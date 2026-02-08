@@ -86,7 +86,8 @@ body {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    overflow-y: auto;
+    overflow: hidden; /* CHANGED: Was overflow-y: auto */
+    height: 100vh;    /* ADDED: Force it to fill screen exactly */
 }
 
 .main-content h1 {
@@ -151,10 +152,13 @@ button:active {
 #screen_container canvas {
     cursor: none;
     display: block;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
+    /* Force the canvas to fit inside the box */
+    max-width: 100% !important;
+    max-height: 100% !important;
+    /* Allow browser to calculate the other dimension to keep aspect ratio */
+    width: auto !important;
+    height: auto !important;
+    /* Keep the pixelated look */
     image-rendering: pixelated;
 }
 
