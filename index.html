@@ -2,222 +2,50 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Retro Windows XP - Road Rash</title>
-    <style>
-        body { background-color: #202020; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 20px; }
-        #screen_container {
-            background-color: black;
-            width: 800px;
-            height: 600px;
-            margin: 20px auto;
-            border: 2px solid #555;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-            overflow: hidden;
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        #screen_container canvas { cursor: none; display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; image-rendering: pixelated; }
-        .controls {
-            background: #333;
-            padding: 10px;
-            border-radius: 8px;
-            display: inline-block;
-            margin-bottom: 10px;
-        }
-        button {
-            padding: 8px 15px;
-            cursor: pointer;
-            background: #555;
-            color: white;
-            border: 1px solid #777;
-            border-radius: 4px;
-        }
-        button:hover { background: #666; }
-    </style>
+    <title>Retro Gaming Site</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <h1>Windows 98 - Gaming Edition</h1>
+    <div class="container">
+        <!-- Left Sidebar with Games List -->
+        <div class="sidebar">
+            <h2>Games Library</h2>
+            <div class="games-list">
+                <div class="game-item" data-game="red-alert-2">
+                    <div class="game-title">Red Alert 2</div>
+                    <button class="launch-btn" onclick="launchGame('red-alert-2')">Launch</button>
+                </div>
+                <div class="game-item" data-game="starcraft">
+                    <div class="game-title">StarCraft</div>
+                    <button class="launch-btn" onclick="launchGame('starcraft')">Launch</button>
+                </div>
+            </div>
+        </div>
 
-    <div class="controls">
-        <button id="save_state">Save State</button>
-        <button id="load_state_btn">Load State File</button>
-        <button id="insert_cd_btn">Insert CD</button>
-        
-        <input id="load_state_file" type="file" style="display:none" accept=".bin,.state" />
-        <input id="insert_cd_file" type="file" style="display:none" accept=".iso" />
-        
-        <span id="status_text" style="margin-left:15px; color: #aaa; font-size: 0.9em;">Ready</span>
+        <!-- Main Content Area -->
+        <div class="main-content">
+            <h1>Windows 98 - Gaming Edition</h1>
+
+            <div class="controls">
+                <button id="save_state">Save State</button>
+                <button id="load_state_btn">Load State File</button>
+                <button id="insert_cd_btn">Insert CD</button>
+                
+                <input id="load_state_file" type="file" style="display:none" accept=".bin,.state" />
+                <input id="insert_cd_file" type="file" style="display:none" accept=".iso" />
+                
+                <span id="status_text" style="margin-left:15px; color: #aaa; font-size: 0.9em;">Ready</span>
+            </div>
+
+            <div id="screen_container">
+                <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
+                <canvas></canvas>
+            </div>
+        </div>
     </div>
 
-    <div id="screen_container">
-        <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
-        <canvas></canvas>
-    </div>
 
     <script src="libv86.js"></script>
-    <script>
-        "use strict";
-
-        var emulator;
-
-        function startEmulator() {
-            // Standard boot with the Driver ISO and State File
-            emulator = new V86({
-                memory_size: 256 * 1024 * 1024,
-                vga_memory_size: 16 * 1024 * 1024,
-                bios: { url: "bios/seabios.bin" },
-                vga_bios: { url: "bios/vgabios.bin" },
-                wasm_path: "v86.wasm",
-                screen_container: document.getElementById("screen_container"),
-                hda: {
-                    url: "windows98/windows98hdd.img",
-                    async: true,
-                    size: 536870912 
-                },
-
-                initial_state: { 
-                   url: "windows98//states//windows98_audio_vga_2d.bin" 
-                },
-                acpi: false,
-                network_relay_url: "wss://relay.widgetry.org/",
-                preserve_fixed_proportions: true,
-                boot_order: 0x213,
-                audio: true,
-                autostart: true
-            });
-
-            emulator.add_listener("emulator-ready", function() {
-                updateStatus("Running...");
-                
-                updateStatus("Loading CD: game/yuri_cn.iso...");
-                fetch("game/yuri_cn.iso")
-                    .then(function(response) {
-                        if (!response.ok) throw new Error("Failed to fetch CD image");
-                        return response.arrayBuffer();
-                    })
-                    .then(function(arrayBuffer) {
-                        updateStatus("Inserting CD...");
-                        return emulator.set_cdrom({
-                            buffer: arrayBuffer,
-                            async: true
-                        });
-                    })
-                    .then(function() {
-                        updateStatus("CD Inserted! Restoring state...");
-                        console.log("Successfully inserted CD: game/yuri_cn.iso");
-                        return fetch("windows98/states/windows98_audio_vga_2d_yuri_cn.bin");
-                    })
-                    .then(function(response) {
-                        if (!response.ok) throw new Error("Failed to fetch state file");
-                        return response.arrayBuffer();
-                    })
-                    .then(function(stateData) {
-                        updateStatus("Restoring saved state...");
-                        return emulator.restore_state(stateData);
-                    })
-                    .then(function() {
-                        updateStatus("State Restored! Ready to play.");
-                        console.log("Successfully restored state: windows98_audio_vga_2d_yuri_cn.bin");
-                    })
-                    .catch(function(err) {
-                        console.error("Setup error:", err);
-                        updateStatus("Setup Failed: Check Console");
-                    });
-            });
-        }
-
-        // Add a Start Button handler to your window.onload
-        window.onload = function() {
-            updateStatus("Click 'Power On' to start with sound");
-        // Create a simple overlay or just use a button
-            document.body.insertAdjacentHTML('afterbegin', '<button id="power_on" style="background:green; padding:20px; font-size:20px; width:100%;">POWER ON (Enable Sound)</button>');
-    
-            document.getElementById("power_on").onclick = function() {
-            this.style.display = 'none'; // Hide button
-            startEmulator();             // Start emulator AFTER click
-            };
-        };
-
-        // --- Save State ---
-        document.getElementById("save_state").onclick = function() {
-            updateStatus("Saving state...");
-            emulator.save_state().then(function(state_data) {
-                var blob = new Blob([state_data], { type: "application/octet-stream" });
-                var url = window.URL.createObjectURL(blob);
-                var a = document.createElement("a");
-                a.href = url;
-                a.download = "v86_state.bin";
-                a.click();
-                window.URL.revokeObjectURL(url);
-                updateStatus("State Saved!");
-            });
-        };
-
-        // --- Load State ---
-        document.getElementById("load_state_btn").onclick = function() {
-            document.getElementById("load_state_file").click();
-        };
-
-        document.getElementById("load_state_file").onchange = function(e) {
-            var file = e.target.files[0];
-            if (!file) return;
-            updateStatus("Restoring state...");
-            var reader = new FileReader();
-            reader.onload = function(e) {
-                emulator.restore_state(e.target.result).then(function() {
-                    updateStatus("State Restored!");
-                });
-            };
-            reader.readAsArrayBuffer(file);
-        };
-
-        // --- INSERT CD FUNCTIONALITY ---
-        document.getElementById("insert_cd_btn").onclick = function() {
-            document.getElementById("insert_cd_file").click();
-        };
-
-document.getElementById("insert_cd_file").onchange = function(e) {
-    var file = e.target.files[0];
-    if (!file || !emulator) return;
-
-    updateStatus("Loading CD image...");
-
-    var reader = new FileReader();
-    reader.onerror = function() {
-        console.error("Failed to read CD file");
-        updateStatus("Swap Failed: Read Error");
-    };
-    reader.onload = function(ev) {
-        var arrayBuffer = ev.target.result;
-        updateStatus("Inserting CD...");
-        emulator.set_cdrom({
-            buffer: arrayBuffer,
-            async: true
-        }).then(function() {
-            updateStatus("CD Inserted! Check My Computer.");
-            console.log("Successfully swapped to:", file.name);
-        }).catch(function(err) {
-            console.error("Swap error:", err);
-            updateStatus("Swap Failed: Check Console");
-        });
-    };
-    reader.readAsArrayBuffer(file);
-};
-
-        function updateStatus(text) {
-            document.getElementById("status_text").innerText = text;
-        }
-
-        // Lock Mouse (attach to the emulator canvas inside the screen container)
-        var canvas = document.querySelector("#screen_container canvas");
-        if (canvas) {
-            canvas.addEventListener("mousedown", function() {
-                canvas.requestPointerLock();
-            });
-        }
-
-    </script>
+    <script src="app.js"></script>
 </body>
 </html>
