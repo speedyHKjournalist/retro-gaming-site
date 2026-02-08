@@ -1,0 +1,4 @@
+*.img
+*.bin
+*.iso
+.DS_Store
