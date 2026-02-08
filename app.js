@@ -7,12 +7,12 @@ const GAMES = {
     'red-alert-2': {
         name: 'Red Alert 2',
         cdImage: 'game/yuri_cn.iso',
-        statePath: 'windows98/states/windows98_audio_vga_2d_yuri_cn.bin'
+        statePath: 'windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst'
     },
     'starcraft': {
         name: 'StarCraft',
         cdImage: 'game/starcraft.iso',
-        statePath: 'windows98/states/windows98_audio_vga_2d_starcraft.bin'
+        statePath: 'windows98/states/windows98_audio_vga_2d_starcraft.bin.zst'
     }
 };
 
@@ -31,7 +31,7 @@ function startEmulator(gameId) {
             size: 536870912 
         },
         initial_state: { 
-           url: "windows98/states/windows98_audio_vga_2d.bin" 
+           url: "windows98/states/windows98_audio_vga_2d.bin.zst" 
         },
         acpi: false,
         network_relay_url: "wss://relay.widgetry.org/",

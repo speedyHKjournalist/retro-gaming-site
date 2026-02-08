@@ -1,4 +1,5 @@
 *.img
 *.bin
 *.iso
+*.bin.zst
 .DS_Store
