@@ -26,12 +26,14 @@ function startEmulator(gameId) {
         wasm_path: "v86.wasm",
         screen_container: document.getElementById("screen_container"),
         hda: {
-            url: "windows98/windows98hdd.img",
+            url: "windows98/windows98hdd/windows98hdd.img",
             async: true,
-            size: 536870912
+            size: 536870912,
+            fixed_chunk_size: 1024 * 1024,
+            use_parts: true,
         },
         initial_state: { 
-           url: "windows98/states/windows98_audio_vga_2d.bin.zst" 
+            url: "windows98/states/windows98_audio_vga_2d.bin.zst",
         },
         acpi: false,
         network_relay_url: "wss://relay.widgetry.org/",
