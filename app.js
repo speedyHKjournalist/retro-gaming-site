@@ -16,7 +16,7 @@ const GAMES = {
     'starcraft': {
         name: 'StarCraft',
         isoConfig: {
-            url: R2_URL + 'game/starcraft.iso',
+            url: R2_URL + '/game/starcraft.iso',
             size: 306894848,
         }
     }
