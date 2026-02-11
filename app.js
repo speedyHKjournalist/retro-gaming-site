@@ -11,16 +11,14 @@ const GAMES = {
         isoConfig: {
             url: R2_URL + '/game/yuri_cn.iso',
             size: 680587264,
-        },
-        statePath: R2_URL + '/windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst'
+        }
     },
     'starcraft': {
         name: 'StarCraft',
         isoConfig: {
-            url: R2_URL + '/game/starcraft.iso',
+            url: R2_URL + 'game/starcraft.iso',
             size: 306894848,
-        },
-        statePath: R2_URL + '/windows98/states/windows98_audio_vga_2d_starcraft.bin.zst'
+        }
     }
 };
 
@@ -53,7 +51,7 @@ function startEmulator(gameId) {
 
     const game = GAMES[gameId];
 
-    setTimeout(async () => {
+    emulator.add_listener("emulator-ready", async () => {
         try {
             console.log("Calling set_cdrom now...");
             // 1. Wait for CD device attach
@@ -62,39 +60,18 @@ function startEmulator(gameId) {
                 throw new Error("cd iso file not found");
             }
 
-            const isoData = await cdResponse.arrayBuffer();
+            let isoData = await cdResponse.arrayBuffer();
             await emulator.set_cdrom({
                 buffer: isoData,
-                async: true
+                async: false
             });
+            isoData = null;
             console.log("CD device attached.");
-
-            // 2. Small delay to allow internal device stabilization
-            await new Promise(resolve => setTimeout(resolve, 300));
-
-            updateStatus("CD Swapped! Fetching state...");
-
-            // 3. Fetch state AFTER CD is ready
-            const stateResponse = await fetch(game.statePath);
-            if (!stateResponse.ok) {
-                throw new Error("State file not found");
-            }
-
-            const stateData = await stateResponse.arrayBuffer();
-
-            updateStatus("Restoring " + game.name + " state...");
-
-            // 4. Restore state AFTER everything is ready
-            await emulator.restore_state(stateData);
-
-            updateStatus("Playing: " + game.name);
-            console.log("Ready to play " + game.name);
 
         } catch (err) {
             console.error("App.js error:", err);
         }
-    }, 1000);
-
+    });
 }
 
 // Game launcher function
