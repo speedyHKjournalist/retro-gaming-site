@@ -2,26 +2,25 @@
 
 var emulator;
 
+const R2_URL = "https://retrogamingsiteresource.dpdns.org";
+
 // Game configurations
 const GAMES = {
     'red-alert-2': {
         name: 'Red Alert 2',
         isoConfig: {
-            url: 'game/yuri_cn.iso',
+            url: R2_URL + '/game/yuri_cn.iso',
             size: 680587264,
         },
-        statePath: 'windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst'
+        statePath: R2_URL + '/windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst'
     },
     'starcraft': {
         name: 'StarCraft',
         isoConfig: {
-            url: 'game/starcraft/starcraft.iso',
+            url: R2_URL + '/game/starcraft.iso',
             size: 306894848,
-            fixed_chunk_size: 1024 * 1024,
-            async: true,
-            use_parts: true
         },
-        statePath: 'windows98/states/windows98_audio_vga_2d_starcraft.bin.zst'
+        statePath: R2_URL + '/windows98/states/windows98_audio_vga_2d_starcraft.bin.zst'
     }
 };
 
@@ -35,14 +34,14 @@ function startEmulator(gameId) {
         wasm_path: "v86.wasm",
         screen_container: document.getElementById("screen_container"),
         hda: {
-            url: "windows98/windows98hdd/windows98hdd.img",
+            url: R2_URL + "/windows98/windows98hdd/windows98hdd.img",
             async: true,
             size: 536870912,
             fixed_chunk_size: 1024 * 1024,
             use_parts: true,
         },
         initial_state: { 
-            url: "windows98/states/windows98_audio_vga_2d.bin.zst",
+            url: R2_URL + "/windows98/states/windows98_audio_vga_2d.bin.zst",
         },
         acpi: false,
         network_relay_url: "wss://relay.widgetry.org/",
@@ -52,39 +51,50 @@ function startEmulator(gameId) {
         autostart: true
     });
 
-    emulator.add_listener("emulator-ready", function() {
-        updateStatus("Running...");
-        
-        const game = GAMES[gameId];
-        
-        updateStatus("Loading CD: " + game.name + "...");
+    const game = GAMES[gameId];
 
-        setTimeout(() => {
+    setTimeout(async () => {
+        try {
             console.log("Calling set_cdrom now...");
-            emulator.set_cdrom(game.isoConfig)
-            .then(() => {
-                // 2. CD is mounted, now we fetch the state file
-                updateStatus("CD Swapped! Fetching state...");
-                console.log("CD set successfully. Fetching: " + game.statePath);
-                return fetch(game.statePath);
-            })
-            .then(response => {
-                if (!response.ok) throw new Error("State file not found");
-                return response.arrayBuffer();
-            })
-            .then(stateData => {
-                // 3. Apply the state to the emulator
-                updateStatus("Restoring " + game.name + " state...");
-                return emulator.restore_state(stateData);
-            })
-            .then(() => {
-                // 4. Success!
-                updateStatus("Playing: " + game.name);
-                console.log("Ready to play " + game.name);
-            })
-            .catch(err => console.error("App.js error:", err));
-        }, 1000);
-    });
+            // 1. Wait for CD device attach
+            const cdResponse = await fetch(game.isoConfig.url);
+            if (!cdResponse.ok) {
+                throw new Error("cd iso file not found");
+            }
+
+            const isoData = await cdResponse.arrayBuffer();
+            await emulator.set_cdrom({
+                buffer: isoData,
+                async: true
+            });
+            console.log("CD device attached.");
+
+            // 2. Small delay to allow internal device stabilization
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            updateStatus("CD Swapped! Fetching state...");
+
+            // 3. Fetch state AFTER CD is ready
+            const stateResponse = await fetch(game.statePath);
+            if (!stateResponse.ok) {
+                throw new Error("State file not found");
+            }
+
+            const stateData = await stateResponse.arrayBuffer();
+
+            updateStatus("Restoring " + game.name + " state...");
+
+            // 4. Restore state AFTER everything is ready
+            await emulator.restore_state(stateData);
+
+            updateStatus("Playing: " + game.name);
+            console.log("Ready to play " + game.name);
+
+        } catch (err) {
+            console.error("App.js error:", err);
+        }
+    }, 1000);
+
 }
 
 // Game launcher function
