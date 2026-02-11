@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const inputFile = "windows98_audio_vga_2d.bin.zst";
+const inputFile = "starcraft.iso";
 const chunkSize = 1048576; // 1MB
 
 if (!fs.existsSync(inputFile)) {
@@ -14,8 +14,8 @@ const totalSize = stats.size;
 const fd = fs.openSync(inputFile, 'r');
 
 // 关键修正：手动分割文件名和多重后缀
-// 我们寻找第一个出现 .bin.zst 的位置，或者直接硬编码你需要的后缀
-const suffix = ".bin.zst";
+// 我们寻找第一个出现 .iso 的位置，或者直接硬编码你需要的后缀
+const suffix = ".iso";
 const baseName = inputFile.endsWith(suffix) 
     ? inputFile.slice(0, -suffix.length) 
     : path.parse(inputFile).name;

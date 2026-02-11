@@ -6,12 +6,14 @@ var emulator;
 const GAMES = {
     'red-alert-2': {
         name: 'Red Alert 2',
-        cdImage: 'game/yuri_cn.iso',
+        cdImage: 'game/yuri_cn/yuri_cn.iso',
+        cdSize: 680587264,
         statePath: 'windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst'
     },
     'starcraft': {
         name: 'StarCraft',
-        cdImage: 'game/starcraft.iso',
+        cdImage: 'game/starcraft/starcraft.iso',
+        cdSize: 306894848,
         statePath: 'windows98/states/windows98_audio_vga_2d_starcraft.bin.zst'
     }
 };
@@ -46,43 +48,43 @@ function startEmulator(gameId) {
     emulator.add_listener("emulator-ready", function() {
         updateStatus("Running...");
         
-        // Get game configuration
-        const game = GAMES[gameId] || GAMES['red-alert-2'];
+        const game = GAMES[gameId];
         
         updateStatus("Loading CD: " + game.name + "...");
-        fetch(game.cdImage)
-            .then(function(response) {
-                if (!response.ok) throw new Error("Failed to fetch CD image");
-                return response.arrayBuffer();
-            })
-            .then(function(arrayBuffer) {
-                updateStatus("Inserting CD...");
-                return emulator.set_cdrom({
-                    buffer: arrayBuffer,
-                    async: true
-                });
-            })
-            .then(function() {
-                updateStatus("CD Inserted! Restoring state...");
-                console.log("Successfully inserted CD: " + game.name);
+        
+        const splittedCD = {
+            url: game.cdImage,
+            size: game.cdSize,
+            fixed_chunk_size: 1024 * 1024,
+            async: true,
+            use_parts: true
+        };
+
+        setTimeout(() => {
+            console.log("Calling set_cdrom now...");
+            emulator.set_cdrom(splittedCD)
+            .then(() => {
+                // 2. CD is mounted, now we fetch the state file
+                updateStatus("CD Swapped! Fetching state...");
+                console.log("CD set successfully. Fetching: " + game.statePath);
                 return fetch(game.statePath);
             })
-            .then(function(response) {
-                if (!response.ok) throw new Error("Failed to fetch state file");
+            .then(response => {
+                if (!response.ok) throw new Error("State file not found");
                 return response.arrayBuffer();
             })
-            .then(function(stateData) {
-                updateStatus("Restoring saved state...");
+            .then(stateData => {
+                // 3. Apply the state to the emulator
+                updateStatus("Restoring " + game.name + " state...");
                 return emulator.restore_state(stateData);
             })
-            .then(function() {
-                updateStatus("State Restored! Ready to play " + game.name);
-                console.log("Successfully restored state for " + game.name);
+            .then(() => {
+                // 4. Success!
+                updateStatus("Playing: " + game.name);
+                console.log("Ready to play " + game.name);
             })
-            .catch(function(err) {
-                console.error("Setup error:", err);
-                updateStatus("Setup Failed: Check Console");
-            });
+            .catch(err => console.error("App.js error:", err));
+        }, 1000);
     });
 }
 
