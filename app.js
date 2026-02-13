@@ -8,21 +8,17 @@ const R2_URL = "https://retrogamingsiteresource.dpdns.org";
 const GAMES = {
     'red-alert-2': {
         name: 'Red Alert 2',
-        isoConfig: {
-            url: R2_URL + '/game/yuri_cn.iso',
-            size: 680587264,
-        }
+        stateurl: '/windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst',
     },
     'starcraft': {
         name: 'StarCraft',
-        isoConfig: {
-            url: R2_URL + '/game/starcraft.iso',
-            size: 306894848,
-        }
+        stateurl: '/windows98/states/windows98_audio_vga_2d_starcraft.bin.zst',
     }
 };
 
-function startEmulator(gameId) {
+function startEmulator9x(gameId) {
+
+    const game = GAMES[gameId];
     // Standard boot with the Driver ISO and State File
     emulator = new V86({
         memory_size: 256 * 1024 * 1024,
@@ -34,12 +30,12 @@ function startEmulator(gameId) {
         hda: {
             url: R2_URL + "/windows98/windows98hdd/windows98hdd.img",
             async: true,
-            size: 536870912,
+            size: 2147483648,
             fixed_chunk_size: 1024 * 1024,
             use_parts: true,
         },
         initial_state: { 
-            url: R2_URL + "/windows98/states/windows98_audio_vga_2d.bin.zst",
+            url: R2_URL + game.stateurl,
         },
         acpi: false,
         network_relay_url: "wss://relay.widgetry.org/",
@@ -49,28 +45,31 @@ function startEmulator(gameId) {
         autostart: true
     });
 
-    const game = GAMES[gameId];
-
     emulator.add_listener("emulator-ready", async () => {
-        try {
-            console.log("Calling set_cdrom now...");
-            // 1. Wait for CD device attach
-            const cdResponse = await fetch(game.isoConfig.url);
-            if (!cdResponse.ok) {
-                throw new Error("cd iso file not found");
-            }
+        updateStatus("Emulator ready");
+        // try {
+        //     updateStatus("Emulator ready. Loading saved state...");
 
-            let isoData = await cdResponse.arrayBuffer();
-            await emulator.set_cdrom({
-                buffer: isoData,
-                async: false
-            });
-            isoData = null;
-            console.log("CD device attached.");
+        //     // 1. 获取状态文件
+        //     const stateUrl = "windows98/states/windows98_audio_vga_2d_yuri_cn.bin";
+        //     const response = await fetch(stateUrl);
+        //     if (!response.ok) throw new Error("State file not found");
+            
+        //     const stateData = await response.arrayBuffer();
 
-        } catch (err) {
-            console.error("App.js error:", err);
-        }
+        //     // 2. 恢复状态
+        //     await emulator.restore_state(stateData);
+        //     updateStatus("State restored! System resuming...");
+
+        //     // 3. 状态恢复后再加载 CD-ROM (可选)
+        //     if (game && game.isoConfig) {
+        //         // 加载 CD 的逻辑...
+        //     }
+
+        // } catch (err) {
+        //     console.error("App.js error:", err);
+        //     updateStatus("Error: " + err.message);
+        // }
     });
 }
 
@@ -83,7 +82,8 @@ function launchGame(gameId) {
     }
     
     updateStatus("Starting " + game.name + "...");
-    startEmulator(gameId);
+    startEmulator9x(gameId);
+    // startEmulatorTest(gameId);
 }
 
 // Initialize on page load
@@ -91,7 +91,7 @@ window.onload = function() {
     updateStatus("Click a game on the left to start");
     
     // Setup save state button
-    document.getElementById("save_state").onclick = function() {
+    document.getElementById("save_state").onclick = async function() {
         if (!emulator) {
             updateStatus("Emulator not running!");
             return;
