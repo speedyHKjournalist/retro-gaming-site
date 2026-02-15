@@ -13,6 +13,18 @@ const GAMES = {
     'starcraft': {
         name: 'StarCraft',
         stateurl: '/windows98/states/windows98_audio_vga_2d_starcraft.bin.zst',
+    },
+    'commando_1': {
+        name: 'Commandos I',
+        stateurl: '/windows98/states/windows98_audio_vga_2d_commando_1.bin.zst',
+    },
+    'Diablo_1': {
+        name: 'Diablo 1',
+        stateurl: '/windows98/states/windows98_audio_vga_2d_diablo.bin.zst',
+    },
+    'richman_4': {
+        name: 'Richman 4 (大富翁4)',
+        stateurl: '/windows98/states/windows98_audio_vga_2d_richman_4.bin.zst',
     }
 };
 
@@ -159,6 +171,29 @@ window.onload = function() {
         };
         reader.readAsArrayBuffer(file);
     };
+
+    // Setup fullscreen button
+    document.getElementById("fullscreen_btn").onclick = function() {
+        var container = document.getElementById("screen_container");
+        if (!document.fullscreenElement) {
+            container.requestFullscreen().catch(function(err) {
+                console.error("Fullscreen request failed:", err);
+                updateStatus("Fullscreen not supported");
+            });
+        } else {
+            document.exitFullscreen();
+        }
+    };
+
+    // Update fullscreen button text when fullscreen changes
+    document.addEventListener("fullscreenchange", function() {
+        var btn = document.getElementById("fullscreen_btn");
+        if (document.fullscreenElement) {
+            btn.innerText = "Exit Fullscreen";
+        } else {
+            btn.innerText = "Fullscreen";
+        }
+    });
 
     // Setup mouse lock
     var canvas = document.querySelector("#screen_container canvas");

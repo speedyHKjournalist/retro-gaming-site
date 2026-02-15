@@ -162,6 +162,14 @@ button:active {
     image-rendering: pixelated;
 }
 
+/* Stretch canvas to fullscreen */
+#screen_container:fullscreen canvas {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    max-height: none !important;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .container {
