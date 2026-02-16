@@ -25,13 +25,25 @@ const GAMES = {
     'richman_4': {
         name: 'Richman 4 (大富翁4)',
         stateurl: '/windows98/states/windows98_audio_vga_2d_richman_4.bin.zst',
-    }
+    },
+    'rollercoaster_tycoon_2': {
+        name: 'RollerCoaster Tycoon 2',
+        disk: '/game/rollercoaster2/rollercoaster2.img',
+        size: 765460480,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_rollercoaster2.bin.zst',
+    },
+    'counter_strike': {
+        name: 'Counter-Strike 1.5',
+        disk: '/game/counterstrike/counterstrike.img',
+        size: 943718400,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_cs.bin.zst',
+    },
 };
 
 function startEmulator9x(gameId) {
 
     const game = GAMES[gameId];
-    // Standard boot with the Driver ISO and State File
+
     emulator = new V86({
         memory_size: 256 * 1024 * 1024,
         vga_memory_size: 16 * 1024 * 1024,
@@ -85,6 +97,47 @@ function startEmulator9x(gameId) {
     });
 }
 
+function startEmulator9xMultiDisk(gameId) {
+
+    const game = GAMES[gameId];
+
+    emulator = new V86({
+        memory_size: 256 * 1024 * 1024,
+        vga_memory_size: 16 * 1024 * 1024,
+        bios: { url: "bios/seabios.bin" },
+        vga_bios: { url: "bios/vgabios.bin" },
+        wasm_path: "v86.wasm",
+        screen_container: document.getElementById("screen_container"),
+        hda: {
+            url: R2_URL + "/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img",
+            async: true,
+            size: 536870912,
+            fixed_chunk_size: 1024 * 1024,
+            use_parts: true,
+        },
+        hdb: {
+            url: R2_URL + game.disk,
+            async: true,
+            size: game.size,
+            fixed_chunk_size: 1024 * 1024,
+            use_parts: true,
+        },
+        initial_state: { 
+            url: R2_URL + game.stateurl,
+        },
+        acpi: false,
+        network_relay_url: "wss://relay.widgetry.org/",
+        preserve_fixed_proportions: true,
+        boot_order: 0x213,
+        audio: true,
+        autostart: true
+    });
+
+    emulator.add_listener("emulator-ready", async () => {
+        updateStatus("Emulator ready");
+    });
+}
+
 // Game launcher function
 function launchGame(gameId) {
     const game = GAMES[gameId];
@@ -95,7 +148,18 @@ function launchGame(gameId) {
     
     updateStatus("Starting " + game.name + "...");
     startEmulator9x(gameId);
-    // startEmulatorTest(gameId);
+}
+
+// Game launcher function
+function launchGameMultiDisk(gameId) {
+    const game = GAMES[gameId];
+    if (!game) {
+        updateStatus("Game not found!");
+        return;
+    }
+    
+    updateStatus("Starting " + game.name + "...");
+    startEmulator9xMultiDisk(gameId);
 }
 
 // Initialize on page load
