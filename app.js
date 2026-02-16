@@ -1,6 +1,6 @@
 "use strict";
 
-var emulator;
+let emulator = null;
 
 const R2_URL = "https://retrogamingsiteresource.dpdns.org";
 
@@ -40,9 +40,33 @@ const GAMES = {
     },
 };
 
+const progressContainer = document.getElementById("progress_container");
+const progressBar = document.getElementById("progress_bar");
+const statusText = document.getElementById("status_text");
+
+function showProgress() {
+    progressContainer.classList.remove("hidden");
+    progressBar.style.width = "0%";
+}
+
+function updateProgress(percent, text) {
+    progressBar.style.width = percent + "%";
+    if (text) statusText.textContent = text;
+}
+
+function hideProgress() {
+    progressContainer.classList.add("hidden");
+}
+
 function startEmulator9x(gameId) {
 
     const game = GAMES[gameId];
+
+    if (emulator) {
+        emulator.stop();
+        emulator.destroy();
+        emulator = null;
+    }
 
     emulator = new V86({
         memory_size: 256 * 1024 * 1024,
@@ -68,38 +92,18 @@ function startEmulator9x(gameId) {
         audio: true,
         autostart: true
     });
-
-    emulator.add_listener("emulator-ready", async () => {
-        updateStatus("Emulator ready");
-        // try {
-        //     updateStatus("Emulator ready. Loading saved state...");
-
-        //     // 1. 获取状态文件
-        //     const stateUrl = "windows98/states/windows98_audio_vga_2d_yuri_cn.bin";
-        //     const response = await fetch(stateUrl);
-        //     if (!response.ok) throw new Error("State file not found");
-            
-        //     const stateData = await response.arrayBuffer();
-
-        //     // 2. 恢复状态
-        //     await emulator.restore_state(stateData);
-        //     updateStatus("State restored! System resuming...");
-
-        //     // 3. 状态恢复后再加载 CD-ROM (可选)
-        //     if (game && game.isoConfig) {
-        //         // 加载 CD 的逻辑...
-        //     }
-
-        // } catch (err) {
-        //     console.error("App.js error:", err);
-        //     updateStatus("Error: " + err.message);
-        // }
-    });
+    attachEmulatorListeners(emulator);
 }
 
 function startEmulator9xMultiDisk(gameId) {
 
     const game = GAMES[gameId];
+
+    if (emulator) {
+        emulator.stop();
+        emulator.destroy();
+        emulator = null;
+    }
 
     emulator = new V86({
         memory_size: 256 * 1024 * 1024,
@@ -132,8 +136,25 @@ function startEmulator9xMultiDisk(gameId) {
         audio: true,
         autostart: true
     });
+    attachEmulatorListeners(emulator);
+}
 
-    emulator.add_listener("emulator-ready", async () => {
+function attachEmulatorListeners(emulator) {
+
+    emulator.add_listener("download-progress", function(e) {
+
+        showProgress();
+
+        if (e.total) {
+            const percent = Math.floor((e.loaded / e.total) * 100);
+            updateProgress(percent, `Loading ${e.file_name} ${percent}%`);
+        } else {
+            updateProgress(0, `Loading ${e.file_name}`);
+        }
+    });
+
+    emulator.add_listener("emulator-ready", function() {
+        hideProgress();
         updateStatus("Emulator ready");
     });
 }
