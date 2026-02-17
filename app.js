@@ -38,6 +38,12 @@ const GAMES = {
         size: 943718400,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_cs.bin.zst',
     },
+    'fallout_2': {
+        name: 'Fallout 2',
+        disk: '/game/fallout2/fallout2.img',
+        size: 618659840,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_fallout2.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
