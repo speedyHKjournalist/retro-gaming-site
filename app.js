@@ -44,6 +44,12 @@ const GAMES = {
         size: 618659840,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_fallout2.bin.zst',
     },
+    'age_of_empires_2': {
+        name: 'Age of Empires 2',
+        disk: '/game/ageofempires2/ageofempires2.img',
+        size: 193986560,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_ageofempires2.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
