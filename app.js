@@ -165,9 +165,9 @@ function attachEmulatorListeners(emulator) {
 
         if (e.total) {
             const percent = Math.floor((e.loaded / e.total) * 100);
-            updateProgress(percent, `Loading ${e.file_name} ${percent}%`);
+            updateProgress(percent, `Loading game resource files ... ${percent}%`);
         } else {
-            updateProgress(0, `Loading ${e.file_name}`);
+            updateProgress(0, `Loading game resource files ...`);
         }
     });
 

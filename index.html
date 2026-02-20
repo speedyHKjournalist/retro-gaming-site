@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Retro Gaming Site</title>
     <link rel="stylesheet" href="styles.css">
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8341075370183667" crossorigin="anonymous"></script>
 </head>
 <body>
     <div class="container">
@@ -52,6 +53,18 @@
                     <button class="launch-btn" onclick="launchGameMultiDisk('counter_strike')">Launch</button>
                 </div>
             </div>
+
+            <div class="sidebar-ad-container">
+                <ins class="adsbygoogle"
+                    style="display:block"
+                    data-ad-client="ca-pub-8341075370183667"
+                    data-ad-slot="1153972289"
+                    data-ad-format="auto"
+                    data-full-width-responsive="true"></ins>
+                <script>
+                    (adsbygoogle = window.adsbygoogle || []).push({});
+                </script>
+            </div>
         </div>
 
         <!-- Main Content Area -->
@@ -62,7 +75,8 @@
                 <button id="save_state">Save State</button>
                 <button id="load_state_btn">Load State File</button>
                 <button id="insert_cd_btn">Insert CD</button>
-                
+                <button id="fullscreen_btn" style="margin-left: auto;">Fullscreen</button>
+                                
                 <input id="load_state_file" type="file" style="display:none" accept=".bin,.state" />
                 <input id="insert_cd_file" type="file" style="display:none" accept=".iso" />
                 
@@ -70,7 +84,6 @@
                 <div id="progress_container" class="hidden">
                     <div id="progress_bar"></div>
                 </div>
-                <button id="fullscreen_btn" style="margin-left: auto;">Fullscreen</button>
             </div>
 
             <div id="screen_container">
@@ -80,6 +93,24 @@
         </div>
     </div>
 
+    <footer class="site-footer-content">
+        <section class="about-section">
+            <h3>About Retro Gaming Web - Windows 98 Edition</h3>
+            <p>Welcome to our online preservation project dedicated to classic computing. We use advanced <strong>v86 virtualization</strong> technology to run a full Windows 98 environment directly in your modern web browser using WebAssembly (WASM).</p>
+    
+            <p>Our library features legendary titles such as <strong>Civilization II</strong>, <strong>Red Alert 2</strong>, and <strong>StarCraft</strong>. By leveraging browser-based emulation, we ensure these historic games remain accessible without the need for complex legacy hardware or local installations.</p>
+    
+            <p>This site serves as a technical demonstration of high-performance web emulation and as a digital museum for the golden era of PC gaming. All games are configured for optimal performance in the v86 environment.</p>
+
+            <div class="footer-bottom-links" style="margin-top: 25px; padding-top: 15px; border-top: 1px solid #444; font-size: 0.85em;">
+                <span>© 2026 Retro Gaming Project. All rights reserved.</span>
+                <span style="margin: 0 15px;">|</span>
+                <a href="privacy.html" style="color: #00ff00; text-decoration: none;">Privacy Policy</a>
+                <span style="margin: 0 15px;">|</span>
+                <a href="index.html" style="color: #00ff00; text-decoration: none;">Home</a>
+            </div>
+        </section>
+    </footer>
 
     <script src="libv86.js"></script>
     <script src="app.js"></script>

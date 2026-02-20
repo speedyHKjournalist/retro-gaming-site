@@ -13,7 +13,7 @@ body {
 
 .container {
     display: flex;
-    height: 100vh;
+    min-height: 80vh; /* 保证至少占大半个屏幕 */
 }
 
 /* Sidebar Styles */
@@ -22,7 +22,7 @@ body {
     background-color: #1a1a1a;
     border-right: 2px solid #555;
     padding: 20px;
-    overflow-y: auto;
+    /* overflow-y: auto;  如果侧边栏太长才开启 */
 }
 
 .sidebar h2 {
@@ -80,14 +80,47 @@ body {
     transform: scale(0.98);
 }
 
+/* 广告容器样式 */
+.sidebar-ad-container {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid #444;
+    text-align: center;
+}
+
+/* 底部 SEO 文字样式 */
+.site-footer-content {
+    background-color: #1a1a1a;
+    padding: 40px 20px;
+    margin-top: auto; /* 如果内容区不满则推到底部 */
+    border-top: 2px solid #555;
+}
+
+.about-section {
+    max-width: 1000px;
+    margin: 0 auto;
+    color: #bbb;
+    line-height: 1.6;
+}
+
+.about-section h3 {
+    color: #00ff00;
+    margin-bottom: 15px;
+    font-size: 1.2em;
+}
+
+.about-section p {
+    margin-bottom: 15px;
+    font-size: 0.9em;
+}
+
 /* Main Content Area */
 .main-content {
     flex: 1;
     display: flex;
     flex-direction: column;
     padding: 20px;
-    overflow: hidden; /* CHANGED: Was overflow-y: auto */
-    height: 100vh;    /* ADDED: Force it to fill screen exactly */
+    min-height: 600px; /* 保证模拟器有足够空间 */
 }
 
 .main-content h1 {
@@ -137,16 +170,9 @@ button:active {
 
 #screen_container {
     background-color: black;
-    flex: 1;
     border: 2px solid #555;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
-    overflow: hidden;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    min-height: 400px;
+    flex: 0 0 600px; /* 固定一个高度，防止页面塌陷 */
+    margin-bottom: 20px;
 }
 
 #screen_container canvas {
