@@ -50,6 +50,12 @@ const GAMES = {
         size: 193986560,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_ageofempires2.bin.zst',
     },
+    'civilization_2': {
+        name: 'Civilization 2',
+        disk: '/game/civilization2/civilization2.img',
+        size: 52428800,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_civilization2.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
