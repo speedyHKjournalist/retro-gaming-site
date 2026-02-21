@@ -1,3 +1,33 @@
+/* Discord 浮动按钮样式 */
+.discord-float-btn {
+    position: fixed;
+    top: 50%;
+    right: 32px;
+    transform: translateY(-50%);
+    z-index: 9999;
+    background: linear-gradient(90deg, #5865F2 60%, #404eed 100%);
+    color: #fff;
+    font-weight: bold;
+    font-size: 1.15em;
+    padding: 16px 32px;
+    border-radius: 32px 0 0 32px;
+    box-shadow: 0 4px 24px 0 rgba(88,101,242,0.25);
+    text-decoration: none;
+    letter-spacing: 1px;
+    border: none;
+    outline: none;
+    transition: background 0.2s, box-shadow 0.2s, right 0.2s;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.discord-float-btn:hover {
+    background: linear-gradient(90deg, #404eed 60%, #5865F2 100%);
+    box-shadow: 0 8px 32px 0 rgba(88,101,242,0.35);
+    right: 24px;
+    color: #fff;
+}
 * {
     margin: 0;
     padding: 0;
