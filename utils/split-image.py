@@ -53,5 +53,5 @@ for i in range(0, len(readf), partsize):
         if len(chunk) < partsize:
             # last chunk
             f.write(bytes(partsize - len(chunk)))
-    if zstd: subprocess.run(["zstd", "--ultra","-22", "--long", "-T0", "-f", "--rm", part_name], check=True)
+    if zstd: subprocess.run(["zstd", "--ultra","-22", "--long", "-T0", part_name], check=True)
     elif gzip: subprocess.run(["gzip", "-9", "-f", part_name], check=True)

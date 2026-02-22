@@ -68,11 +68,11 @@ const GAMES = {
     },
     'civilization_2': {
         name: 'Civilization 2',
-        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img',
-        systemDiskSize: 536870912,
-        disk: '/game/civilization2/civilization2.img',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: '/game/civilization2/civilization.img.zst',
         size: 52428800,
-        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_civilization2.bin.zst',
+        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_civilization2.bin.zst',
     },
 };
 
