@@ -29,6 +29,7 @@ const GAMES = {
     'rollercoaster_tycoon_2': {
         name: 'RollerCoaster Tycoon 2',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img',
+        systemDiskSize: 536870912,
         disk: '/game/rollercoaster2/rollercoaster2.img',
         size: 765460480,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_rollercoaster2.bin.zst',
@@ -36,6 +37,7 @@ const GAMES = {
     'counter_strike': {
         name: 'Counter-Strike 1.5',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img',
+        systemDiskSize: 536870912,
         disk: '/game/counterstrike/counterstrike.img',
         size: 943718400,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_cs.bin.zst',
@@ -43,6 +45,7 @@ const GAMES = {
     'fallout_2': {
         name: 'Fallout 2',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img',
+        systemDiskSize: 536870912,
         disk: '/game/fallout2/fallout2.img',
         size: 618659840,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_fallout2.bin.zst',
@@ -50,6 +53,7 @@ const GAMES = {
     'age_of_empires_2': {
         name: 'Age of Empires 2',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img',
+        systemDiskSize: 536870912,
         disk: '/game/ageofempires2/ageofempires2.img',
         size: 193986560,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_ageofempires2.bin.zst',
@@ -65,6 +69,7 @@ const GAMES = {
     'civilization_2': {
         name: 'Civilization 2',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img',
+        systemDiskSize: 536870912,
         disk: '/game/civilization2/civilization2.img',
         size: 52428800,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_civilization2.bin.zst',
