@@ -30,14 +30,14 @@ const GAMES = {
     //     size: 335544320,
     //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
     // },
-    // 'half_life': {
-    //     name: 'Half Life',
-    //     systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
-    //     systemDiskSize: 536870912,
-    //     disk: 'game/halflife.img',
-    //     size: 608174080,
-    //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
-    // },
+    'half_life': {
+        name: 'Half Life',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: '/game/halflife/halflife.img.zst',
+        size: 608174080,
+        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_halflife.bin.zst',
+    },
     'starcraft': {
         name: 'Starcraft',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
