@@ -8,19 +8,59 @@ const R2_URL = "https://retrogamingsiteresource.dpdns.org";
 const GAMES = {
     'red-alert-2': {
         name: 'Red Alert 2',
-        stateurl: '/windows98/states/windows98_audio_vga_2d_yuri_cn.bin.zst',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/ra2/ra2.img.zst',
+        size: 1363148800,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_ra2.bin.zst',
     },
+    'yuri': {
+        name: 'Yuri\'s Revenge',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/yuri/yuri.img.zst',
+        size: 1363148800,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
+    },
+    // 'thief': {
+    //     name: 'Thief: The Dark Project',
+    //     systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+    //     systemDiskSize: 536870912,
+    //     disk: 'game/thief/thief.img.zst',
+    //     size: 335544320,
+    //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
+    // },
+    // 'half_life': {
+    //     name: 'Half Life',
+    //     systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+    //     systemDiskSize: 536870912,
+    //     disk: 'game/halflife.img',
+    //     size: 608174080,
+    //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
+    // },
     'starcraft': {
-        name: 'StarCraft',
-        stateurl: '/windows98/states/windows98_audio_vga_2d_starcraft.bin.zst',
+        name: 'Starcraft',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/starcraft/starcraft.img.zst',
+        size: 367001600,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_starcraft.bin.zst',
     },
-    'commando_1': {
+    'commandos_1': {
         name: 'Commandos I',
-        stateurl: '/windows98/states/windows98_audio_vga_2d_commando_1.bin.zst',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/commandos1/commandos1.img.zst',
+        size: 157286400,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_commandos1.bin.zst',
     },
     'Diablo_1': {
         name: 'Diablo 1',
-        stateurl: '/windows98/states/windows98_audio_vga_2d_diablo.bin.zst',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/diablo1/diablo1.img.zst',
+        size: 167772160,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_diablo1.bin.zst',
     },
     'richman_4': {
         name: 'Richman 4 (大富翁4)',
@@ -96,43 +136,6 @@ function updateProgress(percent, text) {
 
 function hideProgress() {
     progressContainer.classList.add("hidden");
-}
-
-function startEmulator9x(gameId) {
-
-    const game = GAMES[gameId];
-
-    if (emulator) {
-        emulator.stop();
-        emulator.destroy();
-        emulator = null;
-    }
-
-    emulator = new V86({
-        memory_size: 256 * 1024 * 1024,
-        vga_memory_size: 16 * 1024 * 1024,
-        bios: { url: "bios/seabios.bin" },
-        vga_bios: { url: "bios/vgabios.bin" },
-        wasm_path: "v86.wasm",
-        screen_container: document.getElementById("screen_container"),
-        hda: {
-            url: R2_URL + "/windows98/windows98hdd/windows98hdd.img",
-            async: true,
-            size: 2147483648,
-            fixed_chunk_size: 1024 * 1024,
-            use_parts: true,
-        },
-        initial_state: { 
-            url: R2_URL + game.stateurl,
-        },
-        acpi: false,
-        network_relay_url: "wss://relay.widgetry.org/",
-        preserve_fixed_proportions: true,
-        boot_order: 0x213,
-        audio: true,
-        autostart: true
-    });
-    attachEmulatorListeners(emulator);
 }
 
 function startEmulator9xMultiDisk(gameId) {
