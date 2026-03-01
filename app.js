@@ -38,6 +38,14 @@ const GAMES = {
         size: 608174080,
         stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_halflife.bin.zst',
     },
+    'theme_hospital': {
+        name: 'Theme Hospital',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/themehospital/themehospital.img.zst',
+        size: 293601280,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_themehospital.bin.zst',
+    },
     'starcraft': {
         name: 'Starcraft',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
