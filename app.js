@@ -30,6 +30,14 @@ const GAMES = {
     //     size: 335544320,
     //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
     // },
+    'diablo_2': {
+        name: 'Diablo 2',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: '/game/diablo2/diablo2.img.zst',
+        size: 2222981120,
+        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_diablo2.bin.zst',
+    },
     'half_life': {
         name: 'Half Life',
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
