@@ -1,4 +1,36 @@
-/* Discord 浮动按钮样式 */
+/* Buy Me a Coffee Float Button */
+.coffee-float-btn {
+    position: fixed;
+    top: calc(50% - 75px); /* Offsets it just above the Discord button */
+    right: 32px;
+    transform: translateY(-50%);
+    z-index: 9999;
+    background: linear-gradient(90deg, #FFDD00 60%, #FBB034 100%); /* Yellow/Orange gradient */
+    color: #000; /* Black text for contrast */
+    font-weight: bold;
+    font-size: 1.15em;
+    padding: 16px 32px;
+    border-radius: 32px 0 0 32px;
+    box-shadow: 0 4px 24px 0 rgba(255, 221, 0, 0.25);
+    text-decoration: none;
+    letter-spacing: 1px;
+    border: none;
+    outline: none;
+    transition: background 0.2s, box-shadow 0.2s, right 0.2s;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.coffee-float-btn:hover {
+    background: linear-gradient(90deg, #FBB034 60%, #FFDD00 100%);
+    box-shadow: 0 8px 32px 0 rgba(255, 221, 0, 0.4);
+    right: 24px; /* Slide out effect matching Discord */
+    color: #000;
+}
+
+/* Discord Button */
 .discord-float-btn {
     position: fixed;
     top: 50%;
