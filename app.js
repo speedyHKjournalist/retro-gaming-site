@@ -134,6 +134,14 @@ const GAMES = {
         size: 52428800,
         stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_civilization2.bin.zst',
     },
+    'maplestory': {
+        name: 'Maplestory',
+        systemDisk: 'lubuntu18/lubuntu18.img',
+        systemDiskSize: 8589934592,
+        disk: 'game/maplestory.img',
+        size: 2202009600,
+        // stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_maplestory.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
@@ -165,31 +173,37 @@ function startEmulator9xMultiDisk(gameId) {
     }
 
     emulator = new V86({
-        memory_size: 256 * 1024 * 1024,
-        vga_memory_size: 16 * 1024 * 1024,
+        memory_size: 1024 * 1024 * 1024,
+        vga_memory_size: 32 * 1024 * 1024,
         bios: { url: "bios/seabios.bin" },
         vga_bios: { url: "bios/vgabios.bin" },
-        wasm_path: "v86.wasm",
+        wasm_path: "v86-debug.wasm",
         screen_container: document.getElementById("screen_container"),
         hda: {
-            url: R2_URL + game.systemDisk,
+            // url: R2_URL + game.systemDisk,
+            url: game.systemDisk,
             async: true,
             size: game.systemDiskSize,
-            fixed_chunk_size: 1024 * 1024,
-            use_parts: true,
+            // fixed_chunk_size: 1024 * 1024,
+            // use_parts: true,
         },
         hdb: {
-            url: R2_URL + game.disk,
+            // url: R2_URL + game.disk,
+            url: game.disk,
             async: true,
             size: game.size,
-            fixed_chunk_size: 1024 * 1024,
-            use_parts: true,
+            // fixed_chunk_size: 1024 * 1024,
+            // use_parts: true,
         },
-        initial_state: { 
-            url: R2_URL + game.stateurl,
-        },
+        // initial_state: { 
+        //     url: R2_URL + game.stateurl,
+        // },
         acpi: false,
-        network_relay_url: "wss://relay.widgetry.org/",
+        virtio_gpu: true,
+        net_device: {
+            type: "virtio",
+            relay_url: "wss://relay.widgetry.org/",
+        },
         preserve_fixed_proportions: true,
         boot_order: 0x213,
         audio: true,
