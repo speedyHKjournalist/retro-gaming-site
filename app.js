@@ -6,6 +6,14 @@ const R2_URL = "https://retrogamingsiteresource.dpdns.org";
 
 // Game configurations
 const GAMES = {
+    'heros_3': {
+        name: 'Heroes of Might and Magic 3',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: '/game/heros3/heros3.img.zst',
+        size: 408944640,
+        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_heros3.bin.zst',
+    },
     'red-alert-2': {
         name: 'Red Alert 2',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
@@ -30,14 +38,6 @@ const GAMES = {
     //     size: 335544320,
     //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
     // },
-    'diablo_2': {
-        name: 'Diablo 2',
-        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
-        systemDiskSize: 2147483648,
-        disk: '/game/diablo2/diablo2.img.zst',
-        size: 2222981120,
-        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_diablo2.bin.zst',
-    },
     'half_life': {
         name: 'Half Life',
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
@@ -45,6 +45,14 @@ const GAMES = {
         disk: '/game/halflife/halflife.img.zst',
         size: 608174080,
         stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_halflife.bin.zst',
+    },
+    'diablo_2': {
+        name: 'Diablo 2',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: '/game/diablo2/diablo2.img.zst',
+        size: 2222981120,
+        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_diablo2.bin.zst',
     },
     'theme_hospital': {
         name: 'Theme Hospital',
@@ -55,7 +63,7 @@ const GAMES = {
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_themehospital.bin.zst',
     },
     'starcraft': {
-        name: 'Starcraft',
+        name: 'StarCraft',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: '/game/starcraft/starcraft.img.zst',
@@ -87,20 +95,12 @@ const GAMES = {
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_richman4.bin.zst',
     },
     'rollercoaster_tycoon_2': {
-        name: 'RollerCoaster Tycoon 2',
+        name: 'Rollercoaster Tycoon 2',
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: '/game/rollercoaster2/rollercoaster2.img.zst',
         size: 765460480,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_rollercoaster2.bin.zst',
-    },
-    'counter_strike': {
-        name: 'Counter-Strike 1.5',
-        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
-        systemDiskSize: 536870912,
-        disk: '/game/counterstrike/counterstrike.img.zst',
-        size: 943718400,
-        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_cs.bin.zst',
     },
     'fallout_2': {
         name: 'Fallout 2',
@@ -118,14 +118,6 @@ const GAMES = {
         size: 193986560,
         stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_ageofempires2.bin.zst',
     },
-    'heros_3': {
-        name: 'Heroes of Might and Magic 3',
-        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
-        systemDiskSize: 2147483648,
-        disk: '/game/heros3/heros3.img.zst',
-        size: 408944640,
-        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_heros3.bin.zst',
-    },
     'civilization_2': {
         name: 'Civilization 2',
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
@@ -134,11 +126,48 @@ const GAMES = {
         size: 52428800,
         stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_civilization2.bin.zst',
     },
+    'counter_strike': {
+        name: 'Counter-Strike 1.5',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/counterstrike/counterstrike.img.zst',
+        size: 943718400,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_cs.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
 const progressBar = document.getElementById("progress_bar");
 const statusText = document.getElementById("status_text");
+
+function renderGamesList() {
+    const gamesList = document.getElementById("games_list");
+    if (!gamesList) return;
+
+    gamesList.replaceChildren();
+
+    Object.entries(GAMES).forEach(function([gameId, game]) {
+        const gameItem = document.createElement("div");
+        gameItem.className = "game-item";
+        gameItem.dataset.game = gameId;
+
+        const gameTitle = document.createElement("div");
+        gameTitle.className = "game-title";
+        gameTitle.textContent = game.name;
+
+        const launchButton = document.createElement("button");
+        launchButton.className = "launch-btn";
+        launchButton.type = "button";
+        launchButton.textContent = "Launch";
+        launchButton.setAttribute("aria-label", "Launch " + game.name);
+        launchButton.addEventListener("click", function() {
+            launchGameMultiDisk(gameId);
+        });
+
+        gameItem.append(gameTitle, launchButton);
+        gamesList.appendChild(gameItem);
+    });
+}
 
 function showProgress() {
     progressContainer.classList.remove("hidden");
@@ -244,6 +273,7 @@ function launchGameMultiDisk(gameId) {
 
 // Initialize on page load
 window.onload = function() {
+    renderGamesList();
     updateStatus("Click a game on the left to start");
     
     // Setup save state button
