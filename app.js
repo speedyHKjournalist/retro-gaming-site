@@ -42,7 +42,7 @@ const GAMES = {
         name: 'Baldur\'s Gate 2',
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
-        disk: 'game/baldurgate2/baldurgate2.img.zst',
+        disk: '/game/baldurgate2/baldurgate2.img.zst',
         size: 3221225472,
         stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_baldursgate2.bin.zst',
     },
@@ -200,7 +200,7 @@ function startEmulator9xMultiDisk(gameId) {
             use_parts: true,
         },
         hdb: {
-            url: game.disk,
+            url: R2_URL + game.disk,
             async: true,
             size: game.size,
             fixed_chunk_size: 1024 * 1024,
