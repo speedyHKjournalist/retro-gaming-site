@@ -38,13 +38,13 @@ const GAMES = {
     //     size: 335544320,
     //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
     // },
-    'half_life': {
-        name: 'Half Life',
-        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
-        systemDiskSize: 2147483648,
-        disk: '/game/halflife/halflife.img.zst',
-        size: 608174080,
-        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_halflife.bin.zst',
+    'baldurs_gate_2': {
+        name: 'Baldur\'s Gate 2',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: '/game/baldurgate2/baldurgate2.img.zst',
+        size: 3221225472,
+        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_baldursgate2.bin.zst',
     },
     'diablo_2': {
         name: 'Diablo 2',
@@ -125,14 +125,6 @@ const GAMES = {
         disk: '/game/civilization2/civilization.img.zst',
         size: 52428800,
         stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_civilization2.bin.zst',
-    },
-    'counter_strike': {
-        name: 'Counter-Strike 1.5',
-        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
-        systemDiskSize: 536870912,
-        disk: '/game/counterstrike/counterstrike.img.zst',
-        size: 943718400,
-        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_cs.bin.zst',
     },
 };
 
