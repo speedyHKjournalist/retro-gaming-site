@@ -40,11 +40,11 @@ const GAMES = {
     // },
     'baldurs_gate_2': {
         name: 'Baldur\'s Gate 2',
-        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
-        systemDiskSize: 536870912,
-        disk: '/game/baldurgate2/baldurgate2.img.zst',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: 'game/baldurgate2/baldurgate2.img.zst',
         size: 3221225472,
-        stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_baldursgate2.bin.zst',
+        stateurl: '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_baldursgate2.bin.zst',
     },
     'diablo_2': {
         name: 'Diablo 2',
@@ -200,7 +200,7 @@ function startEmulator9xMultiDisk(gameId) {
             use_parts: true,
         },
         hdb: {
-            url: R2_URL + game.disk,
+            url: game.disk,
             async: true,
             size: game.size,
             fixed_chunk_size: 1024 * 1024,
