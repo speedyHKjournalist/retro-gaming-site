@@ -135,6 +135,14 @@ const GAMES = {
         size: 2621440000,
         stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_torment.bin.zst',
     },
+    'simcity_3000': {
+        name: 'SimCity 3000',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: R2_URL_2 + '/game/simcity3000/simcity3000.img.zst',
+        size: 1572864000,
+        stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_simcity3000.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
