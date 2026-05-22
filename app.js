@@ -143,6 +143,14 @@ const GAMES = {
         size: 1572864000,
         stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_simcity3000.bin.zst',
     },
+    'icewind_dale_1': {
+        name: 'Icewind Dale 1',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: R2_URL_2 + '/game/icewinddale1/icewinddale1.img.zst',
+        size: 2621440000,
+        stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_icewinddale1.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
