@@ -175,14 +175,6 @@ const GAMES = {
         size: 2097152000,
         stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_dinocrisis.bin.zst',
     },
-    'warcraft_3': {
-        name: 'Warcraft III: The Frozen Throne',
-        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
-        systemDiskSize: 2147483648,
-        disk: 'game/warcraft3.img',
-        size: 3670016000,
-        // stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_dinocrisis.bin.zst',
-    },
 };
 
 const progressContainer = document.getElementById("progress_container");
@@ -260,12 +252,12 @@ function startEmulator9xMultiDisk(gameId) {
             url: game.disk,
             async: true,
             size: game.size,
-            // fixed_chunk_size: 1024 * 1024,
-            // use_parts: true,
+            fixed_chunk_size: 1024 * 1024,
+            use_parts: true,
         },
-        // initial_state: { 
-        //     url: game.stateurl,
-        // },
+        initial_state: { 
+            url: game.stateurl,
+        },
         acpi: false,
         net_device: {
             type : "ne2k",
