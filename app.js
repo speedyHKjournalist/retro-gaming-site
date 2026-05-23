@@ -159,6 +159,14 @@ const GAMES = {
         size: 2097152000,
         stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_icewinddale2.bin.zst',
     },
+    'need_for_speed_3': {
+        name: 'Need for Speed 3',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: R2_URL_2 + '/game/nfs3/nfs3.img.zst',
+        size: 2097152000,
+        stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_nfs3.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
