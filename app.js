@@ -175,6 +175,14 @@ const GAMES = {
         size: 2097152000,
         stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_dinocrisis.bin.zst',
     },
+    'resident_evil_2': {
+        name: 'Resident Evil 2',
+        systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
+        systemDiskSize: 536870912,
+        disk: R2_URL_2 + '/game/residentevil2/residentevil2.img.zst',
+        size: 4294967296,
+        stateurl: R2_URL_2 + '/windows98/states/windows98_audio_vga_2d_multidisk_residentevil2.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
