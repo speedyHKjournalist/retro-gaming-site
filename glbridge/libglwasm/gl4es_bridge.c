@@ -1,4 +1,4 @@
-// Thin exported wrapper around gl4es for v86gl_serial_bridge.js.
+// Thin exported wrapper around gl4es for v86_network_bridge.js.
 // Keep these names stable; the browser bridge calls v86gl_gl* functions.
 
 #include <stdint.h>

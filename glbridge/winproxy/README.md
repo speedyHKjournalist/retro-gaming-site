@@ -104,7 +104,7 @@ bridge calls those wrappers, and the wrappers forward into `gl4es_gl*`.
 
 ## v86 browser side
 
-Include `gl4es.js`, `gl4es_loader.js`, and `v86gl_serial_bridge.js` in your v86
+Include `gl4es.js`, `gl4es_loader.js`, and `v86_network_bridge.js` in your v86
 page. Add an overlay canvas above the v86 screen canvas:
 
 ```html
@@ -139,7 +139,7 @@ src/glbridge/sample/host_triangle_demo.html
 ```
 
 That page uses a tiny emulator stub and feeds the same `VGL1` packets to
-`v86gl_serial_bridge.js`, without booting Windows XP.
+`v86_network_bridge.js`, without booting Windows XP.
 
 ## Important limitations
 

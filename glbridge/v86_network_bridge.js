@@ -527,8 +527,4 @@
     global.installV86GLNetworkBridge = function(emulator, canvas, options) {
         return new V86GLNetworkBridge(emulator, canvas, options);
     };
-
-    global.installV86GLSerialBridge = function(emulator, canvas, options) {
-        return new V86GLNetworkBridge(emulator, canvas, options);
-    };
 })(typeof window !== "undefined" ? window : globalThis);

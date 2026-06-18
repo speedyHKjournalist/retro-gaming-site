@@ -316,19 +316,19 @@ function startEmulator9xMultiDisk(gameId) {
             url: game.systemDisk,
             async: true,
             size: game.systemDiskSize,
-            // fixed_chunk_size: 1024 * 1024,
-            // use_parts: true,
+            fixed_chunk_size: 1024 * 1024,
+            use_parts: true,
         },
         hdb: {
             url: game.disk,
             async: true,
             size: game.size,
-            // fixed_chunk_size: 1024 * 1024,
-            // use_parts: true,
+            fixed_chunk_size: 1024 * 1024,
+            use_parts: true,
         },
-        // initial_state: { 
-        //     url: game.stateurl,
-        // },
+        initial_state: { 
+            url: game.stateurl,
+        },
         acpi: false,
         net_device: {
             type : "ne2k",
@@ -346,9 +346,7 @@ function attachEmulatorListeners(emulator) {
     const glCanvas = document.getElementById("v86gl_canvas");
 
     const installV86GLBridge =
-        typeof installV86GLNetworkBridge === "function" ? installV86GLNetworkBridge :
-        typeof installV86GLSerialBridge === "function" ? installV86GLSerialBridge :
-        null;
+        typeof installV86GLNetworkBridge === "function" ? installV86GLNetworkBridge : null;
 
     if (glCanvas && installV86GLBridge) {
         try {
