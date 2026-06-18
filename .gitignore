@@ -3,3 +3,9 @@
 *.iso
 *.bin.zst
 .DS_Store
+
+bios/
+game/
+windows98/
+windows2000/
+windowsxp/

@@ -1,6 +1,7 @@
 "use strict";
 
 let emulator = null;
+let v86gl = null;
 
 const R2_URL_1 = "https://retrogamingsiteresource.dpdns.org";
 const R2_URL_2 = "https://resource2.19930724.xyz";
@@ -231,6 +232,14 @@ const GAMES = {
         size: 1073741824,
         stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
     },
+    'warcraft3': {
+        name: 'Warcraft III',
+        systemDisk: 'windowsxp/windowsxp_multidisk_C_4G.img',
+        systemDiskSize: 4294967296,
+        disk: 'game/warcraft3.img',
+        size: 2634022912,
+        // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
+    },
 };
 
 const progressContainer = document.getElementById("progress_container");
@@ -288,32 +297,38 @@ function startEmulator9xMultiDisk(gameId) {
         emulator.stop();
         emulator.destroy();
         emulator = null;
+        v86gl = null;
+
+        const glCanvas = document.getElementById("v86gl_canvas");
+        if (glCanvas) {
+            glCanvas.style.display = "none";
+        }
     }
 
     emulator = new V86({
-        memory_size: 256 * 1024 * 1024,
-        vga_memory_size: 16 * 1024 * 1024,
+        memory_size: 1024 * 1024 * 1024,
+        vga_memory_size: 64 * 1024 * 1024,
         bios: { url: "bios/seabios.bin" },
         vga_bios: { url: "bios/vgabios.bin" },
         wasm_path: "v86.wasm",
         screen_container: document.getElementById("screen_container"),
         hda: {
-            url: R2_URL_1 + game.systemDisk,
+            url: game.systemDisk,
             async: true,
             size: game.systemDiskSize,
-            fixed_chunk_size: 1024 * 1024,
-            use_parts: true,
+            // fixed_chunk_size: 1024 * 1024,
+            // use_parts: true,
         },
         hdb: {
             url: game.disk,
             async: true,
             size: game.size,
-            fixed_chunk_size: 1024 * 1024,
-            use_parts: true,
+            // fixed_chunk_size: 1024 * 1024,
+            // use_parts: true,
         },
-        initial_state: { 
-            url: game.stateurl,
-        },
+        // initial_state: { 
+        //     url: game.stateurl,
+        // },
         acpi: false,
         net_device: {
             type : "ne2k",
@@ -328,6 +343,24 @@ function startEmulator9xMultiDisk(gameId) {
 }
 
 function attachEmulatorListeners(emulator) {
+    const glCanvas = document.getElementById("v86gl_canvas");
+
+    const installV86GLBridge =
+        typeof installV86GLNetworkBridge === "function" ? installV86GLNetworkBridge :
+        typeof installV86GLSerialBridge === "function" ? installV86GLSerialBridge :
+        null;
+
+    if (glCanvas && installV86GLBridge) {
+        try {
+            v86gl = installV86GLBridge(emulator, glCanvas, {
+                gl4es: window.GL4ES,
+                logPackets: true
+            });
+            window.v86gl = v86gl;
+        } catch (err) {
+            console.warn("Failed to start v86 GL network bridge:", err);
+        }
+    }
 
     emulator.add_listener("download-progress", function(e) {
 
