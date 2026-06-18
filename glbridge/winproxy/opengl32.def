@@ -51,3 +51,12 @@ EXPORTS
     glTexEnvi@12
     glTexEnvf@12
     glTexCoord2f@8
+    glEnableClientState@4
+    glDisableClientState@4
+    glVertexPointer@16
+    glColorPointer@16
+    glTexCoordPointer@16
+    glNormalPointer@12
+    glDrawArrays@12
+    glDrawElements@16
+    glInterleavedArrays@12

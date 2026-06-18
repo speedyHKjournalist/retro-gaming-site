@@ -365,3 +365,88 @@ void v86gl_glTexCoord2f(GLfloat s, GLfloat t) {
     if (!v86gl_ensure_ready()) return;
     glTexCoord2f(s, t);
 }
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glEnableClientState(GLenum array) {
+    if (!v86gl_ensure_ready()) return;
+    glEnableClientState(array);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDisableClientState(GLenum array) {
+    if (!v86gl_ensure_ready()) return;
+    glDisableClientState(array);
+}
+
+static void v86gl_setup_client_arrays(GLint vertex_size, GLenum vertex_type,
+                                      GLsizei vertex_stride, const void* vertex_data,
+                                      GLint color_size, GLenum color_type,
+                                      GLsizei color_stride, const void* color_data,
+                                      GLint texcoord_size, GLenum texcoord_type,
+                                      GLsizei texcoord_stride, const void* texcoord_data,
+                                      GLenum normal_type, GLsizei normal_stride,
+                                      const void* normal_data) {
+    if (vertex_data && vertex_size > 0) {
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glVertexPointer(vertex_size, vertex_type, vertex_stride, vertex_data);
+    } else {
+        glDisableClientState(GL_VERTEX_ARRAY);
+    }
+
+    if (color_data && color_size > 0) {
+        glEnableClientState(GL_COLOR_ARRAY);
+        glColorPointer(color_size, color_type, color_stride, color_data);
+    } else {
+        glDisableClientState(GL_COLOR_ARRAY);
+    }
+
+    if (texcoord_data && texcoord_size > 0) {
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glTexCoordPointer(texcoord_size, texcoord_type, texcoord_stride, texcoord_data);
+    } else {
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    }
+
+    if (normal_data) {
+        glEnableClientState(GL_NORMAL_ARRAY);
+        glNormalPointer(normal_type, normal_stride, normal_data);
+    } else {
+        glDisableClientState(GL_NORMAL_ARRAY);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawArraysPacked(GLenum mode, GLsizei count,
+                              GLint vertex_size, GLenum vertex_type,
+                              GLsizei vertex_stride, const void* vertex_data,
+                              GLint color_size, GLenum color_type,
+                              GLsizei color_stride, const void* color_data,
+                              GLint texcoord_size, GLenum texcoord_type,
+                              GLsizei texcoord_stride, const void* texcoord_data,
+                              GLenum normal_type, GLsizei normal_stride,
+                              const void* normal_data) {
+    if (!v86gl_ensure_ready()) return;
+    v86gl_setup_client_arrays(vertex_size, vertex_type, vertex_stride, vertex_data,
+                              color_size, color_type, color_stride, color_data,
+                              texcoord_size, texcoord_type, texcoord_stride, texcoord_data,
+                              normal_type, normal_stride, normal_data);
+    glDrawArrays(mode, 0, count);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawElementsPacked(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                GLint vertex_size, GLenum vertex_type,
+                                GLsizei vertex_stride, const void* vertex_data,
+                                GLint color_size, GLenum color_type,
+                                GLsizei color_stride, const void* color_data,
+                                GLint texcoord_size, GLenum texcoord_type,
+                                GLsizei texcoord_stride, const void* texcoord_data,
+                                GLenum normal_type, GLsizei normal_stride,
+                                const void* normal_data) {
+    if (!v86gl_ensure_ready()) return;
+    v86gl_setup_client_arrays(vertex_size, vertex_type, vertex_stride, vertex_data,
+                              color_size, color_type, color_stride, color_data,
+                              texcoord_size, texcoord_type, texcoord_stride, texcoord_data,
+                              normal_type, normal_stride, normal_data);
+    glDrawElements(mode, count, type, indices);
+}

@@ -42,6 +42,7 @@ typedef void GLvoid;
 #define GL_INT                0x1404
 #define GL_UNSIGNED_INT       0x1405
 #define GL_FLOAT              0x1406
+#define GL_DOUBLE             0x140A
 #define GL_RED                0x1903
 #define GL_GREEN              0x1904
 #define GL_BLUE               0x1905
@@ -65,7 +66,26 @@ typedef void GLvoid;
 #define GL_UNPACK_ALIGNMENT   0x0CF5
 #define GL_INVALID_ENUM       0x0500
 #define GL_INVALID_VALUE      0x0501
+#define GL_INVALID_OPERATION  0x0502
 #define GL_OUT_OF_MEMORY      0x0505
+#define GL_VERTEX_ARRAY       0x8074
+#define GL_NORMAL_ARRAY       0x8075
+#define GL_COLOR_ARRAY        0x8076
+#define GL_TEXTURE_COORD_ARRAY 0x8078
+#define GL_V2F                0x2A20
+#define GL_V3F                0x2A21
+#define GL_C4UB_V2F           0x2A22
+#define GL_C4UB_V3F           0x2A23
+#define GL_C3F_V3F            0x2A24
+#define GL_N3F_V3F            0x2A25
+#define GL_C4F_N3F_V3F        0x2A26
+#define GL_T2F_V3F            0x2A27
+#define GL_T4F_V4F            0x2A28
+#define GL_T2F_C4UB_V3F       0x2A29
+#define GL_T2F_C3F_V3F        0x2A2A
+#define GL_T2F_N3F_V3F        0x2A2B
+#define GL_T2F_C4F_N3F_V3F    0x2A2C
+#define GL_T4F_C4F_N3F_V4F    0x2A2D
 
 #define VGL_MAGIC 0x314C4756u  // 'VGL1' little-endian
 
@@ -123,6 +143,10 @@ enum {
     GLFN_TEX_ENVI = 34,
     GLFN_TEX_ENVF = 35,
     GLFN_TEX_COORD2F = 36,
+    GLFN_ENABLE_CLIENT_STATE = 37,
+    GLFN_DISABLE_CLIENT_STATE = 38,
+    GLFN_DRAW_ARRAYS = 39,
+    GLFN_DRAW_ELEMENTS = 40,
 };
 
 #pragma pack(push, 1)
@@ -160,6 +184,36 @@ static GLint g_unpack_row_length = 0;
 static GLint g_unpack_skip_rows = 0;
 static GLint g_unpack_skip_pixels = 0;
 static GLenum g_error = 0;
+
+typedef struct {
+    BOOL enabled;
+    GLint size;
+    GLenum type;
+    GLsizei stride;
+    const GLvoid* pointer;
+} ClientArrayState;
+
+typedef struct {
+    uint32_t enabled;
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t data_size;
+} ClientArrayBlockHeader;
+
+typedef struct {
+    BOOL enabled;
+    GLint size;
+    GLenum type;
+    GLsizei stride;
+    uint32_t data_size;
+    const uint8_t* data;
+} ClientArrayCopy;
+
+static ClientArrayState g_vertex_array = { FALSE, 3, GL_FLOAT, 0, NULL };
+static ClientArrayState g_color_array = { FALSE, 4, GL_FLOAT, 0, NULL };
+static ClientArrayState g_texcoord_array = { FALSE, 2, GL_FLOAT, 0, NULL };
+static ClientArrayState g_normal_array = { FALSE, 3, GL_FLOAT, 0, NULL };
 
 static uint16_t bswap16(uint16_t x) {
     return (uint16_t)((x >> 8) | (x << 8));
@@ -492,6 +546,196 @@ static uint32_t gl_pixel_span(GLsizei width, GLsizei height, GLenum format, GLen
     }
 
     return (uint32_t)total;
+}
+
+static uint32_t gl_type_bytes(GLenum type) {
+    switch (type) {
+    case GL_BYTE:
+    case GL_UNSIGNED_BYTE:
+        return 1;
+    case GL_SHORT:
+    case GL_UNSIGNED_SHORT:
+        return 2;
+    case GL_INT:
+    case GL_UNSIGNED_INT:
+    case GL_FLOAT:
+        return 4;
+    case GL_DOUBLE:
+        return 8;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t client_array_element_size(GLint size, GLenum type) {
+    uint32_t bytes = gl_type_bytes(type);
+
+    if (size <= 0 || !bytes) {
+        return 0;
+    }
+
+    return (uint32_t)size * bytes;
+}
+
+static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count, ClientArrayCopy* out) {
+    uint32_t element_size;
+    uint32_t stride;
+    uint64_t offset;
+    uint64_t span;
+
+    ZeroMemory(out, sizeof(*out));
+    if (!state->enabled) {
+        return 1;
+    }
+
+    if (!state->pointer) {
+        g_error = GL_INVALID_OPERATION;
+        return 0;
+    }
+
+    element_size = client_array_element_size(state->size, state->type);
+    if (!element_size) {
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
+
+    stride = state->stride > 0 ? (uint32_t)state->stride : element_size;
+    offset = (uint64_t)(uint32_t)first * stride;
+    span = count > 0 ? (uint64_t)((uint32_t)count - 1u) * stride + element_size : 0;
+    if (offset > UINT32_MAX || span > UINT32_MAX) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+
+    out->enabled = TRUE;
+    out->size = state->size;
+    out->type = state->type;
+    out->stride = state->stride;
+    out->data_size = (uint32_t)span;
+    out->data = (const uint8_t*)state->pointer + (uint32_t)offset;
+    return 1;
+}
+
+static uint32_t client_array_blocks_size(const ClientArrayCopy* arrays, uint32_t count) {
+    uint32_t i;
+    uint64_t total = 0;
+
+    for (i = 0; i < count; i++) {
+        total += sizeof(ClientArrayBlockHeader) + arrays[i].data_size;
+        if (total > UINT32_MAX) {
+            return 0;
+        }
+    }
+
+    return (uint32_t)total;
+}
+
+static uint8_t* write_client_array_block(uint8_t* p, const ClientArrayCopy* array) {
+    ClientArrayBlockHeader h;
+
+    h.enabled = array->enabled ? 1u : 0u;
+    h.size = array->enabled ? array->size : 0;
+    h.type = array->enabled ? (uint32_t)array->type : 0u;
+    h.stride = array->enabled ? array->stride : 0;
+    h.data_size = array->enabled ? array->data_size : 0u;
+    CopyMemory(p, &h, sizeof(h));
+    p += sizeof(h);
+
+    if (h.data_size) {
+        CopyMemory(p, array->data, h.data_size);
+        p += h.data_size;
+    }
+
+    return p;
+}
+
+static int set_client_array_enabled(GLenum array, BOOL enabled, BOOL emit) {
+    uint32_t payload = (uint32_t)array;
+
+    switch (array) {
+    case GL_VERTEX_ARRAY:
+        g_vertex_array.enabled = enabled;
+        break;
+    case GL_COLOR_ARRAY:
+        g_color_array.enabled = enabled;
+        break;
+    case GL_TEXTURE_COORD_ARRAY:
+        g_texcoord_array.enabled = enabled;
+        break;
+    case GL_NORMAL_ARRAY:
+        g_normal_array.enabled = enabled;
+        break;
+    default:
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
+
+    if (emit) {
+        emit_gl_call(enabled ? GLFN_ENABLE_CLIENT_STATE : GLFN_DISABLE_CLIENT_STATE,
+                     &payload, sizeof(payload));
+    }
+
+    return 1;
+}
+
+static int gl_index_bytes(GLenum type) {
+    switch (type) {
+    case GL_UNSIGNED_BYTE:
+        return 1;
+    case GL_UNSIGNED_SHORT:
+        return 2;
+    case GL_UNSIGNED_INT:
+        return 4;
+    default:
+        return 0;
+    }
+}
+
+static int max_draw_index(const GLvoid* indices, GLsizei count, GLenum type, uint32_t* max_index) {
+    GLsizei i;
+
+    *max_index = 0;
+    if (count <= 0) {
+        return 1;
+    }
+
+    if (!indices) {
+        g_error = GL_INVALID_OPERATION;
+        return 0;
+    }
+
+    switch (type) {
+    case GL_UNSIGNED_BYTE: {
+        const GLubyte* p = (const GLubyte*)indices;
+        for (i = 0; i < count; i++) {
+            if (p[i] > *max_index) {
+                *max_index = p[i];
+            }
+        }
+        return 1;
+    }
+    case GL_UNSIGNED_SHORT: {
+        const uint16_t* p = (const uint16_t*)indices;
+        for (i = 0; i < count; i++) {
+            if (p[i] > *max_index) {
+                *max_index = p[i];
+            }
+        }
+        return 1;
+    }
+    case GL_UNSIGNED_INT: {
+        const uint32_t* p = (const uint32_t*)indices;
+        for (i = 0; i < count; i++) {
+            if (p[i] > *max_index) {
+                *max_index = p[i];
+            }
+        }
+        return 1;
+    }
+    default:
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
 }
 
 static uint8_t* alloc_payload(uint32_t size) {
@@ -1046,4 +1290,350 @@ void APIENTRY glTexCoord2f(GLfloat s, GLfloat t) {
     payload.s = s;
     payload.t = t;
     emit_gl_call(GLFN_TEX_COORD2F, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glEnableClientState(GLenum array) {
+    (void)set_client_array_enabled(array, TRUE, TRUE);
+}
+
+__declspec(dllexport)
+void APIENTRY glDisableClientState(GLenum array) {
+    (void)set_client_array_enabled(array, FALSE, TRUE);
+}
+
+__declspec(dllexport)
+void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
+    if (size < 2 || size > 4) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (!gl_type_bytes(type)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    g_vertex_array.size = size;
+    g_vertex_array.type = type;
+    g_vertex_array.stride = stride;
+    g_vertex_array.pointer = pointer;
+}
+
+__declspec(dllexport)
+void APIENTRY glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
+    if (size < 3 || size > 4) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (!gl_type_bytes(type)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    g_color_array.size = size;
+    g_color_array.type = type;
+    g_color_array.stride = stride;
+    g_color_array.pointer = pointer;
+}
+
+__declspec(dllexport)
+void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
+    if (size < 1 || size > 4) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (!gl_type_bytes(type)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    g_texcoord_array.size = size;
+    g_texcoord_array.type = type;
+    g_texcoord_array.stride = stride;
+    g_texcoord_array.pointer = pointer;
+}
+
+__declspec(dllexport)
+void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer) {
+    if (stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (!gl_type_bytes(type)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    g_normal_array.size = 3;
+    g_normal_array.type = type;
+    g_normal_array.stride = stride;
+    g_normal_array.pointer = pointer;
+}
+
+__declspec(dllexport)
+void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+    ClientArrayCopy arrays[4];
+    uint32_t block_size;
+    uint32_t total_size;
+    uint8_t* payload;
+    uint8_t* p;
+    struct { uint32_t mode; int32_t count; } header;
+
+    if (first < 0 || count < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    if (!g_vertex_array.enabled) {
+        g_error = GL_INVALID_OPERATION;
+        return;
+    }
+
+    if (!client_array_copy(&g_vertex_array, first, count, &arrays[0]) ||
+        !client_array_copy(&g_color_array, first, count, &arrays[1]) ||
+        !client_array_copy(&g_texcoord_array, first, count, &arrays[2]) ||
+        !client_array_copy(&g_normal_array, first, count, &arrays[3])) {
+        return;
+    }
+
+    block_size = client_array_blocks_size(arrays, 4);
+    if (!block_size || block_size > UINT32_MAX - sizeof(header)) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    total_size = sizeof(header) + block_size;
+    payload = alloc_payload(total_size);
+    if (!payload) {
+        return;
+    }
+
+    header.mode = (uint32_t)mode;
+    header.count = count;
+    CopyMemory(payload, &header, sizeof(header));
+    p = payload + sizeof(header);
+    p = write_client_array_block(p, &arrays[0]);
+    p = write_client_array_block(p, &arrays[1]);
+    p = write_client_array_block(p, &arrays[2]);
+    p = write_client_array_block(p, &arrays[3]);
+
+    emit_gl_call(GLFN_DRAW_ARRAYS, payload, total_size);
+    HeapFree(GetProcessHeap(), 0, payload);
+}
+
+__declspec(dllexport)
+void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices) {
+    ClientArrayCopy arrays[4];
+    uint32_t max_index;
+    uint32_t array_count;
+    uint32_t index_size;
+    uint32_t index_data_size;
+    uint32_t block_size;
+    uint32_t total_size;
+    uint8_t* payload;
+    uint8_t* p;
+    struct {
+        uint32_t mode;
+        int32_t count;
+        uint32_t type;
+        uint32_t index_data_size;
+    } header;
+
+    if (count < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    if (!g_vertex_array.enabled) {
+        g_error = GL_INVALID_OPERATION;
+        return;
+    }
+
+    index_size = (uint32_t)gl_index_bytes(type);
+    if (!index_size) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    if ((uint32_t)count > UINT32_MAX / index_size) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (!max_draw_index(indices, count, type, &max_index)) {
+        return;
+    }
+
+    if (max_index >= 0x7FFFFFFFu) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    array_count = max_index + 1u;
+    if (!client_array_copy(&g_vertex_array, 0, (GLsizei)array_count, &arrays[0]) ||
+        !client_array_copy(&g_color_array, 0, (GLsizei)array_count, &arrays[1]) ||
+        !client_array_copy(&g_texcoord_array, 0, (GLsizei)array_count, &arrays[2]) ||
+        !client_array_copy(&g_normal_array, 0, (GLsizei)array_count, &arrays[3])) {
+        return;
+    }
+
+    index_data_size = (uint32_t)count * index_size;
+    block_size = client_array_blocks_size(arrays, 4);
+    if (index_data_size > UINT32_MAX - sizeof(header) ||
+        !block_size ||
+        block_size > UINT32_MAX - sizeof(header) - index_data_size) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    total_size = sizeof(header) + index_data_size + block_size;
+    payload = alloc_payload(total_size);
+    if (!payload) {
+        return;
+    }
+
+    header.mode = (uint32_t)mode;
+    header.count = count;
+    header.type = (uint32_t)type;
+    header.index_data_size = index_data_size;
+    CopyMemory(payload, &header, sizeof(header));
+    p = payload + sizeof(header);
+    CopyMemory(p, indices, index_data_size);
+    p += index_data_size;
+    p = write_client_array_block(p, &arrays[0]);
+    p = write_client_array_block(p, &arrays[1]);
+    p = write_client_array_block(p, &arrays[2]);
+    p = write_client_array_block(p, &arrays[3]);
+
+    emit_gl_call(GLFN_DRAW_ELEMENTS, payload, total_size);
+    HeapFree(GetProcessHeap(), 0, payload);
+}
+
+__declspec(dllexport)
+void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* pointer) {
+    const uint8_t* base = (const uint8_t*)pointer;
+    GLsizei row_size = 0;
+    GLint vertex_size = 3;
+    GLint tex_size = 0;
+    GLint color_size = 0;
+    GLint normal_offset = -1;
+    GLint vertex_offset = -1;
+    GLint tex_offset = -1;
+    GLint color_offset = -1;
+    GLenum color_type = GL_FLOAT;
+
+    if (stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    switch (format) {
+    case GL_V2F:
+        row_size = 8; vertex_size = 2; vertex_offset = 0;
+        break;
+    case GL_V3F:
+        row_size = 12; vertex_size = 3; vertex_offset = 0;
+        break;
+    case GL_C4UB_V2F:
+        row_size = 12; color_size = 4; color_type = GL_UNSIGNED_BYTE; color_offset = 0; vertex_size = 2; vertex_offset = 4;
+        break;
+    case GL_C4UB_V3F:
+        row_size = 16; color_size = 4; color_type = GL_UNSIGNED_BYTE; color_offset = 0; vertex_size = 3; vertex_offset = 4;
+        break;
+    case GL_C3F_V3F:
+        row_size = 24; color_size = 3; color_offset = 0; vertex_size = 3; vertex_offset = 12;
+        break;
+    case GL_N3F_V3F:
+        row_size = 24; normal_offset = 0; vertex_size = 3; vertex_offset = 12;
+        break;
+    case GL_C4F_N3F_V3F:
+        row_size = 40; color_size = 4; color_offset = 0; normal_offset = 16; vertex_size = 3; vertex_offset = 28;
+        break;
+    case GL_T2F_V3F:
+        row_size = 20; tex_size = 2; tex_offset = 0; vertex_size = 3; vertex_offset = 8;
+        break;
+    case GL_T4F_V4F:
+        row_size = 32; tex_size = 4; tex_offset = 0; vertex_size = 4; vertex_offset = 16;
+        break;
+    case GL_T2F_C4UB_V3F:
+        row_size = 24; tex_size = 2; tex_offset = 0; color_size = 4; color_type = GL_UNSIGNED_BYTE; color_offset = 8; vertex_size = 3; vertex_offset = 12;
+        break;
+    case GL_T2F_C3F_V3F:
+        row_size = 32; tex_size = 2; tex_offset = 0; color_size = 3; color_offset = 8; vertex_size = 3; vertex_offset = 20;
+        break;
+    case GL_T2F_N3F_V3F:
+        row_size = 32; tex_size = 2; tex_offset = 0; normal_offset = 8; vertex_size = 3; vertex_offset = 20;
+        break;
+    case GL_T2F_C4F_N3F_V3F:
+        row_size = 48; tex_size = 2; tex_offset = 0; color_size = 4; color_offset = 8; normal_offset = 24; vertex_size = 3; vertex_offset = 36;
+        break;
+    case GL_T4F_C4F_N3F_V4F:
+        row_size = 60; tex_size = 4; tex_offset = 0; color_size = 4; color_offset = 16; normal_offset = 32; vertex_size = 4; vertex_offset = 44;
+        break;
+    default:
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    if (stride == 0) {
+        stride = row_size;
+    }
+
+    g_vertex_array.size = vertex_size;
+    g_vertex_array.type = GL_FLOAT;
+    g_vertex_array.stride = stride;
+    g_vertex_array.pointer = base ? base + vertex_offset : NULL;
+
+    if (tex_size) {
+        g_texcoord_array.size = tex_size;
+        g_texcoord_array.type = GL_FLOAT;
+        g_texcoord_array.stride = stride;
+        g_texcoord_array.pointer = base ? base + tex_offset : NULL;
+    }
+
+    if (color_size) {
+        g_color_array.size = color_size;
+        g_color_array.type = color_type;
+        g_color_array.stride = stride;
+        g_color_array.pointer = base ? base + color_offset : NULL;
+    }
+
+    if (normal_offset >= 0) {
+        g_normal_array.size = 3;
+        g_normal_array.type = GL_FLOAT;
+        g_normal_array.stride = stride;
+        g_normal_array.pointer = base ? base + normal_offset : NULL;
+    }
+
+    (void)set_client_array_enabled(GL_VERTEX_ARRAY, TRUE, TRUE);
+    (void)set_client_array_enabled(GL_TEXTURE_COORD_ARRAY, tex_size ? TRUE : FALSE, TRUE);
+    (void)set_client_array_enabled(GL_COLOR_ARRAY, color_size ? TRUE : FALSE, TRUE);
+    (void)set_client_array_enabled(GL_NORMAL_ARRAY, normal_offset >= 0 ? TRUE : FALSE, TRUE);
 }

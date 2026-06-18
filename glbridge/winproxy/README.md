@@ -57,6 +57,15 @@ Guest DLL exports:
 - `glTexEnvi`
 - `glTexEnvf`
 - `glTexCoord2f`
+- `glEnableClientState`
+- `glDisableClientState`
+- `glVertexPointer`
+- `glColorPointer`
+- `glTexCoordPointer`
+- `glNormalPointer`
+- `glDrawArrays`
+- `glDrawElements`
+- `glInterleavedArrays`
 
 It is enough for toy fixed-pipeline demos such as a triangle or a rotating
 colored cube. It is **not** enough for WineD3D or real games yet.
@@ -86,6 +95,11 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_rotate_cube_test.exe gl_rotate_cube_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o gl_client_arrays_test.exe gl_client_arrays_test.c \
+  -lopengl32 -lgdi32 -luser32 -lkernel32
 ```
 
 These commands intentionally avoid the MinGW C runtime. Some modern MinGW-w64
@@ -98,9 +112,11 @@ Copy both files into the same folder in the Windows XP guest:
 opengl32.dll
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
+gl_client_arrays_test.exe
 ```
 
-Run `gl_triangle_test.exe` or `gl_rotate_cube_test.exe`.
+Run `gl_triangle_test.exe`, `gl_rotate_cube_test.exe`, or
+`gl_client_arrays_test.exe`.
 
 The demo calls the fake WGL/OpenGL subset directly and presents with
 `wglSwapLayerBuffers` plus `glFlush`, so it does not depend on intercepting
@@ -178,6 +194,6 @@ That page uses a tiny emulator stub and feeds the same `VGL1` packets to
 ## Important limitations
 
 - UDP broadcast over `net0-send` is only for proof of concept. GL calls are batched per frame to reduce guest stalls, but this is still not a production transport for real games.
-- The fixed-pipeline matrix stack, depth test, shading mode, face-culling, and basic 2D texture calls above are forwarded to gl4es, but there is still no clipping, lighting, display lists, client arrays, compressed textures, multitexture, or WineD3D compatibility.
+- The fixed-pipeline matrix stack, depth test, shading mode, face-culling, basic 2D texture calls, and client arrays above are forwarded to gl4es, but there is still no clipping, lighting, display lists, compressed textures, multitexture, VBOs, or WineD3D compatibility.
 - `SwapBuffers` is exported by `gdi32.dll`, not `opengl32.dll`; normal apps that import `SwapBuffers` from `gdi32.dll` are not intercepted by this DLL. This toy bridge presents on `glFlush`, `glFinish`, `wglSwapLayerBuffers`, and the nonstandard helper export `wglSwapBuffers`.
 - For real performance, replace UDP broadcast with a v86 PCI/MMIO shared command ring or another zero-copy shared command transport.

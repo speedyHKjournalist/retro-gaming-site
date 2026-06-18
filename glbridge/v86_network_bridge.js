@@ -59,6 +59,10 @@
     const GLFN_TEX_ENVI = 34;
     const GLFN_TEX_ENVF = 35;
     const GLFN_TEX_COORD2F = 36;
+    const GLFN_ENABLE_CLIENT_STATE = 37;
+    const GLFN_DISABLE_CLIENT_STATE = 38;
+    const GLFN_DRAW_ARRAYS = 39;
+    const GLFN_DRAW_ELEMENTS = 40;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -114,6 +118,10 @@
         [GLFN_TEX_ENVI]: "glTexEnvi",
         [GLFN_TEX_ENVF]: "glTexEnvf",
         [GLFN_TEX_COORD2F]: "glTexCoord2f",
+        [GLFN_ENABLE_CLIENT_STATE]: "glEnableClientState",
+        [GLFN_DISABLE_CLIENT_STATE]: "glDisableClientState",
+        [GLFN_DRAW_ARRAYS]: "glDrawArrays",
+        [GLFN_DRAW_ELEMENTS]: "glDrawElements",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -212,6 +220,48 @@
             }
 
             return this.withHeapBytes(bytes, callback);
+        }
+
+        withHeapBlocks(blocks, callback) {
+            const ptrs = new Array(blocks.length).fill(0);
+            const allocated = [];
+            let needsHeap = false;
+
+            for (let i = 0; i < blocks.length; i++) {
+                if (blocks[i] && blocks[i].bytes && blocks[i].bytes.length) {
+                    needsHeap = true;
+                    break;
+                }
+            }
+
+            const heap = needsHeap ? this.heapU8() : null;
+            if (needsHeap && !heap) {
+                return false;
+            }
+
+            try {
+                for (let i = 0; i < blocks.length; i++) {
+                    const block = blocks[i];
+                    if (!block || !block.bytes || !block.bytes.length) {
+                        continue;
+                    }
+
+                    const ptr = this.malloc(block.bytes.length);
+                    if (!ptr) {
+                        return false;
+                    }
+
+                    heap.set(block.bytes, ptr);
+                    ptrs[i] = ptr;
+                    allocated.push(ptr);
+                }
+
+                return callback(ptrs);
+            } finally {
+                for (let i = 0; i < allocated.length; i++) {
+                    this.free(allocated[i]);
+                }
+            }
         }
 
         glCall(fn, p) {
@@ -330,6 +380,18 @@
             case GLFN_TEX_COORD2F:
                 this.callGL("TexCoord2f", [f32(p, 0), f32(p, 4)], ["number", "number"]);
                 break;
+            case GLFN_ENABLE_CLIENT_STATE:
+                this.callGL("EnableClientState", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DISABLE_CLIENT_STATE:
+                this.callGL("DisableClientState", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DRAW_ARRAYS:
+                this.callDrawArrays(p);
+                break;
+            case GLFN_DRAW_ELEMENTS:
+                this.callDrawElements(p);
+                break;
             default:
                 this.warnMissing("GL function id " + fn);
                 break;
@@ -377,6 +439,110 @@
                     u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
                     i32(p, 20), u32(p, 24), u32(p, 28), ptr,
                 ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]));
+        }
+
+        parseClientArrayBlocks(p, offset, count) {
+            const blocks = [];
+
+            for (let i = 0; i < count; i++) {
+                if (offset + 20 > p.length) {
+                    return null;
+                }
+
+                const enabled = u32(p, offset) !== 0;
+                const size = i32(p, offset + 4);
+                const type = u32(p, offset + 8);
+                const stride = i32(p, offset + 12);
+                const dataSize = u32(p, offset + 16);
+                offset += 20;
+
+                if (offset + dataSize > p.length) {
+                    return null;
+                }
+
+                blocks.push({
+                    enabled,
+                    size: enabled ? size : 0,
+                    type: enabled ? type : 0,
+                    stride: enabled ? stride : 0,
+                    bytes: enabled && dataSize ? p.slice(offset, offset + dataSize) : null,
+                });
+                offset += dataSize;
+            }
+
+            return { blocks, offset };
+        }
+
+        clientArrayArgs(blocks, ptrs) {
+            const vertex = blocks[0];
+            const color = blocks[1];
+            const texcoord = blocks[2];
+            const normal = blocks[3];
+
+            return [
+                vertex.size, vertex.type, vertex.stride, ptrs[0],
+                color.size, color.type, color.stride, ptrs[1],
+                texcoord.size, texcoord.type, texcoord.stride, ptrs[2],
+                normal.type, normal.stride, ptrs[3],
+            ];
+        }
+
+        callDrawArrays(p) {
+            if (p.length < 8) {
+                return false;
+            }
+
+            const parsed = this.parseClientArrayBlocks(p, 8, 4);
+            if (!parsed) {
+                return false;
+            }
+
+            const mode = u32(p, 0);
+            const count = i32(p, 4);
+            return this.withHeapBlocks(parsed.blocks, ptrs =>
+                this.callGL("DrawArraysPacked", [
+                    mode, count,
+                    ...this.clientArrayArgs(parsed.blocks, ptrs),
+                ], [
+                    "number", "number",
+                    "number", "number", "number", "number",
+                    "number", "number", "number", "number",
+                    "number", "number", "number", "number",
+                    "number", "number", "number",
+                ]));
+        }
+
+        callDrawElements(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const indexDataSize = u32(p, 12);
+            if (16 + indexDataSize > p.length) {
+                return false;
+            }
+
+            const indexBlock = { bytes: indexDataSize ? p.slice(16, 16 + indexDataSize) : null };
+            const parsed = this.parseClientArrayBlocks(p, 16 + indexDataSize, 4);
+            if (!parsed) {
+                return false;
+            }
+
+            const blocks = [indexBlock, ...parsed.blocks];
+            const mode = u32(p, 0);
+            const count = i32(p, 4);
+            const indexType = u32(p, 8);
+            return this.withHeapBlocks(blocks, ptrs =>
+                this.callGL("DrawElementsPacked", [
+                    mode, count, indexType, ptrs[0],
+                    ...this.clientArrayArgs(parsed.blocks, ptrs.slice(1)),
+                ], [
+                    "number", "number", "number", "number",
+                    "number", "number", "number", "number",
+                    "number", "number", "number", "number",
+                    "number", "number", "number", "number",
+                    "number", "number", "number",
+                ]));
         }
 
         present() {

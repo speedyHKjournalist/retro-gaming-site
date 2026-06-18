@@ -65,7 +65,11 @@ emcc gl4es_bridge.c \
     "_v86gl_glPixelStorei",
     "_v86gl_glTexEnvi",
     "_v86gl_glTexEnvf",
-    "_v86gl_glTexCoord2f"
+    "_v86gl_glTexCoord2f",
+    "_v86gl_glEnableClientState",
+    "_v86gl_glDisableClientState",
+    "_v86gl_glDrawArraysPacked",
+    "_v86gl_glDrawElementsPacked"
   ]' \
   -o gl4es.js
 
