@@ -65,6 +65,14 @@ Guest DLL exports:
 - `glActiveTextureARB` / `glActiveTexture`
 - `glClientActiveTextureARB` / `glClientActiveTexture`
 - `glMultiTexCoord*ARB` common scalar/vector variants
+- `glNormal3f`
+- `glFogf`
+- `glFogi`
+- `glFogfv`
+- `glMaterialf`
+- `glMateriali`
+- `glMaterialfv`
+- `glMaterialiv`
 - `glBlendFunc`
 - `glAlphaFunc`
 - `glDepthMask`
@@ -129,6 +137,11 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_query_multitexture_test.exe gl_query_multitexture_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o gl_fog_material_test.exe gl_fog_material_test.c \
+  -lopengl32 -lgdi32 -luser32 -lkernel32
 ```
 
 These commands intentionally avoid the MinGW C runtime. Some modern MinGW-w64
@@ -144,11 +157,12 @@ gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
 gl_blend_ui_test.exe
 gl_query_multitexture_test.exe
+gl_fog_material_test.exe
 ```
 
 Run `gl_triangle_test.exe`, `gl_rotate_cube_test.exe`, or
 `gl_client_arrays_test.exe`, `gl_blend_ui_test.exe`, or
-`gl_query_multitexture_test.exe`.
+`gl_query_multitexture_test.exe`, or `gl_fog_material_test.exe`.
 
 The demo calls the fake WGL/OpenGL subset directly and presents with
 `wglSwapLayerBuffers` plus `glFlush`, so it does not depend on intercepting

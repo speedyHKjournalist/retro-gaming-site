@@ -73,6 +73,14 @@
     const GLFN_ACTIVE_TEXTURE = 48;
     const GLFN_CLIENT_ACTIVE_TEXTURE = 49;
     const GLFN_MULTI_TEX_COORD4F = 50;
+    const GLFN_NORMAL3F = 51;
+    const GLFN_FOGF = 52;
+    const GLFN_FOGI = 53;
+    const GLFN_FOGFV = 54;
+    const GLFN_MATERIALF = 55;
+    const GLFN_MATERIALI = 56;
+    const GLFN_MATERIALFV = 57;
+    const GLFN_MATERIALIV = 58;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -142,6 +150,14 @@
         [GLFN_ACTIVE_TEXTURE]: "glActiveTexture",
         [GLFN_CLIENT_ACTIVE_TEXTURE]: "glClientActiveTexture",
         [GLFN_MULTI_TEX_COORD4F]: "glMultiTexCoord4f",
+        [GLFN_NORMAL3F]: "glNormal3f",
+        [GLFN_FOGF]: "glFogf",
+        [GLFN_FOGI]: "glFogi",
+        [GLFN_FOGFV]: "glFogfv",
+        [GLFN_MATERIALF]: "glMaterialf",
+        [GLFN_MATERIALI]: "glMateriali",
+        [GLFN_MATERIALFV]: "glMaterialfv",
+        [GLFN_MATERIALIV]: "glMaterialiv",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -445,6 +461,38 @@
                 this.callGL("MultiTexCoord4f", [
                     u32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12), f32(p, 16),
                 ], ["number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_NORMAL3F:
+                this.callGL("Normal3f", [f32(p, 0), f32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_FOGF:
+                this.callGL("Fogf", [u32(p, 0), f32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_FOGI:
+                this.callGL("Fogi", [u32(p, 0), i32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_FOGFV:
+                this.callGL("Fogfv4", [
+                    u32(p, 0), u32(p, 4), f32(p, 8), f32(p, 12), f32(p, 16), f32(p, 20),
+                ], ["number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_MATERIALF:
+                this.callGL("Materialf", [u32(p, 0), u32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_MATERIALI:
+                this.callGL("Materiali", [u32(p, 0), u32(p, 4), i32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_MATERIALFV:
+                this.callGL("Materialfv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    f32(p, 12), f32(p, 16), f32(p, 20), f32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_MATERIALIV:
+                this.callGL("Materialiv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    i32(p, 12), i32(p, 16), i32(p, 20), i32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
                 break;
             default:
                 this.warnMissing("GL function id " + fn);

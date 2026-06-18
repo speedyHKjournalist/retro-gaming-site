@@ -16,6 +16,14 @@
 extern void glActiveTexture(GLenum texture);
 extern void glClientActiveTexture(GLenum texture);
 extern void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+extern void glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz);
+extern void glFogf(GLenum pname, GLfloat param);
+extern void glFogi(GLenum pname, GLint param);
+extern void glFogfv(GLenum pname, const GLfloat* params);
+extern void glMaterialf(GLenum face, GLenum pname, GLfloat param);
+extern void glMateriali(GLenum face, GLenum pname, GLint param);
+extern void glMaterialfv(GLenum face, GLenum pname, const GLfloat* params);
+extern void glMaterialiv(GLenum face, GLenum pname, const GLint* params);
 
 static int32_t g_surface_x;
 static int32_t g_surface_y;
@@ -386,6 +394,75 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q) {
     if (!v86gl_ensure_ready()) return;
     glMultiTexCoord4f(target, s, t, r, q);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) {
+    if (!v86gl_ensure_ready()) return;
+    glNormal3f(nx, ny, nz);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFogf(GLenum pname, GLfloat param) {
+    if (!v86gl_ensure_ready()) return;
+    glFogf(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFogi(GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glFogi(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFogfv4(GLenum pname, GLsizei count,
+                    GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
+    GLfloat values[4];
+    (void)count;
+    if (!v86gl_ensure_ready()) return;
+    values[0] = v0;
+    values[1] = v1;
+    values[2] = v2;
+    values[3] = v3;
+    glFogfv(pname, values);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMaterialf(GLenum face, GLenum pname, GLfloat param) {
+    if (!v86gl_ensure_ready()) return;
+    glMaterialf(face, pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMateriali(GLenum face, GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glMateriali(face, pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMaterialfv4(GLenum face, GLenum pname, GLsizei count,
+                         GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
+    GLfloat values[4];
+    (void)count;
+    if (!v86gl_ensure_ready()) return;
+    values[0] = v0;
+    values[1] = v1;
+    values[2] = v2;
+    values[3] = v3;
+    glMaterialfv(face, pname, values);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMaterialiv4(GLenum face, GLenum pname, GLsizei count,
+                         GLint v0, GLint v1, GLint v2, GLint v3) {
+    GLint values[4];
+    (void)count;
+    if (!v86gl_ensure_ready()) return;
+    values[0] = v0;
+    values[1] = v1;
+    values[2] = v2;
+    values[3] = v3;
+    glMaterialiv(face, pname, values);
 }
 
 EMSCRIPTEN_KEEPALIVE

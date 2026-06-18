@@ -100,6 +100,14 @@ EXPORTS
     glMultiTexCoord2fv@8
     glMultiTexCoord3fv@8
     glMultiTexCoord4fv@8
+    glNormal3f@12
+    glFogf@8
+    glFogi@8
+    glFogfv@8
+    glMaterialf@12
+    glMateriali@12
+    glMaterialfv@12
+    glMaterialiv@12
     glBlendFunc@8
     glAlphaFunc@8
     glDepthMask@4

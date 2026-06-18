@@ -69,6 +69,13 @@ typedef void GLvoid;
 #define GL_FRONT_FACE         0x0B46
 #define GL_LIGHTING           0x0B50
 #define GL_SHADE_MODEL        0x0B54
+#define GL_FOG                0x0B60
+#define GL_FOG_INDEX          0x0B61
+#define GL_FOG_DENSITY        0x0B62
+#define GL_FOG_START          0x0B63
+#define GL_FOG_END            0x0B64
+#define GL_FOG_MODE           0x0B65
+#define GL_FOG_COLOR          0x0B66
 #define GL_DEPTH_RANGE        0x0B70
 #define GL_DEPTH_TEST         0x0B71
 #define GL_DEPTH_WRITEMASK    0x0B72
@@ -147,6 +154,15 @@ typedef void GLvoid;
 #define GL_TEXTURE6_ARB       0x84C6
 #define GL_TEXTURE7_ARB       0x84C7
 #define GL_COMBINE_ARB        0x8570
+#define GL_EXP                0x0800
+#define GL_EXP2               0x0801
+#define GL_AMBIENT            0x1200
+#define GL_DIFFUSE            0x1201
+#define GL_SPECULAR           0x1202
+#define GL_EMISSION           0x1600
+#define GL_SHININESS          0x1601
+#define GL_AMBIENT_AND_DIFFUSE 0x1602
+#define GL_COLOR_INDEXES      0x1603
 #define GL_MODULATE           0x2100
 #define GL_DECAL              0x2101
 #define GL_TEXTURE_ENV        0x2300
@@ -304,6 +320,14 @@ enum {
     GLFN_ACTIVE_TEXTURE = 48,
     GLFN_CLIENT_ACTIVE_TEXTURE = 49,
     GLFN_MULTI_TEX_COORD4F = 50,
+    GLFN_NORMAL3F = 51,
+    GLFN_FOGF = 52,
+    GLFN_FOGI = 53,
+    GLFN_FOGFV = 54,
+    GLFN_MATERIALF = 55,
+    GLFN_MATERIALI = 56,
+    GLFN_MATERIALFV = 57,
+    GLFN_MATERIALIV = 58,
 };
 
 #pragma pack(push, 1)
@@ -691,6 +715,59 @@ static void identity_matrix(GLfloat* params) {
     for (i = 0; i < 16; i++) {
         params[i] = (i % 5) == 0 ? 1.0f : 0.0f;
     }
+}
+
+static int fog_value_count(GLenum pname) {
+    switch (pname) {
+    case GL_FOG_COLOR:
+        return 4;
+    case GL_FOG_INDEX:
+    case GL_FOG_DENSITY:
+    case GL_FOG_START:
+    case GL_FOG_END:
+    case GL_FOG_MODE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int fog_scalar_valid(GLenum pname) {
+    switch (pname) {
+    case GL_FOG_INDEX:
+    case GL_FOG_DENSITY:
+    case GL_FOG_START:
+    case GL_FOG_END:
+    case GL_FOG_MODE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int material_face_valid(GLenum face) {
+    return face == GL_FRONT || face == GL_BACK || face == GL_FRONT_AND_BACK;
+}
+
+static int material_value_count(GLenum pname) {
+    switch (pname) {
+    case GL_AMBIENT:
+    case GL_DIFFUSE:
+    case GL_SPECULAR:
+    case GL_EMISSION:
+    case GL_AMBIENT_AND_DIFFUSE:
+        return 4;
+    case GL_COLOR_INDEXES:
+        return 3;
+    case GL_SHININESS:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int material_scalar_valid(GLenum pname) {
+    return pname == GL_SHININESS;
 }
 
 static int open_udp(void) {
@@ -2371,6 +2448,166 @@ void APIENTRY glMultiTexCoord3fv(GLenum target, const GLfloat* v) {
 __declspec(dllexport)
 void APIENTRY glMultiTexCoord4fv(GLenum target, const GLfloat* v) {
     glMultiTexCoord4fvARB(target, v);
+}
+
+__declspec(dllexport)
+void APIENTRY glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) {
+    struct { float nx, ny, nz; } payload;
+    g_current_normal[0] = nx;
+    g_current_normal[1] = ny;
+    g_current_normal[2] = nz;
+    payload.nx = nx;
+    payload.ny = ny;
+    payload.nz = nz;
+    emit_gl_call(GLFN_NORMAL3F, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glFogf(GLenum pname, GLfloat param) {
+    struct { uint32_t pname; float param; } payload;
+    if (!fog_scalar_valid(pname)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    payload.pname = (uint32_t)pname;
+    payload.param = param;
+    emit_gl_call(GLFN_FOGF, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glFogi(GLenum pname, GLint param) {
+    struct { uint32_t pname; int32_t param; } payload;
+    if (!fog_scalar_valid(pname)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    payload.pname = (uint32_t)pname;
+    payload.param = param;
+    emit_gl_call(GLFN_FOGI, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glFogfv(GLenum pname, const GLfloat* params) {
+    struct {
+        uint32_t pname;
+        uint32_t count;
+        float values[4];
+    } payload;
+    int count = fog_value_count(pname);
+    int i;
+
+    if (!count) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    if (!params) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    ZeroMemory(&payload, sizeof(payload));
+    payload.pname = (uint32_t)pname;
+    payload.count = (uint32_t)count;
+    for (i = 0; i < count; i++) {
+        payload.values[i] = params[i];
+    }
+
+    emit_gl_call(GLFN_FOGFV, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glMaterialf(GLenum face, GLenum pname, GLfloat param) {
+    struct { uint32_t face, pname; float param; } payload;
+    if (!material_face_valid(face) || !material_scalar_valid(pname)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    payload.face = (uint32_t)face;
+    payload.pname = (uint32_t)pname;
+    payload.param = param;
+    emit_gl_call(GLFN_MATERIALF, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) {
+    struct { uint32_t face, pname; int32_t param; } payload;
+    if (!material_face_valid(face) || !material_scalar_valid(pname)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    payload.face = (uint32_t)face;
+    payload.pname = (uint32_t)pname;
+    payload.param = param;
+    emit_gl_call(GLFN_MATERIALI, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) {
+    struct {
+        uint32_t face;
+        uint32_t pname;
+        uint32_t count;
+        float values[4];
+    } payload;
+    int count = material_value_count(pname);
+    int i;
+
+    if (!material_face_valid(face) || !count) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    if (!params) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    ZeroMemory(&payload, sizeof(payload));
+    payload.face = (uint32_t)face;
+    payload.pname = (uint32_t)pname;
+    payload.count = (uint32_t)count;
+    for (i = 0; i < count; i++) {
+        payload.values[i] = params[i];
+    }
+
+    emit_gl_call(GLFN_MATERIALFV, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) {
+    struct {
+        uint32_t face;
+        uint32_t pname;
+        uint32_t count;
+        int32_t values[4];
+    } payload;
+    int count = material_value_count(pname);
+    int i;
+
+    if (!material_face_valid(face) || !count) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    if (!params) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    ZeroMemory(&payload, sizeof(payload));
+    payload.face = (uint32_t)face;
+    payload.pname = (uint32_t)pname;
+    payload.count = (uint32_t)count;
+    for (i = 0; i < count; i++) {
+        payload.values[i] = params[i];
+    }
+
+    emit_gl_call(GLFN_MATERIALIV, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
