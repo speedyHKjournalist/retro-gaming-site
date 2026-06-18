@@ -24,3 +24,19 @@ EXPORTS
     glVertex3f@12
     glFlush@0
     glFinish@0
+    glMatrixMode@4
+    glLoadIdentity@0
+    glFrustum@48
+    glOrtho@48
+    glTranslatef@12
+    glRotatef@16
+    glScalef@12
+    glPushMatrix@0
+    glPopMatrix@0
+    glEnable@4
+    glDisable@4
+    glDepthFunc@4
+    glClearDepth@8
+    glShadeModel@4
+    glCullFace@4
+    glFrontFace@4

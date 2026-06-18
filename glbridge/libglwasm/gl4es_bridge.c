@@ -131,3 +131,101 @@ void v86gl_glFinish(void) {
     if (!v86gl_ensure_ready()) return;
     glFinish();
 }
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMatrixMode(GLenum mode) {
+    if (!v86gl_ensure_ready()) return;
+    glMatrixMode(mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glLoadIdentity(void) {
+    if (!v86gl_ensure_ready()) return;
+    glLoadIdentity();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
+                     GLdouble zNear, GLdouble zFar) {
+    if (!v86gl_ensure_ready()) return;
+    glFrustum(left, right, bottom, top, zNear, zFar);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
+                   GLdouble zNear, GLdouble zFar) {
+    if (!v86gl_ensure_ready()) return;
+    glOrtho(left, right, bottom, top, zNear, zFar);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTranslatef(GLfloat x, GLfloat y, GLfloat z) {
+    if (!v86gl_ensure_ready()) return;
+    glTranslatef(x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
+    if (!v86gl_ensure_ready()) return;
+    glRotatef(angle, x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glScalef(GLfloat x, GLfloat y, GLfloat z) {
+    if (!v86gl_ensure_ready()) return;
+    glScalef(x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPushMatrix(void) {
+    if (!v86gl_ensure_ready()) return;
+    glPushMatrix();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPopMatrix(void) {
+    if (!v86gl_ensure_ready()) return;
+    glPopMatrix();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glEnable(GLenum cap) {
+    if (!v86gl_ensure_ready()) return;
+    glEnable(cap);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDisable(GLenum cap) {
+    if (!v86gl_ensure_ready()) return;
+    glDisable(cap);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDepthFunc(GLenum func) {
+    if (!v86gl_ensure_ready()) return;
+    glDepthFunc(func);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glClearDepth(GLdouble depth) {
+    if (!v86gl_ensure_ready()) return;
+    glClearDepth(depth);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glShadeModel(GLenum mode) {
+    if (!v86gl_ensure_ready()) return;
+    glShadeModel(mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCullFace(GLenum mode) {
+    if (!v86gl_ensure_ready()) return;
+    glCullFace(mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFrontFace(GLenum mode) {
+    if (!v86gl_ensure_ready()) return;
+    glFrontFace(mode);
+}

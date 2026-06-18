@@ -30,6 +30,22 @@
     const GLFN_VERTEX3F = 7;
     const GLFN_FLUSH = 8;
     const GLFN_FINISH = 9;
+    const GLFN_MATRIX_MODE = 10;
+    const GLFN_LOAD_IDENTITY = 11;
+    const GLFN_FRUSTUM = 12;
+    const GLFN_ORTHO = 13;
+    const GLFN_TRANSLATEF = 14;
+    const GLFN_ROTATEF = 15;
+    const GLFN_SCALEF = 16;
+    const GLFN_PUSH_MATRIX = 17;
+    const GLFN_POP_MATRIX = 18;
+    const GLFN_ENABLE = 19;
+    const GLFN_DISABLE = 20;
+    const GLFN_DEPTH_FUNC = 21;
+    const GLFN_CLEAR_DEPTH = 22;
+    const GLFN_SHADE_MODEL = 23;
+    const GLFN_CULL_FACE = 24;
+    const GLFN_FRONT_FACE = 25;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -56,6 +72,22 @@
         [GLFN_VERTEX3F]: "glVertex3f",
         [GLFN_FLUSH]: "glFlush",
         [GLFN_FINISH]: "glFinish",
+        [GLFN_MATRIX_MODE]: "glMatrixMode",
+        [GLFN_LOAD_IDENTITY]: "glLoadIdentity",
+        [GLFN_FRUSTUM]: "glFrustum",
+        [GLFN_ORTHO]: "glOrtho",
+        [GLFN_TRANSLATEF]: "glTranslatef",
+        [GLFN_ROTATEF]: "glRotatef",
+        [GLFN_SCALEF]: "glScalef",
+        [GLFN_PUSH_MATRIX]: "glPushMatrix",
+        [GLFN_POP_MATRIX]: "glPopMatrix",
+        [GLFN_ENABLE]: "glEnable",
+        [GLFN_DISABLE]: "glDisable",
+        [GLFN_DEPTH_FUNC]: "glDepthFunc",
+        [GLFN_CLEAR_DEPTH]: "glClearDepth",
+        [GLFN_SHADE_MODEL]: "glShadeModel",
+        [GLFN_CULL_FACE]: "glCullFace",
+        [GLFN_FRONT_FACE]: "glFrontFace",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -65,6 +97,13 @@
     function f32(a, o) {
         const b = new Uint8Array([a[o], a[o + 1], a[o + 2], a[o + 3]]);
         return new DataView(b.buffer).getFloat32(0, true);
+    }
+    function f64(a, o) {
+        const b = new Uint8Array([
+            a[o], a[o + 1], a[o + 2], a[o + 3],
+            a[o + 4], a[o + 5], a[o + 6], a[o + 7],
+        ]);
+        return new DataView(b.buffer).getFloat64(0, true);
     }
 
     class Gl4esRenderer {
@@ -120,6 +159,60 @@
                 break;
             case GLFN_FINISH:
                 this.callGL("Finish", [], []);
+                break;
+            case GLFN_MATRIX_MODE:
+                this.callGL("MatrixMode", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_LOAD_IDENTITY:
+                this.callGL("LoadIdentity", [], []);
+                break;
+            case GLFN_FRUSTUM:
+                this.callGL("Frustum", [
+                    f64(p, 0), f64(p, 8), f64(p, 16),
+                    f64(p, 24), f64(p, 32), f64(p, 40),
+                ], ["number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_ORTHO:
+                this.callGL("Ortho", [
+                    f64(p, 0), f64(p, 8), f64(p, 16),
+                    f64(p, 24), f64(p, 32), f64(p, 40),
+                ], ["number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_TRANSLATEF:
+                this.callGL("Translatef", [f32(p, 0), f32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_ROTATEF:
+                this.callGL("Rotatef", [f32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12)], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_SCALEF:
+                this.callGL("Scalef", [f32(p, 0), f32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_PUSH_MATRIX:
+                this.callGL("PushMatrix", [], []);
+                break;
+            case GLFN_POP_MATRIX:
+                this.callGL("PopMatrix", [], []);
+                break;
+            case GLFN_ENABLE:
+                this.callGL("Enable", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DISABLE:
+                this.callGL("Disable", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DEPTH_FUNC:
+                this.callGL("DepthFunc", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_CLEAR_DEPTH:
+                this.callGL("ClearDepth", [f64(p, 0)], ["number"]);
+                break;
+            case GLFN_SHADE_MODEL:
+                this.callGL("ShadeModel", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_CULL_FACE:
+                this.callGL("CullFace", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_FRONT_FACE:
+                this.callGL("FrontFace", [u32(p, 0)], ["number"]);
                 break;
             default:
                 this.warnMissing("GL function id " + fn);

@@ -36,7 +36,23 @@ emcc gl4es_bridge.c \
     "_v86gl_glColor4f",
     "_v86gl_glVertex3f",
     "_v86gl_glFlush",
-    "_v86gl_glFinish"
+    "_v86gl_glFinish",
+    "_v86gl_glMatrixMode",
+    "_v86gl_glLoadIdentity",
+    "_v86gl_glFrustum",
+    "_v86gl_glOrtho",
+    "_v86gl_glTranslatef",
+    "_v86gl_glRotatef",
+    "_v86gl_glScalef",
+    "_v86gl_glPushMatrix",
+    "_v86gl_glPopMatrix",
+    "_v86gl_glEnable",
+    "_v86gl_glDisable",
+    "_v86gl_glDepthFunc",
+    "_v86gl_glClearDepth",
+    "_v86gl_glShadeModel",
+    "_v86gl_glCullFace",
+    "_v86gl_glFrontFace"
   ]' \
   -o gl4es.js
 

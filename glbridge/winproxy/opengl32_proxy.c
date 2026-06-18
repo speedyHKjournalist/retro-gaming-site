@@ -19,6 +19,7 @@ typedef unsigned char GLubyte;
 typedef int GLint;
 typedef int GLsizei;
 typedef float GLfloat;
+typedef double GLdouble;
 
 #define GL_VENDOR             0x1F00
 #define GL_RENDERER           0x1F01
@@ -60,6 +61,22 @@ enum {
     GLFN_VERTEX3F    = 7,
     GLFN_FLUSH       = 8,
     GLFN_FINISH      = 9,
+    GLFN_MATRIX_MODE = 10,
+    GLFN_LOAD_IDENTITY = 11,
+    GLFN_FRUSTUM     = 12,
+    GLFN_ORTHO       = 13,
+    GLFN_TRANSLATEF  = 14,
+    GLFN_ROTATEF     = 15,
+    GLFN_SCALEF      = 16,
+    GLFN_PUSH_MATRIX = 17,
+    GLFN_POP_MATRIX  = 18,
+    GLFN_ENABLE      = 19,
+    GLFN_DISABLE     = 20,
+    GLFN_DEPTH_FUNC  = 21,
+    GLFN_CLEAR_DEPTH = 22,
+    GLFN_SHADE_MODEL = 23,
+    GLFN_CULL_FACE   = 24,
+    GLFN_FRONT_FACE  = 25,
 };
 
 #pragma pack(push, 1)
@@ -469,4 +486,119 @@ void APIENTRY glFlush(void) {
 __declspec(dllexport)
 void APIENTRY glFinish(void) {
     emit_gl_call(GLFN_FINISH, NULL, 0);
+}
+
+__declspec(dllexport)
+void APIENTRY glMatrixMode(GLenum mode) {
+    uint32_t payload = (uint32_t)mode;
+    emit_gl_call(GLFN_MATRIX_MODE, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glLoadIdentity(void) {
+    emit_gl_call(GLFN_LOAD_IDENTITY, NULL, 0);
+}
+
+__declspec(dllexport)
+void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
+    struct { double left, right, bottom, top, zNear, zFar; } payload;
+    payload.left = left;
+    payload.right = right;
+    payload.bottom = bottom;
+    payload.top = top;
+    payload.zNear = zNear;
+    payload.zFar = zFar;
+    emit_gl_call(GLFN_FRUSTUM, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
+    struct { double left, right, bottom, top, zNear, zFar; } payload;
+    payload.left = left;
+    payload.right = right;
+    payload.bottom = bottom;
+    payload.top = top;
+    payload.zNear = zNear;
+    payload.zFar = zFar;
+    emit_gl_call(GLFN_ORTHO, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z) {
+    struct { float x, y, z; } payload;
+    payload.x = x;
+    payload.y = y;
+    payload.z = z;
+    emit_gl_call(GLFN_TRANSLATEF, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
+    struct { float angle, x, y, z; } payload;
+    payload.angle = angle;
+    payload.x = x;
+    payload.y = y;
+    payload.z = z;
+    emit_gl_call(GLFN_ROTATEF, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glScalef(GLfloat x, GLfloat y, GLfloat z) {
+    struct { float x, y, z; } payload;
+    payload.x = x;
+    payload.y = y;
+    payload.z = z;
+    emit_gl_call(GLFN_SCALEF, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glPushMatrix(void) {
+    emit_gl_call(GLFN_PUSH_MATRIX, NULL, 0);
+}
+
+__declspec(dllexport)
+void APIENTRY glPopMatrix(void) {
+    emit_gl_call(GLFN_POP_MATRIX, NULL, 0);
+}
+
+__declspec(dllexport)
+void APIENTRY glEnable(GLenum cap) {
+    uint32_t payload = (uint32_t)cap;
+    emit_gl_call(GLFN_ENABLE, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glDisable(GLenum cap) {
+    uint32_t payload = (uint32_t)cap;
+    emit_gl_call(GLFN_DISABLE, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glDepthFunc(GLenum func) {
+    uint32_t payload = (uint32_t)func;
+    emit_gl_call(GLFN_DEPTH_FUNC, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glClearDepth(GLdouble depth) {
+    double payload = depth;
+    emit_gl_call(GLFN_CLEAR_DEPTH, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glShadeModel(GLenum mode) {
+    uint32_t payload = (uint32_t)mode;
+    emit_gl_call(GLFN_SHADE_MODEL, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glCullFace(GLenum mode) {
+    uint32_t payload = (uint32_t)mode;
+    emit_gl_call(GLFN_CULL_FACE, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glFrontFace(GLenum mode) {
+    uint32_t payload = (uint32_t)mode;
+    emit_gl_call(GLFN_FRONT_FACE, &payload, sizeof(payload));
 }
