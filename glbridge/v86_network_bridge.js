@@ -70,6 +70,9 @@
     const GLFN_SCISSOR = 45;
     const GLFN_LINE_WIDTH = 46;
     const GLFN_POLYGON_MODE = 47;
+    const GLFN_ACTIVE_TEXTURE = 48;
+    const GLFN_CLIENT_ACTIVE_TEXTURE = 49;
+    const GLFN_MULTI_TEX_COORD4F = 50;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -136,6 +139,9 @@
         [GLFN_SCISSOR]: "glScissor",
         [GLFN_LINE_WIDTH]: "glLineWidth",
         [GLFN_POLYGON_MODE]: "glPolygonMode",
+        [GLFN_ACTIVE_TEXTURE]: "glActiveTexture",
+        [GLFN_CLIENT_ACTIVE_TEXTURE]: "glClientActiveTexture",
+        [GLFN_MULTI_TEX_COORD4F]: "glMultiTexCoord4f",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -428,6 +434,17 @@
                 break;
             case GLFN_POLYGON_MODE:
                 this.callGL("PolygonMode", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_ACTIVE_TEXTURE:
+                this.callGL("ActiveTexture", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_CLIENT_ACTIVE_TEXTURE:
+                this.callGL("ClientActiveTexture", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_MULTI_TEX_COORD4F:
+                this.callGL("MultiTexCoord4f", [
+                    u32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12), f32(p, 16),
+                ], ["number", "number", "number", "number", "number"]);
                 break;
             default:
                 this.warnMissing("GL function id " + fn);

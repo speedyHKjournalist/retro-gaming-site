@@ -13,6 +13,9 @@ EXPORTS
 
     glGetString@4
     glGetError@0
+    glGetIntegerv@8
+    glGetFloatv@8
+    glIsEnabled@4
     glViewport@16
     glClearColor@16
     glClear@4
@@ -47,10 +50,56 @@ EXPORTS
     glTexSubImage2D@36
     glTexParameteri@12
     glTexParameterf@12
+    glGetTexParameteriv@12
+    glGetTexParameterfv@12
     glPixelStorei@8
     glTexEnvi@12
     glTexEnvf@12
     glTexCoord2f@8
+    glActiveTexture@4
+    glClientActiveTexture@4
+    glActiveTextureARB@4
+    glClientActiveTextureARB@4
+    glMultiTexCoord1dARB@12
+    glMultiTexCoord2dARB@20
+    glMultiTexCoord3dARB@28
+    glMultiTexCoord4dARB@36
+    glMultiTexCoord1fARB@8
+    glMultiTexCoord2fARB@12
+    glMultiTexCoord3fARB@16
+    glMultiTexCoord4fARB@20
+    glMultiTexCoord1iARB@8
+    glMultiTexCoord2iARB@12
+    glMultiTexCoord3iARB@16
+    glMultiTexCoord4iARB@20
+    glMultiTexCoord1sARB@8
+    glMultiTexCoord2sARB@12
+    glMultiTexCoord3sARB@16
+    glMultiTexCoord4sARB@20
+    glMultiTexCoord1dvARB@8
+    glMultiTexCoord2dvARB@8
+    glMultiTexCoord3dvARB@8
+    glMultiTexCoord4dvARB@8
+    glMultiTexCoord1fvARB@8
+    glMultiTexCoord2fvARB@8
+    glMultiTexCoord3fvARB@8
+    glMultiTexCoord4fvARB@8
+    glMultiTexCoord1ivARB@8
+    glMultiTexCoord2ivARB@8
+    glMultiTexCoord3ivARB@8
+    glMultiTexCoord4ivARB@8
+    glMultiTexCoord1svARB@8
+    glMultiTexCoord2svARB@8
+    glMultiTexCoord3svARB@8
+    glMultiTexCoord4svARB@8
+    glMultiTexCoord1f@8
+    glMultiTexCoord2f@12
+    glMultiTexCoord3f@16
+    glMultiTexCoord4f@20
+    glMultiTexCoord1fv@8
+    glMultiTexCoord2fv@8
+    glMultiTexCoord3fv@8
+    glMultiTexCoord4fv@8
     glBlendFunc@8
     glAlphaFunc@8
     glDepthMask@4

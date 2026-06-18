@@ -19,6 +19,9 @@ Guest DLL exports:
 - `wglSwapBuffers`
 - `glGetString`
 - `glGetError`
+- `glGetIntegerv`
+- `glGetFloatv`
+- `glIsEnabled`
 - `glViewport`
 - `glClearColor`
 - `glClear`
@@ -53,10 +56,15 @@ Guest DLL exports:
 - `glTexSubImage2D`
 - `glTexParameteri`
 - `glTexParameterf`
+- `glGetTexParameteriv`
+- `glGetTexParameterfv`
 - `glPixelStorei`
 - `glTexEnvi`
 - `glTexEnvf`
 - `glTexCoord2f`
+- `glActiveTextureARB` / `glActiveTexture`
+- `glClientActiveTextureARB` / `glClientActiveTexture`
+- `glMultiTexCoord*ARB` common scalar/vector variants
 - `glBlendFunc`
 - `glAlphaFunc`
 - `glDepthMask`
@@ -77,6 +85,9 @@ Guest DLL exports:
 
 It is enough for toy fixed-pipeline demos such as a triangle or a rotating
 colored cube. It is **not** enough for WineD3D or real games yet.
+
+`glGet*` queries currently return values cached in the guest proxy plus
+conservative defaults. They do not synchronously query browser/WebGL state.
 
 ## Build the DLL
 
@@ -113,6 +124,11 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_blend_ui_test.exe gl_blend_ui_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o gl_query_multitexture_test.exe gl_query_multitexture_test.c \
+  -lopengl32 -lgdi32 -luser32 -lkernel32
 ```
 
 These commands intentionally avoid the MinGW C runtime. Some modern MinGW-w64
@@ -127,10 +143,12 @@ gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
 gl_blend_ui_test.exe
+gl_query_multitexture_test.exe
 ```
 
 Run `gl_triangle_test.exe`, `gl_rotate_cube_test.exe`, or
-`gl_client_arrays_test.exe`, or `gl_blend_ui_test.exe`.
+`gl_client_arrays_test.exe`, `gl_blend_ui_test.exe`, or
+`gl_query_multitexture_test.exe`.
 
 The demo calls the fake WGL/OpenGL subset directly and presents with
 `wglSwapLayerBuffers` plus `glFlush`, so it does not depend on intercepting

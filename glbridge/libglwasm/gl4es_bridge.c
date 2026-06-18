@@ -13,6 +13,10 @@
 #include <GL/gl.h>
 #include <gl4esinit.h>
 
+extern void glActiveTexture(GLenum texture);
+extern void glClientActiveTexture(GLenum texture);
+extern void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+
 static int32_t g_surface_x;
 static int32_t g_surface_y;
 static uint32_t g_surface_width;
@@ -364,6 +368,24 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glTexCoord2f(GLfloat s, GLfloat t) {
     if (!v86gl_ensure_ready()) return;
     glTexCoord2f(s, t);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glActiveTexture(GLenum texture) {
+    if (!v86gl_ensure_ready()) return;
+    glActiveTexture(texture);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glClientActiveTexture(GLenum texture) {
+    if (!v86gl_ensure_ready()) return;
+    glClientActiveTexture(texture);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q) {
+    if (!v86gl_ensure_ready()) return;
+    glMultiTexCoord4f(target, s, t, r, q);
 }
 
 EMSCRIPTEN_KEEPALIVE
