@@ -20,6 +20,16 @@ static uint32_t g_surface_height;
 static uint32_t g_surface_hwnd;
 static int g_ready;
 
+#define V86GL_MAX_TEXTURES 16384
+
+typedef struct {
+    GLuint guest;
+    GLuint host;
+} V86GLTextureName;
+
+static V86GLTextureName g_textures[V86GL_MAX_TEXTURES];
+static uint32_t g_texture_count;
+
 static int v86gl_ensure_ready(void) {
     if (g_ready) {
         return 1;
@@ -54,6 +64,43 @@ static int v86gl_ensure_ready(void) {
     initialize_gl4es();
     g_ready = 1;
     return 1;
+}
+
+static GLuint v86gl_host_texture(GLuint guest, int create) {
+    uint32_t i;
+    GLuint host;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_texture_count; i++) {
+        if (g_textures[i].guest == guest) {
+            return g_textures[i].host;
+        }
+    }
+
+    if (!create || g_texture_count >= V86GL_MAX_TEXTURES) {
+        return 0;
+    }
+
+    glGenTextures(1, &host);
+    g_textures[g_texture_count].guest = guest;
+    g_textures[g_texture_count].host = host;
+    g_texture_count++;
+    return host;
+}
+
+static void v86gl_forget_texture(GLuint guest) {
+    uint32_t i;
+
+    for (i = 0; i < g_texture_count; i++) {
+        if (g_textures[i].guest == guest) {
+            g_textures[i] = g_textures[g_texture_count - 1u];
+            g_texture_count--;
+            return;
+        }
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -228,4 +275,93 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glFrontFace(GLenum mode) {
     if (!v86gl_ensure_ready()) return;
     glFrontFace(mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenTextures(GLsizei n, const GLuint* textures) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n <= 0 || !textures) return;
+
+    for (i = 0; i < n; i++) {
+        (void)v86gl_host_texture(textures[i], 1);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteTextures(GLsizei n, const GLuint* textures) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n <= 0 || !textures) return;
+
+    for (i = 0; i < n; i++) {
+        GLuint host = v86gl_host_texture(textures[i], 0);
+        if (host) {
+            glDeleteTextures(1, &host);
+            v86gl_forget_texture(textures[i]);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBindTexture(GLenum target, GLuint texture) {
+    GLuint host;
+
+    if (!v86gl_ensure_ready()) return;
+    host = v86gl_host_texture(texture, texture != 0);
+    glBindTexture(target, host);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexImage2D(GLenum target, GLint level, GLint internalformat,
+                        GLsizei width, GLsizei height, GLint border,
+                        GLenum format, GLenum type, const void* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                           GLsizei width, GLsizei height,
+                           GLenum format, GLenum type, const void* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexParameteri(GLenum target, GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glTexParameteri(target, pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
+    if (!v86gl_ensure_ready()) return;
+    glTexParameterf(target, pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelStorei(GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glPixelStorei(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexEnvi(GLenum target, GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glTexEnvi(target, pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexEnvf(GLenum target, GLenum pname, GLfloat param) {
+    if (!v86gl_ensure_ready()) return;
+    glTexEnvf(target, pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexCoord2f(GLfloat s, GLfloat t) {
+    if (!v86gl_ensure_ready()) return;
+    glTexCoord2f(s, t);
 }

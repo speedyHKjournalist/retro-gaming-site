@@ -23,8 +23,10 @@ emcc gl4es_bridge.c \
   -sMIN_WEBGL_VERSION=1 \
   -sMAX_WEBGL_VERSION=2 \
   -sGL_ENABLE_GET_PROC_ADDRESS=1 \
-  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' \
+  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8"]' \
   -sEXPORTED_FUNCTIONS='[
+    "_malloc",
+    "_free",
     "_v86glMakeCurrent",
     "_v86glResize",
     "_v86glReleaseCurrent",
@@ -52,7 +54,18 @@ emcc gl4es_bridge.c \
     "_v86gl_glClearDepth",
     "_v86gl_glShadeModel",
     "_v86gl_glCullFace",
-    "_v86gl_glFrontFace"
+    "_v86gl_glFrontFace",
+    "_v86gl_glGenTextures",
+    "_v86gl_glDeleteTextures",
+    "_v86gl_glBindTexture",
+    "_v86gl_glTexImage2D",
+    "_v86gl_glTexSubImage2D",
+    "_v86gl_glTexParameteri",
+    "_v86gl_glTexParameterf",
+    "_v86gl_glPixelStorei",
+    "_v86gl_glTexEnvi",
+    "_v86gl_glTexEnvf",
+    "_v86gl_glTexCoord2f"
   ]' \
   -o gl4es.js
 

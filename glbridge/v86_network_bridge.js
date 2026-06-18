@@ -18,6 +18,8 @@
     const OP_RELEASE_CURRENT = 10;
     const OP_GL_CALL = 20;
     const OP_GL_FRAME = 21;
+    const OP_GL_CHUNK = 22;
+    const OP_GL_BATCH = 23;
 
     const VGL_UDP_PORT = 46000;
 
@@ -46,6 +48,17 @@
     const GLFN_SHADE_MODEL = 23;
     const GLFN_CULL_FACE = 24;
     const GLFN_FRONT_FACE = 25;
+    const GLFN_GEN_TEXTURES = 26;
+    const GLFN_DELETE_TEXTURES = 27;
+    const GLFN_BIND_TEXTURE = 28;
+    const GLFN_TEX_IMAGE_2D = 29;
+    const GLFN_TEX_SUB_IMAGE_2D = 30;
+    const GLFN_TEX_PARAMETERI = 31;
+    const GLFN_TEX_PARAMETERF = 32;
+    const GLFN_PIXEL_STOREI = 33;
+    const GLFN_TEX_ENVI = 34;
+    const GLFN_TEX_ENVF = 35;
+    const GLFN_TEX_COORD2F = 36;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -60,6 +73,8 @@
         [OP_RELEASE_CURRENT]: "RELEASE_CURRENT",
         [OP_GL_CALL]: "GL_CALL",
         [OP_GL_FRAME]: "GL_FRAME",
+        [OP_GL_CHUNK]: "GL_CHUNK",
+        [OP_GL_BATCH]: "GL_BATCH",
     };
 
     const GLFN_NAMES = {
@@ -88,6 +103,17 @@
         [GLFN_SHADE_MODEL]: "glShadeModel",
         [GLFN_CULL_FACE]: "glCullFace",
         [GLFN_FRONT_FACE]: "glFrontFace",
+        [GLFN_GEN_TEXTURES]: "glGenTextures",
+        [GLFN_DELETE_TEXTURES]: "glDeleteTextures",
+        [GLFN_BIND_TEXTURE]: "glBindTexture",
+        [GLFN_TEX_IMAGE_2D]: "glTexImage2D",
+        [GLFN_TEX_SUB_IMAGE_2D]: "glTexSubImage2D",
+        [GLFN_TEX_PARAMETERI]: "glTexParameteri",
+        [GLFN_TEX_PARAMETERF]: "glTexParameterf",
+        [GLFN_PIXEL_STOREI]: "glPixelStorei",
+        [GLFN_TEX_ENVI]: "glTexEnvi",
+        [GLFN_TEX_ENVF]: "glTexEnvf",
+        [GLFN_TEX_COORD2F]: "glTexCoord2f",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -129,6 +155,63 @@
             this.callOptional(["v86glResize", "_v86glResize", "setCanvasSize"], [
                 width, height,
             ], ["number", "number"]);
+        }
+
+        malloc(size) {
+            const fn = this.module && (this.module._malloc || this.module.malloc);
+            if (typeof fn !== "function") {
+                this.warnMissing("malloc");
+                return 0;
+            }
+
+            return fn.call(this.module, size);
+        }
+
+        free(ptr) {
+            const fn = this.module && (this.module._free || this.module.free);
+            if (ptr && typeof fn === "function") {
+                fn.call(this.module, ptr);
+            }
+        }
+
+        heapU8() {
+            const heap = this.module && this.module.HEAPU8;
+            if (!heap) {
+                this.warnMissing("HEAPU8");
+                return null;
+            }
+
+            return heap;
+        }
+
+        withHeapBytes(bytes, callback) {
+            if (!bytes || bytes.length === 0) {
+                return callback(0);
+            }
+
+            const ptr = this.malloc(bytes.length);
+            const heap = this.heapU8();
+            if (!ptr || !heap) {
+                this.free(ptr);
+                return false;
+            }
+
+            heap.set(bytes, ptr);
+            try {
+                return callback(ptr);
+            } finally {
+                this.free(ptr);
+            }
+        }
+
+        withHeapU32(values, callback) {
+            const bytes = new Uint8Array(values.length * 4);
+            const view = new DataView(bytes.buffer);
+            for (let i = 0; i < values.length; i++) {
+                view.setUint32(i * 4, values[i] >>> 0, true);
+            }
+
+            return this.withHeapBytes(bytes, callback);
         }
 
         glCall(fn, p) {
@@ -214,10 +297,86 @@
             case GLFN_FRONT_FACE:
                 this.callGL("FrontFace", [u32(p, 0)], ["number"]);
                 break;
+            case GLFN_GEN_TEXTURES:
+                this.callTextureNameArray("GenTextures", p);
+                break;
+            case GLFN_DELETE_TEXTURES:
+                this.callTextureNameArray("DeleteTextures", p);
+                break;
+            case GLFN_BIND_TEXTURE:
+                this.callGL("BindTexture", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_TEX_IMAGE_2D:
+                this.callTexImage2D(p);
+                break;
+            case GLFN_TEX_SUB_IMAGE_2D:
+                this.callTexSubImage2D(p);
+                break;
+            case GLFN_TEX_PARAMETERI:
+                this.callGL("TexParameteri", [u32(p, 0), u32(p, 4), i32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_TEX_PARAMETERF:
+                this.callGL("TexParameterf", [u32(p, 0), u32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_PIXEL_STOREI:
+                this.callGL("PixelStorei", [u32(p, 0), i32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_TEX_ENVI:
+                this.callGL("TexEnvi", [u32(p, 0), u32(p, 4), i32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_TEX_ENVF:
+                this.callGL("TexEnvf", [u32(p, 0), u32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_TEX_COORD2F:
+                this.callGL("TexCoord2f", [f32(p, 0), f32(p, 4)], ["number", "number"]);
+                break;
             default:
                 this.warnMissing("GL function id " + fn);
                 break;
             }
+        }
+
+        callTextureNameArray(suffix, p) {
+            if (p.length < 4) {
+                return false;
+            }
+
+            const n = u32(p, 0);
+            const ids = [];
+            for (let i = 0; i < n && 4 + i * 4 + 4 <= p.length; i++) {
+                ids.push(u32(p, 4 + i * 4));
+            }
+
+            return this.withHeapU32(ids, ptr =>
+                this.callGL(suffix, [ids.length, ptr], ["number", "number"]));
+        }
+
+        callTexImage2D(p) {
+            if (p.length < 36) {
+                return false;
+            }
+
+            const dataSize = u32(p, 32);
+            const bytes = dataSize ? p.slice(36, 36 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("TexImage2D", [
+                    u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
+                    i32(p, 20), u32(p, 24), u32(p, 28), ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]));
+        }
+
+        callTexSubImage2D(p) {
+            if (p.length < 36) {
+                return false;
+            }
+
+            const dataSize = u32(p, 32);
+            const bytes = dataSize ? p.slice(36, 36 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("TexSubImage2D", [
+                    u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
+                    i32(p, 20), u32(p, 24), u32(p, 28), ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]));
         }
 
         present() {
@@ -289,6 +448,7 @@
             this.pendingPackets = [];
             this.packetCount = 0;
             this.byteCount = 0;
+            this.chunkedCalls = Object.create(null);
             this.surface = { hwnd: 0, x: 0, y: 0, width: 0, height: 0 };
             this.container = canvas.parentElement;
             this.screenCanvas = this.findScreenCanvas();
@@ -459,7 +619,13 @@
                 this.dispatchGLCall(p);
                 break;
             case OP_GL_FRAME:
-                this.dispatchGLFrame(p);
+                this.dispatchGLFrame(p, true);
+                break;
+            case OP_GL_BATCH:
+                this.dispatchGLFrame(p, false);
+                break;
+            case OP_GL_CHUNK:
+                this.dispatchGLChunk(p);
                 break;
             case OP_VIEWPORT:
                 this.resize(i32(p, 8), i32(p, 12));
@@ -508,7 +674,7 @@
             this.requireRenderer().glCall(fn, args);
         }
 
-        dispatchGLFrame(p) {
+        dispatchGLFrame(p, shouldPresent) {
             let offset = 0;
             let commands = 0;
             const renderer = this.requireRenderer();
@@ -535,7 +701,51 @@
             }
 
             this.log("frame", commands, "commands", p.length, "bytes");
-            this.present();
+            if (shouldPresent) {
+                this.present();
+            }
+        }
+
+        dispatchGLChunk(p) {
+            if (p.length < 16) {
+                return;
+            }
+
+            const uploadId = u32(p, 0);
+            const fn = u16(p, 4);
+            const chunkSize = u16(p, 6);
+            const totalSize = u32(p, 8);
+            const offset = u32(p, 12);
+            if (offset + chunkSize > totalSize || 16 + chunkSize > p.length) {
+                console.warn("[v86gl] invalid GL chunk", uploadId, fn, offset, chunkSize, totalSize);
+                return;
+            }
+
+            let upload = this.chunkedCalls[uploadId];
+            if (!upload) {
+                upload = {
+                    fn,
+                    totalSize,
+                    received: 0,
+                    data: new Uint8Array(totalSize),
+                };
+                this.chunkedCalls[uploadId] = upload;
+            }
+
+            if (upload.fn !== fn || upload.totalSize !== totalSize) {
+                console.warn("[v86gl] mismatched GL chunk", uploadId, fn, totalSize);
+                delete this.chunkedCalls[uploadId];
+                return;
+            }
+
+            upload.data.set(p.slice(16, 16 + chunkSize), offset);
+            upload.received += chunkSize;
+
+            if (upload.received >= upload.totalSize) {
+                delete this.chunkedCalls[uploadId];
+                this.log("chunked gl", GLFN_NAMES[fn] || fn, upload.totalSize, "bytes");
+                this.requireRenderer().glCall(fn, upload.data);
+            }
         }
 
         makeCurrent(p) {

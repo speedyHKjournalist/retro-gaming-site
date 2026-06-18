@@ -40,3 +40,14 @@ EXPORTS
     glShadeModel@4
     glCullFace@4
     glFrontFace@4
+    glGenTextures@8
+    glDeleteTextures@8
+    glBindTexture@8
+    glTexImage2D@36
+    glTexSubImage2D@36
+    glTexParameteri@12
+    glTexParameterf@12
+    glPixelStorei@8
+    glTexEnvi@12
+    glTexEnvf@12
+    glTexCoord2f@8
