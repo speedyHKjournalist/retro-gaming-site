@@ -57,6 +57,14 @@ Guest DLL exports:
 - `glTexEnvi`
 - `glTexEnvf`
 - `glTexCoord2f`
+- `glBlendFunc`
+- `glAlphaFunc`
+- `glDepthMask`
+- `glColorMask`
+- `glScissor`
+- `glLineWidth`
+- `glPolygonMode`
+- `glReadPixels` compatibility stub
 - `glEnableClientState`
 - `glDisableClientState`
 - `glVertexPointer`
@@ -100,6 +108,11 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_client_arrays_test.exe gl_client_arrays_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o gl_blend_ui_test.exe gl_blend_ui_test.c \
+  -lopengl32 -lgdi32 -luser32 -lkernel32
 ```
 
 These commands intentionally avoid the MinGW C runtime. Some modern MinGW-w64
@@ -113,10 +126,11 @@ opengl32.dll
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
+gl_blend_ui_test.exe
 ```
 
 Run `gl_triangle_test.exe`, `gl_rotate_cube_test.exe`, or
-`gl_client_arrays_test.exe`.
+`gl_client_arrays_test.exe`, or `gl_blend_ui_test.exe`.
 
 The demo calls the fake WGL/OpenGL subset directly and presents with
 `wglSwapLayerBuffers` plus `glFlush`, so it does not depend on intercepting
@@ -194,6 +208,7 @@ That page uses a tiny emulator stub and feeds the same `VGL1` packets to
 ## Important limitations
 
 - UDP broadcast over `net0-send` is only for proof of concept. GL calls are batched per frame to reduce guest stalls, but this is still not a production transport for real games.
-- The fixed-pipeline matrix stack, depth test, shading mode, face-culling, basic 2D texture calls, and client arrays above are forwarded to gl4es, but there is still no clipping, lighting, display lists, compressed textures, multitexture, VBOs, or WineD3D compatibility.
+- The fixed-pipeline matrix stack, depth test, shading mode, face-culling, blending/alpha/scissor state, basic 2D texture calls, and client arrays above are forwarded to gl4es, but there is still no clipping, lighting, display lists, compressed textures, multitexture, VBOs, or WineD3D compatibility.
+- `glReadPixels` is exported as a guest-side compatibility stub. It fills the caller buffer with zeroed pixels using the current `GL_PACK_*` state, but it does not read the browser/WebGL framebuffer yet because the current UDP bridge has no synchronous browser-to-guest return path.
 - `SwapBuffers` is exported by `gdi32.dll`, not `opengl32.dll`; normal apps that import `SwapBuffers` from `gdi32.dll` are not intercepted by this DLL. This toy bridge presents on `glFlush`, `glFinish`, `wglSwapLayerBuffers`, and the nonstandard helper export `wglSwapBuffers`.
 - For real performance, replace UDP broadcast with a v86 PCI/MMIO shared command ring or another zero-copy shared command transport.

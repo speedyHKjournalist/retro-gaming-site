@@ -63,6 +63,13 @@
     const GLFN_DISABLE_CLIENT_STATE = 38;
     const GLFN_DRAW_ARRAYS = 39;
     const GLFN_DRAW_ELEMENTS = 40;
+    const GLFN_BLEND_FUNC = 41;
+    const GLFN_ALPHA_FUNC = 42;
+    const GLFN_DEPTH_MASK = 43;
+    const GLFN_COLOR_MASK = 44;
+    const GLFN_SCISSOR = 45;
+    const GLFN_LINE_WIDTH = 46;
+    const GLFN_POLYGON_MODE = 47;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -122,6 +129,13 @@
         [GLFN_DISABLE_CLIENT_STATE]: "glDisableClientState",
         [GLFN_DRAW_ARRAYS]: "glDrawArrays",
         [GLFN_DRAW_ELEMENTS]: "glDrawElements",
+        [GLFN_BLEND_FUNC]: "glBlendFunc",
+        [GLFN_ALPHA_FUNC]: "glAlphaFunc",
+        [GLFN_DEPTH_MASK]: "glDepthMask",
+        [GLFN_COLOR_MASK]: "glColorMask",
+        [GLFN_SCISSOR]: "glScissor",
+        [GLFN_LINE_WIDTH]: "glLineWidth",
+        [GLFN_POLYGON_MODE]: "glPolygonMode",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -391,6 +405,29 @@
                 break;
             case GLFN_DRAW_ELEMENTS:
                 this.callDrawElements(p);
+                break;
+            case GLFN_BLEND_FUNC:
+                this.callGL("BlendFunc", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_ALPHA_FUNC:
+                this.callGL("AlphaFunc", [u32(p, 0), f32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_DEPTH_MASK:
+                this.callGL("DepthMask", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_COLOR_MASK:
+                this.callGL("ColorMask", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), u32(p, 12),
+                ], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_SCISSOR:
+                this.callGL("Scissor", [i32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12)], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_LINE_WIDTH:
+                this.callGL("LineWidth", [f32(p, 0)], ["number"]);
+                break;
+            case GLFN_POLYGON_MODE:
+                this.callGL("PolygonMode", [u32(p, 0), u32(p, 4)], ["number", "number"]);
                 break;
             default:
                 this.warnMissing("GL function id " + fn);

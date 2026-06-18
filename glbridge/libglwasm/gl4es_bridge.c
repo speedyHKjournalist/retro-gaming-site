@@ -367,6 +367,48 @@ void v86gl_glTexCoord2f(GLfloat s, GLfloat t) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+void v86gl_glBlendFunc(GLenum sfactor, GLenum dfactor) {
+    if (!v86gl_ensure_ready()) return;
+    glBlendFunc(sfactor, dfactor);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glAlphaFunc(GLenum func, GLclampf ref) {
+    if (!v86gl_ensure_ready()) return;
+    glAlphaFunc(func, ref);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDepthMask(GLboolean flag) {
+    if (!v86gl_ensure_ready()) return;
+    glDepthMask(flag);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
+    if (!v86gl_ensure_ready()) return;
+    glColorMask(red, green, blue, alpha);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
+    if (!v86gl_ensure_ready()) return;
+    glScissor(x, y, width, height);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glLineWidth(GLfloat width) {
+    if (!v86gl_ensure_ready()) return;
+    glLineWidth(width);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPolygonMode(GLenum face, GLenum mode) {
+    if (!v86gl_ensure_ready()) return;
+    glPolygonMode(face, mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glEnableClientState(GLenum array) {
     if (!v86gl_ensure_ready()) return;
     glEnableClientState(array);

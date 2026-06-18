@@ -16,10 +16,12 @@
 typedef unsigned int GLenum;
 typedef unsigned int GLbitfield;
 typedef unsigned char GLubyte;
+typedef unsigned char GLboolean;
 typedef unsigned int GLuint;
 typedef int GLint;
 typedef int GLsizei;
 typedef float GLfloat;
+typedef float GLclampf;
 typedef double GLdouble;
 typedef void GLvoid;
 
@@ -51,6 +53,12 @@ typedef void GLvoid;
 #define GL_RGBA               0x1908
 #define GL_LUMINANCE          0x1909
 #define GL_LUMINANCE_ALPHA    0x190A
+#define GL_PACK_SWAP_BYTES    0x0D00
+#define GL_PACK_LSB_FIRST     0x0D01
+#define GL_PACK_ROW_LENGTH    0x0D02
+#define GL_PACK_SKIP_ROWS     0x0D03
+#define GL_PACK_SKIP_PIXELS   0x0D04
+#define GL_PACK_ALIGNMENT     0x0D05
 #define GL_BGR_EXT            0x80E0
 #define GL_BGRA_EXT           0x80E1
 #define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
@@ -147,6 +155,13 @@ enum {
     GLFN_DISABLE_CLIENT_STATE = 38,
     GLFN_DRAW_ARRAYS = 39,
     GLFN_DRAW_ELEMENTS = 40,
+    GLFN_BLEND_FUNC = 41,
+    GLFN_ALPHA_FUNC = 42,
+    GLFN_DEPTH_MASK = 43,
+    GLFN_COLOR_MASK = 44,
+    GLFN_SCISSOR = 45,
+    GLFN_LINE_WIDTH = 46,
+    GLFN_POLYGON_MODE = 47,
 };
 
 #pragma pack(push, 1)
@@ -183,6 +198,10 @@ static GLint g_unpack_alignment = 4;
 static GLint g_unpack_row_length = 0;
 static GLint g_unpack_skip_rows = 0;
 static GLint g_unpack_skip_pixels = 0;
+static GLint g_pack_alignment = 4;
+static GLint g_pack_row_length = 0;
+static GLint g_pack_skip_rows = 0;
+static GLint g_pack_skip_pixels = 0;
 static GLenum g_error = 0;
 
 typedef struct {
@@ -511,7 +530,9 @@ static uint32_t gl_pixel_bytes(GLenum format, GLenum type) {
     }
 }
 
-static uint32_t gl_pixel_span(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+static uint32_t gl_pixel_span_with_state(GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                         GLint alignment, GLint row_length,
+                                         GLint skip_rows, GLint skip_pixels) {
     uint32_t pixel_bytes;
     uint32_t row_pixels;
     uint32_t row_bytes;
@@ -528,15 +549,15 @@ static uint32_t gl_pixel_span(GLsizei width, GLsizei height, GLenum format, GLen
         return 0;
     }
 
-    row_pixels = g_unpack_row_length > 0 ? (uint32_t)g_unpack_row_length : (uint32_t)width;
+    row_pixels = row_length > 0 ? (uint32_t)row_length : (uint32_t)width;
     if (row_pixels < (uint32_t)width) {
         row_pixels = (uint32_t)width;
     }
 
     row_bytes = row_pixels * pixel_bytes;
-    row_stride = align_u32(row_bytes, (uint32_t)(g_unpack_alignment > 0 ? g_unpack_alignment : 1));
-    skip_bytes = (uint64_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * row_stride +
-                 (uint64_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
+    row_stride = align_u32(row_bytes, (uint32_t)(alignment > 0 ? alignment : 1));
+    skip_bytes = (uint64_t)(skip_rows > 0 ? skip_rows : 0) * row_stride +
+                 (uint64_t)(skip_pixels > 0 ? skip_pixels : 0) * pixel_bytes;
     total = skip_bytes +
             (uint64_t)((uint32_t)height - 1u) * row_stride +
             (uint64_t)(uint32_t)width * pixel_bytes;
@@ -546,6 +567,18 @@ static uint32_t gl_pixel_span(GLsizei width, GLsizei height, GLenum format, GLen
     }
 
     return (uint32_t)total;
+}
+
+static uint32_t gl_pixel_span(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+    return gl_pixel_span_with_state(width, height, format, type,
+                                    g_unpack_alignment, g_unpack_row_length,
+                                    g_unpack_skip_rows, g_unpack_skip_pixels);
+}
+
+static uint32_t gl_read_pixel_span(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+    return gl_pixel_span_with_state(width, height, format, type,
+                                    g_pack_alignment, g_pack_row_length,
+                                    g_pack_skip_rows, g_pack_skip_pixels);
 }
 
 static uint32_t gl_type_bytes(GLenum type) {
@@ -1257,6 +1290,20 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
     case GL_UNPACK_SKIP_PIXELS:
         g_unpack_skip_pixels = param > 0 ? param : 0;
         break;
+    case GL_PACK_ALIGNMENT:
+        if (param == 1 || param == 2 || param == 4 || param == 8) {
+            g_pack_alignment = param;
+        }
+        break;
+    case GL_PACK_ROW_LENGTH:
+        g_pack_row_length = param > 0 ? param : 0;
+        break;
+    case GL_PACK_SKIP_ROWS:
+        g_pack_skip_rows = param > 0 ? param : 0;
+        break;
+    case GL_PACK_SKIP_PIXELS:
+        g_pack_skip_pixels = param > 0 ? param : 0;
+        break;
     default:
         break;
     }
@@ -1290,6 +1337,98 @@ void APIENTRY glTexCoord2f(GLfloat s, GLfloat t) {
     payload.s = s;
     payload.t = t;
     emit_gl_call(GLFN_TEX_COORD2F, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glBlendFunc(GLenum sfactor, GLenum dfactor) {
+    struct { uint32_t sfactor, dfactor; } payload;
+    payload.sfactor = (uint32_t)sfactor;
+    payload.dfactor = (uint32_t)dfactor;
+    emit_gl_call(GLFN_BLEND_FUNC, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glAlphaFunc(GLenum func, GLclampf ref) {
+    struct { uint32_t func; float ref; } payload;
+    payload.func = (uint32_t)func;
+    payload.ref = ref;
+    emit_gl_call(GLFN_ALPHA_FUNC, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glDepthMask(GLboolean flag) {
+    uint32_t payload = flag ? 1u : 0u;
+    emit_gl_call(GLFN_DEPTH_MASK, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
+    struct { uint32_t red, green, blue, alpha; } payload;
+    payload.red = red ? 1u : 0u;
+    payload.green = green ? 1u : 0u;
+    payload.blue = blue ? 1u : 0u;
+    payload.alpha = alpha ? 1u : 0u;
+    emit_gl_call(GLFN_COLOR_MASK, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
+    struct { int32_t x, y, width, height; } payload;
+    if (width < 0 || height < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    payload.x = x;
+    payload.y = y;
+    payload.width = width;
+    payload.height = height;
+    emit_gl_call(GLFN_SCISSOR, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glLineWidth(GLfloat width) {
+    float payload = width;
+    if (width <= 0.0f) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    emit_gl_call(GLFN_LINE_WIDTH, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glPolygonMode(GLenum face, GLenum mode) {
+    struct { uint32_t face, mode; } payload;
+    payload.face = (uint32_t)face;
+    payload.mode = (uint32_t)mode;
+    emit_gl_call(GLFN_POLYGON_MODE, &payload, sizeof(payload));
+}
+
+__declspec(dllexport)
+void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                           GLenum format, GLenum type, GLvoid* pixels) {
+    uint32_t data_size;
+
+    (void)x;
+    (void)y;
+
+    if (width < 0 || height < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (!pixels || width == 0 || height == 0) {
+        return;
+    }
+
+    data_size = gl_read_pixel_span(width, height, format, type);
+    if (!data_size) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+
+    ZeroMemory(pixels, data_size);
 }
 
 __declspec(dllexport)

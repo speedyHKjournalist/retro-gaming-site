@@ -51,6 +51,14 @@ EXPORTS
     glTexEnvi@12
     glTexEnvf@12
     glTexCoord2f@8
+    glBlendFunc@8
+    glAlphaFunc@8
+    glDepthMask@4
+    glColorMask@16
+    glScissor@16
+    glLineWidth@4
+    glPolygonMode@8
+    glReadPixels@28
     glEnableClientState@4
     glDisableClientState@4
     glVertexPointer@16
