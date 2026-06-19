@@ -22,6 +22,7 @@
     const OP_GL_BATCH = 23;
 
     const VGL_UDP_PORT = 46000;
+    const CLIENT_ARRAY_MT_MAGIC = 0x544D4143;
 
     const GLFN_VIEWPORT = 1;
     const GLFN_CLEAR_COLOR = 2;
@@ -81,6 +82,41 @@
     const GLFN_MATERIALI = 56;
     const GLFN_MATERIALFV = 57;
     const GLFN_MATERIALIV = 58;
+    const GLFN_TEX_ENVIV = 59;
+    const GLFN_TEX_ENVFV = 60;
+    const GLFN_LIGHTF = 61;
+    const GLFN_LIGHTI = 62;
+    const GLFN_LIGHTFV = 63;
+    const GLFN_LIGHTIV = 64;
+    const GLFN_LIGHT_MODELF = 65;
+    const GLFN_LIGHT_MODELI = 66;
+    const GLFN_LIGHT_MODELFV = 67;
+    const GLFN_LIGHT_MODELIV = 68;
+    const GLFN_LOAD_MATRIXF = 69;
+    const GLFN_MULT_MATRIXF = 70;
+    const GLFN_DEPTH_RANGE = 71;
+    const GLFN_CLEAR_STENCIL = 72;
+    const GLFN_STENCIL_FUNC = 73;
+    const GLFN_STENCIL_MASK = 74;
+    const GLFN_STENCIL_OP = 75;
+    const GLFN_HINT = 76;
+    const GLFN_POLYGON_OFFSET = 77;
+    const GLFN_TEX_PARAMETERIV = 78;
+    const GLFN_TEX_PARAMETERFV = 79;
+    const GLFN_TEX_GENI = 80;
+    const GLFN_TEX_GENF = 81;
+    const GLFN_TEX_GENIV = 82;
+    const GLFN_TEX_GENFV = 83;
+    const GLFN_CLIP_PLANE = 84;
+    const GLFN_COLOR_MATERIAL = 85;
+    const GLFN_PUSH_ATTRIB = 86;
+    const GLFN_POP_ATTRIB = 87;
+    const GLFN_PUSH_CLIENT_ATTRIB = 88;
+    const GLFN_POP_CLIENT_ATTRIB = 89;
+    const GLFN_DRAW_BUFFER = 90;
+    const GLFN_READ_BUFFER = 91;
+    const GLFN_COPY_TEX_IMAGE_2D = 92;
+    const GLFN_COPY_TEX_SUB_IMAGE_2D = 93;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -158,6 +194,41 @@
         [GLFN_MATERIALI]: "glMateriali",
         [GLFN_MATERIALFV]: "glMaterialfv",
         [GLFN_MATERIALIV]: "glMaterialiv",
+        [GLFN_TEX_ENVIV]: "glTexEnviv",
+        [GLFN_TEX_ENVFV]: "glTexEnvfv",
+        [GLFN_LIGHTF]: "glLightf",
+        [GLFN_LIGHTI]: "glLighti",
+        [GLFN_LIGHTFV]: "glLightfv",
+        [GLFN_LIGHTIV]: "glLightiv",
+        [GLFN_LIGHT_MODELF]: "glLightModelf",
+        [GLFN_LIGHT_MODELI]: "glLightModeli",
+        [GLFN_LIGHT_MODELFV]: "glLightModelfv",
+        [GLFN_LIGHT_MODELIV]: "glLightModeliv",
+        [GLFN_LOAD_MATRIXF]: "glLoadMatrixf",
+        [GLFN_MULT_MATRIXF]: "glMultMatrixf",
+        [GLFN_DEPTH_RANGE]: "glDepthRange",
+        [GLFN_CLEAR_STENCIL]: "glClearStencil",
+        [GLFN_STENCIL_FUNC]: "glStencilFunc",
+        [GLFN_STENCIL_MASK]: "glStencilMask",
+        [GLFN_STENCIL_OP]: "glStencilOp",
+        [GLFN_HINT]: "glHint",
+        [GLFN_POLYGON_OFFSET]: "glPolygonOffset",
+        [GLFN_TEX_PARAMETERIV]: "glTexParameteriv",
+        [GLFN_TEX_PARAMETERFV]: "glTexParameterfv",
+        [GLFN_TEX_GENI]: "glTexGeni",
+        [GLFN_TEX_GENF]: "glTexGenf",
+        [GLFN_TEX_GENIV]: "glTexGeniv",
+        [GLFN_TEX_GENFV]: "glTexGenfv",
+        [GLFN_CLIP_PLANE]: "glClipPlane",
+        [GLFN_COLOR_MATERIAL]: "glColorMaterial",
+        [GLFN_PUSH_ATTRIB]: "glPushAttrib",
+        [GLFN_POP_ATTRIB]: "glPopAttrib",
+        [GLFN_PUSH_CLIENT_ATTRIB]: "glPushClientAttrib",
+        [GLFN_POP_CLIENT_ATTRIB]: "glPopClientAttrib",
+        [GLFN_DRAW_BUFFER]: "glDrawBuffer",
+        [GLFN_READ_BUFFER]: "glReadBuffer",
+        [GLFN_COPY_TEX_IMAGE_2D]: "glCopyTexImage2D",
+        [GLFN_COPY_TEX_SUB_IMAGE_2D]: "glCopyTexSubImage2D",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -253,6 +324,26 @@
             const view = new DataView(bytes.buffer);
             for (let i = 0; i < values.length; i++) {
                 view.setUint32(i * 4, values[i] >>> 0, true);
+            }
+
+            return this.withHeapBytes(bytes, callback);
+        }
+
+        withHeapI32(values, callback) {
+            const bytes = new Uint8Array(values.length * 4);
+            const view = new DataView(bytes.buffer);
+            for (let i = 0; i < values.length; i++) {
+                view.setInt32(i * 4, values[i] | 0, true);
+            }
+
+            return this.withHeapBytes(bytes, callback);
+        }
+
+        withHeapF32(values, callback) {
+            const bytes = new Uint8Array(values.length * 4);
+            const view = new DataView(bytes.buffer);
+            for (let i = 0; i < values.length; i++) {
+                view.setFloat32(i * 4, values[i], true);
             }
 
             return this.withHeapBytes(bytes, callback);
@@ -413,6 +504,18 @@
             case GLFN_TEX_ENVF:
                 this.callGL("TexEnvf", [u32(p, 0), u32(p, 4), f32(p, 8)], ["number", "number", "number"]);
                 break;
+            case GLFN_TEX_ENVIV:
+                this.callGL("TexEnviv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    i32(p, 12), i32(p, 16), i32(p, 20), i32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_TEX_ENVFV:
+                this.callGL("TexEnvfv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    f32(p, 12), f32(p, 16), f32(p, 20), f32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
             case GLFN_TEX_COORD2F:
                 this.callGL("TexCoord2f", [f32(p, 0), f32(p, 4)], ["number", "number"]);
                 break;
@@ -494,10 +597,155 @@
                     i32(p, 12), i32(p, 16), i32(p, 20), i32(p, 24),
                 ], ["number", "number", "number", "number", "number", "number", "number"]);
                 break;
+            case GLFN_LIGHTF:
+                this.callGL("Lightf", [u32(p, 0), u32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_LIGHTI:
+                this.callGL("Lighti", [u32(p, 0), u32(p, 4), i32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_LIGHTFV:
+                this.callGL("Lightfv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    f32(p, 12), f32(p, 16), f32(p, 20), f32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_LIGHTIV:
+                this.callGL("Lightiv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    i32(p, 12), i32(p, 16), i32(p, 20), i32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_LIGHT_MODELF:
+                this.callGL("LightModelf", [u32(p, 0), f32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_LIGHT_MODELI:
+                this.callGL("LightModeli", [u32(p, 0), i32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_LIGHT_MODELFV:
+                this.callGL("LightModelfv4", [
+                    u32(p, 0), u32(p, 4),
+                    f32(p, 8), f32(p, 12), f32(p, 16), f32(p, 20),
+                ], ["number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_LIGHT_MODELIV:
+                this.callGL("LightModeliv4", [
+                    u32(p, 0), u32(p, 4),
+                    i32(p, 8), i32(p, 12), i32(p, 16), i32(p, 20),
+                ], ["number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_LOAD_MATRIXF:
+                this.callMatrixf("LoadMatrixf", p);
+                break;
+            case GLFN_MULT_MATRIXF:
+                this.callMatrixf("MultMatrixf", p);
+                break;
+            case GLFN_DEPTH_RANGE:
+                this.callGL("DepthRange", [f64(p, 0), f64(p, 8)], ["number", "number"]);
+                break;
+            case GLFN_CLEAR_STENCIL:
+                this.callGL("ClearStencil", [i32(p, 0)], ["number"]);
+                break;
+            case GLFN_STENCIL_FUNC:
+                this.callGL("StencilFunc", [u32(p, 0), i32(p, 4), u32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_STENCIL_MASK:
+                this.callGL("StencilMask", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_STENCIL_OP:
+                this.callGL("StencilOp", [u32(p, 0), u32(p, 4), u32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_HINT:
+                this.callGL("Hint", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_POLYGON_OFFSET:
+                this.callGL("PolygonOffset", [f32(p, 0), f32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_TEX_PARAMETERIV:
+                this.callGL("TexParameteriv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    i32(p, 12), i32(p, 16), i32(p, 20), i32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_TEX_PARAMETERFV:
+                this.callGL("TexParameterfv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    f32(p, 12), f32(p, 16), f32(p, 20), f32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_TEX_GENI:
+                this.callGL("TexGeni", [u32(p, 0), u32(p, 4), i32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_TEX_GENF:
+                this.callGL("TexGenf", [u32(p, 0), u32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_TEX_GENIV:
+                this.callGL("TexGeniv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    i32(p, 12), i32(p, 16), i32(p, 20), i32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_TEX_GENFV:
+                this.callGL("TexGenfv4", [
+                    u32(p, 0), u32(p, 4), u32(p, 8),
+                    f32(p, 12), f32(p, 16), f32(p, 20), f32(p, 24),
+                ], ["number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_CLIP_PLANE:
+                this.callGL("ClipPlane4d", [
+                    u32(p, 0), f64(p, 4), f64(p, 12), f64(p, 20), f64(p, 28),
+                ], ["number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_COLOR_MATERIAL:
+                this.callGL("ColorMaterial", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_PUSH_ATTRIB:
+                this.callGL("PushAttrib", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_POP_ATTRIB:
+                this.callGL("PopAttrib", [], []);
+                break;
+            case GLFN_PUSH_CLIENT_ATTRIB:
+                this.callGL("PushClientAttrib", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_POP_CLIENT_ATTRIB:
+                this.callGL("PopClientAttrib", [], []);
+                break;
+            case GLFN_DRAW_BUFFER:
+                this.callGL("DrawBuffer", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_READ_BUFFER:
+                this.callGL("ReadBuffer", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_COPY_TEX_IMAGE_2D:
+                this.callGL("CopyTexImage2D", [
+                    u32(p, 0), i32(p, 4), u32(p, 8), i32(p, 12),
+                    i32(p, 16), i32(p, 20), i32(p, 24), i32(p, 28),
+                ], ["number", "number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_COPY_TEX_SUB_IMAGE_2D:
+                this.callGL("CopyTexSubImage2D", [
+                    u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12),
+                    i32(p, 16), i32(p, 20), i32(p, 24), i32(p, 28),
+                ], ["number", "number", "number", "number", "number", "number", "number", "number"]);
+                break;
             default:
                 this.warnMissing("GL function id " + fn);
                 break;
             }
+        }
+
+        callMatrixf(suffix, p) {
+            if (p.length < 64) {
+                return false;
+            }
+
+            const values = [];
+            for (let i = 0; i < 16; i++) {
+                values.push(f32(p, i * 4));
+            }
+
+            return this.withHeapF32(values, ptr =>
+                this.callGL(suffix, [ptr], ["number"]));
         }
 
         callTextureNameArray(suffix, p) {
@@ -589,9 +837,47 @@
             ];
         }
 
+        clientArrayMetaValues(blocks, ptrs) {
+            const values = [];
+
+            for (let i = 0; i < blocks.length; i++) {
+                const block = blocks[i] || {};
+                values.push(block.size | 0);
+                values.push(block.type | 0);
+                values.push(block.stride | 0);
+                values.push(ptrs[i] | 0);
+            }
+
+            return values;
+        }
+
+        withClientArrayMeta(blocks, ptrs, callback) {
+            return this.withHeapI32(this.clientArrayMetaValues(blocks, ptrs), callback);
+        }
+
         callDrawArrays(p) {
             if (p.length < 8) {
                 return false;
+            }
+
+            if (p.length >= 20 && u32(p, 8) === CLIENT_ARRAY_MT_MAGIC) {
+                const mode = u32(p, 0);
+                const count = i32(p, 4);
+                const texUnitCount = u32(p, 12);
+                const clientActiveTexture = u32(p, 16);
+                if (texUnitCount > 8) {
+                    return false;
+                }
+                const parsed = this.parseClientArrayBlocks(p, 20, 3 + texUnitCount);
+                if (!parsed) {
+                    return false;
+                }
+
+                return this.withHeapBlocks(parsed.blocks, ptrs =>
+                    this.withClientArrayMeta(parsed.blocks, ptrs, metaPtr =>
+                        this.callGL("DrawArraysPackedMT", [
+                            mode, count, texUnitCount, clientActiveTexture, metaPtr,
+                        ], ["number", "number", "number", "number", "number"])));
             }
 
             const parsed = this.parseClientArrayBlocks(p, 8, 4);
@@ -620,6 +906,37 @@
             }
 
             const indexDataSize = u32(p, 12);
+            if (p.length >= 28 && u32(p, 16) === CLIENT_ARRAY_MT_MAGIC) {
+                if (28 + indexDataSize > p.length) {
+                    return false;
+                }
+
+                const indexBlock = { bytes: indexDataSize ? p.slice(28, 28 + indexDataSize) : null };
+                const mode = u32(p, 0);
+                const count = i32(p, 4);
+                const indexType = u32(p, 8);
+                const texUnitCount = u32(p, 20);
+                const clientActiveTexture = u32(p, 24);
+                if (texUnitCount > 8) {
+                    return false;
+                }
+                const parsed = this.parseClientArrayBlocks(p, 28 + indexDataSize, 3 + texUnitCount);
+                if (!parsed) {
+                    return false;
+                }
+
+                const blocks = [indexBlock, ...parsed.blocks];
+                return this.withHeapBlocks(blocks, ptrs =>
+                    this.withClientArrayMeta(parsed.blocks, ptrs.slice(1), metaPtr =>
+                        this.callGL("DrawElementsPackedMT", [
+                            mode, count, indexType, ptrs[0],
+                            texUnitCount, clientActiveTexture, metaPtr,
+                        ], [
+                            "number", "number", "number", "number",
+                            "number", "number", "number",
+                        ])));
+            }
+
             if (16 + indexDataSize > p.length) {
                 return false;
             }
