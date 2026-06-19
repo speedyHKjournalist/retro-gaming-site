@@ -475,7 +475,10 @@ typedef struct {
 #pragma pack(pop)
 
 #define VGL_UDP_PORT 46000u
-#define VGL_FRAME_BUFFER_SIZE 1400u
+#define VGL_PACKET_PAYLOAD_SIZE 1400u
+#define VGL_FRAME_META_SIZE 8u
+#define VGL_CHUNK_META_SIZE 20u
+#define VGL_FRAME_BUFFER_SIZE (VGL_PACKET_PAYLOAD_SIZE - VGL_FRAME_META_SIZE)
 
 static SOCKET g_udp = INVALID_SOCKET;
 static BOOL   g_udp_ready = FALSE;
@@ -495,6 +498,8 @@ static uint16_t g_frame_size = 0;
 static BOOL g_frame_overflow = FALSE;
 static uint32_t g_seq = 1;
 static uint32_t g_chunk_id = 1;
+static uint32_t g_frame_id = 1;
+static uint32_t g_frame_large_call_count = 0;
 static GLuint g_next_texture_id = 1;
 static GLuint g_next_list_id = 1;
 static GLuint g_list_base = 0;
@@ -565,6 +570,7 @@ static const char* g_gl_extensions =
     "GL_ARB_texture_env_combine "
     "GL_EXT_bgra "
     "GL_EXT_compiled_vertex_array "
+    "GL_EXT_draw_range_elements "
     "GL_EXT_texture_env_add "
     "GL_EXT_texture_env_combine "
     "GL_EXT_texture_filter_anisotropic "
@@ -1116,13 +1122,25 @@ static int open_udp(void) {
     return 1;
 }
 
+static void write_u16le(uint8_t* p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void write_u32le(uint8_t* p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
 static void emit_packet(uint16_t op, const void* payload, uint16_t size) {
-    uint8_t packet[sizeof(VGLHeader) + VGL_FRAME_BUFFER_SIZE];
+    uint8_t packet[sizeof(VGLHeader) + VGL_PACKET_PAYLOAD_SIZE];
     struct sockaddr_in dst;
     VGLHeader h;
     int total = (int)(sizeof(h) + size);
 
-    if (size > VGL_FRAME_BUFFER_SIZE || !open_udp()) {
+    if (size > VGL_PACKET_PAYLOAD_SIZE || !open_udp()) {
         return;
     }
 
@@ -1146,7 +1164,11 @@ static void emit_packet(uint16_t op, const void* payload, uint16_t size) {
 
 static void emit_gl_batch(void) {
     if (g_frame_size) {
-        emit_packet(OP_GL_BATCH, g_frame_buffer, g_frame_size);
+        uint8_t payload[VGL_PACKET_PAYLOAD_SIZE];
+        write_u32le(payload, g_frame_id);
+        write_u32le(payload + 4, g_frame_large_call_count);
+        CopyMemory(payload + VGL_FRAME_META_SIZE, g_frame_buffer, g_frame_size);
+        emit_packet(OP_GL_BATCH, payload, (uint16_t)(VGL_FRAME_META_SIZE + g_frame_size));
     }
 
     g_frame_size = 0;
@@ -1156,36 +1178,27 @@ static void emit_gl_batch(void) {
 static void emit_gl_large_call(uint16_t fn, const void* args, uint32_t args_size) {
     uint32_t upload_id = g_chunk_id++;
     uint32_t offset = 0;
-    uint8_t payload[VGL_FRAME_BUFFER_SIZE];
-    const uint32_t header_size = 16;
-    const uint32_t max_chunk = VGL_FRAME_BUFFER_SIZE - header_size;
+    uint8_t payload[VGL_PACKET_PAYLOAD_SIZE];
+    const uint32_t header_size = VGL_CHUNK_META_SIZE;
+    const uint32_t max_chunk = VGL_PACKET_PAYLOAD_SIZE - header_size;
 
     if (!args || !args_size) {
         return;
     }
 
     emit_gl_batch();
+    g_frame_large_call_count++;
 
     while (offset < args_size) {
         uint32_t remaining = args_size - offset;
         uint16_t chunk_size = (uint16_t)(remaining > max_chunk ? max_chunk : remaining);
 
-        payload[0] = (uint8_t)(upload_id & 0xFF);
-        payload[1] = (uint8_t)(upload_id >> 8);
-        payload[2] = (uint8_t)(upload_id >> 16);
-        payload[3] = (uint8_t)(upload_id >> 24);
-        payload[4] = (uint8_t)(fn & 0xFF);
-        payload[5] = (uint8_t)(fn >> 8);
-        payload[6] = (uint8_t)(chunk_size & 0xFF);
-        payload[7] = (uint8_t)(chunk_size >> 8);
-        payload[8] = (uint8_t)(args_size & 0xFF);
-        payload[9] = (uint8_t)(args_size >> 8);
-        payload[10] = (uint8_t)(args_size >> 16);
-        payload[11] = (uint8_t)(args_size >> 24);
-        payload[12] = (uint8_t)(offset & 0xFF);
-        payload[13] = (uint8_t)(offset >> 8);
-        payload[14] = (uint8_t)(offset >> 16);
-        payload[15] = (uint8_t)(offset >> 24);
+        write_u32le(payload, g_frame_id);
+        write_u32le(payload + 4, upload_id);
+        write_u16le(payload + 8, fn);
+        write_u16le(payload + 10, chunk_size);
+        write_u32le(payload + 12, args_size);
+        write_u32le(payload + 16, offset);
 
         CopyMemory(payload + header_size, (const uint8_t*)args + offset, chunk_size);
         emit_packet(OP_GL_CHUNK, payload, (uint16_t)(header_size + chunk_size));
@@ -1220,14 +1233,24 @@ static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
 }
 
 static void emit_frame(void) {
+    uint8_t payload[VGL_PACKET_PAYLOAD_SIZE];
+    write_u32le(payload, g_frame_id);
+    write_u32le(payload + 4, g_frame_large_call_count);
+
     if (g_frame_size) {
-        emit_packet(OP_GL_FRAME, g_frame_buffer, g_frame_size);
+        CopyMemory(payload + VGL_FRAME_META_SIZE, g_frame_buffer, g_frame_size);
+        emit_packet(OP_GL_FRAME, payload, (uint16_t)(VGL_FRAME_META_SIZE + g_frame_size));
     } else {
-        emit_packet(OP_PRESENT, NULL, 0);
+        emit_packet(OP_PRESENT, payload, VGL_FRAME_META_SIZE);
     }
 
     g_frame_size = 0;
     g_frame_overflow = FALSE;
+    g_frame_large_call_count = 0;
+    g_frame_id++;
+    if (!g_frame_id) {
+        g_frame_id = 1;
+    }
 }
 
 static void emit_current_surface(HWND hwnd) {
@@ -4404,6 +4427,20 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 }
 
 __declspec(dllexport)
+void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
+                                  GLsizei count, GLenum type, const GLvoid* indices) {
+    (void)start;
+    (void)end;
+    glDrawElements(mode, count, type, indices);
+}
+
+__declspec(dllexport)
+void APIENTRY glDrawRangeElementsEXT(GLenum mode, GLuint start, GLuint end,
+                                     GLsizei count, GLenum type, const GLvoid* indices) {
+    glDrawRangeElements(mode, start, end, count, type, indices);
+}
+
+__declspec(dllexport)
 void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* pointer) {
     const uint8_t* base = (const uint8_t*)pointer;
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
@@ -4926,9 +4963,142 @@ void APIENTRY glEdgeFlagPointer(GLsizei stride, const GLvoid* pointer) {
     g_edge_flag_array.pointer = pointer;
 }
 
+static const uint8_t* client_array_element_ptr(const ClientArrayState* state, GLint index) {
+    uint32_t element_size;
+    uint32_t stride;
+
+    if (!state || !state->pointer || index < 0) {
+        return NULL;
+    }
+
+    element_size = client_array_element_size(state->size, state->type);
+    if (!element_size) {
+        return NULL;
+    }
+
+    stride = state->stride > 0 ? (uint32_t)state->stride : element_size;
+    return (const uint8_t*)state->pointer + (uint32_t)index * stride;
+}
+
+static GLfloat client_array_scalar(const uint8_t* p, GLenum type) {
+    if (!p) {
+        return 0.0f;
+    }
+
+    switch (type) {
+    case GL_BYTE:
+        return (GLfloat)*(const GLbyte*)p;
+    case GL_UNSIGNED_BYTE:
+        return (GLfloat)*(const GLubyte*)p;
+    case GL_SHORT:
+        return (GLfloat)*(const GLshort*)p;
+    case GL_UNSIGNED_SHORT:
+        return (GLfloat)*(const GLushort*)p;
+    case GL_INT:
+        return (GLfloat)*(const GLint*)p;
+    case GL_UNSIGNED_INT:
+        return (GLfloat)*(const GLuint*)p;
+    case GL_FLOAT:
+        return *(const GLfloat*)p;
+    case GL_DOUBLE:
+        return (GLfloat)*(const GLdouble*)p;
+    default:
+        return 0.0f;
+    }
+}
+
+static GLfloat client_array_color_scalar(const uint8_t* p, GLenum type) {
+    if (!p) {
+        return 0.0f;
+    }
+
+    switch (type) {
+    case GL_BYTE:
+        return color_from_byte(*(const GLbyte*)p);
+    case GL_UNSIGNED_BYTE:
+        return color_from_ubyte(*(const GLubyte*)p);
+    case GL_SHORT:
+        return color_from_short(*(const GLshort*)p);
+    case GL_UNSIGNED_SHORT:
+        return color_from_ushort(*(const GLushort*)p);
+    case GL_INT:
+        return color_from_int(*(const GLint*)p);
+    case GL_UNSIGNED_INT:
+        return color_from_uint(*(const GLuint*)p);
+    case GL_FLOAT:
+        return *(const GLfloat*)p;
+    case GL_DOUBLE:
+        return (GLfloat)*(const GLdouble*)p;
+    default:
+        return 0.0f;
+    }
+}
+
+static void read_client_array_values(const ClientArrayState* state, GLint index,
+                                     GLfloat* values, const GLfloat* defaults,
+                                     int max_values, int normalize_color) {
+    const uint8_t* p = client_array_element_ptr(state, index);
+    uint32_t type_size = state ? gl_type_bytes(state->type) : 0;
+    int i;
+
+    for (i = 0; i < max_values; i++) {
+        values[i] = defaults ? defaults[i] : 0.0f;
+    }
+
+    if (!p || !type_size || !state) {
+        return;
+    }
+
+    for (i = 0; i < state->size && i < max_values; i++) {
+        values[i] = normalize_color ?
+            client_array_color_scalar(p + (uint32_t)i * type_size, state->type) :
+            client_array_scalar(p + (uint32_t)i * type_size, state->type);
+    }
+}
+
 __declspec(dllexport)
 void APIENTRY glArrayElement(GLint i) {
-    (void)i;
+    static const GLfloat color_defaults[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    static const GLfloat texcoord_defaults[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    static const GLfloat normal_defaults[3] = { 0.0f, 0.0f, 1.0f };
+    static const GLfloat vertex_defaults[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    GLfloat values[4];
+    uint32_t unit;
+
+    if (i < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    if (g_color_array.enabled) {
+        read_client_array_values(&g_color_array, i, values, color_defaults, 4, TRUE);
+        glColor4f(values[0], values[1], values[2], values[3]);
+    }
+
+    if (g_normal_array.enabled) {
+        read_client_array_values(&g_normal_array, i, values, normal_defaults, 3, FALSE);
+        glNormal3f(values[0], values[1], values[2]);
+    }
+
+    for (unit = 0; unit < V86GL_MAX_TEXTURE_UNITS; unit++) {
+        ClientArrayState* texcoord = &g_texcoord_arrays[unit];
+        if (texcoord->enabled) {
+            read_client_array_values(texcoord, i, values, texcoord_defaults, 4, FALSE);
+            emit_multi_tex_coord4f(GL_TEXTURE0_ARB + unit, values[0], values[1], values[2], values[3]);
+        }
+    }
+
+    if (g_edge_flag_array.enabled) {
+        const uint8_t* p = client_array_element_ptr(&g_edge_flag_array, i);
+        if (p) {
+            glEdgeFlag(*p ? GL_TRUE : GL_FALSE);
+        }
+    }
+
+    if (g_vertex_array.enabled) {
+        read_client_array_values(&g_vertex_array, i, values, vertex_defaults, 4, FALSE);
+        glVertex3f(values[0], values[1], values[2]);
+    }
 }
 
 __declspec(dllexport)

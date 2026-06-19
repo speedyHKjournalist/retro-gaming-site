@@ -71,10 +71,11 @@ static int v86gl_ensure_ready(void) {
 #ifdef __EMSCRIPTEN__
     EmscriptenWebGLContextAttributes attrs;
     emscripten_webgl_init_context_attributes(&attrs);
-    attrs.alpha = EM_TRUE;
+    attrs.alpha = EM_FALSE;
     attrs.depth = EM_TRUE;
     attrs.stencil = EM_TRUE;
     attrs.antialias = EM_FALSE;
+    attrs.premultipliedAlpha = EM_FALSE;
     attrs.preserveDrawingBuffer = EM_TRUE;
     attrs.majorVersion = 1;
     attrs.minorVersion = 0;

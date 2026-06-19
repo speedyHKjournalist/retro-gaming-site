@@ -190,6 +190,8 @@ EXPORTS
     glNormalPointer@12
     glDrawArrays@12
     glDrawElements@16
+    glDrawRangeElements@24
+    glDrawRangeElementsEXT@24
     glInterleavedArrays@12
     glLockArraysEXT@8
     glUnlockArraysEXT@0

@@ -1034,46 +1034,16 @@
             this.packetCount = 0;
             this.byteCount = 0;
             this.chunkedCalls = Object.create(null);
+            this.frameStates = Object.create(null);
+            this.lastPresentedFrameId = 0;
             this.surface = { hwnd: 0, x: 0, y: 0, width: 0, height: 0 };
             this.container = canvas.parentElement;
             this.screenCanvas = this.findScreenCanvas();
-            this.frontCanvas = this.createFrontCanvas(canvas);
             this.renderer = null;
 
             this.setRendererFromOptions();
             emulator.add_listener("net0-send", packet => this.pushEthernetFrame(packet));
             this.log("installed net0 UDP listener");
-        }
-
-        createFrontCanvas(backCanvas) {
-            let frontCanvas = backCanvas.__v86glFrontCanvas || null;
-
-            if (!frontCanvas && backCanvas.ownerDocument) {
-                frontCanvas = backCanvas.ownerDocument.createElement("canvas");
-                frontCanvas.id = backCanvas.id ? backCanvas.id + "_front" : "v86gl_canvas_front";
-                if (backCanvas.parentNode) {
-                    backCanvas.parentNode.insertBefore(frontCanvas, backCanvas.nextSibling);
-                }
-                backCanvas.__v86glFrontCanvas = frontCanvas;
-            }
-
-            if (!frontCanvas) {
-                return null;
-            }
-
-            frontCanvas.width = backCanvas.width || 640;
-            frontCanvas.height = backCanvas.height || 480;
-            frontCanvas.style.pointerEvents = "none";
-            frontCanvas.style.display = "none";
-            if (backCanvas.style.zIndex) {
-                frontCanvas.style.zIndex = backCanvas.style.zIndex;
-            }
-
-            backCanvas.style.pointerEvents = "none";
-            backCanvas.style.visibility = "hidden";
-            backCanvas.style.display = "block";
-
-            return frontCanvas;
         }
 
         setRendererFromOptions() {
@@ -1095,12 +1065,11 @@
         setGL4ES(module) {
             this.renderer = new Gl4esRenderer(this.canvas, module, (...args) => this.log(...args));
             this.renderer.resize(this.surface.width || this.canvas.width || 640, this.surface.height || this.canvas.height || 480);
-            this.resizeFrontCanvas(this.canvas.width, this.canvas.height);
             this.log("using gl4es renderer");
 
             const pending = this.pendingPackets.splice(0);
             for (let i = 0; i < pending.length; i++) {
-                this.dispatch(pending[i][0], pending[i][1]);
+                this.dispatch(pending[i][0], pending[i][1], pending[i][2]);
             }
         }
 
@@ -1213,17 +1182,18 @@
                     return;
                 }
 
+                const seq = u32(this.buf, 8);
                 const payload = this.buf.slice(12, total);
                 this.buf.splice(0, total);
                 this.packetCount++;
-                this.log("packet", this.packetCount, OP_NAMES[op] || op, "payload", size, "bytes");
-                this.dispatch(op, payload);
+                this.log("packet", this.packetCount, "seq", seq, OP_NAMES[op] || op, "payload", size, "bytes");
+                this.dispatch(op, payload, seq);
             }
         }
 
-        dispatch(op, p) {
+        dispatch(op, p, seq) {
             if (!this.renderer) {
-                this.pendingPackets.push([op, p]);
+                this.pendingPackets.push([op, p, seq]);
                 return;
             }
 
@@ -1237,10 +1207,10 @@
                 this.dispatchGLCall(p);
                 break;
             case OP_GL_FRAME:
-                this.dispatchGLFrame(p, true);
+                this.dispatchGLFramePacket(p, true);
                 break;
             case OP_GL_BATCH:
-                this.dispatchGLFrame(p, false);
+                this.dispatchGLFramePacket(p, false);
                 break;
             case OP_GL_CHUNK:
                 this.dispatchGLChunk(p);
@@ -1268,7 +1238,7 @@
                 renderer.glCall(GLFN_VERTEX3F, p);
                 break;
             case OP_PRESENT:
-                this.present();
+                this.dispatchPresentPacket(p);
                 break;
             case OP_RELEASE_CURRENT:
                 this.releaseCurrent();
@@ -1292,7 +1262,41 @@
             this.requireRenderer().glCall(fn, args);
         }
 
-        dispatchGLFrame(p, shouldPresent) {
+        isStaleFrame(frameId) {
+            return this.lastPresentedFrameId && frameId <= this.lastPresentedFrameId;
+        }
+
+        getFrameState(frameId) {
+            let state = this.frameStates[frameId];
+            if (!state) {
+                state = {
+                    id: frameId,
+                    expectedLargeCalls: null,
+                    completedLargeCalls: 0,
+                    pendingUploadCount: 0,
+                    deferredPayloads: [],
+                    completedUploads: Object.create(null),
+                    finalPayload: null,
+                    finalCommandsExecuted: false,
+                    presentRequested: false,
+                };
+                this.frameStates[frameId] = state;
+            }
+
+            return state;
+        }
+
+        noteExpectedLargeCalls(state, expectedLargeCalls) {
+            if (expectedLargeCalls === null || expectedLargeCalls === undefined) {
+                return;
+            }
+
+            if (state.expectedLargeCalls === null || expectedLargeCalls > state.expectedLargeCalls) {
+                state.expectedLargeCalls = expectedLargeCalls;
+            }
+        }
+
+        executeGLCommands(p) {
             let offset = 0;
             let commands = 0;
             const renderer = this.requireRenderer();
@@ -1319,50 +1323,191 @@
             }
 
             this.log("frame", commands, "commands", p.length, "bytes");
-            if (shouldPresent) {
+            return commands;
+        }
+
+        dispatchGLFramePacket(p, shouldPresent) {
+            if (p.length < 8) {
+                this.executeGLCommands(p);
+                if (shouldPresent) {
+                    this.present();
+                }
+                return;
+            }
+
+            const frameId = u32(p, 0);
+            const expectedLargeCalls = u32(p, 4);
+            const commands = p.slice(8);
+            if (this.isStaleFrame(frameId)) {
+                this.log("drop stale frame packet", frameId, "bytes", commands.length);
+                return;
+            }
+
+            const state = this.getFrameState(frameId);
+            this.noteExpectedLargeCalls(state, expectedLargeCalls);
+
+            if (!shouldPresent) {
+                if (state.pendingUploadCount > 0 || state.presentRequested) {
+                    state.deferredPayloads.push({
+                        payload: commands,
+                        shouldPresent: false,
+                        expectedLargeCalls,
+                    });
+                    this.log("defer batch", frameId, "pending uploads", state.pendingUploadCount);
+                    return;
+                }
+
+                this.executeGLCommands(commands);
+                return;
+            }
+
+            state.finalPayload = commands;
+            state.presentRequested = true;
+            this.tryPresentFrame(state);
+        }
+
+        dispatchPresentPacket(p) {
+            if (p.length < 8) {
                 this.present();
+                return;
+            }
+
+            const frameId = u32(p, 0);
+            const expectedLargeCalls = u32(p, 4);
+            if (this.isStaleFrame(frameId)) {
+                this.log("drop stale present", frameId);
+                return;
+            }
+
+            const state = this.getFrameState(frameId);
+            this.noteExpectedLargeCalls(state, expectedLargeCalls);
+            state.finalPayload = new Uint8Array(0);
+            state.presentRequested = true;
+            this.tryPresentFrame(state);
+        }
+
+        drainDeferredFrameCommands(state) {
+            while (state.pendingUploadCount === 0 && state.deferredPayloads.length) {
+                const item = state.deferredPayloads.shift();
+                this.noteExpectedLargeCalls(state, item.expectedLargeCalls);
+
+                if (item.shouldPresent) {
+                    state.finalPayload = item.payload;
+                    state.presentRequested = true;
+                    break;
+                }
+
+                this.executeGLCommands(item.payload);
             }
         }
 
+        tryPresentFrame(state) {
+            this.drainDeferredFrameCommands(state);
+
+            if (!state.presentRequested) {
+                return;
+            }
+
+            if (state.pendingUploadCount > 0) {
+                this.log("delay present", state.id, "pending uploads", state.pendingUploadCount);
+                return;
+            }
+
+            if (state.expectedLargeCalls !== null &&
+                state.completedLargeCalls < state.expectedLargeCalls) {
+                this.log("delay present", state.id, "completed large calls",
+                    state.completedLargeCalls, "of", state.expectedLargeCalls);
+                return;
+            }
+
+            if (!state.finalCommandsExecuted) {
+                this.executeGLCommands(state.finalPayload || new Uint8Array(0));
+                state.finalCommandsExecuted = true;
+            }
+
+            this.presentFrame(state.id);
+        }
+
         dispatchGLChunk(p) {
-            if (p.length < 16) {
+            if (p.length < 20) {
                 return;
             }
 
-            const uploadId = u32(p, 0);
-            const fn = u16(p, 4);
-            const chunkSize = u16(p, 6);
-            const totalSize = u32(p, 8);
-            const offset = u32(p, 12);
-            if (offset + chunkSize > totalSize || 16 + chunkSize > p.length) {
-                console.warn("[v86gl] invalid GL chunk", uploadId, fn, offset, chunkSize, totalSize);
+            const frameId = u32(p, 0);
+            const uploadId = u32(p, 4);
+            const fn = u16(p, 8);
+            const chunkSize = u16(p, 10);
+            const totalSize = u32(p, 12);
+            const offset = u32(p, 16);
+            if (this.isStaleFrame(frameId)) {
+                this.log("drop stale chunk", frameId, uploadId);
                 return;
             }
 
-            let upload = this.chunkedCalls[uploadId];
+            if (offset + chunkSize > totalSize || 20 + chunkSize > p.length) {
+                console.warn("[v86gl] invalid GL chunk", frameId, uploadId, fn, offset, chunkSize, totalSize);
+                return;
+            }
+
+            const state = this.getFrameState(frameId);
+            const key = frameId + ":" + uploadId;
+            if (state.completedUploads[uploadId]) {
+                this.log("duplicate completed chunk", frameId, uploadId, offset, chunkSize);
+                return;
+            }
+
+            let upload = this.chunkedCalls[key];
             if (!upload) {
                 upload = {
+                    frameId,
+                    uploadId,
                     fn,
                     totalSize,
                     received: 0,
                     data: new Uint8Array(totalSize),
+                    receivedMask: new Uint8Array(totalSize),
                 };
-                this.chunkedCalls[uploadId] = upload;
+                this.chunkedCalls[key] = upload;
+                state.pendingUploadCount++;
             }
 
-            if (upload.fn !== fn || upload.totalSize !== totalSize) {
-                console.warn("[v86gl] mismatched GL chunk", uploadId, fn, totalSize);
-                delete this.chunkedCalls[uploadId];
+            if (upload.fn !== fn || upload.totalSize !== totalSize || upload.frameId !== frameId) {
+                console.warn("[v86gl] mismatched GL chunk", frameId, uploadId, fn, totalSize);
+                delete this.chunkedCalls[key];
+                if (state.pendingUploadCount > 0) {
+                    state.pendingUploadCount--;
+                }
                 return;
             }
 
-            upload.data.set(p.slice(16, 16 + chunkSize), offset);
-            upload.received += chunkSize;
+            upload.data.set(p.slice(20, 20 + chunkSize), offset);
+
+            let newBytes = 0;
+            for (let i = 0; i < chunkSize; i++) {
+                const byteOffset = offset + i;
+                if (!upload.receivedMask[byteOffset]) {
+                    upload.receivedMask[byteOffset] = 1;
+                    newBytes++;
+                }
+            }
+
+            if (!newBytes) {
+                this.log("duplicate chunk", frameId, uploadId, offset, chunkSize);
+                return;
+            }
+
+            upload.received += newBytes;
 
             if (upload.received >= upload.totalSize) {
-                delete this.chunkedCalls[uploadId];
+                delete this.chunkedCalls[key];
+                if (state.pendingUploadCount > 0) {
+                    state.pendingUploadCount--;
+                }
+                state.completedLargeCalls++;
+                state.completedUploads[uploadId] = true;
                 this.log("chunked gl", GLFN_NAMES[fn] || fn, upload.totalSize, "bytes");
                 this.requireRenderer().glCall(fn, upload.data);
+                this.tryPresentFrame(state);
             }
         }
 
@@ -1384,7 +1529,7 @@
             this.resize(this.surface.width, this.surface.height, this.surface.x, this.surface.y);
             this.requireRenderer().makeCurrent(this.surface);
             this.canvas.style.display = "block";
-            this.canvas.style.visibility = "hidden";
+            this.canvas.style.visibility = "visible";
         }
 
         resize(width, height, x, y) {
@@ -1402,19 +1547,7 @@
             this.surface.width = width;
             this.surface.height = height;
             this.requireRenderer().resize(width, height);
-            this.resizeFrontCanvas(width, height);
             this.positionCanvas();
-        }
-
-        resizeFrontCanvas(width, height) {
-            if (!this.frontCanvas) {
-                return;
-            }
-
-            if (this.frontCanvas.width !== width || this.frontCanvas.height !== height) {
-                this.frontCanvas.width = width;
-                this.frontCanvas.height = height;
-            }
         }
 
         styleOverlayCanvas(canvas, left, top, width, height, visible) {
@@ -1453,47 +1586,35 @@
             }
 
             this.styleOverlayCanvas(this.canvas, left, top, width, height, true);
-            this.canvas.style.visibility = "hidden";
-            this.styleOverlayCanvas(this.frontCanvas, left, top, width, height,
-                !!(this.frontCanvas && this.frontCanvas.__v86glHasFrame));
+            this.canvas.style.visibility = "visible";
         }
 
-        copyBackBufferToFront() {
-            if (!this.frontCanvas) {
-                return;
+        presentFrame(frameId) {
+            this.present();
+            this.lastPresentedFrameId = frameId;
+
+            for (const key in this.frameStates) {
+                const id = Number(key);
+                if (id <= frameId) {
+                    delete this.frameStates[key];
+                }
             }
-
-            this.resizeFrontCanvas(this.canvas.width || this.surface.width || 640,
-                                   this.canvas.height || this.surface.height || 480);
-
-            const ctx = this.frontCanvas.getContext("2d");
-            if (!ctx) {
-                return;
-            }
-
-            ctx.clearRect(0, 0, this.frontCanvas.width, this.frontCanvas.height);
-            ctx.drawImage(this.canvas, 0, 0, this.frontCanvas.width, this.frontCanvas.height);
-            this.frontCanvas.__v86glHasFrame = true;
         }
 
         present() {
             this.positionCanvas();
             this.requireRenderer().present();
-            this.copyBackBufferToFront();
-            if (this.frontCanvas) {
-                this.frontCanvas.style.display = "block";
-            }
             this.canvas.style.display = "block";
-            this.canvas.style.visibility = "hidden";
+            this.canvas.style.visibility = "visible";
         }
 
         releaseCurrent() {
             this.requireRenderer().releaseCurrent();
+            this.chunkedCalls = Object.create(null);
+            this.frameStates = Object.create(null);
+            this.lastPresentedFrameId = 0;
             this.canvas.style.display = "none";
-            if (this.frontCanvas) {
-                this.frontCanvas.style.display = "none";
-                this.frontCanvas.__v86glHasFrame = false;
-            }
+            this.canvas.style.visibility = "hidden";
             this.log("released current context");
         }
     }
