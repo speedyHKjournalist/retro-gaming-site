@@ -1274,10 +1274,9 @@
                     expectedLargeCalls: null,
                     completedLargeCalls: 0,
                     pendingUploadCount: 0,
-                    deferredPayloads: [],
+                    items: [],
                     completedUploads: Object.create(null),
-                    finalPayload: null,
-                    finalCommandsExecuted: false,
+                    itemsExecuted: false,
                     presentRequested: false,
                 };
                 this.frameStates[frameId] = state;
@@ -1345,25 +1344,18 @@
 
             const state = this.getFrameState(frameId);
             this.noteExpectedLargeCalls(state, expectedLargeCalls);
+            state.items.push({
+                type: "commands",
+                payload: commands,
+            });
 
-            if (!shouldPresent) {
-                if (state.pendingUploadCount > 0 || state.presentRequested) {
-                    state.deferredPayloads.push({
-                        payload: commands,
-                        shouldPresent: false,
-                        expectedLargeCalls,
-                    });
-                    this.log("defer batch", frameId, "pending uploads", state.pendingUploadCount);
-                    return;
-                }
-
-                this.executeGLCommands(commands);
-                return;
+            if (shouldPresent) {
+                state.presentRequested = true;
             }
 
-            state.finalPayload = commands;
-            state.presentRequested = true;
-            this.tryPresentFrame(state);
+            if (state.presentRequested) {
+                this.tryPresentFrame(state);
+            }
         }
 
         dispatchPresentPacket(p) {
@@ -1381,29 +1373,39 @@
 
             const state = this.getFrameState(frameId);
             this.noteExpectedLargeCalls(state, expectedLargeCalls);
-            state.finalPayload = new Uint8Array(0);
             state.presentRequested = true;
             this.tryPresentFrame(state);
         }
 
-        drainDeferredFrameCommands(state) {
-            while (state.pendingUploadCount === 0 && state.deferredPayloads.length) {
-                const item = state.deferredPayloads.shift();
-                this.noteExpectedLargeCalls(state, item.expectedLargeCalls);
+        executeFrameItems(state) {
+            if (state.itemsExecuted) {
+                return;
+            }
 
-                if (item.shouldPresent) {
-                    state.finalPayload = item.payload;
-                    state.presentRequested = true;
-                    break;
+            for (const item of state.items) {
+                if (item.type === "commands") {
+                    this.executeGLCommands(item.payload);
+                    continue;
                 }
 
-                this.executeGLCommands(item.payload);
+                if (item.type !== "upload") {
+                    continue;
+                }
+
+                const upload = item.upload;
+                if (!upload || !upload.ready || upload.failed || upload.executed) {
+                    continue;
+                }
+
+                this.log("chunked gl", GLFN_NAMES[upload.fn] || upload.fn, upload.totalSize, "bytes");
+                this.requireRenderer().glCall(upload.fn, upload.data);
+                upload.executed = true;
             }
+
+            state.itemsExecuted = true;
         }
 
         tryPresentFrame(state) {
-            this.drainDeferredFrameCommands(state);
-
             if (!state.presentRequested) {
                 return;
             }
@@ -1420,11 +1422,7 @@
                 return;
             }
 
-            if (!state.finalCommandsExecuted) {
-                this.executeGLCommands(state.finalPayload || new Uint8Array(0));
-                state.finalCommandsExecuted = true;
-            }
-
+            this.executeFrameItems(state);
             this.presentFrame(state.id);
         }
 
@@ -1466,9 +1464,16 @@
                     received: 0,
                     data: new Uint8Array(totalSize),
                     receivedMask: new Uint8Array(totalSize),
+                    ready: false,
+                    failed: false,
+                    executed: false,
                 };
                 this.chunkedCalls[key] = upload;
                 state.pendingUploadCount++;
+                state.items.push({
+                    type: "upload",
+                    upload,
+                });
             }
 
             if (upload.fn !== fn || upload.totalSize !== totalSize || upload.frameId !== frameId) {
@@ -1477,6 +1482,11 @@
                 if (state.pendingUploadCount > 0) {
                     state.pendingUploadCount--;
                 }
+                upload.failed = true;
+                upload.ready = true;
+                state.completedLargeCalls++;
+                state.completedUploads[uploadId] = true;
+                this.tryPresentFrame(state);
                 return;
             }
 
@@ -1505,8 +1515,7 @@
                 }
                 state.completedLargeCalls++;
                 state.completedUploads[uploadId] = true;
-                this.log("chunked gl", GLFN_NAMES[fn] || fn, upload.totalSize, "bytes");
-                this.requireRenderer().glCall(fn, upload.data);
+                upload.ready = true;
                 this.tryPresentFrame(state);
             }
         }
