@@ -1037,11 +1037,43 @@
             this.surface = { hwnd: 0, x: 0, y: 0, width: 0, height: 0 };
             this.container = canvas.parentElement;
             this.screenCanvas = this.findScreenCanvas();
+            this.frontCanvas = this.createFrontCanvas(canvas);
             this.renderer = null;
 
             this.setRendererFromOptions();
             emulator.add_listener("net0-send", packet => this.pushEthernetFrame(packet));
             this.log("installed net0 UDP listener");
+        }
+
+        createFrontCanvas(backCanvas) {
+            let frontCanvas = backCanvas.__v86glFrontCanvas || null;
+
+            if (!frontCanvas && backCanvas.ownerDocument) {
+                frontCanvas = backCanvas.ownerDocument.createElement("canvas");
+                frontCanvas.id = backCanvas.id ? backCanvas.id + "_front" : "v86gl_canvas_front";
+                if (backCanvas.parentNode) {
+                    backCanvas.parentNode.insertBefore(frontCanvas, backCanvas.nextSibling);
+                }
+                backCanvas.__v86glFrontCanvas = frontCanvas;
+            }
+
+            if (!frontCanvas) {
+                return null;
+            }
+
+            frontCanvas.width = backCanvas.width || 640;
+            frontCanvas.height = backCanvas.height || 480;
+            frontCanvas.style.pointerEvents = "none";
+            frontCanvas.style.display = "none";
+            if (backCanvas.style.zIndex) {
+                frontCanvas.style.zIndex = backCanvas.style.zIndex;
+            }
+
+            backCanvas.style.pointerEvents = "none";
+            backCanvas.style.visibility = "hidden";
+            backCanvas.style.display = "block";
+
+            return frontCanvas;
         }
 
         setRendererFromOptions() {
@@ -1063,6 +1095,7 @@
         setGL4ES(module) {
             this.renderer = new Gl4esRenderer(this.canvas, module, (...args) => this.log(...args));
             this.renderer.resize(this.surface.width || this.canvas.width || 640, this.surface.height || this.canvas.height || 480);
+            this.resizeFrontCanvas(this.canvas.width, this.canvas.height);
             this.log("using gl4es renderer");
 
             const pending = this.pendingPackets.splice(0);
@@ -1351,6 +1384,7 @@
             this.resize(this.surface.width, this.surface.height, this.surface.x, this.surface.y);
             this.requireRenderer().makeCurrent(this.surface);
             this.canvas.style.display = "block";
+            this.canvas.style.visibility = "hidden";
         }
 
         resize(width, height, x, y) {
@@ -1368,7 +1402,35 @@
             this.surface.width = width;
             this.surface.height = height;
             this.requireRenderer().resize(width, height);
+            this.resizeFrontCanvas(width, height);
             this.positionCanvas();
+        }
+
+        resizeFrontCanvas(width, height) {
+            if (!this.frontCanvas) {
+                return;
+            }
+
+            if (this.frontCanvas.width !== width || this.frontCanvas.height !== height) {
+                this.frontCanvas.width = width;
+                this.frontCanvas.height = height;
+            }
+        }
+
+        styleOverlayCanvas(canvas, left, top, width, height, visible) {
+            if (!canvas) {
+                return;
+            }
+
+            canvas.style.position = "absolute";
+            canvas.style.left = left + "px";
+            canvas.style.top = top + "px";
+            canvas.style.setProperty("width", width + "px", "important");
+            canvas.style.setProperty("height", height + "px", "important");
+            canvas.style.setProperty("max-width", "none", "important");
+            canvas.style.setProperty("max-height", "none", "important");
+            canvas.style.pointerEvents = "none";
+            canvas.style.display = visible ? "block" : "none";
         }
 
         positionCanvas() {
@@ -1390,24 +1452,48 @@
                 height = h * scaleY;
             }
 
-            this.canvas.style.position = "absolute";
-            this.canvas.style.left = left + "px";
-            this.canvas.style.top = top + "px";
-            this.canvas.style.setProperty("width", width + "px", "important");
-            this.canvas.style.setProperty("height", height + "px", "important");
-            this.canvas.style.setProperty("max-width", "none", "important");
-            this.canvas.style.setProperty("max-height", "none", "important");
+            this.styleOverlayCanvas(this.canvas, left, top, width, height, true);
+            this.canvas.style.visibility = "hidden";
+            this.styleOverlayCanvas(this.frontCanvas, left, top, width, height,
+                !!(this.frontCanvas && this.frontCanvas.__v86glHasFrame));
+        }
+
+        copyBackBufferToFront() {
+            if (!this.frontCanvas) {
+                return;
+            }
+
+            this.resizeFrontCanvas(this.canvas.width || this.surface.width || 640,
+                                   this.canvas.height || this.surface.height || 480);
+
+            const ctx = this.frontCanvas.getContext("2d");
+            if (!ctx) {
+                return;
+            }
+
+            ctx.clearRect(0, 0, this.frontCanvas.width, this.frontCanvas.height);
+            ctx.drawImage(this.canvas, 0, 0, this.frontCanvas.width, this.frontCanvas.height);
+            this.frontCanvas.__v86glHasFrame = true;
         }
 
         present() {
             this.positionCanvas();
             this.requireRenderer().present();
+            this.copyBackBufferToFront();
+            if (this.frontCanvas) {
+                this.frontCanvas.style.display = "block";
+            }
             this.canvas.style.display = "block";
+            this.canvas.style.visibility = "hidden";
         }
 
         releaseCurrent() {
             this.requireRenderer().releaseCurrent();
             this.canvas.style.display = "none";
+            if (this.frontCanvas) {
+                this.frontCanvas.style.display = "none";
+                this.frontCanvas.__v86glHasFrame = false;
+            }
             this.log("released current context");
         }
     }
