@@ -1,13 +1,17 @@
 // Minimal fake opengl32.dll for v86 experiments.
-// It serializes a tiny OpenGL subset to UDP broadcast using VGL1 packets.
+// It serializes a tiny OpenGL subset to a v86 PCI DMA command-buffer device.
+// The companion v86gl.sys helper driver maps a contiguous guest-RAM buffer,
+// writes the descriptor physical address to the v86 PCI I/O BAR, and rings doorbell.
 // Build:
-//   i686-w64-mingw32-gcc -shared -Os -s -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -o opengl32.dll opengl32_proxy.c opengl32.def -Wl,--kill-at -luser32 -lkernel32 -lws2_32
+//   i686-w64-mingw32-gcc -shared -Os -s -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -o opengl32.dll opengl32_proxy.c opengl32.def -Wl,--kill-at -luser32 -lkernel32
 
 #define WIN32_LEAN_AND_MEAN
 #define _GDI32_
-#include <winsock2.h>
 #include <windows.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <string.h>
+#include "v86gl_ioctl.h"
 
 #ifndef APIENTRY
 #define APIENTRY __stdcall
@@ -349,25 +353,13 @@ typedef void GLvoid;
 #define GL_T2F_C4F_N3F_V3F    0x2A2C
 #define GL_T4F_C4F_N3F_V4F    0x2A2D
 
-#define VGL_MAGIC 0x314C4756u  // 'VGL1' little-endian
+#define V86GL_CTRL_MAKE_CURRENT 0xFFF0u
+#define V86GL_CTRL_RELEASE_CURRENT 0xFFF1u
+#define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
+#define V86GL_READ_PIXELS_HEADER_SIZE 32u
+#define V86GL_READ_PIXELS_STATUS_PENDING 0u
+#define V86GL_READ_PIXELS_STATUS_OK 1u
 #define CLIENT_ARRAY_MT_MAGIC 0x544D4143u  // 'CAMT' little-endian
-
-enum {
-    OP_MAKE_CURRENT = 1,
-    OP_VIEWPORT     = 2,
-    OP_CLEAR_COLOR  = 3,
-    OP_CLEAR        = 4,
-    OP_BEGIN        = 5,
-    OP_END          = 6,
-    OP_COLOR4F      = 7,
-    OP_VERTEX3F     = 8,
-    OP_PRESENT      = 9,
-    OP_RELEASE_CURRENT = 10,
-    OP_GL_CALL      = 20,
-    OP_GL_FRAME     = 21,
-    OP_GL_CHUNK     = 22,
-    OP_GL_BATCH     = 23,
-};
 
 enum {
     GLFN_VIEWPORT    = 1,
@@ -463,26 +455,16 @@ enum {
     GLFN_READ_BUFFER = 91,
     GLFN_COPY_TEX_IMAGE_2D = 92,
     GLFN_COPY_TEX_SUB_IMAGE_2D = 93,
+    GLFN_READ_PIXELS = 94,
 };
 
-#pragma pack(push, 1)
-typedef struct {
-    uint32_t magic;
-    uint16_t op;
-    uint16_t size;
-    uint32_t seq;
-} VGLHeader;
-#pragma pack(pop)
-
-#define VGL_UDP_PORT 46000u
-#define VGL_PACKET_PAYLOAD_SIZE 1400u
-#define VGL_FRAME_META_SIZE 8u
-#define VGL_CHUNK_META_SIZE 20u
-#define VGL_FRAME_BUFFER_SIZE (VGL_PACKET_PAYLOAD_SIZE - VGL_FRAME_META_SIZE)
-
-static SOCKET g_udp = INVALID_SOCKET;
-static BOOL   g_udp_ready = FALSE;
-static BOOL   g_wsa_started = FALSE;
+static HANDLE g_v86gl = INVALID_HANDLE_VALUE;
+static BOOL   g_v86gl_ready = FALSE;
+static BOOL   g_v86gl_failed = FALSE;
+static uint8_t* g_dma_buffer = NULL;
+static uint32_t g_dma_capacity = 0;
+static uint32_t g_dma_size = 0;
+static uint32_t g_dma_command_count = 0;
 static HINSTANCE g_instance = NULL;
 static HDC    g_current_dc = NULL;
 static HGLRC  g_current_ctx = NULL;
@@ -493,13 +475,7 @@ static int32_t g_last_surface_y = 0;
 static uint32_t g_last_surface_width = 0;
 static uint32_t g_last_surface_height = 0;
 static BOOL g_have_last_surface = FALSE;
-static uint8_t g_frame_buffer[VGL_FRAME_BUFFER_SIZE];
-static uint16_t g_frame_size = 0;
-static BOOL g_frame_overflow = FALSE;
-static uint32_t g_seq = 1;
-static uint32_t g_chunk_id = 1;
 static uint32_t g_frame_id = 1;
-static uint32_t g_frame_large_call_count = 0;
 static GLuint g_next_texture_id = 1;
 static GLuint g_next_list_id = 1;
 static GLuint g_list_base = 0;
@@ -565,6 +541,70 @@ static GLuint g_name_stack[64];
 static GLint g_name_stack_depth = 0;
 static GLuint g_index_mask = 0xFFFFFFFFu;
 static GLenum g_error = 0;
+/*
+ * Transport tracing goes to the Windows debug-output stream.  Use Sysinternals
+ * DebugView inside the XP guest to see it. DMA submit tracing is enabled by
+ * default (set V86GL_TRACE=0 to disable it); V86GL_TRACE_CALLS additionally
+ * logs every encoded GL record.
+ */
+static BOOL g_trace_initialized = FALSE;
+static BOOL g_trace_enabled = FALSE;
+static BOOL g_trace_calls = FALSE;
+
+static BOOL trace_environment_enabled(const char* name) {
+    char value[2];
+    DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
+
+    return length && value[0] != '0';
+}
+
+static BOOL trace_environment_disabled(const char* name) {
+    char value[2];
+    DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
+
+    return length && value[0] == '0';
+}
+
+static void v86gl_logv(BOOL force, const char* format, va_list args) {
+    char message[1024];
+    int length;
+
+    if (!g_trace_initialized) {
+        g_trace_enabled = !trace_environment_disabled("V86GL_TRACE");
+        g_trace_calls = trace_environment_enabled("V86GL_TRACE_CALLS");
+        if (g_trace_calls) {
+            g_trace_enabled = TRUE;
+        }
+        g_trace_initialized = TRUE;
+    }
+
+    if (!force && !g_trace_enabled) {
+        return;
+    }
+
+    lstrcpyA(message, "[v86gl.dll] ");
+    length = lstrlenA(message);
+    wvsprintfA(message + length, format, args);
+    lstrcatA(message, "\r\n");
+    OutputDebugStringA(message);
+}
+
+static void v86gl_trace(const char* format, ...) {
+    va_list args;
+
+    va_start(args, format);
+    v86gl_logv(FALSE, format, args);
+    va_end(args);
+}
+
+static void v86gl_error(const char* format, ...) {
+    va_list args;
+
+    va_start(args, format);
+    v86gl_logv(TRUE, format, args);
+    va_end(args);
+}
+
 static const char* g_gl_extensions =
     "GL_ARB_multitexture "
     "GL_ARB_texture_env_combine "
@@ -670,10 +710,6 @@ static ClientArrayState g_texcoord_arrays[V86GL_MAX_TEXTURE_UNITS] = {
 };
 static ClientArrayState g_normal_array = { FALSE, 3, GL_FLOAT, 0, NULL };
 static ClientArrayState g_edge_flag_array = { FALSE, 1, GL_UNSIGNED_BYTE, 0, NULL };
-
-static uint16_t bswap16(uint16_t x) {
-    return (uint16_t)((x >> 8) | (x << 8));
-}
 
 static GLint active_texture_index(void) {
     if (g_active_texture < GL_TEXTURE0_ARB ||
@@ -1098,33 +1134,100 @@ static int light_model_scalar_valid(GLenum pname) {
     return light_model_value_count(pname) == 1;
 }
 
-static int open_udp(void) {
-    if (g_udp_ready) {
+static void close_v86gl(void) {
+    DWORD returned = 0;
+
+    if (g_v86gl_ready) {
+        v86gl_trace("unmap transport buffer frame=%lu pendingCommands=%lu pendingBytes=%lu",
+                    (unsigned long)g_frame_id,
+                    (unsigned long)g_dma_command_count,
+                    (unsigned long)g_dma_size);
+        DeviceIoControl(g_v86gl,
+                        V86GL_IOCTL_UNMAP_BUFFER,
+                        NULL,
+                        0,
+                        NULL,
+                        0,
+                        &returned,
+                        NULL);
+    }
+
+    if (g_v86gl != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_v86gl);
+        g_v86gl = INVALID_HANDLE_VALUE;
+    }
+
+    g_v86gl_ready = FALSE;
+    g_dma_buffer = NULL;
+    g_dma_capacity = 0;
+    g_dma_size = 0;
+    g_dma_command_count = 0;
+}
+
+static int open_v86gl(void) {
+    V86GLMapBuffer mapping;
+    DWORD returned = 0;
+    DWORD error;
+
+    if (g_v86gl_ready) {
         return 1;
     }
 
-    if (!g_wsa_started) {
-        WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-            return 0;
-        }
-        g_wsa_started = TRUE;
-    }
-
-    g_udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (g_udp == INVALID_SOCKET) {
+    if (g_v86gl_failed) {
+        v86gl_error("transport remains disabled after an earlier failure");
         return 0;
     }
 
-    BOOL yes = TRUE;
-    setsockopt(g_udp, SOL_SOCKET, SO_BROADCAST, (const char*)&yes, sizeof(yes));
-    g_udp_ready = TRUE;
-    return 1;
-}
+    v86gl_trace("open transport device %s", V86GL_DEVICE_DOS_NAME);
+    g_v86gl = CreateFileA(
+        V86GL_DEVICE_DOS_NAME,
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
 
-static void write_u16le(uint8_t* p, uint16_t v) {
-    p[0] = (uint8_t)(v & 0xFF);
-    p[1] = (uint8_t)(v >> 8);
+    if (g_v86gl == INVALID_HANDLE_VALUE) {
+        error = GetLastError();
+        v86gl_error("CreateFile(%s) failed error=%lu", V86GL_DEVICE_DOS_NAME,
+                    (unsigned long)error);
+        g_v86gl_failed = TRUE;
+        return 0;
+    }
+
+    ZeroMemory(&mapping, sizeof(mapping));
+    if (!DeviceIoControl(g_v86gl,
+                         V86GL_IOCTL_MAP_BUFFER,
+                         NULL,
+                         0,
+                         &mapping,
+                         sizeof(mapping),
+                         &returned,
+                         NULL) ||
+        returned != sizeof(mapping) ||
+        !mapping.user_address ||
+        mapping.buffer_bytes <= sizeof(V86GLDMADesc)) {
+        error = GetLastError();
+        v86gl_error("MAP_BUFFER failed winerr=%lu returned=%lu user=%08lx bytes=%lu",
+                    (unsigned long)error,
+                    (unsigned long)returned,
+                    (unsigned long)mapping.user_address,
+                    (unsigned long)mapping.buffer_bytes);
+        close_v86gl();
+        g_v86gl_failed = TRUE;
+        return 0;
+    }
+
+    g_dma_buffer = (uint8_t*)(uintptr_t)mapping.user_address;
+    g_dma_capacity = mapping.buffer_bytes;
+    g_v86gl_ready = TRUE;
+    v86gl_trace("MAP_BUFFER ok user=%08lx capacity=%lu descriptorHeader=%lu",
+                (unsigned long)mapping.user_address,
+                (unsigned long)g_dma_capacity,
+                (unsigned long)sizeof(V86GLDMADesc));
+    return 1;
 }
 
 static void write_u32le(uint8_t* p, uint32_t v) {
@@ -1134,119 +1237,240 @@ static void write_u32le(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 
-static void emit_packet(uint16_t op, const void* payload, uint16_t size) {
-    uint8_t packet[sizeof(VGLHeader) + VGL_PACKET_PAYLOAD_SIZE];
-    struct sockaddr_in dst;
-    VGLHeader h;
-    int total = (int)(sizeof(h) + size);
-
-    if (size > VGL_PACKET_PAYLOAD_SIZE || !open_udp()) {
-        return;
-    }
-
-    h.magic = VGL_MAGIC;
-    h.op = op;
-    h.size = size;
-    h.seq = g_seq++;
-    CopyMemory(packet, &h, sizeof(h));
-
-    if (payload && size) {
-        CopyMemory(packet + sizeof(h), payload, size);
-    }
-
-    ZeroMemory(&dst, sizeof(dst));
-    dst.sin_family = AF_INET;
-    dst.sin_port = bswap16((uint16_t)VGL_UDP_PORT);
-    dst.sin_addr.s_addr = 0xFFFFFFFFu;
-
-    sendto(g_udp, (const char*)packet, total, 0, (const struct sockaddr*)&dst, sizeof(dst));
+static uint32_t read_u32le(const uint8_t* p) {
+    return (uint32_t)p[0] |
+           ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
 }
 
-static void emit_gl_batch(void) {
-    if (g_frame_size) {
-        uint8_t payload[VGL_PACKET_PAYLOAD_SIZE];
-        write_u32le(payload, g_frame_id);
-        write_u32le(payload + 4, g_frame_large_call_count);
-        CopyMemory(payload + VGL_FRAME_META_SIZE, g_frame_buffer, g_frame_size);
-        emit_packet(OP_GL_BATCH, payload, (uint16_t)(VGL_FRAME_META_SIZE + g_frame_size));
+static void reset_pci_stream(void) {
+    g_dma_size = 0;
+    g_dma_command_count = 0;
+}
+
+static int emit_pci_batch(BOOL force_present) {
+    V86GLSubmit submit;
+    V86GLDMADesc* desc;
+    DWORD returned = 0;
+    uint32_t desc_len;
+
+    if (!open_v86gl()) {
+        return 0;
     }
 
-    g_frame_size = 0;
-    g_frame_overflow = FALSE;
+    if (!g_dma_size && !force_present) {
+        return 1;
+    }
+
+    desc = (V86GLDMADesc*)g_dma_buffer;
+    desc->magic = V86GL_MAGIC;
+    desc->version = V86GL_VERSION;
+    desc->flags = force_present ? V86GL_DESC_FLAG_PRESENT : 0;
+    desc->frame_id = g_frame_id;
+    desc->command_count = g_dma_command_count;
+    desc->command_bytes = g_dma_size;
+    desc->reserved0 = 0;
+    desc->reserved1 = 0;
+
+    desc_len = (uint32_t)sizeof(*desc) + g_dma_size;
+    submit.descriptor_bytes = desc_len;
+    submit.flags = force_present ? V86GL_SUBMIT_FORCE_PRESENT : 0;
+
+    v86gl_trace("submit -> sys frame=%lu commands=%lu commandBytes=%lu descBytes=%lu present=%lu",
+                (unsigned long)desc->frame_id,
+                (unsigned long)desc->command_count,
+                (unsigned long)desc->command_bytes,
+                (unsigned long)desc_len,
+                (unsigned long)(force_present ? 1 : 0));
+
+    if (!DeviceIoControl(g_v86gl,
+                         V86GL_IOCTL_SUBMIT,
+                         &submit,
+                         sizeof(submit),
+                         NULL,
+                         0,
+                         &returned,
+                         NULL)) {
+        DWORD error = GetLastError();
+        v86gl_error("SUBMIT failed frame=%lu winerr=%lu commands=%lu bytes=%lu",
+                    (unsigned long)desc->frame_id,
+                    (unsigned long)error,
+                    (unsigned long)desc->command_count,
+                    (unsigned long)desc->command_bytes);
+        close_v86gl();
+        g_v86gl_failed = TRUE;
+        reset_pci_stream();
+        return 0;
+    }
+
+    v86gl_trace("submit <- sys accepted frame=%lu", (unsigned long)desc->frame_id);
+    reset_pci_stream();
+    return 1;
+}
+
+static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
+                              uint8_t** args_out) {
+    const BOOL extended = args_size >= V86GL_EXTENDED_RECORD_SIZE;
+    uint32_t header_size = extended ? 8u : 4u;
+    uint32_t record_size;
+    uint32_t command_capacity;
+    uint8_t* p;
+
+    if (!open_v86gl()) {
+        g_error = GL_INVALID_OPERATION;
+        v86gl_error("drop GL record fn=%u: transport is unavailable", (unsigned int)fn);
+        return 0;
+    }
+
+    if (args_size > 0xFFFFFFFFu - header_size) {
+        g_error = GL_OUT_OF_MEMORY;
+        return 0;
+    }
+
+    record_size = header_size + args_size;
+    command_capacity = g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc);
+    if (record_size > command_capacity) {
+        g_error = GL_OUT_OF_MEMORY;
+        v86gl_error("drop GL record fn=%u payload=%lu capacity=%lu",
+                    (unsigned int)fn, (unsigned long)args_size,
+                    (unsigned long)command_capacity);
+        return 0;
+    }
+
+    if (g_dma_size + record_size > command_capacity && !emit_pci_batch(FALSE)) {
+        g_error = GL_INVALID_OPERATION;
+        return 0;
+    }
+
+    p = g_dma_buffer + sizeof(V86GLDMADesc) + g_dma_size;
+    p[0] = (uint8_t)(fn & 0xFF);
+    p[1] = (uint8_t)(fn >> 8);
+
+    if (extended) {
+        p[2] = 0xFF;
+        p[3] = 0xFF;
+        write_u32le(p + 4, args_size);
+    } else {
+        p[2] = (uint8_t)(args_size & 0xFF);
+        p[3] = (uint8_t)(args_size >> 8);
+    }
+
+    if (args && args_size) {
+        CopyMemory(p + header_size, args, args_size);
+    }
+
+    if (args_out) {
+        *args_out = p + header_size;
+    }
+
+    g_dma_size += record_size;
+    g_dma_command_count++;
+
+    if (g_trace_calls) {
+        v86gl_trace("record frame=%lu index=%lu fn=%u payload=%lu streamBytes=%lu",
+                    (unsigned long)g_frame_id,
+                    (unsigned long)g_dma_command_count,
+                    (unsigned int)fn,
+                    (unsigned long)args_size,
+                    (unsigned long)g_dma_size);
+    }
+
+    return 1;
+}
+
+static int emit_pci_record(uint16_t fn, const void* args, uint32_t args_size, BOOL flush_after) {
+    if (!reserve_pci_record(fn, args, args_size, NULL)) {
+        return 0;
+    }
+
+    if (flush_after && !emit_pci_batch(FALSE)) {
+        g_error = GL_INVALID_OPERATION;
+        return 0;
+    }
+
+    return 1;
+}
+
+static int emit_read_pixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                            GLenum format, GLenum type, uint32_t data_size,
+                            GLvoid* pixels) {
+    struct {
+        int32_t x;
+        int32_t y;
+        int32_t width;
+        int32_t height;
+        uint32_t format;
+        uint32_t type;
+        uint32_t data_size;
+        uint32_t status;
+    } request;
+    uint8_t* args;
+    uint32_t args_size;
+
+    if (data_size > 0xFFFFFFFFu - V86GL_READ_PIXELS_HEADER_SIZE) {
+        return 0;
+    }
+
+    if (g_dma_size && !emit_pci_batch(FALSE)) {
+        return 0;
+    }
+
+    args_size = V86GL_READ_PIXELS_HEADER_SIZE + data_size;
+    request.x = x;
+    request.y = y;
+    request.width = width;
+    request.height = height;
+    request.format = (uint32_t)format;
+    request.type = (uint32_t)type;
+    request.data_size = data_size;
+    request.status = V86GL_READ_PIXELS_STATUS_PENDING;
+
+    if (!reserve_pci_record(GLFN_READ_PIXELS, NULL, args_size, &args)) {
+        return 0;
+    }
+
+    if (sizeof(request) != V86GL_READ_PIXELS_HEADER_SIZE ||
+        args_size < sizeof(request)) {
+        g_error = GL_INVALID_OPERATION;
+        return 0;
+    }
+
+    CopyMemory(args, &request, sizeof(request));
+    ZeroMemory(args + sizeof(request), data_size);
+
+    if (!emit_pci_batch(FALSE) ||
+        read_u32le(args + 28) != V86GL_READ_PIXELS_STATUS_OK) {
+        return 0;
+    }
+
+    CopyMemory(pixels, args + V86GL_READ_PIXELS_HEADER_SIZE, data_size);
+    return 1;
 }
 
 static void emit_gl_large_call(uint16_t fn, const void* args, uint32_t args_size) {
-    uint32_t upload_id = g_chunk_id++;
-    uint32_t offset = 0;
-    uint8_t payload[VGL_PACKET_PAYLOAD_SIZE];
-    const uint32_t header_size = VGL_CHUNK_META_SIZE;
-    const uint32_t max_chunk = VGL_PACKET_PAYLOAD_SIZE - header_size;
-
     if (!args || !args_size) {
         return;
     }
 
-    emit_gl_batch();
-    g_frame_large_call_count++;
-
-    while (offset < args_size) {
-        uint32_t remaining = args_size - offset;
-        uint16_t chunk_size = (uint16_t)(remaining > max_chunk ? max_chunk : remaining);
-
-        write_u32le(payload, g_frame_id);
-        write_u32le(payload + 4, upload_id);
-        write_u16le(payload + 8, fn);
-        write_u16le(payload + 10, chunk_size);
-        write_u32le(payload + 12, args_size);
-        write_u32le(payload + 16, offset);
-
-        CopyMemory(payload + header_size, (const uint8_t*)args + offset, chunk_size);
-        emit_packet(OP_GL_CHUNK, payload, (uint16_t)(header_size + chunk_size));
-        offset += chunk_size;
-    }
+    emit_pci_record(fn, args, args_size, FALSE);
 }
 
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
-    uint32_t record_size = (uint32_t)(sizeof(uint16_t) + sizeof(uint16_t) + args_size);
-    uint8_t* p;
-
-    if (record_size > VGL_FRAME_BUFFER_SIZE) {
+    if (args_size >= V86GL_EXTENDED_RECORD_SIZE) {
         emit_gl_large_call(fn, args, args_size);
         return;
     }
 
-    if ((uint32_t)g_frame_size + record_size > VGL_FRAME_BUFFER_SIZE) {
-        emit_gl_batch();
-    }
-
-    p = g_frame_buffer + g_frame_size;
-    p[0] = (uint8_t)(fn & 0xFF);
-    p[1] = (uint8_t)(fn >> 8);
-    p[2] = (uint8_t)(args_size & 0xFF);
-    p[3] = (uint8_t)(args_size >> 8);
-
-    if (args && args_size) {
-        CopyMemory(p + 4, args, args_size);
-    }
-
-    g_frame_size = (uint16_t)(g_frame_size + record_size);
+    emit_pci_record(fn, args, args_size, FALSE);
 }
 
 static void emit_frame(void) {
-    uint8_t payload[VGL_PACKET_PAYLOAD_SIZE];
-    write_u32le(payload, g_frame_id);
-    write_u32le(payload + 4, g_frame_large_call_count);
-
-    if (g_frame_size) {
-        CopyMemory(payload + VGL_FRAME_META_SIZE, g_frame_buffer, g_frame_size);
-        emit_packet(OP_GL_FRAME, payload, (uint16_t)(VGL_FRAME_META_SIZE + g_frame_size));
-    } else {
-        emit_packet(OP_PRESENT, payload, VGL_FRAME_META_SIZE);
-    }
-
-    g_frame_size = 0;
-    g_frame_overflow = FALSE;
-    g_frame_large_call_count = 0;
+    v86gl_trace("present requested frame=%lu queuedCommands=%lu queuedBytes=%lu",
+                (unsigned long)g_frame_id,
+                (unsigned long)g_dma_command_count,
+                (unsigned long)g_dma_size);
+    emit_pci_batch(TRUE);
     g_frame_id++;
     if (!g_frame_id) {
         g_frame_id = 1;
@@ -1301,7 +1525,13 @@ static void emit_current_surface(HWND hwnd) {
     g_last_surface_height = payload.height;
     g_have_last_surface = TRUE;
 
-    emit_packet(OP_MAKE_CURRENT, &payload, sizeof(payload));
+    v86gl_trace("make-current hwnd=%08lx x=%ld y=%ld size=%lux%lu",
+                (unsigned long)payload.hwnd,
+                (long)payload.x,
+                (long)payload.y,
+                (unsigned long)payload.width,
+                (unsigned long)payload.height);
+    emit_pci_record(V86GL_CTRL_MAKE_CURRENT, &payload, sizeof(payload), TRUE);
 }
 
 static void restore_window_proc(void) {
@@ -1320,7 +1550,7 @@ static LRESULT CALLBACK vgl_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     if (msg == WM_MOVE || msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED) {
         emit_current_surface(hwnd);
     } else if (msg == WM_CLOSE || msg == WM_DESTROY || msg == WM_NCDESTROY) {
-        emit_packet(OP_RELEASE_CURRENT, NULL, 0);
+        emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
     }
 
     if (msg == WM_NCDESTROY && hwnd == g_current_hwnd) {
@@ -1671,20 +1901,14 @@ BOOL WINAPI DllMain
 
     if (reason == DLL_PROCESS_ATTACH) {
         g_instance = hinst;
+        v86gl_trace("loaded");
     }
 
     if (reason == DLL_PROCESS_DETACH) {
+        v86gl_trace("unloading");
         restore_window_proc();
-
-        if (g_udp != INVALID_SOCKET) {
-            closesocket(g_udp);
-            g_udp = INVALID_SOCKET;
-        }
-
-        if (g_wsa_started) {
-            WSACleanup();
-            g_wsa_started = FALSE;
-        }
+        emit_pci_batch(FALSE);
+        close_v86gl();
     }
 
     return TRUE;
@@ -1764,8 +1988,9 @@ BOOL APIENTRY wglCopyContext(HGLRC src, HGLRC dst, UINT mask) {
 __declspec(dllexport)
 BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
     (void)ctx;
+    v86gl_trace("delete context frame=%lu", (unsigned long)g_frame_id);
     restore_window_proc();
-    emit_packet(OP_RELEASE_CURRENT, NULL, 0);
+    emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
     return TRUE;
 }
 
@@ -1775,8 +2000,9 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
     g_current_ctx = ctx;
 
     if (!hdc || !ctx) {
+        v86gl_trace("release current context");
         restore_window_proc();
-        emit_packet(OP_RELEASE_CURRENT, NULL, 0);
+        emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
         return TRUE;
     }
 
@@ -1807,6 +2033,7 @@ __declspec(dllexport)
 BOOL APIENTRY wglSwapLayerBuffers(HDC hdc, UINT planes) {
     (void)hdc;
     (void)planes;
+    v86gl_trace("wglSwapLayerBuffers");
     emit_frame();
     return TRUE;
 }
@@ -1814,6 +2041,7 @@ BOOL APIENTRY wglSwapLayerBuffers(HDC hdc, UINT planes) {
 __declspec(dllexport)
 BOOL APIENTRY wglSwapBuffers(HDC hdc) {
     (void)hdc;
+    v86gl_trace("wglSwapBuffers");
     emit_frame();
     return TRUE;
 }
@@ -1953,7 +2181,7 @@ __declspec(dllexport)
 const GLubyte* APIENTRY glGetString(GLenum name) {
     switch (name) {
     case GL_VENDOR:     return (const GLubyte*)"v86";
-    case GL_RENDERER:   return (const GLubyte*)"v86 fake OpenGL over UDP";
+    case GL_RENDERER:   return (const GLubyte*)"v86 fake OpenGL over PCI DMA";
     case GL_VERSION:    return (const GLubyte*)"1.1";
     case GL_EXTENSIONS:
         return (const GLubyte*)g_gl_extensions;
@@ -1965,6 +2193,12 @@ __declspec(dllexport)
 GLenum APIENTRY glGetError(void) {
     GLenum e = g_error;
     g_error = 0;
+    if (e) {
+        v86gl_error("glGetError -> 0x%04lx frame=%lu queuedCommands=%lu",
+                    (unsigned long)e,
+                    (unsigned long)g_frame_id,
+                    (unsigned long)g_dma_command_count);
+    }
     return e;
 }
 
@@ -4132,9 +4366,6 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                            GLenum format, GLenum type, GLvoid* pixels) {
     uint32_t data_size;
 
-    (void)x;
-    (void)y;
-
     if (width < 0 || height < 0) {
         g_error = GL_INVALID_VALUE;
         return;
@@ -4150,7 +4381,10 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
         return;
     }
 
-    ZeroMemory(pixels, data_size);
+    if (!emit_read_pixels(x, y, width, height, format, type, data_size, pixels)) {
+        ZeroMemory(pixels, data_size);
+        g_error = GL_INVALID_OPERATION;
+    }
 }
 
 __declspec(dllexport)

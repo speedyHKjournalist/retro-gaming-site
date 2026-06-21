@@ -15,6 +15,24 @@
 static HGLRC g_rc = NULL;
 static HDC   g_dc = NULL;
 
+static void show_gl_status(HWND hwnd) {
+    GLenum error = glGetError();
+    const GLubyte *renderer_value = glGetString(GL_RENDERER);
+    const char *renderer = renderer_value ? (const char *)renderer_value : "<none>";
+    char renderer_name[48];
+    char title[128];
+
+    lstrcpynA(renderer_name, renderer, sizeof(renderer_name));
+
+    if (error) {
+        wsprintfA(title, "v86 PCI %s: error 0x%04X", renderer_name, (unsigned int)error);
+    } else {
+        wsprintfA(title, "v86 PCI %s: submitted", renderer_name);
+    }
+
+    SetWindowTextA(hwnd, title);
+}
+
 static void draw_triangle(HWND hwnd) {
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -30,6 +48,7 @@ static void draw_triangle(HWND hwnd) {
     glVertex3f(0.0f, 0.75f, 0.0f);
     glEnd();
     wglSwapLayerBuffers(g_dc, WGL_SWAP_MAIN_PLANE);
+    show_gl_status(hwnd);
 }
 
 static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

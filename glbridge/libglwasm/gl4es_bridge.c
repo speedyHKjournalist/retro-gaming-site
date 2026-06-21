@@ -398,6 +398,17 @@ void v86gl_glReadBuffer(GLenum mode) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int v86gl_glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                       GLenum format, GLenum type, void* pixels) {
+    if (!pixels || width < 0 || height < 0 || !v86gl_ensure_ready()) {
+        return 0;
+    }
+
+    glReadPixels(x, y, width, height, format, type, pixels);
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glGenTextures(GLsizei n, const GLuint* textures) {
     GLsizei i;
 

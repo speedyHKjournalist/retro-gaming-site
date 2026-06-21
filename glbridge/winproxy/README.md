@@ -2,7 +2,11 @@
 
 This is a deliberately tiny fake `opengl32.dll` for experiments in v86.
 
-It does **not** implement real OpenGL. It captures a very small subset of WGL/OpenGL calls and sends compact `VGL1` command packets as UDP broadcast datagrams. OpenGL calls are batched into one frame packet and flushed on `wglSwapLayerBuffers`/`wglSwapBuffers`. A browser-side JavaScript bridge receives the packets from v86 `net0-send` and forwards the frame to gl4es/WebGL.
+It does **not** implement real OpenGL. It captures a small WGL/OpenGL subset,
+writes the command stream into a contiguous guest-RAM buffer provided by
+`v86gl.sys`, and rings the v86gl PCI I/O BAR. The v86 device reads that
+descriptor once and sends the command stream to the browser-side gl4es/WebGL
+bridge. There is no UDP or v86 network-device transport.
 
 ## What it supports
 
@@ -80,7 +84,7 @@ Guest DLL exports:
 - `glScissor`
 - `glLineWidth`
 - `glPolygonMode`
-- `glReadPixels` compatibility stub
+- `glReadPixels` synchronous PCI DMA readback for supported pixel formats
 - `glEnableClientState`
 - `glDisableClientState`
 - `glVertexPointer`
@@ -106,8 +110,48 @@ cd src/glbridge/winproxy
 i686-w64-mingw32-gcc -shared -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 \
   -o opengl32.dll opengl32_proxy.c opengl32.def \
-  -Wl,--kill-at -luser32 -lkernel32 -lws2_32
+  -Wl,--kill-at -luser32 -lkernel32
 ```
+
+Build and start `../v86gl_driver/v86gl.sys` before running a guest OpenGL
+application. Its WDK build and installation steps are in
+`../v86gl_driver/README.md`.
+
+## Trace one command from DLL to WebGL
+
+The transport has correlated diagnostic logs at each hop. In an XP command
+prompt, launch the test with tracing enabled:
+
+```bat
+set V86GL_TRACE_CALLS=1
+gl_triangle_test.exe
+```
+
+Open/map/submit/present boundaries are logged by default; set
+`V86GL_TRACE=0` only to suppress them. `V86GL_TRACE_CALLS` also logs every
+encoded command record. The DLL writes to `OutputDebugString`; use
+Sysinternals DebugView with **Capture Win32** enabled. The kernel driver
+writes `DbgPrint` records; enable DebugView's **Capture Kernel** to see the
+`[v86gl.sys]` lines.
+
+Keep the browser developer console open. With `v86gl_pci.trace: true` (already
+enabled in `app.js`), the resulting sequence for the same `frame` is:
+
+```text
+[v86gl.dll] submit -> sys frame=N commands=C commandBytes=B ...
+[v86gl.sys] SUBMIT #K frame=N commands=C commandBytes=B ...
+[v86gl.sys] doorbell #K ...
+[v86gl-pci] descriptor accepted { frameId: N, ... }
+[v86gl] pci frame received { frameId: N, submitCount: K, ... }
+[v86gl] command { name: "gl...", ... }
+[v86gl] gl4es dispatch gl...
+```
+
+The first missing line is the failed boundary: no `v86gl.sys` line means the
+DLL could not enter the driver; no `v86gl-pci` doorbell means the PCI I/O BAR
+was not reached; no `pci frame received` means event delivery failed; a
+`gl4es export threw` or `export not found` message means the command reached
+the browser bridge but failed at the gl4es layer.
 
 Build the test programs:
 
@@ -221,12 +265,12 @@ const v86gl = installV86GLNetworkBridge(
 The bridge listens to:
 
 ```js
-emulator.add_listener("net0-send", ...)
+emulator.add_listener("v86gl-pci-frame", ...)
 ```
 
-It filters IPv4 UDP packets on port `46000` and renders the received command
-stream into the WebGL canvas. The guest must have the v86 NE2K network device
-available because the DLL uses WinSock UDP broadcast.
+It executes the descriptor command stream directly and renders it into the
+WebGL canvas. Create the emulator with `v86gl_pci` enabled and set
+`net_device.type` to `"none"` when no guest networking is required.
 
 For a host-only smoke test, open:
 
@@ -234,13 +278,15 @@ For a host-only smoke test, open:
 src/glbridge/sample/host_triangle_demo.html
 ```
 
-That page uses a tiny emulator stub and feeds the same `VGL1` packets to
-`v86_network_bridge.js`, without booting Windows XP.
+That page predates the PCI-only transport and is not a smoke test for this
+configuration.
 
 ## Important limitations
 
-- UDP broadcast over `net0-send` is only for proof of concept. GL calls are batched per frame to reduce guest stalls, but this is still not a production transport for real games.
+- `v86gl.sys` currently uses the fixed BAR base `0xF100`. Keep the v86gl PCI
+  BAR at that address until the driver is upgraded to use PnP PCI resources.
 - The fixed-pipeline matrix stack, depth test, shading mode, face-culling, blending/alpha/scissor state, basic 2D texture calls, and client arrays above are forwarded to gl4es, but there is still no clipping, lighting, display lists, compressed textures, multitexture, VBOs, or WineD3D compatibility.
-- `glReadPixels` is exported as a guest-side compatibility stub. It fills the caller buffer with zeroed pixels using the current `GL_PACK_*` state, but it does not read the browser/WebGL framebuffer yet because the current UDP bridge has no synchronous browser-to-guest return path.
+- `glReadPixels` performs a synchronous PCI DMA readback. The host writes the result into the response area of the submitted guest-RAM command record before the IOCTL returns. It currently requires the browser-side gl4es renderer to be ready and supports the pixel formats accepted by the proxy's pack-state validation.
 - `SwapBuffers` is exported by `gdi32.dll`, not `opengl32.dll`; normal apps that import `SwapBuffers` from `gdi32.dll` are not intercepted by this DLL. This toy bridge presents on `glFlush`, `glFinish`, `wglSwapLayerBuffers`, and the nonstandard helper export `wglSwapBuffers`.
-- For real performance, replace UDP broadcast with a v86 PCI/MMIO shared command ring or another zero-copy shared command transport.
+- The driver exposes one shared buffer, so only one guest process can own the
+  transport at a time.

@@ -69,6 +69,7 @@ emcc gl4es_bridge.c \
     "_v86gl_glPopClientAttrib",
     "_v86gl_glDrawBuffer",
     "_v86gl_glReadBuffer",
+    "_v86gl_glReadPixels",
     "_v86gl_glGenTextures",
     "_v86gl_glDeleteTextures",
     "_v86gl_glBindTexture",

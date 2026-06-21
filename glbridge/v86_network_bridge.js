@@ -1,7 +1,7 @@
-// v86 net0 UDP -> OpenGL bridge.
+// v86 PCI DMA -> OpenGL bridge.
 // Guest opengl32.dll packs GL calls, this file decodes them and forwards them
 // to a gl4es wasm/js module. gl4es owns the OpenGL fixed pipeline -> WebGL
-// translation; this file only does packet parsing, canvas placement, and calls.
+// translation; this file only does command parsing, canvas placement, and calls.
 
 (function(global) {
     "use strict";
@@ -21,8 +21,10 @@
     const OP_GL_CHUNK = 22;
     const OP_GL_BATCH = 23;
 
-    const VGL_UDP_PORT = 46000;
     const CLIENT_ARRAY_MT_MAGIC = 0x544D4143;
+    const V86GL_CTRL_MAKE_CURRENT = 0xFFF0;
+    const V86GL_CTRL_RELEASE_CURRENT = 0xFFF1;
+    const V86GL_EXTENDED_RECORD_SIZE = 0xFFFF;
 
     const GLFN_VIEWPORT = 1;
     const GLFN_CLEAR_COLOR = 2;
@@ -117,6 +119,12 @@
     const GLFN_READ_BUFFER = 91;
     const GLFN_COPY_TEX_IMAGE_2D = 92;
     const GLFN_COPY_TEX_SUB_IMAGE_2D = 93;
+    const GLFN_READ_PIXELS = 94;
+
+    const V86GL_READ_PIXELS_HEADER_SIZE = 32;
+    const V86GL_READ_PIXELS_STATUS_PENDING = 0;
+    const V86GL_READ_PIXELS_STATUS_OK = 1;
+    const V86GL_READ_PIXELS_STATUS_FAILED = 2;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -229,11 +237,17 @@
         [GLFN_READ_BUFFER]: "glReadBuffer",
         [GLFN_COPY_TEX_IMAGE_2D]: "glCopyTexImage2D",
         [GLFN_COPY_TEX_SUB_IMAGE_2D]: "glCopyTexSubImage2D",
+        [GLFN_READ_PIXELS]: "glReadPixels",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
-    function be16(a, o) { return (a[o] << 8) | a[o + 1]; }
     function u32(a, o) { return (a[o] | (a[o + 1] << 8) | (a[o + 2] << 16) | (a[o + 3] << 24)) >>> 0; }
+    function writeU32(a, o, v) {
+        a[o] = v & 0xFF;
+        a[o + 1] = (v >>> 8) & 0xFF;
+        a[o + 2] = (v >>> 16) & 0xFF;
+        a[o + 3] = v >>> 24;
+    }
     function i32(a, o) { return u32(a, o) | 0; }
     function f32(a, o) {
         const b = new Uint8Array([a[o], a[o + 1], a[o + 2], a[o + 3]]);
@@ -319,6 +333,36 @@
             }
         }
 
+        withHeapOutput(size, output, callback) {
+            if (!size || !output || output.length !== size) {
+                return false;
+            }
+
+            const ptr = this.malloc(size);
+            let heap = this.heapU8();
+            if (!ptr || !heap || ptr + size > heap.length) {
+                this.free(ptr);
+                return false;
+            }
+
+            try {
+                if (!callback(ptr)) {
+                    return false;
+                }
+
+                // A GL call can grow wasm memory, so reacquire the view before copying.
+                heap = this.heapU8();
+                if (!heap || ptr + size > heap.length) {
+                    return false;
+                }
+
+                output.set(heap.subarray(ptr, ptr + size));
+                return true;
+            } finally {
+                this.free(ptr);
+            }
+        }
+
         withHeapU32(values, callback) {
             const bytes = new Uint8Array(values.length * 4);
             const view = new DataView(bytes.buffer);
@@ -392,6 +436,8 @@
         }
 
         glCall(fn, p) {
+            this.log("gl4es dispatch", GLFN_NAMES[fn] || ("fn#" + fn),
+                "payload", p.length, "bytes");
             switch (fn) {
             case GLFN_VIEWPORT:
                 this.callGL("Viewport", [i32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12)], ["number", "number", "number", "number"]);
@@ -728,6 +774,9 @@
                     i32(p, 16), i32(p, 20), i32(p, 24), i32(p, 28),
                 ], ["number", "number", "number", "number", "number", "number", "number", "number"]);
                 break;
+            case GLFN_READ_PIXELS:
+                this.callReadPixels(p);
+                break;
             default:
                 this.warnMissing("GL function id " + fn);
                 break;
@@ -789,6 +838,28 @@
                     u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
                     i32(p, 20), u32(p, 24), u32(p, 28), ptr,
                 ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]));
+        }
+
+        callReadPixels(p) {
+            if (p.length < V86GL_READ_PIXELS_HEADER_SIZE) {
+                return false;
+            }
+
+            const dataSize = u32(p, 24);
+            const output = p.subarray(V86GL_READ_PIXELS_HEADER_SIZE);
+            if (dataSize !== output.length) {
+                writeU32(p, 28, V86GL_READ_PIXELS_STATUS_FAILED);
+                return false;
+            }
+
+            writeU32(p, 28, V86GL_READ_PIXELS_STATUS_PENDING);
+            const ok = this.withHeapOutput(dataSize, output, ptr =>
+                this.callReadPixelsExport([
+                    i32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12),
+                    u32(p, 16), u32(p, 20), ptr,
+                ]));
+            writeU32(p, 28, ok ? V86GL_READ_PIXELS_STATUS_OK : V86GL_READ_PIXELS_STATUS_FAILED);
+            return ok;
         }
 
         parseClientArrayBlocks(p, offset, count) {
@@ -987,6 +1058,39 @@
             return ok;
         }
 
+        callReadPixelsExport(args) {
+            const module = this.module;
+            const names = [
+                "v86gl_glReadPixels",
+                "_v86gl_glReadPixels",
+                "glReadPixels",
+                "_glReadPixels",
+            ];
+            const argTypes = ["number", "number", "number", "number", "number", "number", "number"];
+
+            if (!module) {
+                return false;
+            }
+
+            for (let i = 0; i < names.length; i++) {
+                const fn = module[names[i]];
+                if (typeof fn === "function") {
+                    return !!fn.apply(module, args);
+                }
+            }
+
+            if (typeof module.ccall === "function") {
+                try {
+                    return !!module.ccall("v86gl_glReadPixels", "number", argTypes, args);
+                } catch (err) {
+                    return false;
+                }
+            }
+
+            this.warnMissing("glReadPixels");
+            return false;
+        }
+
         callOptional(names, args, argTypes) {
             const module = this.module;
             if (!module) {
@@ -996,8 +1100,13 @@
             for (let i = 0; i < names.length; i++) {
                 const fn = module[names[i]];
                 if (typeof fn === "function") {
-                    fn.apply(module, args);
-                    return true;
+                    try {
+                        fn.apply(module, args);
+                        return true;
+                    } catch (err) {
+                        console.error("[v86gl] gl4es export threw", names[i], err);
+                        return false;
+                    }
                 }
             }
 
@@ -1007,6 +1116,7 @@
                     module.ccall(cName, null, argTypes || [], args || []);
                     return true;
                 } catch (err) {
+                    console.error("[v86gl] gl4es ccall threw", cName, err);
                     return false;
                 }
             }
@@ -1031,6 +1141,7 @@
             this.options = options || {};
             this.buf = [];
             this.pendingPackets = [];
+            this.pendingPCIBatches = [];
             this.packetCount = 0;
             this.byteCount = 0;
             this.chunkedCalls = Object.create(null);
@@ -1042,8 +1153,8 @@
             this.renderer = null;
 
             this.setRendererFromOptions();
-            emulator.add_listener("net0-send", packet => this.pushEthernetFrame(packet));
-            this.log("installed net0 UDP listener");
+            emulator.add_listener("v86gl-pci-frame", event => this.pushPCIBatch(event));
+            this.log("installed PCI DMA listener");
         }
 
         setRendererFromOptions() {
@@ -1070,6 +1181,11 @@
             const pending = this.pendingPackets.splice(0);
             for (let i = 0; i < pending.length; i++) {
                 this.dispatch(pending[i][0], pending[i][1], pending[i][2]);
+            }
+
+            const pendingPCIBatches = this.pendingPCIBatches.splice(0);
+            for (let i = 0; i < pendingPCIBatches.length; i++) {
+                this.pushPCIBatch(pendingPCIBatches[i]);
             }
         }
 
@@ -1110,62 +1226,6 @@
             }
 
             this.parse();
-        }
-
-        pushEthernetFrame(packet) {
-            const bytes = packet instanceof Uint8Array ? packet : new Uint8Array(packet);
-            const ethHeaderSize = 14;
-
-            if (bytes.length < ethHeaderSize) {
-                return;
-            }
-
-            const etherType = be16(bytes, 12);
-            if (etherType !== 0x0800) {
-                return;
-            }
-
-            const ipOffset = ethHeaderSize;
-            const version = bytes[ipOffset] >> 4;
-            const ihl = (bytes[ipOffset] & 0x0F) * 4;
-
-            if (version !== 4 || ihl < 20 || bytes.length < ipOffset + ihl + 8) {
-                return;
-            }
-
-            const totalLength = be16(bytes, ipOffset + 2);
-            const protocol = bytes[ipOffset + 9];
-            if (protocol !== 17) {
-                return;
-            }
-
-            const udpOffset = ipOffset + ihl;
-            const srcPort = be16(bytes, udpOffset);
-            const dstPort = be16(bytes, udpOffset + 2);
-            if (srcPort !== VGL_UDP_PORT && dstPort !== VGL_UDP_PORT) {
-                return;
-            }
-
-            const udpLength = be16(bytes, udpOffset + 4);
-            if (udpLength < 8) {
-                return;
-            }
-
-            const payloadOffset = udpOffset + 8;
-            const ipEnd = Math.min(bytes.length, ipOffset + totalLength);
-            const udpEnd = Math.min(ipEnd, udpOffset + udpLength);
-            if (payloadOffset + 12 > udpEnd) {
-                return;
-            }
-
-            if (bytes[payloadOffset] !== 0x56 ||
-                bytes[payloadOffset + 1] !== 0x47 ||
-                bytes[payloadOffset + 2] !== 0x4C ||
-                bytes[payloadOffset + 3] !== 0x31) {
-                return;
-            }
-
-            this.pushBytes(bytes.subarray(payloadOffset, udpEnd));
         }
 
         parse() {
@@ -1295,24 +1355,52 @@
             }
         }
 
-        executeGLCommands(p) {
+        executeGLCommands(p, source) {
             let offset = 0;
             let commands = 0;
             const renderer = this.requireRenderer();
 
             while (offset + 4 <= p.length) {
                 const fn = u16(p, offset);
-                const size = u16(p, offset + 2);
+                let size = u16(p, offset + 2);
                 offset += 4;
+
+                if (size === V86GL_EXTENDED_RECORD_SIZE) {
+                    if (offset + 4 > p.length) {
+                        console.warn("[v86gl] truncated extended GL frame command", fn, p.length - offset);
+                        break;
+                    }
+
+                    size = u32(p, offset);
+                    offset += 4;
+                }
 
                 if (offset + size > p.length) {
                     console.warn("[v86gl] truncated GL frame command", fn, size, p.length - offset);
                     break;
                 }
 
-                const args = p.slice(offset, offset + size);
+                const args = p.subarray(offset, offset + size);
                 offset += size;
                 commands++;
+
+                this.log("command", {
+                    source: source || "packet",
+                    index: commands,
+                    fn,
+                    name: GLFN_NAMES[fn] || ("fn#" + fn),
+                    payloadBytes: size,
+                });
+
+                if (fn === V86GL_CTRL_MAKE_CURRENT) {
+                    this.makeCurrent(args);
+                    continue;
+                }
+
+                if (fn === V86GL_CTRL_RELEASE_CURRENT) {
+                    this.releaseCurrent();
+                    continue;
+                }
 
                 if (fn === GLFN_VIEWPORT && args.length >= 16) {
                     this.resize(i32(args, 8), i32(args, 12));
@@ -1321,8 +1409,60 @@
                 renderer.glCall(fn, args);
             }
 
-            this.log("frame", commands, "commands", p.length, "bytes");
+            this.log("command stream complete", {
+                source: source || "packet",
+                decodedCommands: commands,
+                streamBytes: p.length,
+                consumedBytes: offset,
+            });
             return commands;
+        }
+
+        pushPCIBatch(event) {
+            if (!this.renderer) {
+                const bytes = event.bytes instanceof Uint8Array ? event.bytes.slice() : new Uint8Array(event.bytes || []);
+                this.pendingPCIBatches.push({
+                    ...event,
+                    bytes,
+                });
+                return;
+            }
+
+            const bytes = event.bytes instanceof Uint8Array ? event.bytes : new Uint8Array(event.bytes || []);
+            const frameId = event.frameId >>> 0;
+            if (frameId && this.isStaleFrame(frameId)) {
+                this.log("drop stale pci frame", frameId, "bytes", bytes.length);
+                return;
+            }
+
+            const source = "pci frame=" + frameId + " submit=" + (event.submitCount >>> 0);
+            this.log("pci frame received", {
+                frameId,
+                submitCount: event.submitCount >>> 0,
+                commandCount: event.commandCount >>> 0,
+                commandBytes: bytes.length,
+                descAddr: "0x" + ((event.descAddr || 0) >>> 0).toString(16),
+                descLen: event.descLen >>> 0,
+                flags: "0x" + ((event.flags || 0) >>> 0).toString(16),
+            });
+            const decoded = this.executeGLCommands(bytes, source);
+            if (event.commandCount !== undefined && decoded !== (event.commandCount >>> 0)) {
+                console.error("[v86gl] PCI command count mismatch", {
+                    frameId,
+                    submitCount: event.submitCount >>> 0,
+                    descriptorCount: event.commandCount >>> 0,
+                    decodedCount: decoded,
+                    commandBytes: bytes.length,
+                });
+            }
+
+            if (event.flags & 1) {
+                if (frameId) {
+                    this.presentFrame(frameId);
+                } else {
+                    this.present();
+                }
+            }
         }
 
         dispatchGLFramePacket(p, shouldPresent) {
@@ -1615,6 +1755,8 @@
             this.requireRenderer().present();
             this.canvas.style.display = "block";
             this.canvas.style.visibility = "visible";
+            this.log("present", this.canvas.width, "x", this.canvas.height,
+                "surface", this.surface.width, "x", this.surface.height);
         }
 
         releaseCurrent() {

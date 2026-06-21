@@ -185,7 +185,7 @@ static void update_title(HWND hwnd, int page) {
     } else if (page == 5) {
         SetWindowTextA(hwnd, "v86 OpenGL UI state: 6 glPolygonMode");
     } else {
-        SetWindowTextA(hwnd, "v86 OpenGL UI state: 7 glReadPixels stub");
+        SetWindowTextA(hwnd, "v86 OpenGL UI state: 7 glReadPixels PCI readback");
     }
 }
 
