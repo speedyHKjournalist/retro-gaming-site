@@ -30,6 +30,7 @@ EXPORTS
     wglUseFontOutlinesW@32
     wglSwapIntervalEXT@4
     wglGetSwapIntervalEXT@0
+    wglAddSwapHintRectWIN@16
 
     glGetString@4
     glGetError@0
@@ -88,6 +89,12 @@ EXPORTS
     glDeleteTextures@8
     glBindTexture@8
     glTexImage2D@36
+    glTexImage3DEXT@40
+    glTexImage3D@40
+    glTexSubImage3DEXT@44
+    glTexSubImage3D@44
+    glCompressedTexImage2DARB@32
+    glCompressedTexImage2D@32
     glTexSubImage2D@36
     glCopyTexImage2D@32
     glCopyTexSubImage2D@32
@@ -174,6 +181,14 @@ EXPORTS
     glLightModelfv@8
     glLightModeliv@8
     glBlendFunc@8
+    glBlendColor@16
+    glBlendColorEXT@16
+    glBlendEquation@4
+    glBlendEquationEXT@4
+    glBlendFuncSeparate@16
+    glBlendFuncSeparateEXT@16
+    glSampleCoverage@8
+    glSampleCoverageARB@8
     glAlphaFunc@8
     glDepthMask@4
     glColorMask@16
@@ -181,6 +196,52 @@ EXPORTS
     glLineWidth@4
     glPolygonMode@8
     glPolygonOffset@8
+    glGenerateMipmap@4
+    glGenerateMipmapEXT@4
+    glLoadTransposeMatrixfARB@4
+    glLoadTransposeMatrixdARB@4
+    glMultTransposeMatrixfARB@4
+    glMultTransposeMatrixdARB@4
+    glFogCoordf@4
+    glFogCoordfEXT@4
+    glFogCoordd@8
+    glFogCoorddEXT@8
+    glFogCoordfv@4
+    glFogCoordfvEXT@4
+    glFogCoorddv@4
+    glFogCoorddvEXT@4
+    glSecondaryColor3f@12
+    glSecondaryColor3fEXT@12
+    glSecondaryColor3fv@4
+    glSecondaryColor3fvEXT@4
+    glPointParameterf@8
+    glPointParameterfARB@8
+    glPointParameterfv@8
+    glPointParameterfvARB@8
+    glMultiDrawArrays@16
+    glMultiDrawArraysEXT@16
+    glMultiDrawElements@20
+    glMultiDrawElementsEXT@20
+    glGenBuffersARB@8
+    glGenBuffers@8
+    glDeleteBuffersARB@8
+    glDeleteBuffers@8
+    glBindBufferARB@8
+    glBindBuffer@8
+    glBufferDataARB@16
+    glBufferData@16
+    glBufferSubDataARB@16
+    glBufferSubData@16
+    glIsBufferARB@4
+    glIsBuffer@4
+    glMapBufferARB@8
+    glMapBuffer@8
+    glUnmapBufferARB@4
+    glUnmapBuffer@4
+    glGetBufferParameterivARB@12
+    glGetBufferParameteriv@12
+    glGetBufferPointervARB@12
+    glGetBufferPointerv@12
     glReadPixels@28
     glEnableClientState@4
     glDisableClientState@4

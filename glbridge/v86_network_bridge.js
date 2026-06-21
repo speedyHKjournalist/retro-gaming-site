@@ -121,6 +121,18 @@
     const GLFN_COPY_TEX_IMAGE_2D = 92;
     const GLFN_COPY_TEX_SUB_IMAGE_2D = 93;
     const GLFN_READ_PIXELS = 94;
+    const GLFN_BLEND_COLOR = 95;
+    const GLFN_BLEND_EQUATION = 96;
+    const GLFN_BLEND_FUNC_SEPARATE = 97;
+    const GLFN_SAMPLE_COVERAGE = 98;
+    const GLFN_GENERATE_MIPMAP = 99;
+    const GLFN_FOG_COORDF = 100;
+    const GLFN_SECONDARY_COLOR3F = 101;
+    const GLFN_POINT_PARAMETERF = 102;
+    const GLFN_POINT_PARAMETERFV = 103;
+    const GLFN_COMPRESSED_TEX_IMAGE_2D = 104;
+    const GLFN_TEX_IMAGE_3D = 105;
+    const GLFN_TEX_SUB_IMAGE_3D = 106;
 
     const V86GL_READ_PIXELS_HEADER_SIZE = 32;
     const V86GL_READ_PIXELS_STATUS_PENDING = 0;
@@ -239,6 +251,18 @@
         [GLFN_COPY_TEX_IMAGE_2D]: "glCopyTexImage2D",
         [GLFN_COPY_TEX_SUB_IMAGE_2D]: "glCopyTexSubImage2D",
         [GLFN_READ_PIXELS]: "glReadPixels",
+        [GLFN_BLEND_COLOR]: "glBlendColor",
+        [GLFN_BLEND_EQUATION]: "glBlendEquation",
+        [GLFN_BLEND_FUNC_SEPARATE]: "glBlendFuncSeparate",
+        [GLFN_SAMPLE_COVERAGE]: "glSampleCoverage",
+        [GLFN_GENERATE_MIPMAP]: "glGenerateMipmap",
+        [GLFN_FOG_COORDF]: "glFogCoordf",
+        [GLFN_SECONDARY_COLOR3F]: "glSecondaryColor3f",
+        [GLFN_POINT_PARAMETERF]: "glPointParameterf",
+        [GLFN_POINT_PARAMETERFV]: "glPointParameterfv",
+        [GLFN_COMPRESSED_TEX_IMAGE_2D]: "glCompressedTexImage2D",
+        [GLFN_TEX_IMAGE_3D]: "glTexImage3D",
+        [GLFN_TEX_SUB_IMAGE_3D]: "glTexSubImage3D",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -533,6 +557,15 @@
             case GLFN_TEX_IMAGE_2D:
                 this.callTexImage2D(p);
                 break;
+            case GLFN_COMPRESSED_TEX_IMAGE_2D:
+                this.callCompressedTexImage2D(p);
+                break;
+            case GLFN_TEX_IMAGE_3D:
+                this.callTexImage3D(p);
+                break;
+            case GLFN_TEX_SUB_IMAGE_3D:
+                this.callTexSubImage3D(p);
+                break;
             case GLFN_TEX_SUB_IMAGE_2D:
                 this.callTexSubImage2D(p);
                 break;
@@ -580,6 +613,33 @@
                 break;
             case GLFN_BLEND_FUNC:
                 this.callGL("BlendFunc", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_BLEND_COLOR:
+                this.callGL("BlendColor", [f32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12)], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_BLEND_EQUATION:
+                this.callGL("BlendEquation", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_BLEND_FUNC_SEPARATE:
+                this.callGL("BlendFuncSeparate", [u32(p, 0), u32(p, 4), u32(p, 8), u32(p, 12)], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_SAMPLE_COVERAGE:
+                this.callGL("SampleCoverage", [f32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_GENERATE_MIPMAP:
+                this.callGL("GenerateMipmap", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_FOG_COORDF:
+                this.callGL("FogCoordf", [f32(p, 0)], ["number"]);
+                break;
+            case GLFN_SECONDARY_COLOR3F:
+                this.callGL("SecondaryColor3f", [f32(p, 0), f32(p, 4), f32(p, 8)], ["number", "number", "number"]);
+                break;
+            case GLFN_POINT_PARAMETERF:
+                this.callGL("PointParameterf", [u32(p, 0), f32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_POINT_PARAMETERFV:
+                this.callGL("PointParameterfv3", [u32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12)], ["number", "number", "number", "number"]);
                 break;
             case GLFN_ALPHA_FUNC:
                 this.callGL("AlphaFunc", [u32(p, 0), f32(p, 4)], ["number", "number"]);
@@ -825,6 +885,57 @@
                     u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
                     i32(p, 20), u32(p, 24), u32(p, 28), ptr,
                 ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]));
+        }
+
+        callCompressedTexImage2D(p) {
+            if (p.length < 28) {
+                return false;
+            }
+
+            const dataSize = u32(p, 24);
+            if (28 + dataSize > p.length) {
+                return false;
+            }
+            const bytes = dataSize ? p.slice(28, 28 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("CompressedTexImage2D", [
+                    u32(p, 0), i32(p, 4), u32(p, 8), i32(p, 12), i32(p, 16),
+                    i32(p, 20), dataSize, ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number"]));
+        }
+
+        callTexImage3D(p) {
+            if (p.length < 40) {
+                return false;
+            }
+
+            const dataSize = u32(p, 36);
+            if (40 + dataSize > p.length) {
+                return false;
+            }
+            const bytes = dataSize ? p.slice(40, 40 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("TexImage3D", [
+                    u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
+                    i32(p, 20), i32(p, 24), u32(p, 28), u32(p, 32), ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number"]));
+        }
+
+        callTexSubImage3D(p) {
+            if (p.length < 44) {
+                return false;
+            }
+
+            const dataSize = u32(p, 40);
+            if (44 + dataSize > p.length) {
+                return false;
+            }
+            const bytes = dataSize ? p.slice(44, 44 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("TexSubImage3D", [
+                    u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
+                    i32(p, 20), i32(p, 24), i32(p, 28), u32(p, 32), u32(p, 36), ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number"]));
         }
 
         callTexSubImage2D(p) {

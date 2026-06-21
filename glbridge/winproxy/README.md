@@ -95,6 +95,19 @@ Guest DLL exports:
 - `glDrawElements`
 - `glInterleavedArrays`
 
+The proxy also advertises and routes the following fixed-function extension
+families through the DMA/WebAssembly bridge: packed pixels, rescale normals,
+separate specular color, edge-clamp and texture LOD parameters, 3D and
+compressed texture uploads, blend
+color/equation/separate factors, cube maps, multisample coverage, DOT3 and
+crossbar texture environments, transpose matrices, mipmap generation, shadow
+texture parameters, fog coordinates, secondary color, point parameters,
+stencil wrap, mirrored repeat, point sprites, non-power-of-two textures, and
+`GL_ARB_vertex_buffer_object`. VBO contents remain in guest memory and are
+packed into the existing client-array draw records at draw time, which keeps
+the PCI protocol asynchronous while preserving VBO semantics for array and
+element buffers.
+
 It is enough for toy fixed-pipeline demos such as a triangle or a rotating
 colored cube. It is **not** enough for WineD3D or real games yet.
 

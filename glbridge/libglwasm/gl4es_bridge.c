@@ -41,6 +41,24 @@ extern void glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params);
 extern void glClipPlane(GLenum plane, const GLdouble* equation);
 extern void glPushClientAttrib(GLbitfield mask);
 extern void glPopClientAttrib(void);
+extern void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
+extern void glBlendEquation(GLenum mode);
+extern void glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb, GLenum src_alpha, GLenum dst_alpha);
+extern void glSampleCoverage(GLclampf value, GLboolean invert);
+extern void glGenerateMipmap(GLenum target);
+extern void glFogCoordf(GLfloat coord);
+extern void glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue);
+extern void glPointParameterf(GLenum pname, GLfloat param);
+extern void glPointParameterfv(GLenum pname, const GLfloat* params);
+extern void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
+                                   GLsizei width, GLsizei height, GLint border,
+                                   GLsizei image_size, const void* data);
+extern void glTexImage3D(GLenum target, GLint level, GLint internalformat,
+                         GLsizei width, GLsizei height, GLsizei depth, GLint border,
+                         GLenum format, GLenum type, const void* pixels);
+extern void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                            GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
+                            GLenum format, GLenum type, const void* pixels);
 
 #ifndef GL_TEXTURE0
 #define GL_TEXTURE0 0x84C0
@@ -92,13 +110,15 @@ static int v86gl_ensure_ready(void) {
     attrs.antialias = EM_FALSE;
     attrs.premultipliedAlpha = EM_FALSE;
     attrs.preserveDrawingBuffer = EM_TRUE;
-    attrs.majorVersion = 1;
+    /* Texture3D requires WebGL2.  Prefer it when available, while retaining
+     * the WebGL1 fallback for browsers that cannot create a WebGL2 canvas. */
+    attrs.majorVersion = 2;
     attrs.minorVersion = 0;
 
     g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
 
     if (g_webgl_context <= 0) {
-        attrs.majorVersion = 2;
+        attrs.majorVersion = 1;
         g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
     }
 
@@ -503,6 +523,33 @@ void v86gl_glTexImage2D(GLenum target, GLint level, GLint internalformat,
 }
 
 EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
+                                  GLsizei width, GLsizei height, GLint border,
+                                  GLsizei image_size, const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    glCompressedTexImage2D(target, level, internalformat, width, height, border,
+                           image_size, data);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexImage3D(GLenum target, GLint level, GLint internalformat,
+                        GLsizei width, GLsizei height, GLsizei depth, GLint border,
+                        GLenum format, GLenum type, const void* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glTexImage3D(target, level, internalformat, width, height, depth, border,
+                 format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                           GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
+                           GLenum format, GLenum type, const void* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth,
+                    format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                            GLsizei width, GLsizei height,
                            GLenum format, GLenum type, const void* pixels) {
@@ -838,6 +885,65 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glBlendFunc(GLenum sfactor, GLenum dfactor) {
     if (!v86gl_ensure_ready()) return;
     glBlendFunc(sfactor, dfactor);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
+    if (!v86gl_ensure_ready()) return;
+    glBlendColor(red, green, blue, alpha);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBlendEquation(GLenum mode) {
+    if (!v86gl_ensure_ready()) return;
+    glBlendEquation(mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb,
+                               GLenum src_alpha, GLenum dst_alpha) {
+    if (!v86gl_ensure_ready()) return;
+    glBlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glSampleCoverage(GLclampf value, GLboolean invert) {
+    if (!v86gl_ensure_ready()) return;
+    glSampleCoverage(value, invert);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenerateMipmap(GLenum target) {
+    if (!v86gl_ensure_ready()) return;
+    glGenerateMipmap(target);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFogCoordf(GLfloat coord) {
+    if (!v86gl_ensure_ready()) return;
+    glFogCoordf(coord);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue) {
+    if (!v86gl_ensure_ready()) return;
+    glSecondaryColor3f(red, green, blue);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPointParameterf(GLenum pname, GLfloat param) {
+    if (!v86gl_ensure_ready()) return;
+    glPointParameterf(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPointParameterfv3(GLenum pname, GLfloat v0, GLfloat v1, GLfloat v2) {
+    GLfloat values[3];
+    if (!v86gl_ensure_ready()) return;
+    values[0] = v0;
+    values[1] = v1;
+    values[2] = v2;
+    glPointParameterfv(pname, values);
 }
 
 EMSCRIPTEN_KEEPALIVE
