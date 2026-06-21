@@ -334,6 +334,11 @@ function startEmulator9xMultiDisk(gameId) {
             type : "ne2k",
             relay_url: "wss://relay.widgetry.org/"
         },
+        v86gl_pci: {
+            port: 0xF100,
+            maxBatchBytes: 16 * 1024 * 1024,
+            trace: true
+        },
         preserve_fixed_proportions: true,
         boot_order: 0x213,
         audio: true,
@@ -359,6 +364,29 @@ function attachEmulatorListeners(emulator) {
             console.warn("Failed to start v86 GL network bridge:", err);
         }
     }
+
+    emulator.add_listener("emulator-loaded", function() {
+        const pci = emulator.v86 && emulator.v86.cpu && emulator.v86.cpu.devices.v86gl_pci;
+        if (pci) {
+            const io = emulator.v86.cpu.io;
+            const pciSpace = pci.pci && pci.pci.device_spaces[pci.pci_id];
+            const bar0 = pciSpace ? pciSpace[0x10 >> 2] >>> 0 : 0;
+            const commandPort = pci.port + 0x1C;
+            const commandEntry = io && io.ports[commandPort];
+            console.info("[v86gl] PCI device ready", {
+                port: "0x" + pci.port.toString(16),
+                bar0: "0x" + bar0.toString(16),
+                commandPort: "0x" + commandPort.toString(16),
+                commandPortOwner: commandEntry && commandEntry.device && commandEntry.device.name,
+                maxBatchBytes: pci.maxBatchBytes,
+                trace: !!pci.trace,
+                status: "0x" + (pci.status >>> 0).toString(16),
+                submitCount: pci.submitCount >>> 0,
+            });
+        } else {
+            console.error("[v86gl] PCI device is missing from this libv86.js build");
+        }
+    });
 
     emulator.add_listener("download-progress", function(e) {
 

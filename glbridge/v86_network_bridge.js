@@ -24,6 +24,7 @@
     const CLIENT_ARRAY_MT_MAGIC = 0x544D4143;
     const V86GL_CTRL_MAKE_CURRENT = 0xFFF0;
     const V86GL_CTRL_RELEASE_CURRENT = 0xFFF1;
+    const V86GL_CTRL_DESTROY_CONTEXT = 0xFFF2;
     const V86GL_EXTENDED_RECORD_SIZE = 0xFFFF;
 
     const GLFN_VIEWPORT = 1;
@@ -1402,6 +1403,11 @@
                     continue;
                 }
 
+                if (fn === V86GL_CTRL_DESTROY_CONTEXT) {
+                    this.destroyContext();
+                    continue;
+                }
+
                 if (fn === GLFN_VIEWPORT && args.length >= 16) {
                     this.resize(i32(args, 8), i32(args, 12));
                 }
@@ -1761,12 +1767,19 @@
 
         releaseCurrent() {
             this.requireRenderer().releaseCurrent();
+            // WGL permits a context to be unbound and re-bound around a frame.
+            // Keep the last completed frame visible until an explicit teardown.
+            this.log("released current context");
+        }
+
+        destroyContext() {
+            this.requireRenderer().releaseCurrent();
             this.chunkedCalls = Object.create(null);
             this.frameStates = Object.create(null);
             this.lastPresentedFrameId = 0;
             this.canvas.style.display = "none";
             this.canvas.style.visibility = "hidden";
-            this.log("released current context");
+            this.log("destroyed current context");
         }
     }
 

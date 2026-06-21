@@ -417,6 +417,7 @@ typedef void GLvoid;
 
 #define V86GL_CTRL_MAKE_CURRENT 0xFFF0u
 #define V86GL_CTRL_RELEASE_CURRENT 0xFFF1u
+#define V86GL_CTRL_DESTROY_CONTEXT 0xFFF2u
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
 #define V86GL_READ_PIXELS_HEADER_SIZE 32u
 #define V86GL_READ_PIXELS_STATUS_PENDING 0u
@@ -1956,13 +1957,14 @@ static LRESULT CALLBACK vgl_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
     if (msg == WM_MOVE || msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED) {
         emit_current_surface(hwnd);
-    } else if (msg == WM_CLOSE || msg == WM_DESTROY || msg == WM_NCDESTROY) {
-        emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
+    } else if (msg == WM_NCDESTROY) {
+        emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, NULL, 0, TRUE);
     }
 
     if (msg == WM_NCDESTROY && hwnd == g_current_hwnd) {
         g_current_hwnd = NULL;
         g_original_wndproc = NULL;
+        g_have_last_surface = FALSE;
     }
 
     if (original) {
@@ -2574,7 +2576,7 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
     (void)ctx;
     v86gl_trace("delete context frame=%lu", (unsigned long)g_frame_id);
     restore_window_proc();
-    emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
+    emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, NULL, 0, TRUE);
     return TRUE;
 }
 
@@ -2585,7 +2587,10 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
 
     if (!hdc || !ctx) {
         v86gl_trace("release current context");
-        restore_window_proc();
+        /* Keep the window hook installed: an unbound context may be rebound
+         * on the same surface, and WM_NCDESTROY must still tear down the
+         * browser overlay if the guest exits while it is unbound. */
+        g_have_last_surface = FALSE;
         emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
         return TRUE;
     }
