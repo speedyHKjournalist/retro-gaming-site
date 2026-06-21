@@ -262,6 +262,68 @@ typedef void GLvoid;
 #define GL_TEXTURE_WRAP_T     0x2803
 #define GL_REPEAT             0x2901
 #define GL_TEXTURE_BORDER_COLOR 0x1004
+#define GL_TEXTURE_WIDTH        0x1000
+#define GL_TEXTURE_HEIGHT       0x1001
+#define GL_TEXTURE_COMPONENTS   0x1003
+#define GL_TEXTURE_INTERNAL_FORMAT 0x1003
+#define GL_TEXTURE_BORDER       0x1005
+#define GL_TEXTURE_RED_SIZE     0x805C
+#define GL_TEXTURE_GREEN_SIZE   0x805D
+#define GL_TEXTURE_BLUE_SIZE    0x805E
+#define GL_TEXTURE_ALPHA_SIZE   0x805F
+#define GL_TEXTURE_LUMINANCE_SIZE 0x8060
+#define GL_TEXTURE_INTENSITY_SIZE 0x8061
+#define GL_TEXTURE_DEPTH_SIZE   0x884A
+#define GL_POLYGON_OFFSET_FACTOR 0x8038
+#define GL_POLYGON_OFFSET_UNITS 0x2A00
+#define GL_CURRENT_EDGE_FLAG    0x0B31
+#define GL_CURRENT_RASTER_POSITION 0x0B07
+#define GL_CURRENT_RASTER_POSITION_VALID 0x0B08
+#define GL_CURRENT_RASTER_DISTANCE 0x0B09
+#define GL_CURRENT_RASTER_COLOR 0x0B04
+#define GL_CURRENT_RASTER_INDEX 0x0B05
+#define GL_CURRENT_RASTER_TEXTURE_COORDS 0x0B06
+#define GL_COEFF                0x0A00
+#define GL_ORDER                0x0A01
+#define GL_DOMAIN               0x0A02
+#define GL_MAP1_COLOR_4         0x0D90
+#define GL_MAP1_INDEX           0x0D91
+#define GL_MAP1_NORMAL          0x0D92
+#define GL_MAP1_TEXTURE_COORD_1 0x0D93
+#define GL_MAP1_TEXTURE_COORD_2 0x0D94
+#define GL_MAP1_TEXTURE_COORD_3 0x0D95
+#define GL_MAP1_TEXTURE_COORD_4 0x0D96
+#define GL_MAP1_VERTEX_3        0x0D97
+#define GL_MAP1_VERTEX_4        0x0D98
+#define GL_MAP2_COLOR_4         0x0DB0
+#define GL_MAP2_INDEX           0x0DB1
+#define GL_MAP2_NORMAL          0x0DB2
+#define GL_MAP2_TEXTURE_COORD_1 0x0DB3
+#define GL_MAP2_TEXTURE_COORD_2 0x0DB4
+#define GL_MAP2_TEXTURE_COORD_3 0x0DB5
+#define GL_MAP2_TEXTURE_COORD_4 0x0DB6
+#define GL_MAP2_VERTEX_3        0x0DB7
+#define GL_MAP2_VERTEX_4        0x0DB8
+#define GL_PIXEL_MAP_I_TO_I     0x0C70
+#define GL_PIXEL_MAP_S_TO_S     0x0C71
+#define GL_PIXEL_MAP_I_TO_R     0x0C72
+#define GL_PIXEL_MAP_I_TO_G     0x0C73
+#define GL_PIXEL_MAP_I_TO_B     0x0C74
+#define GL_PIXEL_MAP_I_TO_A     0x0C75
+#define GL_PIXEL_MAP_R_TO_R     0x0C76
+#define GL_PIXEL_MAP_G_TO_G     0x0C77
+#define GL_PIXEL_MAP_B_TO_B     0x0C78
+#define GL_PIXEL_MAP_A_TO_A     0x0C79
+#define GL_PIXEL_MAP_I_TO_I_SIZE 0x0CB0
+#define GL_PIXEL_MAP_S_TO_S_SIZE 0x0CB1
+#define GL_PIXEL_MAP_I_TO_R_SIZE 0x0CB2
+#define GL_PIXEL_MAP_I_TO_G_SIZE 0x0CB3
+#define GL_PIXEL_MAP_I_TO_B_SIZE 0x0CB4
+#define GL_PIXEL_MAP_I_TO_A_SIZE 0x0CB5
+#define GL_PIXEL_MAP_R_TO_R_SIZE 0x0CB6
+#define GL_PIXEL_MAP_G_TO_G_SIZE 0x0CB7
+#define GL_PIXEL_MAP_B_TO_B_SIZE 0x0CB8
+#define GL_PIXEL_MAP_A_TO_A_SIZE 0x0CB9
 #define GL_NEAREST            0x2600
 #define GL_LINEAR             0x2601
 #define GL_NEAREST_MIPMAP_NEAREST 0x2700
@@ -489,6 +551,12 @@ static GLfloat g_current_index = 1.0f;
 static GLfloat g_current_texcoord[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 static GLfloat g_current_normal[3] = { 0.0f, 0.0f, 1.0f };
 static GLboolean g_current_edge_flag = GL_TRUE;
+static GLfloat g_current_raster_position[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+static GLfloat g_current_raster_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+static GLfloat g_current_raster_texcoord[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+static GLfloat g_current_raster_index = 1.0f;
+static GLfloat g_current_raster_distance = 0.0f;
+static GLboolean g_current_raster_valid = GL_TRUE;
 static GLenum g_matrix_mode = GL_MODELVIEW;
 static GLenum g_depth_func = GL_LESS;
 static GLdouble g_clear_depth = 1.0;
@@ -625,9 +693,34 @@ static int g_swap_interval = 0;
 #define V86GL_MAX_TEXTURE_UNITS 8
 #define V86GL_MAX_TEXTURE_STATES 4096
 #define V86GL_MAX_CAP_STATES 128
+#define V86GL_MAX_TEXTURE_LEVELS 16
+#define V86GL_MAX_PIXEL_MAPS 10
+#define V86GL_MAX_MAP_TARGETS 18
 
 typedef struct {
+    BOOL defined;
+    GLint internalformat;
+    GLsizei width;
+    GLsizei height;
+    GLint border;
+    GLenum format;
+    GLenum type;
+    uint32_t data_size;
+    uint8_t* data;
+} TextureLevelState;
+
+typedef struct {
+    GLenum mode;
+    GLfloat object_plane[4];
+    GLfloat eye_plane[4];
+} TexGenState;
+
+typedef struct {
+    GLuint bound_1d;
     GLuint bound_2d;
+    GLenum env_mode;
+    GLfloat env_color[4];
+    TexGenState texgen[4];
 } TextureUnitState;
 
 typedef struct {
@@ -644,6 +737,7 @@ typedef struct {
     GLfloat max_lod;
     GLfloat priority;
     GLfloat border_color[4];
+    TextureLevelState levels[V86GL_MAX_TEXTURE_LEVELS];
 } TextureObjectState;
 
 typedef struct {
@@ -653,6 +747,22 @@ typedef struct {
 
 static TextureUnitState g_texture_units[V86GL_MAX_TEXTURE_UNITS];
 static TextureObjectState g_texture_states[V86GL_MAX_TEXTURE_STATES];
+static TextureObjectState g_default_texture_1d = {
+    TRUE,
+    0,
+    GL_TEXTURE_1D,
+    GL_NEAREST_MIPMAP_LINEAR,
+    GL_LINEAR,
+    GL_REPEAT,
+    GL_REPEAT,
+    0,
+    1000,
+    -1000.0f,
+    1000.0f,
+    1.0f,
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { { 0 } }
+};
 static TextureObjectState g_default_texture_2d = {
     TRUE,
     0,
@@ -666,9 +776,71 @@ static TextureObjectState g_default_texture_2d = {
     -1000.0f,
     1000.0f,
     1.0f,
-    { 0.0f, 0.0f, 0.0f, 0.0f }
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { { 0 } }
 };
 static CapState g_cap_states[V86GL_MAX_CAP_STATES];
+
+typedef struct {
+    GLfloat ambient[4];
+    GLfloat diffuse[4];
+    GLfloat specular[4];
+    GLfloat position[4];
+    GLfloat spot_direction[3];
+    GLfloat spot_exponent;
+    GLfloat spot_cutoff;
+    GLfloat constant_attenuation;
+    GLfloat linear_attenuation;
+    GLfloat quadratic_attenuation;
+} LightState;
+
+typedef struct {
+    GLfloat ambient[4];
+    GLfloat diffuse[4];
+    GLfloat specular[4];
+    GLfloat emission[4];
+    GLfloat shininess;
+    GLfloat color_indexes[3];
+} MaterialState;
+
+typedef struct {
+    GLsizei size;
+    GLdouble* values;
+} PixelMapState;
+
+typedef struct {
+    BOOL defined;
+    GLint dimensions;
+    GLint components;
+    GLint uorder;
+    GLint vorder;
+    GLdouble domain[4];
+    GLdouble* coefficients;
+    uint32_t coefficient_count;
+} MapState;
+
+static BOOL g_query_state_initialized = FALSE;
+static GLfloat g_fog_color[4];
+static GLfloat g_fog_index = 0.0f;
+static GLfloat g_fog_density = 1.0f;
+static GLfloat g_fog_start = 0.0f;
+static GLfloat g_fog_end = 1.0f;
+static GLenum g_fog_mode = GL_EXP;
+static GLdouble g_clip_planes[6][4];
+static LightState g_lights[8];
+static MaterialState g_materials[2];
+static GLfloat g_light_model_ambient[4];
+static GLboolean g_light_model_local_viewer = GL_FALSE;
+static GLboolean g_light_model_two_side = GL_FALSE;
+static PixelMapState g_pixel_maps[V86GL_MAX_PIXEL_MAPS];
+static GLubyte g_polygon_stipple[128];
+static MapState g_map_states[V86GL_MAX_MAP_TARGETS];
+static GLfloat g_modelview_stack[32][16];
+static GLfloat g_projection_stack[2][16];
+static GLfloat g_texture_stack[2][16];
+static GLint g_modelview_stack_depth = 0;
+static GLint g_projection_stack_depth = 0;
+static GLint g_texture_stack_depth = 0;
 
 typedef struct {
     BOOL enabled;
@@ -711,6 +883,75 @@ static ClientArrayState g_texcoord_arrays[V86GL_MAX_TEXTURE_UNITS] = {
 static ClientArrayState g_normal_array = { FALSE, 3, GL_FLOAT, 0, NULL };
 static ClientArrayState g_edge_flag_array = { FALSE, 1, GL_UNSIGNED_BYTE, 0, NULL };
 
+static void init_query_state(void) {
+    uint32_t unit;
+    uint32_t light;
+    uint32_t coord;
+    uint32_t i;
+
+    if (g_query_state_initialized) {
+        return;
+    }
+
+    for (unit = 0; unit < V86GL_MAX_TEXTURE_UNITS; unit++) {
+        TextureUnitState* state = &g_texture_units[unit];
+        state->env_mode = GL_MODULATE;
+        for (coord = 0; coord < 4; coord++) {
+            TexGenState* texgen = &state->texgen[coord];
+            texgen->mode = GL_EYE_LINEAR;
+            texgen->object_plane[coord] = 1.0f;
+            texgen->eye_plane[coord] = 1.0f;
+        }
+    }
+
+    for (light = 0; light < 8; light++) {
+        LightState* state = &g_lights[light];
+        state->ambient[3] = 1.0f;
+        state->diffuse[3] = 1.0f;
+        state->specular[3] = 1.0f;
+        if (light == 0) {
+            state->diffuse[0] = 1.0f;
+            state->diffuse[1] = 1.0f;
+            state->diffuse[2] = 1.0f;
+            state->specular[0] = 1.0f;
+            state->specular[1] = 1.0f;
+            state->specular[2] = 1.0f;
+        }
+        state->position[2] = 1.0f;
+        state->spot_direction[2] = -1.0f;
+        state->spot_cutoff = 180.0f;
+        state->constant_attenuation = 1.0f;
+    }
+
+    for (i = 0; i < 2; i++) {
+        MaterialState* state = &g_materials[i];
+        state->ambient[0] = 0.2f;
+        state->ambient[1] = 0.2f;
+        state->ambient[2] = 0.2f;
+        state->ambient[3] = 1.0f;
+        state->diffuse[0] = 0.8f;
+        state->diffuse[1] = 0.8f;
+        state->diffuse[2] = 0.8f;
+        state->diffuse[3] = 1.0f;
+        state->specular[3] = 1.0f;
+        state->emission[3] = 1.0f;
+        state->color_indexes[1] = 1.0f;
+        state->color_indexes[2] = 1.0f;
+    }
+
+    g_light_model_ambient[0] = 0.2f;
+    g_light_model_ambient[1] = 0.2f;
+    g_light_model_ambient[2] = 0.2f;
+    g_light_model_ambient[3] = 1.0f;
+    FillMemory(g_polygon_stipple, sizeof(g_polygon_stipple), 0xFF);
+    for (i = 0; i < 16; i++) {
+        g_modelview_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
+        g_projection_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
+        g_texture_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
+    }
+    g_query_state_initialized = TRUE;
+}
+
 static GLint active_texture_index(void) {
     if (g_active_texture < GL_TEXTURE0_ARB ||
         g_active_texture >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
@@ -727,6 +968,11 @@ static GLint client_active_texture_index(void) {
     }
 
     return (GLint)(g_client_active_texture - GL_TEXTURE0_ARB);
+}
+
+static TextureUnitState* active_texture_unit_state(void) {
+    init_query_state();
+    return &g_texture_units[active_texture_index()];
 }
 
 static BOOL default_cap_enabled(GLenum cap) {
@@ -766,6 +1012,23 @@ static BOOL get_cap_state(GLenum cap) {
     return default_cap_enabled(cap);
 }
 
+static BOOL is_capability_pname(GLenum pname) {
+    switch (pname) {
+    case GL_POINT_SMOOTH: case GL_LINE_SMOOTH: case GL_LINE_STIPPLE:
+    case GL_CULL_FACE: case GL_LIGHTING: case GL_FOG: case GL_DEPTH_TEST:
+    case GL_STENCIL_TEST: case GL_ALPHA_TEST: case GL_DITHER: case GL_BLEND:
+    case GL_LOGIC_OP: case GL_COLOR_LOGIC_OP: case GL_SCISSOR_TEST:
+    case GL_TEXTURE_GEN_S: case GL_TEXTURE_GEN_T: case GL_TEXTURE_GEN_R: case GL_TEXTURE_GEN_Q:
+    case GL_POLYGON_OFFSET_FILL: case GL_COLOR_MATERIAL:
+    case GL_CLIP_PLANE0: case GL_CLIP_PLANE1: case GL_CLIP_PLANE2:
+    case GL_CLIP_PLANE3: case GL_CLIP_PLANE4: case GL_CLIP_PLANE5:
+    case GL_TEXTURE_1D: case GL_TEXTURE_2D:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 static TextureObjectState* texture_state_defaults(TextureObjectState* state, GLuint name, GLenum target) {
     ZeroMemory(state, sizeof(*state));
     state->used = TRUE;
@@ -783,11 +1046,28 @@ static TextureObjectState* texture_state_defaults(TextureObjectState* state, GLu
     return state;
 }
 
+static void free_texture_levels(TextureObjectState* state) {
+    uint32_t level;
+
+    if (!state) {
+        return;
+    }
+
+    for (level = 0; level < V86GL_MAX_TEXTURE_LEVELS; level++) {
+        if (state->levels[level].data) {
+            HeapFree(GetProcessHeap(), 0, state->levels[level].data);
+        }
+    }
+}
+
 static TextureObjectState* find_texture_state(GLuint name, GLenum target, BOOL create) {
     uint32_t i;
     TextureObjectState* free_state = NULL;
 
     if (!name) {
+        if (target == GL_TEXTURE_1D) {
+            return &g_default_texture_1d;
+        }
         return target == GL_TEXTURE_2D ? &g_default_texture_2d : NULL;
     }
 
@@ -828,12 +1108,16 @@ static void delete_texture_state(GLuint name) {
 
     for (i = 0; i < V86GL_MAX_TEXTURE_STATES; i++) {
         if (g_texture_states[i].used && g_texture_states[i].name == name) {
+            free_texture_levels(&g_texture_states[i]);
             ZeroMemory(&g_texture_states[i], sizeof(g_texture_states[i]));
             break;
         }
     }
 
     for (unit = 0; unit < V86GL_MAX_TEXTURE_UNITS; unit++) {
+        if (g_texture_units[unit].bound_1d == name) {
+            g_texture_units[unit].bound_1d = 0;
+        }
         if (g_texture_units[unit].bound_2d == name) {
             g_texture_units[unit].bound_2d = 0;
         }
@@ -841,14 +1125,18 @@ static void delete_texture_state(GLuint name) {
 }
 
 static TextureObjectState* bound_texture_state(GLenum target, BOOL create) {
-    GLint unit = active_texture_index();
+    TextureUnitState* unit = active_texture_unit_state();
+
+    if (target == GL_TEXTURE_1D) {
+        return find_texture_state(unit->bound_1d, target, create);
+    }
 
     if (target != GL_TEXTURE_2D) {
         g_error = GL_INVALID_ENUM;
         return NULL;
     }
 
-    return find_texture_state(g_texture_units[unit].bound_2d, target, create);
+    return find_texture_state(unit->bound_2d, target, create);
 }
 
 static void update_texture_parameter_i(GLenum target, GLenum pname, GLint param) {
@@ -972,6 +1260,118 @@ static void identity_matrix(GLfloat* params) {
     }
 }
 
+static GLfloat* current_matrix(GLint** depth, GLint* max_depth) {
+    init_query_state();
+    switch (g_matrix_mode) {
+    case GL_MODELVIEW:
+        if (depth) *depth = &g_modelview_stack_depth;
+        if (max_depth) *max_depth = 32;
+        return g_modelview_stack[g_modelview_stack_depth];
+    case GL_PROJECTION:
+        if (depth) *depth = &g_projection_stack_depth;
+        if (max_depth) *max_depth = 2;
+        return g_projection_stack[g_projection_stack_depth];
+    case GL_TEXTURE:
+        if (depth) *depth = &g_texture_stack_depth;
+        if (max_depth) *max_depth = 2;
+        return g_texture_stack[g_texture_stack_depth];
+    default:
+        g_error = GL_INVALID_ENUM;
+        return NULL;
+    }
+}
+
+static GLfloat* matrix_for_pname(GLenum pname) {
+    init_query_state();
+    switch (pname) {
+    case GL_MODELVIEW_MATRIX: return g_modelview_stack[g_modelview_stack_depth];
+    case GL_PROJECTION_MATRIX: return g_projection_stack[g_projection_stack_depth];
+    case GL_TEXTURE_MATRIX: return g_texture_stack[g_texture_stack_depth];
+    default: return NULL;
+    }
+}
+
+static void multiply_current_matrix(const GLfloat* rhs) {
+    GLfloat result[16];
+    GLfloat* lhs = current_matrix(NULL, NULL);
+    int row;
+    int column;
+    int k;
+
+    if (!lhs) return;
+    for (column = 0; column < 4; column++) {
+        for (row = 0; row < 4; row++) {
+            GLfloat sum = 0.0f;
+            for (k = 0; k < 4; k++) sum += lhs[k * 4 + row] * rhs[column * 4 + k];
+            result[column * 4 + row] = sum;
+        }
+    }
+    CopyMemory(lhs, result, sizeof(result));
+}
+
+static GLfloat v86gl_sine_degrees(GLfloat degrees) {
+    GLfloat radians;
+    GLfloat square;
+    while (degrees > 180.0f) degrees -= 360.0f;
+    while (degrees < -180.0f) degrees += 360.0f;
+    radians = degrees * 0.01745329251994329577f;
+    if (radians > 1.5707963267948966f) radians = 3.141592653589793f - radians;
+    if (radians < -1.5707963267948966f) radians = -3.141592653589793f - radians;
+    square = radians * radians;
+    return radians * (1.0f - square * (1.0f / 6.0f - square * (1.0f / 120.0f - square / 5040.0f)));
+}
+
+static void matrix_translate(GLfloat x, GLfloat y, GLfloat z) {
+    GLfloat matrix[16];
+    identity_matrix(matrix);
+    matrix[12] = x; matrix[13] = y; matrix[14] = z;
+    multiply_current_matrix(matrix);
+}
+
+static void matrix_scale(GLfloat x, GLfloat y, GLfloat z) {
+    GLfloat matrix[16];
+    identity_matrix(matrix);
+    matrix[0] = x; matrix[5] = y; matrix[10] = z;
+    multiply_current_matrix(matrix);
+}
+
+static void matrix_rotate(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
+    GLfloat matrix[16];
+    GLfloat length_squared = x * x + y * y + z * z;
+    GLfloat length;
+    GLfloat inv_length;
+    GLfloat sine;
+    GLfloat cosine;
+    GLfloat one_minus_cosine;
+
+    if (length_squared == 0.0f) return;
+    /* Newton's method keeps the proxy self-contained: no MSVCRT/libm dependency. */
+    length = length_squared > 1.0f ? length_squared : 1.0f;
+    length = 0.5f * (length + length_squared / length);
+    length = 0.5f * (length + length_squared / length);
+    length = 0.5f * (length + length_squared / length);
+    length = 0.5f * (length + length_squared / length);
+    length = 0.5f * (length + length_squared / length);
+    length = 0.5f * (length + length_squared / length);
+    length = 0.5f * (length + length_squared / length);
+    inv_length = 1.0f / length;
+    x *= inv_length; y *= inv_length; z *= inv_length;
+    sine = v86gl_sine_degrees(angle);
+    cosine = v86gl_sine_degrees(angle + 90.0f);
+    one_minus_cosine = 1.0f - cosine;
+    identity_matrix(matrix);
+    matrix[0] = x * x * one_minus_cosine + cosine;
+    matrix[1] = y * x * one_minus_cosine + z * sine;
+    matrix[2] = x * z * one_minus_cosine - y * sine;
+    matrix[4] = x * y * one_minus_cosine - z * sine;
+    matrix[5] = y * y * one_minus_cosine + cosine;
+    matrix[6] = y * z * one_minus_cosine + x * sine;
+    matrix[8] = x * z * one_minus_cosine + y * sine;
+    matrix[9] = y * z * one_minus_cosine - x * sine;
+    matrix[10] = z * z * one_minus_cosine + cosine;
+    multiply_current_matrix(matrix);
+}
+
 static int fog_value_count(GLenum pname) {
     switch (pname) {
     case GL_FOG_COLOR:
@@ -1050,9 +1450,16 @@ static int get_value_count(GLenum pname) {
     case GL_COLOR_WRITEMASK:
     case GL_CURRENT_COLOR:
     case GL_CURRENT_TEXTURE_COORDS:
+    case GL_CURRENT_RASTER_POSITION:
+    case GL_CURRENT_RASTER_COLOR:
+    case GL_CURRENT_RASTER_TEXTURE_COORDS:
     case GL_COLOR_CLEAR_VALUE:
     case GL_ACCUM_CLEAR_VALUE:
+    case GL_FOG_COLOR:
+    case GL_LIGHT_MODEL_AMBIENT:
         return 4;
+    case GL_CURRENT_NORMAL:
+        return 3;
     case GL_POLYGON_MODE:
     case GL_MAX_VIEWPORT_DIMS:
     case GL_DEPTH_RANGE:
@@ -1688,6 +2095,183 @@ static uint32_t gl_read_pixel_span(GLsizei width, GLsizei height, GLenum format,
                                     g_pack_skip_rows, g_pack_skip_pixels);
 }
 
+static TextureObjectState* bound_texture_state(GLenum target, BOOL create);
+
+static uint32_t gl_pixel_tight_span(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+    uint64_t total;
+    uint32_t pixel_bytes = gl_pixel_bytes(format, type);
+
+    if (width < 0 || height < 0 || !pixel_bytes) {
+        return 0;
+    }
+    total = (uint64_t)(uint32_t)width * (uint32_t)height * pixel_bytes;
+    return total <= UINT32_MAX ? (uint32_t)total : 0;
+}
+
+static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
+                                    GLint alignment, GLint row_length) {
+    uint32_t pixel_bytes = gl_pixel_bytes(format, type);
+    uint32_t row_pixels = row_length > 0 ? (uint32_t)row_length : (uint32_t)width;
+
+    if (!pixel_bytes || width < 0 || row_pixels < (uint32_t)width ||
+        row_pixels > UINT32_MAX / pixel_bytes) {
+        return 0;
+    }
+    return align_u32(row_pixels * pixel_bytes, (uint32_t)(alignment > 0 ? alignment : 1));
+}
+
+static TextureLevelState* texture_level_state(GLenum target, GLint level, BOOL create) {
+    TextureObjectState* texture;
+
+    if (level < 0 || level >= V86GL_MAX_TEXTURE_LEVELS) {
+        g_error = GL_INVALID_VALUE;
+        return NULL;
+    }
+    texture = bound_texture_state(target, create);
+    return texture ? &texture->levels[level] : NULL;
+}
+
+static void clear_texture_level(TextureLevelState* state) {
+    if (state->data) {
+        HeapFree(GetProcessHeap(), 0, state->data);
+    }
+    ZeroMemory(state, sizeof(*state));
+}
+
+static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
+                               GLsizei width, GLsizei height, GLint border,
+                               GLenum format, GLenum type, const GLvoid* pixels) {
+    TextureLevelState* state;
+    uint32_t pixel_bytes;
+    uint32_t tight_size;
+    uint32_t source_span;
+    uint32_t source_stride;
+    uint32_t source_offset;
+    uint32_t row_bytes;
+    GLsizei row;
+
+    if (width < 0 || height < 0 || border < 0 || border > 1) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+    pixel_bytes = gl_pixel_bytes(format, type);
+    tight_size = gl_pixel_tight_span(width, height, format, type);
+    if (!pixel_bytes || (width > 0 && height > 0 && !tight_size)) {
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
+    state = texture_level_state(target, level, TRUE);
+    if (!state) return 0;
+
+    clear_texture_level(state);
+    state->defined = TRUE;
+    state->internalformat = internalformat;
+    state->width = width;
+    state->height = height;
+    state->border = border;
+    state->format = format;
+    state->type = type;
+    state->data_size = tight_size;
+    if (!pixels || !tight_size) return 1;
+
+    source_span = gl_pixel_span(width, height, format, type);
+    source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
+    source_offset = (uint32_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
+                    (uint32_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
+    row_bytes = (uint32_t)width * pixel_bytes;
+    if (!source_span || !source_stride || source_offset > source_span ||
+        source_span - source_offset < row_bytes) {
+        g_error = GL_INVALID_VALUE;
+        clear_texture_level(state);
+        return 0;
+    }
+
+    state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
+    if (!state->data) {
+        g_error = GL_OUT_OF_MEMORY;
+        clear_texture_level(state);
+        return 0;
+    }
+    for (row = 0; row < height; row++) {
+        CopyMemory(state->data + (uint32_t)row * row_bytes,
+                   (const uint8_t*)pixels + source_offset + (uint32_t)row * source_stride,
+                   row_bytes);
+    }
+    return 1;
+}
+
+static int cache_texture_sub_image(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                   GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                   const GLvoid* pixels) {
+    TextureLevelState* state;
+    uint32_t pixel_bytes;
+    uint32_t source_span;
+    uint32_t source_stride;
+    uint32_t source_offset;
+    uint32_t row_bytes;
+    GLsizei row;
+
+    if (xoffset < 0 || yoffset < 0 || width < 0 || height < 0) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+    state = texture_level_state(target, level, FALSE);
+    if (!state || !state->defined || xoffset > state->width - width || yoffset > state->height - height) {
+        g_error = GL_INVALID_OPERATION;
+        return 0;
+    }
+    if (state->format != format || state->type != type) {
+        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+        state->data = NULL;
+        return 1;
+    }
+    if (!pixels || !width || !height) {
+        return 1;
+    }
+    pixel_bytes = gl_pixel_bytes(format, type);
+    source_span = gl_pixel_span(width, height, format, type);
+    source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
+    source_offset = (uint32_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
+                    (uint32_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
+    row_bytes = (uint32_t)width * pixel_bytes;
+    if (!pixel_bytes || !source_span || !source_stride || source_offset > source_span ||
+        source_span - source_offset < row_bytes) {
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
+    if (!state->data) {
+        state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, state->data_size);
+        if (!state->data && state->data_size) {
+            g_error = GL_OUT_OF_MEMORY;
+            return 0;
+        }
+    }
+    for (row = 0; row < height; row++) {
+        CopyMemory(state->data + ((uint32_t)(yoffset + row) * state->width + xoffset) * pixel_bytes,
+                   (const uint8_t*)pixels + source_offset + (uint32_t)row * source_stride,
+                   row_bytes);
+    }
+    return 1;
+}
+
+static int cache_copy_texture_image(GLenum target, GLint level, GLint internalformat,
+                                    GLsizei width, GLsizei height, GLint border) {
+    TextureLevelState* state;
+    if (width < 0 || height < 0 || border < 0 || border > 1) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+    state = texture_level_state(target, level, TRUE);
+    if (!state) return 0;
+    clear_texture_level(state);
+    state->defined = TRUE;
+    state->internalformat = internalformat;
+    state->width = width;
+    state->height = height;
+    state->border = border;
+    return 1;
+}
+
 static uint32_t gl_type_bytes(GLenum type) {
     switch (type) {
     case GL_BYTE:
@@ -2185,7 +2769,9 @@ const GLubyte* APIENTRY glGetString(GLenum name) {
     case GL_VERSION:    return (const GLubyte*)"1.1";
     case GL_EXTENSIONS:
         return (const GLubyte*)g_gl_extensions;
-    default:            return (const GLubyte*)"";
+    default:
+        g_error = GL_INVALID_ENUM;
+        return NULL;
     }
 }
 
@@ -2207,14 +2793,57 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     GLint viewport[4];
     GLint scissor[4];
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
+    TextureUnitState* texture_unit;
+    int i;
 
     if (!params) {
         return;
     }
 
+    init_query_state();
+    texture_unit = active_texture_unit_state();
+
     switch (pname) {
+    case GL_CURRENT_COLOR:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_current_color[i];
+        break;
+    case GL_CURRENT_INDEX:
+        params[0] = (GLint)g_current_index;
+        break;
+    case GL_CURRENT_NORMAL:
+        for (i = 0; i < 3; i++) params[i] = (GLint)g_current_normal[i];
+        break;
+    case GL_CURRENT_TEXTURE_COORDS:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_current_texcoord[i];
+        break;
+    case GL_CURRENT_EDGE_FLAG:
+        params[0] = g_current_edge_flag ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_CURRENT_RASTER_POSITION:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_current_raster_position[i];
+        break;
+    case GL_CURRENT_RASTER_COLOR:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_current_raster_color[i];
+        break;
+    case GL_CURRENT_RASTER_TEXTURE_COORDS:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_current_raster_texcoord[i];
+        break;
+    case GL_CURRENT_RASTER_INDEX:
+        params[0] = (GLint)g_current_raster_index;
+        break;
+    case GL_CURRENT_RASTER_DISTANCE:
+        params[0] = (GLint)g_current_raster_distance;
+        break;
+    case GL_CURRENT_RASTER_POSITION_VALID:
+        params[0] = g_current_raster_valid ? GL_TRUE : GL_FALSE;
+        break;
     case GL_MATRIX_MODE:
         params[0] = (GLint)g_matrix_mode;
+        break;
+    case GL_MODELVIEW_MATRIX:
+    case GL_PROJECTION_MATRIX:
+    case GL_TEXTURE_MATRIX:
+        for (i = 0; i < 16; i++) params[i] = (GLint)matrix_for_pname(pname)[i];
         break;
     case GL_VIEWPORT:
         current_viewport(viewport);
@@ -2232,6 +2861,13 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_DEPTH_WRITEMASK:
         params[0] = g_depth_mask ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_DEPTH_CLEAR_VALUE:
+        params[0] = (GLint)g_clear_depth;
+        break;
+    case GL_DEPTH_RANGE:
+        params[0] = (GLint)g_depth_range[0];
+        params[1] = (GLint)g_depth_range[1];
         break;
     case GL_DEPTH_FUNC:
         params[0] = (GLint)g_depth_func;
@@ -2278,6 +2914,36 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_ALPHA_TEST_FUNC:
         params[0] = (GLint)g_alpha_func;
         break;
+    case GL_ALPHA_TEST_REF:
+        params[0] = (GLint)g_alpha_ref;
+        break;
+    case GL_FOG_INDEX:
+        params[0] = (GLint)g_fog_index;
+        break;
+    case GL_FOG_DENSITY:
+        params[0] = (GLint)g_fog_density;
+        break;
+    case GL_FOG_START:
+        params[0] = (GLint)g_fog_start;
+        break;
+    case GL_FOG_END:
+        params[0] = (GLint)g_fog_end;
+        break;
+    case GL_FOG_MODE:
+        params[0] = (GLint)g_fog_mode;
+        break;
+    case GL_FOG_COLOR:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_fog_color[i];
+        break;
+    case GL_LIGHT_MODEL_AMBIENT:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_light_model_ambient[i];
+        break;
+    case GL_LIGHT_MODEL_LOCAL_VIEWER:
+        params[0] = g_light_model_local_viewer ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_LIGHT_MODEL_TWO_SIDE:
+        params[0] = g_light_model_two_side ? GL_TRUE : GL_FALSE;
+        break;
     case GL_INDEX_CLEAR_VALUE:
         params[0] = (GLint)g_clear_index;
         break;
@@ -2286,6 +2952,12 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_POINT_SIZE:
         params[0] = (GLint)g_point_size;
+        break;
+    case GL_COLOR_CLEAR_VALUE:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_clear_color[i];
+        break;
+    case GL_ACCUM_CLEAR_VALUE:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_clear_accum[i];
         break;
     case GL_POINT_SIZE_RANGE:
         params[0] = 1;
@@ -2326,10 +2998,10 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = 1;
         break;
     case GL_TEXTURE_BINDING_2D:
-        params[0] = (GLint)g_texture_units[active_texture_index()].bound_2d;
+        params[0] = (GLint)texture_unit->bound_2d;
         break;
     case GL_TEXTURE_BINDING_1D:
-        params[0] = 0;
+        params[0] = (GLint)texture_unit->bound_1d;
         break;
     case GL_PACK_ALIGNMENT:
         params[0] = g_pack_alignment;
@@ -2397,8 +3069,32 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_EDGE_FLAG_ARRAY_STRIDE:
         params[0] = g_edge_flag_array.stride;
         break;
+    case GL_VERTEX_ARRAY:
+        params[0] = g_vertex_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_COLOR_ARRAY:
+        params[0] = g_color_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_INDEX_ARRAY:
+        params[0] = g_index_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_TEXTURE_COORD_ARRAY:
+        params[0] = texcoord->enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_NORMAL_ARRAY:
+        params[0] = g_normal_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_EDGE_FLAG_ARRAY:
+        params[0] = g_edge_flag_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
     case GL_LINE_WIDTH:
         params[0] = (GLint)g_line_width;
+        break;
+    case GL_POLYGON_OFFSET_FACTOR:
+        params[0] = (GLint)g_polygon_offset_factor;
+        break;
+    case GL_POLYGON_OFFSET_UNITS:
+        params[0] = (GLint)g_polygon_offset_units;
         break;
     case GL_LINE_WIDTH_RANGE:
     case GL_ALIASED_LINE_WIDTH_RANGE:
@@ -2437,8 +3133,14 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = 16;
         break;
     case GL_MODELVIEW_STACK_DEPTH:
+        params[0] = g_modelview_stack_depth + 1;
+        break;
     case GL_PROJECTION_STACK_DEPTH:
+        params[0] = g_projection_stack_depth + 1;
+        break;
     case GL_TEXTURE_STACK_DEPTH:
+        params[0] = g_texture_stack_depth + 1;
+        break;
     case GL_ATTRIB_STACK_DEPTH:
     case GL_CLIENT_ATTRIB_STACK_DEPTH:
         params[0] = 1;
@@ -2477,19 +3179,36 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_SELECTION_BUFFER_SIZE:
         params[0] = g_selection_buffer_size;
         break;
+    case GL_PIXEL_MAP_I_TO_I_SIZE:
+    case GL_PIXEL_MAP_S_TO_S_SIZE:
+    case GL_PIXEL_MAP_I_TO_R_SIZE:
+    case GL_PIXEL_MAP_I_TO_G_SIZE:
+    case GL_PIXEL_MAP_I_TO_B_SIZE:
+    case GL_PIXEL_MAP_I_TO_A_SIZE:
+    case GL_PIXEL_MAP_R_TO_R_SIZE:
+    case GL_PIXEL_MAP_G_TO_G_SIZE:
+    case GL_PIXEL_MAP_B_TO_B_SIZE:
+    case GL_PIXEL_MAP_A_TO_A_SIZE:
+        params[0] = g_pixel_maps[pname - GL_PIXEL_MAP_I_TO_I_SIZE].size;
+        break;
     default:
-        g_error = GL_INVALID_ENUM;
+        if (is_capability_pname(pname)) params[0] = get_cap_state(pname) ? GL_TRUE : GL_FALSE;
+        else g_error = GL_INVALID_ENUM;
         break;
     }
 }
 
 __declspec(dllexport)
 void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
-    GLint ints[4];
+    GLint ints[16];
+    int count;
+    int i;
 
     if (!params) {
         return;
     }
+
+    init_query_state();
 
     switch (pname) {
     case GL_CURRENT_COLOR:
@@ -2503,6 +3222,27 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
         break;
     case GL_CURRENT_NORMAL:
         CopyMemory(params, g_current_normal, sizeof(g_current_normal));
+        break;
+    case GL_CURRENT_EDGE_FLAG:
+        params[0] = g_current_edge_flag ? 1.0f : 0.0f;
+        break;
+    case GL_CURRENT_RASTER_POSITION:
+        CopyMemory(params, g_current_raster_position, sizeof(g_current_raster_position));
+        break;
+    case GL_CURRENT_RASTER_COLOR:
+        CopyMemory(params, g_current_raster_color, sizeof(g_current_raster_color));
+        break;
+    case GL_CURRENT_RASTER_TEXTURE_COORDS:
+        CopyMemory(params, g_current_raster_texcoord, sizeof(g_current_raster_texcoord));
+        break;
+    case GL_CURRENT_RASTER_INDEX:
+        params[0] = g_current_raster_index;
+        break;
+    case GL_CURRENT_RASTER_DISTANCE:
+        params[0] = g_current_raster_distance;
+        break;
+    case GL_CURRENT_RASTER_POSITION_VALID:
+        params[0] = g_current_raster_valid ? 1.0f : 0.0f;
         break;
     case GL_COLOR_CLEAR_VALUE:
         CopyMemory(params, g_clear_color, sizeof(g_clear_color));
@@ -2519,6 +3259,33 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
         break;
     case GL_ALPHA_TEST_REF:
         params[0] = g_alpha_ref;
+        break;
+    case GL_FOG_INDEX:
+        params[0] = g_fog_index;
+        break;
+    case GL_FOG_DENSITY:
+        params[0] = g_fog_density;
+        break;
+    case GL_FOG_START:
+        params[0] = g_fog_start;
+        break;
+    case GL_FOG_END:
+        params[0] = g_fog_end;
+        break;
+    case GL_FOG_MODE:
+        params[0] = (GLfloat)g_fog_mode;
+        break;
+    case GL_FOG_COLOR:
+        CopyMemory(params, g_fog_color, sizeof(g_fog_color));
+        break;
+    case GL_LIGHT_MODEL_AMBIENT:
+        CopyMemory(params, g_light_model_ambient, sizeof(g_light_model_ambient));
+        break;
+    case GL_LIGHT_MODEL_LOCAL_VIEWER:
+        params[0] = g_light_model_local_viewer ? 1.0f : 0.0f;
+        break;
+    case GL_LIGHT_MODEL_TWO_SIDE:
+        params[0] = g_light_model_two_side ? 1.0f : 0.0f;
         break;
     case GL_INDEX_CLEAR_VALUE:
         params[0] = g_clear_index;
@@ -2541,25 +3308,25 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
         params[0] = 1.0f;
         params[1] = 1.0f;
         break;
+    case GL_POLYGON_OFFSET_FACTOR:
+        params[0] = g_polygon_offset_factor;
+        break;
+    case GL_POLYGON_OFFSET_UNITS:
+        params[0] = g_polygon_offset_units;
+        break;
     case GL_MODELVIEW_MATRIX:
     case GL_PROJECTION_MATRIX:
     case GL_TEXTURE_MATRIX:
-        identity_matrix(params);
+        CopyMemory(params, matrix_for_pname(pname), sizeof(GLfloat) * 16);
         break;
     default: {
         GLenum old_error = g_error;
+        count = get_value_count(pname);
+        ZeroMemory(ints, sizeof(ints));
         glGetIntegerv(pname, ints);
         if (g_error == old_error) {
-            params[0] = (GLfloat)ints[0];
-            if (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
-                pname == GL_COLOR_WRITEMASK || pname == GL_POLYGON_MODE ||
-                pname == GL_MAX_VIEWPORT_DIMS) {
-                params[1] = (GLfloat)ints[1];
-            }
-            if (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
-                pname == GL_COLOR_WRITEMASK) {
-                params[2] = (GLfloat)ints[2];
-                params[3] = (GLfloat)ints[3];
+            for (i = 0; i < count; i++) {
+                params[i] = (GLfloat)ints[i];
             }
         }
         break;
@@ -2767,12 +3534,19 @@ void APIENTRY glFinish(void) {
 __declspec(dllexport)
 void APIENTRY glMatrixMode(GLenum mode) {
     uint32_t payload = (uint32_t)mode;
+    if (mode != GL_MODELVIEW && mode != GL_PROJECTION && mode != GL_TEXTURE) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
     g_matrix_mode = mode;
     emit_gl_call(GLFN_MATRIX_MODE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLoadIdentity(void) {
+    GLfloat* matrix = current_matrix(NULL, NULL);
+    if (!matrix) return;
+    identity_matrix(matrix);
     emit_gl_call(GLFN_LOAD_IDENTITY, NULL, 0);
 }
 
@@ -2786,6 +3560,8 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) {
     }
 
     CopyMemory(payload, m, sizeof(payload));
+    if (!current_matrix(NULL, NULL)) return;
+    CopyMemory(current_matrix(NULL, NULL), m, sizeof(payload));
     emit_gl_call(GLFN_LOAD_MATRIXF, payload, sizeof(payload));
 }
 
@@ -2803,6 +3579,9 @@ void APIENTRY glLoadMatrixd(const GLdouble* m) {
         payload[i] = (GLfloat)m[i];
     }
 
+    if (!current_matrix(NULL, NULL)) return;
+    CopyMemory(current_matrix(NULL, NULL), payload, sizeof(payload));
+
     emit_gl_call(GLFN_LOAD_MATRIXF, payload, sizeof(payload));
 }
 
@@ -2816,6 +3595,8 @@ void APIENTRY glMultMatrixf(const GLfloat* m) {
     }
 
     CopyMemory(payload, m, sizeof(payload));
+    if (!current_matrix(NULL, NULL)) return;
+    multiply_current_matrix(payload);
     emit_gl_call(GLFN_MULT_MATRIXF, payload, sizeof(payload));
 }
 
@@ -2833,30 +3614,62 @@ void APIENTRY glMultMatrixd(const GLdouble* m) {
         payload[i] = (GLfloat)m[i];
     }
 
+    if (!current_matrix(NULL, NULL)) return;
+    multiply_current_matrix(payload);
+
     emit_gl_call(GLFN_MULT_MATRIXF, payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
     struct { double left, right, bottom, top, zNear, zFar; } payload;
+    GLfloat matrix[16];
+    if (left == right || bottom == top || zNear <= 0.0 || zFar <= 0.0 || zNear == zFar) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
     payload.left = left;
     payload.right = right;
     payload.bottom = bottom;
     payload.top = top;
     payload.zNear = zNear;
     payload.zFar = zFar;
+    ZeroMemory(matrix, sizeof(matrix));
+    matrix[0] = (GLfloat)(2.0 * zNear / (right - left));
+    matrix[5] = (GLfloat)(2.0 * zNear / (top - bottom));
+    matrix[8] = (GLfloat)((right + left) / (right - left));
+    matrix[9] = (GLfloat)((top + bottom) / (top - bottom));
+    matrix[10] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
+    matrix[11] = -1.0f;
+    matrix[14] = (GLfloat)(-(2.0 * zFar * zNear) / (zFar - zNear));
+    if (!current_matrix(NULL, NULL)) return;
+    multiply_current_matrix(matrix);
     emit_gl_call(GLFN_FRUSTUM, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
     struct { double left, right, bottom, top, zNear, zFar; } payload;
+    GLfloat matrix[16];
+    if (left == right || bottom == top || zNear == zFar) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
     payload.left = left;
     payload.right = right;
     payload.bottom = bottom;
     payload.top = top;
     payload.zNear = zNear;
     payload.zFar = zFar;
+    identity_matrix(matrix);
+    matrix[0] = (GLfloat)(2.0 / (right - left));
+    matrix[5] = (GLfloat)(2.0 / (top - bottom));
+    matrix[10] = (GLfloat)(-2.0 / (zFar - zNear));
+    matrix[12] = (GLfloat)(-(right + left) / (right - left));
+    matrix[13] = (GLfloat)(-(top + bottom) / (top - bottom));
+    matrix[14] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
+    if (!current_matrix(NULL, NULL)) return;
+    multiply_current_matrix(matrix);
     emit_gl_call(GLFN_ORTHO, &payload, sizeof(payload));
 }
 
@@ -2866,6 +3679,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z) {
     payload.x = x;
     payload.y = y;
     payload.z = z;
+    if (!current_matrix(NULL, NULL)) return;
+    matrix_translate(x, y, z);
     emit_gl_call(GLFN_TRANSLATEF, &payload, sizeof(payload));
 }
 
@@ -2876,6 +3691,8 @@ void APIENTRY glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
     payload.x = x;
     payload.y = y;
     payload.z = z;
+    if (!current_matrix(NULL, NULL)) return;
+    matrix_rotate(angle, x, y, z);
     emit_gl_call(GLFN_ROTATEF, &payload, sizeof(payload));
 }
 
@@ -2885,16 +3702,30 @@ void APIENTRY glScalef(GLfloat x, GLfloat y, GLfloat z) {
     payload.x = x;
     payload.y = y;
     payload.z = z;
+    if (!current_matrix(NULL, NULL)) return;
+    matrix_scale(x, y, z);
     emit_gl_call(GLFN_SCALEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPushMatrix(void) {
+    GLfloat* matrix;
+    GLint* depth;
+    GLint max_depth;
+    matrix = current_matrix(&depth, &max_depth);
+    if (!matrix) return;
+    if (*depth + 1 >= max_depth) { g_error = GL_INVALID_OPERATION; return; }
+    CopyMemory(matrix + 16, matrix, sizeof(GLfloat) * 16);
+    (*depth)++;
     emit_gl_call(GLFN_PUSH_MATRIX, NULL, 0);
 }
 
 __declspec(dllexport)
 void APIENTRY glPopMatrix(void) {
+    GLint* depth;
+    if (!current_matrix(&depth, NULL)) return;
+    if (*depth <= 0) { g_error = GL_INVALID_OPERATION; return; }
+    (*depth)--;
     emit_gl_call(GLFN_POP_MATRIX, NULL, 0);
 }
 
@@ -3108,13 +3939,20 @@ void APIENTRY glDeleteTextures(GLsizei n, const GLuint* textures) {
 __declspec(dllexport)
 void APIENTRY glBindTexture(GLenum target, GLuint texture) {
     struct { uint32_t target, texture; } payload;
-    if (target == GL_TEXTURE_2D) {
+    if (target == GL_TEXTURE_1D || target == GL_TEXTURE_2D) {
         TextureObjectState* state = find_texture_state(texture, target, TRUE);
         if (!state) {
             return;
         }
 
-        g_texture_units[active_texture_index()].bound_2d = texture;
+        if (target == GL_TEXTURE_1D) {
+            active_texture_unit_state()->bound_1d = texture;
+        } else {
+            active_texture_unit_state()->bound_2d = texture;
+        }
+    } else {
+        g_error = GL_INVALID_ENUM;
+        return;
     }
 
     payload.target = (uint32_t)target;
@@ -3142,9 +3980,12 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
     uint8_t* payload;
 
     if (pixels && !data_size) {
-        g_error = GL_INVALID_ENUM;
+        if (width > 0 && height > 0) g_error = GL_INVALID_ENUM;
         return;
     }
+
+    if (!cache_texture_image(target, level, internalformat, width, height, border,
+                             format, type, pixels)) return;
 
     payload = alloc_payload(total_size);
     if (!payload) {
@@ -3189,9 +4030,12 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
     uint8_t* payload;
 
     if (pixels && !data_size) {
-        g_error = GL_INVALID_ENUM;
+        if (width > 0 && height > 0) g_error = GL_INVALID_ENUM;
         return;
     }
+
+    if (!cache_texture_sub_image(target, level, xoffset, yoffset, width, height,
+                                 format, type, pixels)) return;
 
     payload = alloc_payload(total_size);
     if (!payload) {
@@ -3236,6 +4080,8 @@ void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat
         return;
     }
 
+    if (!cache_copy_texture_image(target, level, (GLint)internalformat, width, height, border)) return;
+
     payload.target = (uint32_t)target;
     payload.level = level;
     payload.internalformat = (uint32_t)internalformat;
@@ -3267,6 +4113,9 @@ void APIENTRY glCopyTexSubImage2D(GLenum target, GLint level,
         g_error = GL_INVALID_VALUE;
         return;
     }
+
+    if (!cache_texture_sub_image(target, level, xoffset, yoffset, width, height,
+                                 0, 0, NULL)) return;
 
     payload.target = (uint32_t)target;
     payload.level = level;
@@ -3529,6 +4378,13 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
 __declspec(dllexport)
 void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) {
     struct { uint32_t target, pname; int32_t param; } payload;
+    TextureUnitState* state;
+    if (target != GL_TEXTURE_ENV || pname != GL_TEXTURE_ENV_MODE) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+    state = active_texture_unit_state();
+    state->env_mode = (GLenum)param;
     payload.target = (uint32_t)target;
     payload.pname = (uint32_t)pname;
     payload.param = param;
@@ -3538,6 +4394,13 @@ void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) {
 __declspec(dllexport)
 void APIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param) {
     struct { uint32_t target, pname; float param; } payload;
+    TextureUnitState* state;
+    if (target != GL_TEXTURE_ENV || pname != GL_TEXTURE_ENV_MODE) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+    state = active_texture_unit_state();
+    state->env_mode = (GLenum)param;
     payload.target = (uint32_t)target;
     payload.pname = (uint32_t)pname;
     payload.param = param;
@@ -3555,7 +4418,7 @@ void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) {
     int count = texenv_value_count(pname);
     int i;
 
-    if (!count) {
+    if (target != GL_TEXTURE_ENV || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
@@ -3571,6 +4434,14 @@ void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
+    }
+
+    if (pname == GL_TEXTURE_ENV_MODE) {
+        active_texture_unit_state()->env_mode = (GLenum)params[0];
+    } else {
+        for (i = 0; i < 4; i++) {
+            active_texture_unit_state()->env_color[i] = (GLfloat)params[i];
+        }
     }
 
     emit_gl_call(GLFN_TEX_ENVIV, &payload, sizeof(payload));
@@ -3587,7 +4458,7 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) {
     int count = texenv_value_count(pname);
     int i;
 
-    if (!count) {
+    if (target != GL_TEXTURE_ENV || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
@@ -3603,6 +4474,13 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
+    }
+
+    if (pname == GL_TEXTURE_ENV_MODE) {
+        active_texture_unit_state()->env_mode = (GLenum)params[0];
+    } else {
+        CopyMemory(active_texture_unit_state()->env_color, params,
+                   sizeof(active_texture_unit_state()->env_color));
     }
 
     emit_gl_call(GLFN_TEX_ENVFV, &payload, sizeof(payload));
@@ -3638,6 +4516,7 @@ void APIENTRY glTexGeni(GLenum coord, GLenum pname, GLint param) {
     payload.coord = (uint32_t)coord;
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)param;
     emit_gl_call(GLFN_TEX_GENI, &payload, sizeof(payload));
 }
 
@@ -3652,6 +4531,7 @@ void APIENTRY glTexGenf(GLenum coord, GLenum pname, GLfloat param) {
     payload.coord = (uint32_t)coord;
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)param;
     emit_gl_call(GLFN_TEX_GENF, &payload, sizeof(payload));
 }
 
@@ -3689,6 +4569,14 @@ void APIENTRY glTexGeniv(GLenum coord, GLenum pname, const GLint* params) {
         payload.values[i] = params[i];
     }
 
+    if (pname == GL_TEXTURE_GEN_MODE) {
+        active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)params[0];
+    } else if (pname == GL_OBJECT_PLANE) {
+        for (i = 0; i < 4; i++) active_texture_unit_state()->texgen[coord - GL_S].object_plane[i] = (GLfloat)params[i];
+    } else {
+        for (i = 0; i < 4; i++) active_texture_unit_state()->texgen[coord - GL_S].eye_plane[i] = (GLfloat)params[i];
+    }
+
     emit_gl_call(GLFN_TEX_GENIV, &payload, sizeof(payload));
 }
 
@@ -3719,6 +4607,16 @@ void APIENTRY glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
+    }
+
+    if (pname == GL_TEXTURE_GEN_MODE) {
+        active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)params[0];
+    } else if (pname == GL_OBJECT_PLANE) {
+        CopyMemory(active_texture_unit_state()->texgen[coord - GL_S].object_plane, params,
+                   sizeof(active_texture_unit_state()->texgen[coord - GL_S].object_plane));
+    } else {
+        CopyMemory(active_texture_unit_state()->texgen[coord - GL_S].eye_plane, params,
+                   sizeof(active_texture_unit_state()->texgen[coord - GL_S].eye_plane));
     }
 
     emit_gl_call(GLFN_TEX_GENFV, &payload, sizeof(payload));
@@ -3761,6 +4659,8 @@ void APIENTRY glClipPlane(GLenum plane, const GLdouble* equation) {
 
     payload.plane = (uint32_t)plane;
     CopyMemory(payload.values, equation, sizeof(payload.values));
+    init_query_state();
+    CopyMemory(g_clip_planes[plane - GL_CLIP_PLANE0], equation, sizeof(payload.values));
     emit_gl_call(GLFN_CLIP_PLANE, &payload, sizeof(payload));
 }
 
@@ -3949,6 +4849,15 @@ void APIENTRY glFogf(GLenum pname, GLfloat param) {
 
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    init_query_state();
+    switch (pname) {
+    case GL_FOG_INDEX: g_fog_index = param; break;
+    case GL_FOG_DENSITY: g_fog_density = param; break;
+    case GL_FOG_START: g_fog_start = param; break;
+    case GL_FOG_END: g_fog_end = param; break;
+    case GL_FOG_MODE: g_fog_mode = (GLenum)param; break;
+    default: break;
+    }
     emit_gl_call(GLFN_FOGF, &payload, sizeof(payload));
 }
 
@@ -3962,6 +4871,15 @@ void APIENTRY glFogi(GLenum pname, GLint param) {
 
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    init_query_state();
+    switch (pname) {
+    case GL_FOG_INDEX: g_fog_index = (GLfloat)param; break;
+    case GL_FOG_DENSITY: g_fog_density = (GLfloat)param; break;
+    case GL_FOG_START: g_fog_start = (GLfloat)param; break;
+    case GL_FOG_END: g_fog_end = (GLfloat)param; break;
+    case GL_FOG_MODE: g_fog_mode = (GLenum)param; break;
+    default: break;
+    }
     emit_gl_call(GLFN_FOGI, &payload, sizeof(payload));
 }
 
@@ -3992,7 +4910,45 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
+    init_query_state();
+    if (pname == GL_FOG_COLOR) {
+        CopyMemory(g_fog_color, params, sizeof(g_fog_color));
+    } else {
+        switch (pname) {
+        case GL_FOG_INDEX: g_fog_index = params[0]; break;
+        case GL_FOG_DENSITY: g_fog_density = params[0]; break;
+        case GL_FOG_START: g_fog_start = params[0]; break;
+        case GL_FOG_END: g_fog_end = params[0]; break;
+        case GL_FOG_MODE: g_fog_mode = (GLenum)params[0]; break;
+        default: break;
+        }
+    }
+
     emit_gl_call(GLFN_FOGFV, &payload, sizeof(payload));
+}
+
+static void cache_material_values(GLenum face, GLenum pname, const GLfloat* values) {
+    int first = face == GL_BACK ? 1 : 0;
+    int last = face == GL_FRONT_AND_BACK ? 1 : first;
+    int i;
+
+    init_query_state();
+    for (i = first; i <= last; i++) {
+        MaterialState* state = &g_materials[i];
+        switch (pname) {
+        case GL_AMBIENT: CopyMemory(state->ambient, values, sizeof(state->ambient)); break;
+        case GL_DIFFUSE: CopyMemory(state->diffuse, values, sizeof(state->diffuse)); break;
+        case GL_SPECULAR: CopyMemory(state->specular, values, sizeof(state->specular)); break;
+        case GL_EMISSION: CopyMemory(state->emission, values, sizeof(state->emission)); break;
+        case GL_AMBIENT_AND_DIFFUSE:
+            CopyMemory(state->ambient, values, sizeof(state->ambient));
+            CopyMemory(state->diffuse, values, sizeof(state->diffuse));
+            break;
+        case GL_SHININESS: state->shininess = values[0]; break;
+        case GL_COLOR_INDEXES: CopyMemory(state->color_indexes, values, sizeof(state->color_indexes)); break;
+        default: break;
+        }
+    }
 }
 
 __declspec(dllexport)
@@ -4006,12 +4962,14 @@ void APIENTRY glMaterialf(GLenum face, GLenum pname, GLfloat param) {
     payload.face = (uint32_t)face;
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    cache_material_values(face, pname, &param);
     emit_gl_call(GLFN_MATERIALF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) {
     struct { uint32_t face, pname; int32_t param; } payload;
+    GLfloat value;
     if (!material_face_valid(face) || !material_scalar_valid(pname)) {
         g_error = GL_INVALID_ENUM;
         return;
@@ -4020,6 +4978,8 @@ void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) {
     payload.face = (uint32_t)face;
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    value = (GLfloat)param;
+    cache_material_values(face, pname, &value);
     emit_gl_call(GLFN_MATERIALI, &payload, sizeof(payload));
 }
 
@@ -4052,6 +5012,8 @@ void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
+    cache_material_values(face, pname, params);
+
     emit_gl_call(GLFN_MATERIALFV, &payload, sizeof(payload));
 }
 
@@ -4065,6 +5027,7 @@ void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) {
     } payload;
     int count = material_value_count(pname);
     int i;
+    GLfloat values[4];
 
     if (!material_face_valid(face) || !count) {
         g_error = GL_INVALID_ENUM;
@@ -4082,9 +5045,32 @@ void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
+        values[i] = (GLfloat)params[i];
     }
 
+    cache_material_values(face, pname, values);
+
     emit_gl_call(GLFN_MATERIALIV, &payload, sizeof(payload));
+}
+
+static void cache_light_values(GLenum light, GLenum pname, const GLfloat* values) {
+    LightState* state;
+
+    init_query_state();
+    state = &g_lights[light - GL_LIGHT0];
+    switch (pname) {
+    case GL_AMBIENT: CopyMemory(state->ambient, values, sizeof(state->ambient)); break;
+    case GL_DIFFUSE: CopyMemory(state->diffuse, values, sizeof(state->diffuse)); break;
+    case GL_SPECULAR: CopyMemory(state->specular, values, sizeof(state->specular)); break;
+    case GL_POSITION: CopyMemory(state->position, values, sizeof(state->position)); break;
+    case GL_SPOT_DIRECTION: CopyMemory(state->spot_direction, values, sizeof(state->spot_direction)); break;
+    case GL_SPOT_EXPONENT: state->spot_exponent = values[0]; break;
+    case GL_SPOT_CUTOFF: state->spot_cutoff = values[0]; break;
+    case GL_CONSTANT_ATTENUATION: state->constant_attenuation = values[0]; break;
+    case GL_LINEAR_ATTENUATION: state->linear_attenuation = values[0]; break;
+    case GL_QUADRATIC_ATTENUATION: state->quadratic_attenuation = values[0]; break;
+    default: break;
+    }
 }
 
 __declspec(dllexport)
@@ -4098,12 +5084,14 @@ void APIENTRY glLightf(GLenum light, GLenum pname, GLfloat param) {
     payload.light = (uint32_t)light;
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    cache_light_values(light, pname, &param);
     emit_gl_call(GLFN_LIGHTF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLighti(GLenum light, GLenum pname, GLint param) {
     struct { uint32_t light, pname; int32_t param; } payload;
+    GLfloat value;
     if (!light_name_valid(light) || !light_scalar_valid(pname)) {
         g_error = GL_INVALID_ENUM;
         return;
@@ -4112,6 +5100,8 @@ void APIENTRY glLighti(GLenum light, GLenum pname, GLint param) {
     payload.light = (uint32_t)light;
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    value = (GLfloat)param;
+    cache_light_values(light, pname, &value);
     emit_gl_call(GLFN_LIGHTI, &payload, sizeof(payload));
 }
 
@@ -4144,6 +5134,8 @@ void APIENTRY glLightfv(GLenum light, GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
+    cache_light_values(light, pname, params);
+
     emit_gl_call(GLFN_LIGHTFV, &payload, sizeof(payload));
 }
 
@@ -4157,6 +5149,7 @@ void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) {
     } payload;
     int count = light_value_count(pname);
     int i;
+    GLfloat values[4];
 
     if (!light_name_valid(light) || !count) {
         g_error = GL_INVALID_ENUM;
@@ -4174,7 +5167,10 @@ void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
+        values[i] = (GLfloat)params[i];
     }
+
+    cache_light_values(light, pname, values);
 
     emit_gl_call(GLFN_LIGHTIV, &payload, sizeof(payload));
 }
@@ -4189,6 +5185,12 @@ void APIENTRY glLightModelf(GLenum pname, GLfloat param) {
 
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    init_query_state();
+    if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
+        g_light_model_local_viewer = param != 0.0f ? GL_TRUE : GL_FALSE;
+    } else {
+        g_light_model_two_side = param != 0.0f ? GL_TRUE : GL_FALSE;
+    }
     emit_gl_call(GLFN_LIGHT_MODELF, &payload, sizeof(payload));
 }
 
@@ -4202,6 +5204,12 @@ void APIENTRY glLightModeli(GLenum pname, GLint param) {
 
     payload.pname = (uint32_t)pname;
     payload.param = param;
+    init_query_state();
+    if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
+        g_light_model_local_viewer = param ? GL_TRUE : GL_FALSE;
+    } else {
+        g_light_model_two_side = param ? GL_TRUE : GL_FALSE;
+    }
     emit_gl_call(GLFN_LIGHT_MODELI, &payload, sizeof(payload));
 }
 
@@ -4232,6 +5240,15 @@ void APIENTRY glLightModelfv(GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
+    init_query_state();
+    if (pname == GL_LIGHT_MODEL_AMBIENT) {
+        CopyMemory(g_light_model_ambient, params, sizeof(g_light_model_ambient));
+    } else if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
+        g_light_model_local_viewer = params[0] != 0.0f ? GL_TRUE : GL_FALSE;
+    } else {
+        g_light_model_two_side = params[0] != 0.0f ? GL_TRUE : GL_FALSE;
+    }
+
     emit_gl_call(GLFN_LIGHT_MODELFV, &payload, sizeof(payload));
 }
 
@@ -4244,6 +5261,7 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) {
     } payload;
     int count = light_model_value_count(pname);
     int i;
+    GLfloat values[4];
 
     if (!count) {
         g_error = GL_INVALID_ENUM;
@@ -4260,6 +5278,16 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
+        values[i] = (GLfloat)params[i];
+    }
+
+    init_query_state();
+    if (pname == GL_LIGHT_MODEL_AMBIENT) {
+        CopyMemory(g_light_model_ambient, values, sizeof(g_light_model_ambient));
+    } else if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
+        g_light_model_local_viewer = params[0] ? GL_TRUE : GL_FALSE;
+    } else {
+        g_light_model_two_side = params[0] ? GL_TRUE : GL_FALSE;
     }
 
     emit_gl_call(GLFN_LIGHT_MODELIV, &payload, sizeof(payload));
@@ -5423,67 +6451,167 @@ void APIENTRY glPixelZoom(GLfloat xfactor, GLfloat yfactor) {
     (void)yfactor;
 }
 
+static int pixel_map_index(GLenum map) {
+    if (map < GL_PIXEL_MAP_I_TO_I || map > GL_PIXEL_MAP_A_TO_A) {
+        return -1;
+    }
+    return (int)(map - GL_PIXEL_MAP_I_TO_I);
+}
+
+static int set_pixel_map(GLenum map, GLsizei mapsize, const GLdouble* values) {
+    PixelMapState* state;
+    GLdouble* copy = NULL;
+    int index = pixel_map_index(map);
+    GLsizei i;
+
+    if (index < 0) {
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
+    if (mapsize < 0 || (mapsize && !values)) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+    if ((uint32_t)mapsize > UINT32_MAX / sizeof(*copy)) {
+        g_error = GL_OUT_OF_MEMORY;
+        return 0;
+    }
+    if (mapsize) {
+        copy = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*copy));
+        if (!copy) {
+            g_error = GL_OUT_OF_MEMORY;
+            return 0;
+        }
+        for (i = 0; i < mapsize; i++) {
+            copy[i] = values[i];
+        }
+    }
+    state = &g_pixel_maps[index];
+    if (state->values) {
+        HeapFree(GetProcessHeap(), 0, state->values);
+    }
+    state->values = copy;
+    state->size = mapsize;
+    return 1;
+}
+
 __declspec(dllexport)
 void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
-    (void)map;
-    (void)values;
-    if (mapsize < 0) {
+    GLdouble* converted;
+    GLsizei i;
+
+    if (mapsize < 0 || (mapsize && !values)) {
         g_error = GL_INVALID_VALUE;
+        return;
     }
+    if (!mapsize) {
+        (void)set_pixel_map(map, 0, NULL);
+        return;
+    }
+    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
+    if (!converted) {
+        g_error = GL_OUT_OF_MEMORY;
+        return;
+    }
+    for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
+    (void)set_pixel_map(map, mapsize, converted);
+    HeapFree(GetProcessHeap(), 0, converted);
 }
 
 __declspec(dllexport)
 void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
-    (void)map;
-    (void)values;
-    if (mapsize < 0) {
+    GLdouble* converted;
+    GLsizei i;
+
+    if (mapsize < 0 || (mapsize && !values)) {
         g_error = GL_INVALID_VALUE;
+        return;
     }
+    if (!mapsize) {
+        (void)set_pixel_map(map, 0, NULL);
+        return;
+    }
+    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
+    if (!converted) {
+        g_error = GL_OUT_OF_MEMORY;
+        return;
+    }
+    for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
+    (void)set_pixel_map(map, mapsize, converted);
+    HeapFree(GetProcessHeap(), 0, converted);
 }
 
 __declspec(dllexport)
 void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values) {
-    (void)map;
-    (void)values;
-    if (mapsize < 0) {
+    GLdouble* converted;
+    GLsizei i;
+
+    if (mapsize < 0 || (mapsize && !values)) {
         g_error = GL_INVALID_VALUE;
+        return;
     }
+    if (!mapsize) {
+        (void)set_pixel_map(map, 0, NULL);
+        return;
+    }
+    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
+    if (!converted) {
+        g_error = GL_OUT_OF_MEMORY;
+        return;
+    }
+    for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
+    (void)set_pixel_map(map, mapsize, converted);
+    HeapFree(GetProcessHeap(), 0, converted);
 }
 
 __declspec(dllexport)
 void APIENTRY glGetPixelMapfv(GLenum map, GLfloat* values) {
-    (void)map;
-    if (values) {
-        values[0] = 0.0f;
-    }
+    PixelMapState* state;
+    GLsizei i;
+    int index = pixel_map_index(map);
+    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (!values) return;
+    state = &g_pixel_maps[index];
+    for (i = 0; i < state->size; i++) values[i] = (GLfloat)state->values[i];
 }
 
 __declspec(dllexport)
 void APIENTRY glGetPixelMapuiv(GLenum map, GLuint* values) {
-    (void)map;
-    if (values) {
-        values[0] = 0;
-    }
+    PixelMapState* state;
+    GLsizei i;
+    int index = pixel_map_index(map);
+    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (!values) return;
+    state = &g_pixel_maps[index];
+    for (i = 0; i < state->size; i++) values[i] = (GLuint)state->values[i];
 }
 
 __declspec(dllexport)
 void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) {
-    (void)map;
-    if (values) {
-        values[0] = 0;
-    }
+    PixelMapState* state;
+    GLsizei i;
+    int index = pixel_map_index(map);
+    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (!values) return;
+    state = &g_pixel_maps[index];
+    for (i = 0; i < state->size; i++) values[i] = (GLushort)state->values[i];
 }
 
 __declspec(dllexport)
 void APIENTRY glPolygonStipple(const GLubyte* mask) {
-    (void)mask;
+    if (!mask) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+    init_query_state();
+    CopyMemory(g_polygon_stipple, mask, sizeof(g_polygon_stipple));
 }
 
 __declspec(dllexport)
 void APIENTRY glGetPolygonStipple(GLubyte* mask) {
-    if (mask) {
-        FillMemory(mask, 128, 0xFF);
-    }
+    if (!mask) return;
+    init_query_state();
+    CopyMemory(mask, g_polygon_stipple, sizeof(g_polygon_stipple));
 }
 
 __declspec(dllexport)
@@ -5643,83 +6771,95 @@ void APIENTRY glFogiv(GLenum pname, const GLint* params) {
     glFogfv(pname, values);
 }
 
-static void get_zero_floats(GLfloat* params, int count) {
-    int i;
-    if (!params) {
-        return;
-    }
-    for (i = 0; i < count; i++) {
-        params[i] = 0.0f;
-    }
-}
-
-static void get_zero_ints(GLint* params, int count) {
-    int i;
-    if (!params) {
-        return;
-    }
-    for (i = 0; i < count; i++) {
-        params[i] = 0;
-    }
-}
-
 __declspec(dllexport)
 void APIENTRY glGetClipPlane(GLenum plane, GLdouble* equation) {
-    int i;
     if (!clip_plane_valid(plane)) {
         g_error = GL_INVALID_ENUM;
         return;
     }
-
-    if (equation) {
-        for (i = 0; i < 4; i++) {
-            equation[i] = 0.0;
-        }
-    }
+    if (!equation) return;
+    init_query_state();
+    CopyMemory(equation, g_clip_planes[plane - GL_CLIP_PLANE0], sizeof(g_clip_planes[0]));
 }
 
 __declspec(dllexport)
 void APIENTRY glGetLightfv(GLenum light, GLenum pname, GLfloat* params) {
     int count = light_value_count(pname);
+    LightState* state;
     if (!light_name_valid(light) || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
-
-    get_zero_floats(params, count);
+    if (!params) return;
+    init_query_state();
+    state = &g_lights[light - GL_LIGHT0];
+    switch (pname) {
+    case GL_AMBIENT: CopyMemory(params, state->ambient, sizeof(state->ambient)); break;
+    case GL_DIFFUSE: CopyMemory(params, state->diffuse, sizeof(state->diffuse)); break;
+    case GL_SPECULAR: CopyMemory(params, state->specular, sizeof(state->specular)); break;
+    case GL_POSITION: CopyMemory(params, state->position, sizeof(state->position)); break;
+    case GL_SPOT_DIRECTION: CopyMemory(params, state->spot_direction, sizeof(state->spot_direction)); break;
+    case GL_SPOT_EXPONENT: params[0] = state->spot_exponent; break;
+    case GL_SPOT_CUTOFF: params[0] = state->spot_cutoff; break;
+    case GL_CONSTANT_ATTENUATION: params[0] = state->constant_attenuation; break;
+    case GL_LINEAR_ATTENUATION: params[0] = state->linear_attenuation; break;
+    case GL_QUADRATIC_ATTENUATION: params[0] = state->quadratic_attenuation; break;
+    default: break;
+    }
 }
 
 __declspec(dllexport)
 void APIENTRY glGetLightiv(GLenum light, GLenum pname, GLint* params) {
     int count = light_value_count(pname);
+    GLfloat values[4];
+    int i;
     if (!light_name_valid(light) || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
 
-    get_zero_ints(params, count);
+    if (!params) return;
+    glGetLightfv(light, pname, values);
+    for (i = 0; i < count; i++) params[i] = (GLint)values[i];
 }
 
 __declspec(dllexport)
 void APIENTRY glGetMaterialfv(GLenum face, GLenum pname, GLfloat* params) {
     int count = material_value_count(pname);
+    MaterialState* state;
     if (!material_face_valid(face) || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
 
-    get_zero_floats(params, count);
+    if (!params) return;
+    init_query_state();
+    state = &g_materials[face == GL_BACK ? 1 : 0];
+    switch (pname) {
+    case GL_AMBIENT: CopyMemory(params, state->ambient, sizeof(state->ambient)); break;
+    case GL_DIFFUSE: CopyMemory(params, state->diffuse, sizeof(state->diffuse)); break;
+    case GL_SPECULAR: CopyMemory(params, state->specular, sizeof(state->specular)); break;
+    case GL_EMISSION: CopyMemory(params, state->emission, sizeof(state->emission)); break;
+    case GL_AMBIENT_AND_DIFFUSE: CopyMemory(params, state->ambient, sizeof(state->ambient)); break;
+    case GL_SHININESS: params[0] = state->shininess; break;
+    case GL_COLOR_INDEXES: CopyMemory(params, state->color_indexes, sizeof(state->color_indexes)); break;
+    default: break;
+    }
 }
 
 __declspec(dllexport)
 void APIENTRY glGetMaterialiv(GLenum face, GLenum pname, GLint* params) {
     int count = material_value_count(pname);
+    GLfloat values[4];
+    int i;
     if (!material_face_valid(face) || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
 
-    get_zero_ints(params, count);
+    if (!params) return;
+    glGetMaterialfv(face, pname, values);
+    for (i = 0; i < count; i++) params[i] = (GLint)values[i];
 }
 
 __declspec(dllexport)
@@ -5731,17 +6871,13 @@ void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) {
         return;
     }
 
-    switch (pname) {
-    case GL_TEXTURE_ENV_MODE:
-        params[0] = (GLfloat)GL_MODULATE;
-        break;
-    case GL_TEXTURE_ENV_COLOR:
-        get_zero_floats(params, 4);
-        break;
-    default:
-        g_error = GL_INVALID_ENUM;
-        break;
-    }
+    init_query_state();
+    if (pname == GL_TEXTURE_ENV_MODE) {
+        params[0] = (GLfloat)active_texture_unit_state()->env_mode;
+    } else if (pname == GL_TEXTURE_ENV_COLOR) {
+        CopyMemory(params, active_texture_unit_state()->env_color,
+                   sizeof(active_texture_unit_state()->env_color));
+    } else g_error = GL_INVALID_ENUM;
 }
 
 __declspec(dllexport)
@@ -5753,39 +6889,45 @@ void APIENTRY glGetTexEnviv(GLenum target, GLenum pname, GLint* params) {
         return;
     }
 
-    switch (pname) {
-    case GL_TEXTURE_ENV_MODE:
-        params[0] = GL_MODULATE;
-        break;
-    case GL_TEXTURE_ENV_COLOR:
-        get_zero_ints(params, 4);
-        break;
-    default:
-        g_error = GL_INVALID_ENUM;
-        break;
-    }
+    init_query_state();
+    if (pname == GL_TEXTURE_ENV_MODE) {
+        params[0] = (GLint)active_texture_unit_state()->env_mode;
+    } else if (pname == GL_TEXTURE_ENV_COLOR) {
+        int i;
+        for (i = 0; i < 4; i++) params[i] = (GLint)active_texture_unit_state()->env_color[i];
+    } else g_error = GL_INVALID_ENUM;
 }
 
 __declspec(dllexport)
 void APIENTRY glGetTexGenfv(GLenum coord, GLenum pname, GLfloat* params) {
     int count = texgen_value_count(pname);
+    TexGenState* state;
     if (!texgen_coord_valid(coord) || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
 
-    get_zero_floats(params, count);
+    if (!params) return;
+    init_query_state();
+    state = &active_texture_unit_state()->texgen[coord - GL_S];
+    if (pname == GL_TEXTURE_GEN_MODE) params[0] = (GLfloat)state->mode;
+    else if (pname == GL_OBJECT_PLANE) CopyMemory(params, state->object_plane, sizeof(state->object_plane));
+    else CopyMemory(params, state->eye_plane, sizeof(state->eye_plane));
 }
 
 __declspec(dllexport)
 void APIENTRY glGetTexGeniv(GLenum coord, GLenum pname, GLint* params) {
     int count = texgen_value_count(pname);
+    GLfloat values[4];
+    int i;
     if (!texgen_coord_valid(coord) || !count) {
         g_error = GL_INVALID_ENUM;
         return;
     }
 
-    get_zero_ints(params, count);
+    if (!params) return;
+    glGetTexGenfv(coord, pname, values);
+    for (i = 0; i < count; i++) params[i] = (GLint)values[i];
 }
 
 __declspec(dllexport)
@@ -5811,37 +6953,105 @@ void APIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble* params) {
 
 __declspec(dllexport)
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
-    (void)target;
-    (void)level;
-    (void)format;
-    (void)type;
-    (void)pixels;
+    TextureLevelState* state;
+    uint32_t pixel_bytes;
+    uint32_t destination_span;
+    uint32_t destination_stride;
+    uint32_t destination_offset;
+    uint32_t row_bytes;
+    GLsizei row;
+
+    if (!pixels) return;
+    state = texture_level_state(target, level, FALSE);
+    if (!state) return;
+    if (!state->defined) {
+        g_error = GL_INVALID_OPERATION;
+        return;
+    }
+    if (!state->width || !state->height) return;
+    pixel_bytes = gl_pixel_bytes(format, type);
+    destination_span = gl_read_pixel_span(state->width, state->height, format, type);
+    destination_stride = gl_pixel_row_stride(state->width, format, type,
+                                             g_pack_alignment, g_pack_row_length);
+    destination_offset = (uint32_t)(g_pack_skip_rows > 0 ? g_pack_skip_rows : 0) * destination_stride +
+                         (uint32_t)(g_pack_skip_pixels > 0 ? g_pack_skip_pixels : 0) * pixel_bytes;
+    if (!pixel_bytes || !destination_span || !destination_stride ||
+        state->format != format || state->type != type) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+    ZeroMemory(pixels, destination_span);
+    if (!state->data) return;
+    row_bytes = (uint32_t)state->width * pixel_bytes;
+    for (row = 0; row < state->height; row++) {
+        CopyMemory((uint8_t*)pixels + destination_offset + (uint32_t)row * destination_stride,
+                   state->data + (uint32_t)row * row_bytes, row_bytes);
+    }
+}
+
+static GLint texture_component_bits(const TextureLevelState* state, GLenum pname) {
+    uint32_t components;
+    uint32_t bits;
+
+    if (!state || !state->defined) return 0;
+    components = gl_format_components(state->format);
+    if (state->type == GL_BYTE || state->type == GL_UNSIGNED_BYTE) bits = 8;
+    else if (state->type == GL_SHORT || state->type == GL_UNSIGNED_SHORT ||
+             state->type == GL_UNSIGNED_SHORT_4_4_4_4 ||
+             state->type == GL_UNSIGNED_SHORT_5_5_5_1 ||
+             state->type == GL_UNSIGNED_SHORT_5_6_5) bits = 16;
+    else bits = 32;
+
+    switch (pname) {
+    case GL_TEXTURE_RED_SIZE: return components >= 1 ? (GLint)bits : 0;
+    case GL_TEXTURE_GREEN_SIZE: return components >= 2 ? (GLint)bits : 0;
+    case GL_TEXTURE_BLUE_SIZE: return components >= 3 ? (GLint)bits : 0;
+    case GL_TEXTURE_ALPHA_SIZE:
+        return (state->format == GL_RGBA || state->format == GL_BGRA_EXT ||
+                state->format == GL_LUMINANCE_ALPHA) ? (GLint)bits : 0;
+    case GL_TEXTURE_LUMINANCE_SIZE:
+        return (state->format == GL_LUMINANCE || state->format == GL_LUMINANCE_ALPHA) ? (GLint)bits : 0;
+    case GL_TEXTURE_INTENSITY_SIZE:
+    case GL_TEXTURE_DEPTH_SIZE:
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname, GLint* result) {
+    TextureLevelState* state = texture_level_state(target, level, FALSE);
+    GLint bits;
+
+    if (!state) return 0;
+    if (!state->defined) {
+        *result = 0;
+        return 1;
+    }
+    switch (pname) {
+    case GL_TEXTURE_WIDTH: *result = state->width; return 1;
+    case GL_TEXTURE_HEIGHT: *result = target == GL_TEXTURE_1D ? 1 : state->height; return 1;
+    case GL_TEXTURE_BORDER: *result = state->border; return 1;
+    case GL_TEXTURE_INTERNAL_FORMAT: *result = state->internalformat; return 1;
+    default:
+        bits = texture_component_bits(state, pname);
+        if (bits >= 0) { *result = bits; return 1; }
+        g_error = GL_INVALID_ENUM;
+        return 0;
+    }
 }
 
 __declspec(dllexport)
 void APIENTRY glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat* params) {
-    (void)level;
-    (void)pname;
-    if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
-        g_error = GL_INVALID_ENUM;
-        return;
-    }
-    if (params) {
-        params[0] = 0.0f;
-    }
+    GLint value;
+    if (!params) return;
+    if (get_texture_level_parameter(target, level, pname, &value)) params[0] = (GLfloat)value;
 }
 
 __declspec(dllexport)
 void APIENTRY glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params) {
-    (void)level;
-    (void)pname;
-    if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
-        g_error = GL_INVALID_ENUM;
-        return;
-    }
-    if (params) {
-        params[0] = 0;
-    }
+    if (!params) return;
+    (void)get_texture_level_parameter(target, level, pname, params);
 }
 
 __declspec(dllexport)
@@ -5943,96 +7153,167 @@ __declspec(dllexport)
 void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLint border,
                            GLenum format, GLenum type, const GLvoid* pixels) {
-    (void)level;
-    (void)internalformat;
-    (void)border;
-    (void)format;
-    (void)type;
-    (void)pixels;
     if (target != GL_TEXTURE_1D) {
         g_error = GL_INVALID_ENUM;
         return;
     }
-    if (width < 0) {
-        g_error = GL_INVALID_VALUE;
-    }
+    (void)cache_texture_image(target, level, internalformat, width, 1, border,
+                              format, type, pixels);
 }
 
 __declspec(dllexport)
 void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                               GLsizei width, GLenum format, GLenum type,
                               const GLvoid* pixels) {
-    (void)level;
-    (void)xoffset;
-    (void)format;
-    (void)type;
-    (void)pixels;
     if (target != GL_TEXTURE_1D) {
         g_error = GL_INVALID_ENUM;
         return;
     }
-    if (width < 0) {
-        g_error = GL_INVALID_VALUE;
-    }
+    (void)cache_texture_sub_image(target, level, xoffset, 0, width, 1, format, type, pixels);
 }
 
 __declspec(dllexport)
 void APIENTRY glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat,
                                GLint x, GLint y, GLsizei width, GLint border) {
-    (void)level;
-    (void)internalFormat;
     (void)x;
     (void)y;
-    (void)border;
     if (target != GL_TEXTURE_1D) {
         g_error = GL_INVALID_ENUM;
         return;
     }
-    if (width < 0) {
-        g_error = GL_INVALID_VALUE;
-    }
+    (void)cache_copy_texture_image(target, level, (GLint)internalFormat, width, 1, border);
 }
 
 __declspec(dllexport)
 void APIENTRY glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                                   GLint x, GLint y, GLsizei width) {
-    (void)level;
-    (void)xoffset;
     (void)x;
     (void)y;
     if (target != GL_TEXTURE_1D) {
         g_error = GL_INVALID_ENUM;
         return;
     }
-    if (width < 0) {
-        g_error = GL_INVALID_VALUE;
+    (void)cache_texture_sub_image(target, level, xoffset, 0, width, 1, 0, 0, NULL);
+}
+
+static int map_target_index(GLenum target) {
+    if (target >= GL_MAP1_COLOR_4 && target <= GL_MAP1_VERTEX_4) return (int)(target - GL_MAP1_COLOR_4);
+    if (target >= GL_MAP2_COLOR_4 && target <= GL_MAP2_VERTEX_4) return 9 + (int)(target - GL_MAP2_COLOR_4);
+    return -1;
+}
+
+static int map_target_components(GLenum target) {
+    switch (target) {
+    case GL_MAP1_COLOR_4: case GL_MAP2_COLOR_4:
+    case GL_MAP1_TEXTURE_COORD_4: case GL_MAP2_TEXTURE_COORD_4:
+    case GL_MAP1_VERTEX_4: case GL_MAP2_VERTEX_4: return 4;
+    case GL_MAP1_NORMAL: case GL_MAP2_NORMAL:
+    case GL_MAP1_TEXTURE_COORD_3: case GL_MAP2_TEXTURE_COORD_3:
+    case GL_MAP1_VERTEX_3: case GL_MAP2_VERTEX_3: return 3;
+    case GL_MAP1_TEXTURE_COORD_2: case GL_MAP2_TEXTURE_COORD_2: return 2;
+    default: return 1;
     }
+}
+
+static int map_target_dimensions(GLenum target) {
+    return target >= GL_MAP2_COLOR_4 && target <= GL_MAP2_VERTEX_4 ? 2 : 1;
+}
+
+static int define_map_state(GLenum target, GLdouble u1, GLdouble u2,
+                            GLint ustride, GLint uorder,
+                            GLdouble v1, GLdouble v2,
+                            GLint vstride, GLint vorder,
+                            const GLdouble* points) {
+    MapState* state;
+    GLdouble* coefficients;
+    uint64_t total;
+    int index = map_target_index(target);
+    int components;
+    int dimensions;
+    GLint u;
+    GLint v;
+    int c;
+
+    if (index < 0) { g_error = GL_INVALID_ENUM; return 0; }
+    components = map_target_components(target);
+    dimensions = map_target_dimensions(target);
+    if (uorder <= 0 || (dimensions == 2 && vorder <= 0) ||
+        ustride < components || (dimensions == 2 && vstride < components) || !points) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+    total = (uint64_t)(uint32_t)uorder * (uint32_t)(dimensions == 2 ? vorder : 1) * components;
+    if (total > UINT32_MAX / sizeof(*coefficients)) { g_error = GL_OUT_OF_MEMORY; return 0; }
+    coefficients = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)total * sizeof(*coefficients));
+    if (!coefficients) { g_error = GL_OUT_OF_MEMORY; return 0; }
+    for (u = 0; u < uorder; u++) {
+        for (v = 0; v < (dimensions == 2 ? vorder : 1); v++) {
+            const GLdouble* source = points + (uint32_t)u * ustride + (dimensions == 2 ? (uint32_t)v * vstride : 0);
+            for (c = 0; c < components; c++) {
+                coefficients[((uint32_t)u * (dimensions == 2 ? vorder : 1) + v) * components + c] = source[c];
+            }
+        }
+    }
+    state = &g_map_states[index];
+    if (state->coefficients) HeapFree(GetProcessHeap(), 0, state->coefficients);
+    ZeroMemory(state, sizeof(*state));
+    state->defined = TRUE;
+    state->dimensions = dimensions;
+    state->components = components;
+    state->uorder = uorder;
+    state->vorder = dimensions == 2 ? vorder : 0;
+    state->domain[0] = u1;
+    state->domain[1] = u2;
+    state->domain[2] = v1;
+    state->domain[3] = v2;
+    state->coefficients = coefficients;
+    state->coefficient_count = (uint32_t)total;
+    return 1;
 }
 
 __declspec(dllexport)
 void APIENTRY glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble* points) {
-    (void)target; (void)u1; (void)u2; (void)stride; (void)points;
-    if (order <= 0) g_error = GL_INVALID_VALUE;
+    (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, points);
 }
 
 __declspec(dllexport)
 void APIENTRY glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat* points) {
-    (void)target; (void)u1; (void)u2; (void)stride; (void)points;
-    if (order <= 0) g_error = GL_INVALID_VALUE;
+    GLdouble* converted;
+    uint64_t count;
+    GLint i;
+    if (order <= 0 || !points || stride <= 0) { (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, NULL); return; }
+    count = (uint64_t)(uint32_t)(order - 1) * stride + map_target_components(target);
+    if (count > UINT32_MAX / sizeof(*converted)) { g_error = GL_OUT_OF_MEMORY; return; }
+    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*converted));
+    if (!converted) { g_error = GL_OUT_OF_MEMORY; return; }
+    for (i = 0; i < (GLint)count; i++) converted[i] = (GLdouble)points[i];
+    (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, converted);
+    HeapFree(GetProcessHeap(), 0, converted);
 }
 
 __declspec(dllexport)
 void APIENTRY glMap2d(GLenum target, GLdouble u1, GLdouble u2, GLint ustride, GLint uorder,
                       GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble* points) {
-    (void)target; (void)u1; (void)u2; (void)ustride; (void)v1; (void)v2; (void)vstride; (void)points;
-    if (uorder <= 0 || vorder <= 0) g_error = GL_INVALID_VALUE;
+    (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points);
 }
 
 __declspec(dllexport)
 void APIENTRY glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
                       GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat* points) {
-    (void)target; (void)u1; (void)u2; (void)ustride; (void)v1; (void)v2; (void)vstride; (void)points;
-    if (uorder <= 0 || vorder <= 0) g_error = GL_INVALID_VALUE;
+    GLdouble* converted;
+    uint64_t count;
+    GLint i;
+    if (uorder <= 0 || vorder <= 0 || !points || ustride <= 0 || vstride <= 0) {
+        (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, NULL);
+        return;
+    }
+    count = (uint64_t)(uint32_t)(uorder - 1) * ustride + (uint64_t)(uint32_t)(vorder - 1) * vstride + map_target_components(target);
+    if (count > UINT32_MAX / sizeof(*converted)) { g_error = GL_OUT_OF_MEMORY; return; }
+    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*converted));
+    if (!converted) { g_error = GL_OUT_OF_MEMORY; return; }
+    for (i = 0; i < (GLint)count; i++) converted[i] = (GLdouble)points[i];
+    (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, converted);
+    HeapFree(GetProcessHeap(), 0, converted);
 }
 
 __declspec(dllexport)
@@ -6121,28 +7402,100 @@ void APIENTRY glEvalPoint2(GLint i, GLint j) {
 
 __declspec(dllexport)
 void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* v) {
-    (void)target; (void)query;
-    if (v) v[0] = 0.0;
+    MapState* state;
+    int index = map_target_index(target);
+    uint32_t i;
+    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (!v) return;
+    state = &g_map_states[index];
+    switch (query) {
+    case GL_COEFF:
+        for (i = 0; i < state->coefficient_count; i++) v[i] = state->coefficients[i];
+        break;
+    case GL_ORDER:
+        v[0] = (GLdouble)state->uorder;
+        if (state->dimensions == 2) v[1] = (GLdouble)state->vorder;
+        break;
+    case GL_DOMAIN:
+        v[0] = state->domain[0]; v[1] = state->domain[1];
+        if (state->dimensions == 2) { v[2] = state->domain[2]; v[3] = state->domain[3]; }
+        break;
+    default:
+        g_error = GL_INVALID_ENUM;
+        break;
+    }
 }
 
 __declspec(dllexport)
 void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* v) {
-    (void)target; (void)query;
-    if (v) v[0] = 0.0f;
+    MapState* state;
+    int index = map_target_index(target);
+    uint32_t i;
+    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (!v) return;
+    state = &g_map_states[index];
+    switch (query) {
+    case GL_COEFF:
+        for (i = 0; i < state->coefficient_count; i++) v[i] = (GLfloat)state->coefficients[i];
+        break;
+    case GL_ORDER:
+        v[0] = (GLfloat)state->uorder;
+        if (state->dimensions == 2) v[1] = (GLfloat)state->vorder;
+        break;
+    case GL_DOMAIN:
+        v[0] = (GLfloat)state->domain[0]; v[1] = (GLfloat)state->domain[1];
+        if (state->dimensions == 2) { v[2] = (GLfloat)state->domain[2]; v[3] = (GLfloat)state->domain[3]; }
+        break;
+    default:
+        g_error = GL_INVALID_ENUM;
+        break;
+    }
 }
 
 __declspec(dllexport)
 void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* v) {
-    (void)target; (void)query;
-    if (v) v[0] = 0;
+    MapState* state;
+    int index = map_target_index(target);
+    uint32_t i;
+    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (!v) return;
+    state = &g_map_states[index];
+    switch (query) {
+    case GL_COEFF:
+        for (i = 0; i < state->coefficient_count; i++) v[i] = (GLint)state->coefficients[i];
+        break;
+    case GL_ORDER:
+        v[0] = state->uorder;
+        if (state->dimensions == 2) v[1] = state->vorder;
+        break;
+    case GL_DOMAIN:
+        v[0] = (GLint)state->domain[0]; v[1] = (GLint)state->domain[1];
+        if (state->dimensions == 2) { v[2] = (GLint)state->domain[2]; v[3] = (GLint)state->domain[3]; }
+        break;
+    default:
+        g_error = GL_INVALID_ENUM;
+        break;
+    }
+}
+
+static void raster_pos4f_compat(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    g_current_raster_position[0] = x;
+    g_current_raster_position[1] = y;
+    g_current_raster_position[2] = z;
+    g_current_raster_position[3] = w;
+    CopyMemory(g_current_raster_color, g_current_color, sizeof(g_current_raster_color));
+    CopyMemory(g_current_raster_texcoord, g_current_texcoord, sizeof(g_current_raster_texcoord));
+    g_current_raster_index = g_current_index;
+    g_current_raster_distance = 0.0f;
+    g_current_raster_valid = GL_TRUE;
 }
 
 #define DEFINE_RASTER_POS_VARIANT(SUFFIX, TYPE) \
-__declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX(TYPE x, TYPE y) { (void)x; (void)y; } \
+__declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX(TYPE x, TYPE y) { raster_pos4f_compat((GLfloat)x, (GLfloat)y, 0.0f, 1.0f); } \
 __declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX##v(const TYPE* v) { if (v) glRasterPos2##SUFFIX(v[0], v[1]); } \
-__declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { (void)x; (void)y; (void)z; } \
+__declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { raster_pos4f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z, 1.0f); } \
 __declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX##v(const TYPE* v) { if (v) glRasterPos3##SUFFIX(v[0], v[1], v[2]); } \
-__declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX(TYPE x, TYPE y, TYPE z, TYPE w) { (void)x; (void)y; (void)z; (void)w; } \
+__declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX(TYPE x, TYPE y, TYPE z, TYPE w) { raster_pos4f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w); } \
 __declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX##v(const TYPE* v) { if (v) glRasterPos4##SUFFIX(v[0], v[1], v[2], v[3]); }
 
 DEFINE_RASTER_POS_VARIANT(d, GLdouble)
