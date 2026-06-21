@@ -30,6 +30,7 @@ emcc gl4es_bridge.c \
     "_v86glMakeCurrent",
     "_v86glResize",
     "_v86glReleaseCurrent",
+    "_v86glDestroyRenderer",
     "_v86gl_glViewport",
     "_v86gl_glClearColor",
     "_v86gl_glClear",

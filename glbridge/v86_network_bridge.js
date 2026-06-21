@@ -1044,6 +1044,15 @@
             this.callOptional(["v86glReleaseCurrent", "_v86glReleaseCurrent"], [], []);
         }
 
+        destroy() {
+            const destroyed = this.callOptional([
+                "v86glDestroyRenderer",
+                "_v86glDestroyRenderer",
+            ], [], []);
+            this.module = null;
+            return destroyed;
+        }
+
         callGL(suffix, args, argTypes) {
             const ok = this.callOptional([
                 "v86gl_gl" + suffix,
@@ -1152,6 +1161,7 @@
             this.container = canvas.parentElement;
             this.screenCanvas = this.findScreenCanvas();
             this.renderer = null;
+            this.rendererGeneration = 0;
 
             this.setRendererFromOptions();
             emulator.add_listener("v86gl-pci-frame", event => this.pushPCIBatch(event));
@@ -1161,20 +1171,31 @@
         setRendererFromOptions() {
             const module = this.options.gl4es || global.GL4ES || global.gl4es;
 
-            if (module && typeof module.then === "function") {
-                module.then(resolved => this.setGL4ES(resolved));
-                return;
-            }
-
-            if (module) {
-                this.setGL4ES(module);
-                return;
-            }
-
-            throw new Error("gl4es module is required: pass { gl4es } or set window.GL4ES/window.gl4es before installing v86gl");
+            this.setRendererModule(module, this.rendererGeneration);
         }
 
-        setGL4ES(module) {
+        setRendererModule(module, generation) {
+            if (!module) {
+                throw new Error("gl4es module is required: pass { gl4es } or set window.GL4ES/window.gl4es before installing v86gl");
+            }
+
+            if (module && typeof module.then === "function") {
+                module.then(resolved => this.setGL4ES(resolved, generation)).catch(err => {
+                    if (generation === this.rendererGeneration) {
+                        console.error("[v86gl] failed to initialise a fresh gl4es renderer", err);
+                    }
+                });
+                return;
+            }
+
+            this.setGL4ES(module, generation);
+        }
+
+        setGL4ES(module, generation) {
+            if (generation !== this.rendererGeneration) {
+                return;
+            }
+
             this.renderer = new Gl4esRenderer(this.canvas, module, (...args) => this.log(...args));
             this.renderer.resize(this.surface.width || this.canvas.width || 640, this.surface.height || this.canvas.height || 480);
             this.log("using gl4es renderer");
@@ -1772,14 +1793,64 @@
             this.log("released current context");
         }
 
+        replaceOverlayCanvas() {
+            const oldCanvas = this.canvas;
+            if (!oldCanvas || !oldCanvas.parentNode) {
+                return;
+            }
+
+            // A WebGL context is bound to a canvas. Replacing the node prevents
+            // browsers from handing the next gl4es instance the old context.
+            const freshCanvas = oldCanvas.cloneNode(false);
+            oldCanvas.parentNode.replaceChild(freshCanvas, oldCanvas);
+            this.canvas = freshCanvas;
+            this.container = freshCanvas.parentElement;
+            this.screenCanvas = this.findScreenCanvas();
+        }
+
+        createFreshRenderer() {
+            const reset = this.options.resetGL4ESRenderer || global.resetV86GL4ESRenderer;
+            if (typeof reset === "function") {
+                return reset(this.canvas);
+            }
+
+            const factory = this.options.createGL4ESRenderer || global.createV86GL4ESRenderer;
+            if (typeof factory === "function") {
+                const renderer = factory(this.canvas);
+                global.GL4ES = renderer;
+                return renderer;
+            }
+
+            const rawFactory = global.createV86GL4ES;
+            if (typeof rawFactory === "function") {
+                const renderer = rawFactory({ canvas: this.canvas });
+                global.GL4ES = renderer;
+                return renderer;
+            }
+
+            throw new Error("gl4es renderer factory is unavailable after context destruction");
+        }
+
         destroyContext() {
-            this.requireRenderer().releaseCurrent();
+            const oldRenderer = this.renderer;
+            this.renderer = null;
+            if (oldRenderer) {
+                oldRenderer.destroy();
+            }
             this.chunkedCalls = Object.create(null);
             this.frameStates = Object.create(null);
             this.lastPresentedFrameId = 0;
             this.canvas.style.display = "none";
             this.canvas.style.visibility = "hidden";
-            this.log("destroyed current context");
+            this.replaceOverlayCanvas();
+
+            const generation = ++this.rendererGeneration;
+            try {
+                this.setRendererModule(this.createFreshRenderer(), generation);
+                this.log("destroyed current context and started a fresh renderer", generation);
+            } catch (err) {
+                console.error("[v86gl] could not recreate gl4es after context destruction", err);
+            }
         }
     }
 

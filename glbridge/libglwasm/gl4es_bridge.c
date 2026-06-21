@@ -53,6 +53,21 @@ static uint32_t g_surface_height;
 static uint32_t g_surface_hwnd;
 static int g_ready;
 
+#ifdef __EMSCRIPTEN__
+static EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_webgl_context;
+
+EM_JS(void, v86gl_lose_webgl_context, (), {
+    const canvas = document.getElementById("v86gl_canvas");
+    const gl = canvas && (canvas.getContext("webgl2") ||
+                          canvas.getContext("webgl") ||
+                          canvas.getContext("experimental-webgl"));
+    const loseContext = gl && gl.getExtension("WEBGL_lose_context");
+    if (loseContext) {
+        loseContext.loseContext();
+    }
+});
+#endif
+
 #define V86GL_MAX_TEXTURES 16384
 
 typedef struct {
@@ -80,16 +95,15 @@ static int v86gl_ensure_ready(void) {
     attrs.majorVersion = 1;
     attrs.minorVersion = 0;
 
-    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx =
-        emscripten_webgl_create_context("#v86gl_canvas", &attrs);
+    g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
 
-    if (ctx <= 0) {
+    if (g_webgl_context <= 0) {
         attrs.majorVersion = 2;
-        ctx = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
+        g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
     }
 
-    if (ctx > 0) {
-        emscripten_webgl_make_context_current(ctx);
+    if (g_webgl_context > 0) {
+        emscripten_webgl_make_context_current(g_webgl_context);
     } else {
         return 0;
     }
@@ -157,6 +171,41 @@ void v86glResize(uint32_t width, uint32_t height) {
 EMSCRIPTEN_KEEPALIVE
 void v86glReleaseCurrent(void) {
     g_surface_hwnd = 0;
+}
+
+/*
+ * A guest WGL context must not share the previous process' gl4es state.
+ * gl4es' static initialisation is intentionally one-shot, so the browser
+ * bridge discards this entire WASM instance after this call and creates a
+ * fresh one for the next guest context.
+ */
+EMSCRIPTEN_KEEPALIVE
+void v86glDestroyRenderer(void) {
+    if (!g_ready) {
+        return;
+    }
+
+    glFlush();
+    close_gl4es();
+    g_ready = 0;
+    g_surface_hwnd = 0;
+    g_surface_x = 0;
+    g_surface_y = 0;
+    g_surface_width = 0;
+    g_surface_height = 0;
+    g_texture_count = 0;
+
+#ifdef __EMSCRIPTEN__
+    if (g_webgl_context > 0) {
+        /* The canvas is replaced by the JS bridge; lose this context now so
+         * repeated guest process exits cannot exhaust the browser's context
+         * limit while waiting for garbage collection. */
+        v86gl_lose_webgl_context();
+        emscripten_webgl_make_context_current(0);
+        emscripten_webgl_destroy_context(g_webgl_context);
+        g_webgl_context = 0;
+    }
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE

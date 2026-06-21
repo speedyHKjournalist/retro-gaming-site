@@ -7,10 +7,23 @@
         return;
     }
 
-    global.GL4ES = factory({
-        canvas: document.getElementById("v86gl_canvas"),
-        locateFile(path) {
-            return "glbridge/libglwasm/" + path;
-        },
-    });
+    function createRenderer(canvas) {
+        return factory({
+            canvas: canvas || document.getElementById("v86gl_canvas"),
+            locateFile(path) {
+                return "glbridge/libglwasm/" + path;
+            },
+        });
+    }
+
+    // The PCI bridge creates a new instance after every guest WGL teardown.
+    // A new WASM instance is required because gl4es keeps process-wide state.
+    global.createV86GL4ESRenderer = createRenderer;
+    global.resetV86GL4ESRenderer = function(canvas) {
+        const renderer = createRenderer(canvas);
+        global.GL4ES = renderer;
+        return renderer;
+    };
+
+    global.resetV86GL4ESRenderer(document.getElementById("v86gl_canvas"));
 })(typeof window !== "undefined" ? window : globalThis);
