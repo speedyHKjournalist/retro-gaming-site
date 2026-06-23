@@ -115,6 +115,10 @@ typedef int GLintptrARB;
 #define GL_BLEND_DST          0x0BE0
 #define GL_BLEND_SRC          0x0BE1
 #define GL_BLEND              0x0BE2
+#define GL_BLEND_DST_RGB      0x80C8
+#define GL_BLEND_SRC_RGB      0x80C9
+#define GL_BLEND_DST_ALPHA    0x80CA
+#define GL_BLEND_SRC_ALPHA    0x80CB
 #define GL_LOGIC_OP           0x0BF1
 #define GL_INDEX_LOGIC_OP     0x0BF1
 #define GL_COLOR_LOGIC_OP     0x0BF2
@@ -208,6 +212,17 @@ typedef int GLintptrARB;
 #define GL_SAMPLE_COVERAGE_INVERT 0x80AB
 #define GL_DOT3_RGB            0x86AE
 #define GL_DOT3_RGBA           0x86AF
+#define GL_COMPRESSED_ALPHA     0x84E9
+#define GL_COMPRESSED_LUMINANCE 0x84EA
+#define GL_COMPRESSED_LUMINANCE_ALPHA 0x84EB
+#define GL_COMPRESSED_INTENSITY 0x84EC
+#define GL_COMPRESSED_RGB       0x84ED
+#define GL_COMPRESSED_RGBA      0x84EE
+#define GL_TEXTURE_COMPRESSION_HINT 0x84EF
+#define GL_TEXTURE_COMPRESSED_IMAGE_SIZE 0x86A0
+#define GL_TEXTURE_COMPRESSED   0x86A1
+#define GL_NUM_COMPRESSED_TEXTURE_FORMATS 0x86A2
+#define GL_COMPRESSED_TEXTURE_FORMATS 0x86A3
 #define GL_GENERATE_MIPMAP     0x8191
 #define GL_GENERATE_MIPMAP_HINT 0x8192
 #define GL_TEXTURE_COMPARE_MODE_ARB 0x884C
@@ -501,6 +516,8 @@ typedef int GLintptrARB;
 #define V86GL_READ_PIXELS_STATUS_PENDING 0u
 #define V86GL_READ_PIXELS_STATUS_OK 1u
 #define CLIENT_ARRAY_MT_MAGIC 0x544D4143u  // 'CAMT' little-endian
+#define CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT 0x80000000u
+#define CLIENT_ARRAY_MT_FOG_COORD_BIT 0x40000000u
 
 enum {
     GLFN_VIEWPORT    = 1,
@@ -609,6 +626,14 @@ enum {
     GLFN_COMPRESSED_TEX_IMAGE_2D = 104,
     GLFN_TEX_IMAGE_3D = 105,
     GLFN_TEX_SUB_IMAGE_3D = 106,
+    GLFN_COMPRESSED_TEX_IMAGE_1D = 107,
+    GLFN_COMPRESSED_TEX_IMAGE_3D = 108,
+    GLFN_COMPRESSED_TEX_SUB_IMAGE_1D = 109,
+    GLFN_COMPRESSED_TEX_SUB_IMAGE_2D = 110,
+    GLFN_COMPRESSED_TEX_SUB_IMAGE_3D = 111,
+    GLFN_WINDOW_POS3F = 112,
+    GLFN_POINT_PARAMETERI = 113,
+    GLFN_POINT_PARAMETERIV = 114,
 };
 
 static HANDLE g_v86gl = INVALID_HANDLE_VALUE;
@@ -668,10 +693,16 @@ static GLenum g_cull_face_mode = GL_BACK;
 static GLenum g_front_face_mode = GL_CCW;
 static GLenum g_blend_src = GL_ONE;
 static GLenum g_blend_dst = GL_ZERO;
+static GLenum g_blend_src_alpha = GL_ONE;
+static GLenum g_blend_dst_alpha = GL_ZERO;
 static GLenum g_blend_equation = GL_FUNC_ADD;
 static GLfloat g_blend_color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+static GLfloat g_sample_coverage_value = 1.0f;
+static GLboolean g_sample_coverage_invert = GL_FALSE;
 static GLfloat g_current_fog_coord = 0.0f;
-static GLfloat g_current_secondary_color[3] = { 0.0f, 0.0f, 0.0f };
+/* GL_CURRENT_SECONDARY_COLOR_EXT is a four-component value; its alpha remains
+ * one because the secondary-color API only supplies RGB. */
+static GLfloat g_current_secondary_color[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 static GLenum g_alpha_func = GL_ALWAYS;
 static GLfloat g_alpha_ref = 0.0f;
 static GLboolean g_depth_mask = GL_TRUE;
@@ -773,10 +804,12 @@ static void v86gl_error(const char* format, ...) {
 
 static const char* g_gl_extensions =
     "GL_ARB_multitexture "
+    "GL_ARB_texture_compression "
     "GL_ARB_texture_env_combine "
     "GL_EXT_vertex_array "
     "GL_EXT_packed_pixels "
     "GL_EXT_rescale_normal "
+    "GL_EXT_secondary_color "
     "GL_EXT_separate_specular_color "
     "GL_EXT_texture_edge_clamp "
     "GL_EXT_texture3D "
@@ -829,9 +862,11 @@ static int g_swap_interval = 0;
 
 typedef struct {
     BOOL defined;
+    BOOL compressed;
     GLint internalformat;
     GLsizei width;
     GLsizei height;
+    GLsizei depth;
     GLint border;
     GLenum format;
     GLenum type;
@@ -1002,6 +1037,7 @@ static GLfloat g_fog_density = 1.0f;
 static GLfloat g_fog_start = 0.0f;
 static GLfloat g_fog_end = 1.0f;
 static GLenum g_fog_mode = GL_EXP;
+static GLenum g_fog_coordinate_source = GL_FRAGMENT_DEPTH_EXT;
 static GLdouble g_clip_planes[6][4];
 static LightState g_lights[8];
 static MaterialState g_materials[2];
@@ -1060,6 +1096,8 @@ static ClientArrayState g_texcoord_arrays[V86GL_MAX_TEXTURE_UNITS] = {
 };
 static ClientArrayState g_normal_array = { FALSE, 3, GL_FLOAT, 0, NULL, 0 };
 static ClientArrayState g_edge_flag_array = { FALSE, 1, GL_UNSIGNED_BYTE, 0, NULL, 0 };
+static ClientArrayState g_secondary_color_array = { FALSE, 3, GL_FLOAT, 0, NULL, 0 };
+static ClientArrayState g_fog_coord_array = { FALSE, 1, GL_FLOAT, 0, NULL, 0 };
 
 static void init_query_state(void) {
     uint32_t unit;
@@ -1649,6 +1687,7 @@ static int fog_value_count(GLenum pname) {
     case GL_FOG_START:
     case GL_FOG_END:
     case GL_FOG_MODE:
+    case GL_FOG_COORDINATE_SOURCE_EXT:
         return 1;
     default:
         return 0;
@@ -1662,6 +1701,7 @@ static int fog_scalar_valid(GLenum pname) {
     case GL_FOG_START:
     case GL_FOG_END:
     case GL_FOG_MODE:
+    case GL_FOG_COORDINATE_SOURCE_EXT:
         return 1;
     default:
         return 0;
@@ -1728,6 +1768,10 @@ static int get_value_count(GLenum pname) {
         return 4;
     case GL_CURRENT_NORMAL:
         return 3;
+    case GL_CURRENT_SECONDARY_COLOR_EXT:
+        return 4;
+    case GL_CURRENT_FOG_COORDINATE_EXT:
+        return 1;
     case GL_POLYGON_MODE:
     case GL_MAX_VIEWPORT_DIMS:
     case GL_DEPTH_RANGE:
@@ -2435,9 +2479,11 @@ static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
 
     clear_texture_level(state);
     state->defined = TRUE;
+    state->compressed = FALSE;
     state->internalformat = internalformat;
     state->width = width;
     state->height = height;
+    state->depth = 1;
     state->border = border;
     state->format = format;
     state->type = type;
@@ -2467,6 +2513,44 @@ static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
                    (const uint8_t*)pixels + source_offset + (uint32_t)row * source_stride,
                    row_bytes);
     }
+    return 1;
+}
+
+static int cache_compressed_texture_image(GLenum target, GLint level,
+                                          GLenum internalformat, GLsizei width,
+                                          GLsizei height, GLsizei depth,
+                                          GLint border, GLsizei image_size,
+                                          const GLvoid* data) {
+    TextureLevelState* state;
+
+    if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1 ||
+        image_size < 0 || (image_size && !data)) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+
+    state = texture_level_state(target, level, TRUE);
+    if (!state) return 0;
+    clear_texture_level(state);
+    state->defined = TRUE;
+    state->compressed = TRUE;
+    state->internalformat = (GLint)internalformat;
+    state->width = width;
+    state->height = height;
+    state->depth = depth;
+    state->border = border;
+    state->format = internalformat;
+    state->type = 0;
+    state->data_size = (uint32_t)image_size;
+    if (!image_size) return 1;
+
+    state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)image_size);
+    if (!state->data) {
+        g_error = GL_OUT_OF_MEMORY;
+        clear_texture_level(state);
+        return 0;
+    }
+    CopyMemory(state->data, data, (SIZE_T)image_size);
     return 1;
 }
 
@@ -2535,9 +2619,11 @@ static int cache_copy_texture_image(GLenum target, GLint level, GLint internalfo
     if (!state) return 0;
     clear_texture_level(state);
     state->defined = TRUE;
+    state->compressed = FALSE;
     state->internalformat = internalformat;
     state->width = width;
     state->height = height;
+    state->depth = 1;
     state->border = border;
     return 1;
 }
@@ -2671,6 +2757,12 @@ static int set_client_array_enabled(GLenum array, BOOL enabled, BOOL emit) {
         break;
     case GL_EDGE_FLAG_ARRAY:
         g_edge_flag_array.enabled = enabled;
+        break;
+    case GL_SECONDARY_COLOR_ARRAY_EXT:
+        g_secondary_color_array.enabled = enabled;
+        break;
+    case GL_FOG_COORDINATE_ARRAY_EXT:
+        g_fog_coord_array.enabled = enabled;
         break;
     default:
         g_error = GL_INVALID_ENUM;
@@ -3150,7 +3242,7 @@ const GLubyte* APIENTRY glGetString(GLenum name) {
     switch (name) {
     case GL_VENDOR:     return (const GLubyte*)"v86";
     case GL_RENDERER:   return (const GLubyte*)"v86 fake OpenGL over PCI DMA";
-    case GL_VERSION:    return (const GLubyte*)"1.3";
+    case GL_VERSION:    return (const GLubyte*)"1.4";
     case GL_EXTENSIONS:
         return (const GLubyte*)g_gl_extensions;
     default:
@@ -3197,6 +3289,12 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     switch (pname) {
     case GL_CURRENT_COLOR:
         for (i = 0; i < 4; i++) params[i] = (GLint)g_current_color[i];
+        break;
+    case GL_CURRENT_SECONDARY_COLOR_EXT:
+        for (i = 0; i < 4; i++) params[i] = (GLint)g_current_secondary_color[i];
+        break;
+    case GL_CURRENT_FOG_COORDINATE_EXT:
+        params[0] = (GLint)g_current_fog_coord;
         break;
     case GL_CURRENT_INDEX:
         params[0] = (GLint)g_current_index;
@@ -3297,10 +3395,24 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = (GLint)g_front_face_mode;
         break;
     case GL_BLEND_SRC:
+    case GL_BLEND_SRC_RGB:
         params[0] = (GLint)g_blend_src;
         break;
     case GL_BLEND_DST:
+    case GL_BLEND_DST_RGB:
         params[0] = (GLint)g_blend_dst;
+        break;
+    case GL_BLEND_SRC_ALPHA:
+        params[0] = (GLint)g_blend_src_alpha;
+        break;
+    case GL_BLEND_DST_ALPHA:
+        params[0] = (GLint)g_blend_dst_alpha;
+        break;
+    case GL_SAMPLE_COVERAGE_VALUE:
+        params[0] = (GLint)g_sample_coverage_value;
+        break;
+    case GL_SAMPLE_COVERAGE_INVERT:
+        params[0] = g_sample_coverage_invert ? GL_TRUE : GL_FALSE;
         break;
     case GL_ALPHA_TEST_FUNC:
         params[0] = (GLint)g_alpha_func;
@@ -3322,6 +3434,9 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_FOG_MODE:
         params[0] = (GLint)g_fog_mode;
+        break;
+    case GL_FOG_COORDINATE_SOURCE_EXT:
+        params[0] = (GLint)g_fog_coordinate_source;
         break;
     case GL_FOG_COLOR:
         for (i = 0; i < 4; i++) params[i] = (GLint)g_fog_color[i];
@@ -3451,6 +3566,21 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_COLOR_ARRAY_STRIDE:
         params[0] = g_color_array.stride;
         break;
+    case GL_SECONDARY_COLOR_ARRAY_SIZE_EXT:
+        params[0] = g_secondary_color_array.size;
+        break;
+    case GL_SECONDARY_COLOR_ARRAY_TYPE_EXT:
+        params[0] = (GLint)g_secondary_color_array.type;
+        break;
+    case GL_SECONDARY_COLOR_ARRAY_STRIDE_EXT:
+        params[0] = g_secondary_color_array.stride;
+        break;
+    case GL_FOG_COORDINATE_ARRAY_TYPE_EXT:
+        params[0] = (GLint)g_fog_coord_array.type;
+        break;
+    case GL_FOG_COORDINATE_ARRAY_STRIDE_EXT:
+        params[0] = g_fog_coord_array.stride;
+        break;
     case GL_INDEX_ARRAY_TYPE:
         params[0] = (GLint)g_index_array.type;
         break;
@@ -3492,6 +3622,12 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_EDGE_FLAG_ARRAY:
         params[0] = g_edge_flag_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_SECONDARY_COLOR_ARRAY_EXT:
+        params[0] = g_secondary_color_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_FOG_COORDINATE_ARRAY_EXT:
+        params[0] = g_fog_coord_array.enabled ? GL_TRUE : GL_FALSE;
         break;
     case GL_LINE_WIDTH:
         params[0] = (GLint)g_line_width;
@@ -3639,6 +3775,12 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     case GL_CURRENT_COLOR:
         CopyMemory(params, g_current_color, sizeof(g_current_color));
         break;
+    case GL_CURRENT_SECONDARY_COLOR_EXT:
+        CopyMemory(params, g_current_secondary_color, sizeof(g_current_secondary_color));
+        break;
+    case GL_CURRENT_FOG_COORDINATE_EXT:
+        params[0] = g_current_fog_coord;
+        break;
     case GL_CURRENT_INDEX:
         params[0] = g_current_index;
         break;
@@ -3685,6 +3827,12 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     case GL_ALPHA_TEST_REF:
         params[0] = g_alpha_ref;
         break;
+    case GL_SAMPLE_COVERAGE_VALUE:
+        params[0] = g_sample_coverage_value;
+        break;
+    case GL_SAMPLE_COVERAGE_INVERT:
+        params[0] = g_sample_coverage_invert ? 1.0f : 0.0f;
+        break;
     case GL_FOG_INDEX:
         params[0] = g_fog_index;
         break;
@@ -3699,6 +3847,9 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
         break;
     case GL_FOG_MODE:
         params[0] = (GLfloat)g_fog_mode;
+        break;
+    case GL_FOG_COORDINATE_SOURCE_EXT:
+        params[0] = (GLfloat)g_fog_coordinate_source;
         break;
     case GL_FOG_COLOR:
         CopyMemory(params, g_fog_color, sizeof(g_fog_color));
@@ -3845,6 +3996,12 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
         break;
     case GL_EDGE_FLAG_ARRAY:
         enabled = g_edge_flag_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_SECONDARY_COLOR_ARRAY_EXT:
+        enabled = g_secondary_color_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_FOG_COORDINATE_ARRAY_EXT:
+        enabled = g_fog_coord_array.enabled ? GL_TRUE : GL_FALSE;
         break;
     default:
         enabled = get_cap_state(cap) ? GL_TRUE : GL_FALSE;
@@ -4130,6 +4287,22 @@ void APIENTRY glMultTransposeMatrixdARB(const GLdouble* matrix) {
     for (i = 0; i < 16; i++) source[i] = (GLfloat)matrix[i];
     transpose_matrixf(transposed, source);
     glMultMatrixf(transposed);
+}
+
+void APIENTRY glLoadTransposeMatrixf(const GLfloat* matrix) {
+    glLoadTransposeMatrixfARB(matrix);
+}
+
+void APIENTRY glLoadTransposeMatrixd(const GLdouble* matrix) {
+    glLoadTransposeMatrixdARB(matrix);
+}
+
+void APIENTRY glMultTransposeMatrixf(const GLfloat* matrix) {
+    glMultTransposeMatrixfARB(matrix);
+}
+
+void APIENTRY glMultTransposeMatrixd(const GLdouble* matrix) {
+    glMultTransposeMatrixdARB(matrix);
 }
 
 __declspec(dllexport)
@@ -4693,32 +4866,30 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
-void APIENTRY glCompressedTexImage2DARB(GLenum target, GLint level,
-                                        GLenum internalformat, GLsizei width,
-                                        GLsizei height, GLint border,
-                                        GLsizei image_size, const GLvoid* data) {
+static void emit_compressed_tex_image(uint16_t opcode, GLenum target, GLint level,
+                                      GLenum internalformat, GLsizei width,
+                                      GLsizei height, GLsizei depth, GLint border,
+                                      GLsizei image_size, const GLvoid* data) {
     struct {
         uint32_t target;
         int32_t level;
         uint32_t internalformat;
         int32_t width;
         int32_t height;
+        int32_t depth;
         int32_t border;
         uint32_t image_size;
     } meta;
     uint32_t total_size;
     uint8_t* payload;
 
-    if (width < 0 || height < 0 || border < 0 || border > 1 || image_size < 0 ||
-        (image_size && !data)) {
-        g_error = GL_INVALID_VALUE;
-        return;
-    }
-    if (!bound_texture_state(target, TRUE)) return;
+    if (!cache_compressed_texture_image(target, level, internalformat, width, height,
+                                        depth, border, image_size, data)) return;
     if ((uint32_t)image_size > UINT32_MAX - sizeof(meta)) {
         g_error = GL_OUT_OF_MEMORY;
         return;
     }
+
     total_size = sizeof(meta) + (uint32_t)image_size;
     payload = alloc_payload(total_size);
     if (!payload) return;
@@ -4727,12 +4898,103 @@ void APIENTRY glCompressedTexImage2DARB(GLenum target, GLint level,
     meta.internalformat = (uint32_t)internalformat;
     meta.width = width;
     meta.height = height;
+    meta.depth = depth;
     meta.border = border;
     meta.image_size = (uint32_t)image_size;
     CopyMemory(payload, &meta, sizeof(meta));
     if (image_size) CopyMemory(payload + sizeof(meta), data, (SIZE_T)image_size);
-    emit_gl_call(GLFN_COMPRESSED_TEX_IMAGE_2D, payload, total_size);
+    emit_gl_call(opcode, payload, total_size);
     HeapFree(GetProcessHeap(), 0, payload);
+}
+
+static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint level,
+                                          GLint xoffset, GLint yoffset, GLint zoffset,
+                                          GLsizei width, GLsizei height, GLsizei depth,
+                                          GLenum format, GLsizei image_size,
+                                          const GLvoid* data) {
+    struct {
+        uint32_t target;
+        int32_t level;
+        int32_t xoffset;
+        int32_t yoffset;
+        int32_t zoffset;
+        int32_t width;
+        int32_t height;
+        int32_t depth;
+        uint32_t format;
+        uint32_t image_size;
+    } meta;
+    TextureLevelState* state;
+    uint32_t total_size;
+    uint8_t* payload;
+
+    if (xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0 ||
+        image_size < 0 || (image_size && !data)) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+    state = texture_level_state(target, level, FALSE);
+    if (!state || !state->defined || !state->compressed ||
+        xoffset > state->width - width || yoffset > state->height - height ||
+        zoffset > state->depth - depth) {
+        g_error = GL_INVALID_OPERATION;
+        return;
+    }
+    if ((uint32_t)image_size > UINT32_MAX - sizeof(meta)) {
+        g_error = GL_OUT_OF_MEMORY;
+        return;
+    }
+
+    /* The driver does not know a compressed block layout.  Preserve a cached
+     * readback only when this update replaces the whole image; partial updates
+     * remain fully forwarded but deliberately invalidate the guest cache. */
+    if (xoffset == 0 && yoffset == 0 && zoffset == 0 &&
+        width == state->width && height == state->height && depth == state->depth) {
+        uint8_t* replacement = NULL;
+        if (image_size) {
+            replacement = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)image_size);
+            if (!replacement) {
+                g_error = GL_OUT_OF_MEMORY;
+                return;
+            }
+            CopyMemory(replacement, data, (SIZE_T)image_size);
+        }
+        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+        state->data = replacement;
+        state->data_size = (uint32_t)image_size;
+        state->format = format;
+    } else {
+        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+        state->data = NULL;
+        state->data_size = 0;
+    }
+
+    total_size = sizeof(meta) + (uint32_t)image_size;
+    payload = alloc_payload(total_size);
+    if (!payload) return;
+    meta.target = (uint32_t)target;
+    meta.level = level;
+    meta.xoffset = xoffset;
+    meta.yoffset = yoffset;
+    meta.zoffset = zoffset;
+    meta.width = width;
+    meta.height = height;
+    meta.depth = depth;
+    meta.format = (uint32_t)format;
+    meta.image_size = (uint32_t)image_size;
+    CopyMemory(payload, &meta, sizeof(meta));
+    if (image_size) CopyMemory(payload + sizeof(meta), data, (SIZE_T)image_size);
+    emit_gl_call(opcode, payload, total_size);
+    HeapFree(GetProcessHeap(), 0, payload);
+}
+
+void APIENTRY glCompressedTexImage2DARB(GLenum target, GLint level,
+                                        GLenum internalformat, GLsizei width,
+                                        GLsizei height, GLint border,
+                                        GLsizei image_size, const GLvoid* data) {
+    emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_2D, target, level,
+                              internalformat, width, height, 1, border,
+                              image_size, data);
 }
 
 void APIENTRY glCompressedTexImage2D(GLenum target, GLint level,
@@ -4743,17 +5005,12 @@ void APIENTRY glCompressedTexImage2D(GLenum target, GLint level,
                               border, image_size, data);
 }
 
-/* The WebGL/GLES backend only has a routed compressed-2D upload path.  Keep
- * the remaining ARB entry points callable so probing applications do not
- * jump through a NULL function pointer; report their unsupported operation
- * through the normal OpenGL error channel. */
 void APIENTRY glCompressedTexImage1DARB(GLenum target, GLint level,
                                         GLenum internalformat, GLsizei width,
                                         GLint border, GLsizei image_size,
                                         const GLvoid* data) {
-    (void)target; (void)level; (void)internalformat; (void)width;
-    (void)border; (void)image_size; (void)data;
-    g_error = GL_INVALID_OPERATION;
+    emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_1D, target, level,
+                              internalformat, width, 1, 1, border, image_size, data);
 }
 
 void APIENTRY glCompressedTexImage3DARB(GLenum target, GLint level,
@@ -4761,15 +5018,88 @@ void APIENTRY glCompressedTexImage3DARB(GLenum target, GLint level,
                                         GLsizei height, GLsizei depth,
                                         GLint border, GLsizei image_size,
                                         const GLvoid* data) {
-    (void)target; (void)level; (void)internalformat; (void)width;
-    (void)height; (void)depth; (void)border; (void)image_size; (void)data;
-    g_error = GL_INVALID_OPERATION;
+    emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_3D, target, level,
+                              internalformat, width, height, depth, border,
+                              image_size, data);
 }
 
 void APIENTRY glGetCompressedTexImageARB(GLenum target, GLint level,
                                          GLvoid* image) {
-    (void)target; (void)level; (void)image;
-    g_error = GL_INVALID_OPERATION;
+    TextureLevelState* state = texture_level_state(target, level, FALSE);
+    if (!image) {
+        g_error = GL_INVALID_VALUE;
+    } else if (!state || !state->defined || !state->compressed ||
+               (state->data_size && !state->data)) {
+        g_error = GL_INVALID_OPERATION;
+    } else if (state->data_size) {
+        CopyMemory(image, state->data, state->data_size);
+    }
+}
+
+void APIENTRY glCompressedTexImage1D(GLenum target, GLint level,
+                                     GLenum internalformat, GLsizei width,
+                                     GLint border, GLsizei image_size,
+                                     const GLvoid* data) {
+    glCompressedTexImage1DARB(target, level, internalformat, width, border, image_size, data);
+}
+
+void APIENTRY glCompressedTexImage3D(GLenum target, GLint level,
+                                     GLenum internalformat, GLsizei width,
+                                     GLsizei height, GLsizei depth, GLint border,
+                                     GLsizei image_size, const GLvoid* data) {
+    glCompressedTexImage3DARB(target, level, internalformat, width, height, depth,
+                              border, image_size, data);
+}
+
+void APIENTRY glCompressedTexSubImage1DARB(GLenum target, GLint level, GLint xoffset,
+                                           GLsizei width, GLenum format,
+                                           GLsizei image_size, const GLvoid* data) {
+    emit_compressed_tex_sub_image(GLFN_COMPRESSED_TEX_SUB_IMAGE_1D, target, level,
+                                  xoffset, 0, 0, width, 1, 1, format, image_size, data);
+}
+
+void APIENTRY glCompressedTexSubImage2DARB(GLenum target, GLint level, GLint xoffset,
+                                           GLint yoffset, GLsizei width, GLsizei height,
+                                           GLenum format, GLsizei image_size,
+                                           const GLvoid* data) {
+    emit_compressed_tex_sub_image(GLFN_COMPRESSED_TEX_SUB_IMAGE_2D, target, level,
+                                  xoffset, yoffset, 0, width, height, 1, format,
+                                  image_size, data);
+}
+
+void APIENTRY glCompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
+                                           GLint yoffset, GLint zoffset, GLsizei width,
+                                           GLsizei height, GLsizei depth, GLenum format,
+                                           GLsizei image_size, const GLvoid* data) {
+    emit_compressed_tex_sub_image(GLFN_COMPRESSED_TEX_SUB_IMAGE_3D, target, level,
+                                  xoffset, yoffset, zoffset, width, height, depth,
+                                  format, image_size, data);
+}
+
+void APIENTRY glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                                        GLsizei width, GLenum format,
+                                        GLsizei image_size, const GLvoid* data) {
+    glCompressedTexSubImage1DARB(target, level, xoffset, width, format, image_size, data);
+}
+
+void APIENTRY glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset,
+                                        GLint yoffset, GLsizei width, GLsizei height,
+                                        GLenum format, GLsizei image_size,
+                                        const GLvoid* data) {
+    glCompressedTexSubImage2DARB(target, level, xoffset, yoffset, width, height,
+                                  format, image_size, data);
+}
+
+void APIENTRY glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset,
+                                        GLint yoffset, GLint zoffset, GLsizei width,
+                                        GLsizei height, GLsizei depth, GLenum format,
+                                        GLsizei image_size, const GLvoid* data) {
+    glCompressedTexSubImage3DARB(target, level, xoffset, yoffset, zoffset, width,
+                                  height, depth, format, image_size, data);
+}
+
+void APIENTRY glGetCompressedTexImage(GLenum target, GLint level, GLvoid* image) {
+    glGetCompressedTexImageARB(target, level, image);
 }
 
 void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
@@ -5728,6 +6058,30 @@ void APIENTRY glMultiTexCoord4fv(GLenum target, const GLfloat* v) {
     glMultiTexCoord4fvARB(target, v);
 }
 
+/* OpenGL 1.3 promoted every ARB_multitexture coordinate overload to core.
+ * They all share the same packed float transport representation above. */
+#define DEFINE_CORE_MULTI_TEX_COORD_SCALAR(SUFFIX, TYPE) \
+void APIENTRY glMultiTexCoord1##SUFFIX(GLenum target, TYPE s) { glMultiTexCoord1##SUFFIX##ARB(target, s); } \
+void APIENTRY glMultiTexCoord2##SUFFIX(GLenum target, TYPE s, TYPE t) { glMultiTexCoord2##SUFFIX##ARB(target, s, t); } \
+void APIENTRY glMultiTexCoord3##SUFFIX(GLenum target, TYPE s, TYPE t, TYPE r) { glMultiTexCoord3##SUFFIX##ARB(target, s, t, r); } \
+void APIENTRY glMultiTexCoord4##SUFFIX(GLenum target, TYPE s, TYPE t, TYPE r, TYPE q) { glMultiTexCoord4##SUFFIX##ARB(target, s, t, r, q); }
+
+#define DEFINE_CORE_MULTI_TEX_COORD_VECTOR(SUFFIX, TYPE) \
+void APIENTRY glMultiTexCoord1##SUFFIX##v(GLenum target, const TYPE* v) { glMultiTexCoord1##SUFFIX##vARB(target, v); } \
+void APIENTRY glMultiTexCoord2##SUFFIX##v(GLenum target, const TYPE* v) { glMultiTexCoord2##SUFFIX##vARB(target, v); } \
+void APIENTRY glMultiTexCoord3##SUFFIX##v(GLenum target, const TYPE* v) { glMultiTexCoord3##SUFFIX##vARB(target, v); } \
+void APIENTRY glMultiTexCoord4##SUFFIX##v(GLenum target, const TYPE* v) { glMultiTexCoord4##SUFFIX##vARB(target, v); }
+
+DEFINE_CORE_MULTI_TEX_COORD_SCALAR(d, GLdouble)
+DEFINE_CORE_MULTI_TEX_COORD_SCALAR(i, GLint)
+DEFINE_CORE_MULTI_TEX_COORD_SCALAR(s, GLshort)
+DEFINE_CORE_MULTI_TEX_COORD_VECTOR(d, GLdouble)
+DEFINE_CORE_MULTI_TEX_COORD_VECTOR(i, GLint)
+DEFINE_CORE_MULTI_TEX_COORD_VECTOR(s, GLshort)
+
+#undef DEFINE_CORE_MULTI_TEX_COORD_SCALAR
+#undef DEFINE_CORE_MULTI_TEX_COORD_VECTOR
+
 __declspec(dllexport)
 void APIENTRY glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) {
     struct { float nx, ny, nz; } payload;
@@ -5764,6 +6118,7 @@ void APIENTRY glFogf(GLenum pname, GLfloat param) {
     case GL_FOG_START: g_fog_start = param; break;
     case GL_FOG_END: g_fog_end = param; break;
     case GL_FOG_MODE: g_fog_mode = (GLenum)param; break;
+    case GL_FOG_COORDINATE_SOURCE_EXT: g_fog_coordinate_source = (GLenum)param; break;
     default: break;
     }
     emit_gl_call(GLFN_FOGF, &payload, sizeof(payload));
@@ -5786,6 +6141,7 @@ void APIENTRY glFogi(GLenum pname, GLint param) {
     case GL_FOG_START: g_fog_start = (GLfloat)param; break;
     case GL_FOG_END: g_fog_end = (GLfloat)param; break;
     case GL_FOG_MODE: g_fog_mode = (GLenum)param; break;
+    case GL_FOG_COORDINATE_SOURCE_EXT: g_fog_coordinate_source = (GLenum)param; break;
     default: break;
     }
     emit_gl_call(GLFN_FOGI, &payload, sizeof(payload));
@@ -5828,6 +6184,7 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat* params) {
         case GL_FOG_START: g_fog_start = params[0]; break;
         case GL_FOG_END: g_fog_end = params[0]; break;
         case GL_FOG_MODE: g_fog_mode = (GLenum)params[0]; break;
+        case GL_FOG_COORDINATE_SOURCE_EXT: g_fog_coordinate_source = (GLenum)params[0]; break;
         default: break;
         }
     }
@@ -5869,6 +6226,29 @@ void APIENTRY glFogCoorddvEXT(const GLdouble* coord) {
     glFogCoorddv(coord);
 }
 
+/* The 1.4 spelling is core; EXT is retained as a strict alias for older
+ * applications.  The pointer is captured with the other guest client arrays
+ * and copied into the DMA frame immediately before a draw. */
+void APIENTRY glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid* pointer) {
+    if (stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+    if (type != GL_FLOAT && type != GL_DOUBLE) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+    g_fog_coord_array.size = 1;
+    g_fog_coord_array.type = type;
+    g_fog_coord_array.stride = stride;
+    g_fog_coord_array.pointer = pointer;
+    g_fog_coord_array.buffer = g_array_buffer_binding;
+}
+
+void APIENTRY glFogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid* pointer) {
+    glFogCoordPointer(type, stride, pointer);
+}
+
 void APIENTRY glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue) {
     struct { float red, green, blue; } payload;
     g_current_secondary_color[0] = red;
@@ -5898,6 +6278,157 @@ void APIENTRY glSecondaryColor3ubvEXT(const GLubyte* values) {
                            (GLfloat)values[1] / 255.0f,
                            (GLfloat)values[2] / 255.0f);
     }
+}
+
+/* GL_EXT_secondary_color uses the same normalized conversion rules as the
+ * primary glColor family.  Keep all scalar/vector variants on one canonical
+ * float implementation so the guest state and the gl4es command stream stay
+ * identical regardless of the input type. */
+static GLfloat secondary_color_signed(GLint value, GLint max_positive) {
+    if (value <= -max_positive - 1) return -1.0f;
+    return (GLfloat)value / (GLfloat)max_positive;
+}
+
+void APIENTRY glSecondaryColor3bEXT(GLbyte red, GLbyte green, GLbyte blue) {
+    glSecondaryColor3f(secondary_color_signed(red, 127),
+                      secondary_color_signed(green, 127),
+                      secondary_color_signed(blue, 127));
+}
+
+void APIENTRY glSecondaryColor3bvEXT(const GLbyte* values) {
+    if (values) glSecondaryColor3bEXT(values[0], values[1], values[2]);
+}
+
+void APIENTRY glSecondaryColor3dEXT(GLdouble red, GLdouble green, GLdouble blue) {
+    glSecondaryColor3f((GLfloat)red, (GLfloat)green, (GLfloat)blue);
+}
+
+void APIENTRY glSecondaryColor3dvEXT(const GLdouble* values) {
+    if (values) glSecondaryColor3dEXT(values[0], values[1], values[2]);
+}
+
+void APIENTRY glSecondaryColor3iEXT(GLint red, GLint green, GLint blue) {
+    glSecondaryColor3f(secondary_color_signed(red, 2147483647),
+                      secondary_color_signed(green, 2147483647),
+                      secondary_color_signed(blue, 2147483647));
+}
+
+void APIENTRY glSecondaryColor3ivEXT(const GLint* values) {
+    if (values) glSecondaryColor3iEXT(values[0], values[1], values[2]);
+}
+
+void APIENTRY glSecondaryColor3sEXT(GLshort red, GLshort green, GLshort blue) {
+    glSecondaryColor3f(secondary_color_signed(red, 32767),
+                      secondary_color_signed(green, 32767),
+                      secondary_color_signed(blue, 32767));
+}
+
+void APIENTRY glSecondaryColor3svEXT(const GLshort* values) {
+    if (values) glSecondaryColor3sEXT(values[0], values[1], values[2]);
+}
+
+void APIENTRY glSecondaryColor3ubEXT(GLubyte red, GLubyte green, GLubyte blue) {
+    glSecondaryColor3f((GLfloat)red / 255.0f,
+                      (GLfloat)green / 255.0f,
+                      (GLfloat)blue / 255.0f);
+}
+
+void APIENTRY glSecondaryColor3uiEXT(GLuint red, GLuint green, GLuint blue) {
+    glSecondaryColor3f((GLfloat)((GLdouble)red / 4294967295.0),
+                      (GLfloat)((GLdouble)green / 4294967295.0),
+                      (GLfloat)((GLdouble)blue / 4294967295.0));
+}
+
+void APIENTRY glSecondaryColor3uivEXT(const GLuint* values) {
+    if (values) glSecondaryColor3uiEXT(values[0], values[1], values[2]);
+}
+
+void APIENTRY glSecondaryColor3usEXT(GLushort red, GLushort green, GLushort blue) {
+    glSecondaryColor3f((GLfloat)red / 65535.0f,
+                      (GLfloat)green / 65535.0f,
+                      (GLfloat)blue / 65535.0f);
+}
+
+void APIENTRY glSecondaryColor3usvEXT(const GLushort* values) {
+    if (values) glSecondaryColor3usEXT(values[0], values[1], values[2]);
+}
+
+void APIENTRY glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride,
+                                         const GLvoid* pointer) {
+    if (size != 3 || stride < 0) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+    if (!gl_type_bytes(type)) {
+        g_error = GL_INVALID_ENUM;
+        return;
+    }
+    g_secondary_color_array.size = size;
+    g_secondary_color_array.type = type;
+    g_secondary_color_array.stride = stride;
+    g_secondary_color_array.pointer = pointer;
+    g_secondary_color_array.buffer = g_array_buffer_binding;
+}
+
+void APIENTRY glSecondaryColor3b(GLbyte red, GLbyte green, GLbyte blue) {
+    glSecondaryColor3bEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3bv(const GLbyte* values) {
+    glSecondaryColor3bvEXT(values);
+}
+
+void APIENTRY glSecondaryColor3d(GLdouble red, GLdouble green, GLdouble blue) {
+    glSecondaryColor3dEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3dv(const GLdouble* values) {
+    glSecondaryColor3dvEXT(values);
+}
+
+void APIENTRY glSecondaryColor3i(GLint red, GLint green, GLint blue) {
+    glSecondaryColor3iEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3iv(const GLint* values) {
+    glSecondaryColor3ivEXT(values);
+}
+
+void APIENTRY glSecondaryColor3s(GLshort red, GLshort green, GLshort blue) {
+    glSecondaryColor3sEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3sv(const GLshort* values) {
+    glSecondaryColor3svEXT(values);
+}
+
+void APIENTRY glSecondaryColor3ub(GLubyte red, GLubyte green, GLubyte blue) {
+    glSecondaryColor3ubEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3ubv(const GLubyte* values) {
+    glSecondaryColor3ubvEXT(values);
+}
+
+void APIENTRY glSecondaryColor3ui(GLuint red, GLuint green, GLuint blue) {
+    glSecondaryColor3uiEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3uiv(const GLuint* values) {
+    glSecondaryColor3uivEXT(values);
+}
+
+void APIENTRY glSecondaryColor3us(GLushort red, GLushort green, GLushort blue) {
+    glSecondaryColor3usEXT(red, green, blue);
+}
+
+void APIENTRY glSecondaryColor3usv(const GLushort* values) {
+    glSecondaryColor3usvEXT(values);
+}
+
+void APIENTRY glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride,
+                                      const GLvoid* pointer) {
+    glSecondaryColorPointerEXT(size, type, stride, pointer);
 }
 
 static void cache_material_values(GLenum face, GLenum pname, const GLfloat* values) {
@@ -6279,6 +6810,8 @@ void APIENTRY glBlendFunc(GLenum sfactor, GLenum dfactor) {
     struct { uint32_t sfactor, dfactor; } payload;
     g_blend_src = sfactor;
     g_blend_dst = dfactor;
+    g_blend_src_alpha = sfactor;
+    g_blend_dst_alpha = dfactor;
     payload.sfactor = (uint32_t)sfactor;
     payload.dfactor = (uint32_t)dfactor;
     emit_gl_call(GLFN_BLEND_FUNC, &payload, sizeof(payload));
@@ -6322,6 +6855,8 @@ void APIENTRY glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb,
 
     g_blend_src = src_rgb;
     g_blend_dst = dst_rgb;
+    g_blend_src_alpha = src_alpha;
+    g_blend_dst_alpha = dst_alpha;
     payload.src_rgb = (uint32_t)src_rgb;
     payload.dst_rgb = (uint32_t)dst_rgb;
     payload.src_alpha = (uint32_t)src_alpha;
@@ -6338,6 +6873,8 @@ void APIENTRY glSampleCoverage(GLclampf value, GLboolean invert) {
     struct { float value; uint32_t invert; } payload;
     payload.value = value;
     payload.invert = invert ? GL_TRUE : GL_FALSE;
+    g_sample_coverage_value = value;
+    g_sample_coverage_invert = invert ? GL_TRUE : GL_FALSE;
     emit_gl_call(GLFN_SAMPLE_COVERAGE, &payload, sizeof(payload));
 }
 
@@ -6562,8 +7099,8 @@ void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer
 
 __declspec(dllexport)
 void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
-    ClientArrayCopy arrays[3 + V86GL_MAX_TEXTURE_UNITS];
-    uint32_t array_block_count = 3u + V86GL_MAX_TEXTURE_UNITS;
+    ClientArrayCopy arrays[4 + V86GL_MAX_TEXTURE_UNITS + 1];
+    uint32_t array_block_count = 4u + V86GL_MAX_TEXTURE_UNITS + 1u;
     uint32_t block_size;
     uint32_t total_size;
     uint8_t* payload;
@@ -6607,6 +7144,14 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
             return;
         }
     }
+    if (!client_array_copy(&g_secondary_color_array, first, count,
+                           &arrays[3 + V86GL_MAX_TEXTURE_UNITS])) {
+        return;
+    }
+    if (!client_array_copy(&g_fog_coord_array, first, count,
+                           &arrays[4 + V86GL_MAX_TEXTURE_UNITS])) {
+        return;
+    }
 
     block_size = client_array_blocks_size(arrays, array_block_count);
     if (!block_size || block_size > UINT32_MAX - sizeof(header)) {
@@ -6623,7 +7168,9 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     header.mode = (uint32_t)mode;
     header.count = count;
     header.magic = CLIENT_ARRAY_MT_MAGIC;
-    header.tex_unit_count = V86GL_MAX_TEXTURE_UNITS;
+    header.tex_unit_count = V86GL_MAX_TEXTURE_UNITS |
+                            CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT |
+                            CLIENT_ARRAY_MT_FOG_COORD_BIT;
     header.client_active_texture = (uint32_t)g_client_active_texture;
     CopyMemory(payload, &header, sizeof(header));
     p = payload + sizeof(header);
@@ -6640,8 +7187,8 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
 __declspec(dllexport)
 void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices) {
-    ClientArrayCopy arrays[3 + V86GL_MAX_TEXTURE_UNITS];
-    uint32_t array_block_count = 3u + V86GL_MAX_TEXTURE_UNITS;
+    ClientArrayCopy arrays[4 + V86GL_MAX_TEXTURE_UNITS + 1];
+    uint32_t array_block_count = 4u + V86GL_MAX_TEXTURE_UNITS + 1u;
     uint32_t max_index;
     uint32_t array_count;
     uint32_t index_size;
@@ -6722,6 +7269,14 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
             return;
         }
     }
+    if (!client_array_copy(&g_secondary_color_array, 0, (GLsizei)array_count,
+                           &arrays[3 + V86GL_MAX_TEXTURE_UNITS])) {
+        return;
+    }
+    if (!client_array_copy(&g_fog_coord_array, 0, (GLsizei)array_count,
+                           &arrays[4 + V86GL_MAX_TEXTURE_UNITS])) {
+        return;
+    }
 
     block_size = client_array_blocks_size(arrays, array_block_count);
     if (index_data_size > UINT32_MAX - sizeof(header) ||
@@ -6742,7 +7297,9 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     header.type = (uint32_t)type;
     header.index_data_size = index_data_size;
     header.magic = CLIENT_ARRAY_MT_MAGIC;
-    header.tex_unit_count = V86GL_MAX_TEXTURE_UNITS;
+    header.tex_unit_count = V86GL_MAX_TEXTURE_UNITS |
+                            CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT |
+                            CLIENT_ARRAY_MT_FOG_COORD_BIT;
     header.client_active_texture = (uint32_t)g_client_active_texture;
     CopyMemory(payload, &header, sizeof(header));
     p = payload + sizeof(header);
@@ -7530,6 +8087,28 @@ void APIENTRY glPointParameterfvARB(GLenum pname, const GLfloat* params) {
     glPointParameterfv(pname, params);
 }
 
+void APIENTRY glPointParameteri(GLenum pname, GLint param) {
+    struct { uint32_t pname; int32_t param; } payload;
+    payload.pname = (uint32_t)pname;
+    payload.param = param;
+    emit_gl_call(GLFN_POINT_PARAMETERI, &payload, sizeof(payload));
+}
+
+void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) {
+    struct { uint32_t pname; int32_t values[3]; } payload;
+
+    if (!params) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+
+    payload.pname = (uint32_t)pname;
+    payload.values[0] = params[0];
+    payload.values[1] = params[1];
+    payload.values[2] = params[2];
+    emit_gl_call(GLFN_POINT_PARAMETERIV, &payload, sizeof(payload));
+}
+
 __declspec(dllexport)
 void APIENTRY glLineStipple(GLint factor, GLushort pattern) {
     if (factor < 1) {
@@ -8201,6 +8780,8 @@ static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname,
     case GL_TEXTURE_HEIGHT: *result = target == GL_TEXTURE_1D ? 1 : state->height; return 1;
     case GL_TEXTURE_BORDER: *result = state->border; return 1;
     case GL_TEXTURE_INTERNAL_FORMAT: *result = state->internalformat; return 1;
+    case GL_TEXTURE_COMPRESSED: *result = state->compressed ? GL_TRUE : GL_FALSE; return 1;
+    case GL_TEXTURE_COMPRESSED_IMAGE_SIZE: *result = state->compressed ? (GLint)state->data_size : 0; return 1;
     default:
         bits = texture_component_bits(state, pname);
         if (bits >= 0) { *result = bits; return 1; }
@@ -8247,6 +8828,12 @@ void APIENTRY glGetPointerv(GLenum pname, GLvoid** params) {
         break;
     case GL_EDGE_FLAG_ARRAY_POINTER:
         *params = (GLvoid*)g_edge_flag_array.pointer;
+        break;
+    case GL_SECONDARY_COLOR_ARRAY_POINTER_EXT:
+        *params = (GLvoid*)g_secondary_color_array.pointer;
+        break;
+    case GL_FOG_COORDINATE_ARRAY_POINTER_EXT:
+        *params = (GLvoid*)g_fog_coord_array.pointer;
         break;
     case GL_FEEDBACK_BUFFER_POINTER:
         *params = (GLvoid*)g_feedback_buffer;
@@ -8673,6 +9260,31 @@ DEFINE_RASTER_POS_VARIANT(s, GLshort)
 
 #undef DEFINE_RASTER_POS_VARIANT
 
+/* glWindowPos bypasses model-view/projection clipping.  Keep the proxy's
+ * observable raster state in sync and send one canonical float command to
+ * gl4es, which implements the same bypass on the browser side. */
+static void window_pos3f_compat(GLfloat x, GLfloat y, GLfloat z) {
+    struct { float x, y, z; } payload;
+    raster_pos4f_compat(x, y, z, 1.0f);
+    payload.x = x;
+    payload.y = y;
+    payload.z = z;
+    emit_gl_call(GLFN_WINDOW_POS3F, &payload, sizeof(payload));
+}
+
+#define DEFINE_WINDOW_POS_VARIANT(SUFFIX, TYPE) \
+void APIENTRY glWindowPos2##SUFFIX(TYPE x, TYPE y) { window_pos3f_compat((GLfloat)x, (GLfloat)y, 0.0f); } \
+void APIENTRY glWindowPos2##SUFFIX##v(const TYPE* v) { if (v) glWindowPos2##SUFFIX(v[0], v[1]); } \
+void APIENTRY glWindowPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { window_pos3f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z); } \
+void APIENTRY glWindowPos3##SUFFIX##v(const TYPE* v) { if (v) glWindowPos3##SUFFIX(v[0], v[1], v[2]); }
+
+DEFINE_WINDOW_POS_VARIANT(d, GLdouble)
+DEFINE_WINDOW_POS_VARIANT(f, GLfloat)
+DEFINE_WINDOW_POS_VARIANT(i, GLint)
+DEFINE_WINDOW_POS_VARIANT(s, GLshort)
+
+#undef DEFINE_WINDOW_POS_VARIANT
+
 typedef struct {
     const char* name;
     PROC proc;
@@ -8813,7 +9425,21 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         PROC_ENTRY(glSecondaryColor3fEXT),
         PROC_ENTRY(glSecondaryColor3fv),
         PROC_ENTRY(glSecondaryColor3fvEXT),
+        PROC_ENTRY(glSecondaryColor3bEXT),
+        PROC_ENTRY(glSecondaryColor3bvEXT),
+        PROC_ENTRY(glSecondaryColor3dEXT),
+        PROC_ENTRY(glSecondaryColor3dvEXT),
+        PROC_ENTRY(glSecondaryColor3iEXT),
+        PROC_ENTRY(glSecondaryColor3ivEXT),
+        PROC_ENTRY(glSecondaryColor3sEXT),
+        PROC_ENTRY(glSecondaryColor3svEXT),
+        PROC_ENTRY(glSecondaryColor3ubEXT),
         PROC_ENTRY(glSecondaryColor3ubvEXT),
+        PROC_ENTRY(glSecondaryColor3uiEXT),
+        PROC_ENTRY(glSecondaryColor3uivEXT),
+        PROC_ENTRY(glSecondaryColor3usEXT),
+        PROC_ENTRY(glSecondaryColor3usvEXT),
+        PROC_ENTRY(glSecondaryColorPointerEXT),
         PROC_ENTRY(glPointParameterf),
         PROC_ENTRY(glPointParameterfARB),
         PROC_ENTRY(glPointParameterfv),

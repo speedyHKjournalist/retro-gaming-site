@@ -114,6 +114,24 @@ colored cube. It is **not** enough for WineD3D or real games yet.
 `glGet*` queries currently return values cached in the guest proxy plus
 conservative defaults. They do not synchronously query browser/WebGL state.
 
+### OpenGL 1.3 / 1.4 core coverage
+
+`glGetString(GL_VERSION)` reports `1.4`. All OpenGL 1.3 and 1.4 core entry
+points are exported, available through `wglGetProcAddress`, and routed through
+the PCI/WASM transport. This includes every multitexture overload, transpose
+matrix operation, compressed texture upload/subimage entry point, separate
+blend factors, point integer parameters, fog-coordinate and secondary-color
+arrays, multi-draw, and the full 2D/3D `glWindowPos*` family.
+
+Compressed-texture readback is served from the proxy's cached upload when the
+whole compressed image is known locally. A partial compressed subimage still
+reaches gl4es, but intentionally invalidates that cache rather than returning
+stale bytes on a later `glGetCompressedTexImage` call.
+
+`GL_ARB_imaging` and `GL_ARB_vertex_program` are separate optional extensions,
+not requirements of the OpenGL 1.4 core profile; they are deliberately not
+advertised until their complete execution paths are implemented.
+
 ## Build the DLL
 
 From Linux/macOS with mingw-w64:
@@ -304,7 +322,7 @@ configuration.
 
 - `v86gl.sys` currently uses the fixed BAR base `0xF100`. Keep the v86gl PCI
   BAR at that address until the driver is upgraded to use PnP PCI resources.
-- The fixed-pipeline matrix stack, depth test, shading mode, face-culling, blending/alpha/scissor state, basic 2D texture calls, and client arrays above are forwarded to gl4es, but there is still no clipping, lighting, display lists, compressed textures, multitexture, VBOs, or WineD3D compatibility.
+- The fixed-pipeline matrix stack, depth test, shading mode, face-culling, blending/alpha/scissor state, 1D/2D/3D and compressed textures, multitexture, lighting, and client arrays above are forwarded to gl4es. It is still not a WineD3D implementation and does not provide OpenGL 1.5+ programmable-pipeline compatibility.
 - `glReadPixels` performs a synchronous PCI DMA readback. The host writes the result into the response area of the submitted guest-RAM command record before the IOCTL returns. It currently requires the browser-side gl4es renderer to be ready and supports the pixel formats accepted by the proxy's pack-state validation.
 - `SwapBuffers` is exported by `gdi32.dll`, not `opengl32.dll`; normal apps that import `SwapBuffers` from `gdi32.dll` are not intercepted by this DLL. This toy bridge presents on `glFlush`, `glFinish`, `wglSwapLayerBuffers`, and the nonstandard helper export `wglSwapBuffers`.
 - The driver exposes one shared buffer, so only one guest process can own the

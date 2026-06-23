@@ -221,7 +221,21 @@ EXPORTS
     glSecondaryColor3fEXT@12
     glSecondaryColor3fv@4
     glSecondaryColor3fvEXT@4
+    glSecondaryColor3bEXT@12
+    glSecondaryColor3bvEXT@4
+    glSecondaryColor3dEXT@24
+    glSecondaryColor3dvEXT@4
+    glSecondaryColor3iEXT@12
+    glSecondaryColor3ivEXT@4
+    glSecondaryColor3sEXT@12
+    glSecondaryColor3svEXT@4
+    glSecondaryColor3ubEXT@12
     glSecondaryColor3ubvEXT@4
+    glSecondaryColor3uiEXT@12
+    glSecondaryColor3uivEXT@4
+    glSecondaryColor3usEXT@12
+    glSecondaryColor3usvEXT@4
+    glSecondaryColorPointerEXT@16
     glPointParameterf@8
     glPointParameterfARB@8
     glPointParameterfv@8
@@ -486,3 +500,79 @@ EXPORTS
     glVertex4iv@4
     glVertex4s@16
     glVertex4sv@4
+
+    ; OpenGL 1.3 core entry points (the ARB spellings above remain exported).
+    glCompressedTexImage1D@28
+    glCompressedTexImage3D@36
+    glCompressedTexSubImage1D@28
+    glCompressedTexSubImage2D@36
+    glCompressedTexSubImage3D@44
+    glGetCompressedTexImage@12
+    glCompressedTexSubImage1DARB@28
+    glCompressedTexSubImage2DARB@36
+    glCompressedTexSubImage3DARB@44
+    glMultiTexCoord1d@12
+    glMultiTexCoord1dv@8
+    glMultiTexCoord1i@8
+    glMultiTexCoord1iv@8
+    glMultiTexCoord1s@8
+    glMultiTexCoord1sv@8
+    glMultiTexCoord2d@20
+    glMultiTexCoord2dv@8
+    glMultiTexCoord2i@12
+    glMultiTexCoord2iv@8
+    glMultiTexCoord2s@12
+    glMultiTexCoord2sv@8
+    glMultiTexCoord3d@28
+    glMultiTexCoord3dv@8
+    glMultiTexCoord3i@16
+    glMultiTexCoord3iv@8
+    glMultiTexCoord3s@16
+    glMultiTexCoord3sv@8
+    glMultiTexCoord4d@36
+    glMultiTexCoord4dv@8
+    glMultiTexCoord4i@20
+    glMultiTexCoord4iv@8
+    glMultiTexCoord4s@20
+    glMultiTexCoord4sv@8
+    glLoadTransposeMatrixf@4
+    glLoadTransposeMatrixd@4
+    glMultTransposeMatrixf@4
+    glMultTransposeMatrixd@4
+
+    ; OpenGL 1.4 core entry points (the EXT/ARB aliases stay available too).
+    glPointParameteri@8
+    glPointParameteriv@8
+    glFogCoordPointer@12
+    glFogCoordPointerEXT@12
+    glSecondaryColor3b@12
+    glSecondaryColor3bv@4
+    glSecondaryColor3d@24
+    glSecondaryColor3dv@4
+    glSecondaryColor3i@12
+    glSecondaryColor3iv@4
+    glSecondaryColor3s@12
+    glSecondaryColor3sv@4
+    glSecondaryColor3ub@12
+    glSecondaryColor3ubv@4
+    glSecondaryColor3ui@12
+    glSecondaryColor3uiv@4
+    glSecondaryColor3us@12
+    glSecondaryColor3usv@4
+    glSecondaryColorPointer@16
+    glWindowPos2d@16
+    glWindowPos2dv@4
+    glWindowPos2f@8
+    glWindowPos2fv@4
+    glWindowPos2i@8
+    glWindowPos2iv@4
+    glWindowPos2s@8
+    glWindowPos2sv@4
+    glWindowPos3d@24
+    glWindowPos3dv@4
+    glWindowPos3f@12
+    glWindowPos3fv@4
+    glWindowPos3i@12
+    glWindowPos3iv@4
+    glWindowPos3s@12
+    glWindowPos3sv@4

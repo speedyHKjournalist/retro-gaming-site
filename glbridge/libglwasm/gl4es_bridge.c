@@ -48,20 +48,48 @@ extern void glSampleCoverage(GLclampf value, GLboolean invert);
 extern void glGenerateMipmap(GLenum target);
 extern void glFogCoordf(GLfloat coord);
 extern void glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue);
+extern void glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride, const void* pointer);
 extern void glPointParameterf(GLenum pname, GLfloat param);
 extern void glPointParameterfv(GLenum pname, const GLfloat* params);
 extern void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                    GLsizei width, GLsizei height, GLint border,
                                    GLsizei image_size, const void* data);
+extern void glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat,
+                                   GLsizei width, GLint border, GLsizei image_size,
+                                   const void* data);
+extern void glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat,
+                                   GLsizei width, GLsizei height, GLsizei depth, GLint border,
+                                   GLsizei image_size, const void* data);
+extern void glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                                      GLsizei width, GLenum format, GLsizei image_size,
+                                      const void* data);
+extern void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset,
+                                      GLint yoffset, GLsizei width, GLsizei height,
+                                      GLenum format, GLsizei image_size, const void* data);
+extern void glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset,
+                                      GLint yoffset, GLint zoffset, GLsizei width,
+                                      GLsizei height, GLsizei depth, GLenum format,
+                                      GLsizei image_size, const void* data);
 extern void glTexImage3D(GLenum target, GLint level, GLint internalformat,
                          GLsizei width, GLsizei height, GLsizei depth, GLint border,
                          GLenum format, GLenum type, const void* pixels);
 extern void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                             GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
                             GLenum format, GLenum type, const void* pixels);
+extern void glPointParameteri(GLenum pname, GLint param);
+extern void glPointParameteriv(GLenum pname, const GLint* params);
+extern void glWindowPos3f(GLfloat x, GLfloat y, GLfloat z);
 
 #ifndef GL_TEXTURE0
 #define GL_TEXTURE0 0x84C0
+#endif
+
+#ifndef GL_SECONDARY_COLOR_ARRAY
+#define GL_SECONDARY_COLOR_ARRAY 0x845E
+#endif
+
+#ifndef GL_FOG_COORDINATE_ARRAY
+#define GL_FOG_COORDINATE_ARRAY 0x8457
 #endif
 
 static int32_t g_surface_x;
@@ -532,6 +560,50 @@ void v86gl_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalfor
 }
 
 EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat,
+                                  GLsizei width, GLint border, GLsizei image_size,
+                                  const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    glCompressedTexImage1D(target, level, internalformat, width, border, image_size, data);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat,
+                                  GLsizei width, GLsizei height, GLsizei depth, GLint border,
+                                  GLsizei image_size, const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    glCompressedTexImage3D(target, level, internalformat, width, height, depth, border,
+                           image_size, data);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                                     GLsizei width, GLenum format, GLsizei image_size,
+                                     const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    glCompressedTexSubImage1D(target, level, xoffset, width, format, image_size, data);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset,
+                                     GLint yoffset, GLsizei width, GLsizei height,
+                                     GLenum format, GLsizei image_size, const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    glCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format,
+                              image_size, data);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset,
+                                     GLint yoffset, GLint zoffset, GLsizei width,
+                                     GLsizei height, GLsizei depth, GLenum format,
+                                     GLsizei image_size, const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    glCompressedTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height,
+                              depth, format, image_size, data);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glTexImage3D(GLenum target, GLint level, GLint internalformat,
                         GLsizei width, GLsizei height, GLsizei depth, GLint border,
                         GLenum format, GLenum type, const void* pixels) {
@@ -947,6 +1019,24 @@ void v86gl_glPointParameterfv3(GLenum pname, GLfloat v0, GLfloat v1, GLfloat v2)
 }
 
 EMSCRIPTEN_KEEPALIVE
+void v86gl_glPointParameteri(GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glPointParameteri(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPointParameteriv(GLenum pname, const GLint* params) {
+    if (!params || !v86gl_ensure_ready()) return;
+    glPointParameteriv(pname, params);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glWindowPos3f(GLfloat x, GLfloat y, GLfloat z) {
+    if (!v86gl_ensure_ready()) return;
+    glWindowPos3f(x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glAlphaFunc(GLenum func, GLclampf ref) {
     if (!v86gl_ensure_ready()) return;
     glAlphaFunc(func, ref);
@@ -1056,6 +1146,8 @@ static V86GLClientArrayMeta v86gl_client_array_meta_at(const int32_t* values, ui
 
 static void v86gl_setup_client_arrays_mt(GLsizei tex_unit_count,
                                          GLenum restore_client_active,
+                                         GLboolean has_secondary_color,
+                                         GLboolean has_fog_coord,
                                          const int32_t* values) {
     V86GLClientArrayMeta vertex;
     V86GLClientArrayMeta color;
@@ -1106,6 +1198,33 @@ static void v86gl_setup_client_arrays_mt(GLsizei tex_unit_count,
         }
     }
 
+    if (has_secondary_color) {
+        V86GLClientArrayMeta secondary =
+            v86gl_client_array_meta_at(values, 3u + (uint32_t)tex_unit_count);
+        if (secondary.data && secondary.size == 3) {
+            glEnableClientState(GL_SECONDARY_COLOR_ARRAY);
+            glSecondaryColorPointer(secondary.size, secondary.type,
+                                    secondary.stride, secondary.data);
+        } else {
+            glDisableClientState(GL_SECONDARY_COLOR_ARRAY);
+        }
+    } else {
+        glDisableClientState(GL_SECONDARY_COLOR_ARRAY);
+    }
+
+    if (has_fog_coord) {
+        V86GLClientArrayMeta fog_coord = v86gl_client_array_meta_at(
+            values, 3u + (uint32_t)tex_unit_count + (has_secondary_color ? 1u : 0u));
+        if (fog_coord.data && fog_coord.size == 1) {
+            glEnableClientState(GL_FOG_COORDINATE_ARRAY);
+            glFogCoordPointer(fog_coord.type, fog_coord.stride, fog_coord.data);
+        } else {
+            glDisableClientState(GL_FOG_COORDINATE_ARRAY);
+        }
+    } else {
+        glDisableClientState(GL_FOG_COORDINATE_ARRAY);
+    }
+
     glClientActiveTexture(restore_client_active);
 }
 
@@ -1130,9 +1249,12 @@ void v86gl_glDrawArraysPacked(GLenum mode, GLsizei count,
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glDrawArraysPackedMT(GLenum mode, GLsizei count,
                                 GLsizei tex_unit_count, GLenum restore_client_active,
+                                GLboolean has_secondary_color,
+                                GLboolean has_fog_coord,
                                 const int32_t* array_meta) {
     if (!v86gl_ensure_ready()) return;
-    v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active, array_meta);
+    v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
+                                 has_secondary_color, has_fog_coord, array_meta);
     glDrawArrays(mode, 0, count);
 }
 
@@ -1157,8 +1279,11 @@ void v86gl_glDrawElementsPacked(GLenum mode, GLsizei count, GLenum type, const v
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glDrawElementsPackedMT(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                   GLsizei tex_unit_count, GLenum restore_client_active,
+                                  GLboolean has_secondary_color,
+                                  GLboolean has_fog_coord,
                                   const int32_t* array_meta) {
     if (!v86gl_ensure_ready()) return;
-    v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active, array_meta);
+    v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
+                                 has_secondary_color, has_fog_coord, array_meta);
     glDrawElements(mode, count, type, indices);
 }

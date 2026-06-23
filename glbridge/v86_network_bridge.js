@@ -22,6 +22,8 @@
     const OP_GL_BATCH = 23;
 
     const CLIENT_ARRAY_MT_MAGIC = 0x544D4143;
+    const CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT = 0x80000000;
+    const CLIENT_ARRAY_MT_FOG_COORD_BIT = 0x40000000;
     const V86GL_CTRL_MAKE_CURRENT = 0xFFF0;
     const V86GL_CTRL_RELEASE_CURRENT = 0xFFF1;
     const V86GL_CTRL_DESTROY_CONTEXT = 0xFFF2;
@@ -133,6 +135,14 @@
     const GLFN_COMPRESSED_TEX_IMAGE_2D = 104;
     const GLFN_TEX_IMAGE_3D = 105;
     const GLFN_TEX_SUB_IMAGE_3D = 106;
+    const GLFN_COMPRESSED_TEX_IMAGE_1D = 107;
+    const GLFN_COMPRESSED_TEX_IMAGE_3D = 108;
+    const GLFN_COMPRESSED_TEX_SUB_IMAGE_1D = 109;
+    const GLFN_COMPRESSED_TEX_SUB_IMAGE_2D = 110;
+    const GLFN_COMPRESSED_TEX_SUB_IMAGE_3D = 111;
+    const GLFN_WINDOW_POS3F = 112;
+    const GLFN_POINT_PARAMETERI = 113;
+    const GLFN_POINT_PARAMETERIV = 114;
 
     const V86GL_READ_PIXELS_HEADER_SIZE = 32;
     const V86GL_READ_PIXELS_STATUS_PENDING = 0;
@@ -263,6 +273,14 @@
         [GLFN_COMPRESSED_TEX_IMAGE_2D]: "glCompressedTexImage2D",
         [GLFN_TEX_IMAGE_3D]: "glTexImage3D",
         [GLFN_TEX_SUB_IMAGE_3D]: "glTexSubImage3D",
+        [GLFN_COMPRESSED_TEX_IMAGE_1D]: "glCompressedTexImage1D",
+        [GLFN_COMPRESSED_TEX_IMAGE_3D]: "glCompressedTexImage3D",
+        [GLFN_COMPRESSED_TEX_SUB_IMAGE_1D]: "glCompressedTexSubImage1D",
+        [GLFN_COMPRESSED_TEX_SUB_IMAGE_2D]: "glCompressedTexSubImage2D",
+        [GLFN_COMPRESSED_TEX_SUB_IMAGE_3D]: "glCompressedTexSubImage3D",
+        [GLFN_WINDOW_POS3F]: "glWindowPos3f",
+        [GLFN_POINT_PARAMETERI]: "glPointParameteri",
+        [GLFN_POINT_PARAMETERIV]: "glPointParameteriv",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -560,6 +578,21 @@
             case GLFN_COMPRESSED_TEX_IMAGE_2D:
                 this.callCompressedTexImage2D(p);
                 break;
+            case GLFN_COMPRESSED_TEX_IMAGE_1D:
+                this.callCompressedTexImage(p, 1);
+                break;
+            case GLFN_COMPRESSED_TEX_IMAGE_3D:
+                this.callCompressedTexImage(p, 3);
+                break;
+            case GLFN_COMPRESSED_TEX_SUB_IMAGE_1D:
+                this.callCompressedTexSubImage(p, 1);
+                break;
+            case GLFN_COMPRESSED_TEX_SUB_IMAGE_2D:
+                this.callCompressedTexSubImage(p, 2);
+                break;
+            case GLFN_COMPRESSED_TEX_SUB_IMAGE_3D:
+                this.callCompressedTexSubImage(p, 3);
+                break;
             case GLFN_TEX_IMAGE_3D:
                 this.callTexImage3D(p);
                 break;
@@ -640,6 +673,15 @@
                 break;
             case GLFN_POINT_PARAMETERFV:
                 this.callGL("PointParameterfv3", [u32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12)], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_POINT_PARAMETERI:
+                this.callGL("PointParameteri", [u32(p, 0), i32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_POINT_PARAMETERIV:
+                this.callPointParameteriv(p);
+                break;
+            case GLFN_WINDOW_POS3F:
+                this.callGL("WindowPos3f", [f32(p, 0), f32(p, 4), f32(p, 8)], ["number", "number", "number"]);
                 break;
             case GLFN_ALPHA_FUNC:
                 this.callGL("AlphaFunc", [u32(p, 0), f32(p, 4)], ["number", "number"]);
@@ -904,6 +946,68 @@
                 ], ["number", "number", "number", "number", "number", "number", "number", "number"]));
         }
 
+        callCompressedTexImage(p, dimensions) {
+            if (p.length < 32) {
+                return false;
+            }
+
+            const dataSize = u32(p, 28);
+            if (32 + dataSize > p.length) {
+                return false;
+            }
+            const bytes = dataSize ? p.slice(32, 32 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr => {
+                const target = u32(p, 0), level = i32(p, 4), internalformat = u32(p, 8);
+                const width = i32(p, 12), height = i32(p, 16), depth = i32(p, 20), border = i32(p, 24);
+                if (dimensions === 1) {
+                    return this.callGL("CompressedTexImage1D", [
+                        target, level, internalformat, width, border, dataSize, ptr,
+                    ], ["number", "number", "number", "number", "number", "number", "number"]);
+                }
+                return this.callGL("CompressedTexImage3D", [
+                    target, level, internalformat, width, height, depth, border, dataSize, ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]);
+            });
+        }
+
+        callCompressedTexSubImage(p, dimensions) {
+            if (p.length < 40) {
+                return false;
+            }
+
+            const dataSize = u32(p, 36);
+            if (40 + dataSize > p.length) {
+                return false;
+            }
+            const bytes = dataSize ? p.slice(40, 40 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr => {
+                const target = u32(p, 0), level = i32(p, 4);
+                const xoffset = i32(p, 8), yoffset = i32(p, 12), zoffset = i32(p, 16);
+                const width = i32(p, 20), height = i32(p, 24), depth = i32(p, 28), format = u32(p, 32);
+                if (dimensions === 1) {
+                    return this.callGL("CompressedTexSubImage1D", [
+                        target, level, xoffset, width, format, dataSize, ptr,
+                    ], ["number", "number", "number", "number", "number", "number", "number"]);
+                }
+                if (dimensions === 2) {
+                    return this.callGL("CompressedTexSubImage2D", [
+                        target, level, xoffset, yoffset, width, height, format, dataSize, ptr,
+                    ], ["number", "number", "number", "number", "number", "number", "number", "number", "number"]);
+                }
+                return this.callGL("CompressedTexSubImage3D", [
+                    target, level, xoffset, yoffset, zoffset, width, height, depth, format, dataSize, ptr,
+                ], ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number"]);
+            });
+        }
+
+        callPointParameteriv(p) {
+            if (p.length < 16) {
+                return false;
+            }
+            return this.withHeapI32([i32(p, 4), i32(p, 8), i32(p, 12)], ptr =>
+                this.callGL("PointParameteriv", [u32(p, 0), ptr], ["number", "number"]));
+        }
+
         callTexImage3D(p) {
             if (p.length < 40) {
                 return false;
@@ -1046,12 +1150,17 @@
             if (p.length >= 20 && u32(p, 8) === CLIENT_ARRAY_MT_MAGIC) {
                 const mode = u32(p, 0);
                 const count = i32(p, 4);
-                const texUnitCount = u32(p, 12);
+                const encodedTexUnitCount = u32(p, 12);
+                const hasSecondaryColor = (encodedTexUnitCount & CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT) !== 0;
+                const hasFogCoord = (encodedTexUnitCount & CLIENT_ARRAY_MT_FOG_COORD_BIT) !== 0;
+                const texUnitCount = encodedTexUnitCount &
+                    ~(CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT | CLIENT_ARRAY_MT_FOG_COORD_BIT);
                 const clientActiveTexture = u32(p, 16);
                 if (texUnitCount > 8) {
                     return false;
                 }
-                const parsed = this.parseClientArrayBlocks(p, 20, 3 + texUnitCount);
+                const parsed = this.parseClientArrayBlocks(p, 20,
+                    3 + texUnitCount + (hasSecondaryColor ? 1 : 0) + (hasFogCoord ? 1 : 0));
                 if (!parsed) {
                     return false;
                 }
@@ -1059,8 +1168,9 @@
                 return this.withHeapBlocks(parsed.blocks, ptrs =>
                     this.withClientArrayMeta(parsed.blocks, ptrs, metaPtr =>
                         this.callGL("DrawArraysPackedMT", [
-                            mode, count, texUnitCount, clientActiveTexture, metaPtr,
-                        ], ["number", "number", "number", "number", "number"])));
+                            mode, count, texUnitCount, clientActiveTexture,
+                            hasSecondaryColor ? 1 : 0, hasFogCoord ? 1 : 0, metaPtr,
+                        ], ["number", "number", "number", "number", "number", "number", "number"])));
             }
 
             const parsed = this.parseClientArrayBlocks(p, 8, 4);
@@ -1098,12 +1208,17 @@
                 const mode = u32(p, 0);
                 const count = i32(p, 4);
                 const indexType = u32(p, 8);
-                const texUnitCount = u32(p, 20);
+                const encodedTexUnitCount = u32(p, 20);
+                const hasSecondaryColor = (encodedTexUnitCount & CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT) !== 0;
+                const hasFogCoord = (encodedTexUnitCount & CLIENT_ARRAY_MT_FOG_COORD_BIT) !== 0;
+                const texUnitCount = encodedTexUnitCount &
+                    ~(CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT | CLIENT_ARRAY_MT_FOG_COORD_BIT);
                 const clientActiveTexture = u32(p, 24);
                 if (texUnitCount > 8) {
                     return false;
                 }
-                const parsed = this.parseClientArrayBlocks(p, 28 + indexDataSize, 3 + texUnitCount);
+                const parsed = this.parseClientArrayBlocks(p, 28 + indexDataSize,
+                    3 + texUnitCount + (hasSecondaryColor ? 1 : 0) + (hasFogCoord ? 1 : 0));
                 if (!parsed) {
                     return false;
                 }
@@ -1113,10 +1228,11 @@
                     this.withClientArrayMeta(parsed.blocks, ptrs.slice(1), metaPtr =>
                         this.callGL("DrawElementsPackedMT", [
                             mode, count, indexType, ptrs[0],
-                            texUnitCount, clientActiveTexture, metaPtr,
+                            texUnitCount, clientActiveTexture,
+                            hasSecondaryColor ? 1 : 0, hasFogCoord ? 1 : 0, metaPtr,
                         ], [
                             "number", "number", "number", "number",
-                            "number", "number", "number",
+                            "number", "number", "number", "number", "number",
                         ])));
             }
 
