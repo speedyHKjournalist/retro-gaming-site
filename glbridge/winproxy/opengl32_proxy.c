@@ -146,8 +146,10 @@ typedef int GLintptrARB;
 #define GL_MAX_EVAL_ORDER     0x0D30
 #define GL_MAX_CLIP_PLANES    0x0D32
 #define GL_MAX_TEXTURE_SIZE   0x0D33
+#define GL_MAX_PIXEL_MAP_TABLE 0x0D34
 #define GL_MAX_ATTRIB_STACK_DEPTH 0x0D35
 #define GL_MAX_MODELVIEW_STACK_DEPTH 0x0D36
+#define GL_MAX_NAME_STACK_DEPTH 0x0D37
 #define GL_MAX_PROJECTION_STACK_DEPTH 0x0D38
 #define GL_MAX_TEXTURE_STACK_DEPTH 0x0D39
 #define GL_MAX_VIEWPORT_DIMS  0x0D3A
@@ -783,7 +785,6 @@ static const char* g_gl_extensions =
     "GL_EXT_blend_subtract "
     "GL_EXT_blend_minmax "
     "GL_ARB_texture_cube_map "
-    "GL_ARB_texture_compression "
     "GL_ARB_multisample "
     "GL_ARB_texture_env_dot3 "
     "GL_ARB_texture_border_clamp "
@@ -793,7 +794,6 @@ static const char* g_gl_extensions =
     "GL_ARB_shadow "
     "GL_EXT_fog_coord "
     "GL_EXT_multi_draw_arrays "
-    "GL_EXT_secondary_color "
     "GL_ARB_point_parameters "
     "GL_EXT_blend_func_separate "
     "GL_EXT_stencil_wrap "
@@ -815,6 +815,7 @@ static const char* g_gl_extensions =
 static const char* g_wgl_extensions =
     "WGL_ARB_extensions_string "
     "WGL_EXT_extensions_string "
+    "WGL_ARB_pixel_format "
     "WGL_EXT_swap_control";
 static int g_swap_interval = 0;
 
@@ -2806,6 +2807,86 @@ int APIENTRY wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd) {
     return 1;
 }
 
+/* A single RGBA/double-buffer format backs the browser canvas.  This is a
+ * deliberately narrow WGL_ARB_pixel_format implementation, but returning a
+ * valid format keeps clients from calling a NULL extension pointer. */
+BOOL APIENTRY wglChoosePixelFormatARB(HDC hdc, const int* int_attribs,
+                                      const FLOAT* float_attribs,
+                                      UINT max_formats, int* formats,
+                                      UINT* format_count) {
+    if (g_trace_calls) {
+        v86gl_trace("wglChoosePixelFormatARB max=%lu attrs=%08lx floatAttrs=%08lx",
+                    (unsigned long)max_formats, (unsigned long)(uintptr_t)int_attribs,
+                    (unsigned long)(uintptr_t)float_attribs);
+    }
+    (void)hdc;
+    (void)int_attribs;
+    (void)float_attribs;
+
+    if (!max_formats || !formats || !format_count) {
+        if (format_count) *format_count = 0;
+        return FALSE;
+    }
+
+    formats[0] = 1;
+    *format_count = 1;
+    return TRUE;
+}
+
+static int wgl_pixel_format_attribute_value(int attribute) {
+    switch (attribute) {
+    case 0x2000: return 1;          /* WGL_NUMBER_PIXEL_FORMATS_ARB */
+    case 0x2001: return TRUE;       /* WGL_DRAW_TO_WINDOW_ARB */
+    case 0x2002: return FALSE;      /* WGL_DRAW_TO_BITMAP_ARB */
+    case 0x2003: return 0x2027;     /* WGL_FULL_ACCELERATION_ARB */
+    case 0x200F: return FALSE;      /* WGL_SUPPORT_GDI_ARB */
+    case 0x2010: return TRUE;       /* WGL_SUPPORT_OPENGL_ARB */
+    case 0x2011: return TRUE;       /* WGL_DOUBLE_BUFFER_ARB */
+    case 0x2012: return FALSE;      /* WGL_STEREO_ARB */
+    case 0x2013: return 0x202B;     /* WGL_TYPE_RGBA_ARB */
+    case 0x2014: return 32;         /* WGL_COLOR_BITS_ARB */
+    case 0x2015:                   /* WGL_RED_BITS_ARB */
+    case 0x2017:                   /* WGL_GREEN_BITS_ARB */
+    case 0x2019:                   /* WGL_BLUE_BITS_ARB */
+    case 0x201B: return 8;          /* WGL_ALPHA_BITS_ARB */
+    case 0x201D: return 24;         /* WGL_DEPTH_BITS_ARB */
+    case 0x2023: return 8;          /* WGL_STENCIL_BITS_ARB */
+    default: return 0;
+    }
+}
+
+BOOL APIENTRY wglGetPixelFormatAttribivARB(HDC hdc, int pixel_format,
+                                            int layer_plane, UINT count,
+                                            const int* attributes,
+                                            int* values) {
+    UINT i;
+    (void)hdc;
+    if (pixel_format != 1 || layer_plane != 0 ||
+        (count && (!attributes || !values))) {
+        return FALSE;
+    }
+    for (i = 0; i < count; i++) {
+        values[i] = wgl_pixel_format_attribute_value(attributes[i]);
+    }
+    return TRUE;
+}
+
+BOOL APIENTRY wglGetPixelFormatAttribfvARB(HDC hdc, int pixel_format,
+                                            int layer_plane, UINT count,
+                                            const int* attributes,
+                                            FLOAT* values) {
+    UINT i;
+    if (pixel_format != 1 || layer_plane != 0 ||
+        (count && (!attributes || !values))) {
+        return FALSE;
+    }
+    for (i = 0; i < count; i++) {
+        values[i] = (FLOAT)wgl_pixel_format_attribute_value(attributes[i]);
+    }
+    (void)hdc;
+    return TRUE;
+}
+
 __declspec(dllexport)
 BOOL APIENTRY wglSetPixelFormat(HDC hdc, int format, const PIXELFORMATDESCRIPTOR* ppfd) {
     (void)hdc;
@@ -3038,23 +3119,38 @@ void APIENTRY wglAddSwapHintRectWIN(int x, int y, int width, int height) {
     (void)height;
 }
 
+/* GL_WIN_swap_hint names this as a GL entry point, rather than a WGL one. */
+void APIENTRY glAddSwapHintRectWIN(int x, int y, int width, int height) {
+    wglAddSwapHintRectWIN(x, y, width, height);
+}
+
 __declspec(dllexport)
 const char* APIENTRY wglGetExtensionsStringARB(HDC hdc) {
     (void)hdc;
+    if (g_trace_calls) {
+        v86gl_trace("wglGetExtensionsStringARB -> %08lx", (unsigned long)(uintptr_t)g_wgl_extensions);
+    }
     return g_wgl_extensions;
 }
 
 __declspec(dllexport)
 const char* APIENTRY wglGetExtensionsStringEXT(void) {
+    if (g_trace_calls) {
+        v86gl_trace("wglGetExtensionsStringEXT -> %08lx", (unsigned long)(uintptr_t)g_wgl_extensions);
+    }
     return g_wgl_extensions;
 }
 
 __declspec(dllexport)
 const GLubyte* APIENTRY glGetString(GLenum name) {
+    if (g_trace_calls) {
+        v86gl_trace("glGetString name=0x%04lx", (unsigned long)name);
+    }
+
     switch (name) {
     case GL_VENDOR:     return (const GLubyte*)"v86";
     case GL_RENDERER:   return (const GLubyte*)"v86 fake OpenGL over PCI DMA";
-    case GL_VERSION:    return (const GLubyte*)"1.1";
+    case GL_VERSION:    return (const GLubyte*)"1.3";
     case GL_EXTENSIONS:
         return (const GLubyte*)g_gl_extensions;
     default:
@@ -3067,7 +3163,7 @@ __declspec(dllexport)
 GLenum APIENTRY glGetError(void) {
     GLenum e = g_error;
     g_error = 0;
-    if (e) {
+    if (g_trace_calls || e) {
         v86gl_error("glGetError -> 0x%04lx frame=%lu queuedCommands=%lu",
                     (unsigned long)e,
                     (unsigned long)g_frame_id,
@@ -3085,7 +3181,14 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     int i;
 
     if (!params) {
+        if (g_trace_calls) {
+            v86gl_trace("glGetIntegerv pname=0x%04lx params=NULL", (unsigned long)pname);
+        }
         return;
+    }
+
+    if (g_trace_calls) {
+        v86gl_trace("glGetIntegerv pname=0x%04lx", (unsigned long)pname);
     }
 
     init_query_state();
@@ -3407,6 +3510,10 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_MAX_TEXTURE_SIZE:
         params[0] = 2048;
         break;
+    case GL_MAX_PIXEL_MAP_TABLE:
+        /* All ten pixel-map targets have a small but valid table. */
+        params[0] = 256;
+        break;
     case GL_MAX_VIEWPORT_DIMS:
         params[0] = 4096;
         params[1] = 4096;
@@ -3422,6 +3529,9 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_MAX_MODELVIEW_STACK_DEPTH:
         params[0] = 32;
+        break;
+    case GL_MAX_NAME_STACK_DEPTH:
+        params[0] = (GLint)(sizeof(g_name_stack) / sizeof(g_name_stack[0]));
         break;
     case GL_MAX_PROJECTION_STACK_DEPTH:
         params[0] = 2;
@@ -3499,6 +3609,11 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         else g_error = GL_INVALID_ENUM;
         break;
     }
+
+    if (g_trace_calls) {
+        v86gl_trace("glGetIntegerv result=0x%04lx value=%ld error=0x%04lx",
+                    (unsigned long)pname, (long)params[0], (unsigned long)g_error);
+    }
 }
 
 __declspec(dllexport)
@@ -3508,7 +3623,14 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     int i;
 
     if (!params) {
+        if (g_trace_calls) {
+            v86gl_trace("glGetFloatv pname=0x%04lx params=NULL", (unsigned long)pname);
+        }
         return;
+    }
+
+    if (g_trace_calls) {
+        v86gl_trace("glGetFloatv pname=0x%04lx", (unsigned long)pname);
     }
 
     init_query_state();
@@ -3648,7 +3770,14 @@ void APIENTRY glGetDoublev(GLenum pname, GLdouble* params) {
     GLenum old_error;
 
     if (!params) {
+        if (g_trace_calls) {
+            v86gl_trace("glGetDoublev pname=0x%04lx params=NULL", (unsigned long)pname);
+        }
         return;
+    }
+
+    if (g_trace_calls) {
+        v86gl_trace("glGetDoublev pname=0x%04lx", (unsigned long)pname);
     }
 
     old_error = g_error;
@@ -3671,7 +3800,14 @@ void APIENTRY glGetBooleanv(GLenum pname, GLboolean* params) {
     GLenum old_error;
 
     if (!params) {
+        if (g_trace_calls) {
+            v86gl_trace("glGetBooleanv pname=0x%04lx params=NULL", (unsigned long)pname);
+        }
         return;
+    }
+
+    if (g_trace_calls) {
+        v86gl_trace("glGetBooleanv pname=0x%04lx", (unsigned long)pname);
     }
 
     old_error = g_error;
@@ -3689,23 +3825,37 @@ void APIENTRY glGetBooleanv(GLenum pname, GLboolean* params) {
 __declspec(dllexport)
 GLboolean APIENTRY glIsEnabled(GLenum cap) {
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
+    GLboolean enabled;
 
     switch (cap) {
     case GL_VERTEX_ARRAY:
-        return g_vertex_array.enabled ? GL_TRUE : GL_FALSE;
+        enabled = g_vertex_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
     case GL_COLOR_ARRAY:
-        return g_color_array.enabled ? GL_TRUE : GL_FALSE;
+        enabled = g_color_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
     case GL_INDEX_ARRAY:
-        return g_index_array.enabled ? GL_TRUE : GL_FALSE;
+        enabled = g_index_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
     case GL_TEXTURE_COORD_ARRAY:
-        return texcoord->enabled ? GL_TRUE : GL_FALSE;
+        enabled = texcoord->enabled ? GL_TRUE : GL_FALSE;
+        break;
     case GL_NORMAL_ARRAY:
-        return g_normal_array.enabled ? GL_TRUE : GL_FALSE;
+        enabled = g_normal_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
     case GL_EDGE_FLAG_ARRAY:
-        return g_edge_flag_array.enabled ? GL_TRUE : GL_FALSE;
+        enabled = g_edge_flag_array.enabled ? GL_TRUE : GL_FALSE;
+        break;
     default:
-        return get_cap_state(cap) ? GL_TRUE : GL_FALSE;
+        enabled = get_cap_state(cap) ? GL_TRUE : GL_FALSE;
+        break;
     }
+
+    if (g_trace_calls) {
+        v86gl_trace("glIsEnabled cap=0x%04lx result=%u",
+                    (unsigned long)cap, (unsigned int)enabled);
+    }
+    return enabled;
 }
 
 __declspec(dllexport)
@@ -3751,6 +3901,9 @@ void APIENTRY glClear(GLbitfield mask) {
 __declspec(dllexport)
 void APIENTRY glBegin(GLenum mode) {
     uint32_t payload = (uint32_t)mode;
+    if (g_trace_calls) {
+        v86gl_trace("glBegin mode=0x%04lx", (unsigned long)mode);
+    }
     emit_gl_call(GLFN_BEGIN, &payload, sizeof(payload));
 }
 
@@ -3860,6 +4013,11 @@ __declspec(dllexport)
 void APIENTRY glLoadMatrixf(const GLfloat* m) {
     float payload[16];
 
+    if (g_trace_calls) {
+        v86gl_trace("glLoadMatrixf enter matrixMode=0x%04lx activeTexture=0x%04lx ptr=%08lx",
+                    (unsigned long)g_matrix_mode, (unsigned long)g_active_texture,
+                    (unsigned long)(uintptr_t)m);
+    }
     if (!m) {
         g_error = GL_INVALID_VALUE;
         return;
@@ -3869,6 +4027,9 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) {
     if (!current_matrix(NULL, NULL)) return;
     CopyMemory(current_matrix(NULL, NULL), m, sizeof(payload));
     emit_gl_call(GLFN_LOAD_MATRIXF, payload, sizeof(payload));
+    if (g_trace_calls) {
+        v86gl_trace("glLoadMatrixf leave queued=%lu", (unsigned long)g_dma_command_count);
+    }
 }
 
 __declspec(dllexport)
@@ -4355,6 +4516,7 @@ void APIENTRY glBufferData(GLenum target, GLsizeiptrARB size,
     glBufferDataARB(target, size, data, usage);
 }
 
+__declspec(dllexport)
 void APIENTRY glBufferSubDataARB(GLenum target, GLintptrARB offset,
                                  GLsizeiptrARB size, const GLvoid* data) {
     BufferObjectState* state = bound_buffer_state(target);
@@ -4370,6 +4532,24 @@ void APIENTRY glBufferSubDataARB(GLenum target, GLintptrARB offset,
 void APIENTRY glBufferSubData(GLenum target, GLintptrARB offset,
                               GLsizeiptrARB size, const GLvoid* data) {
     glBufferSubDataARB(target, offset, size, data);
+}
+
+__declspec(dllexport)
+void APIENTRY glGetBufferSubDataARB(GLenum target, GLintptrARB offset,
+                                    GLsizeiptrARB size, GLvoid* data) {
+    BufferObjectState* state = bound_buffer_state(target);
+    if (!state) return;
+    if (offset < 0 || size < 0 || (size && !data) ||
+        (uint32_t)offset > state->size || (uint32_t)size > state->size - (uint32_t)offset) {
+        g_error = GL_INVALID_VALUE;
+        return;
+    }
+    if (size) CopyMemory(data, state->data + offset, (SIZE_T)size);
+}
+
+void APIENTRY glGetBufferSubData(GLenum target, GLintptrARB offset,
+                                 GLsizeiptrARB size, GLvoid* data) {
+    glGetBufferSubDataARB(target, offset, size, data);
 }
 
 GLboolean APIENTRY glIsBufferARB(GLuint buffer) {
@@ -4561,6 +4741,35 @@ void APIENTRY glCompressedTexImage2D(GLenum target, GLint level,
                                      GLsizei image_size, const GLvoid* data) {
     glCompressedTexImage2DARB(target, level, internalformat, width, height,
                               border, image_size, data);
+}
+
+/* The WebGL/GLES backend only has a routed compressed-2D upload path.  Keep
+ * the remaining ARB entry points callable so probing applications do not
+ * jump through a NULL function pointer; report their unsupported operation
+ * through the normal OpenGL error channel. */
+void APIENTRY glCompressedTexImage1DARB(GLenum target, GLint level,
+                                        GLenum internalformat, GLsizei width,
+                                        GLint border, GLsizei image_size,
+                                        const GLvoid* data) {
+    (void)target; (void)level; (void)internalformat; (void)width;
+    (void)border; (void)image_size; (void)data;
+    g_error = GL_INVALID_OPERATION;
+}
+
+void APIENTRY glCompressedTexImage3DARB(GLenum target, GLint level,
+                                        GLenum internalformat, GLsizei width,
+                                        GLsizei height, GLsizei depth,
+                                        GLint border, GLsizei image_size,
+                                        const GLvoid* data) {
+    (void)target; (void)level; (void)internalformat; (void)width;
+    (void)height; (void)depth; (void)border; (void)image_size; (void)data;
+    g_error = GL_INVALID_OPERATION;
+}
+
+void APIENTRY glGetCompressedTexImageARB(GLenum target, GLint level,
+                                         GLvoid* image) {
+    (void)target; (void)level; (void)image;
+    g_error = GL_INVALID_OPERATION;
 }
 
 void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
@@ -5422,6 +5631,9 @@ static void emit_multi_tex_coord4f(GLenum target, GLfloat s, GLfloat t, GLfloat 
         float q;
     } payload;
 
+    if (g_trace_calls) {
+        v86gl_trace("glMultiTexCoord4f enter target=0x%04lx", (unsigned long)target);
+    }
     if (target < GL_TEXTURE0_ARB ||
         target >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
         g_error = GL_INVALID_ENUM;
@@ -5678,6 +5890,14 @@ void APIENTRY glSecondaryColor3fv(const GLfloat* values) {
 
 void APIENTRY glSecondaryColor3fvEXT(const GLfloat* values) {
     glSecondaryColor3fv(values);
+}
+
+void APIENTRY glSecondaryColor3ubvEXT(const GLubyte* values) {
+    if (values) {
+        glSecondaryColor3f((GLfloat)values[0] / 255.0f,
+                           (GLfloat)values[1] / 255.0f,
+                           (GLfloat)values[2] / 255.0f);
+    }
 }
 
 static void cache_material_values(GLenum face, GLenum pname, const GLfloat* values) {
@@ -6357,6 +6577,11 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         uint32_t client_active_texture;
     } header;
 
+    if (g_trace_calls) {
+        v86gl_trace("glDrawArrays enter mode=0x%04lx first=%ld count=%ld vertexPtr=%08lx",
+                    (unsigned long)mode, (long)first, (long)count,
+                    (unsigned long)(uintptr_t)g_vertex_array.pointer);
+    }
     if (first < 0 || count < 0) {
         g_error = GL_INVALID_VALUE;
         return;
@@ -6408,6 +6633,9 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
     emit_gl_call(GLFN_DRAW_ARRAYS, payload, total_size);
     HeapFree(GetProcessHeap(), 0, payload);
+    if (g_trace_calls) {
+        v86gl_trace("glDrawArrays leave queued=%lu", (unsigned long)g_dma_command_count);
+    }
 }
 
 __declspec(dllexport)
@@ -6434,6 +6662,12 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         uint32_t client_active_texture;
     } header;
 
+    if (g_trace_calls) {
+        v86gl_trace("glDrawElements enter mode=0x%04lx count=%ld type=0x%04lx indices=%08lx vertexPtr=%08lx",
+                    (unsigned long)mode, (long)count, (unsigned long)type,
+                    (unsigned long)(uintptr_t)indices,
+                    (unsigned long)(uintptr_t)g_vertex_array.pointer);
+    }
     if (count < 0) {
         g_error = GL_INVALID_VALUE;
         return;
@@ -6520,6 +6754,9 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 
     emit_gl_call(GLFN_DRAW_ELEMENTS, payload, total_size);
     HeapFree(GetProcessHeap(), 0, payload);
+    if (g_trace_calls) {
+        v86gl_trace("glDrawElements leave queued=%lu", (unsigned long)g_dma_command_count);
+    }
 }
 
 __declspec(dllexport)
@@ -7565,16 +7802,27 @@ GLboolean APIENTRY glIsList(GLuint list) {
 
 __declspec(dllexport)
 void APIENTRY glNewList(GLuint list, GLenum mode) {
+    if (g_trace_calls) {
+        v86gl_trace("glNewList list=%lu mode=0x%04lx (display-list replay is not implemented)",
+                    (unsigned long)list, (unsigned long)mode);
+    }
     (void)list;
     (void)mode;
 }
 
 __declspec(dllexport)
 void APIENTRY glEndList(void) {
+    if (g_trace_calls) {
+        v86gl_trace("glEndList (display-list replay is not implemented)");
+    }
 }
 
 __declspec(dllexport)
 void APIENTRY glCallList(GLuint list) {
+    if (g_trace_calls) {
+        v86gl_trace("glCallList list=%lu (no-op: display-list replay is not implemented)",
+                    (unsigned long)list);
+    }
     (void)list;
 }
 
@@ -8439,7 +8687,11 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         PROC_ENTRY(glGetError),
         PROC_ENTRY(wglGetExtensionsStringARB),
         PROC_ENTRY(wglGetExtensionsStringEXT),
+        PROC_ENTRY(wglChoosePixelFormatARB),
+        PROC_ENTRY(wglGetPixelFormatAttribivARB),
+        PROC_ENTRY(wglGetPixelFormatAttribfvARB),
         PROC_ENTRY(wglAddSwapHintRectWIN),
+        PROC_ENTRY(glAddSwapHintRectWIN),
         PROC_ENTRY(glGetIntegerv),
         PROC_ENTRY(glGetFloatv),
         PROC_ENTRY(glGetDoublev),
@@ -8561,6 +8813,7 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         PROC_ENTRY(glSecondaryColor3fEXT),
         PROC_ENTRY(glSecondaryColor3fv),
         PROC_ENTRY(glSecondaryColor3fvEXT),
+        PROC_ENTRY(glSecondaryColor3ubvEXT),
         PROC_ENTRY(glPointParameterf),
         PROC_ENTRY(glPointParameterfARB),
         PROC_ENTRY(glPointParameterfv),
@@ -8579,6 +8832,8 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         PROC_ENTRY(glBufferData),
         PROC_ENTRY(glBufferSubDataARB),
         PROC_ENTRY(glBufferSubData),
+        PROC_ENTRY(glGetBufferSubDataARB),
+        PROC_ENTRY(glGetBufferSubData),
         PROC_ENTRY(glIsBufferARB),
         PROC_ENTRY(glIsBuffer),
         PROC_ENTRY(glMapBufferARB),
@@ -8591,6 +8846,9 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         PROC_ENTRY(glGetBufferPointerv),
         PROC_ENTRY(glCompressedTexImage2DARB),
         PROC_ENTRY(glCompressedTexImage2D),
+        PROC_ENTRY(glCompressedTexImage1DARB),
+        PROC_ENTRY(glCompressedTexImage3DARB),
+        PROC_ENTRY(glGetCompressedTexImageARB),
         PROC_ENTRY(glTexImage3DEXT),
         PROC_ENTRY(glTexImage3D),
         PROC_ENTRY(glTexSubImage3DEXT),
@@ -8605,15 +8863,26 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
 
     exported = g_instance ? GetProcAddress((HMODULE)g_instance, name) : NULL;
     if (exported) {
+        if (g_trace_calls) {
+            v86gl_trace("wglGetProcAddress name=%s result=%08lx source=export",
+                        name, (unsigned long)(uintptr_t)exported);
+        }
         return exported;
     }
 
     for (i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
         if (lstrcmpA(name, entries[i].name) == 0) {
+            if (g_trace_calls) {
+                v86gl_trace("wglGetProcAddress name=%s result=%08lx source=fallback",
+                            name, (unsigned long)(uintptr_t)entries[i].proc);
+            }
             return entries[i].proc;
         }
     }
 
+    if (g_trace_calls) {
+        v86gl_trace("wglGetProcAddress name=%s result=00000000 source=missing", name);
+    }
     return NULL;
 }
 

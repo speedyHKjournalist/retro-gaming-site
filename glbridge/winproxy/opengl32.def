@@ -9,6 +9,9 @@ EXPORTS
     wglGetCurrentContext@0
     wglGetCurrentDC@0
     wglChoosePixelFormat@8
+    wglChoosePixelFormatARB@24
+    wglGetPixelFormatAttribivARB@24
+    wglGetPixelFormatAttribfvARB@24
     wglSetPixelFormat@12
     wglDescribePixelFormat@16
     wglGetPixelFormat@4
@@ -31,6 +34,7 @@ EXPORTS
     wglSwapIntervalEXT@4
     wglGetSwapIntervalEXT@0
     wglAddSwapHintRectWIN@16
+    glAddSwapHintRectWIN@16
 
     glGetString@4
     glGetError@0
@@ -95,6 +99,9 @@ EXPORTS
     glTexSubImage3D@44
     glCompressedTexImage2DARB@32
     glCompressedTexImage2D@32
+    glCompressedTexImage1DARB@28
+    glCompressedTexImage3DARB@36
+    glGetCompressedTexImageARB@12
     glTexSubImage2D@36
     glCopyTexImage2D@32
     glCopyTexSubImage2D@32
@@ -214,6 +221,7 @@ EXPORTS
     glSecondaryColor3fEXT@12
     glSecondaryColor3fv@4
     glSecondaryColor3fvEXT@4
+    glSecondaryColor3ubvEXT@4
     glPointParameterf@8
     glPointParameterfARB@8
     glPointParameterfv@8
@@ -232,6 +240,8 @@ EXPORTS
     glBufferData@16
     glBufferSubDataARB@16
     glBufferSubData@16
+    glGetBufferSubDataARB@16
+    glGetBufferSubData@16
     glIsBufferARB@4
     glIsBuffer@4
     glMapBufferARB@8
