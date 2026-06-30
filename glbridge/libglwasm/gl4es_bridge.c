@@ -12,9 +12,13 @@
 
 #include <GL/gl.h>
 #include <gl4esinit.h>
+#include <gl4eshint.h>
 
 extern void glActiveTexture(GLenum texture);
 extern void glClientActiveTexture(GLenum texture);
+extern void glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+extern void glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+extern void glRasterPos4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 extern void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
 extern void glTexEnviv(GLenum target, GLenum pname, const GLint* params);
 extern void glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params);
@@ -45,7 +49,6 @@ extern void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf a
 extern void glBlendEquation(GLenum mode);
 extern void glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb, GLenum src_alpha, GLenum dst_alpha);
 extern void glSampleCoverage(GLclampf value, GLboolean invert);
-extern void glGenerateMipmap(GLenum target);
 extern void glFogCoordf(GLfloat coord);
 extern void glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue);
 extern void glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride, const void* pointer);
@@ -76,9 +79,37 @@ extern void glTexImage3D(GLenum target, GLint level, GLint internalformat,
 extern void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                             GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
                             GLenum format, GLenum type, const void* pixels);
+extern void glTexImage1D(GLenum target, GLint level, GLint internalformat,
+                         GLsizei width, GLint border, GLenum format, GLenum type,
+                         const void* pixels);
+extern void glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                            GLsizei width, GLenum format, GLenum type,
+                            const void* pixels);
+extern void glCopyTexImage1D(GLenum target, GLint level, GLenum internalformat,
+                             GLint x, GLint y, GLsizei width, GLint border);
+extern void glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                                GLint x, GLint y, GLsizei width);
 extern void glPointParameteri(GLenum pname, GLint param);
 extern void glPointParameteriv(GLenum pname, const GLint* params);
 extern void glWindowPos3f(GLfloat x, GLfloat y, GLfloat z);
+extern void glPointSize(GLfloat size);
+extern void glLineStipple(GLint factor, GLushort pattern);
+extern void glLogicOp(GLenum opcode);
+extern void glPixelTransferf(GLenum pname, GLfloat param);
+extern void glPixelTransferi(GLenum pname, GLint param);
+extern void glPixelZoom(GLfloat xfactor, GLfloat yfactor);
+extern void glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values);
+extern void glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values);
+extern void glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values);
+extern void glDrawPixels(GLsizei width, GLsizei height, GLenum format,
+                         GLenum type, const GLvoid* pixels);
+extern void glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig,
+                     GLfloat xmove, GLfloat ymove, const GLubyte* bitmap);
+extern void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                         GLenum type);
+extern void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+extern void glAccum(GLenum op, GLfloat value);
+extern void glPolygonStipple(const GLubyte* mask);
 
 #ifndef GL_TEXTURE0
 #define GL_TEXTURE0 0x84C0
@@ -90,6 +121,10 @@ extern void glWindowPos3f(GLfloat x, GLfloat y, GLfloat z);
 
 #ifndef GL_FOG_COORDINATE_ARRAY
 #define GL_FOG_COORDINATE_ARRAY 0x8457
+#endif
+
+#ifndef GL_TEXTURE_RECTANGLE_ARB
+#define GL_TEXTURE_RECTANGLE_ARB 0x84F5
 #endif
 
 static int32_t g_surface_x;
@@ -123,6 +158,84 @@ typedef struct {
 
 static V86GLTextureName g_textures[V86GL_MAX_TEXTURES];
 static uint32_t g_texture_count;
+/* Desktop GL exposes a mutable default texture object (name 0) for each
+ * texture target on every texture unit.  WebGL has no such object:
+ * texParameter on an unbound target is an INVALID_OPERATION.  Keep distinct
+ * host stand-ins because gl4es tracks 1D/2D/3D/cube/rectangle separately. */
+static GLuint g_default_texture_1d;
+static GLuint g_default_texture_2d;
+static GLuint g_default_texture_3d;
+static GLuint g_default_texture_cube;
+static GLuint g_default_texture_rectangle;
+
+static GLuint* v86gl_default_texture_slot(GLenum target) {
+    switch (target) {
+    case GL_TEXTURE_1D:
+        return &g_default_texture_1d;
+    case GL_TEXTURE_3D:
+        return &g_default_texture_3d;
+    case GL_TEXTURE_CUBE_MAP:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+        return &g_default_texture_cube;
+    case GL_TEXTURE_RECTANGLE_ARB:
+        return &g_default_texture_rectangle;
+    case GL_TEXTURE_2D:
+    default:
+        return &g_default_texture_2d;
+    }
+}
+
+static GLenum v86gl_binding_target(GLenum target) {
+    switch (target) {
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+        return GL_TEXTURE_CUBE_MAP;
+    default:
+        return target;
+    }
+}
+
+static GLuint v86gl_default_texture(GLenum target) {
+    GLuint* texture = v86gl_default_texture_slot(target);
+
+    if (!*texture) {
+        glGenTextures(1, texture);
+    }
+    return *texture;
+}
+
+static void v86gl_bind_default_textures(void) {
+    static const GLenum targets[] = {
+        GL_TEXTURE_1D,
+        GL_TEXTURE_2D,
+        GL_TEXTURE_3D,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_RECTANGLE_ARB,
+    };
+    GLsizei i;
+    uint32_t target_index;
+
+    for (i = 0; i < 8; i++) {
+        glActiveTexture((GLenum)(GL_TEXTURE0 + i));
+        for (target_index = 0; target_index < sizeof(targets) / sizeof(targets[0]); target_index++) {
+            GLenum target = targets[target_index];
+            GLuint texture = v86gl_default_texture(target);
+            if (texture) {
+                glBindTexture(target, texture);
+            }
+        }
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
 
 static int v86gl_ensure_ready(void) {
     if (g_ready) {
@@ -158,6 +271,12 @@ static int v86gl_ensure_ready(void) {
 #endif
 
     initialize_gl4es();
+    /* WebGL rejects generateMipmap for several legacy compressed formats.
+     * gl4es normally may issue that call internally after texture upload;
+     * mode 3 disables that automatic path and makes mip filters sample level
+     * zero instead, preserving a visible texture instead of black sampling. */
+    glHint(GL_MIPMAP_HINT_GL4ES, 3);
+    v86gl_bind_default_textures();
     g_ready = 1;
     return 1;
 }
@@ -242,6 +361,11 @@ void v86glDestroyRenderer(void) {
     g_surface_width = 0;
     g_surface_height = 0;
     g_texture_count = 0;
+    g_default_texture_1d = 0;
+    g_default_texture_2d = 0;
+    g_default_texture_3d = 0;
+    g_default_texture_cube = 0;
+    g_default_texture_rectangle = 0;
 
 #ifdef __EMSCRIPTEN__
     if (g_webgl_context > 0) {
@@ -296,6 +420,12 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glVertex3f(GLfloat x, GLfloat y, GLfloat z) {
     if (!v86gl_ensure_ready()) return;
     glVertex3f(x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    if (!v86gl_ensure_ready()) return;
+    glVertex4f(x, y, z, w);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -538,8 +668,9 @@ void v86gl_glBindTexture(GLenum target, GLuint texture) {
     GLuint host;
 
     if (!v86gl_ensure_ready()) return;
-    host = v86gl_host_texture(texture, texture != 0);
-    glBindTexture(target, host);
+    host = texture == 0 ? v86gl_default_texture(target) :
+        v86gl_host_texture(texture, 1);
+    glBindTexture(v86gl_binding_target(target), host);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -548,6 +679,14 @@ void v86gl_glTexImage2D(GLenum target, GLint level, GLint internalformat,
                         GLenum format, GLenum type, const void* pixels) {
     if (!v86gl_ensure_ready()) return;
     glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexImage1D(GLenum target, GLint level, GLint internalformat,
+                        GLsizei width, GLint border,
+                        GLenum format, GLenum type, const void* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glTexImage1D(target, level, internalformat, width, border, format, type, pixels);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -630,11 +769,26 @@ void v86gl_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoff
 }
 
 EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                           GLsizei width, GLenum format, GLenum type,
+                           const void* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glTexSubImage1D(target, level, xoffset, width, format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
                             GLint x, GLint y, GLsizei width, GLsizei height,
                             GLint border) {
     if (!v86gl_ensure_ready()) return;
     glCopyTexImage2D(target, level, internalformat, x, y, width, height, border);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCopyTexImage1D(GLenum target, GLint level, GLenum internalformat,
+                            GLint x, GLint y, GLsizei width, GLint border) {
+    if (!v86gl_ensure_ready()) return;
+    glCopyTexImage1D(target, level, internalformat, x, y, width, border);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -644,6 +798,13 @@ void v86gl_glCopyTexSubImage2D(GLenum target, GLint level,
                                GLsizei width, GLsizei height) {
     if (!v86gl_ensure_ready()) return;
     glCopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
+                               GLint x, GLint y, GLsizei width) {
+    if (!v86gl_ensure_ready()) return;
+    glCopyTexSubImage1D(target, level, xoffset, x, y, width);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -732,6 +893,12 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glTexCoord2f(GLfloat s, GLfloat t) {
     if (!v86gl_ensure_ready()) return;
     glTexCoord2f(s, t);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q) {
+    if (!v86gl_ensure_ready()) return;
+    glTexCoord4f(s, t, r, q);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -987,7 +1154,10 @@ void v86gl_glSampleCoverage(GLclampf value, GLboolean invert) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glGenerateMipmap(GLenum target) {
     if (!v86gl_ensure_ready()) return;
-    glGenerateMipmap(target);
+    /* The browser cannot generate mipmaps for several legacy compressed
+     * formats.  Sampling an incomplete mip chain is black, so retain level 0
+     * instead of issuing a WebGL-invalid generate call. */
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1034,6 +1204,105 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glWindowPos3f(GLfloat x, GLfloat y, GLfloat z) {
     if (!v86gl_ensure_ready()) return;
     glWindowPos3f(x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glRasterPos4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    if (!v86gl_ensure_ready()) return;
+    glRasterPos4f(x, y, z, w);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPointSize(GLfloat size) {
+    if (!v86gl_ensure_ready()) return;
+    glPointSize(size);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glLineStipple(GLint factor, GLushort pattern) {
+    if (!v86gl_ensure_ready()) return;
+    glLineStipple(factor, pattern);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glLogicOp(GLenum opcode) {
+    if (!v86gl_ensure_ready()) return;
+    glLogicOp(opcode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelTransferf(GLenum pname, GLfloat param) {
+    if (!v86gl_ensure_ready()) return;
+    glPixelTransferf(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelTransferi(GLenum pname, GLint param) {
+    if (!v86gl_ensure_ready()) return;
+    glPixelTransferi(pname, param);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelZoom(GLfloat xfactor, GLfloat yfactor) {
+    if (!v86gl_ensure_ready()) return;
+    glPixelZoom(xfactor, yfactor);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
+    if ((mapsize > 0 && !values) || !v86gl_ensure_ready()) return;
+    glPixelMapfv(map, mapsize, values);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
+    if ((mapsize > 0 && !values) || !v86gl_ensure_ready()) return;
+    glPixelMapuiv(map, mapsize, values);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values) {
+    if ((mapsize > 0 && !values) || !v86gl_ensure_ready()) return;
+    glPixelMapusv(map, mapsize, values);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawPixels(GLsizei width, GLsizei height, GLenum format,
+                        GLenum type, const GLvoid* pixels) {
+    if (!v86gl_ensure_ready()) return;
+    glDrawPixels(width, height, format, type, pixels);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig,
+                    GLfloat xmove, GLfloat ymove, const GLubyte* bitmap) {
+    if (!v86gl_ensure_ready()) return;
+    glBitmap(width, height, xorig, yorig, xmove, ymove, bitmap);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                        GLenum type) {
+    if (!v86gl_ensure_ready()) return;
+    glCopyPixels(x, y, width, height, type);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
+    if (!v86gl_ensure_ready()) return;
+    glClearAccum(red, green, blue, alpha);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glAccum(GLenum op, GLfloat value) {
+    if (!v86gl_ensure_ready()) return;
+    glAccum(op, value);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glPolygonStipple(const GLubyte* mask) {
+    if (!mask || !v86gl_ensure_ready()) return;
+    glPolygonStipple(mask);
 }
 
 EMSCRIPTEN_KEEPALIVE

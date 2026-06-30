@@ -1,6 +1,7 @@
 (function(global) {
     "use strict";
 
+    const GL4ES_ASSET_VERSION = "opengl15-batch4-20260630";
     const factory = global.createV86GL4ES;
     if (typeof factory !== "function") {
         console.warn("[v86gl] gl4es factory not found; run glbridge/libglwasm/build_gl4es_module.sh first");
@@ -11,7 +12,8 @@
         return factory({
             canvas: canvas || document.getElementById("v86gl_canvas"),
             locateFile(path) {
-                return "glbridge/libglwasm/" + path;
+                const url = "glbridge/libglwasm/" + path;
+                return path === "gl4es.wasm" ? `${url}?v=${GL4ES_ASSET_VERSION}` : url;
             },
         });
     }

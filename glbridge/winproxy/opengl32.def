@@ -266,6 +266,22 @@ EXPORTS
     glGetBufferParameteriv@12
     glGetBufferPointervARB@12
     glGetBufferPointerv@12
+    glGenQueriesARB@8
+    glGenQueries@8
+    glDeleteQueriesARB@8
+    glDeleteQueries@8
+    glIsQueryARB@4
+    glIsQuery@4
+    glBeginQueryARB@8
+    glBeginQuery@8
+    glEndQueryARB@4
+    glEndQuery@4
+    glGetQueryivARB@12
+    glGetQueryiv@12
+    glGetQueryObjectivARB@12
+    glGetQueryObjectiv@12
+    glGetQueryObjectuivARB@12
+    glGetQueryObjectuiv@12
     glReadPixels@28
     glEnableClientState@4
     glDisableClientState@4

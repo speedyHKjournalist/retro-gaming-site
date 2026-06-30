@@ -35,6 +35,7 @@ Guest DLL exports:
 - `glColor4f`
 - `glVertex2f`
 - `glVertex3f`
+- `glVertex4f`
 - `glFlush`
 - `glFinish`
 - `glMatrixMode`
@@ -46,6 +47,8 @@ Guest DLL exports:
 - `glScalef`
 - `glPushMatrix`
 - `glPopMatrix`
+- `glClearAccum`
+- `glAccum`
 - `glEnable`
 - `glDisable`
 - `glDepthFunc`
@@ -56,8 +59,12 @@ Guest DLL exports:
 - `glGenTextures`
 - `glDeleteTextures`
 - `glBindTexture`
+- `glTexImage1D`
 - `glTexImage2D`
+- `glTexSubImage1D`
 - `glTexSubImage2D`
+- `glCopyTexImage1D`
+- `glCopyTexSubImage1D`
 - `glTexParameteri`
 - `glTexParameterf`
 - `glGetTexParameteriv`
@@ -66,6 +73,7 @@ Guest DLL exports:
 - `glTexEnvi`
 - `glTexEnvf`
 - `glTexCoord2f`
+- `glTexCoord4f`
 - `glActiveTextureARB` / `glActiveTexture`
 - `glClientActiveTextureARB` / `glClientActiveTexture`
 - `glMultiTexCoord*ARB` common scalar/vector variants
@@ -82,8 +90,21 @@ Guest DLL exports:
 - `glDepthMask`
 - `glColorMask`
 - `glScissor`
+- `glPointSize`
 - `glLineWidth`
+- `glLineStipple`
 - `glPolygonMode`
+- `glPolygonStipple`
+- `glLogicOp`
+- `glPixelMapfv`
+- `glPixelMapuiv`
+- `glPixelMapusv`
+- `glPixelTransferf`
+- `glPixelTransferi`
+- `glPixelZoom`
+- `glBitmap`
+- `glCopyPixels`
+- `glDrawPixels`
 - `glReadPixels` synchronous PCI DMA readback for supported pixel formats
 - `glEnableClientState`
 - `glDisableClientState`
@@ -94,6 +115,17 @@ Guest DLL exports:
 - `glDrawArrays`
 - `glDrawElements`
 - `glInterleavedArrays`
+- `glMap1*`
+- `glMap2*`
+- `glMapGrid1*`
+- `glMapGrid2*`
+- `glEvalCoord*`
+- `glEvalPoint*`
+- `glEvalMesh*`
+- OpenGL 1.5 VBO entry points and `GL_ARB_vertex_buffer_object` aliases
+- OpenGL 1.5 query-object entry points and `GL_ARB_occlusion_query` aliases
+- basic display-list compile/replay through `glNewList`, `glEndList`,
+  `glCallList`, and `glCallLists`
 
 The proxy also advertises and routes the following fixed-function extension
 families through the DMA/WebAssembly bridge: packed pixels, rescale normals,
@@ -103,10 +135,13 @@ color/equation/separate factors, cube maps, multisample coverage, DOT3 and
 crossbar texture environments, transpose matrices, mipmap generation, shadow
 texture parameters, fog coordinates, secondary color, point parameters,
 stencil wrap, mirrored repeat, point sprites, non-power-of-two textures, and
-`GL_ARB_vertex_buffer_object`. VBO contents remain in guest memory and are
+`GL_ARB_vertex_buffer_object` / `GL_ARB_occlusion_query`. VBO contents remain in guest memory and are
 packed into the existing client-array draw records at draw time, which keeps
 the PCI protocol asynchronous while preserving VBO semantics for array and
-element buffers.
+element buffers. Query objects are implemented as a conservative synchronous
+compatibility layer: `GL_SAMPLES_PASSED` queries complete immediately with a
+nonzero result so visibility-dependent fixed-function applications do not
+accidentally cull everything when running through WebGL/gl4es.
 
 It is enough for toy fixed-pipeline demos such as a triangle or a rotating
 colored cube. It is **not** enough for WineD3D or real games yet.
@@ -114,19 +149,21 @@ colored cube. It is **not** enough for WineD3D or real games yet.
 `glGet*` queries currently return values cached in the guest proxy plus
 conservative defaults. They do not synchronously query browser/WebGL state.
 
-### OpenGL 1.3 / 1.4 core coverage
+### OpenGL 1.3 / 1.4 / 1.5 core coverage
 
-`glGetString(GL_VERSION)` reports `1.4`. All OpenGL 1.3 and 1.4 core entry
+`glGetString(GL_VERSION)` reports `1.5`. OpenGL 1.1 through 1.5 core entry
 points are exported, available through `wglGetProcAddress`, and routed through
 the PCI/WASM transport. This includes every multitexture overload, transpose
 matrix operation, compressed texture upload/subimage entry point, separate
 blend factors, point integer parameters, fog-coordinate and secondary-color
-arrays, multi-draw, and the full 2D/3D `glWindowPos*` family.
+arrays, multi-draw, the full 2D/3D `glWindowPos*` family, VBO entry points, and
+query-object entry points.
 
-Compressed-texture readback is served from the proxy's cached upload when the
-whole compressed image is known locally. A partial compressed subimage still
-reaches gl4es, but intentionally invalidates that cache rather than returning
-stale bytes on a later `glGetCompressedTexImage` call.
+Compressed-texture entry points and readback caching are implemented in the
+proxy, but `GL_ARB_texture_compression` is intentionally not advertised: the
+current WebGL/gl4es backend cannot reliably generate mipmaps for all legacy
+compressed formats. This lets games select their uncompressed fallback rather
+than sampling an incomplete texture as black.
 
 `GL_ARB_imaging` and `GL_ARB_vertex_program` are separate optional extensions,
 not requirements of the OpenGL 1.4 core profile; they are deliberately not
@@ -147,42 +184,6 @@ i686-w64-mingw32-gcc -shared -Os -s \
 Build and start `../v86gl_driver/v86gl.sys` before running a guest OpenGL
 application. Its WDK build and installation steps are in
 `../v86gl_driver/README.md`.
-
-## Trace one command from DLL to WebGL
-
-The transport has correlated diagnostic logs at each hop. In an XP command
-prompt, launch the test with tracing enabled:
-
-```bat
-set V86GL_TRACE_CALLS=1
-gl_triangle_test.exe
-```
-
-Open/map/submit/present boundaries are logged by default; set
-`V86GL_TRACE=0` only to suppress them. `V86GL_TRACE_CALLS` also logs every
-encoded command record. The DLL writes to `OutputDebugString`; use
-Sysinternals DebugView with **Capture Win32** enabled. The kernel driver
-writes `DbgPrint` records; enable DebugView's **Capture Kernel** to see the
-`[v86gl.sys]` lines.
-
-Keep the browser developer console open. With `v86gl_pci.trace: true` (already
-enabled in `app.js`), the resulting sequence for the same `frame` is:
-
-```text
-[v86gl.dll] submit -> sys frame=N commands=C commandBytes=B ...
-[v86gl.sys] SUBMIT #K frame=N commands=C commandBytes=B ...
-[v86gl.sys] doorbell #K ...
-[v86gl-pci] descriptor accepted { frameId: N, ... }
-[v86gl] pci frame received { frameId: N, submitCount: K, ... }
-[v86gl] command { name: "gl...", ... }
-[v86gl] gl4es dispatch gl...
-```
-
-The first missing line is the failed boundary: no `v86gl.sys` line means the
-DLL could not enter the driver; no `v86gl-pci` doorbell means the PCI I/O BAR
-was not reached; no `pci frame received` means event delivery failed; a
-`gl4es export threw` or `export not found` message means the command reached
-the browser bridge but failed at the gl4es layer.
 
 Build the test programs:
 
