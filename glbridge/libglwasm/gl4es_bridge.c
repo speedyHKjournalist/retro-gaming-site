@@ -2,6 +2,9 @@
 // Keep these names stable; the browser bridge calls v86gl_gl* functions.
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -13,6 +16,38 @@
 #include <GL/gl.h>
 #include <gl4esinit.h>
 #include <gl4eshint.h>
+#include "gl/init.h"
+#include "glx/hardext.h"
+
+#ifdef __EMSCRIPTEN__
+extern void emscripten_glUniformMatrix2x3fv(GLint location, GLsizei count,
+                                            GLboolean transpose,
+                                            const GLfloat* value);
+extern void emscripten_glUniformMatrix3x2fv(GLint location, GLsizei count,
+                                            GLboolean transpose,
+                                            const GLfloat* value);
+extern void emscripten_glUniformMatrix2x4fv(GLint location, GLsizei count,
+                                            GLboolean transpose,
+                                            const GLfloat* value);
+extern void emscripten_glUniformMatrix4x2fv(GLint location, GLsizei count,
+                                            GLboolean transpose,
+                                            const GLfloat* value);
+extern void emscripten_glUniformMatrix3x4fv(GLint location, GLsizei count,
+                                            GLboolean transpose,
+                                            const GLfloat* value);
+extern void emscripten_glUniformMatrix4x3fv(GLint location, GLsizei count,
+                                            GLboolean transpose,
+                                            const GLfloat* value);
+extern void emscripten_glGenQueries(GLsizei n, GLuint* ids);
+extern void emscripten_glDeleteQueries(GLsizei n, const GLuint* ids);
+extern GLboolean emscripten_glIsQuery(GLuint id);
+extern void emscripten_glBeginQuery(GLenum target, GLuint id);
+extern void emscripten_glEndQuery(GLenum target);
+extern void emscripten_glGetQueryiv(GLenum target, GLenum pname,
+                                    GLint* params);
+extern void emscripten_glGetQueryObjectuiv(GLuint id, GLenum pname,
+                                           GLuint* params);
+#endif
 
 extern void glActiveTexture(GLenum texture);
 extern void glClientActiveTexture(GLenum texture);
@@ -47,7 +82,12 @@ extern void glPushClientAttrib(GLbitfield mask);
 extern void glPopClientAttrib(void);
 extern void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
 extern void glBlendEquation(GLenum mode);
+extern void glBlendEquationSeparate(GLenum mode_rgb, GLenum mode_alpha);
 extern void glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb, GLenum src_alpha, GLenum dst_alpha);
+extern void glDrawBuffers(GLsizei n, const GLenum* bufs);
+extern void glStencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum zpass);
+extern void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
+extern void glStencilMaskSeparate(GLenum face, GLuint mask);
 extern void glSampleCoverage(GLclampf value, GLboolean invert);
 extern void glFogCoordf(GLfloat coord);
 extern void glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue);
@@ -110,9 +150,107 @@ extern void glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 extern void glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 extern void glAccum(GLenum op, GLfloat value);
 extern void glPolygonStipple(const GLubyte* mask);
+extern GLuint glCreateProgram(void);
+extern GLuint glCreateShader(GLenum type);
+extern void glDeleteProgram(GLuint program);
+extern void glDeleteShader(GLuint shader);
+extern void glAttachShader(GLuint program, GLuint shader);
+extern void glDetachShader(GLuint program, GLuint shader);
+extern void glShaderSource(GLuint shader, GLsizei count, const GLchar** string,
+                           const GLint* length);
+extern void glCompileShader(GLuint shader);
+extern void glLinkProgram(GLuint program);
+extern void glUseProgram(GLuint program);
+extern void glValidateProgram(GLuint program);
+extern void glBindAttribLocation(GLuint program, GLuint index, const char* name);
+extern GLint glGetUniformLocation(GLuint program, const char* name);
+extern GLint glGetAttribLocation(GLuint program, const char* name);
+extern void glUniform1fv(GLint location, GLsizei count, const GLfloat* value);
+extern void glUniform2fv(GLint location, GLsizei count, const GLfloat* value);
+extern void glUniform3fv(GLint location, GLsizei count, const GLfloat* value);
+extern void glUniform4fv(GLint location, GLsizei count, const GLfloat* value);
+extern void glUniform1iv(GLint location, GLsizei count, const GLint* value);
+extern void glUniform2iv(GLint location, GLsizei count, const GLint* value);
+extern void glUniform3iv(GLint location, GLsizei count, const GLint* value);
+extern void glUniform4iv(GLint location, GLsizei count, const GLint* value);
+extern void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose,
+                               const GLfloat* value);
+extern void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose,
+                               const GLfloat* value);
+extern void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose,
+                               const GLfloat* value);
+extern void glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+extern void glVertexAttribPointer(GLuint index, GLint size, GLenum type,
+                                  GLboolean normalized, GLsizei stride,
+                                  const void* pointer);
+extern void glEnableVertexAttribArray(GLuint index);
+extern void glDisableVertexAttribArray(GLuint index);
+extern void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
+extern void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
+extern void glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+extern void glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+extern void glGetActiveUniform(GLuint program, GLuint index, GLsizei bufSize,
+                               GLsizei* length, GLint* size, GLenum* type,
+                               GLchar* name);
+extern void glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufSize,
+                              GLsizei* length, GLint* size, GLenum* type,
+                              GLchar* name);
+extern void glGenFramebuffers(GLsizei n, GLuint* framebuffers);
+extern void glDeleteFramebuffers(GLsizei n, const GLuint* framebuffers);
+extern void glBindFramebuffer(GLenum target, GLuint framebuffer);
+extern GLenum glCheckFramebufferStatus(GLenum target);
+extern void glFramebufferTexture1D(GLenum target, GLenum attachment,
+                                   GLenum textarget, GLuint texture, GLint level);
+extern void glFramebufferTexture2D(GLenum target, GLenum attachment,
+                                   GLenum textarget, GLuint texture, GLint level);
+extern void glFramebufferTexture3D(GLenum target, GLenum attachment,
+                                   GLenum textarget, GLuint texture, GLint level,
+                                   GLint zoffset);
+extern void glFramebufferRenderbuffer(GLenum target, GLenum attachment,
+                                      GLenum renderbuffertarget, GLuint renderbuffer);
+extern void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers);
+extern void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers);
+extern void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
+extern void glRenderbufferStorage(GLenum target, GLenum internalformat,
+                                  GLsizei width, GLsizei height);
+extern void gl4es_glProgramStringARB(GLenum target, GLenum format, GLsizei len,
+                                     const GLvoid* string);
+extern void gl4es_glBindProgramARB(GLenum target, GLuint program);
+extern void gl4es_glDeleteProgramsARB(GLsizei n, const GLuint* programs);
+extern void gl4es_glGenProgramsARB(GLsizei n, GLuint* programs);
+extern void gl4es_glProgramEnvParameter4dvARB(GLenum target, GLuint index,
+                                              const GLdouble* params);
+extern void gl4es_glProgramEnvParameter4fvARB(GLenum target, GLuint index,
+                                              const GLfloat* params);
+extern void gl4es_glProgramLocalParameter4dvARB(GLenum target, GLuint index,
+                                                const GLdouble* params);
+extern void gl4es_glProgramLocalParameter4fvARB(GLenum target, GLuint index,
+                                                const GLfloat* params);
+extern void gl4es_glGetProgramEnvParameterdvARB(GLenum target, GLuint index,
+                                                GLdouble* params);
+extern void gl4es_glGetProgramEnvParameterfvARB(GLenum target, GLuint index,
+                                                GLfloat* params);
+extern void gl4es_glGetProgramLocalParameterdvARB(GLenum target, GLuint index,
+                                                  GLdouble* params);
+extern void gl4es_glGetProgramLocalParameterfvARB(GLenum target, GLuint index,
+                                                  GLfloat* params);
+extern void gl4es_glGetProgramivARB(GLenum target, GLenum pname, GLint* params);
+extern void gl4es_glGetProgramStringARB(GLenum target, GLenum pname,
+                                        GLvoid* string);
+extern GLboolean gl4es_glIsProgramARB(GLuint program);
+extern void gl4es_glProgramEnvParameters4fvEXT(GLenum target, GLuint index,
+                                               GLsizei count,
+                                               const GLfloat* params);
+extern void gl4es_glProgramLocalParameters4fvEXT(GLenum target, GLuint index,
+                                                 GLsizei count,
+                                                 const GLfloat* params);
 
 #ifndef GL_TEXTURE0
 #define GL_TEXTURE0 0x84C0
+#endif
+
+#ifndef GL_PROGRAM_LENGTH_ARB
+#define GL_PROGRAM_LENGTH_ARB 0x8627
 #endif
 
 #ifndef GL_SECONDARY_COLOR_ARRAY
@@ -127,12 +265,50 @@ extern void glPolygonStipple(const GLubyte* mask);
 #define GL_TEXTURE_RECTANGLE_ARB 0x84F5
 #endif
 
+#ifndef GL_QUERY_RESULT
+#define GL_QUERY_RESULT 0x8866
+#endif
+
+#ifndef GL_QUERY_RESULT_AVAILABLE
+#define GL_QUERY_RESULT_AVAILABLE 0x8867
+#endif
+
+#ifndef GL_SAMPLES_PASSED
+#define GL_SAMPLES_PASSED 0x8914
+#endif
+
+#ifndef GL_ANY_SAMPLES_PASSED
+#define GL_ANY_SAMPLES_PASSED 0x8C2F
+#endif
+
+#ifndef GL_ANY_SAMPLES_PASSED_CONSERVATIVE
+#define GL_ANY_SAMPLES_PASSED_CONSERVATIVE 0x8D6A
+#endif
+
+#ifndef GL_TEXTURE_1D
+#define GL_TEXTURE_1D 0x0DE0
+#endif
+
+#ifndef GL_TEXTURE_3D
+#define GL_TEXTURE_3D 0x806F
+#endif
+
+#ifndef GL_TEXTURE_CUBE_MAP_POSITIVE_X
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_X 0x8516
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_Y 0x8517
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_Y 0x8518
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_Z 0x8519
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_Z 0x851A
+#endif
+
 static int32_t g_surface_x;
 static int32_t g_surface_y;
 static uint32_t g_surface_width;
 static uint32_t g_surface_height;
 static uint32_t g_surface_hwnd;
 static int g_ready;
+static int g_webgl_major_version;
 
 #ifdef __EMSCRIPTEN__
 static EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_webgl_context;
@@ -150,14 +326,56 @@ EM_JS(void, v86gl_lose_webgl_context, (), {
 #endif
 
 #define V86GL_MAX_TEXTURES 16384
+#define V86GL_MAX_PROGRAMS 1024
+#define V86GL_MAX_ARB_PROGRAMS 1024
+#define V86GL_MAX_SHADERS 2048
+#define V86GL_MAX_UNIFORM_LOCATIONS 4096
+#define V86GL_MAX_ATTRIB_LOCATIONS 512
+#define V86GL_MAX_VERTEX_ATTRIBS 16
+#define V86GL_MAX_FRAMEBUFFERS 1024
+#define V86GL_MAX_RENDERBUFFERS 1024
+#define V86GL_MAX_QUERIES 4096
+#define V86GL_OBJECT_KIND_SHADER 1u
+#define V86GL_OBJECT_KIND_PROGRAM 2u
+#define V86GL_OBJECT_KIND_QUERY 3u
+#define V86GL_ACTIVE_KIND_UNIFORM 1u
+#define V86GL_ACTIVE_KIND_ATTRIB 2u
+#define V86GL_PROGRAM_PARAMETER_ENV 1u
+#define V86GL_PROGRAM_PARAMETER_LOCAL 2u
 
 typedef struct {
     GLuint guest;
     GLuint host;
 } V86GLTextureName;
 
+typedef struct {
+    GLuint guest;
+    GLuint host;
+} V86GLNameMap;
+
+typedef struct {
+    GLint guest;
+    GLint host;
+} V86GLLocationMap;
+
 static V86GLTextureName g_textures[V86GL_MAX_TEXTURES];
 static uint32_t g_texture_count;
+static V86GLNameMap g_programs[V86GL_MAX_PROGRAMS];
+static V86GLNameMap g_arb_programs[V86GL_MAX_ARB_PROGRAMS];
+static uint32_t g_program_count;
+static uint32_t g_arb_program_count;
+static V86GLNameMap g_shaders[V86GL_MAX_SHADERS];
+static uint32_t g_shader_count;
+static V86GLNameMap g_framebuffers[V86GL_MAX_FRAMEBUFFERS];
+static uint32_t g_framebuffer_count;
+static V86GLNameMap g_renderbuffers[V86GL_MAX_RENDERBUFFERS];
+static uint32_t g_renderbuffer_count;
+static V86GLNameMap g_queries[V86GL_MAX_QUERIES];
+static uint32_t g_query_count;
+static V86GLLocationMap g_uniform_locations[V86GL_MAX_UNIFORM_LOCATIONS];
+static uint32_t g_uniform_location_count;
+static V86GLLocationMap g_attrib_locations[V86GL_MAX_ATTRIB_LOCATIONS];
+static uint32_t g_attrib_location_count;
 /* Desktop GL exposes a mutable default texture object (name 0) for each
  * texture target on every texture unit.  WebGL has no such object:
  * texParameter on an unbound target is an INVALID_OPERATION.  Keep distinct
@@ -237,6 +455,21 @@ static void v86gl_bind_default_textures(void) {
     glActiveTexture(GL_TEXTURE0);
 }
 
+static void v86gl_apply_gl4es_context_hints(void) {
+#ifdef __EMSCRIPTEN__
+    if (g_webgl_major_version >= 2) {
+        /* gl4es cannot run its normal hardware probe under Emscripten, so it
+         * falls back to limited NPOT. WebGL2 has full NPOT texture support,
+         * and the guest proxy already advertises GL_ARB_texture_non_power_of_two. */
+        hardext.npot = 3;
+        globals4es.npot = 2;
+        globals4es.defaultwrap = 0;
+        globals4es.forcenpot = 0;
+        printf("[v86gl] WebGL2 full NPOT override enabled\n");
+    }
+#endif
+}
+
 static int v86gl_ensure_ready(void) {
     if (g_ready) {
         return 1;
@@ -257,10 +490,16 @@ static int v86gl_ensure_ready(void) {
     attrs.minorVersion = 0;
 
     g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
+    if (g_webgl_context > 0) {
+        g_webgl_major_version = 2;
+    }
 
     if (g_webgl_context <= 0) {
         attrs.majorVersion = 1;
         g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
+        if (g_webgl_context > 0) {
+            g_webgl_major_version = 1;
+        }
     }
 
     if (g_webgl_context > 0) {
@@ -271,6 +510,7 @@ static int v86gl_ensure_ready(void) {
 #endif
 
     initialize_gl4es();
+    v86gl_apply_gl4es_context_hints();
     /* WebGL rejects generateMipmap for several legacy compressed formats.
      * gl4es normally may issue that call internally after texture upload;
      * mode 3 disables that automatic path and makes mip filters sample level
@@ -318,6 +558,242 @@ static void v86gl_forget_texture(GLuint guest) {
     }
 }
 
+static GLuint v86gl_host_program(GLuint guest) {
+    uint32_t i;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_program_count; i++) {
+        if (g_programs[i].guest == guest) {
+            return g_programs[i].host;
+        }
+    }
+    return 0;
+}
+
+static GLuint v86gl_host_arb_program(GLuint guest, int create) {
+    uint32_t i;
+    GLuint host = 0;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_arb_program_count; i++) {
+        if (g_arb_programs[i].guest == guest) {
+            return g_arb_programs[i].host;
+        }
+    }
+
+    if (!create || g_arb_program_count >= V86GL_MAX_ARB_PROGRAMS) {
+        return 0;
+    }
+
+    gl4es_glGenProgramsARB(1, &host);
+    if (!host) {
+        return 0;
+    }
+    g_arb_programs[g_arb_program_count].guest = guest;
+    g_arb_programs[g_arb_program_count].host = host;
+    g_arb_program_count++;
+    return host;
+}
+
+static GLuint v86gl_host_shader(GLuint guest) {
+    uint32_t i;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_shader_count; i++) {
+        if (g_shaders[i].guest == guest) {
+            return g_shaders[i].host;
+        }
+    }
+    return 0;
+}
+
+static GLuint v86gl_host_framebuffer(GLuint guest) {
+    uint32_t i;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_framebuffer_count; i++) {
+        if (g_framebuffers[i].guest == guest) {
+            return g_framebuffers[i].host;
+        }
+    }
+    return 0;
+}
+
+static GLuint v86gl_host_renderbuffer(GLuint guest) {
+    uint32_t i;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_renderbuffer_count; i++) {
+        if (g_renderbuffers[i].guest == guest) {
+            return g_renderbuffers[i].host;
+        }
+    }
+    return 0;
+}
+
+static GLuint v86gl_host_query(GLuint guest) {
+    uint32_t i;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_query_count; i++) {
+        if (g_queries[i].guest == guest) {
+            return g_queries[i].host;
+        }
+    }
+    return 0;
+}
+
+static int v86gl_occlusion_queries_supported(void) {
+    return g_webgl_major_version >= 2;
+}
+
+static GLenum v86gl_webgl_query_target(GLenum target) {
+    switch (target) {
+    case GL_SAMPLES_PASSED:
+    case GL_ANY_SAMPLES_PASSED:
+        return GL_ANY_SAMPLES_PASSED;
+    case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
+        return GL_ANY_SAMPLES_PASSED_CONSERVATIVE;
+    default:
+        return 0;
+    }
+}
+
+static void v86gl_map_name(V86GLNameMap* maps, uint32_t* count,
+                           uint32_t capacity, GLuint guest, GLuint host) {
+    uint32_t i;
+
+    if (!guest) {
+        return;
+    }
+
+    for (i = 0; i < *count; i++) {
+        if (maps[i].guest == guest) {
+            maps[i].host = host;
+            return;
+        }
+    }
+
+    if (*count < capacity) {
+        maps[*count].guest = guest;
+        maps[*count].host = host;
+        (*count)++;
+    }
+}
+
+static void v86gl_forget_name(V86GLNameMap* maps, uint32_t* count, GLuint guest) {
+    uint32_t i;
+
+    for (i = 0; i < *count; i++) {
+        if (maps[i].guest == guest) {
+            maps[i] = maps[*count - 1u];
+            (*count)--;
+            return;
+        }
+    }
+}
+
+static void v86gl_map_location(V86GLLocationMap* maps, uint32_t* count,
+                               uint32_t capacity, GLint guest, GLint host) {
+    uint32_t i;
+
+    if (guest < 0) {
+        return;
+    }
+
+    for (i = 0; i < *count; i++) {
+        if (maps[i].guest == guest) {
+            maps[i].host = host;
+            return;
+        }
+    }
+
+    if (*count < capacity) {
+        maps[*count].guest = guest;
+        maps[*count].host = host;
+        (*count)++;
+    }
+}
+
+static GLint v86gl_host_uniform_location(GLint guest) {
+    uint32_t i;
+
+    if (guest < 0) {
+        return -1;
+    }
+
+    for (i = 0; i < g_uniform_location_count; i++) {
+        if (g_uniform_locations[i].guest == guest) {
+            return g_uniform_locations[i].host;
+        }
+    }
+    return -1;
+}
+
+static GLint v86gl_host_attrib_index(GLint guest) {
+    uint32_t i;
+
+    if (guest < 0) {
+        return -1;
+    }
+
+    for (i = 0; i < g_attrib_location_count; i++) {
+        if (g_attrib_locations[i].guest == guest) {
+            return g_attrib_locations[i].host;
+        }
+    }
+
+    return guest < V86GL_MAX_VERTEX_ATTRIBS ? guest : -1;
+}
+
+static char* v86gl_copy_name(GLsizei length, const char* name) {
+    char* out;
+
+    if (length < 0 || (length > 0 && !name)) {
+        return 0;
+    }
+
+    out = (char*)malloc((size_t)length + 1u);
+    if (!out) {
+        return 0;
+    }
+
+    if (length > 0) {
+        memcpy(out, name, (size_t)length);
+    }
+    out[length] = '\0';
+    return out;
+}
+
+static void v86gl_reset_gl2_maps(void) {
+    g_program_count = 0;
+    g_arb_program_count = 0;
+    g_shader_count = 0;
+    g_uniform_location_count = 0;
+    g_attrib_location_count = 0;
+    g_framebuffer_count = 0;
+    g_renderbuffer_count = 0;
+    g_query_count = 0;
+}
+
 EMSCRIPTEN_KEEPALIVE
 void v86glMakeCurrent(uint32_t hwnd, int32_t x, int32_t y, uint32_t width, uint32_t height) {
     g_surface_hwnd = hwnd;
@@ -361,11 +837,13 @@ void v86glDestroyRenderer(void) {
     g_surface_width = 0;
     g_surface_height = 0;
     g_texture_count = 0;
+    v86gl_reset_gl2_maps();
     g_default_texture_1d = 0;
     g_default_texture_2d = 0;
     g_default_texture_3d = 0;
     g_default_texture_cube = 0;
     g_default_texture_rectangle = 0;
+    g_webgl_major_version = 0;
 
 #ifdef __EMSCRIPTEN__
     if (g_webgl_context > 0) {
@@ -1359,6 +1837,809 @@ void v86gl_glDisableClientState(GLenum array) {
     glDisableClientState(array);
 }
 
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBlendEquationSeparate(GLenum mode_rgb, GLenum mode_alpha) {
+    if (!v86gl_ensure_ready()) return;
+    glBlendEquationSeparate(mode_rgb, mode_alpha);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawBuffers(GLsizei n, const GLenum* bufs) {
+    if (!v86gl_ensure_ready()) return;
+    if (n > 0 && !bufs) return;
+    glDrawBuffers(n, bufs);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glStencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum zpass) {
+    if (!v86gl_ensure_ready()) return;
+    glStencilOpSeparate(face, fail, zfail, zpass);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) {
+    if (!v86gl_ensure_ready()) return;
+    glStencilFuncSeparate(face, func, ref, mask);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glStencilMaskSeparate(GLenum face, GLuint mask) {
+    if (!v86gl_ensure_ready()) return;
+    glStencilMaskSeparate(face, mask);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenProgramsARBMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    for (i = 0; i < n; i++) {
+        GLuint host = 0;
+        if (!guest_names[i] || v86gl_host_arb_program(guest_names[i], 0) ||
+            g_arb_program_count >= V86GL_MAX_ARB_PROGRAMS) {
+            continue;
+        }
+        gl4es_glGenProgramsARB(1, &host);
+        if (host) {
+            v86gl_map_name(g_arb_programs, &g_arb_program_count,
+                           V86GL_MAX_ARB_PROGRAMS, guest_names[i], host);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteProgramsARBMapped(GLsizei n, const GLuint* guest_names) {
+    GLuint* host_names;
+    GLsizei i;
+    GLsizei host_count = 0;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    if (!n) return;
+
+    host_names = (GLuint*)malloc((size_t)n * sizeof(GLuint));
+    if (!host_names) return;
+
+    for (i = 0; i < n; i++) {
+        GLuint host = v86gl_host_arb_program(guest_names[i], 0);
+        if (host) {
+            host_names[host_count++] = host;
+        }
+        v86gl_forget_name(g_arb_programs, &g_arb_program_count, guest_names[i]);
+    }
+
+    if (host_count > 0) {
+        gl4es_glDeleteProgramsARB(host_count, host_names);
+    }
+    free(host_names);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBindProgramARBMapped(GLenum target, GLuint guest_program) {
+    GLuint host_program = 0;
+
+    if (!v86gl_ensure_ready()) return;
+    if (guest_program) {
+        host_program = v86gl_host_arb_program(guest_program, 1);
+        if (!host_program) return;
+    }
+    gl4es_glBindProgramARB(target, host_program);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glProgramStringARB(GLenum target, GLenum format, GLsizei length,
+                              const GLvoid* string) {
+    if (!v86gl_ensure_ready()) return;
+    if (length < 0 || (length > 0 && !string)) return;
+    gl4es_glProgramStringARB(target, format, length, string ? string : "");
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glProgramParameterfvARB(uint32_t parameter_kind, GLenum target,
+                                   GLuint index, GLsizei count,
+                                   const GLfloat* params) {
+    if (!v86gl_ensure_ready()) return;
+    if (count < 0 || (count > 0 && !params)) return;
+    if (!count) return;
+
+    if (parameter_kind == V86GL_PROGRAM_PARAMETER_ENV) {
+        if (count == 1) {
+            gl4es_glProgramEnvParameter4fvARB(target, index, params);
+        } else {
+            gl4es_glProgramEnvParameters4fvEXT(target, index, count, params);
+        }
+    } else if (parameter_kind == V86GL_PROGRAM_PARAMETER_LOCAL) {
+        if (count == 1) {
+            gl4es_glProgramLocalParameter4fvARB(target, index, params);
+        } else {
+            gl4es_glProgramLocalParameters4fvEXT(target, index, count, params);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glProgramParameterdvARB(uint32_t parameter_kind, GLenum target,
+                                   GLuint index, const GLdouble* params) {
+    if (!v86gl_ensure_ready() || !params) return;
+
+    if (parameter_kind == V86GL_PROGRAM_PARAMETER_ENV) {
+        gl4es_glProgramEnvParameter4dvARB(target, index, params);
+    } else if (parameter_kind == V86GL_PROGRAM_PARAMETER_LOCAL) {
+        gl4es_glProgramLocalParameter4dvARB(target, index, params);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
+    if (!v86gl_ensure_ready() || !params) return 0;
+    gl4es_glGetProgramivARB(target, pname, params);
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glGetProgramParameterfvARB(uint32_t parameter_kind, GLenum target,
+                                     GLuint index, GLfloat* params) {
+    if (!v86gl_ensure_ready() || !params) return 0;
+
+    if (parameter_kind == V86GL_PROGRAM_PARAMETER_ENV) {
+        gl4es_glGetProgramEnvParameterfvARB(target, index, params);
+        return 1;
+    }
+    if (parameter_kind == V86GL_PROGRAM_PARAMETER_LOCAL) {
+        gl4es_glGetProgramLocalParameterfvARB(target, index, params);
+        return 1;
+    }
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glGetProgramParameterdvARB(uint32_t parameter_kind, GLenum target,
+                                     GLuint index, GLdouble* params) {
+    if (!v86gl_ensure_ready() || !params) return 0;
+
+    if (parameter_kind == V86GL_PROGRAM_PARAMETER_ENV) {
+        gl4es_glGetProgramEnvParameterdvARB(target, index, params);
+        return 1;
+    }
+    if (parameter_kind == V86GL_PROGRAM_PARAMETER_LOCAL) {
+        gl4es_glGetProgramLocalParameterdvARB(target, index, params);
+        return 1;
+    }
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glGetProgramStringARB(GLenum target, GLenum pname, GLsizei bufSize,
+                                GLsizei* length, GLvoid* string) {
+    GLint program_length = 0;
+
+    if (!v86gl_ensure_ready() || bufSize < 0) return 0;
+    gl4es_glGetProgramivARB(target, GL_PROGRAM_LENGTH_ARB, &program_length);
+    if (length) {
+        *length = program_length;
+    }
+    if (bufSize > 0 && string) {
+        gl4es_glGetProgramStringARB(target, pname, string);
+    }
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryString(GLenum name, GLsizei bufSize, GLsizei* length,
+                        GLchar* string) {
+    const GLubyte* value;
+    size_t value_length;
+    size_t copy_length;
+
+    if (!v86gl_ensure_ready() || bufSize < 0) return 0;
+    value = glGetString(name);
+    if (!value) return 0;
+
+    value_length = strlen((const char*)value);
+    if (length) {
+        *length = (GLsizei)value_length;
+    }
+    if (bufSize > 0 && string) {
+        copy_length = value_length < (size_t)(bufSize - 1) ? value_length : (size_t)(bufSize - 1);
+        if (copy_length) {
+            memcpy(string, value, copy_length);
+        }
+        string[copy_length] = '\0';
+    }
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryInteger(GLenum pname, GLint* value) {
+    if (!v86gl_ensure_ready() || !value) return 0;
+    glGetIntegerv(pname, value);
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCreateProgramMapped(GLuint guest_program) {
+    GLuint host_program;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = glCreateProgram();
+    v86gl_map_name(g_programs, &g_program_count, V86GL_MAX_PROGRAMS,
+                   guest_program, host_program);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCreateShaderMapped(GLuint guest_shader, GLenum type) {
+    GLuint host_shader;
+
+    if (!v86gl_ensure_ready()) return;
+    host_shader = glCreateShader(type);
+    v86gl_map_name(g_shaders, &g_shader_count, V86GL_MAX_SHADERS,
+                   guest_shader, host_shader);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteProgramMapped(GLuint guest_program) {
+    GLuint host_program;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    if (host_program) {
+        glDeleteProgram(host_program);
+        v86gl_forget_name(g_programs, &g_program_count, guest_program);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteShaderMapped(GLuint guest_shader) {
+    GLuint host_shader;
+
+    if (!v86gl_ensure_ready()) return;
+    host_shader = v86gl_host_shader(guest_shader);
+    if (host_shader) {
+        glDeleteShader(host_shader);
+        v86gl_forget_name(g_shaders, &g_shader_count, guest_shader);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glAttachShaderMapped(GLuint guest_program, GLuint guest_shader) {
+    GLuint host_program;
+    GLuint host_shader;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    host_shader = v86gl_host_shader(guest_shader);
+    if (host_program && host_shader) {
+        glAttachShader(host_program, host_shader);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDetachShaderMapped(GLuint guest_program, GLuint guest_shader) {
+    GLuint host_program;
+    GLuint host_shader;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    host_shader = v86gl_host_shader(guest_shader);
+    if (host_program && host_shader) {
+        glDetachShader(host_program, host_shader);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glShaderSourceMapped(GLuint guest_shader, GLsizei length, const char* source) {
+    GLuint host_shader;
+    const char* strings[1];
+    GLint lengths[1];
+
+    if (!v86gl_ensure_ready()) return;
+    host_shader = v86gl_host_shader(guest_shader);
+    if (!host_shader || length < 0 || (length > 0 && !source)) {
+        return;
+    }
+
+    strings[0] = source ? source : "";
+    lengths[0] = length;
+    glShaderSource(host_shader, 1, strings, lengths);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glCompileShaderMapped(GLuint guest_shader) {
+    GLuint host_shader;
+
+    if (!v86gl_ensure_ready()) return;
+    host_shader = v86gl_host_shader(guest_shader);
+    if (host_shader) {
+        glCompileShader(host_shader);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glLinkProgramMapped(GLuint guest_program) {
+    GLuint host_program;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    if (host_program) {
+        glLinkProgram(host_program);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glUseProgramMapped(GLuint guest_program) {
+    if (!v86gl_ensure_ready()) return;
+    glUseProgram(v86gl_host_program(guest_program));
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glValidateProgramMapped(GLuint guest_program) {
+    GLuint host_program;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    if (host_program) {
+        glValidateProgram(host_program);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryObjectivMapped(uint32_t object_kind, GLuint guest_name,
+                                GLenum pname, GLint* value) {
+    GLuint host_name;
+
+    if (!v86gl_ensure_ready() || !value) return 0;
+    if (object_kind == V86GL_OBJECT_KIND_SHADER) {
+        host_name = v86gl_host_shader(guest_name);
+        if (!host_name) return 0;
+        glGetShaderiv(host_name, pname, value);
+        return 1;
+    }
+    if (object_kind == V86GL_OBJECT_KIND_PROGRAM) {
+        host_name = v86gl_host_program(guest_name);
+        if (!host_name) return 0;
+        glGetProgramiv(host_name, pname, value);
+        return 1;
+    }
+    if (object_kind == V86GL_OBJECT_KIND_QUERY) {
+#ifdef __EMSCRIPTEN__
+        GLuint query_value = 0;
+
+        if (!v86gl_occlusion_queries_supported()) return 0;
+        host_name = v86gl_host_query(guest_name);
+        if (!host_name || !emscripten_glIsQuery(host_name)) return 0;
+
+        if (pname == GL_QUERY_RESULT_AVAILABLE) {
+            emscripten_glGetQueryObjectuiv(host_name, pname, &query_value);
+            *value = (GLint)query_value;
+            return 1;
+        }
+        if (pname == GL_QUERY_RESULT) {
+            emscripten_glGetQueryObjectuiv(host_name, GL_QUERY_RESULT_AVAILABLE,
+                                           &query_value);
+            if (!query_value) {
+                *value = 1;
+                return 1;
+            }
+            query_value = 0;
+            emscripten_glGetQueryObjectuiv(host_name, GL_QUERY_RESULT,
+                                           &query_value);
+            *value = query_value ? 1 : 0;
+            return 1;
+        }
+#else
+        (void)pname;
+#endif
+        return 0;
+    }
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryObjectLogMapped(uint32_t object_kind, GLuint guest_name,
+                                 GLsizei bufSize, GLsizei* length,
+                                 GLchar* infoLog) {
+    GLuint host_name;
+
+    if (!v86gl_ensure_ready() || bufSize < 0) return 0;
+    if (object_kind == V86GL_OBJECT_KIND_SHADER) {
+        host_name = v86gl_host_shader(guest_name);
+        if (!host_name) return 0;
+        glGetShaderInfoLog(host_name, bufSize, length, infoLog);
+        return 1;
+    }
+    if (object_kind == V86GL_OBJECT_KIND_PROGRAM) {
+        host_name = v86gl_host_program(guest_name);
+        if (!host_name) return 0;
+        glGetProgramInfoLog(host_name, bufSize, length, infoLog);
+        return 1;
+    }
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryActiveMapped(uint32_t active_kind, GLuint guest_program,
+                              GLuint index, GLsizei bufSize, GLsizei* length,
+                              GLint* size, GLenum* type, GLchar* name) {
+    GLuint host_program;
+
+    if (!v86gl_ensure_ready() || bufSize < 0) return 0;
+    host_program = v86gl_host_program(guest_program);
+    if (!host_program) return 0;
+    if (active_kind == V86GL_ACTIVE_KIND_UNIFORM) {
+        glGetActiveUniform(host_program, index, bufSize, length, size, type, name);
+        return 1;
+    }
+    if (active_kind == V86GL_ACTIVE_KIND_ATTRIB) {
+        glGetActiveAttrib(host_program, index, bufSize, length, size, type, name);
+        return 1;
+    }
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBindAttribLocationMapped(GLuint guest_program, GLuint index,
+                                      GLsizei name_length, const char* name) {
+    GLuint host_program;
+    char* owned_name;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    owned_name = v86gl_copy_name(name_length, name);
+    if (host_program && owned_name) {
+        glBindAttribLocation(host_program, index, owned_name);
+    }
+    free(owned_name);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMapUniformLocation(GLuint guest_program, GLint guest_location,
+                                GLsizei name_length, const char* name) {
+    GLuint host_program;
+    GLint host_location = -1;
+    char* owned_name;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    owned_name = v86gl_copy_name(name_length, name);
+    if (host_program && owned_name) {
+        host_location = glGetUniformLocation(host_program, owned_name);
+    }
+    v86gl_map_location(g_uniform_locations, &g_uniform_location_count,
+                       V86GL_MAX_UNIFORM_LOCATIONS, guest_location, host_location);
+    free(owned_name);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMapAttribLocation(GLuint guest_program, GLint guest_index,
+                               GLsizei name_length, const char* name) {
+    GLuint host_program;
+    GLint host_index = -1;
+    char* owned_name;
+
+    if (!v86gl_ensure_ready()) return;
+    host_program = v86gl_host_program(guest_program);
+    owned_name = v86gl_copy_name(name_length, name);
+    if (host_program && owned_name) {
+        host_index = glGetAttribLocation(host_program, owned_name);
+    }
+    v86gl_map_location(g_attrib_locations, &g_attrib_location_count,
+                       V86GL_MAX_ATTRIB_LOCATIONS, guest_index, host_index);
+    free(owned_name);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glUniformfvMapped(GLint guest_location, GLint components,
+                             GLsizei count, const GLfloat* value) {
+    GLint host_location;
+
+    if (!v86gl_ensure_ready()) return;
+    host_location = v86gl_host_uniform_location(guest_location);
+    if (host_location < 0 || count < 0 || (count > 0 && !value)) {
+        return;
+    }
+
+    switch (components) {
+    case 1: glUniform1fv(host_location, count, value); break;
+    case 2: glUniform2fv(host_location, count, value); break;
+    case 3: glUniform3fv(host_location, count, value); break;
+    case 4: glUniform4fv(host_location, count, value); break;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glUniformivMapped(GLint guest_location, GLint components,
+                             GLsizei count, const GLint* value) {
+    GLint host_location;
+
+    if (!v86gl_ensure_ready()) return;
+    host_location = v86gl_host_uniform_location(guest_location);
+    if (host_location < 0 || count < 0 || (count > 0 && !value)) {
+        return;
+    }
+
+    switch (components) {
+    case 1: glUniform1iv(host_location, count, value); break;
+    case 2: glUniform2iv(host_location, count, value); break;
+    case 3: glUniform3iv(host_location, count, value); break;
+    case 4: glUniform4iv(host_location, count, value); break;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glUniformMatrixfvMapped(GLint guest_location, GLint dimension,
+                                   GLsizei count, GLboolean transpose,
+                                   const GLfloat* value) {
+    GLint host_location;
+
+    if (!v86gl_ensure_ready()) return;
+    host_location = v86gl_host_uniform_location(guest_location);
+    if (host_location < 0 || count < 0 || (count > 0 && !value)) {
+        return;
+    }
+
+    switch (dimension) {
+    case 2: glUniformMatrix2fv(host_location, count, transpose, value); break;
+    case 3: glUniformMatrix3fv(host_location, count, transpose, value); break;
+    case 4: glUniformMatrix4fv(host_location, count, transpose, value); break;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glUniformMatrixRectfvMapped(GLint guest_location, GLint columns,
+                                       GLint rows, GLsizei count,
+                                       GLboolean transpose,
+                                       const GLfloat* value) {
+    GLint host_location;
+
+    if (!v86gl_ensure_ready()) return;
+    host_location = v86gl_host_uniform_location(guest_location);
+    if (host_location < 0 || count < 0 || (count > 0 && !value)) {
+        return;
+    }
+
+#ifdef __EMSCRIPTEN__
+    if (g_webgl_major_version < 2) {
+        return;
+    }
+    if (columns == 2 && rows == 3) emscripten_glUniformMatrix2x3fv(host_location, count, transpose, value);
+    else if (columns == 3 && rows == 2) emscripten_glUniformMatrix3x2fv(host_location, count, transpose, value);
+    else if (columns == 2 && rows == 4) emscripten_glUniformMatrix2x4fv(host_location, count, transpose, value);
+    else if (columns == 4 && rows == 2) emscripten_glUniformMatrix4x2fv(host_location, count, transpose, value);
+    else if (columns == 3 && rows == 4) emscripten_glUniformMatrix3x4fv(host_location, count, transpose, value);
+    else if (columns == 4 && rows == 3) emscripten_glUniformMatrix4x3fv(host_location, count, transpose, value);
+#else
+    (void)columns;
+    (void)rows;
+    (void)transpose;
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenFramebuffersMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    for (i = 0; i < n; i++) {
+        GLuint host = 0;
+        glGenFramebuffers(1, &host);
+        v86gl_map_name(g_framebuffers, &g_framebuffer_count,
+                       V86GL_MAX_FRAMEBUFFERS, guest_names[i], host);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteFramebuffersMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    for (i = 0; i < n; i++) {
+        GLuint host = v86gl_host_framebuffer(guest_names[i]);
+        if (host) {
+            glDeleteFramebuffers(1, &host);
+            v86gl_forget_name(g_framebuffers, &g_framebuffer_count, guest_names[i]);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBindFramebufferMapped(GLenum target, GLuint guest_framebuffer) {
+    if (!v86gl_ensure_ready()) return;
+    glBindFramebuffer(target, v86gl_host_framebuffer(guest_framebuffer));
+}
+
+EMSCRIPTEN_KEEPALIVE
+GLenum v86gl_glCheckFramebufferStatusMapped(GLenum target) {
+    if (!v86gl_ensure_ready()) return 0;
+    return glCheckFramebufferStatus(target);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFramebufferTextureMapped(GLenum target, GLenum attachment,
+                                      GLenum textarget, GLuint guest_texture,
+                                      GLint level, GLint zoffset) {
+    GLuint host_texture;
+
+    if (!v86gl_ensure_ready()) return;
+    host_texture = v86gl_host_texture(guest_texture, 0);
+    if (textarget == GL_TEXTURE_1D) {
+        glFramebufferTexture1D(target, attachment, textarget, host_texture, level);
+    } else if (textarget == GL_TEXTURE_3D) {
+        glFramebufferTexture3D(target, attachment, textarget, host_texture, level, zoffset);
+    } else {
+        glFramebufferTexture2D(target, attachment, textarget, host_texture, level);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFramebufferRenderbufferMapped(GLenum target, GLenum attachment,
+                                           GLenum renderbuffertarget,
+                                           GLuint guest_renderbuffer) {
+    if (!v86gl_ensure_ready()) return;
+    glFramebufferRenderbuffer(target, attachment, renderbuffertarget,
+                              v86gl_host_renderbuffer(guest_renderbuffer));
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenRenderbuffersMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    for (i = 0; i < n; i++) {
+        GLuint host = 0;
+        glGenRenderbuffers(1, &host);
+        v86gl_map_name(g_renderbuffers, &g_renderbuffer_count,
+                       V86GL_MAX_RENDERBUFFERS, guest_names[i], host);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteRenderbuffersMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    for (i = 0; i < n; i++) {
+        GLuint host = v86gl_host_renderbuffer(guest_names[i]);
+        if (host) {
+            glDeleteRenderbuffers(1, &host);
+            v86gl_forget_name(g_renderbuffers, &g_renderbuffer_count, guest_names[i]);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBindRenderbufferMapped(GLenum target, GLuint guest_renderbuffer) {
+    if (!v86gl_ensure_ready()) return;
+    glBindRenderbuffer(target, v86gl_host_renderbuffer(guest_renderbuffer));
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glRenderbufferStorageMapped(GLenum target, GLenum internalformat,
+                                       GLsizei width, GLsizei height) {
+    if (!v86gl_ensure_ready()) return;
+    glRenderbufferStorage(target, internalformat, width, height);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenQueriesMapped(GLsizei n, const GLuint* guest_names) {
+#ifdef __EMSCRIPTEN__
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+    if (!v86gl_occlusion_queries_supported()) return;
+
+    for (i = 0; i < n; i++) {
+        GLuint host = 0;
+        if (!guest_names[i]) {
+            continue;
+        }
+        emscripten_glGenQueries(1, &host);
+        if (host) {
+            v86gl_map_name(g_queries, &g_query_count,
+                           V86GL_MAX_QUERIES, guest_names[i], host);
+        }
+    }
+#else
+    (void)n;
+    (void)guest_names;
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteQueriesMapped(GLsizei n, const GLuint* guest_names) {
+#ifdef __EMSCRIPTEN__
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n < 0 || (n > 0 && !guest_names)) return;
+
+    for (i = 0; i < n; i++) {
+        GLuint host = v86gl_host_query(guest_names[i]);
+        if (host && v86gl_occlusion_queries_supported()) {
+            emscripten_glDeleteQueries(1, &host);
+        }
+        v86gl_forget_name(g_queries, &g_query_count, guest_names[i]);
+    }
+#else
+    (void)n;
+    (void)guest_names;
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBeginQueryMapped(GLenum target, GLuint guest_query) {
+#ifdef __EMSCRIPTEN__
+    GLenum webgl_target;
+    GLuint host;
+
+    if (!v86gl_ensure_ready()) return;
+    if (!v86gl_occlusion_queries_supported()) return;
+    webgl_target = v86gl_webgl_query_target(target);
+    host = v86gl_host_query(guest_query);
+    if (!webgl_target || !host) return;
+
+    emscripten_glBeginQuery(webgl_target, host);
+#else
+    (void)target;
+    (void)guest_query;
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glEndQueryMapped(GLenum target) {
+#ifdef __EMSCRIPTEN__
+    GLenum webgl_target;
+
+    if (!v86gl_ensure_ready()) return;
+    if (!v86gl_occlusion_queries_supported()) return;
+    webgl_target = v86gl_webgl_query_target(target);
+    if (!webgl_target) return;
+
+    emscripten_glEndQuery(webgl_target);
+#else
+    (void)target;
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glVertexAttrib4fMapped(GLuint guest_index, GLfloat x, GLfloat y,
+                                  GLfloat z, GLfloat w) {
+    GLint host_index;
+
+    if (!v86gl_ensure_ready()) return;
+    host_index = v86gl_host_attrib_index((GLint)guest_index);
+    if (host_index >= 0) {
+        glVertexAttrib4f((GLuint)host_index, x, y, z, w);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glEnableVertexAttribArrayMapped(GLuint guest_index) {
+    GLint host_index;
+
+    if (!v86gl_ensure_ready()) return;
+    host_index = v86gl_host_attrib_index((GLint)guest_index);
+    if (host_index >= 0) {
+        glEnableVertexAttribArray((GLuint)host_index);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDisableVertexAttribArrayMapped(GLuint guest_index) {
+    GLint host_index;
+
+    if (!v86gl_ensure_ready()) return;
+    host_index = v86gl_host_attrib_index((GLint)guest_index);
+    if (host_index >= 0) {
+        glDisableVertexAttribArray((GLuint)host_index);
+    }
+}
+
 static void v86gl_setup_client_arrays(GLint vertex_size, GLenum vertex_type,
                                       GLsizei vertex_stride, const void* vertex_data,
                                       GLint color_size, GLenum color_type,
@@ -1497,6 +2778,67 @@ static void v86gl_setup_client_arrays_mt(GLsizei tex_unit_count,
     glClientActiveTexture(restore_client_active);
 }
 
+typedef struct {
+    GLint guest_index;
+    GLboolean normalized;
+    GLboolean enabled;
+    GLint size;
+    GLenum type;
+    GLsizei stride;
+    const void* data;
+} V86GLGenericAttribMeta;
+
+static V86GLGenericAttribMeta v86gl_generic_attrib_meta_at(const int32_t* values,
+                                                           uint32_t index) {
+    V86GLGenericAttribMeta meta;
+    const int32_t* row = values + index * 7u;
+    meta.guest_index = row[0];
+    meta.normalized = row[1] ? GL_TRUE : GL_FALSE;
+    meta.enabled = row[2] ? GL_TRUE : GL_FALSE;
+    meta.size = row[3];
+    meta.type = (GLenum)row[4];
+    meta.stride = row[5];
+    meta.data = row[6] ? (const void*)(uintptr_t)(uint32_t)row[6] : 0;
+    return meta;
+}
+
+static void v86gl_disable_generic_attribs(void) {
+    GLuint i;
+
+    for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++) {
+        glDisableVertexAttribArray(i);
+    }
+}
+
+static void v86gl_setup_generic_attribs(GLsizei attrib_count, const int32_t* values) {
+    GLsizei i;
+
+    v86gl_disable_generic_attribs();
+    if (!values || attrib_count <= 0) {
+        return;
+    }
+
+    if (attrib_count > V86GL_MAX_VERTEX_ATTRIBS) {
+        attrib_count = V86GL_MAX_VERTEX_ATTRIBS;
+    }
+
+    for (i = 0; i < attrib_count; i++) {
+        V86GLGenericAttribMeta meta = v86gl_generic_attrib_meta_at(values, (uint32_t)i);
+        GLint host_index = v86gl_host_attrib_index(meta.guest_index);
+        if (host_index < 0 || host_index >= V86GL_MAX_VERTEX_ATTRIBS) {
+            continue;
+        }
+
+        if (meta.enabled && meta.data && meta.size > 0) {
+            glEnableVertexAttribArray((GLuint)host_index);
+            glVertexAttribPointer((GLuint)host_index, meta.size, meta.type,
+                                  meta.normalized, meta.stride, meta.data);
+        } else {
+            glDisableVertexAttribArray((GLuint)host_index);
+        }
+    }
+}
+
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glDrawArraysPacked(GLenum mode, GLsizei count,
                               GLint vertex_size, GLenum vertex_type,
@@ -1512,6 +2854,7 @@ void v86gl_glDrawArraysPacked(GLenum mode, GLsizei count,
                               color_size, color_type, color_stride, color_data,
                               texcoord_size, texcoord_type, texcoord_stride, texcoord_data,
                               normal_type, normal_stride, normal_data);
+    v86gl_disable_generic_attribs();
     glDrawArrays(mode, 0, count);
 }
 
@@ -1524,6 +2867,22 @@ void v86gl_glDrawArraysPackedMT(GLenum mode, GLsizei count,
     if (!v86gl_ensure_ready()) return;
     v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
                                  has_secondary_color, has_fog_coord, array_meta);
+    v86gl_disable_generic_attribs();
+    glDrawArrays(mode, 0, count);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawArraysPackedGL2(GLenum mode, GLsizei count,
+                                 GLsizei tex_unit_count, GLenum restore_client_active,
+                                 GLboolean has_secondary_color,
+                                 GLboolean has_fog_coord,
+                                 const int32_t* array_meta,
+                                 GLsizei generic_attrib_count,
+                                 const int32_t* generic_attrib_meta) {
+    if (!v86gl_ensure_ready()) return;
+    v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
+                                 has_secondary_color, has_fog_coord, array_meta);
+    v86gl_setup_generic_attribs(generic_attrib_count, generic_attrib_meta);
     glDrawArrays(mode, 0, count);
 }
 
@@ -1542,6 +2901,7 @@ void v86gl_glDrawElementsPacked(GLenum mode, GLsizei count, GLenum type, const v
                               color_size, color_type, color_stride, color_data,
                               texcoord_size, texcoord_type, texcoord_stride, texcoord_data,
                               normal_type, normal_stride, normal_data);
+    v86gl_disable_generic_attribs();
     glDrawElements(mode, count, type, indices);
 }
 
@@ -1554,5 +2914,23 @@ void v86gl_glDrawElementsPackedMT(GLenum mode, GLsizei count, GLenum type, const
     if (!v86gl_ensure_ready()) return;
     v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
                                  has_secondary_color, has_fog_coord, array_meta);
+    v86gl_disable_generic_attribs();
+    glDrawElements(mode, count, type, indices);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawElementsPackedGL2(GLenum mode, GLsizei count, GLenum type,
+                                   const void* indices,
+                                   GLsizei tex_unit_count,
+                                   GLenum restore_client_active,
+                                   GLboolean has_secondary_color,
+                                   GLboolean has_fog_coord,
+                                   const int32_t* array_meta,
+                                   GLsizei generic_attrib_count,
+                                   const int32_t* generic_attrib_meta) {
+    if (!v86gl_ensure_ready()) return;
+    v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
+                                 has_secondary_color, has_fog_coord, array_meta);
+    v86gl_setup_generic_attribs(generic_attrib_count, generic_attrib_meta);
     glDrawElements(mode, count, type, indices);
 }

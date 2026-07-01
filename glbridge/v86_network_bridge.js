@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "framebuffer-sample-history-20260626";
+    const V86GL_BRIDGE_VERSION = "arbprogram-20260701";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;
@@ -168,11 +168,71 @@
     const GLFN_TEX_COORD4F = 134;
     const GLFN_VERTEX4F = 135;
     const GLFN_RASTER_POS4F = 136;
+    const GLFN_BLEND_EQUATION_SEPARATE = 137;
+    const GLFN_DRAW_BUFFERS = 138;
+    const GLFN_STENCIL_OP_SEPARATE = 139;
+    const GLFN_STENCIL_FUNC_SEPARATE = 140;
+    const GLFN_STENCIL_MASK_SEPARATE = 141;
+    const GLFN_CREATE_PROGRAM = 142;
+    const GLFN_CREATE_SHADER = 143;
+    const GLFN_DELETE_PROGRAM = 144;
+    const GLFN_DELETE_SHADER = 145;
+    const GLFN_ATTACH_SHADER = 146;
+    const GLFN_DETACH_SHADER = 147;
+    const GLFN_SHADER_SOURCE = 148;
+    const GLFN_COMPILE_SHADER = 149;
+    const GLFN_LINK_PROGRAM = 150;
+    const GLFN_USE_PROGRAM = 151;
+    const GLFN_VALIDATE_PROGRAM = 152;
+    const GLFN_BIND_ATTRIB_LOCATION = 153;
+    const GLFN_MAP_UNIFORM_LOCATION = 154;
+    const GLFN_MAP_ATTRIB_LOCATION = 155;
+    const GLFN_UNIFORM_FV = 156;
+    const GLFN_UNIFORM_IV = 157;
+    const GLFN_UNIFORM_MATRIX_FV = 158;
+    const GLFN_VERTEX_ATTRIB4F = 159;
+    const GLFN_ENABLE_VERTEX_ATTRIB_ARRAY = 160;
+    const GLFN_DISABLE_VERTEX_ATTRIB_ARRAY = 161;
+    const GLFN_DRAW_ARRAYS_GL2 = 162;
+    const GLFN_DRAW_ELEMENTS_GL2 = 163;
+    const GLFN_UNIFORM_MATRIX_RECT_FV = 164;
+    const GLFN_GEN_FRAMEBUFFERS = 165;
+    const GLFN_DELETE_FRAMEBUFFERS = 166;
+    const GLFN_BIND_FRAMEBUFFER = 167;
+    const GLFN_FRAMEBUFFER_TEXTURE = 168;
+    const GLFN_FRAMEBUFFER_RENDERBUFFER = 169;
+    const GLFN_GEN_RENDERBUFFERS = 170;
+    const GLFN_DELETE_RENDERBUFFERS = 171;
+    const GLFN_BIND_RENDERBUFFER = 172;
+    const GLFN_RENDERBUFFER_STORAGE = 173;
+    const GLFN_QUERY_OBJECT_IV = 174;
+    const GLFN_QUERY_OBJECT_LOG = 175;
+    const GLFN_CHECK_FRAMEBUFFER_STATUS = 176;
+    const GLFN_QUERY_ACTIVE = 177;
+    const GLFN_GEN_QUERIES = 178;
+    const GLFN_DELETE_QUERIES = 179;
+    const GLFN_BEGIN_QUERY = 180;
+    const GLFN_END_QUERY = 181;
+    const GLFN_GEN_PROGRAMS_ARB = 182;
+    const GLFN_DELETE_PROGRAMS_ARB = 183;
+    const GLFN_BIND_PROGRAM_ARB = 184;
+    const GLFN_PROGRAM_STRING_ARB = 185;
+    const GLFN_PROGRAM_PARAMETER_FV_ARB = 186;
+    const GLFN_PROGRAM_PARAMETER_DV_ARB = 187;
+    const GLFN_QUERY_PROGRAM_IV_ARB = 188;
+    const GLFN_QUERY_PROGRAM_PARAMETER_FV_ARB = 189;
+    const GLFN_QUERY_PROGRAM_PARAMETER_DV_ARB = 190;
+    const GLFN_QUERY_PROGRAM_STRING_ARB = 191;
+    const GLFN_QUERY_GL_STRING = 192;
+    const GLFN_QUERY_INTEGER = 193;
 
     const V86GL_READ_PIXELS_HEADER_SIZE = 32;
     const V86GL_READ_PIXELS_STATUS_PENDING = 0;
     const V86GL_READ_PIXELS_STATUS_OK = 1;
     const V86GL_READ_PIXELS_STATUS_FAILED = 2;
+    const V86GL_SYNC_QUERY_STATUS_PENDING = 0;
+    const V86GL_SYNC_QUERY_STATUS_OK = 1;
+    const V86GL_SYNC_QUERY_STATUS_FAILED = 2;
 
     const OP_NAMES = {
         [OP_MAKE_CURRENT]: "MAKE_CURRENT",
@@ -328,6 +388,63 @@
         [GLFN_TEX_COORD4F]: "glTexCoord4f",
         [GLFN_VERTEX4F]: "glVertex4f",
         [GLFN_RASTER_POS4F]: "glRasterPos4f",
+        [GLFN_BLEND_EQUATION_SEPARATE]: "glBlendEquationSeparate",
+        [GLFN_DRAW_BUFFERS]: "glDrawBuffers",
+        [GLFN_STENCIL_OP_SEPARATE]: "glStencilOpSeparate",
+        [GLFN_STENCIL_FUNC_SEPARATE]: "glStencilFuncSeparate",
+        [GLFN_STENCIL_MASK_SEPARATE]: "glStencilMaskSeparate",
+        [GLFN_CREATE_PROGRAM]: "glCreateProgram",
+        [GLFN_CREATE_SHADER]: "glCreateShader",
+        [GLFN_DELETE_PROGRAM]: "glDeleteProgram",
+        [GLFN_DELETE_SHADER]: "glDeleteShader",
+        [GLFN_ATTACH_SHADER]: "glAttachShader",
+        [GLFN_DETACH_SHADER]: "glDetachShader",
+        [GLFN_SHADER_SOURCE]: "glShaderSource",
+        [GLFN_COMPILE_SHADER]: "glCompileShader",
+        [GLFN_LINK_PROGRAM]: "glLinkProgram",
+        [GLFN_USE_PROGRAM]: "glUseProgram",
+        [GLFN_VALIDATE_PROGRAM]: "glValidateProgram",
+        [GLFN_BIND_ATTRIB_LOCATION]: "glBindAttribLocation",
+        [GLFN_MAP_UNIFORM_LOCATION]: "glGetUniformLocation",
+        [GLFN_MAP_ATTRIB_LOCATION]: "glGetAttribLocation",
+        [GLFN_UNIFORM_FV]: "glUniform*fv",
+        [GLFN_UNIFORM_IV]: "glUniform*iv",
+        [GLFN_UNIFORM_MATRIX_FV]: "glUniformMatrix*fv",
+        [GLFN_VERTEX_ATTRIB4F]: "glVertexAttrib4f",
+        [GLFN_ENABLE_VERTEX_ATTRIB_ARRAY]: "glEnableVertexAttribArray",
+        [GLFN_DISABLE_VERTEX_ATTRIB_ARRAY]: "glDisableVertexAttribArray",
+        [GLFN_DRAW_ARRAYS_GL2]: "glDrawArrays(GL2)",
+        [GLFN_DRAW_ELEMENTS_GL2]: "glDrawElements(GL2)",
+        [GLFN_UNIFORM_MATRIX_RECT_FV]: "glUniformMatrix*x*fv",
+        [GLFN_GEN_FRAMEBUFFERS]: "glGenFramebuffers",
+        [GLFN_DELETE_FRAMEBUFFERS]: "glDeleteFramebuffers",
+        [GLFN_BIND_FRAMEBUFFER]: "glBindFramebuffer",
+        [GLFN_FRAMEBUFFER_TEXTURE]: "glFramebufferTexture*",
+        [GLFN_FRAMEBUFFER_RENDERBUFFER]: "glFramebufferRenderbuffer",
+        [GLFN_GEN_RENDERBUFFERS]: "glGenRenderbuffers",
+        [GLFN_DELETE_RENDERBUFFERS]: "glDeleteRenderbuffers",
+        [GLFN_BIND_RENDERBUFFER]: "glBindRenderbuffer",
+        [GLFN_RENDERBUFFER_STORAGE]: "glRenderbufferStorage",
+        [GLFN_QUERY_OBJECT_IV]: "glGetObjectiv(sync)",
+        [GLFN_QUERY_OBJECT_LOG]: "glGetInfoLog(sync)",
+        [GLFN_CHECK_FRAMEBUFFER_STATUS]: "glCheckFramebufferStatus(sync)",
+        [GLFN_QUERY_ACTIVE]: "glGetActive*(sync)",
+        [GLFN_GEN_QUERIES]: "glGenQueries",
+        [GLFN_DELETE_QUERIES]: "glDeleteQueries",
+        [GLFN_BEGIN_QUERY]: "glBeginQuery",
+        [GLFN_END_QUERY]: "glEndQuery",
+        [GLFN_GEN_PROGRAMS_ARB]: "glGenProgramsARB",
+        [GLFN_DELETE_PROGRAMS_ARB]: "glDeleteProgramsARB",
+        [GLFN_BIND_PROGRAM_ARB]: "glBindProgramARB",
+        [GLFN_PROGRAM_STRING_ARB]: "glProgramStringARB",
+        [GLFN_PROGRAM_PARAMETER_FV_ARB]: "glProgramParameterfvARB",
+        [GLFN_PROGRAM_PARAMETER_DV_ARB]: "glProgramParameterdvARB",
+        [GLFN_QUERY_PROGRAM_IV_ARB]: "glGetProgramivARB(sync)",
+        [GLFN_QUERY_PROGRAM_PARAMETER_FV_ARB]: "glGetProgramParameterfvARB(sync)",
+        [GLFN_QUERY_PROGRAM_PARAMETER_DV_ARB]: "glGetProgramParameterdvARB(sync)",
+        [GLFN_QUERY_PROGRAM_STRING_ARB]: "glGetProgramStringARB(sync)",
+        [GLFN_QUERY_GL_STRING]: "glGetString(sync)",
+        [GLFN_QUERY_INTEGER]: "glGetIntegerv(sync)",
     };
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -803,6 +920,193 @@
                 this.callGL("RasterPos4f", [
                     f32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12),
                 ], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_BLEND_EQUATION_SEPARATE:
+                this.callGL("BlendEquationSeparate", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_DRAW_BUFFERS:
+                this.callDrawBuffers(p);
+                break;
+            case GLFN_STENCIL_OP_SEPARATE:
+                this.callGL("StencilOpSeparate", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), u32(p, 12),
+                ], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_STENCIL_FUNC_SEPARATE:
+                this.callGL("StencilFuncSeparate", [
+                    u32(p, 0), u32(p, 4), i32(p, 8), u32(p, 12),
+                ], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_STENCIL_MASK_SEPARATE:
+                this.callGL("StencilMaskSeparate", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_CREATE_PROGRAM:
+                this.callGL("CreateProgramMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_CREATE_SHADER:
+                this.callGL("CreateShaderMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_DELETE_PROGRAM:
+                this.callGL("DeleteProgramMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DELETE_SHADER:
+                this.callGL("DeleteShaderMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_ATTACH_SHADER:
+                this.callGL("AttachShaderMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_DETACH_SHADER:
+                this.callGL("DetachShaderMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_SHADER_SOURCE:
+                this.callShaderSource(p);
+                break;
+            case GLFN_COMPILE_SHADER:
+                this.callGL("CompileShaderMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_LINK_PROGRAM:
+                this.callGL("LinkProgramMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_USE_PROGRAM:
+                this.callGL("UseProgramMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_VALIDATE_PROGRAM:
+                this.callGL("ValidateProgramMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_BIND_ATTRIB_LOCATION:
+                this.callNamePayload("BindAttribLocationMapped", p);
+                break;
+            case GLFN_MAP_UNIFORM_LOCATION:
+                this.callNamePayload("MapUniformLocation", p);
+                break;
+            case GLFN_MAP_ATTRIB_LOCATION:
+                this.callNamePayload("MapAttribLocation", p);
+                break;
+            case GLFN_UNIFORM_FV:
+                this.callUniformVector(p, "fv");
+                break;
+            case GLFN_UNIFORM_IV:
+                this.callUniformVector(p, "iv");
+                break;
+            case GLFN_UNIFORM_MATRIX_FV:
+                this.callUniformMatrix(p);
+                break;
+            case GLFN_UNIFORM_MATRIX_RECT_FV:
+                this.callUniformMatrixRect(p);
+                break;
+            case GLFN_VERTEX_ATTRIB4F:
+                this.callGL("VertexAttrib4fMapped", [
+                    u32(p, 0), f32(p, 4), f32(p, 8), f32(p, 12), f32(p, 16),
+                ], ["number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_ENABLE_VERTEX_ATTRIB_ARRAY:
+                this.callGL("EnableVertexAttribArrayMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DISABLE_VERTEX_ATTRIB_ARRAY:
+                this.callGL("DisableVertexAttribArrayMapped", [u32(p, 0)], ["number"]);
+                break;
+            case GLFN_DRAW_ARRAYS_GL2:
+                this.callDrawArraysGL2(p);
+                break;
+            case GLFN_DRAW_ELEMENTS_GL2:
+                this.callDrawElementsGL2(p);
+                break;
+            case GLFN_GEN_FRAMEBUFFERS:
+                this.callTextureNameArray("GenFramebuffersMapped", p);
+                break;
+            case GLFN_DELETE_FRAMEBUFFERS:
+                this.callTextureNameArray("DeleteFramebuffersMapped", p);
+                break;
+            case GLFN_BIND_FRAMEBUFFER:
+                this.callGL("BindFramebufferMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_FRAMEBUFFER_TEXTURE:
+                this.callGL("FramebufferTextureMapped", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), u32(p, 12), i32(p, 16), i32(p, 20),
+                ], ["number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_FRAMEBUFFER_RENDERBUFFER:
+                this.callGL("FramebufferRenderbufferMapped", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), u32(p, 12),
+                ], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_GEN_RENDERBUFFERS:
+                this.callTextureNameArray("GenRenderbuffersMapped", p);
+                break;
+            case GLFN_DELETE_RENDERBUFFERS:
+                this.callTextureNameArray("DeleteRenderbuffersMapped", p);
+                break;
+            case GLFN_BIND_RENDERBUFFER:
+                this.callGL("BindRenderbufferMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_RENDERBUFFER_STORAGE:
+                this.callGL("RenderbufferStorageMapped", [
+                    u32(p, 0), u32(p, 4), i32(p, 8), i32(p, 12),
+                ], ["number", "number", "number", "number"]);
+                break;
+            case GLFN_QUERY_OBJECT_IV:
+                this.callQueryObjectIV(p);
+                break;
+            case GLFN_QUERY_OBJECT_LOG:
+                this.callQueryObjectLog(p);
+                break;
+            case GLFN_CHECK_FRAMEBUFFER_STATUS:
+                this.callCheckFramebufferStatus(p);
+                break;
+            case GLFN_QUERY_ACTIVE:
+                this.callQueryActive(p);
+                break;
+            case GLFN_GEN_QUERIES:
+                this.callTextureNameArray("GenQueriesMapped", p);
+                break;
+            case GLFN_DELETE_QUERIES:
+                this.callTextureNameArray("DeleteQueriesMapped", p);
+                break;
+            case GLFN_BEGIN_QUERY:
+                if (p.length >= 8) {
+                    this.callGL("BeginQueryMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                }
+                break;
+            case GLFN_END_QUERY:
+                if (p.length >= 4) {
+                    this.callGL("EndQueryMapped", [u32(p, 0)], ["number"]);
+                }
+                break;
+            case GLFN_GEN_PROGRAMS_ARB:
+                this.callTextureNameArray("GenProgramsARBMapped", p);
+                break;
+            case GLFN_DELETE_PROGRAMS_ARB:
+                this.callTextureNameArray("DeleteProgramsARBMapped", p);
+                break;
+            case GLFN_BIND_PROGRAM_ARB:
+                this.callGL("BindProgramARBMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                break;
+            case GLFN_PROGRAM_STRING_ARB:
+                this.callProgramStringARB(p);
+                break;
+            case GLFN_PROGRAM_PARAMETER_FV_ARB:
+                this.callProgramParameterfvARB(p);
+                break;
+            case GLFN_PROGRAM_PARAMETER_DV_ARB:
+                this.callProgramParameterdvARB(p);
+                break;
+            case GLFN_QUERY_PROGRAM_IV_ARB:
+                this.callQueryProgramivARB(p);
+                break;
+            case GLFN_QUERY_PROGRAM_PARAMETER_FV_ARB:
+                this.callQueryProgramParameterARB(p, "fv");
+                break;
+            case GLFN_QUERY_PROGRAM_PARAMETER_DV_ARB:
+                this.callQueryProgramParameterARB(p, "dv");
+                break;
+            case GLFN_QUERY_PROGRAM_STRING_ARB:
+                this.callQueryProgramStringARB(p);
+                break;
+            case GLFN_QUERY_GL_STRING:
+                this.callQueryGLString(p);
+                break;
+            case GLFN_QUERY_INTEGER:
+                this.callQueryInteger(p);
                 break;
             case GLFN_ALPHA_FUNC:
                 this.callGL("AlphaFunc", [u32(p, 0), f32(p, 4)], ["number", "number"]);
@@ -1321,6 +1625,462 @@
             return ok;
         }
 
+        callDrawBuffers(p) {
+            if (p.length < 4) {
+                return false;
+            }
+
+            const count = u32(p, 0);
+            if (4 + count * 4 > p.length) {
+                return false;
+            }
+
+            const buffers = [];
+            for (let i = 0; i < count; i++) {
+                buffers.push(u32(p, 4 + i * 4));
+            }
+
+            return this.withHeapU32(buffers, ptr =>
+                this.callGL("DrawBuffers", [count, ptr], ["number", "number"]));
+        }
+
+        callProgramStringARB(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const length = i32(p, 8);
+            if (length < 0 || 16 + length > p.length) {
+                return false;
+            }
+
+            const bytes = length ? p.slice(16, 16 + length) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("ProgramStringARB", [
+                    u32(p, 0), u32(p, 4), length, ptr,
+                ], ["number", "number", "number", "number"]));
+        }
+
+        callProgramParameterfvARB(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const count = i32(p, 12);
+            if (count < 0) {
+                return false;
+            }
+
+            const dataSize = count * 4 * 4;
+            if (16 + dataSize > p.length) {
+                return false;
+            }
+
+            const bytes = dataSize ? p.slice(16, 16 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("ProgramParameterfvARB", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), count, ptr,
+                ], ["number", "number", "number", "number", "number"]));
+        }
+
+        callProgramParameterdvARB(p) {
+            if (p.length < 48) {
+                return false;
+            }
+
+            const bytes = p.slice(16, 48);
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("ProgramParameterdvARB", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), ptr,
+                ], ["number", "number", "number", "number"]));
+        }
+
+        callShaderSource(p) {
+            if (p.length < 8) {
+                return false;
+            }
+
+            const shader = u32(p, 0);
+            const length = u32(p, 4);
+            if (8 + length > p.length) {
+                return false;
+            }
+
+            const bytes = length ? p.slice(8, 8 + length) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("ShaderSourceMapped", [shader, length, ptr], [
+                    "number", "number", "number",
+                ]));
+        }
+
+        callNamePayload(suffix, p) {
+            if (p.length < 12) {
+                return false;
+            }
+
+            const program = u32(p, 0);
+            const value = i32(p, 4);
+            const nameLength = u32(p, 8);
+            if (12 + nameLength > p.length) {
+                return false;
+            }
+
+            const bytes = nameLength ? p.slice(12, 12 + nameLength) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL(suffix, [program, value, nameLength, ptr], [
+                    "number", "number", "number", "number",
+                ]));
+        }
+
+        callUniformVector(p, variant) {
+            if (p.length < 12) {
+                return false;
+            }
+
+            const location = i32(p, 0);
+            const components = i32(p, 4);
+            const count = i32(p, 8);
+            if (components < 1 || components > 4 || count < 0) {
+                return false;
+            }
+
+            const dataSize = components * count * 4;
+            if (12 + dataSize > p.length) {
+                return false;
+            }
+
+            const suffix = variant === "iv" ? "UniformivMapped" : "UniformfvMapped";
+            const bytes = dataSize ? p.slice(12, 12 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL(suffix, [location, components, count, ptr], [
+                    "number", "number", "number", "number",
+                ]));
+        }
+
+        callUniformMatrix(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const location = i32(p, 0);
+            const dimension = i32(p, 4);
+            const count = i32(p, 8);
+            const transpose = u32(p, 12);
+            if (dimension < 2 || dimension > 4 || count < 0) {
+                return false;
+            }
+
+            const dataSize = dimension * dimension * count * 4;
+            if (16 + dataSize > p.length) {
+                return false;
+            }
+
+            const bytes = dataSize ? p.slice(16, 16 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("UniformMatrixfvMapped", [
+                    location, dimension, count, transpose, ptr,
+                ], ["number", "number", "number", "number", "number"]));
+        }
+
+        callUniformMatrixRect(p) {
+            if (p.length < 20) {
+                return false;
+            }
+
+            const location = i32(p, 0);
+            const columns = i32(p, 4);
+            const rows = i32(p, 8);
+            const count = i32(p, 12);
+            const transpose = u32(p, 16);
+            if (columns < 2 || columns > 4 || rows < 2 || rows > 4 ||
+                columns === rows || count < 0) {
+                return false;
+            }
+
+            const dataSize = columns * rows * count * 4;
+            if (20 + dataSize > p.length) {
+                return false;
+            }
+
+            const bytes = dataSize ? p.slice(20, 20 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("UniformMatrixRectfvMapped", [
+                    location, columns, rows, count, transpose, ptr,
+                ], ["number", "number", "number", "number", "number", "number"]));
+        }
+
+        callQueryInteger(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const out = new Uint8Array(4);
+            writeU32(p, 4, V86GL_SYNC_QUERY_STATUS_PENDING);
+            const ok = this.withHeapOutput(4, out, ptr =>
+                this.callGLReturn("QueryInteger", [u32(p, 0), ptr], [
+                    "number", "number",
+                ]) !== 0);
+            writeU32(p, 4, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok) {
+                writeU32(p, 8, u32(out, 0));
+            }
+            return ok;
+        }
+
+        callQueryGLString(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const dataSize = u32(p, 12);
+            if (16 + dataSize > p.length) {
+                writeU32(p, 4, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const lengthPtr = this.malloc(4);
+            const stringPtr = dataSize ? this.malloc(dataSize) : 0;
+            let heap = this.heapU8();
+            if (!lengthPtr || (dataSize && !stringPtr) || !heap) {
+                this.free(lengthPtr);
+                this.free(stringPtr);
+                writeU32(p, 4, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            writeU32(heap, lengthPtr, 0);
+            if (dataSize) {
+                heap.fill(0, stringPtr, stringPtr + dataSize);
+            }
+
+            const ok = this.callGLReturn("QueryString", [
+                u32(p, 0), dataSize, lengthPtr, stringPtr,
+            ], ["number", "number", "number", "number"]) !== 0;
+            heap = this.heapU8();
+            writeU32(p, 4, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && heap) {
+                writeU32(p, 8, u32(heap, lengthPtr));
+                if (dataSize) {
+                    p.set(heap.subarray(stringPtr, stringPtr + dataSize), 16);
+                }
+            }
+            this.free(stringPtr);
+            this.free(lengthPtr);
+            return ok;
+        }
+
+        callQueryProgramivARB(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const out = new Uint8Array(4);
+            writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_PENDING);
+            const ok = this.withHeapOutput(4, out, ptr =>
+                this.callGLReturn("GetProgramivARB", [
+                    u32(p, 0), u32(p, 4), ptr,
+                ], ["number", "number", "number"]) !== 0);
+            writeU32(p, 8, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok) {
+                writeU32(p, 12, u32(out, 0));
+            }
+            return ok;
+        }
+
+        callQueryProgramParameterARB(p, variant) {
+            if (p.length < 24) {
+                return false;
+            }
+
+            const dataSize = u32(p, 16);
+            if (24 + dataSize > p.length || (variant === "fv" && dataSize !== 16) ||
+                (variant === "dv" && dataSize !== 32)) {
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const out = new Uint8Array(dataSize);
+            const suffix = variant === "dv" ? "GetProgramParameterdvARB" : "GetProgramParameterfvARB";
+            writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_PENDING);
+            const ok = this.withHeapOutput(dataSize, out, ptr =>
+                this.callGLReturn(suffix, [
+                    u32(p, 0), u32(p, 4), u32(p, 8), ptr,
+                ], ["number", "number", "number", "number"]) !== 0);
+            writeU32(p, 12, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok) {
+                p.set(out, 24);
+            }
+            return ok;
+        }
+
+        callQueryProgramStringARB(p) {
+            if (p.length < 24) {
+                return false;
+            }
+
+            const dataSize = u32(p, 16);
+            if (24 + dataSize > p.length) {
+                writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const lengthPtr = this.malloc(4);
+            const stringPtr = dataSize ? this.malloc(dataSize) : 0;
+            let heap = this.heapU8();
+            if (!lengthPtr || (dataSize && !stringPtr) || !heap) {
+                this.free(lengthPtr);
+                this.free(stringPtr);
+                writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            writeU32(heap, lengthPtr, 0);
+            if (dataSize) {
+                heap.fill(0, stringPtr, stringPtr + dataSize);
+            }
+
+            const ok = this.callGLReturn("GetProgramStringARB", [
+                u32(p, 0), u32(p, 4), dataSize, lengthPtr, stringPtr,
+            ], ["number", "number", "number", "number", "number"]) !== 0;
+            heap = this.heapU8();
+            writeU32(p, 8, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && heap) {
+                writeU32(p, 12, u32(heap, lengthPtr));
+                if (dataSize) {
+                    p.set(heap.subarray(stringPtr, stringPtr + dataSize), 24);
+                }
+            }
+            this.free(stringPtr);
+            this.free(lengthPtr);
+            return ok;
+        }
+
+        callQueryObjectIV(p) {
+            if (p.length < 24) {
+                return false;
+            }
+
+            const out = new Uint8Array(4);
+            writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_PENDING);
+            const ok = this.withHeapOutput(4, out, ptr =>
+                this.callGLReturn("QueryObjectivMapped", [
+                    u32(p, 0), u32(p, 4), u32(p, 8), ptr,
+                ], ["number", "number", "number", "number"]) !== 0);
+            writeU32(p, 12, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok) {
+                writeU32(p, 16, u32(out, 0));
+            }
+            return ok;
+        }
+
+        callQueryObjectLog(p) {
+            if (p.length < 24) {
+                return false;
+            }
+
+            const bufSize = u32(p, 8);
+            const dataSize = u32(p, 20);
+            if (24 + dataSize > p.length || dataSize > bufSize) {
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const lengthPtr = this.malloc(4);
+            const logPtr = dataSize ? this.malloc(dataSize) : 0;
+            let heap = this.heapU8();
+            if (!lengthPtr || (dataSize && !logPtr) || !heap) {
+                this.free(lengthPtr);
+                this.free(logPtr);
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            writeU32(heap, lengthPtr, 0);
+            if (dataSize) {
+                heap.fill(0, logPtr, logPtr + dataSize);
+            }
+
+            const ok = this.callGLReturn("QueryObjectLogMapped", [
+                u32(p, 0), u32(p, 4), bufSize, lengthPtr, logPtr,
+            ], ["number", "number", "number", "number", "number"]) !== 0;
+            heap = this.heapU8();
+            writeU32(p, 12, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && heap) {
+                writeU32(p, 16, u32(heap, lengthPtr));
+                if (dataSize) {
+                    p.set(heap.subarray(logPtr, logPtr + dataSize), 24);
+                }
+            }
+            this.free(logPtr);
+            this.free(lengthPtr);
+            return ok;
+        }
+
+        callQueryActive(p) {
+            if (p.length < 40) {
+                return false;
+            }
+
+            const bufSize = u32(p, 12);
+            const dataSize = u32(p, 32);
+            if (40 + dataSize > p.length || dataSize > bufSize) {
+                writeU32(p, 16, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const infoPtr = this.malloc(12);
+            const namePtr = dataSize ? this.malloc(dataSize) : 0;
+            let heap = this.heapU8();
+            if (!infoPtr || (dataSize && !namePtr) || !heap) {
+                this.free(infoPtr);
+                this.free(namePtr);
+                writeU32(p, 16, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            heap.fill(0, infoPtr, infoPtr + 12);
+            if (dataSize) {
+                heap.fill(0, namePtr, namePtr + dataSize);
+            }
+
+            const ok = this.callGLReturn("QueryActiveMapped", [
+                u32(p, 0), u32(p, 4), u32(p, 8), bufSize,
+                infoPtr, infoPtr + 4, infoPtr + 8, namePtr,
+            ], [
+                "number", "number", "number", "number",
+                "number", "number", "number", "number",
+            ]) !== 0;
+            heap = this.heapU8();
+            writeU32(p, 16, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && heap) {
+                writeU32(p, 20, u32(heap, infoPtr));
+                writeU32(p, 24, u32(heap, infoPtr + 4));
+                writeU32(p, 28, u32(heap, infoPtr + 8));
+                if (dataSize) {
+                    p.set(heap.subarray(namePtr, namePtr + dataSize), 40);
+                }
+            }
+            this.free(namePtr);
+            this.free(infoPtr);
+            return ok;
+        }
+
+        callCheckFramebufferStatus(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const result = this.callGLReturn("CheckFramebufferStatusMapped", [
+                u32(p, 0),
+            ], ["number"]) >>> 0;
+            const ok = result !== 0;
+            writeU32(p, 4, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok) {
+                writeU32(p, 8, result);
+            }
+            return ok;
+        }
+
         parseClientArrayBlocks(p, offset, count) {
             const blocks = [];
 
@@ -1341,6 +2101,42 @@
                 }
 
                 blocks.push({
+                    enabled,
+                    size: enabled ? size : 0,
+                    type: enabled ? type : 0,
+                    stride: enabled ? stride : 0,
+                    bytes: enabled && dataSize ? p.slice(offset, offset + dataSize) : null,
+                });
+                offset += dataSize;
+            }
+
+            return { blocks, offset };
+        }
+
+        parseGenericAttribBlocks(p, offset, count) {
+            const blocks = [];
+
+            for (let i = 0; i < count; i++) {
+                if (offset + 28 > p.length) {
+                    return null;
+                }
+
+                const index = u32(p, offset);
+                const normalized = u32(p, offset + 4) !== 0;
+                const enabled = u32(p, offset + 8) !== 0;
+                const size = i32(p, offset + 12);
+                const type = u32(p, offset + 16);
+                const stride = i32(p, offset + 20);
+                const dataSize = u32(p, offset + 24);
+                offset += 28;
+
+                if (offset + dataSize > p.length) {
+                    return null;
+                }
+
+                blocks.push({
+                    index,
+                    normalized,
                     enabled,
                     size: enabled ? size : 0,
                     type: enabled ? type : 0,
@@ -1383,6 +2179,27 @@
 
         withClientArrayMeta(blocks, ptrs, callback) {
             return this.withHeapI32(this.clientArrayMetaValues(blocks, ptrs), callback);
+        }
+
+        genericAttribMetaValues(blocks, ptrs) {
+            const values = [];
+
+            for (let i = 0; i < blocks.length; i++) {
+                const block = blocks[i] || {};
+                values.push(block.index >>> 0);
+                values.push(block.normalized ? 1 : 0);
+                values.push(block.enabled ? 1 : 0);
+                values.push(block.size | 0);
+                values.push(block.type | 0);
+                values.push(block.stride | 0);
+                values.push(ptrs[i] | 0);
+            }
+
+            return values;
+        }
+
+        withGenericAttribMeta(blocks, ptrs, callback) {
+            return this.withHeapI32(this.genericAttribMetaValues(blocks, ptrs), callback);
         }
 
         callDrawArrays(p) {
@@ -1508,6 +2325,110 @@
                 ]));
         }
 
+        callDrawArraysGL2(p) {
+            if (p.length < 24 || u32(p, 8) !== CLIENT_ARRAY_MT_MAGIC) {
+                return false;
+            }
+
+            const mode = u32(p, 0);
+            const count = i32(p, 4);
+            const encodedTexUnitCount = u32(p, 12);
+            const hasSecondaryColor = (encodedTexUnitCount & CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT) !== 0;
+            const hasFogCoord = (encodedTexUnitCount & CLIENT_ARRAY_MT_FOG_COORD_BIT) !== 0;
+            const texUnitCount = encodedTexUnitCount &
+                ~(CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT | CLIENT_ARRAY_MT_FOG_COORD_BIT);
+            const clientActiveTexture = u32(p, 16);
+            const genericAttribCount = u32(p, 20);
+            if (texUnitCount > 8 || genericAttribCount > 16) {
+                return false;
+            }
+
+            const fixedCount = 3 + texUnitCount + (hasSecondaryColor ? 1 : 0) + (hasFogCoord ? 1 : 0);
+            const fixed = this.parseClientArrayBlocks(p, 24, fixedCount);
+            if (!fixed) {
+                return false;
+            }
+
+            const generic = this.parseGenericAttribBlocks(p, fixed.offset, genericAttribCount);
+            if (!generic) {
+                return false;
+            }
+
+            const blocks = [...fixed.blocks, ...generic.blocks];
+            return this.withHeapBlocks(blocks, ptrs => {
+                const fixedPtrs = ptrs.slice(0, fixed.blocks.length);
+                const genericPtrs = ptrs.slice(fixed.blocks.length);
+                return this.withClientArrayMeta(fixed.blocks, fixedPtrs, fixedMetaPtr =>
+                    this.withGenericAttribMeta(generic.blocks, genericPtrs, genericMetaPtr =>
+                        this.callGL("DrawArraysPackedGL2", [
+                            mode, count, texUnitCount, clientActiveTexture,
+                            hasSecondaryColor ? 1 : 0, hasFogCoord ? 1 : 0,
+                            fixedMetaPtr, genericAttribCount, genericMetaPtr,
+                        ], [
+                            "number", "number", "number", "number", "number",
+                            "number", "number", "number", "number",
+                        ])));
+            });
+        }
+
+        callDrawElementsGL2(p) {
+            if (p.length < 32 || u32(p, 16) !== CLIENT_ARRAY_MT_MAGIC) {
+                return false;
+            }
+
+            const mode = u32(p, 0);
+            const count = i32(p, 4);
+            const indexType = u32(p, 8);
+            const indexDataSize = u32(p, 12);
+            if (32 + indexDataSize > p.length) {
+                return false;
+            }
+
+            const encodedTexUnitCount = u32(p, 20);
+            const hasSecondaryColor = (encodedTexUnitCount & CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT) !== 0;
+            const hasFogCoord = (encodedTexUnitCount & CLIENT_ARRAY_MT_FOG_COORD_BIT) !== 0;
+            const texUnitCount = encodedTexUnitCount &
+                ~(CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT | CLIENT_ARRAY_MT_FOG_COORD_BIT);
+            const clientActiveTexture = u32(p, 24);
+            const genericAttribCount = u32(p, 28);
+            if (texUnitCount > 8 || genericAttribCount > 16) {
+                return false;
+            }
+
+            const indexBlock = {
+                bytes: indexDataSize ? p.slice(32, 32 + indexDataSize) : null,
+            };
+            const fixedCount = 3 + texUnitCount + (hasSecondaryColor ? 1 : 0) + (hasFogCoord ? 1 : 0);
+            const fixed = this.parseClientArrayBlocks(p, 32 + indexDataSize, fixedCount);
+            if (!fixed) {
+                return false;
+            }
+
+            const generic = this.parseGenericAttribBlocks(p, fixed.offset, genericAttribCount);
+            if (!generic) {
+                return false;
+            }
+
+            const blocks = [indexBlock, ...fixed.blocks, ...generic.blocks];
+            return this.withHeapBlocks(blocks, ptrs => {
+                const fixedStart = 1;
+                const genericStart = fixedStart + fixed.blocks.length;
+                return this.withClientArrayMeta(
+                    fixed.blocks, ptrs.slice(fixedStart, genericStart), fixedMetaPtr =>
+                        this.withGenericAttribMeta(generic.blocks, ptrs.slice(genericStart), genericMetaPtr =>
+                            this.callGL("DrawElementsPackedGL2", [
+                                mode, count, indexType, ptrs[0],
+                                texUnitCount, clientActiveTexture,
+                                hasSecondaryColor ? 1 : 0, hasFogCoord ? 1 : 0,
+                                fixedMetaPtr, genericAttribCount, genericMetaPtr,
+                            ], [
+                                "number", "number", "number", "number", "number",
+                                "number", "number", "number", "number", "number",
+                                "number",
+                            ])));
+            });
+        }
+
         present() {
             this.callGL("Flush", [], []);
         }
@@ -1538,6 +2459,47 @@
                 this.warnMissing("gl" + suffix);
             }
             return ok;
+        }
+
+        callGLReturn(suffix, args, argTypes) {
+            const module = this.module;
+            const names = [
+                "v86gl_gl" + suffix,
+                "_v86gl_gl" + suffix,
+                "gl" + suffix,
+                "_gl" + suffix,
+                "gl4es_gl" + suffix,
+                "_gl4es_gl" + suffix,
+            ];
+
+            if (!module) {
+                return 0;
+            }
+
+            for (let i = 0; i < names.length; i++) {
+                const fn = module[names[i]];
+                if (typeof fn === "function") {
+                    try {
+                        return fn.apply(module, args) || 0;
+                    } catch (err) {
+                        console.error("[v86gl] gl4es export threw", names[i], err);
+                        return 0;
+                    }
+                }
+            }
+
+            if (typeof module.ccall === "function") {
+                const cName = names[0].charAt(0) === "_" ? names[0].slice(1) : names[0];
+                try {
+                    return module.ccall(cName, "number", argTypes || [], args || []) || 0;
+                } catch (err) {
+                    console.error("[v86gl] gl4es ccall threw", cName, err);
+                    return 0;
+                }
+            }
+
+            this.warnMissing("gl" + suffix);
+            return 0;
         }
 
         callReadPixelsExport(args) {
