@@ -1,7 +1,7 @@
 (function(global) {
     "use strict";
 
-    const GL4ES_ASSET_VERSION = "opengl21-clientarrays-20260702";
+    const GL4ES_ASSET_VERSION = "war3blackfix-20260702";
     const factory = global.createV86GL4ES;
     if (typeof factory !== "function") {
         console.warn("[v86gl] gl4es factory not found; run glbridge/libglwasm/build_gl4es_module.sh first");

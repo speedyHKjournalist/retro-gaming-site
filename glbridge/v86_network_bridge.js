@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "arbprogram-20260701";
+    const V86GL_BRIDGE_VERSION = "war3blackfix-20260702";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;
@@ -225,6 +225,23 @@
     const GLFN_QUERY_PROGRAM_STRING_ARB = 191;
     const GLFN_QUERY_GL_STRING = 192;
     const GLFN_QUERY_INTEGER = 193;
+    const GLFN_GEN_BUFFERS = 194;
+    const GLFN_DELETE_BUFFERS = 195;
+    const GLFN_BIND_BUFFER = 196;
+    const GLFN_BUFFER_DATA = 197;
+    const GLFN_BUFFER_SUB_DATA = 198;
+    const GLFN_VERTEX_POINTER_VBO = 199;
+    const GLFN_COLOR_POINTER_VBO = 200;
+    const GLFN_TEX_COORD_POINTER_VBO = 201;
+    const GLFN_NORMAL_POINTER_VBO = 202;
+    const GLFN_SECONDARY_COLOR_POINTER_VBO = 203;
+    const GLFN_FOG_COORD_POINTER_VBO = 204;
+    const GLFN_VERTEX_ATTRIB_POINTER_VBO = 205;
+    const GLFN_DRAW_ARRAYS_DIRECT = 206;
+    const GLFN_DRAW_ELEMENTS_DIRECT = 207;
+    const GLFN_DRAW_RANGE_ELEMENTS_DIRECT = 208;
+    const GLFN_MULTI_DRAW_ARRAYS_DIRECT = 209;
+    const GLFN_MULTI_DRAW_ELEMENTS_DIRECT = 210;
 
     const V86GL_READ_PIXELS_HEADER_SIZE = 32;
     const V86GL_READ_PIXELS_STATUS_PENDING = 0;
@@ -445,7 +462,41 @@
         [GLFN_QUERY_PROGRAM_STRING_ARB]: "glGetProgramStringARB(sync)",
         [GLFN_QUERY_GL_STRING]: "glGetString(sync)",
         [GLFN_QUERY_INTEGER]: "glGetIntegerv(sync)",
+        [GLFN_GEN_BUFFERS]: "glGenBuffers",
+        [GLFN_DELETE_BUFFERS]: "glDeleteBuffers",
+        [GLFN_BIND_BUFFER]: "glBindBuffer",
+        [GLFN_BUFFER_DATA]: "glBufferData",
+        [GLFN_BUFFER_SUB_DATA]: "glBufferSubData",
+        [GLFN_VERTEX_POINTER_VBO]: "glVertexPointer(VBO)",
+        [GLFN_COLOR_POINTER_VBO]: "glColorPointer(VBO)",
+        [GLFN_TEX_COORD_POINTER_VBO]: "glTexCoordPointer(VBO)",
+        [GLFN_NORMAL_POINTER_VBO]: "glNormalPointer(VBO)",
+        [GLFN_SECONDARY_COLOR_POINTER_VBO]: "glSecondaryColorPointer(VBO)",
+        [GLFN_FOG_COORD_POINTER_VBO]: "glFogCoordPointer(VBO)",
+        [GLFN_VERTEX_ATTRIB_POINTER_VBO]: "glVertexAttribPointer(VBO)",
+        [GLFN_DRAW_ARRAYS_DIRECT]: "glDrawArrays(VBO)",
+        [GLFN_DRAW_ELEMENTS_DIRECT]: "glDrawElements(VBO)",
+        [GLFN_DRAW_RANGE_ELEMENTS_DIRECT]: "glDrawRangeElements(VBO)",
+        [GLFN_MULTI_DRAW_ARRAYS_DIRECT]: "glMultiDrawArrays(VBO)",
+        [GLFN_MULTI_DRAW_ELEMENTS_DIRECT]: "glMultiDrawElements(VBO)",
     };
+
+    const DRAWABLE_GL_FUNCTIONS = new Set([
+        GLFN_VERTEX3F,
+        GLFN_VERTEX4F,
+        GLFN_DRAW_ARRAYS,
+        GLFN_DRAW_ELEMENTS,
+        GLFN_DRAW_PIXELS,
+        GLFN_BITMAP,
+        GLFN_COPY_PIXELS,
+        GLFN_DRAW_ARRAYS_GL2,
+        GLFN_DRAW_ELEMENTS_GL2,
+        GLFN_DRAW_ARRAYS_DIRECT,
+        GLFN_DRAW_ELEMENTS_DIRECT,
+        GLFN_DRAW_RANGE_ELEMENTS_DIRECT,
+        GLFN_MULTI_DRAW_ARRAYS_DIRECT,
+        GLFN_MULTI_DRAW_ELEMENTS_DIRECT,
+    ]);
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
     function u32(a, o) { return (a[o] | (a[o + 1] << 8) | (a[o + 2] << 16) | (a[o + 3] << 24)) >>> 0; }
@@ -1108,6 +1159,63 @@
             case GLFN_QUERY_INTEGER:
                 this.callQueryInteger(p);
                 break;
+            case GLFN_GEN_BUFFERS:
+                this.callTextureNameArray("GenBuffersMapped", p);
+                break;
+            case GLFN_DELETE_BUFFERS:
+                this.callTextureNameArray("DeleteBuffersMapped", p);
+                break;
+            case GLFN_BIND_BUFFER:
+                if (p.length >= 8) {
+                    this.callGL("BindBufferMapped", [u32(p, 0), u32(p, 4)], ["number", "number"]);
+                }
+                break;
+            case GLFN_BUFFER_DATA:
+                this.callBufferData(p);
+                break;
+            case GLFN_BUFFER_SUB_DATA:
+                this.callBufferSubData(p);
+                break;
+            case GLFN_VERTEX_POINTER_VBO:
+                this.callPointerVBO("VertexPointerVBO", p);
+                break;
+            case GLFN_COLOR_POINTER_VBO:
+                this.callPointerVBO("ColorPointerVBO", p);
+                break;
+            case GLFN_TEX_COORD_POINTER_VBO:
+                this.callPointerVBO("TexCoordPointerVBO", p);
+                break;
+            case GLFN_NORMAL_POINTER_VBO:
+                this.callPointerVBO("NormalPointerVBO", p);
+                break;
+            case GLFN_SECONDARY_COLOR_POINTER_VBO:
+                this.callPointerVBO("SecondaryColorPointerVBO", p);
+                break;
+            case GLFN_FOG_COORD_POINTER_VBO:
+                this.callPointerVBO("FogCoordPointerVBO", p);
+                break;
+            case GLFN_VERTEX_ATTRIB_POINTER_VBO:
+                this.callAttribPointerVBO(p);
+                break;
+            case GLFN_DRAW_ARRAYS_DIRECT:
+                if (p.length >= 12) {
+                    this.callGL("DrawArraysDirect", [
+                        u32(p, 0), i32(p, 4), i32(p, 8),
+                    ], ["number", "number", "number"]);
+                }
+                break;
+            case GLFN_DRAW_ELEMENTS_DIRECT:
+                this.callDrawElementsDirect(p, false);
+                break;
+            case GLFN_DRAW_RANGE_ELEMENTS_DIRECT:
+                this.callDrawElementsDirect(p, true);
+                break;
+            case GLFN_MULTI_DRAW_ARRAYS_DIRECT:
+                this.callMultiDrawArraysDirect(p);
+                break;
+            case GLFN_MULTI_DRAW_ELEMENTS_DIRECT:
+                this.callMultiDrawElementsDirect(p);
+                break;
             case GLFN_ALPHA_FUNC:
                 this.callGL("AlphaFunc", [u32(p, 0), f32(p, 4)], ["number", "number"]);
                 break;
@@ -1357,6 +1465,120 @@
 
             return this.withHeapU32(ids, ptr =>
                 this.callGL(suffix, [ids.length, ptr], ["number", "number"]));
+        }
+
+        callBufferData(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const size = i32(p, 4);
+            const dataSize = u32(p, 12);
+            if (size < 0 || 16 + dataSize > p.length) {
+                return false;
+            }
+
+            const bytes = dataSize ? p.slice(16, 16 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("BufferDataMapped", [
+                    u32(p, 0), size, u32(p, 8), dataSize, ptr,
+                ], ["number", "number", "number", "number", "number"]));
+        }
+
+        callBufferSubData(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const offset = i32(p, 4);
+            const size = i32(p, 8);
+            const dataSize = u32(p, 12);
+            if (offset < 0 || size < 0 || dataSize !== size || 16 + dataSize > p.length) {
+                return false;
+            }
+
+            const bytes = dataSize ? p.slice(16, 16 + dataSize) : null;
+            return this.withHeapBytes(bytes, ptr =>
+                this.callGL("BufferSubDataMapped", [
+                    u32(p, 0), offset, size, dataSize, ptr,
+                ], ["number", "number", "number", "number", "number"]));
+        }
+
+        callPointerVBO(suffix, p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            return this.callGL(suffix, [
+                i32(p, 0), u32(p, 4), i32(p, 8), u32(p, 12),
+            ], ["number", "number", "number", "number"]);
+        }
+
+        callAttribPointerVBO(p) {
+            if (p.length < 24) {
+                return false;
+            }
+
+            return this.callGL("VertexAttribPointerMapped", [
+                u32(p, 0), i32(p, 4), u32(p, 8), u32(p, 12),
+                i32(p, 16), u32(p, 20),
+            ], ["number", "number", "number", "number", "number", "number"]);
+        }
+
+        callDrawElementsDirect(p, ranged) {
+            if (p.length < 24) {
+                return false;
+            }
+
+            const suffix = ranged ? "DrawRangeElementsDirect" : "DrawElementsDirect";
+            return this.callGL(suffix, [
+                u32(p, 0), u32(p, 4), u32(p, 8), i32(p, 12),
+                u32(p, 16), u32(p, 20),
+            ], ["number", "number", "number", "number", "number", "number"]);
+        }
+
+        callMultiDrawArraysDirect(p) {
+            if (p.length < 8) {
+                return false;
+            }
+
+            const primcount = i32(p, 4);
+            if (primcount < 0 || 8 + primcount * 8 > p.length) {
+                return false;
+            }
+
+            const pairs = [];
+            for (let i = 0; i < primcount; i++) {
+                pairs.push(i32(p, 8 + i * 8));
+                pairs.push(i32(p, 12 + i * 8));
+            }
+
+            return this.withHeapI32(pairs, ptr =>
+                this.callGL("MultiDrawArraysDirect", [
+                    u32(p, 0), primcount, ptr,
+                ], ["number", "number", "number"]));
+        }
+
+        callMultiDrawElementsDirect(p) {
+            if (p.length < 12) {
+                return false;
+            }
+
+            const primcount = i32(p, 8);
+            if (primcount < 0 || 12 + primcount * 8 > p.length) {
+                return false;
+            }
+
+            const pairs = [];
+            for (let i = 0; i < primcount; i++) {
+                pairs.push(i32(p, 12 + i * 8));
+                pairs.push(u32(p, 16 + i * 8));
+            }
+
+            return this.withHeapI32(pairs, ptr =>
+                this.callGL("MultiDrawElementsDirect", [
+                    u32(p, 0), u32(p, 4), primcount, ptr,
+                ], ["number", "number", "number", "number"]));
         }
 
         callTexImage2D(p) {
@@ -2596,6 +2818,9 @@
             this.screenCanvas = this.findScreenCanvas();
             this.renderer = null;
             this.rendererGeneration = 0;
+            this.frameDrawableSeen = false;
+            this.overlayVisible = false;
+            this.overlayHideTimer = 0;
 
             this.setRendererFromOptions();
             emulator.add_listener("v86gl-pci-frame", event => this.pushPCIBatch(event));
@@ -2741,6 +2966,7 @@
                 renderer.glCall(GLFN_COLOR4F, p);
                 break;
             case OP_VERTEX3F:
+                this.noteDrawableFunction(GLFN_VERTEX3F, 0);
                 renderer.glCall(GLFN_VERTEX3F, p);
                 break;
             case OP_PRESENT:
@@ -2764,6 +2990,7 @@
                 this.resize(i32(args, 8), i32(args, 12));
             }
 
+            this.noteDrawableFunction(fn, 0);
             this.requireRenderer().glCall(fn, args);
         }
 
@@ -2783,6 +3010,7 @@
                     completedUploads: Object.create(null),
                     itemsExecuted: false,
                     presentRequested: false,
+                    drawable: false,
                 };
                 this.frameStates[frameId] = state;
             }
@@ -2849,6 +3077,7 @@
                     this.resize(i32(args, 8), i32(args, 12));
                 }
 
+                this.noteDrawableFunction(fn, commandFrameId);
                 renderer.glCall(fn, args);
             }
 
@@ -2962,6 +3191,7 @@
                     continue;
                 }
 
+                this.noteDrawableFunction(upload.fn, state.id);
                 this.requireRenderer().glCall(upload.fn, upload.data);
                 upload.executed = true;
             }
@@ -3095,8 +3325,6 @@
 
             this.resize(this.surface.width, this.surface.height, this.surface.x, this.surface.y);
             this.requireRenderer().makeCurrent(this.surface);
-            this.canvas.style.display = "block";
-            this.canvas.style.visibility = "visible";
         }
 
         resize(width, height, x, y) {
@@ -3133,13 +3361,14 @@
             canvas.style.display = visible ? "block" : "none";
         }
 
-        positionCanvas() {
+        positionCanvas(visible) {
             const w = this.surface.width || this.canvas.width;
             const h = this.surface.height || this.canvas.height;
             let left = this.surface.x;
             let top = this.surface.y;
             let width = w;
             let height = h;
+            const shouldShow = visible === undefined ? this.overlayVisible : !!visible;
 
             if (this.container && this.screenCanvas && this.screenCanvas.width && this.screenCanvas.height) {
                 const containerRect = this.container.getBoundingClientRect();
@@ -3152,12 +3381,52 @@
                 height = h * scaleY;
             }
 
-            this.styleOverlayCanvas(this.canvas, left, top, width, height, true);
-            this.canvas.style.visibility = "visible";
+            this.styleOverlayCanvas(this.canvas, left, top, width, height, shouldShow);
+            this.canvas.style.visibility = shouldShow ? "visible" : "hidden";
+        }
+
+        cancelOverlayHide() {
+            if (this.overlayHideTimer) {
+                clearTimeout(this.overlayHideTimer);
+                this.overlayHideTimer = 0;
+            }
+        }
+
+        showOverlayCanvas() {
+            this.cancelOverlayHide();
+            this.overlayVisible = true;
+            this.positionCanvas(true);
+        }
+
+        hideOverlayCanvas() {
+            this.cancelOverlayHide();
+            this.overlayVisible = false;
+            this.positionCanvas(false);
+        }
+
+        scheduleOverlayHide(delayMs) {
+            this.cancelOverlayHide();
+            this.overlayHideTimer = setTimeout(() => {
+                this.overlayHideTimer = 0;
+                this.hideOverlayCanvas();
+            }, delayMs);
+        }
+
+        noteDrawableFunction(fn, frameId) {
+            if (!DRAWABLE_GL_FUNCTIONS.has(fn)) {
+                return;
+            }
+            if (frameId) {
+                this.getFrameState(frameId).drawable = true;
+            } else {
+                this.frameDrawableSeen = true;
+            }
+            this.cancelOverlayHide();
         }
 
         presentFrame(frameId) {
-            this.present();
+            const state = this.frameStates[frameId];
+            this.present(!!(state && state.drawable));
             this.lastPresentedFrameId = frameId;
 
             for (const key in this.frameStates) {
@@ -3168,17 +3437,23 @@
             }
         }
 
-        present() {
-            this.positionCanvas();
+        present(drawable) {
             this.requireRenderer().present();
-            this.canvas.style.display = "block";
-            this.canvas.style.visibility = "visible";
+            if (drawable === undefined) {
+                drawable = this.frameDrawableSeen;
+            }
+            this.frameDrawableSeen = false;
+            if (drawable) {
+                this.showOverlayCanvas();
+            } else {
+                this.positionCanvas();
+                this.scheduleOverlayHide(180);
+            }
         }
 
         releaseCurrent() {
             this.requireRenderer().releaseCurrent();
-            // WGL permits a context to be unbound and re-bound around a frame.
-            // Keep the last completed frame visible until an explicit teardown.
+            this.scheduleOverlayHide(120);
         }
 
         replaceOverlayCanvas() {
@@ -3228,8 +3503,8 @@
             this.chunkedCalls = Object.create(null);
             this.frameStates = Object.create(null);
             this.lastPresentedFrameId = 0;
-            this.canvas.style.display = "none";
-            this.canvas.style.visibility = "hidden";
+            this.frameDrawableSeen = false;
+            this.hideOverlayCanvas();
             this.replaceOverlayCanvas();
 
             const generation = ++this.rendererGeneration;

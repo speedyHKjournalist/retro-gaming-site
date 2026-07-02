@@ -178,7 +178,7 @@ cd src/glbridge/winproxy
 i686-w64-mingw32-gcc -shared -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 \
   -o opengl32.dll opengl32_proxy.c opengl32.def \
-  -Wl,--kill-at -luser32 -lkernel32
+  -Wl,--kill-at -luser32 -lgdi32 -lkernel32
 ```
 
 Build and start `../v86gl_driver/v86gl.sys` before running a guest OpenGL

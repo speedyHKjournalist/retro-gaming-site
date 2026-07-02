@@ -185,6 +185,16 @@ extern void glVertexAttribPointer(GLuint index, GLint size, GLenum type,
                                   const void* pointer);
 extern void glEnableVertexAttribArray(GLuint index);
 extern void glDisableVertexAttribArray(GLuint index);
+extern void glGenBuffers(GLsizei n, GLuint* buffers);
+extern void glDeleteBuffers(GLsizei n, const GLuint* buffers);
+extern void glBindBuffer(GLenum target, GLuint buffer);
+extern void glBufferData(GLenum target, GLsizeiptr size, const void* data,
+                         GLenum usage);
+extern void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size,
+                            const void* data);
+extern void glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
+                                GLsizei count, GLenum type,
+                                const void* indices);
 extern void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
 extern void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
 extern void glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
@@ -335,6 +345,7 @@ EM_JS(void, v86gl_lose_webgl_context, (), {
 #define V86GL_MAX_FRAMEBUFFERS 1024
 #define V86GL_MAX_RENDERBUFFERS 1024
 #define V86GL_MAX_QUERIES 4096
+#define V86GL_MAX_BUFFERS 4096
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
@@ -372,6 +383,8 @@ static V86GLNameMap g_renderbuffers[V86GL_MAX_RENDERBUFFERS];
 static uint32_t g_renderbuffer_count;
 static V86GLNameMap g_queries[V86GL_MAX_QUERIES];
 static uint32_t g_query_count;
+static V86GLNameMap g_buffers[V86GL_MAX_BUFFERS];
+static uint32_t g_buffer_count;
 static V86GLLocationMap g_uniform_locations[V86GL_MAX_UNIFORM_LOCATIONS];
 static uint32_t g_uniform_location_count;
 static V86GLLocationMap g_attrib_locations[V86GL_MAX_ATTRIB_LOCATIONS];
@@ -478,7 +491,7 @@ static int v86gl_ensure_ready(void) {
 #ifdef __EMSCRIPTEN__
     EmscriptenWebGLContextAttributes attrs;
     emscripten_webgl_init_context_attributes(&attrs);
-    attrs.alpha = EM_FALSE;
+    attrs.alpha = EM_TRUE;
     attrs.depth = EM_TRUE;
     attrs.stencil = EM_TRUE;
     attrs.antialias = EM_FALSE;
@@ -661,6 +674,34 @@ static GLuint v86gl_host_query(GLuint guest) {
     return 0;
 }
 
+static GLuint v86gl_host_buffer(GLuint guest, int create) {
+    uint32_t i;
+    GLuint host = 0;
+
+    if (!guest) {
+        return 0;
+    }
+
+    for (i = 0; i < g_buffer_count; i++) {
+        if (g_buffers[i].guest == guest) {
+            return g_buffers[i].host;
+        }
+    }
+
+    if (!create || g_buffer_count >= V86GL_MAX_BUFFERS) {
+        return 0;
+    }
+
+    glGenBuffers(1, &host);
+    if (!host) {
+        return 0;
+    }
+    g_buffers[g_buffer_count].guest = guest;
+    g_buffers[g_buffer_count].host = host;
+    g_buffer_count++;
+    return host;
+}
+
 static int v86gl_occlusion_queries_supported(void) {
     return g_webgl_major_version >= 2;
 }
@@ -792,6 +833,7 @@ static void v86gl_reset_gl2_maps(void) {
     g_framebuffer_count = 0;
     g_renderbuffer_count = 0;
     g_query_count = 0;
+    g_buffer_count = 0;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1149,6 +1191,158 @@ void v86gl_glBindTexture(GLenum target, GLuint texture) {
     host = texture == 0 ? v86gl_default_texture(target) :
         v86gl_host_texture(texture, 1);
     glBindTexture(v86gl_binding_target(target), host);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glGenBuffersMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n <= 0 || !guest_names) return;
+
+    for (i = 0; i < n; i++) {
+        (void)v86gl_host_buffer(guest_names[i], 1);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDeleteBuffersMapped(GLsizei n, const GLuint* guest_names) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (n <= 0 || !guest_names) return;
+
+    for (i = 0; i < n; i++) {
+        GLuint host = v86gl_host_buffer(guest_names[i], 0);
+        if (host) {
+            glDeleteBuffers(1, &host);
+            v86gl_forget_name(g_buffers, &g_buffer_count, guest_names[i]);
+        }
+    }
+}
+
+#ifndef GL_PIXEL_PACK_BUFFER
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#endif
+#ifndef GL_PIXEL_UNPACK_BUFFER
+#define GL_PIXEL_UNPACK_BUFFER 0x88EC
+#endif
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBindBufferMapped(GLenum target, GLuint guest_buffer) {
+    GLuint host;
+
+    if (!v86gl_ensure_ready()) return;
+
+    /* The proxy always resolves GL_PIXEL_PACK_BUFFER/GL_PIXEL_UNPACK_BUFFER
+     * offsets to real bytes before a record ever reaches the wire (see
+     * unpack_pixel_pointer()/pack_pixel_pointer() in opengl32_proxy.c), so
+     * every TexImage/TexSubImage/ReadPixels call below always receives a
+     * real heap pointer. Forwarding the guest's bind would leave that target
+     * bound on the real WebGL2 context, which then reinterprets those real
+     * pointers as byte offsets into the bound buffer instead -- corrupting
+     * every subsequent pixel transfer and leaving render-target textures
+     * with incomplete storage (this is what produced the repeated
+     * "Framebuffer is incomplete" errors seen after a guest PBO upload).
+     * gl4es does not track these two targets either (see its own
+     * "unhandled Buffer type" warning), so there is no functional reason to
+     * forward them; keep them permanently unbound instead. */
+    if (target == GL_PIXEL_PACK_BUFFER || target == GL_PIXEL_UNPACK_BUFFER) {
+        return;
+    }
+
+    host = guest_buffer ? v86gl_host_buffer(guest_buffer, 1) : 0;
+    glBindBuffer(target, host);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBufferDataMapped(GLenum target, GLsizeiptr size, GLenum usage,
+                              GLsizeiptr data_size, const void* data) {
+    const void* upload = NULL;
+
+    if (!v86gl_ensure_ready()) return;
+    if (size < 0 || data_size < 0 || data_size > size) return;
+    if (target == GL_PIXEL_PACK_BUFFER || target == GL_PIXEL_UNPACK_BUFFER) {
+        return;
+    }
+    if (data && data_size == size && data_size > 0) {
+        upload = data;
+    }
+    glBufferData(target, size, upload, usage);
+    if (data && data_size > 0 && data_size < size) {
+        glBufferSubData(target, 0, data_size, data);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glBufferSubDataMapped(GLenum target, GLintptr offset, GLsizeiptr size,
+                                 GLsizeiptr data_size, const void* data) {
+    if (!v86gl_ensure_ready()) return;
+    if (target == GL_PIXEL_PACK_BUFFER || target == GL_PIXEL_UNPACK_BUFFER) {
+        return;
+    }
+    if (offset < 0 || size < 0 || data_size != size || (size && !data)) return;
+    if (size) {
+        glBufferSubData(target, offset, size, data);
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glVertexPointerVBO(GLint size, GLenum type, GLsizei stride,
+                              uintptr_t offset) {
+    if (!v86gl_ensure_ready()) return;
+    glVertexPointer(size, type, stride, (const void*)offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glColorPointerVBO(GLint size, GLenum type, GLsizei stride,
+                             uintptr_t offset) {
+    if (!v86gl_ensure_ready()) return;
+    glColorPointer(size, type, stride, (const void*)offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glTexCoordPointerVBO(GLint size, GLenum type, GLsizei stride,
+                                uintptr_t offset) {
+    if (!v86gl_ensure_ready()) return;
+    glTexCoordPointer(size, type, stride, (const void*)offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glNormalPointerVBO(GLint size, GLenum type, GLsizei stride,
+                              uintptr_t offset) {
+    (void)size;
+    if (!v86gl_ensure_ready()) return;
+    glNormalPointer(type, stride, (const void*)offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glSecondaryColorPointerVBO(GLint size, GLenum type, GLsizei stride,
+                                      uintptr_t offset) {
+    if (!v86gl_ensure_ready()) return;
+    glSecondaryColorPointer(size, type, stride, (const void*)offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glFogCoordPointerVBO(GLint size, GLenum type, GLsizei stride,
+                                uintptr_t offset) {
+    (void)size;
+    if (!v86gl_ensure_ready()) return;
+    glFogCoordPointer(type, stride, (const void*)offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glVertexAttribPointerMapped(GLuint guest_index, GLint size,
+                                       GLenum type, GLboolean normalized,
+                                       GLsizei stride, uintptr_t offset) {
+    GLint host_index;
+
+    if (!v86gl_ensure_ready()) return;
+    host_index = v86gl_host_attrib_index((GLint)guest_index);
+    if (host_index >= 0) {
+        glVertexAttribPointer((GLuint)host_index, size, type, normalized,
+                              stride, (const void*)offset);
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -2826,6 +3020,66 @@ static void v86gl_setup_generic_attribs(GLsizei attrib_count, const int32_t* val
                                   meta.normalized, meta.stride, meta.data);
         } else {
             glDisableVertexAttribArray((GLuint)host_index);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawArraysDirect(GLenum mode, GLint first, GLsizei count) {
+    if (!v86gl_ensure_ready()) return;
+    glDrawArrays(mode, first, count);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawElementsDirect(GLenum mode, GLuint start, GLuint end,
+                                GLsizei count, GLenum type,
+                                uintptr_t index_offset) {
+    (void)start;
+    (void)end;
+    if (!v86gl_ensure_ready()) return;
+    glDrawElements(mode, count, type, (const void*)index_offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glDrawRangeElementsDirect(GLenum mode, GLuint start, GLuint end,
+                                     GLsizei count, GLenum type,
+                                     uintptr_t index_offset) {
+    if (!v86gl_ensure_ready()) return;
+    glDrawRangeElements(mode, start, end, count, type,
+                        (const void*)index_offset);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMultiDrawArraysDirect(GLenum mode, GLsizei primcount,
+                                   const int32_t* pairs) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (primcount <= 0 || !pairs) return;
+
+    for (i = 0; i < primcount; i++) {
+        GLint first = pairs[i * 2];
+        GLsizei count = pairs[i * 2 + 1];
+        if (count > 0) {
+            glDrawArrays(mode, first, count);
+        }
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glMultiDrawElementsDirect(GLenum mode, GLenum type,
+                                     GLsizei primcount,
+                                     const int32_t* pairs) {
+    GLsizei i;
+
+    if (!v86gl_ensure_ready()) return;
+    if (primcount <= 0 || !pairs) return;
+
+    for (i = 0; i < primcount; i++) {
+        GLsizei count = pairs[i * 2];
+        uintptr_t index_offset = (uintptr_t)(uint32_t)pairs[i * 2 + 1];
+        if (count > 0) {
+            glDrawElements(mode, count, type, (const void*)index_offset);
         }
     }
 }
