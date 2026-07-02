@@ -2802,18 +2802,9 @@ static V86GLGenericAttribMeta v86gl_generic_attrib_meta_at(const int32_t* values
     return meta;
 }
 
-static void v86gl_disable_generic_attribs(void) {
-    GLuint i;
-
-    for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++) {
-        glDisableVertexAttribArray(i);
-    }
-}
-
 static void v86gl_setup_generic_attribs(GLsizei attrib_count, const int32_t* values) {
     GLsizei i;
 
-    v86gl_disable_generic_attribs();
     if (!values || attrib_count <= 0) {
         return;
     }
@@ -2854,7 +2845,6 @@ void v86gl_glDrawArraysPacked(GLenum mode, GLsizei count,
                               color_size, color_type, color_stride, color_data,
                               texcoord_size, texcoord_type, texcoord_stride, texcoord_data,
                               normal_type, normal_stride, normal_data);
-    v86gl_disable_generic_attribs();
     glDrawArrays(mode, 0, count);
 }
 
@@ -2867,7 +2857,6 @@ void v86gl_glDrawArraysPackedMT(GLenum mode, GLsizei count,
     if (!v86gl_ensure_ready()) return;
     v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
                                  has_secondary_color, has_fog_coord, array_meta);
-    v86gl_disable_generic_attribs();
     glDrawArrays(mode, 0, count);
 }
 
@@ -2901,7 +2890,6 @@ void v86gl_glDrawElementsPacked(GLenum mode, GLsizei count, GLenum type, const v
                               color_size, color_type, color_stride, color_data,
                               texcoord_size, texcoord_type, texcoord_stride, texcoord_data,
                               normal_type, normal_stride, normal_data);
-    v86gl_disable_generic_attribs();
     glDrawElements(mode, count, type, indices);
 }
 
@@ -2914,7 +2902,6 @@ void v86gl_glDrawElementsPackedMT(GLenum mode, GLsizei count, GLenum type, const
     if (!v86gl_ensure_ready()) return;
     v86gl_setup_client_arrays_mt(tex_unit_count, restore_client_active,
                                  has_secondary_color, has_fog_coord, array_meta);
-    v86gl_disable_generic_attribs();
     glDrawElements(mode, count, type, indices);
 }
 
