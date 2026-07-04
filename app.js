@@ -240,6 +240,22 @@ const GAMES = {
         size: 2634022912,
         // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
     },
+    'counter strike': {
+        name: 'Counter-Strike',
+        systemDisk: 'windowsxp/windowsxp_multidisk_C_4G.img',
+        systemDiskSize: 4294967296,
+        disk: 'game/counterstrike.img',
+        size: 943718400,
+        // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
+    },
+    'quake3': {
+        name: 'Quake III',
+        systemDisk: 'windowsxp/windowsxp_multidisk_C_4G.img',
+        systemDiskSize: 4294967296,
+        disk: 'game/quake3.img',
+        size: 2147483648,
+        // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
+    }    
 };
 
 const progressContainer = document.getElementById("progress_container");
@@ -326,7 +342,7 @@ function startEmulator9xMultiDisk(gameId) {
             fixed_chunk_size: 1024 * 1024,
             use_parts: true,
         },
-        initial_state: { 
+        initial_state: {
             url: game.stateurl,
         },
         acpi: false,
@@ -336,8 +352,7 @@ function startEmulator9xMultiDisk(gameId) {
         },
         v86gl_pci: {
             port: 0xF100,
-            maxBatchBytes: 16 * 1024 * 1024,
-            trace: true
+            maxBatchBytes: 16 * 1024 * 1024
         },
         preserve_fixed_proportions: true,
         boot_order: 0x213,
@@ -357,7 +372,6 @@ function attachEmulatorListeners(emulator) {
         try {
             v86gl = installV86GLBridge(emulator, glCanvas, {
                 gl4es: window.GL4ES,
-                logPackets: true
             });
             window.v86gl = v86gl;
         } catch (err) {
@@ -367,23 +381,7 @@ function attachEmulatorListeners(emulator) {
 
     emulator.add_listener("emulator-loaded", function() {
         const pci = emulator.v86 && emulator.v86.cpu && emulator.v86.cpu.devices.v86gl_pci;
-        if (pci) {
-            const io = emulator.v86.cpu.io;
-            const pciSpace = pci.pci && pci.pci.device_spaces[pci.pci_id];
-            const bar0 = pciSpace ? pciSpace[0x10 >> 2] >>> 0 : 0;
-            const commandPort = pci.port + 0x1C;
-            const commandEntry = io && io.ports[commandPort];
-            console.info("[v86gl] PCI device ready", {
-                port: "0x" + pci.port.toString(16),
-                bar0: "0x" + bar0.toString(16),
-                commandPort: "0x" + commandPort.toString(16),
-                commandPortOwner: commandEntry && commandEntry.device && commandEntry.device.name,
-                maxBatchBytes: pci.maxBatchBytes,
-                trace: !!pci.trace,
-                status: "0x" + (pci.status >>> 0).toString(16),
-                submitCount: pci.submitCount >>> 0,
-            });
-        } else {
+        if (!pci) {
             console.error("[v86gl] PCI device is missing from this libv86.js build");
         }
     });
