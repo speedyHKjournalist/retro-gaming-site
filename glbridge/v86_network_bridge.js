@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "war3blackfix-20260702";
+    const V86GL_BRIDGE_VERSION = "viewport-fix-20260710";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;
@@ -658,19 +658,6 @@
         withHeapBlocks(blocks, callback) {
             const ptrs = new Array(blocks.length).fill(0);
             const allocated = [];
-            let needsHeap = false;
-
-            for (let i = 0; i < blocks.length; i++) {
-                if (blocks[i] && blocks[i].bytes && blocks[i].bytes.length) {
-                    needsHeap = true;
-                    break;
-                }
-            }
-
-            const heap = needsHeap ? this.heapU8() : null;
-            if (needsHeap && !heap) {
-                return false;
-            }
 
             try {
                 for (let i = 0; i < blocks.length; i++) {
@@ -684,9 +671,20 @@
                         return false;
                     }
 
+                    // ALLOW_MEMORY_GROWTH lets malloc replace the wasm memory
+                    // buffer.  A HEAPU8 captured before malloc is then a
+                    // detached TypedArray, which used to abort Warcraft III's
+                    // large multi-array glDrawElements calls while its smaller
+                    // UI draws continued to work.  Reacquire the view after
+                    // every allocation because any one of them can grow it.
+                    allocated.push(ptr);
+                    const heap = this.heapU8();
+                    if (!heap || ptr + block.bytes.length > heap.length) {
+                        return false;
+                    }
+
                     heap.set(block.bytes, ptr);
                     ptrs[i] = ptr;
-                    allocated.push(ptr);
                 }
 
                 return callback(ptrs);
@@ -2947,7 +2945,6 @@
                 this.dispatchGLChunk(p);
                 break;
             case OP_VIEWPORT:
-                this.resize(i32(p, 8), i32(p, 12));
                 renderer.glCall(GLFN_VIEWPORT, p);
                 break;
             case OP_CLEAR_COLOR:
@@ -2985,10 +2982,6 @@
 
             const fn = u16(p, 0);
             const args = p.slice(2);
-
-            if (fn === GLFN_VIEWPORT && args.length >= 16) {
-                this.resize(i32(args, 8), i32(args, 12));
-            }
 
             this.noteDrawableFunction(fn, 0);
             this.requireRenderer().glCall(fn, args);
@@ -3071,10 +3064,6 @@
                 if (fn === V86GL_CTRL_DESTROY_CONTEXT) {
                     this.destroyContext();
                     continue;
-                }
-
-                if (fn === GLFN_VIEWPORT && args.length >= 16) {
-                    this.resize(i32(args, 8), i32(args, 12));
                 }
 
                 this.noteDrawableFunction(fn, commandFrameId);
