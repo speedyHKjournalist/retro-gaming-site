@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Play a preserved classic PC game in your browser with v86.">
+    <title>Play — Retro Gaming Site</title>
+    <link rel="stylesheet" href="styles.css?v=site-refactor-20260711b">
+</head>
+<body class="game-page">
+    <header class="site-header">
+        <a class="brand" href="index.html" aria-label="Retro Gaming Site home">
+            <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span>Retro Gaming Site</span>
+        </a>
+        <nav class="header-actions" aria-label="Community links">
+            <a class="text-link" href="https://discord.gg/re5CY3MbfW" target="_blank" rel="noopener">Discord</a>
+            <a class="button button-small button-warm" href="https://paypal.me/retrogamingsite" target="_blank" rel="noopener">Buy me a coffee</a>
+        </nav>
+    </header>
+
+    <main class="game-layout">
+        <aside class="ad-rail game-ad-rail" aria-label="Advertisement">
+            <span>Advertisement</span><strong>Reserved</strong>
+        </aside>
+
+        <article class="game-content">
+            <a class="back-link" href="index.html"><span aria-hidden="true">←</span> All games</a>
+
+            <header class="game-heading">
+                <div class="mini-cover" id="mini_cover" aria-hidden="true"><span></span></div>
+                <div>
+                    <p class="section-kicker" id="game_platform">Classic PC</p>
+                    <h1 id="game_title">Loading game…</h1>
+                    <p id="game_meta">Browser emulation</p>
+                </div>
+                <div class="play-count"><strong id="play_count">0</strong><span>plays by you</span></div>
+            </header>
+
+            <section class="emulator-panel" aria-label="Game emulator">
+                <div class="control-bar" id="control_bar">
+                    <div class="control-group" aria-label="Emulator state controls">
+                        <button class="control-button" id="save_state" type="button" title="Download emulator state">
+                            <span class="control-icon" aria-hidden="true">↓</span><span>Save state</span>
+                        </button>
+                        <button class="control-button" id="load_state_btn" type="button" title="Restore emulator state">
+                            <span class="control-icon" aria-hidden="true">↑</span><span>Load state</span>
+                        </button>
+                    </div>
+                    <div class="control-divider" aria-hidden="true"></div>
+                    <div class="control-group" aria-label="CD controls">
+                        <button class="control-button" id="insert_cd_btn" type="button">
+                            <span class="control-icon disc-icon" aria-hidden="true"></span><span>Insert CD</span>
+                        </button>
+                        <button class="control-button" id="eject_cd_btn" type="button">
+                            <span class="control-icon" aria-hidden="true">⏏</span><span>Eject CD</span>
+                        </button>
+                    </div>
+                    <div class="custom-controls" id="custom_controls"></div>
+                    <button class="control-button fullscreen-button" id="fullscreen_btn" type="button">
+                        <span class="control-icon" aria-hidden="true">⛶</span><span>Full screen</span>
+                    </button>
+                    <input id="load_state_file" type="file" class="hidden" accept=".bin,.state">
+                    <input id="insert_cd_file" type="file" class="hidden" accept=".iso,.cue">
+                </div>
+
+                <div class="emulator-status" role="status" aria-live="polite">
+                    <span class="status-light"></span>
+                    <span id="status_text">Preparing emulator…</span>
+                    <div id="progress_container" class="progress-container hidden" aria-label="Loading progress">
+                        <div id="progress_bar"></div>
+                    </div>
+                </div>
+
+                <div id="screen_container">
+                    <div class="text-screen"></div>
+                    <canvas></canvas>
+                    <canvas id="v86gl_canvas"></canvas>
+                    <div class="screen-placeholder" id="screen_placeholder">
+                        <div class="pixel-loader" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                        <strong>Waking up a classic PC…</strong>
+                        <span>Large game files can take a moment on the first visit.</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="game-about">
+                <div>
+                    <p class="section-kicker">About this game</p>
+                    <h2 id="about_title">A classic, preserved.</h2>
+                </div>
+                <p id="game_description">This game runs inside a preserved Windows environment using v86 and WebAssembly.</p>
+            </section>
+        </article>
+
+        <aside class="ad-rail game-ad-rail" aria-label="Advertisement">
+            <span>Advertisement</span><strong>Reserved</strong>
+        </aside>
+    </main>
+
+    <footer class="site-footer compact-footer">
+        <p>Preserved with v86 · <a href="privacy.html">Privacy</a></p>
+        <a href="index.html">Browse all games</a>
+    </footer>
+
+    <script src="libv86.js"></script>
+    <script src="glbridge/libglwasm/gl4es.js?v=war3blackfix-20260702"></script>
+    <script src="glbridge/libglwasm/gl4es_loader.js?v=war3blackfix-20260702"></script>
+    <script src="glbridge/v86_network_bridge.js?v=savestate-replay-20260711"></script>
+    <script src="app.js?v=site-refactor-20260711b"></script>
+</body>
+</html>

@@ -266,6 +266,73 @@ const GAMES = {
 const progressContainer = document.getElementById("progress_container");
 const progressBar = document.getElementById("progress_bar");
 const statusText = document.getElementById("status_text");
+const CLICK_STORAGE_KEY = "retro-gaming-site:play-counts:v1";
+const GAME_PAGE_META = {
+    heros_3: ["1999", "Strategy"], "red-alert-2": ["2000", "Strategy"], yuri: ["2001", "Strategy"],
+    baldurs_gate_2: ["2000", "RPG"], diablo_2: ["2000", "Action RPG"], theme_hospital: ["1997", "Simulation"],
+    starcraft: ["1998", "Strategy"], commandos_1: ["1998", "Tactics"], Diablo_1: ["1997", "Action RPG"],
+    richman_4: ["1998", "Board game"], rollercoaster_tycoon_2: ["2002", "Simulation"], fallout_2: ["1998", "RPG"],
+    age_of_empires_2: ["1999", "Strategy"], civilization_2: ["1996", "Strategy"], planescape_torment: ["1999", "RPG"],
+    simcity_3000: ["1999", "Simulation"], icewind_dale_1: ["2000", "RPG"], icewind_dale_2: ["2002", "RPG"],
+    need_for_speed_3: ["1998", "Racing"], dino_crisis: ["2000", "Survival"], resident_evil_2: ["1999", "Survival"],
+    metal_slug_1: ["1996", "Arcade"], metal_slug_2: ["1998", "Arcade"], metal_slug_3: ["2000", "Arcade"],
+    metal_slug_4: ["2002", "Arcade"], metal_slug_5: ["2003", "Arcade"], metal_slug_x: ["1999", "Arcade"],
+    warcraft3: ["2002", "Strategy"]
+};
+const COVER_PALETTES = [
+    ["#2c351b", "#a4cf54"], ["#321c1b", "#d3614f"], ["#172f35", "#55abc2"], ["#312541", "#9c70d2"],
+    ["#3b2c19", "#d79a48"], ["#15352d", "#49bf96"], ["#3b1c2b", "#cf5985"], ["#24284a", "#6f7ee0"]
+];
+
+function incrementPlayCount(gameId) {
+    let counts = {};
+    try { counts = JSON.parse(localStorage.getItem(CLICK_STORAGE_KEY) || "{}"); } catch (err) { counts = {}; }
+    counts[gameId] = Number(counts[gameId] || 0) + 1;
+    try { localStorage.setItem(CLICK_STORAGE_KEY, JSON.stringify(counts)); } catch (err) { console.warn("Could not persist play count", err); }
+    return counts[gameId];
+}
+
+function gameCoverStyle(gameId) {
+    let hash = 0;
+    for (let i = 0; i < gameId.length; i += 1) hash = ((hash << 5) - hash + gameId.charCodeAt(i)) | 0;
+    const palette = COVER_PALETTES[Math.abs(hash) % COVER_PALETTES.length];
+    return `--cover-a:${palette[0]};--cover-b:${palette[1]}`;
+}
+
+function gameInitials(name) {
+    return name.replace(/[^A-Za-z0-9\s]/g, " ").trim().split(/\s+/).slice(0, 3)
+        .map(function(word) { return word.charAt(0); }).join("").toUpperCase();
+}
+
+function populateGamePage(gameId, game) {
+    const meta = GAME_PAGE_META[gameId] || ["Classic", "PC game"];
+    const platform = game.systemDisk.indexOf("windowsxp") !== -1 ? "Windows XP" : "Windows 98";
+    const count = incrementPlayCount(gameId);
+    document.title = `${game.name} — Retro Gaming Site`;
+    document.getElementById("game_title").textContent = game.name;
+    document.getElementById("game_platform").textContent = platform;
+    document.getElementById("game_meta").textContent = `${meta[0]} · ${meta[1]} · v86 browser edition`;
+    document.getElementById("play_count").textContent = count;
+    document.getElementById("about_title").textContent = `${game.name}, preserved.`;
+    document.getElementById("game_description").textContent = `${game.name} is preserved in a ready-to-play ${platform} environment. The complete system runs locally in your browser through v86 and WebAssembly, with downloadable emulator states so you can return to your session later.`;
+    const cover = document.getElementById("mini_cover");
+    cover.setAttribute("style", gameCoverStyle(gameId));
+    cover.querySelector("span").textContent = gameInitials(game.name);
+
+    if (gameId === "diablo_2") {
+        const customControls = document.getElementById("custom_controls");
+        const button = document.createElement("button");
+        button.className = "control-button";
+        button.type = "button";
+        button.innerHTML = '<span class="control-icon" aria-hidden="true">◇</span><span>D2 save tools</span>';
+        button.addEventListener("click", function() {
+            const event = new CustomEvent("retro:game-action", { cancelable: true, detail: { gameId, actionId: "save-files", emulator } });
+            window.dispatchEvent(event);
+            if (!event.defaultPrevented) updateStatus("Diablo II save-file hook is ready for the next integration step");
+        });
+        customControls.appendChild(button);
+    }
+}
 
 function renderGamesList() {
     const gamesList = document.getElementById("games_list");
@@ -369,6 +436,17 @@ function startEmulator9xMultiDisk(gameId) {
 
 function attachEmulatorListeners(emulator) {
     const glCanvas = document.getElementById("v86gl_canvas");
+    let glCanvasObserver = null;
+
+    function syncGLCanvasPosition() {
+        if (!v86gl || typeof v86gl.positionCanvas !== "function") return;
+        // v86 changes the VGA canvas size after the bridge is created. Refresh
+        // the reference and calculate the overlay from the final canvas rect.
+        if (typeof v86gl.findScreenCanvas === "function") {
+            v86gl.screenCanvas = v86gl.findScreenCanvas();
+        }
+        v86gl.positionCanvas();
+    }
 
     const installV86GLBridge =
         typeof installV86GLNetworkBridge === "function" ? installV86GLNetworkBridge : null;
@@ -379,10 +457,23 @@ function attachEmulatorListeners(emulator) {
                 gl4es: window.GL4ES,
             });
             window.v86gl = v86gl;
+
+            const screenCanvas = document.querySelector("#screen_container canvas:not(#v86gl_canvas)");
+            if (screenCanvas && typeof ResizeObserver === "function") {
+                glCanvasObserver = new ResizeObserver(function() {
+                    requestAnimationFrame(syncGLCanvasPosition);
+                });
+                glCanvasObserver.observe(screenCanvas);
+                glCanvasObserver.observe(document.getElementById("screen_container"));
+            }
         } catch (err) {
             console.warn("Failed to start v86 GL network bridge:", err);
         }
     }
+
+    emulator.add_listener("screen-set-size", function() {
+        requestAnimationFrame(syncGLCanvasPosition);
+    });
 
     emulator.add_listener("emulator-loaded", function() {
         const pci = emulator.v86 && emulator.v86.cpu && emulator.v86.cpu.devices.v86gl_pci;
@@ -405,7 +496,23 @@ function attachEmulatorListeners(emulator) {
 
     emulator.add_listener("emulator-ready", function() {
         hideProgress();
-        updateStatus("Emulator ready");
+        updateStatus("Emulator ready — click the screen to capture your mouse");
+        const placeholder = document.getElementById("screen_placeholder");
+        if (placeholder) placeholder.classList.add("is-hidden");
+
+        // Some initial states emit an early empty GL frame while the VGA canvas
+        // is still changing size. Do not leave that 300x150 bootstrap canvas on
+        // top of the Windows desktop; the next real GL frame will show it again.
+        requestAnimationFrame(function() {
+            syncGLCanvasPosition();
+            if (v86gl && typeof v86gl.hideOverlayCanvas === "function") {
+                v86gl.hideOverlayCanvas();
+            }
+        });
+    });
+
+    window.addEventListener("resize", function() {
+        requestAnimationFrame(syncGLCanvasPosition);
     });
 }
 
@@ -435,8 +542,17 @@ function launchGameMultiDisk(gameId) {
 
 // Initialize on page load
 window.onload = function() {
+    const gameId = new URLSearchParams(window.location.search).get("id");
+    const selectedGame = GAMES[gameId];
+    if (!selectedGame) {
+        document.getElementById("game_title").textContent = "Game not found";
+        document.getElementById("game_meta").textContent = "Return to the library and choose a game.";
+        document.querySelector(".emulator-panel").classList.add("hidden");
+        return;
+    }
+    populateGamePage(gameId, selectedGame);
     renderGamesList();
-    updateStatus("Click a game on the left to start");
+    updateStatus("Preparing " + selectedGame.name + "…");
     
     // Setup save state button
     document.getElementById("save_state").onclick = async function() {
@@ -471,10 +587,10 @@ window.onload = function() {
             var url = window.URL.createObjectURL(blob);
             var a = document.createElement("a");
             a.href = url;
-            a.download = "v86_state.bin";
+            a.download = gameId + "_v86_state.bin";
             a.click();
             window.URL.revokeObjectURL(url);
-            updateStatus("State Saved!");
+            updateStatus("State saved to your Downloads folder");
         } catch (err) {
             console.error("Failed to save emulator state:", err);
             updateStatus("Save Failed: " + (err && err.message || err));
@@ -584,6 +700,16 @@ window.onload = function() {
         reader.readAsArrayBuffer(file);
     };
 
+    // Setup eject CD button
+    document.getElementById("eject_cd_btn").onclick = function() {
+        if (!emulator) {
+            updateStatus("The emulator is still starting");
+            return;
+        }
+        emulator.eject_cdrom();
+        updateStatus("CD ejected");
+    };
+
     // Setup fullscreen button
     document.getElementById("fullscreen_btn").onclick = function() {
         var container = document.getElementById("screen_container");
@@ -600,10 +726,11 @@ window.onload = function() {
     // Update fullscreen button text when fullscreen changes
     document.addEventListener("fullscreenchange", function() {
         var btn = document.getElementById("fullscreen_btn");
+        var label = btn.querySelector("span:last-child");
         if (document.fullscreenElement) {
-            btn.innerText = "Exit Fullscreen";
+            if (label) label.textContent = "Exit full screen";
         } else {
-            btn.innerText = "Fullscreen";
+            if (label) label.textContent = "Full screen";
         }
     });
 
@@ -613,6 +740,13 @@ window.onload = function() {
         canvas.addEventListener("mousedown", function() {
             canvas.requestPointerLock();
         });
+    }
+
+    // preview=1 keeps visual QA from downloading multi-gigabyte game disks.
+    if (new URLSearchParams(window.location.search).get("preview") === "1") {
+        updateStatus("Preview mode — emulator download paused");
+    } else {
+        launchGameMultiDisk(gameId);
     }
 };
 
