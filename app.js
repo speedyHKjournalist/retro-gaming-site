@@ -11,6 +11,7 @@ const R2_URL_2 = "https://resource2.19930724.xyz";
 const GAMES = {
     'heros_3': {
         name: 'Heroes of Might and Magic 3',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_1 + '/game/heros3/heros3.img.zst',
@@ -19,6 +20,7 @@ const GAMES = {
     },
     'red-alert-2': {
         name: 'Red Alert 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/ra2/ra2.img.zst',
@@ -27,22 +29,16 @@ const GAMES = {
     },
     'yuri': {
         name: 'Yuri\'s Revenge',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/yuri/yuri.img.zst',
         size: 1363148800,
         stateurl: R2_URL_1 + '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
     },
-    // 'thief': {
-    //     name: 'Thief: The Dark Project',
-    //     systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
-    //     systemDiskSize: 536870912,
-    //     disk: 'game/thief/thief.img.zst',
-    //     size: 335544320,
-    //     // stateurl: '/windows98/states/windows98_audio_vga_2d_multidisk_yuri.bin.zst',
-    // },
     'baldurs_gate_2': {
         name: 'Baldur\'s Gate 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_1 + '/game/baldurgate2/baldurgate2.img.zst',
@@ -51,6 +47,7 @@ const GAMES = {
     },
     'diablo_2': {
         name: 'Diablo 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_1 + '/game/diablo2/diablo2.img.zst',
@@ -59,6 +56,7 @@ const GAMES = {
     },
     'theme_hospital': {
         name: 'Theme Hospital',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/themehospital/themehospital.img.zst',
@@ -67,6 +65,7 @@ const GAMES = {
     },
     'starcraft': {
         name: 'StarCraft',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/starcraft/starcraft.img.zst',
@@ -75,6 +74,7 @@ const GAMES = {
     },
     'commandos_1': {
         name: 'Commandos I',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/commandos1/commandos1.img.zst',
@@ -83,6 +83,7 @@ const GAMES = {
     },
     'Diablo_1': {
         name: 'Diablo 1',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/diablo1/diablo1.img.zst',
@@ -91,6 +92,7 @@ const GAMES = {
     },
     'richman_4': {
         name: 'Richman 4 (大富翁4)',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/richman4/richman4.img.zst',
@@ -99,6 +101,7 @@ const GAMES = {
     },
     'rollercoaster_tycoon_2': {
         name: 'Rollercoaster Tycoon 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/rollercoaster2/rollercoaster2.img.zst',
@@ -107,6 +110,7 @@ const GAMES = {
     },
     'fallout_2': {
         name: 'Fallout 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/fallout2/fallout2.img.zst',
@@ -115,6 +119,7 @@ const GAMES = {
     },
     'age_of_empires_2': {
         name: 'Age of Empires 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_1 + '/game/ageofempires2/ageofempires2.img.zst',
@@ -123,6 +128,7 @@ const GAMES = {
     },
     'civilization_2': {
         name: 'Civilization 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_1 + '/game/civilization2/civilization.img.zst',
@@ -131,6 +137,7 @@ const GAMES = {
     },
     'planescape_torment': {
         name: 'Planescape: Torment',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/torment/torment.img.zst',
@@ -139,6 +146,7 @@ const GAMES = {
     },
     'simcity_3000': {
         name: 'SimCity 3000',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_2 + '/game/simcity3000/simcity3000.img.zst',
@@ -147,6 +155,7 @@ const GAMES = {
     },
     'icewind_dale_1': {
         name: 'Icewind Dale 1',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/icewinddale1/icewinddale1.img.zst',
@@ -155,6 +164,7 @@ const GAMES = {
     },
     'icewind_dale_2': {
         name: 'Icewind Dale 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/icewinddale2/icewinddale2.img.zst',
@@ -163,6 +173,7 @@ const GAMES = {
     },
     'need_for_speed_3': {
         name: 'Need for Speed 3',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_2 + '/game/nfs3/nfs3.img.zst',
@@ -171,6 +182,7 @@ const GAMES = {
     },
     'dino_crisis': {
         name: 'Dino Crisis',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_2 + '/game/dinocrisis/dinocrisis.img.zst',
@@ -179,6 +191,7 @@ const GAMES = {
     },
     'resident_evil_2': {
         name: 'Resident Evil 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windows98/windows98multidisk/windows98hdd_C_512MB/windows98hdd_C_512MB.img.zst',
         systemDiskSize: 536870912,
         disk: R2_URL_2 + '/game/residentevil2/residentevil2.img.zst',
@@ -187,6 +200,7 @@ const GAMES = {
     },
     'metal_slug_1': {
         name: 'Metal Slug 1',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/metalslug/metalslug.img.zst',
@@ -195,6 +209,7 @@ const GAMES = {
     },
     'metal_slug_2': {
         name: 'Metal Slug 2',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/metalslug/metalslug.img.zst',
@@ -203,6 +218,7 @@ const GAMES = {
     },
     'metal_slug_3': {
         name: 'Metal Slug 3',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/metalslug/metalslug.img.zst',
@@ -211,6 +227,7 @@ const GAMES = {
     },
     'metal_slug_4': {
         name: 'Metal Slug 4',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/metalslug/metalslug.img.zst',
@@ -219,6 +236,7 @@ const GAMES = {
     },
     'metal_slug_5': {
         name: 'Metal Slug 5',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/metalslug/metalslug.img.zst',
@@ -227,6 +245,7 @@ const GAMES = {
     },
     'metal_slug_x': {
         name: 'Metal Slug X',
+        memorySize: 256 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/metalslug/metalslug.img.zst',
@@ -235,6 +254,7 @@ const GAMES = {
     },
     'warcraft3': {
         name: 'Warcraft III',
+        memorySize: 512 * 1024 * 1024,
         systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
         systemDiskSize: 2147483648,
         disk: R2_URL_2 + '/game/warcraft3/warcraft3.img.zst',
@@ -307,8 +327,8 @@ function startEmulator9xMultiDisk(gameId) {
     }
 
     emulator = new V86({
-        memory_size: 256 * 1024 * 1024,
-        vga_memory_size: 64 * 1024 * 1024,
+        memory_size: game.memorySize,
+        vga_memory_size: 16 * 1024 * 1024,
         bios: { url: "bios/seabios.bin" },
         vga_bios: { url: "bios/vgabios.bin" },
         wasm_path: "v86.wasm",
