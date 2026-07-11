@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "viewport-fix-20260710";
+    const V86GL_BRIDGE_VERSION = "savestate-replay-20260711";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;
@@ -496,6 +496,64 @@
         GLFN_DRAW_RANGE_ELEMENTS_DIRECT,
         GLFN_MULTI_DRAW_ARRAYS_DIRECT,
         GLFN_MULTI_DRAW_ELEMENTS_DIRECT,
+    ]);
+
+    // A v86 snapshot contains guest RAM and the PCI registers, but the gl4es
+    // WASM instance and its WebGL context live outside the VM.  Keep a bounded
+    // reconstruction journal in the PCI state so a fresh renderer can be
+    // rebuilt before the restored guest is allowed to submit another frame.
+    // Draw/output calls are deliberately excluded: Warcraft III embeds large
+    // client arrays in every draw and recording those would grow without
+    // bound.  The next guest frame redraws the default framebuffer.
+    const STATE_JOURNAL_MAGIC = 0x31534756; // "VGS1"
+    const STATE_JOURNAL_VERSION = 1;
+    const STATE_JOURNAL_HEADER_SIZE = 48;
+    const STATE_JOURNAL_ENTRY_HEADER_SIZE = 8;
+    const STATE_JOURNAL_CONTEXT_CURRENT = 1;
+    const PCI_STATE_JOURNAL_INDEX = 8;
+    const DEFAULT_MAX_STATE_JOURNAL_BYTES = 512 * 1024 * 1024;
+
+    const NON_REPLAYABLE_GL_FUNCTIONS = new Set([
+        GLFN_CLEAR,
+        GLFN_BEGIN,
+        GLFN_END,
+        GLFN_VERTEX3F,
+        GLFN_FLUSH,
+        GLFN_FINISH,
+        GLFN_DRAW_ARRAYS,
+        GLFN_DRAW_ELEMENTS,
+        GLFN_READ_PIXELS,
+        GLFN_DRAW_PIXELS,
+        GLFN_BITMAP,
+        GLFN_COPY_PIXELS,
+        GLFN_ACCUM,
+        GLFN_VERTEX4F,
+        GLFN_DRAW_ARRAYS_GL2,
+        GLFN_DRAW_ELEMENTS_GL2,
+        GLFN_QUERY_OBJECT_IV,
+        GLFN_QUERY_OBJECT_LOG,
+        GLFN_CHECK_FRAMEBUFFER_STATUS,
+        GLFN_QUERY_ACTIVE,
+        GLFN_BEGIN_QUERY,
+        GLFN_END_QUERY,
+        GLFN_QUERY_PROGRAM_IV_ARB,
+        GLFN_QUERY_PROGRAM_PARAMETER_FV_ARB,
+        GLFN_QUERY_PROGRAM_PARAMETER_DV_ARB,
+        GLFN_QUERY_PROGRAM_STRING_ARB,
+        GLFN_QUERY_GL_STRING,
+        GLFN_QUERY_INTEGER,
+        GLFN_DRAW_ARRAYS_DIRECT,
+        GLFN_DRAW_ELEMENTS_DIRECT,
+        GLFN_DRAW_RANGE_ELEMENTS_DIRECT,
+        GLFN_MULTI_DRAW_ARRAYS_DIRECT,
+        GLFN_MULTI_DRAW_ELEMENTS_DIRECT,
+    ]);
+
+    const FRAMEBUFFER_DEPENDENT_TEXTURE_FUNCTIONS = new Set([
+        GLFN_COPY_TEX_IMAGE_2D,
+        GLFN_COPY_TEX_SUB_IMAGE_2D,
+        GLFN_COPY_TEX_IMAGE_1D,
+        GLFN_COPY_TEX_SUB_IMAGE_1D,
     ]);
 
     function u16(a, o) { return a[o] | (a[o + 1] << 8); }
@@ -2819,9 +2877,28 @@
             this.frameDrawableSeen = false;
             this.overlayVisible = false;
             this.overlayHideTimer = 0;
+            this.contextCurrent = false;
+            this.stateJournal = [];
+            this.stateJournalBytes = 0;
+            this.stateJournalOverflow = false;
+            this.stateJournalUnsupported = "";
+            this.stateJournalBoundDrawFramebuffer = 0;
+            this.maxStateJournalBytes = this.options.maxStateJournalBytes ||
+                DEFAULT_MAX_STATE_JOURNAL_BYTES;
+            this.replayingState = false;
+            this.restoringState = false;
+            this.pciStateDevice = null;
+            this.stateRestorePrepared = false;
+            this.stateRestoreSeen = false;
+            this.stateRestoreHadCheckpoint = false;
+            this.restoreOperationId = 0;
+            this.activeRestoreOperation = 0;
+            this.pendingStateRestore = Promise.resolve();
 
             this.setRendererFromOptions();
             emulator.add_listener("v86gl-pci-frame", event => this.pushPCIBatch(event));
+            emulator.add_listener("emulator-loaded", () => this.attachPCIStateHooks());
+            this.attachPCIStateHooks();
         }
 
         setRendererFromOptions() {
@@ -2836,15 +2913,16 @@
             }
 
             if (module && typeof module.then === "function") {
-                module.then(resolved => this.setGL4ES(resolved, generation)).catch(err => {
+                const ready = Promise.resolve(module).then(resolved => this.setGL4ES(resolved, generation));
+                ready.catch(err => {
                     if (generation === this.rendererGeneration) {
                         console.error("[v86gl] failed to initialise a fresh gl4es renderer", err);
                     }
                 });
-                return;
+                return ready;
             }
 
-            this.setGL4ES(module, generation);
+            return Promise.resolve(this.setGL4ES(module, generation));
         }
 
         setGL4ES(module, generation) {
@@ -2855,6 +2933,14 @@
             this.renderer = new Gl4esRenderer(this.canvas, module, this.options);
             this.renderer.resize(this.surface.width || this.canvas.width || 640, this.surface.height || this.canvas.height || 480);
 
+            if (!this.restoringState) {
+                this.drainPendingCommands();
+            }
+
+            return this.renderer;
+        }
+
+        drainPendingCommands() {
             const pending = this.pendingPackets.splice(0);
             for (let i = 0; i < pending.length; i++) {
                 this.dispatch(pending[i][0], pending[i][1], pending[i][2]);
@@ -2887,6 +2973,419 @@
             }
 
             return null;
+        }
+
+        getPCIDevice() {
+            const runtime = this.emulator && this.emulator.v86;
+            const cpu = runtime && runtime.cpu;
+            return cpu && cpu.devices && cpu.devices.v86gl_pci || null;
+        }
+
+        attachPCIStateHooks() {
+            const device = this.getPCIDevice();
+            if (!device) {
+                return false;
+            }
+            if (this.pciStateDevice === device) {
+                return true;
+            }
+            if (device.__v86glStateBridge && device.__v86glStateBridge !== this) {
+                console.warn("[v86gl] PCI save-state hooks already belong to another bridge");
+                return false;
+            }
+            if (typeof device.get_state !== "function" || typeof device.set_state !== "function") {
+                return false;
+            }
+
+            const bridge = this;
+            const originalGetState = device.get_state;
+            const originalSetState = device.set_state;
+            device.get_state = function() {
+                const state = originalGetState.call(this);
+                state[PCI_STATE_JOURNAL_INDEX] = bridge.serializeStateJournal();
+                return state;
+            };
+            device.set_state = function(state) {
+                originalSetState.call(this, state);
+                bridge.onPCIStateRestored(state && state[PCI_STATE_JOURNAL_INDEX]);
+            };
+            device.__v86glStateBridge = this;
+            this.pciStateDevice = device;
+            return true;
+        }
+
+        prepareSaveState() {
+            if (!this.attachPCIStateHooks()) {
+                throw new Error("v86gl PCI device is not ready for save state");
+            }
+            this.validateStateJournal();
+            return {
+                entries: this.stateJournal.length,
+                bytes: STATE_JOURNAL_HEADER_SIZE + this.stateJournalBytes,
+            };
+        }
+
+        beginStateRestore() {
+            if (!this.attachPCIStateHooks()) {
+                throw new Error("v86gl PCI device is not ready for state restore");
+            }
+            this.activeRestoreOperation = ++this.restoreOperationId;
+            if (this.restoringState) {
+                // Invalidate a renderer factory belonging to an abandoned
+                // programmatic restore before the new PCI state arrives.
+                this.rendererGeneration++;
+            }
+            this.stateRestorePrepared = true;
+            this.stateRestoreSeen = false;
+            this.stateRestoreHadCheckpoint = false;
+            this.pendingStateRestore = Promise.resolve();
+        }
+
+        onPCIStateRestored(checkpoint) {
+            if (!this.activeRestoreOperation || !this.stateRestorePrepared) {
+                this.activeRestoreOperation = ++this.restoreOperationId;
+            }
+            const operation = this.activeRestoreOperation;
+            this.stateRestoreSeen = true;
+            this.stateRestoreHadCheckpoint = !!(checkpoint && checkpoint.byteLength);
+            const task = this.stateRestoreHadCheckpoint ?
+                this.restoreStateJournal(checkpoint, operation) :
+                this.resetAfterLegacyStateRestore(operation);
+            this.pendingStateRestore = Promise.resolve(task);
+            // The UI awaits the original promise.  Attach a reporting handler
+            // here as well so programmatic restore_state callers do not create
+            // an unhandled rejection.
+            this.pendingStateRestore.catch(err => {
+                console.error("[v86gl] failed to restore GL state", err);
+            });
+        }
+
+        async finishStateRestore() {
+            if (!this.stateRestoreSeen) {
+                this.onPCIStateRestored(null);
+            }
+
+            const operation = this.activeRestoreOperation;
+            try {
+                await this.pendingStateRestore;
+                if (operation !== this.activeRestoreOperation) {
+                    throw new Error("OpenGL state restore was superseded");
+                }
+                return { hasGLState: this.stateRestoreHadCheckpoint };
+            } finally {
+                if (operation === this.activeRestoreOperation) {
+                    this.stateRestorePrepared = false;
+                }
+            }
+        }
+
+        cancelStateRestore() {
+            this.activeRestoreOperation = ++this.restoreOperationId;
+            this.rendererGeneration++;
+            this.stateRestorePrepared = false;
+            this.stateRestoreSeen = false;
+            this.stateRestoreHadCheckpoint = false;
+            this.replayingState = false;
+            this.restoringState = false;
+            this.pendingStateRestore = Promise.resolve();
+            this.clearRestoreTimeline();
+            this.hideOverlayCanvas();
+        }
+
+        validateStateJournal() {
+            if (this.restoringState || this.replayingState || !this.renderer) {
+                throw new Error("OpenGL renderer is not ready for save state");
+            }
+            const unfinishedFrame = Object.values(this.frameStates).some(state =>
+                state.pendingUploadCount > 0 || state.items.length > 0 || state.presentRequested
+            );
+            if (this.buf.length || this.pendingPackets.length || this.pendingPCIBatches.length ||
+                Object.keys(this.chunkedCalls).length || unfinishedFrame) {
+                throw new Error("OpenGL commands are still in flight; retry the save");
+            }
+            if (this.stateJournalOverflow) {
+                throw new Error(
+                    "OpenGL save-state journal exceeded " +
+                    Math.floor(this.maxStateJournalBytes / 1024 / 1024) + " MiB"
+                );
+            }
+            if (this.stateJournalUnsupported) {
+                throw new Error(
+                    "OpenGL save state cannot reconstruct " + this.stateJournalUnsupported
+                );
+            }
+        }
+
+        serializeStateJournal() {
+            this.validateStateJournal();
+            const totalSize = STATE_JOURNAL_HEADER_SIZE + this.stateJournalBytes;
+            if (totalSize > 0xFFFFFFFF) {
+                throw new Error("OpenGL save-state journal is too large");
+            }
+
+            const result = new Uint8Array(totalSize);
+            const view = new DataView(result.buffer);
+            view.setUint32(0, STATE_JOURNAL_MAGIC, true);
+            view.setUint32(4, STATE_JOURNAL_VERSION, true);
+            view.setUint32(8, STATE_JOURNAL_HEADER_SIZE, true);
+            view.setUint32(12, totalSize, true);
+            view.setUint32(16, this.stateJournal.length, true);
+            view.setUint32(20, this.contextCurrent ? STATE_JOURNAL_CONTEXT_CURRENT : 0, true);
+            view.setUint32(24, this.surface.hwnd >>> 0, true);
+            view.setInt32(28, this.surface.x | 0, true);
+            view.setInt32(32, this.surface.y | 0, true);
+            view.setUint32(36, this.surface.width >>> 0, true);
+            view.setUint32(40, this.surface.height >>> 0, true);
+            view.setUint32(44, 0, true);
+
+            let offset = STATE_JOURNAL_HEADER_SIZE;
+            for (const entry of this.stateJournal) {
+                view.setUint16(offset, entry.fn, true);
+                view.setUint16(offset + 2, 0, true);
+                view.setUint32(offset + 4, entry.payload.length, true);
+                offset += STATE_JOURNAL_ENTRY_HEADER_SIZE;
+                result.set(entry.payload, offset);
+                offset += entry.payload.length;
+            }
+            return result;
+        }
+
+        parseStateJournal(checkpoint) {
+            let bytes;
+            if (checkpoint instanceof Uint8Array) {
+                bytes = checkpoint;
+            } else if (ArrayBuffer.isView(checkpoint)) {
+                bytes = new Uint8Array(
+                    checkpoint.buffer, checkpoint.byteOffset, checkpoint.byteLength
+                );
+            } else if (checkpoint instanceof ArrayBuffer) {
+                bytes = new Uint8Array(checkpoint);
+            } else {
+                throw new Error("OpenGL save-state journal has an invalid type");
+            }
+            if (bytes.byteLength < STATE_JOURNAL_HEADER_SIZE) {
+                throw new Error("OpenGL save-state journal is truncated");
+            }
+
+            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            if (view.getUint32(0, true) !== STATE_JOURNAL_MAGIC) {
+                throw new Error("OpenGL save-state journal has an invalid header");
+            }
+            if (view.getUint32(4, true) !== STATE_JOURNAL_VERSION) {
+                throw new Error("OpenGL save-state journal version is not supported");
+            }
+            const headerSize = view.getUint32(8, true);
+            const totalSize = view.getUint32(12, true);
+            const entryCount = view.getUint32(16, true);
+            if (headerSize !== STATE_JOURNAL_HEADER_SIZE || totalSize !== bytes.byteLength) {
+                throw new Error("OpenGL save-state journal length is invalid");
+            }
+            if (entryCount > Math.floor(
+                (totalSize - headerSize) / STATE_JOURNAL_ENTRY_HEADER_SIZE
+            )) {
+                throw new Error("OpenGL save-state journal entry count is invalid");
+            }
+
+            const entries = [];
+            let journalBytes = 0;
+            let offset = headerSize;
+            for (let i = 0; i < entryCount; i++) {
+                if (offset + STATE_JOURNAL_ENTRY_HEADER_SIZE > totalSize) {
+                    throw new Error("OpenGL save-state journal entry is truncated");
+                }
+                const fn = view.getUint16(offset, true);
+                const payloadSize = view.getUint32(offset + 4, true);
+                offset += STATE_JOURNAL_ENTRY_HEADER_SIZE;
+                if (payloadSize > totalSize - offset) {
+                    throw new Error("OpenGL save-state journal payload is truncated");
+                }
+                const payload = bytes.slice(offset, offset + payloadSize);
+                offset += payloadSize;
+                journalBytes += STATE_JOURNAL_ENTRY_HEADER_SIZE + payloadSize;
+                entries.push({ fn, payload });
+            }
+            if (offset !== totalSize) {
+                throw new Error("OpenGL save-state journal has trailing data");
+            }
+
+            return {
+                entries,
+                journalBytes,
+                contextCurrent: !!(view.getUint32(20, true) & STATE_JOURNAL_CONTEXT_CURRENT),
+                surface: {
+                    hwnd: view.getUint32(24, true),
+                    x: view.getInt32(28, true),
+                    y: view.getInt32(32, true),
+                    width: view.getUint32(36, true),
+                    height: view.getUint32(40, true),
+                },
+            };
+        }
+
+        resetStateJournal() {
+            this.stateJournal = [];
+            this.stateJournalBytes = 0;
+            this.stateJournalOverflow = false;
+            this.stateJournalUnsupported = "";
+            this.stateJournalBoundDrawFramebuffer = 0;
+        }
+
+        markStateJournalUnsupported(reason) {
+            if (!this.stateJournalUnsupported) {
+                this.stateJournalUnsupported = reason;
+                console.warn("[v86gl] save-state reconstruction unsupported:", reason);
+            }
+        }
+
+        updateStateJournalTracking(fn, payload) {
+            if (fn === GLFN_BIND_FRAMEBUFFER && payload.length >= 8) {
+                const target = u32(payload, 0);
+                if (target === 0x8D40 || target === 0x8CA9) {
+                    this.stateJournalBoundDrawFramebuffer = u32(payload, 4);
+                }
+            }
+
+            if (FRAMEBUFFER_DEPENDENT_TEXTURE_FUNCTIONS.has(fn)) {
+                this.markStateJournalUnsupported(GLFN_NAMES[fn] || ("GL function " + fn));
+            }
+
+            if (this.stateJournalBoundDrawFramebuffer &&
+                (DRAWABLE_GL_FUNCTIONS.has(fn) || fn === GLFN_CLEAR ||
+                 fn === GLFN_DRAW_PIXELS || fn === GLFN_BITMAP ||
+                 fn === GLFN_COPY_PIXELS || fn === GLFN_ACCUM)) {
+                this.markStateJournalUnsupported("rendered framebuffer object contents");
+            }
+        }
+
+        recordStateCall(fn, payload) {
+            if (this.replayingState) {
+                return;
+            }
+
+            this.updateStateJournalTracking(fn, payload);
+            if (NON_REPLAYABLE_GL_FUNCTIONS.has(fn) ||
+                FRAMEBUFFER_DEPENDENT_TEXTURE_FUNCTIONS.has(fn)) {
+                return;
+            }
+
+            const data = payload instanceof Uint8Array ? payload.slice() :
+                new Uint8Array(payload || []);
+            const entryBytes = STATE_JOURNAL_ENTRY_HEADER_SIZE + data.length;
+            if (this.stateJournalBytes + entryBytes > this.maxStateJournalBytes) {
+                this.stateJournalOverflow = true;
+                return;
+            }
+
+            this.stateJournal.push({ fn, payload: data });
+            this.stateJournalBytes += entryBytes;
+        }
+
+        callRenderer(fn, payload, renderer) {
+            const target = renderer || this.requireRenderer();
+            const result = target.glCall(fn, payload);
+            this.recordStateCall(fn, payload);
+            return result;
+        }
+
+        clearRestoreTimeline() {
+            this.buf = [];
+            this.pendingPackets = [];
+            this.pendingPCIBatches = [];
+            this.chunkedCalls = Object.create(null);
+            this.frameStates = Object.create(null);
+            this.lastPresentedFrameId = 0;
+            this.frameDrawableSeen = false;
+            this.cancelOverlayHide();
+        }
+
+        async replaceRendererForStateRestore(parsed, operation) {
+            if (operation !== this.activeRestoreOperation) {
+                throw new Error("OpenGL state restore was cancelled");
+            }
+            this.restoringState = true;
+            this.clearRestoreTimeline();
+            this.hideOverlayCanvas();
+
+            const oldRenderer = this.renderer;
+            this.renderer = null;
+            if (oldRenderer) {
+                oldRenderer.destroy();
+            }
+            this.replaceOverlayCanvas();
+            this.surface = {
+                hwnd: parsed.surface.hwnd >>> 0,
+                x: parsed.surface.x | 0,
+                y: parsed.surface.y | 0,
+                width: parsed.surface.width >>> 0,
+                height: parsed.surface.height >>> 0,
+            };
+
+            const generation = ++this.rendererGeneration;
+            try {
+                const module = this.createFreshRenderer();
+                await this.setRendererModule(module, generation);
+                if (operation !== this.activeRestoreOperation ||
+                    generation !== this.rendererGeneration || !this.renderer) {
+                    throw new Error("fresh gl4es renderer was superseded during restore");
+                }
+
+                const renderer = this.requireRenderer();
+                if (this.surface.width && this.surface.height) {
+                    renderer.makeCurrent(this.surface);
+                }
+
+                this.replayingState = true;
+                try {
+                    for (const entry of parsed.entries) {
+                        renderer.glCall(entry.fn, entry.payload);
+                    }
+                } finally {
+                    this.replayingState = false;
+                }
+
+                this.contextCurrent = parsed.contextCurrent;
+                if (!this.contextCurrent) {
+                    renderer.releaseCurrent();
+                }
+                this.stateJournal = parsed.entries;
+                this.stateJournalBytes = parsed.journalBytes;
+                this.stateJournalOverflow = false;
+                this.stateJournalUnsupported = "";
+                this.stateJournalBoundDrawFramebuffer = 0;
+                for (const entry of parsed.entries) {
+                    if (entry.fn === GLFN_BIND_FRAMEBUFFER && entry.payload.length >= 8) {
+                        const target = u32(entry.payload, 0);
+                        if (target === 0x8D40 || target === 0x8CA9) {
+                            this.stateJournalBoundDrawFramebuffer = u32(entry.payload, 4);
+                        }
+                    }
+                }
+
+                if (operation === this.activeRestoreOperation) {
+                    this.restoringState = false;
+                    this.drainPendingCommands();
+                }
+            } catch (err) {
+                if (operation === this.activeRestoreOperation) {
+                    this.replayingState = false;
+                    this.restoringState = false;
+                }
+                throw err;
+            }
+        }
+
+        async restoreStateJournal(checkpoint, operation) {
+            const parsed = this.parseStateJournal(checkpoint);
+            await this.replaceRendererForStateRestore(parsed, operation);
+        }
+
+        async resetAfterLegacyStateRestore(operation) {
+            await this.replaceRendererForStateRestore({
+                entries: [],
+                journalBytes: 0,
+                contextCurrent: false,
+                surface: { hwnd: 0, x: 0, y: 0, width: 0, height: 0 },
+            }, operation);
         }
 
         pushBytes(bytes) {
@@ -2922,7 +3421,7 @@
         }
 
         dispatch(op, p, seq) {
-            if (!this.renderer) {
+            if (!this.renderer || this.restoringState) {
                 this.pendingPackets.push([op, p, seq]);
                 return;
             }
@@ -2945,26 +3444,26 @@
                 this.dispatchGLChunk(p);
                 break;
             case OP_VIEWPORT:
-                renderer.glCall(GLFN_VIEWPORT, p);
+                this.callRenderer(GLFN_VIEWPORT, p, renderer);
                 break;
             case OP_CLEAR_COLOR:
-                renderer.glCall(GLFN_CLEAR_COLOR, p);
+                this.callRenderer(GLFN_CLEAR_COLOR, p, renderer);
                 break;
             case OP_CLEAR:
-                renderer.glCall(GLFN_CLEAR, p);
+                this.callRenderer(GLFN_CLEAR, p, renderer);
                 break;
             case OP_BEGIN:
-                renderer.glCall(GLFN_BEGIN, p);
+                this.callRenderer(GLFN_BEGIN, p, renderer);
                 break;
             case OP_END:
-                renderer.glCall(GLFN_END, p);
+                this.callRenderer(GLFN_END, p, renderer);
                 break;
             case OP_COLOR4F:
-                renderer.glCall(GLFN_COLOR4F, p);
+                this.callRenderer(GLFN_COLOR4F, p, renderer);
                 break;
             case OP_VERTEX3F:
                 this.noteDrawableFunction(GLFN_VERTEX3F, 0);
-                renderer.glCall(GLFN_VERTEX3F, p);
+                this.callRenderer(GLFN_VERTEX3F, p, renderer);
                 break;
             case OP_PRESENT:
                 this.dispatchPresentPacket(p);
@@ -2984,7 +3483,7 @@
             const args = p.slice(2);
 
             this.noteDrawableFunction(fn, 0);
-            this.requireRenderer().glCall(fn, args);
+            this.callRenderer(fn, args);
         }
 
         isStaleFrame(frameId) {
@@ -3067,14 +3566,14 @@
                 }
 
                 this.noteDrawableFunction(fn, commandFrameId);
-                renderer.glCall(fn, args);
+                this.callRenderer(fn, args);
             }
 
             return commands;
         }
 
         pushPCIBatch(event) {
-            if (!this.renderer) {
+            if (!this.renderer || this.restoringState) {
                 const bytes = event.bytes instanceof Uint8Array ? event.bytes.slice() : new Uint8Array(event.bytes || []);
                 this.pendingPCIBatches.push({
                     ...event,
@@ -3181,7 +3680,7 @@
                 }
 
                 this.noteDrawableFunction(upload.fn, state.id);
-                this.requireRenderer().glCall(upload.fn, upload.data);
+                this.callRenderer(upload.fn, upload.data);
                 upload.executed = true;
             }
 
@@ -3314,6 +3813,7 @@
 
             this.resize(this.surface.width, this.surface.height, this.surface.x, this.surface.y);
             this.requireRenderer().makeCurrent(this.surface);
+            this.contextCurrent = true;
         }
 
         resize(width, height, x, y) {
@@ -3442,6 +3942,7 @@
 
         releaseCurrent() {
             this.requireRenderer().releaseCurrent();
+            this.contextCurrent = false;
             this.scheduleOverlayHide(120);
         }
 
@@ -3493,6 +3994,8 @@
             this.frameStates = Object.create(null);
             this.lastPresentedFrameId = 0;
             this.frameDrawableSeen = false;
+            this.contextCurrent = false;
+            this.resetStateJournal();
             this.hideOverlayCanvas();
             this.replaceOverlayCanvas();
 

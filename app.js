@@ -2,6 +2,7 @@
 
 let emulator = null;
 let v86gl = null;
+let stateOperationInProgress = false;
 
 const R2_URL_1 = "https://retrogamingsiteresource.dpdns.org";
 const R2_URL_2 = "https://resource2.19930724.xyz";
@@ -234,27 +235,11 @@ const GAMES = {
     },
     'warcraft3': {
         name: 'Warcraft III',
-        systemDisk: 'windowsxp/windowsxp_multidisk_C_4G.img',
-        systemDiskSize: 4294967296,
-        disk: 'game/warcraft3.img',
+        systemDisk: '/windowsxp/windowsxpmultidisk/windowsxp_multidisk_C_2G.img.zst',
+        systemDiskSize: 2147483648,
+        disk: R2_URL_2 + '/game/warcraft3/warcraft3.img.zst',
         size: 2634022912,
-        // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
-    },
-    'counter strike': {
-        name: 'Counter-Strike',
-        systemDisk: 'windowsxp/windowsxp_multidisk_C_4G.img',
-        systemDiskSize: 4294967296,
-        disk: 'game/counterstrike.img',
-        size: 943718400,
-        // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
-    },
-    'quake3': {
-        name: 'Quake III',
-        systemDisk: 'windowsxp/windowsxp_multidisk_C_4G.img',
-        systemDiskSize: 4294967296,
-        disk: 'game/quake3.img',
-        size: 2147483648,
-        // stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_metalslugx.bin.zst',
+        stateurl: R2_URL_2 + '/windowsxp/states/windowsxp_audio_vga_2d_multidisk_warcraft3.bin.zst',
     }    
 };
 
@@ -322,14 +307,14 @@ function startEmulator9xMultiDisk(gameId) {
     }
 
     emulator = new V86({
-        memory_size: 1024 * 1024 * 1024,
+        memory_size: 256 * 1024 * 1024,
         vga_memory_size: 64 * 1024 * 1024,
         bios: { url: "bios/seabios.bin" },
         vga_bios: { url: "bios/vgabios.bin" },
         wasm_path: "v86.wasm",
         screen_container: document.getElementById("screen_container"),
         hda: {
-            url: game.systemDisk,
+            url: R2_URL_1 + game.systemDisk,
             async: true,
             size: game.systemDiskSize,
             fixed_chunk_size: 1024 * 1024,
@@ -439,8 +424,29 @@ window.onload = function() {
             updateStatus("Emulator not running!");
             return;
         }
+        if (stateOperationInProgress) {
+            updateStatus("Another state operation is already running");
+            return;
+        }
+
+        const button = this;
+        const activeEmulator = emulator;
+        const activeBridge = v86gl;
+        const wasRunning = activeEmulator.is_running();
+        stateOperationInProgress = true;
+        button.disabled = true;
         updateStatus("Saving state...");
-        emulator.save_state().then(function(state_data) {
+        try {
+            if (wasRunning) {
+                await activeEmulator.stop();
+            }
+            if (activeBridge && typeof activeBridge.prepareSaveState === "function") {
+                const glState = activeBridge.prepareSaveState();
+                const glMiB = (glState.bytes / 1024 / 1024).toFixed(1);
+                updateStatus("Saving state (OpenGL checkpoint " + glMiB + " MiB)...");
+            }
+
+            const state_data = await activeEmulator.save_state();
             var blob = new Blob([state_data], { type: "application/octet-stream" });
             var url = window.URL.createObjectURL(blob);
             var a = document.createElement("a");
@@ -449,7 +455,20 @@ window.onload = function() {
             a.click();
             window.URL.revokeObjectURL(url);
             updateStatus("State Saved!");
-        });
+        } catch (err) {
+            console.error("Failed to save emulator state:", err);
+            updateStatus("Save Failed: " + (err && err.message || err));
+        } finally {
+            button.disabled = false;
+            if (wasRunning && emulator === activeEmulator) {
+                try {
+                    await activeEmulator.run();
+                } catch (err) {
+                    console.error("Failed to resume emulator after save:", err);
+                }
+            }
+            stateOperationInProgress = false;
+        }
     };
 
     // Setup load state button
@@ -457,17 +476,59 @@ window.onload = function() {
         document.getElementById("load_state_file").click();
     };
 
-    document.getElementById("load_state_file").onchange = function(e) {
+    document.getElementById("load_state_file").onchange = async function(e) {
         var file = e.target.files[0];
         if (!file || !emulator) return;
+        if (stateOperationInProgress) {
+            this.value = "";
+            updateStatus("Another state operation is already running");
+            return;
+        }
+
+        const input = this;
+        const activeEmulator = emulator;
+        const activeBridge = v86gl;
+        const wasRunning = activeEmulator.is_running();
+        let restorePrepared = false;
+        stateOperationInProgress = true;
         updateStatus("Restoring state...");
-        var reader = new FileReader();
-        reader.onload = function(e) {
-            emulator.restore_state(e.target.result).then(function() {
-                updateStatus("State Restored!");
-            });
-        };
-        reader.readAsArrayBuffer(file);
+        try {
+            const stateData = await file.arrayBuffer();
+            if (wasRunning) {
+                await activeEmulator.stop();
+            }
+            if (activeBridge && typeof activeBridge.beginStateRestore === "function") {
+                activeBridge.beginStateRestore();
+                restorePrepared = true;
+            }
+
+            await activeEmulator.restore_state(stateData);
+            if (activeBridge && typeof activeBridge.finishStateRestore === "function") {
+                const result = await activeBridge.finishStateRestore();
+                if (!result.hasGLState) {
+                    throw new Error(
+                        "This legacy snapshot has no OpenGL checkpoint; create a new save with the updated bridge"
+                    );
+                }
+            }
+
+            if (wasRunning && emulator === activeEmulator) {
+                await activeEmulator.run();
+            }
+            updateStatus("State Restored!");
+        } catch (err) {
+            if (restorePrepared && activeBridge &&
+                typeof activeBridge.cancelStateRestore === "function") {
+                activeBridge.cancelStateRestore();
+            }
+            console.error("Failed to restore emulator state:", err);
+            updateStatus("Restore Failed: " + (err && err.message || err));
+            // A partially restored VM must stay paused; running it with an
+            // incomplete WebGL reconstruction would recreate the corruption.
+        } finally {
+            stateOperationInProgress = false;
+            input.value = "";
+        }
     };
 
     // Setup insert CD button
