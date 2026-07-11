@@ -267,6 +267,7 @@ const progressContainer = document.getElementById("progress_container");
 const progressBar = document.getElementById("progress_bar");
 const statusText = document.getElementById("status_text");
 const CLICK_STORAGE_KEY = "retro-gaming-site:play-counts:v1";
+const GAME_COVERS = window.RETRO_GAME_COVERS || {};
 const GAME_PAGE_META = {
     heros_3: ["1999", "Strategy"], "red-alert-2": ["2000", "Strategy"], yuri: ["2001", "Strategy"],
     baldurs_gate_2: ["2000", "RPG"], diablo_2: ["2000", "Action RPG"], theme_hospital: ["1997", "Simulation"],
@@ -317,7 +318,18 @@ function populateGamePage(gameId, game) {
     document.getElementById("game_description").textContent = `${game.name} is preserved in a ready-to-play ${platform} environment. The complete system runs locally in your browser through v86 and WebAssembly, with downloadable emulator states so you can return to your session later.`;
     const cover = document.getElementById("mini_cover");
     cover.setAttribute("style", gameCoverStyle(gameId));
-    cover.querySelector("span").textContent = gameInitials(game.name);
+    const coverPath = GAME_COVERS[gameId];
+    if (coverPath) {
+        cover.classList.add("has-image");
+        const image = document.createElement("img");
+        image.className = "cover-image";
+        image.src = coverPath;
+        image.alt = "";
+        cover.prepend(image);
+        cover.querySelector("span").textContent = "";
+    } else {
+        cover.querySelector("span").textContent = gameInitials(game.name);
+    }
 
     if (gameId === "diablo_2") {
         const customControls = document.getElementById("custom_controls");

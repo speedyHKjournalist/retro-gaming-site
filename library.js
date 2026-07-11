@@ -1,6 +1,7 @@
 "use strict";
 
 const CLICK_STORAGE_KEY = "retro-gaming-site:play-counts:v1";
+const GAME_COVERS = window.RETRO_GAME_COVERS || {};
 const GAMES_LIBRARY = {
     heros_3: ["Heroes of Might and Magic 3", "1999", "Strategy", "Windows XP"],
     "red-alert-2": ["Red Alert 2", "2000", "Strategy", "Windows 98"],
@@ -62,6 +63,7 @@ function initials(name) {
 
 function createGameCard(gameId, data, count) {
     const [name, year, genre, platform] = data;
+    const coverPath = GAME_COVERS[gameId];
     const card = document.createElement("article");
     card.className = "game-card";
     const link = document.createElement("a");
@@ -69,9 +71,10 @@ function createGameCard(gameId, data, count) {
     link.href = `game.html?id=${encodeURIComponent(gameId)}`;
     link.setAttribute("aria-label", `Play ${name}`);
     link.innerHTML = `
-        <div class="game-cover" style="${coverStyle(gameId)}">
+        <div class="game-cover${coverPath ? " has-image" : ""}" style="${coverStyle(gameId)}">
+            ${coverPath ? `<img class="cover-image" src="${coverPath}" alt="" loading="lazy" decoding="async">` : ""}
             <span class="cover-badge">${platform}</span>
-            <strong class="cover-initials">${initials(name)}</strong>
+            ${coverPath ? "" : `<strong class="cover-initials">${initials(name)}</strong>`}
         </div>
         <div class="card-info">
             <h3></h3>

@@ -223,11 +223,12 @@ input:focus-visible {
 }
 
 .hero-intro {
-    max-width: 600px;
+    max-width: none;
     margin: 28px 0 0;
     color: var(--muted);
     font-size: 0.96rem;
     line-height: 1.75;
+    white-space: nowrap;
 }
 
 .hero-stats {
@@ -398,7 +399,7 @@ input:focus-visible {
     position: relative;
     display: flex;
     overflow: hidden;
-    aspect-ratio: 4 / 3;
+    aspect-ratio: 3 / 4;
     align-items: flex-end;
     padding: 18px;
     isolation: isolate;
@@ -407,6 +408,31 @@ input:focus-visible {
         radial-gradient(circle at 72% 28%, var(--cover-b), transparent 42%),
         linear-gradient(150deg, var(--cover-a), #0c0d0b 76%);
     border-radius: 2px;
+}
+
+.game-cover.has-image,
+.mini-cover.has-image {
+    background: #0c0d0b;
+}
+
+.game-cover.has-image::before,
+.mini-cover.has-image::before {
+    display: none;
+}
+
+.game-cover.has-image::after,
+.mini-cover.has-image::after {
+    background: linear-gradient(0deg, rgba(0, 0, 0, 0.36), transparent 45%);
+}
+
+.cover-image {
+    position: absolute;
+    z-index: -2;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
 }
 
 .game-cover::before,
@@ -885,6 +911,10 @@ input:focus-visible {
 }
 
 @media (max-width: 980px) {
+    .hero-intro {
+        white-space: normal;
+    }
+
     .games-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -950,6 +980,7 @@ input:focus-visible {
 
     .hero-intro {
         font-size: 0.84rem;
+        white-space: normal;
     }
 
     .library-shell {
