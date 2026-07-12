@@ -255,18 +255,28 @@ input:focus-visible {
 }
 
 .library-shell {
-    display: grid;
-    width: min(calc(100% - 24px), 1510px);
-    margin: 0 auto;
-    padding: 64px 0 90px;
-    grid-template-columns: 120px minmax(0, var(--page-width)) 120px;
-    justify-content: center;
-    gap: 24px;
-    border-top: 1px solid var(--line);
+  display: grid;
+  width: min(calc(100% - 24px), 1510px);
+  margin: 0 auto;
+  padding: 64px 0 90px;
+  grid-template-columns: 120px minmax(0, var(--page-width)) 120px;
+  grid-template-areas: "left main right";
+  justify-content: center;
+  gap: 24px;
+  border-top: 1px solid var(--line);
 }
 
 .library-content {
-    min-width: 0;
+  grid-area: main;
+  min-width: 0;
+}
+
+.ad-rail-left {
+  grid-area: left;
+}
+
+.ad-rail-right {
+  grid-area: right;
 }
 
 .ad-rail {
@@ -540,21 +550,23 @@ input:focus-visible {
 
 /* Game detail */
 .game-layout {
-    display: grid;
-    width: min(calc(100% - 24px), 1510px);
-    margin: 0 auto;
-    padding: 36px 0 80px;
-    grid-template-columns: 120px minmax(0, 1190px) 120px;
-    justify-content: center;
-    gap: 24px;
+  display: grid;
+  width: min(calc(100% - 24px), 1510px);
+  margin: 0 auto;
+  padding: 36px 0 80px;
+  grid-template-columns: 120px minmax(0, 1190px) 120px;
+  grid-template-areas: "left main right";
+  justify-content: center;
+  gap: 24px;
 }
 
 .game-ad-rail {
-    margin-top: 144px;
+  margin-top: 144px;
 }
 
 .game-content {
-    min-width: 0;
+  grid-area: main;
+  min-width: 0;
 }
 
 .back-link {
@@ -899,15 +911,16 @@ input:focus-visible {
 }
 
 @media (max-width: 1460px) {
-    .library-shell,
-    .game-layout {
-        width: min(calc(100% - 48px), var(--page-width));
-        grid-template-columns: minmax(0, 1fr);
-    }
+  .library-shell,
+  .game-layout {
+    width: min(calc(100% - 48px), var(--page-width));
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main";
+  }
 
-    .ad-rail {
-        display: none;
-    }
+  .ad-rail {
+    display: none;
+  }
 }
 
 @media (max-width: 980px) {
