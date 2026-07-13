@@ -1254,8 +1254,14 @@ static const char* g_gl_extensions =
     "GL_ARB_vertex_shader "
     "GL_ARB_fragment_shader "
     "GL_ARB_shading_language_100 "
-    "GL_ARB_framebuffer_object "
-    "GL_EXT_framebuffer_object "
+    /* WineD3D 1.7.52 defaults to FBO offscreen rendering as soon as either
+     * framebuffer-object extension is advertised.  The browser bridge does
+     * not yet implement the complete desktop-GL renderbuffer format set that
+     * WineD3D probes during adapter initialisation.  Advertising FBO here made
+     * those probes clear the RENDERTARGET flag from the desktop backbuffer
+     * format, so IDirect3D8::CheckDeviceType failed with D3DERR_NOTAVAILABLE.
+     * Keep FBO hidden until its format and attachment semantics are complete;
+     * WineD3D will deliberately fall back to its backbuffer rendering path. */
     "GL_ARB_depth_texture "
     "GL_EXT_packed_depth_stencil "
     "GL_EXT_texture_sRGB "
@@ -5607,10 +5613,27 @@ BOOL APIENTRY wglGetPixelFormatAttribivARB(HDC hdc, int pixel_format,
                                             int* values) {
     UINT i;
     (void)hdc;
-    if (pixel_format != 1 || layer_plane != 0 ||
-        (count && (!attributes || !values))) {
+    if (layer_plane != 0 || (count && (!attributes || !values))) {
         return FALSE;
     }
+
+    /* WGL_ARB_pixel_format explicitly allows pixel_format == 0 when the
+     * caller only asks for WGL_NUMBER_PIXEL_FORMATS_ARB. WineD3D 1.7.52 uses
+     * exactly that form to size its format table before querying format 1. */
+    if (pixel_format == 0) {
+        for (i = 0; i < count; i++) {
+            if (attributes[i] != 0x2000) { /* WGL_NUMBER_PIXEL_FORMATS_ARB */
+                return FALSE;
+            }
+            values[i] = 1;
+        }
+        return TRUE;
+    }
+
+    if (pixel_format != 1) {
+        return FALSE;
+    }
+
     for (i = 0; i < count; i++) {
         values[i] = wgl_pixel_format_attribute_value(attributes[i]);
     }
@@ -5622,10 +5645,24 @@ BOOL APIENTRY wglGetPixelFormatAttribfvARB(HDC hdc, int pixel_format,
                                             const int* attributes,
                                             FLOAT* values) {
     UINT i;
-    if (pixel_format != 1 || layer_plane != 0 ||
-        (count && (!attributes || !values))) {
+    if (layer_plane != 0 || (count && (!attributes || !values))) {
         return FALSE;
     }
+
+    if (pixel_format == 0) {
+        for (i = 0; i < count; i++) {
+            if (attributes[i] != 0x2000) { /* WGL_NUMBER_PIXEL_FORMATS_ARB */
+                return FALSE;
+            }
+            values[i] = 1.0f;
+        }
+        return TRUE;
+    }
+
+    if (pixel_format != 1) {
+        return FALSE;
+    }
+
     for (i = 0; i < count; i++) {
         values[i] = (FLOAT)wgl_pixel_format_attribute_value(attributes[i]);
     }

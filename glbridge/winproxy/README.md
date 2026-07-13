@@ -191,6 +191,11 @@ Build the test programs:
 cd src/glbridge/sample
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_clear_test.exe d3d8_clear_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -234,6 +239,9 @@ Copy both files into the same folder in the Windows XP guest:
 
 ```text
 opengl32.dll
+d3d8.dll                 WineD3D 1.7.52, 32-bit
+wined3d.dll              WineD3D 1.7.52, 32-bit
+d3d8_clear_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -242,7 +250,24 @@ gl_query_multitexture_test.exe
 gl_fog_material_test.exe
 ```
 
-Run `gl_triangle_test.exe`, `gl_rotate_cube_test.exe`, or
+Run `d3d8_clear_test.exe` first. It deliberately imports only `d3d8.dll` and
+renders one solid blue frame through:
+
+```text
+Direct3DCreate8 -> GetAdapterDisplayMode -> CheckDeviceType -> CreateDevice
+    -> Clear -> BeginScene -> EndScene -> Present
+```
+
+The window title reports the last failure HRESULT, or
+`Present S_OK - expected solid blue` on success. Guest debug output prefixes
+each stage with `[d3d8-smoke]`; the corresponding proxy/host log should include
+`wglSwapBuffers`, `present requested`, a PCI submit with `present=1`, and a
+browser `presentFrame` call. The test is restricted to a 32-bit process, one
+window, one backbuffer, windowed mode, software vertex processing, and no
+multisampling, depth/stencil buffer, reset, shaders, or render-to-texture.
+
+The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
+`gl_rotate_cube_test.exe`, or
 `gl_client_arrays_test.exe`, `gl_blend_ui_test.exe`, or
 `gl_query_multitexture_test.exe`, or `gl_fog_material_test.exe`.
 

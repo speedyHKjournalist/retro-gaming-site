@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "savestate-replay-20260711";
+    const V86GL_BRIDGE_VERSION = "d3d8-clear-present-20260713";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;
@@ -482,6 +482,10 @@
     };
 
     const DRAWABLE_GL_FUNCTIONS = new Set([
+        // A color-buffer clear produces a complete visible frame even when
+        // the application does not submit any geometry.  In particular, the
+        // D3D8 clear smoke test is intentionally Clear -> Present only.
+        GLFN_CLEAR,
         GLFN_VERTEX3F,
         GLFN_VERTEX4F,
         GLFN_DRAW_ARRAYS,
