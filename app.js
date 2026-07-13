@@ -638,6 +638,7 @@ window.onload = function() {
         const activeBridge = v86gl;
         const wasRunning = activeEmulator.is_running();
         let restorePrepared = false;
+        let restoredLegacyState = false;
         stateOperationInProgress = true;
         updateStatus("Restoring state...");
         try {
@@ -653,17 +654,17 @@ window.onload = function() {
             await activeEmulator.restore_state(stateData);
             if (activeBridge && typeof activeBridge.finishStateRestore === "function") {
                 const result = await activeBridge.finishStateRestore();
-                if (!result.hasGLState) {
-                    throw new Error(
-                        "This legacy snapshot has no OpenGL checkpoint; create a new save with the updated bridge"
-                    );
-                }
+                restoredLegacyState = !result.hasGLState;
             }
 
             if (wasRunning && emulator === activeEmulator) {
                 await activeEmulator.run();
             }
-            updateStatus("State Restored!");
+            if (restoredLegacyState) {
+                updateStatus("Legacy state restored — save again to upgrade it");
+            } else {
+                updateStatus("State Restored!");
+            }
         } catch (err) {
             if (restorePrepared && activeBridge &&
                 typeof activeBridge.cancelStateRestore === "function") {

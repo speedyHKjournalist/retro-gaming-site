@@ -8,6 +8,8 @@ const GLFN_GEN_TEXTURES = 26;
 const GLFN_BIND_TEXTURE = 28;
 const GLFN_TEX_IMAGE_2D = 29;
 const GLFN_DRAW_ARRAYS_DIRECT = 206;
+const GLFN_CLEAR = 3;
+const GL_COLOR_BUFFER_BIT = 0x00004000;
 const GL_TEXTURE_2D = 0x0DE1;
 const GL_RGBA = 0x1908;
 const GL_UNSIGNED_BYTE = 0x1401;
@@ -87,6 +89,12 @@ function makeModule(name, modules) {
         _v86gl_glDrawArraysDirect(mode, first, count) {
             calls.push(["drawArraysDirect", mode, first, count]);
         },
+        _v86gl_glClear(mask) {
+            calls.push(["clear", mask]);
+        },
+        _v86gl_glFlush() {
+            calls.push(["flush"]);
+        },
     };
     modules.push(module);
     return module;
@@ -139,6 +147,16 @@ async function main() {
     surface.writeUInt32LE(800, 12);
     surface.writeUInt32LE(600, 16);
     bridge.makeCurrent(surface);
+
+    bridge.pushPCIBatch({
+        bytes: glRecord(GLFN_CLEAR, u32Payload(GL_COLOR_BUFFER_BIT)),
+        frameId: 99,
+        submitCount: 1,
+        commandCount: 1,
+        flags: 1,
+    });
+    assert.equal(bridge.overlayVisible, true,
+                 "a clear-only frame must keep the WebGL overlay visible");
 
     const pixels = Buffer.from([0x11, 0x22, 0x33, 0x44]);
     bridge.executeGLCommands(Buffer.concat([
@@ -198,6 +216,25 @@ async function main() {
         replayed.indexOf("texImage2D") < replayed.indexOf("drawArraysDirect"),
         "queued guest draws must execute only after texture replay"
     );
+
+    bridge.beginStateRestore();
+    pci.set_state(savedPCIState.slice(0, 8));
+    listeners["v86gl-pci-frame"]({
+        bytes: glRecord(GLFN_DRAW_ARRAYS_DIRECT, u32Payload(4, 0, 3)),
+        frameId: 5,
+        submitCount: 1,
+        commandCount: 1,
+        flags: 0,
+    });
+    const legacyRestored = await bridge.finishStateRestore();
+    assert.equal(legacyRestored.hasGLState, false,
+                 "snapshots without a journal must use the legacy restore path");
+    assert.equal(bridge.lastPresentedFrameId, 0,
+                 "legacy restores must also accept the restored guest's lower frame ids");
+    assert.equal(bridge.pendingPCIBatches.length, 0,
+                 "legacy guest work must wait for the clean renderer");
+    assert.equal(modules.at(-1).calls.filter(call => call[0] === "drawArraysDirect").length, 1,
+                 "legacy restores must resume guest rendering after the reset");
 
     console.log("v86_network_bridge_state_test: ok");
 }
