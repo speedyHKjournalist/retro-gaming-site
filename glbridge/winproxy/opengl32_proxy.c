@@ -818,6 +818,15 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #ifndef WGL_FONT_POLYGONS
 #define WGL_FONT_POLYGONS 1
 #endif
+#ifndef WGL_ACCUM_BITS_ARB
+#define WGL_ACCUM_BITS_ARB 0x201D
+#endif
+#ifndef WGL_DEPTH_BITS_ARB
+#define WGL_DEPTH_BITS_ARB 0x2022
+#endif
+#ifndef WGL_STENCIL_BITS_ARB
+#define WGL_STENCIL_BITS_ARB 0x2023
+#endif
 
 enum {
     GLFN_VIEWPORT    = 1,
@@ -5602,8 +5611,9 @@ static int wgl_pixel_format_attribute_value(int attribute) {
     case 0x2017:                   /* WGL_GREEN_BITS_ARB */
     case 0x2019:                   /* WGL_BLUE_BITS_ARB */
     case 0x201B: return 8;          /* WGL_ALPHA_BITS_ARB */
-    case 0x201D: return 24;         /* WGL_DEPTH_BITS_ARB */
-    case 0x2023: return 8;          /* WGL_STENCIL_BITS_ARB */
+    case WGL_ACCUM_BITS_ARB: return 0;
+    case WGL_DEPTH_BITS_ARB: return 24;
+    case WGL_STENCIL_BITS_ARB: return 8;
     default: return 0;
     }
 }

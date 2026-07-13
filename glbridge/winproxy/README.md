@@ -201,6 +201,26 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
 
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_texture_test.exe d3d8_texture_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_indexed_test.exe d3d8_indexed_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_transform_depth_test.exe d3d8_transform_depth_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_textured_cube_test.exe d3d8_textured_cube_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -248,6 +268,10 @@ d3d8.dll                 WineD3D 1.7.52, 32-bit
 wined3d.dll              WineD3D 1.7.52, 32-bit
 d3d8_clear_test.exe
 d3d8_triangle_test.exe
+d3d8_texture_test.exe
+d3d8_indexed_test.exe
+d3d8_transform_depth_test.exe
+d3d8_textured_cube_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -289,6 +313,88 @@ prefixed with `[d3d8-triangle]`, and every newly exercised D3D8 call reports
 its HRESULT independently. Before each call, the window title is changed to
 `D3D8 triangle: calling NN API-name`; if WineD3D blocks, the title therefore
 identifies the exact call that did not return.
+
+After the coloured triangle succeeds, run `d3d8_texture_test.exe`. It adds a
+single-level 64x64 managed `D3DFMT_A8R8G8B8` texture and exercises:
+
+```text
+CheckDeviceFormat -> CreateTexture -> LockRect/fill/UnlockRect
+    -> CreateVertexBuffer(XYZRHW | DIFFUSE | TEX1)
+    -> SetTexture(0) -> MODULATE(texture, diffuse)
+    -> POINT filtering -> DrawPrimitive(two triangles) -> Present
+```
+
+The expected result is a blue/yellow 8x8 checkerboard enlarged inside a black
+window, with crisp point-filtered edges and the title
+`Present S_OK - expected blue/yellow checkerboard`. The test uses no mipmaps,
+lighting, depth buffer, culling, alpha blending, programmable shaders, or
+render-to-texture. Debug output is prefixed with `[d3d8-texture]`; the window
+title is updated before all 34 D3D8 calls so a blocked call remains visible.
+
+After the texture test succeeds, run `d3d8_indexed_test.exe`. It deliberately
+returns to the known-good untextured `XYZRHW | DIFFUSE` path and changes only
+the geometry submission path:
+
+```text
+CreateVertexBuffer(4 vertices) -> CreateIndexBuffer(6 x INDEX16)
+    -> Lock/copy/Unlock -> SetIndices(base vertex 0)
+    -> DrawIndexedPrimitive(2 triangles) -> Present
+```
+
+The expected result is a red/green/blue/yellow interpolated rectangle on a
+black background, with the title
+`Present S_OK - expected indexed RGB quad`. Debug output is prefixed with
+`[d3d8-indexed]`; the window title is updated before all 27 D3D8 calls. This
+test still has no texture, matrices, depth buffer, lighting, culling, or
+programmable shaders, so a failure is isolated to the index-buffer path.
+
+Only after the indexed quad succeeds, run `d3d8_transform_depth_test.exe`.
+It retains `INDEX16` submission and adds the remaining fixed-pipeline pieces:
+
+```text
+CheckDeviceFormat(D24S8) -> CheckDepthStencilMatch(D24S8)
+    -> CreateDevice(automatic D24S8 depth-stencil)
+    -> CreateVertexBuffer(XYZ | DIFFUSE) -> CreateIndexBuffer
+    -> SetTransform(WORLD, VIEW, PROJECTION)
+    -> enable Z test/write -> Clear(target + Z)
+    -> DrawIndexedPrimitive(12 cube triangles) -> Present
+```
+
+The expected result is a static, rotated, colour-interpolated cube whose
+hidden surfaces are removed by the depth buffer, with the title
+`Present S_OK - expected depth-tested colour cube`. The far face is submitted
+after the near face, making correct visibility depend on Z testing rather than
+submission order. Debug output is prefixed with `[d3d8-transform-depth]`; the
+window title is updated before all 34 D3D8 calls. `D24S8` deliberately matches
+the bridge's single conservative WGL pixel format (24 depth + 8 stencil bits).
+If the test fails at call 04 or 05, treat that as a D24S8 capability/matching
+failure; calls 27-29 isolate the
+three transform uploads, call 30 isolates depth clear, and call 32 isolates
+the indexed cube draw.
+
+After the static transform/depth cube succeeds, run
+`d3d8_textured_cube_test.exe`. This is the first multi-frame integration test
+and combines all of the validated D3D8 fixed-pipeline paths:
+
+```text
+CreateTexture(A8R8G8B8) -> LockRect/fill/UnlockRect
+    -> CreateVertexBuffer(XYZ | DIFFUSE | TEX1, 24 face-local vertices)
+    -> CreateIndexBuffer(36 x INDEX16) -> MODULATE(texture, diffuse)
+    -> SetTransform(VIEW, PROJECTION)
+    -> every frame: SetTransform(WORLD) -> Clear(target + Z)
+       -> DrawIndexedPrimitive(12 triangles) -> Present
+```
+
+The expected result is a continuously rotating, blue/yellow checkerboard cube
+on black, with differently tinted faces and correct depth occlusion. The title
+must repeatedly advance through
+`frame N Present S_OK - rotating checker cube`; leave it running for at least
+180 frames to cover a full revolution. Setup has 39 individually titled D3D8
+checkpoints. During animation, the title identifies the current frame and the
+last `SetTransform`, `Clear`, `BeginScene`, `DrawIndexedPrimitive`, `EndScene`,
+or `Present` call, so delayed state corruption is distinguishable from setup
+failure. The test deliberately keeps lighting, culling, mipmaps, alpha
+blending, programmable shaders, and render-to-texture disabled.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or
