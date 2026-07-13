@@ -221,6 +221,16 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
 
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_alpha_blend_test.exe d3d8_alpha_blend_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_multitexture_test.exe d3d8_multitexture_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -272,6 +282,8 @@ d3d8_texture_test.exe
 d3d8_indexed_test.exe
 d3d8_transform_depth_test.exe
 d3d8_textured_cube_test.exe
+d3d8_alpha_blend_test.exe
+d3d8_multitexture_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -395,6 +407,65 @@ last `SetTransform`, `Clear`, `BeginScene`, `DrawIndexedPrimitive`, `EndScene`,
 or `Present` call, so delayed state corruption is distinguishable from setup
 failure. The test deliberately keeps lighting, culling, mipmaps, alpha
 blending, programmable shaders, and render-to-texture disabled.
+
+After the rotating textured cube remains stable for at least one revolution,
+run `d3d8_alpha_blend_test.exe`. It uses two A8R8G8B8 textures and five
+pre-transformed quads to isolate the transparent fixed-pipeline states:
+
+```text
+opaque dark-blue background with ZWRITE
+    -> left: ALPHATEST(GREATER, ref=127), ZWRITE=TRUE
+       -> draw a farther cyan probe over the same rectangle
+    -> right: ALPHABLEND=TRUE, SRCBLEND=SRCALPHA,
+       DESTBLEND=INVSRCALPHA, ZWRITE=FALSE
+       -> draw a farther green probe stripe across the blended rectangle
+    -> Present
+```
+
+The expected left panel is a cyan square with a blue/yellow checker diamond in
+front. The texture's transparent and alpha=64 magenta pixels must be absent;
+the cyan probe appears only where those fragments were discarded and must not
+overwrite the opaque diamond. The expected right panel is an orange alpha
+gradient over the dark-blue background. A solid green vertical stripe drawn
+farther away and after the blend must remain continuous through that panel,
+proving that the transparent pass did not write depth. The success title is
+`Present S_OK - left cutout, right blend, probes visible`.
+
+Failure signatures are intentionally distinct: visible magenta means alpha
+test/discard failed, an opaque orange rectangle means source-alpha blending
+failed, a missing cyan surround means discarded fragments wrote depth, and a
+green stripe interrupted only inside the blended rectangle means
+`ZWRITEENABLE=FALSE` was not honoured. The window title is updated before each
+new D3D8 state or draw call so the last call remains visible if WineD3D blocks.
+
+After the alpha test succeeds, run `d3d8_multitexture_test.exe`. It uses an
+`XYZRHW | DIFFUSE | TEX2` vertex buffer, two A8R8G8B8 textures, and three
+side-by-side quads to isolate the two-stage fixed texture pipeline:
+
+```text
+stage 0: coordinate set 0, repeated blue/yellow checker * DIFFUSE
+    -> left draw with stage 1 disabled
+    -> centre draw: stage 1 MODULATE(CURRENT, grayscale lightmap)
+    -> right draw: stage 1 ADD(CURRENT, grayscale lightmap)
+    -> Present
+```
+
+The stage-0 coordinates repeat the checker twice in each direction, while
+stage 1 selects coordinate set 1 and clamps a single coarse grayscale
+lightmap across each panel. The expected result is: an unchanged bright
+checker on the left; the same checker dark-to-bright under modulation in the
+centre; and a progressively brighter, partly saturated checker under ADD on
+the right. The success title is
+`Present S_OK - base | MODULATE lightmap | ADD lightmap`.
+
+The test first requires `MaxSimultaneousTextures >= 2`,
+`MaxTextureBlendStages >= 2`, and the MODULATE/ADD texture-op capability bits,
+then updates its title before all 55 capability, resource, state, draw, and
+present calls. If the centre and right match the left, stage 1 is not active.
+Grayscale-only centre/right panels mean stage-0 `CURRENT` was lost. A
+twice-repeated coarse lightmap, or an unrepeated base checker, indicates a
+`TEXCOORDINDEX`/TEX2 mix-up. A right panel that matches the centre indicates
+that `D3DTOP_ADD` was not applied.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or
