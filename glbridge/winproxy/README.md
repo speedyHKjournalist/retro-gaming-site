@@ -196,6 +196,11 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
 
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_triangle_test.exe d3d8_triangle_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -235,13 +240,14 @@ These commands intentionally avoid the MinGW C runtime. Some modern MinGW-w64
 packages link tiny programs against Universal CRT `api-ms-win-crt-*` DLLs, which
 are not present in Windows XP/98 by default.
 
-Copy both files into the same folder in the Windows XP guest:
+Copy the required files into the same folder in the Windows XP guest:
 
 ```text
 opengl32.dll
 d3d8.dll                 WineD3D 1.7.52, 32-bit
 wined3d.dll              WineD3D 1.7.52, 32-bit
 d3d8_clear_test.exe
+d3d8_triangle_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -265,6 +271,24 @@ each stage with `[d3d8-smoke]`; the corresponding proxy/host log should include
 browser `presentFrame` call. The test is restricted to a 32-bit process, one
 window, one backbuffer, windowed mode, software vertex processing, and no
 multisampling, depth/stencil buffer, reset, shaders, or render-to-texture.
+
+After the clear test succeeds, run `d3d8_triangle_test.exe`. It extends the
+same path with the smallest fixed-pipeline draw:
+
+```text
+CreateVertexBuffer -> Lock/copy/Unlock -> SetStreamSource
+    -> SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE)
+    -> Clear -> BeginScene -> DrawPrimitive -> EndScene -> Present
+```
+
+The expected result is one red/green/blue interpolated triangle on a black
+background, with the title `Present S_OK - expected RGB triangle`. The test
+uses pre-transformed vertices, vertex diffuse colour, no texture, no lighting,
+no culling, no depth buffer, and no programmable shaders. Debug output is
+prefixed with `[d3d8-triangle]`, and every newly exercised D3D8 call reports
+its HRESULT independently. Before each call, the window title is changed to
+`D3D8 triangle: calling NN API-name`; if WineD3D blocks, the title therefore
+identifies the exact call that did not return.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or

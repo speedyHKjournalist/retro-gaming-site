@@ -1236,8 +1236,6 @@ static const char* g_gl_extensions =
     "GL_EXT_fog_coord "
     "GL_EXT_multi_draw_arrays "
     "GL_ARB_point_parameters "
-    "GL_ARB_vertex_program "
-    "GL_ARB_fragment_program "
     "GL_EXT_blend_equation_separate "
     "GL_EXT_blend_func_separate "
     "GL_EXT_stencil_wrap "
@@ -1250,10 +1248,13 @@ static const char* g_gl_extensions =
     "GL_ARB_pixel_buffer_object "
     "GL_EXT_pixel_buffer_object "
     "GL_ARB_occlusion_query "
-    "GL_ARB_shader_objects "
-    "GL_ARB_vertex_shader "
-    "GL_ARB_fragment_shader "
-    "GL_ARB_shading_language_100 "
+    /* Keep the advertised capability profile on the implemented OpenGL 1.5
+     * fixed-function path.  WineD3D 1.7.52 selects its GLSL/ARB-program
+     * vertex and fragment pipelines when any of the shader extensions are
+     * exposed.  Those pipelines compile programs on the first draw and rely
+     * on synchronous shader query semantics that this bridge does not yet
+     * provide.  The entry points may remain available for diagnostics, but
+     * they must not participate in capability negotiation yet. */
     /* WineD3D 1.7.52 defaults to FBO offscreen rendering as soon as either
      * framebuffer-object extension is advertised.  The browser bridge does
      * not yet implement the complete desktop-GL renderbuffer format set that
@@ -6008,9 +6009,7 @@ const GLubyte* APIENTRY glGetString(GLenum name) {
     switch (name) {
     case GL_VENDOR:     return (const GLubyte*)"v86";
     case GL_RENDERER:   return (const GLubyte*)"v86 fake OpenGL over PCI DMA";
-    case GL_VERSION:    return (const GLubyte*)"2.1";
-    case GL_SHADING_LANGUAGE_VERSION:
-        return (const GLubyte*)"1.20";
+    case GL_VERSION:    return (const GLubyte*)"1.5";
     case GL_EXTENSIONS:
         return (const GLubyte*)g_gl_extensions;
     case GL_PROGRAM_ERROR_STRING_ARB:
