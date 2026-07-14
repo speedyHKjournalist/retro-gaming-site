@@ -268,6 +268,26 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
 
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_raster_stencil_test.exe d3d8_raster_stencil_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_stateblock_test.exe d3d8_stateblock_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_reset_lifecycle_test.exe d3d8_reset_lifecycle_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_caps_audit_test.exe d3d8_caps_audit_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -327,6 +347,10 @@ d3d8_mipmap_filter_test.exe
 d3d8_texture_formats_test.exe
 d3d8_texture_stage_ops_test.exe
 d3d8_dynamic_resources_test.exe
+d3d8_raster_stencil_test.exe
+d3d8_stateblock_test.exe
+d3d8_reset_lifecycle_test.exe
+d3d8_caps_audit_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -638,6 +662,49 @@ until at least frame 600. A frozen lane indicates stale VB contents, a missing
 or torn lane indicates an overwritten append region, and an unchanged or
 corrupted colour diagonal indicates stale IB contents. Any failed lock/draw
 stops the timer and leaves its frame, slot, and lock mode in the title.
+
+Run `d3d8_raster_stencil_test.exe` next. Its top row checks opposite triangle
+windings under `D3DCULL_CW`/`D3DCULL_CCW`, an untransformed NDC quad mapped by
+a restricted `D3DVIEWPORT8`, and isolated red/green/blue colour-write masks.
+The bottom row checks coplanar `D3DRS_ZBIAS`, a three-pass stencil write and
+`EQUAL`/`NOTEQUAL` split, and paired `ZWRITEENABLE=FALSE/TRUE` probes. The
+expected bottom-left result is red without bias and green with bias; the
+stencil panel is a green diamond inside a red rectangle; the Z-write panel is
+yellow on the left and blue on the right. D3D8 has no D3D9-style
+`SetScissorRect` or `D3DRS_SCISSORTESTENABLE`, so viewport mapping/clipping is
+the deliberate D3D8 clipping comparison rather than a synthetic scissor API.
+
+Then run `d3d8_stateblock_test.exe`. Its three panels are a direct-state
+reference, a block recorded with `BeginStateBlock`/`EndStateBlock`, and a
+`D3DSBT_ALL` block made with `CreateStateBlock`. Before each panel the test
+deliberately unbinds the texture and corrupts blend, depth, and stage state.
+After `ApplyStateBlock`, it checks the texture COM pointer and reads every
+important state back before drawing. All three panels must be identical
+semi-transparent blue/yellow checkers over dark blue, with no red depth probe.
+
+`d3d8_reset_lifecycle_test.exe` first performs four complete
+CreateDevice/Clear/Present/Release cycles and requires every device reference
+count to reach zero. A long-lived fifth device then presents at 480x360,
+releases its default-pool VB, resizes the client and backbuffer to 720x480,
+calls `Reset`, verifies that the managed checker texture description and
+contents survived, recreates the default-pool VB, and presents through both
+resources. The final window must be 720x480 and contain the repeated
+blue/yellow checker. Inspect the browser log as well: the four renderer
+shutdown/startup cycles must not crash, accumulate warnings, or show growing
+resource-leak counts.
+
+Finally run `d3d8_caps_audit_test.exe`. It always prints a complete
+`GetDeviceCaps` dump and `CheckDeviceFormat` matrix to guest debug output. The
+four dashboard bars represent required texture/depth formats, forbidden
+formats, required tested fixed-pipeline caps, and forbidden high-risk caps.
+Green means consistent; red means that category has at least one mismatch.
+The conservative profile requires the seven already-tested texture formats
+and D24S8, but requires DXT1/3/5, cube textures, volume textures, render-target
+textures, shader versions, and their associated cube/volume caps to remain
+hidden. It also caps the advertised simultaneous textures/stages at the two
+that the regression suite has exercised. Until the host capability profile is
+tightened, a warning and red bars are an expected useful result: the title
+shows the first mismatch and the guest debug log lists all of them in one run.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or
