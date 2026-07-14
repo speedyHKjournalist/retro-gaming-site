@@ -231,6 +231,16 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
 
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_lighting_test.exe d3d8_lighting_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_fog_test.exe d3d8_fog_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -284,6 +294,8 @@ d3d8_transform_depth_test.exe
 d3d8_textured_cube_test.exe
 d3d8_alpha_blend_test.exe
 d3d8_multitexture_test.exe
+d3d8_lighting_test.exe
+d3d8_fog_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -466,6 +478,67 @@ Grayscale-only centre/right panels mean stage-0 `CURRENT` was lost. A
 twice-repeated coarse lightmap, or an unrepeated base checker, indicates a
 `TEXCOORDINDEX`/TEX2 mix-up. A right panel that matches the centre indicates
 that `D3DTOP_ADD` was not applied.
+
+After the two-stage texture test succeeds, run `d3d8_lighting_test.exe`. It
+uses 24 face-local `XYZ | NORMAL` vertices, an INDEX16 cube, and the already
+validated World/View/Projection plus D24S8 paths. No vertex colour or texture
+is present, so the visible colour must come from the fixed-function material
+and lighting calculation:
+
+```text
+SetMaterial(blue ambient, orange diffuse)
+    -> SetLight(0, warm directional light)
+    -> left: LightEnable(0, FALSE), draw ambient-only cube
+    -> right: LightEnable(0, TRUE), draw directionally lit cube
+    -> Present
+```
+
+The expected result is two equally rotated, depth-tested cubes on black. The
+left cube should be a uniform dark blue across its visible faces because only
+global ambient light is active. The right cube should be brighter and mostly
+gold/orange, with clearly different brightness on its top, front, and side
+faces according to their transformed normals. Its success title is
+`Present S_OK - left ambient blue, right directional gold`.
+
+The test checks for at least one active light and the directional-light vertex
+processing capability before creating the device, sets `COLORVERTEX=FALSE`
+so `SetMaterial` is authoritative, and enables `NORMALIZENORMALS`. A black
+left cube means the global ambient/material ambient path failed. Identical
+flat blue cubes mean `LightEnable` or the directional contribution failed. A
+uniform bright right cube means the `NORMAL` stream or its world transform was
+not applied. Missing/incorrect hidden faces instead indicate regression in
+the already-tested depth or matrix path. The title is updated before each of
+the 44 capability, resource, lighting-state, draw, and present checkpoints.
+
+After the lighting test succeeds, run `d3d8_fog_test.exe`. It draws two rows
+of five equal-sized, untextured quads. Their eye-space depths are 2, 4, 6, 8,
+and 10, matching linear fog start/end values of 2 and 10. Geometry is scaled
+against the projection matrix so apparent size remains constant and only fog
+colour changes:
+
+```text
+top orange row: FOGTABLEMODE=NONE, FOGVERTEXMODE=LINEAR
+    -> draw five increasing-depth quads
+bottom green row: FOGVERTEXMODE=NONE, FOGTABLEMODE=LINEAR
+    -> draw the same five depths -> Present
+```
+
+Both rows should progress left-to-right through approximately 0%, 25%, 50%,
+75%, and 100% fog. The first top rectangle is bright orange and the first
+bottom rectangle is bright green. Each later rectangle approaches the same
+blue-gray fog colour; the two far-right rectangles should therefore look
+almost identical even though their original colours differ. The success title
+is `Present S_OK - top vertex orange, bottom table green, both fade`.
+
+Before device creation the test requires the `FOGVERTEX`, `FOGTABLE`, and at
+least one of `ZFOG`/`WFOG` raster capability bits. It uses eye-space start/end
+for WFOG, or projects the same endpoints into the 0..1 depth range for a
+ZFOG-only device. An unfogged top row isolates the vertex-fog path; an unfogged
+bottom row isolates table/pixel fog. Both rows remaining at their original
+colours means `FOGENABLE` or the linear fog parameters failed. If the
+rectangles change size with depth, that is a matrix/vertex-input regression
+rather than a fog failure. The title is updated before all 40 capability,
+resource, fog-state, draw, and present checkpoints.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or
