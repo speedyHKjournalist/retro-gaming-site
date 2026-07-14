@@ -516,6 +516,16 @@
     const STATE_JOURNAL_CONTEXT_CURRENT = 1;
     const PCI_STATE_JOURNAL_INDEX = 8;
     const DEFAULT_MAX_STATE_JOURNAL_BYTES = 512 * 1024 * 1024;
+    const GL_TEXTURE0 = 0x84C0;
+    const GL_TEXTURE_2D = 0x0DE1;
+    const GL_UNPACK_SWAP_BYTES = 0x0CF0;
+    const GL_UNPACK_LSB_FIRST = 0x0CF1;
+    const GL_UNPACK_ROW_LENGTH = 0x0CF2;
+    const GL_UNPACK_SKIP_ROWS = 0x0CF3;
+    const GL_UNPACK_SKIP_PIXELS = 0x0CF4;
+    const GL_UNPACK_ALIGNMENT = 0x0CF5;
+    const GL_UNPACK_SKIP_IMAGES = 0x806D;
+    const GL_UNPACK_IMAGE_HEIGHT = 0x806E;
 
     const NON_REPLAYABLE_GL_FUNCTIONS = new Set([
         GLFN_CLEAR,
@@ -865,8 +875,7 @@
                 this.callGL("BindTexture", [u32(p, 0), u32(p, 4)], ["number", "number"]);
                 break;
             case GLFN_TEX_IMAGE_2D:
-                this.callTexImage2D(p);
-                break;
+                return this.callTexImage2D(p);
             case GLFN_TEX_IMAGE_1D:
                 this.callTexImage1D(p);
                 break;
@@ -895,8 +904,7 @@
                 this.callTexSubImage3D(p);
                 break;
             case GLFN_TEX_SUB_IMAGE_2D:
-                this.callTexSubImage2D(p);
-                break;
+                return this.callTexSubImage2D(p);
             case GLFN_TEX_SUB_IMAGE_1D:
                 this.callTexSubImage1D(p);
                 break;
@@ -1647,6 +1655,9 @@
             }
 
             const dataSize = u32(p, 32);
+            if (dataSize > p.length - 36) {
+                return false;
+            }
             const bytes = dataSize ? p.slice(36, 36 + dataSize) : null;
             return this.withHeapBytes(bytes, ptr =>
                 this.callGL("TexImage2D", [
@@ -1860,6 +1871,9 @@
             }
 
             const dataSize = u32(p, 32);
+            if (dataSize > p.length - 36) {
+                return false;
+            }
             const bytes = dataSize ? p.slice(36, 36 + dataSize) : null;
             return this.withHeapBytes(bytes, ptr =>
                 this.callGL("TexSubImage2D", [
@@ -2882,6 +2896,7 @@
             this.overlayVisible = false;
             this.overlayHideTimer = 0;
             this.contextCurrent = false;
+            this.contextDestroySeen = false;
             this.stateJournal = [];
             this.stateJournalBytes = 0;
             this.stateJournalOverflow = false;
@@ -2889,6 +2904,7 @@
             this.stateJournalBoundDrawFramebuffer = 0;
             this.maxStateJournalBytes = this.options.maxStateJournalBytes ||
                 DEFAULT_MAX_STATE_JOURNAL_BYTES;
+            this.resetStateJournalTextureTracking();
             this.replayingState = false;
             this.restoringState = false;
             this.pciStateDevice = null;
@@ -3232,6 +3248,336 @@
             this.stateJournalOverflow = false;
             this.stateJournalUnsupported = "";
             this.stateJournalBoundDrawFramebuffer = 0;
+            this.resetStateJournalTextureTracking();
+        }
+
+        resetStateJournalTextureTracking() {
+            this.stateJournalActiveTexture = GL_TEXTURE0;
+            this.stateJournalTextureBindings = new Map();
+            this.stateJournalTextureLevels = new Map();
+            this.stateJournalFullTextureUpdates = new Map();
+            this.stateJournalPixelStoreValues = new Map([
+                [GL_UNPACK_SWAP_BYTES, 0],
+                [GL_UNPACK_LSB_FIRST, 0],
+                [GL_UNPACK_ROW_LENGTH, 0],
+                [GL_UNPACK_SKIP_ROWS, 0],
+                [GL_UNPACK_SKIP_PIXELS, 0],
+                [GL_UNPACK_ALIGNMENT, 4],
+                [GL_UNPACK_SKIP_IMAGES, 0],
+                [GL_UNPACK_IMAGE_HEIGHT, 0],
+            ]);
+            this.stateJournalPixelStoreUndo = null;
+            this.stateJournalTextureUploadEpoch = 0;
+            this.stateJournalTextureTrackingReliable = true;
+        }
+
+        stateJournalTextureBindingKey(target) {
+            return this.stateJournalActiveTexture + ":" + target;
+        }
+
+        stateJournalBoundTexture(target) {
+            const key = this.stateJournalTextureBindingKey(target);
+            return this.stateJournalTextureBindings.has(key) ?
+                this.stateJournalTextureBindings.get(key) : 0;
+        }
+
+        stateJournalTextureLevelKey(texture, level) {
+            return texture + ":" + GL_TEXTURE_2D + ":" + level;
+        }
+
+        stateJournalPixelStoreSignature() {
+            const values = Array.from(this.stateJournalPixelStoreValues.entries());
+            values.sort((a, b) => a[0] - b[0]);
+            return this.stateJournalTextureUploadEpoch + "|" +
+                values.map(entry => entry[0] + "=" + entry[1]).join(",");
+        }
+
+        invalidateStateJournalTextureCandidates(texture) {
+            for (const [key, candidate] of this.stateJournalFullTextureUpdates) {
+                if (candidate.texture === texture) {
+                    this.stateJournalFullTextureUpdates.delete(key);
+                }
+            }
+        }
+
+        forgetStateJournalTexture(texture) {
+            this.invalidateStateJournalTextureCandidates(texture);
+            for (const [key, level] of this.stateJournalTextureLevels) {
+                if (level.texture === texture) {
+                    this.stateJournalTextureLevels.delete(key);
+                }
+            }
+            for (const [key, bound] of this.stateJournalTextureBindings) {
+                if (bound === texture) {
+                    this.stateJournalTextureBindings.set(key, 0);
+                }
+            }
+        }
+
+        disableStateJournalTextureCompaction() {
+            this.stateJournalTextureTrackingReliable = false;
+            this.stateJournalFullTextureUpdates.clear();
+        }
+
+        stateJournalTexSubImage2DDescriptor(payload) {
+            if (!this.stateJournalTextureTrackingReliable || payload.length < 36) {
+                return null;
+            }
+            const dataSize = u32(payload, 32);
+            if (dataSize !== payload.length - 36 || u32(payload, 0) !== GL_TEXTURE_2D) {
+                return null;
+            }
+            const level = i32(payload, 4);
+            const texture = this.stateJournalBoundTexture(GL_TEXTURE_2D);
+            const key = this.stateJournalTextureLevelKey(texture, level);
+            return {
+                texture,
+                key,
+                level,
+                xoffset: i32(payload, 8),
+                yoffset: i32(payload, 12),
+                width: i32(payload, 16),
+                height: i32(payload, 20),
+                dataSize,
+            };
+        }
+
+        stateJournalTexImage2DDescriptor(payload) {
+            if (!this.stateJournalTextureTrackingReliable || payload.length < 36) {
+                return null;
+            }
+            const dataSize = u32(payload, 32);
+            if (dataSize !== payload.length - 36 || u32(payload, 0) !== GL_TEXTURE_2D) {
+                return null;
+            }
+            const level = i32(payload, 4);
+            const texture = this.stateJournalBoundTexture(GL_TEXTURE_2D);
+            return {
+                texture,
+                key: this.stateJournalTextureLevelKey(texture, level),
+                level,
+                width: i32(payload, 12),
+                height: i32(payload, 16),
+                dataSize,
+            };
+        }
+
+        stateJournalTexSubImageCoversLevel(descriptor) {
+            const level = this.stateJournalTextureLevels.get(descriptor.key);
+            return !!level && descriptor.dataSize > 0 &&
+                descriptor.xoffset === 0 && descriptor.yoffset === 0 &&
+                descriptor.width === level.width && descriptor.height === level.height &&
+                level.width > 0 && level.height > 0;
+        }
+
+        tryCompactStateJournalTextureUpdate(fn, payload) {
+            if ((fn !== GLFN_TEX_IMAGE_2D && fn !== GLFN_TEX_SUB_IMAGE_2D) ||
+                !this.stateJournalTextureTrackingReliable) {
+                return false;
+            }
+            const descriptor = fn === GLFN_TEX_IMAGE_2D ?
+                this.stateJournalTexImage2DDescriptor(payload) :
+                this.stateJournalTexSubImage2DDescriptor(payload);
+            const complete = fn === GLFN_TEX_IMAGE_2D ?
+                !!descriptor && descriptor.dataSize > 0 &&
+                    descriptor.width > 0 && descriptor.height > 0 :
+                !!descriptor && this.stateJournalTexSubImageCoversLevel(descriptor);
+            if (!complete) {
+                return false;
+            }
+            const candidate = this.stateJournalFullTextureUpdates.get(descriptor.key);
+            if (!candidate || candidate.fn !== fn ||
+                candidate.pixelStore !== this.stateJournalPixelStoreSignature()) {
+                return false;
+            }
+            const entry = this.stateJournal[candidate.index];
+            if (!entry || entry.fn !== fn) {
+                this.stateJournalFullTextureUpdates.delete(descriptor.key);
+                return false;
+            }
+
+            const delta = payload.length - entry.payload.length;
+            if (delta > 0 && this.stateJournalBytes + delta > this.maxStateJournalBytes) {
+                return false;
+            }
+            entry.payload = payload;
+            this.stateJournalBytes += delta;
+            if (fn === GLFN_TEX_IMAGE_2D) {
+                this.stateJournalTextureLevels.set(descriptor.key, {
+                    texture: descriptor.texture,
+                    width: descriptor.width,
+                    height: descriptor.height,
+                });
+            }
+            return true;
+        }
+
+        tryCancelStateJournalPixelStoreTransition(fn, payload) {
+            if (fn !== GLFN_PIXEL_STOREI ||
+                !this.stateJournalTextureTrackingReliable || payload.length !== 8) {
+                return false;
+            }
+            const pname = u32(payload, 0);
+            const param = i32(payload, 4);
+            const current = this.stateJournalPixelStoreValues.get(pname);
+            if (current === param) {
+                return true;
+            }
+
+            const undo = this.stateJournalPixelStoreUndo;
+            if (!undo || undo.index !== this.stateJournal.length - 1 ||
+                undo.pname !== pname || undo.previousValue !== param) {
+                return false;
+            }
+            const entry = this.stateJournal[undo.index];
+            if (!entry || entry.fn !== GLFN_PIXEL_STOREI) {
+                this.stateJournalPixelStoreUndo = null;
+                return false;
+            }
+            this.stateJournal.pop();
+            this.stateJournalBytes -= STATE_JOURNAL_ENTRY_HEADER_SIZE + entry.payload.length;
+            this.stateJournalPixelStoreValues.set(pname, param);
+            this.stateJournalPixelStoreUndo = null;
+            return true;
+        }
+
+        trackStateJournalTextureEntry(fn, payload, index) {
+            if (!this.stateJournalTextureTrackingReliable) {
+                return;
+            }
+
+            if (fn === GLFN_ACTIVE_TEXTURE) {
+                if (payload.length < 4) {
+                    this.disableStateJournalTextureCompaction();
+                } else {
+                    this.stateJournalActiveTexture = u32(payload, 0);
+                }
+                return;
+            }
+            if (fn === GLFN_BIND_TEXTURE) {
+                if (payload.length < 8) {
+                    this.disableStateJournalTextureCompaction();
+                } else if (u32(payload, 0) === GL_TEXTURE_2D) {
+                    this.stateJournalTextureBindings.set(
+                        this.stateJournalTextureBindingKey(GL_TEXTURE_2D),
+                        u32(payload, 4)
+                    );
+                }
+                return;
+            }
+            if (fn === GLFN_DELETE_TEXTURES) {
+                if (payload.length < 4) {
+                    this.disableStateJournalTextureCompaction();
+                    return;
+                }
+                const count = u32(payload, 0);
+                if (count > Math.floor((payload.length - 4) / 4)) {
+                    this.disableStateJournalTextureCompaction();
+                    return;
+                }
+                for (let i = 0; i < count; i++) {
+                    this.forgetStateJournalTexture(u32(payload, 4 + i * 4));
+                }
+                return;
+            }
+            if (fn === GLFN_PIXEL_STOREI) {
+                if (payload.length < 8) {
+                    this.disableStateJournalTextureCompaction();
+                } else {
+                    this.stateJournalPixelStoreValues.set(u32(payload, 0), i32(payload, 4));
+                }
+                return;
+            }
+            if (fn === GLFN_TEX_IMAGE_2D) {
+                if (payload.length < 36 || u32(payload, 32) > payload.length - 36) {
+                    this.disableStateJournalTextureCompaction();
+                    return;
+                }
+                if (u32(payload, 0) === GL_TEXTURE_2D) {
+                    const texture = this.stateJournalBoundTexture(GL_TEXTURE_2D);
+                    const levelNumber = i32(payload, 4);
+                    const key = this.stateJournalTextureLevelKey(texture, levelNumber);
+                    this.stateJournalFullTextureUpdates.delete(key);
+                    this.stateJournalTextureLevels.set(key, {
+                        texture,
+                        width: i32(payload, 12),
+                        height: i32(payload, 16),
+                    });
+                    if (u32(payload, 32) === payload.length - 36 &&
+                        u32(payload, 32) > 0 && i32(payload, 12) > 0 &&
+                        i32(payload, 16) > 0) {
+                        this.stateJournalFullTextureUpdates.set(key, {
+                            texture,
+                            index,
+                            fn,
+                            pixelStore: this.stateJournalPixelStoreSignature(),
+                        });
+                    }
+                }
+                return;
+            }
+            if (fn === GLFN_TEX_SUB_IMAGE_2D) {
+                const descriptor = this.stateJournalTexSubImage2DDescriptor(payload);
+                if (!descriptor) {
+                    this.disableStateJournalTextureCompaction();
+                    return;
+                }
+                this.stateJournalFullTextureUpdates.delete(descriptor.key);
+                if (this.stateJournalTexSubImageCoversLevel(descriptor)) {
+                    this.stateJournalFullTextureUpdates.set(descriptor.key, {
+                        texture: descriptor.texture,
+                        index,
+                        fn,
+                        pixelStore: this.stateJournalPixelStoreSignature(),
+                    });
+                }
+                return;
+            }
+
+            if (fn === GLFN_COMPRESSED_TEX_IMAGE_2D ||
+                fn === GLFN_COMPRESSED_TEX_SUB_IMAGE_2D ||
+                fn === GLFN_GENERATE_MIPMAP) {
+                if (payload.length < 4) {
+                    this.disableStateJournalTextureCompaction();
+                    return;
+                }
+                if (u32(payload, 0) === GL_TEXTURE_2D) {
+                    const texture = this.stateJournalBoundTexture(GL_TEXTURE_2D);
+                    this.invalidateStateJournalTextureCandidates(texture);
+                    if (fn === GLFN_COMPRESSED_TEX_IMAGE_2D) {
+                        for (const [key, level] of this.stateJournalTextureLevels) {
+                            if (level.texture === texture) {
+                                this.stateJournalTextureLevels.delete(key);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            if (fn === GLFN_PIXEL_TRANSFERF || fn === GLFN_PIXEL_TRANSFERI ||
+                fn === GLFN_PIXEL_MAPFV || fn === GLFN_PIXEL_MAPUIV ||
+                fn === GLFN_PIXEL_MAPUSV) {
+                this.stateJournalTextureUploadEpoch++;
+                this.stateJournalFullTextureUpdates.clear();
+                return;
+            }
+
+            /* Attribute stacks can restore texture bindings or pixel-transfer
+             * state without an explicit bind/store command in the stream. Stop
+             * compacting after one appears rather than guessing that state. */
+            if (fn === GLFN_PUSH_ATTRIB || fn === GLFN_POP_ATTRIB ||
+                fn === GLFN_PUSH_CLIENT_ATTRIB || fn === GLFN_POP_CLIENT_ATTRIB) {
+                this.disableStateJournalTextureCompaction();
+            }
+        }
+
+        rebuildStateJournalTextureTracking() {
+            this.resetStateJournalTextureTracking();
+            for (let i = 0; i < this.stateJournal.length; i++) {
+                const entry = this.stateJournal[i];
+                this.trackStateJournalTextureEntry(entry.fn, entry.payload, i);
+            }
         }
 
         markStateJournalUnsupported(reason) {
@@ -3274,20 +3620,41 @@
 
             const data = payload instanceof Uint8Array ? payload.slice() :
                 new Uint8Array(payload || []);
+            if (this.tryCancelStateJournalPixelStoreTransition(fn, data)) {
+                return;
+            }
+            if (this.tryCompactStateJournalTextureUpdate(fn, data)) {
+                return;
+            }
             const entryBytes = STATE_JOURNAL_ENTRY_HEADER_SIZE + data.length;
             if (this.stateJournalBytes + entryBytes > this.maxStateJournalBytes) {
                 this.stateJournalOverflow = true;
                 return;
             }
 
+            const index = this.stateJournal.length;
+            const pixelStorePrevious = fn === GLFN_PIXEL_STOREI && data.length === 8 ?
+                this.stateJournalPixelStoreValues.get(u32(data, 0)) : undefined;
             this.stateJournal.push({ fn, payload: data });
             this.stateJournalBytes += entryBytes;
+            this.trackStateJournalTextureEntry(fn, data, index);
+            if (fn === GLFN_PIXEL_STOREI && data.length === 8) {
+                this.stateJournalPixelStoreUndo = {
+                    index,
+                    pname: u32(data, 0),
+                    previousValue: pixelStorePrevious,
+                };
+            } else {
+                this.stateJournalPixelStoreUndo = null;
+            }
         }
 
         callRenderer(fn, payload, renderer) {
             const target = renderer || this.requireRenderer();
             const result = target.glCall(fn, payload);
-            this.recordStateCall(fn, payload);
+            if (result !== false) {
+                this.recordStateCall(fn, payload);
+            }
             return result;
         }
 
@@ -3348,6 +3715,7 @@
                 }
 
                 this.contextCurrent = parsed.contextCurrent;
+                this.contextDestroySeen = false;
                 if (!this.contextCurrent) {
                     renderer.releaseCurrent();
                 }
@@ -3355,6 +3723,7 @@
                 this.stateJournalBytes = parsed.journalBytes;
                 this.stateJournalOverflow = false;
                 this.stateJournalUnsupported = "";
+                this.rebuildStateJournalTextureTracking();
                 this.stateJournalBoundDrawFramebuffer = 0;
                 for (const entry of parsed.entries) {
                     if (entry.fn === GLFN_BIND_FRAMEBUFFER && entry.payload.length >= 8) {
@@ -3818,6 +4187,7 @@
             this.resize(this.surface.width, this.surface.height, this.surface.x, this.surface.y);
             this.requireRenderer().makeCurrent(this.surface);
             this.contextCurrent = true;
+            this.contextDestroySeen = false;
         }
 
         resize(width, height, x, y) {
@@ -3989,6 +4359,13 @@
         }
 
         destroyContext() {
+            /* WM_NCDESTROY and wglDeleteContext can both describe the same
+             * guest teardown. Do not destroy the freshly pre-created renderer
+             * a second time; the next MAKE_CURRENT starts a new lifecycle. */
+            if (this.contextDestroySeen) {
+                return;
+            }
+            this.contextDestroySeen = true;
             const oldRenderer = this.renderer;
             this.renderer = null;
             if (oldRenderer) {

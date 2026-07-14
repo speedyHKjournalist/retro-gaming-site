@@ -127,7 +127,7 @@ Guest DLL exports:
 - basic display-list compile/replay through `glNewList`, `glEndList`,
   `glCallList`, and `glCallLists`
 
-The proxy also advertises and routes the following fixed-function extension
+The proxy also advertises and routes the following extension
 families through the DMA/WebAssembly bridge: packed pixels, rescale normals,
 separate specular color, edge-clamp and texture LOD parameters, 3D and
 compressed texture uploads, blend
@@ -135,7 +135,8 @@ color/equation/separate factors, cube maps, multisample coverage, DOT3 and
 crossbar texture environments, transpose matrices, mipmap generation, shadow
 texture parameters, fog coordinates, secondary color, point parameters,
 stencil wrap, mirrored repeat, point sprites, non-power-of-two textures, and
-`GL_ARB_vertex_buffer_object` / `GL_ARB_occlusion_query`. VBO contents remain in guest memory and are
+`GL_ARB_vertex_buffer_object` / `GL_ARB_occlusion_query`, plus the ARB vertex
+and fragment program backends used for D3D8 shaders. VBO contents remain in guest memory and are
 packed into the existing client-array draw records at draw time, which keeps
 the PCI protocol asynchronous while preserving VBO semantics for array and
 element buffers. Query objects are implemented as a conservative synchronous
@@ -143,11 +144,25 @@ compatibility layer: `GL_SAMPLES_PASSED` queries complete immediately with a
 nonzero result so visibility-dependent fixed-function applications do not
 accidentally cull everything when running through WebGL/gl4es.
 
-It is enough for toy fixed-pipeline demos such as a triangle or a rotating
-colored cube. It is **not** enough for WineD3D or real games yet.
+The extended WineD3D profile supports DXT1/3/5, mipmapped cube and volume
+textures, ARB-program-backed D3D8 shaders, and eight fixed-function texture
+stages. The host module requires WebGL2; it does not silently fall back to a
+renderer that cannot execute volume textures. Because upstream gl4es maps
+`GL_TEXTURE_3D` onto its GLES2 2D compatibility path, the integration wrapper
+keeps gl4es's desktop state bookkeeping but redirects marked volume objects,
+uploads, subimage updates, sampler parameters and mipmap generation to real
+WebGL2 3D textures. Emscripten's WebGL2 backwards-compatibility conversion
+upgrades the generated GLSL 100 `texture3D()` shaders to GLSL 300 ES. The
+wrapper also normalizes WineD3D's null BGRA/packed-pixel mip allocations and
+populated BGR/BGRA/RGBA packed uploads to WebGL2-valid RGBA8 storage. It
+restores gl4es-generated `_gl4es_Sampler3D_*` uniforms to explicitly qualified
+`sampler3D` declarations, so later 3D subimage uploads and ARB fragment-program
+sampling operate on the same complete mip chain.
 
-`glGet*` queries currently return values cached in the guest proxy plus
-conservative defaults. They do not synchronously query browser/WebGL state.
+Most fixed-function `glGet*` queries return values cached in the guest proxy
+plus conservative defaults. Shader/program status, logs, limits, parameters,
+and error strings use ordered synchronous browser queries because WineD3D
+depends on the compile/link result before its first draw.
 
 ### OpenGL 1.3 / 1.4 / 1.5 core coverage
 
@@ -159,22 +174,29 @@ blend factors, point integer parameters, fog-coordinate and secondary-color
 arrays, multi-draw, the full 2D/3D `glWindowPos*` family, VBO entry points, and
 query-object entry points.
 
-Compressed-texture entry points and readback caching are implemented in the
-proxy, but `GL_ARB_texture_compression` is intentionally not advertised: the
-current WebGL/gl4es backend cannot reliably generate mipmaps for all legacy
-compressed formats. This lets games select their uncompressed fallback rather
-than sampling an incomplete texture as black.
+`GL_EXT_texture_compression_s3tc` is advertised. DXT1/3/5 uploads and partial
+block updates retain their compressed guest-side cache/readback representation
+but are decoded deterministically to RGBA before reaching WebGL. Explicit mip
+chains therefore work without a browser S3TC extension, and
+`glGenerateMipmap` now generates real 1D/2D/cube/3D mip chains instead of
+demoting the minification filter.
 
-Explicit uncompressed mip chains are preserved and sampled normally.  The
-host keeps gl4es automatic mipmap mode disabled so WineD3D's uploaded levels
-and `GL_*_MIPMAP_*` min filters reach WebGL unchanged.  Legacy BGRA packed
+Explicit compressed and uncompressed mip chains are preserved and sampled
+normally. The host keeps gl4es automatic mipmap mode disabled so WineD3D's
+uploaded levels and `GL_*_MIPMAP_*` min filters reach WebGL unchanged. Legacy BGRA packed
 uploads using `GL_UNSIGNED_SHORT_1_5_5_5_REV` and
 `GL_UNSIGNED_SHORT_4_4_4_4_REV` are accepted and converted by gl4es to the
 WebGL-compatible RGBA packed representation.
 
-`GL_ARB_imaging` and `GL_ARB_vertex_program` are separate optional extensions,
-not requirements of the OpenGL 1.4 core profile; they are deliberately not
-advertised until their complete execution paths are implemented.
+`GL_ARB_vertex_program` and `GL_ARB_fragment_program` are advertised for the
+WineD3D D3D8 shader backend, including ordered synchronous program/error/cap
+queries. Before gl4es conversion, the host bridge renames ARB assembly
+identifiers such as WineD3D's `const` register that are reserved in GLSL; it
+caches the original program so `GL_PROGRAM_LENGTH_ARB` and
+`GL_PROGRAM_STRING_ARB` retain desktop-GL query semantics. WebGL default
+texture stand-ins are also rebound per target and texture unit before texture
+parameter updates and after deleting a bound texture. `GL_ARB_imaging` remains
+outside the advertised profile.
 
 ## Build the DLL
 
@@ -687,24 +709,43 @@ CreateDevice/Clear/Present/Release cycles and requires every device reference
 count to reach zero. A long-lived fifth device then presents at 480x360,
 releases its default-pool VB, resizes the client and backbuffer to 720x480,
 calls `Reset`, verifies that the managed checker texture description and
-contents survived, recreates the default-pool VB, and presents through both
-resources. The final window must be 720x480 and contain the repeated
+contents survived. Managed DXT5, cube (all faces/mips), and volume (all
+slices/mips) resources are also populated and preloaded both before and after
+Reset. The test then recreates the default-pool VB and presents through the 2D
+texture and VB. The final window must be 720x480 and contain the repeated
 blue/yellow checker. Inspect the browser log as well: the four renderer
 shutdown/startup cycles must not crash, accumulate warnings, or show growing
-resource-leak counts.
+resource-leak counts. Renderer shutdown deliberately uses gl4es's no-clean
+path: each guest WGL context owns a disposable WASM instance, so the bridge
+flushes it, runs the lightweight shutdown hooks, explicitly loses/destroys the
+WebGL context, and then drops the whole linear-memory instance. This avoids
+gl4es's unsafe deep ARB-shader/render-list teardown while still releasing the
+browser context deterministically. Both the guest proxy and JS bridge coalesce
+the `WM_NCDESTROY`/`wglDeleteContext` pair so one guest context is destroyed
+and replaced only once.
 
 Finally run `d3d8_caps_audit_test.exe`. It always prints a complete
 `GetDeviceCaps` dump and `CheckDeviceFormat` matrix to guest debug output. The
-four dashboard bars represent required texture/depth formats, forbidden
-formats, required tested fixed-pipeline caps, and forbidden high-risk caps.
-Green means consistent; red means that category has at least one mismatch.
-The conservative profile requires the seven already-tested texture formats
-and D24S8, but requires DXT1/3/5, cube textures, volume textures, render-target
-textures, shader versions, and their associated cube/volume caps to remain
-hidden. It also caps the advertised simultaneous textures/stages at the two
-that the regression suite has exercised. Until the host capability profile is
-tightened, a warning and red bars are an expected useful result: the title
-shows the first mismatch and the guest debug log lists all of them in one run.
+four dashboard bars represent core texture/depth formats, extended texture
+formats, tested fixed-pipeline caps, and required extended caps. Green means
+consistent; red means that category has at least one mismatch. The extended
+profile requires DXT1/3/5, cube and volume textures with complete mip chains,
+vertex/pixel shader 1.1 or newer, at least 96 vertex constants, and eight
+simultaneous textures/stages. The audit also creates, locks, updates, binds,
+and draws all three DXT formats, all cube faces/mips, all volume mips, an
+eight-stage combiner, and a vertex/pixel shader pair so a caps-only false
+positive cannot pass. A8R8G8B8 render-target textures are also exercised
+end-to-end through CreateTexture, GetSurfaceLevel, SetRenderTarget, Clear,
+backbuffer restoration and texture sampling. This uses WineD3D's backbuffer
+offscreen path and does not advertise the still-incomplete OpenGL FBO
+extension family. For `glCopyTexImage2D` and `glCopyTexSubImage2D`, the guest
+proxy reuses its framebuffer readback and transmits tightly packed
+`glTexImage2D` / `glTexSubImage2D` updates. This avoids an invalid
+default-framebuffer RGB to A8R8G8B8 texture copy and stores explicit pixels in
+the save-state journal. Repeated full-level updates with identical unpack
+state are compacted to the newest payload, while mipmap generation and other
+content dependencies form conservative compaction barriers. Raw copy
+operations that cannot be captured remain intentionally non-reconstructible.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or
@@ -717,7 +758,7 @@ The demo calls the fake WGL/OpenGL subset directly and presents with
 
 ## Build the gl4es host module
 
-Build the browser module from an active emsdk shell. By default the script uses:
+Build the WebGL2 browser module from an active emsdk shell. By default the script uses:
 
 ```text
 /Users/renruisi/Desktop/Code/gl4es/include

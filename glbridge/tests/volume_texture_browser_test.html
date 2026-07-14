@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL2 volume texture test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=d3d8-shutdown-clean-20260715"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_COLOR_BUFFER_BIT = 0x00004000;
+    const GL_TRIANGLES = 0x0004;
+    const GL_RGBA = 0x1908;
+    const GL_BGRA = 0x80e1;
+    const GL_RGBA8 = 0x8058;
+    const GL_UNSIGNED_BYTE = 0x1401;
+    const GL_UNSIGNED_INT_8_8_8_8_REV = 0x8367;
+    const GL_TEXTURE_3D = 0x806f;
+    const GL_TEXTURE_MIN_FILTER = 0x2801;
+    const GL_TEXTURE_MAG_FILTER = 0x2800;
+    const GL_NEAREST = 0x2600;
+    const GL_NEAREST_MIPMAP_NEAREST = 0x2700;
+    const GL_FRAGMENT_PROGRAM_ARB = 0x8804;
+    const GL_PROGRAM_FORMAT_ASCII_ARB = 0x8875;
+    const source = "!!ARBfp1.0\n" +
+        "TEX result.color, fragment.texcoord[0], texture[0], 3D;\nEND";
+    const canvas = document.getElementById("v86gl_canvas");
+    const module = await createV86GL4ES({
+        canvas,
+        locateFile(path) {
+            return `../libglwasm/${path}?v=d3d8-shutdown-clean-20260715`;
+        },
+    });
+
+    // Observe both gl4es's 2D bookkeeping stub and the bridge's raw 3D call.
+    // Neither layer may receive the desktop tuple, even if the compat shim
+    // would otherwise suppress the bookkeeping upload before native WebGL.
+    const webgl = canvas.getContext("webgl2");
+    const unsafeTuples = [];
+    const desktopTypes = new Set([
+        0x8035, // UNSIGNED_INT_8_8_8_8
+        0x8367, // UNSIGNED_INT_8_8_8_8_REV
+        0x8365, // UNSIGNED_SHORT_4_4_4_4_REV
+        0x8366, // UNSIGNED_SHORT_1_5_5_5_REV
+    ]);
+    for (const [method, formatIndex, typeIndex] of [
+        ["texImage2D", 6, 7],
+        ["texImage3D", 7, 8],
+    ]) {
+        const original = webgl[method].bind(webgl);
+        webgl[method] = function(...args) {
+            if (args[formatIndex] === 0x80e0 || args[formatIndex] === GL_BGRA ||
+                    desktopTypes.has(args[typeIndex])) {
+                unsafeTuples.push([method, args[formatIndex], args[typeIndex]]);
+            }
+            return original(...args);
+        };
+    }
+
+    module._v86glMakeCurrent(1, 0, 0, 64, 64);
+    const u32 = new DataView(module.HEAPU8.buffer);
+    const namePtr = module._malloc(4);
+    u32.setUint32(namePtr, 1, true);
+    module._v86gl_glGenTextures(1, namePtr);
+    module._v86gl_glBindTexture(GL_TEXTURE_3D, 1);
+    module._v86gl_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER,
+        GL_NEAREST_MIPMAP_NEAREST);
+    module._v86gl_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    const volume = new Uint8Array(2 * 2 * 2 * 4);
+    for (let pixel = 0; pixel < 4; pixel++) {
+        volume.set([0, 0, 255, 255], pixel * 4);
+        volume.set([0, 255, 0, 255], (4 + pixel) * 4);
+    }
+    const volumePtr = module._malloc(volume.length);
+    module.HEAPU8.set(volume, volumePtr);
+    // Match WineD3D: allocate every mip with NULL using desktop BGRA/packed
+    // enums, then upload the actual contents through TexSubImage3D.
+    module._v86gl_glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8,
+        2, 2, 2, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, 0);
+    module._v86gl_glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0,
+        2, 2, 2, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, volumePtr);
+    const mip1 = Uint8Array.of(255, 0, 0, 255);
+    const mip1Ptr = module._malloc(mip1.length);
+    module.HEAPU8.set(mip1, mip1Ptr);
+    module._v86gl_glTexImage3D(GL_TEXTURE_3D, 1, GL_RGBA8,
+        1, 1, 1, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, 0);
+    module._v86gl_glTexSubImage3D(GL_TEXTURE_3D, 1, 0, 0, 0,
+        1, 1, 1, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mip1Ptr);
+
+    // WineD3D also defines populated mip levels directly as RGBA paired with
+    // desktop 8_8_8_8_REV. WebGL2 rejects that type, so exercise the bridge's
+    // packed-to-RGBA8 conversion rather than only the NULL-allocation path.
+    const packedRgbaVolume = new Uint8Array(2 * 2 * 2 * 4);
+    for (let pixel = 0; pixel < 4; pixel++) {
+        packedRgbaVolume.set([255, 0, 0, 255], pixel * 4);
+        packedRgbaVolume.set([0, 255, 0, 255], (4 + pixel) * 4);
+    }
+    const packedRgbaPtr = module._malloc(packedRgbaVolume.length);
+    module.HEAPU8.set(packedRgbaVolume, packedRgbaPtr);
+    module._v86gl_glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8,
+        2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, packedRgbaPtr);
+
+    module._v86gl_glGenProgramsARBMapped(1, namePtr);
+    module._v86gl_glBindProgramARBMapped(GL_FRAGMENT_PROGRAM_ARB, 1);
+    const sourceBytes = new TextEncoder().encode(source);
+    const sourcePtr = module._malloc(sourceBytes.length);
+    module.HEAPU8.set(sourceBytes, sourcePtr);
+    module._v86gl_glProgramStringARB(GL_FRAGMENT_PROGRAM_ARB,
+        GL_PROGRAM_FORMAT_ASCII_ARB, sourceBytes.length, sourcePtr);
+
+    module._v86gl_glViewport(0, 0, 64, 64);
+    module._v86gl_glClearColor(0, 0, 0, 1);
+    module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+    module._v86gl_glEnable(GL_TEXTURE_3D);
+    module._v86gl_glEnable(GL_FRAGMENT_PROGRAM_ARB);
+    module._v86gl_glBegin(GL_TRIANGLES);
+    module._v86gl_glTexCoord4f(0.25, 0.25, 0.75, 1);
+    module._v86gl_glVertex3f(-1, -1, 0);
+    module._v86gl_glTexCoord4f(0.75, 0.25, 0.75, 1);
+    module._v86gl_glVertex3f(1, -1, 0);
+    module._v86gl_glTexCoord4f(0.25, 0.75, 0.75, 1);
+    module._v86gl_glVertex3f(0, 1, 0);
+    module._v86gl_glEnd();
+    module._v86gl_glFinish();
+
+    const pixelPtr = module._malloc(4);
+    if (!module._v86gl_glReadPixels(32, 32, 1, 1,
+            GL_RGBA, GL_UNSIGNED_BYTE, pixelPtr)) {
+        throw new Error("readback failed");
+    }
+    const pixel = Array.from(module.HEAPU8.subarray(pixelPtr, pixelPtr + 4));
+    if (unsafeTuples.length) {
+        throw new Error(`desktop volume tuple reached WebGL: ${JSON.stringify(unsafeTuples)}`);
+    }
+    if (pixel[0] > 20 || pixel[1] < 200 || pixel[2] > 20 || pixel[3] < 200) {
+        throw new Error(`unexpected volume pixel ${pixel.join(",")}`);
+    }
+    // Exercise the same renderer teardown used when the guest EXE destroys
+    // its final WGL context. Any WASM trap must fail this browser regression.
+    module._v86glDestroyRenderer();
+    module._v86glDestroyRenderer();
+
+    document.title = "WebGL2 volume texture test: PASS";
+    document.getElementById("result").textContent = `PASS ${pixel.join(",")}`;
+})().catch(error => {
+    document.title = "WebGL2 volume texture test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

@@ -11,7 +11,7 @@ if [ ! -f "${GL4ES_LIB}" ]; then
   exit 1
 fi
 
-emcc gl4es_bridge.c \
+emcc gl4es_bridge.c arb_program_sanitize.c \
   -I"${GL4ES_ROOT}/include" \
   -I"${GL4ES_ROOT}/src" \
   "${GL4ES_LIB}" \
@@ -21,8 +21,9 @@ emcc gl4es_bridge.c \
   -sEXPORT_NAME=createV86GL4ES \
   -sALLOW_MEMORY_GROWTH=1 \
   -sFULL_ES2=1 \
-  -sMIN_WEBGL_VERSION=1 \
+  -sMIN_WEBGL_VERSION=2 \
   -sMAX_WEBGL_VERSION=2 \
+  -sWEBGL2_BACKWARDS_COMPATIBILITY_EMULATION=1 \
   -sGL_ENABLE_GET_PROC_ADDRESS=1 \
   -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8"]' \
   -sEXPORTED_FUNCTIONS='[

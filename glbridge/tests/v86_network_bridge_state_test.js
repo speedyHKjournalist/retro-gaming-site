@@ -7,12 +7,16 @@ require("../v86_network_bridge.js");
 const GLFN_GEN_TEXTURES = 26;
 const GLFN_BIND_TEXTURE = 28;
 const GLFN_TEX_IMAGE_2D = 29;
+const GLFN_TEX_SUB_IMAGE_2D = 30;
+const GLFN_PIXEL_STOREI = 33;
+const GLFN_GENERATE_MIPMAP = 99;
 const GLFN_DRAW_ARRAYS_DIRECT = 206;
 const GLFN_CLEAR = 3;
 const GL_COLOR_BUFFER_BIT = 0x00004000;
 const GL_TEXTURE_2D = 0x0DE1;
 const GL_RGBA = 0x1908;
 const GL_UNSIGNED_BYTE = 0x1401;
+const GL_UNPACK_ALIGNMENT = 0x0CF5;
 
 function glRecord(fn, payload) {
     const record = Buffer.alloc(4 + payload.length);
@@ -40,6 +44,28 @@ function textureImagePayload(pixels) {
     payload.writeUInt32LE(GL_UNSIGNED_BYTE, 28);
     payload.writeUInt32LE(pixels.length, 32);
     pixels.copy(payload, 36);
+    return payload;
+}
+
+function textureSubImagePayload(pixels) {
+    const payload = Buffer.alloc(36 + pixels.length);
+    payload.writeUInt32LE(GL_TEXTURE_2D, 0);
+    payload.writeInt32LE(0, 4);
+    payload.writeInt32LE(0, 8);
+    payload.writeInt32LE(0, 12);
+    payload.writeInt32LE(1, 16);
+    payload.writeInt32LE(1, 20);
+    payload.writeUInt32LE(GL_RGBA, 24);
+    payload.writeUInt32LE(GL_UNSIGNED_BYTE, 28);
+    payload.writeUInt32LE(pixels.length, 32);
+    pixels.copy(payload, 36);
+    return payload;
+}
+
+function pixelStorePayload(pname, param) {
+    const payload = Buffer.alloc(8);
+    payload.writeUInt32LE(pname, 0);
+    payload.writeInt32LE(param, 4);
     return payload;
 }
 
@@ -85,6 +111,19 @@ function makeModule(name, modules) {
                 "texImage2D", target, level, internalFormat, width, height,
                 border, format, type, Array.from(this.HEAPU8.subarray(ptr, ptr + 4)),
             ]);
+        },
+        _v86gl_glTexSubImage2D(target, level, xoffset, yoffset, width, height,
+                               format, type, ptr) {
+            calls.push([
+                "texSubImage2D", target, level, xoffset, yoffset, width, height,
+                format, type, Array.from(this.HEAPU8.subarray(ptr, ptr + 4)),
+            ]);
+        },
+        _v86gl_glPixelStorei(pname, param) {
+            calls.push(["pixelStorei", pname, param]);
+        },
+        _v86gl_glGenerateMipmap(target) {
+            calls.push(["generateMipmap", target]);
         },
         _v86gl_glDrawArraysDirect(mode, first, count) {
             calls.push(["drawArraysDirect", mode, first, count]);
@@ -159,13 +198,52 @@ async function main() {
                  "a clear-only frame must keep the WebGL overlay visible");
 
     const pixels = Buffer.from([0x11, 0x22, 0x33, 0x44]);
+    const copiedPixels = Buffer.from([0x51, 0x62, 0x73, 0x84]);
+
+    const truncatedImage = textureImagePayload(pixels).subarray(0, 38);
+    const truncatedSubImage = textureSubImagePayload(copiedPixels).subarray(0, 38);
     bridge.executeGLCommands(Buffer.concat([
         glRecord(GLFN_GEN_TEXTURES, u32Payload(1, 77)),
         glRecord(GLFN_BIND_TEXTURE, u32Payload(GL_TEXTURE_2D, 77)),
+        glRecord(GLFN_TEX_IMAGE_2D, truncatedImage),
+        glRecord(GLFN_TEX_SUB_IMAGE_2D, truncatedSubImage),
+    ]), "truncated texture payloads", 100);
+    assert.equal(modules[0].calls.some(call => call[0] === "texImage2D"), false,
+                 "a truncated TexImage2D payload must not reach gl4es");
+    assert.equal(modules[0].calls.some(call => call[0] === "texSubImage2D"), false,
+                 "a truncated TexSubImage2D payload must not reach gl4es");
+    assert.equal(bridge.stateJournal.some(entry =>
+        entry.fn === GLFN_TEX_IMAGE_2D || entry.fn === GLFN_TEX_SUB_IMAGE_2D), false,
+        "truncated texture payloads must not enter the save-state journal");
+
+    const repeatedSubImageRecords = [
         glRecord(GLFN_TEX_IMAGE_2D, textureImagePayload(pixels)),
-        glRecord(GLFN_DRAW_ARRAYS_DIRECT, u32Payload(4, 0, 3)),
-    ]), "test", 100);
+    ];
+    let finalCopiedPixels = null;
+    for (let i = 0; i < 128; i++) {
+        finalCopiedPixels = Buffer.from([i, i ^ 0x55, i ^ 0xAA, 0xFF]);
+        repeatedSubImageRecords.push(
+            glRecord(GLFN_PIXEL_STOREI, pixelStorePayload(GL_UNPACK_ALIGNMENT, 1)),
+            glRecord(GLFN_TEX_SUB_IMAGE_2D, textureSubImagePayload(finalCopiedPixels)),
+            glRecord(GLFN_PIXEL_STOREI, pixelStorePayload(GL_UNPACK_ALIGNMENT, 4))
+        );
+    }
+    repeatedSubImageRecords.push(
+        glRecord(GLFN_DRAW_ARRAYS_DIRECT, u32Payload(4, 0, 3))
+    );
+    bridge.executeGLCommands(Buffer.concat(repeatedSubImageRecords), "test", 100);
     bridge.lastPresentedFrameId = 100;
+
+    const journalSubImages = bridge.stateJournal.filter(
+        entry => entry.fn === GLFN_TEX_SUB_IMAGE_2D
+    );
+    assert.equal(journalSubImages.length, 1,
+                 "repeated full-level uploads with identical unpack state must compact");
+    assert.deepEqual(Array.from(journalSubImages[0].payload.subarray(36)),
+                     Array.from(finalCopiedPixels),
+                     "the compacted upload must keep the newest framebuffer pixels");
+    assert.ok(bridge.stateJournal.length < 10,
+              "128 normalized full-level updates must leave a constant-size journal");
 
     bridge.prepareSaveState();
     const savedPCIState = pci.get_state();
@@ -173,9 +251,50 @@ async function main() {
               "the GL journal must be embedded in the v86 PCI state");
     assert.ok(savedPCIState[8].byteLength > 48, "the journal must contain GL resources");
 
+    const postMipmapPixels = Buffer.from([0xDE, 0xAD, 0xBE, 0xEF]);
+    bridge.executeGLCommands(Buffer.concat([
+        glRecord(GLFN_GENERATE_MIPMAP, u32Payload(GL_TEXTURE_2D)),
+        glRecord(GLFN_PIXEL_STOREI, pixelStorePayload(GL_UNPACK_ALIGNMENT, 1)),
+        glRecord(GLFN_TEX_SUB_IMAGE_2D, textureSubImagePayload(postMipmapPixels)),
+        glRecord(GLFN_PIXEL_STOREI, pixelStorePayload(GL_UNPACK_ALIGNMENT, 4)),
+    ]), "mipmap compaction barrier", 101);
+    assert.equal(bridge.stateJournal.filter(
+        entry => entry.fn === GLFN_TEX_SUB_IMAGE_2D
+    ).length, 2, "GenerateMipmap must prevent moving a later upload before it");
+
+    const repeatedImageRecords = [
+        glRecord(GLFN_GEN_TEXTURES, u32Payload(1, 88)),
+        glRecord(GLFN_BIND_TEXTURE, u32Payload(GL_TEXTURE_2D, 88)),
+    ];
+    let finalImagePixels = null;
+    for (let i = 0; i < 128; i++) {
+        finalImagePixels = Buffer.from([0xFF, i, i ^ 0x7F, 0xFF]);
+        repeatedImageRecords.push(
+            glRecord(GLFN_PIXEL_STOREI, pixelStorePayload(GL_UNPACK_ALIGNMENT, 1)),
+            glRecord(GLFN_TEX_IMAGE_2D, textureImagePayload(finalImagePixels)),
+            glRecord(GLFN_PIXEL_STOREI, pixelStorePayload(GL_UNPACK_ALIGNMENT, 4))
+        );
+    }
+    bridge.executeGLCommands(Buffer.concat(repeatedImageRecords),
+                             "repeated texture definitions", 102);
+    const imageEntries = bridge.stateJournal.filter(entry => entry.fn === GLFN_TEX_IMAGE_2D);
+    assert.equal(imageEntries.length, 2,
+                 "repeated definitions of texture 88 must compact to one entry");
+    assert.deepEqual(Array.from(imageEntries.at(-1).payload.subarray(36)),
+                     Array.from(finalImagePixels));
+
     bridge.destroyContext();
     assert.equal(bridge.stateJournal.length, 0,
                  "destroying the live context must not retain deleted resources");
+    const moduleCountAfterDestroy = modules.length;
+    const freshAfterDestroy = modules.at(-1);
+    bridge.destroyContext();
+    assert.equal(modules.length, moduleCountAfterDestroy,
+                 "a duplicate guest destroy must not create another renderer");
+    assert.equal(modules[0].calls.filter(call => call[0] === "destroy").length, 1,
+                 "the live renderer must be destroyed exactly once");
+    assert.equal(freshAfterDestroy.calls.filter(call => call[0] === "destroy").length, 0,
+                 "a duplicate destroy must leave the pre-created renderer intact");
     bridge.pendingPCIBatches.push({ bytes: Uint8Array.of(1, 2, 3), frameId: 999 });
 
     bridge.beginStateRestore();
@@ -203,10 +322,17 @@ async function main() {
     assert.ok(replayed.includes("genTextures"), "texture names must be recreated");
     assert.ok(replayed.includes("bindTexture"), "texture binding must be recreated");
     assert.ok(replayed.includes("texImage2D"), "texture pixels must be uploaded again");
+    assert.ok(replayed.includes("texSubImage2D"),
+              "captured framebuffer copies must replay as texture uploads");
     assert.equal(bridge.stateJournal.some(entry => entry.fn === GLFN_DRAW_ARRAYS_DIRECT), false,
                  "per-frame draw payloads must not enter the save-state journal");
     const upload = restoredModule.calls.find(call => call[0] === "texImage2D");
     assert.deepEqual(upload.at(-1), Array.from(pixels));
+    const copiedUpload = restoredModule.calls.find(call => call[0] === "texSubImage2D");
+    assert.deepEqual(copiedUpload.at(-1), Array.from(finalCopiedPixels));
+    assert.deepEqual(restoredModule.calls.filter(call => call[0] === "pixelStorei").at(-1),
+                     ["pixelStorei", GL_UNPACK_ALIGNMENT, 4],
+                     "journal compaction must preserve the final unpack alignment");
     assert.equal(
         restoredModule.calls.filter(call => call[0] === "drawArraysDirect").length,
         1,

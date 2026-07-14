@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARB program browser test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=d3d8-shutdown-clean-20260715"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_COLOR_BUFFER_BIT = 0x00004000;
+    const GL_TRIANGLES = 0x0004;
+    const GL_RGBA = 0x1908;
+    const GL_UNSIGNED_BYTE = 0x1401;
+    const GL_FRAGMENT_PROGRAM_ARB = 0x8804;
+    const GL_PROGRAM_LENGTH_ARB = 0x8627;
+    const GL_PROGRAM_STRING_ARB = 0x8628;
+    const GL_PROGRAM_FORMAT_ASCII_ARB = 0x8875;
+    const source = "!!ARBfp1.0\nPARAM const = {1.0, 0.0, 0.0, 1.0};\n" +
+        "MOV result.color, const;\nEND";
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const module = await createV86GL4ES({
+        canvas: document.getElementById("v86gl_canvas"),
+        locateFile(path) {
+            return `../libglwasm/${path}?v=d3d8-shutdown-clean-20260715`;
+        },
+    });
+
+    module._v86glMakeCurrent(1, 0, 0, 64, 64);
+    const namePtr = module._malloc(4);
+    new DataView(module.HEAPU8.buffer).setUint32(namePtr, 1, true);
+    module._v86gl_glGenProgramsARBMapped(1, namePtr);
+    module._v86gl_glBindProgramARBMapped(GL_FRAGMENT_PROGRAM_ARB, 1);
+
+    const sourceBytes = encoder.encode(source);
+    const sourcePtr = module._malloc(sourceBytes.length);
+    module.HEAPU8.set(sourceBytes, sourcePtr);
+    module._v86gl_glProgramStringARB(GL_FRAGMENT_PROGRAM_ARB,
+        GL_PROGRAM_FORMAT_ASCII_ARB, sourceBytes.length, sourcePtr);
+
+    const lengthPtr = module._malloc(4);
+    if (!module._v86gl_glGetProgramivARB(GL_FRAGMENT_PROGRAM_ARB,
+            GL_PROGRAM_LENGTH_ARB, lengthPtr)) {
+        throw new Error("program length query failed");
+    }
+    const programLength = new DataView(module.HEAPU8.buffer).getInt32(lengthPtr, true);
+    if (programLength !== sourceBytes.length + 1) {
+        throw new Error(`program length changed: ${programLength}`);
+    }
+    const queriedPtr = module._malloc(programLength);
+    module._v86gl_glGetProgramStringARB(GL_FRAGMENT_PROGRAM_ARB,
+        GL_PROGRAM_STRING_ARB, programLength, lengthPtr, queriedPtr);
+    const queried = decoder.decode(module.HEAPU8.subarray(
+        queriedPtr, queriedPtr + programLength - 1));
+    if (queried !== source) {
+        throw new Error("guest-visible ARB source changed");
+    }
+
+    module._v86gl_glViewport(0, 0, 64, 64);
+    module._v86gl_glClearColor(0, 0, 0, 1);
+    module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+    module._v86gl_glEnable(GL_FRAGMENT_PROGRAM_ARB);
+    module._v86gl_glBegin(GL_TRIANGLES);
+    module._v86gl_glVertex3f(-1, -1, 0);
+    module._v86gl_glVertex3f(1, -1, 0);
+    module._v86gl_glVertex3f(0, 1, 0);
+    module._v86gl_glEnd();
+    module._v86gl_glFinish();
+
+    const pixelPtr = module._malloc(4);
+    if (!module._v86gl_glReadPixels(32, 32, 1, 1,
+            GL_RGBA, GL_UNSIGNED_BYTE, pixelPtr)) {
+        throw new Error("readback failed");
+    }
+    const pixel = Array.from(module.HEAPU8.subarray(pixelPtr, pixelPtr + 4));
+    if (pixel[0] < 200 || pixel[1] > 20 || pixel[2] > 20 || pixel[3] < 200) {
+        throw new Error(`unexpected pixel ${pixel.join(",")}`);
+    }
+
+    document.title = "ARB program browser test: PASS";
+    document.getElementById("result").textContent = `PASS ${pixel.join(",")}`;
+})().catch(error => {
+    document.title = "ARB program browser test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

@@ -22,6 +22,9 @@ static const char g_class_name[] = "V86GLD3D8ResetLifecycleTest";
 static IDirect3D8 *g_d3d;
 static IDirect3DDevice8 *g_device;
 static IDirect3DTexture8 *g_managed_texture;
+static IDirect3DTexture8 *g_managed_dxt;
+static IDirect3DCubeTexture8 *g_managed_cube;
+static IDirect3DVolumeTexture8 *g_managed_volume;
 static IDirect3DVertexBuffer8 *g_default_vb;
 static HWND g_window;
 static D3DFORMAT g_backbuffer_format;
@@ -81,6 +84,21 @@ static void release_all(void)
     {
         IDirect3DTexture8_Release(g_managed_texture);
         g_managed_texture = NULL;
+    }
+    if (g_managed_dxt)
+    {
+        IDirect3DTexture8_Release(g_managed_dxt);
+        g_managed_dxt = NULL;
+    }
+    if (g_managed_cube)
+    {
+        IDirect3DCubeTexture8_Release(g_managed_cube);
+        g_managed_cube = NULL;
+    }
+    if (g_managed_volume)
+    {
+        IDirect3DVolumeTexture8_Release(g_managed_volume);
+        g_managed_volume = NULL;
     }
     if (g_device)
     {
@@ -160,6 +178,120 @@ static HRESULT create_managed_texture(void)
     }
     hr = IDirect3DTexture8_UnlockRect(g_managed_texture, 0);
     return FAILED(hr) ? fail_stage("managed texture UnlockRect", hr) : hr;
+}
+
+static HRESULT create_extended_managed_textures(void)
+{
+    UINT level;
+    UINT face;
+    HRESULT hr;
+
+    begin_stage("CreateTexture DXT5 MANAGED with mip chain");
+    hr = IDirect3DDevice8_CreateTexture(g_device, 8, 8, 4, 0,
+            D3DFMT_DXT5, D3DPOOL_MANAGED, &g_managed_dxt);
+    if (FAILED(hr)) return fail_stage("CreateTexture DXT5 MANAGED", hr);
+    for (level = 0; level < 4; ++level)
+    {
+        D3DLOCKED_RECT lock;
+        UINT extent = 8u >> level;
+        UINT blocks;
+        UINT row;
+        if (!extent) extent = 1;
+        blocks = (extent + 3u) / 4u;
+        hr = IDirect3DTexture8_LockRect(g_managed_dxt, level, &lock, NULL, 0);
+        if (FAILED(hr)) return fail_stage("DXT5 mip LockRect", hr);
+        for (row = 0; row < blocks; ++row)
+            FillMemory((BYTE *)lock.pBits + row * lock.Pitch,
+                    blocks * 16u, (BYTE)(0x31u + level * 19u));
+        hr = IDirect3DTexture8_UnlockRect(g_managed_dxt, level);
+        if (FAILED(hr)) return fail_stage("DXT5 mip UnlockRect", hr);
+    }
+
+    begin_stage("CreateCubeTexture MANAGED with six-face mip chains");
+    hr = IDirect3DDevice8_CreateCubeTexture(g_device, 8, 4, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g_managed_cube);
+    if (FAILED(hr)) return fail_stage("CreateCubeTexture MANAGED", hr);
+    for (face = 0; face < 6; ++face)
+    {
+        for (level = 0; level < 4; ++level)
+        {
+            D3DLOCKED_RECT lock;
+            UINT extent = 8u >> level;
+            UINT y;
+            if (!extent) extent = 1;
+            hr = IDirect3DCubeTexture8_LockRect(g_managed_cube,
+                    (D3DCUBEMAP_FACES)face, level, &lock, NULL, 0);
+            if (FAILED(hr)) return fail_stage("cube face/mip LockRect", hr);
+            for (y = 0; y < extent; ++y)
+            {
+                DWORD *row = (DWORD *)((BYTE *)lock.pBits + y * lock.Pitch);
+                UINT x;
+                for (x = 0; x < extent; ++x)
+                    row[x] = 0xff000000u | (face * 41u << 16)
+                            | (level * 59u << 8) | x * 17u;
+            }
+            hr = IDirect3DCubeTexture8_UnlockRect(g_managed_cube,
+                    (D3DCUBEMAP_FACES)face, level);
+            if (FAILED(hr)) return fail_stage("cube face/mip UnlockRect", hr);
+        }
+    }
+
+    begin_stage("CreateVolumeTexture MANAGED with 3D mip chain");
+    hr = IDirect3DDevice8_CreateVolumeTexture(g_device, 4, 4, 4, 3, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g_managed_volume);
+    if (FAILED(hr)) return fail_stage("CreateVolumeTexture MANAGED", hr);
+    for (level = 0; level < 3; ++level)
+    {
+        D3DLOCKED_BOX lock;
+        UINT extent = 4u >> level;
+        UINT z;
+        if (!extent) extent = 1;
+        hr = IDirect3DVolumeTexture8_LockBox(g_managed_volume, level,
+                &lock, NULL, 0);
+        if (FAILED(hr)) return fail_stage("volume mip LockBox", hr);
+        for (z = 0; z < extent; ++z)
+        {
+            UINT y;
+            for (y = 0; y < extent; ++y)
+            {
+                DWORD *row = (DWORD *)((BYTE *)lock.pBits
+                        + z * lock.SlicePitch + y * lock.RowPitch);
+                UINT x;
+                for (x = 0; x < extent; ++x)
+                    row[x] = 0xff000000u | (z * 43u << 16)
+                            | (y * 47u << 8) | x * 53u;
+            }
+        }
+        hr = IDirect3DVolumeTexture8_UnlockBox(g_managed_volume, level);
+        if (FAILED(hr)) return fail_stage("volume mip UnlockBox", hr);
+    }
+    return D3D_OK;
+}
+
+static HRESULT verify_and_preload_extended_textures(const char *stage)
+{
+    D3DSURFACE_DESC dxt_desc;
+    D3DSURFACE_DESC cube_desc;
+    D3DVOLUME_DESC volume_desc;
+    HRESULT hr;
+
+    begin_stage(stage);
+    hr = IDirect3DTexture8_GetLevelDesc(g_managed_dxt, 0, &dxt_desc);
+    if (FAILED(hr)) return fail_stage("DXT5 GetLevelDesc", hr);
+    hr = IDirect3DCubeTexture8_GetLevelDesc(g_managed_cube, 0, &cube_desc);
+    if (FAILED(hr)) return fail_stage("cube GetLevelDesc", hr);
+    hr = IDirect3DVolumeTexture8_GetLevelDesc(g_managed_volume, 0, &volume_desc);
+    if (FAILED(hr)) return fail_stage("volume GetLevelDesc", hr);
+    if (dxt_desc.Width != 8 || dxt_desc.Height != 8 || dxt_desc.Format != D3DFMT_DXT5
+            || cube_desc.Width != 8 || cube_desc.Height != 8
+            || cube_desc.Format != D3DFMT_A8R8G8B8
+            || volume_desc.Width != 4 || volume_desc.Height != 4
+            || volume_desc.Depth != 4 || volume_desc.Format != D3DFMT_A8R8G8B8)
+        return fail_stage("extended managed description changed", E_FAIL);
+    IDirect3DBaseTexture8_PreLoad((IDirect3DBaseTexture8 *)g_managed_dxt);
+    IDirect3DBaseTexture8_PreLoad((IDirect3DBaseTexture8 *)g_managed_cube);
+    IDirect3DBaseTexture8_PreLoad((IDirect3DBaseTexture8 *)g_managed_volume);
+    return D3D_OK;
 }
 
 static HRESULT create_default_vb(UINT width, UINT height)
@@ -259,6 +391,10 @@ static HRESULT run_reset_test(void)
     if (FAILED(hr)) return fail_stage("CreateDevice 480x360", hr);
     hr = create_managed_texture();
     if (FAILED(hr)) return hr;
+    hr = create_extended_managed_textures();
+    if (FAILED(hr)) return hr;
+    hr = verify_and_preload_extended_textures("pre-Reset preload DXT5/cube/volume");
+    if (FAILED(hr)) return hr;
     ZeroMemory(&before, sizeof(before));
     hr = IDirect3DTexture8_GetLevelDesc(g_managed_texture, 0, &before);
     if (FAILED(hr)) return fail_stage("managed GetLevelDesc before Reset", hr);
@@ -293,6 +429,8 @@ static HRESULT run_reset_test(void)
     if (before.Width != after.Width || before.Height != after.Height
             || before.Format != after.Format)
         return fail_stage("managed texture description changed across Reset", E_FAIL);
+    hr = verify_and_preload_extended_textures("post-Reset preload DXT5/cube/volume");
+    if (FAILED(hr)) return hr;
 
     begin_stage("recreate DEFAULT-pool VB after Reset");
     hr = create_default_vb(NEW_WIDTH, NEW_HEIGHT);
@@ -300,7 +438,7 @@ static HRESULT run_reset_test(void)
     hr = render_present("post-Reset Present 720x480");
     if (FAILED(hr)) return hr;
     SetWindowTextA(g_window,
-            "D3D8 Reset: Present S_OK - 4 device cycles | 480x360->720x480 | managed kept | default rebuilt");
+            "D3D8 Reset: PASS - cycles | resize | 2D/DXT/cube/volume managed kept | default rebuilt");
     return D3D_OK;
 }
 

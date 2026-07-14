@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "arb_program_sanitize.h"
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
@@ -47,6 +49,18 @@ extern void emscripten_glGetQueryiv(GLenum target, GLenum pname,
                                     GLint* params);
 extern void emscripten_glGetQueryObjectuiv(GLuint id, GLenum pname,
                                            GLuint* params);
+extern void emscripten_glTexImage3D(GLenum target, GLint level,
+                                    GLint internalformat, GLsizei width,
+                                    GLsizei height, GLsizei depth, GLint border,
+                                    GLenum format, GLenum type,
+                                    const void* pixels);
+extern void emscripten_glTexSubImage3D(GLenum target, GLint level,
+                                       GLint xoffset, GLint yoffset,
+                                       GLint zoffset, GLsizei width,
+                                       GLsizei height, GLsizei depth,
+                                       GLenum format, GLenum type,
+                                       const void* pixels);
+extern void emscripten_glPixelStorei(GLenum pname, GLint param);
 #endif
 
 extern void glActiveTexture(GLenum texture);
@@ -94,6 +108,7 @@ extern void glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue);
 extern void glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride, const void* pointer);
 extern void glPointParameterf(GLenum pname, GLfloat param);
 extern void glPointParameterfv(GLenum pname, const GLfloat* params);
+extern void glGenerateMipmap(GLenum target);
 extern void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                    GLsizei width, GLsizei height, GLint border,
                                    GLsizei image_size, const void* data);
@@ -263,6 +278,10 @@ extern void gl4es_glProgramLocalParameters4fvEXT(GLenum target, GLuint index,
 #define GL_PROGRAM_LENGTH_ARB 0x8627
 #endif
 
+#ifndef GL_PROGRAM_POINT_SIZE
+#define GL_PROGRAM_POINT_SIZE 0x8642
+#endif
+
 #ifndef GL_SECONDARY_COLOR_ARRAY
 #define GL_SECONDARY_COLOR_ARRAY 0x845E
 #endif
@@ -302,6 +321,24 @@ extern void gl4es_glProgramLocalParameters4fvEXT(GLenum target, GLuint index,
 #ifndef GL_TEXTURE_3D
 #define GL_TEXTURE_3D 0x806F
 #endif
+#ifndef GL_BGR
+#define GL_BGR 0x80E0
+#endif
+#ifndef GL_BGRA
+#define GL_BGRA 0x80E1
+#endif
+#ifndef GL_RGB8
+#define GL_RGB8 0x8051
+#define GL_RGBA8 0x8058
+#endif
+#ifndef GL_UNSIGNED_INT_8_8_8_8
+#define GL_UNSIGNED_INT_8_8_8_8 0x8035
+#define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
+#endif
+#ifndef GL_UNSIGNED_SHORT_4_4_4_4_REV
+#define GL_UNSIGNED_SHORT_4_4_4_4_REV 0x8365
+#define GL_UNSIGNED_SHORT_1_5_5_5_REV 0x8366
+#endif
 
 #ifndef GL_TEXTURE_CUBE_MAP_POSITIVE_X
 #define GL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
@@ -312,6 +349,28 @@ extern void gl4es_glProgramLocalParameters4fvEXT(GLenum target, GLuint index,
 #define GL_TEXTURE_CUBE_MAP_NEGATIVE_Z 0x851A
 #endif
 
+#ifndef GL_COMPRESSED_RGB_S3TC_DXT1_EXT
+#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT 0x83F0
+#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT 0x83F1
+#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT 0x83F2
+#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
+#endif
+#ifndef GL_COMPRESSED_SRGB_S3TC_DXT1_EXT
+#define GL_COMPRESSED_SRGB_S3TC_DXT1_EXT 0x8C4C
+#define GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT 0x8C4D
+#define GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT 0x8C4E
+#define GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT 0x8C4F
+#endif
+#ifndef GL_UNPACK_ROW_LENGTH
+#define GL_UNPACK_ROW_LENGTH 0x0CF2
+#define GL_UNPACK_SKIP_ROWS 0x0CF3
+#define GL_UNPACK_SKIP_PIXELS 0x0CF4
+#endif
+#ifndef GL_UNPACK_SKIP_IMAGES
+#define GL_UNPACK_SKIP_IMAGES 0x806D
+#define GL_UNPACK_IMAGE_HEIGHT 0x806E
+#endif
+
 static int32_t g_surface_x;
 static int32_t g_surface_y;
 static uint32_t g_surface_width;
@@ -319,6 +378,388 @@ static uint32_t g_surface_height;
 static uint32_t g_surface_hwnd;
 static int g_ready;
 static int g_webgl_major_version;
+static GLint g_unpack_alignment = 4;
+static GLint g_unpack_row_length;
+static GLint g_unpack_skip_rows;
+static GLint g_unpack_skip_pixels;
+static GLint g_unpack_image_height;
+static GLint g_unpack_skip_images;
+
+typedef struct {
+    GLint alignment;
+    GLint row_length;
+    GLint skip_rows;
+    GLint skip_pixels;
+    GLint image_height;
+    GLint skip_images;
+} V86GLUnpackState;
+
+static uint16_t v86gl_read_le16(const uint8_t* data) {
+    return (uint16_t)((uint16_t)data[0] | (uint16_t)data[1] << 8);
+}
+
+static uint32_t v86gl_read_le32(const uint8_t* data) {
+    return (uint32_t)data[0] | (uint32_t)data[1] << 8 |
+           (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
+}
+
+static void v86gl_decode_565(uint16_t color, uint8_t* rgba) {
+    uint32_t r = (color >> 11) & 31u;
+    uint32_t g = (color >> 5) & 63u;
+    uint32_t b = color & 31u;
+
+    rgba[0] = (uint8_t)((r << 3) | (r >> 2));
+    rgba[1] = (uint8_t)((g << 2) | (g >> 4));
+    rgba[2] = (uint8_t)((b << 3) | (b >> 2));
+    rgba[3] = 255;
+}
+
+static void v86gl_decode_dxt_colors(const uint8_t* block, int force_four_colors,
+                                    int dxt1_has_alpha, uint8_t* rgba) {
+    uint8_t colors[4][4];
+    uint16_t c0 = v86gl_read_le16(block);
+    uint16_t c1 = v86gl_read_le16(block + 2);
+    uint32_t indices = v86gl_read_le32(block + 4);
+    uint32_t pixel;
+    uint32_t channel;
+
+    v86gl_decode_565(c0, colors[0]);
+    v86gl_decode_565(c1, colors[1]);
+    if (force_four_colors || c0 > c1) {
+        for (channel = 0; channel < 3; channel++) {
+            colors[2][channel] = (uint8_t)((2u * colors[0][channel] + colors[1][channel]) / 3u);
+            colors[3][channel] = (uint8_t)((colors[0][channel] + 2u * colors[1][channel]) / 3u);
+        }
+        colors[2][3] = colors[3][3] = 255;
+    } else {
+        for (channel = 0; channel < 3; channel++) {
+            colors[2][channel] = (uint8_t)((colors[0][channel] + colors[1][channel]) / 2u);
+            colors[3][channel] = 0;
+        }
+        colors[2][3] = 255;
+        colors[3][3] = dxt1_has_alpha ? 0 : 255;
+    }
+
+    for (pixel = 0; pixel < 16; pixel++) {
+        uint32_t index = (indices >> (2u * pixel)) & 3u;
+        memcpy(rgba + pixel * 4u, colors[index], 4u);
+    }
+}
+
+static void v86gl_decode_dxt_block(const uint8_t* block, int mode,
+                                   int dxt1_has_alpha, uint8_t* rgba) {
+    uint32_t pixel;
+
+    if (mode == 1) {
+        v86gl_decode_dxt_colors(block, 0, dxt1_has_alpha, rgba);
+        return;
+    }
+
+    if (mode == 3) {
+        v86gl_decode_dxt_colors(block + 8, 1, 0, rgba);
+        for (pixel = 0; pixel < 16; pixel++) {
+            uint8_t nibble = (uint8_t)((block[pixel >> 1] >> ((pixel & 1u) * 4u)) & 15u);
+            rgba[pixel * 4u + 3u] = (uint8_t)(nibble * 17u);
+        }
+        return;
+    }
+
+    if (mode == 5) {
+        uint8_t alpha[8];
+        uint64_t alpha_indices = 0;
+        uint32_t i;
+
+        alpha[0] = block[0];
+        alpha[1] = block[1];
+        if (alpha[0] > alpha[1]) {
+            for (i = 1; i <= 6; i++) {
+                alpha[i + 1] = (uint8_t)(((7u - i) * alpha[0] + i * alpha[1]) / 7u);
+            }
+        } else {
+            for (i = 1; i <= 4; i++) {
+                alpha[i + 1] = (uint8_t)(((5u - i) * alpha[0] + i * alpha[1]) / 5u);
+            }
+            alpha[6] = 0;
+            alpha[7] = 255;
+        }
+        for (i = 0; i < 6; i++) {
+            alpha_indices |= (uint64_t)block[2 + i] << (8u * i);
+        }
+        v86gl_decode_dxt_colors(block + 8, 1, 0, rgba);
+        for (pixel = 0; pixel < 16; pixel++) {
+            rgba[pixel * 4u + 3u] = alpha[(alpha_indices >> (3u * pixel)) & 7u];
+        }
+    }
+}
+
+static int v86gl_s3tc_format(GLenum format, int* mode, int* has_alpha) {
+    *has_alpha = 0;
+    switch (format) {
+    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+        *mode = 1;
+        return 1;
+    case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
+        *mode = 1;
+        *has_alpha = 1;
+        return 1;
+    case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
+        *mode = 3;
+        *has_alpha = 1;
+        return 1;
+    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        *mode = 5;
+        *has_alpha = 1;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Returns 1 for a decoded S3TC upload, 0 for a different compressed format,
+ * and -1 for malformed input. */
+static int v86gl_decode_s3tc(GLsizei width, GLsizei height, GLsizei depth,
+                             GLenum format, GLsizei image_size, const void* data,
+                             uint8_t** decoded) {
+    int mode;
+    int has_alpha;
+    uint32_t block_bytes;
+    uint32_t blocks_x;
+    uint32_t blocks_y;
+    uint64_t expected_size;
+    uint64_t output_size;
+    uint32_t z;
+    uint32_t by;
+    uint32_t bx;
+    const uint8_t* input = (const uint8_t*)data;
+
+    *decoded = NULL;
+    if (!v86gl_s3tc_format(format, &mode, &has_alpha)) {
+        return 0;
+    }
+    if (width < 0 || height < 0 || depth < 0 || image_size < 0) {
+        return -1;
+    }
+    if (!width || !height || !depth) {
+        return image_size == 0 ? 1 : -1;
+    }
+
+    block_bytes = mode == 1 ? 8u : 16u;
+    blocks_x = ((uint32_t)width + 3u) / 4u;
+    blocks_y = ((uint32_t)height + 3u) / 4u;
+    expected_size = (uint64_t)blocks_x * blocks_y * (uint32_t)depth * block_bytes;
+    output_size = (uint64_t)(uint32_t)width * (uint32_t)height * (uint32_t)depth * 4u;
+    if (!data || expected_size != (uint32_t)image_size || output_size > UINT32_MAX) {
+        return -1;
+    }
+
+    *decoded = (uint8_t*)malloc((size_t)output_size);
+    if (!*decoded) {
+        return -1;
+    }
+    for (z = 0; z < (uint32_t)depth; z++) {
+        for (by = 0; by < blocks_y; by++) {
+            for (bx = 0; bx < blocks_x; bx++) {
+                uint8_t block_rgba[16 * 4];
+                uint32_t py;
+                uint32_t px;
+                const uint8_t* block = input +
+                    (((uint64_t)z * blocks_y + by) * blocks_x + bx) * block_bytes;
+                v86gl_decode_dxt_block(block, mode, has_alpha, block_rgba);
+                for (py = 0; py < 4 && by * 4u + py < (uint32_t)height; py++) {
+                    for (px = 0; px < 4 && bx * 4u + px < (uint32_t)width; px++) {
+                        uint64_t dest_pixel = ((uint64_t)z * (uint32_t)height + by * 4u + py) *
+                                              (uint32_t)width + bx * 4u + px;
+                        memcpy(*decoded + dest_pixel * 4u, block_rgba + (py * 4u + px) * 4u, 4u);
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+static uint32_t v86gl_align_u32(uint32_t value, uint32_t alignment) {
+    uint32_t remainder;
+
+    if (!alignment) alignment = 1;
+    remainder = value % alignment;
+    return remainder ? value + alignment - remainder : value;
+}
+
+/* WebGL2 does not accept desktop GL_BGR / GL_BGRA volume uploads, nor the
+ * desktop 8_8_8_8[_REV] and reversed 16-bit packed types WineD3D can pair
+ * with GL_RGBA. Convert those inputs to tightly packed RGBA8 while
+ * preserving the desktop unpack row/image/skip state carried across the
+ * bridge. */
+static int v86gl_convert_volume_bgr(GLsizei width, GLsizei height,
+                                    GLsizei depth, GLenum format, GLenum type,
+                                    const void* pixels, uint8_t** converted) {
+    uint32_t pixel_bytes;
+    uint32_t row_pixels;
+    uint32_t image_rows;
+    uint32_t row_stride;
+    uint64_t image_stride;
+    uint64_t source_offset;
+    uint64_t source_end;
+    uint64_t output_size;
+    const uint8_t* source = (const uint8_t*)pixels;
+    uint32_t z;
+    uint32_t y;
+    uint32_t x;
+
+    *converted = NULL;
+    if (format != GL_BGR && format != GL_BGRA && format != GL_RGBA) return 0;
+    if (!pixels || width <= 0 || height <= 0 || depth <= 0) return 0;
+    if (g_unpack_alignment != 1 && g_unpack_alignment != 2 &&
+        g_unpack_alignment != 4 && g_unpack_alignment != 8) return -1;
+    if (g_unpack_row_length < 0 || g_unpack_skip_rows < 0 ||
+        g_unpack_skip_pixels < 0 || g_unpack_image_height < 0 ||
+        g_unpack_skip_images < 0) return -1;
+
+    if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
+        return 0;
+    } else if (type == GL_UNSIGNED_BYTE) {
+        pixel_bytes = format == GL_BGRA ? 4u : 3u;
+    } else if ((format == GL_BGRA || format == GL_RGBA) &&
+               (type == GL_UNSIGNED_INT_8_8_8_8 ||
+                type == GL_UNSIGNED_INT_8_8_8_8_REV)) {
+        pixel_bytes = 4u;
+    } else if ((format == GL_BGRA || format == GL_RGBA) &&
+               (type == GL_UNSIGNED_SHORT_4_4_4_4_REV ||
+                type == GL_UNSIGNED_SHORT_1_5_5_5_REV)) {
+        pixel_bytes = 2u;
+    } else {
+        /* Other GL_RGBA types (UNSIGNED_BYTE handled above, plus standard
+         * WebGL2 float/integer combinations) do not need desktop swizzling. */
+        return format == GL_RGBA ? 0 : -1;
+    }
+
+    row_pixels = g_unpack_row_length > 0
+            ? (uint32_t)g_unpack_row_length : (uint32_t)width;
+    image_rows = g_unpack_image_height > 0
+            ? (uint32_t)g_unpack_image_height : (uint32_t)height;
+    if (row_pixels < (uint32_t)width || image_rows < (uint32_t)height ||
+        row_pixels > UINT32_MAX / pixel_bytes) return -1;
+    row_stride = v86gl_align_u32(row_pixels * pixel_bytes,
+                                 (uint32_t)g_unpack_alignment);
+    image_stride = (uint64_t)row_stride * image_rows;
+    source_offset = (uint64_t)(uint32_t)g_unpack_skip_images * image_stride
+            + (uint64_t)(uint32_t)g_unpack_skip_rows * row_stride
+            + (uint64_t)(uint32_t)g_unpack_skip_pixels * pixel_bytes;
+    output_size = (uint64_t)(uint32_t)width * (uint32_t)height *
+            (uint32_t)depth * 4u;
+    source_end = source_offset + (uint64_t)((uint32_t)depth - 1u) * image_stride
+            + (uint64_t)((uint32_t)height - 1u) * row_stride
+            + (uint64_t)(uint32_t)width * pixel_bytes;
+    if (output_size > SIZE_MAX || source_end > SIZE_MAX) return -1;
+
+    *converted = (uint8_t*)malloc((size_t)output_size);
+    if (!*converted) return -1;
+    for (z = 0; z < (uint32_t)depth; z++) {
+        for (y = 0; y < (uint32_t)height; y++) {
+            const uint8_t* row = source + (size_t)(source_offset +
+                    (uint64_t)z * image_stride + (uint64_t)y * row_stride);
+            for (x = 0; x < (uint32_t)width; x++) {
+                const uint8_t* input = row + x * pixel_bytes;
+                uint8_t* output = *converted +
+                        (((uint64_t)z * (uint32_t)height + y) *
+                        (uint32_t)width + x) * 4u;
+                if (type == GL_UNSIGNED_SHORT_4_4_4_4_REV) {
+                    uint16_t value = v86gl_read_le16(input);
+                    output[0] = (uint8_t)(((value >>
+                            (format == GL_BGRA ? 8 : 0)) & 15u) * 17u);
+                    output[1] = (uint8_t)(((value >> 4) & 15u) * 17u);
+                    output[2] = (uint8_t)(((value >>
+                            (format == GL_BGRA ? 0 : 8)) & 15u) * 17u);
+                    output[3] = (uint8_t)(((value >> 12) & 15u) * 17u);
+                } else if (type == GL_UNSIGNED_SHORT_1_5_5_5_REV) {
+                    uint16_t value = v86gl_read_le16(input);
+                    uint32_t r = (value >>
+                            (format == GL_BGRA ? 10 : 0)) & 31u;
+                    uint32_t g = (value >> 5) & 31u;
+                    uint32_t b = (value >>
+                            (format == GL_BGRA ? 0 : 10)) & 31u;
+                    output[0] = (uint8_t)((r << 3) | (r >> 2));
+                    output[1] = (uint8_t)((g << 3) | (g >> 2));
+                    output[2] = (uint8_t)((b << 3) | (b >> 2));
+                    output[3] = (value & 0x8000u) ? 255 : 0;
+                } else if (type == GL_UNSIGNED_INT_8_8_8_8) {
+                    uint32_t value = v86gl_read_le32(input);
+                    output[0] = (uint8_t)((value >>
+                            (format == GL_BGRA ? 8 : 24)) & 255u);
+                    output[1] = (uint8_t)((value >> 16) & 255u);
+                    output[2] = (uint8_t)((value >>
+                            (format == GL_BGRA ? 24 : 8)) & 255u);
+                    output[3] = (uint8_t)(value & 255u);
+                } else {
+                    output[0] = input[format == GL_BGRA ? 2 : 0];
+                    output[1] = input[1];
+                    output[2] = input[format == GL_BGRA ? 0 : 2];
+                    output[3] = format == GL_BGR ? 255 : input[3];
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+#ifdef __EMSCRIPTEN__
+static void v86gl_set_raw_volume_unpack(int tight) {
+    emscripten_glPixelStorei(GL_UNPACK_ALIGNMENT,
+                             tight ? 1 : g_unpack_alignment);
+    emscripten_glPixelStorei(GL_UNPACK_ROW_LENGTH,
+                             tight ? 0 : g_unpack_row_length);
+    emscripten_glPixelStorei(GL_UNPACK_SKIP_ROWS,
+                             tight ? 0 : g_unpack_skip_rows);
+    emscripten_glPixelStorei(GL_UNPACK_SKIP_PIXELS,
+                             tight ? 0 : g_unpack_skip_pixels);
+    emscripten_glPixelStorei(GL_UNPACK_IMAGE_HEIGHT,
+                             tight ? 0 : g_unpack_image_height);
+    emscripten_glPixelStorei(GL_UNPACK_SKIP_IMAGES,
+                             tight ? 0 : g_unpack_skip_images);
+}
+
+static void v86gl_restore_raw_unpack_for_gl4es(void) {
+    emscripten_glPixelStorei(GL_UNPACK_ALIGNMENT, g_unpack_alignment);
+    emscripten_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    emscripten_glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    emscripten_glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    emscripten_glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    emscripten_glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+}
+#endif
+
+static void v86gl_begin_tight_unpack(V86GLUnpackState* saved) {
+    saved->alignment = g_unpack_alignment;
+    saved->row_length = g_unpack_row_length;
+    saved->skip_rows = g_unpack_skip_rows;
+    saved->skip_pixels = g_unpack_skip_pixels;
+    saved->image_height = g_unpack_image_height;
+    saved->skip_images = g_unpack_skip_images;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    if (g_webgl_major_version >= 2) {
+        glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+        glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+    }
+}
+
+static void v86gl_end_tight_unpack(const V86GLUnpackState* saved) {
+    glPixelStorei(GL_UNPACK_ALIGNMENT, saved->alignment);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, saved->row_length);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, saved->skip_rows);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, saved->skip_pixels);
+    if (g_webgl_major_version >= 2) {
+        glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, saved->image_height);
+        glPixelStorei(GL_UNPACK_SKIP_IMAGES, saved->skip_images);
+    }
+}
 
 #ifdef __EMSCRIPTEN__
 static EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_webgl_context;
@@ -332,6 +773,111 @@ EM_JS(void, v86gl_lose_webgl_context, (), {
     if (loseContext) {
         loseContext.loseContext();
     }
+});
+
+/* gl4es intentionally maps desktop GL_TEXTURE_3D onto GLES2 GL_TEXTURE_2D.
+ * The renderer is WebGL2, so keep gl4es's desktop state bookkeeping while
+ * redirecting the underlying WebGL object and parameter calls back to a real
+ * 3D target. TexImage2D/TexSubImage2D calls made by gl4es's 3D metadata stub
+ * are suppressed; the bridge follows them with the real WebGL2 3D upload. */
+EM_JS(void, v86gl_install_webgl2_volume_compat, (), {
+    const ctx = GLctx;
+    if (!ctx || ctx.__v86glVolumeCompat) return;
+
+    const state = {
+        textures: new WeakSet(),
+        redirected: [],
+        unit: 0,
+        rawActiveTexture: ctx.activeTexture.bind(ctx),
+        rawBindTexture: ctx.bindTexture.bind(ctx),
+        rawTexImage2D: ctx.texImage2D.bind(ctx),
+        rawTexSubImage2D: ctx.texSubImage2D.bind(ctx),
+        rawCompressedTexImage2D: ctx.compressedTexImage2D.bind(ctx),
+        rawCompressedTexSubImage2D: ctx.compressedTexSubImage2D.bind(ctx),
+        rawTexParameteri: ctx.texParameteri.bind(ctx),
+        rawTexParameterf: ctx.texParameterf.bind(ctx),
+        rawGenerateMipmap: ctx.generateMipmap.bind(ctx),
+        rawShaderSource: ctx.shaderSource.bind(ctx)
+    };
+    ctx.__v86glVolumeCompat = state;
+
+    ctx.activeTexture = function(texture) {
+        state.unit = texture - ctx.TEXTURE0;
+        return state.rawActiveTexture(texture);
+    };
+    ctx.bindTexture = function(target, texture) {
+        if (target === ctx.TEXTURE_2D) {
+            const volume = !!texture && state.textures.has(texture);
+            state.redirected[state.unit] = volume;
+            if (volume) target = ctx.TEXTURE_3D;
+        }
+        return state.rawBindTexture(target, texture);
+    };
+    ctx.texImage2D = function(target) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit]) return;
+        return state.rawTexImage2D.apply(ctx, arguments);
+    };
+    ctx.texSubImage2D = function(target) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit]) return;
+        return state.rawTexSubImage2D.apply(ctx, arguments);
+    };
+    ctx.compressedTexImage2D = function(target) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit]) return;
+        return state.rawCompressedTexImage2D.apply(ctx, arguments);
+    };
+    ctx.compressedTexSubImage2D = function(target) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit]) return;
+        return state.rawCompressedTexSubImage2D.apply(ctx, arguments);
+    };
+    ctx.texParameteri = function(target, pname, param) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit])
+            target = ctx.TEXTURE_3D;
+        return state.rawTexParameteri(target, pname, param);
+    };
+    ctx.texParameterf = function(target, pname, param) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit])
+            target = ctx.TEXTURE_3D;
+        return state.rawTexParameterf(target, pname, param);
+    };
+    ctx.generateMipmap = function(target) {
+        if (target === ctx.TEXTURE_2D && state.redirected[state.unit])
+            target = ctx.TEXTURE_3D;
+        return state.rawGenerateMipmap(target);
+    };
+    ctx.shaderSource = function(shader, source) {
+        /* gl4es's GLES2 shader converter historically lowers the 3D ARB
+         * sampler name to sampler2D. Emscripten then correctly rewrites
+         * texture3D() to texture(), but the sampler/vec3 pair no longer has
+         * a valid WebGL2 overload. Keep the generated name (gl4es uses it to
+         * assign the texture unit) and restore only its sampler type. */
+        if (typeof source === "string" &&
+                source.indexOf("_gl4es_Sampler3D_") !== -1) {
+            source = source.replace(
+                /\\buniform(\\s+(?:lowp|mediump|highp))?\\s+sampler2D(\\s+_gl4es_Sampler3D_\\d+\\s*;)/g,
+                function(_match, precision, declaration) {
+                    /* Fragment shaders have a default precision for
+                     * sampler2D, but not necessarily for sampler3D. Keep an
+                     * explicit qualifier when gl4es emitted one and provide
+                     * highp otherwise so the rewritten declaration remains
+                     * valid GLSL ES without reducing 3D coordinate precision. */
+                    return "uniform" + (precision || " highp") +
+                        " sampler3D" + declaration;
+                });
+        }
+        return state.rawShaderSource(shader, source);
+    };
+});
+
+EM_JS(void, v86gl_prepare_webgl2_volume_texture, (GLuint texture, GLuint unit), {
+    const ctx = GLctx;
+    const state = ctx && ctx.__v86glVolumeCompat;
+    const object = GL.textures[texture];
+    if (!state || !object) return;
+    state.textures.add(object);
+    state.unit = unit;
+    state.redirected[unit] = true;
+    state.rawActiveTexture(ctx.TEXTURE0 + unit);
+    state.rawBindTexture(ctx.TEXTURE_3D, object);
 });
 #endif
 
@@ -365,6 +911,13 @@ typedef struct {
 } V86GLNameMap;
 
 typedef struct {
+    GLuint guest;
+    GLuint host;
+    char* source;
+    GLsizei source_length;
+} V86GLArbProgramMap;
+
+typedef struct {
     GLint guest;
     GLint host;
 } V86GLLocationMap;
@@ -372,9 +925,11 @@ typedef struct {
 static V86GLTextureName g_textures[V86GL_MAX_TEXTURES];
 static uint32_t g_texture_count;
 static V86GLNameMap g_programs[V86GL_MAX_PROGRAMS];
-static V86GLNameMap g_arb_programs[V86GL_MAX_ARB_PROGRAMS];
+static V86GLArbProgramMap g_arb_programs[V86GL_MAX_ARB_PROGRAMS];
 static uint32_t g_program_count;
 static uint32_t g_arb_program_count;
+static GLuint g_current_vertex_arb_program;
+static GLuint g_current_fragment_arb_program;
 static V86GLNameMap g_shaders[V86GL_MAX_SHADERS];
 static uint32_t g_shader_count;
 static V86GLNameMap g_framebuffers[V86GL_MAX_FRAMEBUFFERS];
@@ -398,6 +953,45 @@ static GLuint g_default_texture_2d;
 static GLuint g_default_texture_3d;
 static GLuint g_default_texture_cube;
 static GLuint g_default_texture_rectangle;
+
+typedef struct {
+    GLuint texture_1d;
+    GLuint texture_2d;
+    GLuint texture_3d;
+    GLuint texture_cube;
+    GLuint texture_rectangle;
+} V86GLTextureBindings;
+
+static V86GLTextureBindings g_texture_bindings[8];
+static uint32_t g_active_texture_unit;
+
+static GLuint* v86gl_bound_texture_slot(GLenum target, uint32_t unit) {
+    V86GLTextureBindings* bindings;
+
+    if (unit >= sizeof(g_texture_bindings) / sizeof(g_texture_bindings[0])) {
+        return NULL;
+    }
+    bindings = &g_texture_bindings[unit];
+    switch (target) {
+    case GL_TEXTURE_1D:
+        return &bindings->texture_1d;
+    case GL_TEXTURE_3D:
+        return &bindings->texture_3d;
+    case GL_TEXTURE_CUBE_MAP:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+        return &bindings->texture_cube;
+    case GL_TEXTURE_RECTANGLE_ARB:
+        return &bindings->texture_rectangle;
+    case GL_TEXTURE_2D:
+    default:
+        return &bindings->texture_2d;
+    }
+}
 
 static GLuint* v86gl_default_texture_slot(GLenum target) {
     switch (target) {
@@ -444,6 +1038,28 @@ static GLuint v86gl_default_texture(GLenum target) {
     return *texture;
 }
 
+static void v86gl_restore_texture_binding(GLenum target) {
+    GLenum binding_target = v86gl_binding_target(target);
+    GLuint* bound = v86gl_bound_texture_slot(binding_target,
+                                              g_active_texture_unit);
+    GLuint texture;
+
+    if (!bound) {
+        return;
+    }
+    texture = *bound;
+    if (!texture) {
+        texture = v86gl_default_texture(binding_target);
+        *bound = texture;
+    }
+    if (texture) {
+        /* Rebinding is intentional. gl4es may temporarily bind object zero
+         * while switching emulated desktop texture targets; WebGL rejects a
+         * following texParameter call unless the real binding is restored. */
+        glBindTexture(binding_target, texture);
+    }
+}
+
 static void v86gl_bind_default_textures(void) {
     static const GLenum targets[] = {
         GL_TEXTURE_1D,
@@ -462,10 +1078,12 @@ static void v86gl_bind_default_textures(void) {
             GLuint texture = v86gl_default_texture(target);
             if (texture) {
                 glBindTexture(target, texture);
+                *v86gl_bound_texture_slot(target, (uint32_t)i) = texture;
             }
         }
     }
     glActiveTexture(GL_TEXTURE0);
+    g_active_texture_unit = 0;
 }
 
 static void v86gl_apply_gl4es_context_hints(void) {
@@ -497,8 +1115,9 @@ static int v86gl_ensure_ready(void) {
     attrs.antialias = EM_FALSE;
     attrs.premultipliedAlpha = EM_FALSE;
     attrs.preserveDrawingBuffer = EM_TRUE;
-    /* Texture3D requires WebGL2.  Prefer it when available, while retaining
-     * the WebGL1 fallback for browsers that cannot create a WebGL2 canvas. */
+    /* The advertised D3D8 profile includes volume textures and therefore
+     * requires WebGL2.  Failing context creation is preferable to silently
+     * exposing a volume capability on a WebGL1 renderer that cannot execute it. */
     attrs.majorVersion = 2;
     attrs.minorVersion = 0;
 
@@ -507,16 +1126,9 @@ static int v86gl_ensure_ready(void) {
         g_webgl_major_version = 2;
     }
 
-    if (g_webgl_context <= 0) {
-        attrs.majorVersion = 1;
-        g_webgl_context = emscripten_webgl_create_context("#v86gl_canvas", &attrs);
-        if (g_webgl_context > 0) {
-            g_webgl_major_version = 1;
-        }
-    }
-
     if (g_webgl_context > 0) {
         emscripten_webgl_make_context_current(g_webgl_context);
+        v86gl_install_webgl2_volume_compat();
     } else {
         return 0;
     }
@@ -587,18 +1199,42 @@ static GLuint v86gl_host_program(GLuint guest) {
     return 0;
 }
 
-static GLuint v86gl_host_arb_program(GLuint guest, int create) {
+static V86GLArbProgramMap* v86gl_arb_program_map(GLuint guest) {
     uint32_t i;
-    GLuint host = 0;
 
     if (!guest) {
-        return 0;
+        return NULL;
     }
 
     for (i = 0; i < g_arb_program_count; i++) {
         if (g_arb_programs[i].guest == guest) {
-            return g_arb_programs[i].host;
+            return &g_arb_programs[i];
         }
+    }
+
+    return NULL;
+}
+
+static V86GLArbProgramMap* v86gl_arb_program_map_host(GLuint host) {
+    uint32_t i;
+
+    if (!host) {
+        return NULL;
+    }
+    for (i = 0; i < g_arb_program_count; i++) {
+        if (g_arb_programs[i].host == host) {
+            return &g_arb_programs[i];
+        }
+    }
+    return NULL;
+}
+
+static GLuint v86gl_host_arb_program(GLuint guest, int create) {
+    V86GLArbProgramMap* map = v86gl_arb_program_map(guest);
+    GLuint host = 0;
+
+    if (map) {
+        return map->host;
     }
 
     if (!create || g_arb_program_count >= V86GL_MAX_ARB_PROGRAMS) {
@@ -611,6 +1247,8 @@ static GLuint v86gl_host_arb_program(GLuint guest, int create) {
     }
     g_arb_programs[g_arb_program_count].guest = guest;
     g_arb_programs[g_arb_program_count].host = host;
+    g_arb_programs[g_arb_program_count].source = NULL;
+    g_arb_programs[g_arb_program_count].source_length = 0;
     g_arb_program_count++;
     return host;
 }
@@ -753,6 +1391,54 @@ static void v86gl_forget_name(V86GLNameMap* maps, uint32_t* count, GLuint guest)
     }
 }
 
+static void v86gl_map_arb_program(GLuint guest, GLuint host) {
+    V86GLArbProgramMap* map;
+
+    if (!guest) {
+        return;
+    }
+    map = v86gl_arb_program_map(guest);
+    if (map) {
+        map->host = host;
+        return;
+    }
+    if (g_arb_program_count < V86GL_MAX_ARB_PROGRAMS) {
+        map = &g_arb_programs[g_arb_program_count++];
+        map->guest = guest;
+        map->host = host;
+        map->source = NULL;
+        map->source_length = 0;
+    }
+}
+
+static void v86gl_forget_arb_program(GLuint guest) {
+    uint32_t i;
+
+    for (i = 0; i < g_arb_program_count; i++) {
+        if (g_arb_programs[i].guest == guest) {
+            if (g_arb_programs[i].source) {
+                free(g_arb_programs[i].source);
+            }
+            g_arb_programs[i] = g_arb_programs[g_arb_program_count - 1u];
+            g_arb_program_count--;
+            return;
+        }
+    }
+}
+
+static V86GLArbProgramMap* v86gl_bound_arb_program(GLenum target) {
+    GLuint host;
+
+    if (target == GL_VERTEX_PROGRAM_ARB) {
+        host = g_current_vertex_arb_program;
+    } else if (target == GL_FRAGMENT_PROGRAM_ARB) {
+        host = g_current_fragment_arb_program;
+    } else {
+        return NULL;
+    }
+    return v86gl_arb_program_map_host(host);
+}
+
 static void v86gl_map_location(V86GLLocationMap* maps, uint32_t* count,
                                uint32_t capacity, GLint guest, GLint host) {
     uint32_t i;
@@ -826,8 +1512,16 @@ static char* v86gl_copy_name(GLsizei length, const char* name) {
 }
 
 static void v86gl_reset_gl2_maps(void) {
+    uint32_t i;
+
+    for (i = 0; i < g_arb_program_count; i++) {
+        free(g_arb_programs[i].source);
+        g_arb_programs[i].source = NULL;
+    }
     g_program_count = 0;
     g_arb_program_count = 0;
+    g_current_vertex_arb_program = 0;
+    g_current_fragment_arb_program = 0;
     g_shader_count = 0;
     g_uniform_location_count = 0;
     g_attrib_location_count = 0;
@@ -872,6 +1566,15 @@ void v86glDestroyRenderer(void) {
     }
 
     glFlush();
+    /* The JS bridge discards this entire WASM instance immediately after
+     * returning.  A deep gl4es heap teardown is both unnecessary and unsafe:
+     * DeleteGLState(DEFAULT_STATE) clears the global glstate pointer before it
+     * releases residual ARB shaders and render lists; shader/VBO deletion then
+     * still resolves maps and GLES entry points through glstate. Ask gl4es to
+     * run its shutdown hooks without walking that per-instance heap; the WebGL
+     * context is explicitly lost and destroyed below, and dropping the WASM
+     * instance releases the linear memory as a unit. */
+    globals4es.noclean = 1;
     close_gl4es();
     g_ready = 0;
     g_surface_hwnd = 0;
@@ -886,6 +1589,8 @@ void v86glDestroyRenderer(void) {
     g_default_texture_3d = 0;
     g_default_texture_cube = 0;
     g_default_texture_rectangle = 0;
+    memset(g_texture_bindings, 0, sizeof(g_texture_bindings));
+    g_active_texture_unit = 0;
     g_webgl_major_version = 0;
 
 #ifdef __EMSCRIPTEN__
@@ -1034,12 +1739,16 @@ void v86gl_glPopMatrix(void) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glEnable(GLenum cap) {
     if (!v86gl_ensure_ready()) return;
+    /* WebGL always accepts gl_PointSize from the active vertex shader and
+     * does not expose desktop GL_PROGRAM_POINT_SIZE as an enable. */
+    if (cap == GL_PROGRAM_POINT_SIZE) return;
     glEnable(cap);
 }
 
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glDisable(GLenum cap) {
     if (!v86gl_ensure_ready()) return;
+    if (cap == GL_PROGRAM_POINT_SIZE) return;
     glDisable(cap);
 }
 
@@ -1148,12 +1857,22 @@ void v86gl_glReadBuffer(GLenum mode) {
 EMSCRIPTEN_KEEPALIVE
 int v86gl_glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                        GLenum format, GLenum type, void* pixels) {
+    unsigned int pending_errors;
+
     if (!pixels || width < 0 || height < 0 || !v86gl_ensure_ready()) {
         return 0;
     }
 
+    /* This export backs a synchronous protocol request. Do not report success
+     * when WebGL/gl4es rejected the read: copy-to-texture normalization would
+     * otherwise journal and upload an uninitialized output buffer. Host GL
+     * errors are not part of the guest-visible error queue, so drain any stale
+     * host errors before attributing the next one to this operation. */
+    for (pending_errors = 0; pending_errors < 16; pending_errors++) {
+        if (glGetError() == GL_NO_ERROR) break;
+    }
     glReadPixels(x, y, width, height, format, type, pixels);
-    return 1;
+    return glGetError() == GL_NO_ERROR;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1170,6 +1889,13 @@ void v86gl_glGenTextures(GLsizei n, const GLuint* textures) {
 
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glDeleteTextures(GLsizei n, const GLuint* textures) {
+    static const GLenum targets[] = {
+        GL_TEXTURE_1D,
+        GL_TEXTURE_2D,
+        GL_TEXTURE_3D,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_RECTANGLE_ARB,
+    };
     GLsizei i;
 
     if (!v86gl_ensure_ready()) return;
@@ -1178,7 +1904,25 @@ void v86gl_glDeleteTextures(GLsizei n, const GLuint* textures) {
     for (i = 0; i < n; i++) {
         GLuint host = v86gl_host_texture(textures[i], 0);
         if (host) {
+            uint32_t unit;
+            uint32_t target_index;
+
             glDeleteTextures(1, &host);
+            for (unit = 0; unit < sizeof(g_texture_bindings) /
+                                      sizeof(g_texture_bindings[0]); unit++) {
+                for (target_index = 0;
+                     target_index < sizeof(targets) / sizeof(targets[0]);
+                     target_index++) {
+                    GLuint* bound = v86gl_bound_texture_slot(targets[target_index], unit);
+                    if (bound && *bound == host) {
+                        GLuint replacement = v86gl_default_texture(targets[target_index]);
+                        glActiveTexture((GLenum)(GL_TEXTURE0 + unit));
+                        glBindTexture(targets[target_index], replacement);
+                        *bound = replacement;
+                    }
+                }
+            }
+            glActiveTexture((GLenum)(GL_TEXTURE0 + g_active_texture_unit));
             v86gl_forget_texture(textures[i]);
         }
     }
@@ -1187,11 +1931,16 @@ void v86gl_glDeleteTextures(GLsizei n, const GLuint* textures) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glBindTexture(GLenum target, GLuint texture) {
     GLuint host;
+    GLuint* bound;
 
     if (!v86gl_ensure_ready()) return;
     host = texture == 0 ? v86gl_default_texture(target) :
         v86gl_host_texture(texture, 1);
     glBindTexture(v86gl_binding_target(target), host);
+    bound = v86gl_bound_texture_slot(target, g_active_texture_unit);
+    if (bound) {
+        *bound = host;
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1332,6 +2081,125 @@ void v86gl_glFogCoordPointerVBO(GLint size, GLenum type, GLsizei stride,
     glFogCoordPointer(type, stride, (const void*)offset);
 }
 
+static GLuint v86gl_prepare_bound_volume_texture(void) {
+    GLuint* bound = v86gl_bound_texture_slot(GL_TEXTURE_3D,
+                                              g_active_texture_unit);
+    GLuint texture = bound ? *bound : 0;
+
+#ifdef __EMSCRIPTEN__
+    if (texture) {
+        v86gl_prepare_webgl2_volume_texture(texture,
+                                             g_active_texture_unit);
+    }
+#endif
+    return texture;
+}
+
+static void v86gl_tex_image_3d_impl(GLenum target, GLint level,
+                                    GLint internalformat, GLsizei width,
+                                    GLsizei height, GLsizei depth, GLint border,
+                                    GLenum format, GLenum type,
+                                    const void* pixels, int pixels_are_tight) {
+#ifdef __EMSCRIPTEN__
+    uint8_t* converted = NULL;
+    int conversion;
+
+    if (!v86gl_prepare_bound_volume_texture()) return;
+    /* WineD3D first allocates every volume mip with a NULL pointer. No byte
+     * conversion is needed in that case, but WebGL2 still validates the
+     * desktop external format/type pair. Normalize it before the raw call so
+     * BGRA + UNSIGNED_INT_8_8_8_8_REV storage is actually created. */
+    if (!pixels || width <= 0 || height <= 0 || depth <= 0) {
+        if (format == GL_BGR) {
+            internalformat = GL_RGB8;
+            format = GL_RGB;
+            type = GL_UNSIGNED_BYTE;
+        } else if (format == GL_BGRA ||
+                   (format == GL_RGBA &&
+                    (type == GL_UNSIGNED_INT_8_8_8_8 ||
+                     type == GL_UNSIGNED_INT_8_8_8_8_REV ||
+                     type == GL_UNSIGNED_SHORT_4_4_4_4_REV ||
+                     type == GL_UNSIGNED_SHORT_1_5_5_5_REV))) {
+            internalformat = GL_RGBA8;
+            format = GL_RGBA;
+            type = GL_UNSIGNED_BYTE;
+        }
+    }
+    conversion = v86gl_convert_volume_bgr(width, height, depth, format, type,
+                                           pixels, &converted);
+    if (conversion < 0) {
+        printf("[v86gl] unsupported WebGL2 volume upload format=0x%x type=0x%x\n",
+               (unsigned int)format, (unsigned int)type);
+        return;
+    }
+    if (conversion > 0) {
+        internalformat = GL_RGBA8;
+        format = GL_RGBA;
+        type = GL_UNSIGNED_BYTE;
+        pixels = converted;
+        pixels_are_tight = 1;
+    }
+    if (internalformat == GL_RGBA || internalformat == 4)
+        internalformat = GL_RGBA8;
+    else if (internalformat == GL_RGB || internalformat == 3)
+        internalformat = GL_RGB8;
+    /* Keep gl4es's validity, mip-level and fixed-pipeline bookkeeping, but
+     * never let its GLES2 3D stub inspect or forward the original desktop
+     * tuple. The real pixels are uploaded exactly once by the raw WebGL2 call
+     * below; NULL is sufficient for gl4es to record the normalized level. */
+    glTexImage3D(target, level, internalformat, width, height, depth, border,
+                 format, type, NULL);
+    v86gl_set_raw_volume_unpack(pixels_are_tight);
+    emscripten_glTexImage3D(target, level, internalformat, width, height,
+                            depth, border, format, type, pixels);
+    v86gl_restore_raw_unpack_for_gl4es();
+    free(converted);
+#else
+    (void)pixels_are_tight;
+    glTexImage3D(target, level, internalformat, width, height, depth, border,
+                 format, type, pixels);
+#endif
+}
+
+static void v86gl_tex_sub_image_3d_impl(GLenum target, GLint level,
+                                        GLint xoffset, GLint yoffset,
+                                        GLint zoffset, GLsizei width,
+                                        GLsizei height, GLsizei depth,
+                                        GLenum format, GLenum type,
+                                        const void* pixels,
+                                        int pixels_are_tight) {
+#ifdef __EMSCRIPTEN__
+    uint8_t* converted = NULL;
+    int conversion;
+
+    if (!v86gl_prepare_bound_volume_texture()) return;
+    glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height,
+                    depth, format, type, pixels);
+    conversion = v86gl_convert_volume_bgr(width, height, depth, format, type,
+                                           pixels, &converted);
+    if (conversion < 0) {
+        printf("[v86gl] unsupported WebGL2 volume sub-upload format=0x%x type=0x%x\n",
+               (unsigned int)format, (unsigned int)type);
+        return;
+    }
+    if (conversion > 0) {
+        format = GL_RGBA;
+        type = GL_UNSIGNED_BYTE;
+        pixels = converted;
+        pixels_are_tight = 1;
+    }
+    v86gl_set_raw_volume_unpack(pixels_are_tight);
+    emscripten_glTexSubImage3D(target, level, xoffset, yoffset, zoffset,
+                               width, height, depth, format, type, pixels);
+    v86gl_restore_raw_unpack_for_gl4es();
+    free(converted);
+#else
+    (void)pixels_are_tight;
+    glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height,
+                    depth, format, type, pixels);
+#endif
+}
+
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glVertexAttribPointerMapped(GLuint guest_index, GLint size,
                                        GLenum type, GLboolean normalized,
@@ -1366,7 +2234,21 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                   GLsizei width, GLsizei height, GLint border,
                                   GLsizei image_size, const void* data) {
+    uint8_t* decoded;
+    int result;
+    V86GLUnpackState unpack;
+
     if (!v86gl_ensure_ready()) return;
+    result = v86gl_decode_s3tc(width, height, 1, internalformat, image_size, data, &decoded);
+    if (result > 0) {
+        v86gl_begin_tight_unpack(&unpack);
+        glTexImage2D(target, level, GL_RGBA, width, height, border,
+                     GL_RGBA, GL_UNSIGNED_BYTE, decoded);
+        v86gl_end_tight_unpack(&unpack);
+        free(decoded);
+        return;
+    }
+    if (result < 0) return;
     glCompressedTexImage2D(target, level, internalformat, width, height, border,
                            image_size, data);
 }
@@ -1375,7 +2257,21 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat,
                                   GLsizei width, GLint border, GLsizei image_size,
                                   const void* data) {
+    uint8_t* decoded;
+    int result;
+    V86GLUnpackState unpack;
+
     if (!v86gl_ensure_ready()) return;
+    result = v86gl_decode_s3tc(width, 1, 1, internalformat, image_size, data, &decoded);
+    if (result > 0) {
+        v86gl_begin_tight_unpack(&unpack);
+        glTexImage1D(target, level, GL_RGBA, width, border,
+                     GL_RGBA, GL_UNSIGNED_BYTE, decoded);
+        v86gl_end_tight_unpack(&unpack);
+        free(decoded);
+        return;
+    }
+    if (result < 0) return;
     glCompressedTexImage1D(target, level, internalformat, width, border, image_size, data);
 }
 
@@ -1383,7 +2279,21 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat,
                                   GLsizei width, GLsizei height, GLsizei depth, GLint border,
                                   GLsizei image_size, const void* data) {
+    uint8_t* decoded;
+    int result;
+    V86GLUnpackState unpack;
+
     if (!v86gl_ensure_ready()) return;
+    result = v86gl_decode_s3tc(width, height, depth, internalformat, image_size, data, &decoded);
+    if (result > 0) {
+        v86gl_begin_tight_unpack(&unpack);
+        v86gl_tex_image_3d_impl(target, level, GL_RGBA, width, height, depth,
+                                border, GL_RGBA, GL_UNSIGNED_BYTE, decoded, 1);
+        v86gl_end_tight_unpack(&unpack);
+        free(decoded);
+        return;
+    }
+    if (result < 0) return;
     glCompressedTexImage3D(target, level, internalformat, width, height, depth, border,
                            image_size, data);
 }
@@ -1392,7 +2302,20 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                                      GLsizei width, GLenum format, GLsizei image_size,
                                      const void* data) {
+    uint8_t* decoded;
+    int result;
+    V86GLUnpackState unpack;
+
     if (!v86gl_ensure_ready()) return;
+    result = v86gl_decode_s3tc(width, 1, 1, format, image_size, data, &decoded);
+    if (result > 0) {
+        v86gl_begin_tight_unpack(&unpack);
+        glTexSubImage1D(target, level, xoffset, width, GL_RGBA, GL_UNSIGNED_BYTE, decoded);
+        v86gl_end_tight_unpack(&unpack);
+        free(decoded);
+        return;
+    }
+    if (result < 0) return;
     glCompressedTexSubImage1D(target, level, xoffset, width, format, image_size, data);
 }
 
@@ -1400,7 +2323,21 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset,
                                      GLint yoffset, GLsizei width, GLsizei height,
                                      GLenum format, GLsizei image_size, const void* data) {
+    uint8_t* decoded;
+    int result;
+    V86GLUnpackState unpack;
+
     if (!v86gl_ensure_ready()) return;
+    result = v86gl_decode_s3tc(width, height, 1, format, image_size, data, &decoded);
+    if (result > 0) {
+        v86gl_begin_tight_unpack(&unpack);
+        glTexSubImage2D(target, level, xoffset, yoffset, width, height,
+                        GL_RGBA, GL_UNSIGNED_BYTE, decoded);
+        v86gl_end_tight_unpack(&unpack);
+        free(decoded);
+        return;
+    }
+    if (result < 0) return;
     glCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format,
                               image_size, data);
 }
@@ -1410,7 +2347,22 @@ void v86gl_glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset,
                                      GLint yoffset, GLint zoffset, GLsizei width,
                                      GLsizei height, GLsizei depth, GLenum format,
                                      GLsizei image_size, const void* data) {
+    uint8_t* decoded;
+    int result;
+    V86GLUnpackState unpack;
+
     if (!v86gl_ensure_ready()) return;
+    result = v86gl_decode_s3tc(width, height, depth, format, image_size, data, &decoded);
+    if (result > 0) {
+        v86gl_begin_tight_unpack(&unpack);
+        v86gl_tex_sub_image_3d_impl(target, level, xoffset, yoffset, zoffset,
+                                    width, height, depth, GL_RGBA,
+                                    GL_UNSIGNED_BYTE, decoded, 1);
+        v86gl_end_tight_unpack(&unpack);
+        free(decoded);
+        return;
+    }
+    if (result < 0) return;
     glCompressedTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height,
                               depth, format, image_size, data);
 }
@@ -1420,8 +2372,8 @@ void v86gl_glTexImage3D(GLenum target, GLint level, GLint internalformat,
                         GLsizei width, GLsizei height, GLsizei depth, GLint border,
                         GLenum format, GLenum type, const void* pixels) {
     if (!v86gl_ensure_ready()) return;
-    glTexImage3D(target, level, internalformat, width, height, depth, border,
-                 format, type, pixels);
+    v86gl_tex_image_3d_impl(target, level, internalformat, width, height,
+                            depth, border, format, type, pixels, 0);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1429,8 +2381,8 @@ void v86gl_glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoff
                            GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
                            GLenum format, GLenum type, const void* pixels) {
     if (!v86gl_ensure_ready()) return;
-    glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth,
-                    format, type, pixels);
+    v86gl_tex_sub_image_3d_impl(target, level, xoffset, yoffset, zoffset,
+                                width, height, depth, format, type, pixels, 0);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1483,12 +2435,14 @@ void v86gl_glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glTexParameteri(GLenum target, GLenum pname, GLint param) {
     if (!v86gl_ensure_ready()) return;
+    v86gl_restore_texture_binding(target);
     glTexParameteri(target, pname, param);
 }
 
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
     if (!v86gl_ensure_ready()) return;
+    v86gl_restore_texture_binding(target);
     glTexParameterf(target, pname, param);
 }
 
@@ -1502,6 +2456,7 @@ void v86gl_glTexParameteriv4(GLenum target, GLenum pname, GLsizei count,
     values[1] = v1;
     values[2] = v2;
     values[3] = v3;
+    v86gl_restore_texture_binding(target);
     glTexParameteriv(target, pname, values);
 }
 
@@ -1515,12 +2470,22 @@ void v86gl_glTexParameterfv4(GLenum target, GLenum pname, GLsizei count,
     values[1] = v1;
     values[2] = v2;
     values[3] = v3;
+    v86gl_restore_texture_binding(target);
     glTexParameterfv(target, pname, values);
 }
 
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glPixelStorei(GLenum pname, GLint param) {
     if (!v86gl_ensure_ready()) return;
+    switch (pname) {
+    case GL_UNPACK_ALIGNMENT: g_unpack_alignment = param; break;
+    case GL_UNPACK_ROW_LENGTH: g_unpack_row_length = param; break;
+    case GL_UNPACK_SKIP_ROWS: g_unpack_skip_rows = param; break;
+    case GL_UNPACK_SKIP_PIXELS: g_unpack_skip_pixels = param; break;
+    case GL_UNPACK_IMAGE_HEIGHT: g_unpack_image_height = param; break;
+    case GL_UNPACK_SKIP_IMAGES: g_unpack_skip_images = param; break;
+    default: break;
+    }
     glPixelStorei(pname, param);
 }
 
@@ -1633,6 +2598,11 @@ void v86gl_glColorMaterial(GLenum face, GLenum mode) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glActiveTexture(GLenum texture) {
     if (!v86gl_ensure_ready()) return;
+    if (texture >= GL_TEXTURE0 &&
+        texture < GL_TEXTURE0 + sizeof(g_texture_bindings) /
+                                sizeof(g_texture_bindings[0])) {
+        g_active_texture_unit = (uint32_t)(texture - GL_TEXTURE0);
+    }
     glActiveTexture(texture);
 }
 
@@ -1827,10 +2797,9 @@ void v86gl_glSampleCoverage(GLclampf value, GLboolean invert) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glGenerateMipmap(GLenum target) {
     if (!v86gl_ensure_ready()) return;
-    /* The browser cannot generate mipmaps for several legacy compressed
-     * formats.  Sampling an incomplete mip chain is black, so retain level 0
-     * instead of issuing a WebGL-invalid generate call. */
-    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    /* S3TC images are decoded to ordinary RGBA by the upload wrappers, so
+     * mipmap generation is valid and deterministic for 1D/2D/cube/3D data. */
+    glGenerateMipmap(target);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -2077,8 +3046,7 @@ void v86gl_glGenProgramsARBMapped(GLsizei n, const GLuint* guest_names) {
         }
         gl4es_glGenProgramsARB(1, &host);
         if (host) {
-            v86gl_map_name(g_arb_programs, &g_arb_program_count,
-                           V86GL_MAX_ARB_PROGRAMS, guest_names[i], host);
+            v86gl_map_arb_program(guest_names[i], host);
         }
     }
 }
@@ -2100,8 +3068,14 @@ void v86gl_glDeleteProgramsARBMapped(GLsizei n, const GLuint* guest_names) {
         GLuint host = v86gl_host_arb_program(guest_names[i], 0);
         if (host) {
             host_names[host_count++] = host;
+            if (g_current_vertex_arb_program == host) {
+                g_current_vertex_arb_program = 0;
+            }
+            if (g_current_fragment_arb_program == host) {
+                g_current_fragment_arb_program = 0;
+            }
         }
-        v86gl_forget_name(g_arb_programs, &g_arb_program_count, guest_names[i]);
+        v86gl_forget_arb_program(guest_names[i]);
     }
 
     if (host_count > 0) {
@@ -2119,15 +3093,45 @@ void v86gl_glBindProgramARBMapped(GLenum target, GLuint guest_program) {
         host_program = v86gl_host_arb_program(guest_program, 1);
         if (!host_program) return;
     }
+    if (target == GL_VERTEX_PROGRAM_ARB) {
+        g_current_vertex_arb_program = host_program;
+    } else if (target == GL_FRAGMENT_PROGRAM_ARB) {
+        g_current_fragment_arb_program = host_program;
+    }
     gl4es_glBindProgramARB(target, host_program);
 }
 
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glProgramStringARB(GLenum target, GLenum format, GLsizei length,
                               const GLvoid* string) {
+    V86GLArbProgramMap* map;
+    char* original = NULL;
+    char* sanitized = NULL;
+    size_t sanitized_length = 0;
+
     if (!v86gl_ensure_ready()) return;
     if (length < 0 || (length > 0 && !string)) return;
-    gl4es_glProgramStringARB(target, format, length, string ? string : "");
+    map = v86gl_bound_arb_program(target);
+    if (map) {
+        original = v86gl_copy_name(length, (const char*)string);
+        if (!original) return;
+    }
+    if (!v86gl_sanitize_arb_program((const char*)string, (size_t)length,
+                                    &sanitized, &sanitized_length) ||
+        sanitized_length > INT32_MAX) {
+        free(original);
+        free(sanitized);
+        return;
+    }
+
+    gl4es_glProgramStringARB(target, format, (GLsizei)sanitized_length,
+                             sanitized);
+    free(sanitized);
+    if (map) {
+        free(map->source);
+        map->source = original;
+        map->source_length = length;
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -2167,7 +3171,14 @@ void v86gl_glProgramParameterdvARB(uint32_t parameter_kind, GLenum target,
 
 EMSCRIPTEN_KEEPALIVE
 int v86gl_glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
+    V86GLArbProgramMap* map;
+
     if (!v86gl_ensure_ready() || !params) return 0;
+    map = v86gl_bound_arb_program(target);
+    if (pname == GL_PROGRAM_LENGTH_ARB && map && map->source) {
+        *params = map->source_length < INT32_MAX ? map->source_length + 1 : INT32_MAX;
+        return 1;
+    }
     gl4es_glGetProgramivARB(target, pname, params);
     return 1;
 }
@@ -2207,9 +3218,29 @@ int v86gl_glGetProgramParameterdvARB(uint32_t parameter_kind, GLenum target,
 EMSCRIPTEN_KEEPALIVE
 int v86gl_glGetProgramStringARB(GLenum target, GLenum pname, GLsizei bufSize,
                                 GLsizei* length, GLvoid* string) {
+    V86GLArbProgramMap* map;
     GLint program_length = 0;
 
     if (!v86gl_ensure_ready() || bufSize < 0) return 0;
+    map = v86gl_bound_arb_program(target);
+    if (pname == GL_PROGRAM_STRING_ARB && map && map->source) {
+        GLsizei copy_length = 0;
+
+        program_length = map->source_length < INT32_MAX ?
+            map->source_length + 1 : INT32_MAX;
+        if (length) {
+            *length = program_length;
+        }
+        if (bufSize > 0 && string) {
+            copy_length = map->source_length < bufSize - 1 ?
+                map->source_length : bufSize - 1;
+            if (copy_length > 0) {
+                memcpy(string, map->source, (size_t)copy_length);
+            }
+            ((char*)string)[copy_length] = '\0';
+        }
+        return 1;
+    }
     gl4es_glGetProgramivARB(target, GL_PROGRAM_LENGTH_ARB, &program_length);
     if (length) {
         *length = program_length;

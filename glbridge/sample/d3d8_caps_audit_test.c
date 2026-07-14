@@ -1,4 +1,4 @@
-// Direct3D 8 conservative capability-profile and CheckDeviceFormat audit.
+// Direct3D 8 extended capability-profile and CheckDeviceFormat audit.
 
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
@@ -30,15 +30,15 @@ static const FormatProbe g_probes[] =
     {"D24S8 depth/stencil surface", D3DUSAGE_DEPTHSTENCIL,
             D3DRTYPE_SURFACE, D3DFMT_D24S8, TRUE, 0},
 
-    {"DXT1 must be hidden", 0, D3DRTYPE_TEXTURE, D3DFMT_DXT1, FALSE, 1},
-    {"DXT3 must be hidden", 0, D3DRTYPE_TEXTURE, D3DFMT_DXT3, FALSE, 1},
-    {"DXT5 must be hidden", 0, D3DRTYPE_TEXTURE, D3DFMT_DXT5, FALSE, 1},
-    {"cube texture must be hidden", 0, D3DRTYPE_CUBETEXTURE,
-            D3DFMT_A8R8G8B8, FALSE, 1},
-    {"volume texture must be hidden", 0, D3DRTYPE_VOLUMETEXTURE,
-            D3DFMT_A8R8G8B8, FALSE, 1},
-    {"render-target texture must be hidden", D3DUSAGE_RENDERTARGET,
-            D3DRTYPE_TEXTURE, D3DFMT_A8R8G8B8, FALSE, 1}
+    {"DXT1 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_DXT1, TRUE, 1},
+    {"DXT3 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_DXT3, TRUE, 1},
+    {"DXT5 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_DXT5, TRUE, 1},
+    {"cube texture", 0, D3DRTYPE_CUBETEXTURE,
+            D3DFMT_A8R8G8B8, TRUE, 1},
+    {"volume texture", 0, D3DRTYPE_VOLUMETEXTURE,
+            D3DFMT_A8R8G8B8, TRUE, 1},
+    {"render-target texture", D3DUSAGE_RENDERTARGET,
+            D3DRTYPE_TEXTURE, D3DFMT_A8R8G8B8, TRUE, 1}
 };
 
 static const char g_class_name[] = "V86GLD3D8CapsAuditTest";
@@ -114,15 +114,6 @@ static void require_bits(const char *name, DWORD actual, DWORD required,
     char line[240];
     if ((actual & required) == required) return;
     wsprintfA(line, "%s is missing required tested bits", name);
-    mismatch(line, category);
-}
-
-static void forbid_bits(const char *name, DWORD actual, DWORD forbidden,
-        UINT category)
-{
-    char line[240];
-    if (!(actual & forbidden)) return;
-    wsprintfA(line, "%s exposes an unverified/forbidden bit", name);
     mismatch(line, category);
 }
 
@@ -202,35 +193,29 @@ static void audit_caps(void)
             D3DSTENCILCAPS_KEEP | D3DSTENCILCAPS_REPLACE, 2);
     require_bits("TextureOpCaps", g_caps.TextureOpCaps,
             tested_texture_ops, 2);
-    if (g_caps.MaxTextureBlendStages < 2)
-        mismatch("MaxTextureBlendStages is below tested value 2", 2);
-    if (g_caps.MaxSimultaneousTextures < 2)
-        mismatch("MaxSimultaneousTextures is below tested value 2", 2);
-
-    begin_stage("audit forbidden high-risk caps");
-    forbid_bits("TextureCaps", g_caps.TextureCaps,
+    begin_stage("audit required extended caps");
+    require_bits("TextureCaps", g_caps.TextureCaps,
             D3DPTEXTURECAPS_CUBEMAP | D3DPTEXTURECAPS_VOLUMEMAP
-            | D3DPTEXTURECAPS_MIPCUBEMAP | D3DPTEXTURECAPS_MIPVOLUMEMAP
-            | D3DPTEXTURECAPS_CUBEMAP_POW2 | D3DPTEXTURECAPS_VOLUMEMAP_POW2,
+            | D3DPTEXTURECAPS_MIPCUBEMAP | D3DPTEXTURECAPS_MIPVOLUMEMAP,
             3);
-    if (g_caps.CubeTextureFilterCaps)
-        mismatch("CubeTextureFilterCaps must be zero", 3);
-    if (g_caps.VolumeTextureFilterCaps)
-        mismatch("VolumeTextureFilterCaps must be zero", 3);
-    if (g_caps.VolumeTextureAddressCaps)
-        mismatch("VolumeTextureAddressCaps must be zero", 3);
-    if (g_caps.MaxVolumeExtent)
-        mismatch("MaxVolumeExtent must be zero", 3);
-    if (g_caps.VertexShaderVersion)
-        mismatch("VertexShaderVersion must be zero", 3);
-    if (g_caps.MaxVertexShaderConst)
-        mismatch("MaxVertexShaderConst must be zero", 3);
-    if (g_caps.PixelShaderVersion)
-        mismatch("PixelShaderVersion must be zero", 3);
-    if (g_caps.MaxSimultaneousTextures > 2)
-        mismatch("MaxSimultaneousTextures exceeds tested value 2", 3);
-    if (g_caps.MaxTextureBlendStages > 2)
-        mismatch("MaxTextureBlendStages exceeds tested value 2", 3);
+    require_bits("CubeTextureFilterCaps", g_caps.CubeTextureFilterCaps,
+            D3DPTFILTERCAPS_MINFPOINT | D3DPTFILTERCAPS_MAGFPOINT, 3);
+    require_bits("VolumeTextureFilterCaps", g_caps.VolumeTextureFilterCaps,
+            D3DPTFILTERCAPS_MINFPOINT | D3DPTFILTERCAPS_MAGFPOINT, 3);
+    require_bits("VolumeTextureAddressCaps", g_caps.VolumeTextureAddressCaps,
+            D3DPTADDRESSCAPS_WRAP | D3DPTADDRESSCAPS_CLAMP, 3);
+    if (g_caps.MaxVolumeExtent < 256)
+        mismatch("MaxVolumeExtent is below required value 256", 3);
+    if (g_caps.VertexShaderVersion < D3DVS_VERSION(1, 1))
+        mismatch("VertexShaderVersion is below 1.1", 3);
+    if (g_caps.MaxVertexShaderConst < 96)
+        mismatch("MaxVertexShaderConst is below 96", 3);
+    if (g_caps.PixelShaderVersion < D3DPS_VERSION(1, 1))
+        mismatch("PixelShaderVersion is below 1.1", 3);
+    if (g_caps.MaxSimultaneousTextures < 8)
+        mismatch("MaxSimultaneousTextures is below required value 8", 3);
+    if (g_caps.MaxTextureBlendStages < 8)
+        mismatch("MaxTextureBlendStages is below required value 8", 3);
 }
 
 static void audit_formats(void)
@@ -253,6 +238,400 @@ static void audit_formats(void)
         if (supported != probe->expected_supported)
             mismatch(probe->name, probe->category);
     }
+}
+
+typedef struct AuditVertex
+{
+    float x, y, z, rhw;
+    DWORD color;
+    float u, v, w;
+} AuditVertex;
+
+#define AUDIT_VERTEX_FVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1 | D3DFVF_TEXCOORDSIZE3(0))
+#define AUDIT_SHADER_PARAM 0x80000000u
+
+static void resource_failure(const char *name, HRESULT hr, UINT category)
+{
+    char line[240];
+    wsprintfA(line, "%s failed (0x%08lX)", name, (unsigned long)hr);
+    mismatch(line, category);
+}
+
+static HRESULT draw_texture(IDirect3DBaseTexture8 *texture)
+{
+    static const AuditVertex vertices[3] =
+    {
+        {40.0f, 40.0f, 0.0f, 1.0f, 0xffffffff, 0.0f, 0.0f, 0.0f},
+        {80.0f, 40.0f, 0.0f, 1.0f, 0xffffffff, 1.0f, 0.0f, 0.0f},
+        {40.0f, 80.0f, 0.0f, 1.0f, 0xffffffff, 0.0f, 1.0f, 1.0f}
+    };
+    HRESULT hr;
+
+    IDirect3DDevice8_SetPixelShader(g_device, 0);
+    IDirect3DDevice8_SetVertexShader(g_device, AUDIT_VERTEX_FVF);
+    IDirect3DDevice8_SetTexture(g_device, 0, texture);
+    IDirect3DDevice8_SetTextureStageState(g_device, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    IDirect3DDevice8_SetTextureStageState(g_device, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    IDirect3DDevice8_SetTextureStageState(g_device, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+    IDirect3DDevice8_SetTextureStageState(g_device, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    IDirect3DDevice8_SetTextureStageState(g_device, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    hr = IDirect3DDevice8_DrawPrimitiveUP(g_device, D3DPT_TRIANGLELIST, 1,
+            vertices, sizeof(vertices[0]));
+    IDirect3DDevice8_SetTexture(g_device, 0, NULL);
+    return hr;
+}
+
+static void audit_render_target_texture(void)
+{
+    IDirect3DTexture8 *texture = NULL;
+    IDirect3DSurface8 *surface = NULL;
+    IDirect3DSurface8 *previous = NULL;
+    IDirect3DSurface8 *readback = NULL;
+    BOOL scene_started = FALSE;
+    HRESULT hr;
+
+    hr = IDirect3DDevice8_CreateTexture(g_device, 32, 32, 1,
+            D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+            D3DPOOL_DEFAULT, &texture);
+    if (FAILED(hr))
+    {
+        resource_failure("render-target texture create", hr, 1);
+        return;
+    }
+    hr = IDirect3DTexture8_GetSurfaceLevel(texture, 0, &surface);
+    if (SUCCEEDED(hr))
+        hr = IDirect3DDevice8_GetRenderTarget(g_device, &previous);
+    if (SUCCEEDED(hr))
+        hr = IDirect3DDevice8_CreateImageSurface(g_device, 32, 32,
+                D3DFMT_A8R8G8B8, &readback);
+    if (SUCCEEDED(hr))
+        hr = IDirect3DDevice8_SetRenderTarget(g_device, surface, NULL);
+    if (SUCCEEDED(hr))
+        hr = IDirect3DDevice8_Clear(g_device, 0, NULL, D3DCLEAR_TARGET,
+                D3DCOLOR_ARGB(255, 24, 196, 72), 1.0f, 0);
+    if (SUCCEEDED(hr))
+        hr = IDirect3DDevice8_CopyRects(g_device, surface, NULL, 0,
+                readback, NULL);
+    if (SUCCEEDED(hr))
+    {
+        D3DLOCKED_RECT lock;
+        hr = IDirect3DSurface8_LockRect(readback, &lock, NULL,
+                D3DLOCK_READONLY);
+        if (SUCCEEDED(hr))
+        {
+            DWORD pixel = *(const DWORD *)lock.pBits;
+            IDirect3DSurface8_UnlockRect(readback);
+            if ((pixel & 0x00ffffffu) !=
+                    (D3DCOLOR_XRGB(24, 196, 72) & 0x00ffffffu))
+                hr = E_FAIL;
+        }
+    }
+    if (previous)
+    {
+        HRESULT restore_hr = IDirect3DDevice8_SetRenderTarget(g_device,
+                previous, NULL);
+        if (SUCCEEDED(hr) && FAILED(restore_hr)) hr = restore_hr;
+    }
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DDevice8_BeginScene(g_device);
+        scene_started = SUCCEEDED(hr);
+    }
+    if (scene_started)
+    {
+        HRESULT draw_hr = draw_texture((IDirect3DBaseTexture8 *)texture);
+        HRESULT end_hr = IDirect3DDevice8_EndScene(g_device);
+        if (SUCCEEDED(hr) && FAILED(draw_hr)) hr = draw_hr;
+        if (SUCCEEDED(hr) && FAILED(end_hr)) hr = end_hr;
+    }
+    if (FAILED(hr)) resource_failure("render-target texture render/sample", hr, 1);
+
+    if (previous) IDirect3DSurface8_Release(previous);
+    if (readback) IDirect3DSurface8_Release(readback);
+    if (surface) IDirect3DSurface8_Release(surface);
+    IDirect3DTexture8_Release(texture);
+}
+
+static void audit_dxt_format(D3DFORMAT format, UINT block_bytes, const char *name)
+{
+    IDirect3DTexture8 *texture = NULL;
+    UINT level;
+    HRESULT hr = IDirect3DDevice8_CreateTexture(g_device, 8, 8, 4, 0,
+            format, D3DPOOL_MANAGED, &texture);
+    if (FAILED(hr))
+    {
+        resource_failure(name, hr, 1);
+        return;
+    }
+    for (level = 0; level < 4; ++level)
+    {
+        D3DLOCKED_RECT lock;
+        UINT width = 8u >> level;
+        UINT height = 8u >> level;
+        UINT blocks_x;
+        UINT blocks_y;
+        UINT row;
+        if (!width) width = 1;
+        if (!height) height = 1;
+        blocks_x = (width + 3u) / 4u;
+        blocks_y = (height + 3u) / 4u;
+        hr = IDirect3DTexture8_LockRect(texture, level, &lock, NULL, 0);
+        if (FAILED(hr))
+        {
+            resource_failure(name, hr, 1);
+            break;
+        }
+        for (row = 0; row < blocks_y; ++row)
+            FillMemory((BYTE *)lock.pBits + row * lock.Pitch,
+                    blocks_x * block_bytes, (BYTE)(0x20u + level * 17u));
+        IDirect3DTexture8_UnlockRect(texture, level);
+    }
+    if (SUCCEEDED(hr))
+    {
+        hr = draw_texture((IDirect3DBaseTexture8 *)texture);
+        if (FAILED(hr)) resource_failure(name, hr, 1);
+    }
+    IDirect3DTexture8_Release(texture);
+}
+
+static void audit_cube_texture(void)
+{
+    IDirect3DCubeTexture8 *texture = NULL;
+    UINT face;
+    UINT level;
+    HRESULT hr = IDirect3DDevice8_CreateCubeTexture(g_device, 8, 4, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture);
+    if (FAILED(hr))
+    {
+        resource_failure("cube texture create", hr, 1);
+        return;
+    }
+    for (face = 0; face < 6 && SUCCEEDED(hr); ++face)
+    {
+        for (level = 0; level < 4; ++level)
+        {
+            D3DLOCKED_RECT lock;
+            UINT extent = 8u >> level;
+            UINT y;
+            if (!extent) extent = 1;
+            hr = IDirect3DCubeTexture8_LockRect(texture,
+                    (D3DCUBEMAP_FACES)face, level, &lock, NULL, 0);
+            if (FAILED(hr)) break;
+            for (y = 0; y < extent; ++y)
+            {
+                DWORD *row = (DWORD *)((BYTE *)lock.pBits + y * lock.Pitch);
+                UINT x;
+                for (x = 0; x < extent; ++x)
+                    row[x] = 0xff000000u | (face * 37u << 16)
+                            | (level * 61u << 8) | x * 13u;
+            }
+            IDirect3DCubeTexture8_UnlockRect(texture,
+                    (D3DCUBEMAP_FACES)face, level);
+        }
+    }
+    if (FAILED(hr)) resource_failure("cube face/mip update", hr, 1);
+    else
+    {
+        hr = draw_texture((IDirect3DBaseTexture8 *)texture);
+        if (FAILED(hr)) resource_failure("cube texture draw", hr, 1);
+    }
+    IDirect3DCubeTexture8_Release(texture);
+}
+
+static void audit_volume_texture(void)
+{
+    IDirect3DVolumeTexture8 *texture = NULL;
+    UINT level;
+    HRESULT hr = IDirect3DDevice8_CreateVolumeTexture(g_device, 4, 4, 4, 3, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture);
+    if (FAILED(hr))
+    {
+        resource_failure("volume texture create", hr, 1);
+        return;
+    }
+    for (level = 0; level < 3; ++level)
+    {
+        D3DLOCKED_BOX lock;
+        UINT extent = 4u >> level;
+        UINT z;
+        if (!extent) extent = 1;
+        hr = IDirect3DVolumeTexture8_LockBox(texture, level, &lock, NULL, 0);
+        if (FAILED(hr)) break;
+        for (z = 0; z < extent; ++z)
+        {
+            UINT y;
+            for (y = 0; y < extent; ++y)
+            {
+                DWORD *row = (DWORD *)((BYTE *)lock.pBits
+                        + z * lock.SlicePitch + y * lock.RowPitch);
+                UINT x;
+                for (x = 0; x < extent; ++x)
+                    row[x] = 0xff000000u | (z * 53u << 16)
+                            | (y * 47u << 8) | x * 41u;
+            }
+        }
+        IDirect3DVolumeTexture8_UnlockBox(texture, level);
+    }
+    if (FAILED(hr)) resource_failure("volume mip update", hr, 1);
+    else
+    {
+        hr = draw_texture((IDirect3DBaseTexture8 *)texture);
+        if (FAILED(hr)) resource_failure("volume texture draw", hr, 1);
+    }
+    IDirect3DVolumeTexture8_Release(texture);
+}
+
+static void audit_shader_pipeline(void)
+{
+    static const DWORD declaration[] =
+    {
+        D3DVSD_STREAM(0),
+        D3DVSD_REG(D3DVSDE_POSITION, D3DVSDT_FLOAT4),
+        D3DVSD_REG(D3DVSDE_DIFFUSE, D3DVSDT_D3DCOLOR),
+        D3DVSD_END()
+    };
+    static const DWORD vertex_shader[] =
+    {
+        D3DVS_VERSION(1, 1),
+        D3DSIO_MOV, AUDIT_SHADER_PARAM | D3DSPR_RASTOUT | D3DSRO_POSITION | D3DSP_WRITEMASK_ALL,
+                AUDIT_SHADER_PARAM | D3DSPR_INPUT | D3DVS_NOSWIZZLE,
+        D3DSIO_MOV, AUDIT_SHADER_PARAM | D3DSPR_ATTROUT | D3DSP_WRITEMASK_ALL,
+                AUDIT_SHADER_PARAM | D3DSPR_INPUT | D3DVS_NOSWIZZLE | 1,
+        D3DVS_END()
+    };
+    static const DWORD pixel_shader[] =
+    {
+        D3DPS_VERSION(1, 1),
+        D3DSIO_MOV, AUDIT_SHADER_PARAM | D3DSPR_TEMP | D3DSP_WRITEMASK_ALL,
+                AUDIT_SHADER_PARAM | D3DSPR_INPUT | D3DSP_NOSWIZZLE,
+        D3DPS_END()
+    };
+    static const struct { float x, y, z, w; DWORD color; } vertices[3] =
+    {
+        {-0.8f, -0.8f, 0.0f, 1.0f, 0xffff0000},
+        {-0.4f, -0.8f, 0.0f, 1.0f, 0xff00ff00},
+        {-0.8f, -0.4f, 0.0f, 1.0f, 0xff0000ff}
+    };
+    DWORD vs = 0;
+    DWORD ps = 0;
+    HRESULT hr = IDirect3DDevice8_CreateVertexShader(g_device, declaration,
+            vertex_shader, &vs, 0);
+    if (FAILED(hr)) resource_failure("vertex shader create", hr, 3);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DDevice8_CreatePixelShader(g_device, pixel_shader, &ps);
+        if (FAILED(hr)) resource_failure("pixel shader create", hr, 3);
+    }
+    if (SUCCEEDED(hr)) hr = IDirect3DDevice8_SetVertexShader(g_device, vs);
+    if (SUCCEEDED(hr)) hr = IDirect3DDevice8_SetPixelShader(g_device, ps);
+    if (SUCCEEDED(hr)) hr = IDirect3DDevice8_DrawPrimitiveUP(g_device,
+            D3DPT_TRIANGLELIST, 1, vertices, sizeof(vertices[0]));
+    if (FAILED(hr) && vs && ps) resource_failure("shader draw", hr, 3);
+    IDirect3DDevice8_SetPixelShader(g_device, 0);
+    IDirect3DDevice8_SetVertexShader(g_device, D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
+    if (ps) IDirect3DDevice8_DeletePixelShader(g_device, ps);
+    if (vs) IDirect3DDevice8_DeleteVertexShader(g_device, vs);
+}
+
+typedef struct EightStageVertex
+{
+    float x, y, z, rhw;
+    DWORD color;
+    float texcoord[8][2];
+} EightStageVertex;
+
+static void audit_eight_texture_stages(void)
+{
+    IDirect3DTexture8 *textures[8];
+    EightStageVertex vertices[3];
+    UINT stage;
+    UINT vertex;
+    HRESULT hr = D3D_OK;
+
+    ZeroMemory(textures, sizeof(textures));
+    ZeroMemory(vertices, sizeof(vertices));
+    vertices[0].x = 100.0f; vertices[0].y = 40.0f;
+    vertices[1].x = 140.0f; vertices[1].y = 40.0f;
+    vertices[2].x = 100.0f; vertices[2].y = 80.0f;
+    for (vertex = 0; vertex < 3; ++vertex)
+    {
+        vertices[vertex].z = 0.0f;
+        vertices[vertex].rhw = 1.0f;
+        vertices[vertex].color = 0xffffffff;
+        for (stage = 0; stage < 8; ++stage)
+        {
+            vertices[vertex].texcoord[stage][0] = vertex == 1 ? 1.0f : 0.0f;
+            vertices[vertex].texcoord[stage][1] = vertex == 2 ? 1.0f : 0.0f;
+        }
+    }
+
+    for (stage = 0; stage < 8; ++stage)
+    {
+        D3DLOCKED_RECT lock;
+        hr = IDirect3DDevice8_CreateTexture(g_device, 1, 1, 1, 0,
+                D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &textures[stage]);
+        if (FAILED(hr)) break;
+        hr = IDirect3DTexture8_LockRect(textures[stage], 0, &lock, NULL, 0);
+        if (FAILED(hr)) break;
+        *(DWORD *)lock.pBits = 0xff808080u + stage * 0x00080808u;
+        IDirect3DTexture8_UnlockRect(textures[stage], 0);
+        IDirect3DDevice8_SetTexture(g_device, stage,
+                (IDirect3DBaseTexture8 *)textures[stage]);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_TEXCOORDINDEX, stage);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_COLOROP, D3DTOP_MODULATE);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_COLORARG2, stage ? D3DTA_CURRENT : D3DTA_DIFFUSE);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+        IDirect3DDevice8_SetTextureStageState(g_device, stage,
+                D3DTSS_ALPHAARG2, stage ? D3DTA_CURRENT : D3DTA_DIFFUSE);
+    }
+    if (SUCCEEDED(hr))
+    {
+        IDirect3DDevice8_SetPixelShader(g_device, 0);
+        hr = IDirect3DDevice8_SetVertexShader(g_device,
+                D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX8);
+    }
+    if (SUCCEEDED(hr))
+        hr = IDirect3DDevice8_DrawPrimitiveUP(g_device,
+                D3DPT_TRIANGLELIST, 1, vertices, sizeof(vertices[0]));
+    if (FAILED(hr)) resource_failure("eight texture stages draw", hr, 3);
+
+    for (stage = 0; stage < 8; ++stage)
+    {
+        IDirect3DDevice8_SetTexture(g_device, stage, NULL);
+        if (textures[stage]) IDirect3DTexture8_Release(textures[stage]);
+    }
+    IDirect3DDevice8_SetTextureStageState(g_device, 1,
+            D3DTSS_COLOROP, D3DTOP_DISABLE);
+}
+
+static void audit_extended_resources(void)
+{
+    HRESULT hr;
+    begin_stage("exercise extended texture and shader paths");
+    audit_render_target_texture();
+    hr = IDirect3DDevice8_BeginScene(g_device);
+    if (FAILED(hr))
+    {
+        resource_failure("extended-path BeginScene", hr, 3);
+        return;
+    }
+    audit_dxt_format(D3DFMT_DXT1, 8, "DXT1 mip-chain upload/draw");
+    audit_dxt_format(D3DFMT_DXT3, 16, "DXT3 mip-chain upload/draw");
+    audit_dxt_format(D3DFMT_DXT5, 16, "DXT5 mip-chain upload/draw");
+    audit_cube_texture();
+    audit_volume_texture();
+    audit_eight_texture_stages();
+    audit_shader_pipeline();
+    hr = IDirect3DDevice8_EndScene(g_device);
+    if (FAILED(hr)) resource_failure("extended-path EndScene", hr, 3);
 }
 
 static HRESULT create_dashboard_device(void)
@@ -298,7 +677,7 @@ static HRESULT render_dashboard(void)
     if (FAILED(hr)) return fail_stage("Present", hr);
     if (!g_mismatch_count)
         SetWindowTextA(g_window,
-                "D3D8 caps audit: PASS - formats | hidden formats | fixed caps | forbidden caps");
+                "D3D8 caps audit: PASS - core formats | extended textures | fixed caps | extended caps");
     else
     {
         wsprintfA(title, "D3D8 caps audit: %u MISMATCHES - first: %s",
@@ -369,6 +748,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous,
         hr = create_dashboard_device();
         if (FAILED(hr)) fail_stage("CreateDevice dashboard", hr);
     }
+    if (SUCCEEDED(hr)) audit_extended_resources();
     if (SUCCEEDED(hr)) hr = render_dashboard();
     if (SUCCEEDED(hr) && g_mismatch_count)
     {

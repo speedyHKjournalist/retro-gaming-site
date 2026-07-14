@@ -171,6 +171,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_MAX_EVAL_ORDER     0x0D30
 #define GL_MAX_CLIP_PLANES    0x0D32
 #define GL_MAX_TEXTURE_SIZE   0x0D33
+#define GL_MAX_3D_TEXTURE_SIZE 0x8073
+#define GL_MAX_CUBE_MAP_TEXTURE_SIZE 0x851C
 #define GL_MAX_PIXEL_MAP_TABLE 0x0D34
 #define GL_MAX_ATTRIB_STACK_DEPTH 0x0D35
 #define GL_MAX_MODELVIEW_STACK_DEPTH 0x0D36
@@ -201,10 +203,12 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_TEXTURE_1D         0x0DE0
 #define GL_TEXTURE_2D         0x0DE1
 #define GL_TEXTURE_3D         0x806F
+#define GL_TEXTURE_WRAP_R     0x8072
 #define GL_TEXTURE_BINDING_1D 0x8068
 #define GL_POLYGON_OFFSET_FILL 0x8037
 #define GL_TEXTURE_BINDING_2D 0x8069
 #define GL_TEXTURE_BINDING_3D 0x806A
+#define GL_TEXTURE_DEPTH      0x8071
 #define GL_RESCALE_NORMAL     0x803A
 #define GL_LIGHT_MODEL_COLOR_CONTROL 0x81F8
 #define GL_SINGLE_COLOR        0x81F9
@@ -569,6 +573,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_PACK_ROW_LENGTH    0x0D02
 #define GL_PACK_SKIP_ROWS     0x0D03
 #define GL_PACK_SKIP_PIXELS   0x0D04
+#define GL_PACK_SKIP_IMAGES   0x806B
+#define GL_PACK_IMAGE_HEIGHT  0x806C
 #define GL_BGR_EXT            0x80E0
 #define GL_BGRA_EXT           0x80E1
 #define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
@@ -587,6 +593,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_UNPACK_ROW_LENGTH  0x0CF2
 #define GL_UNPACK_SKIP_ROWS   0x0CF3
 #define GL_UNPACK_SKIP_PIXELS 0x0CF4
+#define GL_UNPACK_SKIP_IMAGES 0x806D
+#define GL_UNPACK_IMAGE_HEIGHT 0x806E
 #define GL_INVALID_ENUM       0x0500
 #define GL_INVALID_VALUE      0x0501
 #define GL_INVALID_OPERATION  0x0502
@@ -1061,6 +1069,7 @@ static int32_t g_last_surface_y = 0;
 static uint32_t g_last_surface_width = 0;
 static uint32_t g_last_surface_height = 0;
 static BOOL g_have_last_surface = FALSE;
+static BOOL g_context_destroy_sent = FALSE;
 static uint32_t g_frame_id = 1;
 static GLuint g_next_texture_id = 1;
 static GLuint g_next_buffer_id = 1;
@@ -1149,10 +1158,16 @@ static GLint g_unpack_alignment = 4;
 static GLint g_unpack_row_length = 0;
 static GLint g_unpack_skip_rows = 0;
 static GLint g_unpack_skip_pixels = 0;
+static GLint g_unpack_image_height = 0;
+static GLint g_unpack_skip_images = 0;
+
+void APIENTRY glPixelStorei(GLenum pname, GLint param);
 static GLint g_pack_alignment = 4;
 static GLint g_pack_row_length = 0;
 static GLint g_pack_skip_rows = 0;
 static GLint g_pack_skip_pixels = 0;
+static GLint g_pack_image_height = 0;
+static GLint g_pack_skip_images = 0;
 static GLenum g_render_mode = GL_RENDER;
 static GLsizei g_feedback_buffer_size = 0;
 static GLenum g_feedback_buffer_type = 0;
@@ -1260,13 +1275,12 @@ static const char* g_gl_extensions =
     "GL_ARB_pixel_buffer_object "
     "GL_EXT_pixel_buffer_object "
     "GL_ARB_occlusion_query "
-    /* Keep the advertised capability profile on the implemented OpenGL 1.5
-     * fixed-function path.  WineD3D 1.7.52 selects its GLSL/ARB-program
-     * vertex and fragment pipelines when any of the shader extensions are
-     * exposed.  Those pipelines compile programs on the first draw and rely
-     * on synchronous shader query semantics that this bridge does not yet
-     * provide.  The entry points may remain available for diagnostics, but
-     * they must not participate in capability negotiation yet. */
+    /* WineD3D 1.7.52's ARB program backend maps D3D8 shader bytecode onto the
+     * synchronous program upload/query path implemented by this bridge.  Keep
+     * GLSL extensions hidden until desktop-GLSL compatibility is complete,
+     * but advertise both ARB program stages so D3D8 shaders are selected. */
+    "GL_ARB_vertex_program "
+    "GL_ARB_fragment_program "
     /* WineD3D 1.7.52 defaults to FBO offscreen rendering as soon as either
      * framebuffer-object extension is advertised.  The browser bridge does
      * not yet implement the complete desktop-GL renderbuffer format set that
@@ -1367,6 +1381,8 @@ typedef struct {
     GLfloat priority;
     GLfloat border_color[4];
     TextureLevelState levels[V86GL_MAX_TEXTURE_LEVELS];
+    TextureLevelState* cube_levels;
+    GLint wrap_r;
 } TextureObjectState;
 
 typedef struct {
@@ -1412,7 +1428,9 @@ static TextureObjectState g_default_texture_1d = {
     1000.0f,
     1.0f,
     { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } }
+    { { 0 } },
+    NULL,
+    GL_REPEAT
 };
 static TextureObjectState g_default_texture_2d = {
     TRUE,
@@ -1428,7 +1446,9 @@ static TextureObjectState g_default_texture_2d = {
     1000.0f,
     1.0f,
     { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } }
+    { { 0 } },
+    NULL,
+    GL_REPEAT
 };
 static TextureObjectState g_default_texture_3d = {
     TRUE,
@@ -1444,7 +1464,9 @@ static TextureObjectState g_default_texture_3d = {
     1000.0f,
     1.0f,
     { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } }
+    { { 0 } },
+    NULL,
+    GL_REPEAT
 };
 static TextureObjectState g_default_texture_cube = {
     TRUE,
@@ -1460,7 +1482,9 @@ static TextureObjectState g_default_texture_cube = {
     1000.0f,
     1.0f,
     { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } }
+    { { 0 } },
+    NULL,
+    GL_REPEAT
 };
 static CapState g_cap_states[V86GL_MAX_CAP_STATES];
 
@@ -1880,6 +1904,7 @@ static TextureObjectState* texture_state_defaults(TextureObjectState* state, GLu
     state->mag_filter = GL_LINEAR;
     state->wrap_s = GL_REPEAT;
     state->wrap_t = GL_REPEAT;
+    state->wrap_r = GL_REPEAT;
     state->base_level = 0;
     state->max_level = 1000;
     state->min_lod = -1000.0f;
@@ -1890,6 +1915,7 @@ static TextureObjectState* texture_state_defaults(TextureObjectState* state, GLu
 
 static void free_texture_levels(TextureObjectState* state) {
     uint32_t level;
+    uint32_t cube_level;
 
     if (!state) {
         return;
@@ -1899,6 +1925,16 @@ static void free_texture_levels(TextureObjectState* state) {
         if (state->levels[level].data) {
             HeapFree(GetProcessHeap(), 0, state->levels[level].data);
         }
+    }
+
+    if (state->cube_levels) {
+        for (cube_level = 0; cube_level < 6u * V86GL_MAX_TEXTURE_LEVELS; cube_level++) {
+            if (state->cube_levels[cube_level].data) {
+                HeapFree(GetProcessHeap(), 0, state->cube_levels[cube_level].data);
+            }
+        }
+        HeapFree(GetProcessHeap(), 0, state->cube_levels);
+        state->cube_levels = NULL;
     }
 }
 
@@ -2621,6 +2657,9 @@ static void update_texture_parameter_i(GLenum target, GLenum pname, GLint param)
     case GL_TEXTURE_WRAP_T:
         state->wrap_t = param;
         break;
+    case GL_TEXTURE_WRAP_R:
+        state->wrap_r = param;
+        break;
     case GL_TEXTURE_BASE_LEVEL:
         state->base_level = param;
         break;
@@ -2666,6 +2705,9 @@ static void update_texture_parameter_f(GLenum target, GLenum pname, GLfloat para
         break;
     case GL_TEXTURE_WRAP_T:
         state->wrap_t = (GLint)param;
+        break;
+    case GL_TEXTURE_WRAP_R:
+        state->wrap_r = (GLint)param;
         break;
     case GL_TEXTURE_BASE_LEVEL:
         state->base_level = (GLint)param;
@@ -4395,13 +4437,23 @@ static void restore_window_proc(void) {
     g_have_last_surface = FALSE;
 }
 
+static void emit_destroy_context_once(void) {
+    if (g_context_destroy_sent) {
+        return;
+    }
+
+    if (emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, NULL, 0, TRUE)) {
+        g_context_destroy_sent = TRUE;
+    }
+}
+
 static LRESULT CALLBACK vgl_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     WNDPROC original = g_original_wndproc;
 
     if (msg == WM_MOVE || msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED) {
         emit_current_surface(hwnd);
     } else if (msg == WM_NCDESTROY) {
-        emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, NULL, 0, TRUE);
+        emit_destroy_context_once();
     }
 
     if (msg == WM_NCDESTROY && hwnd == g_current_hwnd) {
@@ -4552,40 +4604,57 @@ static uint32_t gl_read_pixel_span(GLsizei width, GLsizei height, GLenum format,
                                     g_pack_skip_rows, g_pack_skip_pixels);
 }
 
-static uint32_t gl_pixel_span_3d(GLsizei width, GLsizei height, GLsizei depth,
-                                 GLenum format, GLenum type) {
-    uint64_t rows;
+static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
+                                    GLint alignment, GLint row_length);
+
+static uint32_t gl_pixel_span_3d_with_state(GLsizei width, GLsizei height, GLsizei depth,
+                                            GLenum format, GLenum type,
+                                            GLint alignment, GLint row_length,
+                                            GLint skip_rows, GLint skip_pixels,
+                                            GLint image_height, GLint skip_images) {
+    uint32_t pixel_bytes;
+    uint32_t row_stride;
+    uint32_t image_rows;
+    uint64_t image_stride;
+    uint64_t offset;
+    uint64_t total;
 
     if (width <= 0 || height <= 0 || depth <= 0) {
         return 0;
     }
 
-    rows = (uint64_t)(uint32_t)height * (uint32_t)depth;
-    if (rows > INT_MAX) {
+    pixel_bytes = gl_pixel_bytes(format, type);
+    row_stride = gl_pixel_row_stride(width, format, type, alignment, row_length);
+    if (!pixel_bytes || !row_stride) {
         return 0;
     }
 
-    return gl_pixel_span_with_state(width, (GLsizei)rows, format, type,
-                                    g_unpack_alignment, g_unpack_row_length,
-                                    g_unpack_skip_rows, g_unpack_skip_pixels);
+    image_rows = image_height > 0 ? (uint32_t)image_height : (uint32_t)height;
+    image_stride = (uint64_t)row_stride * image_rows;
+    offset = (uint64_t)(skip_images > 0 ? skip_images : 0) * image_stride +
+             (uint64_t)(skip_rows > 0 ? skip_rows : 0) * row_stride +
+             (uint64_t)(skip_pixels > 0 ? skip_pixels : 0) * pixel_bytes;
+    total = offset +
+            (uint64_t)((uint32_t)depth - 1u) * image_stride +
+            (uint64_t)((uint32_t)height - 1u) * row_stride +
+            (uint64_t)(uint32_t)width * pixel_bytes;
+    return total <= UINT32_MAX ? (uint32_t)total : 0;
+}
+
+static uint32_t gl_pixel_span_3d(GLsizei width, GLsizei height, GLsizei depth,
+                                 GLenum format, GLenum type) {
+    return gl_pixel_span_3d_with_state(width, height, depth, format, type,
+                                       g_unpack_alignment, g_unpack_row_length,
+                                       g_unpack_skip_rows, g_unpack_skip_pixels,
+                                       g_unpack_image_height, g_unpack_skip_images);
 }
 
 static uint32_t gl_read_pixel_span_3d(GLsizei width, GLsizei height, GLsizei depth,
                                       GLenum format, GLenum type) {
-    uint64_t rows;
-
-    if (width <= 0 || height <= 0 || depth <= 0) {
-        return 0;
-    }
-
-    rows = (uint64_t)(uint32_t)height * (uint32_t)depth;
-    if (rows > INT_MAX) {
-        return 0;
-    }
-
-    return gl_pixel_span_with_state(width, (GLsizei)rows, format, type,
-                                    g_pack_alignment, g_pack_row_length,
-                                    g_pack_skip_rows, g_pack_skip_pixels);
+    return gl_pixel_span_3d_with_state(width, height, depth, format, type,
+                                       g_pack_alignment, g_pack_row_length,
+                                       g_pack_skip_rows, g_pack_skip_pixels,
+                                       g_pack_image_height, g_pack_skip_images);
 }
 
 static uint32_t gl_bitmap_span(GLsizei width, GLsizei height) {
@@ -4658,15 +4727,55 @@ static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
     return align_u32(row_pixels * pixel_bytes, (uint32_t)(alignment > 0 ? alignment : 1));
 }
 
+static uint32_t gl_pixel_image_stride(GLsizei width, GLsizei height,
+                                      GLenum format, GLenum type,
+                                      GLint alignment, GLint row_length,
+                                      GLint image_height) {
+    uint32_t row_stride = gl_pixel_row_stride(width, format, type, alignment, row_length);
+    uint32_t image_rows = image_height > 0 ? (uint32_t)image_height : (uint32_t)height;
+    uint64_t image_stride = (uint64_t)row_stride * image_rows;
+
+    return row_stride && image_stride <= UINT32_MAX ? (uint32_t)image_stride : 0;
+}
+
 static TextureLevelState* texture_level_state(GLenum target, GLint level, BOOL create) {
     TextureObjectState* texture;
+    GLint face = -1;
 
     if (level < 0 || level >= V86GL_MAX_TEXTURE_LEVELS) {
         g_error = GL_INVALID_VALUE;
         return NULL;
     }
+    switch (target) {
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_X: face = 0; break;
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X: face = 1; break;
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y: face = 2; break;
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y: face = 3; break;
+    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z: face = 4; break;
+    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z: face = 5; break;
+    default: break;
+    }
+
     texture = bound_texture_state(target, create);
-    return texture ? &texture->levels[level] : NULL;
+    if (!texture) {
+        return NULL;
+    }
+    if (face < 0) {
+        return &texture->levels[level];
+    }
+    if (!texture->cube_levels) {
+        if (!create) {
+            return NULL;
+        }
+        texture->cube_levels = (TextureLevelState*)HeapAlloc(
+            GetProcessHeap(), HEAP_ZERO_MEMORY,
+            6u * V86GL_MAX_TEXTURE_LEVELS * sizeof(*texture->cube_levels));
+        if (!texture->cube_levels) {
+            g_error = GL_OUT_OF_MEMORY;
+            return NULL;
+        }
+    }
+    return &texture->cube_levels[(uint32_t)face * V86GL_MAX_TEXTURE_LEVELS + (uint32_t)level];
 }
 
 static void clear_texture_level(TextureLevelState* state) {
@@ -4749,11 +4858,13 @@ static int cache_texture_image_3d(GLenum target, GLint level, GLint internalform
     uint32_t tight_size;
     uint32_t source_span;
     uint32_t source_stride;
+    uint32_t source_image_stride;
     uint32_t source_offset;
     uint32_t row_bytes;
-    uint32_t row_count;
+    uint64_t source_offset_64;
     uint64_t source_needed;
-    uint32_t row;
+    GLsizei z;
+    GLsizei row;
 
     if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1) {
         g_error = GL_INVALID_VALUE;
@@ -4783,18 +4894,24 @@ static int cache_texture_image_3d(GLenum target, GLint level, GLint internalform
 
     source_span = gl_pixel_span_3d(width, height, depth, format, type);
     source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
-    source_offset = (uint32_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
-                    (uint32_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
+    source_image_stride = gl_pixel_image_stride(width, height, format, type,
+                                                g_unpack_alignment, g_unpack_row_length,
+                                                g_unpack_image_height);
+    source_offset_64 = (uint64_t)(g_unpack_skip_images > 0 ? g_unpack_skip_images : 0) *
+                       source_image_stride +
+                       (uint64_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
+                       (uint64_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
     row_bytes = (uint32_t)width * pixel_bytes;
-    row_count = (uint32_t)height * (uint32_t)depth;
-    source_needed = (uint64_t)(row_count - 1u) * source_stride + row_bytes;
-    if (!source_span || !source_stride || source_offset > source_span ||
-        row_count > UINT32_MAX / row_bytes ||
-        source_needed > source_span - source_offset) {
+    source_needed = (uint64_t)((uint32_t)depth - 1u) * source_image_stride +
+                    (uint64_t)((uint32_t)height - 1u) * source_stride + row_bytes;
+    if (!source_span || !source_stride || !source_image_stride ||
+        source_offset_64 > UINT32_MAX || source_offset_64 > source_span ||
+        source_needed > source_span - source_offset_64) {
         g_error = GL_INVALID_VALUE;
         clear_texture_level(state);
         return 0;
     }
+    source_offset = (uint32_t)source_offset_64;
 
     state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
     if (!state->data) {
@@ -4802,13 +4919,19 @@ static int cache_texture_image_3d(GLenum target, GLint level, GLint internalform
         clear_texture_level(state);
         return 0;
     }
-    for (row = 0; row < row_count; row++) {
-        CopyMemory(state->data + row * row_bytes,
-                   (const uint8_t*)pixels + source_offset + row * source_stride,
-                   row_bytes);
+    for (z = 0; z < depth; z++) {
+        for (row = 0; row < height; row++) {
+            uint32_t dest_row = (uint32_t)z * (uint32_t)height + (uint32_t)row;
+            CopyMemory(state->data + dest_row * row_bytes,
+                       (const uint8_t*)pixels + source_offset +
+                       (uint32_t)z * source_image_stride + (uint32_t)row * source_stride,
+                       row_bytes);
+        }
     }
     return 1;
 }
+
+static uint32_t s3tc_block_bytes(GLenum format);
 
 static int cache_compressed_texture_image(GLenum target, GLint level,
                                           GLenum internalformat, GLsizei width,
@@ -4816,9 +4939,19 @@ static int cache_compressed_texture_image(GLenum target, GLint level,
                                           GLint border, GLsizei image_size,
                                           const GLvoid* data) {
     TextureLevelState* state;
+    uint32_t block_bytes;
+    uint64_t expected_size;
 
     if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1 ||
         image_size < 0 || (image_size && !data)) {
+        g_error = GL_INVALID_VALUE;
+        return 0;
+    }
+
+    block_bytes = s3tc_block_bytes(internalformat);
+    expected_size = (uint64_t)(((uint32_t)width + 3u) / 4u) *
+                    (((uint32_t)height + 3u) / 4u) * (uint32_t)depth * block_bytes;
+    if (block_bytes && expected_size != (uint32_t)image_size) {
         g_error = GL_INVALID_VALUE;
         return 0;
     }
@@ -4845,6 +4978,79 @@ static int cache_compressed_texture_image(GLenum target, GLint level,
         return 0;
     }
     CopyMemory(state->data, data, (SIZE_T)image_size);
+    return 1;
+}
+
+static uint32_t s3tc_block_bytes(GLenum format) {
+    switch (format) {
+    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
+        return 8;
+    case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
+    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
+    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+        return 16;
+    default:
+        return 0;
+    }
+}
+
+static int cache_compressed_texture_sub_image(TextureLevelState* state,
+                                              GLint xoffset, GLint yoffset, GLint zoffset,
+                                              GLsizei width, GLsizei height, GLsizei depth,
+                                              GLenum format, GLsizei image_size,
+                                              const GLvoid* data) {
+    uint32_t block_bytes = s3tc_block_bytes(format);
+    uint32_t dest_blocks_x;
+    uint32_t dest_blocks_y;
+    uint32_t source_blocks_x;
+    uint32_t source_blocks_y;
+    uint64_t expected_source_size;
+    uint64_t expected_dest_size;
+    uint32_t z;
+    uint32_t row;
+
+    if (!block_bytes) {
+        return 0;
+    }
+    if (state->internalformat != (GLint)format ||
+        (xoffset & 3) || (yoffset & 3) ||
+        ((width & 3) && xoffset + width != state->width) ||
+        ((height & 3) && yoffset + height != state->height)) {
+        g_error = GL_INVALID_OPERATION;
+        return -1;
+    }
+
+    dest_blocks_x = ((uint32_t)state->width + 3u) / 4u;
+    dest_blocks_y = ((uint32_t)state->height + 3u) / 4u;
+    source_blocks_x = ((uint32_t)width + 3u) / 4u;
+    source_blocks_y = ((uint32_t)height + 3u) / 4u;
+    expected_source_size = (uint64_t)source_blocks_x * source_blocks_y *
+                           (uint32_t)depth * block_bytes;
+    expected_dest_size = (uint64_t)dest_blocks_x * dest_blocks_y *
+                         (uint32_t)state->depth * block_bytes;
+    if (expected_source_size != (uint32_t)image_size ||
+        expected_dest_size != state->data_size ||
+        (image_size && (!data || !state->data))) {
+        g_error = GL_INVALID_VALUE;
+        return -1;
+    }
+
+    for (z = 0; z < (uint32_t)depth; z++) {
+        for (row = 0; row < source_blocks_y; row++) {
+            uint64_t dest_block =
+                ((uint64_t)((uint32_t)zoffset + z) * dest_blocks_y +
+                 (uint32_t)yoffset / 4u + row) * dest_blocks_x +
+                (uint32_t)xoffset / 4u;
+            uint64_t source_block = ((uint64_t)z * source_blocks_y + row) * source_blocks_x;
+            CopyMemory(state->data + dest_block * block_bytes,
+                       (const uint8_t*)data + source_block * block_bytes,
+                       source_blocks_x * block_bytes);
+        }
+    }
     return 1;
 }
 
@@ -4910,9 +5116,10 @@ static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset,
     uint32_t pixel_bytes;
     uint32_t source_span;
     uint32_t source_stride;
+    uint32_t source_image_stride;
     uint32_t source_offset;
     uint32_t row_bytes;
-    uint64_t source_rows;
+    uint64_t source_offset_64;
     uint64_t source_needed;
     GLsizei z;
     GLsizei row;
@@ -4942,17 +5149,23 @@ static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset,
     pixel_bytes = gl_pixel_bytes(format, type);
     source_span = gl_pixel_span_3d(width, height, depth, format, type);
     source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
-    source_offset = (uint32_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
-                    (uint32_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
+    source_image_stride = gl_pixel_image_stride(width, height, format, type,
+                                                g_unpack_alignment, g_unpack_row_length,
+                                                g_unpack_image_height);
+    source_offset_64 = (uint64_t)(g_unpack_skip_images > 0 ? g_unpack_skip_images : 0) *
+                       source_image_stride +
+                       (uint64_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
+                       (uint64_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
     row_bytes = (uint32_t)width * pixel_bytes;
-    source_rows = (uint64_t)(uint32_t)height * (uint32_t)depth;
-    source_needed = (source_rows - 1u) * source_stride + row_bytes;
-    if (!pixel_bytes || !source_span || !source_stride || source_offset > source_span ||
-        source_rows > UINT32_MAX ||
-        source_needed > source_span - source_offset) {
+    source_needed = (uint64_t)((uint32_t)depth - 1u) * source_image_stride +
+                    (uint64_t)((uint32_t)height - 1u) * source_stride + row_bytes;
+    if (!pixel_bytes || !source_span || !source_stride || !source_image_stride ||
+        source_offset_64 > UINT32_MAX || source_offset_64 > source_span ||
+        source_needed > source_span - source_offset_64) {
         g_error = GL_INVALID_ENUM;
         return 0;
     }
+    source_offset = (uint32_t)source_offset_64;
     if (!state->data) {
         state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, state->data_size);
         if (!state->data && state->data_size) {
@@ -4962,12 +5175,12 @@ static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset,
     }
     for (z = 0; z < depth; z++) {
         for (row = 0; row < height; row++) {
-            uint32_t source_row = (uint32_t)z * (uint32_t)height + (uint32_t)row;
             uint32_t dest_row = (uint32_t)(zoffset + z) * (uint32_t)state->height +
                                 (uint32_t)(yoffset + row);
             CopyMemory(state->data + (dest_row * (uint32_t)state->width +
                                       (uint32_t)xoffset) * pixel_bytes,
-                       (const uint8_t*)pixels + source_offset + source_row * source_stride,
+                       (const uint8_t*)pixels + source_offset +
+                       (uint32_t)z * source_image_stride + (uint32_t)row * source_stride,
                        row_bytes);
         }
     }
@@ -5102,12 +5315,31 @@ static int read_framebuffer_tight(GLint x, GLint y, GLsizei width, GLsizei heigh
     return ok;
 }
 
+typedef struct TextureSubImageCapture {
+    BOOL valid;
+    BOOL owns_data;
+    GLenum format;
+    GLenum type;
+    uint32_t data_size;
+    uint8_t* data;
+} TextureSubImageCapture;
+
+static void release_texture_capture(TextureSubImageCapture* capture) {
+    if (!capture) return;
+    if (capture->owns_data && capture->data) {
+        HeapFree(GetProcessHeap(), 0, capture->data);
+    }
+    ZeroMemory(capture, sizeof(*capture));
+}
+
 static int cache_copy_texture_image(GLenum target, GLint level, GLint internalformat,
                                     GLint x, GLint y, GLsizei width, GLsizei height,
-                                    GLint border) {
+                                    GLint border,
+                                    TextureSubImageCapture* capture) {
     TextureLevelState* state;
     GLenum format;
     GLenum type;
+    if (capture) ZeroMemory(capture, sizeof(*capture));
     if (width < 0 || height < 0 || border < 0 || border > 1) {
         g_error = GL_INVALID_VALUE;
         return 0;
@@ -5127,7 +5359,15 @@ static int cache_copy_texture_image(GLenum target, GLint level, GLint internalfo
     state->format = format;
     state->type = type;
     state->data_size = gl_pixel_tight_span(width, height, format, type);
-    if (!format || !type || !state->data_size) {
+    if (!format || !type || (!state->data_size && width && height)) {
+        return 1;
+    }
+    if (!width || !height) {
+        if (capture) {
+            capture->valid = TRUE;
+            capture->format = format;
+            capture->type = type;
+        }
         return 1;
     }
     state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, state->data_size);
@@ -5140,6 +5380,14 @@ static int cache_copy_texture_image(GLenum target, GLint level, GLint internalfo
                                 state->data, state->data_size)) {
         HeapFree(GetProcessHeap(), 0, state->data);
         state->data = NULL;
+        return 1;
+    }
+    if (capture) {
+        capture->valid = TRUE;
+        capture->format = format;
+        capture->type = type;
+        capture->data_size = state->data_size;
+        capture->data = state->data;
     }
     return 1;
 }
@@ -5147,7 +5395,8 @@ static int cache_copy_texture_image(GLenum target, GLint level, GLint internalfo
 static int cache_copy_texture_sub_image(GLenum target, GLint level,
                                         GLint xoffset, GLint yoffset,
                                         GLint x, GLint y,
-                                        GLsizei width, GLsizei height) {
+                                        GLsizei width, GLsizei height,
+                                        TextureSubImageCapture* capture) {
     TextureLevelState* state;
     uint32_t pixel_bytes;
     uint32_t row_bytes;
@@ -5155,6 +5404,7 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
     uint8_t* tight;
     GLsizei row;
 
+    if (capture) ZeroMemory(capture, sizeof(*capture));
     if (xoffset < 0 || yoffset < 0 || width < 0 || height < 0) {
         g_error = GL_INVALID_VALUE;
         return 0;
@@ -5177,6 +5427,11 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
         return 1;
     }
     if (!width || !height) {
+        if (capture) {
+            capture->valid = TRUE;
+            capture->format = state->format;
+            capture->type = state->type;
+        }
         return 1;
     }
 
@@ -5211,7 +5466,16 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
                    tight + (uint32_t)row * row_bytes,
                    row_bytes);
     }
-    HeapFree(GetProcessHeap(), 0, tight);
+    if (capture) {
+        capture->valid = TRUE;
+        capture->owns_data = TRUE;
+        capture->format = state->format;
+        capture->type = state->type;
+        capture->data_size = tight_size;
+        capture->data = tight;
+    } else {
+        HeapFree(GetProcessHeap(), 0, tight);
+    }
     return 1;
 }
 
@@ -5545,6 +5809,7 @@ BOOL WINAPI DllMain
 __declspec(dllexport)
 HGLRC APIENTRY wglCreateContext(HDC hdc) {
     (void)hdc;
+    g_context_destroy_sent = FALSE;
     return (HGLRC)0x1001;
 }
 
@@ -5730,7 +5995,7 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
     (void)ctx;
     v86gl_trace("delete context frame=%lu", (unsigned long)g_frame_id);
     restore_window_proc();
-    emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, NULL, 0, TRUE);
+    emit_destroy_context_once();
     return TRUE;
 }
 
@@ -5750,6 +6015,7 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
     }
 
     HWND hwnd = hdc ? WindowFromDC(hdc) : NULL;
+    g_context_destroy_sent = FALSE;
     hook_window(hwnd);
     emit_current_surface(hwnd);
     return TRUE;
@@ -6325,6 +6591,12 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_MAX_TEXTURE_COORDS:
         params[0] = V86GL_MAX_TEXTURE_UNITS;
         break;
+    case GL_MAX_3D_TEXTURE_SIZE:
+        params[0] = 256;
+        break;
+    case GL_MAX_CUBE_MAP_TEXTURE_SIZE:
+        params[0] = 2048;
+        break;
     case GL_MAX_TEXTURE_IMAGE_UNITS:
     case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
         params[0] = V86GL_MAX_TEXTURE_UNITS;
@@ -6420,6 +6692,12 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_PACK_SKIP_PIXELS:
         params[0] = g_pack_skip_pixels;
         break;
+    case GL_PACK_IMAGE_HEIGHT:
+        params[0] = g_pack_image_height;
+        break;
+    case GL_PACK_SKIP_IMAGES:
+        params[0] = g_pack_skip_images;
+        break;
     case GL_UNPACK_ALIGNMENT:
         params[0] = g_unpack_alignment;
         break;
@@ -6431,6 +6709,12 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_UNPACK_SKIP_PIXELS:
         params[0] = g_unpack_skip_pixels;
+        break;
+    case GL_UNPACK_IMAGE_HEIGHT:
+        params[0] = g_unpack_image_height;
+        break;
+    case GL_UNPACK_SKIP_IMAGES:
+        params[0] = g_unpack_skip_images;
         break;
     case GL_VERTEX_ARRAY_SIZE:
         params[0] = g_vertex_array.size;
@@ -10579,6 +10863,7 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
         uint32_t image_size;
     } meta;
     TextureLevelState* state;
+    int cache_result;
     uint32_t total_size;
     uint8_t* payload;
     const GLvoid* pixel_data;
@@ -10602,10 +10887,16 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
         return;
     }
 
-    /* The driver does not know a compressed block layout.  Preserve a cached
-     * readback only when this update replaces the whole image; partial updates
-     * remain fully forwarded but deliberately invalidate the guest cache. */
-    if (xoffset == 0 && yoffset == 0 && zoffset == 0 &&
+    cache_result = cache_compressed_texture_sub_image(
+        state, xoffset, yoffset, zoffset, width, height, depth,
+        format, image_size, pixel_data);
+    if (cache_result < 0) {
+        return;
+    }
+
+    /* S3TC block updates preserve the complete cached image.  For other
+     * compressed formats retain the old whole-image fallback. */
+    if (!cache_result && xoffset == 0 && yoffset == 0 && zoffset == 0 &&
         width == state->width && height == state->height && depth == state->depth) {
         uint8_t* replacement = NULL;
         if (image_size) {
@@ -10620,7 +10911,7 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
         state->data = replacement;
         state->data_size = (uint32_t)image_size;
         state->format = format;
-    } else {
+    } else if (!cache_result) {
         if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
         state->data = NULL;
         state->data_size = 0;
@@ -10946,6 +11237,46 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
+typedef struct TightUnpackState {
+    GLint alignment;
+    GLint row_length;
+    GLint skip_rows;
+    GLint skip_pixels;
+    GLint image_height;
+    GLint skip_images;
+} TightUnpackState;
+
+static void begin_tight_unpack(TightUnpackState* saved) {
+    saved->alignment = g_unpack_alignment;
+    saved->row_length = g_unpack_row_length;
+    saved->skip_rows = g_unpack_skip_rows;
+    saved->skip_pixels = g_unpack_skip_pixels;
+    saved->image_height = g_unpack_image_height;
+    saved->skip_images = g_unpack_skip_images;
+
+    if (saved->alignment != 1) glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (saved->row_length) glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    if (saved->skip_rows) glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    if (saved->skip_pixels) glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    if (saved->image_height) glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    if (saved->skip_images) glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+}
+
+static void end_tight_unpack(const TightUnpackState* saved) {
+    if (saved->alignment != 1)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, saved->alignment);
+    if (saved->row_length)
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, saved->row_length);
+    if (saved->skip_rows)
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, saved->skip_rows);
+    if (saved->skip_pixels)
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, saved->skip_pixels);
+    if (saved->image_height)
+        glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, saved->image_height);
+    if (saved->skip_images)
+        glPixelStorei(GL_UNPACK_SKIP_IMAGES, saved->skip_images);
+}
+
 __declspec(dllexport)
 void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                GLint x, GLint y, GLsizei width, GLsizei height,
@@ -10960,6 +11291,21 @@ void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat
         int32_t height;
         int32_t border;
     } payload;
+    struct {
+        uint32_t target;
+        int32_t level;
+        int32_t internalformat;
+        int32_t width;
+        int32_t height;
+        int32_t border;
+        uint32_t format;
+        uint32_t type;
+        uint32_t data_size;
+    } upload;
+    TextureSubImageCapture capture;
+    TightUnpackState unpack;
+    uint8_t* upload_payload = NULL;
+    uint32_t upload_size = 0;
 
     if (width < 0 || height < 0) {
         g_error = GL_INVALID_VALUE;
@@ -10967,7 +11313,37 @@ void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat
     }
 
     if (!cache_copy_texture_image(target, level, (GLint)internalformat,
-                                  x, y, width, height, border)) return;
+                                  x, y, width, height, border, &capture)) return;
+
+    if (capture.valid && capture.data_size <= UINT32_MAX - sizeof(upload)) {
+        upload_size = (uint32_t)sizeof(upload) + capture.data_size;
+        upload_payload = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, upload_size);
+    }
+    if (upload_payload) {
+        upload.target = (uint32_t)target;
+        upload.level = level;
+        upload.internalformat = (int32_t)internalformat;
+        upload.width = width;
+        upload.height = height;
+        upload.border = border;
+        upload.format = (uint32_t)capture.format;
+        upload.type = (uint32_t)capture.type;
+        upload.data_size = capture.data_size;
+        CopyMemory(upload_payload, &upload, sizeof(upload));
+        if (capture.data_size) {
+            CopyMemory(upload_payload + sizeof(upload), capture.data,
+                       capture.data_size);
+        }
+
+        begin_tight_unpack(&unpack);
+        emit_gl_call(GLFN_TEX_IMAGE_2D, upload_payload, upload_size);
+        end_tight_unpack(&unpack);
+
+        HeapFree(GetProcessHeap(), 0, upload_payload);
+        release_texture_capture(&capture);
+        return;
+    }
+    release_texture_capture(&capture);
 
     payload.target = (uint32_t)target;
     payload.level = level;
@@ -10995,6 +11371,21 @@ void APIENTRY glCopyTexSubImage2D(GLenum target, GLint level,
         int32_t width;
         int32_t height;
     } payload;
+    struct {
+        uint32_t target;
+        int32_t level;
+        int32_t xoffset;
+        int32_t yoffset;
+        int32_t width;
+        int32_t height;
+        uint32_t format;
+        uint32_t type;
+        uint32_t data_size;
+    } upload;
+    TextureSubImageCapture capture;
+    TightUnpackState unpack;
+    uint8_t* upload_payload = NULL;
+    uint32_t upload_size = 0;
 
     if (width < 0 || height < 0) {
         g_error = GL_INVALID_VALUE;
@@ -11002,7 +11393,43 @@ void APIENTRY glCopyTexSubImage2D(GLenum target, GLint level,
     }
 
     if (!cache_copy_texture_sub_image(target, level, xoffset, yoffset,
-                                      x, y, width, height)) return;
+                                      x, y, width, height, &capture)) return;
+
+    /* The proxy already read the framebuffer to maintain its CPU texture
+     * cache. Re-send those exact pixels as a tight TexSubImage update instead
+     * of asking WebGL to copy RGB drawing-buffer storage directly into an
+     * RGBA WineD3D render-target texture. Besides avoiding WebGL's incompatible
+     * copy-format error, the explicit bytes make save-state replay independent
+     * of transient framebuffer contents. */
+    if (capture.valid && capture.data_size <= UINT32_MAX - sizeof(upload)) {
+        upload_size = (uint32_t)sizeof(upload) + capture.data_size;
+        upload_payload = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, upload_size);
+    }
+    if (upload_payload) {
+        upload.target = (uint32_t)target;
+        upload.level = level;
+        upload.xoffset = xoffset;
+        upload.yoffset = yoffset;
+        upload.width = width;
+        upload.height = height;
+        upload.format = (uint32_t)capture.format;
+        upload.type = (uint32_t)capture.type;
+        upload.data_size = capture.data_size;
+        CopyMemory(upload_payload, &upload, sizeof(upload));
+        if (capture.data_size) {
+            CopyMemory(upload_payload + sizeof(upload), capture.data,
+                       capture.data_size);
+        }
+
+        begin_tight_unpack(&unpack);
+        emit_gl_call(GLFN_TEX_SUB_IMAGE_2D, upload_payload, upload_size);
+        end_tight_unpack(&unpack);
+
+        HeapFree(GetProcessHeap(), 0, upload_payload);
+        release_texture_capture(&capture);
+        return;
+    }
+    release_texture_capture(&capture);
 
     payload.target = (uint32_t)target;
     payload.level = level;
@@ -11153,6 +11580,9 @@ void APIENTRY glGetTexParameteriv(GLenum target, GLenum pname, GLint* params) {
     case GL_TEXTURE_WRAP_T:
         params[0] = state->wrap_t;
         break;
+    case GL_TEXTURE_WRAP_R:
+        params[0] = state->wrap_r;
+        break;
     case GL_TEXTURE_BASE_LEVEL:
         params[0] = state->base_level;
         break;
@@ -11209,6 +11639,9 @@ void APIENTRY glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params) 
     case GL_TEXTURE_WRAP_T:
         params[0] = (GLfloat)state->wrap_t;
         break;
+    case GL_TEXTURE_WRAP_R:
+        params[0] = (GLfloat)state->wrap_r;
+        break;
     case GL_TEXTURE_BASE_LEVEL:
         params[0] = (GLfloat)state->base_level;
         break;
@@ -11242,32 +11675,58 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
 
     switch (pname) {
     case GL_UNPACK_ALIGNMENT:
-        if (param == 1 || param == 2 || param == 4 || param == 8) {
-            g_unpack_alignment = param;
+        if (param != 1 && param != 2 && param != 4 && param != 8) {
+            g_error = GL_INVALID_VALUE;
+            return;
         }
+        g_unpack_alignment = param;
         break;
     case GL_UNPACK_ROW_LENGTH:
-        g_unpack_row_length = param > 0 ? param : 0;
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_unpack_row_length = param;
         break;
     case GL_UNPACK_SKIP_ROWS:
-        g_unpack_skip_rows = param > 0 ? param : 0;
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_unpack_skip_rows = param;
         break;
     case GL_UNPACK_SKIP_PIXELS:
-        g_unpack_skip_pixels = param > 0 ? param : 0;
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_unpack_skip_pixels = param;
+        break;
+    case GL_UNPACK_IMAGE_HEIGHT:
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_unpack_image_height = param;
+        break;
+    case GL_UNPACK_SKIP_IMAGES:
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_unpack_skip_images = param;
         break;
     case GL_PACK_ALIGNMENT:
-        if (param == 1 || param == 2 || param == 4 || param == 8) {
-            g_pack_alignment = param;
+        if (param != 1 && param != 2 && param != 4 && param != 8) {
+            g_error = GL_INVALID_VALUE;
+            return;
         }
+        g_pack_alignment = param;
         break;
     case GL_PACK_ROW_LENGTH:
-        g_pack_row_length = param > 0 ? param : 0;
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_pack_row_length = param;
         break;
     case GL_PACK_SKIP_ROWS:
-        g_pack_skip_rows = param > 0 ? param : 0;
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_pack_skip_rows = param;
         break;
     case GL_PACK_SKIP_PIXELS:
-        g_pack_skip_pixels = param > 0 ? param : 0;
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_pack_skip_pixels = param;
+        break;
+    case GL_PACK_IMAGE_HEIGHT:
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_pack_image_height = param;
+        break;
+    case GL_PACK_SKIP_IMAGES:
+        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        g_pack_skip_images = param;
         break;
     default:
         break;
@@ -15037,10 +15496,13 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     uint32_t pixel_bytes;
     uint32_t destination_span;
     uint32_t destination_stride;
+    uint32_t destination_image_stride;
     uint32_t destination_offset;
+    uint64_t destination_offset_64;
     uint32_t row_bytes;
-    uint32_t row_count;
-    uint32_t row;
+    uint64_t source_size;
+    GLsizei z;
+    GLsizei row;
     GLvoid* destination;
 
     state = texture_level_state(target, level, FALSE);
@@ -15055,27 +15517,39 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
                                              format, type);
     destination_stride = gl_pixel_row_stride(state->width, format, type,
                                              g_pack_alignment, g_pack_row_length);
-    destination_offset = (uint32_t)(g_pack_skip_rows > 0 ? g_pack_skip_rows : 0) * destination_stride +
-                         (uint32_t)(g_pack_skip_pixels > 0 ? g_pack_skip_pixels : 0) * pixel_bytes;
-    if (!pixel_bytes || !destination_span || !destination_stride ||
+    destination_image_stride = gl_pixel_image_stride(state->width, state->height,
+                                                      format, type, g_pack_alignment,
+                                                      g_pack_row_length, g_pack_image_height);
+    destination_offset_64 = (uint64_t)(g_pack_skip_images > 0 ? g_pack_skip_images : 0) *
+                            destination_image_stride +
+                            (uint64_t)(g_pack_skip_rows > 0 ? g_pack_skip_rows : 0) *
+                            destination_stride +
+                            (uint64_t)(g_pack_skip_pixels > 0 ? g_pack_skip_pixels : 0) * pixel_bytes;
+    if (!pixel_bytes || !destination_span || !destination_stride || !destination_image_stride ||
+        destination_offset_64 > UINT32_MAX ||
         state->format != format || state->type != type) {
         g_error = GL_INVALID_ENUM;
         return;
     }
+    destination_offset = (uint32_t)destination_offset_64;
     destination = pack_pixel_pointer(pixels, destination_span);
     if (!destination) return;
     ZeroMemory(destination, destination_span);
     if (!state->data) return;
     row_bytes = (uint32_t)state->width * pixel_bytes;
-    if ((uint32_t)state->height > UINT32_MAX / (uint32_t)state->depth) return;
-    row_count = (uint32_t)state->height * (uint32_t)state->depth;
-    if (row_count > UINT32_MAX / row_bytes ||
-        state->data_size < row_count * row_bytes) {
+    source_size = (uint64_t)(uint32_t)state->width * (uint32_t)state->height *
+                  (uint32_t)state->depth * pixel_bytes;
+    if (source_size > state->data_size) {
         return;
     }
-    for (row = 0; row < row_count; row++) {
-        CopyMemory((uint8_t*)destination + destination_offset + (uint32_t)row * destination_stride,
-                   state->data + (uint32_t)row * row_bytes, row_bytes);
+    for (z = 0; z < state->depth; z++) {
+        for (row = 0; row < state->height; row++) {
+            uint32_t source_row = (uint32_t)z * (uint32_t)state->height + (uint32_t)row;
+            CopyMemory((uint8_t*)destination + destination_offset +
+                       (uint32_t)z * destination_image_stride +
+                       (uint32_t)row * destination_stride,
+                       state->data + source_row * row_bytes, row_bytes);
+        }
     }
 }
 
@@ -15167,6 +15641,7 @@ static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname,
     switch (pname) {
     case GL_TEXTURE_WIDTH: *result = state->width; return 1;
     case GL_TEXTURE_HEIGHT: *result = target == GL_TEXTURE_1D ? 1 : state->height; return 1;
+    case GL_TEXTURE_DEPTH: *result = state->depth; return 1;
     case GL_TEXTURE_BORDER: *result = state->border; return 1;
     case GL_TEXTURE_INTERNAL_FORMAT: *result = state->internalformat; return 1;
     case GL_TEXTURE_COMPRESSED: *result = state->compressed ? GL_TRUE : GL_FALSE; return 1;
@@ -15427,7 +15902,7 @@ void APIENTRY glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat
         return;
     }
     if (!cache_copy_texture_image(target, level, (GLint)internalFormat,
-                                  x, y, width, 1, border)) return;
+                                  x, y, width, 1, border, NULL)) return;
 
     payload.target = (uint32_t)target;
     payload.level = level;
@@ -15460,7 +15935,7 @@ void APIENTRY glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
         return;
     }
     if (!cache_copy_texture_sub_image(target, level, xoffset, 0,
-                                      x, y, width, 1)) return;
+                                      x, y, width, 1, NULL)) return;
 
     payload.target = (uint32_t)target;
     payload.level = level;
