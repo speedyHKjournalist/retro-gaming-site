@@ -574,6 +574,9 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
 #define GL_UNSIGNED_SHORT_5_5_5_1 0x8034
 #define GL_UNSIGNED_SHORT_5_6_5   0x8363
+#define GL_UNSIGNED_SHORT_5_6_5_REV   0x8364
+#define GL_UNSIGNED_SHORT_4_4_4_4_REV 0x8365
+#define GL_UNSIGNED_SHORT_1_5_5_5_REV 0x8366
 #define GL_UNSIGNED_INT_8_8_8_8   0x8035
 #define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
 #define GL_COLOR             0x1800
@@ -4483,6 +4486,9 @@ static uint32_t gl_pixel_bytes(GLenum format, GLenum type) {
     case GL_UNSIGNED_SHORT_4_4_4_4:
     case GL_UNSIGNED_SHORT_5_5_5_1:
     case GL_UNSIGNED_SHORT_5_6_5:
+    case GL_UNSIGNED_SHORT_5_6_5_REV:
+    case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+    case GL_UNSIGNED_SHORT_1_5_5_5_REV:
         return 2u;
     case GL_UNSIGNED_INT_8_8_8_8:
     case GL_UNSIGNED_INT_8_8_8_8_REV:
@@ -15126,7 +15132,10 @@ static GLint texture_component_bits(const TextureLevelState* state, GLenum pname
     else if (state->type == GL_SHORT || state->type == GL_UNSIGNED_SHORT ||
              state->type == GL_UNSIGNED_SHORT_4_4_4_4 ||
              state->type == GL_UNSIGNED_SHORT_5_5_5_1 ||
-             state->type == GL_UNSIGNED_SHORT_5_6_5) bits = 16;
+             state->type == GL_UNSIGNED_SHORT_5_6_5 ||
+             state->type == GL_UNSIGNED_SHORT_5_6_5_REV ||
+             state->type == GL_UNSIGNED_SHORT_4_4_4_4_REV ||
+             state->type == GL_UNSIGNED_SHORT_1_5_5_5_REV) bits = 16;
     else bits = 32;
 
     switch (pname) {

@@ -165,6 +165,13 @@ current WebGL/gl4es backend cannot reliably generate mipmaps for all legacy
 compressed formats. This lets games select their uncompressed fallback rather
 than sampling an incomplete texture as black.
 
+Explicit uncompressed mip chains are preserved and sampled normally.  The
+host keeps gl4es automatic mipmap mode disabled so WineD3D's uploaded levels
+and `GL_*_MIPMAP_*` min filters reach WebGL unchanged.  Legacy BGRA packed
+uploads using `GL_UNSIGNED_SHORT_1_5_5_5_REV` and
+`GL_UNSIGNED_SHORT_4_4_4_4_REV` are accepted and converted by gl4es to the
+WebGL-compatible RGBA packed representation.
+
 `GL_ARB_imaging` and `GL_ARB_vertex_program` are separate optional extensions,
 not requirements of the OpenGL 1.4 core profile; they are deliberately not
 advertised until their complete execution paths are implemented.
@@ -241,6 +248,26 @@ i686-w64-mingw32-gcc -mwindows -Os -s \
 
 i686-w64-mingw32-gcc -mwindows -Os -s \
   -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_mipmap_filter_test.exe d3d8_mipmap_filter_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_texture_formats_test.exe d3d8_texture_formats_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_texture_stage_ops_test.exe d3d8_texture_stage_ops_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
+  -o d3d8_dynamic_resources_test.exe d3d8_dynamic_resources_test.c \
+  -ld3d8 -lgdi32 -luser32 -lkernel32
+
+i686-w64-mingw32-gcc -mwindows -Os -s \
+  -nostdlib -Wl,--subsystem,windows:5.01 -Wl,-e,_WinMainCRTStartup@0 \
   -o gl_triangle_test.exe gl_triangle_test.c \
   -lopengl32 -lgdi32 -luser32 -lkernel32
 
@@ -296,6 +323,10 @@ d3d8_alpha_blend_test.exe
 d3d8_multitexture_test.exe
 d3d8_lighting_test.exe
 d3d8_fog_test.exe
+d3d8_mipmap_filter_test.exe
+d3d8_texture_formats_test.exe
+d3d8_texture_stage_ops_test.exe
+d3d8_dynamic_resources_test.exe
 gl_triangle_test.exe
 gl_rotate_cube_test.exe
 gl_client_arrays_test.exe
@@ -539,6 +570,74 @@ colours means `FOGENABLE` or the linear fog parameters failed. If the
 rectangles change size with depth, that is a matrix/vertex-input regression
 rather than a fog failure. The title is updated before all 40 capability,
 resource, fog-state, draw, and present checkpoints.
+
+After fog succeeds, run `d3d8_mipmap_filter_test.exe`. It uploads all eight
+levels of a 128x128 A8R8G8B8 mip chain. Level zero is a blue/yellow checker;
+levels 1 through 7 are distinct solid colours. Six panels separate minifying,
+magnifying, mip-selection, and address-mode behaviour:
+
+```text
+top-left:     POINT, no mip, WRAP, UV 0..16 (high-frequency alias reference)
+top-middle:   LINEAR + MIP POINT, UV 0..16 (one solid selected mip level)
+top-right:    LINEAR + MIP LINEAR, UV 0..16 (blend of adjacent mip colours)
+bottom-left:  MAG POINT, CLAMP, UV 0..1 (crisp enlarged checker)
+bottom-middle:MAG LINEAR, CLAMP, UV -0.5..1.5 (soft centre, clamped borders)
+bottom-right: MAG POINT, WRAP, UV -0.5..1.5 (repeated checker)
+```
+
+The top-middle panel should be close to one of the solid mip colours, while
+the top-right panel should be an intermediate colour rather than an aliasing
+checker. The lower-left checker has hard texel transitions, the lower-middle
+has softened transitions and extended edge texels, and the lower-right wraps
+the texture outside 0..1. Its success title is
+`Present S_OK - top min/mip, bottom mag/address`.
+
+Then run `d3d8_texture_formats_test.exe`. Its 4x2 panel order is:
+
+```text
+top:    X8R8G8B8 | A8R8G8B8 | R5G6B5     | A1R5G5B5
+bottom: A4R4G4B4 | L8       | A8 grayscale | A8R8G8B8 subrect
+```
+
+All full textures are filled row-by-row using the returned `Pitch`. RGB
+formats show the same two-axis colour/checker pattern at their respective bit
+precision. The alpha-bearing formats blend left-to-right over dark blue:
+A1R5G5B5 has one abrupt alpha transition, while A4R4G4B4 and A8R8G8B8 show
+progressively smoother steps. L8 is grayscale; A8 is displayed with
+`D3DTA_ALPHAREPLICATE`. The last panel starts purple, then a 32x32 subrectangle
+lock replaces only its centre with a green/yellow checker. Pixels outside that
+centre must remain purple. Success is
+`Present S_OK - 7 formats plus green/yellow subrect`.
+
+Next run `d3d8_texture_stage_ops_test.exe`. It uses constant stage-0 RGBA
+`(64,128,192,64)` and stage-1 RGBA `(128,64,32,192)` textures. The 3x3 grid is:
+
+```text
+base reference       | MODULATE2X       | ADD
+ADDSIGNED            | SUBTRACT         | BLENDTEXTUREALPHA
+BLENDCURRENTALPHA    | COMPLEMENT       | ALPHAREPLICATE
+```
+
+Approximate expected RGB values are respectively `(64,128,192)`, `(64,64,48)`,
+`(192,192,224)`, `(64,64,96)`, `(0,64,160)`, `(112,80,72)`, `(80,112,152)`,
+`(127,191,223)`, and `(192,192,192)`. This makes an ignored operation or wrong
+argument source visible as a panel matching another cell. Success is
+`Present S_OK - 3x3 stage-op colour grid`.
+
+Finally run `d3d8_dynamic_resources_test.exe`. It creates default-pool dynamic
+VB and IB ring buffers with three slots. Every frame, slot zero is locked with
+`D3DLOCK_DISCARD`; slots one and two are appended with
+`D3DLOCK_NOOVERWRITE`. Each slot is drawn before the next append. Three
+red/green/blue gradient rectangles continuously move in separate horizontal
+lanes, and their INDEX16 diagonal changes every 30 frames so both vertex and
+index updates remain visible.
+
+The title must continuously advance through
+`frame N Present S_OK - VB+IB DISCARD then 2x NOOVERWRITE`. Leave it running
+until at least frame 600. A frozen lane indicates stale VB contents, a missing
+or torn lane indicates an overwritten append region, and an unchanged or
+corrupted colour diagonal indicates stale IB contents. Any failed lock/draw
+stops the timer and leaves its frame, slot, and lock mode in the title.
 
 The OpenGL-only diagnostics can then be run with `gl_triangle_test.exe`,
 `gl_rotate_cube_test.exe`, or

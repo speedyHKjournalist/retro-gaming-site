@@ -524,11 +524,12 @@ static int v86gl_ensure_ready(void) {
 
     initialize_gl4es();
     v86gl_apply_gl4es_context_hints();
-    /* WebGL rejects generateMipmap for several legacy compressed formats.
-     * gl4es normally may issue that call internally after texture upload;
-     * mode 3 disables that automatic path and makes mip filters sample level
-     * zero instead, preserving a visible texture instead of black sampling. */
-    glHint(GL_MIPMAP_HINT_GL4ES, 3);
+    /* Preserve explicit mip chains uploaded by WineD3D.  Mode 3 makes gl4es
+     * ignore every level above zero and demotes mip min-filters, which keeps
+     * incomplete compressed textures visible but breaks ordinary D3D8 mip
+     * selection.  Compressed formats stay conservative through the advertised
+     * capability profile and v86gl_glGenerateMipmap() below. */
+    glHint(GL_MIPMAP_HINT_GL4ES, 0);
     v86gl_bind_default_textures();
     g_ready = 1;
     return 1;
