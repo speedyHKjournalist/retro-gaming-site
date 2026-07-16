@@ -11,7 +11,7 @@ if [ ! -f "${GL4ES_LIB}" ]; then
   exit 1
 fi
 
-emcc gl4es_bridge.c arb_program_sanitize.c \
+emcc gl4es_bridge.c \
   -I"${GL4ES_ROOT}/include" \
   -I"${GL4ES_ROOT}/src" \
   "${GL4ES_LIB}" \
@@ -104,6 +104,7 @@ emcc gl4es_bridge.c arb_program_sanitize.c \
     "_v86gl_glCopyTexImage2D",
     "_v86gl_glCopyTexSubImage1D",
     "_v86gl_glCopyTexSubImage2D",
+    "_v86gl_glCopyTexSubImage3D",
     "_v86gl_glTexParameteri",
     "_v86gl_glTexParameterf",
     "_v86gl_glTexParameteriv4",
@@ -209,6 +210,10 @@ emcc gl4es_bridge.c arb_program_sanitize.c \
     "_v86gl_glQueryObjectivMapped",
     "_v86gl_glQueryObjectLogMapped",
     "_v86gl_glQueryActiveMapped",
+    "_v86gl_glQueryError",
+    "_v86gl_glQueryLocationMapped",
+    "_v86gl_glQueryUniformMapped",
+    "_v86gl_glInvalidateProgramLocations",
     "_v86gl_glBindAttribLocationMapped",
     "_v86gl_glMapUniformLocation",
     "_v86gl_glMapAttribLocation",

@@ -16,8 +16,11 @@
     const GL_PROGRAM_LENGTH_ARB = 0x8627;
     const GL_PROGRAM_STRING_ARB = 0x8628;
     const GL_PROGRAM_FORMAT_ASCII_ARB = 0x8875;
-    const source = "!!ARBfp1.0\nPARAM const = {1.0, 0.0, 0.0, 1.0};\n" +
-        "MOV result.color, const;\nEND";
+    const source = "!!ARBfp1.0\nPARAM const = {0.0, 1.0, 0.0, 1.0};\n" +
+        "TEMP foo$bar, foo_bar;\n" +
+        "MOV foo$bar, const;\n" +
+        "SWZ foo_bar, foo$bar, y, x, -z, 1;\n" +
+        "MOV result.color, foo_bar;\nEND";
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const module = await createV86GL4ES({
@@ -45,14 +48,14 @@
         throw new Error("program length query failed");
     }
     const programLength = new DataView(module.HEAPU8.buffer).getInt32(lengthPtr, true);
-    if (programLength !== sourceBytes.length + 1) {
+    if (programLength !== sourceBytes.length) {
         throw new Error(`program length changed: ${programLength}`);
     }
     const queriedPtr = module._malloc(programLength);
     module._v86gl_glGetProgramStringARB(GL_FRAGMENT_PROGRAM_ARB,
         GL_PROGRAM_STRING_ARB, programLength, lengthPtr, queriedPtr);
     const queried = decoder.decode(module.HEAPU8.subarray(
-        queriedPtr, queriedPtr + programLength - 1));
+        queriedPtr, queriedPtr + programLength));
     if (queried !== source) {
         throw new Error("guest-visible ARB source changed");
     }

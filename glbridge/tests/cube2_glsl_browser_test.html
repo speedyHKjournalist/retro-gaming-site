@@ -1,0 +1,302 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cube 2 GLSL corpus test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=cube2-glsl-r6889-20260716"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_VERTEX_SHADER = 0x8B31;
+    const GL_FRAGMENT_SHADER = 0x8B30;
+    const GL_COMPILE_STATUS = 0x8B81;
+    const GL_LINK_STATUS = 0x8B82;
+    const GL_ACTIVE_UNIFORMS = 0x8B86;
+    const OBJECT_SHADER = 1;
+    const OBJECT_PROGRAM = 2;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    /*
+     * Representative real shaders from the official Cube 2 r6889
+     * data/glsl.cfg.  "screenrect" and "atmosphere" include the exact
+     * resolved output of their CubeScript macros.  Together these cover the
+     * menu/HUD, occlusion-query, cubemap, depth-effects, postprocess and
+     * complex world-sky compiler paths without vendoring the game assets.
+     *
+     * https://sourceforge.net/p/sauerbraten/code/HEAD/tree/data/glsl.cfg
+     */
+    const corpus = [
+        {
+            name: "hud",
+            vertex: `
+                attribute vec4 vvertex, vcolor;
+                attribute vec2 vtexcoord0;
+                uniform mat4 hudmatrix;
+                varying vec2 texcoord0;
+                varying vec4 color;
+                void main(void) {
+                    gl_Position = hudmatrix * vvertex;
+                    texcoord0 = vtexcoord0;
+                    color = vcolor;
+                }
+            `,
+            fragment: `
+                varying vec2 texcoord0;
+                varying vec4 color;
+                uniform sampler2D tex0;
+                void main(void) {
+                    gl_FragColor = color * texture2D(tex0, texcoord0);
+                }
+            `,
+        },
+        {
+            name: "cubemap",
+            vertex: `
+                attribute vec4 vvertex, vcolor;
+                attribute vec3 vtexcoord0;
+                varying vec3 texcoord0;
+                varying vec4 color;
+                void main(void) {
+                    gl_Position = vvertex;
+                    texcoord0 = vtexcoord0;
+                    color = vcolor;
+                }
+            `,
+            fragment: `
+                varying vec3 texcoord0;
+                varying vec4 color;
+                uniform samplerCube tex0;
+                void main(void) {
+                    gl_FragColor = color * textureCube(tex0, texcoord0);
+                }
+            `,
+        },
+        {
+            name: "bbquery",
+            vertex: `
+                attribute vec4 vvertex;
+                uniform mat4 camprojmatrix;
+                uniform vec3 bborigin, bbsize;
+                void main() {
+                    gl_Position = camprojmatrix *
+                        vec4(bborigin + vvertex.xyz*bbsize, vvertex.w);
+                }
+            `,
+            fragment: `void main() {}`,
+        },
+        {
+            name: "depthfxsplitworld",
+            vertex: `
+                attribute vec4 vvertex;
+                uniform mat4 camprojmatrix;
+                uniform vec4 depthscale, depthoffsets;
+                varying vec4 depthranges;
+                void main(void) {
+                    gl_Position = camprojmatrix * vvertex;
+                    depthranges = depthoffsets + gl_Position.w*depthscale;
+                }
+            `,
+            fragment: `
+                varying vec4 depthranges;
+                void main(void) {
+                    vec4 ranges = vec4(depthranges.x, fract(depthranges.yzw));
+                    ranges.xy -= ranges.yz*vec2(0.00390625, 0.00390625);
+                    gl_FragColor = ranges;
+                }
+            `,
+        },
+        {
+            name: "screenrect-resolved",
+            vertex: `
+                attribute vec4 vvertex, vcolor;
+                uniform vec4 screentexcoord0;
+                #define vtexcoord0 (vvertex.xy * screentexcoord0.xy + screentexcoord0.zw)
+                varying vec2 texcoord0;
+                varying vec4 color;
+                void main(void) {
+                    gl_Position = vvertex;
+                    texcoord0 = vtexcoord0;
+                    color = vcolor;
+                }
+            `,
+            fragment: `
+                varying vec2 texcoord0;
+                varying vec4 color;
+                uniform sampler2D tex0;
+                void main(void) {
+                    gl_FragColor = color * texture2D(tex0, texcoord0);
+                }
+            `,
+        },
+        {
+            name: "skyboxglare",
+            vertex: `
+                attribute vec4 vvertex, vcolor;
+                attribute vec2 vtexcoord0;
+                uniform mat4 skymatrix;
+                varying vec4 color;
+                varying vec2 texcoord0;
+                void main(void) {
+                    gl_Position = skymatrix * vvertex;
+                    color = vcolor;
+                    texcoord0 = vtexcoord0;
+                }
+            `,
+            fragment: `
+                varying vec4 color;
+                varying vec2 texcoord0;
+                uniform sampler2D tex0;
+                void main(void) {
+                    vec4 glare = texture2D(tex0, texcoord0) * color;
+                    gl_FragColor.rgb = vec3(dot(glare.rgb,
+                        vec3(10.56, 10.88, 10.56)) - 30.4);
+                    gl_FragColor.a = glare.a;
+                }
+            `,
+        },
+        {
+            name: "atmosphere-resolved",
+            minActiveUniforms: 10,
+            vertex: `
+                attribute vec4 vvertex;
+                uniform mat4 skymatrix;
+                varying vec3 camvec;
+                void main(void) {
+                    gl_Position = skymatrix * vvertex;
+                    camvec = vvertex.xyz;
+                }
+            `,
+            fragment: `
+                uniform vec4 sunlight;
+                uniform vec3 sundir;
+                uniform vec3 sunweight;
+                uniform vec3 sundiskcolor;
+                uniform vec2 sundiskparams;
+                uniform vec4 opticaldepthparams;
+                uniform vec3 mieparams;
+                uniform vec3 betarayleigh, betamie, betaozone;
+                varying vec3 camvec;
+                void main(void) {
+                    vec3 camdir = normalize(camvec);
+                    float costheta = dot(camdir, sundir);
+                    float edgeoffset = max(1.0 -
+                        (1.0 - max(costheta, 0.0)*costheta)*sundiskparams.x, 0.0);
+                    float limbdarken = sqrt(edgeoffset);
+                    float corona = min(edgeoffset * sundiskparams.y, 1.0);
+                    corona = max(0.75 / (1.5 - corona * corona) - 0.5, 0.0);
+                    vec3 sundisk = sundiskcolor * limbdarken * corona;
+                    float offset = camdir.z*opticaldepthparams.w;
+                    vec3 depth = sqrt(offset*offset + opticaldepthparams.xyz) - offset;
+                    vec3 rayleighweight = betarayleigh * depth.x;
+                    vec3 mieweight = betamie * depth.y;
+                    vec3 ozoneweight = betaozone * (depth.z - depth.x);
+                    vec3 viewweight = sunweight -
+                        (rayleighweight + mieweight + ozoneweight);
+                    vec3 extinction = (exp2(viewweight) - 1.0) / viewweight;
+                    float rphase = (1.5 + 0.5*costheta*costheta) *
+                        (3.0 / (16.0 * 3.14159265));
+                    float mphase = inversesqrt(mieparams.x +
+                        mieparams.y*min(costheta, mieparams.z));
+                    vec3 scatter = rayleighweight * rphase +
+                        mieweight * (mphase * mphase * mphase);
+                    vec3 inscatter =
+                        (sunlight.rgb * scatter + sundisk) * extinction;
+                    gl_FragColor = vec4(sqrt(inscatter), sunlight.a);
+                }
+            `,
+        },
+    ];
+
+    const canvas = document.getElementById("v86gl_canvas");
+    const module = await createV86GL4ES({
+        canvas,
+        locateFile(path) {
+            return `../libglwasm/${path}?v=cube2-glsl-r6889-20260716`;
+        },
+    });
+    const view = () => new DataView(module.HEAPU8.buffer);
+
+    function allocText(text) {
+        const bytes = encoder.encode(text);
+        const ptr = module._malloc(Math.max(bytes.length, 1));
+        module.HEAPU8.set(bytes, ptr);
+        return {ptr, length: bytes.length};
+    }
+
+    function queryObject(kind, name, pname) {
+        const ptr = module._malloc(4);
+        view().setInt32(ptr, -1, true);
+        const ok = module._v86gl_glQueryObjectivMapped(kind, name, pname, ptr);
+        return {ok, value: view().getInt32(ptr, true)};
+    }
+
+    function objectLog(kind, name) {
+        const lengthPtr = module._malloc(4);
+        const logPtr = module._malloc(8192);
+        const ok = module._v86gl_glQueryObjectLogMapped(
+            kind, name, 8192, lengthPtr, logPtr);
+        if (!ok) return "<log unavailable>";
+        const length = view().getInt32(lengthPtr, true);
+        return decoder.decode(module.HEAPU8.subarray(logPtr, logPtr + length));
+    }
+
+    function compileShader(guestName, type, source, label) {
+        module._v86gl_glCreateShaderMapped(guestName, type);
+        const encoded = allocText(`#version 120\n${source}`);
+        module._v86gl_glShaderSourceMapped(guestName, encoded.length, encoded.ptr);
+        module._v86gl_glCompileShaderMapped(guestName);
+        const status = queryObject(OBJECT_SHADER, guestName, GL_COMPILE_STATUS);
+        if (!status.ok || !status.value) {
+            throw new Error(`${label} failed to compile:\n${objectLog(OBJECT_SHADER, guestName)}`);
+        }
+    }
+
+    module._v86glMakeCurrent(1, 0, 0, 64, 64);
+
+    for (let index = 0; index < corpus.length; index++) {
+        const entry = corpus[index];
+        const vertexShader = 100 + index * 3;
+        const fragmentShader = vertexShader + 1;
+        const program = vertexShader + 2;
+        compileShader(vertexShader, GL_VERTEX_SHADER, entry.vertex,
+            `${entry.name} vertex shader`);
+        compileShader(fragmentShader, GL_FRAGMENT_SHADER, entry.fragment,
+            `${entry.name} fragment shader`);
+        module._v86gl_glCreateProgramMapped(program);
+        module._v86gl_glAttachShaderMapped(program, vertexShader);
+        module._v86gl_glAttachShaderMapped(program, fragmentShader);
+        for (const [attribIndex, name] of [
+            [0, "vvertex"], [1, "vcolor"], [2, "vtexcoord0"],
+        ]) {
+            const encoded = allocText(name);
+            module._v86gl_glBindAttribLocationMapped(
+                program, attribIndex, encoded.length, encoded.ptr);
+        }
+        module._v86gl_glLinkProgramMapped(program);
+        const linked = queryObject(OBJECT_PROGRAM, program, GL_LINK_STATUS);
+        if (!linked.ok || !linked.value) {
+            throw new Error(`${entry.name} failed to link:\n${objectLog(OBJECT_PROGRAM, program)}`);
+        }
+        if (entry.minActiveUniforms) {
+            const uniforms = queryObject(OBJECT_PROGRAM, program, GL_ACTIVE_UNIFORMS);
+            if (!uniforms.ok || uniforms.value < entry.minActiveUniforms) {
+                throw new Error(`${entry.name} reflection lost uniforms: ${uniforms.value}`);
+            }
+        }
+        module._v86gl_glDeleteShaderMapped(vertexShader);
+        module._v86gl_glDeleteShaderMapped(fragmentShader);
+        module._v86gl_glDeleteProgramMapped(program);
+    }
+
+    module._v86glDestroyRenderer();
+    document.title = "Cube 2 GLSL corpus test: PASS";
+    document.getElementById("result").textContent =
+        `PASS ${corpus.length} official/resolved shader pairs`;
+})().catch(error => {
+    document.title = "Cube 2 GLSL corpus test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

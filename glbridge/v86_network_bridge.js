@@ -242,6 +242,38 @@
     const GLFN_DRAW_RANGE_ELEMENTS_DIRECT = 208;
     const GLFN_MULTI_DRAW_ARRAYS_DIRECT = 209;
     const GLFN_MULTI_DRAW_ELEMENTS_DIRECT = 210;
+    const GLFN_QUERY_ERROR = 211;
+    const GLFN_QUERY_LOCATION = 212;
+    const GLFN_QUERY_UNIFORM = 213;
+    const GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214;
+    const GLFN_COPY_TEX_SUB_IMAGE_3D = 215;
+
+    // Private capability query shared with opengl32_proxy.c. Optional desktop
+    // extensions are derived from the live WebGL2 context instead of gl4es's
+    // broad compatibility extension string.
+    const V86GL_QUERY_HOST_CAPABILITIES = 0x76380001;
+    const V86GL_HOST_CAP_WEBGL2 = 0x00000001;
+    const V86GL_HOST_CAP_COLOR_BUFFER_FLOAT = 0x00000002;
+    const V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR = 0x00000004;
+    const V86GL_HOST_CAP_ANISOTROPY = 0x00000008;
+
+    const GL_MAX_TEXTURE_SIZE = 0x0D33;
+    const GL_MAX_3D_TEXTURE_SIZE = 0x8073;
+    const GL_MAX_CUBE_MAP_TEXTURE_SIZE = 0x851C;
+    const GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF;
+    const GL_MAX_RENDERBUFFER_SIZE = 0x84E8;
+    const GL_MAX_DRAW_BUFFERS = 0x8824;
+    const GL_MAX_VERTEX_ATTRIBS = 0x8869;
+    const GL_MAX_TEXTURE_IMAGE_UNITS = 0x8872;
+    const GL_MAX_FRAGMENT_UNIFORM_COMPONENTS = 0x8B49;
+    const GL_MAX_VERTEX_UNIFORM_COMPONENTS = 0x8B4A;
+    const GL_MAX_VARYING_FLOATS = 0x8B4B;
+    const GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS = 0x8B4C;
+    const GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS = 0x8B4D;
+    const GL_MAX_COLOR_ATTACHMENTS = 0x8CDF;
+    const WEBGL_MAX_VERTEX_UNIFORM_VECTORS = 0x8DFB;
+    const WEBGL_MAX_VARYING_VECTORS = 0x8DFC;
+    const WEBGL_MAX_FRAGMENT_UNIFORM_VECTORS = 0x8DFD;
 
     const V86GL_READ_PIXELS_HEADER_SIZE = 32;
     const V86GL_READ_PIXELS_STATUS_PENDING = 0;
@@ -479,6 +511,11 @@
         [GLFN_DRAW_RANGE_ELEMENTS_DIRECT]: "glDrawRangeElements(VBO)",
         [GLFN_MULTI_DRAW_ARRAYS_DIRECT]: "glMultiDrawArrays(VBO)",
         [GLFN_MULTI_DRAW_ELEMENTS_DIRECT]: "glMultiDrawElements(VBO)",
+        [GLFN_QUERY_ERROR]: "glGetError(sync)",
+        [GLFN_QUERY_LOCATION]: "glGet*Location(sync)",
+        [GLFN_QUERY_UNIFORM]: "glGetUniform*(sync)",
+        [GLFN_INVALIDATE_PROGRAM_LOCATIONS]: "invalidateProgramLocations",
+        [GLFN_COPY_TEX_SUB_IMAGE_3D]: "glCopyTexSubImage3D",
     };
 
     const DRAWABLE_GL_FUNCTIONS = new Set([
@@ -556,6 +593,8 @@
         GLFN_QUERY_PROGRAM_STRING_ARB,
         GLFN_QUERY_GL_STRING,
         GLFN_QUERY_INTEGER,
+        GLFN_QUERY_ERROR,
+        GLFN_QUERY_UNIFORM,
         GLFN_DRAW_ARRAYS_DIRECT,
         GLFN_DRAW_ELEMENTS_DIRECT,
         GLFN_DRAW_RANGE_ELEMENTS_DIRECT,
@@ -566,6 +605,7 @@
     const FRAMEBUFFER_DEPENDENT_TEXTURE_FUNCTIONS = new Set([
         GLFN_COPY_TEX_IMAGE_2D,
         GLFN_COPY_TEX_SUB_IMAGE_2D,
+        GLFN_COPY_TEX_SUB_IMAGE_3D,
         GLFN_COPY_TEX_IMAGE_1D,
         GLFN_COPY_TEX_SUB_IMAGE_1D,
     ]);
@@ -1227,6 +1267,20 @@
             case GLFN_QUERY_INTEGER:
                 this.callQueryInteger(p);
                 break;
+            case GLFN_QUERY_ERROR:
+                this.callQueryError(p);
+                break;
+            case GLFN_QUERY_LOCATION:
+                this.callQueryLocation(p);
+                break;
+            case GLFN_QUERY_UNIFORM:
+                this.callQueryUniform(p);
+                break;
+            case GLFN_INVALIDATE_PROGRAM_LOCATIONS:
+                if (p.length >= 4) {
+                    this.callGL("InvalidateProgramLocations", [u32(p, 0)], ["number"]);
+                }
+                break;
             case GLFN_GEN_BUFFERS:
                 this.callTextureNameArray("GenBuffersMapped", p);
                 break;
@@ -1485,6 +1539,15 @@
                     u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12),
                     i32(p, 16), i32(p, 20), i32(p, 24), i32(p, 28),
                 ], ["number", "number", "number", "number", "number", "number", "number", "number"]);
+                break;
+            case GLFN_COPY_TEX_SUB_IMAGE_3D:
+                this.callGL("CopyTexSubImage3D", [
+                    u32(p, 0), i32(p, 4), i32(p, 8), i32(p, 12), i32(p, 16),
+                    i32(p, 20), i32(p, 24), i32(p, 28), i32(p, 32),
+                ], [
+                    "number", "number", "number", "number", "number",
+                    "number", "number", "number", "number",
+                ]);
                 break;
             case GLFN_COPY_TEX_SUB_IMAGE_1D:
                 this.callGL("CopyTexSubImage1D", [
@@ -2121,6 +2184,104 @@
                 writeU32(p, 8, u32(out, 0));
             }
             return ok;
+        }
+
+        callQueryError(p) {
+            if (p.length < 16) {
+                return false;
+            }
+
+            const result = this.callGLReturn("QueryError", [], []) >>> 0;
+            writeU32(p, 0, V86GL_SYNC_QUERY_STATUS_OK);
+            writeU32(p, 4, result);
+            return true;
+        }
+
+        callQueryLocation(p) {
+            if (p.length < 32) {
+                return false;
+            }
+
+            const nameLength = u32(p, 28);
+            if (32 + nameLength > p.length) {
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const namePtr = nameLength ? this.malloc(nameLength) : 0;
+            const infoPtr = this.malloc(12);
+            let heap = this.heapU8();
+            if (!infoPtr || (nameLength && !namePtr) || !heap) {
+                this.free(namePtr);
+                this.free(infoPtr);
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+            if (nameLength) {
+                heap.set(p.subarray(32, 32 + nameLength), namePtr);
+            }
+            heap.fill(0, infoPtr, infoPtr + 12);
+            writeU32(heap, infoPtr, 0xFFFFFFFF);
+
+            const ok = this.callGLReturn("QueryLocationMapped", [
+                u32(p, 0), u32(p, 4), i32(p, 8),
+                nameLength, namePtr, infoPtr, infoPtr + 4, infoPtr + 8,
+            ], [
+                "number", "number", "number", "number",
+                "number", "number", "number", "number",
+            ]) !== 0;
+            heap = this.heapU8();
+            writeU32(p, 12, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && heap) {
+                writeU32(p, 16, u32(heap, infoPtr));
+                writeU32(p, 20, u32(heap, infoPtr + 4));
+                writeU32(p, 24, u32(heap, infoPtr + 8));
+            }
+            this.free(namePtr);
+            this.free(infoPtr);
+            return ok;
+        }
+
+        callQueryUniform(p) {
+            if (p.length < 32) {
+                return false;
+            }
+
+            const valueKind = u32(p, 8);
+            const dataSize = u32(p, 20);
+            if ((valueKind !== 1 && valueKind !== 2) || dataSize !== 64 ||
+                32 + dataSize > p.length) {
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+
+            const dataPtr = this.malloc(dataSize);
+            const countPtr = this.malloc(4);
+            let heap = this.heapU8();
+            if (!dataPtr || !countPtr || !heap) {
+                this.free(dataPtr);
+                this.free(countPtr);
+                writeU32(p, 12, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+            heap.fill(0, dataPtr, dataPtr + dataSize);
+            writeU32(heap, countPtr, 0);
+
+            const ok = this.callGLReturn("QueryUniformMapped", [
+                u32(p, 0), i32(p, 4), valueKind, dataPtr, countPtr,
+            ], ["number", "number", "number", "number", "number"]) !== 0;
+            heap = this.heapU8();
+            const valueCount = ok && heap ? u32(heap, countPtr) : 0;
+            const validCount = valueCount >= 1 && valueCount <= 16;
+            writeU32(p, 12, ok && validCount ?
+                V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && validCount && heap) {
+                writeU32(p, 16, valueCount);
+                p.set(heap.subarray(dataPtr, dataPtr + valueCount * 4), 32);
+            }
+            this.free(dataPtr);
+            this.free(countPtr);
+            return ok && validCount;
         }
 
         callQueryGLString(p) {
@@ -4359,9 +4520,9 @@
         }
 
         destroyContext() {
-            /* WM_NCDESTROY and wglDeleteContext can both describe the same
-             * guest teardown. Do not destroy the freshly pre-created renderer
-             * a second time; the next MAKE_CURRENT starts a new lifecycle. */
+            /* The final wglDeleteContext and process teardown can both describe
+             * the same guest lifecycle. Do not destroy a freshly pre-created
+             * renderer twice; the next MAKE_CURRENT starts a new lifecycle. */
             if (this.contextDestroySeen) {
                 return;
             }

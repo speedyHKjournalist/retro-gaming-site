@@ -52,6 +52,7 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 
 #define GL_FALSE              0
 #define GL_TRUE               1
+#define GL_NO_ERROR           0
 #define GL_ZERO               0
 #define GL_ONE                1
 #define GL_NONE               0
@@ -59,6 +60,15 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_RENDERER           0x1F01
 #define GL_VERSION            0x1F02
 #define GL_EXTENSIONS         0x1F03
+/* Private synchronous query understood by v86_network_bridge.js.  It never
+ * reaches desktop GL/gl4es: the browser bridge answers it from the live
+ * WebGL2 context so optional desktop extensions are only exposed when their
+ * complete WebGL backing is available. */
+#define V86GL_QUERY_HOST_CAPABILITIES 0x76380001u
+#define V86GL_HOST_CAP_WEBGL2            0x00000001u
+#define V86GL_HOST_CAP_COLOR_BUFFER_FLOAT 0x00000002u
+#define V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR 0x00000004u
+#define V86GL_HOST_CAP_ANISOTROPY        0x00000008u
 #define GL_COLOR_BUFFER_BIT   0x00004000
 #define GL_DEPTH_BUFFER_BIT   0x00000100
 #define GL_NEVER              0x0200
@@ -819,6 +829,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define V86GL_OBJECT_KIND_QUERY 3u
 #define V86GL_ACTIVE_KIND_UNIFORM 1u
 #define V86GL_ACTIVE_KIND_ATTRIB 2u
+#define V86GL_LOCATION_KIND_UNIFORM 1u
+#define V86GL_LOCATION_KIND_ATTRIB 2u
 #define CLIENT_ARRAY_MT_MAGIC 0x544D4143u  // 'CAMT' little-endian
 #define CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT 0x80000000u
 #define CLIENT_ARRAY_MT_FOG_COORD_BIT 0x40000000u
@@ -1050,6 +1062,11 @@ enum {
     GLFN_DRAW_RANGE_ELEMENTS_DIRECT = 208,
     GLFN_MULTI_DRAW_ARRAYS_DIRECT = 209,
     GLFN_MULTI_DRAW_ELEMENTS_DIRECT = 210,
+    GLFN_QUERY_ERROR = 211,
+    GLFN_QUERY_LOCATION = 212,
+    GLFN_QUERY_UNIFORM = 213,
+    GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214,
+    GLFN_COPY_TEX_SUB_IMAGE_3D = 215,
 };
 
 static HANDLE g_v86gl = INVALID_HANDLE_VALUE;
@@ -1070,6 +1087,19 @@ static uint32_t g_last_surface_width = 0;
 static uint32_t g_last_surface_height = 0;
 static BOOL g_have_last_surface = FALSE;
 static BOOL g_context_destroy_sent = FALSE;
+#define V86GL_MAX_WGL_CONTEXTS 32
+typedef struct {
+    BOOL used;
+    DWORD owner_thread;
+    BOOL ever_current;
+    uint32_t share_group;
+} V86GLWGLContext;
+static V86GLWGLContext g_wgl_contexts[V86GL_MAX_WGL_CONTEXTS];
+static uint32_t g_wgl_context_count = 0;
+static uint32_t g_next_share_group = 1;
+static V86GLWGLContext* find_wgl_context(HGLRC handle);
+static void release_thread_current_context(DWORD thread_id);
+static void force_release_current_context(void);
 static uint32_t g_frame_id = 1;
 static GLuint g_next_texture_id = 1;
 static GLuint g_next_buffer_id = 1;
@@ -1082,7 +1112,6 @@ static GLuint g_current_fragment_program_arb = 0;
 static GLuint g_next_framebuffer_id = 1;
 static GLuint g_next_renderbuffer_id = 1;
 static GLint g_next_uniform_location = 1;
-static GLint g_next_attrib_location = 8;
 static GLuint g_current_samples_passed_query = 0;
 static GLuint g_current_program = 0;
 static GLuint g_array_buffer_binding = 0;
@@ -1185,6 +1214,14 @@ static GLuint g_name_stack[64];
 static GLint g_name_stack_depth = 0;
 static GLuint g_index_mask = 0xFFFFFFFFu;
 static GLenum g_error = 0;
+
+/* OpenGL exposes one latched error flag.  A later error must not overwrite
+ * the first one before the application has observed it with glGetError(). */
+static void v86gl_set_error(GLenum error) {
+    if (error != GL_NO_ERROR && g_error == GL_NO_ERROR) {
+        g_error = error;
+    }
+}
 /* Optional transport tracing is off by default; set V86GL_TRACE=1 or
  * V86GL_TRACE_CALLS=1 in the guest process when low-level logging is needed. */
 static BOOL g_trace_initialized = FALSE;
@@ -1238,7 +1275,10 @@ static void v86gl_error(const char* format, ...) {
     va_end(args);
 }
 
-static const char* g_gl_extensions =
+/* These extensions are implemented by the proxy/gl4es bridge itself or are
+ * guaranteed by the required WebGL2 context.  Host-optional features are
+ * appended to g_gl_extensions after a synchronous capability snapshot. */
+static const char g_gl_extensions_base[] =
     "GL_ARB_multitexture "
     "GL_ARB_texture_env_combine "
     "GL_EXT_vertex_array "
@@ -1275,25 +1315,18 @@ static const char* g_gl_extensions =
     "GL_ARB_pixel_buffer_object "
     "GL_EXT_pixel_buffer_object "
     "GL_ARB_occlusion_query "
-    /* WineD3D 1.7.52's ARB program backend maps D3D8 shader bytecode onto the
-     * synchronous program upload/query path implemented by this bridge.  Keep
-     * GLSL extensions hidden until desktop-GLSL compatibility is complete,
-     * but advertise both ARB program stages so D3D8 shaders are selected. */
+    "GL_ARB_shader_objects "
+    "GL_ARB_vertex_shader "
+    "GL_ARB_fragment_shader "
+    "GL_ARB_shading_language_100 "
+    /* Both native GLSL 1.20 and ARB assembly programs use synchronous object,
+     * reflection and error paths through the browser bridge. */
     "GL_ARB_vertex_program "
     "GL_ARB_fragment_program "
-    /* WineD3D 1.7.52 defaults to FBO offscreen rendering as soon as either
-     * framebuffer-object extension is advertised.  The browser bridge does
-     * not yet implement the complete desktop-GL renderbuffer format set that
-     * WineD3D probes during adapter initialisation.  Advertising FBO here made
-     * those probes clear the RENDERTARGET flag from the desktop backbuffer
-     * format, so IDirect3D8::CheckDeviceType failed with D3DERR_NOTAVAILABLE.
-     * Keep FBO hidden until its format and attachment semantics are complete;
-     * WineD3D will deliberately fall back to its backbuffer rendering path. */
+    "GL_EXT_framebuffer_object "
     "GL_ARB_depth_texture "
     "GL_EXT_packed_depth_stencil "
     "GL_EXT_texture_sRGB "
-    "GL_ARB_texture_float "
-    "GL_ARB_half_float_pixel "
     "GL_EXT_texture_compression_s3tc "
     "GL_EXT_shadow_funcs "
     "GL_ARB_texture_non_power_of_two "
@@ -1302,9 +1335,11 @@ static const char* g_gl_extensions =
     "GL_EXT_draw_range_elements "
     "GL_EXT_texture_env_add "
     "GL_EXT_texture_env_combine "
-    "GL_EXT_texture_filter_anisotropic "
     "GL_EXT_texture_lod_bias "
     "GL_EXT_texture_object";
+#define V86GL_GL_EXTENSIONS_MAX 4096
+static char g_gl_extensions[V86GL_GL_EXTENSIONS_MAX];
+static BOOL g_gl_extensions_profile_valid;
 static const char* g_wgl_extensions =
     "WGL_ARB_extensions_string "
     "WGL_EXT_extensions_string "
@@ -1323,7 +1358,7 @@ static int g_swap_interval = 0;
 #define V86GL_MAX_PROGRAM_OBJECTS 1024
 #define V86GL_MAX_ARB_PROGRAM_OBJECTS 1024
 #define V86GL_MAX_SHADER_OBJECTS 2048
-#define V86GL_MAX_ATTACHED_SHADERS 8
+#define V86GL_MAX_ATTACHED_SHADERS 32
 #define V86GL_MAX_UNIFORM_LOCATIONS 4096
 #define V86GL_MAX_ATTRIB_LOCATIONS 512
 #define V86GL_MAX_VERTEX_ATTRIBS 16
@@ -1601,6 +1636,7 @@ typedef struct {
     BOOL deleted;
     GLboolean linked;
     GLboolean validated;
+    GLboolean has_executable;
     GLuint name;
     GLuint attached[V86GL_MAX_ATTACHED_SHADERS];
     uint32_t attached_count;
@@ -1625,6 +1661,8 @@ typedef struct {
 
 typedef struct {
     BOOL used;
+    BOOL bound;
+    BOOL queried;
     GLuint program;
     GLint guest_index;
     GLint requested_index;
@@ -1959,7 +1997,7 @@ static TextureObjectState* find_texture_state(GLuint name, GLenum target, BOOL c
         TextureObjectState* state = &g_texture_states[i];
         if (state->used && state->name == name) {
             if (state->target && state->target != target) {
-                g_error = GL_INVALID_OPERATION;
+                v86gl_set_error(GL_INVALID_OPERATION);
                 return NULL;
             }
 
@@ -2023,7 +2061,7 @@ static GLchar* dup_gl_string(const GLchar* text, uint32_t length) {
 
     out = (GLchar*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)length + 1u);
     if (!out) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return NULL;
     }
 
@@ -2134,6 +2172,8 @@ static void clear_attrib_location(AttribLocationState* state) {
     ZeroMemory(state, sizeof(*state));
 }
 
+static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size);
+
 static UniformLocationState* find_uniform_location_by_name(GLuint program,
                                                            const GLchar* name,
                                                            BOOL create) {
@@ -2189,13 +2229,10 @@ static AttribLocationState* find_attrib_location_by_name(GLuint program,
     }
 
     if (!create || !free_state) return NULL;
-    if (g_next_attrib_location >= V86GL_MAX_VERTEX_ATTRIBS) {
-        return NULL;
-    }
     ZeroMemory(free_state, sizeof(*free_state));
     free_state->used = TRUE;
     free_state->program = program;
-    free_state->guest_index = g_next_attrib_location++;
+    free_state->guest_index = -1;
     free_state->requested_index = -1;
     free_state->name = dup_gl_string(name, gl_string_length(name));
     if (!free_state->name) {
@@ -2203,16 +2240,6 @@ static AttribLocationState* find_attrib_location_by_name(GLuint program,
         return NULL;
     }
     return free_state;
-}
-
-static AttribLocationState* find_attrib_location_by_index(GLint guest_index) {
-    uint32_t i;
-
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
-        AttribLocationState* state = &g_attrib_locations[i];
-        if (state->used && state->guest_index == guest_index) return state;
-    }
-    return NULL;
 }
 
 static AttribLocationState* bind_attrib_location_name(GLuint program,
@@ -2223,6 +2250,8 @@ static AttribLocationState* bind_attrib_location_name(GLuint program,
     if (index < V86GL_MAX_VERTEX_ATTRIBS) {
         state->guest_index = (GLint)index;
         state->requested_index = (GLint)index;
+        state->bound = TRUE;
+        state->queried = FALSE;
     }
     return state;
 }
@@ -2239,6 +2268,70 @@ static void delete_program_locations(GLuint program) {
         if (g_attrib_locations[i].used && g_attrib_locations[i].program == program) {
             clear_attrib_location(&g_attrib_locations[i]);
         }
+    }
+}
+
+static void invalidate_program_locations(GLuint program) {
+    uint32_t i;
+    uint32_t payload = program;
+
+    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
+        if (g_uniform_locations[i].used && g_uniform_locations[i].program == program) {
+            clear_uniform_location(&g_uniform_locations[i]);
+        }
+    }
+    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
+        AttribLocationState* state = &g_attrib_locations[i];
+        if (!state->used || state->program != program) continue;
+        if (state->bound) {
+            state->guest_index = state->requested_index;
+            state->queried = FALSE;
+        } else {
+            clear_attrib_location(state);
+        }
+    }
+    emit_gl_call(GLFN_INVALIDATE_PROGRAM_LOCATIONS, &payload, sizeof(payload));
+}
+
+static BOOL shader_is_attached(GLuint shader) {
+    uint32_t i;
+    uint32_t j;
+
+    for (i = 0; i < V86GL_MAX_PROGRAM_OBJECTS; i++) {
+        ProgramObjectState* program = &g_program_objects[i];
+        if (!program->used) continue;
+        for (j = 0; j < program->attached_count; j++) {
+            if (program->attached[j] == shader) return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void collect_deleted_shader(GLuint shader) {
+    ShaderObjectState* state = find_shader_state(shader, FALSE, 0);
+
+    if (!state || !state->deleted || shader_is_attached(shader)) return;
+    if (state->source) HeapFree(GetProcessHeap(), 0, state->source);
+    ZeroMemory(state, sizeof(*state));
+}
+
+static void destroy_program_state(ProgramObjectState* state) {
+    GLuint attached[V86GL_MAX_ATTACHED_SHADERS];
+    uint32_t attached_count;
+    uint32_t i;
+    GLuint program;
+
+    if (!state) return;
+    program = state->name;
+    attached_count = state->attached_count;
+    if (attached_count) {
+        CopyMemory(attached, state->attached,
+                   attached_count * sizeof(attached[0]));
+    }
+    delete_program_locations(program);
+    ZeroMemory(state, sizeof(*state));
+    for (i = 0; i < attached_count; i++) {
+        collect_deleted_shader(attached[i]);
     }
 }
 
@@ -2273,7 +2366,6 @@ static void free_gl2_state(void) {
     g_next_framebuffer_id = 1;
     g_next_renderbuffer_id = 1;
     g_next_uniform_location = 1;
-    g_next_attrib_location = V86GL_MAX_TEXTURE_UNITS;
     g_current_program = 0;
     g_current_vertex_program_arb = 0;
     g_current_fragment_program_arb = 0;
@@ -2364,11 +2456,11 @@ static BufferObjectState* bound_buffer_state(GLenum target) {
     else if (target == GL_PIXEL_PACK_BUFFER) name = g_pixel_pack_buffer_binding;
     else if (target == GL_PIXEL_UNPACK_BUFFER) name = g_pixel_unpack_buffer_binding;
     else {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
     }
     if (!name) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return NULL;
     }
     return find_buffer_state(name, FALSE);
@@ -2379,7 +2471,7 @@ static const uint8_t* buffer_data_at(GLuint name, const GLvoid* offset, uint32_t
     uintptr_t value = (uintptr_t)offset;
 
     if (!state || !state->data || value > state->size || bytes > state->size - value) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return NULL;
     }
     return state->data + (uint32_t)value;
@@ -2393,7 +2485,7 @@ static const GLvoid* unpack_pixel_pointer(const GLvoid* pixels, uint32_t bytes) 
         return buffer_data_at(g_pixel_unpack_buffer_binding, pixels, bytes);
     }
     if (!pixels) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return NULL;
     }
     return pixels;
@@ -2407,7 +2499,7 @@ static GLvoid* pack_pixel_pointer(GLvoid* pixels, uint32_t bytes) {
         return (GLvoid*)buffer_data_at(g_pixel_pack_buffer_binding, pixels, bytes);
     }
     if (!pixels) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return NULL;
     }
     return pixels;
@@ -2542,17 +2634,17 @@ static FramebufferAttachmentState* bound_framebuffer_attachment(GLenum attachmen
     uint32_t index;
 
     if (!valid_framebuffer_attachment(attachment)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
     }
     if (!g_framebuffer_binding) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return NULL;
     }
 
     framebuffer = find_framebuffer_state(g_framebuffer_binding, create);
     if (!framebuffer) {
-        g_error = create ? GL_OUT_OF_MEMORY : GL_INVALID_OPERATION;
+        v86gl_set_error(create ? GL_OUT_OF_MEMORY : GL_INVALID_OPERATION);
         return NULL;
     }
 
@@ -2633,7 +2725,7 @@ static TextureObjectState* bound_texture_state(GLenum target, BOOL create) {
         return find_texture_state(unit->bound_cube, target, create);
     }
 
-    g_error = GL_INVALID_ENUM;
+    v86gl_set_error(GL_INVALID_ENUM);
     return NULL;
 }
 
@@ -2780,7 +2872,7 @@ static GLfloat* current_matrix(GLint** depth, GLint* max_depth) {
         if (max_depth) *max_depth = 2;
         return g_texture_stack[g_texture_stack_depth];
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
     }
 }
@@ -3181,7 +3273,7 @@ static DisplayList* find_display_list(GLuint name, BOOL create) {
 
     list = (DisplayList*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*list));
     if (!list) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return NULL;
     }
 
@@ -3229,7 +3321,7 @@ static int reserve_display_list_bytes(DisplayList* list, uint32_t bytes, uint8_t
         return 0;
     }
     if (bytes > UINT32_MAX - list->size) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -3245,7 +3337,7 @@ static int reserve_display_list_bytes(DisplayList* list, uint32_t bytes, uint8_t
         }
         data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, capacity);
         if (!data) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return 0;
         }
         if (list->data && list->size) {
@@ -3290,7 +3382,7 @@ static int append_display_list_record(DisplayList* list, uint16_t fn,
         return 0;
     }
     if (args_size > UINT32_MAX - header_size) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -3401,20 +3493,20 @@ static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
     uint8_t* p;
 
     if (!open_v86gl()) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         v86gl_error("drop GL record fn=%u: transport is unavailable", (unsigned int)fn);
         return 0;
     }
 
     if (args_size > 0xFFFFFFFFu - header_size) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
     record_size = header_size + args_size;
     command_capacity = g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc);
     if (record_size > command_capacity) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         v86gl_error("drop GL record fn=%u payload=%lu capacity=%lu",
                     (unsigned int)fn, (unsigned long)args_size,
                     (unsigned long)command_capacity);
@@ -3422,7 +3514,7 @@ static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
     }
 
     if (g_dma_size + record_size > command_capacity && !emit_pci_batch(FALSE)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
@@ -3468,7 +3560,7 @@ static int emit_pci_record(uint16_t fn, const void* args, uint32_t args_size, BO
     }
 
     if (flush_after && !emit_pci_batch(FALSE)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
@@ -3515,7 +3607,7 @@ static int emit_read_pixels(GLint x, GLint y, GLsizei width, GLsizei height,
 
     if (sizeof(request) != V86GL_READ_PIXELS_HEADER_SIZE ||
         args_size < sizeof(request)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
@@ -3586,13 +3678,13 @@ static int emit_query_object_log(uint32_t object_kind, GLuint name, GLsizei bufS
     uint32_t data_size;
 
     if (bufSize < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
     data_size = (bufSize > 0 && infoLog) ? (uint32_t)bufSize : 0;
     if (data_size > 0xFFFFFFFFu - sizeof(request)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -3650,13 +3742,13 @@ static int emit_query_active(uint32_t active_kind, GLuint program, GLuint index,
     uint32_t data_size;
 
     if (bufSize < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
     data_size = (bufSize > 0 && name) ? (uint32_t)bufSize : 0;
     if (data_size > 0xFFFFFFFFu - sizeof(request)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -3772,6 +3864,158 @@ static int emit_query_integer(GLenum pname, GLint* value) {
     return 1;
 }
 
+static GLint query_limit_or_default(GLenum pname, GLint fallback, GLint maximum) {
+    GLint value = 0;
+
+    if (!emit_query_integer(pname, &value) || value <= 0) {
+        value = fallback;
+    }
+    if (maximum > 0 && value > maximum) {
+        value = maximum;
+    }
+    return value;
+}
+
+static int emit_query_error(GLenum* value) {
+    struct {
+        uint32_t status;
+        uint32_t value;
+        uint32_t reserved0;
+        uint32_t reserved1;
+    } request;
+    uint8_t* args;
+
+    if (!value) {
+        return 0;
+    }
+    if (g_dma_size && !emit_pci_batch(FALSE)) {
+        return 0;
+    }
+
+    request.status = V86GL_SYNC_QUERY_STATUS_PENDING;
+    request.value = GL_NO_ERROR;
+    request.reserved0 = 0;
+    request.reserved1 = 0;
+    if (!reserve_pci_record(GLFN_QUERY_ERROR, NULL, sizeof(request), &args)) {
+        return 0;
+    }
+    CopyMemory(args, &request, sizeof(request));
+    if (!emit_pci_batch(FALSE) ||
+        read_u32le(args) != V86GL_SYNC_QUERY_STATUS_OK) {
+        return 0;
+    }
+    *value = (GLenum)read_u32le(args + 4);
+    return 1;
+}
+
+static int emit_query_location(uint32_t location_kind, GLuint program,
+                               GLint guest_location, const GLchar* name,
+                               GLint* result, GLenum* value_type,
+                               GLint* value_count) {
+    struct {
+        uint32_t location_kind;
+        uint32_t program;
+        int32_t guest_location;
+        uint32_t status;
+        int32_t result;
+        uint32_t value_type;
+        int32_t value_count;
+        uint32_t name_length;
+    } request;
+    uint8_t* args;
+    uint32_t name_length;
+    uint32_t total_size;
+
+    if (!name || !result) {
+        return 0;
+    }
+    name_length = gl_string_length(name);
+    if (name_length > UINT32_MAX - (uint32_t)sizeof(request)) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return 0;
+    }
+    if (g_dma_size && !emit_pci_batch(FALSE)) {
+        return 0;
+    }
+
+    request.location_kind = location_kind;
+    request.program = program;
+    request.guest_location = guest_location;
+    request.status = V86GL_SYNC_QUERY_STATUS_PENDING;
+    request.result = -1;
+    request.value_type = 0;
+    request.value_count = 0;
+    request.name_length = name_length;
+    total_size = (uint32_t)sizeof(request) + name_length;
+    if (!reserve_pci_record(GLFN_QUERY_LOCATION, NULL, total_size, &args)) {
+        return 0;
+    }
+    CopyMemory(args, &request, sizeof(request));
+    if (name_length) {
+        CopyMemory(args + sizeof(request), name, name_length);
+    }
+    if (!emit_pci_batch(FALSE) ||
+        read_u32le(args + 12) != V86GL_SYNC_QUERY_STATUS_OK) {
+        return 0;
+    }
+
+    *result = (GLint)read_u32le(args + 16);
+    if (value_type) *value_type = (GLenum)read_u32le(args + 20);
+    if (value_count) *value_count = (GLint)read_u32le(args + 24);
+    return 1;
+}
+
+static int emit_query_uniform(GLuint program, GLint location,
+                              uint32_t value_kind, void* values,
+                              GLint* value_count) {
+    struct {
+        uint32_t program;
+        int32_t location;
+        uint32_t value_kind;
+        uint32_t status;
+        int32_t value_count;
+        uint32_t data_size;
+        uint32_t reserved0;
+        uint32_t reserved1;
+    } request;
+    uint8_t* args;
+    const uint32_t data_size = 16u * sizeof(uint32_t);
+
+    if (!values || !value_count) {
+        return 0;
+    }
+    if (g_dma_size && !emit_pci_batch(FALSE)) {
+        return 0;
+    }
+
+    request.program = program;
+    request.location = location;
+    request.value_kind = value_kind;
+    request.status = V86GL_SYNC_QUERY_STATUS_PENDING;
+    request.value_count = 0;
+    request.data_size = data_size;
+    request.reserved0 = 0;
+    request.reserved1 = 0;
+    if (!reserve_pci_record(GLFN_QUERY_UNIFORM, NULL,
+                            (uint32_t)sizeof(request) + data_size, &args)) {
+        return 0;
+    }
+    CopyMemory(args, &request, sizeof(request));
+    ZeroMemory(args + sizeof(request), data_size);
+    if (!emit_pci_batch(FALSE) ||
+        read_u32le(args + 12) != V86GL_SYNC_QUERY_STATUS_OK) {
+        return 0;
+    }
+
+    *value_count = (GLint)read_u32le(args + 16);
+    if (*value_count < 1 || *value_count > 16) {
+        return 0;
+    }
+    CopyMemory(values, args + sizeof(request),
+               (uint32_t)*value_count * sizeof(uint32_t));
+    return 1;
+}
+
 static int emit_query_gl_string(GLenum name, GLsizei bufSize,
                                 GLsizei* length, GLchar* string) {
     struct {
@@ -3784,13 +4028,13 @@ static int emit_query_gl_string(GLenum name, GLsizei bufSize,
     uint32_t data_size;
 
     if (bufSize < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
     data_size = (bufSize > 0 && string) ? (uint32_t)bufSize : 0;
     if (data_size > 0xFFFFFFFFu - sizeof(request)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -3923,13 +4167,13 @@ static int emit_query_program_string_arb(GLenum target, GLenum pname,
     uint32_t data_size;
 
     if (bufSize < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
     data_size = (bufSize > 0 && string) ? (uint32_t)bufSize : 0;
     if (data_size > 0xFFFFFFFFu - sizeof(request)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -4252,7 +4496,7 @@ static BOOL emit_multi_draw_arrays_direct(GLenum mode, const GLint* first,
     GLsizei i;
 
     if ((uint32_t)primcount > (UINT32_MAX - 8u) / 8u) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return FALSE;
     }
 
@@ -4285,7 +4529,7 @@ static BOOL emit_multi_draw_elements_direct(GLenum mode, const GLsizei* count,
     GLsizei i;
 
     if ((uint32_t)primcount > (UINT32_MAX - 12u) / 8u) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return FALSE;
     }
 
@@ -4320,7 +4564,7 @@ static int emit_display_list_stream(const uint8_t* data, uint32_t size) {
         uint32_t args_size;
 
         if (size - offset < 4u) {
-            g_error = GL_INVALID_OPERATION;
+            v86gl_set_error(GL_INVALID_OPERATION);
             g_replaying_display_list = previous_replay;
             return 0;
         }
@@ -4328,7 +4572,7 @@ static int emit_display_list_stream(const uint8_t* data, uint32_t size) {
         fn = (uint16_t)(data[offset] | ((uint16_t)data[offset + 1] << 8));
         if (data[offset + 2] == 0xFF && data[offset + 3] == 0xFF) {
             if (size - offset < 8u) {
-                g_error = GL_INVALID_OPERATION;
+                v86gl_set_error(GL_INVALID_OPERATION);
                 g_replaying_display_list = previous_replay;
                 return 0;
             }
@@ -4341,7 +4585,7 @@ static int emit_display_list_stream(const uint8_t* data, uint32_t size) {
         }
 
         if (args_size > size - offset - header_size) {
-            g_error = GL_INVALID_OPERATION;
+            v86gl_set_error(GL_INVALID_OPERATION);
             g_replaying_display_list = previous_replay;
             return 0;
         }
@@ -4452,14 +4696,21 @@ static LRESULT CALLBACK vgl_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
     if (msg == WM_MOVE || msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED) {
         emit_current_surface(hwnd);
-    } else if (msg == WM_NCDESTROY) {
-        emit_destroy_context_once();
     }
 
     if (msg == WM_NCDESTROY && hwnd == g_current_hwnd) {
+        force_release_current_context();
+        emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
         g_current_hwnd = NULL;
         g_original_wndproc = NULL;
         g_have_last_surface = FALSE;
+
+        /* A drawable can disappear while one or more WGL contexts remain
+         * alive and are later rebound to another window.  Keep the shared
+         * browser renderer until the last context is explicitly deleted. */
+        if (!g_wgl_context_count) {
+            emit_destroy_context_once();
+        }
     }
 
     if (original) {
@@ -4743,7 +4994,7 @@ static TextureLevelState* texture_level_state(GLenum target, GLint level, BOOL c
     GLint face = -1;
 
     if (level < 0 || level >= V86GL_MAX_TEXTURE_LEVELS) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return NULL;
     }
     switch (target) {
@@ -4771,7 +5022,7 @@ static TextureLevelState* texture_level_state(GLenum target, GLint level, BOOL c
             GetProcessHeap(), HEAP_ZERO_MEMORY,
             6u * V86GL_MAX_TEXTURE_LEVELS * sizeof(*texture->cube_levels));
         if (!texture->cube_levels) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return NULL;
         }
     }
@@ -4798,13 +5049,13 @@ static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
     GLsizei row;
 
     if (width < 0 || height < 0 || border < 0 || border > 1) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     pixel_bytes = gl_pixel_bytes(format, type);
     tight_size = gl_pixel_tight_span(width, height, format, type);
     if (!pixel_bytes || (width > 0 && height > 0 && !tight_size)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
     state = texture_level_state(target, level, TRUE);
@@ -4830,14 +5081,14 @@ static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
     row_bytes = (uint32_t)width * pixel_bytes;
     if (!source_span || !source_stride || source_offset > source_span ||
         source_span - source_offset < row_bytes) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         clear_texture_level(state);
         return 0;
     }
 
     state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
     if (!state->data) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         clear_texture_level(state);
         return 0;
     }
@@ -4867,13 +5118,13 @@ static int cache_texture_image_3d(GLenum target, GLint level, GLint internalform
     GLsizei row;
 
     if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     pixel_bytes = gl_pixel_bytes(format, type);
     tight_size = gl_pixel_tight_span_3d(width, height, depth, format, type);
     if (!pixel_bytes || (width > 0 && height > 0 && depth > 0 && !tight_size)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
     state = texture_level_state(target, level, TRUE);
@@ -4907,7 +5158,7 @@ static int cache_texture_image_3d(GLenum target, GLint level, GLint internalform
     if (!source_span || !source_stride || !source_image_stride ||
         source_offset_64 > UINT32_MAX || source_offset_64 > source_span ||
         source_needed > source_span - source_offset_64) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         clear_texture_level(state);
         return 0;
     }
@@ -4915,7 +5166,7 @@ static int cache_texture_image_3d(GLenum target, GLint level, GLint internalform
 
     state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
     if (!state->data) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         clear_texture_level(state);
         return 0;
     }
@@ -4944,7 +5195,7 @@ static int cache_compressed_texture_image(GLenum target, GLint level,
 
     if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1 ||
         image_size < 0 || (image_size && !data)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
@@ -4952,7 +5203,7 @@ static int cache_compressed_texture_image(GLenum target, GLint level,
     expected_size = (uint64_t)(((uint32_t)width + 3u) / 4u) *
                     (((uint32_t)height + 3u) / 4u) * (uint32_t)depth * block_bytes;
     if (block_bytes && expected_size != (uint32_t)image_size) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
@@ -4973,7 +5224,7 @@ static int cache_compressed_texture_image(GLenum target, GLint level,
 
     state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)image_size);
     if (!state->data) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         clear_texture_level(state);
         return 0;
     }
@@ -5020,7 +5271,7 @@ static int cache_compressed_texture_sub_image(TextureLevelState* state,
         (xoffset & 3) || (yoffset & 3) ||
         ((width & 3) && xoffset + width != state->width) ||
         ((height & 3) && yoffset + height != state->height)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
     }
 
@@ -5035,7 +5286,7 @@ static int cache_compressed_texture_sub_image(TextureLevelState* state,
     if (expected_source_size != (uint32_t)image_size ||
         expected_dest_size != state->data_size ||
         (image_size && (!data || !state->data))) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return -1;
     }
 
@@ -5066,12 +5317,12 @@ static int cache_texture_sub_image(GLenum target, GLint level, GLint xoffset, GL
     GLsizei row;
 
     if (xoffset < 0 || yoffset < 0 || width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     state = texture_level_state(target, level, FALSE);
     if (!state || !state->defined || xoffset > state->width - width || yoffset > state->height - height) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
     if (state->format != format || state->type != type) {
@@ -5090,13 +5341,13 @@ static int cache_texture_sub_image(GLenum target, GLint level, GLint xoffset, GL
     row_bytes = (uint32_t)width * pixel_bytes;
     if (!pixel_bytes || !source_span || !source_stride || source_offset > source_span ||
         source_span - source_offset < row_bytes) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
     if (!state->data) {
         state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, state->data_size);
         if (!state->data && state->data_size) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return 0;
         }
     }
@@ -5126,7 +5377,7 @@ static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset,
 
     if (xoffset < 0 || yoffset < 0 || zoffset < 0 ||
         width < 0 || height < 0 || depth < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     state = texture_level_state(target, level, FALSE);
@@ -5135,7 +5386,7 @@ static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset,
         xoffset > state->width - width ||
         yoffset > state->height - height ||
         zoffset > state->depth - depth) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
     if (state->format != format || state->type != type) {
@@ -5162,14 +5413,14 @@ static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset,
     if (!pixel_bytes || !source_span || !source_stride || !source_image_stride ||
         source_offset_64 > UINT32_MAX || source_offset_64 > source_span ||
         source_needed > source_span - source_offset_64) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
     source_offset = (uint32_t)source_offset_64;
     if (!state->data) {
         state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, state->data_size);
         if (!state->data && state->data_size) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return 0;
         }
     }
@@ -5296,7 +5547,7 @@ static int read_framebuffer_tight(GLint x, GLint y, GLsizei width, GLsizei heigh
     if (packed_offset || packed_stride != row_bytes || packed_size != tight_size) {
         packed = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, packed_size);
         if (!packed) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return 0;
         }
     }
@@ -5341,7 +5592,7 @@ static int cache_copy_texture_image(GLenum target, GLint level, GLint internalfo
     GLenum type;
     if (capture) ZeroMemory(capture, sizeof(*capture));
     if (width < 0 || height < 0 || border < 0 || border > 1) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     state = texture_level_state(target, level, TRUE);
@@ -5372,7 +5623,7 @@ static int cache_copy_texture_image(GLenum target, GLint level, GLint internalfo
     }
     state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, state->data_size);
     if (!state->data) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         state->data_size = 0;
         return 1;
     }
@@ -5406,7 +5657,7 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
 
     if (capture) ZeroMemory(capture, sizeof(*capture));
     if (xoffset < 0 || yoffset < 0 || width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
@@ -5415,7 +5666,7 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
         width > state->width || height > state->height ||
         xoffset > state->width - width ||
         yoffset > state->height - height) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
@@ -5437,7 +5688,7 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
 
     tight = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
     if (!tight) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 1;
     }
     if (!read_framebuffer_tight(x, y, width, height, state->format, state->type,
@@ -5453,7 +5704,7 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
                                           state->data_size);
         if (!state->data && state->data_size) {
             HeapFree(GetProcessHeap(), 0, tight);
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return 1;
         }
     }
@@ -5462,6 +5713,96 @@ static int cache_copy_texture_sub_image(GLenum target, GLint level,
     for (row = 0; row < height; row++) {
         CopyMemory(state->data + ((uint32_t)(yoffset + row) *
                                   (uint32_t)state->width +
+                                  (uint32_t)xoffset) * pixel_bytes,
+                   tight + (uint32_t)row * row_bytes,
+                   row_bytes);
+    }
+    if (capture) {
+        capture->valid = TRUE;
+        capture->owns_data = TRUE;
+        capture->format = state->format;
+        capture->type = state->type;
+        capture->data_size = tight_size;
+        capture->data = tight;
+    } else {
+        HeapFree(GetProcessHeap(), 0, tight);
+    }
+    return 1;
+}
+
+static int cache_copy_texture_sub_image_3d(GLenum target, GLint level,
+                                           GLint xoffset, GLint yoffset,
+                                           GLint zoffset, GLint x, GLint y,
+                                           GLsizei width, GLsizei height,
+                                           TextureSubImageCapture* capture) {
+    TextureLevelState* state;
+    uint32_t pixel_bytes;
+    uint32_t row_bytes;
+    uint32_t tight_size;
+    uint8_t* tight;
+    GLsizei row;
+
+    if (capture) ZeroMemory(capture, sizeof(*capture));
+    if (xoffset < 0 || yoffset < 0 || zoffset < 0 ||
+        width < 0 || height < 0) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return 0;
+    }
+
+    state = texture_level_state(target, level, FALSE);
+    if (!state || !state->defined ||
+        width > state->width || height > state->height ||
+        xoffset > state->width - width ||
+        yoffset > state->height - height ||
+        zoffset >= state->depth) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return 0;
+    }
+
+    pixel_bytes = gl_pixel_bytes(state->format, state->type);
+    tight_size = gl_pixel_tight_span(width, height, state->format, state->type);
+    if (state->compressed || !pixel_bytes || (!tight_size && width && height)) {
+        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+        state->data = NULL;
+        return 1;
+    }
+    if (!width || !height) {
+        if (capture) {
+            capture->valid = TRUE;
+            capture->format = state->format;
+            capture->type = state->type;
+        }
+        return 1;
+    }
+
+    tight = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
+    if (!tight) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return 1;
+    }
+    if (!read_framebuffer_tight(x, y, width, height, state->format, state->type,
+                                tight, tight_size)) {
+        HeapFree(GetProcessHeap(), 0, tight);
+        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+        state->data = NULL;
+        return 1;
+    }
+
+    if (!state->data) {
+        state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                          state->data_size);
+        if (!state->data && state->data_size) {
+            HeapFree(GetProcessHeap(), 0, tight);
+            v86gl_set_error(GL_OUT_OF_MEMORY);
+            return 1;
+        }
+    }
+
+    row_bytes = (uint32_t)width * pixel_bytes;
+    for (row = 0; row < height; row++) {
+        uint32_t dest_row = (uint32_t)zoffset * (uint32_t)state->height +
+                            (uint32_t)(yoffset + row);
+        CopyMemory(state->data + (dest_row * (uint32_t)state->width +
                                   (uint32_t)xoffset) * pixel_bytes,
                    tight + (uint32_t)row * row_bytes,
                    row_bytes);
@@ -5520,13 +5861,13 @@ static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count
     }
 
     if (!state->pointer && !state->buffer) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
     element_size = client_array_element_size(state->size, state->type);
     if (!element_size) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
 
@@ -5534,7 +5875,7 @@ static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count
     offset = (uint64_t)(uint32_t)first * stride;
     span = count > 0 ? (uint64_t)((uint32_t)count - 1u) * stride + element_size : 0;
     if (offset > UINT32_MAX || span > UINT32_MAX || offset > UINT32_MAX - span) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
@@ -5610,20 +5951,20 @@ static int generic_attrib_copy(GLuint index, GLint first, GLsizei count,
     }
 
     if (!state->pointer && !state->buffer) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
     element_size = client_array_element_size(state->size, state->type);
     if (!element_size) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
     stride = state->stride > 0 ? (uint32_t)state->stride : element_size;
     offset = (uint64_t)(uint32_t)first * stride;
     span = count > 0 ? (uint64_t)((uint32_t)count - 1u) * stride + element_size : 0;
     if (offset > UINT32_MAX || span > UINT32_MAX || offset > UINT32_MAX - span) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
 
@@ -5703,7 +6044,7 @@ static int set_client_array_enabled(GLenum array, BOOL enabled, BOOL emit) {
         g_fog_coord_array.enabled = enabled;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
 
@@ -5737,7 +6078,7 @@ static int max_draw_index(const GLvoid* indices, GLsizei count, GLenum type, uin
     }
 
     if (!indices) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return 0;
     }
 
@@ -5770,7 +6111,7 @@ static int max_draw_index(const GLvoid* indices, GLsizei count, GLenum type, uin
         return 1;
     }
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
 }
@@ -5779,7 +6120,7 @@ static uint8_t* alloc_payload(uint32_t size) {
     uint8_t* payload = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, size ? size : 1);
 
     if (!payload) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
     }
 
     return payload;
@@ -5796,6 +6137,9 @@ BOOL WINAPI DllMain
 
     if (reason == DLL_PROCESS_DETACH) {
         v86gl_trace("unloading");
+        if (g_wgl_context_count) {
+            emit_destroy_context_once();
+        }
         restore_window_proc();
         emit_pci_batch(FALSE);
         free_display_lists();
@@ -5808,9 +6152,81 @@ BOOL WINAPI DllMain
 
 __declspec(dllexport)
 HGLRC APIENTRY wglCreateContext(HDC hdc) {
-    (void)hdc;
-    g_context_destroy_sent = FALSE;
-    return (HGLRC)0x1001;
+    uint32_t i;
+
+    if (!hdc) {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return NULL;
+    }
+    for (i = 0; i < V86GL_MAX_WGL_CONTEXTS; i++) {
+        V86GLWGLContext* context = &g_wgl_contexts[i];
+        if (context->used) continue;
+        ZeroMemory(context, sizeof(*context));
+        context->used = TRUE;
+        context->share_group = g_next_share_group++;
+        if (!g_next_share_group) g_next_share_group = 1;
+        g_wgl_context_count++;
+        g_context_destroy_sent = FALSE;
+        SetLastError(ERROR_SUCCESS);
+        return (HGLRC)context;
+    }
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return NULL;
+}
+
+static V86GLWGLContext* find_wgl_context(HGLRC handle) {
+    uint32_t i;
+
+    if (!handle) return NULL;
+    for (i = 0; i < V86GL_MAX_WGL_CONTEXTS; i++) {
+        V86GLWGLContext* context = &g_wgl_contexts[i];
+        if (context->used && handle == (HGLRC)context) return context;
+    }
+    return NULL;
+}
+
+static BOOL validate_wgl_context(HGLRC handle, V86GLWGLContext** out) {
+    V86GLWGLContext* context = find_wgl_context(handle);
+    if (!context) {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    if (out) *out = context;
+    return TRUE;
+}
+
+static void release_thread_current_context(DWORD thread_id) {
+    V86GLWGLContext* current = find_wgl_context(g_current_ctx);
+    if (current && current->owner_thread == thread_id) {
+        current->owner_thread = 0;
+    }
+    g_current_dc = NULL;
+    g_current_ctx = NULL;
+}
+
+static void force_release_current_context(void) {
+    V86GLWGLContext* current = find_wgl_context(g_current_ctx);
+    if (current) {
+        current->owner_thread = 0;
+    }
+    g_current_dc = NULL;
+    g_current_ctx = NULL;
+}
+
+static BOOL can_bind_wgl_context(V86GLWGLContext* context, DWORD thread_id) {
+    V86GLWGLContext* global_current = find_wgl_context(g_current_ctx);
+    if (context->owner_thread && context->owner_thread != thread_id) {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+    /* The browser renderer has one actual current WebGL context. Serialize
+     * it even when the guest calls WGL from multiple threads. */
+    if (global_current && global_current != context &&
+        global_current->owner_thread && global_current->owner_thread != thread_id) {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static void fill_default_pixel_format(PIXELFORMATDESCRIPTOR* pfd) {
@@ -5984,57 +6400,110 @@ HGLRC APIENTRY wglCreateLayerContext(HDC hdc, int layer) {
 
 __declspec(dllexport)
 BOOL APIENTRY wglCopyContext(HGLRC src, HGLRC dst, UINT mask) {
-    (void)src;
-    (void)dst;
+    if (!validate_wgl_context(src, NULL) || !validate_wgl_context(dst, NULL)) {
+        return FALSE;
+    }
     (void)mask;
+    SetLastError(ERROR_SUCCESS);
     return TRUE;
 }
 
 __declspec(dllexport)
 BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
-    (void)ctx;
+    V86GLWGLContext* context;
+
+    if (!validate_wgl_context(ctx, &context)) return FALSE;
+    if (context->owner_thread || g_current_ctx == ctx) {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+    ZeroMemory(context, sizeof(*context));
+    if (g_wgl_context_count) g_wgl_context_count--;
     v86gl_trace("delete context frame=%lu", (unsigned long)g_frame_id);
-    restore_window_proc();
-    emit_destroy_context_once();
+    if (!g_wgl_context_count) {
+        restore_window_proc();
+        emit_destroy_context_once();
+    }
+    SetLastError(ERROR_SUCCESS);
     return TRUE;
 }
 
 __declspec(dllexport)
 BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
-    g_current_dc = hdc;
-    g_current_ctx = ctx;
+    DWORD thread_id = GetCurrentThreadId();
+    V86GLWGLContext* context;
+    HGLRC previous = g_current_ctx;
 
-    if (!hdc || !ctx) {
+    if (!hdc && !ctx) {
+        V86GLWGLContext* current = find_wgl_context(g_current_ctx);
+        if (current && current->owner_thread != thread_id) {
+            SetLastError(ERROR_SUCCESS);
+            return TRUE;
+        }
         v86gl_trace("release current context");
         /* Keep the window hook installed: an unbound context may be rebound
          * on the same surface, and WM_NCDESTROY must still tear down the
          * browser overlay if the guest exits while it is unbound. */
+        release_thread_current_context(thread_id);
         g_have_last_surface = FALSE;
         emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
+        SetLastError(ERROR_SUCCESS);
         return TRUE;
     }
+    if (!hdc || !ctx) {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    if (!validate_wgl_context(ctx, &context) ||
+        !can_bind_wgl_context(context, thread_id)) return FALSE;
+
+    if (previous != ctx) {
+        release_thread_current_context(thread_id);
+        g_have_last_surface = FALSE;
+    }
+    context->owner_thread = thread_id;
+    context->ever_current = TRUE;
+    g_current_dc = hdc;
+    g_current_ctx = ctx;
 
     HWND hwnd = hdc ? WindowFromDC(hdc) : NULL;
     g_context_destroy_sent = FALSE;
     hook_window(hwnd);
     emit_current_surface(hwnd);
+    SetLastError(ERROR_SUCCESS);
     return TRUE;
 }
 
 __declspec(dllexport)
 HGLRC APIENTRY wglGetCurrentContext(void) {
-    return g_current_ctx;
+    V86GLWGLContext* context = find_wgl_context(g_current_ctx);
+    return context && context->owner_thread == GetCurrentThreadId() ?
+        g_current_ctx : NULL;
 }
 
 __declspec(dllexport)
 HDC APIENTRY wglGetCurrentDC(void) {
-    return g_current_dc;
+    return wglGetCurrentContext() ? g_current_dc : NULL;
 }
 
 __declspec(dllexport)
 BOOL APIENTRY wglShareLists(HGLRC a, HGLRC b) {
-    (void)a;
-    (void)b;
+    V86GLWGLContext* first;
+    V86GLWGLContext* second;
+
+    if (!validate_wgl_context(a, &first) ||
+        !validate_wgl_context(b, &second) || a == b) {
+        if (a == b) SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (second->ever_current) {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+    /* Object names already live in the single browser-side share group. Keep
+     * the guest-visible grouping metadata for validation and future splitting. */
+    second->share_group = first->share_group;
+    SetLastError(ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -6282,6 +6751,59 @@ const char* APIENTRY wglGetExtensionsStringEXT(void) {
     return g_wgl_extensions;
 }
 
+static void append_gl_extension(const char* extension) {
+    int current_length;
+    int extension_length;
+
+    if (!extension || !extension[0]) {
+        return;
+    }
+    current_length = lstrlenA(g_gl_extensions);
+    extension_length = lstrlenA(extension);
+    if (current_length + 1 + extension_length + 1 > V86GL_GL_EXTENSIONS_MAX) {
+        return;
+    }
+    g_gl_extensions[current_length++] = ' ';
+    CopyMemory(g_gl_extensions + current_length, extension,
+               (SIZE_T)extension_length + 1u);
+}
+
+static const char* current_gl_extensions(void) {
+    GLint host_caps = 0;
+    const GLint float_caps =
+        (GLint)(V86GL_HOST_CAP_WEBGL2 |
+                V86GL_HOST_CAP_COLOR_BUFFER_FLOAT |
+                V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR);
+
+    if (g_gl_extensions_profile_valid) {
+        return g_gl_extensions;
+    }
+
+    CopyMemory(g_gl_extensions, g_gl_extensions_base,
+               sizeof(g_gl_extensions_base));
+    if (!emit_query_integer(V86GL_QUERY_HOST_CAPABILITIES, &host_caps)) {
+        /* Renderer startup can briefly lag the guest.  Return the conservative
+         * bridge-guaranteed profile now and retry on the next GL_EXTENSIONS
+         * query instead of permanently caching guessed optional features. */
+        return g_gl_extensions;
+    }
+
+    if ((host_caps & float_caps) == float_caps) {
+        /* Cube 2 renders into and linearly filters its floating-point shadow
+         * targets.  WebGL2 texture allocation alone is therefore not enough:
+         * require both renderability and linear filtering. */
+        append_gl_extension("GL_ARB_texture_float");
+        append_gl_extension("GL_ARB_half_float_pixel");
+    }
+    if ((host_caps & (GLint)(V86GL_HOST_CAP_WEBGL2 |
+                             V86GL_HOST_CAP_ANISOTROPY)) ==
+        (GLint)(V86GL_HOST_CAP_WEBGL2 | V86GL_HOST_CAP_ANISOTROPY)) {
+        append_gl_extension("GL_EXT_texture_filter_anisotropic");
+    }
+    g_gl_extensions_profile_valid = TRUE;
+    return g_gl_extensions;
+}
+
 __declspec(dllexport)
 const GLubyte* APIENTRY glGetString(GLenum name) {
     if (g_trace_calls) {
@@ -6291,16 +6813,18 @@ const GLubyte* APIENTRY glGetString(GLenum name) {
     switch (name) {
     case GL_VENDOR:     return (const GLubyte*)"v86";
     case GL_RENDERER:   return (const GLubyte*)"v86 fake OpenGL over PCI DMA";
-    case GL_VERSION:    return (const GLubyte*)"1.5";
+    case GL_VERSION:    return (const GLubyte*)"2.1 v86gl (gl4es/WebGL2)";
+    case GL_SHADING_LANGUAGE_VERSION:
+        return (const GLubyte*)"1.20 v86gl";
     case GL_EXTENSIONS:
-        return (const GLubyte*)g_gl_extensions;
+        return (const GLubyte*)current_gl_extensions();
     case GL_PROGRAM_ERROR_STRING_ARB:
         g_program_error_string[0] = '\0';
         emit_query_gl_string(name, (GLsizei)sizeof(g_program_error_string),
                              NULL, g_program_error_string);
         return (const GLubyte*)g_program_error_string;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
     }
 }
@@ -6309,6 +6833,12 @@ __declspec(dllexport)
 GLenum APIENTRY glGetError(void) {
     GLenum e = g_error;
     g_error = 0;
+    if (e == GL_NO_ERROR) {
+        GLenum backend_error = GL_NO_ERROR;
+        if (emit_query_error(&backend_error)) {
+            e = backend_error;
+        }
+    }
     if (g_trace_calls || e) {
         v86gl_error("glGetError -> 0x%04lx frame=%lu queuedCommands=%lu",
                     (unsigned long)e,
@@ -6592,20 +7122,26 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = V86GL_MAX_TEXTURE_UNITS;
         break;
     case GL_MAX_3D_TEXTURE_SIZE:
-        params[0] = 256;
+        params[0] = query_limit_or_default(pname, 256, 0);
         break;
     case GL_MAX_CUBE_MAP_TEXTURE_SIZE:
-        params[0] = 2048;
+        params[0] = query_limit_or_default(pname, 2048, 0);
         break;
     case GL_MAX_TEXTURE_IMAGE_UNITS:
     case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
-        params[0] = V86GL_MAX_TEXTURE_UNITS;
+        params[0] = query_limit_or_default(pname, V86GL_MAX_TEXTURE_UNITS,
+                                           V86GL_MAX_TEXTURE_UNITS);
         break;
     case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
-        params[0] = V86GL_MAX_TEXTURE_UNITS * 2;
+        /* Texture bindings and fixed-function texture state are both indexed
+         * by the proxy's eight physical units, so advertising the host's
+         * larger combined count would let shaders address untracked units. */
+        params[0] = query_limit_or_default(pname, V86GL_MAX_TEXTURE_UNITS,
+                                           V86GL_MAX_TEXTURE_UNITS);
         break;
     case GL_MAX_VERTEX_ATTRIBS:
-        params[0] = V86GL_MAX_VERTEX_ATTRIBS;
+        params[0] = query_limit_or_default(pname, V86GL_MAX_VERTEX_ATTRIBS,
+                                           V86GL_MAX_VERTEX_ATTRIBS);
         break;
     case GL_MAX_PROGRAM_MATRICES_ARB:
         params[0] = 32;
@@ -6614,22 +7150,24 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         if (!emit_query_integer(pname, params)) params[0] = -1;
         break;
     case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
-        params[0] = 512;
+        params[0] = query_limit_or_default(pname, 512, 0);
         break;
     case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
-        params[0] = 256;
+        params[0] = query_limit_or_default(pname, 256, 0);
         break;
     case GL_MAX_VARYING_FLOATS:
-        params[0] = 32;
+        params[0] = query_limit_or_default(pname, 32, 0);
         break;
     case GL_MAX_DRAW_BUFFERS:
-        params[0] = V86GL_MAX_DRAW_BUFFERS;
+        params[0] = query_limit_or_default(pname, V86GL_MAX_DRAW_BUFFERS,
+                                           V86GL_MAX_DRAW_BUFFERS);
         break;
     case GL_MAX_COLOR_ATTACHMENTS_EXT:
-        params[0] = V86GL_MAX_COLOR_ATTACHMENTS;
+        params[0] = query_limit_or_default(pname, V86GL_MAX_COLOR_ATTACHMENTS,
+                                           V86GL_MAX_COLOR_ATTACHMENTS);
         break;
     case GL_MAX_RENDERBUFFER_SIZE_EXT:
-        params[0] = 4096;
+        params[0] = query_limit_or_default(pname, 4096, 0);
         break;
     case GL_NUM_COMPRESSED_TEXTURE_FORMATS:
         params[0] = 8;
@@ -6648,7 +7186,7 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = (GLint)g_point_sprite_coord_origin;
         break;
     case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
-        params[0] = 1;
+        params[0] = query_limit_or_default(pname, 1, 0);
         break;
     case GL_TEXTURE_BINDING_2D:
         params[0] = (GLint)texture_unit->bound_2d;
@@ -6812,7 +7350,7 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[1] = 1;
         break;
     case GL_MAX_TEXTURE_SIZE:
-        params[0] = 2048;
+        params[0] = query_limit_or_default(pname, 2048, 0);
         break;
     case GL_MAX_PIXEL_MAP_TABLE:
         /* All ten pixel-map targets have a small but valid table. */
@@ -6913,7 +7451,7 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
             GLint draw_index = (GLint)(pname - GL_DRAW_BUFFER0);
             params[0] = draw_index < V86GL_MAX_DRAW_BUFFERS ? (GLint)g_draw_buffers[draw_index] : GL_NONE;
         } else if (is_capability_pname(pname)) params[0] = get_cap_state(pname) ? GL_TRUE : GL_FALSE;
-        else g_error = GL_INVALID_ENUM;
+        else v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 
@@ -7190,7 +7728,7 @@ __declspec(dllexport)
 void APIENTRY glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     struct { int32_t x, y, width, height; } payload;
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -7347,7 +7885,7 @@ __declspec(dllexport)
 void APIENTRY glMatrixMode(GLenum mode) {
     uint32_t payload = (uint32_t)mode;
     if (mode != GL_MODELVIEW && mode != GL_PROJECTION && mode != GL_TEXTURE) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     g_matrix_mode = mode;
@@ -7372,7 +7910,7 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) {
                     (unsigned long)(uintptr_t)m);
     }
     if (!m) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -7391,7 +7929,7 @@ void APIENTRY glLoadMatrixd(const GLdouble* m) {
     uint32_t i;
 
     if (!m) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -7410,7 +7948,7 @@ void APIENTRY glMultMatrixf(const GLfloat* m) {
     float payload[16];
 
     if (!m) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -7426,7 +7964,7 @@ void APIENTRY glMultMatrixd(const GLdouble* m) {
     uint32_t i;
 
     if (!m) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -7453,7 +7991,7 @@ static void transpose_matrixf(GLfloat* destination, const GLfloat* source) {
 
 void APIENTRY glLoadTransposeMatrixfARB(const GLfloat* matrix) {
     GLfloat transposed[16];
-    if (!matrix) { g_error = GL_INVALID_VALUE; return; }
+    if (!matrix) { v86gl_set_error(GL_INVALID_VALUE); return; }
     transpose_matrixf(transposed, matrix);
     glLoadMatrixf(transposed);
 }
@@ -7462,7 +8000,7 @@ void APIENTRY glLoadTransposeMatrixdARB(const GLdouble* matrix) {
     GLfloat source[16];
     GLfloat transposed[16];
     int i;
-    if (!matrix) { g_error = GL_INVALID_VALUE; return; }
+    if (!matrix) { v86gl_set_error(GL_INVALID_VALUE); return; }
     for (i = 0; i < 16; i++) source[i] = (GLfloat)matrix[i];
     transpose_matrixf(transposed, source);
     glLoadMatrixf(transposed);
@@ -7470,7 +8008,7 @@ void APIENTRY glLoadTransposeMatrixdARB(const GLdouble* matrix) {
 
 void APIENTRY glMultTransposeMatrixfARB(const GLfloat* matrix) {
     GLfloat transposed[16];
-    if (!matrix) { g_error = GL_INVALID_VALUE; return; }
+    if (!matrix) { v86gl_set_error(GL_INVALID_VALUE); return; }
     transpose_matrixf(transposed, matrix);
     glMultMatrixf(transposed);
 }
@@ -7479,7 +8017,7 @@ void APIENTRY glMultTransposeMatrixdARB(const GLdouble* matrix) {
     GLfloat source[16];
     GLfloat transposed[16];
     int i;
-    if (!matrix) { g_error = GL_INVALID_VALUE; return; }
+    if (!matrix) { v86gl_set_error(GL_INVALID_VALUE); return; }
     for (i = 0; i < 16; i++) source[i] = (GLfloat)matrix[i];
     transpose_matrixf(transposed, source);
     glMultMatrixf(transposed);
@@ -7506,7 +8044,7 @@ void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble
     struct { double left, right, bottom, top, zNear, zFar; } payload;
     GLfloat matrix[16];
     if (left == right || bottom == top || zNear <= 0.0 || zFar <= 0.0 || zNear == zFar) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     payload.left = left;
@@ -7533,7 +8071,7 @@ void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble t
     struct { double left, right, bottom, top, zNear, zFar; } payload;
     GLfloat matrix[16];
     if (left == right || bottom == top || zNear == zFar) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     payload.left = left;
@@ -7595,7 +8133,7 @@ void APIENTRY glPushMatrix(void) {
     GLint max_depth;
     matrix = current_matrix(&depth, &max_depth);
     if (!matrix) return;
-    if (*depth + 1 >= max_depth) { g_error = GL_INVALID_OPERATION; return; }
+    if (*depth + 1 >= max_depth) { v86gl_set_error(GL_INVALID_OPERATION); return; }
     CopyMemory(matrix + 16, matrix, sizeof(GLfloat) * 16);
     (*depth)++;
     emit_gl_call(GLFN_PUSH_MATRIX, NULL, 0);
@@ -7605,7 +8143,7 @@ __declspec(dllexport)
 void APIENTRY glPopMatrix(void) {
     GLint* depth;
     if (!current_matrix(&depth, NULL)) return;
-    if (*depth <= 0) { g_error = GL_INVALID_OPERATION; return; }
+    if (*depth <= 0) { v86gl_set_error(GL_INVALID_OPERATION); return; }
     (*depth)--;
     emit_gl_call(GLFN_POP_MATRIX, NULL, 0);
 }
@@ -7843,11 +8381,11 @@ void APIENTRY glDrawBuffers(GLsizei n, const GLenum* bufs) {
     GLsizei i;
 
     if (n < 0 || n > V86GL_MAX_DRAW_BUFFERS) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (n && !bufs) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -7874,7 +8412,7 @@ void APIENTRY glDrawBuffersATI(GLsizei n, const GLenum* bufs) {
 
 void APIENTRY glActiveStencilFaceEXT(GLenum face) {
     if (face != GL_FRONT && face != GL_BACK) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     g_active_stencil_face_ext = face;
@@ -7882,7 +8420,7 @@ void APIENTRY glActiveStencilFaceEXT(GLenum face) {
 
 void APIENTRY glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) {
     if (!valid_stencil_face(face)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     emit_stencil_op_separate(face, sfail, dpfail, dppass);
@@ -7890,7 +8428,7 @@ void APIENTRY glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLen
 
 void APIENTRY glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) {
     if (!valid_stencil_face(face)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     emit_stencil_func_separate(face, func, ref, mask);
@@ -7898,7 +8436,7 @@ void APIENTRY glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint 
 
 void APIENTRY glStencilMaskSeparate(GLenum face, GLuint mask) {
     if (!valid_stencil_face(face)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     emit_stencil_mask_separate(face, mask);
@@ -7922,6 +8460,14 @@ static void emit_arb_program_name_array(uint16_t fn, GLsizei n, const GLuint* na
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
+static BOOL valid_arb_program_target(GLenum target) {
+    return target == GL_VERTEX_PROGRAM_ARB || target == GL_FRAGMENT_PROGRAM_ARB;
+}
+
+static GLuint arb_program_parameter_limit(GLenum target) {
+    return target == GL_VERTEX_PROGRAM_ARB ? 96u : 24u;
+}
+
 static void emit_arb_program_parameter_fv(uint32_t parameter_kind, GLenum target,
                                           GLuint index, GLsizei count,
                                           const GLfloat* params) {
@@ -7936,18 +8482,27 @@ static void emit_arb_program_parameter_fv(uint32_t parameter_kind, GLenum target
     uint8_t* payload;
 
     if (count < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (count > 0 && !params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!count) {
         return;
     }
+    if (!valid_arb_program_target(target)) {
+        v86gl_set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (index >= arb_program_parameter_limit(target) ||
+        (uint32_t)count > arb_program_parameter_limit(target) - index) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return;
+    }
     if ((uint32_t)count > (0xFFFFFFFFu - sizeof(meta)) / (4u * sizeof(GLfloat))) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -7979,7 +8534,15 @@ static void emit_arb_program_parameter_dv(uint32_t parameter_kind, GLenum target
     } payload;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!valid_arb_program_target(target)) {
+        v86gl_set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (index >= arb_program_parameter_limit(target)) {
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -8003,16 +8566,20 @@ void APIENTRY glProgramStringARB(GLenum target, GLenum format, GLsizei len,
     uint32_t total_size;
     uint8_t* payload;
 
+    if (!valid_arb_program_target(target) || format != GL_PROGRAM_FORMAT_ASCII_ARB) {
+        v86gl_set_error(GL_INVALID_ENUM);
+        return;
+    }
     if (len < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (len > 0 && !string) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if ((uint32_t)len > 0xFFFFFFFFu - sizeof(meta)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -8038,9 +8605,14 @@ void APIENTRY glProgramStringARB(GLenum target, GLenum format, GLsizei len,
 void APIENTRY glBindProgramARB(GLenum target, GLuint program) {
     struct { uint32_t target, program; } payload;
 
+    if (!valid_arb_program_target(target)) {
+        v86gl_set_error(GL_INVALID_ENUM);
+        return;
+    }
+
     if (program) {
         if (!find_arb_program_state(program, TRUE)) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return;
         }
         if (program >= g_next_arb_program_id) {
@@ -8066,14 +8638,14 @@ void APIENTRY glDeleteProgramsARB(GLsizei n, const GLuint* programs) {
     GLsizei i;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!n) {
         return;
     }
     if (!programs) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -8093,21 +8665,21 @@ void APIENTRY glGenProgramsARB(GLsizei n, GLuint* programs) {
     GLsizei i;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!n) {
         return;
     }
     if (!programs) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     for (i = 0; i < n; i++) {
         GLuint name = next_arb_program_name();
         if (!find_arb_program_state(name, TRUE)) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             programs[i] = 0;
             return;
         }
@@ -8193,49 +8765,62 @@ void APIENTRY glProgramLocalParameters4fvEXT(GLenum target, GLuint index,
 void APIENTRY glGetProgramEnvParameterfvARB(GLenum target, GLuint index,
                                             GLfloat* params) {
     if (!params) return;
+    if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!emit_query_program_parameter_arb(GLFN_QUERY_PROGRAM_PARAMETER_FV_ARB,
                                           V86GL_PROGRAM_PARAMETER_ENV,
                                           target, index, params,
                                           4u * sizeof(GLfloat))) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
 
 void APIENTRY glGetProgramEnvParameterdvARB(GLenum target, GLuint index,
                                             GLdouble* params) {
     if (!params) return;
+    if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!emit_query_program_parameter_arb(GLFN_QUERY_PROGRAM_PARAMETER_DV_ARB,
                                           V86GL_PROGRAM_PARAMETER_ENV,
                                           target, index, params,
                                           4u * sizeof(GLdouble))) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
 
 void APIENTRY glGetProgramLocalParameterfvARB(GLenum target, GLuint index,
                                               GLfloat* params) {
     if (!params) return;
+    if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!emit_query_program_parameter_arb(GLFN_QUERY_PROGRAM_PARAMETER_FV_ARB,
                                           V86GL_PROGRAM_PARAMETER_LOCAL,
                                           target, index, params,
                                           4u * sizeof(GLfloat))) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
 
 void APIENTRY glGetProgramLocalParameterdvARB(GLenum target, GLuint index,
                                               GLdouble* params) {
     if (!params) return;
+    if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!emit_query_program_parameter_arb(GLFN_QUERY_PROGRAM_PARAMETER_DV_ARB,
                                           V86GL_PROGRAM_PARAMETER_LOCAL,
                                           target, index, params,
                                           4u * sizeof(GLdouble))) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
 
 void APIENTRY glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
     if (!params) return;
+    if (!valid_arb_program_target(target)) {
+        v86gl_set_error(GL_INVALID_ENUM);
+        params[0] = 0;
+        return;
+    }
     if (pname == GL_PROGRAM_BINDING_ARB) {
         if (target == GL_VERTEX_PROGRAM_ARB) {
             params[0] = (GLint)g_current_vertex_program_arb;
@@ -8245,12 +8830,12 @@ void APIENTRY glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
             params[0] = (GLint)g_current_fragment_program_arb;
             return;
         }
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         params[0] = 0;
         return;
     }
     if (!emit_query_program_iv_arb(target, pname, params)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         params[0] = 0;
     }
 }
@@ -8259,12 +8844,16 @@ void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string)
     GLint length = 0;
 
     if (!string) return;
+    if (!valid_arb_program_target(target) || pname != GL_PROGRAM_STRING_ARB) {
+        v86gl_set_error(GL_INVALID_ENUM);
+        return;
+    }
     if (!emit_query_program_iv_arb(target, GL_PROGRAM_LENGTH_ARB, &length) ||
         length <= 0) {
         return;
     }
     if (!emit_query_program_string_arb(target, pname, length, NULL, string)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
 
@@ -8274,7 +8863,7 @@ GLuint APIENTRY glCreateProgram(void) {
 
     if (!name) name = g_next_program_id++;
     if (!find_program_state(name, TRUE)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -8288,14 +8877,14 @@ GLuint APIENTRY glCreateShader(GLenum type) {
     struct { uint32_t shader, type; } payload;
 
     if (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
 
     name = g_next_shader_id++;
     if (!name) name = g_next_shader_id++;
     if (!find_shader_state(name, TRUE, type)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
 
@@ -8310,11 +8899,12 @@ void APIENTRY glDeleteProgram(GLuint program) {
     uint32_t payload = program;
 
     if (!program || !state) return;
+    if (state->deleted) return;
     state->deleted = TRUE;
-    if (g_current_program == program) g_current_program = 0;
-    delete_program_locations(program);
-    ZeroMemory(state, sizeof(*state));
     emit_gl_call(GLFN_DELETE_PROGRAM, &payload, sizeof(payload));
+    if (g_current_program != program) {
+        destroy_program_state(state);
+    }
 }
 
 void APIENTRY glDeleteShader(GLuint shader) {
@@ -8322,19 +8912,20 @@ void APIENTRY glDeleteShader(GLuint shader) {
     uint32_t payload = shader;
 
     if (!shader || !state) return;
-    if (state->source) HeapFree(GetProcessHeap(), 0, state->source);
-    ZeroMemory(state, sizeof(*state));
+    if (state->deleted) return;
+    state->deleted = TRUE;
     emit_gl_call(GLFN_DELETE_SHADER, &payload, sizeof(payload));
+    collect_deleted_shader(shader);
 }
 
 GLboolean APIENTRY glIsProgram(GLuint program) {
     ProgramObjectState* state = find_program_state(program, FALSE);
-    return state && !state->deleted ? GL_TRUE : GL_FALSE;
+    return state ? GL_TRUE : GL_FALSE;
 }
 
 GLboolean APIENTRY glIsShader(GLuint shader) {
     ShaderObjectState* state = find_shader_state(shader, FALSE, 0);
-    return state && !state->deleted ? GL_TRUE : GL_FALSE;
+    return state ? GL_TRUE : GL_FALSE;
 }
 
 void APIENTRY glAttachShader(GLuint program, GLuint shader) {
@@ -8344,21 +8935,20 @@ void APIENTRY glAttachShader(GLuint program, GLuint shader) {
     uint32_t i;
 
     if (!program_state || !shader_state) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     for (i = 0; i < program_state->attached_count; i++) {
         if (program_state->attached[i] == shader) {
-            g_error = GL_INVALID_OPERATION;
+            v86gl_set_error(GL_INVALID_OPERATION);
             return;
         }
     }
     if (program_state->attached_count >= V86GL_MAX_ATTACHED_SHADERS) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
     program_state->attached[program_state->attached_count++] = shader;
-    program_state->linked = GL_FALSE;
     payload.program = program;
     payload.shader = shader;
     emit_gl_call(GLFN_ATTACH_SHADER, &payload, sizeof(payload));
@@ -8370,7 +8960,7 @@ void APIENTRY glDetachShader(GLuint program, GLuint shader) {
     uint32_t i;
 
     if (!program_state || !find_shader_state(shader, FALSE, 0)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     for (i = 0; i < program_state->attached_count; i++) {
@@ -8380,10 +8970,11 @@ void APIENTRY glDetachShader(GLuint program, GLuint shader) {
             payload.program = program;
             payload.shader = shader;
             emit_gl_call(GLFN_DETACH_SHADER, &payload, sizeof(payload));
+            collect_deleted_shader(shader);
             return;
         }
     }
-    g_error = GL_INVALID_OPERATION;
+    v86gl_set_error(GL_INVALID_OPERATION);
 }
 
 void APIENTRY glShaderSource(GLuint shader, GLsizei count,
@@ -8397,11 +8988,11 @@ void APIENTRY glShaderSource(GLuint shader, GLsizei count,
     uint8_t* payload;
 
     if (!state) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (count < 0 || (count && !string)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -8409,14 +9000,14 @@ void APIENTRY glShaderSource(GLuint shader, GLsizei count,
         if (!string[i]) continue;
         total64 += (length && length[i] >= 0) ? (uint32_t)length[i] : gl_string_length(string[i]);
         if (total64 > 0x7FFFFFFFu) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
     }
     total = (uint32_t)total64;
     source = (GLchar*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)total + 1u);
     if (!source) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     out = source;
@@ -8449,13 +9040,13 @@ void APIENTRY glCompileShader(GLuint shader) {
     ShaderObjectState* state = find_shader_state(shader, FALSE, 0);
     GLint status;
     uint32_t payload = shader;
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
     emit_gl_call(GLFN_COMPILE_SHADER, &payload, sizeof(payload));
     if (emit_query_object_iv(V86GL_OBJECT_KIND_SHADER, shader,
                              GL_COMPILE_STATUS, &status)) {
         state->compiled = status ? GL_TRUE : GL_FALSE;
     } else {
-        state->compiled = GL_TRUE;
+        state->compiled = GL_FALSE;
     }
 }
 
@@ -8463,13 +9054,18 @@ void APIENTRY glLinkProgram(GLuint program) {
     ProgramObjectState* state = find_program_state(program, FALSE);
     GLint status;
     uint32_t payload = program;
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
     emit_gl_call(GLFN_LINK_PROGRAM, &payload, sizeof(payload));
     if (emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program,
                              GL_LINK_STATUS, &status)) {
         state->linked = status ? GL_TRUE : GL_FALSE;
+        if (state->linked) {
+            state->has_executable = GL_TRUE;
+            state->validated = GL_FALSE;
+            invalidate_program_locations(program);
+        }
     } else {
-        state->linked = GL_TRUE;
+        state->linked = GL_FALSE;
     }
 }
 
@@ -8477,37 +9073,50 @@ void APIENTRY glValidateProgram(GLuint program) {
     ProgramObjectState* state = find_program_state(program, FALSE);
     GLint status;
     uint32_t payload = program;
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
     emit_gl_call(GLFN_VALIDATE_PROGRAM, &payload, sizeof(payload));
     if (emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program,
                              GL_VALIDATE_STATUS, &status)) {
         state->validated = status ? GL_TRUE : GL_FALSE;
     } else {
-        state->validated = GL_TRUE;
+        state->validated = GL_FALSE;
     }
 }
 
 void APIENTRY glUseProgram(GLuint program) {
     uint32_t payload = program;
     ProgramObjectState* state;
+    GLuint previous = g_current_program;
 
     if (!program) {
         g_current_program = 0;
         emit_gl_call(GLFN_USE_PROGRAM, &payload, sizeof(payload));
+        if (previous) {
+            ProgramObjectState* previous_state = find_program_state(previous, FALSE);
+            if (previous_state && previous_state->deleted) {
+                destroy_program_state(previous_state);
+            }
+        }
         return;
     }
 
     state = find_program_state(program, FALSE);
     if (!state) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!state->linked) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
     g_current_program = program;
     emit_gl_call(GLFN_USE_PROGRAM, &payload, sizeof(payload));
+    if (previous && previous != program) {
+        ProgramObjectState* previous_state = find_program_state(previous, FALSE);
+        if (previous_state && previous_state->deleted) {
+            destroy_program_state(previous_state);
+        }
+    }
 }
 
 void APIENTRY glBindAttribLocation(GLuint program, GLuint index, const GLchar* name) {
@@ -8517,8 +9126,12 @@ void APIENTRY glBindAttribLocation(GLuint program, GLuint index, const GLchar* n
     uint32_t total_size;
     uint8_t* payload;
 
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS || !name) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS || !name) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (name[0] == 'g' && name[1] == 'l' && name[2] == '_') {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return;
+    }
     attrib = bind_attrib_location_name(program, index, name);
     if (!attrib) return;
     name_len = gl_string_length(name);
@@ -8535,56 +9148,74 @@ void APIENTRY glBindAttribLocation(GLuint program, GLuint index, const GLchar* n
 
 GLint APIENTRY glGetUniformLocation(GLuint program, const GLchar* name) {
     UniformLocationState* state;
-    uint32_t name_len;
-    uint32_t total_size;
-    uint8_t* payload;
+    ProgramObjectState* program_state;
+    GLint result = -1;
+    GLenum value_type = 0;
+    GLint value_count = 0;
 
-    if (!find_program_state(program, FALSE) || !name) {
-        g_error = GL_INVALID_VALUE;
+    program_state = find_program_state(program, FALSE);
+    if (!program_state || !name) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return -1;
+    }
+    if (!program_state->linked) {
+        v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
     }
 
+    state = find_uniform_location_by_name(program, name, FALSE);
+    if (state) return state->location;
     state = find_uniform_location_by_name(program, name, TRUE);
     if (!state) return -1;
-
-    name_len = gl_string_length(name);
-    total_size = 12u + name_len;
-    payload = alloc_payload(total_size);
-    if (!payload) return state->location;
-    ((uint32_t*)payload)[0] = program;
-    ((int32_t*)payload)[1] = state->location;
-    ((uint32_t*)payload)[2] = name_len;
-    if (name_len) CopyMemory(payload + 12, name, name_len);
-    emit_gl_call(GLFN_MAP_UNIFORM_LOCATION, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
-    return state->location;
+    if (!emit_query_location(V86GL_LOCATION_KIND_UNIFORM, program,
+                             state->location, name, &result,
+                             &value_type, &value_count)) {
+        clear_uniform_location(state);
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    if (result < 0) {
+        clear_uniform_location(state);
+        return -1;
+    }
+    state->location = result;
+    state->value_type = value_type;
+    state->components = value_count > 0 ? value_count : 1;
+    state->count = 1;
+    return result;
 }
 
 GLint APIENTRY glGetAttribLocation(GLuint program, const GLchar* name) {
     AttribLocationState* state;
-    uint32_t name_len;
-    uint32_t total_size;
-    uint8_t* payload;
+    ProgramObjectState* program_state;
+    GLint result = -1;
 
-    if (!find_program_state(program, FALSE) || !name) {
-        g_error = GL_INVALID_VALUE;
+    program_state = find_program_state(program, FALSE);
+    if (!program_state || !name) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return -1;
+    }
+    if (!program_state->linked) {
+        v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
     }
 
-    state = find_attrib_location_by_name(program, name, TRUE);
+    state = find_attrib_location_by_name(program, name, FALSE);
+    if (state && state->queried) return state->guest_index;
+    if (!state) state = find_attrib_location_by_name(program, name, TRUE);
     if (!state) return -1;
-
-    name_len = gl_string_length(name);
-    total_size = 12u + name_len;
-    payload = alloc_payload(total_size);
-    if (!payload) return state->guest_index;
-    ((uint32_t*)payload)[0] = program;
-    ((int32_t*)payload)[1] = state->guest_index;
-    ((uint32_t*)payload)[2] = name_len;
-    if (name_len) CopyMemory(payload + 12, name, name_len);
-    emit_gl_call(GLFN_MAP_ATTRIB_LOCATION, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
-    return state->guest_index;
+    if (!emit_query_location(V86GL_LOCATION_KIND_ATTRIB, program, -1,
+                             name, &result, NULL, NULL)) {
+        if (!state->bound) clear_attrib_location(state);
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    state->guest_index = result;
+    state->queried = TRUE;
+    if (result < 0 && !state->bound) {
+        clear_attrib_location(state);
+    }
+    return result;
 }
 
 static void copy_gl_string_result(const GLchar* text, GLsizei bufSize,
@@ -8600,80 +9231,10 @@ static void copy_gl_string_result(const GLchar* text, GLsizei bufSize,
     if (length) *length = copy_len;
 }
 
-static uint32_t program_active_uniform_count(GLuint program) {
-    uint32_t i;
-    uint32_t count = 0;
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
-        if (g_uniform_locations[i].used && g_uniform_locations[i].program == program) count++;
-    }
-    return count;
-}
-
-static uint32_t program_active_attrib_count(GLuint program) {
-    uint32_t i;
-    uint32_t count = 0;
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
-        if (g_attrib_locations[i].used && g_attrib_locations[i].program == program) count++;
-    }
-    return count;
-}
-
-static GLsizei program_max_uniform_name(GLuint program) {
-    uint32_t i;
-    GLsizei max_len = 1;
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
-        UniformLocationState* state = &g_uniform_locations[i];
-        if (state->used && state->program == program) {
-            GLsizei len = (GLsizei)gl_string_length(state->name) + 1;
-            if (len > max_len) max_len = len;
-        }
-    }
-    return max_len;
-}
-
-static GLsizei program_max_attrib_name(GLuint program) {
-    uint32_t i;
-    GLsizei max_len = 1;
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
-        AttribLocationState* state = &g_attrib_locations[i];
-        if (state->used && state->program == program) {
-            GLsizei len = (GLsizei)gl_string_length(state->name) + 1;
-            if (len > max_len) max_len = len;
-        }
-    }
-    return max_len;
-}
-
-static UniformLocationState* uniform_by_active_index(GLuint program, GLuint index) {
-    uint32_t i;
-    uint32_t seen = 0;
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
-        UniformLocationState* state = &g_uniform_locations[i];
-        if (state->used && state->program == program) {
-            if (seen == index) return state;
-            seen++;
-        }
-    }
-    return NULL;
-}
-
-static AttribLocationState* attrib_by_active_index(GLuint program, GLuint index) {
-    uint32_t i;
-    uint32_t seen = 0;
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
-        AttribLocationState* state = &g_attrib_locations[i];
-        if (state->used && state->program == program) {
-            if (seen == index) return state;
-            seen++;
-        }
-    }
-    return NULL;
-}
-
 void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
     ProgramObjectState* state = find_program_state(program, FALSE);
     if (!params) return;
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
 
     switch (pname) {
     case GL_DELETE_STATUS:
@@ -8681,19 +9242,24 @@ void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
         break;
     case GL_LINK_STATUS:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = state->linked ? GL_TRUE : GL_FALSE;
+            params[0] = GL_FALSE;
+            v86gl_set_error(GL_INVALID_OPERATION);
+            break;
         }
         state->linked = params[0] ? GL_TRUE : GL_FALSE;
         break;
     case GL_VALIDATE_STATUS:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = state->validated ? GL_TRUE : GL_FALSE;
+            params[0] = GL_FALSE;
+            v86gl_set_error(GL_INVALID_OPERATION);
+            break;
         }
         state->validated = params[0] ? GL_TRUE : GL_FALSE;
         break;
     case GL_INFO_LOG_LENGTH:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = 1;
+            params[0] = 0;
+            v86gl_set_error(GL_INVALID_OPERATION);
         }
         break;
     case GL_ATTACHED_SHADERS:
@@ -8701,26 +9267,30 @@ void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
         break;
     case GL_ACTIVE_UNIFORMS:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = (GLint)program_active_uniform_count(program);
+            params[0] = 0;
+            v86gl_set_error(GL_INVALID_OPERATION);
         }
         break;
     case GL_ACTIVE_UNIFORM_MAX_LENGTH:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = program_max_uniform_name(program);
+            params[0] = 0;
+            v86gl_set_error(GL_INVALID_OPERATION);
         }
         break;
     case GL_ACTIVE_ATTRIBUTES:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = (GLint)program_active_attrib_count(program);
+            params[0] = 0;
+            v86gl_set_error(GL_INVALID_OPERATION);
         }
         break;
     case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params)) {
-            params[0] = program_max_attrib_name(program);
+            params[0] = 0;
+            v86gl_set_error(GL_INVALID_OPERATION);
         }
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -8728,7 +9298,7 @@ void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
 void APIENTRY glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
     ShaderObjectState* state = find_shader_state(shader, FALSE, 0);
     if (!params) return;
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
 
     switch (pname) {
     case GL_SHADER_TYPE:
@@ -8739,28 +9309,31 @@ void APIENTRY glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
         break;
     case GL_COMPILE_STATUS:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_SHADER, shader, pname, params)) {
-            params[0] = state->compiled ? GL_TRUE : GL_FALSE;
+            params[0] = GL_FALSE;
+            v86gl_set_error(GL_INVALID_OPERATION);
+            break;
         }
         state->compiled = params[0] ? GL_TRUE : GL_FALSE;
         break;
     case GL_INFO_LOG_LENGTH:
         if (!emit_query_object_iv(V86GL_OBJECT_KIND_SHADER, shader, pname, params)) {
-            params[0] = 1;
+            params[0] = 0;
+            v86gl_set_error(GL_INVALID_OPERATION);
         }
         break;
     case GL_SHADER_SOURCE_LENGTH:
         params[0] = state->source ? state->source_length + 1 : 0;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
 
 void APIENTRY glGetProgramInfoLog(GLuint program, GLsizei bufSize,
                                   GLsizei* length, GLchar* infoLog) {
-    if (!find_program_state(program, FALSE)) { g_error = GL_INVALID_VALUE; return; }
-    if (bufSize < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (!find_program_state(program, FALSE)) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!emit_query_object_log(V86GL_OBJECT_KIND_PROGRAM, program, bufSize, length, infoLog)) {
         copy_gl_string_result("", bufSize, length, infoLog);
     }
@@ -8768,8 +9341,8 @@ void APIENTRY glGetProgramInfoLog(GLuint program, GLsizei bufSize,
 
 void APIENTRY glGetShaderInfoLog(GLuint shader, GLsizei bufSize,
                                  GLsizei* length, GLchar* infoLog) {
-    if (!find_shader_state(shader, FALSE, 0)) { g_error = GL_INVALID_VALUE; return; }
-    if (bufSize < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (!find_shader_state(shader, FALSE, 0)) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!emit_query_object_log(V86GL_OBJECT_KIND_SHADER, shader, bufSize, length, infoLog)) {
         copy_gl_string_result("", bufSize, length, infoLog);
     }
@@ -8778,8 +9351,8 @@ void APIENTRY glGetShaderInfoLog(GLuint shader, GLsizei bufSize,
 void APIENTRY glGetShaderSource(GLuint shader, GLsizei bufSize,
                                 GLsizei* length, GLchar* source) {
     ShaderObjectState* state = find_shader_state(shader, FALSE, 0);
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
-    if (bufSize < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     copy_gl_string_result(state->source ? state->source : "", bufSize, length, source);
 }
 
@@ -8789,8 +9362,8 @@ void APIENTRY glGetAttachedShaders(GLuint program, GLsizei maxCount,
     GLsizei n;
     GLsizei i;
 
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
-    if (maxCount < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (maxCount < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     n = (GLsizei)state->attached_count;
     if (n > maxCount) n = maxCount;
     if (shaders) {
@@ -8802,35 +9375,25 @@ void APIENTRY glGetAttachedShaders(GLuint program, GLsizei maxCount,
 void APIENTRY glGetActiveUniform(GLuint program, GLuint index, GLsizei bufSize,
                                  GLsizei* length, GLint* size, GLenum* type,
                                  GLchar* name) {
-    UniformLocationState* state;
-    if (!find_program_state(program, FALSE)) { g_error = GL_INVALID_VALUE; return; }
-    if (bufSize < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (!find_program_state(program, FALSE)) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (emit_query_active(V86GL_ACTIVE_KIND_UNIFORM, program, index, bufSize,
                           length, size, type, name)) {
         return;
     }
-    state = uniform_by_active_index(program, index);
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
-    if (size) *size = state->count > 0 ? state->count : 1;
-    if (type) *type = state->value_type ? state->value_type : GL_FLOAT_VEC4;
-    copy_gl_string_result(state->name, bufSize, length, name);
+    v86gl_set_error(GL_INVALID_OPERATION);
 }
 
 void APIENTRY glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufSize,
                                 GLsizei* length, GLint* size, GLenum* type,
                                 GLchar* name) {
-    AttribLocationState* state;
-    if (!find_program_state(program, FALSE)) { g_error = GL_INVALID_VALUE; return; }
-    if (bufSize < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (!find_program_state(program, FALSE)) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (emit_query_active(V86GL_ACTIVE_KIND_ATTRIB, program, index, bufSize,
                           length, size, type, name)) {
         return;
     }
-    state = attrib_by_active_index(program, index);
-    if (!state) { g_error = GL_INVALID_VALUE; return; }
-    if (size) *size = 1;
-    if (type) *type = GL_FLOAT_VEC4;
-    copy_gl_string_result(state->name, bufSize, length, name);
+    v86gl_set_error(GL_INVALID_OPERATION);
 }
 
 static GLenum uniform_float_type(GLint components) {
@@ -8887,6 +9450,22 @@ static void cache_uniform_iv(GLint location, GLint components, GLsizei count,
     state->value_type = uniform_int_type(components);
 }
 
+static int validate_uniform_update(GLint location) {
+    UniformLocationState* state;
+
+    if (location == -1) return 0;
+    if (location < -1 || !g_current_program) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    state = find_uniform_location(location);
+    if (!state || state->program != g_current_program) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    return 1;
+}
+
 static void emit_uniform_vector(GLint location, GLint components, GLsizei count,
                                 const void* value, uint32_t value_size,
                                 uint16_t fn) {
@@ -8894,12 +9473,11 @@ static void emit_uniform_vector(GLint location, GLint components, GLsizei count,
     uint32_t total_size;
     uint8_t* payload;
 
-    if (location < 0) return;
-    if (!g_current_program) { g_error = GL_INVALID_OPERATION; return; }
+    if (validate_uniform_update(location) <= 0) return;
     if (count < 0 || components <= 0 || components > 4 ||
         (count && !value) || (uint32_t)count > UINT32_MAX / (uint32_t)components ||
         (uint32_t)count * (uint32_t)components > UINT32_MAX / value_size) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -8913,6 +9491,10 @@ static void emit_uniform_vector(GLint location, GLint components, GLsizei count,
     if (data_size) CopyMemory(payload + 12, value, data_size);
     emit_gl_call(fn, payload, total_size);
     HeapFree(GetProcessHeap(), 0, payload);
+    if (fn == GLFN_UNIFORM_FV)
+        cache_uniform_fv(location, components, count, (const GLfloat*)value);
+    else
+        cache_uniform_iv(location, components, count, (const GLint*)value);
 }
 
 static void emit_uniform_matrix(GLint location, GLint dimension, GLsizei count,
@@ -8923,15 +9505,14 @@ static void emit_uniform_matrix(GLint location, GLint dimension, GLsizei count,
     uint8_t* payload;
     UniformLocationState* state;
 
-    if (location < 0) return;
-    if (!g_current_program) { g_error = GL_INVALID_OPERATION; return; }
+    if (validate_uniform_update(location) <= 0) return;
     if (count < 0 || dimension < 2 || dimension > 4 || (count && !value)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     component_count = (uint32_t)dimension * (uint32_t)dimension * (uint32_t)count;
     if (component_count > UINT32_MAX / sizeof(GLfloat)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     data_size = component_count * sizeof(GLfloat);
@@ -8981,16 +9562,15 @@ static void emit_uniform_matrix_rect(GLint location, GLint columns, GLint rows,
     uint8_t* payload;
     UniformLocationState* state;
 
-    if (location < 0) return;
-    if (!g_current_program) { g_error = GL_INVALID_OPERATION; return; }
+    if (validate_uniform_update(location) <= 0) return;
     if (count < 0 || columns < 2 || columns > 4 || rows < 2 || rows > 4 ||
         columns == rows || (count && !value)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     component_count = (uint32_t)columns * (uint32_t)rows * (uint32_t)count;
     if (component_count > UINT32_MAX / sizeof(GLfloat)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     data_size = component_count * sizeof(GLfloat);
@@ -9023,76 +9603,60 @@ static void emit_uniform_matrix_rect(GLint location, GLint columns, GLint rows,
 
 void APIENTRY glUniform1f(GLint location, GLfloat v0) {
     GLfloat values[1] = { v0 };
-    cache_uniform_fv(location, 1, 1, values);
     emit_uniform_vector(location, 1, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform2f(GLint location, GLfloat v0, GLfloat v1) {
     GLfloat values[2] = { v0, v1 };
-    cache_uniform_fv(location, 2, 1, values);
     emit_uniform_vector(location, 2, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) {
     GLfloat values[3] = { v0, v1, v2 };
-    cache_uniform_fv(location, 3, 1, values);
     emit_uniform_vector(location, 3, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
     GLfloat values[4] = { v0, v1, v2, v3 };
-    cache_uniform_fv(location, 4, 1, values);
     emit_uniform_vector(location, 4, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 
 void APIENTRY glUniform1i(GLint location, GLint v0) {
     GLint values[1] = { v0 };
-    cache_uniform_iv(location, 1, 1, values);
     emit_uniform_vector(location, 1, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 void APIENTRY glUniform2i(GLint location, GLint v0, GLint v1) {
     GLint values[2] = { v0, v1 };
-    cache_uniform_iv(location, 2, 1, values);
     emit_uniform_vector(location, 2, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 void APIENTRY glUniform3i(GLint location, GLint v0, GLint v1, GLint v2) {
     GLint values[3] = { v0, v1, v2 };
-    cache_uniform_iv(location, 3, 1, values);
     emit_uniform_vector(location, 3, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 void APIENTRY glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) {
     GLint values[4] = { v0, v1, v2, v3 };
-    cache_uniform_iv(location, 4, 1, values);
     emit_uniform_vector(location, 4, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 
 void APIENTRY glUniform1fv(GLint location, GLsizei count, const GLfloat* value) {
-    cache_uniform_fv(location, 1, count, value);
     emit_uniform_vector(location, 1, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform2fv(GLint location, GLsizei count, const GLfloat* value) {
-    cache_uniform_fv(location, 2, count, value);
     emit_uniform_vector(location, 2, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform3fv(GLint location, GLsizei count, const GLfloat* value) {
-    cache_uniform_fv(location, 3, count, value);
     emit_uniform_vector(location, 3, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform4fv(GLint location, GLsizei count, const GLfloat* value) {
-    cache_uniform_fv(location, 4, count, value);
     emit_uniform_vector(location, 4, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 void APIENTRY glUniform1iv(GLint location, GLsizei count, const GLint* value) {
-    cache_uniform_iv(location, 1, count, value);
     emit_uniform_vector(location, 1, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 void APIENTRY glUniform2iv(GLint location, GLsizei count, const GLint* value) {
-    cache_uniform_iv(location, 2, count, value);
     emit_uniform_vector(location, 2, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 void APIENTRY glUniform3iv(GLint location, GLsizei count, const GLint* value) {
-    cache_uniform_iv(location, 3, count, value);
     emit_uniform_vector(location, 3, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 void APIENTRY glUniform4iv(GLint location, GLsizei count, const GLint* value) {
-    cache_uniform_iv(location, 4, count, value);
     emit_uniform_vector(location, 4, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 
@@ -9141,28 +9705,32 @@ void APIENTRY glUniformMatrix4x3fv(GLint location, GLsizei count,
 
 void APIENTRY glGetUniformfv(GLuint program, GLint location, GLfloat* params) {
     UniformLocationState* state;
-    GLint i, total;
+    GLint total = 0;
     if (!params) return;
-    if (!find_program_state(program, FALSE)) { g_error = GL_INVALID_VALUE; return; }
+    if (!find_program_state(program, FALSE)) { v86gl_set_error(GL_INVALID_VALUE); return; }
     state = find_uniform_location(location);
-    if (!state) { params[0] = 0.0f; return; }
-    total = state->components * (state->count > 0 ? state->count : 1);
-    if (total <= 0) total = 1;
-    if (total > 16) total = 16;
-    for (i = 0; i < total; i++) params[i] = state->fvalues[i];
+    if (!state || state->program != program) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (!emit_query_uniform(program, location, 1u, params, &total)) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+    }
 }
 
 void APIENTRY glGetUniformiv(GLuint program, GLint location, GLint* params) {
     UniformLocationState* state;
-    GLint i, total;
+    GLint total = 0;
     if (!params) return;
-    if (!find_program_state(program, FALSE)) { g_error = GL_INVALID_VALUE; return; }
+    if (!find_program_state(program, FALSE)) { v86gl_set_error(GL_INVALID_VALUE); return; }
     state = find_uniform_location(location);
-    if (!state) { params[0] = 0; return; }
-    total = state->components * (state->count > 0 ? state->count : 1);
-    if (total <= 0) total = 1;
-    if (total > 16) total = 16;
-    for (i = 0; i < total; i++) params[i] = state->ivalues[i];
+    if (!state || state->program != program) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (!emit_query_uniform(program, location, 2u, params, &total)) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+    }
 }
 
 static GLfloat normalize_signed_value(double value, double max_positive) {
@@ -9176,7 +9744,7 @@ static void emit_vertex_attrib4f(GLuint index, GLfloat x, GLfloat y,
                                  GLfloat z, GLfloat w) {
     struct { uint32_t index; float x, y, z, w; } payload;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     g_generic_attribs[index].current[0] = x;
@@ -9316,14 +9884,14 @@ void APIENTRY glVertexAttrib4Nuiv(GLuint index, const GLuint* v) {
 
 void APIENTRY glEnableVertexAttribArray(GLuint index) {
     uint32_t payload = index;
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { g_error = GL_INVALID_VALUE; return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     g_generic_attribs[index].enabled = TRUE;
     emit_gl_call(GLFN_ENABLE_VERTEX_ATTRIB_ARRAY, &payload, sizeof(payload));
 }
 
 void APIENTRY glDisableVertexAttribArray(GLuint index) {
     uint32_t payload = index;
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { g_error = GL_INVALID_VALUE; return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     g_generic_attribs[index].enabled = FALSE;
     emit_gl_call(GLFN_DISABLE_VERTEX_ATTRIB_ARRAY, &payload, sizeof(payload));
 }
@@ -9332,9 +9900,9 @@ void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type,
                                     GLboolean normalized, GLsizei stride,
                                     const GLvoid* pointer) {
     GenericAttribState* state;
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { g_error = GL_INVALID_VALUE; return; }
-    if (size < 1 || size > 4 || stride < 0) { g_error = GL_INVALID_VALUE; return; }
-    if (!gl_type_bytes(type)) { g_error = GL_INVALID_ENUM; return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (size < 1 || size > 4 || stride < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (!gl_type_bytes(type)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     state = &g_generic_attribs[index];
     state->size = size;
     state->type = type;
@@ -9348,7 +9916,7 @@ void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type,
 void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) {
     GenericAttribState* state;
     if (!params) return;
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { g_error = GL_INVALID_VALUE; return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     state = &g_generic_attribs[index];
     switch (pname) {
     case GL_CURRENT_VERTEX_ATTRIB:
@@ -9373,7 +9941,7 @@ void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) {
         params[0] = (GLfloat)state->buffer;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -9381,7 +9949,7 @@ void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) {
 void APIENTRY glGetVertexAttribiv(GLuint index, GLenum pname, GLint* params) {
     GenericAttribState* state;
     if (!params) return;
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { g_error = GL_INVALID_VALUE; return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     state = &g_generic_attribs[index];
     switch (pname) {
     case GL_CURRENT_VERTEX_ATTRIB:
@@ -9409,7 +9977,7 @@ void APIENTRY glGetVertexAttribiv(GLuint index, GLenum pname, GLint* params) {
         params[0] = (GLint)state->buffer;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -9424,8 +9992,8 @@ void APIENTRY glGetVertexAttribdv(GLuint index, GLenum pname, GLdouble* params) 
 
 void APIENTRY glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid** pointer) {
     if (!pointer) return;
-    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { g_error = GL_INVALID_VALUE; return; }
-    if (pname != GL_VERTEX_ATTRIB_ARRAY_POINTER) { g_error = GL_INVALID_ENUM; return; }
+    if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (pname != GL_VERTEX_ATTRIB_ARRAY_POINTER) { v86gl_set_error(GL_INVALID_ENUM); return; }
     *pointer = (GLvoid*)g_generic_attribs[index].pointer;
 }
 
@@ -9493,17 +10061,17 @@ void APIENTRY glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* pa
     if (pname == GL_OBJECT_TYPE_ARB) {
         if (glIsProgram((GLuint)obj)) params[0] = GL_PROGRAM_OBJECT_ARB;
         else if (glIsShader((GLuint)obj)) params[0] = GL_SHADER_OBJECT_ARB;
-        else { g_error = GL_INVALID_VALUE; return; }
+        else { v86gl_set_error(GL_INVALID_VALUE); return; }
         return;
     }
     if (pname == GL_OBJECT_SUBTYPE_ARB) {
         if (glIsShader((GLuint)obj)) glGetShaderiv((GLuint)obj, GL_SHADER_TYPE, params);
-        else { g_error = GL_INVALID_OPERATION; }
+        else { v86gl_set_error(GL_INVALID_OPERATION); }
         return;
     }
     if (glIsShader((GLuint)obj)) glGetShaderiv((GLuint)obj, core_pname, params);
     else if (glIsProgram((GLuint)obj)) glGetProgramiv((GLuint)obj, core_pname, params);
-    else g_error = GL_INVALID_VALUE;
+    else v86gl_set_error(GL_INVALID_VALUE);
 }
 
 void APIENTRY glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* params) {
@@ -9520,7 +10088,7 @@ void APIENTRY glGetInfoLogARB(GLhandleARB obj, GLsizei maxLength,
     } else if (glIsProgram((GLuint)obj)) {
         glGetProgramInfoLog((GLuint)obj, maxLength, length, (GLchar*)infoLog);
     } else {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
     }
 }
 
@@ -9533,7 +10101,7 @@ GLhandleARB APIENTRY glGetHandleARB(GLenum pname) {
     if (pname == GL_PROGRAM_OBJECT_ARB) {
         return (GLhandleARB)g_current_program;
     }
-    g_error = GL_INVALID_ENUM;
+    v86gl_set_error(GL_INVALID_ENUM);
     return 0;
 }
 
@@ -9683,7 +10251,7 @@ void APIENTRY glGenTextures(GLsizei n, GLuint* textures) {
     GLint i;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -9718,7 +10286,7 @@ void APIENTRY glDeleteTextures(GLsizei n, const GLuint* textures) {
     uint8_t* payload;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -9807,7 +10375,7 @@ static void emit_buffer_sub_data(GLenum target, GLintptrARB offset,
 
 void APIENTRY glGenBuffersARB(GLsizei n, GLuint* buffers) {
     GLsizei i;
-    if (n < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!buffers) return;
     for (i = 0; i < n; i++) {
         GLuint name = g_next_buffer_id++;
@@ -9829,7 +10397,7 @@ void APIENTRY glGenQueries(GLsizei n, GLuint* ids) {
     uint8_t* payload;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!ids || n == 0) {
@@ -9852,7 +10420,7 @@ void APIENTRY glGenQueries(GLsizei n, GLuint* ids) {
         state = find_query_state(name, TRUE);
         if (!state) {
             ids[i] = 0;
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             HeapFree(GetProcessHeap(), 0, payload);
             return;
         }
@@ -9870,7 +10438,7 @@ void APIENTRY glDeleteQueries(GLsizei n, const GLuint* ids) {
     uint8_t* payload;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!ids || n == 0) {
@@ -9902,21 +10470,21 @@ void APIENTRY glBeginQuery(GLenum target, GLuint id) {
     uint32_t args[2];
 
     if (!is_occlusion_query_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (!id || g_current_samples_passed_query) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
     state = find_query_state(id, FALSE);
     if (!state) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
     if (state->target && state->target != target) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -9936,17 +10504,17 @@ void APIENTRY glEndQuery(GLenum target) {
     uint32_t arg;
 
     if (!is_occlusion_query_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (!g_current_samples_passed_query) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
     state = find_query_state(g_current_samples_passed_query, FALSE);
     if (!state || !state->active || state->target != target) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -9964,7 +10532,7 @@ void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) {
         return;
     }
     if (!is_occlusion_query_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -9976,7 +10544,7 @@ void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) {
         params[0] = 1;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -10018,7 +10586,7 @@ void APIENTRY glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
         return;
     }
     if (!state || state->active) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -10030,7 +10598,7 @@ void APIENTRY glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
         }
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -10043,7 +10611,7 @@ void APIENTRY glGetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) {
         return;
     }
     if (!state || state->active) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -10055,7 +10623,7 @@ void APIENTRY glGetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) {
         }
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -10094,7 +10662,7 @@ void APIENTRY glGetQueryObjectuivARB(GLuint id, GLenum pname, GLuint* params) {
 
 void APIENTRY glDeleteBuffersARB(GLsizei n, const GLuint* buffers) {
     GLsizei i;
-    if (n < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!buffers) return;
     for (i = 0; i < n; i++) delete_buffer_state(buffers[i]);
     if (n > 0) {
@@ -10113,11 +10681,11 @@ void APIENTRY glBindBufferARB(GLenum target, GLuint buffer) {
         target != GL_ELEMENT_ARRAY_BUFFER_ARB &&
         target != GL_PIXEL_PACK_BUFFER &&
         target != GL_PIXEL_UNPACK_BUFFER) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     state = buffer ? find_buffer_state(buffer, TRUE) : NULL;
-    if (buffer && !state) { g_error = GL_OUT_OF_MEMORY; return; }
+    if (buffer && !state) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
     if (state) state->target = target;
     if (target == GL_ARRAY_BUFFER_ARB) g_array_buffer_binding = buffer;
     else if (target == GL_ELEMENT_ARRAY_BUFFER_ARB) g_element_array_buffer_binding = buffer;
@@ -10137,10 +10705,10 @@ void APIENTRY glBufferDataARB(GLenum target, GLsizeiptrARB size,
     BufferObjectState* state = bound_buffer_state(target);
     uint8_t* copy = NULL;
     if (!state) return;
-    if (size < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (size < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (size) {
         copy = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)size);
-        if (!copy) { g_error = GL_OUT_OF_MEMORY; return; }
+        if (!copy) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
         if (data) CopyMemory(copy, data, (SIZE_T)size);
         else ZeroMemory(copy, (SIZE_T)size);
     }
@@ -10166,7 +10734,7 @@ void APIENTRY glBufferSubDataARB(GLenum target, GLintptrARB offset,
     if (!state) return;
     if (offset < 0 || size < 0 || (size && !data) ||
         (uint32_t)offset > state->size || (uint32_t)size > state->size - (uint32_t)offset) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (size) CopyMemory(state->data + offset, data, (SIZE_T)size);
@@ -10185,7 +10753,7 @@ void APIENTRY glGetBufferSubDataARB(GLenum target, GLintptrARB offset,
     if (!state) return;
     if (offset < 0 || size < 0 || (size && !data) ||
         (uint32_t)offset > state->size || (uint32_t)size > state->size - (uint32_t)offset) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (size) CopyMemory(data, state->data + offset, (SIZE_T)size);
@@ -10208,7 +10776,7 @@ GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) {
     BufferObjectState* state = bound_buffer_state(target);
     if (!state) return NULL;
     if (access != GL_READ_ONLY_ARB && access != GL_WRITE_ONLY_ARB && access != GL_READ_WRITE_ARB) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
     }
     state->mapped = TRUE;
@@ -10243,7 +10811,7 @@ void APIENTRY glGetBufferParameterivARB(GLenum target, GLenum pname, GLint* para
     case GL_BUFFER_USAGE_ARB: params[0] = (GLint)state->usage; break;
     case GL_BUFFER_ACCESS_ARB: params[0] = (GLint)state->access; break;
     case GL_BUFFER_MAPPED_ARB: params[0] = state->mapped ? GL_TRUE : GL_FALSE; break;
-    default: g_error = GL_INVALID_ENUM; break;
+    default: v86gl_set_error(GL_INVALID_ENUM); break;
     }
 }
 
@@ -10254,7 +10822,7 @@ void APIENTRY glGetBufferParameteriv(GLenum target, GLenum pname, GLint* params)
 void APIENTRY glGetBufferPointervARB(GLenum target, GLenum pname, GLvoid** params) {
     BufferObjectState* state = bound_buffer_state(target);
     if (!state || !params) return;
-    if (pname != GL_BUFFER_MAP_POINTER_ARB) { g_error = GL_INVALID_ENUM; return; }
+    if (pname != GL_BUFFER_MAP_POINTER_ARB) { v86gl_set_error(GL_INVALID_ENUM); return; }
     *params = state->mapped ? state->data : NULL;
 }
 
@@ -10283,14 +10851,14 @@ static void emit_name_array_call(uint16_t fn, GLsizei n, const GLuint* names) {
 void APIENTRY glGenFramebuffersEXT(GLsizei n, GLuint* framebuffers) {
     GLsizei i;
 
-    if (n < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!framebuffers || !n) return;
     for (i = 0; i < n; i++) {
         GLuint name = g_next_framebuffer_id++;
         if (!name) name = g_next_framebuffer_id++;
         framebuffers[i] = name;
         if (!find_framebuffer_state(name, TRUE)) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return;
         }
     }
@@ -10304,7 +10872,7 @@ void APIENTRY glGenFramebuffers(GLsizei n, GLuint* framebuffers) {
 void APIENTRY glDeleteFramebuffersEXT(GLsizei n, const GLuint* framebuffers) {
     GLsizei i;
 
-    if (n < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!framebuffers || !n) return;
     for (i = 0; i < n; i++) {
         delete_framebuffer_state(framebuffers[i]);
@@ -10320,11 +10888,11 @@ void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) {
     struct { uint32_t target, framebuffer; } payload;
 
     if (!valid_framebuffer_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (framebuffer && !find_framebuffer_state(framebuffer, TRUE)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     g_framebuffer_binding = framebuffer;
@@ -10349,7 +10917,7 @@ GLenum APIENTRY glCheckFramebufferStatusEXT(GLenum target) {
     GLenum result;
 
     if (!valid_framebuffer_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return GL_FRAMEBUFFER_UNSUPPORTED_EXT;
     }
     result = cached_framebuffer_status();
@@ -10377,11 +10945,11 @@ static void framebuffer_texture_ext(GLenum target, GLenum attachment,
     } payload;
 
     if (!valid_framebuffer_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (level < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     state = bound_framebuffer_attachment(attachment, TRUE);
@@ -10429,7 +10997,7 @@ void APIENTRY glFramebufferTexture2D(GLenum target, GLenum attachment,
 void APIENTRY glFramebufferTexture3DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
                                         GLint level, GLint zoffset) {
-    if (zoffset < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (zoffset < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     framebuffer_texture_ext(target, attachment, textarget, texture, level, zoffset);
 }
 
@@ -10452,7 +11020,7 @@ void APIENTRY glFramebufferRenderbufferEXT(GLenum target, GLenum attachment,
 
     if (!valid_framebuffer_target(target) ||
         !valid_renderbuffer_target(renderbuffertarget)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     state = bound_framebuffer_attachment(attachment, TRUE);
@@ -10484,7 +11052,7 @@ void APIENTRY glGetFramebufferAttachmentParameterivEXT(GLenum target,
     FramebufferAttachmentState* state;
 
     if (!params) return;
-    if (!valid_framebuffer_target(target)) { g_error = GL_INVALID_ENUM; return; }
+    if (!valid_framebuffer_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     state = bound_framebuffer_attachment(attachment, FALSE);
     if (!state || !state->object_type) {
         params[0] = pname == GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE_EXT ? GL_NONE : 0;
@@ -10508,7 +11076,7 @@ void APIENTRY glGetFramebufferAttachmentParameterivEXT(GLenum target,
         params[0] = state->texture_zoffset;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -10523,14 +11091,14 @@ void APIENTRY glGetFramebufferAttachmentParameteriv(GLenum target,
 void APIENTRY glGenRenderbuffersEXT(GLsizei n, GLuint* renderbuffers) {
     GLsizei i;
 
-    if (n < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!renderbuffers || !n) return;
     for (i = 0; i < n; i++) {
         GLuint name = g_next_renderbuffer_id++;
         if (!name) name = g_next_renderbuffer_id++;
         renderbuffers[i] = name;
         if (!find_renderbuffer_state(name, TRUE)) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return;
         }
     }
@@ -10544,7 +11112,7 @@ void APIENTRY glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {
 void APIENTRY glDeleteRenderbuffersEXT(GLsizei n, const GLuint* renderbuffers) {
     GLsizei i;
 
-    if (n < 0) { g_error = GL_INVALID_VALUE; return; }
+    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!renderbuffers || !n) return;
     for (i = 0; i < n; i++) {
         delete_renderbuffer_state(renderbuffers[i]);
@@ -10560,11 +11128,11 @@ void APIENTRY glBindRenderbufferEXT(GLenum target, GLuint renderbuffer) {
     struct { uint32_t target, renderbuffer; } payload;
 
     if (!valid_renderbuffer_target(target)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (renderbuffer && !find_renderbuffer_state(renderbuffer, TRUE)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     g_renderbuffer_binding = renderbuffer;
@@ -10595,11 +11163,11 @@ void APIENTRY glRenderbufferStorageEXT(GLenum target, GLenum internalformat,
         int32_t height;
     } payload;
 
-    if (!valid_renderbuffer_target(target)) { g_error = GL_INVALID_ENUM; return; }
-    if (width < 0 || height < 0) { g_error = GL_INVALID_VALUE; return; }
-    if (!g_renderbuffer_binding) { g_error = GL_INVALID_OPERATION; return; }
+    if (!valid_renderbuffer_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (width < 0 || height < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (!g_renderbuffer_binding) { v86gl_set_error(GL_INVALID_OPERATION); return; }
     state = find_renderbuffer_state(g_renderbuffer_binding, TRUE);
-    if (!state) { g_error = GL_OUT_OF_MEMORY; return; }
+    if (!state) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
 
     state->internalformat = internalformat;
     state->width = width;
@@ -10680,10 +11248,10 @@ void APIENTRY glGetRenderbufferParameterivEXT(GLenum target, GLenum pname,
     RenderbufferObjectState* state;
 
     if (!params) return;
-    if (!valid_renderbuffer_target(target)) { g_error = GL_INVALID_ENUM; return; }
-    if (!g_renderbuffer_binding) { g_error = GL_INVALID_OPERATION; return; }
+    if (!valid_renderbuffer_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (!g_renderbuffer_binding) { v86gl_set_error(GL_INVALID_OPERATION); return; }
     state = find_renderbuffer_state(g_renderbuffer_binding, FALSE);
-    if (!state) { g_error = GL_INVALID_OPERATION; return; }
+    if (!state) { v86gl_set_error(GL_INVALID_OPERATION); return; }
 
     switch (pname) {
     case GL_RENDERBUFFER_WIDTH_EXT:
@@ -10704,7 +11272,7 @@ void APIENTRY glGetRenderbufferParameterivEXT(GLenum target, GLenum pname,
         params[0] = renderbuffer_component_bits(state->internalformat, pname);
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -10734,7 +11302,7 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) {
             active_texture_unit_state()->bound_cube = texture;
         }
     } else {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -10765,7 +11333,7 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
     const GLvoid* pixel_data = NULL;
 
     if (has_pixels && !data_size) {
-        if (width > 0 && height > 0) g_error = GL_INVALID_ENUM;
+        if (width > 0 && height > 0) v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
@@ -10816,7 +11384,7 @@ static void emit_compressed_tex_image(uint16_t opcode, GLenum target, GLint leve
     const GLvoid* pixel_data;
 
     if (image_size < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     pixel_data = unpack_pixel_pointer(data, (uint32_t)image_size);
@@ -10824,7 +11392,7 @@ static void emit_compressed_tex_image(uint16_t opcode, GLenum target, GLint leve
     if (!cache_compressed_texture_image(target, level, internalformat, width, height,
                                         depth, border, image_size, pixel_data)) return;
     if ((uint32_t)image_size > UINT32_MAX - sizeof(meta)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -10870,7 +11438,7 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
 
     if (xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0 ||
         image_size < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     pixel_data = unpack_pixel_pointer(data, (uint32_t)image_size);
@@ -10879,11 +11447,11 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
     if (!state || !state->defined || !state->compressed ||
         xoffset > state->width - width || yoffset > state->height - height ||
         zoffset > state->depth - depth) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
     if ((uint32_t)image_size > UINT32_MAX - sizeof(meta)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -10902,7 +11470,7 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
         if (image_size) {
             replacement = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)image_size);
             if (!replacement) {
-                g_error = GL_OUT_OF_MEMORY;
+                v86gl_set_error(GL_OUT_OF_MEMORY);
                 return;
             }
             CopyMemory(replacement, pixel_data, (SIZE_T)image_size);
@@ -10978,7 +11546,7 @@ void APIENTRY glGetCompressedTexImageARB(GLenum target, GLint level,
 
     if (!state || !state->defined || !state->compressed ||
         (state->data_size && !state->data)) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     } else if (state->data_size) {
         destination = pack_pixel_pointer(image, state->data_size);
         if (!destination) return;
@@ -11075,14 +11643,14 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
 
     if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!bound_texture_state(target, TRUE)) return;
     if (has_pixels && width && height && depth) {
         data_size = gl_pixel_span_3d(width, height, depth, format, type);
         if (!data_size) {
-            g_error = GL_INVALID_ENUM;
+            v86gl_set_error(GL_INVALID_ENUM);
             return;
         }
     }
@@ -11140,14 +11708,14 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
 
     if (xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0 ||
         (width && height && depth && !pixels && !g_pixel_unpack_buffer_binding)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!bound_texture_state(target, FALSE)) return;
     if (width && height && depth) {
         data_size = gl_pixel_span_3d(width, height, depth, format, type);
         if (!data_size) {
-            g_error = GL_INVALID_ENUM;
+            v86gl_set_error(GL_INVALID_ENUM);
             return;
         }
     }
@@ -11205,7 +11773,7 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
     const GLvoid* pixel_data = NULL;
 
     if (has_pixels && !data_size) {
-        if (width > 0 && height > 0) g_error = GL_INVALID_ENUM;
+        if (width > 0 && height > 0) v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
@@ -11308,7 +11876,7 @@ void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat
     uint32_t upload_size = 0;
 
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11388,7 +11956,7 @@ void APIENTRY glCopyTexSubImage2D(GLenum target, GLint level,
     uint32_t upload_size = 0;
 
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11443,6 +12011,104 @@ void APIENTRY glCopyTexSubImage2D(GLenum target, GLint level,
 }
 
 __declspec(dllexport)
+void APIENTRY glCopyTexSubImage3D(GLenum target, GLint level,
+                                  GLint xoffset, GLint yoffset, GLint zoffset,
+                                  GLint x, GLint y,
+                                  GLsizei width, GLsizei height) {
+    struct {
+        uint32_t target;
+        int32_t level;
+        int32_t xoffset;
+        int32_t yoffset;
+        int32_t zoffset;
+        int32_t x;
+        int32_t y;
+        int32_t width;
+        int32_t height;
+    } payload;
+    struct {
+        uint32_t target;
+        int32_t level;
+        int32_t xoffset;
+        int32_t yoffset;
+        int32_t zoffset;
+        int32_t width;
+        int32_t height;
+        int32_t depth;
+        uint32_t format;
+        uint32_t type;
+        uint32_t data_size;
+    } upload;
+    TextureSubImageCapture capture;
+    TightUnpackState unpack;
+    uint8_t* upload_payload = NULL;
+    uint32_t upload_size = 0;
+
+    if (width < 0 || height < 0) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    if (!cache_copy_texture_sub_image_3d(target, level, xoffset, yoffset,
+                                         zoffset, x, y, width, height,
+                                         &capture)) return;
+
+    /* Preserve the exact pixels already read for the CPU texture cache. This
+     * keeps WebGL2 format validation and save-state replay independent of the
+     * transient framebuffer while updating exactly one volume slice. */
+    if (capture.valid && capture.data_size <= UINT32_MAX - sizeof(upload)) {
+        upload_size = (uint32_t)sizeof(upload) + capture.data_size;
+        upload_payload = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, upload_size);
+    }
+    if (upload_payload) {
+        upload.target = (uint32_t)target;
+        upload.level = level;
+        upload.xoffset = xoffset;
+        upload.yoffset = yoffset;
+        upload.zoffset = zoffset;
+        upload.width = width;
+        upload.height = height;
+        upload.depth = 1;
+        upload.format = (uint32_t)capture.format;
+        upload.type = (uint32_t)capture.type;
+        upload.data_size = capture.data_size;
+        CopyMemory(upload_payload, &upload, sizeof(upload));
+        if (capture.data_size) {
+            CopyMemory(upload_payload + sizeof(upload), capture.data,
+                       capture.data_size);
+        }
+
+        begin_tight_unpack(&unpack);
+        emit_gl_call(GLFN_TEX_SUB_IMAGE_3D, upload_payload, upload_size);
+        end_tight_unpack(&unpack);
+
+        HeapFree(GetProcessHeap(), 0, upload_payload);
+        release_texture_capture(&capture);
+        return;
+    }
+    release_texture_capture(&capture);
+
+    payload.target = (uint32_t)target;
+    payload.level = level;
+    payload.xoffset = xoffset;
+    payload.yoffset = yoffset;
+    payload.zoffset = zoffset;
+    payload.x = x;
+    payload.y = y;
+    payload.width = width;
+    payload.height = height;
+    emit_gl_call(GLFN_COPY_TEX_SUB_IMAGE_3D, &payload, sizeof(payload));
+}
+
+void APIENTRY glCopyTexSubImage3DEXT(GLenum target, GLint level,
+                                     GLint xoffset, GLint yoffset, GLint zoffset,
+                                     GLint x, GLint y,
+                                     GLsizei width, GLsizei height) {
+    glCopyTexSubImage3D(target, level, xoffset, yoffset, zoffset,
+                        x, y, width, height);
+}
+
+__declspec(dllexport)
 void APIENTRY glGenerateMipmap(GLenum target) {
     uint32_t payload = (uint32_t)target;
     TextureObjectState* state = bound_texture_state(target, FALSE);
@@ -11490,7 +12156,7 @@ void APIENTRY glTexParameteriv(GLenum target, GLenum pname, const GLint* params)
     int i;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11529,7 +12195,7 @@ void APIENTRY glTexParameterfv(GLenum target, GLenum pname, const GLfloat* param
     int i;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11608,7 +12274,7 @@ void APIENTRY glGetTexParameteriv(GLenum target, GLenum pname, GLint* params) {
         params[3] = (GLint)state->border_color[3];
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -11664,7 +12330,7 @@ void APIENTRY glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params) 
         CopyMemory(params, state->border_color, sizeof(state->border_color));
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -11676,56 +12342,56 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
     switch (pname) {
     case GL_UNPACK_ALIGNMENT:
         if (param != 1 && param != 2 && param != 4 && param != 8) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         g_unpack_alignment = param;
         break;
     case GL_UNPACK_ROW_LENGTH:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_unpack_row_length = param;
         break;
     case GL_UNPACK_SKIP_ROWS:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_unpack_skip_rows = param;
         break;
     case GL_UNPACK_SKIP_PIXELS:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_unpack_skip_pixels = param;
         break;
     case GL_UNPACK_IMAGE_HEIGHT:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_unpack_image_height = param;
         break;
     case GL_UNPACK_SKIP_IMAGES:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_unpack_skip_images = param;
         break;
     case GL_PACK_ALIGNMENT:
         if (param != 1 && param != 2 && param != 4 && param != 8) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         g_pack_alignment = param;
         break;
     case GL_PACK_ROW_LENGTH:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_pack_row_length = param;
         break;
     case GL_PACK_SKIP_ROWS:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_pack_skip_rows = param;
         break;
     case GL_PACK_SKIP_PIXELS:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_pack_skip_pixels = param;
         break;
     case GL_PACK_IMAGE_HEIGHT:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_pack_image_height = param;
         break;
     case GL_PACK_SKIP_IMAGES:
-        if (param < 0) { g_error = GL_INVALID_VALUE; return; }
+        if (param < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
         g_pack_skip_images = param;
         break;
     default:
@@ -11742,7 +12408,7 @@ void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) {
     struct { uint32_t target, pname; int32_t param; } payload;
     TextureUnitState* state;
     if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (target == GL_TEXTURE_ENV && pname == GL_TEXTURE_ENV_MODE) {
@@ -11760,7 +12426,7 @@ void APIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param) {
     struct { uint32_t target, pname; float param; } payload;
     TextureUnitState* state;
     if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (target == GL_TEXTURE_ENV && pname == GL_TEXTURE_ENV_MODE) {
@@ -11785,12 +12451,12 @@ void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) {
     int i;
 
     if (target != GL_TEXTURE_ENV || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11825,12 +12491,12 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) {
     int i;
 
     if (target != GL_TEXTURE_ENV || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11875,7 +12541,7 @@ __declspec(dllexport)
 void APIENTRY glTexGeni(GLenum coord, GLenum pname, GLint param) {
     struct { uint32_t coord, pname; int32_t param; } payload;
     if (!texgen_coord_valid(coord) || !texgen_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -11890,7 +12556,7 @@ __declspec(dllexport)
 void APIENTRY glTexGenf(GLenum coord, GLenum pname, GLfloat param) {
     struct { uint32_t coord, pname; float param; } payload;
     if (!texgen_coord_valid(coord) || !texgen_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -11918,12 +12584,12 @@ void APIENTRY glTexGeniv(GLenum coord, GLenum pname, const GLint* params) {
     int i;
 
     if (!texgen_coord_valid(coord) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11958,12 +12624,12 @@ void APIENTRY glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params) {
     int i;
 
     if (!texgen_coord_valid(coord) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -11995,7 +12661,7 @@ void APIENTRY glTexGendv(GLenum coord, GLenum pname, const GLdouble* params) {
     int i;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12014,12 +12680,12 @@ void APIENTRY glClipPlane(GLenum plane, const GLdouble* equation) {
     } payload;
 
     if (!clip_plane_valid(plane)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!equation) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12034,7 +12700,7 @@ __declspec(dllexport)
 void APIENTRY glColorMaterial(GLenum face, GLenum mode) {
     struct { uint32_t face, mode; } payload;
     if (!material_face_valid(face)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12051,7 +12717,7 @@ void APIENTRY glActiveTextureARB(GLenum texture) {
 
     if (texture < GL_TEXTURE0_ARB ||
         texture >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12070,7 +12736,7 @@ void APIENTRY glClientActiveTextureARB(GLenum texture) {
 
     if (texture < GL_TEXTURE0_ARB ||
         texture >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12097,7 +12763,7 @@ static void emit_multi_tex_coord4f(GLenum target, GLfloat s, GLfloat t, GLfloat 
     }
     if (target < GL_TEXTURE0_ARB ||
         target >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12236,7 +12902,7 @@ __declspec(dllexport)
 void APIENTRY glFogf(GLenum pname, GLfloat param) {
     struct { uint32_t pname; float param; } payload;
     if (!fog_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12259,7 +12925,7 @@ __declspec(dllexport)
 void APIENTRY glFogi(GLenum pname, GLint param) {
     struct { uint32_t pname; int32_t param; } payload;
     if (!fog_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12289,12 +12955,12 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat* params) {
     int i;
 
     if (!count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12362,11 +13028,11 @@ void APIENTRY glFogCoorddvEXT(const GLdouble* coord) {
  * and copied into the DMA frame immediately before a draw. */
 void APIENTRY glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid* pointer) {
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (type != GL_FLOAT && type != GL_DOUBLE) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     g_fog_coord_array.size = 1;
@@ -12488,11 +13154,11 @@ void APIENTRY glSecondaryColor3usvEXT(const GLushort* values) {
 void APIENTRY glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride,
                                          const GLvoid* pointer) {
     if (size != 3 || stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!gl_type_bytes(type)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     g_secondary_color_array.size = size;
@@ -12592,7 +13258,7 @@ __declspec(dllexport)
 void APIENTRY glMaterialf(GLenum face, GLenum pname, GLfloat param) {
     struct { uint32_t face, pname; float param; } payload;
     if (!material_face_valid(face) || !material_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12608,7 +13274,7 @@ void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) {
     struct { uint32_t face, pname; int32_t param; } payload;
     GLfloat value;
     if (!material_face_valid(face) || !material_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12632,12 +13298,12 @@ void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) {
     int i;
 
     if (!material_face_valid(face) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12667,12 +13333,12 @@ void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) {
     GLfloat values[4];
 
     if (!material_face_valid(face) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12714,7 +13380,7 @@ __declspec(dllexport)
 void APIENTRY glLightf(GLenum light, GLenum pname, GLfloat param) {
     struct { uint32_t light, pname; float param; } payload;
     if (!light_name_valid(light) || !light_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12730,7 +13396,7 @@ void APIENTRY glLighti(GLenum light, GLenum pname, GLint param) {
     struct { uint32_t light, pname; int32_t param; } payload;
     GLfloat value;
     if (!light_name_valid(light) || !light_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12754,12 +13420,12 @@ void APIENTRY glLightfv(GLenum light, GLenum pname, const GLfloat* params) {
     int i;
 
     if (!light_name_valid(light) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12789,12 +13455,12 @@ void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) {
     GLfloat values[4];
 
     if (!light_name_valid(light) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12816,7 +13482,7 @@ __declspec(dllexport)
 void APIENTRY glLightModelf(GLenum pname, GLfloat param) {
     struct { uint32_t pname; float param; } payload;
     if (!light_model_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12837,7 +13503,7 @@ __declspec(dllexport)
 void APIENTRY glLightModeli(GLenum pname, GLint param) {
     struct { uint32_t pname; int32_t param; } payload;
     if (!light_model_scalar_valid(pname)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -12865,12 +13531,12 @@ void APIENTRY glLightModelfv(GLenum pname, const GLfloat* params) {
     int i;
 
     if (!count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -12907,12 +13573,12 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) {
     GLfloat values[4];
 
     if (!count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13051,7 +13717,7 @@ __declspec(dllexport)
 void APIENTRY glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
     struct { int32_t x, y, width, height; } payload;
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13070,7 +13736,7 @@ __declspec(dllexport)
 void APIENTRY glLineWidth(GLfloat width) {
     float payload = width;
     if (width <= 0.0f) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13109,7 +13775,7 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
     GLvoid* destination;
 
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13119,7 +13785,7 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 
     data_size = gl_read_pixel_span(width, height, format, type);
     if (!data_size) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -13130,7 +13796,7 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 
     if (!emit_read_pixels(x, y, width, height, format, type, data_size, destination)) {
         ZeroMemory(destination, data_size);
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
 
@@ -13147,17 +13813,17 @@ void APIENTRY glDisableClientState(GLenum array) {
 __declspec(dllexport)
 void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
     if (size < 2 || size > 4) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (!gl_type_bytes(type)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -13172,17 +13838,17 @@ void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLv
 __declspec(dllexport)
 void APIENTRY glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
     if (size < 3 || size > 4) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (!gl_type_bytes(type)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -13199,17 +13865,17 @@ void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const G
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
 
     if (size < 1 || size > 4) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (!gl_type_bytes(type)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -13224,12 +13890,12 @@ void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const G
 __declspec(dllexport)
 void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer) {
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (!gl_type_bytes(type)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -13275,7 +13941,7 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
                     (unsigned long)(uintptr_t)g_vertex_array.pointer);
     }
     if (first < 0 || count < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13285,7 +13951,7 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
     generic_attrib_count = enabled_generic_attrib_count();
     if (!g_vertex_array.enabled && !generic_attrib_count) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -13338,27 +14004,27 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         generic_attrib_count = written;
         generic_block_size = generic_attrib_blocks_size(generic_arrays, generic_attrib_count);
         if (!generic_block_size) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
     }
 
     block_size = client_array_blocks_size(arrays, array_block_count);
     if (!block_size) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (generic_attrib_count) {
         if (block_size > UINT32_MAX - sizeof(header_gl2) ||
             generic_block_size > UINT32_MAX - sizeof(header_gl2) - block_size) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         total_size = sizeof(header_gl2) + block_size + generic_block_size;
     } else {
         if (block_size > UINT32_MAX - sizeof(header)) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         total_size = sizeof(header) + block_size;
@@ -13452,7 +14118,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
                     (unsigned long)(uintptr_t)g_vertex_array.pointer);
     }
     if (count < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13462,18 +14128,18 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 
     generic_attrib_count = enabled_generic_attrib_count();
     if (!g_vertex_array.enabled && !generic_attrib_count) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
     index_size = (uint32_t)gl_index_bytes(type);
     if (!index_size) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if ((uint32_t)count > UINT32_MAX / index_size) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13495,7 +14161,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
             return;
         }
         if (max_index >= 0x7FFFFFFFu) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         if (!validate_vbo_direct_arrays(0, (GLsizei)(max_index + 1u))) {
@@ -13518,7 +14184,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     }
 
     if (max_index >= 0x7FFFFFFFu) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13557,14 +14223,14 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         generic_attrib_count = written;
         generic_block_size = generic_attrib_blocks_size(generic_arrays, generic_attrib_count);
         if (!generic_block_size) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
     }
 
     block_size = client_array_blocks_size(arrays, array_block_count);
     if (!block_size) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13572,14 +14238,14 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         if (index_data_size > UINT32_MAX - sizeof(header_gl2) ||
             block_size > UINT32_MAX - sizeof(header_gl2) - index_data_size ||
             generic_block_size > UINT32_MAX - sizeof(header_gl2) - index_data_size - block_size) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         total_size = sizeof(header_gl2) + index_data_size + block_size + generic_block_size;
     } else {
         if (index_data_size > UINT32_MAX - sizeof(header) ||
             block_size > UINT32_MAX - sizeof(header) - index_data_size) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         total_size = sizeof(header) + index_data_size + block_size;
@@ -13644,7 +14310,7 @@ void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
     uint32_t max_index;
 
     if (count < 0 || start > end) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13654,12 +14320,12 @@ void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
 
     index_size = (uint32_t)gl_index_bytes(type);
     if (!index_size) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     if ((uint32_t)count > UINT32_MAX / index_size) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13673,15 +14339,15 @@ void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
             return;
         }
         if (max_index >= 0x7FFFFFFFu) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         if (max_index > end) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         if (end >= 0x7FFFFFFFu) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         if (!validate_vbo_direct_arrays(0, (GLsizei)(end + 1u))) {
@@ -13706,11 +14372,11 @@ void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
     GLsizei i;
 
     if (primcount < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (primcount && (!first || !count)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13719,7 +14385,7 @@ void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
         GLint max_end = 0;
         for (i = 0; i < primcount; i++) {
             if (first[i] < 0 || count[i] < 0) {
-                g_error = GL_INVALID_VALUE;
+                v86gl_set_error(GL_INVALID_VALUE);
                 return;
             }
             if (!count[i]) {
@@ -13729,7 +14395,7 @@ void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
                 min_first = first[i];
             }
             if (first[i] > INT_MAX - count[i]) {
-                g_error = GL_INVALID_VALUE;
+                v86gl_set_error(GL_INVALID_VALUE);
                 return;
             }
             if (first[i] + count[i] > max_end) {
@@ -13761,11 +14427,11 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
     GLsizei i;
 
     if (primcount < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (primcount && (!count || !indices)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13773,7 +14439,7 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
         uint32_t index_size = (uint32_t)gl_index_bytes(type);
         uint32_t max_index_all = 0;
         if (!index_size) {
-            g_error = GL_INVALID_ENUM;
+            v86gl_set_error(GL_INVALID_ENUM);
             return;
         }
         for (i = 0; i < primcount; i++) {
@@ -13782,11 +14448,11 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
             uint32_t draw_max_index;
 
             if (count[i] < 0) {
-                g_error = GL_INVALID_VALUE;
+                v86gl_set_error(GL_INVALID_VALUE);
                 return;
             }
             if ((uint32_t)count[i] > UINT32_MAX / index_size) {
-                g_error = GL_INVALID_VALUE;
+                v86gl_set_error(GL_INVALID_VALUE);
                 return;
             }
             index_data_size = (uint32_t)count[i] * index_size;
@@ -13803,7 +14469,7 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
             }
         }
         if (max_index_all >= 0x7FFFFFFFu) {
-            g_error = GL_INVALID_VALUE;
+            v86gl_set_error(GL_INVALID_VALUE);
             return;
         }
         if (!validate_vbo_direct_arrays(0, (GLsizei)(max_index_all + 1u))) {
@@ -13840,7 +14506,7 @@ void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* p
     GLenum color_type = GL_FLOAT;
 
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -13888,7 +14554,7 @@ void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* p
         row_size = 60; tex_size = 4; tex_offset = 0; color_size = 4; color_offset = 16; normal_offset = 32; vertex_size = 4; vertex_offset = 44;
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -13951,7 +14617,7 @@ __declspec(dllexport)
 void APIENTRY glLockArraysEXT(GLint first, GLsizei count) {
     (void)first;
     if (count < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
     }
 }
 
@@ -14357,12 +15023,12 @@ void APIENTRY glEdgeFlagv(const GLboolean* flag) {
 __declspec(dllexport)
 void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer) {
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (!gl_type_bytes(type)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -14376,7 +15042,7 @@ void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer)
 __declspec(dllexport)
 void APIENTRY glEdgeFlagPointer(GLsizei stride, const GLvoid* pointer) {
     if (stride < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -14490,7 +15156,7 @@ void APIENTRY glArrayElement(GLint i) {
     uint32_t unit;
 
     if (i < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -14529,7 +15195,7 @@ __declspec(dllexport)
 void APIENTRY glPointSize(GLfloat size) {
     struct { float size; } payload;
     if (size <= 0.0f) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -14553,7 +15219,7 @@ void APIENTRY glPointParameterfv(GLenum pname, const GLfloat* params) {
     struct { uint32_t pname; float values[3]; } payload;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -14579,7 +15245,7 @@ void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) {
     struct { uint32_t pname; int32_t values[3]; } payload;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -14594,7 +15260,7 @@ __declspec(dllexport)
 void APIENTRY glLineStipple(GLint factor, GLushort pattern) {
     struct { int32_t factor; uint32_t pattern; } payload;
     if (factor < 1) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -14639,13 +15305,13 @@ void APIENTRY glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yor
     BOOL has_bitmap = bitmap || g_pixel_unpack_buffer_binding;
 
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     data_size = has_bitmap ? gl_bitmap_span(width, height) : 0;
     if (has_bitmap && width > 0 && height > 0 && !data_size) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     bitmap_data = unpack_pixel_pointer(bitmap, data_size);
@@ -14684,11 +15350,11 @@ void APIENTRY glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
     } payload;
 
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (type != GL_COLOR && type != GL_DEPTH && type != GL_STENCIL) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -14716,13 +15382,13 @@ void APIENTRY glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum 
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
 
     if (width < 0 || height < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     data_size = has_pixels ? gl_pixel_span(width, height, format, type) : 0;
     if (has_pixels && width > 0 && height > 0 && !data_size) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
@@ -14791,21 +15457,21 @@ static int set_pixel_map(GLenum map, GLsizei mapsize, const GLdouble* values) {
     GLsizei i;
 
     if (index < 0) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
     if (mapsize < 0 || (mapsize && !values)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     if ((uint32_t)mapsize > UINT32_MAX / sizeof(*copy)) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
     }
     if (mapsize) {
         copy = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*copy));
         if (!copy) {
-            g_error = GL_OUT_OF_MEMORY;
+            v86gl_set_error(GL_OUT_OF_MEMORY);
             return 0;
         }
         for (i = 0; i < mapsize; i++) {
@@ -14831,11 +15497,11 @@ static void emit_pixel_map(uint16_t opcode, GLenum map, GLsizei mapsize,
     uint8_t* payload;
 
     if (mapsize < 0 || (mapsize && !values)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if ((uint32_t)mapsize > UINT32_MAX / value_size) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -14859,7 +15525,7 @@ void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
     GLsizei i;
 
     if (mapsize < 0 || (mapsize && !values)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!mapsize) {
@@ -14870,7 +15536,7 @@ void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
     }
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
     if (!converted) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
@@ -14886,7 +15552,7 @@ void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
     GLsizei i;
 
     if (mapsize < 0 || (mapsize && !values)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!mapsize) {
@@ -14897,7 +15563,7 @@ void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
     }
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
     if (!converted) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
@@ -14913,7 +15579,7 @@ void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values)
     GLsizei i;
 
     if (mapsize < 0 || (mapsize && !values)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!mapsize) {
@@ -14924,7 +15590,7 @@ void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values)
     }
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
     if (!converted) {
-        g_error = GL_OUT_OF_MEMORY;
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
     for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
@@ -14939,7 +15605,7 @@ void APIENTRY glGetPixelMapfv(GLenum map, GLfloat* values) {
     PixelMapState* state;
     GLsizei i;
     int index = pixel_map_index(map);
-    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!values) return;
     state = &g_pixel_maps[index];
     for (i = 0; i < state->size; i++) values[i] = (GLfloat)state->values[i];
@@ -14950,7 +15616,7 @@ void APIENTRY glGetPixelMapuiv(GLenum map, GLuint* values) {
     PixelMapState* state;
     GLsizei i;
     int index = pixel_map_index(map);
-    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!values) return;
     state = &g_pixel_maps[index];
     for (i = 0; i < state->size; i++) values[i] = (GLuint)state->values[i];
@@ -14961,7 +15627,7 @@ void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) {
     PixelMapState* state;
     GLsizei i;
     int index = pixel_map_index(map);
-    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!values) return;
     state = &g_pixel_maps[index];
     for (i = 0; i < state->size; i++) values[i] = (GLushort)state->values[i];
@@ -14970,7 +15636,7 @@ void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) {
 __declspec(dllexport)
 void APIENTRY glPolygonStipple(const GLubyte* mask) {
     if (!mask) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     init_query_state();
@@ -15007,7 +15673,7 @@ void APIENTRY glDeleteLists(GLuint list, GLsizei range) {
     GLuint last;
 
     if (range < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!range) {
@@ -15039,11 +15705,11 @@ void APIENTRY glNewList(GLuint list, GLenum mode) {
     }
 
     if (!list || (mode != GL_COMPILE && mode != GL_COMPILE_AND_EXECUTE)) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (g_current_display_list) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -15065,7 +15731,7 @@ void APIENTRY glEndList(void) {
     }
 
     if (!g_current_display_list) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -15093,7 +15759,7 @@ void APIENTRY glCallList(GLuint list) {
         return;
     }
     if (entry == g_current_display_list) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -15167,18 +15833,18 @@ void APIENTRY glCallLists(GLsizei n, GLenum type, const GLvoid* lists) {
     GLsizei i;
 
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (n > 0 && !lists) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     for (i = 0; i < n; i++) {
         GLuint name;
         if (!display_list_name_from_array(i, type, lists, &name)) {
-            g_error = GL_INVALID_ENUM;
+            v86gl_set_error(GL_INVALID_ENUM);
             return;
         }
         glCallList(g_list_base + name);
@@ -15193,7 +15859,7 @@ void APIENTRY glListBase(GLuint base) {
 __declspec(dllexport)
 void APIENTRY glSelectBuffer(GLsizei size, GLuint* buffer) {
     if (size < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -15205,12 +15871,12 @@ void APIENTRY glSelectBuffer(GLsizei size, GLuint* buffer) {
 __declspec(dllexport)
 void APIENTRY glFeedbackBuffer(GLsizei size, GLenum type, GLfloat* buffer) {
     if (size < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (type != GL_2D && type != GL_3D && type != GL_3D_COLOR &&
         type != GL_3D_COLOR_TEXTURE && type != GL_4D_COLOR_TEXTURE) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15225,7 +15891,7 @@ GLint APIENTRY glRenderMode(GLenum mode) {
     GLenum old_mode = g_render_mode;
     GLint result = 0;
     if (mode != GL_RENDER && mode != GL_SELECT && mode != GL_FEEDBACK) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
 
@@ -15252,7 +15918,7 @@ void APIENTRY glInitNames(void) {
 __declspec(dllexport)
 void APIENTRY glLoadName(GLuint name) {
     if (g_name_stack_depth <= 0) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -15262,7 +15928,7 @@ void APIENTRY glLoadName(GLuint name) {
 __declspec(dllexport)
 void APIENTRY glPushName(GLuint name) {
     if (g_name_stack_depth >= (GLint)(sizeof(g_name_stack) / sizeof(g_name_stack[0]))) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -15272,7 +15938,7 @@ void APIENTRY glPushName(GLuint name) {
 __declspec(dllexport)
 void APIENTRY glPopName(void) {
     if (g_name_stack_depth <= 0) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -15294,12 +15960,12 @@ void APIENTRY glFogiv(GLenum pname, const GLint* params) {
     int i;
 
     if (!params) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
     if (!count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15313,7 +15979,7 @@ void APIENTRY glFogiv(GLenum pname, const GLint* params) {
 __declspec(dllexport)
 void APIENTRY glGetClipPlane(GLenum plane, GLdouble* equation) {
     if (!clip_plane_valid(plane)) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (!equation) return;
@@ -15326,7 +15992,7 @@ void APIENTRY glGetLightfv(GLenum light, GLenum pname, GLfloat* params) {
     int count = light_value_count(pname);
     LightState* state;
     if (!light_name_valid(light) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (!params) return;
@@ -15353,7 +16019,7 @@ void APIENTRY glGetLightiv(GLenum light, GLenum pname, GLint* params) {
     GLfloat values[4];
     int i;
     if (!light_name_valid(light) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15367,7 +16033,7 @@ void APIENTRY glGetMaterialfv(GLenum face, GLenum pname, GLfloat* params) {
     int count = material_value_count(pname);
     MaterialState* state;
     if (!material_face_valid(face) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15392,7 +16058,7 @@ void APIENTRY glGetMaterialiv(GLenum face, GLenum pname, GLint* params) {
     GLfloat values[4];
     int i;
     if (!material_face_valid(face) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15405,7 +16071,7 @@ __declspec(dllexport)
 void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) {
     if (target != GL_TEXTURE_ENV || !params) {
         if (target != GL_TEXTURE_ENV) {
-            g_error = GL_INVALID_ENUM;
+            v86gl_set_error(GL_INVALID_ENUM);
         }
         return;
     }
@@ -15416,14 +16082,14 @@ void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) {
     } else if (pname == GL_TEXTURE_ENV_COLOR) {
         CopyMemory(params, active_texture_unit_state()->env_color,
                    sizeof(active_texture_unit_state()->env_color));
-    } else g_error = GL_INVALID_ENUM;
+    } else v86gl_set_error(GL_INVALID_ENUM);
 }
 
 __declspec(dllexport)
 void APIENTRY glGetTexEnviv(GLenum target, GLenum pname, GLint* params) {
     if (target != GL_TEXTURE_ENV || !params) {
         if (target != GL_TEXTURE_ENV) {
-            g_error = GL_INVALID_ENUM;
+            v86gl_set_error(GL_INVALID_ENUM);
         }
         return;
     }
@@ -15434,7 +16100,7 @@ void APIENTRY glGetTexEnviv(GLenum target, GLenum pname, GLint* params) {
     } else if (pname == GL_TEXTURE_ENV_COLOR) {
         int i;
         for (i = 0; i < 4; i++) params[i] = (GLint)active_texture_unit_state()->env_color[i];
-    } else g_error = GL_INVALID_ENUM;
+    } else v86gl_set_error(GL_INVALID_ENUM);
 }
 
 __declspec(dllexport)
@@ -15442,7 +16108,7 @@ void APIENTRY glGetTexGenfv(GLenum coord, GLenum pname, GLfloat* params) {
     int count = texgen_value_count(pname);
     TexGenState* state;
     if (!texgen_coord_valid(coord) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15460,7 +16126,7 @@ void APIENTRY glGetTexGeniv(GLenum coord, GLenum pname, GLint* params) {
     GLfloat values[4];
     int i;
     if (!texgen_coord_valid(coord) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15479,7 +16145,7 @@ void APIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble* params) {
     }
 
     if (!texgen_coord_valid(coord) || !count) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -15508,7 +16174,7 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     state = texture_level_state(target, level, FALSE);
     if (!state) return;
     if (!state->defined) {
-        g_error = GL_INVALID_OPERATION;
+        v86gl_set_error(GL_INVALID_OPERATION);
         return;
     }
     if (!state->width || !state->height || !state->depth) return;
@@ -15528,7 +16194,7 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     if (!pixel_bytes || !destination_span || !destination_stride || !destination_image_stride ||
         destination_offset_64 > UINT32_MAX ||
         state->format != format || state->type != type) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     destination_offset = (uint32_t)destination_offset_64;
@@ -15649,7 +16315,7 @@ static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname,
     default:
         bits = texture_component_bits(state, pname);
         if (bits >= 0) { *result = bits; return 1; }
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return 0;
     }
 }
@@ -15707,7 +16373,7 @@ void APIENTRY glGetPointerv(GLenum pname, GLvoid** params) {
         break;
     default:
         *params = NULL;
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -15733,7 +16399,7 @@ GLboolean APIENTRY glAreTexturesResident(GLsizei n, const GLuint* textures, GLbo
     GLsizei i;
     (void)textures;
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return GL_FALSE;
     }
 
@@ -15750,7 +16416,7 @@ void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLcl
     GLsizei i;
     uint32_t j;
     if (n < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
@@ -15789,13 +16455,13 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
 
     if (target != GL_TEXTURE_1D) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     data_size = has_pixels ? gl_pixel_span(width, 1, format, type) : 0;
     if (has_pixels && !data_size) {
-        if (width > 0) g_error = GL_INVALID_ENUM;
+        if (width > 0) v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
@@ -15845,13 +16511,13 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
 
     if (target != GL_TEXTURE_1D) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
     data_size = has_pixels ? gl_pixel_span(width, 1, format, type) : 0;
     if (has_pixels && !data_size) {
-        if (width > 0) g_error = GL_INVALID_ENUM;
+        if (width > 0) v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
@@ -15894,11 +16560,11 @@ void APIENTRY glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat
     } payload;
 
     if (target != GL_TEXTURE_1D) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (width < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!cache_copy_texture_image(target, level, (GLint)internalFormat,
@@ -15927,11 +16593,11 @@ void APIENTRY glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
     } payload;
 
     if (target != GL_TEXTURE_1D) {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
     if (width < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     if (!cache_copy_texture_sub_image(target, level, xoffset, 0,
@@ -15984,18 +16650,18 @@ static int define_map_state(GLenum target, GLdouble u1, GLdouble u2,
     GLint v;
     int c;
 
-    if (index < 0) { g_error = GL_INVALID_ENUM; return 0; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return 0; }
     components = map_target_components(target);
     dimensions = map_target_dimensions(target);
     if (uorder <= 0 || (dimensions == 2 && vorder <= 0) ||
         ustride < components || (dimensions == 2 && vstride < components) || !points) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return 0;
     }
     total = (uint64_t)(uint32_t)uorder * (uint32_t)(dimensions == 2 ? vorder : 1) * components;
-    if (total > UINT32_MAX / sizeof(*coefficients)) { g_error = GL_OUT_OF_MEMORY; return 0; }
+    if (total > UINT32_MAX / sizeof(*coefficients)) { v86gl_set_error(GL_OUT_OF_MEMORY); return 0; }
     coefficients = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)total * sizeof(*coefficients));
-    if (!coefficients) { g_error = GL_OUT_OF_MEMORY; return 0; }
+    if (!coefficients) { v86gl_set_error(GL_OUT_OF_MEMORY); return 0; }
     for (u = 0; u < uorder; u++) {
         for (v = 0; v < (dimensions == 2 ? vorder : 1); v++) {
             const GLdouble* source = points + (uint32_t)u * ustride + (dimensions == 2 ? (uint32_t)v * vstride : 0);
@@ -16033,9 +16699,9 @@ void APIENTRY glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint
     GLint i;
     if (order <= 0 || !points || stride <= 0) { (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, NULL); return; }
     count = (uint64_t)(uint32_t)(order - 1) * stride + map_target_components(target);
-    if (count > UINT32_MAX / sizeof(*converted)) { g_error = GL_OUT_OF_MEMORY; return; }
+    if (count > UINT32_MAX / sizeof(*converted)) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*converted));
-    if (!converted) { g_error = GL_OUT_OF_MEMORY; return; }
+    if (!converted) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
     for (i = 0; i < (GLint)count; i++) converted[i] = (GLdouble)points[i];
     (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, converted);
     HeapFree(GetProcessHeap(), 0, converted);
@@ -16058,9 +16724,9 @@ void APIENTRY glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLin
         return;
     }
     count = (uint64_t)(uint32_t)(uorder - 1) * ustride + (uint64_t)(uint32_t)(vorder - 1) * vstride + map_target_components(target);
-    if (count > UINT32_MAX / sizeof(*converted)) { g_error = GL_OUT_OF_MEMORY; return; }
+    if (count > UINT32_MAX / sizeof(*converted)) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*converted));
-    if (!converted) { g_error = GL_OUT_OF_MEMORY; return; }
+    if (!converted) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
     for (i = 0; i < (GLint)count; i++) converted[i] = (GLdouble)points[i];
     (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, converted);
     HeapFree(GetProcessHeap(), 0, converted);
@@ -16248,7 +16914,7 @@ static GLdouble map_grid_coord(GLint index, GLint segments, GLdouble v1, GLdoubl
 __declspec(dllexport)
 void APIENTRY glMapGrid1d(GLint un, GLdouble u1, GLdouble u2) {
     if (un < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     g_map_grid1_un = un;
@@ -16264,7 +16930,7 @@ void APIENTRY glMapGrid1f(GLint un, GLfloat u1, GLfloat u2) {
 __declspec(dllexport)
 void APIENTRY glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2) {
     if (un < 0 || vn < 0) {
-        g_error = GL_INVALID_VALUE;
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
     g_map_grid2_un = un;
@@ -16333,7 +16999,7 @@ void APIENTRY glEvalMesh1(GLenum mode, GLint i1, GLint i2) {
     } else if (mode == GL_LINE) {
         primitive = GL_LINE_STRIP;
     } else {
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
 
@@ -16390,7 +17056,7 @@ void APIENTRY glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) {
         return;
     }
 
-    g_error = GL_INVALID_ENUM;
+    v86gl_set_error(GL_INVALID_ENUM);
 }
 
 __declspec(dllexport)
@@ -16410,7 +17076,7 @@ void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* v) {
     MapState* state;
     int index = map_target_index(target);
     uint32_t i;
-    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!v) return;
     state = &g_map_states[index];
     switch (query) {
@@ -16426,7 +17092,7 @@ void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* v) {
         if (state->dimensions == 2) { v[2] = state->domain[2]; v[3] = state->domain[3]; }
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -16436,7 +17102,7 @@ void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* v) {
     MapState* state;
     int index = map_target_index(target);
     uint32_t i;
-    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!v) return;
     state = &g_map_states[index];
     switch (query) {
@@ -16452,7 +17118,7 @@ void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* v) {
         if (state->dimensions == 2) { v[2] = (GLfloat)state->domain[2]; v[3] = (GLfloat)state->domain[3]; }
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -16462,7 +17128,7 @@ void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* v) {
     MapState* state;
     int index = map_target_index(target);
     uint32_t i;
-    if (index < 0) { g_error = GL_INVALID_ENUM; return; }
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!v) return;
     state = &g_map_states[index];
     switch (query) {
@@ -16478,7 +17144,7 @@ void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* v) {
         if (state->dimensions == 2) { v[2] = (GLint)state->domain[2]; v[3] = (GLint)state->domain[3]; }
         break;
     default:
-        g_error = GL_INVALID_ENUM;
+        v86gl_set_error(GL_INVALID_ENUM);
         break;
     }
 }
@@ -16585,6 +17251,8 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         PROC_ENTRY(glReadBuffer),
         PROC_ENTRY(glCopyTexImage2D),
         PROC_ENTRY(glCopyTexSubImage2D),
+        PROC_ENTRY(glCopyTexSubImage3D),
+        PROC_ENTRY(glCopyTexSubImage3DEXT),
         PROC_ENTRY(glTexParameteriv),
         PROC_ENTRY(glTexParameterfv),
         PROC_ENTRY(glTexEnviv),

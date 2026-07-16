@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arb_program_sanitize.h"
-
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
@@ -60,7 +58,22 @@ extern void emscripten_glTexSubImage3D(GLenum target, GLint level,
                                        GLsizei height, GLsizei depth,
                                        GLenum format, GLenum type,
                                        const void* pixels);
+extern void emscripten_glCopyTexSubImage3D(GLenum target, GLint level,
+                                           GLint xoffset, GLint yoffset,
+                                           GLint zoffset, GLint x, GLint y,
+                                           GLsizei width, GLsizei height);
 extern void emscripten_glPixelStorei(GLenum pname, GLint param);
+extern void emscripten_glFramebufferTexture2D(GLenum target, GLenum attachment,
+                                              GLenum textarget, GLuint texture,
+                                              GLint level);
+extern void emscripten_glFramebufferTextureLayer(GLenum target, GLenum attachment,
+                                                 GLuint texture, GLint level,
+                                                 GLint layer);
+extern void emscripten_glFramebufferRenderbuffer(GLenum target, GLenum attachment,
+                                                 GLenum renderbuffertarget,
+                                                 GLuint renderbuffer);
+extern void emscripten_glRenderbufferStorage(GLenum target, GLenum internalformat,
+                                             GLsizei width, GLsizei height);
 #endif
 
 extern void glActiveTexture(GLenum texture);
@@ -144,6 +157,10 @@ extern void glCopyTexImage1D(GLenum target, GLint level, GLenum internalformat,
                              GLint x, GLint y, GLsizei width, GLint border);
 extern void glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                                 GLint x, GLint y, GLsizei width);
+extern void glCopyTexSubImage3D(GLenum target, GLint level,
+                                GLint xoffset, GLint yoffset, GLint zoffset,
+                                GLint x, GLint y,
+                                GLsizei width, GLsizei height);
 extern void glPointParameteri(GLenum pname, GLint param);
 extern void glPointParameteriv(GLenum pname, const GLint* params);
 extern void glWindowPos3f(GLfloat x, GLfloat y, GLfloat z);
@@ -897,6 +914,8 @@ EM_JS(void, v86gl_prepare_webgl2_volume_texture, (GLuint texture, GLuint unit), 
 #define V86GL_OBJECT_KIND_QUERY 3u
 #define V86GL_ACTIVE_KIND_UNIFORM 1u
 #define V86GL_ACTIVE_KIND_ATTRIB 2u
+#define V86GL_LOCATION_KIND_UNIFORM 1u
+#define V86GL_LOCATION_KIND_ATTRIB 2u
 #define V86GL_PROGRAM_PARAMETER_ENV 1u
 #define V86GL_PROGRAM_PARAMETER_LOCAL 2u
 
@@ -913,13 +932,14 @@ typedef struct {
 typedef struct {
     GLuint guest;
     GLuint host;
-    char* source;
-    GLsizei source_length;
 } V86GLArbProgramMap;
 
 typedef struct {
+    GLuint guest_program;
     GLint guest;
     GLint host;
+    GLenum type;
+    GLint value_count;
 } V86GLLocationMap;
 
 static V86GLTextureName g_textures[V86GL_MAX_TEXTURES];
@@ -927,6 +947,7 @@ static uint32_t g_texture_count;
 static V86GLNameMap g_programs[V86GL_MAX_PROGRAMS];
 static V86GLArbProgramMap g_arb_programs[V86GL_MAX_ARB_PROGRAMS];
 static uint32_t g_program_count;
+static GLuint g_current_guest_program;
 static uint32_t g_arb_program_count;
 static GLuint g_current_vertex_arb_program;
 static GLuint g_current_fragment_arb_program;
@@ -1215,20 +1236,6 @@ static V86GLArbProgramMap* v86gl_arb_program_map(GLuint guest) {
     return NULL;
 }
 
-static V86GLArbProgramMap* v86gl_arb_program_map_host(GLuint host) {
-    uint32_t i;
-
-    if (!host) {
-        return NULL;
-    }
-    for (i = 0; i < g_arb_program_count; i++) {
-        if (g_arb_programs[i].host == host) {
-            return &g_arb_programs[i];
-        }
-    }
-    return NULL;
-}
-
 static GLuint v86gl_host_arb_program(GLuint guest, int create) {
     V86GLArbProgramMap* map = v86gl_arb_program_map(guest);
     GLuint host = 0;
@@ -1247,8 +1254,6 @@ static GLuint v86gl_host_arb_program(GLuint guest, int create) {
     }
     g_arb_programs[g_arb_program_count].guest = guest;
     g_arb_programs[g_arb_program_count].host = host;
-    g_arb_programs[g_arb_program_count].source = NULL;
-    g_arb_programs[g_arb_program_count].source_length = 0;
     g_arb_program_count++;
     return host;
 }
@@ -1406,8 +1411,6 @@ static void v86gl_map_arb_program(GLuint guest, GLuint host) {
         map = &g_arb_programs[g_arb_program_count++];
         map->guest = guest;
         map->host = host;
-        map->source = NULL;
-        map->source_length = 0;
     }
 }
 
@@ -1416,9 +1419,6 @@ static void v86gl_forget_arb_program(GLuint guest) {
 
     for (i = 0; i < g_arb_program_count; i++) {
         if (g_arb_programs[i].guest == guest) {
-            if (g_arb_programs[i].source) {
-                free(g_arb_programs[i].source);
-            }
             g_arb_programs[i] = g_arb_programs[g_arb_program_count - 1u];
             g_arb_program_count--;
             return;
@@ -1426,21 +1426,10 @@ static void v86gl_forget_arb_program(GLuint guest) {
     }
 }
 
-static V86GLArbProgramMap* v86gl_bound_arb_program(GLenum target) {
-    GLuint host;
-
-    if (target == GL_VERTEX_PROGRAM_ARB) {
-        host = g_current_vertex_arb_program;
-    } else if (target == GL_FRAGMENT_PROGRAM_ARB) {
-        host = g_current_fragment_arb_program;
-    } else {
-        return NULL;
-    }
-    return v86gl_arb_program_map_host(host);
-}
-
 static void v86gl_map_location(V86GLLocationMap* maps, uint32_t* count,
-                               uint32_t capacity, GLint guest, GLint host) {
+                               uint32_t capacity, GLuint guest_program,
+                               GLint guest, GLint host, GLenum type,
+                               GLint value_count) {
     uint32_t i;
 
     if (guest < 0) {
@@ -1448,32 +1437,45 @@ static void v86gl_map_location(V86GLLocationMap* maps, uint32_t* count,
     }
 
     for (i = 0; i < *count; i++) {
-        if (maps[i].guest == guest) {
+        if (maps[i].guest_program == guest_program && maps[i].guest == guest) {
             maps[i].host = host;
+            maps[i].type = type;
+            maps[i].value_count = value_count;
             return;
         }
     }
 
     if (*count < capacity) {
+        maps[*count].guest_program = guest_program;
         maps[*count].guest = guest;
         maps[*count].host = host;
+        maps[*count].type = type;
+        maps[*count].value_count = value_count;
         (*count)++;
     }
 }
 
-static GLint v86gl_host_uniform_location(GLint guest) {
+static V86GLLocationMap* v86gl_uniform_location_map(GLuint guest_program,
+                                                     GLint guest) {
     uint32_t i;
 
     if (guest < 0) {
-        return -1;
+        return NULL;
     }
 
     for (i = 0; i < g_uniform_location_count; i++) {
-        if (g_uniform_locations[i].guest == guest) {
-            return g_uniform_locations[i].host;
+        if (g_uniform_locations[i].guest_program == guest_program &&
+            g_uniform_locations[i].guest == guest) {
+            return &g_uniform_locations[i];
         }
     }
-    return -1;
+    return NULL;
+}
+
+static GLint v86gl_host_uniform_location(GLint guest) {
+    V86GLLocationMap* map =
+        v86gl_uniform_location_map(g_current_guest_program, guest);
+    return map ? map->host : -1;
 }
 
 static GLint v86gl_host_attrib_index(GLint guest) {
@@ -1490,6 +1492,28 @@ static GLint v86gl_host_attrib_index(GLint guest) {
     }
 
     return guest < V86GL_MAX_VERTEX_ATTRIBS ? guest : -1;
+}
+
+static void v86gl_forget_program_locations(GLuint guest_program) {
+    uint32_t i = 0;
+
+    while (i < g_uniform_location_count) {
+        if (g_uniform_locations[i].guest_program == guest_program) {
+            g_uniform_locations[i] =
+                g_uniform_locations[--g_uniform_location_count];
+        } else {
+            i++;
+        }
+    }
+    i = 0;
+    while (i < g_attrib_location_count) {
+        if (g_attrib_locations[i].guest_program == guest_program) {
+            g_attrib_locations[i] =
+                g_attrib_locations[--g_attrib_location_count];
+        } else {
+            i++;
+        }
+    }
 }
 
 static char* v86gl_copy_name(GLsizei length, const char* name) {
@@ -1512,13 +1536,8 @@ static char* v86gl_copy_name(GLsizei length, const char* name) {
 }
 
 static void v86gl_reset_gl2_maps(void) {
-    uint32_t i;
-
-    for (i = 0; i < g_arb_program_count; i++) {
-        free(g_arb_programs[i].source);
-        g_arb_programs[i].source = NULL;
-    }
     g_program_count = 0;
+    g_current_guest_program = 0;
     g_arb_program_count = 0;
     g_current_vertex_arb_program = 0;
     g_current_fragment_arb_program = 0;
@@ -2426,6 +2445,26 @@ void v86gl_glCopyTexSubImage2D(GLenum target, GLint level,
 }
 
 EMSCRIPTEN_KEEPALIVE
+void v86gl_glCopyTexSubImage3D(GLenum target, GLint level,
+                               GLint xoffset, GLint yoffset, GLint zoffset,
+                               GLint x, GLint y,
+                               GLsizei width, GLsizei height) {
+    if (!v86gl_ensure_ready()) return;
+#ifdef __EMSCRIPTEN__
+    /* gl4es implements this entry point as a 2D stub. Flush its pending draw
+     * state, restore the real WebGL2 volume binding, then issue the native 3D
+     * copy so zoffset is preserved. */
+    glFlush();
+    if (!v86gl_prepare_bound_volume_texture()) return;
+    emscripten_glCopyTexSubImage3D(target, level, xoffset, yoffset, zoffset,
+                                   x, y, width, height);
+#else
+    glCopyTexSubImage3D(target, level, xoffset, yoffset, zoffset,
+                        x, y, width, height);
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
 void v86gl_glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                                GLint x, GLint y, GLsizei width) {
     if (!v86gl_ensure_ready()) return;
@@ -3104,34 +3143,9 @@ void v86gl_glBindProgramARBMapped(GLenum target, GLuint guest_program) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glProgramStringARB(GLenum target, GLenum format, GLsizei length,
                               const GLvoid* string) {
-    V86GLArbProgramMap* map;
-    char* original = NULL;
-    char* sanitized = NULL;
-    size_t sanitized_length = 0;
-
     if (!v86gl_ensure_ready()) return;
     if (length < 0 || (length > 0 && !string)) return;
-    map = v86gl_bound_arb_program(target);
-    if (map) {
-        original = v86gl_copy_name(length, (const char*)string);
-        if (!original) return;
-    }
-    if (!v86gl_sanitize_arb_program((const char*)string, (size_t)length,
-                                    &sanitized, &sanitized_length) ||
-        sanitized_length > INT32_MAX) {
-        free(original);
-        free(sanitized);
-        return;
-    }
-
-    gl4es_glProgramStringARB(target, format, (GLsizei)sanitized_length,
-                             sanitized);
-    free(sanitized);
-    if (map) {
-        free(map->source);
-        map->source = original;
-        map->source_length = length;
-    }
+    gl4es_glProgramStringARB(target, format, length, string);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -3171,14 +3185,7 @@ void v86gl_glProgramParameterdvARB(uint32_t parameter_kind, GLenum target,
 
 EMSCRIPTEN_KEEPALIVE
 int v86gl_glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
-    V86GLArbProgramMap* map;
-
     if (!v86gl_ensure_ready() || !params) return 0;
-    map = v86gl_bound_arb_program(target);
-    if (pname == GL_PROGRAM_LENGTH_ARB && map && map->source) {
-        *params = map->source_length < INT32_MAX ? map->source_length + 1 : INT32_MAX;
-        return 1;
-    }
     gl4es_glGetProgramivARB(target, pname, params);
     return 1;
 }
@@ -3218,29 +3225,9 @@ int v86gl_glGetProgramParameterdvARB(uint32_t parameter_kind, GLenum target,
 EMSCRIPTEN_KEEPALIVE
 int v86gl_glGetProgramStringARB(GLenum target, GLenum pname, GLsizei bufSize,
                                 GLsizei* length, GLvoid* string) {
-    V86GLArbProgramMap* map;
     GLint program_length = 0;
 
     if (!v86gl_ensure_ready() || bufSize < 0) return 0;
-    map = v86gl_bound_arb_program(target);
-    if (pname == GL_PROGRAM_STRING_ARB && map && map->source) {
-        GLsizei copy_length = 0;
-
-        program_length = map->source_length < INT32_MAX ?
-            map->source_length + 1 : INT32_MAX;
-        if (length) {
-            *length = program_length;
-        }
-        if (bufSize > 0 && string) {
-            copy_length = map->source_length < bufSize - 1 ?
-                map->source_length : bufSize - 1;
-            if (copy_length > 0) {
-                memcpy(string, map->source, (size_t)copy_length);
-            }
-            ((char*)string)[copy_length] = '\0';
-        }
-        return 1;
-    }
     gl4es_glGetProgramivARB(target, GL_PROGRAM_LENGTH_ARB, &program_length);
     if (length) {
         *length = program_length;
@@ -3311,7 +3298,15 @@ void v86gl_glDeleteProgramMapped(GLuint guest_program) {
     host_program = v86gl_host_program(guest_program);
     if (host_program) {
         glDeleteProgram(host_program);
-        v86gl_forget_name(g_programs, &g_program_count, guest_program);
+        /* A current program is deleted only after another program is bound.
+         * Keep its name map until then; gl4es follows the same deferred object
+         * lifetime as desktop OpenGL. */
+        if (guest_program != g_current_guest_program) {
+            if (!glIsProgram(host_program)) {
+                v86gl_forget_program_locations(guest_program);
+                v86gl_forget_name(g_programs, &g_program_count, guest_program);
+            }
+        }
     }
 }
 
@@ -3323,7 +3318,9 @@ void v86gl_glDeleteShaderMapped(GLuint guest_shader) {
     host_shader = v86gl_host_shader(guest_shader);
     if (host_shader) {
         glDeleteShader(host_shader);
-        v86gl_forget_name(g_shaders, &g_shader_count, guest_shader);
+        if (!glIsShader(host_shader)) {
+            v86gl_forget_name(g_shaders, &g_shader_count, guest_shader);
+        }
     }
 }
 
@@ -3350,6 +3347,9 @@ void v86gl_glDetachShaderMapped(GLuint guest_program, GLuint guest_shader) {
     host_shader = v86gl_host_shader(guest_shader);
     if (host_program && host_shader) {
         glDetachShader(host_program, host_shader);
+        if (!glIsShader(host_shader)) {
+            v86gl_forget_name(g_shaders, &g_shader_count, guest_shader);
+        }
     }
 }
 
@@ -3384,18 +3384,39 @@ void v86gl_glCompileShaderMapped(GLuint guest_shader) {
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glLinkProgramMapped(GLuint guest_program) {
     GLuint host_program;
+    GLint linked = GL_FALSE;
 
     if (!v86gl_ensure_ready()) return;
     host_program = v86gl_host_program(guest_program);
     if (host_program) {
         glLinkProgram(host_program);
+        glGetProgramiv(host_program, GL_LINK_STATUS, &linked);
+        if (linked) {
+            /* Uniform and attribute locations are invalidated only by a
+             * successful link; a failed relink keeps the current executable. */
+            v86gl_forget_program_locations(guest_program);
+        }
     }
 }
 
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glUseProgramMapped(GLuint guest_program) {
+    GLuint previous_guest;
+    GLuint host_program;
+
     if (!v86gl_ensure_ready()) return;
-    glUseProgram(v86gl_host_program(guest_program));
+    host_program = v86gl_host_program(guest_program);
+    if (guest_program && !host_program) return;
+    previous_guest = g_current_guest_program;
+    glUseProgram(host_program);
+    g_current_guest_program = guest_program;
+    if (previous_guest && previous_guest != guest_program) {
+        GLuint previous_host = v86gl_host_program(previous_guest);
+        if (previous_host && !glIsProgram(previous_host)) {
+            v86gl_forget_program_locations(previous_guest);
+            v86gl_forget_name(g_programs, &g_program_count, previous_guest);
+        }
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -3503,6 +3524,187 @@ int v86gl_glQueryActiveMapped(uint32_t active_kind, GLuint guest_program,
     return 0;
 }
 
+static int v86gl_uniform_name_matches(const char* active_name,
+                                      const char* requested_name) {
+    const char* a = active_name;
+    const char* r = requested_name;
+
+    if (!a || !r) return 0;
+    while (*a && *r) {
+        if (*a == '[' && *r == '[') {
+            a++;
+            r++;
+            if (*a < '0' || *a > '9' || *r < '0' || *r > '9') return 0;
+            while (*a >= '0' && *a <= '9') a++;
+            while (*r >= '0' && *r <= '9') r++;
+            if (*a != ']' || *r != ']') return 0;
+            a++;
+            r++;
+            continue;
+        }
+        if (*a++ != *r++) return 0;
+    }
+    if (!*a && !*r) return 1;
+    /* glGetUniformLocation accepts both "array" and "array[0]". */
+    return !*r && a[0] == '[' && a[1] == '0' && a[2] == ']' && !a[3];
+}
+
+static GLenum v86gl_uniform_type_for_name(GLuint host_program,
+                                           const char* requested_name) {
+    GLint active_count = 0;
+    GLint max_length = 0;
+    GLint i;
+    char* active_name;
+
+    glGetProgramiv(host_program, GL_ACTIVE_UNIFORMS, &active_count);
+    glGetProgramiv(host_program, GL_ACTIVE_UNIFORM_MAX_LENGTH, &max_length);
+    if (active_count <= 0 || max_length <= 0) return 0;
+    active_name = (char*)malloc((size_t)max_length);
+    if (!active_name) return 0;
+
+    for (i = 0; i < active_count; i++) {
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveUniform(host_program, (GLuint)i, max_length, &length,
+                           &size, &type, active_name);
+        active_name[max_length - 1] = '\0';
+        if (v86gl_uniform_name_matches(active_name, requested_name)) {
+            free(active_name);
+            return type;
+        }
+    }
+    free(active_name);
+    return 0;
+}
+
+static GLint v86gl_uniform_value_count(GLenum type) {
+    switch (type) {
+    case GL_FLOAT_VEC2:
+    case GL_INT_VEC2:
+    case GL_BOOL_VEC2:
+        return 2;
+    case GL_FLOAT_VEC3:
+    case GL_INT_VEC3:
+    case GL_BOOL_VEC3:
+        return 3;
+    case GL_FLOAT_VEC4:
+    case GL_INT_VEC4:
+    case GL_BOOL_VEC4:
+        return 4;
+    case GL_FLOAT_MAT2:
+        return 4;
+    case GL_FLOAT_MAT3:
+        return 9;
+    case GL_FLOAT_MAT4:
+        return 16;
+#ifdef GL_FLOAT_MAT2x3
+    case GL_FLOAT_MAT2x3:
+    case GL_FLOAT_MAT3x2:
+        return 6;
+    case GL_FLOAT_MAT2x4:
+    case GL_FLOAT_MAT4x2:
+        return 8;
+    case GL_FLOAT_MAT3x4:
+    case GL_FLOAT_MAT4x3:
+        return 12;
+#endif
+    default:
+        return 1;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryLocationMapped(uint32_t location_kind,
+                                GLuint guest_program,
+                                GLint guest_location,
+                                GLsizei name_length,
+                                const char* name,
+                                GLint* result,
+                                GLenum* value_type,
+                                GLint* value_count) {
+    GLuint host_program;
+    GLint host_location;
+    GLenum type = 0;
+    char* owned_name;
+
+    if (!v86gl_ensure_ready() || !result || !value_type || !value_count) return 0;
+    host_program = v86gl_host_program(guest_program);
+    owned_name = v86gl_copy_name(name_length, name);
+    if (!host_program || !owned_name) {
+        free(owned_name);
+        return 0;
+    }
+
+    if (location_kind == V86GL_LOCATION_KIND_UNIFORM) {
+        host_location = glGetUniformLocation(host_program, owned_name);
+        if (host_location >= 0) {
+            type = v86gl_uniform_type_for_name(host_program, owned_name);
+            *value_count = v86gl_uniform_value_count(type);
+            v86gl_map_location(g_uniform_locations, &g_uniform_location_count,
+                               V86GL_MAX_UNIFORM_LOCATIONS, guest_program,
+                               guest_location, host_location, type,
+                               *value_count);
+            *result = guest_location;
+        } else {
+            *result = -1;
+            *value_count = 0;
+        }
+    } else if (location_kind == V86GL_LOCATION_KIND_ATTRIB) {
+        host_location = glGetAttribLocation(host_program, owned_name);
+        *result = host_location;
+        *value_count = host_location >= 0 ? 1 : 0;
+        if (host_location >= 0) {
+            v86gl_map_location(g_attrib_locations, &g_attrib_location_count,
+                               V86GL_MAX_ATTRIB_LOCATIONS, guest_program,
+                               host_location, host_location, 0, 1);
+        }
+    } else {
+        free(owned_name);
+        return 0;
+    }
+
+    *value_type = type;
+    free(owned_name);
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryUniformMapped(GLuint guest_program, GLint guest_location,
+                               uint32_t value_kind, void* values,
+                               GLint* value_count) {
+    GLuint host_program;
+    V86GLLocationMap* map;
+
+    if (!v86gl_ensure_ready() || !values || !value_count) return 0;
+    host_program = v86gl_host_program(guest_program);
+    map = v86gl_uniform_location_map(guest_program, guest_location);
+    if (!host_program || !map || map->host < 0) return 0;
+
+    *value_count = map->value_count > 0 && map->value_count <= 16 ?
+        map->value_count : 1;
+    if (value_kind == 1u) {
+        glGetUniformfv(host_program, map->host, (GLfloat*)values);
+        return 1;
+    }
+    if (value_kind == 2u) {
+        glGetUniformiv(host_program, map->host, (GLint*)values);
+        return 1;
+    }
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+GLenum v86gl_glQueryError(void) {
+    if (!v86gl_ensure_ready()) return GL_INVALID_OPERATION;
+    return glGetError();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void v86gl_glInvalidateProgramLocations(GLuint guest_program) {
+    v86gl_forget_program_locations(guest_program);
+}
+
 EMSCRIPTEN_KEEPALIVE
 void v86gl_glBindAttribLocationMapped(GLuint guest_program, GLuint index,
                                       GLsizei name_length, const char* name) {
@@ -3532,7 +3734,8 @@ void v86gl_glMapUniformLocation(GLuint guest_program, GLint guest_location,
         host_location = glGetUniformLocation(host_program, owned_name);
     }
     v86gl_map_location(g_uniform_locations, &g_uniform_location_count,
-                       V86GL_MAX_UNIFORM_LOCATIONS, guest_location, host_location);
+                       V86GL_MAX_UNIFORM_LOCATIONS, guest_program,
+                       guest_location, host_location, 0, 1);
     free(owned_name);
 }
 
@@ -3550,7 +3753,8 @@ void v86gl_glMapAttribLocation(GLuint guest_program, GLint guest_index,
         host_index = glGetAttribLocation(host_program, owned_name);
     }
     v86gl_map_location(g_attrib_locations, &g_attrib_location_count,
-                       V86GL_MAX_ATTRIB_LOCATIONS, guest_index, host_index);
+                       V86GL_MAX_ATTRIB_LOCATIONS, guest_program,
+                       guest_index, host_index, 0, 1);
     free(owned_name);
 }
 
@@ -3690,6 +3894,22 @@ void v86gl_glFramebufferTextureMapped(GLenum target, GLenum attachment,
 
     if (!v86gl_ensure_ready()) return;
     host_texture = v86gl_host_texture(guest_texture, 0);
+#ifdef __EMSCRIPTEN__
+    /* The renderer owns a WebGL2 context. Attach mapped host names directly:
+     * gl4es' legacy FBO wrapper rejects valid WebGL renderbuffer/attachment
+     * enums on this path before they reach the driver. Proxy-side state owns
+     * desktop attachment reflection, so no gl4es attachment cache is needed. */
+    if (textarget == GL_TEXTURE_3D) {
+        emscripten_glFramebufferTextureLayer(target, attachment, host_texture,
+                                             level, zoffset);
+    } else {
+        GLenum host_target = textarget;
+        if (host_target == GL_TEXTURE_1D || host_target == GL_TEXTURE_RECTANGLE)
+            host_target = GL_TEXTURE_2D;
+        emscripten_glFramebufferTexture2D(target, attachment, host_target,
+                                          host_texture, level);
+    }
+#else
     if (textarget == GL_TEXTURE_1D) {
         glFramebufferTexture1D(target, attachment, textarget, host_texture, level);
     } else if (textarget == GL_TEXTURE_3D) {
@@ -3697,6 +3917,7 @@ void v86gl_glFramebufferTextureMapped(GLenum target, GLenum attachment,
     } else {
         glFramebufferTexture2D(target, attachment, textarget, host_texture, level);
     }
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -3704,8 +3925,14 @@ void v86gl_glFramebufferRenderbufferMapped(GLenum target, GLenum attachment,
                                            GLenum renderbuffertarget,
                                            GLuint guest_renderbuffer) {
     if (!v86gl_ensure_ready()) return;
+#ifdef __EMSCRIPTEN__
+    emscripten_glFramebufferRenderbuffer(
+        target, attachment, renderbuffertarget,
+        v86gl_host_renderbuffer(guest_renderbuffer));
+#else
     glFramebufferRenderbuffer(target, attachment, renderbuffertarget,
                               v86gl_host_renderbuffer(guest_renderbuffer));
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -3747,7 +3974,50 @@ EMSCRIPTEN_KEEPALIVE
 void v86gl_glRenderbufferStorageMapped(GLenum target, GLenum internalformat,
                                        GLsizei width, GLsizei height) {
     if (!v86gl_ensure_ready()) return;
+#ifdef __EMSCRIPTEN__
+    /* WebGL2 supports sized renderbuffer formats. Normalize desktop legacy
+     * formats which have no WebGL renderbuffer equivalent while preserving
+     * their color/depth/stencil class. Guest reflection remains proxy-owned. */
+    switch (internalformat) {
+    case 0x1907: /* GL_RGB */
+    case 0x2A10: /* GL_R3_G3_B2 */
+    case 0x804F: /* GL_RGB4 */
+    case 0x8050: /* GL_RGB5 */
+        internalformat = 0x8D62; /* GL_RGB565 */
+        break;
+    case 0x8052: /* GL_RGB10 */
+        internalformat = 0x8059; /* GL_RGB10_A2 */
+        break;
+    case 0x8053: /* GL_RGB12 */
+    case 0x8054: /* GL_RGB16 */
+    case 0x805A: /* GL_RGBA12 */
+    case 0x805B: /* GL_RGBA16 */
+        internalformat = 0x8058; /* GL_RGBA8 */
+        break;
+    case 0x1908: /* GL_RGBA */
+        internalformat = 0x8058; /* GL_RGBA8 */
+        break;
+    case 0x8055: /* GL_RGBA2 */
+        internalformat = 0x8056; /* GL_RGBA4 */
+        break;
+    case 0x8C40: /* GL_SRGB */
+    case 0x8C41: /* GL_SRGB8 */
+        internalformat = 0x8C43; /* GL_SRGB8_ALPHA8 */
+        break;
+    case 0x1902: /* GL_DEPTH_COMPONENT */
+    case 0x81A7: /* GL_DEPTH_COMPONENT32 */
+        internalformat = 0x81A5; /* GL_DEPTH_COMPONENT16 */
+        break;
+    case 0x8D46: /* GL_STENCIL_INDEX1 */
+    case 0x8D47: /* GL_STENCIL_INDEX4 */
+    case 0x8D49: /* GL_STENCIL_INDEX16 */
+        internalformat = 0x8D48; /* GL_STENCIL_INDEX8 */
+        break;
+    }
+    emscripten_glRenderbufferStorage(target, internalformat, width, height);
+#else
     glRenderbufferStorage(target, internalformat, width, height);
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE

@@ -1,0 +1,270 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OpenGL 2 program browser test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=gl2-program-lifecycle-20260716"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_VERTEX_SHADER = 0x8B31;
+    const GL_FRAGMENT_SHADER = 0x8B30;
+    const GL_COMPILE_STATUS = 0x8B81;
+    const GL_LINK_STATUS = 0x8B82;
+    const GL_DELETE_STATUS = 0x8B80;
+    const GL_ACTIVE_UNIFORMS = 0x8B86;
+    const GL_ACTIVE_ATTRIBUTES = 0x8B89;
+    const GL_FLOAT = 0x1406;
+    const GL_FLOAT_VEC4 = 0x8B52;
+    const GL_COLOR_BUFFER_BIT = 0x4000;
+    const GL_TRIANGLES = 0x0004;
+    const GL_RGBA = 0x1908;
+    const GL_UNSIGNED_BYTE = 0x1401;
+    const GL_TEXTURE0 = 0x84C0;
+    const OBJECT_SHADER = 1;
+    const OBJECT_PROGRAM = 2;
+    const ACTIVE_UNIFORM = 1;
+    const ACTIVE_ATTRIB = 2;
+    const LOCATION_UNIFORM = 1;
+    const LOCATION_ATTRIB = 2;
+    const GL_VERSION = 0x1F02;
+    const GL_SHADING_LANGUAGE_VERSION = 0x8B8C;
+    const GL_MAX_VERTEX_ATTRIBS = 0x8869;
+    const GL_MAX_VERTEX_UNIFORM_COMPONENTS = 0x8B4A;
+    const GL_MAX_FRAGMENT_UNIFORM_COMPONENTS = 0x8B49;
+    const GL_MAX_VARYING_FLOATS = 0x8B4B;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const module = await createV86GL4ES({
+        canvas: document.getElementById("v86gl_canvas"),
+        locateFile(path) {
+            return `../libglwasm/${path}?v=gl2-program-lifecycle-20260716`;
+        },
+    });
+    const dv = () => new DataView(module.HEAPU8.buffer);
+
+    function allocBytes(text) {
+        const bytes = encoder.encode(text);
+        const ptr = module._malloc(Math.max(bytes.length, 1));
+        module.HEAPU8.set(bytes, ptr);
+        return {ptr, length: bytes.length};
+    }
+
+    function queryObject(kind, name, pname) {
+        const ptr = module._malloc(4);
+        dv().setInt32(ptr, -777, true);
+        const ok = module._v86gl_glQueryObjectivMapped(kind, name, pname, ptr);
+        return {ok, value: dv().getInt32(ptr, true)};
+    }
+
+    function queryInteger(pname) {
+        const ptr = module._malloc(4);
+        if (!module._v86gl_glQueryInteger(pname, ptr)) {
+            throw new Error(`integer query 0x${pname.toString(16)} failed`);
+        }
+        return dv().getInt32(ptr, true);
+    }
+
+    function queryString(pname) {
+        const lengthPtr = module._malloc(4);
+        const stringPtr = module._malloc(128);
+        if (!module._v86gl_glQueryString(pname, 128, lengthPtr, stringPtr)) {
+            throw new Error(`string query 0x${pname.toString(16)} failed`);
+        }
+        const length = dv().getInt32(lengthPtr, true);
+        return decoder.decode(module.HEAPU8.subarray(stringPtr, stringPtr + length));
+    }
+
+    function shaderSource(shader, source) {
+        const encoded = allocBytes(source);
+        module._v86gl_glShaderSourceMapped(shader, encoded.length, encoded.ptr);
+        module._v86gl_glCompileShaderMapped(shader);
+        const status = queryObject(OBJECT_SHADER, shader, GL_COMPILE_STATUS);
+        if (!status.ok || !status.value) {
+            throw new Error(`shader ${shader} did not compile`);
+        }
+    }
+
+    function queryLocation(kind, program, guestLocation, name) {
+        const encoded = allocBytes(name);
+        const resultPtr = module._malloc(4);
+        const typePtr = module._malloc(4);
+        const countPtr = module._malloc(4);
+        const ok = module._v86gl_glQueryLocationMapped(
+            kind, program, guestLocation, encoded.length, encoded.ptr,
+            resultPtr, typePtr, countPtr);
+        return {
+            ok,
+            result: dv().getInt32(resultPtr, true),
+            type: dv().getUint32(typePtr, true),
+            count: dv().getInt32(countPtr, true),
+        };
+    }
+
+    function activeNames(kind, program, pname) {
+        const countResult = queryObject(OBJECT_PROGRAM, program, pname);
+        if (!countResult.ok) throw new Error("active object count query failed");
+        const names = [];
+        for (let i = 0; i < countResult.value; i++) {
+            const lengthPtr = module._malloc(4);
+            const sizePtr = module._malloc(4);
+            const typePtr = module._malloc(4);
+            const namePtr = module._malloc(128);
+            const ok = module._v86gl_glQueryActiveMapped(
+                kind, program, i, 128, lengthPtr, sizePtr, typePtr, namePtr);
+            if (!ok) throw new Error(`active object ${i} query failed`);
+            const length = dv().getInt32(lengthPtr, true);
+            names.push(decoder.decode(module.HEAPU8.subarray(namePtr, namePtr + length)));
+        }
+        return names;
+    }
+
+    function setTint(location, rgba) {
+        const ptr = module._malloc(16);
+        new Float32Array(module.HEAPU8.buffer, ptr, 4).set(rgba);
+        module._v86gl_glUniformfvMapped(location, 4, 1, ptr);
+    }
+
+    function drawAndRead(expectedChannel) {
+        module._v86gl_glClearColor(0, 0, 0, 1);
+        module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+        module._v86gl_glDrawArraysPackedGL2(
+            GL_TRIANGLES, 3, 0, GL_TEXTURE0, 0, 0,
+            conventionalMetaPtr, 1, genericMetaPtr);
+        module._v86gl_glFinish();
+        const pixelPtr = module._malloc(4);
+        if (!module._v86gl_glReadPixels(32, 32, 1, 1,
+                GL_RGBA, GL_UNSIGNED_BYTE, pixelPtr)) {
+            throw new Error("pixel readback failed");
+        }
+        const pixel = Array.from(module.HEAPU8.subarray(pixelPtr, pixelPtr + 4));
+        if (pixel[expectedChannel] < 150) {
+            throw new Error(`unexpected pixel ${pixel.join(",")}`);
+        }
+        return pixel;
+    }
+
+    module._v86glMakeCurrent(1, 0, 0, 64, 64);
+    module._v86gl_glViewport(0, 0, 64, 64);
+    const backendVersion = queryString(GL_VERSION);
+    const backendGLSLVersion = queryString(GL_SHADING_LANGUAGE_VERSION);
+    if (!backendVersion.startsWith("2.1") || !backendGLSLVersion.startsWith("1.20")) {
+        throw new Error(`version mismatch: ${backendVersion} / ${backendGLSLVersion}`);
+    }
+    const limits = [
+        queryInteger(GL_MAX_VERTEX_ATTRIBS),
+        queryInteger(GL_MAX_VERTEX_UNIFORM_COMPONENTS),
+        queryInteger(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS),
+        queryInteger(GL_MAX_VARYING_FLOATS),
+    ];
+    if (limits[0] < 8 || limits[1] < 512 || limits[2] < 64 || limits[3] < 32) {
+        throw new Error(`insufficient GLSL limits: ${limits}`);
+    }
+
+    const vertexShader = 11;
+    const fragmentShader = 12;
+    const program = 21;
+    module._v86gl_glCreateShaderMapped(vertexShader, GL_VERTEX_SHADER);
+    module._v86gl_glCreateShaderMapped(fragmentShader, GL_FRAGMENT_SHADER);
+    module._v86gl_glCreateProgramMapped(program);
+    shaderSource(vertexShader,
+        "#version 120\nattribute vec2 position;\n" +
+        "void main() { gl_Position = vec4(position, 0.0, 1.0); }\n");
+    shaderSource(fragmentShader,
+        "#version 120\nuniform vec4 tint;\n" +
+        "void main() { gl_FragColor = tint; }\n");
+    module._v86gl_glAttachShaderMapped(program, vertexShader);
+    module._v86gl_glAttachShaderMapped(program, fragmentShader);
+    const positionName = allocBytes("position");
+    module._v86gl_glBindAttribLocationMapped(
+        program, 3, positionName.length, positionName.ptr);
+    module._v86gl_glLinkProgramMapped(program);
+    const linked = queryObject(OBJECT_PROGRAM, program, GL_LINK_STATUS);
+    if (!linked.ok || !linked.value) throw new Error("program did not link");
+
+    const uniforms = activeNames(ACTIVE_UNIFORM, program, GL_ACTIVE_UNIFORMS);
+    const attributes = activeNames(ACTIVE_ATTRIB, program, GL_ACTIVE_ATTRIBUTES);
+    if (!uniforms.includes("tint") || !attributes.includes("position")) {
+        throw new Error(`reflection mismatch: ${uniforms} / ${attributes}`);
+    }
+
+    const attrib = queryLocation(LOCATION_ATTRIB, program, -1, "position");
+    const tint = queryLocation(LOCATION_UNIFORM, program, 101, "tint");
+    if (!attrib.ok || attrib.result !== 3 || !tint.ok || tint.result !== 101 ||
+            tint.type !== GL_FLOAT_VEC4 || tint.count !== 4) {
+        throw new Error(`location mapping mismatch: ${JSON.stringify({attrib, tint})}`);
+    }
+
+    const vertices = new Float32Array([-1, -1, 1, -1, 0, 1]);
+    const vertexPtr = module._malloc(vertices.byteLength);
+    new Float32Array(module.HEAPU8.buffer, vertexPtr, vertices.length).set(vertices);
+    const conventionalMetaPtr = module._malloc(12 * 4);
+    new Int32Array(module.HEAPU8.buffer, conventionalMetaPtr, 12).fill(0);
+    const genericMetaPtr = module._malloc(7 * 4);
+    new Int32Array(module.HEAPU8.buffer, genericMetaPtr, 7).set([
+        3, 0, 1, 2, GL_FLOAT, 0, vertexPtr,
+    ]);
+
+    module._v86gl_glUseProgramMapped(program);
+    setTint(101, [0.1, 0.8, 0.2, 1]);
+    const greenPixel = drawAndRead(1);
+    const uniformPtr = module._malloc(16);
+    const uniformCountPtr = module._malloc(4);
+    if (!module._v86gl_glQueryUniformMapped(
+            program, 101, 1, uniformPtr, uniformCountPtr)) {
+        throw new Error("uniform readback failed");
+    }
+    const tintValues = Array.from(new Float32Array(module.HEAPU8.buffer, uniformPtr, 4));
+    if (Math.abs(tintValues[1] - 0.8) > 0.01 ||
+            dv().getInt32(uniformCountPtr, true) !== 4) {
+        throw new Error(`uniform value mismatch: ${tintValues}`);
+    }
+
+    module._v86gl_glLinkProgramMapped(program);
+    if (module._v86gl_glQueryUniformMapped(
+            program, 101, 1, uniformPtr, uniformCountPtr)) {
+        throw new Error("successful relink preserved a stale uniform location");
+    }
+    const relinkedTint = queryLocation(LOCATION_UNIFORM, program, 102, "tint");
+    if (!relinkedTint.ok || relinkedTint.result !== 102) {
+        throw new Error("uniform remap after relink failed");
+    }
+    setTint(102, [0.8, 0.1, 0.1, 1]);
+    const redPixel = drawAndRead(0);
+
+    module._v86gl_glDeleteShaderMapped(vertexShader);
+    module._v86gl_glDeleteShaderMapped(fragmentShader);
+    if (queryObject(OBJECT_SHADER, vertexShader, GL_DELETE_STATUS).value !== 1 ||
+            queryObject(OBJECT_SHADER, fragmentShader, GL_DELETE_STATUS).value !== 1) {
+        throw new Error("attached shader was not marked for deletion");
+    }
+    module._v86gl_glDetachShaderMapped(program, vertexShader);
+    module._v86gl_glDetachShaderMapped(program, fragmentShader);
+    if (queryObject(OBJECT_SHADER, vertexShader, GL_DELETE_STATUS).ok ||
+            queryObject(OBJECT_SHADER, fragmentShader, GL_DELETE_STATUS).ok) {
+        throw new Error("detached deleted shader stayed alive");
+    }
+
+    module._v86gl_glDeleteProgramMapped(program);
+    const deleteStatus = queryObject(OBJECT_PROGRAM, program, GL_DELETE_STATUS);
+    if (!deleteStatus.ok || deleteStatus.value !== 1) {
+        throw new Error("current program was not deferred after deletion");
+    }
+    setTint(102, [0.1, 0.2, 0.9, 1]);
+    const bluePixel = drawAndRead(2);
+    module._v86gl_glUseProgramMapped(0);
+    if (queryObject(OBJECT_PROGRAM, program, GL_DELETE_STATUS).ok) {
+        throw new Error("deleted program survived after it stopped being current");
+    }
+
+    document.title = "OpenGL 2 program browser test: PASS";
+    document.getElementById("result").textContent =
+        `PASS ${backendVersion} GLSL=${backendGLSLVersion} limits=${limits.join(",")} ` +
+        `green=${greenPixel.join(",")} red=${redPixel.join(",")} blue=${bluePixel.join(",")}`;
+})().catch(error => {
+    document.title = "OpenGL 2 program browser test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

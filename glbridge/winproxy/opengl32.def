@@ -97,6 +97,8 @@ EXPORTS
     glTexImage3D@40
     glTexSubImage3DEXT@44
     glTexSubImage3D@44
+    glCopyTexSubImage3DEXT@36
+    glCopyTexSubImage3D@36
     glCompressedTexImage2DARB@32
     glCompressedTexImage2D@32
     glCompressedTexImage1DARB@28
