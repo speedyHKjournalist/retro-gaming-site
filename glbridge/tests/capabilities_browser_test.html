@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OpenGL dynamic capability test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=dynamic-caps-20260716"></script>
+<script src="../v86_network_bridge.js?v=dynamic-caps-20260716"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GLFN_QUERY_INTEGER = 193;
+    const V86GL_QUERY_HOST_CAPABILITIES = 0x76380001;
+    const V86GL_HOST_CAP_WEBGL2 = 0x1;
+    const V86GL_HOST_CAP_COLOR_BUFFER_FLOAT = 0x2;
+    const V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR = 0x4;
+    const V86GL_HOST_CAP_ANISOTROPY = 0x8;
+    const GL_MAX_TEXTURE_SIZE = 0x0D33;
+    const GL_MAX_DRAW_BUFFERS = 0x8824;
+    const GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS = 0x8B4D;
+
+    const canvas = document.getElementById("v86gl_canvas");
+    const module = await createV86GL4ES({
+        canvas,
+        locateFile(path) {
+            return `../libglwasm/${path}?v=dynamic-caps-20260716`;
+        },
+    });
+    const bridge = installV86GLNetworkBridge(
+        { add_listener() {} }, canvas, { gl4es: module });
+
+    function query(pname) {
+        const payload = new Uint8Array(16);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, pname, true);
+        bridge.renderer.glCall(GLFN_QUERY_INTEGER, payload);
+        if (view.getUint32(4, true) !== 1) {
+            throw new Error(`query 0x${pname.toString(16)} failed`);
+        }
+        return view.getInt32(8, true);
+    }
+
+    const bits = query(V86GL_QUERY_HOST_CAPABILITIES);
+    if (!(bits & V86GL_HOST_CAP_WEBGL2)) {
+        throw new Error(`WebGL2 capability missing: 0x${bits.toString(16)}`);
+    }
+    const gl = canvas.getContext("webgl2");
+    const expectedOptional =
+        (gl.getExtension("EXT_color_buffer_float") ?
+            V86GL_HOST_CAP_COLOR_BUFFER_FLOAT : 0) |
+        (gl.getExtension("OES_texture_float_linear") ?
+            V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR : 0) |
+        (gl.getExtension("EXT_texture_filter_anisotropic") ?
+            V86GL_HOST_CAP_ANISOTROPY : 0);
+    if ((bits & ~V86GL_HOST_CAP_WEBGL2) !== expectedOptional) {
+        throw new Error(`optional capability mismatch: got 0x${bits.toString(16)}, expected 0x${(expectedOptional | 1).toString(16)}`);
+    }
+
+    const maxTexture = query(GL_MAX_TEXTURE_SIZE);
+    if (maxTexture !== gl.getParameter(gl.MAX_TEXTURE_SIZE)) {
+        throw new Error(`texture limit mismatch: ${maxTexture}`);
+    }
+    const maxCombined = query(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+    if (maxCombined !== Math.min(8, gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS))) {
+        throw new Error(`combined texture limit was not clamped: ${maxCombined}`);
+    }
+    const maxDrawBuffers = query(GL_MAX_DRAW_BUFFERS);
+    if (maxDrawBuffers !== Math.min(4, gl.getParameter(gl.MAX_DRAW_BUFFERS))) {
+        throw new Error(`draw-buffer limit was not clamped: ${maxDrawBuffers}`);
+    }
+
+    document.title = "OpenGL dynamic capability test: PASS";
+    document.getElementById("result").textContent =
+        `PASS bits=0x${bits.toString(16)} texture=${maxTexture} combined=${maxCombined} drawBuffers=${maxDrawBuffers}`;
+})().catch(error => {
+    console.error(error);
+    document.title = "OpenGL dynamic capability test: FAIL";
+    document.getElementById("result").textContent = `FAIL: ${error.stack || error}`;
+});
+</script>

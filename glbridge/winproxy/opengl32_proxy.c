@@ -827,6 +827,7 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
+#define V86GL_QUERY_VISIBLE_SAMPLES 0x7FFFFFFFu
 #define V86GL_ACTIVE_KIND_UNIFORM 1u
 #define V86GL_ACTIVE_KIND_ATTRIB 2u
 #define V86GL_LOCATION_KIND_UNIFORM 1u
@@ -1067,6 +1068,7 @@ enum {
     GLFN_QUERY_UNIFORM = 213,
     GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214,
     GLFN_COPY_TEX_SUB_IMAGE_3D = 215,
+    GLFN_QUERY_OBJECT_BATCH = 216,
 };
 
 static HANDLE g_v86gl = INVALID_HANDLE_VALUE;
@@ -1293,10 +1295,8 @@ static const char g_gl_extensions_base[] =
     "GL_EXT_blend_subtract "
     "GL_EXT_blend_minmax "
     "GL_ARB_texture_cube_map "
-    "GL_ARB_multisample "
     "GL_ARB_texture_env_dot3 "
     "GL_ARB_draw_buffers "
-    "GL_ARB_texture_border_clamp "
     "GL_ARB_transpose_matrix "
     "GL_NV_blend_square "
     "GL_ARB_shadow "
@@ -1438,6 +1438,8 @@ typedef struct {
     GLenum target;
     GLuint result;
     GLboolean available;
+    uint32_t poll_frame;
+    uint32_t poll_skip;
 } QueryObjectState;
 
 typedef struct {
@@ -2441,6 +2443,12 @@ static void delete_query_state(GLuint name) {
         g_current_samples_passed_query = 0;
     }
     ZeroMemory(state, sizeof(*state));
+}
+
+static void reset_query_object_state(void) {
+    ZeroMemory(g_query_objects, sizeof(g_query_objects));
+    g_current_samples_passed_query = 0;
+    g_next_query_id = 1;
 }
 
 static BOOL is_occlusion_query_target(GLenum target) {
@@ -3664,6 +3672,83 @@ static int emit_query_object_iv(uint32_t object_kind, GLuint name, GLenum pname,
     return 1;
 }
 
+/* Cube 2 keeps two pools containing up to 2048 occlusion queries and reads the
+ * previous pool at the start of a frame.  Sending one synchronous PCI request
+ * per object dominates the actual WebGL query work, so refresh every pending
+ * object in one request and cache the results in the guest proxy. */
+static int emit_query_object_batch(void) {
+    const uint32_t header_size = 16u;
+    const uint32_t entry_size = 12u;
+    uint32_t count = 0;
+    uint32_t args_size;
+    uint32_t i;
+    uint32_t entry_index = 0;
+    uint8_t* args;
+
+    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
+        QueryObjectState* state = &g_query_objects[i];
+        if (state->used && state->target && !state->active &&
+            !state->available && state->poll_frame != g_frame_id) {
+            count++;
+        }
+    }
+    if (!count) {
+        return 1;
+    }
+    if (count > (UINT32_MAX - header_size) / entry_size) {
+        return 0;
+    }
+    if (g_dma_size && !emit_pci_batch(FALSE)) {
+        return 0;
+    }
+
+    args_size = header_size + count * entry_size;
+    if (!reserve_pci_record(GLFN_QUERY_OBJECT_BATCH, NULL, args_size, &args)) {
+        return 0;
+    }
+    write_u32le(args, count);
+    write_u32le(args + 4, V86GL_OBJECT_KIND_QUERY);
+    write_u32le(args + 8, V86GL_SYNC_QUERY_STATUS_PENDING);
+    write_u32le(args + 12, 0);
+
+    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
+        QueryObjectState* state = &g_query_objects[i];
+        uint8_t* entry;
+        if (!state->used || !state->target || state->active ||
+            state->available || state->poll_frame == g_frame_id) {
+            continue;
+        }
+        entry = args + header_size + entry_index * entry_size;
+        write_u32le(entry, state->name);
+        write_u32le(entry + 4, GL_FALSE);
+        /* An unavailable WebGL query is conservatively visible if a blocking
+         * desktop GL result is requested before the GPU has completed it. */
+        write_u32le(entry + 8, V86GL_QUERY_VISIBLE_SAMPLES);
+        entry_index++;
+    }
+
+    if (!emit_pci_batch(FALSE) ||
+        read_u32le(args + 8) != V86GL_SYNC_QUERY_STATUS_OK) {
+        return 0;
+    }
+
+    for (i = 0; i < count; i++) {
+        const uint8_t* entry = args + header_size + i * entry_size;
+        QueryObjectState* state = find_query_state(read_u32le(entry), FALSE);
+        if (!state) {
+            continue;
+        }
+        state->poll_frame = g_frame_id;
+        state->poll_skip = 8;
+        if (read_u32le(entry + 4)) {
+            state->available = GL_TRUE;
+            state->result = read_u32le(entry + 8);
+            state->poll_skip = 0;
+        }
+    }
+    return 1;
+}
+
 static int emit_query_object_log(uint32_t object_kind, GLuint name, GLsizei bufSize,
                                  GLsizei* length, GLchar* infoLog) {
     struct {
@@ -4682,6 +4767,10 @@ static void restore_window_proc(void) {
 }
 
 static void emit_destroy_context_once(void) {
+    /* The browser bridge replaces both the canvas and the WebGL context.
+     * Optional extensions must be re-probed if this DLL later creates and
+     * binds another WGL context in the same process. */
+    g_gl_extensions_profile_valid = FALSE;
     if (g_context_destroy_sent) {
         return;
     }
@@ -6423,6 +6512,10 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
     if (!g_wgl_context_count) {
         restore_window_proc();
         emit_destroy_context_once();
+        /* The browser destroys every mapped WebGL query with the final
+         * renderer.  Do not let guest-side availability/polling cache entries
+         * survive into a later WGL context in the same process. */
+        reset_query_object_state();
     }
     SetLastError(ERROR_SUCCESS);
     return TRUE;
@@ -10492,6 +10585,8 @@ void APIENTRY glBeginQuery(GLenum target, GLuint id) {
     state->active = TRUE;
     state->available = GL_FALSE;
     state->result = 0;
+    state->poll_frame = 0;
+    state->poll_skip = 0;
     g_current_samples_passed_query = id;
 
     args[0] = (uint32_t)target;
@@ -10519,8 +10614,10 @@ void APIENTRY glEndQuery(GLenum target) {
     }
 
     state->active = FALSE;
-    state->available = GL_TRUE;
-    state->result = 1;
+    state->available = GL_FALSE;
+    state->result = 0;
+    state->poll_frame = 0;
+    state->poll_skip = 0;
     g_current_samples_passed_query = 0;
 
     arg = (uint32_t)target;
@@ -10541,7 +10638,10 @@ void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) {
         params[0] = (GLint)g_current_samples_passed_query;
         break;
     case GL_QUERY_COUNTER_BITS:
-        params[0] = 1;
+        /* WebGL2 exposes an any-samples boolean query.  The bridge maps a
+         * visible result to a saturated positive desktop-style sample count
+         * so GL 2.x engines can retain thresholds such as Cube's oqfrags=8. */
+        params[0] = 31;
         break;
     default:
         v86gl_set_error(GL_INVALID_ENUM);
@@ -10556,24 +10656,60 @@ static BOOL query_object_value(QueryObjectState* state, GLenum pname, GLuint* va
         return FALSE;
     }
 
-    if (emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, state->name,
-                             pname, &remote_value)) {
-        *value = (GLuint)remote_value;
-        if (pname == GL_QUERY_RESULT) {
-            state->result = (GLuint)remote_value;
-            state->available = GL_TRUE;
-        } else if (pname == GL_QUERY_RESULT_AVAILABLE) {
-            state->available = remote_value ? GL_TRUE : GL_FALSE;
+    if (pname != GL_QUERY_RESULT && pname != GL_QUERY_RESULT_AVAILABLE) {
+        return FALSE;
+    }
+
+    if (!state->available) {
+        BOOL should_poll = state->poll_frame != g_frame_id;
+
+        /* A legal busy-wait loop may ask AVAILABLE repeatedly without a swap.
+         * Reuse a negative answer briefly, then retry the host in batches.
+         * WebGL still needs the browser event loop to advance GPU work, so
+         * callers should prefer RESULT (handled conservatively below). */
+        if (!should_poll && pname == GL_QUERY_RESULT_AVAILABLE) {
+            if (state->poll_skip) {
+                state->poll_skip--;
+            } else {
+                state->poll_frame = 0;
+                should_poll = TRUE;
+            }
         }
-        return TRUE;
+
+        if (should_poll && !emit_query_object_batch()) {
+            /* Keep the original single-object path as a transport fallback. */
+            if (emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, state->name,
+                                     pname, &remote_value)) {
+                *value = (GLuint)remote_value;
+                if (pname == GL_QUERY_RESULT) {
+                    state->result = (GLuint)remote_value;
+                    state->available = GL_TRUE;
+                } else if (remote_value) {
+                    GLint result_value = (GLint)V86GL_QUERY_VISIBLE_SAMPLES;
+                    if (emit_query_object_iv(V86GL_OBJECT_KIND_QUERY,
+                                             state->name, GL_QUERY_RESULT,
+                                             &result_value)) {
+                        state->result = (GLuint)result_value;
+                        state->available = GL_TRUE;
+                    }
+                }
+                return TRUE;
+            }
+        }
     }
 
     if (pname == GL_QUERY_RESULT) {
+        if (!state->available) {
+            /* WebGL cannot synchronously wait for a GPU query. Desktop GL's
+             * blocking RESULT contract is emulated conservatively: treat the
+             * object as visible rather than incorrectly culling geometry. */
+            state->result = V86GL_QUERY_VISIBLE_SAMPLES;
+            state->available = GL_TRUE;
+            state->poll_skip = 0;
+        }
         *value = state->result;
-    } else if (pname == GL_QUERY_RESULT_AVAILABLE) {
-        *value = state->available ? GL_TRUE : GL_FALSE;
     } else {
-        return FALSE;
+        *value = state->available ? GL_TRUE : GL_FALSE;
     }
     return TRUE;
 }

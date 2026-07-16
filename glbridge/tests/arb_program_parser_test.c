@@ -91,9 +91,25 @@ static void test_fragment_state_and_indirections(void) {
     free(glsl);
 }
 
+static void test_fragment_volume_texture(void) {
+    static const char source[] =
+        "!!ARBfp1.0\n"
+        "TEX result.color, fragment.texcoord[0], texture[0], 3D;\n"
+        "END\n";
+    arb_program_stats_t stats;
+    char *glsl = convert(source, 0, &stats);
+    expect_contains("fragment volume sampler", glsl, "gl_Sampler3D_0");
+    expect_contains("fragment volume function", glsl, "texture3D(");
+    expect_contains("fragment volume coordinate", glsl, "gl_TexCoord[0].xyz");
+    expect_int("fragment volume instructions", stats.instructions, 1);
+    expect_int("fragment volume texture instructions", stats.tex_instructions, 1);
+    free(glsl);
+}
+
 int main(void) {
     test_vertex_state();
     test_fragment_state_and_indirections();
+    test_fragment_volume_texture();
     if (failures) {
         fprintf(stderr, "ARB parser tests: %d failure(s)\n", failures);
         return 1;

@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cube 2 real query batch test: running</title>
+<canvas id="v86gl_canvas" width="32" height="32"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=cube2-query-batch-20260716"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const QUERY_COUNT = 2048; // Cube 2 MAXQUERY per frame
+    const TOTAL_QUERY_COUNT = QUERY_COUNT * 2; // MAXQUERYFRAMES
+    const GL_SAMPLES_PASSED = 0x8914;
+    const GL_QUERY_RESULT_AVAILABLE = 0x8867;
+    const OBJECT_QUERY = 3;
+    const VISIBLE_SAMPLES = 0x7FFFFFFF;
+    const canvas = document.getElementById("v86gl_canvas");
+    const module = await createV86GL4ES({
+        canvas,
+        locateFile(path) {
+            return `../libglwasm/${path}?v=cube2-query-batch-20260716`;
+        },
+    });
+    module._v86glMakeCurrent(1, 0, 0, 32, 32);
+
+    const byteCount = TOTAL_QUERY_COUNT * 4;
+    const namesPtr = module._malloc(byteCount);
+    const availablePtr = module._malloc(QUERY_COUNT * 4);
+    const resultsPtr = module._malloc(QUERY_COUNT * 4);
+    const names = new Uint32Array(
+        module.HEAPU8.buffer, namesPtr, TOTAL_QUERY_COUNT);
+    for (let i = 0; i < TOTAL_QUERY_COUNT; i++) names[i] = i + 1;
+    module._v86gl_glGenQueriesMapped(TOTAL_QUERY_COUNT, namesPtr);
+
+    /* Materialize every WebGL query.  Merely generating one is not enough for
+     * isQuery() to become true under WebGL/OpenGL query object semantics. */
+    for (let i = 0; i < TOTAL_QUERY_COUNT; i++) {
+        module._v86gl_glBeginQueryMapped(GL_SAMPLES_PASSED, i + 1);
+        module._v86gl_glEndQueryMapped(GL_SAMPLES_PASSED);
+    }
+    const probePtr = module._malloc(4);
+    for (const guestName of [1, QUERY_COUNT + 1, TOTAL_QUERY_COUNT]) {
+        if (!module._v86gl_glQueryObjectivMapped(
+                OBJECT_QUERY, guestName, GL_QUERY_RESULT_AVAILABLE, probePtr)) {
+            throw new Error(`query ${guestName} was not materialized/mapped`);
+        }
+    }
+
+    /* Let the browser submit some GPU work, then measure the actual
+     * Emscripten/WebGL query-map loop (not a mocked JavaScript callback). */
+    await new Promise(resolve => requestAnimationFrame(
+        () => requestAnimationFrame(resolve)));
+    const started = performance.now();
+    const ok = module._v86gl_glQueryObjectsMapped(
+        QUERY_COUNT, namesPtr + QUERY_COUNT * 4, availablePtr, resultsPtr);
+    const elapsedMs = performance.now() - started;
+    if (!ok) throw new Error("real WebGL query batch failed");
+
+    const available = new Uint32Array(
+        module.HEAPU8.buffer, availablePtr, QUERY_COUNT);
+    const results = new Uint32Array(
+        module.HEAPU8.buffer, resultsPtr, QUERY_COUNT);
+    let readyCount = 0;
+    for (let i = 0; i < QUERY_COUNT; i++) {
+        if (available[i] > 1) {
+            throw new Error(`invalid availability at ${i}: ${available[i]}`);
+        }
+        if (results[i] !== 0 && results[i] !== VISIBLE_SAMPLES) {
+            throw new Error(`invalid saturated result at ${i}: ${results[i]}`);
+        }
+        readyCount += available[i];
+    }
+    /* This is only a generous manual/non-virtual timing guard.  Headless
+     * Chrome's virtual-time mode can report 0 ms for synchronous CPU work;
+     * the second-pool mapping probes above provide the automated regression
+     * coverage for the direct lookup path. */
+    if (elapsedMs > 5000) {
+        throw new Error(`2048-query host batch took ${elapsedMs.toFixed(1)}ms`);
+    }
+
+    module._free(probePtr);
+    module._v86gl_glDeleteQueriesMapped(TOTAL_QUERY_COUNT, namesPtr);
+    module._v86glDestroyRenderer();
+    document.title = "Cube 2 real query batch test: PASS";
+    document.getElementById("result").textContent =
+        `PASS ${QUERY_COUNT} real WebGL queries in ${elapsedMs.toFixed(1)}ms ` +
+        `(ready=${readyCount})`;
+})().catch(error => {
+    document.title = "Cube 2 real query batch test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

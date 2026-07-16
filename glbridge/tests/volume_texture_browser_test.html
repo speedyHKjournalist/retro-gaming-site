@@ -130,8 +130,29 @@
         throw new Error("readback failed");
     }
     const pixel = Array.from(module.HEAPU8.subarray(pixelPtr, pixelPtr + 4));
+
+    // Verify the converted upload independently, but only after every gl4es
+    // draw/readback. Raw WebGL FBO calls bypass gl4es's framebuffer cache and
+    // must not perturb the state used by the path under test.
+    const rawTexture = webgl.getParameter(webgl.TEXTURE_BINDING_3D);
+    const uploadFramebuffer = webgl.createFramebuffer();
+    webgl.bindFramebuffer(webgl.FRAMEBUFFER, uploadFramebuffer);
+    webgl.framebufferTextureLayer(webgl.FRAMEBUFFER,
+        webgl.COLOR_ATTACHMENT0, rawTexture, 0, 1);
+    if (webgl.checkFramebufferStatus(webgl.FRAMEBUFFER) !==
+            webgl.FRAMEBUFFER_COMPLETE) {
+        throw new Error("converted volume layer framebuffer incomplete");
+    }
+    const uploadedPixel = new Uint8Array(4);
+    webgl.readPixels(0, 0, 1, 1, webgl.RGBA, webgl.UNSIGNED_BYTE, uploadedPixel);
+    webgl.deleteFramebuffer(uploadFramebuffer);
+
     if (unsafeTuples.length) {
         throw new Error(`desktop volume tuple reached WebGL: ${JSON.stringify(unsafeTuples)}`);
+    }
+    if (uploadedPixel[0] > 20 || uploadedPixel[1] < 200 ||
+            uploadedPixel[2] > 20 || uploadedPixel[3] < 200) {
+        throw new Error(`converted volume upload failed ${Array.from(uploadedPixel)}`);
     }
     if (pixel[0] > 20 || pixel[1] < 200 || pixel[2] > 20 || pixel[3] < 200) {
         throw new Error(`unexpected volume pixel ${pixel.join(",")}`);
@@ -142,7 +163,8 @@
     module._v86glDestroyRenderer();
 
     document.title = "WebGL2 volume texture test: PASS";
-    document.getElementById("result").textContent = `PASS ${pixel.join(",")}`;
+    document.getElementById("result").textContent =
+        `PASS upload=${Array.from(uploadedPixel)} draw=${pixel.join(",")}`;
 })().catch(error => {
     document.title = "WebGL2 volume texture test: FAIL";
     document.getElementById("result").textContent = `FAIL ${error.stack || error}`;

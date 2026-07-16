@@ -8,7 +8,8 @@ const path = require("node:path");
  * Cube 2: Sauerbraten's Windows renderer resolves these 143 names through
  * SDL_GL_GetProcAddress.  This is a checked-in snapshot of the calls in the
  * official r6889 src/engine/rendergl.cpp (also present as literal strings in
- * bin/sauerbraten.exe):
+ * the official 32-bit bin/sauerbraten.exe, SHA-256
+ * d132e390b4bbd50469ba32117a3bebf22f165ae9ca5eb42eb24370e07570aa40):
  *
  * https://sourceforge.net/p/sauerbraten/code/HEAD/tree/src/engine/rendergl.cpp
  *

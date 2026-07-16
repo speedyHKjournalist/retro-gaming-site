@@ -13,6 +13,7 @@ const GLFN_QUERY_LOCATION = 212;
 const GLFN_QUERY_UNIFORM = 213;
 const GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214;
 const GLFN_COPY_TEX_SUB_IMAGE_3D = 215;
+const GLFN_QUERY_OBJECT_BATCH = 216;
 const GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;
 const GL_TEXTURE_3D = 0x806F;
 const GL_COMPRESSED_RGBA_S3TC_DXT5_EXT = 0x83F3;
@@ -95,6 +96,19 @@ function makeModule() {
             calls.push(["queryUniform"]);
             return 1;
         },
+        _v86gl_glQueryObjectsMapped(count, namesPtr, availablePtr, resultsPtr) {
+            const view = new DataView(this.HEAPU8.buffer);
+            const names = [];
+            for (let i = 0; i < count; i++) {
+                const name = view.getUint32(namesPtr + i * 4, true);
+                names.push(name);
+                view.setUint32(availablePtr + i * 4, i === 1 ? 0 : 1, true);
+                view.setUint32(resultsPtr + i * 4,
+                    i === 0 ? 0 : 0x7FFFFFFF, true);
+            }
+            calls.push(["queryBatch", names]);
+            return 1;
+        },
         _v86gl_glInvalidateProgramLocations(program) {
             calls.push(["invalidateLocations", program]);
         },
@@ -165,6 +179,16 @@ function copyVolumePayload() {
     return payload;
 }
 
+function queryBatchPayload(names) {
+    const payload = Buffer.alloc(16 + names.length * 12);
+    payload.writeUInt32LE(names.length, 0);
+    payload.writeUInt32LE(3, 4);
+    for (let i = 0; i < names.length; i++) {
+        payload.writeUInt32LE(names[i], 16 + i * 12);
+    }
+    return payload;
+}
+
 function main() {
     const module = makeModule();
     const bridge = makeBridge(module);
@@ -217,6 +241,19 @@ function main() {
     invalidate.writeUInt32LE(77, 0);
     bridge.renderer.glCall(GLFN_INVALIDATE_PROGRAM_LOCATIONS, invalidate);
     bridge.renderer.glCall(GLFN_COPY_TEX_SUB_IMAGE_3D, copyVolumePayload());
+    const queryBatch = queryBatchPayload([301, 302, 303]);
+    bridge.renderer.glCall(GLFN_QUERY_OBJECT_BATCH, queryBatch);
+    assert.equal(queryBatch.readUInt32LE(8), 1,
+                 "batched query refresh must complete synchronously");
+    assert.deepEqual([
+        [queryBatch.readUInt32LE(20), queryBatch.readUInt32LE(24)],
+        [queryBatch.readUInt32LE(32), queryBatch.readUInt32LE(36)],
+        [queryBatch.readUInt32LE(44), queryBatch.readUInt32LE(48)],
+    ], [
+        [1, 0],
+        [0, 0x7FFFFFFF],
+        [1, 0x7FFFFFFF],
+    ]);
 
     assert.deepEqual(module.calls[0].slice(1, 7), [
         GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
@@ -232,6 +269,7 @@ function main() {
         ["queryUniform"],
         ["invalidateLocations", 77],
         ["copyVolume", GL_TEXTURE_3D, 2, 3, 4, 5, 6, 7, 8, 9],
+        ["queryBatch", [301, 302, 303]],
     ]);
     console.log("v86_network_bridge_extended_features_test: ok");
 }

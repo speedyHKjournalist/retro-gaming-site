@@ -131,7 +131,7 @@ The proxy also advertises and routes the following extension
 families through the DMA/WebAssembly bridge: packed pixels, rescale normals,
 separate specular color, edge-clamp and texture LOD parameters, 3D and
 compressed texture uploads, blend
-color/equation/separate factors, cube maps, multisample coverage, DOT3 and
+color/equation/separate factors, cube maps, DOT3 and
 crossbar texture environments, transpose matrices, mipmap generation, shadow
 texture parameters, fog coordinates, secondary color, point parameters,
 stencil wrap, mirrored repeat, point sprites, non-power-of-two textures, and
@@ -139,10 +139,12 @@ stencil wrap, mirrored repeat, point sprites, non-power-of-two textures, and
 and fragment program backends used for D3D8 shaders. VBO contents remain in guest memory and are
 packed into the existing client-array draw records at draw time, which keeps
 the PCI protocol asynchronous while preserving VBO semantics for array and
-element buffers. Query objects are implemented as a conservative synchronous
-compatibility layer: `GL_SAMPLES_PASSED` queries complete immediately with a
-nonzero result so visibility-dependent fixed-function applications do not
-accidentally cull everything when running through WebGL/gl4es.
+element buffers. Query objects use WebGL2 boolean occlusion queries underneath.
+The first result request in a frame refreshes every pending guest query in one
+PCI record (up to Cube 2's 2048-object pool), and later reads use the proxy
+cache. A visible boolean result is exposed as a saturated desktop sample count,
+so engines using a fragment threshold do not mistake WebGL's value `1` for an
+almost-empty query. A not-yet-ready blocking result is conservatively visible.
 
 The extended WineD3D profile supports DXT1/3/5, mipmapped cube and volume
 textures, ARB-program-backed D3D8 shaders, and eight fixed-function texture
@@ -164,15 +166,34 @@ plus conservative defaults. Shader/program status, logs, limits, parameters,
 and error strings use ordered synchronous browser queries because WineD3D
 depends on the compile/link result before its first draw.
 
+The OpenGL extension string and hardware limits are capability snapshots, not
+static browser guesses. The JS bridge reads the live WebGL2 context and the
+guest clamps its result to bridge-owned tables (8 texture units, 16 generic
+attributes, 4 draw buffers and 4 color attachments). `GL_ARB_texture_float`
+and `GL_ARB_half_float_pixel` are exposed only when float targets are both
+renderable (`EXT_color_buffer_float`) and linearly filterable
+(`OES_texture_float_linear`); anisotropy is exposed only when the browser's
+anisotropy extension is enabled. A missing/late renderer yields the
+conservative bridge-guaranteed profile and never enables those optional paths.
+Destroying the last WGL context invalidates the snapshot so a replacement
+canvas/context is probed again. S3TC remains advertised independently because
+the bridge implements DXT1/3/5 by deterministic CPU decode. Pixel-buffer
+objects likewise use guest-side storage and resolve pack/unpack offsets before
+the PCI transfer; compiled vertex arrays are a safe performance hint, and the
+two-sided stencil extension is routed through separate front/back state.
+
 ### OpenGL 1.3 / 1.4 / 1.5 core coverage
 
-`glGetString(GL_VERSION)` reports `1.5`. OpenGL 1.1 through 1.5 core entry
+`glGetString(GL_VERSION)` reports `2.1` and GLSL reports `1.20`. OpenGL 1.1
+through 2.1 core entry
 points are exported, available through `wglGetProcAddress`, and routed through
 the PCI/WASM transport. This includes every multitexture overload, transpose
 matrix operation, compressed texture upload/subimage entry point, separate
 blend factors, point integer parameters, fog-coordinate and secondary-color
 arrays, multi-draw, the full 2D/3D `glWindowPos*` family, VBO entry points, and
-query-object entry points.
+query-object entry points. The 3D texture path also implements and exports
+`glCopyTexSubImage3D`/`EXT`, preserving the destination volume slice through
+native WebGL2 copy or an exact readback-backed subimage upload.
 
 `GL_EXT_texture_compression_s3tc` is advertised. DXT1/3/5 uploads and partial
 block updates retain their compressed guest-side cache/readback representation

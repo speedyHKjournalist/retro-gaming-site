@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL2 copyTexSubImage3D test: running</title>
+<canvas id="v86gl_canvas" width="32" height="32"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_COLOR_BUFFER_BIT = 0x00004000;
+    const GL_RGBA = 0x1908;
+    const GL_RGBA8 = 0x8058;
+    const GL_UNSIGNED_BYTE = 0x1401;
+    const GL_TEXTURE_3D = 0x806F;
+    const GL_TEXTURE_MIN_FILTER = 0x2801;
+    const GL_TEXTURE_MAG_FILTER = 0x2800;
+    const GL_NEAREST = 0x2600;
+    const canvas = document.getElementById("v86gl_canvas");
+    const module = await createV86GL4ES({
+        canvas,
+        locateFile(path) { return `../libglwasm/${path}`; },
+    });
+    const webgl = canvas.getContext("webgl2");
+    const calls = [];
+    const rawCopy = webgl.copyTexSubImage3D.bind(webgl);
+    webgl.copyTexSubImage3D = function(...args) {
+        calls.push(args.slice());
+        return rawCopy(...args);
+    };
+
+    module._v86glMakeCurrent(1, 0, 0, 32, 32);
+    const namePtr = module._malloc(4);
+    new DataView(module.HEAPU8.buffer).setUint32(namePtr, 1, true);
+    module._v86gl_glGenTextures(1, namePtr);
+    module._v86gl_glBindTexture(GL_TEXTURE_3D, 1);
+    module._v86gl_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    module._v86gl_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    const blueVolume = new Uint8Array(2 * 2 * 2 * 4);
+    for (let offset = 0; offset < blueVolume.length; offset += 4) {
+        blueVolume.set([0, 0, 255, 255], offset);
+    }
+    const pixelsPtr = module._malloc(blueVolume.length);
+    module.HEAPU8.set(blueVolume, pixelsPtr);
+    module._v86gl_glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8,
+        2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixelsPtr);
+
+    module._v86gl_glViewport(0, 0, 32, 32);
+    module._v86gl_glClearColor(1, 0, 0, 1);
+    module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+    module._v86gl_glFlush();
+    while (webgl.getError() !== webgl.NO_ERROR) {}
+    module._v86gl_glCopyTexSubImage3D(GL_TEXTURE_3D, 0,
+        0, 0, 1, 0, 0, 2, 2);
+    const copyError = webgl.getError();
+
+    const texture = webgl.getParameter(webgl.TEXTURE_BINDING_3D);
+    const framebuffer = webgl.createFramebuffer();
+    webgl.bindFramebuffer(webgl.FRAMEBUFFER, framebuffer);
+    const layers = [];
+    for (let layer = 0; layer < 2; layer++) {
+        webgl.framebufferTextureLayer(webgl.FRAMEBUFFER,
+            webgl.COLOR_ATTACHMENT0, texture, 0, layer);
+        if (webgl.checkFramebufferStatus(webgl.FRAMEBUFFER) !==
+                webgl.FRAMEBUFFER_COMPLETE) {
+            throw new Error(`layer ${layer} framebuffer incomplete`);
+        }
+        const pixel = new Uint8Array(4);
+        webgl.readPixels(0, 0, 1, 1, webgl.RGBA, webgl.UNSIGNED_BYTE, pixel);
+        layers.push(Array.from(pixel));
+    }
+
+    if (copyError !== webgl.NO_ERROR || calls.length !== 1 ||
+            calls[0][0] !== GL_TEXTURE_3D || calls[0][4] !== 1) {
+        throw new Error(`bad native copy call error=0x${copyError.toString(16)} ` +
+            `calls=${JSON.stringify(calls)}`);
+    }
+    const layer0 = layers[0], layer1 = layers[1];
+    if (layer0[0] > 20 || layer0[1] > 20 || layer0[2] < 200 || layer0[3] < 200 ||
+            layer1[0] < 200 || layer1[1] > 20 || layer1[2] > 20 || layer1[3] < 200) {
+        throw new Error(`unexpected layers ${JSON.stringify(layers)}`);
+    }
+
+    document.title = "WebGL2 copyTexSubImage3D test: PASS";
+    document.getElementById("result").textContent = `PASS ${JSON.stringify(layers)}`;
+})().catch(error => {
+    document.title = "WebGL2 copyTexSubImage3D test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

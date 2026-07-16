@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGL shader built-in overload test: running</title>
+<canvas id="v86gl_canvas" width="16" height="16"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=shaderconv-webgl-builtins-20260716"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_VERTEX_SHADER = 0x8B31;
+    const GL_FRAGMENT_SHADER = 0x8B30;
+    const GL_COMPILE_STATUS = 0x8B81;
+    const GL_LINK_STATUS = 0x8B82;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const module = await createV86GL4ES({
+        canvas: document.getElementById("v86gl_canvas"),
+        locateFile(path) {
+            return `../libglwasm/${path}?v=shaderconv-webgl-builtins-20260716`;
+        },
+    });
+    const dv = () => new DataView(module.HEAPU8.buffer);
+
+    function alloc(text) {
+        const bytes = encoder.encode(text);
+        const ptr = module._malloc(bytes.length);
+        module.HEAPU8.set(bytes, ptr);
+        return {ptr, length: bytes.length};
+    }
+
+    function query(kind, name, pname) {
+        const ptr = module._malloc(4);
+        const ok = module._v86gl_glQueryObjectivMapped(kind, name, pname, ptr);
+        return ok && dv().getInt32(ptr, true);
+    }
+
+    function log(kind, name) {
+        const lengthPtr = module._malloc(4);
+        const textPtr = module._malloc(4096);
+        if (!module._v86gl_glQueryObjectLogMapped(
+                kind, name, 4096, lengthPtr, textPtr)) return "<unavailable>";
+        const length = dv().getInt32(lengthPtr, true);
+        return decoder.decode(module.HEAPU8.subarray(textPtr, textPtr + length));
+    }
+
+    function compile(name, type, source) {
+        module._v86gl_glCreateShaderMapped(name, type);
+        const encoded = alloc(source);
+        module._v86gl_glShaderSourceMapped(name, encoded.length, encoded.ptr);
+        module._v86gl_glCompileShaderMapped(name);
+        if (!query(1, name, GL_COMPILE_STATUS)) {
+            throw new Error(`shader ${name} failed:\n${log(1, name)}`);
+        }
+    }
+
+    module._v86glMakeCurrent(1, 0, 0, 16, 16);
+    compile(1, GL_VERTEX_SHADER, `#version 120
+        attribute vec4 position;
+        void main(void) { gl_Position = position; }
+    `);
+    compile(2, GL_FRAGMENT_SHADER, `#version 120
+        void main(void) {
+            float a = max(0.25, min(0.75, 1.0));
+            float b = pow(2.0, 2.0) + mod(5.0, 2.0);
+            gl_FragColor = vec4(clamp(a + b, 0.0, 1.0));
+        }
+    `);
+    module._v86gl_glCreateProgramMapped(3);
+    module._v86gl_glAttachShaderMapped(3, 1);
+    module._v86gl_glAttachShaderMapped(3, 2);
+    module._v86gl_glLinkProgramMapped(3);
+    if (!query(2, 3, GL_LINK_STATUS)) {
+        throw new Error(`program failed:\n${log(2, 3)}`);
+    }
+    module._v86glDestroyRenderer();
+    document.title = "WebGL shader built-in overload test: PASS";
+    document.getElementById("result").textContent = "PASS max min pow clamp mod";
+})().catch(error => {
+    document.title = "WebGL shader built-in overload test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

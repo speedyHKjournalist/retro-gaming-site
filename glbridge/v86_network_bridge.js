@@ -247,6 +247,7 @@
     const GLFN_QUERY_UNIFORM = 213;
     const GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214;
     const GLFN_COPY_TEX_SUB_IMAGE_3D = 215;
+    const GLFN_QUERY_OBJECT_BATCH = 216;
 
     // Private capability query shared with opengl32_proxy.c. Optional desktop
     // extensions are derived from the live WebGL2 context instead of gl4es's
@@ -274,6 +275,10 @@
     const WEBGL_MAX_VERTEX_UNIFORM_VECTORS = 0x8DFB;
     const WEBGL_MAX_VARYING_VECTORS = 0x8DFC;
     const WEBGL_MAX_FRAGMENT_UNIFORM_VECTORS = 0x8DFD;
+    const V86GL_MAX_TEXTURE_UNITS = 8;
+    const V86GL_MAX_VERTEX_ATTRIBS = 16;
+    const V86GL_MAX_DRAW_BUFFERS = 4;
+    const V86GL_MAX_COLOR_ATTACHMENTS = 4;
 
     const V86GL_READ_PIXELS_HEADER_SIZE = 32;
     const V86GL_READ_PIXELS_STATUS_PENDING = 0;
@@ -516,6 +521,7 @@
         [GLFN_QUERY_UNIFORM]: "glGetUniform*(sync)",
         [GLFN_INVALIDATE_PROGRAM_LOCATIONS]: "invalidateProgramLocations",
         [GLFN_COPY_TEX_SUB_IMAGE_3D]: "glCopyTexSubImage3D",
+        [GLFN_QUERY_OBJECT_BATCH]: "glGetQueryObject*(batch)",
     };
 
     const DRAWABLE_GL_FUNCTIONS = new Set([
@@ -595,6 +601,7 @@
         GLFN_QUERY_INTEGER,
         GLFN_QUERY_ERROR,
         GLFN_QUERY_UNIFORM,
+        GLFN_QUERY_OBJECT_BATCH,
         GLFN_DRAW_ARRAYS_DIRECT,
         GLFN_DRAW_ELEMENTS_DIRECT,
         GLFN_DRAW_RANGE_ELEMENTS_DIRECT,
@@ -637,10 +644,176 @@
             this.module = module;
             this.options = options || {};
             this.missing = Object.create(null);
+            this.hostExtensions = Object.create(null);
+            this.hostContext = null;
             this.matrixMode = 0x1700; // GL_MODELVIEW
             this.activeTexture = 0x84C0; // GL_TEXTURE0
             this.clientActiveTexture = 0x84C0; // GL_TEXTURE0
             this.boundTextures = new Map();
+        }
+
+        getHostWebGL2Context() {
+            if (this.hostContext) {
+                return this.hostContext;
+            }
+
+            let context = this.options.webglContext;
+            if (typeof context === "function") {
+                try {
+                    context = context();
+                } catch (_err) {
+                    context = null;
+                }
+            }
+            if (!context && typeof this.options.getWebGLContext === "function") {
+                try {
+                    context = this.options.getWebGLContext();
+                } catch (_err) {
+                    context = null;
+                }
+            }
+
+            const canvas = this.canvas || (this.module && this.module.canvas);
+            if (!context && canvas && typeof canvas.getContext === "function") {
+                try {
+                    /* v86glResize synchronously creates the Emscripten WebGL2
+                     * context before guest commands are drained. Asking the
+                     * same canvas for webgl2 returns that existing object. */
+                    context = canvas.getContext("webgl2");
+                } catch (_err) {
+                    context = null;
+                }
+            }
+
+            const WebGL2 = global.WebGL2RenderingContext;
+            const isWebGL2 = !!context &&
+                ((typeof WebGL2 === "function" && context instanceof WebGL2) ||
+                 (typeof context.texImage3D === "function" &&
+                  typeof context.drawBuffers === "function"));
+            if (!isWebGL2) {
+                return null;
+            }
+            this.hostContext = context;
+            return context;
+        }
+
+        getHostExtension(names) {
+            const gl = this.getHostWebGL2Context();
+            if (!gl || typeof gl.getExtension !== "function") {
+                return null;
+            }
+            const key = names.join("|");
+            if (Object.prototype.hasOwnProperty.call(this.hostExtensions, key)) {
+                return this.hostExtensions[key];
+            }
+            let extension = null;
+            for (let i = 0; i < names.length && !extension; i++) {
+                try {
+                    extension = gl.getExtension(names[i]);
+                } catch (_err) {
+                    extension = null;
+                }
+            }
+            this.hostExtensions[key] = extension;
+            return extension;
+        }
+
+        hostCapabilityBits() {
+            if (!this.getHostWebGL2Context()) {
+                return 0;
+            }
+
+            let bits = V86GL_HOST_CAP_WEBGL2;
+            if (this.getHostExtension(["EXT_color_buffer_float"])) {
+                bits |= V86GL_HOST_CAP_COLOR_BUFFER_FLOAT;
+            }
+            if (this.getHostExtension(["OES_texture_float_linear"])) {
+                bits |= V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR;
+            }
+            if (this.getHostExtension([
+                "EXT_texture_filter_anisotropic",
+                "WEBKIT_EXT_texture_filter_anisotropic",
+                "MOZ_EXT_texture_filter_anisotropic",
+            ])) {
+                bits |= V86GL_HOST_CAP_ANISOTROPY;
+            }
+            return bits >>> 0;
+        }
+
+        queryHostInteger(pname) {
+            const gl = this.getHostWebGL2Context();
+            if (!gl || typeof gl.getParameter !== "function") {
+                return null;
+            }
+
+            let hostPname = pname;
+            let scale = 1;
+            switch (pname) {
+            case GL_MAX_TEXTURE_SIZE:
+            case GL_MAX_3D_TEXTURE_SIZE:
+            case GL_MAX_CUBE_MAP_TEXTURE_SIZE:
+            case GL_MAX_RENDERBUFFER_SIZE:
+            case GL_MAX_DRAW_BUFFERS:
+            case GL_MAX_VERTEX_ATTRIBS:
+            case GL_MAX_TEXTURE_IMAGE_UNITS:
+            case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
+            case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
+            case GL_MAX_COLOR_ATTACHMENTS:
+                break;
+            case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
+                hostPname = WEBGL_MAX_VERTEX_UNIFORM_VECTORS;
+                scale = 4;
+                break;
+            case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
+                hostPname = WEBGL_MAX_FRAGMENT_UNIFORM_VECTORS;
+                scale = 4;
+                break;
+            case GL_MAX_VARYING_FLOATS:
+                hostPname = WEBGL_MAX_VARYING_VECTORS;
+                scale = 4;
+                break;
+            case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT: {
+                const anisotropy = this.getHostExtension([
+                    "EXT_texture_filter_anisotropic",
+                    "WEBKIT_EXT_texture_filter_anisotropic",
+                    "MOZ_EXT_texture_filter_anisotropic",
+                ]);
+                if (!anisotropy) {
+                    return 1;
+                }
+                hostPname = anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT || pname;
+                break;
+            }
+            default:
+                return null;
+            }
+
+            try {
+                const value = Number(gl.getParameter(hostPname));
+                if (!Number.isFinite(value) || value < 0) {
+                    return null;
+                }
+                let result = Math.floor(value * scale);
+                switch (pname) {
+                case GL_MAX_TEXTURE_IMAGE_UNITS:
+                case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
+                case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
+                    result = Math.min(result, V86GL_MAX_TEXTURE_UNITS);
+                    break;
+                case GL_MAX_VERTEX_ATTRIBS:
+                    result = Math.min(result, V86GL_MAX_VERTEX_ATTRIBS);
+                    break;
+                case GL_MAX_DRAW_BUFFERS:
+                    result = Math.min(result, V86GL_MAX_DRAW_BUFFERS);
+                    break;
+                case GL_MAX_COLOR_ATTACHMENTS:
+                    result = Math.min(result, V86GL_MAX_COLOR_ATTACHMENTS);
+                    break;
+                }
+                return result;
+            } catch (_err) {
+                return null;
+            }
         }
 
         makeCurrent(surface) {
@@ -1205,6 +1378,9 @@
                 break;
             case GLFN_QUERY_OBJECT_IV:
                 this.callQueryObjectIV(p);
+                break;
+            case GLFN_QUERY_OBJECT_BATCH:
+                this.callQueryObjectBatch(p);
                 break;
             case GLFN_QUERY_OBJECT_LOG:
                 this.callQueryObjectLog(p);
@@ -2173,10 +2349,24 @@
                 return false;
             }
 
+            const pname = u32(p, 0);
+            if (pname === V86GL_QUERY_HOST_CAPABILITIES) {
+                writeU32(p, 4, V86GL_SYNC_QUERY_STATUS_OK);
+                writeU32(p, 8, this.hostCapabilityBits());
+                return true;
+            }
+
+            const hostValue = this.queryHostInteger(pname);
+            if (hostValue !== null) {
+                writeU32(p, 4, V86GL_SYNC_QUERY_STATUS_OK);
+                writeU32(p, 8, hostValue);
+                return true;
+            }
+
             const out = new Uint8Array(4);
             writeU32(p, 4, V86GL_SYNC_QUERY_STATUS_PENDING);
             const ok = this.withHeapOutput(4, out, ptr =>
-                this.callGLReturn("QueryInteger", [u32(p, 0), ptr], [
+                this.callGLReturn("QueryInteger", [pname, ptr], [
                     "number", "number",
                 ]) !== 0);
             writeU32(p, 4, ok ? V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
@@ -2427,6 +2617,61 @@
             if (ok) {
                 writeU32(p, 16, u32(out, 0));
             }
+            return ok;
+        }
+
+        callQueryObjectBatch(p) {
+            const headerSize = 16;
+            const entrySize = 12;
+            if (p.length < headerSize) {
+                return false;
+            }
+
+            const count = u32(p, 0);
+            if (u32(p, 4) !== 3 || count > 4096 ||
+                    headerSize + count * entrySize > p.length) {
+                writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+            if (!count) {
+                writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_OK);
+                return true;
+            }
+
+            const arraySize = count * 4;
+            const arraysPtr = this.malloc(arraySize * 3);
+            let heap = this.heapU8();
+            if (!arraysPtr || !heap) {
+                this.free(arraysPtr);
+                writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_FAILED);
+                return false;
+            }
+            const namesPtr = arraysPtr;
+            const availablePtr = namesPtr + arraySize;
+            const resultsPtr = availablePtr + arraySize;
+            for (let i = 0; i < count; i++) {
+                writeU32(heap, namesPtr + i * 4,
+                    u32(p, headerSize + i * entrySize));
+            }
+            heap.fill(0, availablePtr, resultsPtr + arraySize);
+
+            writeU32(p, 8, V86GL_SYNC_QUERY_STATUS_PENDING);
+            const ok = this.callGLReturn("QueryObjectsMapped", [
+                count, namesPtr, availablePtr, resultsPtr,
+            ], ["number", "number", "number", "number"]) !== 0;
+            heap = this.heapU8();
+            writeU32(p, 8, ok ?
+                V86GL_SYNC_QUERY_STATUS_OK : V86GL_SYNC_QUERY_STATUS_FAILED);
+            if (ok && heap) {
+                for (let i = 0; i < count; i++) {
+                    const entryOffset = headerSize + i * entrySize;
+                    writeU32(p, entryOffset + 4,
+                        u32(heap, availablePtr + i * 4));
+                    writeU32(p, entryOffset + 8,
+                        u32(heap, resultsPtr + i * 4));
+                }
+            }
+            this.free(arraysPtr);
             return ok;
         }
 

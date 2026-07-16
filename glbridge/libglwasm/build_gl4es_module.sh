@@ -208,6 +208,7 @@ emcc gl4es_bridge.c \
     "_v86gl_glUseProgramMapped",
     "_v86gl_glValidateProgramMapped",
     "_v86gl_glQueryObjectivMapped",
+    "_v86gl_glQueryObjectsMapped",
     "_v86gl_glQueryObjectLogMapped",
     "_v86gl_glQueryActiveMapped",
     "_v86gl_glQueryError",

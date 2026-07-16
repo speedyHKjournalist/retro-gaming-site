@@ -912,6 +912,7 @@ EM_JS(void, v86gl_prepare_webgl2_volume_texture, (GLuint texture, GLuint unit), 
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
+#define V86GL_QUERY_VISIBLE_SAMPLES 0x7FFFFFFFu
 #define V86GL_ACTIVE_KIND_UNIFORM 1u
 #define V86GL_ACTIVE_KIND_ATTRIB 2u
 #define V86GL_LOCATION_KIND_UNIFORM 1u
@@ -3465,13 +3466,17 @@ int v86gl_glQueryObjectivMapped(uint32_t object_kind, GLuint guest_name,
             emscripten_glGetQueryObjectuiv(host_name, GL_QUERY_RESULT_AVAILABLE,
                                            &query_value);
             if (!query_value) {
-                *value = 1;
+                *value = (GLint)V86GL_QUERY_VISIBLE_SAMPLES;
                 return 1;
             }
             query_value = 0;
             emscripten_glGetQueryObjectuiv(host_name, GL_QUERY_RESULT,
                                            &query_value);
-            *value = query_value ? 1 : 0;
+            /* WebGL2 exposes boolean occlusion queries while desktop GL 2.x
+             * exposes a sample count. Saturate a visible result so engines
+             * such as Cube 2 can keep their normal oqfrags threshold instead
+             * of interpreting boolean true (1) as "too few fragments". */
+            *value = query_value ? (GLint)V86GL_QUERY_VISIBLE_SAMPLES : 0;
             return 1;
         }
 #else
@@ -3480,6 +3485,54 @@ int v86gl_glQueryObjectivMapped(uint32_t object_kind, GLuint guest_name,
         return 0;
     }
     return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86gl_glQueryObjectsMapped(GLsizei count, const GLuint* guest_names,
+                               GLuint* available, GLuint* results) {
+#ifdef __EMSCRIPTEN__
+    GLsizei i;
+
+    if (!v86gl_ensure_ready() || !v86gl_occlusion_queries_supported() ||
+        count < 0 || (count > 0 && (!guest_names || !available || !results))) {
+        return 0;
+    }
+
+    for (i = 0; i < count; i++) {
+        GLuint guest_name = guest_names[i];
+        uint32_t direct_slot = guest_name ? (uint32_t)(guest_name - 1u) : UINT32_MAX;
+        /* Cube allocates a stable, consecutive query pool and polls it in the
+         * same order starting at guest name 1.  A frame can poll either half
+         * of that pool, so index by the name rather than the batch position.
+         * Preserve generic lookup for churned/arbitrary names. */
+        GLuint host_name = direct_slot < g_query_count &&
+                           g_queries[direct_slot].guest == guest_name
+                               ? g_queries[direct_slot].host
+                               : v86gl_host_query(guest_name);
+        GLuint ready = 0;
+        GLuint result = V86GL_QUERY_VISIBLE_SAMPLES;
+
+        if (host_name && emscripten_glIsQuery(host_name)) {
+            emscripten_glGetQueryObjectuiv(host_name,
+                                           GL_QUERY_RESULT_AVAILABLE, &ready);
+            if (ready) {
+                result = 0;
+                emscripten_glGetQueryObjectuiv(host_name,
+                                               GL_QUERY_RESULT, &result);
+                result = result ? V86GL_QUERY_VISIBLE_SAMPLES : 0u;
+            }
+        }
+        available[i] = ready ? 1u : 0u;
+        results[i] = result;
+    }
+    return 1;
+#else
+    (void)count;
+    (void)guest_names;
+    (void)available;
+    (void)results;
+    return 0;
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -4036,8 +4089,16 @@ void v86gl_glGenQueriesMapped(GLsizei n, const GLuint* guest_names) {
         }
         emscripten_glGenQueries(1, &host);
         if (host) {
-            v86gl_map_name(g_queries, &g_query_count,
-                           V86GL_MAX_QUERIES, guest_names[i], host);
+            /* glGenQueriesMapped is fed names freshly allocated by the guest
+             * proxy.  Append directly: the generic duplicate-search mapper
+             * would make Cube's 4096-query pool initialization quadratic. */
+            if (g_query_count < V86GL_MAX_QUERIES) {
+                g_queries[g_query_count].guest = guest_names[i];
+                g_queries[g_query_count].host = host;
+                g_query_count++;
+            } else {
+                emscripten_glDeleteQueries(1, &host);
+            }
         }
     }
 #else

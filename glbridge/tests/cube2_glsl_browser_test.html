@@ -3,6 +3,7 @@
 <title>Cube 2 GLSL corpus test: running</title>
 <canvas id="v86gl_canvas" width="64" height="64"></canvas>
 <pre id="result">running</pre>
+<script src="./cube2_glsl_direct_corpus_r6889.js"></script>
 <script src="../libglwasm/gl4es.js?v=cube2-glsl-r6889-20260716"></script>
 <script>
 (async () => {
@@ -25,9 +26,11 @@
      * menu/HUD, occlusion-query, cubemap, depth-effects, postprocess and
      * complex world-sky compiler paths without vendoring the game assets.
      *
+     * Source snapshot SHA-256:
+     * cd8963aedfcfb2285e0a2750d7cb7384c1c5ac3fdd7b125b462ede400bee47a4
      * https://sourceforge.net/p/sauerbraten/code/HEAD/tree/data/glsl.cfg
      */
-    const corpus = [
+    const generatedCorpus = [
         {
             name: "hud",
             vertex: `
@@ -104,6 +107,27 @@
                     vec4 ranges = vec4(depthranges.x, fract(depthranges.yzw));
                     ranges.xy -= ranges.yz*vec2(0.00390625, 0.00390625);
                     gl_FragColor = ranges;
+                }
+            `,
+        },
+        {
+            name: "noglareblendworld-resolved",
+            vertex: `
+                attribute vec4 vvertex;
+                attribute vec2 vtexcoord1;
+                uniform mat4 camprojmatrix;
+                varying vec2 texcoord0;
+                void main(void) {
+                    gl_Position = camprojmatrix * vvertex;
+                    texcoord0 = vtexcoord1 * 0.000030518509476;
+                }
+            `,
+            fragment: `
+                varying vec2 texcoord0;
+                uniform sampler2D lightmap;
+                void main(void) {
+                    gl_FragColor.rgb = vec3(0.0);
+                    gl_FragColor.a = texture2D(lightmap, texcoord0).a;
                 }
             `,
         },
@@ -209,6 +233,17 @@
         },
     ];
 
+    if (!Array.isArray(globalThis.CUBE2_DIRECT_GLSL_CORPUS_R6889) ||
+            globalThis.CUBE2_DIRECT_GLSL_CORPUS_R6889.length !== 36) {
+        throw new Error("Cube 2 direct GLSL corpus fixture is incomplete");
+    }
+    const directNames = new Set(
+        globalThis.CUBE2_DIRECT_GLSL_CORPUS_R6889.map(entry => entry.name));
+    const corpus = [
+        ...globalThis.CUBE2_DIRECT_GLSL_CORPUS_R6889,
+        ...generatedCorpus.filter(entry => !directNames.has(entry.name)),
+    ];
+
     const canvas = document.getElementById("v86gl_canvas");
     const module = await createV86GL4ES({
         canvas,
@@ -267,8 +302,11 @@
         module._v86gl_glCreateProgramMapped(program);
         module._v86gl_glAttachShaderMapped(program, vertexShader);
         module._v86gl_glAttachShaderMapped(program, fragmentShader);
+        /* Exact gle::attribnames order from official src/shared/glemu.cpp. */
         for (const [attribIndex, name] of [
             [0, "vvertex"], [1, "vcolor"], [2, "vtexcoord0"],
+            [3, "vtexcoord1"], [4, "vnormal"], [5, "vtangent"],
+            [6, "vboneweight"], [7, "vboneindex"],
         ]) {
             const encoded = allocText(name);
             module._v86gl_glBindAttribLocationMapped(
