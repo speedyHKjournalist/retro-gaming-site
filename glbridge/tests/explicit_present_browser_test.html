@@ -1,0 +1,147 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>OpenGL explicit-present browser test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<canvas id="probe" width="1" height="1" hidden></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=cube2-present-fix-20260717"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_COLOR_BUFFER_BIT = 0x00004000;
+    const GL_TRIANGLES = 0x0004;
+    const GL_DEPTH24_STENCIL8 = 0x88F0;
+    const canvas = document.getElementById("v86gl_canvas");
+    const probe = document.getElementById("probe");
+    const probeContext = probe.getContext("2d", {willReadFrequently: true});
+    const module = await createV86GL4ES({
+        canvas,
+        locateFile(path) {
+            return `../libglwasm/${path}?v=cube2-present-fix-20260717`;
+        },
+    });
+
+    async function settle() {
+        /* Headless Chrome may throttle requestAnimationFrame for a hidden tab;
+         * drawImage itself synchronises the source drawing buffer. */
+        await new Promise(resolve => setTimeout(resolve, 20));
+    }
+
+    function visiblePixel() {
+        probeContext.clearRect(0, 0, 1, 1);
+        probeContext.drawImage(canvas,
+            Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1,
+            0, 0, 1, 1);
+        return Array.from(probeContext.getImageData(0, 0, 1, 1).data);
+    }
+
+    function isColor(pixel, red, green, blue) {
+        return Math.abs(pixel[0] - red) < 25 &&
+               Math.abs(pixel[1] - green) < 25 &&
+               Math.abs(pixel[2] - blue) < 25 && pixel[3] > 240;
+    }
+
+    function offscreenDepthStencil() {
+        const gl = canvas.getContext("webgl2");
+        const context = canvas.GLctxObject;
+        if (!gl || !context || !context.defaultFbo) {
+            throw new Error("Emscripten explicit-swap framebuffer is missing");
+        }
+        const previousDraw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+        const previousRead = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+        const previousRenderbuffer = gl.getParameter(gl.RENDERBUFFER_BINDING);
+        let info;
+        try {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, context.defaultFbo);
+            const stencil = gl.getFramebufferAttachmentParameter(
+                gl.FRAMEBUFFER, gl.STENCIL_ATTACHMENT,
+                gl.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+            if (!stencil) throw new Error("offscreen stencil attachment is missing");
+            gl.bindRenderbuffer(gl.RENDERBUFFER, stencil);
+            info = {
+                format: gl.getRenderbufferParameter(
+                    gl.RENDERBUFFER, gl.RENDERBUFFER_INTERNAL_FORMAT),
+                width: gl.getRenderbufferParameter(
+                    gl.RENDERBUFFER, gl.RENDERBUFFER_WIDTH),
+                height: gl.getRenderbufferParameter(
+                    gl.RENDERBUFFER, gl.RENDERBUFFER_HEIGHT),
+                status: gl.checkFramebufferStatus(gl.FRAMEBUFFER),
+            };
+        } finally {
+            gl.bindRenderbuffer(gl.RENDERBUFFER, previousRenderbuffer);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, previousDraw);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, previousRead);
+        }
+        if (info.format !== GL_DEPTH24_STENCIL8 ||
+                info.status !== gl.FRAMEBUFFER_COMPLETE) {
+            throw new Error(`bad depth/stencil buffer ${JSON.stringify(info)}`);
+        }
+        return info;
+    }
+
+    module._v86glMakeCurrent(1, 0, 0, 64, 64);
+    module._v86gl_glViewport(0, 0, 64, 64);
+    while (module._v86gl_glQueryError()) {}
+
+    const initialDepthStencil = offscreenDepthStencil();
+    if (initialDepthStencil.width !== 64 || initialDepthStencil.height !== 64) {
+        throw new Error(`bad initial attachment size ${JSON.stringify(initialDepthStencil)}`);
+    }
+
+    module._v86gl_glClearColor(0, 0, 0, 1);
+    module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+    if (!module._v86glPresent()) throw new Error("initial present failed");
+    await settle();
+    const black = visiblePixel();
+    if (!isColor(black, 0, 0, 0)) {
+        throw new Error(`initial present mismatch ${black.join(",")}`);
+    }
+
+    module._v86gl_glClearColor(1, 0, 0, 1);
+    module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+    module._v86gl_glFinish();
+    await settle();
+    const beforePresent = visiblePixel();
+    if (!isColor(beforePresent, 0, 0, 0)) {
+        throw new Error(`uncommitted pass leaked to canvas ${beforePresent.join(",")}`);
+    }
+
+    if (!module._v86glPresent()) throw new Error("red present failed");
+    await settle();
+    const afterPresent = visiblePixel();
+    if (!isColor(afterPresent, 255, 0, 0)) {
+        throw new Error(`explicit present mismatch ${afterPresent.join(",")}`);
+    }
+
+    /* A draw with seven untouched texture units reproduced Cube2's seven
+     * GenerateMipmap warnings before undefined textures were deferred. */
+    module._v86gl_glColor4f(0, 1, 0, 1);
+    module._v86gl_glBegin(GL_TRIANGLES);
+    module._v86gl_glVertex3f(-0.5, -0.5, 0);
+    module._v86gl_glVertex3f(0.5, -0.5, 0);
+    module._v86gl_glVertex3f(0, 0.5, 0);
+    module._v86gl_glEnd();
+    const drawError = module._v86gl_glQueryError();
+    if (drawError) {
+        throw new Error(`default-texture draw error 0x${drawError.toString(16)}`);
+    }
+
+    module._v86glResize(96, 48);
+    module._v86gl_glViewport(0, 0, 96, 48);
+    const resizedDepthStencil = offscreenDepthStencil();
+    if (canvas.width !== 96 || canvas.height !== 48 ||
+            resizedDepthStencil.width !== 96 || resizedDepthStencil.height !== 48) {
+        throw new Error(`offscreen resize mismatch ${JSON.stringify(resizedDepthStencil)}`);
+    }
+
+    document.title = "OpenGL explicit-present browser test: PASS";
+    document.getElementById("result").textContent =
+        `PASS hidden=${beforePresent.join(",")} shown=${afterPresent.join(",")} ` +
+        `depthStencil=${resizedDepthStencil.width}x${resizedDepthStencil.height}`;
+})().catch(error => {
+    document.title = "OpenGL explicit-present browser test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>

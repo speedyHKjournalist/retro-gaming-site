@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "d3d8-clear-present-20260713";
+    const V86GL_BRIDGE_VERSION = "cube2-explicit-present-20260717";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;
@@ -823,14 +823,17 @@
         }
 
         resize(width, height) {
+            this.callOptional(["v86glResize", "_v86glResize", "setCanvasSize"], [
+                width, height,
+            ], ["number", "number"]);
+
+            /* New explicit-present modules resize their offscreen attachments
+             * and the canvas together.  Keep this fallback for older modules
+             * and lightweight test renderers that only record the call. */
             if (this.canvas.width !== width || this.canvas.height !== height) {
                 this.canvas.width = width;
                 this.canvas.height = height;
             }
-
-            this.callOptional(["v86glResize", "_v86glResize", "setCanvasSize"], [
-                width, height,
-            ], ["number", "number"]);
         }
 
         malloc(size) {
@@ -3132,7 +3135,11 @@
         }
 
         present() {
-            this.callGL("Flush", [], []);
+            if (!this.callOptional(["v86glPresent", "_v86glPresent"], [], [])) {
+                /* Compatibility with an older module during a rolling cache
+                 * update.  New modules commit their explicit back buffer. */
+                this.callGL("Flush", [], []);
+            }
         }
 
         releaseCurrent() {
@@ -3989,7 +3996,6 @@
         markStateJournalUnsupported(reason) {
             if (!this.stateJournalUnsupported) {
                 this.stateJournalUnsupported = reason;
-                console.warn("[v86gl] save-state reconstruction unsupported:", reason);
             }
         }
 

@@ -12,6 +12,7 @@ const GLFN_PIXEL_STOREI = 33;
 const GLFN_GENERATE_MIPMAP = 99;
 const GLFN_DRAW_ARRAYS_DIRECT = 206;
 const GLFN_CLEAR = 3;
+const GLFN_FLUSH = 8;
 const GL_COLOR_BUFFER_BIT = 0x00004000;
 const GL_TEXTURE_2D = 0x0DE1;
 const GL_RGBA = 0x1908;
@@ -134,6 +135,9 @@ function makeModule(name, modules) {
         _v86gl_glFlush() {
             calls.push(["flush"]);
         },
+        _v86glPresent() {
+            calls.push(["present"]);
+        },
     };
     modules.push(module);
     return module;
@@ -196,6 +200,24 @@ async function main() {
     });
     assert.equal(bridge.overlayVisible, true,
                  "a clear-only frame must keep the WebGL overlay visible");
+    assert.equal(modules[0].calls.filter(call => call[0] === "present").length, 1,
+                 "a guest swap boundary must explicitly present the WebGL back buffer");
+    assert.equal(modules[0].calls.some(call => call[0] === "flush"), false,
+                 "an explicit-present module must not fall back to a plain flush");
+
+    bridge.executeGLCommands(glRecord(GLFN_FLUSH, Buffer.alloc(0)),
+                             "guest glFlush", 99);
+    assert.equal(modules[0].calls.filter(call => call[0] === "flush").length, 1,
+                 "guest glFlush must still flush the offscreen back buffer");
+    assert.equal(modules[0].calls.filter(call => call[0] === "present").length, 1,
+                 "guest glFlush must not expose an unfinished frame");
+
+    const explicitPresent = modules[0]._v86glPresent;
+    delete modules[0]._v86glPresent;
+    bridge.renderer.present();
+    modules[0]._v86glPresent = explicitPresent;
+    assert.equal(modules[0].calls.filter(call => call[0] === "flush").length, 2,
+                 "an older module without v86glPresent must retain the flush fallback");
 
     const pixels = Buffer.from([0x11, 0x22, 0x33, 0x44]);
     const copiedPixels = Buffer.from([0x51, 0x62, 0x73, 0x84]);

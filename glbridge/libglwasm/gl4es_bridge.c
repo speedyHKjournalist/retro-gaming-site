@@ -63,6 +63,10 @@ extern void emscripten_glCopyTexSubImage3D(GLenum target, GLint level,
                                            GLint zoffset, GLint x, GLint y,
                                            GLsizei width, GLsizei height);
 extern void emscripten_glPixelStorei(GLenum pname, GLint param);
+extern void emscripten_glTexParameteri(GLenum target, GLenum pname,
+                                      GLint param);
+extern void emscripten_glTexParameterf(GLenum target, GLenum pname,
+                                      GLfloat param);
 extern void emscripten_glFramebufferTexture2D(GLenum target, GLenum attachment,
                                               GLenum textarget, GLuint texture,
                                               GLint level);
@@ -780,6 +784,9 @@ static void v86gl_end_tight_unpack(const V86GLUnpackState* saved) {
 
 #ifdef __EMSCRIPTEN__
 static EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_webgl_context;
+static int g_offscreen_width;
+static int g_offscreen_height;
+static int g_offscreen_valid;
 
 EM_JS(void, v86gl_lose_webgl_context, (), {
     const canvas = document.getElementById("v86gl_canvas");
@@ -883,6 +890,62 @@ EM_JS(void, v86gl_install_webgl2_volume_compat, (), {
         }
         return state.rawShaderSource(shader, source);
     };
+});
+
+/* Emscripten's emulated explicit-swap framebuffer is resized through its
+ * canvas-size API.  That implementation temporarily binds a 2D texture; keep
+ * those internal binds from changing the bridge's 3D-texture redirection bit
+ * for the guest's currently active unit. */
+EM_JS(void, v86gl_push_volume_state, (), {
+    const state = GLctx && GLctx.__v86glVolumeCompat;
+    if (!state) return;
+    const stack = state.internalStateStack || (state.internalStateStack = []);
+    stack.push({
+        unit: state.unit,
+        redirected: state.redirected.slice()
+    });
+});
+
+EM_JS(void, v86gl_pop_volume_state, (), {
+    const state = GLctx && GLctx.__v86glVolumeCompat;
+    const stack = state && state.internalStateStack;
+    if (!stack || !stack.length) return;
+    const saved = stack.pop();
+    state.unit = saved.unit;
+    state.redirected = saved.redirected;
+});
+
+/* OFFSCREEN_FRAMEBUFFER currently creates only a DEPTH_COMPONENT16 renderbuffer
+ * and omits stencil even when the WebGL context requested it.  GL 2.x guests
+ * expect the default framebuffer to retain the requested 24/8 format, so
+ * replace that storage and attach both aspects to Emscripten's default FBO. */
+EM_JS(int, v86gl_configure_offscreen_depth_stencil, (), {
+    const context = GL.currentContext;
+    const gl = context && context.GLctx;
+    if (!gl || !context.defaultFbo || !context.defaultDepthTarget ||
+            typeof gl.DEPTH24_STENCIL8 === "undefined") return 0;
+
+    const previousRenderbuffer = gl.getParameter(gl.RENDERBUFFER_BINDING);
+    const previousDrawFramebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+    const previousReadFramebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+    let complete = false;
+    try {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, context.defaultFbo);
+        gl.bindRenderbuffer(gl.RENDERBUFFER, context.defaultDepthTarget);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8,
+                               gl.drawingBufferWidth, gl.drawingBufferHeight);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT,
+                                   gl.RENDERBUFFER, context.defaultDepthTarget);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.STENCIL_ATTACHMENT,
+                                   gl.RENDERBUFFER, context.defaultDepthTarget);
+        complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
+                   gl.FRAMEBUFFER_COMPLETE;
+    } finally {
+        gl.bindRenderbuffer(gl.RENDERBUFFER, previousRenderbuffer);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, previousReadFramebuffer);
+    }
+    return complete ? 1 : 0;
 });
 
 EM_JS(void, v86gl_prepare_webgl2_volume_texture, (GLuint texture, GLuint unit), {
@@ -1056,6 +1119,18 @@ static GLuint v86gl_default_texture(GLenum target) {
 
     if (!*texture) {
         glGenTextures(1, texture);
+        if (*texture) {
+            /* Desktop GL's name-zero texture may be incomplete.  Its default
+             * minification mode nevertheless requests mipmaps, which made
+             * gl4es try to generate a chain before level zero existed.  The
+             * WebGL stand-in must remain legal while it is only a placeholder;
+             * a guest TexParameter call can still replace this state later. */
+            glBindTexture(v86gl_binding_target(target), *texture);
+            glTexParameteri(v86gl_binding_target(target),
+                            GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(v86gl_binding_target(target),
+                            GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        }
     }
     return *texture;
 }
@@ -1079,6 +1154,14 @@ static void v86gl_restore_texture_binding(GLenum target) {
          * while switching emulated desktop texture targets; WebGL rejects a
          * following texParameter call unless the real binding is restored. */
         glBindTexture(binding_target, texture);
+#ifdef __EMSCRIPTEN__
+        if (binding_target == GL_TEXTURE_3D) {
+            /* gl4es can elide a same-name bind after its draw path changed the
+             * raw WebGL target. Reassert the native volume object as well. */
+            v86gl_prepare_webgl2_volume_texture(
+                texture, g_active_texture_unit);
+        }
+#endif
     }
 }
 
@@ -1137,6 +1220,11 @@ static int v86gl_ensure_ready(void) {
     attrs.antialias = EM_FALSE;
     attrs.premultipliedAlpha = EM_FALSE;
     attrs.preserveDrawingBuffer = EM_TRUE;
+    /* v86 delivers one guest frame through several browser callbacks.  Render
+     * those callbacks into Emscripten's offscreen back buffer and expose the
+     * result only when the guest sends its WGL swap boundary. */
+    attrs.explicitSwapControl = EM_TRUE;
+    attrs.renderViaOffscreenBackBuffer = EM_TRUE;
     /* The advertised D3D8 profile includes volume textures and therefore
      * requires WebGL2.  Failing context creation is preferable to silently
      * exposing a volume capability on a WebGL1 renderer that cannot execute it. */
@@ -1151,6 +1239,20 @@ static int v86gl_ensure_ready(void) {
     if (g_webgl_context > 0) {
         emscripten_webgl_make_context_current(g_webgl_context);
         v86gl_install_webgl2_volume_compat();
+        emscripten_get_canvas_element_size("#v86gl_canvas",
+                                           &g_offscreen_width,
+                                           &g_offscreen_height);
+        if (!v86gl_configure_offscreen_depth_stencil()) {
+            printf("[v86gl] failed to configure explicit-swap depth/stencil buffer\n");
+            emscripten_webgl_make_context_current(0);
+            emscripten_webgl_destroy_context(g_webgl_context);
+            g_webgl_context = 0;
+            g_webgl_major_version = 0;
+            g_offscreen_width = 0;
+            g_offscreen_height = 0;
+            return 0;
+        }
+        g_offscreen_valid = 1;
     } else {
         return 0;
     }
@@ -1558,14 +1660,69 @@ void v86glMakeCurrent(uint32_t hwnd, int32_t x, int32_t y, uint32_t width, uint3
     g_surface_y = y;
     g_surface_width = width;
     g_surface_height = height;
-    (void)v86gl_ensure_ready();
+    if (!v86gl_ensure_ready()) return;
+#ifdef __EMSCRIPTEN__
+    if (width && height &&
+            ((int)width != g_offscreen_width ||
+             (int)height != g_offscreen_height)) {
+        v86gl_push_volume_state();
+        EMSCRIPTEN_RESULT result = emscripten_set_canvas_element_size(
+            "#v86gl_canvas", (int)width, (int)height);
+        v86gl_pop_volume_state();
+        g_offscreen_valid = result == EMSCRIPTEN_RESULT_SUCCESS &&
+                            v86gl_configure_offscreen_depth_stencil();
+        if (g_offscreen_valid) {
+            g_offscreen_width = (int)width;
+            g_offscreen_height = (int)height;
+        } else {
+            printf("[v86gl] failed to resize explicit-swap framebuffer\n");
+        }
+    }
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE
 void v86glResize(uint32_t width, uint32_t height) {
     g_surface_width = width;
     g_surface_height = height;
-    (void)v86gl_ensure_ready();
+    if (!v86gl_ensure_ready()) return;
+#ifdef __EMSCRIPTEN__
+    if (width && height &&
+            ((int)width != g_offscreen_width ||
+             (int)height != g_offscreen_height)) {
+        v86gl_push_volume_state();
+        EMSCRIPTEN_RESULT result = emscripten_set_canvas_element_size(
+            "#v86gl_canvas", (int)width, (int)height);
+        v86gl_pop_volume_state();
+        if (result == EMSCRIPTEN_RESULT_SUCCESS) {
+            g_offscreen_valid = v86gl_configure_offscreen_depth_stencil();
+            if (g_offscreen_valid) {
+                g_offscreen_width = (int)width;
+                g_offscreen_height = (int)height;
+            }
+        } else {
+            g_offscreen_valid = 0;
+        }
+        if (!g_offscreen_valid) {
+            printf("[v86gl] failed to resize explicit-swap framebuffer\n");
+        }
+    }
+#endif
+}
+
+EMSCRIPTEN_KEEPALIVE
+int v86glPresent(void) {
+    if (!v86gl_ensure_ready()) return 0;
+    glFlush();
+#ifdef __EMSCRIPTEN__
+    if (!g_offscreen_valid) return 0;
+    v86gl_push_volume_state();
+    EMSCRIPTEN_RESULT result = emscripten_webgl_commit_frame();
+    v86gl_pop_volume_state();
+    return result == EMSCRIPTEN_RESULT_SUCCESS;
+#else
+    return 1;
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1614,6 +1771,9 @@ void v86glDestroyRenderer(void) {
     g_webgl_major_version = 0;
 
 #ifdef __EMSCRIPTEN__
+    g_offscreen_width = 0;
+    g_offscreen_height = 0;
+    g_offscreen_valid = 0;
     if (g_webgl_context > 0) {
         /* The canvas is replaced by the JS bridge; lose this context now so
          * repeated guest process exits cannot exhaust the browser's context
@@ -1957,6 +2117,11 @@ void v86gl_glBindTexture(GLenum target, GLuint texture) {
     host = texture == 0 ? v86gl_default_texture(target) :
         v86gl_host_texture(texture, 1);
     glBindTexture(v86gl_binding_target(target), host);
+#ifdef __EMSCRIPTEN__
+    if (v86gl_binding_target(target) == GL_TEXTURE_3D && host) {
+        v86gl_prepare_webgl2_volume_texture(host, g_active_texture_unit);
+    }
+#endif
     bound = v86gl_bound_texture_slot(target, g_active_texture_unit);
     if (bound) {
         *bound = host;
@@ -2477,6 +2642,14 @@ void v86gl_glTexParameteri(GLenum target, GLenum pname, GLint param) {
     if (!v86gl_ensure_ready()) return;
     v86gl_restore_texture_binding(target);
     glTexParameteri(target, pname, param);
+#ifdef __EMSCRIPTEN__
+    if (v86gl_binding_target(target) == GL_TEXTURE_3D &&
+            v86gl_prepare_bound_volume_texture()) {
+        /* gl4es updates its desktop bookkeeping above, but its GLES2 target
+         * lowering may suppress the native WebGL2 volume parameter call. */
+        emscripten_glTexParameteri(GL_TEXTURE_3D, pname, param);
+    }
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -2484,6 +2657,12 @@ void v86gl_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
     if (!v86gl_ensure_ready()) return;
     v86gl_restore_texture_binding(target);
     glTexParameterf(target, pname, param);
+#ifdef __EMSCRIPTEN__
+    if (v86gl_binding_target(target) == GL_TEXTURE_3D &&
+            v86gl_prepare_bound_volume_texture()) {
+        emscripten_glTexParameterf(GL_TEXTURE_3D, pname, param);
+    }
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE

@@ -3,7 +3,7 @@
 <title>WebGL2 volume texture test: running</title>
 <canvas id="v86gl_canvas" width="64" height="64"></canvas>
 <pre id="result">running</pre>
-<script src="../libglwasm/gl4es.js?v=d3d8-shutdown-clean-20260715"></script>
+<script src="../libglwasm/gl4es.js?v=cube2-present-fix-20260717"></script>
 <script>
 (async () => {
     "use strict";
@@ -16,9 +16,11 @@
     const GL_UNSIGNED_BYTE = 0x1401;
     const GL_UNSIGNED_INT_8_8_8_8_REV = 0x8367;
     const GL_TEXTURE_3D = 0x806f;
+    const GL_TEXTURE0 = 0x84c0;
     const GL_TEXTURE_MIN_FILTER = 0x2801;
     const GL_TEXTURE_MAG_FILTER = 0x2800;
     const GL_NEAREST = 0x2600;
+    const GL_LINEAR = 0x2601;
     const GL_NEAREST_MIPMAP_NEAREST = 0x2700;
     const GL_FRAGMENT_PROGRAM_ARB = 0x8804;
     const GL_PROGRAM_FORMAT_ASCII_ARB = 0x8875;
@@ -28,7 +30,7 @@
     const module = await createV86GL4ES({
         canvas,
         locateFile(path) {
-            return `../libglwasm/${path}?v=d3d8-shutdown-clean-20260715`;
+            return `../libglwasm/${path}?v=cube2-present-fix-20260717`;
         },
     });
 
@@ -130,6 +132,29 @@
         throw new Error("readback failed");
     }
     const pixel = Array.from(module.HEAPU8.subarray(pixelPtr, pixelPtr + 4));
+
+    /* Resize and present both perform internal WebGL work.  The bridge must
+     * restore its logical 3D redirection state so a parameter call can keep
+     * targeting this volume without another guest bind. */
+    module._v86gl_glActiveTexture(GL_TEXTURE0);
+    module._v86gl_glBindTexture(GL_TEXTURE_3D, 1);
+    const textureBeforeResize = webgl.getParameter(webgl.TEXTURE_BINDING_3D);
+    if (!textureBeforeResize) throw new Error("volume rebind before resize failed");
+    module._v86glResize(80, 48);
+    const textureAfterResize = webgl.getParameter(webgl.TEXTURE_BINDING_3D);
+    if (!module._v86glPresent()) throw new Error("volume present failed");
+    const textureAfterPresent = webgl.getParameter(webgl.TEXTURE_BINDING_3D);
+    module._v86gl_glTexParameteri(
+        GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    const redirectError = module._v86gl_glQueryError();
+    const redirectedMagFilter = webgl.getTexParameter(
+        webgl.TEXTURE_3D, webgl.TEXTURE_MAG_FILTER);
+    if (redirectError || redirectedMagFilter !== webgl.LINEAR) {
+        throw new Error(
+            `volume redirect lost across resize/present: error=0x${redirectError.toString(16)} ` +
+            `filter=${redirectedMagFilter === null ? "null" : `0x${redirectedMagFilter.toString(16)}`} ` +
+            `bound=${!!textureBeforeResize}/${!!textureAfterResize}/${!!textureAfterPresent}`);
+    }
 
     // Verify the converted upload independently, but only after every gl4es
     // draw/readback. Raw WebGL FBO calls bypass gl4es's framebuffer cache and

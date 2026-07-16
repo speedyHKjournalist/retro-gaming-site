@@ -21,6 +21,7 @@ emcc gl4es_bridge.c \
   -sEXPORT_NAME=createV86GL4ES \
   -sALLOW_MEMORY_GROWTH=1 \
   -sFULL_ES2=1 \
+  -sOFFSCREEN_FRAMEBUFFER=1 \
   -sMIN_WEBGL_VERSION=2 \
   -sMAX_WEBGL_VERSION=2 \
   -sWEBGL2_BACKWARDS_COMPATIBILITY_EMULATION=1 \
@@ -31,6 +32,7 @@ emcc gl4es_bridge.c \
     "_free",
     "_v86glMakeCurrent",
     "_v86glResize",
+    "_v86glPresent",
     "_v86glReleaseCurrent",
     "_v86glDestroyRenderer",
     "_v86gl_glViewport",
