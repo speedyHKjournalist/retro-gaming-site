@@ -1,7 +1,7 @@
 (function(global) {
     "use strict";
 
-    const GL4ES_ASSET_VERSION = "cube2-skinning-fix-20260718";
+    const GL4ES_ASSET_VERSION = "cube2-dxt-header-fix-20260718";
     const factory = global.createV86GL4ES;
     if (typeof factory !== "function") {
         console.warn("[v86gl] gl4es factory not found; run glbridge/libglwasm/build_gl4es_module.sh first");

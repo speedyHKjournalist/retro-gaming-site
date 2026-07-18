@@ -1995,19 +1995,23 @@
         }
 
         callCompressedTexImage2D(p) {
-            if (p.length < 28) {
+            /* emit_compressed_tex_image() uses one shared wire header for
+             * 1D, 2D and 3D uploads.  The depth field is present for 2D too:
+             * target, level, internalformat, width, height, depth, border,
+             * image_size, followed by the compressed bytes. */
+            if (p.length < 32) {
                 return false;
             }
 
-            const dataSize = u32(p, 24);
-            if (28 + dataSize > p.length) {
+            const dataSize = u32(p, 28);
+            if (32 + dataSize > p.length) {
                 return false;
             }
-            const bytes = dataSize ? p.slice(28, 28 + dataSize) : null;
+            const bytes = dataSize ? p.slice(32, 32 + dataSize) : null;
             return this.withHeapBytes(bytes, ptr =>
                 this.callGL("CompressedTexImage2D", [
                     u32(p, 0), i32(p, 4), u32(p, 8), i32(p, 12), i32(p, 16),
-                    i32(p, 20), dataSize, ptr,
+                    i32(p, 24), dataSize, ptr,
                 ], ["number", "number", "number", "number", "number", "number", "number", "number"]));
         }
 

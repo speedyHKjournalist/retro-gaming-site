@@ -14,9 +14,9 @@ const GLFN_QUERY_UNIFORM = 213;
 const GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214;
 const GLFN_COPY_TEX_SUB_IMAGE_3D = 215;
 const GLFN_QUERY_OBJECT_BATCH = 216;
-const GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;
+const GL_TEXTURE_2D = 0x0DE1;
 const GL_TEXTURE_3D = 0x806F;
-const GL_COMPRESSED_RGBA_S3TC_DXT5_EXT = 0x83F3;
+const GL_COMPRESSED_RGB_S3TC_DXT1_EXT = 0x83F0;
 const GL_RGBA = 0x1908;
 const GL_UNSIGNED_BYTE = 0x1401;
 const GL_VERTEX_PROGRAM_ARB = 0x8620;
@@ -126,16 +126,19 @@ function makeBridge(module) {
         { add_listener() {} }, canvas, { gl4es: module });
 }
 
-function compressedCubePayload(bytes) {
-    const payload = Buffer.alloc(28 + bytes.length);
-    payload.writeUInt32LE(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0);
+function compressedTexture2DPayload(bytes) {
+    /* Match opengl32_proxy.c::emit_compressed_tex_image exactly.  Even a 2D
+     * upload carries the shared depth field before border and image_size. */
+    const payload = Buffer.alloc(32 + bytes.length);
+    payload.writeUInt32LE(GL_TEXTURE_2D, 0);
     payload.writeInt32LE(0, 4);
-    payload.writeUInt32LE(GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 8);
+    payload.writeUInt32LE(GL_COMPRESSED_RGB_S3TC_DXT1_EXT, 8);
     payload.writeInt32LE(4, 12);
     payload.writeInt32LE(4, 16);
-    payload.writeInt32LE(0, 20);
-    payload.writeUInt32LE(bytes.length, 24);
-    bytes.copy(payload, 28);
+    payload.writeInt32LE(1, 20);
+    payload.writeInt32LE(0, 24);
+    payload.writeUInt32LE(bytes.length, 28);
+    bytes.copy(payload, 32);
     return payload;
 }
 
@@ -192,11 +195,12 @@ function queryBatchPayload(names) {
 function main() {
     const module = makeModule();
     const bridge = makeBridge(module);
-    const dxt = Buffer.from(Array.from({ length: 16 }, (_, i) => i + 1));
+    /* One complete 4x4 DXT1 block, matching Cube 2's HUD diffuse format. */
+    const dxt = Buffer.from([0x00, 0xF8, 0xE0, 0x07, 0x00, 0x00, 0x00, 0x00]);
     const volume = Buffer.from(Array.from({ length: 32 }, (_, i) => 0x80 + i));
     const arb = "!!ARBvp1.0\nMOV result.position, vertex.position;\nEND";
 
-    bridge.renderer.glCall(GLFN_COMPRESSED_TEX_IMAGE_2D, compressedCubePayload(dxt));
+    bridge.renderer.glCall(GLFN_COMPRESSED_TEX_IMAGE_2D, compressedTexture2DPayload(dxt));
     bridge.renderer.glCall(GLFN_TEX_IMAGE_3D, volumePayload(volume));
     bridge.renderer.glCall(GLFN_PROGRAM_STRING_ARB, programPayload(arb));
 
@@ -256,7 +260,7 @@ function main() {
     ]);
 
     assert.deepEqual(module.calls[0].slice(1, 7), [
-        GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
+        GL_TEXTURE_2D, 0, GL_COMPRESSED_RGB_S3TC_DXT1_EXT,
         4, 4, 0,
     ]);
     assert.deepEqual(module.calls[0][7], Array.from(dxt));
