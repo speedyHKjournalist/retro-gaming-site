@@ -965,8 +965,8 @@ EM_JS(void, v86gl_prepare_webgl2_volume_texture, (GLuint texture, GLuint unit), 
 #define V86GL_MAX_PROGRAMS 1024
 #define V86GL_MAX_ARB_PROGRAMS 1024
 #define V86GL_MAX_SHADERS 2048
-#define V86GL_MAX_UNIFORM_LOCATIONS 4096
-#define V86GL_MAX_ATTRIB_LOCATIONS 512
+#define V86GL_INITIAL_UNIFORM_LOCATIONS 4096
+#define V86GL_INITIAL_ATTRIB_LOCATIONS 512
 #define V86GL_MAX_VERTEX_ATTRIBS 16
 #define V86GL_MAX_FRAMEBUFFERS 1024
 #define V86GL_MAX_RENDERBUFFERS 1024
@@ -1025,10 +1025,12 @@ static V86GLNameMap g_queries[V86GL_MAX_QUERIES];
 static uint32_t g_query_count;
 static V86GLNameMap g_buffers[V86GL_MAX_BUFFERS];
 static uint32_t g_buffer_count;
-static V86GLLocationMap g_uniform_locations[V86GL_MAX_UNIFORM_LOCATIONS];
+static V86GLLocationMap* g_uniform_locations;
 static uint32_t g_uniform_location_count;
-static V86GLLocationMap g_attrib_locations[V86GL_MAX_ATTRIB_LOCATIONS];
+static uint32_t g_uniform_location_capacity;
+static V86GLLocationMap* g_attrib_locations;
 static uint32_t g_attrib_location_count;
+static uint32_t g_attrib_location_capacity;
 /* Desktop GL exposes a mutable default texture object (name 0) for each
  * texture target on every texture unit.  WebGL has no such object:
  * texParameter on an unbound target is an INVALID_OPERATION.  Keep distinct
@@ -1529,33 +1531,50 @@ static void v86gl_forget_arb_program(GLuint guest) {
     }
 }
 
-static void v86gl_map_location(V86GLLocationMap* maps, uint32_t* count,
-                               uint32_t capacity, GLuint guest_program,
-                               GLint guest, GLint host, GLenum type,
-                               GLint value_count) {
+static int v86gl_map_location(V86GLLocationMap** maps, uint32_t* count,
+                              uint32_t* capacity, uint32_t initial_capacity,
+                              GLuint guest_program, GLint guest, GLint host,
+                              GLenum type, GLint value_count) {
     uint32_t i;
+    V86GLLocationMap* grown;
+    uint32_t new_capacity;
 
     if (guest < 0) {
-        return;
+        return 1;
     }
 
     for (i = 0; i < *count; i++) {
-        if (maps[i].guest_program == guest_program && maps[i].guest == guest) {
-            maps[i].host = host;
-            maps[i].type = type;
-            maps[i].value_count = value_count;
-            return;
+        if ((*maps)[i].guest_program == guest_program &&
+            (*maps)[i].guest == guest) {
+            (*maps)[i].host = host;
+            (*maps)[i].type = type;
+            (*maps)[i].value_count = value_count;
+            return 1;
         }
     }
 
-    if (*count < capacity) {
-        maps[*count].guest_program = guest_program;
-        maps[*count].guest = guest;
-        maps[*count].host = host;
-        maps[*count].type = type;
-        maps[*count].value_count = value_count;
-        (*count)++;
+    if (*count == *capacity) {
+        new_capacity = *capacity ? *capacity * 2u : initial_capacity;
+        if (*capacity > UINT32_MAX / 2u ||
+            new_capacity > UINT32_MAX / (uint32_t)sizeof(**maps)) {
+            return 0;
+        }
+        grown = (V86GLLocationMap*)realloc(
+            *maps, (size_t)new_capacity * sizeof(**maps));
+        if (!grown) {
+            return 0;
+        }
+        *maps = grown;
+        *capacity = new_capacity;
     }
+
+    (*maps)[*count].guest_program = guest_program;
+    (*maps)[*count].guest = guest;
+    (*maps)[*count].host = host;
+    (*maps)[*count].type = type;
+    (*maps)[*count].value_count = value_count;
+    (*count)++;
+    return 1;
 }
 
 static V86GLLocationMap* v86gl_uniform_location_map(GLuint guest_program,
@@ -1589,7 +1608,8 @@ static GLint v86gl_host_attrib_index(GLint guest) {
     }
 
     for (i = 0; i < g_attrib_location_count; i++) {
-        if (g_attrib_locations[i].guest == guest) {
+        if (g_attrib_locations[i].guest_program == g_current_guest_program &&
+            g_attrib_locations[i].guest == guest) {
             return g_attrib_locations[i].host;
         }
     }
@@ -1646,7 +1666,13 @@ static void v86gl_reset_gl2_maps(void) {
     g_current_fragment_arb_program = 0;
     g_shader_count = 0;
     g_uniform_location_count = 0;
+    free(g_uniform_locations);
+    g_uniform_locations = NULL;
+    g_uniform_location_capacity = 0;
     g_attrib_location_count = 0;
+    free(g_attrib_locations);
+    g_attrib_locations = NULL;
+    g_attrib_location_capacity = 0;
     g_framebuffer_count = 0;
     g_renderbuffer_count = 0;
     g_query_count = 0;
@@ -3873,10 +3899,17 @@ int v86gl_glQueryLocationMapped(uint32_t location_kind,
         if (host_location >= 0) {
             type = v86gl_uniform_type_for_name(host_program, owned_name);
             *value_count = v86gl_uniform_value_count(type);
-            v86gl_map_location(g_uniform_locations, &g_uniform_location_count,
-                               V86GL_MAX_UNIFORM_LOCATIONS, guest_program,
-                               guest_location, host_location, type,
-                               *value_count);
+            if (!v86gl_map_location(
+                    &g_uniform_locations, &g_uniform_location_count,
+                    &g_uniform_location_capacity,
+                    V86GL_INITIAL_UNIFORM_LOCATIONS, guest_program,
+                    guest_location, host_location, type, *value_count)) {
+                free(owned_name);
+                *result = -1;
+                *value_type = 0;
+                *value_count = 0;
+                return 0;
+            }
             *result = guest_location;
         } else {
             *result = -1;
@@ -3887,9 +3920,16 @@ int v86gl_glQueryLocationMapped(uint32_t location_kind,
         *result = host_location;
         *value_count = host_location >= 0 ? 1 : 0;
         if (host_location >= 0) {
-            v86gl_map_location(g_attrib_locations, &g_attrib_location_count,
-                               V86GL_MAX_ATTRIB_LOCATIONS, guest_program,
-                               host_location, host_location, 0, 1);
+            if (!v86gl_map_location(
+                    &g_attrib_locations, &g_attrib_location_count,
+                    &g_attrib_location_capacity,
+                    V86GL_INITIAL_ATTRIB_LOCATIONS, guest_program,
+                    host_location, host_location, 0, 1)) {
+                free(owned_name);
+                *result = -1;
+                *value_count = 0;
+                return 0;
+            }
         }
     } else {
         free(owned_name);
@@ -3965,9 +4005,12 @@ void v86gl_glMapUniformLocation(GLuint guest_program, GLint guest_location,
     if (host_program && owned_name) {
         host_location = glGetUniformLocation(host_program, owned_name);
     }
-    v86gl_map_location(g_uniform_locations, &g_uniform_location_count,
-                       V86GL_MAX_UNIFORM_LOCATIONS, guest_program,
-                       guest_location, host_location, 0, 1);
+    if (!v86gl_map_location(
+            &g_uniform_locations, &g_uniform_location_count,
+            &g_uniform_location_capacity, V86GL_INITIAL_UNIFORM_LOCATIONS,
+            guest_program, guest_location, host_location, 0, 1)) {
+        printf("[v86gl] failed to grow uniform location map\n");
+    }
     free(owned_name);
 }
 
@@ -3984,9 +4027,12 @@ void v86gl_glMapAttribLocation(GLuint guest_program, GLint guest_index,
     if (host_program && owned_name) {
         host_index = glGetAttribLocation(host_program, owned_name);
     }
-    v86gl_map_location(g_attrib_locations, &g_attrib_location_count,
-                       V86GL_MAX_ATTRIB_LOCATIONS, guest_program,
-                       guest_index, host_index, 0, 1);
+    if (!v86gl_map_location(
+            &g_attrib_locations, &g_attrib_location_count,
+            &g_attrib_location_capacity, V86GL_INITIAL_ATTRIB_LOCATIONS,
+            guest_program, guest_index, host_index, 0, 1)) {
+        printf("[v86gl] failed to grow attribute location map\n");
+    }
     free(owned_name);
 }
 

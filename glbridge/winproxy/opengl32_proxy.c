@@ -1359,8 +1359,8 @@ static int g_swap_interval = 0;
 #define V86GL_MAX_ARB_PROGRAM_OBJECTS 1024
 #define V86GL_MAX_SHADER_OBJECTS 2048
 #define V86GL_MAX_ATTACHED_SHADERS 32
-#define V86GL_MAX_UNIFORM_LOCATIONS 4096
-#define V86GL_MAX_ATTRIB_LOCATIONS 512
+#define V86GL_INITIAL_UNIFORM_LOCATIONS 4096
+#define V86GL_INITIAL_ATTRIB_LOCATIONS 512
 #define V86GL_MAX_VERTEX_ATTRIBS 16
 #define V86GL_MAX_DRAW_BUFFERS 4
 #define V86GL_MAX_COLOR_ATTACHMENTS 4
@@ -1759,8 +1759,16 @@ static GenericAttribState g_generic_attribs[V86GL_MAX_VERTEX_ATTRIBS] = {
 static ShaderObjectState g_shader_objects[V86GL_MAX_SHADER_OBJECTS];
 static ProgramObjectState g_program_objects[V86GL_MAX_PROGRAM_OBJECTS];
 static ArbProgramObjectState g_arb_program_objects[V86GL_MAX_ARB_PROGRAM_OBJECTS];
-static UniformLocationState g_uniform_locations[V86GL_MAX_UNIFORM_LOCATIONS];
-static AttribLocationState g_attrib_locations[V86GL_MAX_ATTRIB_LOCATIONS];
+/* Cube 2 keeps many shader variants alive at once and binds all eight of its
+ * conventional attributes on every program.  A fixed 512-entry attribute
+ * table was therefore exhausted after only 64 programs; later
+ * glBindAttribLocation calls (including vboneweight/vboneindex for MD5
+ * weapons) were silently discarded.  Grow both location tables on demand so
+ * the proxy's bookkeeping cannot change program linkage semantics. */
+static UniformLocationState* g_uniform_locations;
+static uint32_t g_uniform_location_capacity;
+static AttribLocationState* g_attrib_locations;
+static uint32_t g_attrib_location_capacity;
 static FramebufferObjectState g_framebuffer_objects[V86GL_MAX_FRAMEBUFFER_OBJECTS];
 static RenderbufferObjectState g_renderbuffer_objects[V86GL_MAX_RENDERBUFFER_OBJECTS];
 static GLenum g_draw_buffers[V86GL_MAX_DRAW_BUFFERS] = { GL_BACK, GL_NONE, GL_NONE, GL_NONE };
@@ -2174,6 +2182,64 @@ static void clear_attrib_location(AttribLocationState* state) {
     ZeroMemory(state, sizeof(*state));
 }
 
+static BOOL grow_uniform_locations(void) {
+    uint32_t old_capacity = g_uniform_location_capacity;
+    uint32_t new_capacity = old_capacity ?
+        old_capacity * 2u : V86GL_INITIAL_UNIFORM_LOCATIONS;
+    UniformLocationState* locations;
+
+    if (old_capacity > UINT32_MAX / 2u ||
+        new_capacity > UINT32_MAX / (uint32_t)sizeof(*locations)) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return FALSE;
+    }
+    locations = old_capacity ?
+        (UniformLocationState*)HeapReAlloc(
+            GetProcessHeap(), 0, g_uniform_locations,
+            (SIZE_T)new_capacity * sizeof(*locations)) :
+        (UniformLocationState*)HeapAlloc(
+            GetProcessHeap(), 0,
+            (SIZE_T)new_capacity * sizeof(*locations));
+    if (!locations) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return FALSE;
+    }
+    ZeroMemory(locations + old_capacity,
+               (SIZE_T)(new_capacity - old_capacity) * sizeof(*locations));
+    g_uniform_locations = locations;
+    g_uniform_location_capacity = new_capacity;
+    return TRUE;
+}
+
+static BOOL grow_attrib_locations(void) {
+    uint32_t old_capacity = g_attrib_location_capacity;
+    uint32_t new_capacity = old_capacity ?
+        old_capacity * 2u : V86GL_INITIAL_ATTRIB_LOCATIONS;
+    AttribLocationState* locations;
+
+    if (old_capacity > UINT32_MAX / 2u ||
+        new_capacity > UINT32_MAX / (uint32_t)sizeof(*locations)) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return FALSE;
+    }
+    locations = old_capacity ?
+        (AttribLocationState*)HeapReAlloc(
+            GetProcessHeap(), 0, g_attrib_locations,
+            (SIZE_T)new_capacity * sizeof(*locations)) :
+        (AttribLocationState*)HeapAlloc(
+            GetProcessHeap(), 0,
+            (SIZE_T)new_capacity * sizeof(*locations));
+    if (!locations) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return FALSE;
+    }
+    ZeroMemory(locations + old_capacity,
+               (SIZE_T)(new_capacity - old_capacity) * sizeof(*locations));
+    g_attrib_locations = locations;
+    g_attrib_location_capacity = new_capacity;
+    return TRUE;
+}
+
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size);
 
 static UniformLocationState* find_uniform_location_by_name(GLuint program,
@@ -2183,7 +2249,7 @@ static UniformLocationState* find_uniform_location_by_name(GLuint program,
     UniformLocationState* free_state = NULL;
 
     if (!program || !name) return NULL;
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
+    for (i = 0; i < g_uniform_location_capacity; i++) {
         UniformLocationState* state = &g_uniform_locations[i];
         if (state->used && state->program == program && gl_string_equal(state->name, name)) {
             return state;
@@ -2191,7 +2257,12 @@ static UniformLocationState* find_uniform_location_by_name(GLuint program,
         if (!state->used && !free_state) free_state = state;
     }
 
-    if (!create || !free_state) return NULL;
+    if (!create) return NULL;
+    if (!free_state) {
+        uint32_t free_index = g_uniform_location_capacity;
+        if (!grow_uniform_locations()) return NULL;
+        free_state = &g_uniform_locations[free_index];
+    }
     ZeroMemory(free_state, sizeof(*free_state));
     free_state->used = TRUE;
     free_state->program = program;
@@ -2199,6 +2270,7 @@ static UniformLocationState* find_uniform_location_by_name(GLuint program,
     free_state->name = dup_gl_string(name, gl_string_length(name));
     if (!free_state->name) {
         ZeroMemory(free_state, sizeof(*free_state));
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return NULL;
     }
     return free_state;
@@ -2208,7 +2280,7 @@ static UniformLocationState* find_uniform_location(GLint location) {
     uint32_t i;
 
     if (location < 0) return NULL;
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
+    for (i = 0; i < g_uniform_location_capacity; i++) {
         UniformLocationState* state = &g_uniform_locations[i];
         if (state->used && state->location == location) return state;
     }
@@ -2222,7 +2294,7 @@ static AttribLocationState* find_attrib_location_by_name(GLuint program,
     AttribLocationState* free_state = NULL;
 
     if (!program || !name) return NULL;
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
+    for (i = 0; i < g_attrib_location_capacity; i++) {
         AttribLocationState* state = &g_attrib_locations[i];
         if (state->used && state->program == program && gl_string_equal(state->name, name)) {
             return state;
@@ -2230,7 +2302,12 @@ static AttribLocationState* find_attrib_location_by_name(GLuint program,
         if (!state->used && !free_state) free_state = state;
     }
 
-    if (!create || !free_state) return NULL;
+    if (!create) return NULL;
+    if (!free_state) {
+        uint32_t free_index = g_attrib_location_capacity;
+        if (!grow_attrib_locations()) return NULL;
+        free_state = &g_attrib_locations[free_index];
+    }
     ZeroMemory(free_state, sizeof(*free_state));
     free_state->used = TRUE;
     free_state->program = program;
@@ -2239,6 +2316,7 @@ static AttribLocationState* find_attrib_location_by_name(GLuint program,
     free_state->name = dup_gl_string(name, gl_string_length(name));
     if (!free_state->name) {
         ZeroMemory(free_state, sizeof(*free_state));
+        v86gl_set_error(GL_OUT_OF_MEMORY);
         return NULL;
     }
     return free_state;
@@ -2261,12 +2339,12 @@ static AttribLocationState* bind_attrib_location_name(GLuint program,
 static void delete_program_locations(GLuint program) {
     uint32_t i;
 
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
+    for (i = 0; i < g_uniform_location_capacity; i++) {
         if (g_uniform_locations[i].used && g_uniform_locations[i].program == program) {
             clear_uniform_location(&g_uniform_locations[i]);
         }
     }
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
+    for (i = 0; i < g_attrib_location_capacity; i++) {
         if (g_attrib_locations[i].used && g_attrib_locations[i].program == program) {
             clear_attrib_location(&g_attrib_locations[i]);
         }
@@ -2277,12 +2355,12 @@ static void invalidate_program_locations(GLuint program) {
     uint32_t i;
     uint32_t payload = program;
 
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
+    for (i = 0; i < g_uniform_location_capacity; i++) {
         if (g_uniform_locations[i].used && g_uniform_locations[i].program == program) {
             clear_uniform_location(&g_uniform_locations[i]);
         }
     }
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
+    for (i = 0; i < g_attrib_location_capacity; i++) {
         AttribLocationState* state = &g_attrib_locations[i];
         if (!state->used || state->program != program) continue;
         if (state->bound) {
@@ -2345,12 +2423,12 @@ static void free_gl2_state(void) {
             HeapFree(GetProcessHeap(), 0, g_shader_objects[i].source);
         }
     }
-    for (i = 0; i < V86GL_MAX_UNIFORM_LOCATIONS; i++) {
+    for (i = 0; i < g_uniform_location_capacity; i++) {
         if (g_uniform_locations[i].name) {
             HeapFree(GetProcessHeap(), 0, g_uniform_locations[i].name);
         }
     }
-    for (i = 0; i < V86GL_MAX_ATTRIB_LOCATIONS; i++) {
+    for (i = 0; i < g_attrib_location_capacity; i++) {
         if (g_attrib_locations[i].name) {
             HeapFree(GetProcessHeap(), 0, g_attrib_locations[i].name);
         }
@@ -2358,8 +2436,16 @@ static void free_gl2_state(void) {
     ZeroMemory(g_shader_objects, sizeof(g_shader_objects));
     ZeroMemory(g_program_objects, sizeof(g_program_objects));
     ZeroMemory(g_arb_program_objects, sizeof(g_arb_program_objects));
-    ZeroMemory(g_uniform_locations, sizeof(g_uniform_locations));
-    ZeroMemory(g_attrib_locations, sizeof(g_attrib_locations));
+    if (g_uniform_locations) {
+        HeapFree(GetProcessHeap(), 0, g_uniform_locations);
+        g_uniform_locations = NULL;
+    }
+    g_uniform_location_capacity = 0;
+    if (g_attrib_locations) {
+        HeapFree(GetProcessHeap(), 0, g_attrib_locations);
+        g_attrib_locations = NULL;
+    }
+    g_attrib_location_capacity = 0;
     ZeroMemory(g_framebuffer_objects, sizeof(g_framebuffer_objects));
     ZeroMemory(g_renderbuffer_objects, sizeof(g_renderbuffer_objects));
     g_next_shader_id = 1;

@@ -6,7 +6,7 @@
 (function(global) {
     "use strict";
 
-    const V86GL_BRIDGE_VERSION = "cube2-explicit-present-20260717";
+    const V86GL_BRIDGE_VERSION = "cube2-skinning-fix-20260718";
     global.V86GL_BRIDGE_VERSION = V86GL_BRIDGE_VERSION;
 
     const OP_MAKE_CURRENT = 1;

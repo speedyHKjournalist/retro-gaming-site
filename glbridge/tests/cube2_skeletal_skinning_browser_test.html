@@ -1,0 +1,347 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cube 2 skeletal skinning test: running</title>
+<canvas id="v86gl_canvas" width="64" height="64"></canvas>
+<pre id="result">running</pre>
+<script src="../libglwasm/gl4es.js?v=cube2-skeletal-locations-20260718"></script>
+<script>
+(async () => {
+    "use strict";
+
+    const GL_VERTEX_SHADER = 0x8B31;
+    const GL_FRAGMENT_SHADER = 0x8B30;
+    const GL_COMPILE_STATUS = 0x8B81;
+    const GL_LINK_STATUS = 0x8B82;
+    const GL_ACTIVE_UNIFORMS = 0x8B86;
+    const GL_ARRAY_BUFFER = 0x8892;
+    const GL_ELEMENT_ARRAY_BUFFER = 0x8893;
+    const GL_STATIC_DRAW = 0x88E4;
+    const GL_FLOAT = 0x1406;
+    const GL_UNSIGNED_BYTE = 0x1401;
+    const GL_UNSIGNED_SHORT = 0x1403;
+    const GL_TRIANGLES = 0x0004;
+    const GL_COLOR_BUFFER_BIT = 0x4000;
+    const GL_RGBA = 0x1908;
+    const OBJECT_SHADER = 1;
+    const OBJECT_PROGRAM = 2;
+    const ACTIVE_UNIFORM = 1;
+    const LOCATION_UNIFORM = 1;
+    const LOCATION_ATTRIB = 2;
+    const PROGRAM_COUNT = 66;
+    const FILLER_COUNT = 64;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    const module = await createV86GL4ES({
+        canvas: document.getElementById("v86gl_canvas"),
+        locateFile(path) {
+            return `../libglwasm/${path}?v=cube2-skeletal-locations-20260718`;
+        },
+    });
+    const view = () => new DataView(module.HEAPU8.buffer);
+
+    function allocBytes(value) {
+        const bytes = typeof value === "string" ? encoder.encode(value) :
+            new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        const ptr = module._malloc(Math.max(bytes.byteLength, 1));
+        module.HEAPU8.set(bytes, ptr);
+        return {ptr, length: bytes.byteLength};
+    }
+
+    function queryObject(kind, name, pname) {
+        const ptr = module._malloc(4);
+        const ok = module._v86gl_glQueryObjectivMapped(kind, name, pname, ptr);
+        const value = view().getInt32(ptr, true);
+        module._free(ptr);
+        return {ok, value};
+    }
+
+    function objectLog(kind, name) {
+        const lengthPtr = module._malloc(4);
+        const logPtr = module._malloc(8192);
+        const ok = module._v86gl_glQueryObjectLogMapped(
+            kind, name, 8192, lengthPtr, logPtr);
+        const length = ok ? view().getInt32(lengthPtr, true) : 0;
+        const result = ok ? decoder.decode(
+            module.HEAPU8.subarray(logPtr, logPtr + length)) : "<unavailable>";
+        module._free(logPtr);
+        module._free(lengthPtr);
+        return result;
+    }
+
+    function compile(shader, type, source) {
+        module._v86gl_glCreateShaderMapped(shader, type);
+        const encoded = allocBytes(source);
+        module._v86gl_glShaderSourceMapped(
+            shader, encoded.length, encoded.ptr);
+        module._free(encoded.ptr);
+        module._v86gl_glCompileShaderMapped(shader);
+        const status = queryObject(OBJECT_SHADER, shader, GL_COMPILE_STATUS);
+        if (!status.ok || !status.value) {
+            throw new Error(`shader compile failed: ${objectLog(OBJECT_SHADER, shader)}`);
+        }
+    }
+
+    function bindAttrib(program, index, name) {
+        const encoded = allocBytes(name);
+        module._v86gl_glBindAttribLocationMapped(
+            program, index, encoded.length, encoded.ptr);
+        module._free(encoded.ptr);
+    }
+
+    function mapAttrib(program, guestIndex, name) {
+        const encoded = allocBytes(name);
+        module._v86gl_glMapAttribLocation(
+            program, guestIndex, encoded.length, encoded.ptr);
+        module._free(encoded.ptr);
+    }
+
+    function queryLocation(kind, program, guestLocation, name) {
+        const encoded = allocBytes(name);
+        const resultPtr = module._malloc(4);
+        const typePtr = module._malloc(4);
+        const countPtr = module._malloc(4);
+        const ok = module._v86gl_glQueryLocationMapped(
+            kind, program, guestLocation, encoded.length, encoded.ptr,
+            resultPtr, typePtr, countPtr);
+        const result = view().getInt32(resultPtr, true);
+        module._free(countPtr);
+        module._free(typePtr);
+        module._free(resultPtr);
+        module._free(encoded.ptr);
+        return {ok, result};
+    }
+
+    function verifyArrayReflection(program, expectedName, expectedSize) {
+        const count = queryObject(
+            OBJECT_PROGRAM, program, GL_ACTIVE_UNIFORMS);
+        if (!count.ok) throw new Error("active-uniform count failed");
+        for (let index = 0; index < count.value; index++) {
+            const lengthPtr = module._malloc(4);
+            const sizePtr = module._malloc(4);
+            const typePtr = module._malloc(4);
+            const namePtr = module._malloc(128);
+            const ok = module._v86gl_glQueryActiveMapped(
+                ACTIVE_UNIFORM, program, index, 128,
+                lengthPtr, sizePtr, typePtr, namePtr);
+            const length = ok ? view().getInt32(lengthPtr, true) : 0;
+            const size = ok ? view().getInt32(sizePtr, true) : 0;
+            const name = ok ? decoder.decode(
+                module.HEAPU8.subarray(namePtr, namePtr + length)) : "";
+            module._free(namePtr);
+            module._free(typePtr);
+            module._free(sizePtr);
+            module._free(lengthPtr);
+            if (name === expectedName) {
+                if (size !== expectedSize) {
+                    throw new Error(`${name} reflected size ${size}, expected ${expectedSize}`);
+                }
+                return;
+            }
+        }
+        throw new Error(`${expectedName} missing from active-uniform reflection`);
+    }
+
+    function uploadBuffer(target, guestName, value) {
+        const namePtr = module._malloc(4);
+        view().setUint32(namePtr, guestName, true);
+        module._v86gl_glGenBuffersMapped(1, namePtr);
+        module._free(namePtr);
+        module._v86gl_glBindBufferMapped(target, guestName);
+        const data = allocBytes(value);
+        module._v86gl_glBufferDataMapped(
+            target, value.byteLength, GL_STATIC_DRAW, value.byteLength, data.ptr);
+        module._free(data.ptr);
+    }
+
+    const vertexSource = `#version 120
+attribute vec4 vvertex;
+attribute vec4 vcolor;
+attribute vec2 vtexcoord0;
+attribute vec2 vtexcoord1;
+attribute vec3 vnormal;
+attribute vec4 vtangent;
+attribute vec4 vboneweight;
+attribute vec4 vboneindex;
+uniform vec4 animdata[96];
+uniform vec4 filler[64];
+varying vec4 modelcolor;
+void main() {
+    int index = int(vboneindex.x);
+    vec4 dqreal = animdata[index] * vboneweight.x;
+    vec4 dqdual = animdata[index + 1] * vboneweight.x;
+    index = int(vboneindex.y);
+    dqreal += animdata[index] * vboneweight.y;
+    dqdual += animdata[index + 1] * vboneweight.y;
+    index = int(vboneindex.z);
+    dqreal += animdata[index] * vboneweight.z;
+    dqdual += animdata[index + 1] * vboneweight.z;
+    index = int(vboneindex.w);
+    dqreal += animdata[index] * vboneweight.w;
+    dqdual += animdata[index + 1] * vboneweight.w;
+    float len = length(dqreal);
+    dqreal /= len;
+    dqdual /= len;
+    vec4 mpos = vec4((cross(dqreal.xyz,
+        cross(dqreal.xyz, vvertex.xyz) + vvertex.xyz*dqreal.w + dqdual.xyz) +
+        dqdual.xyz*dqreal.w - dqreal.xyz*dqdual.w)*2.0 + vvertex.xyz,
+        vvertex.w);
+    vec4 keep = vcolor + vec4(vtexcoord0, vtexcoord1) +
+        vec4(vnormal, 0.0) + vtangent;
+    gl_Position = vec4(mpos.xy + (keep.xy + filler[63].xy)*1.0e-20,
+                       0.0, 1.0);
+    modelcolor = vec4(0.0, 1.0, 0.0, 1.0) +
+                 (keep + filler[63])*1.0e-20;
+}
+`;
+    const fragmentSource = `#version 120
+varying vec4 modelcolor;
+void main() { gl_FragColor = modelcolor; }
+`;
+    const attribs = [
+        "vvertex", "vcolor", "vtexcoord0", "vtexcoord1",
+        "vnormal", "vtangent", "vboneweight", "vboneindex",
+    ];
+
+    module._v86glMakeCurrent(1, 0, 0, 64, 64);
+    module._v86gl_glViewport(0, 0, 64, 64);
+    compile(11, GL_VERTEX_SHADER, vertexSource);
+    compile(12, GL_FRAGMENT_SHADER, fragmentSource);
+
+    let nextGuestUniform = 1;
+    let finalProgram = 0;
+    let finalAnimLocation = -1;
+    for (let programIndex = 0; programIndex < PROGRAM_COUNT; programIndex++) {
+        const program = 100 + programIndex;
+        module._v86gl_glCreateProgramMapped(program);
+        module._v86gl_glAttachShaderMapped(program, 11);
+        module._v86gl_glAttachShaderMapped(program, 12);
+        attribs.forEach((name, index) => bindAttrib(program, index, name));
+        module._v86gl_glLinkProgramMapped(program);
+        const linked = queryObject(OBJECT_PROGRAM, program, GL_LINK_STATUS);
+        if (!linked.ok || !linked.value) {
+            throw new Error(`program ${programIndex} link failed: ` +
+                objectLog(OBJECT_PROGRAM, program));
+        }
+        for (let index = 0; index < attribs.length; index++) {
+            const location = queryLocation(
+                LOCATION_ATTRIB, program, -1, attribs[index]);
+            if (!location.ok || location.result !== index) {
+                throw new Error(`program ${programIndex} attribute ${index} -> ` +
+                    JSON.stringify(location));
+            }
+        }
+        /* Keep the first 65 programs identity-mapped, then swap only the two
+         * bone attributes on the final program.  The draw below therefore
+         * fails both if the old 512-entry map silently overflows and if lookup
+         * accidentally reuses a different program's mapping. */
+        for (let guestIndex = 0; guestIndex < attribs.length; guestIndex++) {
+            const hostName = programIndex === PROGRAM_COUNT - 1 && guestIndex === 6 ?
+                "vboneindex" :
+                programIndex === PROGRAM_COUNT - 1 && guestIndex === 7 ?
+                    "vboneweight" : attribs[guestIndex];
+            mapAttrib(program, guestIndex, hostName);
+        }
+        for (let index = 0; index < FILLER_COUNT; index++) {
+            const location = queryLocation(
+                LOCATION_UNIFORM, program, nextGuestUniform++, `filler[${index}]`);
+            if (!location.ok || location.result < 0) {
+                throw new Error(`program ${programIndex} filler[${index}] mapping failed`);
+            }
+        }
+        const animLocation = nextGuestUniform++;
+        const anim = queryLocation(
+            LOCATION_UNIFORM, program, animLocation, "animdata");
+        if (!anim.ok || anim.result !== animLocation) {
+            throw new Error(`program ${programIndex} animdata mapping failed`);
+        }
+        if (programIndex === PROGRAM_COUNT - 1) {
+            finalProgram = program;
+            finalAnimLocation = animLocation;
+            verifyArrayReflection(program, "animdata", 96);
+            for (const invalidName of ["filler[64]", "animdata[96]"]) {
+                const invalid = queryLocation(
+                    LOCATION_UNIFORM, program, nextGuestUniform++, invalidName);
+                if (!invalid.ok || invalid.result !== -1) {
+                    throw new Error(`${invalidName} crossed the array boundary`);
+                }
+            }
+        }
+    }
+
+    module._v86gl_glUseProgramMapped(finalProgram);
+    for (let index = 1; index <= 5; index++) {
+        module._v86gl_glVertexAttrib4fMapped(index, 0, 0, 0, 0);
+    }
+
+    const stride = 20;
+    const vertices = new ArrayBuffer(stride * 3);
+    const vertexView = new DataView(vertices);
+    const positions = [[-0.9, -0.7, 0], [0.1, -0.7, 0], [-0.4, 0.7, 0]];
+    for (let index = 0; index < 3; index++) {
+        const base = index * stride;
+        positions[index].forEach((value, component) =>
+            vertexView.setFloat32(base + component * 4, value, true));
+        vertexView.setUint8(base + 12, 255);
+        vertexView.setUint8(base + 13, 0);
+        vertexView.setUint8(base + 14, 0);
+        vertexView.setUint8(base + 15, 0);
+        vertexView.setUint8(base + 16, 32);
+        vertexView.setUint8(base + 17, 0);
+        vertexView.setUint8(base + 18, 0);
+        vertexView.setUint8(base + 19, 0);
+    }
+    uploadBuffer(GL_ARRAY_BUFFER, 501, new Uint8Array(vertices));
+    module._v86gl_glVertexAttribPointerMapped(0, 3, GL_FLOAT, false, stride, 0);
+    /* The final program maps guest 7 -> host vboneweight (6) and guest 6 ->
+     * host vboneindex (7), deliberately making identity fallback incorrect. */
+    module._v86gl_glVertexAttribPointerMapped(
+        7, 4, GL_UNSIGNED_BYTE, true, stride, 12);
+    module._v86gl_glVertexAttribPointerMapped(
+        6, 4, GL_UNSIGNED_BYTE, false, stride, 16);
+    module._v86gl_glEnableVertexAttribArrayMapped(0);
+    module._v86gl_glEnableVertexAttribArrayMapped(7);
+    module._v86gl_glEnableVertexAttribArrayMapped(6);
+    uploadBuffer(GL_ELEMENT_ARRAY_BUFFER, 502, new Uint16Array([0, 1, 2]));
+
+    const animdata = new Float32Array(66 * 4);
+    function setQuat(index, x, y, z, w) {
+        animdata.set([x, y, z, w], index * 4);
+    }
+    setQuat(0, 0, 0, 0, 1);
+    setQuat(1, -1.5, 0, 0, 0);
+    for (let bone = 1; bone < 33; bone++) {
+        setQuat(bone * 2, 0, 0, 0, 1);
+    }
+    setQuat(32, 0, 0, 0, 1);
+    setQuat(33, 0.2, 0, 0, 0);
+    const animPtr = allocBytes(animdata);
+    module._v86gl_glUniformfvMapped(finalAnimLocation, 4, 66, animPtr.ptr);
+    module._free(animPtr.ptr);
+
+    module._v86gl_glClearColor(0, 0, 0, 1);
+    module._v86gl_glClear(GL_COLOR_BUFFER_BIT);
+    module._v86gl_glDrawRangeElementsDirect(
+        GL_TRIANGLES, 0, 2, 3, GL_UNSIGNED_SHORT, 0);
+    module._v86gl_glFinish();
+    const pixelPtr = module._malloc(4);
+    if (!module._v86gl_glReadPixels(
+            32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelPtr)) {
+        throw new Error("pixel readback failed");
+    }
+    const pixel = Array.from(module.HEAPU8.subarray(pixelPtr, pixelPtr + 4));
+    if (pixel[1] < 170 || pixel[0] > 60 || pixel[2] > 60) {
+        throw new Error(`skeletal vertex landed incorrectly: ${pixel.join(",")}`);
+    }
+
+    document.title = "Cube 2 skeletal skinning test: PASS";
+    document.getElementById("result").textContent =
+        `PASS ${PROGRAM_COUNT * 8} program-isolated attribute remaps, ` +
+        `${PROGRAM_COUNT * (FILLER_COUNT + 1)} uniform mappings, ` +
+        `pixel ${pixel.join(",")}`;
+})().catch(error => {
+    document.title = "Cube 2 skeletal skinning test: FAIL";
+    document.getElementById("result").textContent = `FAIL ${error.stack || error}`;
+    throw error;
+});
+</script>
