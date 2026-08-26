@@ -179,6 +179,27 @@ check("onDDUpdateOverlay decodes identity, rectangles, state and destination",
                 (base + index * 4) + " is not read");
 });
 
+check("GetDC preserves the channel masks of true-colour DirectDraw surfaces",
+        () => {
+    const start = guestSource.indexOf(
+        "static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface");
+    const end = guestSource.indexOf(
+        "static HRESULT WINAPI surface_ReleaseDC", start);
+    assert.ok(start >= 0 && end > start, "surface_GetDC was not found");
+    const getDC = guestSource.slice(start, end);
+    assert.match(getDC, /biCompression\s*=\s*BI_BITFIELDS/,
+        "16/32-bit GDI surfaces must not use the implicit RGB555 layout");
+    for (const [index, channel] of [
+        [0, "dwRBitMask"], [1, "dwGBitMask"], [2, "dwBBitMask"],
+    ]) {
+        assert.match(getDC,
+            new RegExp("info\\.table\\.masks\\[" + index +
+                "\\]\\s*=\\s*" +
+                "surface->desc\\.ddpfPixelFormat\\." + channel),
+            "the DIB does not inherit " + channel + " from the surface");
+    }
+});
+
 // ---- opcode and flag values agree across all three files ----
 
 function headerConstant(text, name) {

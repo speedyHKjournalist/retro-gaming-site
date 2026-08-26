@@ -225,7 +225,7 @@
     <!-- DirectDraw shares the D3D9 executor, but its 0x500 opcode handlers live
          in this sibling module and must be installed before the bridge creates
          the executor. -->
-    <script src="glbridge/d3d9-webgpu/ddraw_ops.js?v=ddraw-webgpu-20260825"></script>
+    <script src="glbridge/d3d9-webgpu/ddraw_ops.js?v=ddraw-display-mode-backbuffer-20260826"></script>
     <!-- The OpenGL path on WebGPU. Load order matters: the executor resolves
          its constants, wire format, state layout, translator and fixed-function
          generator at load time, not lazily, and webgpu_host.js has to exist

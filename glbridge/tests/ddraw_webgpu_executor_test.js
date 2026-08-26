@@ -32,6 +32,7 @@ const D9WG_MAGIC = 0x47573944;
 const BATCH_FLAG_PRESENT = 1;
 const DEVICE = 0x00100002;
 const FMT_X8R8G8B8 = 22;
+const FMT_R5G6B5 = 23;
 const FMT_P8 = 41;
 const FMT_D16 = 80;
 const USAGE_DEPTHSTENCIL = 0x2;
@@ -891,6 +892,52 @@ await test("an exclusive fullscreen display mode repositions the overlay",
     const state = windowed.executor.devices.get(DEVICE);
     assert.equal(state.ddDisplayMode.guestModeChanged, false);
     assert.equal(state.ddDisplayMode.bitsPerPixel, 16);
+});
+
+await test("a DirectDraw display mode resizes the implicit back buffer",
+        async () => {
+    const { executor, find } = makeExecutor();
+
+    // dxdiag sets its cooperative level while its temporary client area is
+    // only 106x2, then switches to a 640x480 DirectDraw display mode.
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(106, 2)),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 106, 2)),
+    ], { present: true }));
+    const oldBackBuffer = executor.backBufferTexture;
+    assert.ok(oldBackBuffer, "the transient-size back buffer was not created");
+    assert.equal(executor.canvas.width, 106);
+    assert.equal(executor.canvas.height, 2);
+
+    await executor.submit(buildBatch([
+        command(OP.DD_SET_DISPLAY_MODE,
+            displayModePayload(640, 480, 16,
+                (1 << 1) | (1 << 2), true)),
+        SURFACE_SETUP(0x300, 640, 480, FMT_R5G6B5),
+        command(OP.DD_BLT, bltPayload({
+            sourceHandle: 0x300, sourceRect: [0, 0, 640, 480],
+            destinationHandle: 0, destinationRect: [0, 0, 640, 480],
+        })),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
+    ], { present: true }));
+    await Promise.resolve();
+
+    const state = executor.devices.get(DEVICE);
+    assert.equal(state.backBufferWidth, 640);
+    assert.equal(state.backBufferHeight, 480);
+    assert.equal(executor.canvas.width, 640);
+    assert.equal(executor.canvas.height, 480);
+    assert.notEqual(executor.backBufferTexture, oldBackBuffer);
+    assert.equal(oldBackBuffer.destroyed, true,
+        "the retained 106x2 back buffer survived the mode switch");
+    assert.deepEqual(executor.backBufferTexture.descriptor.size,
+        { width: 640, height: 480, depthOrArrayLayers: 1 });
+
+    const blitViewport = find("setViewport")
+        .find(call => call[1] === 0 && call[2] === 0 &&
+            call[3] === 640 && call[4] === 480);
+    assert.ok(blitViewport,
+        "SCREEN_BLT was still clipped to the transient device size");
 });
 
 await test("an unknown surface handle is skipped rather than guessed at",

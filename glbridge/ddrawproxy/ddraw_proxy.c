@@ -2769,7 +2769,13 @@ static HRESULT WINAPI surface_GetColorKey(IDirectDrawSurface7 *iface,
 static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
 {
     DDSurface *surface = surface_from_iface(iface);
-    struct { BITMAPINFOHEADER header; RGBQUAD colors[256]; } info;
+    struct {
+        BITMAPINFOHEADER header;
+        union {
+            RGBQUAD colors[256];
+            DWORD masks[3];
+        } table;
+    } info;
     HDC screen;
     UINT index;
     UINT row;
@@ -2797,13 +2803,34 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
     info.header.biPlanes = 1;
     info.header.biBitCount = (WORD)(surface->bytes_per_pixel * 8u);
     info.header.biCompression = BI_RGB;
-    if (surface->bytes_per_pixel == 1u) {
+    if ((surface->bytes_per_pixel == 2u ||
+            surface->bytes_per_pixel == 4u) &&
+            (surface->desc.ddpfPixelFormat.dwFlags & DDPF_RGB) &&
+            surface->desc.ddpfPixelFormat.dwRBitMask &&
+            surface->desc.ddpfPixelFormat.dwGBitMask &&
+            surface->desc.ddpfPixelFormat.dwBBitMask) {
+        /* Windows defines a 16-bit BI_RGB DIB as RGB555.  DirectDraw's
+         * ordinary 16-bit display mode is RGB565, so using BI_RGB silently
+         * moves the low red bit into the high green bit.  GDI-created
+         * textures then arrive at the host as dark red with bright green
+         * stripes (dxdiag's DirectX 7 cube).  BI_BITFIELDS makes the DIB use
+         * the exact masks that the surface reports and that the WebGPU upload
+         * decoder consumes.  The three DWORD masks occupy bmiColors for a
+         * BITMAPINFOHEADER-format DIB. */
+        info.table.masks[0] = surface->desc.ddpfPixelFormat.dwRBitMask;
+        info.table.masks[1] = surface->desc.ddpfPixelFormat.dwGBitMask;
+        info.table.masks[2] = surface->desc.ddpfPixelFormat.dwBBitMask;
+        info.header.biCompression = BI_BITFIELDS;
+    } else if (surface->bytes_per_pixel == 1u) {
         info.header.biClrUsed = 256;
         for (index = 0; index < 256u; ++index) {
             if (surface->palette) {
-                info.colors[index].rgbRed = surface->palette->entries[index].peRed;
-                info.colors[index].rgbGreen = surface->palette->entries[index].peGreen;
-                info.colors[index].rgbBlue = surface->palette->entries[index].peBlue;
+                info.table.colors[index].rgbRed =
+                        surface->palette->entries[index].peRed;
+                info.table.colors[index].rgbGreen =
+                        surface->palette->entries[index].peGreen;
+                info.table.colors[index].rgbBlue =
+                        surface->palette->entries[index].peBlue;
             }
         }
     }

@@ -593,6 +593,30 @@ ${body.join("\n")}
                 (cooperativeFlags & DDSCL_EXCLUSIVE) !== 0 &&
                 (cooperativeFlags & DDSCL_FULLSCREEN) !== 0;
             if (width && height) {
+                const backBufferSizeChanged =
+                    state.backBufferWidth !== width ||
+                    state.backBufferHeight !== height;
+                if (backBufferSizeChanged) {
+                    // DirectDraw creates the executor device as soon as the
+                    // cooperative level is set, while the window can still
+                    // have a transient client size (dxdiag: 106x2).  The real
+                    // primary/flip-chain size arrives only here.  Leaving the
+                    // implicit target at the creation size makes a 640x480
+                    // SCREEN_BLT clip to the top-left 106x2 -- a black strip
+                    // which the page then stretches over the whole overlay.
+                    //
+                    // A mode switch invalidates the old primary contents.  Do
+                    // not let recorded ops or a retained texture with the old
+                    // dimensions survive into the first Present of this mode.
+                    this.discardFrame();
+                    this.retireActiveSessionBackBuffer();
+                    state.backBufferWidth = width;
+                    state.backBufferHeight = height;
+                    if ((state.sampleCount || 1) > 1) {
+                        this.configureBackBufferMSAA(state, width, height,
+                            state.multisampleType, state.multisampleQuality);
+                    }
+                }
                 state.surface = { ...state.surface, width, height,
                     // Only a mode the guest really switched to puts the window
                     // at the origin covering the emulated screen. When
