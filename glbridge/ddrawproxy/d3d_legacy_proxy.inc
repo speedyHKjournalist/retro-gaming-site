@@ -209,7 +209,7 @@ static HRESULT d3d_legacy_enum_devices(LPD3DENUMDEVICESCALLBACK callback,
 {
     D3DDEVICEDESC hal, hel;
     GUID guid;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     d3d_legacy_fill_caps(&hal);
     hel = hal;
     guid = IID_IDirect3DHALDevice;
@@ -235,7 +235,7 @@ static HRESULT d3d_legacy_find_device(D3DFINDDEVICESEARCH *search,
 {
     if (!search || !result || search->dwSize != sizeof(*search) ||
             result->dwSize != sizeof(*result))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     ZeroMemory(result, sizeof(*result));
     result->dwSize = sizeof(*result);
     result->guid = IID_IDirect3DHALDevice;
@@ -332,7 +332,7 @@ static ULONG WINAPI d3d1_Release(IDirect3D *iface)
 static HRESULT WINAPI d3d1_Initialize(IDirect3D *iface, REFIID iid)
 {
     (void)iface;
-    return iid ? D3D_OK : DDERR_INVALIDPARAMS;
+    return DDWG_TRACE_ERROR(iid ? D3D_OK : DDERR_INVALIDPARAMS);
 }
 
 static HRESULT WINAPI d3d1_EnumDevices(IDirect3D *iface,
@@ -378,7 +378,7 @@ static HRESULT WINAPI d3d_material_QueryInterface(IDirect3DMaterial3 *iface,
         REFIID iid, void **out)
 {
     D3DLegacyMaterial *material = d3d_material_from_any(iface);
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DMaterial3))
         *out = &material->vtbl3;
@@ -387,7 +387,7 @@ static HRESULT WINAPI d3d_material_QueryInterface(IDirect3DMaterial3 *iface,
     else if (guid_equal(iid, &IID_IDirect3DMaterial))
         *out = &material->vtbl1;
     else
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     InterlockedIncrement(&material->ref);
     return S_OK;
 }
@@ -418,7 +418,7 @@ static HRESULT WINAPI d3d_material_SetMaterial(IDirect3DMaterial3 *iface,
     D3DLegacyMaterial *material = d3d_material_from_any(iface);
     D3DMATERIAL7 material7;
     if (!data || data->dwSize < sizeof(D3DMATERIAL))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     material->material = *data;
     material->material.dwSize = sizeof(material->material);
     if (material->owner->d3d7_device) {
@@ -435,7 +435,7 @@ static HRESULT WINAPI d3d_material_GetMaterial(IDirect3DMaterial3 *iface,
 {
     D3DLegacyMaterial *material = d3d_material_from_any(iface);
     DWORD size;
-    if (!data || data->dwSize < sizeof(DWORD)) return DDERR_INVALIDPARAMS;
+    if (!data || data->dwSize < sizeof(DWORD)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     size = data->dwSize < sizeof(material->material) ? data->dwSize :
             sizeof(material->material);
     CopyMemory(data, &material->material, size);
@@ -447,7 +447,7 @@ static HRESULT d3d_material_get_handle(D3DLegacyMaterial *material,
         D3D7Device *device, D3DMATERIALHANDLE *handle)
 {
     if (!handle || !device || device->owner != material->owner)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!material->handle) material->handle = allocate_handle();
     *handle = material->handle;
     return D3D_OK;
@@ -498,11 +498,11 @@ static HRESULT d3d_legacy_create_material(DDrawObject *owner,
         D3DLegacyMaterial **out, IUnknown *outer)
 {
     D3DLegacyMaterial *material;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     material = (D3DLegacyMaterial *)heap_alloc_zero(sizeof(*material));
-    if (!material) return DDERR_OUTOFMEMORY;
+    if (!material) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     material->vtbl3 = &g_d3d_material3_vtbl;
     material->vtbl2 = &g_d3d_material2_vtbl;
     material->vtbl1 = &g_d3d_material1_vtbl;
@@ -544,10 +544,10 @@ static void d3d_legacy_light7(const D3DLIGHT2 *source, D3DLIGHT7 *destination)
 static HRESULT WINAPI d3d_light_QueryInterface(IDirect3DLight *iface,
         REFIID iid, void **out)
 {
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid_is_unknown(iid) && !guid_equal(iid, &IID_IDirect3DLight))
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     *out = iface;
     InterlockedIncrement(&d3d_light_from_iface(iface)->ref);
     return S_OK;
@@ -582,7 +582,7 @@ static HRESULT WINAPI d3d_light_SetLight(IDirect3DLight *iface,
 {
     D3DLegacyLight *light = d3d_light_from_iface(iface);
     DWORD size;
-    if (!data || data->dwSize < sizeof(D3DLIGHT)) return DDERR_INVALIDPARAMS;
+    if (!data || data->dwSize < sizeof(D3DLIGHT)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     size = data->dwSize < sizeof(light->light) ? data->dwSize :
             sizeof(light->light);
     ZeroMemory(&light->light, sizeof(light->light));
@@ -600,7 +600,7 @@ static HRESULT WINAPI d3d_light_GetLight(IDirect3DLight *iface,
 {
     D3DLegacyLight *light = d3d_light_from_iface(iface);
     DWORD size;
-    if (!data || data->dwSize < sizeof(DWORD)) return DDERR_INVALIDPARAMS;
+    if (!data || data->dwSize < sizeof(DWORD)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     size = data->dwSize < sizeof(light->light) ? data->dwSize :
             sizeof(light->light);
     CopyMemory(data, &light->light, size);
@@ -612,11 +612,11 @@ static HRESULT d3d_legacy_create_light(DDrawObject *owner,
         IDirect3DLight **out, IUnknown *outer)
 {
     D3DLegacyLight *light;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     light = (D3DLegacyLight *)heap_alloc_zero(sizeof(*light));
-    if (!light) return DDERR_OUTOFMEMORY;
+    if (!light) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     light->vtbl = &g_d3d_light_vtbl;
     light->ref = 1;
     light->owner = owner;
@@ -662,23 +662,23 @@ static HRESULT d3d_legacy_apply_viewport(D3DLegacyViewport *viewport)
     D3DLegacyLight *light;
     DWORD index = 0;
     HRESULT result;
-    if (!viewport->device) return D3DERR_VIEWPORTHASNODEVICE;
+    if (!viewport->device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     if (!viewport->viewport1_set && !viewport->viewport2_set)
-        return D3DERR_VIEWPORTDATANOTSET;
+        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
     d3d_legacy_viewport7(viewport, &viewport7);
     result = d3d7_device_SetViewport((IDirect3DDevice7 *)viewport->device,
             &viewport7);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     for (light = viewport->lights; light && index < D3D7_MAX_LIGHTS;
             light = light->next_in_viewport, ++index) {
         D3DLIGHT7 light7;
         d3d_legacy_light7(&light->light, &light7);
         result = d3d7_device_SetLight((IDirect3DDevice7 *)viewport->device,
                 index, &light7);
-        if (FAILED(result)) return result;
+        if (FAILED(result)) return DDWG_TRACE_ERROR(result);
         result = d3d7_device_LightEnable((IDirect3DDevice7 *)viewport->device,
                 index, !!(light->light.dwFlags & D3DLIGHT_ACTIVE));
-        if (FAILED(result)) return result;
+        if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     }
     while (index < D3D7_MAX_LIGHTS) {
         d3d7_device_LightEnable((IDirect3DDevice7 *)viewport->device,
@@ -691,7 +691,7 @@ static HRESULT WINAPI d3d_viewport_QueryInterface(IDirect3DViewport3 *iface,
         REFIID iid, void **out)
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DViewport3))
         *out = &viewport->vtbl3;
@@ -700,7 +700,7 @@ static HRESULT WINAPI d3d_viewport_QueryInterface(IDirect3DViewport3 *iface,
     else if (guid_equal(iid, &IID_IDirect3DViewport))
         *out = &viewport->vtbl1;
     else
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     InterlockedIncrement(&viewport->ref);
     return S_OK;
 }
@@ -745,8 +745,8 @@ static HRESULT WINAPI d3d_viewport_GetViewport(IDirect3DViewport3 *iface,
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     if (!data || data->dwSize < sizeof(D3DVIEWPORT))
-        return DDERR_INVALIDPARAMS;
-    if (!viewport->viewport1_set) return D3DERR_VIEWPORTDATANOTSET;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!viewport->viewport1_set) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
     *data = viewport->viewport1;
     return D3D_OK;
 }
@@ -757,7 +757,7 @@ static HRESULT WINAPI d3d_viewport_SetViewport(IDirect3DViewport3 *iface,
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     if (!data || data->dwSize < sizeof(D3DVIEWPORT) || !data->dwWidth ||
             !data->dwHeight || data->dvMinZ > data->dvMaxZ)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     viewport->viewport1 = *data;
     viewport->viewport1.dwSize = sizeof(viewport->viewport1);
     viewport->viewport1_set = TRUE;
@@ -772,8 +772,8 @@ static HRESULT WINAPI d3d_viewport_GetViewport2(IDirect3DViewport3 *iface,
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     if (!data || data->dwSize < sizeof(D3DVIEWPORT2))
-        return DDERR_INVALIDPARAMS;
-    if (!viewport->viewport2_set) return D3DERR_VIEWPORTDATANOTSET;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!viewport->viewport2_set) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
     *data = viewport->viewport2;
     return D3D_OK;
 }
@@ -784,7 +784,7 @@ static HRESULT WINAPI d3d_viewport_SetViewport2(IDirect3DViewport3 *iface,
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     if (!data || data->dwSize < sizeof(D3DVIEWPORT2) || !data->dwWidth ||
             !data->dwHeight || data->dvMinZ > data->dvMaxZ)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     viewport->viewport2 = *data;
     viewport->viewport2.dwSize = sizeof(viewport->viewport2);
     viewport->viewport2_set = TRUE;
@@ -804,14 +804,14 @@ static HRESULT WINAPI d3d_viewport_TransformVertices(
     D3DVIEWPORT7 viewport7;
     DWORD index;
     DWORD clip_union = 0, clip_intersection = 0x3fu;
-    if (!device) return D3DERR_VIEWPORTHASNODEVICE;
+    if (!device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     if (!data || data->dwSize < sizeof(*data) || !data->lpIn ||
             !data->lpOut || data->dwInSize < sizeof(D3DVECTOR) ||
             data->dwOutSize < sizeof(D3DTLVERTEX) ||
             !(flags & (D3DTRANSFORM_CLIPPED | D3DTRANSFORM_UNCLIPPED)))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!viewport->viewport1_set && !viewport->viewport2_set)
-        return D3DERR_VIEWPORTDATANOTSET;
+        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
@@ -861,11 +861,11 @@ static HRESULT WINAPI d3d_viewport_LightElements(IDirect3DViewport3 *iface,
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     DWORD index;
-    if (!viewport->device) return D3DERR_VIEWPORTHASNODEVICE;
+    if (!viewport->device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     if (!data || data->dwSize < sizeof(*data) || !data->lpIn || !data->lpOut ||
             data->dwInSize < sizeof(D3DLIGHTINGELEMENT) ||
             data->dwOutSize < sizeof(D3DTLVERTEX))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (index = 0; index < count; ++index) {
         D3DLIGHTINGELEMENT *input = (D3DLIGHTINGELEMENT *)((BYTE *)data->lpIn +
                 index * data->dwInSize);
@@ -887,7 +887,7 @@ static HRESULT WINAPI d3d_viewport_SetBackground(IDirect3DViewport3 *iface,
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     if (handle && !d3d_legacy_find_material(viewport->owner, handle))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     viewport->background = handle;
     viewport->background_valid = !!handle;
     return D3D_OK;
@@ -897,7 +897,7 @@ static HRESULT WINAPI d3d_viewport_GetBackground(IDirect3DViewport3 *iface,
         D3DMATERIALHANDLE *handle, WINBOOL *valid)
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
-    if (!handle || !valid) return DDERR_INVALIDPARAMS;
+    if (!handle || !valid) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *handle = viewport->background;
     *valid = viewport->background_valid;
     return D3D_OK;
@@ -909,7 +909,7 @@ static HRESULT d3d_viewport_set_depth(D3DLegacyViewport *viewport,
     DDSurface *surface = surface_iface ? surface_from_any(surface_iface, NULL) :
             NULL;
     if (surface && (surface->owner != viewport->owner ||
-            !format_is_depth(surface->format))) return DDERR_INVALIDPARAMS;
+            !format_is_depth(surface->format))) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     if (viewport->background_depth)
         surface_Release((IDirectDrawSurface7 *)&
@@ -933,7 +933,7 @@ static HRESULT WINAPI d3d_viewport_SetBackgroundDepth2(
 static HRESULT d3d_viewport_get_depth(D3DLegacyViewport *viewport,
         void **out, WINBOOL *valid, unsigned version)
 {
-    if (!out || !valid) return DDERR_INVALIDPARAMS;
+    if (!out || !valid) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *valid = !!viewport->background_depth;
     *out = surface_interface(viewport->background_depth, version);
     if (viewport->background_depth)
@@ -961,7 +961,7 @@ static HRESULT WINAPI d3d_viewport_Clear2(IDirect3DViewport3 *iface,
         DWORD stencil)
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
-    if (!viewport->device) return D3DERR_VIEWPORTHASNODEVICE;
+    if (!viewport->device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     return d3d7_device_Clear((IDirect3DDevice7 *)viewport->device, count,
             rects, flags, color, z, stencil);
 }
@@ -984,11 +984,11 @@ static HRESULT WINAPI d3d_viewport_AddLight(IDirect3DViewport3 *iface,
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     D3DLegacyLight *light;
     if (!light_iface || light_iface->lpVtbl != &g_d3d_light_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     light = d3d_light_from_iface(light_iface);
-    if (light->owner != viewport->owner) return DDERR_INVALIDPARAMS;
+    if (light->owner != viewport->owner) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (light->viewport == viewport) return D3D_OK;
-    if (light->viewport) return D3DERR_LIGHTHASVIEWPORT;
+    if (light->viewport) return DDWG_TRACE_ERROR(D3DERR_LIGHTHASVIEWPORT);
     light->viewport = viewport;
     light->next_in_viewport = viewport->lights;
     viewport->lights = light;
@@ -1005,9 +1005,9 @@ static HRESULT WINAPI d3d_viewport_DeleteLight(IDirect3DViewport3 *iface,
     D3DLegacyLight *light;
     D3DLegacyLight **link;
     if (!light_iface || light_iface->lpVtbl != &g_d3d_light_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     light = d3d_light_from_iface(light_iface);
-    if (light->viewport != viewport) return D3DERR_LIGHTNOTINTHISVIEWPORT;
+    if (light->viewport != viewport) return DDWG_TRACE_ERROR(D3DERR_LIGHTNOTINTHISVIEWPORT);
     link = &viewport->lights;
     while (*link && *link != light) link = &(*link)->next_in_viewport;
     if (*link) *link = light->next_in_viewport;
@@ -1024,7 +1024,7 @@ static HRESULT WINAPI d3d_viewport_NextLight(IDirect3DViewport3 *iface,
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     D3DLegacyLight *light = NULL;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (flags == D3DNEXT_HEAD) light = viewport->lights;
     else if (flags == D3DNEXT_TAIL) {
@@ -1033,10 +1033,10 @@ static HRESULT WINAPI d3d_viewport_NextLight(IDirect3DViewport3 *iface,
     } else if (flags == D3DNEXT_NEXT && reference &&
             reference->lpVtbl == &g_d3d_light_vtbl) {
         light = d3d_light_from_iface(reference);
-        if (light->viewport != viewport) return D3DERR_LIGHTNOTINTHISVIEWPORT;
+        if (light->viewport != viewport) return DDWG_TRACE_ERROR(D3DERR_LIGHTNOTINTHISVIEWPORT);
         light = light->next_in_viewport;
-    } else return DDERR_INVALIDPARAMS;
-    if (!light) return DDERR_NOTFOUND;
+    } else return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!light) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     *out = (IDirect3DLight *)light;
     d3d_light_AddRef(*out);
     return D3D_OK;
@@ -1046,11 +1046,11 @@ static HRESULT d3d_legacy_create_viewport(DDrawObject *owner,
         D3DLegacyViewport **out, IUnknown *outer)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     viewport = (D3DLegacyViewport *)heap_alloc_zero(sizeof(*viewport));
-    if (!viewport) return DDERR_OUTOFMEMORY;
+    if (!viewport) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     viewport->vtbl3 = &g_d3d_viewport3_vtbl;
     viewport->vtbl2 = &g_d3d_viewport2_vtbl;
     viewport->vtbl1 = &g_d3d_viewport1_vtbl;
@@ -1085,78 +1085,78 @@ static HRESULT WINAPI d3d3_CreateMaterial(IDirect3D3 *iface,
         IDirect3DMaterial3 **out, IUnknown *outer)
 {
     D3DLegacyMaterial *material;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     HRESULT result = d3d_legacy_create_material(d3d3_object_from_iface(iface),
             &material, outer);
     if (out) *out = SUCCEEDED(result) ?
             (IDirect3DMaterial3 *)&material->vtbl3 : NULL;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI d3d2_CreateMaterial(IDirect3D2 *iface,
         IDirect3DMaterial2 **out, IUnknown *outer)
 {
     D3DLegacyMaterial *material;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     HRESULT result = d3d_legacy_create_material(d3d2_object_from_iface(iface),
             &material, outer);
     if (out) *out = SUCCEEDED(result) ?
             (IDirect3DMaterial2 *)&material->vtbl2 : NULL;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI d3d1_CreateMaterial(IDirect3D *iface,
         IDirect3DMaterial **out, IUnknown *outer)
 {
     D3DLegacyMaterial *material;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     HRESULT result = d3d_legacy_create_material(d3d1_object_from_iface(iface),
             &material, outer);
     if (out) *out = SUCCEEDED(result) ?
             (IDirect3DMaterial *)&material->vtbl1 : NULL;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI d3d3_CreateViewport(IDirect3D3 *iface,
         IDirect3DViewport3 **out, IUnknown *outer)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     HRESULT result = d3d_legacy_create_viewport(d3d3_object_from_iface(iface),
             &viewport, outer);
     if (out) *out = SUCCEEDED(result) ?
             (IDirect3DViewport3 *)&viewport->vtbl3 : NULL;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI d3d2_CreateViewport(IDirect3D2 *iface,
         IDirect3DViewport2 **out, IUnknown *outer)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     HRESULT result = d3d_legacy_create_viewport(d3d2_object_from_iface(iface),
             &viewport, outer);
     if (out) *out = SUCCEEDED(result) ?
             (IDirect3DViewport2 *)&viewport->vtbl2 : NULL;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI d3d1_CreateViewport(IDirect3D *iface,
         IDirect3DViewport **out, IUnknown *outer)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     HRESULT result = d3d_legacy_create_viewport(d3d1_object_from_iface(iface),
             &viewport, outer);
     if (out) *out = SUCCEEDED(result) ?
             (IDirect3DViewport *)&viewport->vtbl1 : NULL;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1187,7 +1187,7 @@ static HRESULT d3d_texture_get_handle(DDSurface *surface, D3D7Device *device,
         D3DTEXTUREHANDLE *handle)
 {
     if (!handle || !device || device->owner != surface->owner ||
-            format_is_depth(surface->format)) return DDERR_INVALIDPARAMS;
+            format_is_depth(surface->format)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!surface->texture_handle) surface->texture_handle = allocate_handle();
     *handle = surface->texture_handle;
     return D3D_OK;
@@ -1221,23 +1221,23 @@ static HRESULT d3d_legacy_texture_load_surface(DDSurface *destination,
             destination->format != source->format ||
             destination->width != source->width ||
             destination->height != source->height)
-        return D3DERR_TEXTURE_BADSIZE;
+        return DDWG_TRACE_ERROR(D3DERR_TEXTURE_BADSIZE);
     while (dst_level && src_level) {
         result = surface_Blt((IDirectDrawSurface7 *)&dst_level->vtbl7, NULL,
                 (IDirectDrawSurface7 *)&src_level->vtbl7, NULL, DDBLT_WAIT,
                 NULL);
-        if (FAILED(result)) return D3DERR_TEXTURE_LOAD_FAILED;
+        if (FAILED(result)) return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
         dst_level = dst_level->mip_next;
         src_level = src_level->mip_next;
     }
-    if (dst_level || src_level) return D3DERR_TEXTURE_BADSIZE;
+    if (dst_level || src_level) return DDWG_TRACE_ERROR(D3DERR_TEXTURE_BADSIZE);
     for (face = 1; face < 6u; ++face) {
         if (!!destination->cube_faces[face] != !!source->cube_faces[face])
-            return D3DERR_TEXTURE_BADSIZE;
+            return DDWG_TRACE_ERROR(D3DERR_TEXTURE_BADSIZE);
         if (destination->cube_faces[face]) {
             result = d3d_legacy_texture_load_surface(
                     destination->cube_faces[face], source->cube_faces[face]);
-            if (FAILED(result)) return result;
+            if (FAILED(result)) return DDWG_TRACE_ERROR(result);
         }
     }
     return D3D_OK;
@@ -1247,7 +1247,7 @@ static HRESULT WINAPI d3d_texture2_Load(IDirect3DTexture2 *iface,
         IDirect3DTexture2 *source_iface)
 {
     if (!source_iface || source_iface->lpVtbl != &g_d3d_texture2_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return d3d_legacy_texture_load_surface(d3d_texture2_from_iface(iface),
             d3d_texture2_from_iface(source_iface));
 }
@@ -1278,8 +1278,8 @@ static HRESULT WINAPI d3d_texture1_Initialize(IDirect3DTexture *iface,
     DDSurface *surface = d3d_texture1_from_iface(iface);
     if (!device || !surface_iface || surface_from_any(surface_iface, NULL) !=
             surface || d3d1_device_from_iface(device)->owner != surface->owner)
-        return DDERR_INVALIDPARAMS;
-    return DDERR_ALREADYINITIALIZED;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
 static HRESULT WINAPI d3d_texture1_GetHandle(IDirect3DTexture *iface,
@@ -1303,7 +1303,7 @@ static HRESULT WINAPI d3d_texture1_Load(IDirect3DTexture *iface,
         IDirect3DTexture *source_iface)
 {
     if (!source_iface || source_iface->lpVtbl != &g_d3d_texture1_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return d3d_legacy_texture_load_surface(d3d_texture1_from_iface(iface),
             d3d_texture1_from_iface(source_iface));
 }
@@ -1326,11 +1326,11 @@ static HRESULT d3d_legacy_create_device(DDrawObject *owner, REFCLSID clsid,
     IDirect3DDevice7 *device7;
     const GUID *normalized_class = clsid;
     HRESULT result;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (!surface_iface) return DDERR_INVALIDPARAMS;
+    if (!surface_iface) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = surface_from_any(surface_iface, NULL);
-    if (!surface || surface->owner != owner) return DDERR_INVALIDPARAMS;
+    if (!surface || surface->owner != owner) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (guid_equal(clsid, &IID_IDirect3DRampDevice) ||
             guid_equal(clsid, &IID_IDirect3DMMXDevice) ||
             guid_equal(clsid, &IID_IDirect3DRefDevice))
@@ -1338,7 +1338,7 @@ static HRESULT d3d_legacy_create_device(DDrawObject *owner, REFCLSID clsid,
     result = d3d7_CreateDevice((IDirect3D7 *)&owner->d3d7_vtbl,
             normalized_class,
             (IDirectDrawSurface7 *)&surface->vtbl7, &device7);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     if (version == 3u)
         *out = &d3d7_device_from_iface(device7)->device3_vtbl;
     else if (version == 2u)
@@ -1351,7 +1351,7 @@ static HRESULT d3d_legacy_create_device(DDrawObject *owner, REFCLSID clsid,
 static HRESULT WINAPI d3d3_CreateDevice(IDirect3D3 *iface, REFCLSID clsid,
         IDirectDrawSurface4 *surface, IDirect3DDevice3 **out, IUnknown *outer)
 {
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     return d3d_legacy_create_device(d3d3_object_from_iface(iface), clsid,
             surface, 3u, (void **)out);
 }
@@ -1369,13 +1369,13 @@ static HRESULT WINAPI d3d3_CreateVertexBuffer(IDirect3D3 *iface,
 {
     IDirect3DVertexBuffer7 *buffer7;
     HRESULT result;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     result = d3d7_CreateVertexBuffer((IDirect3D7 *)&
             d3d3_object_from_iface(iface)->d3d7_vtbl, description, &buffer7,
             flags);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     *out = (IDirect3DVertexBuffer *)&
             d3d7_vb_from_iface(buffer7)->legacy_vtbl;
     return D3D_OK;
@@ -1400,7 +1400,7 @@ static HRESULT WINAPI d3d3_device_QueryInterface(IDirect3DDevice3 *iface,
         REFIID iid, void **out)
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DDevice7))
         *out = &device->vtbl;
@@ -1411,7 +1411,7 @@ static HRESULT WINAPI d3d3_device_QueryInterface(IDirect3DDevice3 *iface,
     else if (guid_equal(iid, &IID_IDirect3DDevice))
         *out = &device->device1_vtbl;
     else
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     d3d7_device_AddRef((IDirect3DDevice7 *)device);
     return S_OK;
 }
@@ -1431,7 +1431,7 @@ static ULONG WINAPI d3d3_device_Release(IDirect3DDevice3 *iface)
 static HRESULT d3d_legacy_device_get_caps(D3DDEVICEDESC *hal,
         D3DDEVICEDESC *hel)
 {
-    if (!hal && !hel) return DDERR_INVALIDPARAMS;
+    if (!hal && !hel) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (hal) d3d_legacy_fill_caps(hal);
     if (hel) d3d_legacy_fill_caps(hel);
     return D3D_OK;
@@ -1449,7 +1449,7 @@ static HRESULT WINAPI d3d3_device_GetStats(IDirect3DDevice3 *iface,
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
     DWORD size;
-    if (!stats || stats->dwSize < sizeof(DWORD)) return DDERR_INVALIDPARAMS;
+    if (!stats || stats->dwSize < sizeof(DWORD)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     size = stats->dwSize < sizeof(device->legacy_stats) ? stats->dwSize :
             sizeof(device->legacy_stats);
     CopyMemory(stats, &device->legacy_stats, size);
@@ -1461,9 +1461,9 @@ static HRESULT d3d_legacy_add_viewport(D3D7Device *device,
         D3DLegacyViewport *viewport)
 {
     if (!viewport || viewport->owner != device->owner)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (viewport->device == device) return D3D_OK;
-    if (viewport->device) return D3DERR_VIEWPORTHASNODEVICE;
+    if (viewport->device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     viewport->device = device;
     viewport->next_in_device = device->legacy_viewports;
     device->legacy_viewports = viewport;
@@ -1476,7 +1476,7 @@ static HRESULT d3d_legacy_delete_viewport(D3D7Device *device,
 {
     D3DLegacyViewport **link;
     if (!viewport || viewport->device != device)
-        return D3DERR_VIEWPORTHASNODEVICE;
+        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     link = &device->legacy_viewports;
     while (*link && *link != viewport) link = &(*link)->next_in_device;
     if (*link) *link = viewport->next_in_device;
@@ -1521,11 +1521,11 @@ static HRESULT WINAPI d3d3_device_NextViewport(IDirect3DDevice3 *iface,
         IDirect3DViewport3 *reference, IDirect3DViewport3 **out, DWORD flags)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     viewport = d3d_legacy_next_viewport(d3d3_device_from_iface(iface),
             reference ? d3d_viewport_from_any(reference) : NULL, flags);
-    if (!viewport) return DDERR_NOTFOUND;
+    if (!viewport) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     *out = (IDirect3DViewport3 *)&viewport->vtbl3;
     d3d_viewport_AddRef(*out);
     return D3D_OK;
@@ -1574,7 +1574,7 @@ static HRESULT WINAPI d3d3_device_GetDirect3D(IDirect3DDevice3 *iface,
         IDirect3D3 **out)
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = (IDirect3D3 *)&device->owner->d3d3_vtbl;
     d3d3_AddRef(*out);
     return D3D_OK;
@@ -1584,7 +1584,7 @@ static HRESULT d3d_legacy_set_current_viewport(D3D7Device *device,
         D3DLegacyViewport *viewport)
 {
     if (!viewport || viewport->device != device)
-        return D3DERR_VIEWPORTHASNODEVICE;
+        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
     device->legacy_current_viewport = viewport;
     return d3d_legacy_apply_viewport(viewport);
 }
@@ -1601,9 +1601,9 @@ static HRESULT WINAPI d3d3_device_GetCurrentViewport(IDirect3DDevice3 *iface,
 {
     D3DLegacyViewport *viewport =
             d3d3_device_from_iface(iface)->legacy_current_viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = viewport ? (IDirect3DViewport3 *)&viewport->vtbl3 : NULL;
-    if (!viewport) return D3DERR_NOCURRENTVIEWPORT;
+    if (!viewport) return DDWG_TRACE_ERROR(D3DERR_NOCURRENTVIEWPORT);
     d3d_viewport_AddRef(*out);
     return D3D_OK;
 }
@@ -1621,12 +1621,12 @@ static HRESULT WINAPI d3d3_device_GetRenderTarget(IDirect3DDevice3 *iface,
         IDirectDrawSurface4 **out)
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = device->render_target ? (IDirectDrawSurface4 *)&
             device->render_target->vtbl4 : NULL;
     if (device->render_target)
         surface_AddRef((IDirectDrawSurface7 *)&device->render_target->vtbl7);
-    return device->render_target ? D3D_OK : DDERR_NOTFOUND;
+    return DDWG_TRACE_ERROR(device->render_target ? D3D_OK : DDERR_NOTFOUND);
 }
 
 static BOOL d3d_legacy_grow(void **memory, DWORD *capacity, DWORD required,
@@ -1658,10 +1658,10 @@ static HRESULT d3d_legacy_begin(D3D7Device *device,
     D3D7FVFLayout layout;
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
     UINT element_count = 0;
-    if (device->legacy_in_begin) return D3DERR_INBEGIN;
+    if (device->legacy_in_begin) return DDWG_TRACE_ERROR(D3DERR_INBEGIN);
     if (!d3d7_decode_fvf(fvf, &layout, elements, &element_count))
-        return D3DERR_INVALIDVERTEXTYPE;
-    if (vertex_count && !vertices) return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
+    if (vertex_count && !vertices) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (device->legacy_vertex_stride != layout.stride) {
         heap_free(device->legacy_vertices);
         device->legacy_vertices = NULL;
@@ -1670,7 +1670,7 @@ static HRESULT d3d_legacy_begin(D3D7Device *device,
     }
     if (vertex_count && !d3d_legacy_grow((void **)&device->legacy_vertices,
             &device->legacy_vertex_capacity, vertex_count, layout.stride))
-        return DDERR_OUTOFMEMORY;
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     if (vertex_count)
         CopyMemory(device->legacy_vertices, vertices,
                 (SIZE_T)vertex_count * layout.stride);
@@ -1706,12 +1706,12 @@ static HRESULT WINAPI d3d3_device_Vertex(IDirect3DDevice3 *iface,
     D3D7FVFLayout layout;
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
     UINT element_count = 0;
-    if (!device->legacy_in_begin) return D3DERR_NOTINBEGIN;
+    if (!device->legacy_in_begin) return DDWG_TRACE_ERROR(D3DERR_NOTINBEGIN);
     if (!vertex || !d3d7_decode_fvf(device->legacy_fvf, &layout, elements,
-            &element_count)) return D3DERR_INVALIDVERTEXTYPE;
+            &element_count)) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
     if (!d3d_legacy_grow((void **)&device->legacy_vertices,
             &device->legacy_vertex_capacity, device->legacy_vertex_count + 1u,
-            layout.stride)) return DDERR_OUTOFMEMORY;
+            layout.stride)) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     CopyMemory(device->legacy_vertices +
             device->legacy_vertex_count * layout.stride, vertex,
             layout.stride);
@@ -1722,10 +1722,10 @@ static HRESULT WINAPI d3d3_device_Vertex(IDirect3DDevice3 *iface,
 static HRESULT WINAPI d3d3_device_Index(IDirect3DDevice3 *iface, WORD index)
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
-    if (!device->legacy_in_begin) return D3DERR_NOTINBEGIN;
+    if (!device->legacy_in_begin) return DDWG_TRACE_ERROR(D3DERR_NOTINBEGIN);
     if (!d3d_legacy_grow((void **)&device->legacy_indices,
             &device->legacy_index_capacity, device->legacy_index_count + 1u,
-            sizeof(WORD))) return DDERR_OUTOFMEMORY;
+            sizeof(WORD))) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     device->legacy_indices[device->legacy_index_count++] = index;
     return D3D_OK;
 }
@@ -1736,7 +1736,7 @@ static HRESULT WINAPI d3d3_device_End(IDirect3DDevice3 *iface, DWORD flags)
     HRESULT result;
     UINT primitive_count;
     (void)flags;
-    if (!device->legacy_in_begin) return D3DERR_NOTINBEGIN;
+    if (!device->legacy_in_begin) return DDWG_TRACE_ERROR(D3DERR_NOTINBEGIN);
     device->legacy_in_begin = FALSE;
     if (!device->legacy_vertex_count) {
         device->legacy_index_count = 0;
@@ -1766,7 +1766,7 @@ static HRESULT WINAPI d3d3_device_End(IDirect3DDevice3 *iface, DWORD flags)
         else device->legacy_stats.dwTrianglesDrawn += primitive_count;
     }
     device->legacy_vertex_count = device->legacy_index_count = 0;
-    return result;
+    return DDWG_TRACE_ERROR(result);
 }
 
 static DDSurface *d3d_legacy_find_texture(DDrawObject *owner,
@@ -1794,12 +1794,12 @@ static HRESULT WINAPI d3d3_device_SetRenderState(IDirect3DDevice3 *iface,
         DDSurface *surface = value ? d3d_legacy_find_texture(device->owner,
                 value) : NULL;
         HRESULT result;
-        if (value && !surface) return DDERR_INVALIDPARAMS;
+        if (value && !surface) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         result = d3d7_device_SetTexture((IDirect3DDevice7 *)device, 0,
                 surface ? (IDirectDrawSurface7 *)&surface->vtbl7 : NULL);
         if (SUCCEEDED(result))
             device->render_states[D3DRENDERSTATE_TEXTUREHANDLE] = value;
-        return result;
+        return DDWG_TRACE_ERROR(result);
     }
     return d3d7_device_SetRenderState((IDirect3DDevice7 *)device, state,
             value);
@@ -1809,7 +1809,7 @@ static HRESULT WINAPI d3d3_device_GetLightState(IDirect3DDevice3 *iface,
         D3DLIGHTSTATETYPE state, DWORD *value)
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
-    if (!value) return DDERR_INVALIDPARAMS;
+    if (!value) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     switch (state) {
     case D3DLIGHTSTATE_MATERIAL: *value = device->legacy_material_handle; break;
     case D3DLIGHTSTATE_AMBIENT:
@@ -1825,7 +1825,7 @@ static HRESULT WINAPI d3d3_device_GetLightState(IDirect3DDevice3 *iface,
         *value = device->render_states[D3DRENDERSTATE_FOGDENSITY]; break;
     case D3DLIGHTSTATE_COLORVERTEX:
         *value = device->render_states[D3DRENDERSTATE_COLORVERTEX]; break;
-    default: return DDERR_INVALIDPARAMS;
+    default: return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
     return D3D_OK;
 }
@@ -1839,7 +1839,7 @@ static HRESULT WINAPI d3d3_device_SetLightState(IDirect3DDevice3 *iface,
         D3DLegacyMaterial *material = d3d_legacy_find_material(device->owner,
                 value);
         D3DMATERIAL7 material7;
-        if (value && !material) return DDERR_INVALIDPARAMS;
+        if (value && !material) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (material)
             d3d_material_AddRef((IDirect3DMaterial3 *)&material->vtbl3);
         if (device->legacy_material)
@@ -1855,7 +1855,8 @@ static HRESULT WINAPI d3d3_device_SetLightState(IDirect3DDevice3 *iface,
         return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_AMBIENT, value);
     case D3DLIGHTSTATE_COLORMODEL:
-        return value == D3DCOLOR_RGB ? D3D_OK : DDERR_UNSUPPORTED;
+        return DDWG_TRACE_ERROR(value == D3DCOLOR_RGB
+                ? D3D_OK : DDERR_UNSUPPORTED);
     case D3DLIGHTSTATE_FOGMODE:
         return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_FOGVERTEXMODE, value);
@@ -1871,7 +1872,7 @@ static HRESULT WINAPI d3d3_device_SetLightState(IDirect3DDevice3 *iface,
     case D3DLIGHTSTATE_COLORVERTEX:
         return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_COLORVERTEX, value);
-    default: return DDERR_INVALIDPARAMS;
+    default: return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
 }
 
@@ -1954,7 +1955,7 @@ static HRESULT WINAPI d3d3_device_DrawPrimitiveVB(IDirect3DDevice3 *iface,
 {
     D3D7VertexBuffer *buffer;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d_vb_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d_vb_from_iface(buffer_iface);
     return d3d7_device_DrawPrimitiveVB((IDirect3DDevice7 *)
             d3d3_device_from_iface(iface), primitive_type,
@@ -1969,7 +1970,7 @@ static HRESULT WINAPI d3d3_device_DrawIndexedPrimitiveVB(
 {
     D3D7VertexBuffer *buffer;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d_vb_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d_vb_from_iface(buffer_iface);
     return d3d7_device_DrawIndexedPrimitiveVB((IDirect3DDevice7 *)
             d3d3_device_from_iface(iface), primitive_type,
@@ -1987,7 +1988,7 @@ static HRESULT WINAPI d3d3_device_ComputeSphereVisibility(
     DWORD index, plane;
     (void)flags;
     if (sphere_count && (!centers || !radii || !results))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
@@ -2046,7 +2047,7 @@ static HRESULT WINAPI d3d3_device_GetTexture(IDirect3DDevice3 *iface,
     D3D7Device *device = d3d3_device_from_iface(iface);
     DDSurface *surface;
     if (!out || stage >= D3D7_MAX_TEXTURE_STAGES)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = device->textures[stage];
     *out = surface ? (IDirect3DTexture2 *)&surface->texture2_vtbl : NULL;
     if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
@@ -2059,7 +2060,7 @@ static HRESULT WINAPI d3d3_device_SetTexture(IDirect3DDevice3 *iface,
     DDSurface *surface = NULL;
     if (texture) {
         if (texture->lpVtbl != &g_d3d_texture2_vtbl)
-            return DDERR_INVALIDPARAMS;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         surface = d3d_texture2_from_iface(texture);
     }
     return d3d7_device_SetTexture((IDirect3DDevice7 *)
@@ -2130,11 +2131,11 @@ static HRESULT WINAPI d3d2_device_SwapTextureHandles(IDirect3DDevice2 *iface,
     if (!first_iface || !second_iface ||
             first_iface->lpVtbl != &g_d3d_texture2_vtbl ||
             second_iface->lpVtbl != &g_d3d_texture2_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     first = d3d_texture2_from_iface(first_iface);
     second = d3d_texture2_from_iface(second_iface);
     if (first->owner != device->owner || second->owner != device->owner)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     handle = first->texture_handle;
     first->texture_handle = second->texture_handle;
     second->texture_handle = handle;
@@ -2171,11 +2172,11 @@ static HRESULT WINAPI d3d2_device_NextViewport(IDirect3DDevice2 *iface,
         IDirect3DViewport2 *reference, IDirect3DViewport2 **out, DWORD flags)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     viewport = d3d_legacy_next_viewport(d3d2_device_from_iface(iface),
             reference ? d3d_viewport_from_any(reference) : NULL, flags);
-    if (!viewport) return DDERR_NOTFOUND;
+    if (!viewport) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     *out = (IDirect3DViewport2 *)&viewport->vtbl2;
     d3d_viewport_AddRef((IDirect3DViewport3 *)&viewport->vtbl3);
     return D3D_OK;
@@ -2187,7 +2188,7 @@ static HRESULT WINAPI d3d2_device_EnumTextureFormats(
 {
     D3DLegacyTextureEnumContext adapter;
     (void)iface;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     adapter.callback = callback;
     adapter.context = context;
     return d3d7_enum_texture_formats(d3d_legacy_texture_enum_callback,
@@ -2210,7 +2211,7 @@ static HRESULT WINAPI d3d2_device_GetDirect3D(IDirect3DDevice2 *iface,
         IDirect3D2 **out)
 {
     D3D7Device *device = d3d2_device_from_iface(iface);
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = (IDirect3D2 *)&device->owner->d3d2_vtbl;
     d3d2_AddRef(*out);
     return D3D_OK;
@@ -2228,9 +2229,9 @@ static HRESULT WINAPI d3d2_device_GetCurrentViewport(IDirect3DDevice2 *iface,
 {
     D3DLegacyViewport *viewport =
             d3d2_device_from_iface(iface)->legacy_current_viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = viewport ? (IDirect3DViewport2 *)&viewport->vtbl2 : NULL;
-    if (!viewport) return D3DERR_NOCURRENTVIEWPORT;
+    if (!viewport) return DDWG_TRACE_ERROR(D3DERR_NOCURRENTVIEWPORT);
     d3d_viewport_AddRef((IDirect3DViewport3 *)&viewport->vtbl3);
     return D3D_OK;
 }
@@ -2248,12 +2249,12 @@ static HRESULT WINAPI d3d2_device_GetRenderTarget(IDirect3DDevice2 *iface,
         IDirectDrawSurface **out)
 {
     D3D7Device *device = d3d2_device_from_iface(iface);
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = device->render_target ? (IDirectDrawSurface *)&
             device->render_target->vtbl1 : NULL;
     if (device->render_target)
         surface_AddRef((IDirectDrawSurface7 *)&device->render_target->vtbl7);
-    return device->render_target ? D3D_OK : DDERR_NOTFOUND;
+    return DDWG_TRACE_ERROR(device->render_target ? D3D_OK : DDERR_NOTFOUND);
 }
 
 static HRESULT WINAPI d3d2_device_Begin(IDirect3DDevice2 *iface,
@@ -2261,7 +2262,7 @@ static HRESULT WINAPI d3d2_device_Begin(IDirect3DDevice2 *iface,
         DWORD flags)
 {
     DWORD fvf = d3d_legacy_vertex_type_fvf(vertex_type);
-    if (!fvf) return D3DERR_INVALIDVERTEXTYPE;
+    if (!fvf) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
     (void)flags;
     return d3d_legacy_begin(d3d2_device_from_iface(iface), primitive_type,
             fvf, NULL, 0);
@@ -2272,7 +2273,7 @@ static HRESULT WINAPI d3d2_device_BeginIndexed(IDirect3DDevice2 *iface,
         void *vertices, DWORD vertex_count, DWORD flags)
 {
     DWORD fvf = d3d_legacy_vertex_type_fvf(vertex_type);
-    if (!fvf) return D3DERR_INVALIDVERTEXTYPE;
+    if (!fvf) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
     (void)flags;
     return d3d_legacy_begin(d3d2_device_from_iface(iface), primitive_type,
             fvf, vertices, vertex_count);
@@ -2356,7 +2357,7 @@ static HRESULT WINAPI d3d2_device_DrawPrimitive(IDirect3DDevice2 *iface,
         void *vertices, DWORD vertex_count, DWORD flags)
 {
     DWORD fvf = d3d_legacy_vertex_type_fvf(vertex_type);
-    if (!fvf) return D3DERR_INVALIDVERTEXTYPE;
+    if (!fvf) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
     return d3d7_device_DrawPrimitive((IDirect3DDevice7 *)
             d3d2_device_from_iface(iface), primitive_type, fvf, vertices,
             vertex_count, flags);
@@ -2368,7 +2369,7 @@ static HRESULT WINAPI d3d2_device_DrawIndexedPrimitive(
         WORD *indices, DWORD index_count, DWORD flags)
 {
     DWORD fvf = d3d_legacy_vertex_type_fvf(vertex_type);
-    if (!fvf) return D3DERR_INVALIDVERTEXTYPE;
+    if (!fvf) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
     return d3d7_device_DrawIndexedPrimitive((IDirect3DDevice7 *)
             d3d2_device_from_iface(iface), primitive_type, fvf, vertices,
             vertex_count, indices, index_count, flags);
@@ -2431,7 +2432,7 @@ static HRESULT WINAPI d3d_vb_ProcessVertices(IDirect3DVertexBuffer *iface,
     D3D7VertexBuffer *destination = d3d_vb_from_iface(iface);
     D3D7VertexBuffer *source;
     if (!source_iface || source_iface->lpVtbl != &g_d3d_vb_vtbl || !device)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     source = d3d_vb_from_iface(source_iface);
     return d3d7_vb_ProcessVertices((IDirect3DVertexBuffer7 *)destination,
             vertex_op, destination_index, count,
@@ -2462,11 +2463,11 @@ static HRESULT d3d_legacy_surface_create_device(DDSurface *surface,
         REFIID iid, void **out)
 {
     const GUID *device_class;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (surface->owner->d3d7_device) {
         D3D7Device *device = surface->owner->d3d7_device;
-        if (device->render_target != surface) return D3DERR_INITFAILED;
+        if (device->render_target != surface) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         d3d7_device_AddRef((IDirect3DDevice7 *)device);
         *out = &device->device1_vtbl;
         return D3D_OK;
@@ -2505,8 +2506,8 @@ static HRESULT WINAPI d3d1_device_Initialize(IDirect3DDevice *iface,
     D3D7Device *device = d3d1_device_from_iface(iface);
     (void)description;
     if (!d3d || d3d1_object_from_iface(d3d) != device->owner || !guid)
-        return DDERR_INVALIDPARAMS;
-    return DDERR_ALREADYINITIALIZED;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
 static HRESULT WINAPI d3d1_device_GetCaps(IDirect3DDevice *iface,
@@ -2525,11 +2526,11 @@ static HRESULT WINAPI d3d1_device_SwapTextureHandles(IDirect3DDevice *iface,
     if (!first_iface || !second_iface ||
             first_iface->lpVtbl != &g_d3d_texture1_vtbl ||
             second_iface->lpVtbl != &g_d3d_texture1_vtbl)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     first = d3d_texture1_from_iface(first_iface);
     second = d3d_texture1_from_iface(second_iface);
     if (first->owner != device->owner || second->owner != device->owner)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     handle = first->texture_handle;
     first->texture_handle = second->texture_handle;
     second->texture_handle = handle;
@@ -2545,10 +2546,10 @@ static D3DLegacyExecuteBuffer *d3d_execute_buffer_from_iface(
 static HRESULT WINAPI d3d_execute_buffer_QueryInterface(
         IDirect3DExecuteBuffer *iface, REFIID iid, void **out)
 {
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid_is_unknown(iid) && !guid_equal(iid, &IID_IDirect3DExecuteBuffer))
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     *out = iface;
     InterlockedIncrement(&d3d_execute_buffer_from_iface(iface)->ref);
     return S_OK;
@@ -2590,8 +2591,8 @@ static HRESULT WINAPI d3d_execute_buffer_Lock(IDirect3DExecuteBuffer *iface,
     D3DLegacyExecuteBuffer *buffer = d3d_execute_buffer_from_iface(iface);
     DWORD requested;
     if (!description || description->dwSize < sizeof(DWORD))
-        return DDERR_INVALIDPARAMS;
-    if (buffer->locked) return D3DERR_EXECUTE_LOCKED;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_LOCKED);
     requested = description->dwSize;
     ZeroMemory(description, requested < sizeof(*description) ? requested :
             sizeof(*description));
@@ -2611,7 +2612,7 @@ static HRESULT WINAPI d3d_execute_buffer_Lock(IDirect3DExecuteBuffer *iface,
 static HRESULT WINAPI d3d_execute_buffer_Unlock(IDirect3DExecuteBuffer *iface)
 {
     D3DLegacyExecuteBuffer *buffer = d3d_execute_buffer_from_iface(iface);
-    if (!buffer->locked) return D3DERR_EXECUTE_NOT_LOCKED;
+    if (!buffer->locked) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_NOT_LOCKED);
     buffer->locked = FALSE;
     return D3D_OK;
 }
@@ -2635,12 +2636,12 @@ static HRESULT WINAPI d3d_execute_buffer_SetExecuteData(
 {
     D3DLegacyExecuteBuffer *buffer = d3d_execute_buffer_from_iface(iface);
     D3DTLVERTEX *processed = NULL;
-    if (buffer->locked) return D3DERR_EXECUTE_LOCKED;
-    if (!d3d_execute_data_valid(buffer, data)) return DDERR_INVALIDPARAMS;
+    if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_LOCKED);
+    if (!d3d_execute_data_valid(buffer, data)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (data->dwVertexCount) {
         processed = (D3DTLVERTEX *)heap_alloc_zero((SIZE_T)data->dwVertexCount *
                 sizeof(*processed));
-        if (!processed) return DDERR_OUTOFMEMORY;
+        if (!processed) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     }
     heap_free(buffer->processed);
     buffer->processed = processed;
@@ -2652,7 +2653,7 @@ static HRESULT WINAPI d3d_execute_buffer_SetExecuteData(
 static HRESULT WINAPI d3d_execute_buffer_GetExecuteData(
         IDirect3DExecuteBuffer *iface, D3DEXECUTEDATA *data)
 {
-    if (!data) return DDERR_INVALIDPARAMS;
+    if (!data) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *data = d3d_execute_buffer_from_iface(iface)->data;
     return D3D_OK;
 }
@@ -2704,7 +2705,7 @@ static HRESULT d3d_execute_validate_internal(D3DLegacyExecuteBuffer *buffer,
     if (found_exit) return D3D_OK;
     if (bad_offset) *bad_offset = cursor;
     if (callback) callback(context, cursor);
-    return D3DERR_EXECUTE_FAILED;
+    return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
 }
 
 static HRESULT WINAPI d3d_execute_buffer_Validate(
@@ -2713,7 +2714,7 @@ static HRESULT WINAPI d3d_execute_buffer_Validate(
 {
     D3DLegacyExecuteBuffer *buffer = d3d_execute_buffer_from_iface(iface);
     (void)reserved;
-    if (buffer->locked) return D3DERR_EXECUTE_LOCKED;
+    if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_LOCKED);
     return d3d_execute_validate_internal(buffer, offset, callback, context);
 }
 
@@ -2731,16 +2732,16 @@ static HRESULT WINAPI d3d1_device_CreateExecuteBuffer(IDirect3DDevice *iface,
 {
     D3D7Device *device = d3d1_device_from_iface(iface);
     D3DLegacyExecuteBuffer *buffer;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     if (!description || description->dwSize < sizeof(*description) ||
             !(description->dwFlags & D3DDEB_BUFSIZE) ||
-            !description->dwBufferSize) return DDERR_INVALIDPARAMS;
+            !description->dwBufferSize) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = (D3DLegacyExecuteBuffer *)heap_alloc_zero(sizeof(*buffer));
-    if (!buffer) return DDERR_OUTOFMEMORY;
+    if (!buffer) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     buffer->memory = (BYTE *)heap_alloc_zero(description->dwBufferSize);
-    if (!buffer->memory) { heap_free(buffer); return DDERR_OUTOFMEMORY; }
+    if (!buffer->memory) { heap_free(buffer); return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY); }
     if ((description->dwFlags & D3DDEB_LPDATA) && description->lpData)
         CopyMemory(buffer->memory, description->lpData,
                 description->dwBufferSize);
@@ -2779,10 +2780,10 @@ static HRESULT WINAPI d3d1_device_CreateMatrix(IDirect3DDevice *iface,
 {
     D3D7Device *device = d3d1_device_from_iface(iface);
     D3DLegacyMatrix *matrix;
-    if (!handle) return DDERR_INVALIDPARAMS;
+    if (!handle) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *handle = 0;
     matrix = (D3DLegacyMatrix *)heap_alloc_zero(sizeof(*matrix));
-    if (!matrix) return DDERR_OUTOFMEMORY;
+    if (!matrix) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     matrix->handle = allocate_handle();
     d3d7_identity_matrix(&matrix->matrix);
     matrix->next = device->legacy_matrices;
@@ -2796,7 +2797,7 @@ static HRESULT WINAPI d3d1_device_SetMatrix(IDirect3DDevice *iface,
 {
     D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(
             d3d1_device_from_iface(iface), handle);
-    if (!matrix || !data) return D3DERR_MATRIX_SETDATA_FAILED;
+    if (!matrix || !data) return DDWG_TRACE_ERROR(D3DERR_MATRIX_SETDATA_FAILED);
     matrix->matrix = *data;
     return D3D_OK;
 }
@@ -2806,7 +2807,7 @@ static HRESULT WINAPI d3d1_device_GetMatrix(IDirect3DDevice *iface,
 {
     D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(
             d3d1_device_from_iface(iface), handle);
-    if (!matrix || !data) return D3DERR_MATRIX_GETDATA_FAILED;
+    if (!matrix || !data) return DDWG_TRACE_ERROR(D3DERR_MATRIX_GETDATA_FAILED);
     *data = matrix->matrix;
     return D3D_OK;
 }
@@ -2817,7 +2818,7 @@ static HRESULT WINAPI d3d1_device_DeleteMatrix(IDirect3DDevice *iface,
     D3D7Device *device = d3d1_device_from_iface(iface);
     D3DLegacyMatrix **link = &device->legacy_matrices;
     while (*link && (*link)->handle != handle) link = &(*link)->next;
-    if (!*link) return D3DERR_MATRIX_DESTROY_FAILED;
+    if (!*link) return DDWG_TRACE_ERROR(D3DERR_MATRIX_DESTROY_FAILED);
     {
         D3DLegacyMatrix *matrix = *link;
         *link = matrix->next;
@@ -2837,13 +2838,13 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
             process->dwCount > buffer->data.dwVertexCount - process->wStart ||
             (DWORD)process->wDest > buffer->processed_count ||
             process->dwCount > buffer->processed_count - process->wDest)
-        return D3DERR_EXECUTE_FAILED;
+        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
     if (operation == D3DPROCESSVERTICES_COPY) {
         uint64_t source_offset = (uint64_t)buffer->data.dwVertexOffset +
                 (uint64_t)process->wStart * sizeof(D3DTLVERTEX);
         uint64_t source_end = source_offset +
                 (uint64_t)process->dwCount * sizeof(D3DTLVERTEX);
-        if (source_end > buffer->byte_count) return D3DERR_EXECUTE_FAILED;
+        if (source_end > buffer->byte_count) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
         CopyMemory(buffer->processed + process->wDest,
                 buffer->memory + (DWORD)source_offset,
                 process->dwCount * sizeof(D3DTLVERTEX));
@@ -2851,7 +2852,7 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
     }
     if (operation != D3DPROCESSVERTICES_TRANSFORM &&
             operation != D3DPROCESSVERTICES_TRANSFORMLIGHT)
-        return D3DERR_EXECUTE_FAILED;
+        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
@@ -2922,7 +2923,7 @@ static HRESULT d3d_execute_draw_indexed(D3DLegacyExecuteBuffer *buffer,
     DWORD index;
     if (!count) return D3D_OK;
     indices = (WORD *)heap_alloc_zero(index_count * sizeof(*indices));
-    if (!indices) return DDERR_OUTOFMEMORY;
+    if (!indices) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     for (index = 0; index < count; ++index) {
         if (vertices_per_record == 2u) {
             const D3DLINE *line = (const D3DLINE *)(records + index * size);
@@ -2931,7 +2932,7 @@ static HRESULT d3d_execute_draw_indexed(D3DLegacyExecuteBuffer *buffer,
             if (line->v1 >= buffer->processed_count ||
                     line->v2 >= buffer->processed_count) {
                 heap_free(indices);
-                return D3DERR_EXECUTE_FAILED;
+                return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
             }
         } else {
             const D3DTRIANGLE *triangle =
@@ -2943,7 +2944,7 @@ static HRESULT d3d_execute_draw_indexed(D3DLegacyExecuteBuffer *buffer,
                     triangle->v2 >= buffer->processed_count ||
                     triangle->v3 >= buffer->processed_count) {
                 heap_free(indices);
-                return D3DERR_EXECUTE_FAILED;
+                return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
             }
         }
     }
@@ -2953,7 +2954,7 @@ static HRESULT d3d_execute_draw_indexed(D3DLegacyExecuteBuffer *buffer,
                 buffer->processed, buffer->processed_count, indices,
                 index_count, 0);
         heap_free(indices);
-        return result;
+        return DDWG_TRACE_ERROR(result);
     }
 }
 
@@ -3011,7 +3012,7 @@ static HRESULT d3d_execute_add_pick_record(D3D7Device *device, BYTE opcode,
     if (!d3d_legacy_grow((void **)&device->legacy_pick_records,
             &device->legacy_pick_record_capacity,
             device->legacy_pick_record_count + 1u, sizeof(*record)))
-        return DDERR_OUTOFMEMORY;
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     record = &device->legacy_pick_records[device->legacy_pick_record_count++];
     record->bOpcode = opcode;
     record->bPad = 0;
@@ -3029,7 +3030,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
     DWORD steps = 0;
     HRESULT result;
     result = d3d_execute_validate_internal(buffer, NULL, NULL, NULL);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     if (pick_rect) device->legacy_pick_record_count = 0;
     while (cursor < end && ++steps < 1000000u) {
         D3DINSTRUCTION *instruction =
@@ -3046,19 +3047,19 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                         index * instruction->bSize);
                 if ((DWORD)point->wFirst > buffer->processed_count ||
                         point->wCount > buffer->processed_count - point->wFirst)
-                    return D3DERR_EXECUTE_FAILED;
+                    return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
                 if (!point->wCount) continue;
                 result = d3d7_device_DrawPrimitive((IDirect3DDevice7 *)device,
                         D3DPT_POINTLIST, D3DFVF_TLVERTEX,
                         buffer->processed + point->wFirst, point->wCount, 0);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_LINE:
             if (pick_rect) break;
             result = d3d_execute_draw_indexed(buffer, D3DPT_LINELIST, records,
                     instruction->bSize, instruction->wCount, 2u);
-            if (FAILED(result)) return result;
+            if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             break;
         case D3DOP_TRIANGLE:
             if (pick_rect) {
@@ -3069,7 +3070,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                     if (triangle->v1 >= buffer->processed_count ||
                             triangle->v2 >= buffer->processed_count ||
                             triangle->v3 >= buffer->processed_count)
-                        return D3DERR_EXECUTE_FAILED;
+                        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
                     vertices[0] = buffer->processed[triangle->v1];
                     vertices[1] = buffer->processed[triangle->v2];
                     vertices[2] = buffer->processed[triangle->v3];
@@ -3082,7 +3083,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                                 buffer->data.dwInstructionOffset),
                                 d3d_execute_pick_z(pick_rect->x1,
                                 pick_rect->y1, vertices));
-                        if (FAILED(result)) return result;
+                        if (FAILED(result)) return DDWG_TRACE_ERROR(result);
                         break;
                     }
                 }
@@ -3090,7 +3091,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
             }
             result = d3d_execute_draw_indexed(buffer, D3DPT_TRIANGLELIST,
                     records, instruction->bSize, instruction->wCount, 3u);
-            if (FAILED(result)) return result;
+            if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             break;
         case D3DOP_MATRIXLOAD:
             for (index = 0; index < instruction->wCount; ++index) {
@@ -3100,7 +3101,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                         load->hDestMatrix);
                 D3DLegacyMatrix *source = d3d_legacy_find_matrix(device,
                         load->hSrcMatrix);
-                if (!destination || !source) return D3DERR_INVALIDMATRIX;
+                if (!destination || !source) return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
                 destination->matrix = source->matrix;
             }
             break;
@@ -3116,7 +3117,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                         multiply->hSrcMatrix2);
                 D3DMATRIX value;
                 if (!destination || !first || !second)
-                    return D3DERR_INVALIDMATRIX;
+                    return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
                 d3d7_multiply_matrix(&first->matrix, &second->matrix, &value);
                 destination->matrix = value;
             }
@@ -3127,10 +3128,10 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                         index * instruction->bSize);
                 D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(device,
                         state->dwArg[0]);
-                if (!matrix) return D3DERR_INVALIDMATRIX;
+                if (!matrix) return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
                 result = d3d7_device_SetTransform((IDirect3DDevice7 *)device,
                         state->dtstTransformStateType, &matrix->matrix);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_STATELIGHT:
@@ -3140,7 +3141,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                 result = d3d3_device_SetLightState((IDirect3DDevice3 *)&
                         device->device3_vtbl, state->dlstLightStateType,
                         state->dwArg[0]);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_STATERENDER:
@@ -3150,7 +3151,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                 result = d3d3_device_SetRenderState((IDirect3DDevice3 *)&
                         device->device3_vtbl, state->drstRenderStateType,
                         state->dwArg[0]);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_PROCESSVERTICES:
@@ -3158,7 +3159,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                 result = d3d_execute_process_vertices(buffer,
                         (D3DPROCESSVERTICES *)(records +
                         index * instruction->bSize));
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_TEXTURELOAD:
@@ -3169,9 +3170,9 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                         load->hDestTexture);
                 DDSurface *source = d3d_legacy_find_texture(device->owner,
                         load->hSrcTexture);
-                if (!destination || !source) return D3DERR_TEXTURE_LOAD_FAILED;
+                if (!destination || !source) return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
                 result = d3d_legacy_texture_load_surface(destination, source);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_EXIT:
@@ -3185,7 +3186,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                 if (equal != !!branch->bNegate && branch->dwOffset) {
                     uint64_t target = (uint64_t)cursor + branch->dwOffset;
                     if (target <= cursor ||
-                            target >= end) return D3DERR_EXECUTE_FAILED;
+                            target >= end) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
                     next = (DWORD)target;
                     break;
                 }
@@ -3198,12 +3199,12 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                         index * instruction->bSize);
                 if ((DWORD)span->wFirst > buffer->processed_count ||
                         span->wCount > buffer->processed_count - span->wFirst)
-                    return D3DERR_EXECUTE_FAILED;
+                    return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
                 if (!span->wCount) continue;
                 result = d3d7_device_DrawPrimitive((IDirect3DDevice7 *)device,
                         D3DPT_POINTLIST, D3DFVF_TLVERTEX,
                         buffer->processed + span->wFirst, span->wCount, 0);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_SETSTATUS:
@@ -3218,11 +3219,11 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
             }
             break;
         default:
-            return D3DERR_EXECUTE_FAILED;
+            return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
         }
         cursor = next;
     }
-    return D3DERR_EXECUTE_FAILED;
+    return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
 }
 
 static HRESULT WINAPI d3d1_device_Execute(IDirect3DDevice *iface,
@@ -3235,13 +3236,13 @@ static HRESULT WINAPI d3d1_device_Execute(IDirect3DDevice *iface,
     HRESULT result;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d_execute_buffer_vtbl ||
             !viewport_iface || (flags != D3DEXECUTE_CLIPPED &&
-            flags != D3DEXECUTE_UNCLIPPED)) return DDERR_INVALIDPARAMS;
+            flags != D3DEXECUTE_UNCLIPPED)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d_execute_buffer_from_iface(buffer_iface);
     viewport = d3d_viewport_from_any(viewport_iface);
     if (buffer->device != device || buffer->locked || viewport->device != device)
-        return D3DERR_EXECUTE_FAILED;
+        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
     result = d3d_legacy_set_current_viewport(device, viewport);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     return d3d_execute_run(buffer, NULL);
 }
 
@@ -3263,11 +3264,11 @@ static HRESULT WINAPI d3d1_device_NextViewport(IDirect3DDevice *iface,
         IDirect3DViewport *reference, IDirect3DViewport **out, DWORD flags)
 {
     D3DLegacyViewport *viewport;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     viewport = d3d_legacy_next_viewport(d3d1_device_from_iface(iface),
             reference ? d3d_viewport_from_any(reference) : NULL, flags);
-    if (!viewport) return DDERR_NOTFOUND;
+    if (!viewport) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     *out = (IDirect3DViewport *)&viewport->vtbl1;
     d3d_viewport_AddRef((IDirect3DViewport3 *)&viewport->vtbl3);
     return D3D_OK;
@@ -3283,13 +3284,13 @@ static HRESULT WINAPI d3d1_device_Pick(IDirect3DDevice *iface,
     HRESULT result;
     if (!buffer || buffer->lpVtbl != &g_d3d_execute_buffer_vtbl || !viewport ||
             !rect || (flags != D3DEXECUTE_CLIPPED &&
-            flags != D3DEXECUTE_UNCLIPPED)) return DDERR_INVALIDPARAMS;
+            flags != D3DEXECUTE_UNCLIPPED)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     execute_buffer = d3d_execute_buffer_from_iface(buffer);
     legacy_viewport = d3d_viewport_from_any(viewport);
     if (execute_buffer->device != device || execute_buffer->locked ||
-            legacy_viewport->device != device) return D3DERR_EXECUTE_FAILED;
+            legacy_viewport->device != device) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
     result = d3d_legacy_set_current_viewport(device, legacy_viewport);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     return d3d_execute_run(execute_buffer, rect);
 }
 
@@ -3297,7 +3298,7 @@ static HRESULT WINAPI d3d1_device_GetPickRecords(IDirect3DDevice *iface,
         DWORD *count, D3DPICKRECORD *records)
 {
     D3D7Device *device = d3d1_device_from_iface(iface);
-    if (!count) return DDERR_INVALIDPARAMS;
+    if (!count) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *count = device->legacy_pick_record_count;
     if (records && *count)
         CopyMemory(records, device->legacy_pick_records,
@@ -3310,7 +3311,7 @@ static HRESULT WINAPI d3d1_device_EnumTextureFormats(IDirect3DDevice *iface,
 {
     D3DLegacyTextureEnumContext adapter;
     (void)iface;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     adapter.callback = callback;
     adapter.context = context;
     return d3d7_enum_texture_formats(d3d_legacy_texture_enum_callback,
@@ -3333,7 +3334,7 @@ static HRESULT WINAPI d3d1_device_GetDirect3D(IDirect3DDevice *iface,
         IDirect3D **out)
 {
     D3D7Device *device = d3d1_device_from_iface(iface);
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = (IDirect3D *)&device->owner->d3d1_vtbl;
     d3d1_AddRef(*out);
     return D3D_OK;

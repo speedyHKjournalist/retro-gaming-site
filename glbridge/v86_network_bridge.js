@@ -212,9 +212,23 @@
                         if (this.activeOwner === "d3d9") this.hideOverlayCanvas();
                     }
                 } else {
-                    this.d3d9OwnerSessionKey = session;
-                    this.d3d9Surface = { ...this.d3d9Surface, ...surface };
-                    this.positionOwner("d3d9", false);
+                    /* A CREATE/RESET only declares where a process would
+                     * present; it does not make that process the visible
+                     * owner. Capability helpers interleave their batches with
+                     * games and dxdiag, so stealing ownership here made the
+                     * live canvas disappear until the helper's (often absent)
+                     * Present. Ownership changes only after a successful
+                     * onPresent below. */
+                    const hasOwner = this.d3d9OwnerSessionKey !== null;
+                    const belongsToOwner = hasOwner &&
+                        session === this.d3d9OwnerSessionKey;
+                    const legacyOwner = !hasOwner && !session &&
+                        this.activeOwner === "d3d9";
+                    if (!hasOwner || belongsToOwner) {
+                        this.d3d9Surface = { ...this.d3d9Surface, ...surface };
+                        this.positionOwner("d3d9",
+                            belongsToOwner || legacyOwner);
+                    }
                 }
                 if (typeof userSurface === "function") userSurface(surface, reason);
             };

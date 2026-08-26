@@ -115,6 +115,20 @@ d3d9Options.onPresent({ sessionKey: "new-session", hwnd: 0x1234,
     displayHeight: 600, visible: true }, {});
 assert.equal(d3d9Canvas.style.display, "block");
 
+const ownerLeft = d3d9Canvas.style.left;
+const ownerTop = d3d9Canvas.style.top;
+d3d9Options.onSurface({ sessionKey: "pending-session", hwnd: 0x5678,
+    x: 500, y: 600, width: 320, height: 200, visible: true }, "create");
+assert.equal(d3d9Canvas.style.display, "block",
+    "a helper session's CreateDevice must not hide the presenting owner");
+assert.equal(d3d9Canvas.style.left, ownerLeft,
+    "a helper session must not move the presenting owner's canvas");
+assert.equal(d3d9Canvas.style.top, ownerTop);
+d3d9Options.onDestroy({ sessionKey: "pending-session", hwnd: 0x5678,
+    x: 500, y: 600, width: 320, height: 200, visible: false }, "session-end");
+assert.equal(d3d9Canvas.style.display, "block",
+    "tearing down a non-owner session must leave the owner visible");
+
 d3d9Options.onDestroy({ sessionKey: "old-session", hwnd: 0x1234,
     x: 30, y: 40, width: 640, height: 480, displayWidth: 800,
     displayHeight: 600, visible: true }, "device");
@@ -125,6 +139,14 @@ d3d9Options.onDestroy({ sessionKey: "new-session", hwnd: 0x1234,
     displayHeight: 600, visible: true }, "device");
 assert.equal(d3d9Canvas.style.display, "none");
 assert.equal(d3d9Canvas.style.visibility, "hidden");
+
+d3d9Options.onSurface({ sessionKey: "next-session", hwnd: 0x9999,
+    x: 5, y: 6, width: 320, height: 200, visible: true }, "create");
+assert.equal(d3d9Canvas.style.display, "none",
+    "a new session stays hidden until its own first Present");
+d3d9Options.onPresent({ sessionKey: "next-session", hwnd: 0x9999,
+    x: 5, y: 6, width: 320, height: 200, visible: true }, {});
+assert.equal(d3d9Canvas.style.display, "block");
 
 bridge.showOverlayCanvas();
 assert.equal(d3d9Canvas.style.display, "none");

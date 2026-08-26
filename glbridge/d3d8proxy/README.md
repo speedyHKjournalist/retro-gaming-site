@@ -183,6 +183,22 @@ An XP-compatible DLL with no C runtime dependency:
 ./glbridge/d3d8proxy/build.sh /private/tmp/d3d8.dll
 ```
 
+For an XP diagnostic build that records proxy failures and first-chance
+exceptions:
+
+```sh
+./glbridge/d3d8proxy/build_diagnostic.sh
+```
+
+This produces `d3d8-diagnostic.dll`. Deploy it under the loader-visible name
+`d3d8.dll` beside the program. It writes `d3d8_trace_<pid>.log` beside the DLL,
+or to `%TEMP%` when that directory is read-only. The trace includes the loaded
+EXE/proxy paths, guest memory at attach/detach, every explicit failing HRESULT
+with function and source line, `v86gl.sys` open/map/submit Win32 errors, and x86
+registers for first-chance exceptions. Start the guest driver first (`sc start
+v86gl`); an `OPEN_FAIL` line otherwise records the exact reason that
+`Direct3DCreate8` returned `NULL`.
+
 The guest DLL and the host executor are one unit: `d3d8.dll` must be deployed
 with a `d3d9_executor.js` of the same D9WG protocol version. The executor
 rejects a different protocol minor version rather than silently skipping newer
@@ -197,6 +213,7 @@ either `d3d8.dll` or `d3d9.dll`, never both.
 
 ```sh
 node glbridge/tests/d3d8_protocol_consistency_test.js
+node glbridge/tests/legacy_proxy_diagnostic_trace_test.js
 ```
 
 Guards the translation boundary itself, which is where this architecture's

@@ -18,7 +18,8 @@ const ddraw = require("../d3d9-webgpu/ddraw_ops.js");
 ddraw.installDDrawOps(D3D9WebGPUExecutor);
 
 const OP = {
-    HELLO: 1, CREATE_DEVICE: 2, PRESENT: 4,
+    HELLO: 1, CREATE_DEVICE: 2, PRESENT: 4, SESSION_END: 13,
+    DESTROY_RESOURCE: 0x103,
     CREATE_TEXTURE_2D: 0x110, CREATE_TEXTURE_CUBE: 0x111,
     UPDATE_TEXTURE: 0x113,
     SET_PALETTE: 0x21F,
@@ -904,6 +905,108 @@ await test("an unknown surface handle is skipped rather than guessed at",
     ], { present: true }));
     assert.equal(executor.getStats().ddBlitsSkipped, 1);
     assert.equal(find("beginRenderPass").length, 0);
+});
+
+await test("retained back buffers are isolated by process session", async () => {
+    const { executor } = makeExecutor();
+    const sessionA = { sessionLow: 0x11111111, sessionHigh: 0xaaaaaaaa };
+    const sessionB = { sessionLow: 0x22222222, sessionHigh: 0xbbbbbbbb };
+    const keyA = "aaaaaaaa11111111";
+    const keyB = "bbbbbbbb22222222";
+    const present = () => command(OP.PRESENT,
+        u32(DEVICE, 0x1234, 0, 0, 320, 200));
+
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(320, 200)), present(),
+    ], { ...sessionA, present: true }));
+    const backBufferA = executor.sessionStates.get(keyA).backBufferTexture;
+    assert.ok(backBufferA, "session A retained no back buffer");
+    assert.equal(executor.canvas.width, 320);
+    assert.equal(executor.canvas.height, 200);
+
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+    ], sessionB));
+    assert.equal(executor.canvas.width, 320,
+        "a non-presenting helper must not resize the visible canvas");
+    assert.equal(executor.canvas.height, 200);
+    await executor.submit(buildBatch([
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
+    ], { ...sessionB, present: true }));
+    const backBufferB = executor.sessionStates.get(keyB).backBufferTexture;
+    assert.ok(backBufferB, "session B retained no back buffer");
+    assert.equal(executor.canvas.width, 640);
+    assert.equal(executor.canvas.height, 480);
+    assert.notEqual(backBufferB, backBufferA,
+        "two processes must not alias one retained texture");
+    assert.notEqual(backBufferA.destroyed, true,
+        "switching sessions must not destroy the inactive owner's frame");
+
+    await executor.submit(buildBatch([present()],
+        { ...sessionA, present: true }));
+    assert.equal(executor.backBufferTexture, backBufferA,
+        "switching back must restore session A's retained texture");
+    assert.equal(executor.canvas.width, 320);
+    assert.equal(executor.canvas.height, 200);
+    assert.notEqual(backBufferB.destroyed, true);
+});
+
+await test("destroying the DirectDraw device retires its retained frame",
+        async () => {
+    const destroyed = [];
+    const { executor } = makeExecutor({
+        onDestroy: (surface, reason) => destroyed.push({ ...surface, reason }),
+    });
+    const session = { sessionLow: 0x33333333, sessionHigh: 0xcccccccc };
+    const key = "cccccccc33333333";
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(320, 200)),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 320, 200)),
+    ], { ...session, present: true }));
+    const backBuffer = executor.sessionStates.get(key).backBufferTexture;
+
+    await executor.submit(buildBatch([
+        command(OP.DESTROY_RESOURCE, u32(DEVICE, 0)),
+    ], session));
+    await Promise.resolve();
+    assert.equal(executor.devices.size, 0);
+    assert.equal(executor.backBufferTexture, null);
+    assert.equal(backBuffer.destroyed, true);
+    assert.equal(destroyed.length, 1);
+    assert.equal(destroyed[0].visible, false);
+    assert.equal(destroyed[0].reason, "device");
+});
+
+await test("SESSION_END releases every live object owned by the process",
+        async () => {
+    const destroyed = [];
+    const { executor } = makeExecutor({
+        onDestroy: (surface, reason) => destroyed.push({ ...surface, reason }),
+    });
+    const session = { sessionLow: 0x44444444, sessionHigh: 0xdddddddd };
+    const key = "dddddddd44444444";
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(320, 200)),
+        SURFACE_SETUP(0x300, 16, 16, FMT_X8R8G8B8),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 320, 200)),
+    ], { ...session, present: true }));
+    const state = executor.sessionStates.get(key);
+    const backBuffer = state.backBufferTexture;
+    const surfaceTexture = state.resources.get(0x300).gpuTexture;
+
+    await executor.submit(buildBatch([
+        command(OP.SESSION_END,
+            u32(session.sessionLow, session.sessionHigh)),
+    ], session));
+    await Promise.resolve();
+    assert.equal(executor.sessionKey, null);
+    assert.equal(executor.sessionStates.has(key), false);
+    assert.equal(executor.getStats().sessionsEnded, 1);
+    assert.equal(backBuffer.destroyed, true);
+    assert.equal(surfaceTexture.destroyed, true);
+    assert.equal(destroyed.length, 1);
+    assert.equal(destroyed[0].reason, "session-end");
+    assert.equal(destroyed[0].visible, false);
 });
 
 // ---- report ----

@@ -56,6 +56,25 @@
 #endif
 
 #define DDWG_LOG_PREFIX "[ddraw-webgpu] "
+#ifdef DDWG_DIAGNOSTIC_TRACE
+#define V86WG_DIAGNOSTIC_COMPONENT "ddraw-webgpu"
+#define V86WG_DIAGNOSTIC_FILE_STEM "ddraw_trace"
+#include "../diagnostic_trace.h"
+#define DDWG_TRACE_ERROR(result) \
+    v86wg_diagnostic_hresult((HRESULT)(result), __func__, __LINE__)
+#define DDWG_TRACE_RESULT(result) \
+    v86wg_diagnostic_result((HRESULT)(result), __func__, __LINE__)
+#define DDWG_TRACE(...) v86wg_diagnostic_write(__VA_ARGS__)
+#define DDWG_TRACE_CHECKPOINT(...) do { \
+    v86wg_diagnostic_write(__VA_ARGS__); \
+    v86wg_diagnostic_flush(); \
+} while (0)
+#else
+#define DDWG_TRACE_ERROR(result) (result)
+#define DDWG_TRACE_RESULT(result) (result)
+#define DDWG_TRACE(...) ((void)0)
+#define DDWG_TRACE_CHECKPOINT(...) ((void)0)
+#endif
 
 /* The VGL2 record header the batch rides inside: function code, 0xFFFF marker,
  * and the extended payload size. Identical to the D3D8/D3D9 proxies. */
@@ -81,16 +100,144 @@ static uint32_t g_sequence = 1;
 static uint32_t g_next_handle = DDWG_HANDLE_GENERATION_ONE;
 static uint32_t g_session_id_low;
 static uint32_t g_session_id_high;
-static BOOL g_transport_failed;
-static BOOL g_hello_sent;
+/*
+ * The transport is retried, not latched off. v86gl.sys is a demand-start
+ * service: an application that reaches DirectDraw before "sc start v86gl" has
+ * run -- or while another process still owns the single 16 MiB mapping the
+ * driver hands out -- must not be left permanently blind once the device
+ * becomes available. Every successful open bumps a generation, and the device,
+ * the palettes and the surface storage are recreated lazily against it.
+ */
+#define DDWG_TRANSPORT_RETRY_MS 750u
+#define DDWG_LOG_FILE_MAX_LINES 4096u
+
+static DWORD g_transport_retry_tick;    /* GetTickCount at the last failure */
+static BOOL g_transport_retry_armed;
+static uint32_t g_transport_generation; /* incremented on every open */
+static uint32_t g_hello_generation;
+static HINSTANCE g_instance;
+static char g_log_path[MAX_PATH];
+static BOOL g_log_path_resolved;
+static UINT g_log_lines;
 static CRITICAL_SECTION g_transport_lock;
 static CRITICAL_SECTION g_object_lock;
 
+#ifdef DDWG_DIAGNOSTIC_TRACE
+static volatile LONG g_trace_blt_status_calls;
+static volatile LONG g_trace_flip_status_calls;
+static volatile LONG g_trace_scanline_calls;
+static volatile LONG g_trace_vblank_status_calls;
+
+/* Polling methods can run millions of times in a broken wait loop. Log the
+ * first few calls and then powers of two: enough to prove where the guest is
+ * stuck without turning a five-minute dxdiag hang into a multi-megabyte log. */
+static void ddwg_trace_poll(volatile LONG *counter, const char *name,
+        DWORD object, DWORD value0, DWORD value1)
+{
+    LONG count = InterlockedIncrement(counter);
+    if (count <= 8 || (count & (count - 1)) == 0)
+        DDWG_TRACE_CHECKPOINT("POLL name=%s count=%ld object=%08lX "
+                "value0=%lu value1=%lu", name, count, object,
+                value0, value1);
+}
+#else
+#define ddwg_trace_poll(counter, name, object, value0, value1) ((void)0)
+#endif
+
+/*
+ * A transport failure is the one failure this DLL cannot report through
+ * D9WG_OP_GUEST_LOG, because the guest log rides the transport that just
+ * failed -- which is how "the bridge is not open" reached the caller as
+ * DDERR_OUTOFVIDEOMEMORY with nothing written down anywhere. OutputDebugStringA
+ * needs a debugger attached, and a v86 guest running a game does not have one,
+ * so every line also goes to ddraw-webgpu.log beside this DLL.
+ */
+static void ddwg_log_resolve_path(void)
+{
+    char module[MAX_PATH];
+    DWORD length;
+    int index;
+    int cut = -1;
+
+    g_log_path_resolved = TRUE;
+    g_log_path[0] = 0;
+    length = GetModuleFileNameA(g_instance, module, MAX_PATH);
+    if (length && length < MAX_PATH) {
+        for (index = 0; module[index]; ++index) {
+            if (module[index] == '\\' || module[index] == '/')
+                cut = index;
+        }
+        module[cut + 1] = 0;
+    } else {
+        length = GetTempPathA(MAX_PATH, module);
+        if (!length || length >= MAX_PATH)
+            return;
+    }
+    if (lstrlenA(module) + (int)sizeof("ddraw-webgpu.log") > MAX_PATH)
+        return;
+    lstrcpynA(g_log_path, module, MAX_PATH);
+    lstrcatA(g_log_path, "ddraw-webgpu.log");
+}
+
 static void ddwg_log(const char *text)
 {
+    char body[2 * MAX_PATH + 64];
+    char line[2 * MAX_PATH + 128];
+    HANDLE file;
+    DWORD written = 0;
+
     OutputDebugStringA(DDWG_LOG_PREFIX);
     OutputDebugStringA(text);
     OutputDebugStringA("\r\n");
+    DDWG_TRACE("LOG %s", text);
+
+    if (!g_log_path_resolved)
+        ddwg_log_resolve_path();
+    if (!g_log_path[0] || g_log_lines >= DDWG_LOG_FILE_MAX_LINES)
+        return;
+    ++g_log_lines;
+    file = CreateFileA(g_log_path, FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        /* Read-only directory: keep the debugger sink and stop retrying. */
+        g_log_path[0] = 0;
+        return;
+    }
+    lstrcpynA(body, text, (int)sizeof(body));
+    wsprintfA(line, "%lu " DDWG_LOG_PREFIX "%s\r\n", GetTickCount(), body);
+    SetFilePointer(file, 0, NULL, FILE_END);
+    WriteFile(file, line, (DWORD)lstrlenA(line), &written, NULL);
+    CloseHandle(file);
+}
+
+/*
+ * One line the first time a program reaches a DirectDraw entry point through
+ * this DLL. "Is the proxy the DLL this program actually loaded?" is the first
+ * question behind every report of a DirectDraw error, and app-local loading
+ * makes it a real question: dxdiag.exe and a game in its own directory resolve
+ * ddraw.dll from different places. It is written from the entry point rather
+ * than from DllMain so no file I/O happens under the loader lock.
+ */
+static LONG g_banner_written;
+
+static void ddwg_log_banner_once(void)
+{
+    char banner[2 * MAX_PATH + 64];
+    char host[MAX_PATH];
+    char self[MAX_PATH];
+    DWORD length;
+
+    if (InterlockedExchange(&g_banner_written, 1))
+        return;
+    length = GetModuleFileNameA(NULL, host, MAX_PATH);
+    if (!length || length >= MAX_PATH)
+        lstrcpynA(host, "?", MAX_PATH);
+    length = GetModuleFileNameA(g_instance, self, MAX_PATH);
+    if (!length || length >= MAX_PATH)
+        lstrcpynA(self, "?", MAX_PATH);
+    wsprintfA(banner, "%s loaded by %s", self, host);
+    ddwg_log(banner);
 }
 
 static BOOL guid_equal(REFIID left, REFIID right)
@@ -208,43 +355,86 @@ static void close_transport_locked(void)
     g_command_count = 0;
 }
 
+/* Backs the transport off for DDWG_TRANSPORT_RETRY_MS and writes the reason
+ * down once per distinct reason, so a command per frame does not become an
+ * open attempt per frame or a log line per frame. */
+static void transport_failed_locked(const char *reason)
+{
+    static char last_reason[D9WG_LOG_MAX_TEXT];
+
+    g_transport_retry_tick = GetTickCount();
+    g_transport_retry_armed = TRUE;
+    if (lstrcmpA(last_reason, reason) != 0) {
+        lstrcpynA(last_reason, reason, (int)D9WG_LOG_MAX_TEXT);
+        ddwg_log(reason);
+        DDWG_TRACE_CHECKPOINT("TRANSPORT FAILURE reason=%s", reason);
+    }
+}
+
 static BOOL open_transport_locked(void)
 {
     V86GLMapBuffer mapping;
+    char reason[D9WG_LOG_MAX_TEXT];
     DWORD returned = 0;
+    DWORD error;
 
     if (g_dma_buffer)
         return TRUE;
-    if (g_transport_failed)
+    if (g_transport_retry_armed &&
+            GetTickCount() - g_transport_retry_tick < DDWG_TRANSPORT_RETRY_MS)
         return FALSE;
 
+    DDWG_TRACE_CHECKPOINT("TRANSPORT OPEN_BEGIN device=\\\\.\\v86gl");
     g_transport = CreateFileA(V86GL_DEVICE_DOS_NAME,
             GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL, NULL);
     if (g_transport == INVALID_HANDLE_VALUE) {
-        g_transport_failed = TRUE;
-        ddwg_log("could not open \\\\.\\v86gl");
+        error = GetLastError();
+        wsprintfA(reason, "could not open \\\\.\\v86gl (Win32 error %lu); the "
+                "v86gl kernel service is not started, so no DirectDraw surface "
+                "can reach the browser", error);
+        transport_failed_locked(reason);
         return FALSE;
     }
 
     ZeroMemory(&mapping, sizeof(mapping));
     if (!DeviceIoControl(g_transport, V86GL_IOCTL_MAP_BUFFER,
-            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)
-            || returned != sizeof(mapping)
-            || !mapping.user_address
+            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)) {
+        error = GetLastError();
+        wsprintfA(reason, "v86gl MAP_BUFFER failed (Win32 error %lu); error 170 "
+                "means another process still owns the single 16 MiB DMA "
+                "mapping", error);
+        close_transport_locked();
+        transport_failed_locked(reason);
+        return FALSE;
+    }
+    if (returned != sizeof(mapping) || !mapping.user_address
             || mapping.buffer_bytes < sizeof(V86GLDMADesc)
                     + DDWG_VGL2_RECORD_HEADER_BYTES
                     + sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)
                     + D9WG_RESPONSE_REGION_BYTES) {
-        ddwg_log("v86gl MAP_BUFFER failed");
+        wsprintfA(reason, "v86gl MAP_BUFFER returned an unusable mapping "
+                "(bytes=%lu returned=%lu)", mapping.buffer_bytes, returned);
         close_transport_locked();
-        g_transport_failed = TRUE;
+        transport_failed_locked(reason);
         return FALSE;
     }
 
     g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
     g_dma_capacity = mapping.buffer_bytes;
+    g_transport_retry_armed = FALSE;
+    /*
+     * Everything the host knows about belonged to the previous generation.
+     * Bumping it here is what makes ensure_device, the palettes and
+     * ensure_surface_storage recreate themselves on their next use instead of
+     * addressing handles the host has never seen.
+     */
+    ++g_transport_generation;
     reset_batch_locked();
+    DDWG_TRACE_CHECKPOINT("TRANSPORT OPEN_OK handle=%08lX dma=%08lX "
+            "capacity=%lu generation=%lu", (DWORD)(uintptr_t)g_transport,
+            (DWORD)(uintptr_t)g_dma_buffer, g_dma_capacity,
+            g_transport_generation);
     return TRUE;
 }
 
@@ -261,6 +451,11 @@ static BOOL submit_batch_locked(BOOL present)
         return FALSE;
     if (g_command_count == 0)
         return TRUE;
+
+    DDWG_TRACE_CHECKPOINT("BATCH SUBMIT_BEGIN frame=%lu present=%lu "
+            "commands=%lu bytes=%lu generation=%lu", g_frame_id,
+            present ? 1u : 0u, g_command_count, g_batch_bytes,
+            g_transport_generation);
 
     batch = (D9WGBatchHeader *)batch_base();
     batch->frame_id = g_frame_id;
@@ -296,12 +491,18 @@ static BOOL submit_batch_locked(BOOL present)
     submit.flags = 0;
     if (!DeviceIoControl(g_transport, V86GL_IOCTL_SUBMIT,
             &submit, sizeof(submit), NULL, 0, &returned, NULL)) {
-        ddwg_log("D9WG batch submit failed");
+        char reason[D9WG_LOG_MAX_TEXT];
+        wsprintfA(reason, "D9WG batch submit failed (Win32 error %lu)",
+                GetLastError());
         close_transport_locked();
-        g_transport_failed = TRUE;
+        transport_failed_locked(reason);
         return FALSE;
     }
 
+    DDWG_TRACE_CHECKPOINT("BATCH SUBMIT_OK frame=%lu present=%lu "
+            "commands=%lu descriptor_bytes=%lu returned=%lu", g_frame_id,
+            present ? 1u : 0u, g_command_count,
+            submit.descriptor_bytes, returned);
     if (present)
         ++g_frame_id;
     reset_batch_locked();
@@ -424,7 +625,7 @@ static void host_log(uint32_t severity, const char *format, ...)
 
 #define UNSUPPORTED(name, result) \
     (HOSTLOG_REFUSED("%s is not implemented and returned an error", name), \
-     (result))
+     DDWG_TRACE_ERROR(result))
 
 /* ------------------------------------------------------------------ *
  * Objects
@@ -488,6 +689,21 @@ struct DDTextureStorage {
     uint32_t handle;
     uint32_t resource_kind;
     BOOL created;
+    uint32_t create_generation;  /* the transport generation it was made in */
+    /*
+     * The creation command, kept verbatim. DirectDraw surface memory is the
+     * guest's own; the host texture is a cache of it that can be missing --
+     * because the bridge was not open yet when the surface was created -- and
+     * be built later without the application knowing. Replaying the recorded
+     * command is how a surface stops being permanently dead just because
+     * CreateSurface happened to run first.
+     */
+    uint16_t create_opcode;
+    uint32_t create_bytes;
+    union {
+        D9WGCreateTexture2D texture_2d;
+        D9WGCreateTextureCube texture_cube;
+    } create;
 };
 
 /* DuplicateSurface creates another COM object over the same pixels, not
@@ -535,6 +751,7 @@ struct DDSurface {
     DDSurfaceMemory *memory;
     BYTE *shadow;               /* system-memory bits Lock hands out */
     BOOL external_memory;       /* upload before every use as a source */
+    BOOL upload_pending;        /* host texture is blank; owes a full upload */
     BOOL implicit;              /* complex child; cannot be duplicated */
     DWORD lock_depth;
     RECT locked_rect;
@@ -581,6 +798,7 @@ struct DDrawObject {
     DWORD cooperative_flags;
     uint32_t device_handle;
     BOOL device_created;
+    uint32_t device_generation;     /* the transport generation it belongs to */
     UINT mode_width;
     UINT mode_height;
     UINT mode_bpp;
@@ -764,6 +982,29 @@ static void mode_pixel_format(UINT bpp, DDPIXELFORMAT *out)
     }
 }
 
+static void object_display_size(DDrawObject *object, UINT *width, UINT *height)
+{
+    UINT resolved_width = object->mode_width;
+    UINT resolved_height = object->mode_height;
+    RECT client;
+    int metric;
+
+    if ((!resolved_width || !resolved_height) && object->window &&
+            GetClientRect(object->window, &client)) {
+        if (!resolved_width && client.right > client.left)
+            resolved_width = (UINT)(client.right - client.left);
+        if (!resolved_height && client.bottom > client.top)
+            resolved_height = (UINT)(client.bottom - client.top);
+    }
+    if (!resolved_width && (metric = GetSystemMetrics(SM_CXSCREEN)) > 0)
+        resolved_width = (UINT)metric;
+    if (!resolved_height && (metric = GetSystemMetrics(SM_CYSCREEN)) > 0)
+        resolved_height = (UINT)metric;
+
+    *width = resolved_width ? resolved_width : 640u;
+    *height = resolved_height ? resolved_height : 480u;
+}
+
 /* Rows are 8-byte aligned. DirectDraw lets the driver pick the pitch and every
  * app reads it back out of the surface description, so the only requirement is
  * that we report what we actually use. */
@@ -776,37 +1017,89 @@ static UINT surface_pitch_for(UINT width, UINT bytes_per_pixel)
  * D9WG emitters
  * ------------------------------------------------------------------ */
 
+/* The handshake is owned by the transport generation, not by a one-shot flag:
+ * a HELLO that was dropped because the device was not open yet must be sent
+ * again once it is, or the host executes a stream it never greeted. */
 static void emit_hello_once(void)
 {
     D9WGHello hello;
 
-    if (g_hello_sent)
+    if (g_hello_generation && g_hello_generation == g_transport_generation)
         return;
-    g_hello_sent = TRUE;
     ZeroMemory(&hello, sizeof(hello));
     hello.guest_pointer_bits = (uint32_t)(sizeof(void *) * 8u);
     hello.feature_bits = 0;
     hello.session_id_low = g_session_id_low;
     hello.session_id_high = g_session_id_high;
-    emit_command(D9WG_OP_HELLO, &hello, sizeof(hello));
+    DDWG_TRACE_CHECKPOINT("HELLO QUEUE session=%08lX:%08lX "
+            "generation=%lu pointer_bits=%lu", hello.session_id_high,
+            hello.session_id_low, g_transport_generation,
+            hello.guest_pointer_bits);
+    if (emit_command(D9WG_OP_HELLO, &hello, sizeof(hello)))
+        g_hello_generation = g_transport_generation;
 }
+
+static void emit_session_end(void)
+{
+    D9WGSessionEnd end;
+
+    /* Do not open the transport just to announce a process that never sent a
+     * D9WG command. Once HELLO has been queued at least once, SESSION_END is
+     * the process-wide safety net for objects left live at DLL unload. */
+    if (!g_hello_generation)
+        return;
+    ZeroMemory(&end, sizeof(end));
+    end.session_id_low = g_session_id_low;
+    end.session_id_high = g_session_id_high;
+    DDWG_TRACE_CHECKPOINT("SESSION END QUEUE session=%08lX:%08lX",
+            end.session_id_high, end.session_id_low);
+    emit_command(D9WG_OP_SESSION_END, &end, sizeof(end));
+}
+
+static void emit_device_destroy(DDrawObject *object)
+{
+    D9WGDestroyResource destroy;
+
+    if (!object || !object->device_created || !object->device_handle)
+        return;
+    ZeroMemory(&destroy, sizeof(destroy));
+    destroy.resource_handle = object->device_handle;
+    /* resource_kind 0 is the established D8WG/D9WG device-destroy
+     * convention. Reusing it makes DirectDraw follow the same host path as
+     * D3D8/D3D9 instead of leaving its last swap image on screen forever. */
+    destroy.resource_kind = 0;
+    DDWG_TRACE_CHECKPOINT("DEVICE DESTROY QUEUE handle=%lu generation=%lu",
+            object->device_handle, object->device_generation);
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    object->device_created = FALSE;
+    object->device_generation = 0;
+}
+
+static void emit_palette_table(DDPalette *palette);
 
 static BOOL ensure_device(DDrawObject *object)
 {
     D9WGCreateDevice create;
-    RECT client;
+    DDPalette *palette;
+    BOOL recovering;
+    UINT width;
+    UINT height;
 
-    if (object->device_created)
+    if (object->device_created &&
+            object->device_generation == g_transport_generation)
         return TRUE;
+    recovering = object->device_created;
+    object->device_created = FALSE;
     if (!object->device_handle)
         object->device_handle = allocate_handle();
 
     emit_hello_once();
+    object_display_size(object, &width, &height);
     ZeroMemory(&create, sizeof(create));
     create.device_handle = object->device_handle;
     create.hwnd = (uint32_t)(uintptr_t)object->window;
-    create.width = object->mode_width ? object->mode_width : 640u;
-    create.height = object->mode_height ? object->mode_height : 480u;
+    create.width = width;
+    create.height = height;
     /* The swap-chain image is always true colour: it is the surface the page
      * composites, and a palettised primary resolves into it rather than being
      * one. */
@@ -814,15 +1107,21 @@ static BOOL ensure_device(DDrawObject *object)
     create.windowed = (object->cooperative_flags & DDSCL_FULLSCREEN) ? 0u : 1u;
     create.behavior_flags = 0;
     create.enable_auto_depth_stencil = 0;
-    if (object->window && GetClientRect(object->window, &client)) {
-        if (client.right > client.left && !object->mode_width)
-            create.width = (uint32_t)(client.right - client.left);
-        if (client.bottom > client.top && !object->mode_height)
-            create.height = (uint32_t)(client.bottom - client.top);
-    }
+    DDWG_TRACE_CHECKPOINT("DEVICE CREATE handle=%lu hwnd=%08lX size=%lux%lu "
+            "windowed=%lu recovering=%lu generation=%lu",
+            create.device_handle, create.hwnd, create.width, create.height,
+            create.windowed, recovering ? 1u : 0u, g_transport_generation);
     if (!emit_command(D9WG_OP_CREATE_DEVICE, &create, sizeof(create)))
         return FALSE;
     object->device_created = TRUE;
+    object->device_generation = g_transport_generation;
+    /* A palette table lives on the host against the device that is gone. The
+     * surfaces restate their own bindings when their storage is recreated;
+     * the tables themselves have no other owner to restate them. */
+    if (recovering) {
+        for (palette = object->palettes; palette; palette = palette->next)
+            emit_palette_table(palette);
+    }
     return TRUE;
 }
 
@@ -847,16 +1146,29 @@ static void emit_display_mode(DDrawObject *object)
     mode.refresh_rate = object->mode_refresh ? object->mode_refresh : 60u;
     mode.cooperative_flags = flags;
     mode.guest_mode_changed = object->guest_mode_changed ? 1u : 0u;
+    DDWG_TRACE_CHECKPOINT("DISPLAY_MODE device=%lu size=%lux%lux%lu "
+            "refresh=%lu cooperative=%08lX guest_changed=%lu",
+            mode.device_handle, mode.width, mode.height,
+            mode.bits_per_pixel, mode.refresh_rate, mode.cooperative_flags,
+            mode.guest_mode_changed);
     emit_command(D9WG_OP_DD_SET_DISPLAY_MODE, &mode, sizeof(mode));
 }
 
-static BOOL emit_surface_storage_create(DDSurface *surface, UINT level_count,
+static void rebind_host_surface_state(DDSurface *surface);
+
+/*
+ * The creation command is recorded on the storage before any attempt to send
+ * it, because the attempt is the part that can fail for a reason that has
+ * nothing to do with the surface: v86gl.sys is a demand-start service, and a
+ * program that reaches CreateSurface before it is running must still get a
+ * surface. What it gets is a surface that owes the host a texture, and the
+ * record is what lets ensure_surface_storage pay that debt later.
+ */
+static void record_surface_storage_create(DDSurface *surface, UINT level_count,
         BOOL cube)
 {
-    D9WGCreateTexture2D create;
+    DDTextureStorage *storage = surface->storage;
 
-    if (!ensure_device(surface->owner))
-        return FALSE;
     if (cube) {
         D9WGCreateTextureCube cube_create;
         ZeroMemory(&cube_create, sizeof(cube_create));
@@ -870,32 +1182,96 @@ static BOOL emit_surface_storage_create(DDSurface *surface, UINT level_count,
         if (surface->indexed)
             cube_create.usage |= D9WG_USAGE_DDRAW_INDEXED;
         cube_create.pool = DDWG_POOL_DEFAULT;
-        if (!emit_command(D9WG_OP_CREATE_TEXTURE_CUBE, &cube_create,
-                sizeof(cube_create)))
-            return FALSE;
-        surface->storage->resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
-        surface->storage->created = TRUE;
-        return TRUE;
+        storage->resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
+        storage->create_opcode = D9WG_OP_CREATE_TEXTURE_CUBE;
+        storage->create_bytes = (uint32_t)sizeof(cube_create);
+        storage->create.texture_cube = cube_create;
+        return;
     }
-    ZeroMemory(&create, sizeof(create));
-    create.device_handle = surface->owner->device_handle;
-    create.resource_handle = surface->handle;
-    create.width = surface->width;
-    create.height = surface->height;
-    create.level_count = level_count;
-    create.format = surface->format;
-    create.usage = format_is_depth(surface->format)
-        ? DDWG_USAGE_DEPTHSTENCIL : 0u;
-    if (surface->desc.ddsCaps.dwCaps & DDSCAPS_3DDEVICE)
-        create.usage |= DDWG_USAGE_RENDERTARGET;
-    if (surface->indexed)
-        create.usage |= D9WG_USAGE_DDRAW_INDEXED;
-    create.pool = DDWG_POOL_DEFAULT;
-    if (!emit_command(D9WG_OP_CREATE_TEXTURE_2D, &create, sizeof(create)))
+    {
+        D9WGCreateTexture2D create;
+        ZeroMemory(&create, sizeof(create));
+        create.device_handle = surface->owner->device_handle;
+        create.resource_handle = surface->handle;
+        create.width = surface->width;
+        create.height = surface->height;
+        create.level_count = level_count;
+        create.format = surface->format;
+        create.usage = format_is_depth(surface->format)
+            ? DDWG_USAGE_DEPTHSTENCIL : 0u;
+        if (surface->desc.ddsCaps.dwCaps & DDSCAPS_3DDEVICE)
+            create.usage |= DDWG_USAGE_RENDERTARGET;
+        if (surface->indexed)
+            create.usage |= D9WG_USAGE_DDRAW_INDEXED;
+        create.pool = DDWG_POOL_DEFAULT;
+        storage->resource_kind = D9WG_RESOURCE_TEXTURE_2D;
+        storage->create_opcode = D9WG_OP_CREATE_TEXTURE_2D;
+        storage->create_bytes = (uint32_t)sizeof(create);
+        storage->create.texture_2d = create;
+    }
+}
+
+/*
+ * Sends the recorded creation for a surface whose host texture is missing:
+ * either it was never created, because the transport was not open when
+ * CreateSurface ran, or it belonged to an earlier transport generation. Every
+ * surface sharing the storage is marked for a full re-upload, because the new
+ * texture starts blank and the guest shadow is the only copy of the pixels.
+ */
+static BOOL ensure_surface_storage(DDSurface *surface)
+{
+    DDTextureStorage *storage;
+    DDSurface *sibling;
+    BOOL rebuilding;
+
+    if (!surface || !surface->storage)
         return FALSE;
-    surface->storage->resource_kind = D9WG_RESOURCE_TEXTURE_2D;
-    surface->storage->created = TRUE;
+    storage = surface->storage;
+    if (storage->created &&
+            storage->create_generation == g_transport_generation)
+        return TRUE;
+    if (!storage->create_opcode)
+        return FALSE;
+    if (!ensure_device(surface->owner))
+        return FALSE;
+    rebuilding = storage->create_generation != 0;
+    storage->created = FALSE;
+    /* The device handle is reissued with the device, so the recorded command
+     * carries the old one until it is refreshed here. */
+    if (storage->create_opcode == D9WG_OP_CREATE_TEXTURE_CUBE)
+        storage->create.texture_cube.device_handle =
+                surface->owner->device_handle;
+    else
+        storage->create.texture_2d.device_handle =
+                surface->owner->device_handle;
+    DDWG_TRACE_CHECKPOINT("SURFACE STORAGE_CREATE handle=%lu opcode=%u "
+            "size=%lux%lu format=%u level=%lu face=%lu rebuilding=%lu",
+            surface->handle, storage->create_opcode, surface->width,
+            surface->height, surface->format, surface->mip_level,
+            surface->cube_face, rebuilding ? 1u : 0u);
+    if (!emit_command(storage->create_opcode, &storage->create,
+            storage->create_bytes))
+        return FALSE;
+    storage->created = TRUE;
+    storage->create_generation = g_transport_generation;
+    if (rebuilding) {
+        EnterCriticalSection(&g_object_lock);
+        for (sibling = surface->owner->surfaces; sibling;
+                sibling = sibling->next) {
+            if (sibling->storage == storage)
+                sibling->upload_pending = TRUE;
+        }
+        LeaveCriticalSection(&g_object_lock);
+    }
+    rebind_host_surface_state(surface);
     return TRUE;
+}
+
+static BOOL emit_surface_storage_create(DDSurface *surface, UINT level_count,
+        BOOL cube)
+{
+    record_surface_storage_create(surface, level_count, cube);
+    return ensure_surface_storage(surface);
 }
 
 static BOOL emit_surface_create(DDSurface *surface)
@@ -921,6 +1297,17 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
 
     if (!surface->shadow || !surface->handle)
         return FALSE;
+    if (!ensure_surface_storage(surface)) {
+        /* The guest just wrote pixels the host will never see. Record the
+         * debt against this surface so the upload happens once the texture
+         * exists, rather than losing the write. */
+        surface->upload_pending = TRUE;
+        return FALSE;
+    }
+    /* A texture that has just been created holds nothing, so a dirty-rect
+     * upload would leave the rest of it blank. */
+    if (surface->upload_pending)
+        rect = NULL;
     if (rect) {
         left = (UINT)(rect->left < 0 ? 0 : rect->left);
         top = (UINT)(rect->top < 0 ? 0 : rect->top);
@@ -946,6 +1333,11 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
         source_x = left * surface->bytes_per_pixel;
         source_y = top;
     }
+
+    DDWG_TRACE_CHECKPOINT("SURFACE UPLOAD_BEGIN handle=%lu level=%lu "
+            "face=%lu rect=%lu,%lu-%lu,%lu pitch=%lu bytes=%lu",
+            surface->handle, surface->mip_level, surface->cube_face,
+            left, top, right, bottom, row_bytes, row_bytes * rows);
 
     ZeroMemory(&update, sizeof(update));
     EnterCriticalSection(&g_transport_lock);
@@ -975,9 +1367,34 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
                         + source_x,
                     row_bytes);
         }
+        if (left == 0 && top == 0 && right >= surface->width &&
+                bottom >= surface->height)
+            surface->upload_pending = FALSE;
     }
     LeaveCriticalSection(&g_transport_lock);
+    DDWG_TRACE_CHECKPOINT("SURFACE UPLOAD_END handle=%lu result=%lu "
+            "pending=%lu", surface->handle, result ? 1u : 0u,
+            surface->upload_pending ? 1u : 0u);
     return result;
+}
+
+/* Everything that names a surface handle on the wire goes through here first:
+ * the host texture must exist and must hold the guest's pixels before it can
+ * be a blit source, an overlay, or a texture. */
+static BOOL prepare_surface_for_host(DDSurface *surface)
+{
+    if (!ensure_surface_storage(surface))
+        return FALSE;
+    if (!surface->upload_pending)
+        return TRUE;
+    /* A depth buffer's guest shadow is never the truth -- nothing writes it,
+     * and UPDATE_TEXTURE against a depth texture is not a copy the host can
+     * make. A rebuilt one simply starts cleared. */
+    if (!surface->shadow || format_is_depth(surface->format)) {
+        surface->upload_pending = FALSE;
+        return TRUE;
+    }
+    return emit_surface_upload(surface, NULL);
 }
 
 /* SetSurfaceDesc deliberately gives DirectDraw no notification when the
@@ -998,7 +1415,7 @@ static void emit_color_key(DDSurface *surface, DWORD kind,
     D9WGDDSetColorKey command;
     DDrawPixelFormatDesc format;
 
-    if (!surface->handle)
+    if (!surface->handle || !surface->storage->created)
         return;
     describe_pixel_format(&surface->desc.ddpfPixelFormat, &format);
     ZeroMemory(&command, sizeof(command));
@@ -1052,7 +1469,7 @@ static void emit_surface_palette_binding(DDSurface *surface)
 {
     D9WGDDSetSurfacePalette command;
 
-    if (!surface->handle || !surface->palette)
+    if (!surface->handle || !surface->palette || !surface->storage->created)
         return;
     ZeroMemory(&command, sizeof(command));
     command.surface_handle = surface->handle;
@@ -1099,6 +1516,10 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         return FALSE;
     if (!ensure_device(destination->owner))
         return FALSE;
+    if (!prepare_surface_for_host(destination))
+        return FALSE;
+    if (source && !prepare_surface_for_host(source))
+        return FALSE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = destination->owner->device_handle;
     command.source_handle = source ? source->handle : 0u;
@@ -1143,6 +1564,8 @@ static BOOL emit_blt_to_screen(DDSurface *source)
 
     if (!sync_external_surface_for_read(source) || !ensure_device(object))
         return FALSE;
+    if (!prepare_surface_for_host(source))
+        return FALSE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = object->device_handle;
     command.source_handle = source->handle;
@@ -1153,6 +1576,9 @@ static BOOL emit_blt_to_screen(DDSurface *source)
     command.destination_handle = 0;
     command.destination_rect[2] = (int32_t)source->width;
     command.destination_rect[3] = (int32_t)source->height;
+    DDWG_TRACE_CHECKPOINT("SCREEN_BLT source=%lu level=%lu face=%lu "
+            "size=%lux%lu", source->handle, source->mip_level,
+            source->cube_face, source->width, source->height);
     return emit_command(D9WG_OP_DD_BLT, &command, sizeof(command));
 }
 
@@ -1171,6 +1597,7 @@ static BOOL emit_overlay_state(DDSurface *surface)
             !sync_external_surface_for_read(surface))
         return FALSE;
     if (!ensure_device(surface->owner)) return FALSE;
+    if (!prepare_surface_for_host(surface)) return FALSE;
     target = surface->overlay_destination;
     if (surface->overlay_wire_flags & D9WG_DDOVER_KEY_SOURCE) {
         if (surface->overlay_wire_flags &
@@ -1273,11 +1700,17 @@ static BOOL emit_present_and_flush(DDrawObject *object)
         present.width = object->mode_width;
         present.height = object->mode_height;
     }
+    DDWG_TRACE_CHECKPOINT("PRESENT BEGIN device=%lu hwnd=%08lX "
+            "rect=%ld,%ld %lux%lu frame=%lu", present.device_handle,
+            present.hwnd, present.x, present.y, present.width,
+            present.height, g_frame_id);
     if (!emit_command(D9WG_OP_PRESENT, &present, sizeof(present)))
         return FALSE;
     EnterCriticalSection(&g_transport_lock);
     result = submit_batch_locked(TRUE);
     LeaveCriticalSection(&g_transport_lock);
+    DDWG_TRACE_CHECKPOINT("PRESENT END device=%lu result=%lu next_frame=%lu",
+            present.device_handle, result ? 1u : 0u, g_frame_id);
     return result;
 }
 
@@ -1589,7 +2022,9 @@ static HRESULT WINAPI surface_QueryInterface(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_any(iface, NULL);
     unsigned version = 0;
 
-    if (!out) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL surface_QueryInterface handle=%lu iid=%08lX",
+            surface->handle, iid ? iid->Data1 : 0u);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirectDrawSurface7))
         version = DD_VERSION_7;
@@ -1605,12 +2040,12 @@ static HRESULT WINAPI surface_QueryInterface(IDirectDrawSurface7 *iface,
         if (guid_equal(iid, &IID_IDirect3DTexture2)) {
             surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
             *out = &surface->texture2_vtbl;
-            return D3D_OK;
+            return DDWG_TRACE_RESULT(D3D_OK);
         }
         if (guid_equal(iid, &IID_IDirect3DTexture)) {
             surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
             *out = &surface->texture1_vtbl;
-            return D3D_OK;
+            return DDWG_TRACE_RESULT(D3D_OK);
         }
         if (guid_equal(iid, &IID_IDirect3DHALDevice) ||
                 guid_equal(iid, &IID_IDirect3DRGBDevice) ||
@@ -1618,14 +2053,16 @@ static HRESULT WINAPI surface_QueryInterface(IDirectDrawSurface7 *iface,
                 guid_equal(iid, &IID_IDirect3DMMXDevice) ||
                 guid_equal(iid, &IID_IDirect3DRefDevice))
             return d3d_legacy_surface_create_device(surface, iid, out);
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     }
     /* One object, one reference count: every version is the same allocation
      * seen through a different vtable, so the identity an app compares
      * pointers against is preserved per version and the count is shared. */
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     *out = surface_interface(surface, version);
-    return DD_OK;
+    DDWG_TRACE("SURFACE QUERY_INTERFACE handle=%lu version=%u out=%08lX",
+            surface->handle, version, (DWORD)(uintptr_t)*out);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static ULONG WINAPI surface_AddRef(IDirectDrawSurface7 *iface)
@@ -1638,8 +2075,12 @@ static ULONG WINAPI surface_Release(IDirectDrawSurface7 *iface)
     DDSurface *surface = surface_from_any(iface, NULL);
     LONG remaining = InterlockedDecrement(&surface->ref);
 
-    if (remaining == 0)
+    if (remaining == 0) {
+        DDWG_TRACE_CHECKPOINT("SURFACE DESTROY handle=%lu object=%08lX "
+                "primary=%lu", surface->handle,
+                (DWORD)(uintptr_t)surface, surface->primary ? 1u : 0u);
         surface_destroy(surface);
+    }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
 
@@ -1649,7 +2090,7 @@ static HRESULT WINAPI surface_AddAttachedSurface(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
     DDSurface *other = surface_from_iface(attachment);
 
-    if (!other) return DDERR_INVALIDPARAMS;
+    if (!other) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (other->desc.ddsCaps.dwCaps & DDSCAPS_ZBUFFER) {
         surface->attached_depth = other;
         IDirectDrawSurface7_AddRef(attachment);
@@ -1671,12 +2112,12 @@ static HRESULT WINAPI surface_AddOverlayDirtyRect(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
-        return DDERR_NOTAOVERLAYSURFACE;
+        return DDWG_TRACE_ERROR(DDERR_NOTAOVERLAYSURFACE);
     if (!rect || rect->left < 0 || rect->top < 0 ||
             rect->right > (LONG)surface->width ||
             rect->bottom > (LONG)surface->height ||
             rect->right <= rect->left || rect->bottom <= rect->top)
-        return DDERR_INVALIDRECT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
     /* The host recomposites the overlay from its texture on every Present, so
      * tracking a smaller emulated dirty list cannot reduce the copy. Keeping
      * the dirty state still makes REFRESHDIRTYRECTS observably correct. */
@@ -1737,8 +2178,21 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     UINT index;
     BOOL ok = TRUE;
 
+    DDWG_TRACE_CHECKPOINT("CALL surface_Blt dst=%lu src=%lu flags=%08lX "
+            "dst_rect=%ld,%ld-%ld,%ld src_rect=%ld,%ld-%ld,%ld",
+            destination->handle, source ? source->handle : 0u, flags,
+            dest_rect ? dest_rect->left : 0,
+            dest_rect ? dest_rect->top : 0,
+            dest_rect ? dest_rect->right : (LONG)destination->width,
+            dest_rect ? dest_rect->bottom : (LONG)destination->height,
+            source_rect ? source_rect->left : 0,
+            source_rect ? source_rect->top : 0,
+            source_rect ? source_rect->right :
+                    (source ? (LONG)source->width : 0),
+            source_rect ? source_rect->bottom :
+                    (source ? (LONG)source->height : 0));
     if (destination->lock_depth)
-        return DDERR_SURFACEBUSY;
+        return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
     effective_destination.left = 0;
     effective_destination.top = 0;
@@ -1747,16 +2201,16 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     if (dest_rect) effective_destination = *dest_rect;
 
     if (flags & DDBLT_COLORFILL) {
-        if (!fx) return DDERR_INVALIDPARAMS;
+        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         blt_flags |= D9WG_DDBLT_COLOR_FILL;
         fill_color = fx->dwFillColor;
         source = NULL;
     } else if (flags & DDBLT_DEPTHFILL) {
         DWORD depth;
         DWORD maximum;
-        if (!fx) return DDERR_INVALIDPARAMS;
+        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (!format_is_depth(destination->format))
-            return DDERR_INVALIDPIXELFORMAT;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
         depth = fx->dwFillDepth;
         switch (destination->format) {
         case DDWG_FMT_D15S1: maximum = 0x7fffu; break;
@@ -1772,26 +2226,26 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         blt_flags |= D9WG_DDBLT_DEPTH_FILL;
         source = NULL;
     } else {
-        if (!source) return DDERR_INVALIDPARAMS;
+        if (!source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         effective_source.left = 0;
         effective_source.top = 0;
         effective_source.right = (LONG)source->width;
         effective_source.bottom = (LONG)source->height;
         if (source_rect) effective_source = *source_rect;
-        if (source->lock_depth) return DDERR_SURFACEBUSY;
+        if (source->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
         if (source->palette) emit_surface_palette_binding(source);
     }
 
     if (flags & DDBLT_KEYSRC) {
         if (!(source && (source->color_key_present &
                 (1u << D9WG_DDCKEY_SOURCE_BLT))))
-            return DDERR_NOCOLORKEY;
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         emit_color_key(source, D9WG_DDCKEY_SOURCE_BLT,
                 &source->color_key[D9WG_DDCKEY_SOURCE_BLT], TRUE);
         blt_flags |= D9WG_DDBLT_KEY_SOURCE;
     }
     if (flags & DDBLT_KEYSRCOVERRIDE) {
-        if (!fx || !source) return DDERR_INVALIDPARAMS;
+        if (!fx || !source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         /* An override key is a key for the duration of one blit. Sending it as
          * surface state around the blit keeps DD_BLT to one shape instead of
          * carrying a second key nobody else needs. */
@@ -1802,13 +2256,13 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     if (flags & DDBLT_KEYDEST) {
         if (!(destination->color_key_present &
                 (1u << D9WG_DDCKEY_DESTINATION_BLT)))
-            return DDERR_NOCOLORKEY;
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT,
                 &destination->color_key[D9WG_DDCKEY_DESTINATION_BLT], TRUE);
         blt_flags |= D9WG_DDBLT_KEY_DESTINATION;
     }
     if (flags & DDBLT_KEYDESTOVERRIDE) {
-        if (!fx) return DDERR_INVALIDPARAMS;
+        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT,
                 &fx->ddckDestColorkey, TRUE);
         blt_flags |= D9WG_DDBLT_KEY_DESTINATION;
@@ -1907,7 +2361,7 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         emit_blt_to_screen(destination);
         emit_present_and_flush(destination->owner);
     }
-    return ok ? DD_OK : DDERR_GENERIC;
+    return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
 }
 
 static HRESULT WINAPI surface_BltBatch(IDirectDrawSurface7 *iface,
@@ -1929,9 +2383,12 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
     uint32_t blt_flags = 0;
     BOOL ok;
 
-    if (!source) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL surface_BltFast dst=%lu src=%lu x=%lu y=%lu "
+            "flags=%08lX", destination->handle,
+            source ? source->handle : 0u, x, y, trans);
+    if (!source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (destination->lock_depth || source->lock_depth)
-        return DDERR_SURFACEBUSY;
+        return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
     if (source->palette) emit_surface_palette_binding(source);
 
     effective_source.left = 0;
@@ -1949,7 +2406,7 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
 
     if (trans & DDBLTFAST_SRCCOLORKEY) {
         if (!(source->color_key_present & (1u << D9WG_DDCKEY_SOURCE_BLT)))
-            return DDERR_NOCOLORKEY;
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         emit_color_key(source, D9WG_DDCKEY_SOURCE_BLT,
                 &source->color_key[D9WG_DDCKEY_SOURCE_BLT], TRUE);
         blt_flags |= D9WG_DDBLT_KEY_SOURCE;
@@ -1957,7 +2414,7 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
     if (trans & DDBLTFAST_DESTCOLORKEY) {
         if (!(destination->color_key_present &
                 (1u << D9WG_DDCKEY_DESTINATION_BLT)))
-            return DDERR_NOCOLORKEY;
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT,
                 &destination->color_key[D9WG_DDCKEY_DESTINATION_BLT], TRUE);
         blt_flags |= D9WG_DDBLT_KEY_DESTINATION;
@@ -1972,7 +2429,7 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
         emit_blt_to_screen(destination);
         emit_present_and_flush(destination->owner);
     }
-    return ok ? DD_OK : DDERR_GENERIC;
+    return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
 }
 
 static HRESULT WINAPI surface_DeleteAttachedSurface(IDirectDrawSurface7 *iface,
@@ -2001,7 +2458,7 @@ static HRESULT WINAPI surface_DeleteAttachedSurface(IDirectDrawSurface7 *iface,
             return DD_OK;
         }
     }
-    return DDERR_SURFACENOTATTACHED;
+    return DDWG_TRACE_ERROR(DDERR_SURFACENOTATTACHED);
 }
 
 static HRESULT WINAPI surface_EnumAttachedSurfaces(IDirectDrawSurface7 *iface,
@@ -2010,7 +2467,7 @@ static HRESULT WINAPI surface_EnumAttachedSurfaces(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
     DDSurface *attachment;
 
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (surface->mip_next) {
         DDSURFACEDESC2 description = surface->mip_next->desc;
         IDirectDrawSurface7_AddRef(
@@ -2061,7 +2518,7 @@ static HRESULT WINAPI surface_EnumOverlayZOrders(IDirectDrawSurface7 *iface,
 
     if (!callback || (flags != DDENUMOVERLAYZ_BACKTOFRONT &&
             flags != DDENUMOVERLAYZ_FRONTTOBACK))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (walk = destination->owner->surfaces; walk; walk = walk->next) {
         if (walk->overlay_destination == destination &&
                 count < DDWG_MAX_OVERLAYS)
@@ -2096,9 +2553,13 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
     DDSurface *override_surface = override_iface
         ? surface_from_iface(override_iface) : NULL;
 
+    DDWG_TRACE_CHECKPOINT("CALL surface_Flip front=%lu override=%lu "
+            "flags=%08lX has_chain=%lu", surface->handle,
+            override_surface ? override_surface->handle : 0u, flags,
+            surface->flip_next ? 1u : 0u);
     if (!surface->primary && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_FLIP))
-        return DDERR_NOTFLIPPABLE;
-    if (surface->lock_depth) return DDERR_SURFACEBUSY;
+        return DDWG_TRACE_ERROR(DDERR_NOTFLIPPABLE);
+    if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
     if (override_surface) {
         /* Flip to a named surface: that surface's contents become the front
@@ -2147,7 +2608,8 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
     }
     (void)flags; /* DDFLIP_NOVSYNC/WAIT/INTERVALn: the browser's presentation
                   * cadence is not ours to choose. Recorded in README.md. */
-    return emit_present_and_flush(surface->owner) ? DD_OK : DDERR_GENERIC;
+    return DDWG_TRACE_RESULT(emit_present_and_flush(surface->owner)
+            ? DD_OK : DDERR_GENERIC);
 }
 
 static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
@@ -2156,7 +2618,7 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
     DDSurface *walk;
 
-    if (!caps || !out) return DDERR_INVALIDPARAMS;
+    if (!caps || !out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (caps->dwCaps2 & DDSCAPS2_CUBEMAP_ALLFACES) {
         static const DWORD face_caps[6] = {
@@ -2176,16 +2638,16 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
                 return DD_OK;
             }
         }
-        return DDERR_NOTFOUND;
+        return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     }
     if (caps->dwCaps & DDSCAPS_MIPMAP) {
-        if (!surface->mip_next) return DDERR_NOTFOUND;
+        if (!surface->mip_next) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
         *out = (IDirectDrawSurface7 *)surface->mip_next;
         IDirectDrawSurface7_AddRef(*out);
         return DD_OK;
     }
     if (caps->dwCaps & DDSCAPS_ZBUFFER) {
-        if (!surface->attached_depth) return DDERR_NOTFOUND;
+        if (!surface->attached_depth) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
         *out = (IDirectDrawSurface7 *)surface->attached_depth;
         IDirectDrawSurface7_AddRef(*out);
         return DD_OK;
@@ -2199,13 +2661,17 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
         }
         walk = walk->flip_next;
     }
-    return DDERR_NOTFOUND;
+    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
 }
 
 static HRESULT WINAPI surface_GetBltStatus(IDirectDrawSurface7 *iface,
         DWORD flags)
 {
-    (void)iface; (void)flags;
+    DDSurface *surface = surface_from_iface(iface);
+    (void)surface;
+    (void)flags;
+    ddwg_trace_poll(&g_trace_blt_status_calls, "GetBltStatus",
+            surface->handle, flags, 0u);
     /* Blits are queued to the host and never block the guest. */
     return DD_OK;
 }
@@ -2215,7 +2681,7 @@ static HRESULT WINAPI surface_GetCaps(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!caps) return DDERR_INVALIDPARAMS;
+    if (!caps) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *caps = surface->desc.ddsCaps;
     return DD_OK;
 }
@@ -2225,8 +2691,8 @@ static HRESULT WINAPI surface_GetClipper(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!out) return DDERR_INVALIDPARAMS;
-    if (!surface->clipper) return DDERR_NOCLIPPERATTACHED;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!surface->clipper) return DDWG_TRACE_ERROR(DDERR_NOCLIPPERATTACHED);
     *out = (IDirectDrawClipper *)surface->clipper;
     IDirectDrawClipper_AddRef(*out);
     return DD_OK;
@@ -2283,11 +2749,11 @@ static HRESULT WINAPI surface_GetColorKey(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
     DWORD kind, description_flag;
 
-    if (!key) return DDERR_INVALIDPARAMS;
+    if (!key) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!surface_color_key_kind(flags, &kind, &description_flag))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(surface->color_key_present & (1u << kind)))
-        return DDERR_NOCOLORKEY;
+        return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
     *key = surface->color_key[kind];
     return DD_OK;
 }
@@ -2309,10 +2775,13 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
     UINT row;
     UINT row_bytes;
 
-    if (!out) return DDERR_INVALIDPARAMS;
-    if (!surface->bytes_per_pixel) return DDERR_UNSUPPORTED;
-    if (surface->dc) return DDERR_DCALREADYCREATED;
-    if (surface->lock_depth) return DDERR_SURFACEBUSY;
+    DDWG_TRACE_CHECKPOINT("CALL surface_GetDC handle=%lu size=%lux%lu "
+            "bpp=%lu", surface->handle, surface->width, surface->height,
+            surface->bytes_per_pixel * 8u);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!surface->bytes_per_pixel) return DDWG_TRACE_ERROR(DDERR_UNSUPPORTED);
+    if (surface->dc) return DDWG_TRACE_ERROR(DDERR_DCALREADYCREATED);
+    if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
     /* A failed readback has already reported itself; the DC is still built
      * over the shadow, because a DC that does not exist is worse than one
      * whose GPU-written pixels are stale. */
@@ -2340,16 +2809,16 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
     }
 
     screen = GetDC(NULL);
-    if (!screen) return DDERR_GENERIC;
+    if (!screen) return DDWG_TRACE_ERROR(DDERR_GENERIC);
     surface->dc = CreateCompatibleDC(screen);
     ReleaseDC(NULL, screen);
-    if (!surface->dc) return DDERR_GENERIC;
+    if (!surface->dc) return DDWG_TRACE_ERROR(DDERR_GENERIC);
     surface->dib = CreateDIBSection(surface->dc, (const BITMAPINFO *)&info,
             DIB_RGB_COLORS, (void **)&surface->dib_bits, NULL, 0);
     if (!surface->dib) {
         DeleteDC(surface->dc);
         surface->dc = NULL;
-        return DDERR_GENERIC;
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
     }
     surface->old_bitmap = (HBITMAP)SelectObject(surface->dc, surface->dib);
     row_bytes = surface->width * surface->bytes_per_pixel;
@@ -2358,7 +2827,9 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
                 surface->shadow + row * surface->pitch, row_bytes);
     }
     *out = surface->dc;
-    return DD_OK;
+    DDWG_TRACE("SURFACE DC_CREATED handle=%lu dc=%08lX",
+            surface->handle, (DWORD)(uintptr_t)surface->dc);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI surface_ReleaseDC(IDirectDrawSurface7 *iface, HDC dc)
@@ -2367,7 +2838,9 @@ static HRESULT WINAPI surface_ReleaseDC(IDirectDrawSurface7 *iface, HDC dc)
     UINT row;
     UINT row_bytes;
 
-    if (!surface->dc || dc != surface->dc) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL surface_ReleaseDC handle=%lu dc=%08lX",
+            surface->handle, (DWORD)(uintptr_t)dc);
+    if (!surface->dc || dc != surface->dc) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     GdiFlush();
     row_bytes = surface->width * surface->bytes_per_pixel;
     for (row = 0; row < surface->height; ++row) {
@@ -2388,13 +2861,17 @@ static HRESULT WINAPI surface_ReleaseDC(IDirectDrawSurface7 *iface, HDC dc)
         emit_blt_to_screen(surface);
         emit_present_and_flush(surface->owner);
     }
-    return DD_OK;
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI surface_GetFlipStatus(IDirectDrawSurface7 *iface,
         DWORD flags)
 {
-    (void)iface; (void)flags;
+    DDSurface *surface = surface_from_iface(iface);
+    (void)surface;
+    (void)flags;
+    ddwg_trace_poll(&g_trace_flip_status_calls, "GetFlipStatus",
+            surface->handle, flags, 0u);
     return DD_OK;
 }
 
@@ -2402,10 +2879,10 @@ static HRESULT WINAPI surface_GetOverlayPosition(IDirectDrawSurface7 *iface,
         LPLONG x, LPLONG y)
 {
     DDSurface *surface = surface_from_iface(iface);
-    if (!x || !y) return DDERR_INVALIDPARAMS;
+    if (!x || !y) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
-        return DDERR_NOTAOVERLAYSURFACE;
-    if (!surface->overlay_destination) return DDERR_NOOVERLAYDEST;
+        return DDWG_TRACE_ERROR(DDERR_NOTAOVERLAYSURFACE);
+    if (!surface->overlay_destination) return DDWG_TRACE_ERROR(DDERR_NOOVERLAYDEST);
     *x = surface->overlay_destination_rect.left;
     *y = surface->overlay_destination_rect.top;
     return DD_OK;
@@ -2416,8 +2893,8 @@ static HRESULT WINAPI surface_GetPalette(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!out) return DDERR_INVALIDPARAMS;
-    if (!surface->palette) return DDERR_NOPALETTEATTACHED;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!surface->palette) return DDWG_TRACE_ERROR(DDERR_NOPALETTEATTACHED);
     *out = (IDirectDrawPalette *)surface->palette;
     IDirectDrawPalette_AddRef(*out);
     return DD_OK;
@@ -2428,7 +2905,7 @@ static HRESULT WINAPI surface_GetPixelFormat(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!format) return DDERR_INVALIDPARAMS;
+    if (!format) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *format = surface->desc.ddpfPixelFormat;
     format->dwSize = sizeof(*format);
     return DD_OK;
@@ -2439,9 +2916,9 @@ static HRESULT WINAPI surface_GetSurfaceDesc(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!description) return DDERR_INVALIDPARAMS;
+    if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (description->dwSize != sizeof(DDSURFACEDESC2))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *description = surface->desc;
     description->dwSize = sizeof(DDSURFACEDESC2);
     return DD_OK;
@@ -2452,7 +2929,7 @@ static HRESULT WINAPI surface_Initialize(IDirectDrawSurface7 *iface,
 {
     (void)iface; (void)dd; (void)description;
     /* DirectDraw creates its surfaces initialised; the API says so. */
-    return DDERR_ALREADYINITIALIZED;
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
 static HRESULT WINAPI surface_IsLost(IDirectDrawSurface7 *iface)
@@ -2471,11 +2948,17 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     LONG left = 0, top = 0;
 
     (void)event;
-    if (!description) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL surface_Lock handle=%lu flags=%08lX "
+            "rect=%ld,%ld-%ld,%ld depth=%lu", surface->handle, flags,
+            rect ? rect->left : 0, rect ? rect->top : 0,
+            rect ? rect->right : (LONG)surface->width,
+            rect ? rect->bottom : (LONG)surface->height,
+            surface->lock_depth);
+    if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (description->dwSize != sizeof(DDSURFACEDESC2))
-        return DDERR_INVALIDPARAMS;
-    if (!surface->shadow) return DDERR_GENERIC;
-    if (surface->dc) return DDERR_SURFACEBUSY;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!surface->shadow) return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    if (surface->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
     if (surface->memory->gpu_dirty && !(flags & DDLOCK_WRITEONLY))
         surface_readback(surface);
@@ -2485,13 +2968,13 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
                 rect->right > (LONG)surface->width ||
                 rect->bottom > (LONG)surface->height ||
                 rect->right <= rect->left || rect->bottom <= rect->top)
-            return DDERR_INVALIDRECT;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
         if (format_is_compressed(surface->format) &&
                 ((rect->left & 3) || (rect->top & 3) ||
                  ((rect->right & 3) && rect->right != (LONG)surface->width) ||
                  ((rect->bottom & 3) &&
                     rect->bottom != (LONG)surface->height)))
-            return DDERR_INVALIDRECT;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
         surface->locked_rect = *rect;
         left = rect->left;
         top = rect->top;
@@ -2514,7 +2997,10 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     else
         description->lpSurface = surface->shadow + top * surface->pitch
             + left * surface->bytes_per_pixel;
-    return DD_OK;
+    DDWG_TRACE("SURFACE LOCKED handle=%lu pitch=%lu bits=%08lX depth=%lu",
+            surface->handle, surface->pitch,
+            (DWORD)(uintptr_t)description->lpSurface, surface->lock_depth);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI surface_Restore(IDirectDrawSurface7 *iface)
@@ -2546,7 +3032,7 @@ static HRESULT WINAPI surface_SetColorKey(IDirectDrawSurface7 *iface,
     DWORD kind, description_flag;
 
     if (!surface_color_key_kind(flags, &kind, &description_flag))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     if (!key) {
         surface->color_key_present &= ~(1u << kind);
@@ -2581,8 +3067,8 @@ static HRESULT WINAPI surface_SetOverlayPosition(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
     LONG width, height;
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
-        return DDERR_NOTAOVERLAYSURFACE;
-    if (!surface->overlay_destination) return DDERR_NOOVERLAYDEST;
+        return DDWG_TRACE_ERROR(DDERR_NOTAOVERLAYSURFACE);
+    if (!surface->overlay_destination) return DDWG_TRACE_ERROR(DDERR_NOOVERLAYDEST);
     width = surface->overlay_destination_rect.right -
         surface->overlay_destination_rect.left;
     height = surface->overlay_destination_rect.bottom -
@@ -2591,7 +3077,8 @@ static HRESULT WINAPI surface_SetOverlayPosition(IDirectDrawSurface7 *iface,
     surface->overlay_destination_rect.top = y;
     surface->overlay_destination_rect.right = x + width;
     surface->overlay_destination_rect.bottom = y + height;
-    return emit_overlay_state(surface) ? DD_OK : DDERR_GENERIC;
+    return DDWG_TRACE_ERROR(emit_overlay_state(surface)
+            ? DD_OK : DDERR_GENERIC);
 }
 
 static HRESULT WINAPI surface_SetPalette(IDirectDrawSurface7 *iface,
@@ -2617,7 +3104,14 @@ static HRESULT WINAPI surface_Unlock(IDirectDrawSurface7 *iface, LPRECT rect)
     DDSurface *surface = surface_from_iface(iface);
     RECT uploaded;
 
-    if (!surface->lock_depth) return DDERR_NOTLOCKED;
+    DDWG_TRACE_CHECKPOINT("CALL surface_Unlock handle=%lu rect=%ld,%ld-%ld,%ld "
+            "depth=%lu flags=%08lX", surface->handle,
+            rect ? rect->left : surface->locked_rect.left,
+            rect ? rect->top : surface->locked_rect.top,
+            rect ? rect->right : surface->locked_rect.right,
+            rect ? rect->bottom : surface->locked_rect.bottom,
+            surface->lock_depth, surface->lock_flags);
+    if (!surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_NOTLOCKED);
     --surface->lock_depth;
     uploaded = surface->locked_rect;
     if (rect) uploaded = *rect;
@@ -2630,7 +3124,7 @@ static HRESULT WINAPI surface_Unlock(IDirectDrawSurface7 *iface, LPRECT rect)
             emit_present_and_flush(surface->owner);
         }
     }
-    return DD_OK;
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
@@ -2656,25 +3150,26 @@ static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
     BOOL ok;
 
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
-        return DDERR_NOTAOVERLAYSURFACE;
+        return DDWG_TRACE_ERROR(DDERR_NOTAOVERLAYSURFACE);
     if ((flags & DDOVER_SHOW) && (flags & DDOVER_HIDE))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (flags & unsupported)
         return UNSUPPORTED("UpdateOverlay video-port/alpha mode",
                 DDERR_UNSUPPORTED);
     if ((flags & (DDOVER_DDFX | DDOVER_KEYSRCOVERRIDE |
             DDOVER_KEYDESTOVERRIDE)) &&
             (!fx || fx->dwSize != sizeof(*fx)))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     if ((flags & DDOVER_HIDE) || (!destination && !destination_rect &&
             !source_rect && !(flags & (DDOVER_SHOW | DDOVER_REFRESHALL |
                 DDOVER_REFRESHDIRTYRECTS)))) {
         surface->overlay_visible = FALSE;
-        return emit_overlay_state(surface) ? DD_OK : DDERR_GENERIC;
+        return DDWG_TRACE_ERROR(emit_overlay_state(surface)
+                ? DD_OK : DDERR_GENERIC);
     }
-    if (!target) return DDERR_NOOVERLAYDEST;
-    if (target->owner != surface->owner) return DDERR_INVALIDOBJECT;
+    if (!target) return DDWG_TRACE_ERROR(DDERR_NOOVERLAYDEST);
+    if (target->owner != surface->owner) return DDWG_TRACE_ERROR(DDERR_INVALIDOBJECT);
 
     source_area.left = 0;
     source_area.top = 0;
@@ -2686,21 +3181,21 @@ static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
             source_area.bottom > (LONG)surface->height ||
             source_area.right <= source_area.left ||
             source_area.bottom <= source_area.top)
-        return DDERR_INVALIDRECT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
 
     if (destination_rect) destination_area = *destination_rect;
     else if (surface->overlay_destination)
         destination_area = surface->overlay_destination_rect;
     else
-        return DDERR_INVALIDRECT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
     if (destination_area.right <= destination_area.left ||
             destination_area.bottom <= destination_area.top)
-        return DDERR_INVALIDRECT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
 
     if (flags & DDOVER_KEYSRC) {
         if (!(surface->color_key_present &
                 (1u << D9WG_DDCKEY_SOURCE_OVERLAY)))
-            return DDERR_NOCOLORKEY;
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         wire_flags |= D9WG_DDOVER_KEY_SOURCE;
     }
     if (flags & DDOVER_KEYSRCOVERRIDE) {
@@ -2711,7 +3206,7 @@ static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
     if (flags & DDOVER_KEYDEST) {
         if (!(target->color_key_present &
                 (1u << D9WG_DDCKEY_DESTINATION_OVERLAY)))
-            return DDERR_NOCOLORKEY;
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         wire_flags |= D9WG_DDOVER_KEY_DESTINATION;
     }
     if (flags & DDOVER_KEYDESTOVERRIDE) {
@@ -2746,7 +3241,7 @@ static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
     if (flags & (DDOVER_REFRESHALL | DDOVER_REFRESHDIRTYRECTS))
         surface->overlay_dirty = FALSE;
     ok = emit_overlay_state(surface);
-    return ok ? DD_OK : DDERR_GENERIC;
+    return DDWG_TRACE_ERROR(ok ? DD_OK : DDERR_GENERIC);
 }
 
 static HRESULT WINAPI surface_UpdateOverlayDisplay(IDirectDrawSurface7 *iface,
@@ -2754,7 +3249,7 @@ static HRESULT WINAPI surface_UpdateOverlayDisplay(IDirectDrawSurface7 *iface,
 {
     (void)iface; (void)flags;
     /* Microsoft documents this method as unimplemented even in DirectX 7. */
-    return DDERR_UNSUPPORTED;
+    return DDWG_TRACE_ERROR(DDERR_UNSUPPORTED);
 }
 
 static HRESULT WINAPI surface_UpdateOverlayZOrder(IDirectDrawSurface7 *iface,
@@ -2767,14 +3262,14 @@ static HRESULT WINAPI surface_UpdateOverlayZOrder(IDirectDrawSurface7 *iface,
     UINT count = 0, i, j, old_index = 0, insert_at;
 
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
-        return DDERR_NOTAOVERLAYSURFACE;
-    if (!surface->overlay_destination) return DDERR_NOOVERLAYDEST;
-    if (flags > DDOVERZ_INSERTINBACKOF) return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_NOTAOVERLAYSURFACE);
+    if (!surface->overlay_destination) return DDWG_TRACE_ERROR(DDERR_NOOVERLAYDEST);
+    if (flags > DDOVERZ_INSERTINBACKOF) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if ((flags == DDOVERZ_INSERTINFRONTOF ||
             flags == DDOVERZ_INSERTINBACKOF) &&
             (!relative || relative == surface ||
              relative->overlay_destination != surface->overlay_destination))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     for (walk = surface->owner->surfaces; walk; walk = walk->next) {
         if (walk->overlay_destination == surface->overlay_destination &&
@@ -2813,7 +3308,7 @@ static HRESULT WINAPI surface_UpdateOverlayZOrder(IDirectDrawSurface7 *iface,
             ++insert_at;
         if (flags == DDOVERZ_INSERTINFRONTOF) ++insert_at;
         break;
-    default: return DDERR_INVALIDPARAMS;
+    default: return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
     for (i = count; i > insert_at; --i) ordered[i] = ordered[i - 1u];
     ordered[insert_at] = surface;
@@ -2830,7 +3325,7 @@ static HRESULT WINAPI surface_GetDDInterface(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = (IDirectDraw7 *)surface->owner;
     IDirectDraw7_AddRef((IDirectDraw7 *)surface->owner);
     return DD_OK;
@@ -2857,63 +3352,59 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
         DDSD_HEIGHT | DDSD_PITCH | DDSD_CAPS;
     DDSurface *surface = surface_from_iface(iface);
     DDSURFACEDESC2 new_desc;
-    DDSURFACEDESC2 old_desc;
     DDrawPixelFormatDesc format_desc;
     DDSurfaceMemory *new_memory;
     DDTextureStorage *new_storage = NULL;
     DDTextureStorage *old_storage;
     DDSurfaceMemory *old_memory;
     unsigned new_format;
-    unsigned old_format;
-    UINT old_width, old_height, old_bytes_per_pixel, old_pitch;
-    BOOL old_indexed, old_external_memory;
     UINT width, height, bytes_per_pixel, block_bytes, pitch, rows;
     SIZE_T bytes;
     BOOL recreate;
 
     if (!description || description->dwSize != sizeof(*description) || flags)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) ||
             (surface->desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) ||
             surface->implicit)
-        return DDERR_INVALIDSURFACETYPE;
-    if (surface->lock_depth || surface->dc) return DDERR_SURFACEBUSY;
-    if (description->dwFlags & ~allowed) return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDSURFACETYPE);
+    if (surface->lock_depth || surface->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
+    if (description->dwFlags & ~allowed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(description->dwFlags & DDSD_LPSURFACE) || !description->lpSurface)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if ((description->dwFlags & DDSD_CAPS) &&
             (description->ddsCaps.dwCaps || description->ddsCaps.dwCaps2 ||
              description->ddsCaps.dwCaps3 || description->ddsCaps.dwCaps4))
-        return DDERR_INVALIDCAPS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     if ((description->dwFlags & DDSD_WIDTH) &&
             !(description->dwFlags & DDSD_PITCH))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if ((description->dwFlags & DDSD_PITCH) &&
             !(description->dwFlags & DDSD_WIDTH))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (surface->mip_next || surface->cube_faces[1] ||
             surface->cube_faces[2] || surface->cube_faces[3] ||
             surface->cube_faces[4] || surface->cube_faces[5])
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     width = (description->dwFlags & DDSD_WIDTH)
         ? description->dwWidth : surface->width;
     height = (description->dwFlags & DDSD_HEIGHT)
         ? description->dwHeight : surface->height;
-    if (!width || !height) return DDERR_INVALIDPARAMS;
+    if (!width || !height) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     new_desc = surface->desc;
     if (description->dwFlags & DDSD_PIXELFORMAT)
         new_desc.ddpfPixelFormat = description->ddpfPixelFormat;
     describe_pixel_format(&new_desc.ddpfPixelFormat, &format_desc);
     new_format = ddraw_pixel_format_to_d3dformat(&format_desc);
-    if (new_format == DDWG_FMT_UNKNOWN) return DDERR_INVALIDPIXELFORMAT;
+    if (new_format == DDWG_FMT_UNKNOWN) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     bytes_per_pixel = format_bytes_per_pixel(new_format);
     block_bytes = format_compressed_block_bytes(new_format);
-    if (!bytes_per_pixel && !block_bytes) return DDERR_INVALIDPIXELFORMAT;
+    if (!bytes_per_pixel && !block_bytes) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     if (description->dwFlags & DDSD_PITCH) {
         if (description->lPitch <= 0 || (description->lPitch & 3))
-            return DDERR_INVALIDPARAMS;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         pitch = (UINT)description->lPitch;
     } else if (block_bytes) {
         pitch = ((width + 3u) / 4u) * block_bytes;
@@ -2922,17 +3413,17 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     }
     if (block_bytes) {
         if (pitch < ((width + 3u) / 4u) * block_bytes)
-            return DDERR_INVALIDPARAMS;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         rows = (height + 3u) / 4u;
     } else {
-        if (pitch < width * bytes_per_pixel) return DDERR_INVALIDPARAMS;
+        if (pitch < width * bytes_per_pixel) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         rows = height;
     }
     bytes = (SIZE_T)pitch * rows;
-    if (pitch && bytes / pitch != rows) return DDERR_OUTOFMEMORY;
+    if (pitch && bytes / pitch != rows) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     new_memory = surface_memory_create((BYTE *)description->lpSurface,
             bytes, FALSE);
-    if (!new_memory) return DDERR_OUTOFMEMORY;
+    if (!new_memory) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
 
     recreate = width != surface->width || height != surface->height ||
         new_format != surface->format || surface->storage->ref > 1;
@@ -2940,20 +3431,12 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
         new_storage = surface_storage_allocate();
         if (!new_storage) {
             surface_memory_release(new_memory);
-            return DDERR_OUTOFMEMORY;
+            return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
         }
     }
 
     old_storage = surface->storage;
     old_memory = surface->memory;
-    old_desc = surface->desc;
-    old_format = surface->format;
-    old_indexed = surface->indexed;
-    old_width = surface->width;
-    old_height = surface->height;
-    old_bytes_per_pixel = surface->bytes_per_pixel;
-    old_pitch = surface->pitch;
-    old_external_memory = surface->external_memory;
     new_desc.dwFlags |= DDSD_LPSURFACE | DDSD_WIDTH | DDSD_HEIGHT |
         DDSD_PITCH | DDSD_PIXELFORMAT;
     new_desc.dwFlags &= ~DDSD_LINEARSIZE;
@@ -2976,23 +3459,12 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     if (new_storage) {
         surface->storage = new_storage;
         surface->handle = new_storage->handle;
-        if (!emit_surface_create(surface)) {
-            surface->storage = old_storage;
-            surface->handle = old_storage->handle;
-            surface->memory = old_memory;
-            surface->shadow = old_memory->bits;
-            surface->desc = old_desc;
-            surface->format = old_format;
-            surface->indexed = old_indexed;
-            surface->width = old_width;
-            surface->height = old_height;
-            surface->bytes_per_pixel = old_bytes_per_pixel;
-            surface->pitch = old_pitch;
-            surface->external_memory = old_external_memory;
-            surface_storage_release(new_storage);
-            surface_memory_release(new_memory);
-            return DDERR_OUTOFVIDEOMEMORY;
-        }
+        /* The rollback that used to live here existed for a host texture that
+         * could not be created. That is now an owed texture rather than a
+         * failure -- rolling the description back behind a caller whose own
+         * memory is already installed would be the worse of the two. */
+        if (!emit_surface_create(surface))
+            surface->upload_pending = TRUE;
     }
     if (!emit_surface_upload(surface, NULL)) {
         /* The app-facing description is still valid and Lock must expose the
@@ -3017,14 +3489,14 @@ static HRESULT WINAPI surface_GetPrivateData(IDirectDrawSurface7 *iface,
         REFGUID tag, LPVOID buffer, LPDWORD bytes)
 {
     (void)iface; (void)tag; (void)buffer; (void)bytes;
-    return DDERR_NOTFOUND;
+    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
 }
 
 static HRESULT WINAPI surface_FreePrivateData(IDirectDrawSurface7 *iface,
         REFGUID tag)
 {
     (void)iface; (void)tag;
-    return DDERR_NOTFOUND;
+    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
 }
 
 static HRESULT WINAPI surface_GetUniquenessValue(IDirectDrawSurface7 *iface,
@@ -3032,7 +3504,7 @@ static HRESULT WINAPI surface_GetUniquenessValue(IDirectDrawSurface7 *iface,
 {
     DDSurface *surface = surface_from_iface(iface);
 
-    if (!value) return DDERR_INVALIDPARAMS;
+    if (!value) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *value = (DWORD)surface->handle;
     return DD_OK;
 }
@@ -3055,7 +3527,7 @@ static HRESULT WINAPI surface_GetPriority(IDirectDrawSurface7 *iface,
         LPDWORD priority)
 {
     (void)iface;
-    if (!priority) return DDERR_INVALIDPARAMS;
+    if (!priority) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *priority = 0;
     return DD_OK;
 }
@@ -3069,7 +3541,7 @@ static HRESULT WINAPI surface_SetLOD(IDirectDrawSurface7 *iface, DWORD lod)
 static HRESULT WINAPI surface_GetLOD(IDirectDrawSurface7 *iface, LPDWORD lod)
 {
     (void)iface;
-    if (!lod) return DDERR_INVALIDPARAMS;
+    if (!lod) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *lod = 0;
     return DD_OK;
 }
@@ -3081,14 +3553,14 @@ static HRESULT WINAPI surface_GetLOD(IDirectDrawSurface7 *iface, LPDWORD lod)
 static HRESULT WINAPI palette_QueryInterface(IDirectDrawPalette *iface,
         REFIID iid, void **out)
 {
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirectDrawPalette)) {
         IDirectDrawPalette_AddRef(iface);
         *out = iface;
         return DD_OK;
     }
-    return E_NOINTERFACE;
+    return DDWG_TRACE_ERROR(E_NOINTERFACE);
 }
 
 static ULONG WINAPI palette_AddRef(IDirectDrawPalette *iface)
@@ -3118,7 +3590,7 @@ static HRESULT WINAPI palette_GetCaps(IDirectDrawPalette *iface, LPDWORD caps)
 {
     DDPalette *palette = palette_from_iface(iface);
 
-    if (!caps) return DDERR_INVALIDPARAMS;
+    if (!caps) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *caps = palette->caps;
     return DD_OK;
 }
@@ -3131,7 +3603,7 @@ static HRESULT WINAPI palette_GetEntries(IDirectDrawPalette *iface,
 
     (void)flags;
     if (!entries || base > 256u || count > 256u - base)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (index = 0; index < count; ++index)
         entries[index] = palette->entries[base + index];
     return DD_OK;
@@ -3141,7 +3613,7 @@ static HRESULT WINAPI palette_Initialize(IDirectDrawPalette *iface,
         LPDIRECTDRAW dd, DWORD flags, LPPALETTEENTRY entries)
 {
     (void)iface; (void)dd; (void)flags; (void)entries;
-    return DDERR_ALREADYINITIALIZED;
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
 static HRESULT WINAPI palette_SetEntries(IDirectDrawPalette *iface,
@@ -3152,7 +3624,7 @@ static HRESULT WINAPI palette_SetEntries(IDirectDrawPalette *iface,
 
     (void)flags;
     if (!entries || start > 256u || count > 256u - start)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (index = 0; index < count; ++index)
         palette->entries[start + index] = entries[index];
     /*
@@ -3173,14 +3645,14 @@ static HRESULT WINAPI palette_SetEntries(IDirectDrawPalette *iface,
 static HRESULT WINAPI clipper_QueryInterface(IDirectDrawClipper *iface,
         REFIID iid, void **out)
 {
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirectDrawClipper)) {
         IDirectDrawClipper_AddRef(iface);
         *out = iface;
         return DD_OK;
     }
-    return E_NOINTERFACE;
+    return DDWG_TRACE_ERROR(E_NOINTERFACE);
 }
 
 static ULONG WINAPI clipper_AddRef(IDirectDrawClipper *iface)
@@ -3214,14 +3686,14 @@ static HRESULT WINAPI clipper_GetClipList(IDirectDrawClipper *iface,
     DWORD needed;
 
     (void)rect;
-    if (!size) return DDERR_INVALIDPARAMS;
+    if (!size) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (clipper->window) {
         RECT client;
         needed = (DWORD)(sizeof(RGNDATAHEADER) + sizeof(RECT));
         if (!list) { *size = needed; return DD_OK; }
-        if (*size < needed) return DDERR_REGIONTOOSMALL;
+        if (*size < needed) return DDWG_TRACE_ERROR(DDERR_REGIONTOOSMALL);
         if (!GetClientRect(clipper->window, &client))
-            return DDERR_GENERIC;
+            return DDWG_TRACE_ERROR(DDERR_GENERIC);
         ZeroMemory(list, needed);
         list->rdh.dwSize = sizeof(RGNDATAHEADER);
         list->rdh.iType = RDH_RECTANGLES;
@@ -3232,10 +3704,10 @@ static HRESULT WINAPI clipper_GetClipList(IDirectDrawClipper *iface,
         *size = needed;
         return DD_OK;
     }
-    if (!clipper->clip_list) return DDERR_NOCLIPLIST;
+    if (!clipper->clip_list) return DDWG_TRACE_ERROR(DDERR_NOCLIPLIST);
     needed = clipper->clip_list_bytes;
     if (!list) { *size = needed; return DD_OK; }
-    if (*size < needed) return DDERR_REGIONTOOSMALL;
+    if (*size < needed) return DDWG_TRACE_ERROR(DDERR_REGIONTOOSMALL);
     CopyMemory(list, clipper->clip_list, needed);
     *size = needed;
     return DD_OK;
@@ -3245,7 +3717,7 @@ static HRESULT WINAPI clipper_GetHWnd(IDirectDrawClipper *iface, HWND *out)
 {
     DDClipper *clipper = clipper_from_iface(iface);
 
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = clipper->window;
     return DD_OK;
 }
@@ -3254,7 +3726,7 @@ static HRESULT WINAPI clipper_Initialize(IDirectDrawClipper *iface,
         LPDIRECTDRAW dd, DWORD flags)
 {
     (void)iface; (void)dd; (void)flags;
-    return DDERR_ALREADYINITIALIZED;
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
 static HRESULT WINAPI clipper_IsClipListChanged(IDirectDrawClipper *iface,
@@ -3262,7 +3734,7 @@ static HRESULT WINAPI clipper_IsClipListChanged(IDirectDrawClipper *iface,
 {
     DDClipper *clipper = clipper_from_iface(iface);
 
-    if (!changed) return DDERR_INVALIDPARAMS;
+    if (!changed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *changed = clipper->changed;
     clipper->changed = FALSE;
     return DD_OK;
@@ -3280,10 +3752,10 @@ static HRESULT WINAPI clipper_SetClipList(IDirectDrawClipper *iface,
     clipper->clip_list_bytes = 0;
     clipper->changed = TRUE;
     if (!list) return DD_OK;
-    if (clipper->window) return DDERR_CLIPPERISUSINGHWND;
+    if (clipper->window) return DDWG_TRACE_ERROR(DDERR_CLIPPERISUSINGHWND);
     bytes = (DWORD)(sizeof(RGNDATAHEADER) + list->rdh.nRgnSize);
     clipper->clip_list = (RGNDATA *)heap_alloc_zero(bytes);
-    if (!clipper->clip_list) return DDERR_OUTOFMEMORY;
+    if (!clipper->clip_list) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     CopyMemory(clipper->clip_list, list, bytes);
     clipper->clip_list_bytes = bytes;
     return DD_OK;
@@ -3500,6 +3972,16 @@ static DDSurface *surface_allocate(DDrawObject *object,
     return surface;
 }
 
+/*
+ * A DirectDraw surface is guest memory with a host texture cached behind it,
+ * and only the first half can fail for a reason the application caused. When
+ * the bridge is not open the surface is still a valid surface -- Lock, Blt and
+ * GetDC all work against the shadow -- so it is created anyway and owes the
+ * host a texture, which ensure_surface_storage builds on first use. Failing
+ * here instead is what turned "v86gl.sys is not started" into
+ * DDERR_OUTOFVIDEOMEMORY out of CreateSurface, which is neither true nor
+ * something the caller can act on.
+ */
 static DDSurface *surface_create(DDrawObject *object,
         const DDSURFACEDESC2 *request, unsigned format, UINT width,
         UINT height, DWORD caps)
@@ -3507,11 +3989,10 @@ static DDSurface *surface_create(DDrawObject *object,
     DDSurface *surface = surface_allocate(object, request, format, width,
             height, caps, NULL, 0u, 0u);
     if (!surface) return NULL;
-    if (!emit_surface_create(surface)) {
-        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
-        return NULL;
-    }
-    rebind_host_surface_state(surface);
+    /* ensure_surface_storage restates the colour keys and the palette binding
+     * as part of building the texture, whenever that turns out to be. */
+    if (!emit_surface_create(surface))
+        surface->upload_pending = TRUE;
     return surface;
 }
 
@@ -3585,11 +4066,11 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
             NULL, 0u, 0u);
     if (!root) return NULL;
     if (cube) root->cube_faces[0] = root;
-    if (!emit_surface_storage_create(root, level_count, cube)) {
-        surface_Release((IDirectDrawSurface7 *)&root->vtbl7);
-        return NULL;
-    }
-    rebind_host_surface_state(root);
+    /* As in surface_create: a missing bridge leaves the texture owed, not the
+     * surface refused. surface_build_mip_chain and the faces below share this
+     * storage, so ensure_surface_storage builds it for all of them at once. */
+    if (!emit_surface_storage_create(root, level_count, cube))
+        root->upload_pending = TRUE;
     if (!surface_build_mip_chain(root, &root_seed, format, level_count, caps,
             cube ? DDSCAPS2_CUBEMAP | face_caps[0] : 0u)) {
         surface_Release((IDirectDrawSurface7 *)&root->vtbl7);
@@ -3631,27 +4112,29 @@ static HRESULT WINAPI ddraw_QueryInterface(IDirectDraw7 *iface, REFIID iid,
     DDrawObject *object = object_from_any(iface, NULL);
     unsigned version = 0;
 
-    if (!out) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_QueryInterface object=%08lX iid=%08lX",
+            (DWORD)(uintptr_t)object, iid ? iid->Data1 : 0u);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (guid_equal(iid, &IID_IDirect3D7)) {
         ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
         *out = &object->d3d7_vtbl;
-        return D3D_OK;
+        return DDWG_TRACE_RESULT(D3D_OK);
     }
     if (guid_equal(iid, &IID_IDirect3D3)) {
         ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
         *out = &object->d3d3_vtbl;
-        return D3D_OK;
+        return DDWG_TRACE_RESULT(D3D_OK);
     }
     if (guid_equal(iid, &IID_IDirect3D2)) {
         ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
         *out = &object->d3d2_vtbl;
-        return D3D_OK;
+        return DDWG_TRACE_RESULT(D3D_OK);
     }
     if (guid_equal(iid, &IID_IDirect3D)) {
         ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
         *out = &object->d3d1_vtbl;
-        return D3D_OK;
+        return DDWG_TRACE_RESULT(D3D_OK);
     }
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirectDraw7))
         version = DD_VERSION_7;
@@ -3663,10 +4146,12 @@ static HRESULT WINAPI ddraw_QueryInterface(IDirectDraw7 *iface, REFIID iid,
         version = DD_VERSION_2;
     else if (guid_equal(iid, &IID_IDirectDraw))
         version = DD_VERSION_1;
-    if (!version) return E_NOINTERFACE;
+    if (!version) return DDWG_TRACE_ERROR(E_NOINTERFACE);
     ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
     *out = object_interface(object, version);
-    return DD_OK;
+    DDWG_TRACE("DDRAW QUERY_INTERFACE object=%08lX version=%u out=%08lX",
+            (DWORD)(uintptr_t)object, version, (DWORD)(uintptr_t)*out);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static ULONG WINAPI ddraw_AddRef(IDirectDraw7 *iface)
@@ -3680,6 +4165,10 @@ static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
     LONG remaining = InterlockedDecrement(&object->ref);
 
     if (remaining == 0) {
+        DDWG_TRACE_CHECKPOINT("DIRECTDRAW DESTROY object=%08lX device=%lu "
+                "mode_changed=%lu", (DWORD)(uintptr_t)object,
+                object->device_handle,
+                object->guest_mode_changed ? 1u : 0u);
         EnterCriticalSection(&g_object_lock);
         {
             DDrawObject **link = &g_objects;
@@ -3689,6 +4178,7 @@ static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
         LeaveCriticalSection(&g_object_lock);
         if (object->guest_mode_changed)
             ChangeDisplaySettingsA(NULL, 0);
+        emit_device_destroy(object);
         EnterCriticalSection(&g_transport_lock);
         submit_batch_locked(FALSE);
         LeaveCriticalSection(&g_transport_lock);
@@ -3712,10 +4202,10 @@ static HRESULT WINAPI ddraw_CreateClipper(IDirectDraw7 *iface, DWORD flags,
     DDClipper *clipper;
 
     (void)flags;
-    if (outer) return CLASS_E_NOAGGREGATION;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     clipper = (DDClipper *)heap_alloc_zero(sizeof(*clipper));
-    if (!clipper) return DDERR_OUTOFMEMORY;
+    if (!clipper) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     clipper->vtbl = &g_clipper_vtbl;
     clipper->ref = 1;
     clipper->owner = object;
@@ -3734,8 +4224,8 @@ static HRESULT WINAPI ddraw_CreatePalette(IDirectDraw7 *iface, DWORD flags,
     DDPalette *palette;
     UINT index;
 
-    if (outer) return CLASS_E_NOAGGREGATION;
-    if (!out || !table) return DDERR_INVALIDPARAMS;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
+    if (!out || !table) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(flags & DDPCAPS_8BIT)) {
         /* 1/2/4-bit palettes have no indexed storage on the host and no user
          * in the target library. */
@@ -3743,7 +4233,7 @@ static HRESULT WINAPI ddraw_CreatePalette(IDirectDraw7 *iface, DWORD flags,
                 DDERR_UNSUPPORTED);
     }
     palette = (DDPalette *)heap_alloc_zero(sizeof(*palette));
-    if (!palette) return DDERR_OUTOFMEMORY;
+    if (!palette) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     palette->vtbl = &g_palette_vtbl;
     palette->ref = 1;
     palette->owner = object;
@@ -3775,37 +4265,36 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
     UINT mip_levels = 1u;
     BOOL cube;
 
-    if (outer) return CLASS_E_NOAGGREGATION;
-    if (!out || !request) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_CreateSurface object=%08lX request=%08lX "
+            "outer=%08lX", (DWORD)(uintptr_t)object,
+            (DWORD)(uintptr_t)request, (DWORD)(uintptr_t)outer);
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
+    if (!out || !request) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (request->dwSize != sizeof(DDSURFACEDESC2)) {
         /* The v1-v3 description is a different size, and guessing which one
          * arrived is how a surface ends up with someone else's caps. */
         HOSTLOG_REFUSED("CreateSurface was given a %lu-byte description; only "
                 "the DDSURFACEDESC2 form is implemented", request->dwSize);
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
     *out = NULL;
     caps = request->ddsCaps.dwCaps;
     back_buffers = (request->dwFlags & DDSD_BACKBUFFERCOUNT)
         ? request->dwBackBufferCount : 0;
+    DDWG_TRACE_CHECKPOINT("SURFACE REQUEST flags=%08lX caps=%08lX caps2=%08lX "
+            "size=%lux%lu backbuffers=%lu pf_flags=%08lX pf_bits=%lu",
+            request->dwFlags, caps, request->ddsCaps.dwCaps2,
+            request->dwWidth, request->dwHeight, back_buffers,
+            request->ddpfPixelFormat.dwFlags,
+            request->ddpfPixelFormat.dwRGBBitCount);
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
-        width = object->mode_width;
-        height = object->mode_height;
+        object_display_size(object, &width, &height);
         mode_pixel_format(object->mode_bpp, &pixel_format);
-        if (!width || !height) {
-            RECT client;
-            if (object->window && GetClientRect(object->window, &client)) {
-                width = (UINT)(client.right - client.left);
-                height = (UINT)(client.bottom - client.top);
-            }
-            if (!width || !height) return DDERR_NOEXCLUSIVEMODE;
-            mode_pixel_format(32, &pixel_format);
-        }
     } else {
         if (!(request->dwFlags & DDSD_WIDTH) ||
                 !(request->dwFlags & DDSD_HEIGHT))
-            return DDERR_INVALIDPARAMS;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         width = request->dwWidth;
         height = request->dwHeight;
         if (request->dwFlags & DDSD_PIXELFORMAT)
@@ -3820,16 +4309,16 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
                 DDERR_UNSUPPORTED);
     }
     cube = (request->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP) != 0;
-    if (cube && width != height) return DDERR_INVALIDPARAMS;
+    if (cube && width != height) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if ((caps & DDSCAPS_MIPMAP) || (request->dwFlags & DDSD_MIPMAPCOUNT)) {
         UINT full_levels = surface_full_mip_count(width, height);
         mip_levels = (request->dwFlags & DDSD_MIPMAPCOUNT)
             ? request->dwMipMapCount : full_levels;
         if (!mip_levels || mip_levels > full_levels)
-            return DDERR_INVALIDPARAMS;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
     if ((cube || mip_levels > 1u) && back_buffers)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     describe_pixel_format(&pixel_format, &format_desc);
     format = ddraw_pixel_format_to_d3dformat(&format_desc);
@@ -3839,7 +4328,7 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
                 "b=%08lX)", pixel_format.dwFlags, pixel_format.dwRGBBitCount,
                 pixel_format.dwRBitMask, pixel_format.dwGBitMask,
                 pixel_format.dwBBitMask);
-        return DDERR_INVALIDPIXELFORMAT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     }
 
     {
@@ -3853,7 +4342,7 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
             surface = surface_create(object, &seed, format, width, height,
                     caps);
     }
-    if (!surface) return DDERR_OUTOFVIDEOMEMORY;
+    if (!surface) return DDWG_TRACE_ERROR(DDERR_OUTOFVIDEOMEMORY);
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
         object->primary = surface;
@@ -3889,7 +4378,12 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
     }
 
     *out = (IDirectDrawSurface7 *)surface;
-    return DD_OK;
+    DDWG_TRACE("SURFACE CREATED handle=%lu object=%08lX size=%lux%lu "
+            "pitch=%lu format=%u caps=%08lX primary=%lu backbuffers=%lu",
+            surface->handle, (DWORD)(uintptr_t)surface, surface->width,
+            surface->height, surface->pitch, surface->format, caps,
+            surface->primary ? 1u : 0u, back_buffers);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_DuplicateSurface(IDirectDraw7 *iface,
@@ -3900,23 +4394,23 @@ static HRESULT WINAPI ddraw_DuplicateSurface(IDirectDraw7 *iface,
     DDSurface *duplicate;
     DWORD caps;
 
-    if (!out || !source) return DDERR_INVALIDPARAMS;
+    if (!out || !source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     original = surface_from_iface(source);
-    if (!original || original->owner != object) return DDERR_INVALIDOBJECT;
+    if (!original || original->owner != object) return DDWG_TRACE_ERROR(DDERR_INVALIDOBJECT);
     caps = original->desc.ddsCaps.dwCaps;
     /* DirectDraw explicitly excludes primary, 3-D, and implicitly-created
      * members of a complex surface.  An explicit texture/offscreen/overlay
      * object is valid: only this subresource's pixels are aliased. */
     if ((caps & (DDSCAPS_PRIMARYSURFACE | DDSCAPS_3DDEVICE)) ||
             original->implicit)
-        return DDERR_CANTDUPLICATE;
-    if (original->lock_depth || original->dc) return DDERR_SURFACEBUSY;
+        return DDWG_TRACE_ERROR(DDERR_CANTDUPLICATE);
+    if (original->lock_depth || original->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
     duplicate = surface_allocate(object, &original->desc, original->format,
             original->width, original->height, caps, original->storage,
             original->mip_level, original->cube_face);
-    if (!duplicate) return DDERR_OUTOFMEMORY;
+    if (!duplicate) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
 
     /* surface_allocate made a private zeroed shadow because that is the safe
      * default for mip/cube children. Replace it with the one DuplicateSurface
@@ -3960,8 +4454,12 @@ static HRESULT WINAPI ddraw_EnumDisplayModes(IDirectDraw7 *iface, DWORD flags,
     UINT mode;
     UINT depth;
 
-    (void)iface; (void)flags;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    (void)iface;
+    (void)flags;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_EnumDisplayModes flags=%08lX "
+            "filter=%08lX filter_flags=%08lX", flags,
+            (DWORD)(uintptr_t)filter, filter ? filter->dwFlags : 0u);
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (mode = 0; mode < sizeof(g_modes) / sizeof(g_modes[0]); ++mode) {
         for (depth = 0; depth < sizeof(g_mode_depths) / sizeof(DWORD);
                 ++depth) {
@@ -3986,10 +4484,10 @@ static HRESULT WINAPI ddraw_EnumDisplayModes(IDirectDraw7 *iface, DWORD flags,
             description.lPitch = (LONG)surface_pitch_for(g_modes[mode].width,
                     g_mode_depths[depth] / 8u);
             if (callback(&description, context) == DDENUMRET_CANCEL)
-                return DD_OK;
+                return DDWG_TRACE_RESULT(DD_OK);
         }
     }
-    return DD_OK;
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_EnumSurfaces(IDirectDraw7 *iface, DWORD flags,
@@ -4000,7 +4498,7 @@ static HRESULT WINAPI ddraw_EnumSurfaces(IDirectDraw7 *iface, DWORD flags,
     DDSurface *surface;
 
     (void)flags; (void)filter;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     EnterCriticalSection(&g_object_lock);
     surface = object->surfaces;
     LeaveCriticalSection(&g_object_lock);
@@ -4091,7 +4589,7 @@ static HRESULT copy_caps_to_caller(LPDDCAPS destination, DWORD visible,
      * only the part the caller provided so those probes do not fail or write
      * past their buffer. */
     if (caller_size < sizeof(destination->dwSize))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     caps.dwSize = sizeof(caps);
     fill_caps(&caps);
     caps.dwCurrVisibleOverlays = visible;
@@ -4110,20 +4608,24 @@ static HRESULT WINAPI ddraw_GetCaps(IDirectDraw7 *iface, LPDDCAPS driver,
     DDSurface *surface;
     HRESULT result;
     DWORD visible = 0;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_GetCaps driver=%08lX driver_size=%lu "
+            "emulation=%08lX emulation_size=%lu", (DWORD)(uintptr_t)driver,
+            driver ? driver->dwSize : 0u, (DWORD)(uintptr_t)emulation,
+            emulation ? emulation->dwSize : 0u);
     for (surface = object->surfaces; surface; surface = surface->next)
         if (surface->overlay_visible) ++visible;
-    if (!driver && !emulation) return DDERR_INVALIDPARAMS;
+    if (!driver && !emulation) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (driver) {
         result = copy_caps_to_caller(driver, visible, FALSE);
-        if (FAILED(result)) return result;
+        if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     }
     if (emulation) {
         /* Everything here is "hardware": there is no software fallback layer
          * underneath, and claiming one would invite a title to ask for it. */
         result = copy_caps_to_caller(emulation, visible, TRUE);
-        if (FAILED(result)) return result;
+        if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     }
-    return DD_OK;
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
@@ -4132,8 +4634,12 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
     DDrawObject *object = object_from_iface(iface);
     UINT bpp = object->mode_bpp ? object->mode_bpp : 32u;
 
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_GetDisplayMode object=%08lX "
+            "description=%08lX size=%lu", (DWORD)(uintptr_t)object,
+            (DWORD)(uintptr_t)description,
+            description ? description->dwSize : 0u);
     if (!description || description->dwSize != sizeof(DDSURFACEDESC2))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     ZeroMemory(description, sizeof(*description));
     description->dwSize = sizeof(*description);
     description->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH |
@@ -4147,7 +4653,10 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
     mode_pixel_format(bpp, &description->ddpfPixelFormat);
     description->lPitch = (LONG)surface_pitch_for(description->dwWidth,
             bpp / 8u);
-    return DD_OK;
+    DDWG_TRACE("DISPLAY_MODE_CURRENT size=%lux%lux%lu refresh=%lu pitch=%ld",
+            description->dwWidth, description->dwHeight, bpp,
+            description->dwRefreshRate, description->lPitch);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_GetFourCCCodes(IDirectDraw7 *iface, LPDWORD count,
@@ -4160,7 +4669,7 @@ static HRESULT WINAPI ddraw_GetFourCCCodes(IDirectDraw7 *iface, LPDWORD count,
     DWORD capacity;
     DWORD index;
     (void)iface;
-    if (!count) return DDERR_INVALIDPARAMS;
+    if (!count) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     capacity = *count;
     *count = sizeof(supported) / sizeof(supported[0]);
     if (!codes) return DD_OK;
@@ -4174,8 +4683,8 @@ static HRESULT WINAPI ddraw_GetGDISurface(IDirectDraw7 *iface,
 {
     DDrawObject *object = object_from_iface(iface);
 
-    if (!out) return DDERR_INVALIDPARAMS;
-    if (!object->primary) return DDERR_NOTFOUND;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!object->primary) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     *out = (IDirectDrawSurface7 *)object->primary;
     IDirectDrawSurface7_AddRef(*out);
     return DD_OK;
@@ -4186,7 +4695,7 @@ static HRESULT WINAPI ddraw_GetMonitorFrequency(IDirectDraw7 *iface,
 {
     DDrawObject *object = object_from_iface(iface);
 
-    if (!frequency) return DDERR_INVALIDPARAMS;
+    if (!frequency) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *frequency = object->mode_refresh ? object->mode_refresh : 60u;
     return DD_OK;
 }
@@ -4211,8 +4720,10 @@ static HRESULT WINAPI ddraw_GetScanLine(IDirectDraw7 *iface, LPDWORD scanline)
 {
     DDrawObject *object = object_from_iface(iface);
 
-    if (!scanline) return DDERR_INVALIDPARAMS;
+    if (!scanline) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *scanline = raster_position(object);
+    ddwg_trace_poll(&g_trace_scanline_calls, "GetScanLine",
+            (DWORD)(uintptr_t)object, *scanline, 0u);
     return DD_OK;
 }
 
@@ -4221,49 +4732,60 @@ static HRESULT WINAPI ddraw_GetVerticalBlankStatus(IDirectDraw7 *iface,
 {
     DDrawObject *object = object_from_iface(iface);
 
-    if (!in_blank) return DDERR_INVALIDPARAMS;
+    if (!in_blank) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *in_blank = raster_position(object) >=
         (object->mode_height ? object->mode_height : 480u) - 8u;
+    ddwg_trace_poll(&g_trace_vblank_status_calls, "GetVerticalBlankStatus",
+            (DWORD)(uintptr_t)object, *in_blank ? 1u : 0u, 0u);
     return DD_OK;
 }
 
 static HRESULT WINAPI ddraw_Initialize(IDirectDraw7 *iface, GUID *guid)
 {
     (void)iface; (void)guid;
-    return DDERR_ALREADYINITIALIZED;
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
 static HRESULT WINAPI ddraw_RestoreDisplayMode(IDirectDraw7 *iface)
 {
     DDrawObject *object = object_from_iface(iface);
 
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_RestoreDisplayMode object=%08lX "
+            "guest_changed=%lu", (DWORD)(uintptr_t)object,
+            object->guest_mode_changed ? 1u : 0u);
     if (object->guest_mode_changed) {
         ChangeDisplaySettingsA(NULL, 0);
         object->guest_mode_changed = FALSE;
     }
     object->mode_set = FALSE;
     emit_display_mode(object);
-    return DD_OK;
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_SetCooperativeLevel(IDirectDraw7 *iface,
         HWND window, DWORD flags)
 {
     DDrawObject *object = object_from_iface(iface);
+    UINT width;
+    UINT height;
 
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_SetCooperativeLevel object=%08lX "
+            "hwnd=%08lX flags=%08lX", (DWORD)(uintptr_t)object,
+            (DWORD)(uintptr_t)window, flags);
     if ((flags & DDSCL_EXCLUSIVE) && !window)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     object->window = window;
     object->cooperative_flags = flags;
-    if (!object->mode_width && window) {
-        RECT client;
-        if (GetClientRect(window, &client)) {
-            object->mode_width = (UINT)(client.right - client.left);
-            object->mode_height = (UINT)(client.bottom - client.top);
-        }
+    if (!object->mode_width || !object->mode_height) {
+        object_display_size(object, &width, &height);
+        if (!object->mode_width) object->mode_width = width;
+        if (!object->mode_height) object->mode_height = height;
     }
     emit_display_mode(object);
-    return DD_OK;
+    DDWG_TRACE("COOPERATIVE_LEVEL object=%08lX size=%lux%lu mode_bpp=%lu",
+            (DWORD)(uintptr_t)object, object->mode_width,
+            object->mode_height, object->mode_bpp);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_SetDisplayMode(IDirectDraw7 *iface, DWORD width,
@@ -4273,9 +4795,13 @@ static HRESULT WINAPI ddraw_SetDisplayMode(IDirectDraw7 *iface, DWORD width,
     DEVMODEA mode;
 
     (void)flags;
-    if (!width || !height) return DDERR_INVALIDMODE;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_SetDisplayMode object=%08lX "
+            "size=%lux%lux%lu refresh=%lu flags=%08lX cooperative=%08lX",
+            (DWORD)(uintptr_t)object, width, height, bpp, refresh, flags,
+            object->cooperative_flags);
+    if (!width || !height) return DDWG_TRACE_ERROR(DDERR_INVALIDMODE);
     if (bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)
-        return DDERR_INVALIDMODE;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDMODE);
 
     object->mode_width = width;
     object->mode_height = height;
@@ -4311,7 +4837,10 @@ static HRESULT WINAPI ddraw_SetDisplayMode(IDirectDraw7 *iface, DWORD width,
                     "instead", width, height, bpp);
     }
     emit_display_mode(object);
-    return DD_OK;
+    DDWG_TRACE("DISPLAY_MODE_RESULT object=%08lX guest_changed=%lu",
+            (DWORD)(uintptr_t)object,
+            object->guest_mode_changed ? 1u : 0u);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 static HRESULT WINAPI ddraw_WaitForVerticalBlank(IDirectDraw7 *iface,
@@ -4348,7 +4877,7 @@ static HRESULT WINAPI ddraw_GetSurfaceFromDC(IDirectDraw7 *iface, HDC dc,
     DDrawObject *object = object_from_iface(iface);
     DDSurface *surface;
 
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     EnterCriticalSection(&g_object_lock);
     for (surface = object->surfaces; surface; surface = surface->next) {
@@ -4358,7 +4887,7 @@ static HRESULT WINAPI ddraw_GetSurfaceFromDC(IDirectDraw7 *iface, HDC dc,
         }
     }
     LeaveCriticalSection(&g_object_lock);
-    if (!*out) return DDERR_NOTFOUND;
+    if (!*out) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     IDirectDrawSurface7_AddRef(*out);
     return DD_OK;
 }
@@ -4381,7 +4910,7 @@ static HRESULT WINAPI ddraw_GetDeviceIdentifier(IDirectDraw7 *iface,
         LPDDDEVICEIDENTIFIER2 identifier, DWORD flags)
 {
     (void)iface; (void)flags;
-    if (!identifier) return DDERR_INVALIDPARAMS;
+    if (!identifier) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     ZeroMemory(identifier, sizeof(*identifier));
     lstrcpynA(identifier->szDriver, "v86gl.sys",
             (int)sizeof(identifier->szDriver));
@@ -4400,7 +4929,7 @@ static HRESULT WINAPI ddraw_StartModeTest(IDirectDraw7 *iface, LPSIZE modes,
 {
     (void)iface; (void)modes; (void)count; (void)flags;
     /* Refresh-rate testing has nothing to test against here. */
-    return DDERR_TESTFINISHED;
+    return DDWG_TRACE_ERROR(DDERR_TESTFINISHED);
 }
 
 static HRESULT WINAPI ddraw_EvaluateMode(IDirectDraw7 *iface, DWORD flags,
@@ -4408,7 +4937,7 @@ static HRESULT WINAPI ddraw_EvaluateMode(IDirectDraw7 *iface, DWORD flags,
 {
     (void)iface; (void)flags;
     if (timeout) *timeout = 0;
-    return DDERR_TESTFINISHED;
+    return DDWG_TRACE_ERROR(DDERR_TESTFINISHED);
 }
 
 /* ------------------------------------------------------------------ *
@@ -4466,8 +4995,10 @@ static IDirectDrawClipperVtbl g_clipper_vtbl = {
 
 static DDrawObject *object_create(void)
 {
-    DDrawObject *object = (DDrawObject *)heap_alloc_zero(sizeof(*object));
+    DDrawObject *object;
 
+    ddwg_log_banner_once();
+    object = (DDrawObject *)heap_alloc_zero(sizeof(*object));
     if (!object) return NULL;
     object->vtbl7 = &g_ddraw_vtbl;
     object->vtbl4 = &g_ddraw_vtbl4;
@@ -4495,18 +5026,24 @@ HRESULT WINAPI DirectDrawCreateEx(GUID *guid, LPVOID *out, REFIID iid,
     DDrawObject *object;
 
     (void)guid;
-    if (outer) return CLASS_E_NOAGGREGATION;
-    if (!out) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL DirectDrawCreateEx guid=%08lX iid=%08lX "
+            "out=%08lX outer=%08lX", guid ? guid->Data1 : 0u,
+            iid ? iid->Data1 : 0u, (DWORD)(uintptr_t)out,
+            (DWORD)(uintptr_t)outer);
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     /* The API says so: DirectDrawCreateEx creates only IDirectDraw7. */
     if (!guid_equal(iid, &IID_IDirectDraw7))
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     object = object_create();
-    if (!object) return DDERR_OUTOFMEMORY;
+    if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     emit_hello_once();
     HOSTLOG_INFO("DirectDraw/Direct3D7 frontend attached");
     *out = (IDirectDraw7 *)object;
-    return DD_OK;
+    DDWG_TRACE("DIRECTDRAW CREATED object=%08lX device=%lu interface=7",
+            (DWORD)(uintptr_t)object, object->device_handle);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 HRESULT WINAPI DirectDrawCreate(GUID *guid, LPDIRECTDRAW *out, IUnknown *outer)
@@ -4514,11 +5051,14 @@ HRESULT WINAPI DirectDrawCreate(GUID *guid, LPDIRECTDRAW *out, IUnknown *outer)
     DDrawObject *object;
 
     (void)guid;
-    if (outer) return CLASS_E_NOAGGREGATION;
-    if (!out) return DDERR_INVALIDPARAMS;
+    DDWG_TRACE_CHECKPOINT("CALL DirectDrawCreate guid=%08lX out=%08lX "
+            "outer=%08lX", guid ? guid->Data1 : 0u,
+            (DWORD)(uintptr_t)out, (DWORD)(uintptr_t)outer);
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     object = object_create();
-    if (!object) return DDERR_OUTOFMEMORY;
+    if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     emit_hello_once();
     HOSTLOG_INFO("DirectDraw frontend attached through DirectDrawCreate "
             "(version 1 interface)");
@@ -4526,7 +5066,9 @@ HRESULT WINAPI DirectDrawCreate(GUID *guid, LPDIRECTDRAW *out, IUnknown *outer)
      * app will usually QueryInterface its way up to version 2 or 4 straight
      * away; all of them are views of this one object. */
     *out = (IDirectDraw *)&object->vtbl1;
-    return DD_OK;
+    DDWG_TRACE("DIRECTDRAW CREATED object=%08lX device=%lu interface=1",
+            (DWORD)(uintptr_t)object, object->device_handle);
+    return DDWG_TRACE_RESULT(DD_OK);
 }
 
 HRESULT WINAPI DirectDrawCreateClipper(DWORD flags,
@@ -4535,10 +5077,10 @@ HRESULT WINAPI DirectDrawCreateClipper(DWORD flags,
     DDClipper *clipper;
 
     (void)flags;
-    if (outer) return CLASS_E_NOAGGREGATION;
-    if (!out) return DDERR_INVALIDPARAMS;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     clipper = (DDClipper *)heap_alloc_zero(sizeof(*clipper));
-    if (!clipper) return DDERR_OUTOFMEMORY;
+    if (!clipper) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     clipper->vtbl = &g_clipper_vtbl;
     clipper->ref = 1;
     clipper->owner = NULL;   /* a free-standing clipper has no DirectDraw */
@@ -4551,7 +5093,7 @@ HRESULT WINAPI DirectDrawCreateClipper(DWORD flags,
  * picks. */
 HRESULT WINAPI DirectDrawEnumerateA(LPDDENUMCALLBACKA callback, LPVOID context)
 {
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     callback(NULL, (LPSTR)"v86gl DirectDraw to WebGPU", (LPSTR)"display",
             context);
     return DD_OK;
@@ -4562,7 +5104,7 @@ HRESULT WINAPI DirectDrawEnumerateW(LPDDENUMCALLBACKW callback, LPVOID context)
     static const WCHAR description[] = L"v86gl DirectDraw to WebGPU";
     static const WCHAR name[] = L"display";
 
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     callback(NULL, (LPWSTR)description, (LPWSTR)name, context);
     return DD_OK;
 }
@@ -4571,7 +5113,7 @@ HRESULT WINAPI DirectDrawEnumerateExA(LPDDENUMCALLBACKEXA callback,
         LPVOID context, DWORD flags)
 {
     (void)flags;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     callback(NULL, (LPSTR)"v86gl DirectDraw to WebGPU", (LPSTR)"display",
             context, NULL);
     return DD_OK;
@@ -4584,7 +5126,7 @@ HRESULT WINAPI DirectDrawEnumerateExW(LPDDENUMCALLBACKEXW callback,
     static const WCHAR name[] = L"display";
 
     (void)flags;
-    if (!callback) return DDERR_INVALIDPARAMS;
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     callback(NULL, (LPWSTR)description, (LPWSTR)name, context, NULL);
     return DD_OK;
 }
@@ -4602,7 +5144,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
     if (out) *out = NULL;
     HOSTLOG_REFUSED("DllGetClassObject: creating DirectDraw through COM is "
             "not implemented; use DirectDrawCreateEx");
-    return CLASS_E_CLASSNOTAVAILABLE;
+    return DDWG_TRACE_ERROR(CLASS_E_CLASSNOTAVAILABLE);
 }
 
 HRESULT WINAPI DllCanUnloadNow(void)
@@ -4665,7 +5207,7 @@ DWORD WINAPI GetDDSurfaceLocal(DWORD unknown1, DWORD unknown2, DWORD unknown3)
 HRESULT WINAPI GetSurfaceFromDC(DWORD unknown1, DWORD unknown2, DWORD unknown3)
 {
     (void)unknown1; (void)unknown2; (void)unknown3;
-    return DDERR_NOTFOUND;
+    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
 }
 
 DWORD WINAPI GetOLEThunkData(DWORD index)
@@ -4684,7 +5226,7 @@ HRESULT WINAPI RegisterSpecialCase(DWORD unknown1, DWORD unknown2,
 HRESULT WINAPI DSoundHelp(DWORD unknown1, DWORD unknown2, DWORD unknown3)
 {
     (void)unknown1; (void)unknown2; (void)unknown3;
-    return DDERR_UNSUPPORTED;
+    return DDWG_TRACE_ERROR(DDERR_UNSUPPORTED);
 }
 
 void WINAPI SetAppCompatData(DWORD type, DWORD value)
@@ -4694,14 +5236,26 @@ void WINAPI SetAppCompatData(DWORD type, DWORD value)
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
+#ifdef DDWG_DIAGNOSTIC_TRACE
+    DWORD pending_commands;
+#else
     (void)reserved;
+#endif
     if (reason == DLL_PROCESS_ATTACH) {
+        g_instance = instance;
         DisableThreadLibraryCalls(instance);
         initialize_session_id(instance);
         InitializeCriticalSection(&g_transport_lock);
         InitializeCriticalSection(&g_object_lock);
         InitializeCriticalSection(&g_readback_lock);
+#ifdef DDWG_DIAGNOSTIC_TRACE
+        v86wg_diagnostic_process_attach(instance);
+#endif
     } else if (reason == DLL_PROCESS_DETACH) {
+#ifdef DDWG_DIAGNOSTIC_TRACE
+        pending_commands = g_command_count;
+#endif
+        emit_session_end();
         EnterCriticalSection(&g_transport_lock);
         if (g_command_count)
             submit_batch_locked(FALSE);
@@ -4710,6 +5264,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         DeleteCriticalSection(&g_readback_lock);
         DeleteCriticalSection(&g_object_lock);
         DeleteCriticalSection(&g_transport_lock);
+#ifdef DDWG_DIAGNOSTIC_TRACE
+        v86wg_diagnostic_process_detach(reserved, pending_commands);
+#endif
     }
     return TRUE;
 }
@@ -4816,7 +5373,7 @@ static HRESULT WINAPI tag##_EnumAttachedSurfaces(IFACE *iface, void *context, \
     DDSurface *surface = surface_from_any(iface, NULL); \
     DDSurface *attachment; \
     UINT face; \
-    if (!callback) return DDERR_INVALIDPARAMS; \
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     if (surface->mip_next) { \
         DESC description; \
         description.dwSize = sizeof(DESC); \
@@ -4870,7 +5427,7 @@ static HRESULT WINAPI tag##_EnumOverlayZOrders(IFACE *iface, DWORD flags, \
     UINT count, index; \
     if (!callback || (flags != DDENUMOVERLAYZ_BACKTOFRONT && \
             flags != DDENUMOVERLAYZ_FRONTTOBACK)) \
-        return DDERR_INVALIDPARAMS; \
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     count = legacy_collect_overlays(destination, flags, overlays, \
             DDWG_MAX_OVERLAYS); \
     for (index = 0; index < count; ++index) { \
@@ -4896,7 +5453,7 @@ static HRESULT WINAPI tag##_GetAttachedSurface(IFACE *iface, CAPS *caps, \
     DDSCAPS2 caps2; \
     IDirectDrawSurface7 *found = NULL; \
     HRESULT result; \
-    if (!caps || !out) return DDERR_INVALIDPARAMS; \
+    if (!caps || !out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
     ZeroMemory(&caps2, sizeof(caps2)); \
     if ((VERSION) >= DD_VERSION_4) \
@@ -4907,7 +5464,7 @@ static HRESULT WINAPI tag##_GetAttachedSurface(IFACE *iface, CAPS *caps, \
     if (SUCCEEDED(result) && found) \
         *out = (IFACE *)surface_interface(surface_from_any(found, NULL), \
                 VERSION); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_GetBltStatus(IFACE *iface, DWORD flags) \
 { \
@@ -4916,7 +5473,7 @@ static HRESULT WINAPI tag##_GetBltStatus(IFACE *iface, DWORD flags) \
 static HRESULT WINAPI tag##_GetCaps(IFACE *iface, CAPS *caps) \
 { \
     DDSurface *surface = surface_from_any(iface, NULL); \
-    if (!caps) return DDERR_INVALIDPARAMS; \
+    if (!caps) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     ZeroMemory(caps, sizeof(*caps)); \
     caps->dwCaps = surface->desc.ddsCaps.dwCaps; \
     return DD_OK; \
@@ -4958,7 +5515,7 @@ static HRESULT WINAPI tag##_GetSurfaceDesc(IFACE *iface, DESC *description) \
 { \
     DDSurface *surface = surface_from_any(iface, NULL); \
     if (!description || description->dwSize != sizeof(DESC)) \
-        return DDERR_INVALIDPARAMS; \
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     legacy_describe(surface, description); \
     return DD_OK; \
 } \
@@ -4966,7 +5523,7 @@ static HRESULT WINAPI tag##_Initialize(IFACE *iface, LPDIRECTDRAW dd, \
         DESC *description) \
 { \
     (void)iface; (void)dd; (void)description; \
-    return DDERR_ALREADYINITIALIZED; \
+    return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED); \
 } \
 static HRESULT WINAPI tag##_IsLost(IFACE *iface) \
 { \
@@ -4978,12 +5535,12 @@ static HRESULT WINAPI tag##_Lock(IFACE *iface, LPRECT rect, DESC *description, \
     DDSURFACEDESC2 description2; \
     HRESULT result; \
     if (!description || description->dwSize != sizeof(DESC)) \
-        return DDERR_INVALIDPARAMS; \
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     ZeroMemory(&description2, sizeof(description2)); \
     description2.dwSize = sizeof(description2); \
     result = surface_Lock(SURFACE7(iface), rect, &description2, flags, event); \
     if (SUCCEEDED(result)) legacy_narrow(&description2, description); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_ReleaseDC(IFACE *iface, HDC dc) \
 { \
@@ -5044,7 +5601,7 @@ static HRESULT WINAPI tag##_UpdateOverlayZOrder(IFACE *iface, DWORD flags, \
 static HRESULT WINAPI tag##_GetDDInterface(IFACE *iface, LPVOID *out) \
 { \
     DDSurface *surface = surface_from_any(iface, NULL); \
-    if (!out) return DDERR_INVALIDPARAMS; \
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     ddraw_AddRef((IDirectDraw7 *)&surface->owner->vtbl7); \
     *out = object_interface(surface->owner, VERSION); \
     return DD_OK; \
@@ -5065,7 +5622,7 @@ static HRESULT WINAPI tag##_SetSurfaceDesc(IFACE *iface, DESC *description, \
 { \
     DDSURFACEDESC2 description2; \
     if (!description || description->dwSize != sizeof(DESC)) \
-        return DDERR_INVALIDPARAMS; \
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     if (sizeof(DESC) == sizeof(DDSURFACEDESC2)) \
         CopyMemory(&description2, description, sizeof(description2)); \
     else \
@@ -5276,29 +5833,29 @@ static HRESULT WINAPI tag##_CreateSurface(IFACE *iface, DESC *request, \
     DDSURFACEDESC2 request2; \
     IDirectDrawSurface7 *created = NULL; \
     HRESULT result; \
-    if (!out || !request) return DDERR_INVALIDPARAMS; \
+    if (!out || !request) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
-    if (request->dwSize != sizeof(DESC)) return DDERR_INVALIDPARAMS; \
+    if (request->dwSize != sizeof(DESC)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     legacy_widen(request, &request2); \
     result = ddraw_CreateSurface(DDRAW7(iface), &request2, &created, outer); \
     if (SUCCEEDED(result) && created) \
         *out = (SURFIFACE *)surface_interface( \
                 surface_from_any(created, NULL), VERSION); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_DuplicateSurface(IFACE *iface, SURFIFACE *source, \
         SURFIFACE **out) \
 { \
     IDirectDrawSurface7 *duplicate = NULL; \
     HRESULT result; \
-    if (!out || !source) return DDERR_INVALIDPARAMS; \
+    if (!out || !source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
     result = ddraw_DuplicateSurface(DDRAW7(iface), SURFACE7(source), \
             &duplicate); \
     if (SUCCEEDED(result)) \
         *out = (SURFIFACE *)surface_interface( \
                 surface_from_any(duplicate, NULL), VERSION); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_EnumDisplayModes(IFACE *iface, DWORD flags, \
         DESC *filter, LPVOID context, ENUMMODESCB callback) \
@@ -5306,7 +5863,7 @@ static HRESULT WINAPI tag##_EnumDisplayModes(IFACE *iface, DWORD flags, \
     UINT mode; \
     UINT depth; \
     (void)iface; (void)flags; \
-    if (!callback) return DDERR_INVALIDPARAMS; \
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     for (mode = 0; mode < sizeof(g_modes) / sizeof(g_modes[0]); ++mode) { \
         for (depth = 0; depth < sizeof(g_mode_depths) / sizeof(DWORD); \
                 ++depth) { \
@@ -5342,7 +5899,7 @@ static HRESULT WINAPI tag##_EnumSurfaces(IFACE *iface, DWORD flags, \
     DDrawObject *object = object_from_any(iface, NULL); \
     DDSurface *surface; \
     (void)flags; (void)filter; \
-    if (!callback) return DDERR_INVALIDPARAMS; \
+    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     EnterCriticalSection(&g_object_lock); \
     surface = object->surfaces; \
     LeaveCriticalSection(&g_object_lock); \
@@ -5373,12 +5930,12 @@ static HRESULT WINAPI tag##_GetDisplayMode(IFACE *iface, DESC *description) \
     DDSURFACEDESC2 description2; \
     HRESULT result; \
     if (!description || description->dwSize != sizeof(DESC)) \
-        return DDERR_INVALIDPARAMS; \
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     ZeroMemory(&description2, sizeof(description2)); \
     description2.dwSize = sizeof(description2); \
     result = ddraw_GetDisplayMode(DDRAW7(iface), &description2); \
     if (SUCCEEDED(result)) legacy_narrow(&description2, description); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_GetFourCCCodes(IFACE *iface, LPDWORD count, \
         LPDWORD codes) \
@@ -5389,13 +5946,13 @@ static HRESULT WINAPI tag##_GetGDISurface(IFACE *iface, SURFIFACE **out) \
 { \
     IDirectDrawSurface7 *found = NULL; \
     HRESULT result; \
-    if (!out) return DDERR_INVALIDPARAMS; \
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
     result = ddraw_GetGDISurface(DDRAW7(iface), &found); \
     if (SUCCEEDED(result) && found) \
         *out = (SURFIFACE *)surface_interface(surface_from_any(found, NULL), \
                 VERSION); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_GetMonitorFrequency(IFACE *iface, \
         LPDWORD frequency) \
@@ -5496,13 +6053,13 @@ static HRESULT WINAPI tag##_GetSurfaceFromDC(IFACE *iface, HDC dc, \
 { \
     IDirectDrawSurface7 *found = NULL; \
     HRESULT result; \
-    if (!out) return DDERR_INVALIDPARAMS; \
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
     result = ddraw_GetSurfaceFromDC(DDRAW7(iface), dc, &found); \
     if (SUCCEEDED(result) && found) \
         *out = (SURFIFACE *)surface_interface(surface_from_any(found, NULL), \
                 VERSION); \
-    return result; \
+    return DDWG_TRACE_ERROR(result); \
 }
 
 LEGACY_DDRAW_SURFACE_FROM_DC_THUNK(ddraw3, IDirectDraw3, IDirectDrawSurface,
@@ -5528,9 +6085,9 @@ static HRESULT WINAPI ddraw4_GetDeviceIdentifier(IDirectDraw4 *iface,
     DDDEVICEIDENTIFIER2 wide;
     HRESULT result;
 
-    if (!identifier) return DDERR_INVALIDPARAMS;
+    if (!identifier) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     result = ddraw_GetDeviceIdentifier(DDRAW7(iface), &wide, flags);
-    if (FAILED(result)) return result;
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     ZeroMemory(identifier, sizeof(*identifier));
     CopyMemory(identifier->szDriver, wide.szDriver,
             sizeof(identifier->szDriver));

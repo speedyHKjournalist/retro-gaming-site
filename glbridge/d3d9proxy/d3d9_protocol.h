@@ -98,6 +98,13 @@ enum D9WGOpcode {
      */
     D9WG_OP_GUEST_LOG = 11,
     D9WG_OP_READBACK_SURFACE = 12,
+    /*
+     * The process owning the batch session is going away.  Device destruction
+     * is still sent at the normal COM lifetime boundary; this is the fallback
+     * that releases anything retained when a process exits abnormally or
+     * unloads the proxy with live objects.
+     */
+    D9WG_OP_SESSION_END = 13,
 
     D9WG_OP_CREATE_BUFFER = 0x100,
     D9WG_OP_UPDATE_BUFFER = 0x101,
@@ -311,6 +318,11 @@ typedef struct D9WGHello {
     uint32_t session_id_low;
     uint32_t session_id_high;
 } D9WGHello;
+
+typedef struct D9WGSessionEnd {
+    uint32_t session_id_low;
+    uint32_t session_id_high;
+} D9WGSessionEnd;
 
 typedef struct D9WGCreateDevice {
     uint32_t device_handle;
@@ -1094,6 +1106,8 @@ typedef char D9WGAssertCommandHeaderSize[
         sizeof(D9WGCommandHeader) == 16 ? 1 : -1];
 typedef char D9WGAssertHelloSize[
         sizeof(D9WGHello) == 16 ? 1 : -1];
+typedef char D9WGAssertSessionEndSize[
+        sizeof(D9WGSessionEnd) == 8 ? 1 : -1];
 typedef char D9WGAssertCreateDeviceSize[
         sizeof(D9WGCreateDevice) == 52 ? 1 : -1];
 typedef char D9WGAssertResetDeviceSize[

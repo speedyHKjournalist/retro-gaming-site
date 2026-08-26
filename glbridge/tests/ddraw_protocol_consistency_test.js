@@ -73,6 +73,7 @@ const SURFACE_PALETTE = structLayout("D9WGDDSetSurfacePalette");
 const DISPLAY_MODE = structLayout("D9WGDDSetDisplayMode");
 const OVERLAY = structLayout("D9WGDDUpdateOverlay");
 const READBACK = structLayout("D9WGReadbackSurface");
+const SESSION_END = structLayout("D9WGSessionEnd");
 
 check("the wire structs are the sizes their compile-time assertions claim",
         () => {
@@ -80,6 +81,7 @@ check("the wire structs are the sizes their compile-time assertions claim",
         D9WGDDBlt: 80, D9WGDDSetColorKey: 24,
         D9WGDDSetSurfacePalette: 16, D9WGDDSetDisplayMode: 32,
         D9WGDDUpdateOverlay: 52, D9WGReadbackSurface: 52,
+        D9WGSessionEnd: 8,
     };
     for (const [name, size] of Object.entries(assertions)) {
         assert.match(protocolHeader,
@@ -92,6 +94,7 @@ check("the wire structs are the sizes their compile-time assertions claim",
     assert.equal(DISPLAY_MODE.get("__size"), 32);
     assert.equal(OVERLAY.get("__size"), 52);
     assert.equal(READBACK.get("__size"), 52);
+    assert.equal(SESSION_END.get("__size"), 8);
 });
 
 // ---- the host decodes at the offsets the header defines ----
@@ -306,6 +309,24 @@ check("the guest emits the DirectDraw group by name, not by number", () => {
         "step");
 });
 
+check("DirectDraw teardown reaches both normal and process-wide host paths",
+        () => {
+    assert.equal(headerEnum("D9WG_OP_SESSION_END"), 13);
+    assert.match(executorSource, /const OP_SESSION_END = 13;/);
+    assert.match(executorSource,
+        /\[OP_SESSION_END\]: this\.onSessionEnd/,
+        "the executor must dispatch process teardown");
+    assert.match(guestSource,
+        /destroy\.resource_kind\s*=\s*0;[\s\S]{0,500}?D9WG_OP_DESTROY_RESOURCE/,
+        "the last DirectDraw reference must emit device destruction");
+    assert.match(guestSource,
+        /DLL_PROCESS_DETACH[\s\S]{0,500}?emit_session_end\(\)/,
+        "DLL unload must close the process session even with live COM objects");
+    assert.match(guestSource,
+        /emit_command\(D9WG_OP_SESSION_END,\s*&end,\s*sizeof\(end\)\)/,
+        "SESSION_END must carry the current process id through the protocol");
+});
+
 check("the guest rides the D3D9 batch function code, not one of its own",
         () => {
     assert.ok(guestSource.includes("V86GL_CTRL_D3D9_BATCH"),
@@ -320,7 +341,11 @@ check("mip and cube subresources keep their level and face on every wire path",
     assert.match(guestSource, /command\.level\s*=\s*surface->mip_level/);
     assert.match(guestSource, /command\.face\s*=\s*surface->cube_face/);
     assert.match(guestSource,
-        /emit_command\(D9WG_OP_CREATE_TEXTURE_CUBE,\s*&cube_create/);
+        /storage->create_opcode = D9WG_OP_CREATE_TEXTURE_CUBE;[\s\S]*?storage->create\.texture_cube = cube_create;/,
+        "a cube surface must record a cube create with the cube payload");
+    assert.match(guestSource,
+        /emit_command\(storage->create_opcode, &storage->create,\s*storage->create_bytes\)/,
+        "the recorded create is what reaches the wire");
     assert.match(guestSource, /update\.height\s*=\s*bottom\s*-\s*top/,
         "a DXT upload carries logical texel height, not its block-row count");
 
@@ -380,10 +405,58 @@ check("advanced DirectDraw surface features are real core paths, not stubs",
     assert.doesNotMatch(guestSource,
         /(?:driver|emulation)->dwSize\s*!=\s*sizeof\(DDCAPS\)/,
         "GetCaps must not reject pre-DX7 DDCAPS sizes");
+    assert.match(guestSource,
+        /object_display_size[\s\S]*?GetSystemMetrics\(SM_CXSCREEN\)[\s\S]*?GetSystemMetrics\(SM_CYSCREEN\)/,
+        "a windowless normal-mode primary must fall back to the desktop size");
+    assert.match(guestSource,
+        /if \(caps & DDSCAPS_PRIMARYSURFACE\) \{\s*object_display_size\(object,\s*&width,\s*&height\)/,
+        "CreateSurface must resolve a primary size without requiring exclusive mode");
+    assert.doesNotMatch(guestSource,
+        /if \(!width \|\| !height\) return DDERR_NOEXCLUSIVEMODE/,
+        "a normal-mode primary must not require SetDisplayMode");
     for (const removedStub of ["UNSUPPORTED(\"DuplicateSurface",
             "UNSUPPORTED(\"SetSurfaceDesc", "UNSUPPORTED(\"UpdateOverlay\""])
         assert.ok(!guestSource.includes(removedStub),
             removedStub + " is still present as a refusal");
+});
+
+// The transport is demand-started and single-client, so "not open yet" is an
+// ordinary state, not a fatal one. It reached a caller once as
+// DDERR_OUTOFVIDEOMEMORY out of CreateSurface, with nothing written down
+// anywhere, which is the combination these checks exist to prevent.
+check("a closed transport is retried, recorded, and never fails CreateSurface",
+        () => {
+    assert.doesNotMatch(guestSource, /g_transport_failed/,
+        "a transport failure must not latch the DLL off permanently");
+    assert.match(guestSource,
+        /GetTickCount\(\) - g_transport_retry_tick < DDWG_TRANSPORT_RETRY_MS/,
+        "a failed open must be retried after a backoff");
+    assert.match(guestSource,
+        /\+\+g_transport_generation;/,
+        "a successful open must start a new resource generation");
+    assert.match(guestSource,
+        /if \(emit_command\(D9WG_OP_HELLO[\s\S]*?g_hello_generation = g_transport_generation;/,
+        "HELLO must be resent when it was dropped by a closed transport");
+    assert.match(guestSource,
+        /surface_create\(DDrawObject[\s\S]*?if \(!emit_surface_create\(surface\)\)\s*surface->upload_pending = TRUE;/,
+        "CreateSurface must return a surface when only the host texture failed");
+    assert.doesNotMatch(guestSource,
+        /if \(!emit_surface_create\(surface\)\) \{\s*surface_Release/,
+        "a missing host texture must not destroy the DirectDraw surface");
+    assert.match(guestSource,
+        /record_surface_storage_create\(surface, level_count, cube\);\s*return ensure_surface_storage\(surface\);/,
+        "the create must be recorded before it is attempted, so it can be replayed");
+    for (const site of ["emit_surface_upload", "emit_blt", "emit_blt_to_screen",
+            "emit_overlay_state"])
+        assert.ok(new RegExp(site + "[\\s\\S]{0,1400}?(?:ensure_surface_storage|prepare_surface_for_host)\\(")
+                .test(guestSource),
+            site + " must build a missing host texture before naming its handle");
+    assert.match(guestSource,
+        /CreateFileA\(g_log_path, FILE_APPEND_DATA/,
+        "a transport failure must be written somewhere the guest can read it");
+    assert.match(guestSource,
+        /could not open \\\\\\\\\.\\\\v86gl \(Win32 error %lu\)/,
+        "the log line must name the Win32 error behind a failed open");
 });
 
 if (failures.length) {

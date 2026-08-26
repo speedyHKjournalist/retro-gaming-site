@@ -107,6 +107,7 @@
     const OP_UPDATE_SURFACE = 10;
     const OP_GUEST_LOG = 11;
     const OP_READBACK_SURFACE = 12;
+    const OP_SESSION_END = 13;
     const GUEST_LOG_SEVERITY_INFO = 0;
     const GUEST_LOG_SEVERITY_FAILED = 2;
     const OP_CREATE_TEXTURE_2D = 0x110;
@@ -2912,6 +2913,13 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.backBufferSrgbView = null;
             this.backBufferTextureWidth = 0;
             this.backBufferTextureHeight = 0;
+            // Palette contents and the DirectDraw GPU palette cache use device
+            // handles in their keys. Handles overlap between guest processes,
+            // so these are session aliases just like devices/resources and the
+            // retained back buffer (see switchSession()).
+            this.palettes = new Map();
+            this.ddPaletteBuffers = new Map();
+            this.ddPaletteSerials = new Map();
             // How many recorded ops may accumulate before the frame is
             // submitted early. A D3D9 frame's cost is otherwise unbounded in
             // its draw count -- 3DMark06's batch-size tests exist to drive that
@@ -3113,6 +3121,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 textureRenames: 0, textureFullCopyRenameBytes: 0,
                 bufferFullCopyRenames: 0, bufferNoOverwriteWrites: 0,
                 emptySurfaceReports: 0, surfaceChanges: 0, sessionChanges: 0,
+                sessionsEnded: 0,
                 deviceLosses: 0, deviceRecoveries: 0,
                 guestFeatureBits: 0, guestShaderModel2: false,
                 guestShaderModel3: false,
@@ -3662,6 +3671,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 activeOcclusion: null,
                 presentingDevice: null,
                 lastSwapTexture: null,
+                backBufferTexture: null,
+                backBufferView: null,
+                backBufferSrgbView: null,
+                backBufferTextureWidth: 0,
+                backBufferTextureHeight: 0,
+                palettes: new Map(),
+                ddPaletteBuffers: new Map(),
+                ddPaletteSerials: new Map(),
                 windowState: null,
                 cursor: { texture: null, view: null, width: 0, height: 0,
                     hotspotX: 0, hotspotY: 0, x: 0, y: 0, visible: false,
@@ -3681,13 +3698,21 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             state.activeOcclusion = this.activeOcclusion || null;
             state.presentingDevice = this.presentingDevice || null;
             state.lastSwapTexture = this.lastSwapTexture || null;
+            state.backBufferTexture = this.backBufferTexture || null;
+            state.backBufferView = this.backBufferView || null;
+            state.backBufferSrgbView = this.backBufferSrgbView || null;
+            state.backBufferTextureWidth = this.backBufferTextureWidth || 0;
+            state.backBufferTextureHeight = this.backBufferTextureHeight || 0;
+            state.palettes = this.palettes;
+            state.ddPaletteBuffers = this.ddPaletteBuffers;
+            state.ddPaletteSerials = this.ddPaletteSerials;
             state.windowState = this.windowState || null;
             state.cursor = this.cursor;
             state.lastDraws = this.lastDraws;
         }
 
         switchSession(key) {
-            if (this.sessionKey === key) return;
+            if (this.sessionKey === key && this.sessionStates.has(key)) return;
             const previousKey = this.sessionKey;
             this.saveActiveSessionState();
             let state = this.sessionStates.get(key);
@@ -3702,6 +3727,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.activeOcclusion = state.activeOcclusion;
             this.presentingDevice = state.presentingDevice;
             this.lastSwapTexture = state.lastSwapTexture;
+            this.backBufferTexture = state.backBufferTexture;
+            this.backBufferView = state.backBufferView;
+            this.backBufferSrgbView = state.backBufferSrgbView;
+            this.backBufferTextureWidth = state.backBufferTextureWidth;
+            this.backBufferTextureHeight = state.backBufferTextureHeight;
+            this.palettes = state.palettes;
+            this.ddPaletteBuffers = state.ddPaletteBuffers;
+            this.ddPaletteSerials = state.ddPaletteSerials;
             this.windowState = state.windowState;
             this.cursor = state.cursor;
             this.lastDraws = state.lastDraws;
@@ -3717,7 +3750,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // cannot grow the session table without bound.
                 if (previous && !previous.devices.size &&
                         !previous.resources.size && !previous.frame &&
-                        !previous.activeOcclusion && !previous.cursor.texture)
+                        !previous.activeOcclusion && !previous.cursor.texture &&
+                        !previous.backBufferTexture &&
+                        !previous.ddPaletteBuffers.size)
                     this.sessionStates.delete(previousKey);
             }
         }
@@ -3753,6 +3788,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 [OP_UPDATE_TEXTURE]: this.onUpdateTexture,
                 [OP_UPDATE_SURFACE]: this.onUpdateSurface,
                 [OP_READBACK_SURFACE]: this.onReadbackSurface,
+                [OP_SESSION_END]: this.onSessionEnd,
                 [OP_SET_SCISSOR_RECT]: this.onSetScissorRect,
                 [OP_SET_RENDER_TARGET]: this.onSetRenderTarget,
                 [OP_SET_DEPTH_STENCIL_SURFACE_LEVEL]:
@@ -3851,6 +3887,117 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 (featureBits & D9WG_FEATURE_SHADER_MODEL_3) !== 0;
         }
 
+        retireResourceState(resource) {
+            if (!resource) return;
+            this.retireGPUObject(resource.gpuBuffer);
+            this.retireGPUObject(resource.gpuTexture);
+            this.retireGPUObject(resource.msaaTexture);
+            // Installed by ddraw_ops.js on palettised sample resources. A
+            // SESSION_END bypasses per-resource opcodes, so its companion
+            // textures have to participate in the process-wide teardown too.
+            if (resource.ddSampleViews) {
+                for (const entry of resource.ddSampleViews.values())
+                    this.retireGPUObject(entry && entry.texture);
+                resource.ddSampleViews.clear();
+            }
+            resource.destroyed = true;
+        }
+
+        retirePaletteCachesForDevice(handle) {
+            const prefix = (handle >>> 0) + ":";
+            for (const [key, entry] of this.ddPaletteBuffers) {
+                if (!key.startsWith(prefix)) continue;
+                this.retireGPUObject(entry && entry.buffer);
+                this.ddPaletteBuffers.delete(key);
+            }
+            for (const key of this.ddPaletteSerials.keys())
+                if (key.startsWith(prefix)) this.ddPaletteSerials.delete(key);
+            for (const key of this.palettes.keys())
+                if (key.startsWith(prefix)) this.palettes.delete(key);
+        }
+
+        retireDeviceState(state, reason) {
+            if (!state) return;
+            state.surface = { ...state.surface, visible: false };
+            if (typeof this.options.onDestroy === "function")
+                this.options.onDestroy(state.surface, reason || "device");
+            if (state.swapChains) {
+                for (const chain of state.swapChains.values()) {
+                    if (chain.context &&
+                            typeof chain.context.unconfigure === "function")
+                        chain.context.unconfigure();
+                    this.notifySwapChainSurface(
+                        { ...chain.surface, visible: false }, "destroy");
+                }
+                state.swapChains.clear();
+            }
+            this.retireGPUObject(state.depthTexture);
+            this.retireGPUObject(state.backBufferMsaaTexture);
+            this.retireGPUObject(state.gammaRampTexture);
+            this.retirePaletteCachesForDevice(state.handle);
+        }
+
+        retireActiveSessionBackBuffer() {
+            this.retireGPUObject(this.backBufferTexture);
+            this.backBufferTexture = null;
+            this.backBufferView = null;
+            this.backBufferSrgbView = null;
+            this.backBufferTextureWidth = 0;
+            this.backBufferTextureHeight = 0;
+            this.lastSwapTexture = null;
+        }
+
+        releaseActiveSession(reason) {
+            // No queued frame from an ending process may be replayed later
+            // after another process has reused the same numeric handles.
+            this.discardFrame();
+            for (const resource of this.resources.values())
+                this.retireResourceState(resource);
+            this.resources.clear();
+            for (const state of this.devices.values())
+                this.retireDeviceState(state, reason || "session-end");
+            this.devices.clear();
+            for (const entry of this.ddPaletteBuffers.values())
+                this.retireGPUObject(entry && entry.buffer);
+            this.ddPaletteBuffers.clear();
+            this.ddPaletteSerials.clear();
+            this.palettes.clear();
+            this.retireActiveSessionBackBuffer();
+            this.retireGPUObject(this.cursor && this.cursor.texture);
+            this.retireGPUObject(this.cursor && this.cursor.uniform);
+            this.cursor = { texture: null, view: null, width: 0, height: 0,
+                hotspotX: 0, hotspotY: 0, x: 0, y: 0, visible: false,
+                pipeline: null, sampler: null, uniform: null };
+            this.activeOcclusion = null;
+            this.presentingDevice = null;
+            this.windowState = null;
+            this.lastDraws = { fixed: null, programmable: null };
+        }
+
+        onSessionEnd(bytes, view, offset, length) {
+            if (length < 8) {
+                ++this.stats.malformedBatches;
+                throw new D9WGStreamError("D9WG SESSION_END payload is truncated");
+            }
+            const sessionLow = view.getUint32(offset, true);
+            const sessionHigh = view.getUint32(offset + 4, true);
+            const sessionKey = sessionHigh.toString(16).padStart(8, "0") +
+                sessionLow.toString(16).padStart(8, "0");
+            if (this.sessionKey !== sessionKey) {
+                ++this.stats.malformedBatches;
+                throw new D9WGStreamError(
+                    "D9WG SESSION_END session does not match its batch");
+            }
+            const endedKey = this.sessionKey;
+            this.releaseActiveSession("session-end");
+            this.sessionStates.delete(endedKey);
+            // SESSION_END is required to be the final command from a process.
+            // Clearing the active key also makes a corrupt trailing command
+            // unable to save freshly-created state back under the dead id.
+            this.sessionKey = null;
+            ++this.stats.sessionsEnded;
+        }
+
         onCreateDevice(bytes, view, offset, length) {
             if (length < 52) {
                 ++this.stats.malformedBatches;
@@ -3877,7 +4024,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 sessionKey: this.sessionKey };
             state.backBufferWidth = width;
             state.backBufferHeight = height;
-            this.resizeCanvasIfNeeded(width, height);
             this.configureBackBufferMSAA(state, width, height,
                 multisampleType, multisampleQuality);
             this.ensureDepthTarget(state, width, height, enableAutoDepth !== 0);
@@ -3920,7 +4066,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 sessionKey: this.sessionKey };
             state.backBufferWidth = width;
             state.backBufferHeight = height;
-            this.resizeCanvasIfNeeded(width, height);
             this.configureBackBufferMSAA(state, width, height,
                 multisampleType, multisampleQuality);
             this.ensureDepthTarget(state, width, height, enableAutoDepth !== 0);
@@ -3932,8 +4077,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             if (this.canvas.height !== height) this.canvas.height = height;
         }
 
-        // The swap-chain colour attachment is context.getCurrentTexture(), which
-        // is the canvas, which resizeCanvasIfNeeded sized to the back buffer.
+        // The swap-chain colour attachment is context.getCurrentTexture(). The
+        // shared canvas is resized only at Present, after that process has won
+        // ownership; CREATE/RESET from a helper session must not clear the
+        // currently visible owner's canvas.
         // Reading state.surface here instead was a real defect: Present rewrites
         // state.surface with the window's client rect every frame, so a windowed
         // game reported a back buffer 13 rows shorter than the auto depth target
@@ -4148,6 +4295,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.sessionStates.clear();
             this.devices = new Map();
             this.resources = new Map();
+            this.palettes = new Map();
+            this.ddPaletteBuffers = new Map();
+            this.ddPaletteSerials = new Map();
             this.pipelineCache.clear();
             this.bindGroupCache.clear();
             this.moduleCache.clear();
@@ -4759,10 +4909,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // owned texture, so this whole replay is independent of the
                 // swap chain; getCurrentTexture() is acquired further down and
                 // only when this finish actually presents.
-                const backWidth = this.canvas.width ||
-                    this.backBufferTextureWidth || 1;
-                const backHeight = this.canvas.height ||
-                    this.backBufferTextureHeight || 1;
+                const backState = this.presentingDevice ||
+                    this.devices.values().next().value || null;
+                const backWidth = backState
+                    ? this.backBufferWidthOf(backState)
+                    : (this.backBufferTextureWidth || this.canvas.width || 1);
+                const backHeight = backState
+                    ? this.backBufferHeightOf(backState)
+                    : (this.backBufferTextureHeight || this.canvas.height || 1);
                 const backTexture = this.ensureBackBufferTexture(
                     backWidth, backHeight);
                 const swapView = this.backBufferView;
@@ -5183,6 +5337,12 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // the same synchronous stretch as the submit that consumes it,
                 // which is the whole rule getCurrentTexture() imposes.
                 if (present) {
+                    // Canvas width/height are global even though the retained
+                    // image is per session. Defer this destructive resize until
+                    // the session actually presents, so a capability helper's
+                    // CREATE_DEVICE cannot blank the visible process.
+                    this.resizeCanvasIfNeeded(this.backBufferTextureWidth,
+                        this.backBufferTextureHeight);
                     const swapTexture = this.context.getCurrentTexture();
                     // A canvas resize between recording and here would leave
                     // the two sizes disagreeing; copying the overlap keeps the
@@ -5991,18 +6151,26 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // drops (see d3d9_proxy.c).
                 const state = this.devices.get(handle);
                 if (state) {
-                    state.surface = { ...state.surface, visible: false };
-                    if (typeof this.options.onDestroy === "function")
-                        this.options.onDestroy(state.surface, "device");
-                    this.retireGPUObject(state.depthTexture);
-                    this.retireGPUObject(state.backBufferMsaaTexture);
+                    const lastDevice = this.devices.size === 1;
+                    if (lastDevice) this.discardFrame();
+                    this.retireDeviceState(state, "device");
                     this.devices.delete(handle);
+                    if (this.presentingDevice === state)
+                        this.presentingDevice = null;
+                    if (lastDevice) {
+                        this.retireActiveSessionBackBuffer();
+                        this.retireGPUObject(this.cursor && this.cursor.texture);
+                        this.retireGPUObject(this.cursor && this.cursor.uniform);
+                        this.cursor = { texture: null, view: null, width: 0,
+                            height: 0, hotspotX: 0, hotspotY: 0, x: 0, y: 0,
+                            visible: false, pipeline: null, sampler: null,
+                            uniform: null };
+                    }
                 }
                 return;
             }
             const resource = this.resources.get(handle);
             if (!resource) return;
-            resource.destroyed = true;
             // Never destroy inline. A frame being recorded may already hold a
             // bind group referencing this texture's view or a pending draw
             // referencing this buffer, and none of it is submitted until
@@ -6010,9 +6178,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // buffer ("Destroyed texture ... used in a submit"). Releasing a
             // texture in the same frame it was last drawn with is ordinary
             // application behaviour, not an edge case.
-            this.retireGPUObject(resource.gpuBuffer);
-            this.retireGPUObject(resource.gpuTexture);
-            this.retireGPUObject(resource.msaaTexture);
+            this.retireResourceState(resource);
             this.resources.delete(handle);
         }
 

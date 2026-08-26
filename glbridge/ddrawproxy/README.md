@@ -169,9 +169,26 @@ instead of a full-surface repaint.
 
 ```sh
 ./build.sh                 # produces ddraw.dll next to this README
+./build_diagnostic.sh      # produces ddraw-diagnostic.dll with full tracing
 ./build_smoke_test.sh /private/tmp/ddraw-d3d7-smoke
                            # produces the DLL + four XP-compatible EXEs
 ```
+
+Deploy `ddraw-diagnostic.dll` under the loader-visible name `ddraw.dll`. For a
+game that normally means beside its EXE; for `dxdiag.exe` it means the system
+copy it actually loads, after preserving the original. The diagnostic DLL
+writes `ddraw_trace_<pid>.log` beside itself, or to `%TEMP%` if that directory
+is read-only. Delete an old trace before starting a new capture: DLL reloads in
+the same process append new `PROCESS_ATTACH` sections so an early dxdiag pass
+cannot be overwritten by a later one. It records loaded module paths, memory
+state, every explicit failing DirectDraw or Direct3D 1-7 HRESULT, successful
+returns from the critical DirectDraw display path, surface parameters and
+lifetime, uploads, presents, batch submissions, `v86gl.sys` transport state,
+and x86 exception registers. Repeated status polling is sampled at powers of
+two, and `OutputDebugString` exceptions are omitted as tracing noise. Start
+`v86gl.sys` before the test (`sc start v86gl`). The smaller
+`ddraw-webgpu.log` remains the operational log for transport retries and
+host-visible refusals.
 
 The build fails if the DLL picks up a C runtime import: it links `-nostdlib`
 and must import nothing beyond `kernel32`, `user32` and `gdi32`.
@@ -189,6 +206,7 @@ driver.
 | Test | What it pins |
 | --- | --- |
 | `../tests/ddraw_protocol_consistency_test.js` | the wire structs, opcode numbers, flag bits and export list agree across the header, the DLL and the host module |
+| `../tests/legacy_proxy_diagnostic_trace_test.js` | every explicit error return is routed through the diagnostic trace and both diagnostic build scripts remain wired |
 | `../tests/ddraw_channel_expansion_test.js` | the guest and the executor widen colour channels identically |
 | `../tests/ddraw_webgpu_executor_test.js` | which pipeline variant, which bindings, what lands in the uniform block, and which blits are refused |
 | `../tests/ddraw_blit_wgsl_validation_test.js` | every generated blit shader compiles under real `naga` |

@@ -29,6 +29,17 @@
 #endif
 
 #define D8WG_LOG_PREFIX "[d3d8-webgpu] "
+#ifdef D8WG_DIAGNOSTIC_TRACE
+#define V86WG_DIAGNOSTIC_COMPONENT "d3d8-webgpu"
+#define V86WG_DIAGNOSTIC_FILE_STEM "d3d8_trace"
+#include "../diagnostic_trace.h"
+#define D8WG_TRACE_ERROR(result) \
+    v86wg_diagnostic_hresult((HRESULT)(result), __func__, __LINE__)
+#define D8WG_TRACE(...) v86wg_diagnostic_write(__VA_ARGS__)
+#else
+#define D8WG_TRACE_ERROR(result) (result)
+#define D8WG_TRACE(...) ((void)0)
+#endif
 #define D8WG_MAX_RENDER_STATES 256u
 #define D8WG_MAX_TEXTURE_STAGES 8u
 #define D8WG_MAX_TEXTURE_STAGE_STATES 32u
@@ -515,6 +526,7 @@ static void d8wg_log(const char *text)
     OutputDebugStringA(D8WG_LOG_PREFIX);
     OutputDebugStringA(text);
     OutputDebugStringA("\r\n");
+    D8WG_TRACE("LOG %s", text);
 }
 
 static uint32_t allocate_handle(void)
@@ -601,6 +613,9 @@ static BOOL open_transport_locked(void)
 {
     V86GLMapBuffer mapping;
     DWORD returned = 0;
+#ifdef D8WG_DIAGNOSTIC_TRACE
+    DWORD error;
+#endif
 
     if (g_dma_buffer)
         return TRUE;
@@ -611,21 +626,41 @@ static BOOL open_transport_locked(void)
             GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL, NULL);
     if (g_transport == INVALID_HANDLE_VALUE) {
+#ifdef D8WG_DIAGNOSTIC_TRACE
+        error = GetLastError();
+#endif
         g_transport_failed = TRUE;
         d8wg_log("could not open \\.\\v86gl");
+        D8WG_TRACE("TRANSPORT OPEN_FAIL path=\\\\.\\v86gl "
+                "win32=%lu; start v86gl.sys before launching the program",
+                error);
         return FALSE;
     }
 
     ZeroMemory(&mapping, sizeof(mapping));
     if (!DeviceIoControl(g_transport, V86GL_IOCTL_MAP_BUFFER,
-            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)
-            || returned != sizeof(mapping)
-            || !mapping.user_address
+            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)) {
+#ifdef D8WG_DIAGNOSTIC_TRACE
+        error = GetLastError();
+#endif
+        d8wg_log("v86gl MAP_BUFFER failed");
+        D8WG_TRACE("TRANSPORT MAP_FAIL win32=%lu; win32=170 usually means "
+                "another process owns the DMA mapping", error);
+        close_transport_locked();
+        g_transport_failed = TRUE;
+        return FALSE;
+    }
+    if (returned != sizeof(mapping) || !mapping.user_address
             || mapping.buffer_bytes < sizeof(V86GLDMADesc)
                     + D8WG_VGL2_RECORD_HEADER_BYTES
                     + sizeof(D9WGBatchHeader)
-                    + sizeof(D9WGCommandHeader)) {
+                    + sizeof(D9WGCommandHeader)
+                    + D9WG_RESPONSE_REGION_BYTES) {
         d8wg_log("v86gl MAP_BUFFER failed");
+        D8WG_TRACE("TRANSPORT MAP_INVALID returned=%lu expected=%lu "
+                "address=%08lX bytes=%lu", returned,
+                (DWORD)sizeof(mapping), mapping.user_address,
+                mapping.buffer_bytes);
         close_transport_locked();
         g_transport_failed = TRUE;
         return FALSE;
@@ -634,6 +669,8 @@ static BOOL open_transport_locked(void)
     g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
     g_dma_capacity = mapping.buffer_bytes;
     reset_batch_locked();
+    D8WG_TRACE("TRANSPORT OPEN_OK address=%08lX bytes=%lu batch_capacity=%lu",
+            mapping.user_address, mapping.buffer_bytes, batch_capacity());
     return TRUE;
 }
 
@@ -685,7 +722,13 @@ static BOOL submit_batch_locked(BOOL present)
     submit.flags = 0;
     if (!DeviceIoControl(g_transport, V86GL_IOCTL_SUBMIT,
             &submit, sizeof(submit), NULL, 0, &returned, NULL)) {
+#ifdef D8WG_DIAGNOSTIC_TRACE
+        DWORD error = GetLastError();
+#endif
         d8wg_log("D8WG batch submit failed");
+        D8WG_TRACE("TRANSPORT SUBMIT_FAIL win32=%lu descriptor_bytes=%lu "
+                "commands=%lu present=%lu", error, submit.descriptor_bytes,
+                g_command_count, (DWORD)present);
         close_transport_locked();
         g_transport_failed = TRUE;
         return FALSE;
@@ -693,6 +736,9 @@ static BOOL submit_batch_locked(BOOL present)
 
     if (present)
         ++g_frame_id;
+    D8WG_TRACE("TRANSPORT SUBMIT_OK descriptor_bytes=%lu commands=%lu "
+            "present=%lu", submit.descriptor_bytes, g_command_count,
+            (DWORD)present);
     reset_batch_locked();
     return TRUE;
 }
@@ -707,15 +753,25 @@ static BOOL reserve_command_locked(uint16_t opcode, uint32_t payload_bytes,
 
     if (!open_transport_locked())
         return FALSE;
-    if (payload_bytes > 0xFFFFFFFFu - sizeof(*command) - extra_bytes)
+    if (payload_bytes > 0xFFFFFFFFu - sizeof(*command) - extra_bytes) {
+        D8WG_TRACE("COMMAND REFUSED opcode=%u payload=%lu extra=%lu "
+                "reason=size_overflow", opcode, payload_bytes, extra_bytes);
         return FALSE;
+    }
     raw_size = (uint32_t)sizeof(*command) + payload_bytes + extra_bytes;
     record_size = D9WG_ALIGN8(raw_size);
-    if (record_size > batch_capacity() - sizeof(D9WGBatchHeader))
+    if (record_size > batch_capacity() - sizeof(D9WGBatchHeader)) {
+        D8WG_TRACE("COMMAND REFUSED opcode=%u record=%lu capacity=%lu "
+                "reason=record_too_large", opcode, record_size,
+                batch_capacity());
         return FALSE;
+    }
     if (g_batch_bytes + record_size > batch_capacity()
-            && !submit_batch_locked(FALSE))
+            && !submit_batch_locked(FALSE)) {
+        D8WG_TRACE("COMMAND REFUSED opcode=%u record=%lu reason=flush_failed",
+                opcode, record_size);
         return FALSE;
+    }
 
     command = (D9WGCommandHeader *)(batch_base() + g_batch_bytes);
     ZeroMemory(command, record_size);
@@ -2170,10 +2226,10 @@ static HRESULT WINAPI d3d_query_interface(IDirect3D8 *iface, REFIID iid,
         void **object)
 {
     if (!object)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid) && !guid_equal(iid, &IID_IDirect3D8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3D8_AddRef(iface);
     return S_OK;
@@ -2198,7 +2254,7 @@ static HRESULT WINAPI d3d_register_software_device(IDirect3D8 *iface,
 {
     (void)iface;
     (void)initialize;
-    return D3DERR_INVALIDCALL;
+    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 }
 
 static UINT WINAPI d3d_get_adapter_count(IDirect3D8 *iface)
@@ -2213,7 +2269,7 @@ static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D8 *iface,
     (void)iface;
     (void)flags;
     if (adapter || !identifier)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(identifier, sizeof(*identifier));
     lstrcpynA(identifier->Driver, "d3d8-webgpu", sizeof(identifier->Driver));
     lstrcpynA(identifier->Description,
@@ -2249,7 +2305,7 @@ static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D8 *iface, UINT adapter,
     };
     (void)iface;
     if (adapter || !mode || index >= sizeof(modes) / sizeof(modes[0]))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     fill_display_mode(mode, modes[index].width, modes[index].height,
             modes[index].format);
     return D3D_OK;
@@ -2260,7 +2316,7 @@ static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D8 *iface,
 {
     (void)iface;
     if (adapter || !mode)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     fill_display_mode(mode, 1024, 768, D3DFMT_X8R8G8B8);
     return D3D_OK;
 }
@@ -2278,11 +2334,11 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D8 *iface, UINT adapter,
     (void)iface;
     (void)windowed;
     if (adapter || type != D3DDEVTYPE_HAL)
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if ((display_format != D3DFMT_X8R8G8B8
             && display_format != D3DFMT_R5G6B5)
             || !supported_backbuffer_format(backbuffer_format))
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     return D3D_OK;
 }
 
@@ -2309,7 +2365,7 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D8 *iface,
     (void)iface;
     (void)adapter_format;
     if (adapter || type != D3DDEVTYPE_HAL)
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (resource_type == D3DRTYPE_TEXTURE
             && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
             && supported_texture_format(format))
@@ -2339,7 +2395,7 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D8 *iface,
             && (usage & D3DUSAGE_DEPTHSTENCIL)
             && (format == D3DFMT_D16 || format == D3DFMT_D24S8))
         return D3D_OK;
-    return D3DERR_NOTAVAILABLE;
+    return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
 }
 
 /*
@@ -2374,7 +2430,7 @@ static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D8 *iface,
     (void)adapter_format;
     (void)render_format;
     if (adapter || type != D3DDEVTYPE_HAL)
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     return depth_format == D3DFMT_D16 || depth_format == D3DFMT_D24S8
             ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
@@ -2384,7 +2440,7 @@ static HRESULT WINAPI d3d_get_device_caps(IDirect3D8 *iface, UINT adapter,
 {
     (void)iface;
     if (adapter || type != D3DDEVTYPE_HAL || !caps)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     fill_caps(caps);
     return D3D_OK;
 }
@@ -2717,33 +2773,33 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     UINT front_byte_count;
 
     if (!device_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = NULL;
     if (adapter || type != D3DDEVTYPE_HAL || !parameters)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!supported_multisample_type(parameters->MultiSampleType))
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->EnableAutoDepthStencil
             && parameters->AutoDepthStencilFormat != D3DFMT_D16
             && parameters->AutoDepthStencilFormat != D3DFMT_D24S8)
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferWidth > 8192
             || parameters->BackBufferHeight > 8192)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* D3D8 permits 0..3 back buffers (0 meaning 1). The host always presents
      * through a single WebGPU surface, so extra back buffers are a
      * presentation detail we can satisfy with one target; only a request
      * beyond the D3D8 maximum is a genuine error. */
     if (parameters->BackBufferCount > 3)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     device = (D8Device *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*device));
     if (!device)
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     device->iface.lpVtbl = &g_device_vtbl;
     device->refcount = 1;
     device->parent = d3d;
@@ -2774,14 +2830,14 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
             || front_row_count != device->display_mode.Height) {
         IDirect3D8_Release(iface);
         HeapFree(GetProcessHeap(), 0, device);
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     }
     device->front_shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
             HEAP_ZERO_MEMORY, front_byte_count);
     if (!device->front_shadow) {
         IDirect3D8_Release(iface);
         HeapFree(GetProcessHeap(), 0, device);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
 
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
@@ -2819,7 +2875,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
         IDirect3D8_Release(iface);
         HeapFree(GetProcessHeap(), 0, device->front_shadow);
         HeapFree(GetProcessHeap(), 0, device);
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     attach_device_window(device, window);
     capture_surface(device, window, &device->last_surface);
@@ -2833,11 +2889,11 @@ static HRESULT WINAPI device_query_interface(IDirect3DDevice8 *iface,
         REFIID iid, void **object)
 {
     if (!object)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DDevice8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DDevice8_AddRef(iface);
     return S_OK;
@@ -2916,7 +2972,7 @@ static HRESULT WINAPI device_get_direct3d(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     if (!d3d_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *d3d_out = &device->parent->iface;
     IDirect3D8_AddRef(*d3d_out);
     return D3D_OK;
@@ -2926,7 +2982,7 @@ static HRESULT WINAPI device_get_caps(IDirect3DDevice8 *iface, D3DCAPS8 *caps)
 {
     (void)iface;
     if (!caps)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     fill_caps(caps);
     return D3D_OK;
 }
@@ -2935,7 +2991,7 @@ static HRESULT WINAPI device_get_display_mode(IDirect3DDevice8 *iface,
         D3DDISPLAYMODE *mode)
 {
     if (!mode)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *mode = device_from_iface(iface)->display_mode;
     return D3D_OK;
 }
@@ -2944,7 +3000,7 @@ static HRESULT WINAPI device_get_creation_parameters(IDirect3DDevice8 *iface,
         D3DDEVICE_CREATION_PARAMETERS *parameters)
 {
     if (!parameters)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *parameters = device_from_iface(iface)->creation;
     return D3D_OK;
 }
@@ -2965,14 +3021,14 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     if (!parameters || !supported_multisample_type(parameters->MultiSampleType)
             || parameters->BackBufferCount > 1
             || device_has_reset_blockers(device))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
             && parameters->AutoDepthStencilFormat != D3DFMT_D16
             && parameters->AutoDepthStencilFormat != D3DFMT_D24S8)
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
             : device->creation.hFocusWindow;
     SetRect(&client, 0, 0, 640, 480);
@@ -3005,19 +3061,19 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     reset.multisample_type = parameters->MultiSampleType;
     reset.multisample_quality = 0;
     if (reset.width > 8192 || reset.height > 8192)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!texture_level_layout((D3DFORMAT)reset.backbuffer_format,
             reset.width, reset.height, &new_front_pitch, &new_front_rows,
             &new_front_bytes) || new_front_rows != reset.height)
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     new_front_shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
             HEAP_ZERO_MEMORY, new_front_bytes);
     if (!new_front_shadow)
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset)))
     {
         HeapFree(GetProcessHeap(), 0, new_front_shadow);
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     device_clear_bindings(device);
     HeapFree(GetProcessHeap(), 0, device->front_shadow);
@@ -3036,7 +3092,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     device->viewport.MaxZ = 1.0f;
     device->depth_surface_enabled = parameters->EnableAutoDepthStencil;
     if (!recreate_device_resources(device))
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     if (window != device->tracked_window) {
         detach_device_window(device);
         attach_device_window(device, window);
@@ -3062,7 +3118,7 @@ static HRESULT WINAPI device_begin_scene(IDirect3DDevice8 *iface)
     D8Device *device = device_from_iface(iface);
     D9WGDeviceOnly command;
     if (device->in_scene)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     device->in_scene = TRUE;
     command.device_handle = device->handle;
     command.reserved = 0;
@@ -3075,7 +3131,7 @@ static HRESULT WINAPI device_end_scene(IDirect3DDevice8 *iface)
     D8Device *device = device_from_iface(iface);
     D9WGDeviceOnly command;
     if (!device->in_scene)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     device->in_scene = FALSE;
     command.device_handle = device->handle;
     command.reserved = 0;
@@ -3096,11 +3152,11 @@ static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
     BOOL result;
 
     if (rect_count && !rects)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (rect_count > 0xFFFFFFFFu / sizeof(*rects))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     rect_bytes = rect_count * sizeof(*rects);
     command.device_handle = device->handle;
     command.clear_flags = flags;
@@ -3140,7 +3196,7 @@ static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
         }
         if (!texture_format_layout(format, &block_width, &block_height,
                 &pixel_bytes) || block_width != 1 || block_height != 1)
-            return D3DERR_DRIVERINTERNALERROR;
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
         for (rect_index = 0; rect_index < (rect_count ? rect_count : 1u);
                 ++rect_index) {
             LONG left = rect_count ? rects[rect_index].x1 : 0;
@@ -3160,7 +3216,7 @@ static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
             }
         }
     }
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI device_set_viewport(IDirect3DDevice8 *iface,
@@ -3169,14 +3225,14 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D9WGSetViewport command;
     if (!viewport || !viewport->Width || !viewport->Height)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (viewport->X > device->display_mode.Width
             || viewport->Y > device->display_mode.Height
             || viewport->Width > device->display_mode.Width - viewport->X
             || viewport->Height > device->display_mode.Height - viewport->Y
             || viewport->MinZ < 0.0f || viewport->MaxZ > 1.0f
             || viewport->MinZ > viewport->MaxZ)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.viewport_mask = TRUE;
     if (device->viewport.X == viewport->X
@@ -3203,7 +3259,7 @@ static HRESULT WINAPI device_get_viewport(IDirect3DDevice8 *iface,
         D3DVIEWPORT8 *viewport)
 {
     if (!viewport)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *viewport = device_from_iface(iface)->viewport;
     return D3D_OK;
 }
@@ -3296,7 +3352,7 @@ static HRESULT WINAPI device_set_render_state(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     if ((UINT)state >= D8WG_MAX_RENDER_STATES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.render_mask[state] = 1;
     if (device->render_states[state] == value)
@@ -3310,7 +3366,7 @@ static HRESULT WINAPI device_get_render_state(IDirect3DDevice8 *iface,
         D3DRENDERSTATETYPE state, DWORD *value)
 {
     if (!value || (UINT)state >= D8WG_MAX_RENDER_STATES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *value = device_from_iface(iface)->render_states[state];
     return D3D_OK;
 }
@@ -3321,7 +3377,7 @@ static HRESULT WINAPI device_set_texture_stage_state(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if (stage >= D8WG_MAX_TEXTURE_STAGES
             || (UINT)state >= D8WG_MAX_TEXTURE_STAGE_STATES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.texture_stage_mask[stage][state]
                 = 1;
@@ -3337,7 +3393,7 @@ static HRESULT WINAPI device_get_texture_stage_state(IDirect3DDevice8 *iface,
 {
     if (!value || stage >= D8WG_MAX_TEXTURE_STAGES
             || (UINT)state >= D8WG_MAX_TEXTURE_STAGE_STATES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *value = device_from_iface(iface)->texture_stage_states[stage][state];
     return D3D_OK;
 }
@@ -3349,19 +3405,19 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8VertexBuffer *buffer;
     if (!buffer_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *buffer_out = NULL;
     if (!length || pool > D3DPOOL_SCRATCH)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     buffer = (D8VertexBuffer *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*buffer));
     if (!buffer)
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     buffer->shadow = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             length);
     if (!buffer->shadow) {
         HeapFree(GetProcessHeap(), 0, buffer);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     buffer->iface.lpVtbl = &g_vb_vtbl;
     buffer->refcount = 1;
@@ -3377,7 +3433,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice8 *iface,
         device_child_release(device);
         HeapFree(GetProcessHeap(), 0, buffer->shadow);
         HeapFree(GetProcessHeap(), 0, buffer);
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     buffer->next_device_resource = device->vertex_buffers;
     device->vertex_buffers = buffer;
@@ -3394,28 +3450,28 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice8 *iface,
     UINT index_size;
 
     if (!buffer_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *buffer_out = NULL;
     if (!length || pool > D3DPOOL_SCRATCH)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (format == D3DFMT_INDEX16)
         index_size = 2;
     else if (format == D3DFMT_INDEX32)
         index_size = 4;
     else
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (length % index_size)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     buffer = (D8IndexBuffer *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*buffer));
     if (!buffer)
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     buffer->shadow = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             length);
     if (!buffer->shadow) {
         HeapFree(GetProcessHeap(), 0, buffer);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     buffer->iface.lpVtbl = &g_ib_vtbl;
     buffer->refcount = 1;
@@ -3431,7 +3487,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice8 *iface,
         device_child_release(device);
         HeapFree(GetProcessHeap(), 0, buffer->shadow);
         HeapFree(GetProcessHeap(), 0, buffer);
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     buffer->next_device_resource = device->index_buffers;
     device->index_buffers = buffer;
@@ -3446,10 +3502,10 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice8 *iface,
     D8VertexBuffer *buffer = buffer_iface ? vb_from_iface(buffer_iface) : NULL;
     D9WGSetStreamSource command;
     if (stream >= D8WG_MAX_STREAMS)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (buffer && (buffer_iface->lpVtbl != &g_vb_vtbl
             || buffer->device != device))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.stream_mask[stream] = 1;
     if (device->streams[stream].buffer == buffer
@@ -3479,7 +3535,7 @@ static HRESULT WINAPI device_get_stream_source(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     if (stream >= D8WG_MAX_STREAMS || !buffer_out || !stride_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *stride_out = device->streams[stream].stride;
     *buffer_out = device->streams[stream].buffer
             ? &device->streams[stream].buffer->iface : NULL;
@@ -3498,7 +3554,7 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice8 *iface,
     if (base_vertex_index > 0x7FFFFFFFu
             || (buffer && (buffer_iface->lpVtbl != &g_ib_vtbl
                 || buffer->device != device)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.indices_mask = TRUE;
     if (device->index_buffer == buffer
@@ -3523,7 +3579,7 @@ static HRESULT WINAPI device_get_indices(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     if (!buffer_out || !base_vertex_index_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *buffer_out = device->index_buffer ? &device->index_buffer->iface : NULL;
     *base_vertex_index_out = device->base_vertex_index;
     if (*buffer_out)
@@ -3569,7 +3625,7 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice8 *iface,
     /* D3D8 shader handles always carry bit 0; raw FVF tokens never do. */
     if (handle & 1u) {
         if (!find_shader(device->vertex_shaders, handle))
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
         if (device->recording_state_block)
             device->recording_state_block->state.vertex_shader_mask = TRUE;
         if (device->vertex_shader == handle)
@@ -3594,7 +3650,7 @@ static HRESULT WINAPI device_get_vertex_shader(IDirect3DDevice8 *iface,
         DWORD *handle)
 {
     if (!handle)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *handle = device_from_iface(iface)->vertex_shader;
     return D3D_OK;
 }
@@ -3612,12 +3668,12 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice8 *iface,
             || !device->vertex_shader || !primitive_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     available_vertices = device->streams[0].buffer->length
             / device->streams[0].stride;
     if (start_vertex > available_vertices
             || vertex_count > available_vertices - start_vertex)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.start_vertex = start_vertex;
@@ -3644,20 +3700,20 @@ static HRESULT WINAPI device_draw_indexed(IDirect3DDevice8 *iface,
             || !primitive_count || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     index_size = device->index_buffer->format == D3DFMT_INDEX16 ? 2u : 4u;
     available_indices = device->index_buffer->length / index_size;
     if (start_index > available_indices
             || index_count > available_indices - start_index)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     available_vertices = device->streams[0].buffer->length
             / device->streams[0].stride;
     if (device->base_vertex_index > 0xFFFFFFFFu - min_vertex_index)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     first_vertex = device->base_vertex_index + min_vertex_index;
     if (first_vertex > available_vertices
             || vertex_count > available_vertices - first_vertex)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
@@ -3703,7 +3759,7 @@ static HRESULT WINAPI device_draw_up(IDirect3DDevice8 *iface,
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count)
             || !multiply_u32(vertex_count, stride, &vertex_bytes))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
@@ -3714,7 +3770,7 @@ static HRESULT WINAPI device_draw_up(IDirect3DDevice8 *iface,
     result = emit_draw_primitive_up(&command, vertex_data);
     if (result)
         clear_stream_zero_after_up(device);
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI device_draw_indexed_up(IDirect3DDevice8 *iface,
@@ -3733,21 +3789,21 @@ static HRESULT WINAPI device_draw_indexed_up(IDirect3DDevice8 *iface,
             || !primitive_count || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (index_format == D3DFMT_INDEX16)
         index_size = 2;
     else if (index_format == D3DFMT_INDEX32)
         index_size = 4;
     else
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (min_vertex_index > 0xFFFFFFFFu - vertex_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     vertex_elements = min_vertex_index + vertex_count;
     ZeroMemory(&command, sizeof(command));
     if (!multiply_u32(index_count, index_size, &command.index_bytes)
             || !multiply_u32(vertex_elements, stride,
                     &command.vertex_bytes))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.min_vertex_index = min_vertex_index;
@@ -3762,14 +3818,14 @@ static HRESULT WINAPI device_draw_indexed_up(IDirect3DDevice8 *iface,
         clear_stream_zero_after_up(device);
         clear_indices_after_indexed_up(device);
     }
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI device_validate(IDirect3DDevice8 *iface, DWORD *passes)
 {
     (void)iface;
     if (!passes)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *passes = 1;
     return D3D_OK;
 }
@@ -3778,12 +3834,12 @@ static HRESULT WINAPI vb_query_interface(IDirect3DVertexBuffer8 *iface,
         REFIID iid, void **object)
 {
     if (!object)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DVertexBuffer8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DVertexBuffer8_AddRef(iface);
     return S_OK;
@@ -3819,7 +3875,7 @@ static HRESULT WINAPI vb_get_device(IDirect3DVertexBuffer8 *iface,
 {
     D8VertexBuffer *buffer = vb_from_iface(iface);
     if (!device_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = &buffer->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
     return D3D_OK;
@@ -3829,21 +3885,21 @@ static HRESULT WINAPI vb_set_private_data(IDirect3DVertexBuffer8 *iface,
         REFGUID guid, const void *data, DWORD size, DWORD flags)
 {
     (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-    return D3DERR_INVALIDCALL;
+    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 }
 
 static HRESULT WINAPI vb_get_private_data(IDirect3DVertexBuffer8 *iface,
         REFGUID guid, void *data, DWORD *size)
 {
     (void)iface; (void)guid; (void)data; (void)size;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static HRESULT WINAPI vb_free_private_data(IDirect3DVertexBuffer8 *iface,
         REFGUID guid)
 {
     (void)iface; (void)guid;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static DWORD WINAPI vb_set_priority(IDirect3DVertexBuffer8 *iface,
@@ -3876,19 +3932,19 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer8 *iface, UINT offset,
 {
     D8VertexBuffer *buffer = vb_from_iface(iface);
     if (!data_out || buffer->locked || offset > buffer->length)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((flags & D3DLOCK_DISCARD) && (flags & D3DLOCK_NOOVERWRITE))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE))
             && !(buffer->usage & D3DUSAGE_DYNAMIC))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((flags & D3DLOCK_READONLY)
             && (flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     buffer->locked = TRUE;
     buffer->lock_offset = offset;
     buffer->lock_size = size;
@@ -3904,7 +3960,7 @@ static HRESULT WINAPI vb_unlock(IDirect3DVertexBuffer8 *iface)
     D8VertexBuffer *buffer = vb_from_iface(iface);
     BOOL result;
     if (!buffer->locked)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     result = (buffer->lock_flags & D3DLOCK_READONLY) ||
             emit_buffer_update(buffer->handle, buffer->lock_offset,
             buffer->shadow + buffer->lock_offset, buffer->lock_size,
@@ -3913,7 +3969,7 @@ static HRESULT WINAPI vb_unlock(IDirect3DVertexBuffer8 *iface)
     buffer->lock_offset = 0;
     buffer->lock_size = 0;
     buffer->lock_flags = 0;
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI vb_get_desc(IDirect3DVertexBuffer8 *iface,
@@ -3921,7 +3977,7 @@ static HRESULT WINAPI vb_get_desc(IDirect3DVertexBuffer8 *iface,
 {
     D8VertexBuffer *buffer = vb_from_iface(iface);
     if (!desc)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(desc, sizeof(*desc));
     desc->Format = D3DFMT_VERTEXDATA;
     desc->Type = D3DRTYPE_VERTEXBUFFER;
@@ -3936,12 +3992,12 @@ static HRESULT WINAPI ib_query_interface(IDirect3DIndexBuffer8 *iface,
         REFIID iid, void **object)
 {
     if (!object)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DIndexBuffer8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DIndexBuffer8_AddRef(iface);
     return S_OK;
@@ -3977,7 +4033,7 @@ static HRESULT WINAPI ib_get_device(IDirect3DIndexBuffer8 *iface,
 {
     D8IndexBuffer *buffer = ib_from_iface(iface);
     if (!device_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = &buffer->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
     return D3D_OK;
@@ -3987,21 +4043,21 @@ static HRESULT WINAPI ib_set_private_data(IDirect3DIndexBuffer8 *iface,
         REFGUID guid, const void *data, DWORD size, DWORD flags)
 {
     (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-    return D3DERR_INVALIDCALL;
+    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 }
 
 static HRESULT WINAPI ib_get_private_data(IDirect3DIndexBuffer8 *iface,
         REFGUID guid, void *data, DWORD *size)
 {
     (void)iface; (void)guid; (void)data; (void)size;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static HRESULT WINAPI ib_free_private_data(IDirect3DIndexBuffer8 *iface,
         REFGUID guid)
 {
     (void)iface; (void)guid;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static DWORD WINAPI ib_set_priority(IDirect3DIndexBuffer8 *iface,
@@ -4034,19 +4090,19 @@ static HRESULT WINAPI ib_lock(IDirect3DIndexBuffer8 *iface, UINT offset,
 {
     D8IndexBuffer *buffer = ib_from_iface(iface);
     if (!data_out || buffer->locked || offset > buffer->length)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((flags & D3DLOCK_DISCARD) && (flags & D3DLOCK_NOOVERWRITE))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE))
             && !(buffer->usage & D3DUSAGE_DYNAMIC))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((flags & D3DLOCK_READONLY)
             && (flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     buffer->locked = TRUE;
     buffer->lock_offset = offset;
     buffer->lock_size = size;
@@ -4062,7 +4118,7 @@ static HRESULT WINAPI ib_unlock(IDirect3DIndexBuffer8 *iface)
     D8IndexBuffer *buffer = ib_from_iface(iface);
     BOOL result;
     if (!buffer->locked)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     result = (buffer->lock_flags & D3DLOCK_READONLY) ||
             emit_buffer_update(buffer->handle, buffer->lock_offset,
             buffer->shadow + buffer->lock_offset, buffer->lock_size,
@@ -4071,7 +4127,7 @@ static HRESULT WINAPI ib_unlock(IDirect3DIndexBuffer8 *iface)
     buffer->lock_offset = 0;
     buffer->lock_size = 0;
     buffer->lock_flags = 0;
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI ib_get_desc(IDirect3DIndexBuffer8 *iface,
@@ -4079,7 +4135,7 @@ static HRESULT WINAPI ib_get_desc(IDirect3DIndexBuffer8 *iface,
 {
     D8IndexBuffer *buffer = ib_from_iface(iface);
     if (!desc)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(desc, sizeof(*desc));
     desc->Format = buffer->format;
     desc->Type = D3DRTYPE_INDEXBUFFER;
@@ -4115,7 +4171,7 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
     HRESULT failure = E_OUTOFMEMORY;
 
     if (!texture_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *texture_out = NULL;
     if (!width || !height || width > 4096 || height > 4096
             || !supported_texture_format(format)
@@ -4125,22 +4181,22 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
                     || (format != D3DFMT_A8R8G8B8
                         && format != D3DFMT_X8R8G8B8)))
             || pool > D3DPOOL_SCRATCH)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(width, height);
     if (!levels)
         levels = full_levels;
     if (levels > full_levels)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     texture = (D8Texture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*texture));
     if (!texture)
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     texture->levels = (D8TextureLevel *)HeapAlloc(GetProcessHeap(),
             HEAP_ZERO_MEMORY, levels * sizeof(*texture->levels));
     if (!texture->levels) {
         HeapFree(GetProcessHeap(), 0, texture);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     texture->iface.lpVtbl = &g_texture_vtbl;
     texture->refcount = 1;
@@ -4204,9 +4260,9 @@ static HRESULT lock_texture_level(D8TextureLevel *level_data, D3DFORMAT format,
     UINT block_y;
 
     if (!locked_rect || !lockable)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (level_data->locked)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (rect) {
         area = *rect;
     } else {
@@ -4219,7 +4275,7 @@ static HRESULT lock_texture_level(D8TextureLevel *level_data, D3DFORMAT format,
             || (UINT)area.bottom > level_data->height
             || !texture_format_layout(format, &block_width,
                     &block_height, &block_bytes))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (block_width > 1
             && (((UINT)area.left % block_width)
                 || ((UINT)area.top % block_height)
@@ -4227,7 +4283,7 @@ static HRESULT lock_texture_level(D8TextureLevel *level_data, D3DFORMAT format,
                     && (UINT)area.right % block_width)
                 || ((UINT)area.bottom != level_data->height
                     && (UINT)area.bottom % block_height)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     block_x = (UINT)area.left / block_width;
     block_y = (UINT)area.top / block_height;
@@ -4246,21 +4302,21 @@ static HRESULT unlock_texture_level(uint32_t handle, D3DFORMAT format,
     BOOL result = TRUE;
 
     if (!level_data->locked)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_level_update(handle, format, level_data, level, z,
                 &level_data->lock_rect);
     level_data->locked = FALSE;
     level_data->lock_flags = 0;
     ZeroMemory(&level_data->lock_rect, sizeof(level_data->lock_rect));
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT texture_lock_level(D8Texture *texture, UINT level,
         D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
 {
     if (level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return lock_texture_level(&texture->levels[level], texture->format,
             !(texture->usage & D3DUSAGE_RENDERTARGET)
                 || texture->lockable_render_target,
@@ -4270,7 +4326,7 @@ static HRESULT texture_lock_level(D8Texture *texture, UINT level,
 static HRESULT texture_unlock_level(D8Texture *texture, UINT level)
 {
     if (level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return unlock_texture_level(texture->handle, texture->format,
             &texture->levels[level], level, 0);
 }
@@ -4279,13 +4335,13 @@ static HRESULT WINAPI texture_query_interface(IDirect3DTexture8 *iface,
         REFIID iid, void **object)
 {
     if (!object)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
             && !guid_equal(iid, &IID_IDirect3DTexture8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DTexture8_AddRef(iface);
     return S_OK;
@@ -4324,7 +4380,7 @@ static HRESULT WINAPI texture_get_device(IDirect3DTexture8 *iface,
 {
     D8Texture *texture = texture_from_iface(iface);
     if (!device_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = &texture->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
     return D3D_OK;
@@ -4334,21 +4390,21 @@ static HRESULT WINAPI texture_set_private_data(IDirect3DTexture8 *iface,
         REFGUID guid, const void *data, DWORD size, DWORD flags)
 {
     (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-    return D3DERR_INVALIDCALL;
+    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 }
 
 static HRESULT WINAPI texture_get_private_data(IDirect3DTexture8 *iface,
         REFGUID guid, void *data, DWORD *size)
 {
     (void)iface; (void)guid; (void)data; (void)size;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static HRESULT WINAPI texture_free_private_data(IDirect3DTexture8 *iface,
         REFGUID guid)
 {
     (void)iface; (void)guid;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static DWORD WINAPI texture_set_priority(IDirect3DTexture8 *iface,
@@ -4402,7 +4458,7 @@ static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture8 *iface,
     D8Texture *texture = texture_from_iface(iface);
     D8TextureLevel *level_data;
     if (!desc || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
     ZeroMemory(desc, sizeof(*desc));
     desc->Format = texture->format;
@@ -4422,14 +4478,14 @@ static HRESULT WINAPI texture_get_surface_level(IDirect3DTexture8 *iface,
     D8Texture *texture = texture_from_iface(iface);
     D8Surface *surface;
     if (!surface_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     surface = (D8Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
     if (!surface)
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     surface->iface.lpVtbl = &g_surface_vtbl;
     surface->refcount = 1;
     surface->texture = texture;
@@ -4461,7 +4517,7 @@ static HRESULT WINAPI texture_add_dirty_rect(IDirect3DTexture8 *iface,
             || rect->right <= rect->left || rect->bottom <= rect->top
             || (UINT)rect->right > texture->width
             || (UINT)rect->bottom > texture->height))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return D3D_OK;
 }
 
@@ -4469,12 +4525,12 @@ static HRESULT WINAPI surface_query_interface(IDirect3DSurface8 *iface,
         REFIID iid, void **object)
 {
     if (!object)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DSurface8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DSurface8_AddRef(iface);
     return S_OK;
@@ -4509,7 +4565,7 @@ static HRESULT WINAPI surface_get_device(IDirect3DSurface8 *iface,
         IDirect3DDevice8 **device_out)
 {
     D8Surface *surface = surface_from_iface(iface);
-    if (!device_out) return D3DERR_INVALIDCALL;
+    if (!device_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = surface->texture ? &surface->texture->device->iface
             : &surface->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
@@ -4520,21 +4576,21 @@ static HRESULT WINAPI surface_set_private_data(IDirect3DSurface8 *iface,
         REFGUID guid, const void *data, DWORD size, DWORD flags)
 {
     (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-    return D3DERR_INVALIDCALL;
+    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 }
 
 static HRESULT WINAPI surface_get_private_data(IDirect3DSurface8 *iface,
         REFGUID guid, void *data, DWORD *size)
 {
     (void)iface; (void)guid; (void)data; (void)size;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static HRESULT WINAPI surface_free_private_data(IDirect3DSurface8 *iface,
         REFGUID guid)
 {
     (void)iface; (void)guid;
-    return D3DERR_NOTFOUND;
+    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
 }
 
 static HRESULT WINAPI surface_get_container(IDirect3DSurface8 *iface,
@@ -4542,14 +4598,14 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface8 *iface,
 {
     D8Surface *surface = surface_from_iface(iface);
     if (!container)
-        return E_POINTER;
+        return D8WG_TRACE_ERROR(E_POINTER);
     *container = NULL;
     if (surface->texture) {
         if (!iid || (!iid_is_unknown(iid)
                 && !guid_equal(iid, &IID_IDirect3DResource8)
                 && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
                 && !guid_equal(iid, &IID_IDirect3DTexture8)))
-            return E_NOINTERFACE;
+            return D8WG_TRACE_ERROR(E_NOINTERFACE);
         *container = &surface->texture->iface;
         IDirect3DTexture8_AddRef(&surface->texture->iface);
     } else if (surface->cube) {
@@ -4557,13 +4613,13 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface8 *iface,
                 && !guid_equal(iid, &IID_IDirect3DResource8)
                 && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
                 && !guid_equal(iid, &IID_IDirect3DCubeTexture8)))
-            return E_NOINTERFACE;
+            return D8WG_TRACE_ERROR(E_NOINTERFACE);
         *container = &surface->cube->iface;
         IDirect3DCubeTexture8_AddRef(&surface->cube->iface);
     } else {
         if (!iid || (!iid_is_unknown(iid)
                 && !guid_equal(iid, &IID_IDirect3DDevice8)))
-            return E_NOINTERFACE;
+            return D8WG_TRACE_ERROR(E_NOINTERFACE);
         *container = &surface->device->iface;
         IDirect3DDevice8_AddRef(&surface->device->iface);
     }
@@ -4574,7 +4630,7 @@ static HRESULT WINAPI surface_get_desc(IDirect3DSurface8 *iface,
         D3DSURFACE_DESC *desc)
 {
     D8Surface *surface = surface_from_iface(iface);
-    if (!desc) return D3DERR_INVALIDCALL;
+    if (!desc) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (surface->texture)
         return texture_get_level_desc(&surface->texture->iface,
                 surface->level, desc);
@@ -4599,7 +4655,7 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface8 *iface,
                 locked_rect, rect, flags);
     if (!locked_rect || !surface->shadow || surface->locked
             || surface->backbuffer || surface->depth_stencil)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (rect) area = *rect;
     else SetRect(&area, 0, 0, (int)surface->desc.Width,
             (int)surface->desc.Height);
@@ -4607,7 +4663,7 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface8 *iface,
             || area.bottom <= area.top
             || (UINT)area.right > surface->desc.Width
             || (UINT)area.bottom > surface->desc.Height)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     surface->locked = TRUE;
     surface->lock_rect = area;
     surface->lock_flags = flags;
@@ -4625,7 +4681,7 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface8 *iface)
     if (surface->cube)
         return cube_unlock_face(surface->cube,
                 (D3DCUBEMAP_FACES)surface->face, surface->level);
-    if (!surface->locked) return D3DERR_INVALIDCALL;
+    if (!surface->locked) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     surface->locked = FALSE;
     surface->lock_flags = 0;
     ZeroMemory(&surface->lock_rect, sizeof(surface->lock_rect));
@@ -4637,7 +4693,7 @@ static HRESULT WINAPI device_get_texture(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     if (!texture_out || stage >= D8WG_MAX_TEXTURE_STAGES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *texture_out = device->textures[stage];
     if (*texture_out)
         IDirect3DBaseTexture8_AddRef(*texture_out);
@@ -4692,7 +4748,7 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice8 *iface,
 
     if (stage >= D8WG_MAX_TEXTURE_STAGES
             || !resolve_base_texture(device, texture_iface, &handle))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.texture_mask[stage] = 1;
     if (device->textures[stage] == texture_iface)
@@ -4730,7 +4786,7 @@ static HRESULT update_cube_texture(D8Device *device,
             || source->device != device || destination->device != device
             || source->format != destination->format
             || source->edge_length != destination->edge_length)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     for (face = 0; face < 6u; ++face) {
         for (level = 0; level < source->level_count
                 && level < destination->level_count; ++level) {
@@ -4740,12 +4796,12 @@ static HRESULT update_cube_texture(D8Device *device,
                     cube_level(destination, (D3DCUBEMAP_FACES)face, level);
             RECT full;
             if (from->locked || to->locked)
-                return D3DERR_INVALIDCALL;
+                return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
             CopyMemory(to->shadow, from->shadow, to->byte_count);
             SetRect(&full, 0, 0, (int)to->width, (int)to->height);
             if (!emit_level_update(destination->handle, destination->format,
                     to, level, face, &full))
-                return D3DERR_DRIVERINTERNALERROR;
+                return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
         }
     }
     return D3D_OK;
@@ -4766,18 +4822,18 @@ static HRESULT update_volume_texture(D8Device *device,
             || source->width != destination->width
             || source->height != destination->height
             || source->depth != destination->depth)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     for (level = 0; level < source->level_count
             && level < destination->level_count; ++level) {
         D8TextureLevel *to = &destination->levels[level];
         RECT full;
         if (source->levels[level].locked || to->locked)
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
         CopyMemory(to->shadow, source->levels[level].shadow, to->byte_count);
         SetRect(&full, 0, 0, (int)to->width, (int)to->height);
         if (!emit_volume_level_update(destination, level, &full, 0,
                 to->depth))
-            return D3DERR_DRIVERINTERNALERROR;
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     return D3D_OK;
 }
@@ -4792,7 +4848,7 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice8 *iface,
     UINT level;
 
     if (!source_iface || !destination_iface)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* Both operands must be the same kind of base texture. The cube and
      * volume cases are handled first because the 2D path below reads fields
      * that only a D8Texture has. */
@@ -4818,19 +4874,19 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice8 *iface,
             || source->format != destination->format
             || source->width != destination->width
             || source->height != destination->height)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     for (level = 0; level < source->level_count
             && level < destination->level_count; ++level) {
         RECT full;
         if (source->levels[level].locked || destination->levels[level].locked)
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
         CopyMemory(destination->levels[level].shadow,
                 source->levels[level].shadow,
                 destination->levels[level].byte_count);
         SetRect(&full, 0, 0, (int)destination->levels[level].width,
                 (int)destination->levels[level].height);
         if (!emit_texture_update(destination, level, &full))
-            return D3DERR_DRIVERINTERNALERROR;
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     return D3D_OK;
 }
@@ -4848,17 +4904,17 @@ static HRESULT create_standalone_surface(D8Device *device, UINT width,
     UINT row_count;
     UINT byte_count;
     if (!surface_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (!width || !height || width > 8192 || height > 8192)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!depth_stencil) {
         if (!texture_format_layout(format, &block_width, &block_height,
                 &pixel_bytes)
                 || (lockable && (block_width != 1 || block_height != 1))
                 || !texture_level_layout(format, width, height,
                     &row_pitch, &row_count, &byte_count))
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
     if (depth_stencil) {
         row_pitch = width * 4u;
@@ -4867,13 +4923,13 @@ static HRESULT create_standalone_surface(D8Device *device, UINT width,
     }
     surface = (D8Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
-    if (!surface) return E_OUTOFMEMORY;
+    if (!surface) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     if (lockable) {
         surface->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
                 HEAP_ZERO_MEMORY, byte_count);
         if (!surface->shadow) {
             HeapFree(GetProcessHeap(), 0, surface);
-            return E_OUTOFMEMORY;
+            return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
         }
     }
     surface->iface.lpVtbl = &g_surface_vtbl;
@@ -4952,7 +5008,7 @@ static HRESULT copy_surface_rect(D8Surface *source, const RECT *source_rect,
             || !texture_format_layout(source_desc.Format, &block_width,
                     &block_height, &pixel_bytes)
             || block_width != 1 || block_height != 1)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (source_rect) area = *source_rect;
     else SetRect(&area, 0, 0, (int)source_desc.Width,
             (int)source_desc.Height);
@@ -4967,10 +5023,10 @@ static HRESULT copy_surface_rect(D8Surface *source, const RECT *source_rect,
                     > destination_desc.Width
             || (UINT)(point.y + area.bottom - area.top)
                     > destination_desc.Height)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     source_data = surface_pixels(source, &source_pitch);
     destination_data = surface_pixels(destination, &destination_pitch);
-    if (!source_data || !destination_data) return D3DERR_INVALIDCALL;
+    if (!source_data || !destination_data) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     for (row = 0; row < (UINT)(area.bottom - area.top); ++row) {
         CopyMemory(destination_data + (point.y + row) * destination_pitch
                 + point.x * pixel_bytes,
@@ -4985,7 +5041,7 @@ static HRESULT copy_surface_rect(D8Surface *source, const RECT *source_rect,
                 point.y + area.bottom - area.top);
         if (!emit_texture_update(destination->texture, destination->level,
                 &dirty))
-            return D3DERR_DRIVERINTERNALERROR;
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     return D3D_OK;
 }
@@ -4993,12 +5049,12 @@ static HRESULT copy_surface_rect(D8Surface *source, const RECT *source_rect,
 /* Typed unsupported methods keep stdcall stack cleanup correct on 32-bit XP. */
 #define DEV_STUB0(name) \
     static HRESULT WINAPI device_##name(IDirect3DDevice8 *iface) \
-    { (void)iface; return D3DERR_INVALIDCALL; }
+    { (void)iface; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 #define DEV_STUB(name, ...) \
     static HRESULT WINAPI device_##name(IDirect3DDevice8 *iface, __VA_ARGS__)
 
 DEV_STUB(set_cursor_properties, UINT x, UINT y, IDirect3DSurface8 *surface)
-{ (void)iface; (void)x; (void)y; (void)surface; return D3DERR_INVALIDCALL; }
+{ (void)iface; (void)x; (void)y; (void)surface; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 static void WINAPI device_set_cursor_position(IDirect3DDevice8 *iface,
         UINT x, UINT y, DWORD flags)
 { (void)iface; (void)x; (void)y; (void)flags; }
@@ -5008,11 +5064,11 @@ static WINBOOL WINAPI device_show_cursor(IDirect3DDevice8 *iface, WINBOOL show)
 static HRESULT WINAPI swapchain_query_interface(IDirect3DSwapChain8 *iface,
         REFIID iid, void **object)
 {
-    if (!object) return E_POINTER;
+    if (!object) return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DSwapChain8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DSwapChain8_AddRef(iface);
     return S_OK;
@@ -5052,10 +5108,10 @@ static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8 *iface,
 {
     D8SwapChain *chain = (D8SwapChain *)iface;
     if (!surface_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (index || type != D3DBACKBUFFER_TYPE_MONO)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return create_backbuffer_surface(chain->device, &chain->present, TRUE,
             surface_out);
 }
@@ -5066,20 +5122,20 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8SwapChain *chain;
     if (!chain_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *chain_out = NULL;
     if (!parameters || !parameters->Windowed
             || !supported_multisample_type(parameters->MultiSampleType)
             || parameters->BackBufferCount > 1
             || parameters->BackBufferWidth > 8192
             || parameters->BackBufferHeight > 8192)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
-        return D3DERR_NOTAVAILABLE;
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     chain = (D8SwapChain *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*chain));
-    if (!chain) return E_OUTOFMEMORY;
+    if (!chain) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     chain->iface.lpVtbl = &g_swapchain_vtbl;
     chain->refcount = 1;
     chain->device = device;
@@ -5095,15 +5151,15 @@ static HRESULT WINAPI device_get_backbuffer(IDirect3DDevice8 *iface, UINT index,
 {
     D8Device *device = device_from_iface(iface);
     if (!surface_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (index || type != D3DBACKBUFFER_TYPE_MONO)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return create_backbuffer_surface(device, &device->present, TRUE,
             surface_out);
 }
 DEV_STUB(get_raster_status, D3DRASTER_STATUS *s)
-{ (void)iface; (void)s; return D3DERR_INVALIDCALL; }
+{ (void)iface; (void)s; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 static void WINAPI device_set_gamma(IDirect3DDevice8 *iface, DWORD flags,
         const D3DGAMMARAMP *ramp)
 { (void)iface; (void)flags; (void)ramp; }
@@ -5116,16 +5172,16 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice8 *iface,
     IDirect3DTexture8 *texture_iface = NULL;
     HRESULT hr;
     if (!surface_out || !supported_multisample_type(ms))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* A multisampled surface has no single value per pixel to hand back, so
      * D3D8 forbids locking one -- and so does this path, rather than returning
      * a lock that reads one arbitrary sample. */
     if (lockable && ms != D3DMULTISAMPLE_NONE)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     hr = device_create_texture(iface, width, height, 1,
             D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture_iface);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr)) return D8WG_TRACE_ERROR(hr);
     texture_from_iface(texture_iface)->lockable_render_target = !!lockable;
     /* Set after creation and re-sent, because device_create_texture has no
      * multisample parameter of its own -- every other caller wants NONE. */
@@ -5134,12 +5190,12 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice8 *iface,
         if (!emit_texture_create(device_from_iface(iface),
                 texture_from_iface(texture_iface))) {
             IDirect3DTexture8_Release(texture_iface);
-            return D3DERR_DRIVERINTERNALERROR;
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
         }
     }
     hr = IDirect3DTexture8_GetSurfaceLevel(texture_iface, 0, surface_out);
     IDirect3DTexture8_Release(texture_iface);
-    return hr;
+    return D8WG_TRACE_ERROR(hr);
 }
 
 static HRESULT WINAPI device_create_depth_surface(IDirect3DDevice8 *iface,
@@ -5148,7 +5204,7 @@ static HRESULT WINAPI device_create_depth_surface(IDirect3DDevice8 *iface,
 {
     if (!surface_out || (format != D3DFMT_D16 && format != D3DFMT_D24S8)
             || !supported_multisample_type(ms))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     return create_standalone_surface(device_from_iface(iface), width, height,
             format, D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT, FALSE, FALSE,
@@ -5159,7 +5215,7 @@ static HRESULT WINAPI device_create_image_surface(IDirect3DDevice8 *iface,
         UINT width, UINT height, D3DFORMAT format,
         IDirect3DSurface8 **surface_out)
 {
-    if (!surface_out) return D3DERR_INVALIDCALL;
+    if (!surface_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     return create_standalone_surface(device_from_iface(iface), width, height,
             format, 0, D3DPOOL_SYSTEMMEM, TRUE, FALSE, FALSE, FALSE,
@@ -5178,18 +5234,18 @@ static HRESULT WINAPI device_copy_rects(IDirect3DDevice8 *iface,
             || source_iface->lpVtbl != &g_surface_vtbl
             || destination_iface->lpVtbl != &g_surface_vtbl
             || (count && (!rects || !points)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     source = surface_from_iface(source_iface);
     destination = surface_from_iface(destination_iface);
     if ((source->texture ? source->texture->device : source->device) != device
             || (destination->texture ? destination->texture->device
                     : destination->device) != device)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!count) return copy_surface_rect(source, NULL, destination, NULL);
     for (index = 0; index < count; ++index) {
         HRESULT hr = copy_surface_rect(source, &rects[index], destination,
                 &points[index]);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) return D8WG_TRACE_ERROR(hr);
     }
     return D3D_OK;
 }
@@ -5201,11 +5257,11 @@ static HRESULT WINAPI device_get_front_buffer(IDirect3DDevice8 *iface,
     IDirect3DSurface8 *source_iface = NULL;
     HRESULT hr;
     if (!destination_iface || destination_iface->lpVtbl != &g_surface_vtbl)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if ((surface_from_iface(destination_iface)->texture
             ? surface_from_iface(destination_iface)->texture->device
             : surface_from_iface(destination_iface)->device) != device)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     hr = create_backbuffer_surface(device, &device->present, FALSE,
             &source_iface);
     if (SUCCEEDED(hr)) {
@@ -5213,7 +5269,7 @@ static HRESULT WINAPI device_get_front_buffer(IDirect3DDevice8 *iface,
                 surface_from_iface(destination_iface), NULL);
         IDirect3DSurface8_Release(source_iface);
     }
-    return hr;
+    return D8WG_TRACE_ERROR(hr);
 }
 
 static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
@@ -5229,24 +5285,24 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
     if (!render_target_iface
             || render_target_iface->lpVtbl != &g_surface_vtbl
             || (depth_iface && depth_iface->lpVtbl != &g_surface_vtbl))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     render_target = surface_from_iface(render_target_iface);
     if ((render_target->texture ? render_target->texture->device
             : render_target->device) != device || render_target->depth_stencil)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     texture = render_target->backbuffer ? NULL : render_target->texture;
     if (texture && !(texture->usage & D3DUSAGE_RENDERTARGET))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (depth && ((depth->texture ? depth->texture->device : depth->device)
                 != device || !depth->depth_stencil))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (depth && (depth->desc.Width != (render_target->texture
                     ? render_target->texture->levels[render_target->level].width
                     : render_target->desc.Width)
             || depth->desc.Height != (render_target->texture
                     ? render_target->texture->levels[render_target->level].height
                     : render_target->desc.Height)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (texture) IDirect3DTexture8_AddRef(&texture->iface);
     if (depth) IDirect3DSurface8_AddRef(&depth->iface);
     if (device->render_target_texture)
@@ -5275,7 +5331,7 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
     command.color_level = texture ? render_target->level : 0;
     command.color_face = 0;
     if (!emit_command(D9WG_OP_SET_RENDER_TARGET, &command, sizeof(command)))
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
 
     depth_command.device_handle = device->handle;
     depth_command.depth_texture_handle = depth
@@ -5292,7 +5348,7 @@ static HRESULT WINAPI device_get_render_target(IDirect3DDevice8 *iface,
         IDirect3DSurface8 **surface_out)
 {
     D8Device *device = device_from_iface(iface);
-    if (!surface_out) return D3DERR_INVALIDCALL;
+    if (!surface_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (device->render_target_texture)
         return texture_get_surface_level(&device->render_target_texture->iface,
@@ -5306,10 +5362,10 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     if (!surface_out)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (!device->depth_surface_enabled)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->depth_surface) {
         *surface_out = &device->depth_surface->iface;
         IDirect3DSurface8_AddRef(*surface_out);
@@ -5391,7 +5447,7 @@ static HRESULT WINAPI device_set_transform(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     UINT slot;
     if (!matrix || !transform_slot(state, &slot))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.transform_mask[slot] = 1;
     if (matrix_equal(&device->transforms[slot], matrix))
@@ -5405,7 +5461,7 @@ static HRESULT WINAPI device_get_transform(IDirect3DDevice8 *iface,
 {
     UINT slot;
     if (!matrix || !transform_slot(state, &slot))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *matrix = device_from_iface(iface)->transforms[slot];
     return D3D_OK;
 }
@@ -5417,7 +5473,7 @@ static HRESULT WINAPI device_multiply_transform(IDirect3DDevice8 *iface,
     D3DMATRIX product;
     UINT slot;
     if (!matrix || !transform_slot(state, &slot))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.transform_mask[slot] = 1;
     matrix_multiply(&product, &device->transforms[slot], matrix);
@@ -5442,7 +5498,7 @@ static HRESULT WINAPI device_set_material(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     D9WGSetMaterial command;
-    if (!material) return D3DERR_INVALIDCALL;
+    if (!material) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.material_mask = TRUE;
     if (bytes_equal(&device->material, material, sizeof(*material)))
@@ -5461,7 +5517,7 @@ static HRESULT WINAPI device_set_material(IDirect3DDevice8 *iface,
 static HRESULT WINAPI device_get_material(IDirect3DDevice8 *iface,
         D3DMATERIAL8 *material)
 {
-    if (!material) return D3DERR_INVALIDCALL;
+    if (!material) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *material = device_from_iface(iface)->material;
     return D3D_OK;
 }
@@ -5473,7 +5529,7 @@ static HRESULT WINAPI device_set_light(IDirect3DDevice8 *iface, DWORD index,
     D9WGSetLight command;
     if (!light || index >= D8WG_MAX_LIGHTS || light->Type < D3DLIGHT_POINT
             || light->Type > D3DLIGHT_DIRECTIONAL)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.light_mask[index] = 1;
     if (device->light_set[index] &&
@@ -5505,7 +5561,7 @@ static HRESULT WINAPI device_get_light(IDirect3DDevice8 *iface, DWORD index,
 {
     D8Device *device = device_from_iface(iface);
     if (!light || index >= D8WG_MAX_LIGHTS || !device->light_set[index])
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *light = device->lights[index];
     return D3D_OK;
 }
@@ -5515,7 +5571,7 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     D9WGLightEnable command;
-    if (index >= D8WG_MAX_LIGHTS) return D3DERR_INVALIDCALL;
+    if (index >= D8WG_MAX_LIGHTS) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.light_enable_mask[index] = 1;
     enable = !!enable;
@@ -5532,7 +5588,7 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice8 *iface,
 static HRESULT WINAPI device_get_light_enable(IDirect3DDevice8 *iface,
         DWORD index, WINBOOL *enable)
 {
-    if (!enable || index >= D8WG_MAX_LIGHTS) return D3DERR_INVALIDCALL;
+    if (!enable || index >= D8WG_MAX_LIGHTS) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *enable = device_from_iface(iface)->light_enabled[index];
     return D3D_OK;
 }
@@ -5543,7 +5599,7 @@ static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice8 *iface,
     D9WGSetClipPlane command;
 
     if (!plane || index >= D8WG_MAX_CLIP_PLANES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(device->clip_planes[index], plane,
             sizeof(device->clip_planes[index]));
     command.device_handle = device->handle;
@@ -5559,7 +5615,7 @@ static HRESULT WINAPI device_get_clip_plane(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
 
     if (!plane || index >= D8WG_MAX_CLIP_PLANES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(plane, device->clip_planes[index],
             sizeof(device->clip_planes[index]));
     return D3D_OK;
@@ -5723,7 +5779,7 @@ static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
     HRESULT hr;
     UINT index;
     UINT stage;
-#define APPLY_STATE(call) do { hr = (call); if (FAILED(hr)) return hr; } while (0)
+#define APPLY_STATE(call) do { hr = (call); if (FAILED(hr)) return D8WG_TRACE_ERROR(hr); } while (0)
     for (index = 0; index < D8WG_MAX_RENDER_STATES; ++index) {
         if (state->render_mask[index])
             APPLY_STATE(device_set_render_state(&device->iface,
@@ -5784,10 +5840,10 @@ static HRESULT WINAPI device_begin_state_block(IDirect3DDevice8 *iface)
     D8Device *device = device_from_iface(iface);
     D8StateBlock *block;
     if (device->recording_state_block)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block = (D8StateBlock *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*block));
-    if (!block) return E_OUTOFMEMORY;
+    if (!block) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     device->recording_state_block = block;
     return D3D_OK;
 }
@@ -5798,7 +5854,7 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8StateBlock *block = device->recording_state_block;
     if (!token || !block)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block->token = device_allocate_state_block_token(device);
     state_block_capture(device, block);
     block->next = device->state_blocks;
@@ -5814,9 +5870,10 @@ static HRESULT WINAPI device_apply_state_block(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8StateBlock *block;
     if (device->recording_state_block)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block = device_find_state_block(device, token, NULL);
-    return block ? state_block_apply(device, block) : D3DERR_INVALIDCALL;
+    return D8WG_TRACE_ERROR(block ? state_block_apply(device, block)
+            : D3DERR_INVALIDCALL);
 }
 
 static HRESULT WINAPI device_capture_state_block(IDirect3DDevice8 *iface,
@@ -5825,9 +5882,9 @@ static HRESULT WINAPI device_capture_state_block(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8StateBlock *block;
     if (device->recording_state_block)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block = device_find_state_block(device, token, NULL);
-    if (!block) return D3DERR_INVALIDCALL;
+    if (!block) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     state_block_capture(device, block);
     return D3D_OK;
 }
@@ -5839,9 +5896,9 @@ static HRESULT WINAPI device_delete_state_block(IDirect3DDevice8 *iface,
     D8StateBlock **link;
     D8StateBlock *block;
     if (device->recording_state_block)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block = device_find_state_block(device, token, &link);
-    if (!block) return D3DERR_INVALIDCALL;
+    if (!block) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *link = block->next;
     state_block_release_references(block);
     HeapFree(GetProcessHeap(), 0, block);
@@ -5856,10 +5913,10 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice8 *iface,
     if (!token || device->recording_state_block
             || (type != D3DSBT_ALL && type != D3DSBT_PIXELSTATE
                 && type != D3DSBT_VERTEXSTATE))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block = (D8StateBlock *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*block));
-    if (!block) return E_OUTOFMEMORY;
+    if (!block) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     block->type = type;
     block->token = device_allocate_state_block_token(device);
     state_block_set_scope(block, type);
@@ -5870,11 +5927,11 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice8 *iface,
     return D3D_OK;
 }
 DEV_STUB(set_clip_status, const D3DCLIPSTATUS8 *status)
-{ (void)iface;(void)status; return D3DERR_INVALIDCALL; }
+{ (void)iface;(void)status; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 DEV_STUB(get_clip_status, D3DCLIPSTATUS8 *status)
-{ (void)iface;(void)status; return D3DERR_INVALIDCALL; }
+{ (void)iface;(void)status; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 DEV_STUB(get_info, DWORD id, void *info, DWORD size)
-{ (void)iface;(void)id;(void)info;(void)size; return D3DERR_NOTAVAILABLE; }
+{ (void)iface;(void)id;(void)info;(void)size; return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE); }
 /*
  * Palettes. D3D8's PALETTEENTRY is peRed/peGreen/peBlue/peFlags; the host wants
  * 256 D3DCOLOR (A8R8G8B8) entries, with peFlags carrying the alpha -- which is
@@ -5893,7 +5950,7 @@ static HRESULT WINAPI device_set_palette(IDirect3DDevice8 *iface, UINT index,
     BOOL result;
 
     if (!entries || index >= D8WG_MAX_PALETTES)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(device->palettes[index], entries, sizeof(device->palettes[index]));
     device->palette_set[index] = TRUE;
     for (entry = 0; entry < 256u; ++entry) {
@@ -5916,7 +5973,7 @@ static HRESULT WINAPI device_set_palette(IDirect3DDevice8 *iface, UINT index,
         CopyMemory(blob, colors, sizeof(colors));
     }
     LeaveCriticalSection(&g_transport_lock);
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI device_get_palette(IDirect3DDevice8 *iface, UINT index,
@@ -5925,7 +5982,7 @@ static HRESULT WINAPI device_get_palette(IDirect3DDevice8 *iface, UINT index,
     D8Device *device = device_from_iface(iface);
 
     if (!entries || index >= D8WG_MAX_PALETTES || !device->palette_set[index])
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(entries, device->palettes[index], sizeof(device->palettes[index]));
     return D3D_OK;
 }
@@ -5937,7 +5994,7 @@ static HRESULT WINAPI device_set_current_palette(IDirect3DDevice8 *iface,
     D9WGSetCurrentTexturePalette command;
 
     if (index >= D8WG_MAX_PALETTES || !device->palette_set[index])
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     device->current_palette = index;
     command.device_handle = device->handle;
     command.palette_index = index;
@@ -5948,7 +6005,7 @@ static HRESULT WINAPI device_set_current_palette(IDirect3DDevice8 *iface,
 static HRESULT WINAPI device_get_current_palette(IDirect3DDevice8 *iface,
         UINT *index)
 {
-    if (!index) return D3DERR_INVALIDCALL;
+    if (!index) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *index = device_from_iface(iface)->current_palette;
     return D3D_OK;
 }
@@ -6199,27 +6256,27 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     (void)flags;
     if (!destination_iface
             || destination_iface->lpVtbl != &g_vb_vtbl)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     destination = vb_from_iface(destination_iface);
     source = device->streams[0].buffer;
     if (destination->device != device || !source || destination->locked
             || source->locked || !vertex_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* A real shader means programmable vertex processing, which this software
      * path deliberately does not emulate -- running the fixed-function
      * pipeline instead would silently produce different geometry. */
     if (device->vertex_shader & 1u)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!decode_fvf_layout(device->vertex_shader, &source_layout)
             || !decode_fvf_layout(destination->fvf, &destination_layout))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* D3D8 requires the destination to be pre-transformed, and refuses to
      * transform something that already is. */
     if (source_layout.pretransformed || !destination_layout.pretransformed)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!device->streams[0].stride
             || device->streams[0].stride < source_layout.stride)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     {
         UINT source_needed;
         UINT destination_needed;
@@ -6229,7 +6286,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
                     destination_layout.stride, &destination_needed)
                 || source_needed > source->length
                 || destination_needed > destination->length)
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
 
     multiply_matrix(&device->transforms[D8WG_TRANSFORM_WORLD_SLOT],
@@ -6351,19 +6408,19 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
 
     if (shader) *shader = 0;
     if (!declaration || !function || !shader)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (function[0] != (DWORD)D3DVS_VERSION(1, 1))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!validate_vertex_declaration(declaration, D8WG_MAX_SHADER_TOKENS,
             &decl_count))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!validate_shader_body(function + 1, D8WG_MAX_SHADER_TOKENS, FALSE,
             1u, &body_count))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     entry = (D8Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*entry));
-    if (!entry) return E_OUTOFMEMORY;
+    if (!entry) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     entry->declaration_tokens = decl_count
             ? (DWORD *)HeapAlloc(GetProcessHeap(), 0,
                     decl_count * sizeof(DWORD))
@@ -6374,7 +6431,7 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
         HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
         HeapFree(GetProcessHeap(), 0, entry->code_tokens);
         HeapFree(GetProcessHeap(), 0, entry);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     if (decl_count)
         CopyMemory(entry->declaration_tokens, declaration,
@@ -6397,7 +6454,7 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
         HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
         HeapFree(GetProcessHeap(), 0, entry->code_tokens);
         HeapFree(GetProcessHeap(), 0, entry);
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     entry->next = device->vertex_shaders;
     device->vertex_shaders = entry;
@@ -6412,13 +6469,13 @@ static HRESULT WINAPI device_delete_vertex_shader(IDirect3DDevice8 *iface,
     D8Shader **link = &device->vertex_shaders;
     D8Shader *entry;
     if (!(shader & 1u))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     while (*link && (*link)->handle != shader) link = &(*link)->next;
     entry = *link;
     /* Real D3D8 refuses to delete the currently bound shader; the app must
      * rebind (0 or another handle) first. */
     if (!entry || device->vertex_shader == shader)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *link = entry->next;
     emit_destroy_shader(entry);
     HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
@@ -6433,7 +6490,7 @@ static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if (!data || !count
             || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(device->vs_constants[reg], data, count * 16u);
     return emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
             device, reg, (const float *)data, count)
@@ -6446,7 +6503,7 @@ static HRESULT WINAPI device_get_vs_constant(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if (!data || !count
             || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(data, device->vs_constants[reg], count * 16u);
     return D3D_OK;
 }
@@ -6457,12 +6514,12 @@ static HRESULT WINAPI device_get_vs_decl(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8Shader *entry;
     DWORD needed;
-    if (!(shader & 1u) || !size) return D3DERR_INVALIDCALL;
+    if (!(shader & 1u) || !size) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     entry = find_shader(device->vertex_shaders, shader);
-    if (!entry) return D3DERR_INVALIDCALL;
+    if (!entry) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     needed = (entry->declaration_token_count + 1u) * (DWORD)sizeof(DWORD);
     if (!data) { *size = needed; return D3D_OK; }
-    if (*size < needed) return D3DERR_INVALIDCALL;
+    if (*size < needed) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (entry->declaration_token_count)
         CopyMemory(data, entry->declaration_tokens,
                 entry->declaration_token_count * sizeof(DWORD));
@@ -6477,12 +6534,12 @@ static HRESULT WINAPI device_get_vs_function(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8Shader *entry;
     DWORD needed;
-    if (!(shader & 1u) || !size) return D3DERR_INVALIDCALL;
+    if (!(shader & 1u) || !size) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     entry = find_shader(device->vertex_shaders, shader);
-    if (!entry) return D3DERR_INVALIDCALL;
+    if (!entry) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     needed = (entry->code_token_count + 1u) * (DWORD)sizeof(DWORD);
     if (!data) { *size = needed; return D3D_OK; }
-    if (*size < needed) return D3DERR_INVALIDCALL;
+    if (*size < needed) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(data, entry->code_tokens,
             entry->code_token_count * sizeof(DWORD));
     ((DWORD *)data)[entry->code_token_count] = 0x0000FFFFu;
@@ -6502,26 +6559,26 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice8 *iface,
 
     if (shader) *shader = 0;
     if (!function || !shader)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     version = function[0];
     if ((version & 0xFFFF0000u) != 0xFFFF0000u)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     major = (UINT)D3DSHADER_VERSION_MAJOR(version);
     minor = (UINT)D3DSHADER_VERSION_MINOR(version);
     if (major != 1u || minor < 1u || minor > 4u)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!validate_shader_body(function + 1, D8WG_MAX_SHADER_TOKENS, TRUE,
             minor, &body_count))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     entry = (D8Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*entry));
-    if (!entry) return E_OUTOFMEMORY;
+    if (!entry) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     entry->code_tokens = (DWORD *)HeapAlloc(GetProcessHeap(), 0,
             (body_count + 1u) * sizeof(DWORD));
     if (!entry->code_tokens) {
         HeapFree(GetProcessHeap(), 0, entry);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     entry->code_tokens[0] = version;
     if (body_count)
@@ -6536,7 +6593,7 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice8 *iface,
     if (!emit_create_pixel_shader(device, entry)) {
         HeapFree(GetProcessHeap(), 0, entry->code_tokens);
         HeapFree(GetProcessHeap(), 0, entry);
-        return D3DERR_DRIVERINTERNALERROR;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     entry->next = device->pixel_shaders;
     device->pixel_shaders = entry;
@@ -6550,7 +6607,7 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if (shader && (!(shader & 1u)
             || !find_shader(device->pixel_shaders, shader)))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block)
         device->recording_state_block->state.pixel_shader_mask = TRUE;
     if (device->pixel_shader == shader)
@@ -6563,7 +6620,7 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
 static HRESULT WINAPI device_get_pixel_shader(IDirect3DDevice8 *iface,
         DWORD *shader)
 {
-    if (!shader) return D3DERR_INVALIDCALL;
+    if (!shader) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *shader = device_from_iface(iface)->pixel_shader;
     return D3D_OK;
 }
@@ -6575,11 +6632,11 @@ static HRESULT WINAPI device_delete_pixel_shader(IDirect3DDevice8 *iface,
     D8Shader **link = &device->pixel_shaders;
     D8Shader *entry;
     if (!(shader & 1u))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     while (*link && (*link)->handle != shader) link = &(*link)->next;
     entry = *link;
     if (!entry || device->pixel_shader == shader)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *link = entry->next;
     emit_destroy_shader(entry);
     HeapFree(GetProcessHeap(), 0, entry->code_tokens);
@@ -6593,7 +6650,7 @@ static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if (!data || !count
             || (uint64_t)reg + count > D8WG_MAX_PS_CONSTANTS)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(device->ps_constants[reg], data, count * 16u);
     return emit_set_shader_constant(D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
             device, reg, (const float *)data, count)
@@ -6606,7 +6663,7 @@ static HRESULT WINAPI device_get_ps_constant(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if (!data || !count
             || (uint64_t)reg + count > D8WG_MAX_PS_CONSTANTS)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(data, device->ps_constants[reg], count * 16u);
     return D3D_OK;
 }
@@ -6617,12 +6674,12 @@ static HRESULT WINAPI device_get_ps_function(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8Shader *entry;
     DWORD needed;
-    if (!(shader & 1u) || !size) return D3DERR_INVALIDCALL;
+    if (!(shader & 1u) || !size) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     entry = find_shader(device->pixel_shaders, shader);
-    if (!entry) return D3DERR_INVALIDCALL;
+    if (!entry) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     needed = (entry->code_token_count + 1u) * (DWORD)sizeof(DWORD);
     if (!data) { *size = needed; return D3D_OK; }
-    if (*size < needed) return D3DERR_INVALIDCALL;
+    if (*size < needed) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(data, entry->code_tokens,
             entry->code_token_count * sizeof(DWORD));
     ((DWORD *)data)[entry->code_token_count] = 0x0000FFFFu;
@@ -6738,7 +6795,7 @@ static HRESULT draw_tessellated_quad(D8Device *device,
     UINT column;
 
     if (vertex_count > 0xFFFFu)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     vertices = (BYTE *)HeapAlloc(GetProcessHeap(), 0,
             vertex_count * layout->stride);
     indices = (WORD *)HeapAlloc(GetProcessHeap(), 0,
@@ -6791,7 +6848,7 @@ done:
     HeapFree(GetProcessHeap(), 0, indices);
     HeapFree(GetProcessHeap(), 0, edge_low);
     HeapFree(GetProcessHeap(), 0, edge_high);
-    return result;
+    return D8WG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI device_draw_rect_patch(IDirect3DDevice8 *iface,
@@ -6811,31 +6868,31 @@ static HRESULT WINAPI device_draw_rect_patch(IDirect3DDevice8 *iface,
     /* No patch is cached, so a call that names one without describing it has
      * nothing to redraw. */
     if (!info || !source || source->locked || !stride)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (info->Order != D3DORDER_LINEAR)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* A linear-order rectangle patch is exactly its four corner control
      * points; any other extent is a higher-order description. */
     if (info->Width != 2u || info->Height != 2u)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->vertex_shader & 1u
             || !decode_fvf_layout(device->vertex_shader, &layout)
             || stride < layout.stride)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     row_stride = info->Stride ? info->Stride : info->Width;
     segments_u = patch_segment_count(segments, 0);
     segments_v = patch_segment_count(segments, 1);
     last_vertex = info->StartVertexOffsetHeight + 1u;
     if (last_vertex > 0xFFFFFFFFu / (row_stride ? row_stride : 1u))
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     {
         UINT needed;
         UINT corner = (info->StartVertexOffsetHeight + 1u) * row_stride
                 + info->StartVertexOffsetWidth + 1u;
         if (!multiply_u32(corner + 1u, stride, &needed)
                 || needed > source->length)
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
     base = source->shadow
             + (info->StartVertexOffsetHeight * row_stride
@@ -6861,16 +6918,16 @@ static HRESULT WINAPI device_draw_tri_patch(IDirect3DDevice8 *iface,
 
     (void)handle;
     if (!info || !source || source->locked || !stride)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (info->Order != D3DORDER_LINEAR || info->NumVertices != 3u)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->vertex_shader & 1u
             || !decode_fvf_layout(device->vertex_shader, &layout)
             || stride < layout.stride)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!multiply_u32(info->StartVertexOffset + 3u, stride, &needed)
             || needed > source->length)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     segments_u = patch_segment_count(segments, 0);
     base = source->shadow + info->StartVertexOffset * stride;
@@ -7073,7 +7130,7 @@ static HRESULT cube_lock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
         UINT level, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
 {
     if ((UINT)face >= 6u || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return lock_texture_level(cube_level(texture, face, level),
             texture->format, TRUE, locked_rect, rect, flags);
 }
@@ -7082,7 +7139,7 @@ static HRESULT cube_unlock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
         UINT level)
 {
     if ((UINT)face >= 6u || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return unlock_texture_level(texture->handle, texture->format,
             cube_level(texture, face, level), level, (UINT)face);
 }
@@ -7090,13 +7147,13 @@ static HRESULT cube_unlock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
 static HRESULT WINAPI cube_query_interface(IDirect3DCubeTexture8 *iface,
         REFIID iid, void **object)
 {
-    if (!object) return E_POINTER;
+    if (!object) return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
             && !guid_equal(iid, &IID_IDirect3DCubeTexture8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DCubeTexture8_AddRef(iface);
     return S_OK;
@@ -7134,7 +7191,7 @@ static HRESULT WINAPI cube_get_device(IDirect3DCubeTexture8 *iface,
         IDirect3DDevice8 **device_out)
 {
     D8CubeTexture *texture = cube_from_iface(iface);
-    if (!device_out) return D3DERR_INVALIDCALL;
+    if (!device_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = &texture->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
     return D3D_OK;
@@ -7143,15 +7200,15 @@ static HRESULT WINAPI cube_get_device(IDirect3DCubeTexture8 *iface,
 static HRESULT WINAPI cube_set_private_data(IDirect3DCubeTexture8 *iface,
         REFGUID guid, const void *data, DWORD size, DWORD flags)
 { (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return D3DERR_INVALIDCALL; }
+  return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 
 static HRESULT WINAPI cube_get_private_data(IDirect3DCubeTexture8 *iface,
         REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return D3DERR_NOTFOUND; }
+{ (void)iface; (void)guid; (void)data; (void)size; return D8WG_TRACE_ERROR(D3DERR_NOTFOUND); }
 
 static HRESULT WINAPI cube_free_private_data(IDirect3DCubeTexture8 *iface,
         REFGUID guid)
-{ (void)iface; (void)guid; return D3DERR_NOTFOUND; }
+{ (void)iface; (void)guid; return D8WG_TRACE_ERROR(D3DERR_NOTFOUND); }
 
 static DWORD WINAPI cube_set_priority(IDirect3DCubeTexture8 *iface,
         DWORD priority)
@@ -7192,7 +7249,7 @@ static HRESULT WINAPI cube_get_level_desc(IDirect3DCubeTexture8 *iface,
     D8CubeTexture *texture = cube_from_iface(iface);
     D8TextureLevel *level_data;
     if (!desc || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = cube_level(texture, D3DCUBEMAP_FACE_POSITIVE_X, level);
     ZeroMemory(desc, sizeof(*desc));
     desc->Format = texture->format;
@@ -7210,13 +7267,13 @@ static HRESULT WINAPI cube_get_surface(IDirect3DCubeTexture8 *iface,
 {
     D8CubeTexture *texture = cube_from_iface(iface);
     D8Surface *surface;
-    if (!surface_out) return D3DERR_INVALIDCALL;
+    if (!surface_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if ((UINT)face >= 6u || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     surface = (D8Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
-    if (!surface) return E_OUTOFMEMORY;
+    if (!surface) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     surface->iface.lpVtbl = &g_surface_vtbl;
     surface->refcount = 1;
     surface->cube = texture;
@@ -7308,7 +7365,7 @@ static HRESULT volume_lock_level(D8VolumeTexture *texture, UINT level,
     HRESULT hr;
 
     if (!locked_box || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
     if (box) {
         if (box->Right <= box->Left || box->Bottom <= box->Top
@@ -7316,7 +7373,7 @@ static HRESULT volume_lock_level(D8VolumeTexture *texture, UINT level,
                 || box->Right > level_data->width
                 || box->Bottom > level_data->height
                 || box->Back > level_data->depth)
-            return D3DERR_INVALIDCALL;
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
         SetRect(&area, (int)box->Left, (int)box->Top, (int)box->Right,
                 (int)box->Bottom);
         front = box->Front;
@@ -7328,7 +7385,7 @@ static HRESULT volume_lock_level(D8VolumeTexture *texture, UINT level,
     }
     hr = lock_texture_level(level_data, texture->format, TRUE, &locked_rect,
             &area, flags);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr)) return D8WG_TRACE_ERROR(hr);
     level_data->lock_z = front;
     level_data->lock_depth = back - front;
     locked_box->RowPitch = locked_rect.Pitch;
@@ -7344,10 +7401,10 @@ static HRESULT volume_unlock_level(D8VolumeTexture *texture, UINT level)
     BOOL result = TRUE;
 
     if (level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
     if (!level_data->locked)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_volume_level_update(texture, level,
                 &level_data->lock_rect, level_data->lock_z,
@@ -7357,19 +7414,19 @@ static HRESULT volume_unlock_level(D8VolumeTexture *texture, UINT level)
     level_data->lock_z = 0;
     level_data->lock_depth = 0;
     ZeroMemory(&level_data->lock_rect, sizeof(level_data->lock_rect));
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI volume_texture_query_interface(
         IDirect3DVolumeTexture8 *iface, REFIID iid, void **object)
 {
-    if (!object) return E_POINTER;
+    if (!object) return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
             && !guid_equal(iid, &IID_IDirect3DVolumeTexture8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DVolumeTexture8_AddRef(iface);
     return S_OK;
@@ -7408,7 +7465,7 @@ static HRESULT WINAPI volume_texture_get_device(IDirect3DVolumeTexture8 *iface,
         IDirect3DDevice8 **device_out)
 {
     D8VolumeTexture *texture = volume_texture_from_iface(iface);
-    if (!device_out) return D3DERR_INVALIDCALL;
+    if (!device_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = &texture->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
     return D3D_OK;
@@ -7418,15 +7475,15 @@ static HRESULT WINAPI volume_texture_set_private_data(
         IDirect3DVolumeTexture8 *iface, REFGUID guid, const void *data,
         DWORD size, DWORD flags)
 { (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return D3DERR_INVALIDCALL; }
+  return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 
 static HRESULT WINAPI volume_texture_get_private_data(
         IDirect3DVolumeTexture8 *iface, REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return D3DERR_NOTFOUND; }
+{ (void)iface; (void)guid; (void)data; (void)size; return D8WG_TRACE_ERROR(D3DERR_NOTFOUND); }
 
 static HRESULT WINAPI volume_texture_free_private_data(
         IDirect3DVolumeTexture8 *iface, REFGUID guid)
-{ (void)iface; (void)guid; return D3DERR_NOTFOUND; }
+{ (void)iface; (void)guid; return D8WG_TRACE_ERROR(D3DERR_NOTFOUND); }
 
 static DWORD WINAPI volume_texture_set_priority(
         IDirect3DVolumeTexture8 *iface, DWORD priority)
@@ -7470,7 +7527,7 @@ static HRESULT WINAPI volume_texture_get_level_desc(
     D8VolumeTexture *texture = volume_texture_from_iface(iface);
     D8TextureLevel *level_data;
     if (!desc || level >= texture->level_count)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
     ZeroMemory(desc, sizeof(*desc));
     desc->Format = texture->format;
@@ -7490,12 +7547,12 @@ static HRESULT WINAPI volume_texture_get_volume_level(
 {
     D8VolumeTexture *texture = volume_texture_from_iface(iface);
     D8Volume *volume;
-    if (!volume_out) return D3DERR_INVALIDCALL;
+    if (!volume_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *volume_out = NULL;
-    if (level >= texture->level_count) return D3DERR_INVALIDCALL;
+    if (level >= texture->level_count) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     volume = (D8Volume *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*volume));
-    if (!volume) return E_OUTOFMEMORY;
+    if (!volume) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     volume->iface.lpVtbl = &g_volume_vtbl;
     volume->refcount = 1;
     volume->texture = texture;
@@ -7527,11 +7584,11 @@ static HRESULT WINAPI volume_texture_add_dirty_box(
 static HRESULT WINAPI volume_query_interface(IDirect3DVolume8 *iface,
         REFIID iid, void **object)
 {
-    if (!object) return E_POINTER;
+    if (!object) return D8WG_TRACE_ERROR(E_POINTER);
     *object = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DVolume8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *object = iface;
     IDirect3DVolume8_AddRef(iface);
     return S_OK;
@@ -7555,7 +7612,7 @@ static HRESULT WINAPI volume_get_device(IDirect3DVolume8 *iface,
         IDirect3DDevice8 **device_out)
 {
     D8Volume *volume = volume_from_iface(iface);
-    if (!device_out) return D3DERR_INVALIDCALL;
+    if (!device_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *device_out = &volume->texture->device->iface;
     IDirect3DDevice8_AddRef(*device_out);
     return D3D_OK;
@@ -7564,27 +7621,27 @@ static HRESULT WINAPI volume_get_device(IDirect3DVolume8 *iface,
 static HRESULT WINAPI volume_set_private_data(IDirect3DVolume8 *iface,
         REFGUID guid, const void *data, DWORD size, DWORD flags)
 { (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return D3DERR_INVALIDCALL; }
+  return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
 
 static HRESULT WINAPI volume_get_private_data(IDirect3DVolume8 *iface,
         REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return D3DERR_NOTFOUND; }
+{ (void)iface; (void)guid; (void)data; (void)size; return D8WG_TRACE_ERROR(D3DERR_NOTFOUND); }
 
 static HRESULT WINAPI volume_free_private_data(IDirect3DVolume8 *iface,
         REFGUID guid)
-{ (void)iface; (void)guid; return D3DERR_NOTFOUND; }
+{ (void)iface; (void)guid; return D8WG_TRACE_ERROR(D3DERR_NOTFOUND); }
 
 static HRESULT WINAPI volume_get_container(IDirect3DVolume8 *iface,
         REFIID iid, void **container)
 {
     D8Volume *volume = volume_from_iface(iface);
-    if (!container) return E_POINTER;
+    if (!container) return D8WG_TRACE_ERROR(E_POINTER);
     *container = NULL;
     if (!iid || (!iid_is_unknown(iid)
             && !guid_equal(iid, &IID_IDirect3DResource8)
             && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
             && !guid_equal(iid, &IID_IDirect3DVolumeTexture8)))
-        return E_NOINTERFACE;
+        return D8WG_TRACE_ERROR(E_NOINTERFACE);
     *container = &volume->texture->iface;
     IDirect3DVolumeTexture8_AddRef(&volume->texture->iface);
     return S_OK;
@@ -7625,7 +7682,7 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice8 *iface,
     UINT level_edge;
     HRESULT failure = E_OUTOFMEMORY;
 
-    if (!texture_out) return D3DERR_INVALIDCALL;
+    if (!texture_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *texture_out = NULL;
     if (!edge_length || edge_length > 4096
             || !supported_texture_format(format)
@@ -7635,19 +7692,19 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice8 *iface,
                     || (format != D3DFMT_A8R8G8B8
                         && format != D3DFMT_X8R8G8B8)))
             || pool > D3DPOOL_SCRATCH)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(edge_length, edge_length);
     if (!levels) levels = full_levels;
-    if (levels > full_levels) return D3DERR_INVALIDCALL;
+    if (levels > full_levels) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     texture = (D8CubeTexture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*texture));
-    if (!texture) return E_OUTOFMEMORY;
+    if (!texture) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     texture->levels = (D8TextureLevel *)HeapAlloc(GetProcessHeap(),
             HEAP_ZERO_MEMORY, levels * 6u * sizeof(*texture->levels));
     if (!texture->levels) {
         HeapFree(GetProcessHeap(), 0, texture);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     texture->iface.lpVtbl = &g_cube_texture_vtbl;
     texture->refcount = 1;
@@ -7701,7 +7758,7 @@ static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice8 *iface,
     UINT level_depth;
     HRESULT failure = E_OUTOFMEMORY;
 
-    if (!texture_out) return D3DERR_INVALIDCALL;
+    if (!texture_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *texture_out = NULL;
     if (!width || !height || !depth || width > 2048 || height > 2048
             || depth > 2048
@@ -7713,20 +7770,20 @@ static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice8 *iface,
             || format == D3DFMT_DXT3 || format == D3DFMT_DXT4
             || format == D3DFMT_DXT5
             || pool > D3DPOOL_SCRATCH)
-        return D3DERR_INVALIDCALL;
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(width,
             height > depth ? height : depth);
     if (!levels) levels = full_levels;
-    if (levels > full_levels) return D3DERR_INVALIDCALL;
+    if (levels > full_levels) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     texture = (D8VolumeTexture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*texture));
-    if (!texture) return E_OUTOFMEMORY;
+    if (!texture) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     texture->levels = (D8TextureLevel *)HeapAlloc(GetProcessHeap(),
             HEAP_ZERO_MEMORY, levels * sizeof(*texture->levels));
     if (!texture->levels) {
         HeapFree(GetProcessHeap(), 0, texture);
-        return E_OUTOFMEMORY;
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     }
     texture->iface.lpVtbl = &g_volume_texture_vtbl;
     texture->refcount = 1;
@@ -7888,22 +7945,33 @@ IDirect3D8 *WINAPI Direct3DCreate8(UINT sdk_version)
     D8Direct3D *d3d;
     BOOL transport_ready;
 
+    D8WG_TRACE("CALL Direct3DCreate8 sdk=%lu", sdk_version);
     if (sdk_version != D3D_SDK_VERSION_DX80
-            && sdk_version != D3D_SDK_VERSION_DX81)
+            && sdk_version != D3D_SDK_VERSION_DX81) {
+        D8WG_TRACE("FAIL Direct3DCreate8 sdk=%lu expected=%lu|%lu",
+                sdk_version, D3D_SDK_VERSION_DX80, D3D_SDK_VERSION_DX81);
         return NULL;
+    }
     EnterCriticalSection(&g_transport_lock);
     transport_ready = open_transport_locked();
     LeaveCriticalSection(&g_transport_lock);
-    if (!transport_ready)
+    if (!transport_ready) {
+        D8WG_TRACE("FAIL Direct3DCreate8 transport unavailable");
         return NULL;
+    }
 
     d3d = (D8Direct3D *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*d3d));
-    if (!d3d)
+    if (!d3d) {
+        D8WG_TRACE("FAIL Direct3DCreate8 allocation win32_last=%lu",
+                GetLastError());
         return NULL;
+    }
     d3d->iface.lpVtbl = &g_d3d_vtbl;
     d3d->refcount = 1;
     emit_hello_once();
+    D8WG_TRACE("OK Direct3DCreate8 object=%08lX",
+            (DWORD)(uintptr_t)&d3d->iface);
     return &d3d->iface;
 }
 
@@ -7944,18 +8012,31 @@ void WINAPI DebugSetMute(void)
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
+#ifdef D8WG_DIAGNOSTIC_TRACE
+    DWORD pending_commands;
+#else
     (void)reserved;
+#endif
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
         initialize_session_id(instance);
         InitializeCriticalSection(&g_transport_lock);
+#ifdef D8WG_DIAGNOSTIC_TRACE
+        v86wg_diagnostic_process_attach(instance);
+#endif
     } else if (reason == DLL_PROCESS_DETACH) {
+#ifdef D8WG_DIAGNOSTIC_TRACE
+        pending_commands = g_command_count;
+#endif
         EnterCriticalSection(&g_transport_lock);
         if (g_command_count)
             submit_batch_locked(FALSE);
         close_transport_locked();
         LeaveCriticalSection(&g_transport_lock);
         DeleteCriticalSection(&g_transport_lock);
+#ifdef D8WG_DIAGNOSTIC_TRACE
+        v86wg_diagnostic_process_detach(reserved, pending_commands);
+#endif
     }
     return TRUE;
 }
