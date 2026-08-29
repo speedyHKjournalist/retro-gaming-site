@@ -249,6 +249,7 @@
     const D3DFMT_X8L8V8U8 = 62;
     const D3DFMT_Q8W8V8U8 = 63;
     const D3DFMT_V16U16 = 64;
+    const D3DFMT_W11V11U10 = 65;
     const D3DFMT_A2W10V10U10 = 67;
     const D3DFMT_L16 = 81;
     const D3DFMT_R16F = 111;
@@ -744,7 +745,8 @@
         34: "G16R16", 35: "A2R10G10B10", 36: "A16B16G16R16",
         50: "L8", 51: "A8L8",
         52: "A4L4", 60: "V8U8", 61: "L6V5U5", 62: "X8L8V8U8",
-        63: "Q8W8V8U8", 64: "V16U16", 67: "A2W10V10U10", 81: "L16",
+        63: "Q8W8V8U8", 64: "V16U16", 65: "W11V11U10",
+        67: "A2W10V10U10", 81: "L16",
         111: "R16F", 112: "G16R16F", 113: "A16B16G16R16F",
         117: "CxV8U8",
         0x31545844: "DXT1", 0x32545844: "DXT2",
@@ -877,7 +879,8 @@
     function isHalfFloatExpansionFormat(format) {
         return format === D3DFMT_Q16W16V16U16 ||
             format === D3DFMT_L6V5U5 || format === D3DFMT_X8L8V8U8 ||
-            format === D3DFMT_V16U16 || format === D3DFMT_A2W10V10U10 ||
+            format === D3DFMT_V16U16 || format === D3DFMT_W11V11U10 ||
+            format === D3DFMT_A2W10V10U10 ||
             format === D3DFMT_L16 || format === D3DFMT_CxV8U8 ||
             format === D3DFMT_A2B10G10R10 || format === D3DFMT_G16R16 ||
             format === D3DFMT_A2R10G10B10 ||
@@ -963,6 +966,8 @@
         case D3DFMT_YUY2:
         case D3DFMT_R8G8_B8G8:
         case D3DFMT_G8R8_G8B8:
+        case D3DFMT_INDEX16:
+        case D3DFMT_INDEX32:
             // All of these are CPU-expanded to tightly-packed RGBA8 on
             // upload (see expandRowToGPU), matching the D3D8 path's
             // approach: WebGPU has no native 16-bit BGR/BGRA formats.
@@ -973,6 +978,7 @@
         case D3DFMT_L6V5U5:
         case D3DFMT_X8L8V8U8:
         case D3DFMT_V16U16:
+        case D3DFMT_W11V11U10:
         case D3DFMT_A2W10V10U10:
         case D3DFMT_L16:
         case D3DFMT_CxV8U8:
@@ -1415,6 +1421,18 @@
                     v = read(at + 2);
                     w = read(at + 4);
                     q = read(at + 6);
+                } else if (format === D3DFMT_W11V11U10) {
+                    // The one D3D8 bump format whose channels are not a whole
+                    // number of bits alike: U is 10 bits at 0-9, V is 11 at
+                    // 10-20, W is 11 at 21-31, and all three are signed.
+                    const at = sourceOffset + i * 4;
+                    const value = (source[at] | (source[at + 1] << 8) |
+                        (source[at + 2] << 16) |
+                        (source[at + 3] << 24)) >>> 0;
+                    u = signedNormalized(value & 0x3ff, 10);
+                    v = signedNormalized((value >>> 10) & 0x7ff, 11);
+                    w = signedNormalized((value >>> 21) & 0x7ff, 11);
+                    q = 1;
                 } else {
                     const at = sourceOffset + i * 4;
                     const value = (source[at] | (source[at + 1] << 8) |
@@ -1539,6 +1557,24 @@
                 break;
             }
             case D3DFMT_Q8W8V8U8: {
+                const at = sourceOffset + i * 4;
+                r = source[at]; g = source[at + 1];
+                b = source[at + 2]; a = source[at + 3];
+                break;
+            }
+            case D3DFMT_INDEX16: {
+                /*
+                 * INDEX16/32 are buffer formats, not standard D3D colour
+                 * formats, but old capability scanners also try them as
+                 * textures. Preserve the little-endian index bytes in RGBA
+                 * instead of inventing a lossy colour conversion: shaders can
+                 * reconstruct the exact value after multiplying by 255.
+                 */
+                const at = sourceOffset + i * 2;
+                r = source[at]; g = source[at + 1]; b = 0; a = 0xff;
+                break;
+            }
+            case D3DFMT_INDEX32: {
                 const at = sourceOffset + i * 4;
                 r = source[at]; g = source[at + 1];
                 b = source[at + 2]; a = source[at + 3];
@@ -2344,7 +2380,21 @@
         let coordBody = "";
         for (const stage of signature.coordStages) {
             let raw;
-            switch (stage.tciMode) {
+            // XYZRHW vertices have already passed the object/view transform
+            // and carry neither an eye-space position nor a normal. A few
+            // D3D8 applications leave camera-space TCI bits behind when they
+            // switch to a pre-transformed overlay. Native D3D treats the
+            // generated value there as undefined; referring to the absent
+            // position_view/normal_view locals is worse because it makes the
+            // whole WGSL module invalid and poisons the command buffer. Keep a
+            // declared coordinate when one exists, otherwise use the same
+            // benign (0,0,0,1) value as a missing passthrough coordinate.
+            if (signature.positionType === "screen" &&
+                    stage.tciMode !== D3DTSS_TCI_PASSTHRU) {
+                raw = signature.texCoordSets.includes(stage.texCoordIndex)
+                    ? "in" + (FF_LOCATION_TEXCOORD0 + stage.texCoordIndex)
+                    : "vec4<f32>(0.0, 0.0, 0.0, 1.0)";
+            } else switch (stage.tciMode) {
             case D3DTSS_TCI_CAMERASPACENORMAL:
                 raw = "vec4<f32>(normal_view, 1.0)";
                 break;
@@ -7891,8 +7941,20 @@ fn d9_ps_main(stage_in: D9BlitOutput) -> @location(0) vec4<f32> {
         }
 
         rectClearPipelineFor(targets, clearsColor, clearsDepth, clearsStencil) {
+            // The key has to describe the *pass* this pipeline will be used
+            // in, not just what the clear writes. WebGPU requires a pipeline's
+            // attachment state -- colour formats, whether there is a
+            // depth-stencil attachment, and the sample count -- to match the
+            // pass exactly. Keying on the clear flags alone let a pipeline
+            // built for a depth-less pass be reused in a pass that has depth,
+            // which fails validation at setPipeline and invalidates the whole
+            // command buffer, so the frame draws nothing. 3DMark 2001 hits
+            // this the moment one pass drops depth (an undersized depth
+            // surface does that) and the next one has it.
             const key = [targets.formats.join(","), clearsColor ? "c" : "-",
-                clearsDepth ? "d" : "-", clearsStencil ? "s" : "-"].join("|");
+                clearsDepth ? "d" : "-", clearsStencil ? "s" : "-",
+                targets.hasDepth ? "z" : "-",
+                targets.sampleCount || 1].join("|");
             if (!this.rectClearPipelines) this.rectClearPipelines = new Map();
             let entry = this.rectClearPipelines.get(key);
             if (entry) return entry;
@@ -7953,6 +8015,8 @@ ${depthWrite}
                     stencilReadMask: clearsStencil ? 0xff : 0,
                     stencilWriteMask: clearsStencil ? 0xff : 0 };
             }
+            if ((targets.sampleCount || 1) > 1)
+                descriptor.multisample = { count: targets.sampleCount };
             entry = { pipeline: this.device.createRenderPipeline(descriptor),
                 bindGroupLayout };
             this.rectClearPipelines.set(key, entry);
@@ -8902,8 +8966,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const handle = view.getUint32(offset + 4, true);
             const tokenCount = view.getUint32(offset + 8, true);
             const codeOffset = view.getUint32(offset + 12, true);
-            const hashLow = view.getUint32(offset + 16, true);
-            const hashHigh = view.getUint32(offset + 20, true);
+            const suppliedHashLow = view.getUint32(offset + 16, true);
+            const suppliedHashHigh = view.getUint32(offset + 20, true);
             if (codeOffset + tokenCount * 4 > bytes.byteLength) {
                 ++this.stats.malformedBatches;
                 throw new D9WGStreamError("D9WG shader bytecode overruns the batch");
@@ -8913,6 +8977,26 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const tokens = new Uint32Array(tokenCount);
             for (let i = 0; i < tokenCount; ++i)
                 tokens[i] = view.getUint32(codeOffset + i * 4, true);
+            // Hashes are a cache hint carried by an untrusted guest. Verify
+            // them from the bytecode so an old or buggy proxy cannot alias
+            // every shader to the same cached translation (the original D3D8
+            // proxy sent zero for both fields).
+            const verifiedHash = shaderPipeline.hashTokens(tokens);
+            const hashLow = verifiedHash.low;
+            const hashHigh = verifiedHash.high;
+            if (hashLow !== suppliedHashLow || hashHigh !== suppliedHashHigh) {
+                this.warnOnce("shader-hash-mismatch-" + kind,
+                    "guest shader bytecode hash did not match its token " +
+                    "stream; using the verified hash to prevent distinct " +
+                    "shaders from aliasing in the translation cache", {
+                        kind: kind === RESOURCE_VERTEX_SHADER
+                            ? "vertex" : "pixel",
+                        suppliedHashLow,
+                        suppliedHashHigh,
+                        verifiedHashLow: hashLow,
+                        verifiedHashHigh: hashHigh,
+                    });
+            }
             const compilesBefore = this.shaderCache.stats.compiles;
             let translated = this.shaderCache.get(hashLow, hashHigh);
             if (!translated) {

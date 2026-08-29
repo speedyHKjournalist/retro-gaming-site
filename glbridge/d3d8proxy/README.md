@@ -59,6 +59,16 @@ position, `v3` normal, `v7..v14` texture coordinates, and so on. The guest
 synthesises the usage from the register number on that basis
 (`d3d8_vsd_register_usage`), which is what a D3D8 declaration means.
 
+The host applies the *same* table to the shader it translates
+(`VS1_FIXED_INPUT_SEMANTICS` in `../d3d9-webgpu/d3d9_shader_pipeline.js`),
+because `d3d9_executor.js` pairs a declaration element to a shader input by
+`(usage, usageIndex)` and binds nothing when the two disagree. Until that
+table existed the translator reflected *no* inputs for any real vs_1_x -- only
+shaders carrying a `dcl_`, which this model cannot contain, looked correct --
+so every `v#` read a zeroed private variable and every vertex-shader draw was
+dropped for having no attribute to bind. `d3d8_protocol_consistency_test.js`
+compares the two tables by running both, register by register.
+
 ## Implemented
 
 - `IDirect3D8`/`IDirect3DDevice8` COM lifecycle, adapter enumeration, caps and
@@ -74,12 +84,29 @@ synthesises the usage from the register number on that basis
 - **volume textures** (`IDirect3DVolumeTexture8`/`IDirect3DVolume8`):
   `GetVolumeLevel`, `LockBox`/`UnlockBox` with a real `D3DBOX` sub-range, and
   `UpdateTexture`. Backed by a genuine 3D WebGPU texture, one slice per upload;
+- **every D3DFORMAT D3D8 defines**, in the role D3D8 gives it. What follows is
+  the complete enumeration, and
+  `glbridge/tests/d3d8_protocol_consistency_test.js` fails if either side of
+  the boundary loses one:
+  - **textures**, listed below;
+  - **render targets and back buffers**: `A8R8G8B8`, `X8R8G8B8`, `R5G6B5`,
+    `X1R5G5B5`, `A1R5G5B5`, `A4R4G4B4` -- a 16-bit display mode is only usable
+    when its own format is a legal render target, so the older set of two
+    32-bit formats made every 16-bit mode fail the check an app runs before it
+    picks one;
+  - **display modes**: 640x480, 800x600 and 1024x768, each in `X1R5G5B5`,
+    `R5G6B5` and `X8R8G8B8`;
+  - **depth-stencil**: `D16`, `D24S8`, `D32`, `D15S1`, `D24X8`, `D24X4S4`
+    (see Approximations for what each really gets, and Not implemented for
+    `D16_LOCKABLE`);
 - every texture format the host decodes that D3D8 also names: the
   `A8R8G8B8`/`X8R8G8B8`/`R5G6B5`/`X1R5G5B5`/`A1R5G5B5`/`A4R4G4B4`/`X4R4G4B4`
   core set, `R8G8B8`, `A8R3G3B2`, `R3G3B2`, `L8`/`A8`/`A8L8`/`A4L4`,
   `A2B10G10R10`, `G16R16`, `P8`/`A8P8` with palettes, `DXT1`-`DXT5`, and the
   signed bump formats `V8U8`, `L6V5U5`, `X8L8V8U8`, `Q8W8V8U8`, `V16U16`,
-  `A2W10V10U10`;
+  `W11V11U10`, `A2W10V10U10`; packed-video `UYVY`/`YUY2` is converted from BT.601 4:2:2,
+  while legacy `INDEX16`/`INDEX32` texture probes are backed by RGBA8 with the
+  little-endian index bytes preserved in channel order;
 - eight texture blend stages and eight simultaneous textures, the full
   `SetTextureStageState` cascade, and per-stage sampler state;
 - sixteen vertex streams;
@@ -97,19 +124,35 @@ synthesises the usage from the register number on that basis
   `D3DTOP_BUMPENVMAPLUMINANCE` in the fixed-function cascade, driven by
   `D3DTSS_BUMPENVMAT00..11`/`BUMPENVLSCALE`/`BUMPENVLOFFSET`, plus the ps_1_x
   `texbem`/`texbeml`/`texdp3`/`texdp3tex`/`texm3x2*`/`texm3x3*` addressing
-  instructions in the shader translator. Both were previously refused;
+  instructions in the shader translator, and the ps_1_4 arithmetic form `bem`
+  (3DMark 2001's Advanced Pixel Shader test is built on it). All were
+  previously refused;
 - **`ProcessVertices`**: a real software fixed-function transform (world x view
   x projection, viewport mapping to `XYZRHW`) with directional, point and spot
   lighting over the shadowed material and light state;
 - **4x multisampling** on the device, additional swap chains, render targets
   and depth surfaces;
-- vertex shader 1.1 and pixel shader 1.1-1.4: declaration parsing and
+- vertex shader 1.0-1.1 and pixel shader 1.0-1.4: declaration parsing and
   conversion, bytecode validation, constant banks including `D3DVSD_CONST`,
-  state-block capture and `Reset` reconstruction;
-- render targets, depth surfaces, image surfaces, `CopyRects`, state blocks,
-  and a 64-bit per-process session namespace. `CopyRects` and the state-block
-  machinery are guest-side and carried over unchanged; the session namespace is
-  a D9WG feature the D3D8 path now shares.
+  state-block capture and `Reset` reconstruction. The guest validator accepts
+  exactly the instructions the host translator implements -- including the
+  `m4x4`/`m4x3`/`m3x4`/`m3x3`/`m3x2` macros every vs_1_x transform is written
+  with, and the ps_1_x `texbem`/`texm3x*`/`texreg2*`/`texdp3*`/`bem` bump and
+  addressing family -- and `d3d8_protocol_consistency_test.js` compares the two
+  tables instruction by instruction, operand count included;
+- render targets, image surfaces, `CopyRects`, state blocks, and a 64-bit
+  per-process session namespace. `CopyRects` and the state-block machinery are
+  guest-side and carried over unchanged; the session namespace is a D9WG
+  feature the D3D8 path now shares;
+- **depth-stencil surfaces with a resource of their own**:
+  `CreateDepthStencilSurface` allocates a host depth texture at the size asked
+  for, rather than aliasing every depth surface onto the device's implicit
+  buffer. Render-to-texture depends on this -- an app renders a reflection into
+  an offscreen target and creates depth to match -- and the alias left the host
+  depth-testing such a pass against the buffer negotiated at `CreateDevice`,
+  which it answers by dropping depth testing for the pass entirely. The surface
+  `GetDepthStencilSurface()` returns for the implicit buffer still names the
+  auto depth-stencil, which is what it is.
 
 ## Not implemented
 
@@ -133,10 +176,18 @@ caps bits are correspondingly absent:
 - **`ProcessVertices` with a programmable vertex shader bound.** The call would
   have to run the app's own vs_1_1 on the CPU; running the fixed-function
   pipeline instead would silently produce different geometry.
+- **`D3DFMT_D16_LOCKABLE`.** Every other D3D8 depth format is offered; this
+  one exists purely so `LockRect` works on the depth surface, and WebGPU
+  cannot copy a `depth24plus` texture to a buffer at all. A lockable surface
+  whose lock fails is worse than a format an app never selects, and plenty of
+  real DX8 cards refused it as well. Making it real means giving the depth
+  target a copyable format (`depth16unorm`/`depth32float`) and adding a depth
+  readback path to `../d3d9-webgpu/`.
 - **the ps_1_x depth-replacement instructions** `texdepth` and `texm3x2depth`,
-  and the ps_1_4 `bem`. The first two write the fragment's depth from a
+  plus `texm3x3`. The first two write the fragment's depth from a
   texture-addressing result, which the host's pipeline has no `frag_depth` path
-  for.
+  for; the third is the Radeon-era 3x3 form that writes a result without
+  sampling, and nothing observed emits it.
 
 ## Regression from the D8WG backend
 
@@ -174,6 +225,18 @@ refused:
   does so to project geometry, not to shade it.
 - **ps_1_x 1D texture lookups** (`texdp3tex`) sample a 2D texture at `v = 0`,
   because WGSL has no 1D texture type. Every desktop driver did the same.
+- **depth-stencil bit layouts.** The host backs all six accepted depth formats
+  with one `depth24plus-stencil8` target, so `D3DFMT_D32` gets 24 bits of
+  depth rather than 32, `D3DFMT_D15S1` and `D3DFMT_D24X4S4` get 8 bits of
+  stencil rather than 1 and 4, and `D3DFMT_D24X8` gets a stencil buffer it did
+  not ask for. Each is more precision than the app requested -- the direction
+  that cannot turn a correct scene into a wrong one -- and the guest can never
+  read a depth surface back, so the layout is unobservable. An app that relies
+  on 4-bit stencil *wrapping* at 16 is the one case this changes.
+- **16-bit render targets** are stored as `rgba8unorm` and re-packed to their
+  own bit layout only when the app reads one back, so rendering into an
+  `R5G6B5` target keeps 8 bits per channel instead of 5/6/5. Banding an app
+  expected from a 16-bit target will be absent.
 
 ## Building
 
@@ -208,6 +271,35 @@ Install the DLL beside the target executable. Use a game deployment profile
 that does not also contain the `opengl32.dll` proxy: both frontends share one
 mapped DMA arena and cannot produce batches concurrently. A guest process loads
 either `d3d8.dll` or `d3d9.dll`, never both.
+
+`GetDeviceCaps` advertises vs_1_1/ps_1_4, and the earlier 1.x models are
+subsets of those, so they are accepted rather than refused: a D3D8 device that
+advertises 1.1 runs a `vs.1.0` shader, and 3DMark 2001 assembles most of its
+shaders that way, never checks the `CreateVertexShader` HRESULT, and
+dereferences the handle it did not get.
+
+## Guest-side blockers that are not the proxy
+
+**3DMark2001 SE build 300 refuses to start on Windows XP SP3**, with
+"3DMark2001 SE needs DirectX 8.1 and proper drivers installed in order to run"
+and `DirectX8 not installed.` in `error.log`, however complete the installed
+`d3d8.dll` is. The app reads `HKLM\SOFTWARE\Microsoft\DirectX\Version` and
+takes `Mid(value, 5, 6)` as the DirectX minor number: correct for DirectX 8.1's
+`4.08.01.0881`, but XP SP3 ships DirectX 9.0c as `4.09.00.0904`, whose
+substring is `00.090` -> minor 0 -> "DirectX 8.0" -> below its 8.1 floor. The
+system-info dump it writes alongside the refusal shows the proxy enumerated
+correctly (adapter, modes, formats, full caps), so the trace log is a false
+lead here. Futuremark fixed this in build 330; for a build 300 image, patch the
+routine at VA `0x005e9d20` -- which takes no stack arguments and has exactly
+one caller -- so that it returns 1. Six bytes at file offset `0x1e9d20` of
+`3DMark2001SE.exe` (build 300, 4,403,200 bytes):
+
+```
+6a ff 68 19 b9 74 00 ...   ->   b8 01 00 00 00 c3   ; mov eax,1 / ret
+```
+
+Searching a raw disk image for the routine's opening bytes patches it in place
+without mounting the image.
 
 ## Tests
 

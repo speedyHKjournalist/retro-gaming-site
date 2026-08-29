@@ -269,6 +269,88 @@ test("ps_1_1: t# is both coordinate and sample destination, r0 is the output", (
     assert.ok(wgsl.includes("t0 = stage_in.varying2;"), "t0 not wired to TEXCOORD0");
 });
 
+test("a vs_1_1 with no dcl gets the API's fixed v# semantics", () => {
+    // Real vs_1_x bytecode contains no dcl_ at all -- the instruction did not
+    // exist before vs_2_0 -- so what v0/v5/v7 mean comes from D3D's fixed
+    // register table, not from the shader. (The VS_1_1_* fixtures above spell
+    // their inputs with dcl, which is convenient but not a shape any
+    // assembler produces for this model.)
+    //
+    // Reflecting nothing here is not a cosmetic gap: the executor pairs a
+    // vertex declaration element to a shader input by (usage, usageIndex), so
+    // an input-less reflection means no attribute is bound, every v# reads
+    // zero, and d3d9_executor drops the draw entirely -- which is what
+    // happened to every vertex-shader draw 3DMark 2001 issued.
+    const shader = [
+        VS(1, 1),
+        instruction(OP.M4x4), dst(REG.RASTOUT, 0), src(REG.INPUT, 0), src(REG.CONST, 0),
+        instruction(OP.MOV), dst(REG.ATTROUT, 0), src(REG.INPUT, 5),
+        instruction(OP.MOV), dst(REG.TEXCRDOUT, 0), src(REG.INPUT, 7),
+        END,
+    ];
+    const { wgsl, reflection } = compileOk(shader, "vs_1_1 without dcl");
+    assert.deepStrictEqual(reflection.inputs, [
+        { register: 0, usage: 0, usageIndex: 0, location: 0 },   // POSITION0
+        { register: 5, usage: 10, usageIndex: 0, location: 5 },  // COLOR0
+        { register: 7, usage: 5, usageIndex: 0, location: 7 },   // TEXCOORD0
+    ], "v0/v5/v7 must reflect as position, diffuse and texcoord0");
+    // And they have to reach the shader as real attributes: the register
+    // variable is still private storage, but the entry point now takes an
+    // attribute per input and copies it in, instead of leaving vin0 at the
+    // zero it is initialised to.
+    assert.match(wgsl, /fn d9_vs_main\(@location\(0\) \w+: vec4<f32>/);
+    assert.match(wgsl, /\n\s+vin0 = \w+;/,
+        "a used v# must be loaded from its vertex attribute");
+});
+
+test("vs_1_1 MOV a0.x selects a matrix-palette constant", () => {
+    // SM1.1 has no MOVA instruction. Matrix-palette skinning loads each
+    // vertex's packed bone index with MOV and then addresses c[a0.x + n]. If
+    // the integer a0 mirror is not updated, every vertex reads the same root
+    // matrix and an animated character remains in its bind/T pose.
+    const shader = [
+        VS(1, 1),
+        instruction(OP.MOV), dst(REG.ADDR, 0, { mask: 0x1 }),
+            src(REG.INPUT, 2, { swizzle: swizzle("xxxx") }),
+        instruction(OP.M4x3), dst(REG.TEMP, 0, { mask: 0x7 }),
+            src(REG.INPUT, 0), src(REG.CONST, 4, { relative: true }),
+        instruction(OP.MOV), dst(REG.RASTOUT, 0), src(REG.TEMP, 0),
+        END,
+    ];
+    const { wgsl, reflection } = compileOk(shader,
+        "vs_1_1 matrix-palette address");
+    assert.match(wgsl, /let _v\d+ = round\(/,
+        "MOV a0.x must apply SM1.1 round-to-nearest conversion");
+    assert.ok(wgsl.includes("a0 = vec4<i32>(a0f);"),
+        "MOV a0.x did not update the integer address register:\n" + wgsl);
+    assert.ok(wgsl.includes("clamp(a0.x + 4, 0, 255)"),
+        "the bone matrix read did not use the updated address register:\n" + wgsl);
+    assert.strictEqual(reflection.usesRelativeConstants, true);
+    assert.strictEqual(reflection.floatConstCount, 256);
+});
+
+test("vs_1_0/ps_1_0 translate exactly like their 1.1 counterparts", () => {
+    // The 1.0 models are strict subsets: vs_1_1 only adds the address
+    // register, ps_1_1 only adds instructions a 1.0 shader cannot contain.
+    // A device advertising vs_1_1/ps_1_4 therefore has to run them, and the
+    // same bytecode with the minor version dropped must translate the same
+    // way. 3DMark 2001 assembles most of its shaders as `vs.1.0`.
+    const withVersion = (list, version) =>
+        list.map((token, index) => (index === 0 ? version : token));
+    // Everything but the header comment, which names the model it came from.
+    const body = wgsl => wgsl.slice(wgsl.indexOf("\n") + 1);
+
+    const vs10 = compileOk(withVersion(VS_1_1_TRANSFORM, VS(1, 0)), "vs_1_0");
+    assert.deepStrictEqual(vs10.reflection.version, { major: 1, minor: 0 });
+    assert.strictEqual(body(vs10.wgsl),
+        body(compileOk(VS_1_1_TRANSFORM, "vs_1_1").wgsl));
+
+    const ps10 = compileOk(withVersion(PS_1_1_MODULATE, PS(1, 0)), "ps_1_0");
+    assert.deepStrictEqual(ps10.reflection.version, { major: 1, minor: 0 });
+    assert.strictEqual(body(ps10.wgsl),
+        body(compileOk(PS_1_1_MODULATE, "ps_1_1").wgsl));
+});
+
 test("ps_2_0: dcl_2d, def and texld produce a sampler pair and a constant default", () => {
     const { wgsl, reflection } = compileOk(PS_2_0_TEXTURED, "ps_2_0");
     assert.deepStrictEqual(reflection.samplers, [
@@ -447,6 +529,37 @@ test("ps_1_x texbeml scales by luminance from the bump map's blue channel", () =
     ]);
     assert.match(result.wgsl, /clamp\(d9c\.bump_lum\[1\]\.x \* \([^)]*\)\.z \+ d9c\.bump_lum\[1\]\.y, 0\.0, 1\.0\)/,
         "luminance should be scale*b + offset, clamped: " + result.wgsl);
+});
+
+test("ps_1_4 bem displaces a coordinate by the stage's bump matrix", () => {
+    // The ps_1_4 spelling of the same transform, as an arithmetic instruction
+    // with no sample: texcrd brings the coordinate into r1, texld the (du, dv)
+    // pair into r0, and bem writes the displaced coordinate back for the
+    // second phase to sample with.
+    const result = compileOk([
+        PS(1, 4),
+        instruction(OP.TEXCOORD), dst(REG.TEMP, 1), src(REG.TEXTURE, 1),
+        instruction(OP.TEX), dst(REG.TEMP, 0), src(REG.TEXTURE, 0),
+        instruction(OP.BEM), dst(REG.TEMP, 1, { mask: 0x3 }),
+            src(REG.TEMP, 1), src(REG.TEMP, 0),
+        END,
+    ]);
+    // Same matrix convention as texbem, and the stage is the *destination*
+    // register's index -- getting that from a source instead reads an
+    // unwritten matrix and displaces by zero.
+    assert.match(result.wgsl,
+        /\w+\.x \+ d9c\.bump\[1\]\.x \* \w+\.x \+ d9c\.bump\[1\]\.z \* \w+\.y/,
+        "r should be src0.r + m00*du + m10*dv: " + result.wgsl);
+    assert.match(result.wgsl,
+        /\w+\.y \+ d9c\.bump\[1\]\.y \* \w+\.x \+ d9c\.bump\[1\]\.w \* \w+\.y/,
+        "g should be src0.g + m01*du + m11*dv");
+    // bem writes .rg only. b and a of the destination must survive it.
+    assert.match(result.wgsl, /r1\.x = /, "bem must write r");
+    assert.match(result.wgsl, /r1\.y = /, "bem must write g");
+    assert.ok(!/r1\.z = |r1\.w = /.test(result.wgsl),
+        "bem must not touch b or a: " + result.wgsl);
+    assert.strictEqual(result.reflection.bumpStageCount, 2,
+        "the bump matrix array must cover stage 1");
 });
 
 test("ps_1_x texm3x3 forms build their coordinate from the preceding pads", () => {

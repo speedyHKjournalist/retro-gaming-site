@@ -27,6 +27,16 @@ static const FormatProbe g_probes[] =
     {"A4R4G4B4 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_A4R4G4B4, TRUE, 0},
     {"L8 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_L8, TRUE, 0},
     {"A8 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_A8, TRUE, 0},
+    {"UYVY texture", 0, D3DRTYPE_TEXTURE, D3DFMT_UYVY, TRUE, 0},
+    {"YUY2 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_YUY2, TRUE, 0},
+    {"INDEX16 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_INDEX16, TRUE, 0},
+    {"INDEX32 texture", 0, D3DRTYPE_TEXTURE, D3DFMT_INDEX32, TRUE, 0},
+    /* 3DMark2001 uses these queries to decide whether an enumerated display
+     * mode belongs to a renderable D3D8 driver, before it creates a device. */
+    {"X8R8G8B8 render-target surface", D3DUSAGE_RENDERTARGET,
+            D3DRTYPE_SURFACE, D3DFMT_X8R8G8B8, TRUE, 0},
+    {"A8R8G8B8 render-target surface", D3DUSAGE_RENDERTARGET,
+            D3DRTYPE_SURFACE, D3DFMT_A8R8G8B8, TRUE, 0},
     {"D24S8 depth/stencil surface", D3DUSAGE_DEPTHSTENCIL,
             D3DRTYPE_SURFACE, D3DFMT_D24S8, TRUE, 0},
 
@@ -664,20 +674,27 @@ static void audit_still_hidden_paths(void)
 
 /* A shader that claims an unsupported/unadvertised version, or one built
  * from an opcode outside the Stage 6 instruction set, must still be
- * rejected outright -- Stage 6 only advertises vs_1_1/ps_1_1..1_4. */
+ * rejected outright -- Stage 6 advertises vs_1_0..1_1/ps_1_0..1_4.
+ *
+ * The earlier 1.0 shader models are part of that set, not outside it: a
+ * device advertising vs_1_1/ps_1_4 runs every earlier 1.x shader, and the
+ * D3D8 runtime passes them straight to the driver. 3DMark 2001 assembles
+ * most of its shaders as `vs.1.0` and crashes on the handle it does not get,
+ * so audit_earlier_shader_models_accepted() below guards that direction. */
 static void audit_unsupported_shader_bytecode_rejected(void)
 {
     DWORD shader = 0xCCCCCCCCu;
     static const DWORD declaration[] = { D3DVSD_END() };
-    /* vs_1_0 is not the version this backend advertises via GetDeviceCaps. */
-    static const DWORD wrong_version[] = { D3DVS_VERSION(1, 0), D3DVS_END() };
-    /* D3DSIO_M4x4 (a matrix macro) is legal D3D8 bytecode but outside the
-     * Stage 6 supported instruction set -- must be rejected, not guessed at. */
+    /* vs_2_0 is a shader model this backend does not advertise at all. */
+    static const DWORD wrong_version[] = { D3DVS_VERSION(2, 0), D3DVS_END() };
+    /* D3DSIO_TEXKILL is legal D3D8 bytecode, but it is a pixel-shader
+     * instruction: inside a vertex shader it must be rejected, not guessed
+     * at. (The matrix macros that used to stand here are translated now --
+     * every vs_1_x transform is written with one.) */
     static const DWORD unsupported_opcode[] =
     {
         D3DVS_VERSION(1, 1),
-        D3DSIO_M4x4, AUDIT_SHADER_PARAM | D3DSPR_TEMP | D3DSP_WRITEMASK_ALL,
-                AUDIT_SHADER_PARAM | D3DSPR_INPUT | D3DVS_NOSWIZZLE,
+        D3DSIO_TEXKILL, AUDIT_SHADER_PARAM | D3DSPR_TEMP | D3DSP_WRITEMASK_ALL,
         D3DVS_END()
     };
     HRESULT hr;
@@ -692,6 +709,46 @@ static void audit_unsupported_shader_bytecode_rejected(void)
     if (hr != D3DERR_INVALIDCALL || shader != 0)
         mismatch("unsupported-opcode vertex shader was not rejected/zeroed",
                 3);
+}
+
+/* The converse of the audit above: vs_1_0 and ps_1_0 are subsets of the
+ * advertised models and must be created, not refused. */
+static void audit_earlier_shader_models_accepted(void)
+{
+    static const DWORD declaration[] =
+    {
+        D3DVSD_STREAM(0),
+        D3DVSD_REG(D3DVSDE_POSITION, D3DVSDT_FLOAT4),
+        D3DVSD_END()
+    };
+    static const DWORD vertex_shader[] =
+    {
+        D3DVS_VERSION(1, 0),
+        /* The shape every real vs_1_x transform has: a matrix macro against
+         * four consecutive constants. */
+        D3DSIO_M4x4, AUDIT_SHADER_PARAM | D3DSPR_RASTOUT | D3DSRO_POSITION | D3DSP_WRITEMASK_ALL,
+                AUDIT_SHADER_PARAM | D3DSPR_INPUT | D3DVS_NOSWIZZLE,
+                AUDIT_SHADER_PARAM | D3DSPR_CONST | D3DVS_NOSWIZZLE,
+        D3DVS_END()
+    };
+    static const DWORD pixel_shader[] =
+    {
+        D3DPS_VERSION(1, 0),
+        D3DSIO_MOV, AUDIT_SHADER_PARAM | D3DSPR_TEMP | D3DSP_WRITEMASK_ALL,
+                AUDIT_SHADER_PARAM | D3DSPR_INPUT | D3DSP_NOSWIZZLE,
+        D3DPS_END()
+    };
+    DWORD vs = 0;
+    DWORD ps = 0;
+    HRESULT hr = IDirect3DDevice8_CreateVertexShader(g_device, declaration,
+            vertex_shader, &vs, 0);
+    if (FAILED(hr) || !vs)
+        mismatch("vs_1_0 was refused by a device advertising vs_1_1", 3);
+    hr = IDirect3DDevice8_CreatePixelShader(g_device, pixel_shader, &ps);
+    if (FAILED(hr) || !ps)
+        mismatch("ps_1_0 was refused by a device advertising ps_1_4", 3);
+    if (ps) IDirect3DDevice8_DeletePixelShader(g_device, ps);
+    if (vs) IDirect3DDevice8_DeleteVertexShader(g_device, vs);
 }
 
 static void audit_supported_resources(void)
@@ -712,6 +769,7 @@ static void audit_supported_resources(void)
     if (FAILED(hr)) resource_failure("extended-path EndScene", hr, 3);
     audit_still_hidden_paths();
     audit_unsupported_shader_bytecode_rejected();
+    audit_earlier_shader_models_accepted();
     audit_shader_pipeline();
 }
 

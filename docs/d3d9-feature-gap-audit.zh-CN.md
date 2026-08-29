@@ -101,13 +101,16 @@ naga 校验 178 个着色器，全绿；DLL 以 `-Werror` 编译通过。
 
 `D3DTEXTURESTAGESTATETYPE` 因此从 12/18 变成 18/18。
 
-剩余仍被拒绝的只有 4 条冷门指令（`UNSUPPORTED_OPS`，`d3d9_shader_pipeline.js:130`）：
+- `bem`（ps_1_4 的算术形 bump，无纹理采样）也已翻译：2026-08-28 补上，
+  3DMark 2001 的 Advanced Pixel Shader 测试整个建立在它之上，之前 guest 侧
+  `CreatePixelShader` 直接拒绝该 shader，测试跑不起来
 
-- [ ] `bem`（ps_1_4 的独立 bump，无纹理采样）
+剩余仍被拒绝的只有 3 条冷门指令（`UNSUPPORTED_OPS`，`d3d9_shader_pipeline.js`）：
+
 - [ ] `texm3x2depth` / `texdepth`（用纹理寻址结果改写 fragment depth）
 - [ ] `texm3x3`（Radeon 世代写 3x3 结果的变体）
 
-优先级低：这四条在实际游戏里近乎绝迹。
+优先级低：这三条在实际游戏里近乎绝迹。
 
 ### 2. 五个 texture op 缺失
 

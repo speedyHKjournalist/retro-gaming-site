@@ -325,6 +325,8 @@ static HRESULT configure_fixed_pipeline(void)
     D3DMATRIX projection;
     D3DMATERIAL8 material;
     D3DLIGHT8 light;
+    D3DLIGHT8 readback;
+    WINBOOL enabled;
     HRESULT hr;
 
     begin_stage("14 LIGHTING true");
@@ -425,12 +427,20 @@ static HRESULT configure_fixed_pipeline(void)
     light.Direction.x = 0.35f;
     light.Direction.y = -0.55f;
     light.Direction.z = 0.75f;
-    begin_stage("34 SetLight 0 directional");
-    hr = IDirect3DDevice8_SetLight(g_device, 0, &light);
-    if (FAILED(hr)) return failed("SetLight(0, directional)", hr);
-    begin_stage("35 LightEnable 0 false");
-    hr = IDirect3DDevice8_LightEnable(g_device, 0, FALSE);
-    if (FAILED(hr)) return failed("LightEnable(0, FALSE)", hr);
+    begin_stage("34 SetLight sparse index 37 directional");
+    hr = IDirect3DDevice8_SetLight(g_device, 37, &light);
+    if (FAILED(hr)) return failed("SetLight(37, directional)", hr);
+    ZeroMemory(&readback, sizeof(readback));
+    hr = IDirect3DDevice8_GetLight(g_device, 37, &readback);
+    if (FAILED(hr) || readback.Type != D3DLIGHT_DIRECTIONAL)
+        return failed("GetLight(37)", FAILED(hr) ? hr : E_FAIL);
+    begin_stage("35 LightEnable sparse index 37 false");
+    hr = IDirect3DDevice8_LightEnable(g_device, 37, FALSE);
+    if (FAILED(hr)) return failed("LightEnable(37, FALSE)", hr);
+    enabled = TRUE;
+    hr = IDirect3DDevice8_GetLightEnable(g_device, 37, &enabled);
+    if (FAILED(hr) || enabled)
+        return failed("GetLightEnable(37)", FAILED(hr) ? hr : E_FAIL);
 
     return D3D_OK;
 }
@@ -458,8 +468,8 @@ static HRESULT render_lighting_comparison(HWND hwnd)
             D3DPT_TRIANGLELIST, 0, 24, 0, 12);
     if (FAILED(hr)) goto scene_failed;
 
-    begin_stage("40 LightEnable 0 true");
-    hr = IDirect3DDevice8_LightEnable(g_device, 0, TRUE);
+    begin_stage("40 LightEnable sparse index 37 true");
+    hr = IDirect3DDevice8_LightEnable(g_device, 37, TRUE);
     if (FAILED(hr)) goto scene_failed;
     make_world_matrix(&world, 1.7f);
     begin_stage("41 SetTransform WORLD right");

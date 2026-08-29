@@ -79,6 +79,7 @@ typedef struct D8Shader D8Shader;
 typedef struct D8CubeTexture D8CubeTexture;
 typedef struct D8VolumeTexture D8VolumeTexture;
 typedef struct D8Volume D8Volume;
+typedef struct D8LightState D8LightState;
 
 /*
  * The device window's client area in screen coordinates.
@@ -123,6 +124,22 @@ typedef struct D8StreamBinding {
     UINT stride;
 } D8StreamBinding;
 
+/*
+ * MaxActiveLights limits how many lights participate in one draw; it does not
+ * limit the DWORD indices an application may assign. Keep the common 0..7
+ * entries inline for the hot fixed-function path and store sparse higher
+ * indices here. The two masks are used only by state-block copies of a node.
+ */
+struct D8LightState {
+    D8LightState *next;
+    DWORD index;
+    D3DLIGHT8 light;
+    BOOL set;
+    BOOL enabled;
+    BOOL light_mask;
+    BOOL enable_mask;
+};
+
 typedef struct D8StateSnapshot {
     BYTE render_mask[D8WG_MAX_RENDER_STATES];
     BYTE texture_stage_mask[D8WG_MAX_TEXTURE_STAGES]
@@ -152,6 +169,8 @@ typedef struct D8StateSnapshot {
     D3DLIGHT8 lights[D8WG_MAX_LIGHTS];
     BOOL light_set[D8WG_MAX_LIGHTS];
     BOOL light_enabled[D8WG_MAX_LIGHTS];
+    D8LightState *extra_lights;
+    BOOL all_lights_scope;
 } D8StateSnapshot;
 
 struct D8StateBlock {
@@ -182,6 +201,7 @@ struct D8Device {
     D3DLIGHT8 lights[D8WG_MAX_LIGHTS];
     BOOL light_set[D8WG_MAX_LIGHTS];
     BOOL light_enabled[D8WG_MAX_LIGHTS];
+    D8LightState *extra_lights;
     DWORD render_states[D8WG_MAX_RENDER_STATES];
     DWORD texture_stage_states[D8WG_MAX_TEXTURE_STAGES]
                                       [D8WG_MAX_TEXTURE_STAGE_STATES];
@@ -337,6 +357,8 @@ struct D8Volume {
     UINT level;
 };
 
+static void free_extra_lights(D8LightState **list);
+
 /*
  * D3D8 vertex/pixel shaders are not COM objects: CreateVertexShader and
  * CreatePixelShader hand back a raw DWORD handle (bit 0 always set, which is
@@ -365,6 +387,11 @@ struct D8Shader {
     UINT code_token_count;
     UINT major_version;
     UINT minor_version;
+    /* FNV-1a of exactly the bytecode blob sent to the host. The host shader
+     * cache keys exclusively on these fields, so leaving them zero aliases
+     * every D3D8 shader to the first one compiled in the session. */
+    uint32_t hash_low;
+    uint32_t hash_high;
     /* D3DVSD_CONST payload. D3D8 applies it when the shader is set, not when
      * it is created, so it is replayed by device_set_vertex_shader(). */
     UINT const_start;
@@ -852,11 +879,14 @@ static BOOL shader_regtype_valid(DWORD register_type, BOOL is_pixel_shader)
 }
 
 /*
- * Returns FALSE for any opcode outside the Stage 6 supported instruction set
- * for this shader type/version. Unimplemented-but-legal D3D8 opcodes (matrix
- * macros, bump-mapping texture ops, control flow) are rejected the same way
- * as truly malformed data: the doc's parser safety rule is "never guess at
- * semantics for an instruction you do not implement." On success,
+ * Returns FALSE for any opcode outside the supported instruction set for this
+ * shader type/version. The set is the host translator's, not a smaller one of
+ * this DLL's own: a legal instruction refused here is a shader the backend
+ * could have run, and the app has no way to tell that apart from a driver
+ * with no shader support at all. What stays refused is what the host also
+ * refuses (`texdepth`, `texm3x2depth`, `texm3x3`) plus anything malformed, on
+ * the parser safety rule "never guess at semantics for an instruction you do
+ * not implement". On success,
  * *operand_words is the number of DWORD parameter tokens following the
  * opcode token (D3DSIO_DEF's trailing four are raw float32 immediates, not
  * register-encoded operands, but are still counted here).
@@ -896,6 +926,18 @@ static BOOL shader_opcode_supported(WORD opcode, BOOL is_pixel_shader,
         *operand_words = 3; return TRUE;
     case D3DSIO_DEF:
         *operand_words = 5; return TRUE;
+    case D3DSIO_M4x4:
+    case D3DSIO_M4x3:
+    case D3DSIO_M3x4:
+    case D3DSIO_M3x3:
+    case D3DSIO_M3x2:
+        /* dst, the source vector, and the first row of the matrix. These are
+         * how every vs_1_x transform is spelled -- 3DMark 2001 opens with
+         * `m4x4 oPos, v0, c0` -- and the host translator expands each one into
+         * consecutive dot products. Refusing them refused vertex shaders as a
+         * feature. */
+        if (is_pixel_shader) return FALSE;
+        *operand_words = 3; return TRUE;
     case D3DSIO_LRP:
         if (!is_pixel_shader) return FALSE;
         *operand_words = 4; return TRUE;
@@ -906,8 +948,12 @@ static BOOL shader_opcode_supported(WORD opcode, BOOL is_pixel_shader,
         if (!is_pixel_shader || minor < 2u) return FALSE;
         *operand_words = 4; return TRUE;
     case D3DSIO_TEXCOORD:
+        /* ps_1_4 renamed this to `texcrd dst, src` and gave it a source
+         * operand; 1.1-1.3 `texcoord dst` has none. Reading the wrong number
+         * of words here does not just mis-validate one instruction, it
+         * desyncs the walk over everything after it. */
         if (!is_pixel_shader) return FALSE;
-        *operand_words = 1; return TRUE;
+        *operand_words = (minor >= 4u) ? 2u : 1u; return TRUE;
     case D3DSIO_TEX:
         if (!is_pixel_shader) return FALSE;
         *operand_words = (minor >= 4u) ? 2u : 1u; return TRUE;
@@ -917,6 +963,41 @@ static BOOL shader_opcode_supported(WORD opcode, BOOL is_pixel_shader,
     case D3DSIO_PHASE:
         if (!is_pixel_shader || minor != 4u) return FALSE;
         *operand_words = 0; return TRUE;
+    case D3DSIO_BEM:
+        /* ps_1_4's arithmetic form of the texbem displacement: `bem dst.rg,
+         * src0, src1` applies the destination stage's D3DTSS_BUMPENVMAT*
+         * matrix without sampling. 1.4-only -- earlier versions have only the
+         * texture-addressing spelling. 3DMark 2001's Advanced Pixel Shader
+         * test is a ps_1_4 shader built around it, so refusing it failed that
+         * test at CreatePixelShader. */
+        if (!is_pixel_shader || minor != 4u) return FALSE;
+        *operand_words = 3; return TRUE;
+    /*
+     * The ps_1_x texture-addressing family. The host translates all of these
+     * (see the TEXBEM/TEXM3x* cases in d3d9_shader_pipeline.js's emit()), so
+     * refusing them here hid environment bump mapping behind a validator that
+     * had never been updated to match. TEXDEPTH, TEXM3x2DEPTH and TEXM3x3 stay
+     * refused -- those are the three the host itself refuses -- and TEXM3x3DIFF
+     * was never implemented by any hardware.
+     */
+    case D3DSIO_TEXBEM:
+    case D3DSIO_TEXBEML:
+    case D3DSIO_TEXREG2AR:
+    case D3DSIO_TEXREG2GB:
+    case D3DSIO_TEXREG2RGB:
+    case D3DSIO_TEXDP3:
+    case D3DSIO_TEXDP3TEX:
+    case D3DSIO_TEXM3x2PAD:
+    case D3DSIO_TEXM3x2TEX:
+    case D3DSIO_TEXM3x3PAD:
+    case D3DSIO_TEXM3x3TEX:
+    case D3DSIO_TEXM3x3VSPEC:
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = 2; return TRUE;
+    case D3DSIO_TEXM3x3SPEC:
+        /* The one that also takes the eye-ray constant. */
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = 3; return TRUE;
     default:
         return FALSE;
     }
@@ -948,20 +1029,41 @@ static BOOL validate_shader_body(const DWORD *tokens, UINT max_tokens,
         if (opcode == D3DSIO_COMMENT) {
             UINT comment_words = (UINT)((token & D3DSI_COMMENTSIZE_MASK)
                     >> D3DSI_COMMENTSIZE_SHIFT);
-            if (offset + 1u + comment_words > max_tokens)
+            if (offset + 1u + comment_words > max_tokens) {
+                D8WG_TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u "
+                        "offset=%u opcode=%04X reason=truncated-comment",
+                        is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                        (UINT)opcode);
                 return FALSE;
+            }
             offset += 1u + comment_words;
             continue;
         }
         if (!shader_opcode_supported(opcode, is_pixel_shader, minor,
-                &operand_words))
+                &operand_words)) {
+            D8WG_TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u "
+                    "opcode=%04X reason=unsupported-opcode",
+                    is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                    (UINT)opcode);
             return FALSE;
-        if (offset + 1u + operand_words > max_tokens)
+        }
+        if (offset + 1u + operand_words > max_tokens) {
+            D8WG_TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u "
+                    "opcode=%04X reason=truncated-operands",
+                    is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                    (UINT)opcode);
             return FALSE;
+        }
         if (opcode != D3DSIO_NOP && opcode != D3DSIO_PHASE) {
             DWORD dst_regtype = tokens[offset + 1u] & D3DSP_REGTYPE_MASK;
-            if (!shader_regtype_valid(dst_regtype, is_pixel_shader))
+            if (!shader_regtype_valid(dst_regtype, is_pixel_shader)) {
+                D8WG_TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u "
+                        "offset=%u opcode=%04X reason=invalid-dst-regtype "
+                        "regtype=%08lX",
+                        is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                        (UINT)opcode, dst_regtype);
                 return FALSE;
+            }
         }
         if (opcode != D3DSIO_DEF && opcode != D3DSIO_NOP
                 && opcode != D3DSIO_PHASE) {
@@ -970,13 +1072,56 @@ static BOOL validate_shader_body(const DWORD *tokens, UINT max_tokens,
             for (src = 0; src < src_count; ++src) {
                 DWORD src_regtype =
                         tokens[offset + 2u + src] & D3DSP_REGTYPE_MASK;
-                if (!shader_regtype_valid(src_regtype, is_pixel_shader))
+                if (!shader_regtype_valid(src_regtype, is_pixel_shader)) {
+                    D8WG_TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u "
+                            "offset=%u opcode=%04X reason=invalid-src-regtype "
+                            "source=%u regtype=%08lX",
+                            is_pixel_shader ? "pixel" : "vertex", minor,
+                            offset, (UINT)opcode, src, src_regtype);
                     return FALSE;
+                }
             }
         }
         offset += 1u + operand_words;
     }
+    D8WG_TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u "
+            "reason=missing-end", is_pixel_shader ? "pixel" : "vertex",
+            minor, offset);
     return FALSE; /* ran past max_tokens without ever finding D3DSIO_END */
+}
+
+/* 64-bit FNV-1a over the raw little-endian token bytes. This is the same
+ * byte-oriented implementation as d3d9proxy's shader_bytecode_hash(), and
+ * therefore the same key hashTokens() in d3d9_shader_pipeline.js produces.
+ * D3D8's stored blob excludes END, so hash exactly code_token_count tokens --
+ * i.e. exactly what emit_create_{vertex,pixel}_shader uploads. */
+static void shader_bytecode_hash(const DWORD *code, UINT token_count,
+        uint32_t *low_out, uint32_t *high_out)
+{
+    uint32_t low = 0x84222325u;
+    uint32_t high = 0xCBF29CE4u;
+    UINT index;
+    UINT byte_index;
+
+    for (index = 0; index < token_count; ++index) {
+        DWORD token = code[index];
+        for (byte_index = 0; byte_index < 4; ++byte_index) {
+            uint32_t l0, l1, h0, h1, r0, r1, r2, r3;
+            low ^= (token >> (byte_index * 8)) & 0xFFu;
+            l0 = low & 0xFFFFu;
+            l1 = low >> 16;
+            h0 = high & 0xFFFFu;
+            h1 = high >> 16;
+            r0 = l0 * 0x1B3u;
+            r1 = l1 * 0x1B3u + (r0 >> 16);
+            r2 = h0 * 0x1B3u + (r1 >> 16) + l0;
+            r3 = h1 * 0x1B3u + (r2 >> 16) + l1;
+            low = ((r1 & 0xFFFFu) << 16) | (r0 & 0xFFFFu);
+            high = ((r3 & 0xFFFFu) << 16) | (r2 & 0xFFFFu);
+        }
+    }
+    *low_out = low;
+    *high_out = high;
 }
 
 /*
@@ -1336,6 +1481,8 @@ static BOOL emit_create_vertex_shader(D8Device *device, D8Shader *shader)
         command.resource_handle = shader->handle;
         command.instruction_token_count = shader->code_token_count;
         command.code_offset = (uint32_t)(code_blob - batch_base());
+        command.bytecode_hash_low = shader->hash_low;
+        command.bytecode_hash_high = shader->hash_high;
         CopyMemory(payload, &command, sizeof(command));
         if (code_bytes)
             CopyMemory(code_blob, shader->code_tokens, code_bytes);
@@ -1361,6 +1508,8 @@ static BOOL emit_create_pixel_shader(D8Device *device, D8Shader *shader)
         command.resource_handle = shader->handle;
         command.instruction_token_count = shader->code_token_count;
         command.code_offset = (uint32_t)(code_blob - batch_base());
+        command.bytecode_hash_low = shader->hash_low;
+        command.bytecode_hash_high = shader->hash_high;
         CopyMemory(payload, &command, sizeof(command));
         if (code_bytes)
             CopyMemory(code_blob, shader->code_tokens, code_bytes);
@@ -1506,7 +1655,9 @@ static BOOL texture_format_layout(D3DFORMAT format, UINT *block_width,
     case D3DFMT_X8L8V8U8:  /* signed bump + luminance */
     case D3DFMT_Q8W8V8U8:  /* signed bump, four channels */
     case D3DFMT_V16U16:
+    case D3DFMT_W11V11U10: /* signed 10/11/11, packed in one DWORD */
     case D3DFMT_A2W10V10U10:
+    case D3DFMT_INDEX32:    /* probed as a texture by legacy caps scanners */
         *block_bytes = 4;
         return TRUE;
     case D3DFMT_R8G8B8:
@@ -1522,6 +1673,7 @@ static BOOL texture_format_layout(D3DFORMAT format, UINT *block_width,
     case D3DFMT_A8P8:
     case D3DFMT_V8U8:      /* the classic EMBM bump map */
     case D3DFMT_L6V5U5:
+    case D3DFMT_INDEX16:    /* probed as a texture by legacy caps scanners */
         *block_bytes = 2;
         return TRUE;
     case D3DFMT_L8:
@@ -1543,6 +1695,12 @@ static BOOL texture_format_layout(D3DFORMAT format, UINT *block_width,
         *block_width = 4;
         *block_height = 4;
         *block_bytes = 16;
+        return TRUE;
+    case D3DFMT_UYVY:
+    case D3DFMT_YUY2:
+        /* 4:2:2 video: two horizontal texels share one 32-bit YUV block. */
+        *block_width = 2;
+        *block_bytes = 4;
         return TRUE;
     default:
         return FALSE;
@@ -2267,7 +2425,6 @@ static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D8 *iface,
         UINT adapter, DWORD flags, D3DADAPTER_IDENTIFIER8 *identifier)
 {
     (void)iface;
-    (void)flags;
     if (adapter || !identifier)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(identifier, sizeof(*identifier));
@@ -2278,14 +2435,41 @@ static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D8 *iface,
     identifier->DeviceId = 0x5686;
     identifier->SubSysId = 0x56861234;
     identifier->Revision = 1;
-    identifier->WHQLLevel = 0;
+    /* No real driver reports an all-zero DriverVersion, and a caller that
+     * sanity-checks the struct -- or prints it, as 3DMark 2001's system-info
+     * report does -- has nothing to show for it. product.version.subversion.
+     * build packed as two DWORDs, the way a driver reports it; 6.14.10.6764
+     * is a plausible XP-era revision and is what ../d3d9proxy reports for the
+     * same backend. */
+    identifier->DriverVersion.HighPart = (6 << 16) | 14;
+    identifier->DriverVersion.LowPart = (10 << 16) | 6764;
+    /* Stable and non-zero, derived from the identity: apps cache this GUID to
+     * notice that the driver changed under them, which an all-zero value
+     * defeats. The D9WG frontend derives its own the same way, from a
+     * different prefix, so the two never collide. */
+    identifier->DeviceIdentifier.Data1 = 0xD8E60000u | identifier->DeviceId;
+    identifier->DeviceIdentifier.Data2 = (WORD)identifier->VendorId;
+    identifier->DeviceIdentifier.Data3 = (WORD)identifier->DeviceId;
+    identifier->DeviceIdentifier.Data4[0] = 0x9A;
+    identifier->DeviceIdentifier.Data4[1] = 0xB1;
+    identifier->DeviceIdentifier.Data4[2] = 0xC2;
+    identifier->DeviceIdentifier.Data4[3] = 0xD3;
+    identifier->DeviceIdentifier.Data4[4] = 0xE4;
+    identifier->DeviceIdentifier.Data4[5] = 0xF5;
+    identifier->DeviceIdentifier.Data4[6] = 0x06;
+    identifier->DeviceIdentifier.Data4[7] = 0x17;
+    /* D3D8 computes the WHQL level only when the caller leaves
+     * D3DENUM_NO_WHQL_LEVEL clear. 1 = signed but no date information, rather
+     * than 0 = "not certified", which some titles read as a blacklisted
+     * driver. */
+    identifier->WHQLLevel = (flags & D3DENUM_NO_WHQL_LEVEL) ? 0 : 1;
     return D3D_OK;
 }
 
 static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D8 *iface, UINT adapter)
 {
     (void)iface;
-    return adapter ? 0 : 6;
+    return adapter ? 0 : 9;
 }
 
 static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D8 *iface, UINT adapter,
@@ -2296,10 +2480,13 @@ static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D8 *iface, UINT adapter,
         UINT height;
         D3DFORMAT format;
     } modes[] = {
+        { 640, 480, D3DFMT_X1R5G5B5 },
         { 640, 480, D3DFMT_R5G6B5 },
         { 640, 480, D3DFMT_X8R8G8B8 },
+        { 800, 600, D3DFMT_X1R5G5B5 },
         { 800, 600, D3DFMT_R5G6B5 },
         { 800, 600, D3DFMT_X8R8G8B8 },
+        { 1024, 768, D3DFMT_X1R5G5B5 },
         { 1024, 768, D3DFMT_R5G6B5 },
         { 1024, 768, D3DFMT_X8R8G8B8 }
     };
@@ -2321,10 +2508,71 @@ static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D8 *iface,
     return D3D_OK;
 }
 
-static BOOL supported_backbuffer_format(D3DFORMAT format)
+/*
+ * An off-screen plain surface (CreateImageSurface) is CPU memory the app
+ * locks, so every uncompressed format can be one -- but only those: a
+ * block-compressed or packed-pair surface has no single-texel row for a lock
+ * to describe, which is the rule create_standalone_surface already enforces.
+ * Answering this query at all matters because an app that asks before
+ * creating took silence for "no such format".
+ */
+static BOOL supported_image_surface_format(D3DFORMAT format)
+{
+    UINT block_width;
+    UINT block_height;
+    UINT block_bytes;
+    return texture_format_layout(format, &block_width, &block_height,
+            &block_bytes) && block_width == 1 && block_height == 1;
+}
+
+/*
+ * Render-target formats. Wider than the two 32-bit ones this frontend started
+ * with, because a 16-bit display mode is only usable when its own format is a
+ * legal render target: 3DMark 2001 validates every mode it enumerates with
+ * CheckDeviceFormat(mode, RENDERTARGET, SURFACE, mode) and drops the ones that
+ * fail, so refusing R5G6B5 silently removed every 16-bit mode.
+ *
+ * The host stores all of them as `rgba8unorm` -- more precision than the
+ * 16-bit formats describe, never less -- and packGPUReadbackRow() in
+ * ../d3d9-webgpu/d3d9_executor.js re-packs exactly this set on readback, so a
+ * lockable render target still hands back the bit layout that was asked for.
+ */
+static BOOL supported_render_target_format(D3DFORMAT format)
 {
     return format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8
-            || format == D3DFMT_R5G6B5;
+            || format == D3DFMT_R5G6B5 || format == D3DFMT_X1R5G5B5
+            || format == D3DFMT_A1R5G5B5 || format == D3DFMT_A4R4G4B4;
+}
+
+/*
+ * Depth-stencil formats. The host satisfies every one of these with a single
+ * `depth24plus-stencil8` target: the guest can never read a depth surface
+ * back, so the only thing an app can observe is that depth and stencil work,
+ * not how many bits each was given. D3DFMT_D32 therefore gets 24 bits of
+ * depth, D3DFMT_D15S1 and D3DFMT_D24X4S4 get 8 bits of stencil rather than 1
+ * and 4, and D3DFMT_D24X8 gets a stencil buffer it did not ask for. Each is
+ * more precision than the app requested, in the one direction that cannot
+ * turn a correct scene into a wrong one.
+ *
+ * D3DFMT_D16_LOCKABLE is deliberately absent: its whole point is that
+ * LockRect works on it, WebGPU cannot copy a depth24plus texture to a buffer
+ * at all, and a lockable surface whose Lock fails is worse than a format the
+ * app never picks. Plenty of real DX8 cards refused it too.
+ */
+static BOOL supported_depth_stencil_format(D3DFORMAT format)
+{
+    return format == D3DFMT_D16 || format == D3DFMT_D24S8
+            || format == D3DFMT_D32 || format == D3DFMT_D15S1
+            || format == D3DFMT_D24X8 || format == D3DFMT_D24X4S4;
+}
+
+/* A back buffer is a render target, and D3D8 lets an app pick a 16-bit one
+ * against a 32-bit display mode or the reverse. Refusing the 15/16-bit
+ * formats failed CreateDevice outright for a title that asks for the back
+ * buffer its fullscreen mode implies. */
+static BOOL supported_backbuffer_format(D3DFORMAT format)
+{
+    return supported_render_target_format(format);
 }
 
 static HRESULT WINAPI d3d_check_device_type(IDirect3D8 *iface, UINT adapter,
@@ -2336,7 +2584,8 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D8 *iface, UINT adapter,
     if (adapter || type != D3DDEVTYPE_HAL)
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if ((display_format != D3DFMT_X8R8G8B8
-            && display_format != D3DFMT_R5G6B5)
+            && display_format != D3DFMT_R5G6B5
+            && display_format != D3DFMT_X1R5G5B5)
             || !supported_backbuffer_format(backbuffer_format))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     return D3D_OK;
@@ -2376,7 +2625,7 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D8 *iface,
         return D3D_OK;
     if (resource_type == D3DRTYPE_CUBETEXTURE
             && usage == D3DUSAGE_RENDERTARGET
-            && (format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8))
+            && supported_render_target_format(format))
         return D3D_OK;
     /* Volumes have no block-compressed layout on this path, and are never
      * render targets -- device_create_volume_texture refuses both. */
@@ -2389,12 +2638,37 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D8 *iface,
         return D3D_OK;
     if (resource_type == D3DRTYPE_TEXTURE
             && usage == D3DUSAGE_RENDERTARGET
-            && (format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8))
+            && supported_render_target_format(format))
+        return D3D_OK;
+    /*
+     * 3DMark2001 validates every enumerated display mode with this exact
+     * query before it exposes the adapter:
+     *
+     *   CheckDeviceFormat(display_format, D3DUSAGE_RENDERTARGET,
+     *           D3DRTYPE_SURFACE, display_format)
+     *
+     * A render-target surface is the object returned by CreateRenderTarget,
+     * which this frontend backs with the same one-level target texture as the
+     * texture case above. Omitting SURFACE here therefore hid a capability the
+     * device really has and made 3DMark reject every 32-bit display mode as
+     * non-renderable before CreateDevice was ever reached.
+     */
+    if (resource_type == D3DRTYPE_SURFACE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format(format))
         return D3D_OK;
     if (resource_type == D3DRTYPE_SURFACE
             && (usage & D3DUSAGE_DEPTHSTENCIL)
-            && (format == D3DFMT_D16 || format == D3DFMT_D24S8))
+            && supported_depth_stencil_format(format))
         return D3D_OK;
+    if (resource_type == D3DRTYPE_SURFACE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_image_surface_format(format))
+        return D3D_OK;
+    D8WG_TRACE("CHECK_FORMAT REFUSE adapter=%lu type=%lu adapter_fmt=%08lX "
+            "usage=%08lX resource_type=%lu format=%08lX", adapter,
+            (DWORD)type, (DWORD)adapter_format, usage, (DWORD)resource_type,
+            (DWORD)format);
     return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
 }
 
@@ -2431,7 +2705,7 @@ static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D8 *iface,
     (void)render_format;
     if (adapter || type != D3DDEVTYPE_HAL)
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
-    return depth_format == D3DFMT_D16 || depth_format == D3DFMT_D24S8
+    return supported_depth_stencil_format(depth_format)
             ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
 
@@ -2490,6 +2764,7 @@ static void device_init_states(D8Device *device)
     device->material.Diffuse.r = device->material.Diffuse.g =
             device->material.Diffuse.b = device->material.Diffuse.a = 1.0f;
     device->material.Ambient = device->material.Diffuse;
+    free_extra_lights(&device->extra_lights);
     ZeroMemory(device->lights, sizeof(device->lights));
     ZeroMemory(device->light_set, sizeof(device->light_set));
     ZeroMemory(device->light_enabled, sizeof(device->light_enabled));
@@ -2780,8 +3055,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     if (!supported_multisample_type(parameters->MultiSampleType))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->EnableAutoDepthStencil
-            && parameters->AutoDepthStencilFormat != D3DFMT_D16
-            && parameters->AutoDepthStencilFormat != D3DFMT_D24S8)
+            && !supported_depth_stencil_format(
+                parameters->AutoDepthStencilFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
@@ -2930,6 +3205,7 @@ static ULONG WINAPI device_release(IDirect3DDevice8 *iface)
          * Delete{Vertex,Pixel}Shader on must be freed here. */
         free_shader_list(device->vertex_shaders);
         free_shader_list(device->pixel_shaders);
+        free_extra_lights(&device->extra_lights);
         HeapFree(GetProcessHeap(), 0, device->front_shadow);
         HeapFree(GetProcessHeap(), 0, device);
     }
@@ -3023,8 +3299,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
             || device_has_reset_blockers(device))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
-            && parameters->AutoDepthStencilFormat != D3DFMT_D16
-            && parameters->AutoDepthStencilFormat != D3DFMT_D24S8)
+            && !supported_depth_stencil_format(
+                parameters->AutoDepthStencilFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
@@ -3219,20 +3495,54 @@ static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
     return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
+/*
+ * Dimensions of the colour target currently bound, which is the surface a
+ * viewport is clipped against -- not the display mode. An app may bind an
+ * offscreen render target of any size, in either direction, and 3DMark 2001's
+ * advanced pixel-shader test binds one larger than the 800x600 mode it runs
+ * in. Same rule device_clear() already follows for its shadow copy.
+ */
+static void current_render_target_size(D8Device *device, UINT *width,
+        UINT *height)
+{
+    if (device->render_target_texture) {
+        D8TextureLevel *level = &device->render_target_texture->levels[
+                device->render_target_level];
+        *width = level->width;
+        *height = level->height;
+        return;
+    }
+    *width = device->present.BackBufferWidth ? device->present.BackBufferWidth
+            : device->display_mode.Width;
+    *height = device->present.BackBufferHeight
+            ? device->present.BackBufferHeight : device->display_mode.Height;
+}
+
 static HRESULT WINAPI device_set_viewport(IDirect3DDevice8 *iface,
         const D3DVIEWPORT8 *viewport)
 {
     D8Device *device = device_from_iface(iface);
     D9WGSetViewport command;
+    UINT target_width;
+    UINT target_height;
     if (!viewport || !viewport->Width || !viewport->Height)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (viewport->X > device->display_mode.Width
-            || viewport->Y > device->display_mode.Height
-            || viewport->Width > device->display_mode.Width - viewport->X
-            || viewport->Height > device->display_mode.Height - viewport->Y
+    /* Validating against the display mode instead of the bound target
+     * rejected the viewport SetRenderTarget installs for an offscreen target
+     * bigger than the screen, which reached the app as "Could not set render
+     * target - D3DERR_INVALIDCALL". */
+    current_render_target_size(device, &target_width, &target_height);
+    if (viewport->X > target_width
+            || viewport->Y > target_height
+            || viewport->Width > target_width - viewport->X
+            || viewport->Height > target_height - viewport->Y
             || viewport->MinZ < 0.0f || viewport->MaxZ > 1.0f
-            || viewport->MinZ > viewport->MaxZ)
+            || viewport->MinZ > viewport->MaxZ) {
+        D8WG_TRACE("VIEWPORT REFUSE x=%lu y=%lu size=%lux%lu target=%ux%u",
+                viewport->X, viewport->Y, viewport->Width, viewport->Height,
+                target_width, target_height);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     if (device->recording_state_block)
         device->recording_state_block->state.viewport_mask = TRUE;
     if (device->viewport.X == viewport->X
@@ -3641,7 +3951,18 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice8 *iface,
         if (device->vertex_shader == handle)
             return D3D_OK;
         device->vertex_shader = handle;
-        return emit_set_fvf(device, handle)
+        /*
+         * D3D8 overloads SetVertexShader: an even value is an FVF and also
+         * switches the device back to fixed-function vertex processing.
+         * D9WG keeps the D3D9-shaped shader and declaration states separate,
+         * so SET_FVF alone leaves the previously bound programmable shader
+         * alive. 3DMark2001 alternates those two paths between scene passes;
+         * the stale shader then reads inputs the FVF does not provide and the
+         * host correctly drops the draw. Explicitly unbind it as part of the
+         * D3D8-to-D3D9 translation.
+         */
+        return emit_set_shader(D9WG_OP_SET_VERTEX_SHADER, device, 0)
+                && emit_set_fvf(device, handle)
                 ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
     }
 }
@@ -4178,8 +4499,7 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
             || (usage & D3DUSAGE_DEPTHSTENCIL)
             || (usage & D3DUSAGE_RENDERTARGET
                 && (pool != D3DPOOL_DEFAULT || levels != 1
-                    || (format != D3DFMT_A8R8G8B8
-                        && format != D3DFMT_X8R8G8B8)))
+                    || !supported_render_target_format(format)))
             || pool > D3DPOOL_SCRATCH)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(width, height);
@@ -4241,6 +4561,74 @@ allocation_failed:
     HeapFree(GetProcessHeap(), 0, texture->levels);
     HeapFree(GetProcessHeap(), 0, texture);
     return failure;
+}
+
+/*
+ * A depth-stencil surface with a host resource of its own.
+ *
+ * D3D8's CreateDepthStencilSurface takes a size that need not match the
+ * device's implicit depth buffer, and render-to-texture leans on that: an app
+ * renders a reflection into a 1024x512 target and creates a depth surface to
+ * match. Aliasing every depth surface onto the implicit buffer left the host
+ * depth-testing such a pass against the 800x600 buffer negotiated at
+ * CreateDevice; it saw the mismatch and dropped depth testing for the whole
+ * pass, so nothing occluded anything -- 3DMark 2001's advanced pixel-shader
+ * test reported it as "the bound depth surface is smaller than the render
+ * target".
+ *
+ * The host already models a depth surface as a texture carrying
+ * D3DUSAGE_DEPTHSTENCIL -- that is how the D3D9 frontend creates one -- so
+ * this is the same CREATE_TEXTURE_2D every other resource uses. It never gets
+ * a shadow: no D3D8 entry point can read depth back through this DLL, so
+ * there is nothing to mirror guest-side. device_create_texture() keeps
+ * refusing the usage, because an app reaching CreateTexture with it is asking
+ * for a depth *texture* to sample, which this path does not provide.
+ */
+static HRESULT create_depth_stencil_texture(D8Device *device, UINT width,
+        UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
+        D8Texture **texture_out)
+{
+    D8Texture *texture;
+    *texture_out = NULL;
+    if (!width || !height || width > 8192 || height > 8192)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    texture = (D8Texture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+            sizeof(*texture));
+    if (!texture)
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    texture->levels = (D8TextureLevel *)HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, sizeof(*texture->levels));
+    if (!texture->levels) {
+        HeapFree(GetProcessHeap(), 0, texture);
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    }
+    texture->iface.lpVtbl = &g_texture_vtbl;
+    texture->refcount = 1;
+    texture->device = device;
+    texture->handle = allocate_handle();
+    texture->width = width;
+    texture->height = height;
+    texture->level_count = 1;
+    texture->usage = D3DUSAGE_DEPTHSTENCIL;
+    texture->format = format;
+    texture->pool = D3DPOOL_DEFAULT;
+    texture->multisample_type = ms;
+    texture->levels[0].width = width;
+    texture->levels[0].height = height;
+    texture->levels[0].depth = 1;
+    texture->levels[0].row_pitch = width * 4u;
+    texture->levels[0].row_count = height;
+    device_child_add_ref(device);
+    if (!emit_texture_create(device, texture)) {
+        device_child_release(device);
+        HeapFree(GetProcessHeap(), 0, texture->levels);
+        HeapFree(GetProcessHeap(), 0, texture);
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    }
+    texture->next_device_resource = device->texture_resources;
+    device->texture_resources = texture;
+    *texture_out = texture;
+    return D3D_OK;
 }
 
 /*
@@ -4316,6 +4704,11 @@ static HRESULT texture_lock_level(D8Texture *texture, UINT level,
         D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
 {
     if (level >= texture->level_count)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* A depth-stencil level carries no shadow, and D3D8 only ever allows
+     * locking one through D3DFMT_D16_LOCKABLE, which this DLL does not
+     * advertise (see the README). */
+    if (texture->usage & D3DUSAGE_DEPTHSTENCIL)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return lock_texture_level(&texture->levels[level], texture->format,
             !(texture->usage & D3DUSAGE_RENDERTARGET)
@@ -4491,6 +4884,8 @@ static HRESULT WINAPI texture_get_surface_level(IDirect3DTexture8 *iface,
     surface->texture = texture;
     surface->device = texture->device;
     surface->level = level;
+    /* What SetRenderTarget tests to tell a colour target from a depth one. */
+    surface->depth_stencil = (texture->usage & D3DUSAGE_DEPTHSTENCIL) != 0;
     IDirect3DTexture8_AddRef(iface);
     *surface_out = &surface->iface;
     return D3D_OK;
@@ -5202,13 +5597,18 @@ static HRESULT WINAPI device_create_depth_surface(IDirect3DDevice8 *iface,
         UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
         IDirect3DSurface8 **surface_out)
 {
-    if (!surface_out || (format != D3DFMT_D16 && format != D3DFMT_D24S8)
+    D8Texture *texture = NULL;
+    HRESULT hr;
+    if (!surface_out || !supported_depth_stencil_format(format)
             || !supported_multisample_type(ms))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
-    return create_standalone_surface(device_from_iface(iface), width, height,
-            format, D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT, FALSE, FALSE,
-            TRUE, TRUE, surface_out);
+    hr = create_depth_stencil_texture(device_from_iface(iface), width, height,
+            format, ms, &texture);
+    if (FAILED(hr)) return hr;
+    hr = IDirect3DTexture8_GetSurfaceLevel(&texture->iface, 0, surface_out);
+    IDirect3DTexture8_Release(&texture->iface);
+    return D8WG_TRACE_ERROR(hr);
 }
 
 static HRESULT WINAPI device_create_image_surface(IDirect3DDevice8 *iface,
@@ -5282,6 +5682,11 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
     D8Texture *texture;
     D9WGSetRenderTarget command;
     D9WGSetDepthStencilSurfaceLevel depth_command;
+    D3DVIEWPORT8 viewport;
+    UINT render_target_width;
+    UINT render_target_height;
+    UINT depth_width;
+    UINT depth_height;
     if (!render_target_iface
             || render_target_iface->lpVtbl != &g_surface_vtbl
             || (depth_iface && depth_iface->lpVtbl != &g_surface_vtbl))
@@ -5294,15 +5699,35 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
     if (texture && !(texture->usage & D3DUSAGE_RENDERTARGET))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (depth && ((depth->texture ? depth->texture->device : depth->device)
-                != device || !depth->depth_stencil))
+                != device || !depth->depth_stencil)) {
+        D8WG_TRACE("RENDER TARGET REFUSE reason=depth-surface "
+                "depth_stencil=%d owner=%08lX device=%08lX",
+                (int)depth->depth_stencil,
+                (DWORD)(uintptr_t)(depth->texture ? depth->texture->device
+                        : depth->device), (DWORD)(uintptr_t)device);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (depth && (depth->desc.Width != (render_target->texture
-                    ? render_target->texture->levels[render_target->level].width
-                    : render_target->desc.Width)
-            || depth->desc.Height != (render_target->texture
-                    ? render_target->texture->levels[render_target->level].height
-                    : render_target->desc.Height)))
+    }
+    render_target_width = render_target->texture
+            ? render_target->texture->levels[render_target->level].width
+            : render_target->desc.Width;
+    render_target_height = render_target->texture
+            ? render_target->texture->levels[render_target->level].height
+            : render_target->desc.Height;
+    depth_width = !depth ? 0u : depth->texture
+            ? depth->texture->levels[depth->level].width : depth->desc.Width;
+    depth_height = !depth ? 0u : depth->texture
+            ? depth->texture->levels[depth->level].height : depth->desc.Height;
+    /* D3D8 permits a depth/stencil surface larger than the colour target; it
+     * only returns INVALIDCALL when depth is smaller. 3DMark 2001 keeps its
+     * full-size depth surface while switching to a smaller offscreen target in
+     * the advanced pixel-shader test, so exact equality rejects a legal bind. */
+    if (depth && (depth_width < render_target_width
+            || depth_height < render_target_height)) {
+        D8WG_TRACE("RENDER TARGET REFUSE reason=depth-too-small rt=%ux%u "
+                "depth=%ux%u", render_target_width, render_target_height,
+                depth_width, depth_height);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     if (texture) IDirect3DTexture8_AddRef(&texture->iface);
     if (depth) IDirect3DSurface8_AddRef(&depth->iface);
     if (device->render_target_texture)
@@ -5317,13 +5742,12 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
      * D3D8 binds colour and depth in one call; D3D9 splits them, so this
      * becomes two commands.
      *
-     * Every depth surface this DLL hands out is created by
-     * device_create_depth_surface(), which allocates no host resource -- the
-     * host owns exactly one depth buffer per device, negotiated at
-     * CreateDevice. So the depth half is a bind/unbind of the implicit auto
-     * depth-stencil rather than the selection of a depth texture. Binding a
-     * separately allocated depth texture is a D3D9 capability that D3D8 apps
-     * cannot reach through this path.
+     * Two kinds of depth surface reach here. One created by
+     * CreateDepthStencilSurface owns a host texture and is bound by handle,
+     * so a render-to-texture pass gets depth of its own size. The surface
+     * GetDepthStencilSurface() hands back for the device's implicit buffer
+     * has no texture, and names the auto depth-stencil the host negotiated at
+     * CreateDevice.
      */
     command.device_handle = device->handle;
     command.target_index = 0;
@@ -5334,14 +5758,27 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
 
     depth_command.device_handle = device->handle;
-    depth_command.depth_texture_handle = depth
-            ? D9WG_AUTO_DEPTH_STENCIL_HANDLE : 0u;
-    depth_command.depth_level = 0;
-    depth_command.width = depth ? depth->desc.Width : 0u;
-    depth_command.height = depth ? depth->desc.Height : 0u;
-    return emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL,
-            &depth_command, sizeof(depth_command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    depth_command.depth_texture_handle = !depth ? 0u
+            : depth->texture ? depth->texture->handle
+            : D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+    depth_command.depth_level = depth && depth->texture ? depth->level : 0u;
+    depth_command.width = depth_width;
+    depth_command.height = depth_height;
+    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL,
+            &depth_command, sizeof(depth_command)))
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+
+    /* IDirect3DDevice8::SetRenderTarget resets the viewport to the complete
+     * new colour target. Keep both the guest shadow and WebGPU state in sync;
+     * otherwise a later GetViewport reports the old size and XYZRHW passes
+     * are mapped through the wrong pixel rectangle. */
+    viewport.X = 0;
+    viewport.Y = 0;
+    viewport.Width = render_target_width;
+    viewport.Height = render_target_height;
+    viewport.MinZ = 0.0f;
+    viewport.MaxZ = 1.0f;
+    return D8WG_TRACE_ERROR(device_set_viewport(iface, &viewport));
 }
 
 static HRESULT WINAPI device_get_render_target(IDirect3DDevice8 *iface,
@@ -5522,21 +5959,54 @@ static HRESULT WINAPI device_get_material(IDirect3DDevice8 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_set_light(IDirect3DDevice8 *iface, DWORD index,
+static D8LightState *find_extra_light(D8LightState *entry, DWORD index)
+{
+    while (entry && entry->index != index)
+        entry = entry->next;
+    return entry;
+}
+
+static D8LightState *get_extra_light(D8LightState **list, DWORD index,
+        BOOL create)
+{
+    D8LightState *entry = find_extra_light(*list, index);
+    if (entry || !create)
+        return entry;
+    entry = (D8LightState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+            sizeof(*entry));
+    if (!entry)
+        return NULL;
+    entry->index = index;
+    entry->next = *list;
+    *list = entry;
+    return entry;
+}
+
+static void free_extra_lights(D8LightState **list)
+{
+    D8LightState *entry = *list;
+    *list = NULL;
+    while (entry) {
+        D8LightState *next = entry->next;
+        HeapFree(GetProcessHeap(), 0, entry);
+        entry = next;
+    }
+}
+
+static void initialize_default_light(D3DLIGHT8 *light)
+{
+    ZeroMemory(light, sizeof(*light));
+    light->Type = D3DLIGHT_DIRECTIONAL;
+    light->Diffuse.r = 1.0f;
+    light->Diffuse.g = 1.0f;
+    light->Diffuse.b = 1.0f;
+    light->Direction.z = 1.0f;
+}
+
+static BOOL emit_light(D8Device *device, DWORD index,
         const D3DLIGHT8 *light)
 {
-    D8Device *device = device_from_iface(iface);
     D9WGSetLight command;
-    if (!light || index >= D8WG_MAX_LIGHTS || light->Type < D3DLIGHT_POINT
-            || light->Type > D3DLIGHT_DIRECTIONAL)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.light_mask[index] = 1;
-    if (device->light_set[index] &&
-            bytes_equal(&device->lights[index], light, sizeof(*light)))
-        return D3D_OK;
-    device->lights[index] = *light;
-    device->light_set[index] = TRUE;
     command.device_handle = device->handle;
     command.index = index;
     command.type = light->Type;
@@ -5552,7 +6022,45 @@ static HRESULT WINAPI device_set_light(IDirect3DDevice8 *iface, DWORD index,
     command.attenuation[2] = light->Attenuation2;
     command.theta = light->Theta;
     command.phi = light->Phi;
-    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command))
+    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command));
+}
+
+static HRESULT WINAPI device_set_light(IDirect3DDevice8 *iface, DWORD index,
+        const D3DLIGHT8 *light)
+{
+    D8Device *device = device_from_iface(iface);
+    D8LightState *entry;
+    D8LightState *recorded = NULL;
+
+    if (!light || light->Type < D3DLIGHT_POINT
+            || light->Type > D3DLIGHT_DIRECTIONAL)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (index < D8WG_MAX_LIGHTS) {
+        if (device->recording_state_block)
+            device->recording_state_block->state.light_mask[index] = 1;
+        if (device->light_set[index]
+                && bytes_equal(&device->lights[index], light, sizeof(*light)))
+            return D3D_OK;
+        device->lights[index] = *light;
+        device->light_set[index] = TRUE;
+    } else {
+        entry = get_extra_light(&device->extra_lights, index, TRUE);
+        if (!entry)
+            return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+        if (device->recording_state_block) {
+            recorded = get_extra_light(
+                    &device->recording_state_block->state.extra_lights,
+                    index, TRUE);
+            if (!recorded)
+                return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+            recorded->light_mask = TRUE;
+        }
+        if (entry->set && bytes_equal(&entry->light, light, sizeof(*light)))
+            return D3D_OK;
+        entry->light = *light;
+        entry->set = TRUE;
+    }
+    return emit_light(device, index, light)
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
@@ -5560,9 +6068,19 @@ static HRESULT WINAPI device_get_light(IDirect3DDevice8 *iface, DWORD index,
         D3DLIGHT8 *light)
 {
     D8Device *device = device_from_iface(iface);
-    if (!light || index >= D8WG_MAX_LIGHTS || !device->light_set[index])
+    D8LightState *entry;
+    if (!light)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    *light = device->lights[index];
+    if (index < D8WG_MAX_LIGHTS) {
+        if (!device->light_set[index])
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+        *light = device->lights[index];
+    } else {
+        entry = find_extra_light(device->extra_lights, index);
+        if (!entry || !entry->set)
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+        *light = entry->light;
+    }
     return D3D_OK;
 }
 
@@ -5570,13 +6088,47 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice8 *iface,
         DWORD index, WINBOOL enable)
 {
     D8Device *device = device_from_iface(iface);
+    D8LightState *entry = NULL;
+    D8LightState *recorded = NULL;
+    D3DLIGHT8 *light;
+    BOOL *set;
+    BOOL *enabled;
     D9WGLightEnable command;
-    if (index >= D8WG_MAX_LIGHTS) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.light_enable_mask[index] = 1;
+
+    if (index < D8WG_MAX_LIGHTS) {
+        light = &device->lights[index];
+        set = &device->light_set[index];
+        enabled = &device->light_enabled[index];
+        if (device->recording_state_block)
+            device->recording_state_block->state.light_enable_mask[index] = 1;
+    } else {
+        entry = get_extra_light(&device->extra_lights, index, TRUE);
+        if (!entry)
+            return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+        light = &entry->light;
+        set = &entry->set;
+        enabled = &entry->enabled;
+        if (device->recording_state_block) {
+            recorded = get_extra_light(
+                    &device->recording_state_block->state.extra_lights,
+                    index, TRUE);
+            if (!recorded)
+                return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+            recorded->enable_mask = TRUE;
+        }
+    }
+    /* Direct3D creates a default directional light when LightEnable names an
+     * index that SetLight has never assigned. This applies even when the call
+     * disables that new light. */
+    if (!*set) {
+        initialize_default_light(light);
+        *set = TRUE;
+        if (!emit_light(device, index, light))
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    }
     enable = !!enable;
-    if (device->light_enabled[index] == enable) return D3D_OK;
-    device->light_enabled[index] = enable;
+    if (*enabled == enable) return D3D_OK;
+    *enabled = enable;
     command.device_handle = device->handle;
     command.index = index;
     command.enable = enable;
@@ -5588,8 +6140,15 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice8 *iface,
 static HRESULT WINAPI device_get_light_enable(IDirect3DDevice8 *iface,
         DWORD index, WINBOOL *enable)
 {
-    if (!enable || index >= D8WG_MAX_LIGHTS) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    *enable = device_from_iface(iface)->light_enabled[index];
+    D8Device *device = device_from_iface(iface);
+    D8LightState *entry;
+    if (!enable) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (index < D8WG_MAX_LIGHTS) {
+        *enable = device->light_enabled[index];
+    } else {
+        entry = find_extra_light(device->extra_lights, index);
+        *enable = entry ? entry->enabled : FALSE;
+    }
     return D3D_OK;
 }
 static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice8 *iface,
@@ -5640,6 +6199,7 @@ static void state_block_set_scope(D8StateBlock *block,
         FillMemory(state->light_mask, sizeof(state->light_mask), 1);
         FillMemory(state->light_enable_mask,
                 sizeof(state->light_enable_mask), 1);
+        state->all_lights_scope = TRUE;
         state->viewport_mask = TRUE;
         state->material_mask = TRUE;
         state->indices_mask = TRUE;
@@ -5667,11 +6227,13 @@ static void state_block_release_references(D8StateBlock *block)
         IDirect3DIndexBuffer8_Release(&block->state.index_buffer->iface);
         block->state.index_buffer = NULL;
     }
+    free_extra_lights(&block->state.extra_lights);
 }
 
 static void state_block_capture(D8Device *device, D8StateBlock *block)
 {
     D8StateSnapshot *state = &block->state;
+    D8LightState *entry;
     UINT index;
     UINT stage;
 
@@ -5735,6 +6297,31 @@ static void state_block_capture(D8Device *device, D8StateBlock *block)
         if (state->light_enable_mask[index])
             state->light_enabled[index] = device->light_enabled[index];
     }
+    /* A predefined ALL/VERTEX block covers every light property set that
+     * exists at capture time, including sparse indices above MaxActiveLights.
+     * A BeginStateBlock recording already created only the entries explicitly
+     * touched while recording. */
+    if (state->all_lights_scope) {
+        for (entry = device->extra_lights; entry; entry = entry->next) {
+            D8LightState *captured = get_extra_light(&state->extra_lights,
+                    entry->index, TRUE);
+            if (!captured)
+                continue;
+            captured->light_mask = TRUE;
+            captured->enable_mask = TRUE;
+        }
+    }
+    for (entry = state->extra_lights; entry; entry = entry->next) {
+        D8LightState *current = find_extra_light(device->extra_lights,
+                entry->index);
+        if (entry->light_mask) {
+            entry->set = current ? current->set : FALSE;
+            if (current && current->set)
+                entry->light = current->light;
+        }
+        if (entry->enable_mask)
+            entry->enabled = current ? current->enabled : FALSE;
+    }
 }
 
 static D8StateBlock *device_find_state_block(D8Device *device, DWORD token,
@@ -5776,6 +6363,7 @@ static D3DTRANSFORMSTATETYPE transform_state_from_slot(UINT slot)
 static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
 {
     D8StateSnapshot *state = &block->state;
+    D8LightState *light;
     HRESULT hr;
     UINT index;
     UINT stage;
@@ -5813,6 +6401,14 @@ static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
         if (state->light_enable_mask[index])
             APPLY_STATE(device_light_enable(&device->iface, index,
                     state->light_enabled[index]));
+    }
+    for (light = state->extra_lights; light; light = light->next) {
+        if (light->light_mask && light->set)
+            APPLY_STATE(device_set_light(&device->iface, light->index,
+                    &light->light));
+        if (light->enable_mask)
+            APPLY_STATE(device_light_enable(&device->iface, light->index,
+                    light->enabled));
     }
     for (index = 0; index < D8WG_MAX_STREAMS; ++index) {
         if (state->stream_mask[index])
@@ -6404,19 +7000,39 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
     D8Shader *entry;
     UINT decl_count = 0;
     UINT body_count = 0;
+    DWORD version;
+    UINT minor;
     (void)usage;
 
     if (shader) *shader = 0;
     if (!declaration || !function || !shader)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (function[0] != (DWORD)D3DVS_VERSION(1, 1))
+    version = function[0];
+    minor = (UINT)D3DSHADER_VERSION_MINOR(version);
+    /* A device that advertises vs_1_1 must also run vs_1_0: 1.1 only adds the
+     * address register, so 1.0 is a strict subset and the runtime hands it
+     * straight to the driver. Refusing it looks like a driver that cannot do
+     * vertex shaders at all -- 3DMark 2001 assembles most of its shaders as
+     * `vs.1.0`, does not check the HRESULT, and dereferences the handle it
+     * never got. */
+    if ((version & 0xFFFF0000u) != 0xFFFE0000u
+            || (UINT)D3DSHADER_VERSION_MAJOR(version) != 1u || minor > 1u) {
+        D8WG_TRACE("SHADER REFUSE kind=vertex stage=version version=%08lX",
+                version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     if (!validate_vertex_declaration(declaration, D8WG_MAX_SHADER_TOKENS,
-            &decl_count))
+            &decl_count)) {
+        D8WG_TRACE("SHADER REFUSE kind=vertex stage=declaration "
+                "version=%08lX", version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     if (!validate_shader_body(function + 1, D8WG_MAX_SHADER_TOKENS, FALSE,
-            1u, &body_count))
+            minor, &body_count)) {
+        D8WG_TRACE("SHADER REFUSE kind=vertex stage=body version=%08lX",
+                version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
 
     entry = (D8Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*entry));
@@ -6444,7 +7060,9 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
     entry->code_token_count = body_count + 1u;
     entry->is_pixel_shader = FALSE;
     entry->major_version = 1;
-    entry->minor_version = 1;
+    entry->minor_version = minor;
+    shader_bytecode_hash(entry->code_tokens, entry->code_token_count,
+            &entry->hash_low, &entry->hash_high);
     entry->handle = allocate_shader_handle();
     /* The declaration is a separate D9WG resource with its own handle, drawn
      * from the ordinary resource namespace rather than the shader one. */
@@ -6456,6 +7074,10 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
         HeapFree(GetProcessHeap(), 0, entry);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
+    D8WG_TRACE("SHADER CREATE kind=vertex version=%08lX tokens=%u "
+            "handle=%08lX hash=%08lX%08lX", version,
+            entry->code_token_count, entry->handle,
+            entry->hash_high, entry->hash_low);
     entry->next = device->vertex_shaders;
     device->vertex_shaders = entry;
     *shader = entry->handle;
@@ -6472,10 +7094,15 @@ static HRESULT WINAPI device_delete_vertex_shader(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     while (*link && (*link)->handle != shader) link = &(*link)->next;
     entry = *link;
-    /* Real D3D8 refuses to delete the currently bound shader; the app must
-     * rebind (0 or another handle) first. */
-    if (!entry || device->vertex_shader == shader)
+    if (!entry)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* Deleting the shader that is currently set is legal: the runtime unbinds
+     * it and destroys it, which is what Wine's d3d8 does and what 3DMark 2001
+     * relies on between test scenes. Refusing left the object bound, alive and
+     * unreachable -- a leak the app has no way to notice. Unbinding restores
+     * fixed-function vertex processing, exactly as SetVertexShader(0) does. */
+    if (device->vertex_shader == shader)
+        device_set_vertex_shader(iface, 0);
     *link = entry->next;
     emit_destroy_shader(entry);
     HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
@@ -6488,8 +7115,8 @@ static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface,
         DWORD reg, const void *data, DWORD count)
 {
     D8Device *device = device_from_iface(iface);
-    if (!data || !count
-            || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
+    if (!count) return D3D_OK;  /* see device_set_ps_constant */
+    if (!data || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(device->vs_constants[reg], data, count * 16u);
     return emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
@@ -6501,8 +7128,8 @@ static HRESULT WINAPI device_get_vs_constant(IDirect3DDevice8 *iface,
         DWORD reg, void *data, DWORD count)
 {
     D8Device *device = device_from_iface(iface);
-    if (!data || !count
-            || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(data, device->vs_constants[reg], count * 16u);
     return D3D_OK;
@@ -6561,15 +7188,23 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice8 *iface,
     if (!function || !shader)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     version = function[0];
-    if ((version & 0xFFFF0000u) != 0xFFFF0000u)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     major = (UINT)D3DSHADER_VERSION_MAJOR(version);
     minor = (UINT)D3DSHADER_VERSION_MINOR(version);
-    if (major != 1u || minor < 1u || minor > 4u)
+    /* ps_1_0 for the same reason vs_1_0 is accepted above: a ps_1_4 device
+     * runs every earlier 1.x shader, and shader_opcode_supported() already
+     * gates `cmp` (1.2+), `cnd` (up to 1.3) and the 1.4 forms on this minor,
+     * so 1.0 validates as the subset it is. */
+    if ((version & 0xFFFF0000u) != 0xFFFF0000u || major != 1u || minor > 4u) {
+        D8WG_TRACE("SHADER REFUSE kind=pixel stage=version version=%08lX",
+                version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     if (!validate_shader_body(function + 1, D8WG_MAX_SHADER_TOKENS, TRUE,
-            minor, &body_count))
+            minor, &body_count)) {
+        D8WG_TRACE("SHADER REFUSE kind=pixel stage=body version=%08lX",
+                version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
 
     entry = (D8Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*entry));
@@ -6588,6 +7223,8 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice8 *iface,
     entry->is_pixel_shader = TRUE;
     entry->major_version = major;
     entry->minor_version = minor;
+    shader_bytecode_hash(entry->code_tokens, entry->code_token_count,
+            &entry->hash_low, &entry->hash_high);
     entry->handle = allocate_shader_handle();
 
     if (!emit_create_pixel_shader(device, entry)) {
@@ -6595,6 +7232,10 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice8 *iface,
         HeapFree(GetProcessHeap(), 0, entry);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
+    D8WG_TRACE("SHADER CREATE kind=pixel version=%08lX tokens=%u "
+            "handle=%08lX hash=%08lX%08lX", version,
+            entry->code_token_count, entry->handle,
+            entry->hash_high, entry->hash_low);
     entry->next = device->pixel_shaders;
     device->pixel_shaders = entry;
     *shader = entry->handle;
@@ -6635,8 +7276,11 @@ static HRESULT WINAPI device_delete_pixel_shader(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     while (*link && (*link)->handle != shader) link = &(*link)->next;
     entry = *link;
-    if (!entry || device->pixel_shader == shader)
+    if (!entry)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* Unbind first, for the reason device_delete_vertex_shader gives. */
+    if (device->pixel_shader == shader)
+        device_set_pixel_shader(iface, 0);
     *link = entry->next;
     emit_destroy_shader(entry);
     HeapFree(GetProcessHeap(), 0, entry->code_tokens);
@@ -6648,9 +7292,18 @@ static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface,
         DWORD reg, const void *data, DWORD count)
 {
     D8Device *device = device_from_iface(iface);
-    if (!data || !count
-            || (uint64_t)reg + count > D8WG_MAX_PS_CONSTANTS)
+    /* A zero-vector write is a no-op, and the pointer is never read -- so it
+     * is checked before the pointer is, not after. 3DMark 2001 issues
+     * SetPixelShaderConstant(0, NULL, 0) before most draws (1179 times in one
+     * benchmark run); refusing it makes an app that checks the HRESULT
+     * abandon a frame the driver never had a problem with. */
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)reg + count > D8WG_MAX_PS_CONSTANTS) {
+        D8WG_TRACE("PS_CONSTANT REFUSE register=%lu count=%lu data=%08lX "
+                "limit=%u", reg, count, (DWORD)(uintptr_t)data,
+                D8WG_MAX_PS_CONSTANTS);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     CopyMemory(device->ps_constants[reg], data, count * 16u);
     return emit_set_shader_constant(D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
             device, reg, (const float *)data, count)
@@ -6661,8 +7314,8 @@ static HRESULT WINAPI device_get_ps_constant(IDirect3DDevice8 *iface,
         DWORD reg, void *data, DWORD count)
 {
     D8Device *device = device_from_iface(iface);
-    if (!data || !count
-            || (uint64_t)reg + count > D8WG_MAX_PS_CONSTANTS)
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)reg + count > D8WG_MAX_PS_CONSTANTS)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     CopyMemory(data, device->ps_constants[reg], count * 16u);
     return D3D_OK;
@@ -7689,8 +8342,7 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice8 *iface,
             || (usage & D3DUSAGE_DEPTHSTENCIL)
             || ((usage & D3DUSAGE_RENDERTARGET)
                 && (pool != D3DPOOL_DEFAULT
-                    || (format != D3DFMT_A8R8G8B8
-                        && format != D3DFMT_X8R8G8B8)))
+                    || !supported_render_target_format(format)))
             || pool > D3DPOOL_SCRATCH)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(edge_length, edge_length);

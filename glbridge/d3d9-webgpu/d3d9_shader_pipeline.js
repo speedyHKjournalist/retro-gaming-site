@@ -19,9 +19,9 @@
 // to keep alive, no LGPL redistribution obligation (plan section 25 flags
 // this as unresolved for vkd3d), and a translator that is unit-testable
 // directly in Node. What it costs: correctness rests on this file's own test
-// suite instead of Wine's decades of game coverage, and the exotic ps_1_x
-// bump-environment/texm3x* family is honestly refused (see UNSUPPORTED_OPS)
-// rather than approximated. compileShader() is the seam: it takes raw
+// suite instead of Wine's decades of game coverage, and the few ps_1_x
+// texture-addressing forms with no honest translation are refused (see
+// UNSUPPORTED_OPS) rather than approximated. compileShader() is the seam: it takes raw
 // bytecode and returns WGSL + reflection, so swapping in a WASM backend later
 // changes only this file.
 //
@@ -117,7 +117,8 @@
     })();
 
     // What remains of the ps_1_x texture-addressing family after the bump and
-    // matrix forms were implemented (see the TEXBEM/TEXM3x* cases in emit()).
+    // matrix forms were implemented (see the TEXBEM/TEXM3x*/BEM cases in
+    // emit()).
     //
     // These three are the ones with no honest translation. TEXDEPTH and
     // TEXM3x2DEPTH replace the fragment's depth from a texture-addressing
@@ -128,7 +129,7 @@
     // unusable and draws that bind it are counted and skipped, rather than
     // silently rendering something wrong.
     const UNSUPPORTED_OPS = new Set([
-        OP.BEM, OP.TEXM3x2DEPTH, OP.TEXM3x3, OP.TEXDEPTH,
+        OP.TEXM3x2DEPTH, OP.TEXM3x3, OP.TEXDEPTH,
     ]);
 
     // Operand shape per opcode: [destCount, sourceCount]. SM2.0+ instruction
@@ -159,7 +160,9 @@
         // The UNSUPPORTED_OPS family still needs an operand shape: the stream
         // has to decode cleanly before translate() can refuse the shader with
         // a message naming the instruction, rather than dying at "unknown
-        // opcode" and hiding which feature was actually missing.
+        // opcode" and hiding which feature was actually missing. BEM is
+        // translated, and is here because it is the one ps_1_4 form that takes
+        // two sources.
         [OP.TEXBEM]: [1, 1], [OP.TEXBEML]: [1, 1], [OP.BEM]: [1, 2],
         [OP.TEXM3x2PAD]: [1, 1], [OP.TEXM3x2TEX]: [1, 1],
         [OP.TEXM3x3PAD]: [1, 1], [OP.TEXM3x3TEX]: [1, 1],
@@ -223,6 +226,35 @@
         DECLUSAGE_TEXCOORD = 5, DECLUSAGE_TANGENT = 6, DECLUSAGE_BINORMAL = 7,
         DECLUSAGE_TESSFACTOR = 8, DECLUSAGE_POSITIONT = 9, DECLUSAGE_COLOR = 10,
         DECLUSAGE_FOG = 11, DECLUSAGE_DEPTH = 12, DECLUSAGE_SAMPLE = 13;
+
+    /*
+     * vs_1_x has no `dcl_` instructions: what a v# register means is fixed by
+     * the API rather than declared by the shader. D3D8 spells that table as
+     * D3DVSDE_*, D3D9 as the usage a D3DVERTEXELEMENT9 carries, and the D3D8
+     * guest frontend converts its declarations with the same table
+     * (d3d8_vsd_register_usage in d3d8proxy/d3d8_protocol.h) -- the two must
+     * agree exactly, since the executor pairs a declaration element to a
+     * shader input by (usage, usageIndex) and binds nothing when they differ.
+     *
+     * Without this, a real vs_1_1 -- which never carries a dcl -- reflects no
+     * inputs at all: every v# read becomes a zeroed private variable and the
+     * executor drops the draw for having no attribute to bind. Only shaders
+     * assembled with a dcl, which vs_1_x cannot contain, appeared to work.
+     */
+    const VS1_FIXED_INPUT_SEMANTICS = {
+        0: [DECLUSAGE_POSITION, 0], 1: [DECLUSAGE_BLENDWEIGHT, 0],
+        2: [DECLUSAGE_BLENDINDICES, 0], 3: [DECLUSAGE_NORMAL, 0],
+        4: [DECLUSAGE_PSIZE, 0], 5: [DECLUSAGE_COLOR, 0],
+        6: [DECLUSAGE_COLOR, 1], 15: [DECLUSAGE_POSITION, 1],
+    };
+
+    function vs1InputSemantic(register) {
+        const fixed = VS1_FIXED_INPUT_SEMANTICS[register];
+        if (fixed) return { usage: fixed[0], usageIndex: fixed[1] };
+        if (register >= 7 && register <= 14)
+            return { usage: DECLUSAGE_TEXCOORD, usageIndex: register - 7 };
+        return { usage: DECLUSAGE_TEXCOORD, usageIndex: 8 + (register & 7) };
+    }
 
     const TEXTURE_TYPE_NAMES = { 2: "2d", 3: "cube", 4: "3d" };
 
@@ -610,7 +642,7 @@
             case REG_TEMP:
                 this.temps.add(dest.index);
                 return "r" + dest.index;
-            case REG_ADDR: // vs: a0 (via mova); ps: t# scratch register
+            case REG_ADDR: // vs: a0 (MOV in 1.1, MOVA in 2.0+); ps: t# scratch
                 if (this.kind === "vertex") {
                     this.usesAddress = true;
                     return "a0f";
@@ -879,7 +911,20 @@
                 if (opcode === OP.PHASE)
                     this.note("ps_1_4 `phase` is treated as a no-op");
                 return;
-            case OP.MOV: this.store(dest, s(0)); return;
+            case OP.MOV:
+                // vs_1_1 predates MOVA. Its only legal way to load a0.x is
+                // `mov a0.x, src`, which performs the same round-to-nearest
+                // float-to-integer conversion MOVA performs in later models.
+                // Keep the float mirror for masked assignment, then update
+                // the integer register relative c[a0.x + n] reads.
+                if (this.kind === "vertex" && this.major === 1 &&
+                        dest.type === REG_ADDR) {
+                    this.store(dest, "round(" + s(0) + ")");
+                    this.emit("a0 = vec4<i32>(a0f);");
+                } else {
+                    this.store(dest, s(0));
+                }
+                return;
             case OP.MOVA:
                 this.store(dest, "round(" + s(0) + ")");
                 this.emit("a0 = vec4<i32>(a0f);");
@@ -1009,6 +1054,34 @@
             case OP.TEX: this.textureLoad(instruction); return;
             case OP.TEXLDL: this.textureLoad(instruction, { explicitLod: true }); return;
             case OP.TEXLDD: this.textureLoad(instruction, { gradients: true }); return;
+            case OP.BEM: {
+                // ps_1_4's arithmetic form of the same displacement, with no
+                // sampling: src1 carries a (du, dv) pair, src0 the coordinate
+                // to displace, and the 2x2 matrix comes from the texture stage
+                // named by the *destination* register index -- the rule texbem
+                // follows and the one Wine's shader backends implement.
+                //
+                //   dest.r = src0.r + m00 * src1.r + m10 * src1.g
+                //   dest.g = src0.g + m01 * src1.r + m11 * src1.g
+                //
+                // The instruction writes .rg and nothing else, so the mask is
+                // narrowed here rather than trusted: a full-mask encoding must
+                // not clear the destination's b and a.
+                const index = dest.index;
+                this.bumpStages.add(index);
+                const bump = "d9c.bump[" + index + "]";
+                const base = this.fresh("bem");
+                const delta = this.fresh("bemd");
+                this.emit("let " + base + " = " + s(0) + ";");
+                this.emit("let " + delta + " = " + s(1) + ";");
+                this.store(Object.assign({}, dest,
+                        { writeMask: dest.writeMask & 0x3 }),
+                    "vec4<f32>(" + base + ".x + " + bump + ".x * " + delta +
+                    ".x + " + bump + ".z * " + delta + ".y, " + base + ".y + " +
+                    bump + ".y * " + delta + ".x + " + bump + ".w * " + delta +
+                    ".y, 0.0, 0.0)");
+                return;
+            }
             case OP.TEXBEM:
             case OP.TEXBEML: {
                 // ps_1_x environment bump mapping. The source register holds a
@@ -1860,7 +1933,8 @@
         }
 
         assembleVertexEntry(out) {
-            const inputs = Array.from(this.usedInputs.entries())
+            const inputs = Array.from(this.usedInputs.keys())
+                .map(register => [register, this.inputSemanticFor(register)])
                 .filter(entry => entry[1])
                 .sort((a, b) => a[0] - b[0]);
             const conversions = this.options.inputConversions || {};
@@ -2073,9 +2147,20 @@
 
         }
 
+        // The semantic a used v# carries: the one its dcl declared, or the
+        // API's fixed vs_1_x table when the model has no dcl to declare it.
+        inputSemanticFor(register) {
+            const declared = this.usedInputs.get(register);
+            if (declared) return declared;
+            if (this.kind === "vertex" && this.major === 1)
+                return vs1InputSemantic(register);
+            return null;
+        }
+
         reflect(floatCount, intCount, boolVectors) {
             const inputs = [];
-            for (const [register, semantic] of this.usedInputs) {
+            for (const register of this.usedInputs.keys()) {
+                const semantic = this.inputSemanticFor(register);
                 if (!semantic) continue;
                 inputs.push({ register, usage: semantic.usage,
                     usageIndex: semantic.usageIndex, location: register });

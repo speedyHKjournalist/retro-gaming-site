@@ -6,9 +6,9 @@
 #include <d3d8.h>
 
 #define TEST_CLIENT_WIDTH   720
-#define TEST_CLIENT_HEIGHT  520
+#define TEST_CLIENT_HEIGHT  770
 #define TEST_TEXTURE_SIZE    64
-#define TEST_CASE_COUNT       8
+#define TEST_CASE_COUNT      12
 #define TEST_FVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1)
 
 typedef struct TestVertex
@@ -34,6 +34,10 @@ static TextureCase g_cases[TEST_CASE_COUNT] =
     {D3DFMT_A4R4G4B4, "A4R4G4B4", NULL},
     {D3DFMT_L8, "L8", NULL},
     {D3DFMT_A8, "A8", NULL},
+    {D3DFMT_UYVY, "UYVY", NULL},
+    {D3DFMT_YUY2, "YUY2", NULL},
+    {D3DFMT_INDEX16, "INDEX16", NULL},
+    {D3DFMT_INDEX32, "INDEX32", NULL},
     {D3DFMT_A8R8G8B8, "A8R8G8B8 subrect", NULL},
 };
 
@@ -136,7 +140,7 @@ static void fill_quad(TestVertex *vertices, FLOAT x0, FLOAT y0,
 static void build_vertices(void)
 {
     UINT row, column;
-    for (row = 0; row < 2; ++row)
+    for (row = 0; row < 3; ++row)
     {
         for (column = 0; column < 4; ++column)
         {
@@ -187,7 +191,7 @@ static void fill_full_texture(UINT case_index,
                     ((DWORD *)row)[x] = D3DCOLOR_XRGB(r, g, b);
                     break;
                 case D3DFMT_A8R8G8B8:
-                    if (case_index == 7)
+                    if (case_index == TEST_CASE_COUNT - 1)
                         ((DWORD *)row)[x] = D3DCOLOR_ARGB(255, 112, 24, 160);
                     else
                         ((DWORD *)row)[x] = D3DCOLOR_ARGB(a, r, g, b);
@@ -206,6 +210,38 @@ static void fill_full_texture(UINT case_index,
                     break;
                 case D3DFMT_A8:
                     row[x] = (BYTE)a;
+                    break;
+                case D3DFMT_UYVY:
+                    if (!(x & 1))
+                    {
+                        BYTE *pair = row + x * 2;
+                        pair[0] = 128;
+                        pair[1] = (BYTE)(16 + x * 219 /
+                                (TEST_TEXTURE_SIZE - 1));
+                        pair[2] = 128;
+                        pair[3] = (BYTE)(16 + (x + 1) * 219 /
+                                (TEST_TEXTURE_SIZE - 1));
+                    }
+                    break;
+                case D3DFMT_YUY2:
+                    if (!(x & 1))
+                    {
+                        BYTE *pair = row + x * 2;
+                        pair[0] = (BYTE)(16 + x * 219 /
+                                (TEST_TEXTURE_SIZE - 1));
+                        pair[1] = 128;
+                        pair[2] = (BYTE)(16 + (x + 1) * 219 /
+                                (TEST_TEXTURE_SIZE - 1));
+                        pair[3] = 128;
+                    }
+                    break;
+                case D3DFMT_INDEX16:
+                    ((WORD *)row)[x] = (WORD)((y * 4 << 8) | (x * 4));
+                    break;
+                case D3DFMT_INDEX32:
+                    ((DWORD *)row)[x] = ((DWORD)0xff << 24) |
+                            ((DWORD)b << 16) | ((DWORD)(y * 4) << 8) |
+                            (DWORD)(x * 4);
                     break;
                 default:
                     break;
@@ -249,7 +285,7 @@ static HRESULT create_device(HWND hwnd)
             mode.Format, mode.Format, TRUE);
     if (FAILED(hr)) return failed("CheckDeviceType", hr);
 
-    for (i = 0; i < 7; ++i)
+    for (i = 0; i < TEST_CASE_COUNT - 1; ++i)
     {
         wsprintfA(stage, "04 CheckDeviceFormat %s", g_cases[i].name);
         begin_stage(stage);
@@ -303,7 +339,8 @@ static HRESULT create_resources(void)
     SetRect(&update_rect, 16, 16, 48, 48);
     begin_stage("07 LockRect subrect 16,16..48,48");
     ZeroMemory(&locked, sizeof(locked));
-    hr = IDirect3DTexture8_LockRect(g_cases[7].texture, 0,
+    hr = IDirect3DTexture8_LockRect(
+            g_cases[TEST_CASE_COUNT - 1].texture, 0,
             &locked, &update_rect, 0);
     if (FAILED(hr)) return failed("LockRect(subrect)", hr);
     fill_subrect(&locked);
@@ -434,7 +471,7 @@ static HRESULT render(HWND hwnd)
     hr = IDirect3DDevice8_Present(g_device, NULL, NULL, NULL, NULL);
     if (FAILED(hr)) return failed("Present", hr);
     set_result_title(hwnd,
-            "Present S_OK - 7 formats plus green/yellow subrect", hr);
+            "Present S_OK - 11 formats plus green/yellow subrect", hr);
     return hr;
 
 scene_failed:

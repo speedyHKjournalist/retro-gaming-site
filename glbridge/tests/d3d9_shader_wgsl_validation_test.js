@@ -85,6 +85,29 @@ const USAGE = { POSITION: 0, NORMAL: 3, PSIZE: 4, TEXCOORD: 5, POSITIONT: 9,
 // to cover a distinct WGSL construct the translator has to get right.
 
 const CORPUS = [
+    // What an assembler actually produces for this model: no dcl_ anywhere,
+    // because the instruction post-dates it. v0/v5/v7 mean position, diffuse
+    // and texcoord0 by API rule, and the entry point has to declare them as
+    // real attributes on their register's location.
+    ["vs_1_1 as assembled, with no dcl_ to declare its inputs", [
+        VS(1, 1),
+        instruction(OP.M4x4), dst(REG.RASTOUT, 0), src(REG.INPUT, 0), src(REG.CONST, 0),
+        instruction(OP.MOV), dst(REG.ATTROUT, 0), src(REG.INPUT, 5),
+        instruction(OP.MOV), dst(REG.OUTPUT, 0), src(REG.INPUT, 7),
+        END,
+    ]],
+    // The DirectX 8 matrix-palette skinning path. SM1.1 writes its scalar
+    // integer address register with MOV (MOVA starts at SM2), then indexes the
+    // bone-matrix constants relative to it.
+    ["vs_1_1 MOV a0.x matrix-palette skinning", [
+        VS(1, 1),
+        instruction(OP.MOV), dst(REG.ADDR, 0, { mask: 0x1 }),
+            src(REG.INPUT, 2, { swizzle: swizzle("xxxx") }),
+        instruction(OP.M4x3), dst(REG.TEMP, 0, { mask: 0x7 }),
+            src(REG.INPUT, 0), src(REG.CONST, 4, { relative: true }),
+        instruction(OP.MOV), dst(REG.RASTOUT, 0), src(REG.TEMP, 0),
+        END,
+    ]],
     ["vs_1_1 world transform + texcoord passthrough", [
         VS(1, 1),
         instruction(OP.DCL), dclToken(USAGE.POSITION), dst(REG.INPUT, 0),
@@ -235,6 +258,17 @@ const CORPUS = [
         instruction(OP.TEX), dst(REG.TEXTURE, 0),
         instruction(OP.TEXBEML), dst(REG.TEXTURE, 1), src(REG.TEXTURE, 0),
         instruction(OP.MOV), dst(REG.TEMP, 0), src(REG.TEXTURE, 1),
+        END,
+    ]],
+    ["ps_1_4 bem arithmetic bump displacement", [
+        PS(1, 4),
+        instruction(OP.TEXCOORD), dst(REG.TEMP, 1), src(REG.TEXTURE, 1),
+        instruction(OP.TEX), dst(REG.TEMP, 0), src(REG.TEXTURE, 0),
+        instruction(OP.BEM), dst(REG.TEMP, 1, { mask: 0x3 }),
+            src(REG.TEMP, 1), src(REG.TEMP, 0),
+        instruction(OP.PHASE),
+        instruction(OP.TEX), dst(REG.TEMP, 1), src(REG.TEMP, 1),
+        instruction(OP.MOV), dst(REG.TEMP, 0), src(REG.TEMP, 1),
         END,
     ]],
     ["ps_1_1 texm3x3tex tangent-space environment map", [
@@ -726,6 +760,17 @@ for (const [name, entry] of [
                 }))]);
         }
     }
+    // 3DMark 2001 leaves camera-space reflection TCI selected while drawing
+    // one XYZRHW pass with no normal or texture-coordinate declaration. The
+    // value is undefined in D3D, but the generated WGSL must remain valid: a
+    // reference to position_view/normal_view here invalidates the module and
+    // every pipeline/command buffer that follows it.
+    fixedFunction.push(["ff vs screen stale camera reflection tci",
+        executor.buildFixedFunctionVertexShader(vsBase({
+            positionType: "screen", hasColor: true,
+            coordStages: [{ index: 0, texCoordIndex: 0, tciMode: 0x30000,
+                transformCount: 3, projected: false }],
+        }))]);
     for (const fogMode of [1, 2, 3]) {
         for (const fogRange of [false, true]) {
             fixedFunction.push(["ff vs fog " + fogMode + (fogRange ? " range" : ""),

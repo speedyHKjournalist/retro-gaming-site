@@ -1250,6 +1250,36 @@ await test("persistent WGSL cache is restored before CREATE_SHADER executes", as
         active: 0, perFrameCapacity: 8192, resolved: 0 });
 });
 
+await test("CREATE_SHADER verifies guest hashes before cache lookup", async () => {
+    const { executor } = makeExecutor();
+    const firstHandle = 0x40000110;
+    const secondHandle = 0x40000111;
+    const first = shaderCreatePayload(firstHandle, VS_BYTECODE);
+    const second = shaderCreatePayload(secondHandle, VS_TEXCOORD0_BYTECODE);
+    // Reproduce the legacy D3D8 proxy bug: every CREATE_SHADER command
+    // advertised the same all-zero cache key despite carrying different code.
+    for (const shader of [first, second]) {
+        shader.payload.writeUInt32LE(0, 16);
+        shader.payload.writeUInt32LE(0, 20);
+    }
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+        command(OP.CREATE_VERTEX_SHADER, first.payload, first.blob,
+            first.blobOffsetField),
+        command(OP.CREATE_VERTEX_SHADER, second.payload, second.blob,
+            second.blobOffsetField),
+    ]));
+    await executor.idle();
+
+    const stats = executor.getStats();
+    assert.equal(stats.shaderCacheMisses, 2,
+        "different bytecode must compile as two cache entries");
+    assert.equal(stats.shaderCacheHits, 0);
+    assert.notEqual(executor.resources.get(firstHandle).translated.wgsl,
+        executor.resources.get(secondHandle).translated.wgsl,
+        "a bogus guest hash must not alias distinct translated shaders");
+});
+
 await test("CREATE_SHADER translation can run through the M6 Worker path", async () => {
     class CompileWorker {
         postMessage(message) {
@@ -3473,7 +3503,41 @@ await test("pre-transformed vertices are never blended", async () => {
     assert.ok(wgsl.includes("let ndc_x"), "and still be mapped through NDC");
 });
 
-await test("fixed-function lighting reaches the shader and the uniform block",
+await test("pre-transformed vertices survive stale camera-space texgen",
+        async () => {
+    // Exact state shape from 3DMark 2001 test 16: an XYZRHW+DIFFUSE stream has
+    // no normal or texcoord, while stage 0 still asks for the camera-space
+    // reflection vector and a COUNT3 texture transform. The generated value
+    // is undefined, but compiling an identifier that was never declared drops
+    // the draw and invalidates the rest of the WebGPU command buffer.
+    const { executor, find } = makeExecutor();
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+        command(OP.CREATE_BUFFER, createBufferPayload(0x201, 1, 120)),
+        command(OP.SET_FVF, fvfPayload(0x104, [
+            element(0, 0, DECLTYPE.FLOAT4, DECLUSAGE.POSITIONT),
+            element(0, 16, DECLTYPE.D3DCOLOR, DECLUSAGE.COLOR)])),
+        command(OP.SET_STREAM_SOURCE, setStreamSourcePayload(0, 0x201, 20)),
+        command(OP.SET_TEXTURE_STAGE_STATE,
+            u32(DEVICE, 0, D3DTSS.TEXCOORDINDEX, 0x30000)),
+        command(OP.SET_TEXTURE_STAGE_STATE,
+            u32(DEVICE, 0, D3DTSS.TEXTURETRANSFORMFLAGS, 3)),
+        command(OP.DRAW_PRIMITIVE, drawPrimitivePayload(4, 0, 1)),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
+    ], { present: true }));
+    await executor.idle();
+
+    assert.equal(executor.stats.droppedDraws, 0, "the draw remains encodable");
+    const wgsl = find("createRenderPipeline").pop()[1].vertex.module.code;
+    assert.ok(!wgsl.includes("position_view"),
+        "XYZRHW must not read an unavailable view-space position:\n" + wgsl);
+    assert.ok(!wgsl.includes("normal_view"),
+        "XYZRHW must not read an unavailable view-space normal:\n" + wgsl);
+    assert.ok(wgsl.includes("vec4<f32>(0.0, 0.0, 0.0, 1.0)"),
+        "a missing source coordinate needs a finite fallback:\n" + wgsl);
+});
+
+await test("fixed-function lighting accepts a sparse light index",
         async () => {
     const { executor, find } = makeExecutor();
     const elements = [
@@ -3496,9 +3560,11 @@ await test("fixed-function lighting reaches the shader and the uniform block",
         command(OP.SET_RENDER_STATE, u32(DEVICE, D3DRS.NORMALIZENORMALS, 1, 0)),
         command(OP.SET_MATERIAL, materialPayload(
             [0.5, 0.25, 0.125, 0.75], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0], 16)),
-        command(OP.SET_LIGHT, lightPayload(0, 1 /* POINT */,
+        // MaxActiveLights limits the simultaneous count, not the DWORD index.
+        // 3DMark2001 uses scene-object light indices well above seven.
+        command(OP.SET_LIGHT, lightPayload(37, 1 /* POINT */,
             { position: [1, 2, 3], attenuation: [1, 0, 0] })),
-        command(OP.LIGHT_ENABLE, u32(DEVICE, 0, 1, 0)),
+        command(OP.LIGHT_ENABLE, u32(DEVICE, 37, 1, 0)),
         command(OP.DRAW_PRIMITIVE, drawPrimitivePayload(4, 0, 1)),
         command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
     ], { present: true }));
@@ -4551,6 +4617,42 @@ await test("packed 4:2:2 and RGBG formats expand two pixels per block",
     });
 });
 
+await test("INDEX16 and INDEX32 texture uploads preserve little-endian bytes",
+        async () => {
+    const { executor, find } = makeExecutor();
+    const cases = [
+        { name: "INDEX16", format: 101, source: [0x34, 0x12],
+          expected: [0x34, 0x12, 0x00, 0xff] },
+        { name: "INDEX32", format: 102, source: [0x78, 0x56, 0x34, 0x12],
+          expected: [0x78, 0x56, 0x34, 0x12] },
+    ];
+    const commands = [command(OP.CREATE_DEVICE, createDevicePayload(640, 480))];
+    cases.forEach((item, index) => {
+        const handle = 0x920 + index;
+        const source = Buffer.from(item.source);
+        const update = Buffer.alloc(48);
+        update.writeUInt32LE(handle, 0);
+        update.writeUInt32LE(1, 20);
+        update.writeUInt32LE(1, 24);
+        update.writeUInt32LE(1, 28);
+        update.writeUInt32LE(source.length, 32);
+        update.writeUInt32LE(source.length, 40);
+        commands.push(command(OP.CREATE_TEXTURE_2D,
+            u32(DEVICE, handle, 1, 1, 1, item.format, 0, 1)));
+        commands.push(command(OP.UPDATE_TEXTURE, update, source, 44));
+    });
+    await executor.submit(buildBatch(commands));
+    await executor.idle();
+
+    assert.equal(executor.stats.texturesRejected, 0,
+        "both index formats must be accepted as textures");
+    const writes = find("writeTexture").slice(-cases.length);
+    cases.forEach((item, index) => {
+        assert.deepEqual(Array.from(writes[index][2]), item.expected,
+            item.name + ": exact index bytes survive RGBA8 expansion");
+    });
+});
+
 await test("a palette change repaints P8 textures without a re-upload",
         async () => {
     const D3DFMT_P8 = 41;
@@ -4833,6 +4935,10 @@ await test("legacy D3D9 texture formats preserve colour and signed bump values",
         { format: 62, gpu: "rgba16float", source: [0x80, 0x7f, 0xff, 0],
           expected: [...halfMinusOne, ...halfOne, ...halfOne, ...halfOne] },
         { format: 64, gpu: "rgba16float", source: [0x00, 0x80, 0xff, 0x7f],
+          expected: [...halfMinusOne, ...halfOne, ...halfOne, ...halfOne] },
+        // W11V11U10: U is 10 signed bits at 0-9, V and W are 11 each at
+        // 10-20 and 21-31. 0x7FEFFE00 is (u,v,w) = (-1, +1, +1).
+        { format: 65, gpu: "rgba16float", source: [0x00, 0xfe, 0xef, 0x7f],
           expected: [...halfMinusOne, ...halfOne, ...halfOne, ...halfOne] },
         { format: 67, gpu: "rgba16float", source: [0x00, 0xfe, 0x07, 0xc0],
           expected: [...halfMinusOne, ...halfOne, ...halfZero, ...halfOne] },
@@ -5709,6 +5815,47 @@ await test("M4 Clear honours its rectangle list", async () => {
     assert.deepEqual(pass.ops.find(op => op[0] === "viewport").slice(1, 5),
         [8, 10, 20, 24]);
     assert.deepEqual(pass.ops.find(op => op[0] === "draw"), ["draw", 3]);
+});
+
+// WebGPU requires a pipeline's attachment state -- colour formats, presence of
+// a depth-stencil attachment, sample count -- to match the pass it draws into.
+// The rectangle-clear pipeline cache keyed only on the clear flags, so the
+// pipeline built for a depth-less pass was handed to a pass that had depth:
+// setPipeline failed validation, the whole command buffer was rejected, and
+// the frame drew nothing. 3DMark 2001 reached this the moment one pass dropped
+// depth (an undersized depth surface does exactly that) and the next had it.
+await test("a rectangle clear caches one pipeline per pass attachment state",
+        async () => {
+    const clear = Buffer.alloc(40);
+    clear.writeUInt32LE(DEVICE, 0);
+    clear.writeUInt32LE(1, 4); // D3DCLEAR_TARGET
+    clear.writeUInt32LE(0xff336699, 8);
+    clear.writeFloatLE(1, 12);
+    clear.writeUInt32LE(0, 16);
+    clear.writeUInt32LE(1, 20);
+    [0, 0, 16, 16].forEach((value, index) =>
+        clear.writeInt32LE(value, 24 + index * 4));
+    const { executor, find } = makeExecutor();
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+        command(OP.CLEAR, clear),
+        // Unbind the depth surface, so the next clear's pass has no
+        // depth-stencil attachment while the clear flags stay identical.
+        command(OP.SET_DEPTH_STENCIL_SURFACE_LEVEL,
+            u32(DEVICE, 0, 0, 640, 480)),
+        command(OP.CLEAR, clear),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
+    ], { present: true }));
+    await executor.idle();
+    const pipelines = find("createRenderPipeline").map(call => call[1])
+        .filter(descriptor =>
+            (descriptor.label || "").startsWith("D3D9 rectangle clear"));
+    assert.equal(pipelines.length, 2,
+        "the two passes disagree about depth, so they cannot share a pipeline");
+    assert.ok(pipelines.some(descriptor => descriptor.depthStencil),
+        "the pass that has a depth attachment needs a depth-stencil state");
+    assert.ok(pipelines.some(descriptor => !descriptor.depthStencil),
+        "the pass without one must not declare a depth-stencil state");
 });
 
 // WebGPU counts a block-compressed copy in whole 4x4 blocks, and a mip level's
