@@ -48,16 +48,20 @@ interface version and the Direct3D 1-7 fixed-function object models:
 | `IDirectDrawPalette`, palettised surfaces kept as GPU-side indices | done |
 | `IDirectDrawClipper`, resolved guest-side into per-rectangle blits | done |
 | `GetDC`/`ReleaseDC` over a DIB section | done |
+| Windowed primary initial contents | seeded from the current GDI desktop, so save-under splash screens preserve rather than black out their background |
 | Overlay show/hide, position/stretch, dirty refresh, source/destination keys and overrides, mirroring, enumeration and all z-order operations | done as a non-destructive present-time composite |
 | `DuplicateSurface` | done; distinct COM/overlay identity over refcounted shared GPU storage and CPU pixels |
 | `SetSurfaceDesc` | done for explicit system-memory surfaces, including client-owned memory and size/format reallocation |
 | `EnumDisplayModes`, `GetCaps`, `GetDisplayMode`, `GetDeviceIdentifier` | done |
+| Taking the screen back when a title stops drawing to it | releasing the primary reports the device as no longer showing, so the composited overlay comes down instead of freezing the last frame over the guest's own display |
+| `IDirectDrawGammaControl` on the primary | the interface and its ramp are real; the ramp is not applied (see the deviations) |
 | `WaitForVerticalBlank`, `GetScanLine` | approximated from the clock |
 | Readback of a GPU-written surface on `Lock` | done for true-colour, P8 and BC/DXT subresources |
 | Pre-v7 interfaces: `IDirectDraw`/`2`/`3`/`4` and `IDirectDrawSurface`/`2`/`3`/`4` | done, as thunks over the v7 implementation |
 | `DirectDrawCreate` (the v1 entry point every retail title uses) | done |
-| `IDirect3D7`, HAL/T&L HAL/RGB enumeration and device creation | done |
+| `IDirect3D7`, HAL/T&L HAL/RGB enumeration and device creation | done; all three are enumerated, each describing itself -- only the T&L HAL claims `D3DDEVCAPS_HWTRANSFORMANDLIGHT`, and `GetCaps` answers for the device that was actually created |
 | `IDirect3DDevice7`: render target/depth binding, clear, transforms, viewport, material, lights, render/TSS/sampler state, textures and all draw entry points | done |
+| D3D7 environment bump mapping | done; `V8U8`/`DDPF_BUMPDUDV` is enumerated and uploaded as signed Du/Dv, with `BUMPENVMAP` and `BUMPENVMAPLUMINANCE` executed by the fixed-function WebGPU cascade |
 | D3D7 state blocks and `IDirect3DVertexBuffer7`, including software `ProcessVertices` | done |
 | D3D7 mip chains, six-face cube maps, DXT1-5 upload/readback and texture colour-key rendering | done |
 | D3D7 `ComputeSphereVisibility`, including enabled user clip planes | exact CPU frustum classification |
@@ -118,10 +122,11 @@ another, on purpose.
 | Overlay alpha, bob/interleaved capture and video ports | refused and their caps are not advertised | these require a video-capture/scanout model rather than a DirectDraw texture composite |
 | `DDBLTFX` rotation and `DDBLTFX_ARITHSTRETCHY` | ignored, mirroring is honoured | no GPU equivalent; the caps bits for them are not set either |
 | Raster operations other than `SRCCOPY` and `BLACKNESS` | refused with `DDERR_NORASTEROPHW` | the only two DirectDraw ever required of a driver |
-| GDI drawn straight onto the primary while DirectDraw owns it | does not appear | the primary is a host texture, not the screen; the same boundary d7vk draws |
+| GDI drawn straight onto the primary after its initial desktop snapshot | does not appear | the primary is a host texture, not the screen; the same boundary d7vk draws |
 | `CoCreateInstance(CLSID_DirectDraw)` | reaches `system32\ddraw.dll`, not this DLL | the registry, not the loader, resolves it; app-local replacement cannot intercept it |
 | Surface loss | never reported; `Restore` returns `DD_OK` | nothing here is lost to a mode change or a task switch |
 | Filtered true-colour texture colour keys | compared after the sampled RGB value is quantised | exact at texel centres; filtered edges may differ from individual 1990s drivers |
+| `IDirectDrawGammaControl::SetGammaRamp` | the ramp is stored and returned by `GetGammaRamp`, not applied to the output | presentation and output transfer belong to the browser, the same boundary the D3D8/D3D9 frontends' `SetGammaRamp` draws. A fade done by ramping gamma stays lit; refusing the interface while `DDCAPS2_PRIMARYGAMMA` is advertised would be worse, and dropping the cap loses apps that query without checking |
 | `D3DLIGHT_PARALLELPOINT` / `D3DLIGHT_GLSPOT` | translated to directional / spot | D3D9/WebGPU has no distinct form for either legacy light type |
 | D3D1 `D3DOP_SPAN` | submitted as a point list over the named transformed vertices | WebGPU has no span primitive; the opcode remains executable instead of aborting the buffer |
 | D3D1 triangle `Pick` at exact shared edges | top-left raster rule in guest floating point | historical drivers differed by subpixel rounding at boundaries |

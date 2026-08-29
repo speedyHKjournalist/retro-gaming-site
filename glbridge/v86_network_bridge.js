@@ -209,7 +209,11 @@
                 if (reason === "hide" || surface.visible === false) {
                     if (!session || session === this.d3d9OwnerSessionKey) {
                         this.d3d9Surface = { ...this.d3d9Surface, ...surface };
-                        if (this.activeOwner === "d3d9") this.hideOverlayCanvas();
+                        if (this.activeOwner === "d3d9")
+                            this.hideOverlayCanvas();
+                        else
+                            this.styleOverlayCanvas(this.d3d9Canvas,
+                                0, 0, 0, 0, false);
                     }
                 } else {
                     /* A CREATE/RESET only declares where a process would
@@ -226,8 +230,15 @@
                         this.activeOwner === "d3d9";
                     if (!hasOwner || belongsToOwner) {
                         this.d3d9Surface = { ...this.d3d9Surface, ...surface };
+                        // Only a successful Present may put the shared canvas
+                        // on screen.  In particular, DirectDraw sends a
+                        // display-mode report while tearing down 3DMark 2000;
+                        // treating that geometry report as visibility showed
+                        // the retained (black) canvas after the primary had
+                        // already told us to hide it.
                         this.positionOwner("d3d9",
-                            belongsToOwner || legacyOwner);
+                            this.activeOwner === "d3d9" &&
+                            (belongsToOwner || legacyOwner));
                     }
                 }
                 if (typeof userSurface === "function") userSurface(surface, reason);
@@ -241,11 +252,30 @@
             };
             opts.onDestroy = (surface, reason) => {
                 const session = surface.sessionKey || null;
-                if (!session || session === this.d3d9OwnerSessionKey) {
+                // The session check stops a helper process -- dxdiag, a
+                // capability probe -- from tearing down a running game's
+                // canvas, and that has to keep working.
+                //
+                // What it cannot answer is the orphaned case: the canvas is
+                // still showing frames while no session claims it any more,
+                // which is where an earlier destroy in the same session has
+                // already cleared the owner. Nothing can take it down after
+                // that, so an exiting process leaves a picture of itself over
+                // the guest's desktop with nothing left running to remove it.
+                // A session ending is a safe moment to reclaim that: there is
+                // no owner left to protect.
+                const orphaned = this.d3d9OwnerSessionKey === null &&
+                    this.activeOwner === "d3d9";
+                if (!session || session === this.d3d9OwnerSessionKey ||
+                        (reason === "session-end" && orphaned)) {
                     this.d3d9OwnerSessionKey = null;
                     this.d3d9Surface = { ...this.d3d9Surface, ...surface,
                         visible: false };
-                    if (this.activeOwner === "d3d9") this.hideOverlayCanvas();
+                    if (this.activeOwner === "d3d9")
+                        this.hideOverlayCanvas();
+                    else
+                        this.styleOverlayCanvas(this.d3d9Canvas,
+                            0, 0, 0, 0, false);
                 }
                 if (typeof userDestroy === "function") userDestroy(surface, reason);
             };

@@ -657,6 +657,7 @@ static IDirect3D2Vtbl g_d3d2_vtbl;
 static IDirect3DVtbl g_d3d1_vtbl;
 static IDirect3DTexture2Vtbl g_d3d_texture2_vtbl;
 static IDirect3DTextureVtbl g_d3d_texture1_vtbl;
+static IDirectDrawGammaControlVtbl g_gamma_vtbl;
 
 struct DDPalette {
     const IDirectDrawPaletteVtbl *vtbl;
@@ -734,6 +735,7 @@ struct DDSurface {
     const IDirectDrawSurfaceVtbl *vtbl1;
     const IDirect3DTexture2Vtbl *texture2_vtbl;
     const IDirect3DTextureVtbl *texture1_vtbl;
+    const IDirectDrawGammaControlVtbl *gamma_vtbl;
     LONG ref;
     DDrawObject *owner;
     uint32_t handle;            /* the D9WG texture behind it */
@@ -742,6 +744,7 @@ struct DDSurface {
     UINT mip_level;
     UINT cube_face;
     DDSURFACEDESC2 desc;        /* what the app asked for, kept verbatim */
+    DDGAMMARAMP gamma_ramp;     /* primary only; stored, not applied */
     unsigned format;            /* DDWG_FMT_* */
     BOOL indexed;               /* stored as r8uint indices on the host */
     UINT width;
@@ -890,12 +893,13 @@ static UINT format_bytes_per_pixel(unsigned format)
     case DDWG_FMT_R5G6B5: case DDWG_FMT_X1R5G5B5: case DDWG_FMT_A1R5G5B5:
     case DDWG_FMT_A4R4G4B4: case DDWG_FMT_X4R4G4B4: case DDWG_FMT_A8R3G3B2:
     case DDWG_FMT_A8P8: case DDWG_FMT_A8L8: case DDWG_FMT_D16:
-    case DDWG_FMT_D15S1:
+    case DDWG_FMT_D15S1: case DDWG_FMT_V8U8: case DDWG_FMT_L6V5U5:
         return 2u;
     case DDWG_FMT_R8G8B8:
         return 3u;
     case DDWG_FMT_A8R8G8B8: case DDWG_FMT_X8R8G8B8: case DDWG_FMT_D32:
     case DDWG_FMT_D24S8: case DDWG_FMT_D24X8: case DDWG_FMT_D24X4S4:
+    case DDWG_FMT_X8L8V8U8:
         return 4u;
     default:
         return 0u;
@@ -982,20 +986,25 @@ static void mode_pixel_format(UINT bpp, DDPIXELFORMAT *out)
     }
 }
 
+/*
+ * The size of the display, which is what a primary surface is.
+ *
+ * Deliberately not the window's client rectangle. A DirectDraw display mode
+ * describes the display, not the app's window: a DDSCL_NORMAL app's primary
+ * surface *is* the desktop, and it reaches its own window through a clipper.
+ * Consulting GetClientRect here was also wrong in a way that only showed up
+ * in a real guest -- an MFC frame exists before it is sized, and 3DMark 2000
+ * calls SetCooperativeLevel while its client rectangle still measures 1x1.
+ * That 1x1 was latched as the display mode, so every primary surface created
+ * afterwards was 1x1, no call ever failed, and the first symptom was the host
+ * refusing a blit for reading outside a one-pixel source.
+ */
 static void object_display_size(DDrawObject *object, UINT *width, UINT *height)
 {
     UINT resolved_width = object->mode_width;
     UINT resolved_height = object->mode_height;
-    RECT client;
     int metric;
 
-    if ((!resolved_width || !resolved_height) && object->window &&
-            GetClientRect(object->window, &client)) {
-        if (!resolved_width && client.right > client.left)
-            resolved_width = (UINT)(client.right - client.left);
-        if (!resolved_height && client.bottom > client.top)
-            resolved_height = (UINT)(client.bottom - client.top);
-    }
     if (!resolved_width && (metric = GetSystemMetrics(SM_CXSCREEN)) > 0)
         resolved_width = (UINT)metric;
     if (!resolved_height && (metric = GetSystemMetrics(SM_CYSCREEN)) > 0)
@@ -2005,6 +2014,7 @@ static void desc2_to_desc1(const DDSURFACEDESC2 *from, DDSURFACEDESC *to)
 }
 
 static void surface_destroy(DDSurface *surface);
+static void emit_window_state_not_showing(DDrawObject *object);
 static void surface_storage_release(DDTextureStorage *storage);
 static DDTextureStorage *surface_storage_allocate(void);
 static ULONG WINAPI surface_AddRef(IDirectDrawSurface7 *iface);
@@ -2013,6 +2023,8 @@ static HRESULT WINAPI ddraw_QueryInterface(IDirectDraw7 *iface, REFIID iid,
 static ULONG WINAPI ddraw_AddRef(IDirectDraw7 *iface);
 static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface);
 static void d3d7_rebind_after_flip(DDrawObject *object);
+static void d3d7_refresh_render_target(DDrawObject *object,
+        DDSurface *surface);
 static HRESULT d3d_legacy_surface_create_device(DDSurface *surface,
         REFIID iid, void **out);
 
@@ -2046,6 +2058,15 @@ static HRESULT WINAPI surface_QueryInterface(IDirectDrawSurface7 *iface,
             surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
             *out = &surface->texture1_vtbl;
             return DDWG_TRACE_RESULT(D3D_OK);
+        }
+        if (guid_equal(iid, &IID_IDirectDrawGammaControl)) {
+            /* DDCAPS2_PRIMARYGAMMA is the only gamma capability claimed, so
+             * the primary is the only surface that answers to it. */
+            if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE))
+                return DDWG_TRACE_ERROR(E_NOINTERFACE);
+            surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
+            *out = &surface->gamma_vtbl;
+            return DDWG_TRACE_RESULT(DD_OK);
         }
         if (guid_equal(iid, &IID_IDirect3DHALDevice) ||
                 guid_equal(iid, &IID_IDirect3DRGBDevice) ||
@@ -2084,6 +2105,74 @@ static ULONG WINAPI surface_Release(IDirectDrawSurface7 *iface)
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
 
+/* ------------------------------------------------------------------ *
+ * IDirectDrawGammaControl
+ *
+ * Another interface on the primary surface, reached by QueryInterface, and
+ * the one DDCAPS2_PRIMARYGAMMA promises. Advertising that bit without this
+ * interface was the mismatch worth removing: a title that checks the cap and
+ * then queries -- 3DMark 2000's graphics layer is one -- got E_NOINTERFACE
+ * from a driver that had just said gamma was available.
+ *
+ * The ramp is stored and returned, not applied: presentation cadence and
+ * output transfer belong to the browser, exactly as with the D3D8/D3D9
+ * frontends' SetGammaRamp. What that costs is listed in the README's
+ * deviations -- a fade-to-black done through gamma stays lit.
+ * ------------------------------------------------------------------ */
+
+static DDSurface *gamma_from_iface(IDirectDrawGammaControl *iface)
+{
+    return (DDSurface *)((BYTE *)iface - offsetof(DDSurface, gamma_vtbl));
+}
+
+static HRESULT WINAPI gamma_QueryInterface(IDirectDrawGammaControl *iface,
+        REFIID iid, void **out)
+{
+    DDSurface *surface = gamma_from_iface(iface);
+    return surface_QueryInterface((IDirectDrawSurface7 *)&surface->vtbl7,
+            iid, out);
+}
+
+static ULONG WINAPI gamma_AddRef(IDirectDrawGammaControl *iface)
+{
+    DDSurface *surface = gamma_from_iface(iface);
+    return surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
+}
+
+static ULONG WINAPI gamma_Release(IDirectDrawGammaControl *iface)
+{
+    DDSurface *surface = gamma_from_iface(iface);
+    return surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
+}
+
+static HRESULT WINAPI gamma_GetGammaRamp(IDirectDrawGammaControl *iface,
+        DWORD flags, LPDDGAMMARAMP ramp)
+{
+    DDSurface *surface = gamma_from_iface(iface);
+    (void)flags;
+    if (!ramp) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    *ramp = surface->gamma_ramp;
+    return DD_OK;
+}
+
+static HRESULT WINAPI gamma_SetGammaRamp(IDirectDrawGammaControl *iface,
+        DWORD flags, LPDDGAMMARAMP ramp)
+{
+    DDSurface *surface = gamma_from_iface(iface);
+    /* DDSGR_CALIBRATE asks the driver to correct the ramp for this monitor.
+     * There is no monitor here to calibrate against, and the API allows a
+     * driver to ignore it. */
+    (void)flags;
+    if (!ramp) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    surface->gamma_ramp = *ramp;
+    return DD_OK;
+}
+
+static IDirectDrawGammaControlVtbl g_gamma_vtbl = {
+    gamma_QueryInterface, gamma_AddRef, gamma_Release,
+    gamma_GetGammaRamp, gamma_SetGammaRamp,
+};
+
 static HRESULT WINAPI surface_AddAttachedSurface(IDirectDrawSurface7 *iface,
         LPDIRECTDRAWSURFACE7 attachment)
 {
@@ -2094,6 +2183,7 @@ static HRESULT WINAPI surface_AddAttachedSurface(IDirectDrawSurface7 *iface,
     if (other->desc.ddsCaps.dwCaps & DDSCAPS_ZBUFFER) {
         surface->attached_depth = other;
         IDirectDrawSurface7_AddRef(attachment);
+        d3d7_refresh_render_target(surface->owner, surface);
         return DD_OK;
     }
     if (other->desc.ddsCaps.dwCaps & DDSCAPS_BACKBUFFER) {
@@ -2441,6 +2531,7 @@ static HRESULT WINAPI surface_DeleteAttachedSurface(IDirectDrawSurface7 *iface,
     (void)flags;
     if (other && surface->attached_depth == other) {
         surface->attached_depth = NULL;
+        d3d7_refresh_render_target(surface->owner, surface);
         IDirectDrawSurface7_Release(attachment);
         return DD_OK;
     }
@@ -2859,15 +2950,29 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
     return DDWG_TRACE_RESULT(DD_OK);
 }
 
+static HRESULT surface_finish_dc(DDSurface *surface, BOOL present);
+
 static HRESULT WINAPI surface_ReleaseDC(IDirectDrawSurface7 *iface, HDC dc)
 {
     DDSurface *surface = surface_from_iface(iface);
-    UINT row;
-    UINT row_bytes;
+    HRESULT result;
 
     DDWG_TRACE_CHECKPOINT("CALL surface_ReleaseDC handle=%lu dc=%08lX",
             surface->handle, (DWORD)(uintptr_t)dc);
-    if (!surface->dc || dc != surface->dc) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!surface->dc || dc != surface->dc)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    result = surface_finish_dc(surface, TRUE);
+    return DDWG_TRACE_RESULT(result);
+}
+
+/* Commit a DIB-backed DC to the surface shadow.  The public ReleaseDC path
+ * presents a primary immediately; the windowed-primary seed below needs the
+ * same upload without making the still-unmodified desktop into a new frame. */
+static HRESULT surface_finish_dc(DDSurface *surface, BOOL present)
+{
+    UINT row;
+    UINT row_bytes;
+
     GdiFlush();
     row_bytes = surface->width * surface->bytes_per_pixel;
     for (row = 0; row < surface->height; ++row) {
@@ -2884,11 +2989,49 @@ static HRESULT WINAPI surface_ReleaseDC(IDirectDrawSurface7 *iface, HDC dc)
     surface->old_bitmap = NULL;
     emit_surface_upload(surface, NULL);
     surface->memory->gpu_dirty = FALSE;
-    if (surface->primary && !surface->flip_next) {
+    if (present && surface->primary && !surface->flip_next) {
         emit_blt_to_screen(surface);
         emit_present_and_flush(surface->owner);
     }
-    return DDWG_TRACE_RESULT(DD_OK);
+    return DD_OK;
+}
+
+/*
+ * DDSCL_NORMAL does not give an application a private black primary: its
+ * primary is the desktop that GDI has already drawn.  Seed our host-backed
+ * primary from that desktop before the first DirectDraw blit.  3DMark 2000's
+ * splash copies the 420x170 rectangle behind itself, animates into the
+ * primary, then restores that saved rectangle.  A zero-filled proxy primary
+ * therefore turned the whole 800x600 overlay black even though the logo blit
+ * and all its coordinates were correct.
+ *
+ * This is intentionally only the initial snapshot.  GDI writes made while
+ * DirectDraw owns the primary still do not enter its texture (documented in
+ * README.md), but a normal primary begins with the pixels the API promises.
+ */
+static BOOL seed_windowed_primary_from_screen(DDSurface *surface)
+{
+    HDC target;
+    HDC screen;
+    BOOL copied;
+    HRESULT result;
+
+    if (!surface || !surface->primary || !surface->owner ||
+            !(surface->owner->cooperative_flags & DDSCL_NORMAL) ||
+            (surface->owner->cooperative_flags & DDSCL_FULLSCREEN) ||
+            !surface->owner->window || !IsWindow(surface->owner->window) ||
+            surface->bytes_per_pixel < 2u)
+        return FALSE;
+    result = surface_GetDC((IDirectDrawSurface7 *)&surface->vtbl7, &target);
+    if (FAILED(result)) return FALSE;
+    screen = GetDC(NULL);
+    copied = screen && BitBlt(target, 0, 0, (int)surface->width,
+            (int)surface->height, screen, 0, 0, SRCCOPY);
+    if (screen) ReleaseDC(NULL, screen);
+    result = surface_finish_dc(surface, FALSE);
+    DDWG_TRACE("PRIMARY DESKTOP_SEED handle=%lu copied=%lu result=%08lX",
+            surface->handle, copied ? 1u : 0u, (DWORD)result);
+    return copied && SUCCEEDED(result);
 }
 
 static HRESULT WINAPI surface_GetFlipStatus(IDirectDrawSurface7 *iface,
@@ -3835,6 +3978,7 @@ static void surface_destroy(DDSurface *surface)
 {
     DDrawObject *owner = surface->owner;
     UINT face;
+    BOOL was_primary = FALSE;
 
     if ((surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY) &&
             surface->overlay_destination) {
@@ -3879,11 +4023,85 @@ static void surface_destroy(DDSurface *surface)
         DDSurface **link = &owner->surfaces;
         while (*link && *link != surface) link = &(*link)->next;
         if (*link) *link = surface->next;
-        if (owner->primary == surface) owner->primary = NULL;
+        if (owner->primary == surface) {
+            owner->primary = NULL;
+            was_primary = TRUE;
+        }
     }
     LeaveCriticalSection(&g_object_lock);
+    /* Outside the object lock: emitting takes the transport lock, and the two
+     * are never held in the other order anywhere else. */
+    if (was_primary) emit_window_state_not_showing(owner);
     surface_memory_release(surface->memory);
     heap_free(surface);
+}
+
+/*
+ * Tell the host this device has stopped putting anything on screen.
+ *
+ * The overlay canvas is *shown* by a present, and only two things ever take
+ * it away again: destroying the device, and a window-state report saying the
+ * window is not showing. An app that releases its primary surface while
+ * keeping the DirectDraw object alive hits neither -- 3DMark 2000 does
+ * exactly that when its splash screen closes -- so the last frame it
+ * presented stayed composited over the guest's own screen for the rest of the
+ * process, hiding the GDI window underneath it.
+ *
+ * The report carries the window's real geometry with D9WG_WINDOW_VISIBLE
+ * cleared. That bit means "what this device presents is on screen", which is
+ * precisely what stops being true when the primary goes away. The window
+ * itself may well still be up, and is described as it is.
+ */
+static void emit_window_state_not_showing(DDrawObject *object)
+{
+    D9WGWindowState command;
+    HWND window;
+    HWND foreground;
+    RECT window_rect;
+    RECT client;
+    uint32_t flags = 0;
+
+    if (!object || !object->device_created || !object->device_handle)
+        return;
+    window = object->window;
+    foreground = GetForegroundWindow();
+    SetRect(&window_rect, 0, 0, 0, 0);
+    SetRect(&client, 0, 0, 0, 0);
+    if (window && IsWindow(window)) {
+        flags |= D9WG_WINDOW_IS_WINDOW;
+        if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
+        if (window == foreground) flags |= D9WG_WINDOW_FOREGROUND;
+        GetWindowRect(window, &window_rect);
+        GetClientRect(window, &client);
+    }
+    if (object->cooperative_flags & DDSCL_FULLSCREEN)
+        flags |= D9WG_WINDOW_FULLSCREEN;
+    /* Says which claim this is: nothing to present, rather than a window that
+     * has gone away. Without it the host reads a cleared VISIBLE bit as a
+     * minimised window and warns that input is going elsewhere -- for a title
+     * that has simply finished drawing and whose window is fine. */
+    flags |= D9WG_WINDOW_NO_SURFACE;
+    ZeroMemory(&command, sizeof(command));
+    command.device_handle = object->device_handle;
+    command.hwnd = (uint32_t)(uintptr_t)window;
+    command.foreground_hwnd = (uint32_t)(uintptr_t)foreground;
+    command.flags = flags;
+    command.window_x = window_rect.left;
+    command.window_y = window_rect.top;
+    command.window_width = (uint32_t)(window_rect.right - window_rect.left);
+    command.window_height = (uint32_t)(window_rect.bottom - window_rect.top);
+    command.client_width = (uint32_t)(client.right - client.left);
+    command.client_height = (uint32_t)(client.bottom - client.top);
+    DDWG_TRACE_CHECKPOINT("WINDOW_STATE not_showing device=%lu hwnd=%08lX "
+            "flags=%08lX", command.device_handle, command.hwnd, flags);
+    if (!emit_command(D9WG_OP_WINDOW_STATE, &command, sizeof(command)))
+        return;
+    /* Flushed rather than left in the batch: the app has stopped presenting,
+     * so there may be no next submission until the process exits, and a
+     * hide that arrives then is no hide at all. */
+    EnterCriticalSection(&g_transport_lock);
+    submit_batch_locked(FALSE);
+    LeaveCriticalSection(&g_transport_lock);
 }
 
 static DDSurface *surface_allocate(DDrawObject *object,
@@ -3925,8 +4143,20 @@ static DDSurface *surface_allocate(DDrawObject *object,
     surface->vtbl1 = &g_surface_vtbl1;
     surface->texture2_vtbl = &g_d3d_texture2_vtbl;
     surface->texture1_vtbl = &g_d3d_texture1_vtbl;
+    surface->gamma_vtbl = &g_gamma_vtbl;
     surface->ref = 1;
     surface->owner = object;
+    {
+        /* The identity ramp, which is what a surface reports before anyone
+         * sets one: 8-bit level i widened to 16 bits is i * 257. */
+        UINT entry;
+        for (entry = 0; entry < 256u; ++entry) {
+            WORD value = (WORD)(entry * 257u);
+            surface->gamma_ramp.red[entry] = value;
+            surface->gamma_ramp.green[entry] = value;
+            surface->gamma_ramp.blue[entry] = value;
+        }
+    }
     if (shared_storage) {
         InterlockedIncrement(&shared_storage->ref);
         surface->storage = shared_storage;
@@ -4324,6 +4554,15 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         width = request->dwWidth;
         height = request->dwHeight;
+        /* DirectDraw refuses a zero-sized surface. Accepting one produced a
+         * host texture clamped to 1x1 that no call ever complained about,
+         * until something blitted from it. */
+        if (!width || !height) {
+            HOSTLOG_REFUSED("CreateSurface asked for a %lux%lu surface; "
+                    "DirectDraw answers a zero dimension with "
+                    "DDERR_INVALIDPARAMS", width, height);
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        }
         if (request->dwFlags & DDSD_PIXELFORMAT)
             pixel_format = request->ddpfPixelFormat;
         else
@@ -4374,6 +4613,8 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
     if (caps & DDSCAPS_PRIMARYSURFACE) {
         object->primary = surface;
         surface->front_of_chain = back_buffers > 0;
+        if (!back_buffers)
+            (void)seed_windowed_primary_from_screen(surface);
     }
 
     /*
@@ -4560,14 +4801,19 @@ static void fill_caps(DDCAPS *caps)
      *   COLORKEY + CKEYCAPS_SRCBLT       -> emit_color_key + the keyed variant
      *   PALETTE / PALETTEVSYNC           -> emit_palette_table, indexed storage
      *   CANBLTSYSMEM                     -> every surface has a shadow
+     *   3D                               -> d3d7_proxy.inc, the whole of it
+     * DDCAPS_3D is how a DirectX 7 title asks "is there a Direct3D device
+     * behind this DirectDraw object at all"; the SDK's own enumeration sample
+     * checks it before it will call EnumDevices, and every title descended
+     * from that sample does the same.
      * Video ports and alpha overlays remain separate capabilities and are not
      * claimed; ordinary keyed/scaled/mirrored overlays are present-time GPU
      * composites and are advertised below.
      */
-    caps->dwCaps = DDCAPS_BLT | DDCAPS_BLTSTRETCH | DDCAPS_BLTCOLORFILL |
-        DDCAPS_BLTDEPTHFILL | DDCAPS_COLORKEY | DDCAPS_PALETTE |
-        DDCAPS_CANBLTSYSMEM | DDCAPS_BLTQUEUE | DDCAPS_OVERLAY |
-        DDCAPS_OVERLAYFOURCC | DDCAPS_OVERLAYSTRETCH;
+    caps->dwCaps = DDCAPS_3D | DDCAPS_BLT | DDCAPS_BLTSTRETCH |
+        DDCAPS_BLTCOLORFILL | DDCAPS_BLTDEPTHFILL | DDCAPS_COLORKEY |
+        DDCAPS_PALETTE | DDCAPS_CANBLTSYSMEM | DDCAPS_BLTQUEUE |
+        DDCAPS_OVERLAY | DDCAPS_OVERLAYFOURCC | DDCAPS_OVERLAYSTRETCH;
     caps->dwCaps2 = DDCAPS2_WIDESURFACES | DDCAPS2_PRIMARYGAMMA;
     caps->dwCKeyCaps = DDCKEYCAPS_SRCBLT | DDCKEYCAPS_SRCBLTCLRSPACE |
         DDCKEYCAPS_DESTBLT | DDCKEYCAPS_DESTBLTCLRSPACE |
@@ -5279,9 +5525,26 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         v86wg_diagnostic_process_attach(instance);
 #endif
     } else if (reason == DLL_PROCESS_DETACH) {
+        DDrawObject *object;
 #ifdef DDWG_DIAGNOSTIC_TRACE
         pending_commands = g_command_count;
 #endif
+        /*
+         * Take the composited overlay down before the session goes, through
+         * the same report a released primary sends.
+         *
+         * SESSION_END already tells the host this process is gone, and the
+         * host does retire the devices for it -- but whether that reaches the
+         * page's canvas depends on the session bookkeeping lining up, and a
+         * frame left on screen after the app has exited is the one failure
+         * the user cannot work around: it covers the desktop with a picture
+         * of a program that no longer exists. Saying "nothing to show" first
+         * makes the teardown depend on the path that is already known to
+         * work, rather than on the last message of a dying process being
+         * matched up correctly.
+         */
+        for (object = g_objects; object; object = object->next)
+            emit_window_state_not_showing(object);
         emit_session_end();
         EnterCriticalSection(&g_transport_lock);
         if (g_command_count)

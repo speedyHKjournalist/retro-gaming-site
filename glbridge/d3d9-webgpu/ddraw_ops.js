@@ -625,7 +625,7 @@ ${body.join("\n")}
                     // window is or the pointer stops matching the picture.
                     ...(exclusiveFullscreen && guestModeChanged
                         ? { x: 0, y: 0 } : {}),
-                    fullscreen: exclusiveFullscreen, visible: true };
+                    fullscreen: exclusiveFullscreen };
                 this.notifySurface(state, "display-mode");
             }
             this.stats.ddDisplayModes = (this.stats.ddDisplayModes || 0) + 1;

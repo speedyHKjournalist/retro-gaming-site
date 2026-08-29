@@ -73,6 +73,9 @@
 #define DDWG_FMT_L8 50u
 #define DDWG_FMT_A8L8 51u
 #define DDWG_FMT_A4L4 52u
+#define DDWG_FMT_V8U8 60u
+#define DDWG_FMT_L6V5U5 61u
+#define DDWG_FMT_X8L8V8U8 62u
 #define DDWG_FMT_D16_LOCKABLE 70u
 #define DDWG_FMT_D32 71u
 #define DDWG_FMT_D15S1 73u
@@ -118,6 +121,8 @@
 #define DDRAW_PF_ZPIXELS 0x00002000u
 #define DDRAW_PF_STENCILBUFFER 0x00004000u
 #define DDRAW_PF_LUMINANCE 0x00020000u
+#define DDRAW_PF_BUMPLUMINANCE 0x00040000u
+#define DDRAW_PF_BUMPDUDV 0x00080000u
 
 typedef struct DDrawPixelFormatDesc {
     unsigned flags;
@@ -203,6 +208,27 @@ static __inline unsigned ddraw_pixel_format_to_d3dformat(
 
     if ((pf->flags & DDRAW_PF_ALPHA) && pf->bit_count == 8u)
         return DDWG_FMT_A8;
+
+    /* D3D7 environment-bump formats. DDPIXELFORMAT overlays Du/Dv/L on its
+     * R/G/B fields, so the three masks here deliberately describe signed U,
+     * signed V and unsigned luminance. Accept only the layouts the D3DFORMAT
+     * values specify: forwarding an arbitrary DDPF_BUMPDUDV description would
+     * make the host decode its texels with the wrong component widths. */
+    if (pf->flags & DDRAW_PF_BUMPDUDV) {
+        if (pf->bit_count == 16u && pf->red_mask == 0x00ffu &&
+                pf->green_mask == 0xff00u && !pf->blue_mask)
+            return DDWG_FMT_V8U8;
+        if ((pf->flags & DDRAW_PF_BUMPLUMINANCE) &&
+                pf->bit_count == 16u && pf->red_mask == 0x001fu &&
+                pf->green_mask == 0x03e0u && pf->blue_mask == 0xfc00u)
+            return DDWG_FMT_L6V5U5;
+        if ((pf->flags & DDRAW_PF_BUMPLUMINANCE) &&
+                pf->bit_count == 32u && pf->red_mask == 0x000000ffu &&
+                pf->green_mask == 0x0000ff00u &&
+                pf->blue_mask == 0x00ff0000u)
+            return DDWG_FMT_X8L8V8U8;
+        return DDWG_FMT_UNKNOWN;
+    }
 
     if (!(pf->flags & DDRAW_PF_RGB)) return DDWG_FMT_UNKNOWN;
 

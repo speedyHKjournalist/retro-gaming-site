@@ -159,6 +159,7 @@
     const D9WG_WINDOW_ICONIC = 1 << 2;
     const D9WG_WINDOW_FOREGROUND = 1 << 3;
     const D9WG_WINDOW_FULLSCREEN = 1 << 4;
+    const D9WG_WINDOW_NO_SURFACE = 1 << 5;
     const OP_SET_VERTEX_SHADER = 0x211;
     const OP_SET_PIXEL_SHADER = 0x212;
     const OP_SET_VERTEX_SHADER_CONSTANT_F = 0x213;
@@ -3627,7 +3628,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // fills width/height from GetClientRect, and a windowed game's
                 // client area is smaller than the back buffer it hosts.
                 surface: { hwnd: 0, x: 0, y: 0, width: 0, height: 0,
-                    visible: true, sessionKey: null },
+                    visible: true, noSurface: false, sessionKey: null },
                 // What the guest asked for at CreateDevice/Reset, and therefore
                 // the real size of the swap-chain colour attachment and of the
                 // auto depth target created beside it.
@@ -4071,7 +4072,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const state = this.deviceState(handle);
             state.viewport = { x: 0, y: 0, width, height, minZ: 0, maxZ: 1 };
             state.surface = { hwnd, x, y, width, height, visible: true,
-                sessionKey: this.sessionKey };
+                noSurface: false, sessionKey: this.sessionKey };
             state.backBufferWidth = width;
             state.backBufferHeight = height;
             this.configureBackBufferMSAA(state, width, height,
@@ -4113,7 +4114,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const state = this.deviceState(newHandle);
             state.viewport = { x: 0, y: 0, width, height, minZ: 0, maxZ: 1 };
             state.surface = { hwnd, x, y, width, height, visible: true,
-                sessionKey: this.sessionKey };
+                noSurface: false, sessionKey: this.sessionKey };
             state.backBufferWidth = width;
             state.backBufferHeight = height;
             this.configureBackBufferMSAA(state, width, height,
@@ -4427,7 +4428,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const changed = state.surface.hwnd !== hwnd || state.surface.x !== x ||
                 state.surface.y !== y || state.surface.width !== width ||
                 state.surface.height !== height;
-            state.surface = { ...state.surface, hwnd, x, y, width, height, visible: true };
+            state.surface = { ...state.surface, hwnd, x, y, width, height,
+                visible: true, noSurface: false };
             if (changed) {
                 ++this.stats.surfaceChanges;
                 this.notifySurface(state, "present");
@@ -9193,8 +9195,23 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             if (!state) return;
             const hidden = !report.isWindow || report.iconic || !report.visible;
             if (hidden) {
-                if (state.surface.visible === false) return;
-                state.surface = { ...state.surface, visible: false };
+                // Visibility is tracked per device; the canvas is one shared
+                // thing. Those disagree the moment anything else puts the
+                // canvas back on screen -- a CreateDevice for the same
+                // session does exactly that -- and this device's own flag
+                // still reads false from an earlier report. Skipping the
+                // notification as redundant then drops the one message that
+                // would have taken the canvas down.
+                //
+                // A no-surface report is a teardown signal rather than a
+                // geometry update, so it is never redundant: it is the last
+                // thing an exiting process says, and if it is dropped its
+                // final frame stays composited over the guest's desktop with
+                // nothing left running to remove it.
+                if (state.surface.visible === false && !report.noSurface)
+                    return;
+                state.surface = { ...state.surface, visible: false,
+                    noSurface: !!report.noSurface };
                 ++this.stats.surfaceChanges;
                 this.notifySurface(state, "window-state");
                 return;
@@ -9214,7 +9231,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             if (!changed) return;
             state.surface = { ...state.surface, hwnd: report.hwnd,
                 x: report.windowX, y: report.windowY, width, height,
-                visible: true };
+                visible: true, noSurface: false };
             ++this.stats.surfaceChanges;
             this.notifySurface(state, "window-state");
         }
@@ -9247,10 +9264,18 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 windowHeight: view.getUint32(offset + 28, true),
                 clientWidth: view.getUint32(offset + 32, true),
                 clientHeight: view.getUint32(offset + 36, true),
+                // "I have nothing to show", which is not the same claim as
+                // "my window is gone": the window may be up and taking input.
+                noSurface: (flags & D9WG_WINDOW_NO_SURFACE) !== 0,
             };
             this.windowState = state;
             ++this.stats.windowStateChanges;
             this.applyWindowStateGeometry(deviceHandle, state);
+            // A device that says it has nothing to present is not describing a
+            // window problem, and the two diagnostics below are about window
+            // problems: they would report broken input for a title that is
+            // simply done drawing.
+            if (state.noSurface) return;
             if (!state.foreground) {
                 ++this.stats.windowNotForegroundReports;
                 // The guest re-takes the foreground for a fullscreen device

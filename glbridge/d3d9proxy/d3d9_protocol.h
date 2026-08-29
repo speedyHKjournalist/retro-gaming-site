@@ -732,6 +732,15 @@ typedef struct D9WGShowCursor {
 #define D9WG_WINDOW_ICONIC       (1u << 2)
 #define D9WG_WINDOW_FOREGROUND   (1u << 3)
 #define D9WG_WINDOW_FULLSCREEN   (1u << 4)
+/*
+ * The guest has nothing to present for this device -- a DirectDraw title that
+ * released its primary surface, say. The host takes the overlay down for it
+ * exactly as it does for a hidden window, but the window itself may be up and
+ * taking input normally, so the reports about visibility and foreground do not
+ * apply and are not made. Reported alongside the real window state, never
+ * instead of it.
+ */
+#define D9WG_WINDOW_NO_SURFACE   (1u << 5)
 
 typedef struct D9WGWindowState {
     uint32_t device_handle;

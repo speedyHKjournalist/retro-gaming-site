@@ -69,6 +69,11 @@ struct D3D7Device {
     LONG ref;
     DDrawObject *owner;
     DDSurface *render_target;
+    /* Which of the three device GUIDs CreateDevice was given. GetCaps has to
+     * answer for that device, not for the best one this DLL can offer: an app
+     * that asked for the non-T&L HAL and is told it has hardware T&L will
+     * measure the wrong thing and believe the wrong caps. */
+    GUID device_guid;
     BOOL in_scene;
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
@@ -455,7 +460,16 @@ static void d3d7_fill_prim_caps(D3DPRIMCAPS *caps)
             D3DPTADDRESSCAPS_BORDER | D3DPTADDRESSCAPS_INDEPENDENTUV;
 }
 
-static void d3d7_fill_caps(D3DDEVICEDESC7 *caps)
+/*
+ * `device` selects which of the three enumerated devices this describes.
+ * The T&L HAL is the full set; the plain HAL is the same rasteriser without
+ * hardware transform and lighting, which is how a D3D7 app asks for software
+ * T&L; the RGB device is the software rasteriser. All three run on the same
+ * backend here, so the difference is what is claimed, not what is done -- but
+ * claiming hardware T&L to an app that deliberately chose software T&L makes
+ * its own reporting wrong, which for a benchmark is the whole point.
+ */
+static void d3d7_fill_caps_for(const GUID *device, D3DDEVICEDESC7 *caps)
 {
     ZeroMemory(caps, sizeof(*caps));
     caps->dwDevCaps = D3DDEVCAPS_HWRASTERIZATION |
@@ -489,18 +503,32 @@ static void d3d7_fill_caps(D3DDEVICEDESC7 *caps)
             D3DTEXOPCAPS_BLENDTEXTUREALPHA |
             D3DTEXOPCAPS_BLENDFACTORALPHA |
             D3DTEXOPCAPS_BLENDTEXTUREALPHAPM |
-            D3DTEXOPCAPS_BLENDCURRENTALPHA | D3DTEXOPCAPS_DOTPRODUCT3;
+            D3DTEXOPCAPS_BLENDCURRENTALPHA | D3DTEXOPCAPS_DOTPRODUCT3 |
+            /* The WebGPU fixed-function cascade samples signed Du/Dv from
+             * V8U8 and perturbs the following stage through BUMPENVMAT00..11.
+             * Keep this promise in lockstep with the V8U8 format below. */
+            D3DTEXOPCAPS_BUMPENVMAP |
+            D3DTEXOPCAPS_BUMPENVMAPLUMINANCE;
     caps->wMaxTextureBlendStages = D3D7_MAX_TEXTURE_STAGES;
     caps->wMaxSimultaneousTextures = D3D7_MAX_TEXTURE_STAGES;
     caps->dwMaxActiveLights = D3D7_MAX_LIGHTS;
     caps->dvMaxVertexW = 1.0e10f;
-    caps->deviceGUID = IID_IDirect3DTnLHalDevice;
+    caps->deviceGUID = device ? *device : IID_IDirect3DTnLHalDevice;
     caps->wMaxUserClipPlanes = D3D7_MAX_CLIP_PLANES;
     caps->wMaxVertexBlendMatrices = 4u;
     caps->dwVertexProcessingCaps = D3DVTXPCAPS_TEXGEN |
             D3DVTXPCAPS_MATERIALSOURCE7 | D3DVTXPCAPS_VERTEXFOG |
             D3DVTXPCAPS_DIRECTIONALLIGHTS | D3DVTXPCAPS_POSITIONALLIGHTS |
             D3DVTXPCAPS_LOCALVIEWER;
+    if (device && !guid_equal(device, &IID_IDirect3DTnLHalDevice))
+        caps->dwDevCaps &= ~(DWORD)D3DDEVCAPS_HWTRANSFORMANDLIGHT;
+    if (device && guid_equal(device, &IID_IDirect3DRGBDevice))
+        caps->dwDevCaps &= ~(DWORD)D3DDEVCAPS_HWRASTERIZATION;
+}
+
+static void d3d7_fill_caps(D3DDEVICEDESC7 *caps)
+{
+    d3d7_fill_caps_for(&IID_IDirect3DTnLHalDevice, caps);
 }
 
 static void d3d7_make_rgb_format(DDPIXELFORMAT *format, DWORD bits,
@@ -535,8 +563,24 @@ static HRESULT d3d7_enum_texture_formats(LPD3DENUMPIXELFORMATSCALLBACK callback,
 
     if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (depth_only) {
-        static const struct { DWORD depth, stencil; } depths[] = {
-            { 16u, 0u }, { 24u, 0u }, { 24u, 8u }, { 32u, 0u }
+        /*
+         * The bit masks are not decoration. A depth format is identified by
+         * where its bits sit, not only by how many there are, and an app that
+         * validates what it is offered -- 3DMark 2000 does -- rejects a
+         * format whose mask is zero, keeps the zeroed DDPIXELFORMAT it
+         * started with, and hands that back to CreateSurface. What arrives
+         * then is DDPF_ZBUFFER with a bit depth of zero, refused as an
+         * invalid pixel format, and the app reports that it "could not
+         * initialize your 3D Accelerator" -- with no sign that the real
+         * mistake was three fields earlier, in the enumeration.
+         */
+        static const struct {
+            DWORD depth, stencil, z_mask, stencil_mask;
+        } depths[] = {
+            { 16u, 0u, 0x0000ffffu, 0u },
+            { 24u, 0u, 0x00ffffffu, 0u },
+            { 24u, 8u, 0xffffff00u, 0x000000ffu },
+            { 32u, 0u, 0xffffffffu, 0u },
         };
         for (index = 0; index < sizeof(depths) / sizeof(depths[0]); ++index) {
             ZeroMemory(&format, sizeof(format));
@@ -545,8 +589,13 @@ static HRESULT d3d7_enum_texture_formats(LPD3DENUMPIXELFORMATSCALLBACK callback,
                     (depths[index].stencil ? DDPF_STENCILBUFFER : 0u);
             format.dwZBufferBitDepth = depths[index].depth;
             format.dwStencilBitDepth = depths[index].stencil;
+            format.dwZBitMask = depths[index].z_mask;
+            format.dwStencilBitMask = depths[index].stencil_mask;
             if (callback(&format, context) == D3DENUMRET_CANCEL) break;
         }
+        /* `index` is the count offered, or where the caller cancelled. */
+        DDWG_TRACE("ZBUFFER FORMATS offered=%u first_depth=%lu", index,
+                depths[0].depth);
         return D3D_OK;
     }
     for (index = 0; index < sizeof(colors) / sizeof(colors[0]); ++index) {
@@ -559,6 +608,31 @@ static HRESULT d3d7_enum_texture_formats(LPD3DENUMPIXELFORMATSCALLBACK callback,
     format.dwFlags = DDPF_RGB | DDPF_PALETTEINDEXED8;
     format.dwRGBBitCount = 8u;
     if (callback(&format, context) == D3DENUMRET_CANCEL) return D3D_OK;
+    {
+        /* V8U8 (format 60), plus the two luminance-bearing forms consumed by
+         * BUMPENVMAPLUMINANCE. 3DMark 2000 creates the first exact entry for
+         * its environment bump-mapping test. */
+        static const struct {
+            DWORD flags, bits, du, dv, luminance;
+        } bumps[] = {
+            { DDPF_BUMPDUDV, 16u, 0x000000ffu, 0x0000ff00u, 0u },
+            { DDPF_BUMPDUDV | DDPF_BUMPLUMINANCE,
+              16u, 0x0000001fu, 0x000003e0u, 0x0000fc00u },
+            { DDPF_BUMPDUDV | DDPF_BUMPLUMINANCE,
+              32u, 0x000000ffu, 0x0000ff00u, 0x00ff0000u },
+        };
+        for (index = 0; index < sizeof(bumps) / sizeof(bumps[0]); ++index) {
+            ZeroMemory(&format, sizeof(format));
+            format.dwSize = sizeof(format);
+            format.dwFlags = bumps[index].flags;
+            format.dwBumpBitCount = bumps[index].bits;
+            format.dwBumpDuBitMask = bumps[index].du;
+            format.dwBumpDvBitMask = bumps[index].dv;
+            format.dwBumpLuminanceBitMask = bumps[index].luminance;
+            if (callback(&format, context) == D3DENUMRET_CANCEL)
+                return D3D_OK;
+        }
+    }
     {
         static const DWORD compressed[] = {
             DDWG_FMT_DXT1, DDWG_FMT_DXT2, DDWG_FMT_DXT3,
@@ -602,12 +676,38 @@ static ULONG WINAPI d3d7_Release(IDirect3D7 *iface)
 static HRESULT WINAPI d3d7_EnumDevices(IDirect3D7 *iface,
         LPD3DENUMDEVICESCALLBACK7 callback, void *context)
 {
+    /*
+     * All three retail device types, best first. CreateDevice already accepts
+     * each of these GUIDs, so enumerating only the T&L HAL hid two devices
+     * that work: an app offering a "hardware T&L / software T&L" choice --
+     * 3DMark 2000 is exactly that -- finds nothing behind the software entry
+     * and cannot select it. The order matters for the other kind of app, the
+     * one that takes the first device it is handed.
+     */
+    static const struct {
+        const GUID *guid;
+        const char *description;
+        const char *name;
+    } devices[] = {
+        { &IID_IDirect3DTnLHalDevice, "v86 WebGPU T&L HAL",
+          "Direct3D T&L HAL" },
+        { &IID_IDirect3DHALDevice, "v86 WebGPU HAL", "Direct3D HAL" },
+        { &IID_IDirect3DRGBDevice, "v86 WebGPU RGB Emulation",
+          "Direct3D RGB" },
+    };
     D3DDEVICEDESC7 caps;
+    UINT index;
     (void)iface;
     if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d7_fill_caps(&caps);
-    callback((char *)"v86 WebGPU T&L HAL",
-            (char *)"v86 WebGPU Direct3D 7", &caps, context);
+    for (index = 0; index < sizeof(devices) / sizeof(devices[0]); ++index) {
+        d3d7_fill_caps_for(devices[index].guid, &caps);
+        /* D3DENUMRET_CANCEL is zero, so the return value cannot be ignored
+         * the way it could when there was only ever one callback. */
+        if (callback((char *)devices[index].description,
+                (char *)devices[index].name, &caps, context)
+                == D3DENUMRET_CANCEL)
+            break;
+    }
     return D3D_OK;
 }
 
@@ -887,6 +987,7 @@ static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
     device->ref = 1;
     device->owner = owner;
     device->render_target = surface;
+    device->device_guid = *clsid;
     ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     d3d7_device_init_state(device);
@@ -973,6 +1074,15 @@ static HRESULT WINAPI d3d7_EnumZBufferFormats(IDirect3D7 *iface,
         void *context)
 {
     (void)iface;
+    /* Traced on the way in, not only when it fails: an app that never gets a
+     * depth format here falls back to building one itself, and the format it
+     * invents arrives at CreateSurface with a zero bit depth and no hint of
+     * where it came from. Knowing which device GUID was asked about, and
+     * whether this returned anything, is the difference between reading that
+     * refusal and guessing at it. */
+    DDWG_TRACE_CHECKPOINT("CALL d3d7_EnumZBufferFormats device_iid=%08lX "
+            "callback=%08lX", device_iid ? device_iid->Data1 : 0u,
+            (DWORD)(uintptr_t)callback);
     if (!device_iid || (!guid_equal(device_iid, &IID_IDirect3DHALDevice) &&
             !guid_equal(device_iid, &IID_IDirect3DTnLHalDevice) &&
             !guid_equal(device_iid, &IID_IDirect3DRGBDevice)))
@@ -1050,9 +1160,8 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
 static HRESULT WINAPI d3d7_device_GetCaps(IDirect3DDevice7 *iface,
         D3DDEVICEDESC7 *caps)
 {
-    (void)iface;
     if (!caps) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d7_fill_caps(caps);
+    d3d7_fill_caps_for(&d3d7_device_from_iface(iface)->device_guid, caps);
     return D3D_OK;
 }
 
@@ -2189,6 +2298,22 @@ static HRESULT WINAPI d3d7_device_GetInfo(IDirect3DDevice7 *iface,
     (void)iface; (void)info_id; (void)info; (void)info_size;
     /* The D3D7 contract explicitly permits S_FALSE for unsupported queries. */
     return S_FALSE;
+}
+
+/*
+ * The depth surface a render target uses is not chosen by Direct3D at all --
+ * it is whatever DirectDraw surface is attached to the colour surface, and an
+ * app may attach or detach it at any time, including after CreateDevice. The
+ * binding therefore has to be re-sent when the attachment changes under the
+ * currently bound target; otherwise the host keeps rendering against the
+ * depth buffer that was attached when the device was created, or against one
+ * that has since been detached.
+ */
+static void d3d7_refresh_render_target(DDrawObject *object, DDSurface *surface)
+{
+    D3D7Device *device = object ? object->d3d7_device : NULL;
+    if (!device || device->render_target != surface) return;
+    d3d7_emit_render_target(device);
 }
 
 static void d3d7_rebind_after_flip(DDrawObject *object)
