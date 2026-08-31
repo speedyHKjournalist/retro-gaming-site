@@ -132,6 +132,8 @@ static IDirect3DDevice2Vtbl g_d3d2_device_vtbl;
 static IDirect3DDeviceVtbl g_d3d1_device_vtbl;
 static IDirect3DVertexBufferVtbl g_d3d_vb_vtbl;
 static BOOL d3d7_sync_initial_state(D3D7Device *device);
+static BOOL d3d7_emit_sampler_state(D3D7Device *device, DWORD stage,
+        DWORD state, DWORD value);
 static float d3d7_sqrt(float value);
 static void d3d_legacy_device_cleanup(D3D7Device *device);
 
@@ -280,6 +282,266 @@ static BOOL d3d7_decode_fvf(DWORD fvf, D3D7FVFLayout *layout,
     return count != 0 && offset != 0;
 }
 
+/*
+ * D3DRS_WRAPn is not a sampler address mode.  It changes interpolation for
+ * one texture-coordinate set so that 0 and 1 are coincident and every
+ * primitive crosses their seam by the shortest route.  WebGPU has no
+ * primitive-wide shader stage, but the D3D7 frontend still owns the source
+ * vertices here.  Give each line/triangle private copies and add an integral
+ * offset to the wrapped components before the normal linear interpolation.
+ * A repeat sampler maps those private -1..2 coordinates back to the same
+ * texels after interpolation.
+ */
+#define D3D7_WRAP_PREPARE_ERROR (-1)
+#define D3D7_WRAP_PREPARE_NONE 0
+#define D3D7_WRAP_PREPARE_READY 1
+
+typedef struct D3D7WrapSamplerOverride {
+    DWORD address_u_stages;
+    DWORD address_v_stages;
+} D3D7WrapSamplerOverride;
+
+static DWORD d3d7_wrap_mask(const D3D7Device *device, UINT coordinate_set)
+{
+    DWORD mask;
+    if (coordinate_set >= D3D7_MAX_TEXTURE_STAGES) return 0;
+    mask = device->render_states[D3D9RS_WRAP0 + coordinate_set] & 0x0fu;
+    /* WRAPU/WRAPV are the pre-multitexture spellings of WRAP0's first two
+     * bits.  Keep accepting them even if an old state block predates the
+     * alias synchronisation in SetRenderState below. */
+    if (!coordinate_set) {
+        if (device->render_states[D3DRENDERSTATE_WRAPU]) mask |= 1u;
+        if (device->render_states[D3DRENDERSTATE_WRAPV]) mask |= 2u;
+    }
+    return mask;
+}
+
+static BOOL d3d7_fvf_uses_wrap(D3D7Device *device, DWORD fvf)
+{
+    D3D7FVFLayout layout;
+    D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
+    UINT element_count = 0;
+    UINT coordinate_set;
+    if (!d3d7_decode_fvf(fvf, &layout, elements, &element_count))
+        return FALSE;
+    for (coordinate_set = 0; coordinate_set < layout.texcoord_count;
+            ++coordinate_set) {
+        UINT components = layout.texcoord_bytes[coordinate_set] / sizeof(float);
+        DWORD available = components >= 4u ? 0x0fu : ((1u << components) - 1u);
+        if (d3d7_wrap_mask(device, coordinate_set) & available) return TRUE;
+    }
+    return FALSE;
+}
+
+static float d3d7_wrap_distance(float left, float right)
+{
+    float distance = left - right;
+    return distance < 0.0f ? -distance : distance;
+}
+
+static void d3d7_unwrap_primitive_coordinate(BYTE *vertices, UINT stride,
+        UINT vertex_count, UINT offset)
+{
+    float value[3];
+    float best_score;
+    int best_shift1 = 0, best_shift2 = 0;
+    int shift1, shift2;
+    UINT vertex;
+
+    for (vertex = 0; vertex < vertex_count; ++vertex) {
+        CopyMemory(&value[vertex], vertices + vertex * stride + offset,
+                sizeof(value[vertex]));
+        /* Direct3D defines wrapped interpolation only for [0,1].  Preserve
+         * the application's bytes for the explicitly undefined case. */
+        if (!(value[vertex] >= 0.0f && value[vertex] <= 1.0f)) return;
+    }
+    best_score = d3d7_wrap_distance(value[0], value[1]);
+    if (vertex_count == 3u)
+        best_score += d3d7_wrap_distance(value[1], value[2]) +
+                d3d7_wrap_distance(value[2], value[0]);
+
+    for (shift1 = -1; shift1 <= 1; ++shift1) {
+        int first_shift = vertex_count == 3u ? -1 : 0;
+        int last_shift = vertex_count == 3u ? 1 : 0;
+        for (shift2 = first_shift; shift2 <= last_shift; ++shift2) {
+            float adjusted1 = value[1] + (float)shift1;
+            float adjusted2 = vertex_count == 3u
+                    ? value[2] + (float)shift2 : value[0];
+            float score = d3d7_wrap_distance(value[0], adjusted1);
+            if (vertex_count == 3u)
+                score += d3d7_wrap_distance(adjusted1, adjusted2) +
+                        d3d7_wrap_distance(adjusted2, value[0]);
+            /* Strict comparison deliberately preserves the original values
+             * when two seam placements have the same minimum perimeter. */
+            if (score < best_score) {
+                best_score = score;
+                best_shift1 = shift1;
+                best_shift2 = shift2;
+            }
+        }
+    }
+    value[1] += (float)best_shift1;
+    CopyMemory(vertices + stride + offset, &value[1], sizeof(value[1]));
+    if (vertex_count == 3u) {
+        value[2] += (float)best_shift2;
+        CopyMemory(vertices + 2u * stride + offset, &value[2],
+                sizeof(value[2]));
+    }
+}
+
+static BOOL d3d7_primitive_element(D3DPRIMITIVETYPE type, UINT primitive,
+        UINT corner, UINT *element, UINT *corners)
+{
+    switch (type) {
+    case D3DPT_LINELIST:
+        *corners = 2u;
+        *element = primitive * 2u + corner;
+        return corner < 2u;
+    case D3DPT_LINESTRIP:
+        *corners = 2u;
+        *element = primitive + corner;
+        return corner < 2u;
+    case D3DPT_TRIANGLELIST:
+        *corners = 3u;
+        *element = primitive * 3u + corner;
+        return corner < 3u;
+    case D3DPT_TRIANGLESTRIP:
+        *corners = 3u;
+        if ((primitive & 1u) && corner < 2u)
+            *element = primitive + 1u - corner;
+        else
+            *element = primitive + corner;
+        return corner < 3u;
+    case D3DPT_TRIANGLEFAN:
+        *corners = 3u;
+        *element = corner ? primitive + corner : 0u;
+        return corner < 3u;
+    default:
+        return FALSE;
+    }
+}
+
+static int d3d7_prepare_wrapped_primitives(D3D7Device *device,
+        D3DPRIMITIVETYPE primitive_type, DWORD fvf, const void *vertices,
+        DWORD vertex_count, const WORD *indices, DWORD element_count,
+        D3DPRIMITIVETYPE *prepared_type, BYTE **prepared_vertices,
+        DWORD *prepared_vertex_count)
+{
+    D3D7FVFLayout layout;
+    D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
+    UINT declaration_count = 0;
+    UINT primitive_count, corners = 0, primitive, corner, coordinate_set;
+    UINT expanded_count, expanded_bytes, source_bytes, ignored_element;
+    BYTE *expanded;
+
+    *prepared_vertices = NULL;
+    *prepared_vertex_count = 0;
+    if (!vertices || !d3d7_decode_fvf(fvf, &layout, elements,
+            &declaration_count))
+        return D3D7_WRAP_PREPARE_ERROR;
+    if (!d3d7_fvf_uses_wrap(device, fvf)) return D3D7_WRAP_PREPARE_NONE;
+    if (!d3d7_primitive_counts(primitive_type, element_count,
+            &primitive_count))
+        return D3D7_WRAP_PREPARE_ERROR;
+    if (!d3d7_primitive_element(primitive_type, 0, 0, &ignored_element,
+            &corners))
+        return D3D7_WRAP_PREPARE_NONE;
+    if (!d3d7_multiply_u32(vertex_count, layout.stride, &source_bytes) ||
+            !d3d7_multiply_u32(primitive_count, corners, &expanded_count) ||
+            !d3d7_multiply_u32(expanded_count, layout.stride,
+                    &expanded_bytes))
+        return D3D7_WRAP_PREPARE_ERROR;
+    (void)source_bytes;
+    expanded = (BYTE *)heap_alloc_zero(expanded_bytes);
+    if (!expanded) return D3D7_WRAP_PREPARE_ERROR;
+
+    for (primitive = 0; primitive < primitive_count; ++primitive) {
+        BYTE *primitive_vertices = expanded + primitive * corners * layout.stride;
+        for (corner = 0; corner < corners; ++corner) {
+            UINT element, source_vertex;
+            if (!d3d7_primitive_element(primitive_type, primitive, corner,
+                    &element, &corners) || element >= element_count) {
+                heap_free(expanded);
+                return D3D7_WRAP_PREPARE_ERROR;
+            }
+            source_vertex = indices ? indices[element] : element;
+            if (source_vertex >= vertex_count) {
+                heap_free(expanded);
+                return D3D7_WRAP_PREPARE_ERROR;
+            }
+            CopyMemory(primitive_vertices + corner * layout.stride,
+                    (const BYTE *)vertices + source_vertex * layout.stride,
+                    layout.stride);
+        }
+        for (coordinate_set = 0;
+                coordinate_set < layout.texcoord_count; ++coordinate_set) {
+            DWORD mask = d3d7_wrap_mask(device, coordinate_set);
+            UINT component_count =
+                    layout.texcoord_bytes[coordinate_set] / sizeof(float);
+            UINT component;
+            for (component = 0; component < component_count; ++component) {
+                if (mask & (1u << component))
+                    d3d7_unwrap_primitive_coordinate(primitive_vertices,
+                            layout.stride, corners,
+                            layout.texcoord_offset[coordinate_set] +
+                                component * sizeof(float));
+            }
+        }
+    }
+    *prepared_type = corners == 2u ? D3DPT_LINELIST : D3DPT_TRIANGLELIST;
+    *prepared_vertices = expanded;
+    *prepared_vertex_count = expanded_count;
+    return D3D7_WRAP_PREPARE_READY;
+}
+
+static BOOL d3d7_begin_wrap_sampler_override(D3D7Device *device,
+        D3D7WrapSamplerOverride *override)
+{
+    UINT stage;
+    ZeroMemory(override, sizeof(*override));
+    for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
+        UINT coordinate_set =
+                device->texture_stage_states[stage][D3DTSS_TEXCOORDINDEX] &
+                0xffffu;
+        DWORD mask = d3d7_wrap_mask(device, coordinate_set);
+        DWORD desired_u =
+                device->texture_stage_states[stage][D3DTSS_ADDRESSU];
+        DWORD desired_v =
+                device->texture_stage_states[stage][D3DTSS_ADDRESSV];
+        if ((mask & 1u) && desired_u != D3DTADDRESS_WRAP) {
+            if (!d3d7_emit_sampler_state(device, stage,
+                    D3D9SAMP_ADDRESSU, D3DTADDRESS_WRAP))
+                return FALSE;
+            override->address_u_stages |= 1u << stage;
+        }
+        if ((mask & 2u) && desired_v != D3DTADDRESS_WRAP) {
+            if (!d3d7_emit_sampler_state(device, stage,
+                    D3D9SAMP_ADDRESSV, D3DTADDRESS_WRAP))
+                return FALSE;
+            override->address_v_stages |= 1u << stage;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL d3d7_end_wrap_sampler_override(D3D7Device *device,
+        const D3D7WrapSamplerOverride *override)
+{
+    BOOL result = TRUE;
+    UINT stage;
+    for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
+        if ((override->address_u_stages & (1u << stage)) &&
+                !d3d7_emit_sampler_state(device, stage, D3D9SAMP_ADDRESSU,
+                    device->texture_stage_states[stage][D3DTSS_ADDRESSU]))
+            result = FALSE;
+        if ((override->address_v_stages & (1u << stage)) &&
+                !d3d7_emit_sampler_state(device, stage, D3D9SAMP_ADDRESSV,
+                    device->texture_stage_states[stage][D3DTSS_ADDRESSV]))
+            result = FALSE;
+    }
+    return result;
+}
+
 static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
 {
     D3D7FVFLayout layout;
@@ -309,7 +571,7 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     return result;
 }
 
-static BOOL d3d7_emit_draw_up(D3D7Device *device,
+static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, const void *vertices,
         DWORD vertex_count)
 {
@@ -345,7 +607,7 @@ static BOOL d3d7_emit_draw_up(D3D7Device *device,
     return result;
 }
 
-static BOOL d3d7_emit_draw_indexed_up(D3D7Device *device,
+static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, const void *vertices,
         DWORD vertex_count, const WORD *indices, DWORD index_count)
 {
@@ -390,6 +652,62 @@ static BOOL d3d7_emit_draw_indexed_up(D3D7Device *device,
     if (result && device->render_target)
         device->render_target->memory->gpu_dirty = TRUE;
     return result;
+}
+
+static BOOL d3d7_emit_draw_up(D3D7Device *device,
+        D3DPRIMITIVETYPE primitive_type, DWORD fvf, const void *vertices,
+        DWORD vertex_count)
+{
+    D3DPRIMITIVETYPE prepared_type = primitive_type;
+    BYTE *prepared = NULL;
+    DWORD prepared_count = 0;
+    D3D7WrapSamplerOverride sampler_override;
+    int status = d3d7_prepare_wrapped_primitives(device, primitive_type, fvf,
+            vertices, vertex_count, NULL, vertex_count, &prepared_type,
+            &prepared, &prepared_count);
+    BOOL result, restored;
+    if (status == D3D7_WRAP_PREPARE_ERROR) return FALSE;
+    if (status == D3D7_WRAP_PREPARE_NONE)
+        return d3d7_emit_draw_up_raw(device, primitive_type, fvf, vertices,
+                vertex_count);
+    if (!d3d7_begin_wrap_sampler_override(device, &sampler_override)) {
+        d3d7_end_wrap_sampler_override(device, &sampler_override);
+        heap_free(prepared);
+        return FALSE;
+    }
+    result = d3d7_emit_draw_up_raw(device, prepared_type, fvf, prepared,
+            prepared_count);
+    restored = d3d7_end_wrap_sampler_override(device, &sampler_override);
+    heap_free(prepared);
+    return result && restored;
+}
+
+static BOOL d3d7_emit_draw_indexed_up(D3D7Device *device,
+        D3DPRIMITIVETYPE primitive_type, DWORD fvf, const void *vertices,
+        DWORD vertex_count, const WORD *indices, DWORD index_count)
+{
+    D3DPRIMITIVETYPE prepared_type = primitive_type;
+    BYTE *prepared = NULL;
+    DWORD prepared_count = 0;
+    D3D7WrapSamplerOverride sampler_override;
+    int status = d3d7_prepare_wrapped_primitives(device, primitive_type, fvf,
+            vertices, vertex_count, indices, index_count, &prepared_type,
+            &prepared, &prepared_count);
+    BOOL result, restored;
+    if (status == D3D7_WRAP_PREPARE_ERROR) return FALSE;
+    if (status == D3D7_WRAP_PREPARE_NONE)
+        return d3d7_emit_draw_indexed_up_raw(device, primitive_type, fvf,
+                vertices, vertex_count, indices, index_count);
+    if (!d3d7_begin_wrap_sampler_override(device, &sampler_override)) {
+        d3d7_end_wrap_sampler_override(device, &sampler_override);
+        heap_free(prepared);
+        return FALSE;
+    }
+    result = d3d7_emit_draw_up_raw(device, prepared_type, fvf, prepared,
+            prepared_count);
+    restored = d3d7_end_wrap_sampler_override(device, &sampler_override);
+    heap_free(prepared);
+    return result && restored;
 }
 
 static void d3d7_identity_matrix(D3DMATRIX *matrix)
@@ -1531,14 +1849,11 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
                 sizeof(command));
     }
     case D3DRENDERSTATE_WRAPU:
-    case D3DRENDERSTATE_WRAPV: {
-        DWORD wrap = device->render_states[D3DRENDERSTATE_WRAPU] ? 1u : 0u;
-        if (device->render_states[D3DRENDERSTATE_WRAPV]) wrap |= 2u;
-        command.state = D3D9RS_WRAP0;
-        command.value = wrap;
-        return emit_command(D9WG_OP_SET_RENDER_STATE, &command,
-                sizeof(command));
-    }
+    case D3DRENDERSTATE_WRAPV:
+        /* SetRenderState keeps the legacy aliases in D3DRS_WRAP0.  The draw
+         * path consumes them while it has primitive-wide vertex access; do
+         * not forward an unimplementable WRAP0 request to the host. */
+        return TRUE;
     case D3DRENDERSTATE_ANTIALIAS:
         command.state = D3D9RS_MULTISAMPLEANTIALIAS;
         command.value = value != D3DANTIALIAS_NONE;
@@ -1569,11 +1884,53 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     DWORD previous;
     if (!d3d7_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+
+    /* D3DRENDERSTATE_WRAPU/V and D3DRS_WRAP0's U/V bits are aliases.  WRAP1
+     * through WRAP7 name the other FVF coordinate sets.  None goes on the
+     * wire: d3d7_prepare_wrapped_primitives implements them before each draw. */
+    if (state == D3DRENDERSTATE_WRAPU ||
+            state == D3DRENDERSTATE_WRAPV ||
+            ((DWORD)state >= D3D9RS_WRAP0 &&
+             (DWORD)state < D3D9RS_WRAP0 + D3D7_MAX_TEXTURE_STAGES)) {
+        if (state == D3DRENDERSTATE_WRAPU) {
+            device->render_states[state] = value;
+            if (value) device->render_states[D3D9RS_WRAP0] |= 1u;
+            else device->render_states[D3D9RS_WRAP0] &= ~1u;
+        } else if (state == D3DRENDERSTATE_WRAPV) {
+            device->render_states[state] = value;
+            if (value) device->render_states[D3D9RS_WRAP0] |= 2u;
+            else device->render_states[D3D9RS_WRAP0] &= ~2u;
+        } else {
+            device->render_states[state] = value;
+            if ((DWORD)state == D3D9RS_WRAP0) {
+                device->render_states[D3DRENDERSTATE_WRAPU] =
+                        (value & 1u) != 0;
+                device->render_states[D3DRENDERSTATE_WRAPV] =
+                        (value & 2u) != 0;
+            }
+        }
+        if (device->recording_state_block)
+            device->recording_state_block->render_mask[state] = 1;
+        return D3D_OK;
+    }
+
     previous = device->render_states[state];
     device->render_states[state] = value;
     if (!d3d7_emit_render_state(device, state, value)) {
         device->render_states[state] = previous;
         return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    }
+    /* The old render-state spellings address sampler 0 and are aliases of
+     * D3DTSS_ADDRESS/U/V.  Keep one authoritative shadow for restoring a
+     * sampler temporarily forced to repeat by wrapped interpolation. */
+    if (state == D3DRENDERSTATE_TEXTUREADDRESS) {
+        device->texture_stage_states[0][D3D7TSS_ADDRESS] = value;
+        device->texture_stage_states[0][D3DTSS_ADDRESSU] = value;
+        device->texture_stage_states[0][D3DTSS_ADDRESSV] = value;
+    } else if (state == D3DRENDERSTATE_TEXTUREADDRESSU) {
+        device->texture_stage_states[0][D3DTSS_ADDRESSU] = value;
+    } else if (state == D3DRENDERSTATE_TEXTUREADDRESSV) {
+        device->texture_stage_states[0][D3DTSS_ADDRESSV] = value;
     }
     if (device->recording_state_block)
         device->recording_state_block->render_mask[state] = 1;
@@ -1773,8 +2130,14 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
             start_vertex > buffer->desc.dwNumVertices ||
             vertex_count > buffer->desc.dwNumVertices - start_vertex ||
             !d3d7_primitive_counts(primitive_type, vertex_count,
-                    &primitive_count) ||
-            !d3d7_emit_fvf(device, buffer->desc.dwFVF, NULL))
+                    &primitive_count))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    if (d3d7_fvf_uses_wrap(device, buffer->desc.dwFVF))
+        return d3d7_emit_draw_up(device, primitive_type,
+                buffer->desc.dwFVF,
+                buffer->shadow + start_vertex * buffer->stride, vertex_count)
+                ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    if (!d3d7_emit_fvf(device, buffer->desc.dwFVF, NULL))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     ZeroMemory(&stream, sizeof(stream));
     stream.device_handle = device->owner->device_handle;
@@ -2016,6 +2379,10 @@ static HRESULT WINAPI d3d7_device_SetTextureStageState(
     if (!result) {
         device->texture_stage_states[stage][state] = previous;
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    }
+    if ((UINT)state == D3D7TSS_ADDRESS) {
+        device->texture_stage_states[stage][D3DTSS_ADDRESSU] = value;
+        device->texture_stage_states[stage][D3DTSS_ADDRESSV] = value;
     }
     if (device->recording_state_block)
         device->recording_state_block->texture_stage_mask[stage][state] = 1;

@@ -433,8 +433,8 @@ static __inline unsigned ddraw_render_state_action(unsigned state,
     case D3D7RS_ZBIAS:              /* -> DEPTHBIAS, rescaled */
     case D3D7RS_COLORKEYENABLE:     /* -> alpha test over a keyed upload */
     case D3D7RS_COLORKEYBLENDENABLE:
-    case D3D7RS_WRAPU:              /* -> D3DRS_WRAP0 bit 0 */
-    case D3D7RS_WRAPV:              /* -> D3DRS_WRAP0 bit 1 */
+    case D3D7RS_WRAPU:              /* -> guest primitive-coordinate unwrap */
+    case D3D7RS_WRAPV:              /* -> guest primitive-coordinate unwrap */
     case D3D7RS_ANTIALIAS:          /* -> MULTISAMPLEANTIALIAS */
         return DDRAW_STATE_SPECIAL;
 

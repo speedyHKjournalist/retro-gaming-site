@@ -4470,6 +4470,69 @@ await test("an autogen texture allocates the chain and fills it after a write",
     assert.equal(executor.stats.drawsWithIncompleteMipChain, 0);
 });
 
+await test("an untouched scratch texture is not an incomplete mip chain",
+        async () => {
+    const D3DFMT_X8R8G8B8 = 22;
+    const { executor } = makeExecutor();
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+        command(OP.CREATE_BUFFER, createBufferPayload(0x201, 1, 60)),
+        // 3DMark 99 creates and binds its dynamic frame-capture texture before
+        // the first DirectDraw Blt fills it. A wholly untouched single-level
+        // allocation is not evidence that the proxy lost a subresource write.
+        command(OP.CREATE_TEXTURE_2D,
+            u32(DEVICE, 0xE10, 256, 256, 1, D3DFMT_X8R8G8B8, 0, 0)),
+        command(OP.SET_FVF, fvfPayload(0x104, [
+            element(0, 0, DECLTYPE.FLOAT3, DECLUSAGE.POSITION),
+            element(0, 12, DECLTYPE.FLOAT2, DECLUSAGE.TEXCOORD, 0)])),
+        command(OP.SET_STREAM_SOURCE, setStreamSourcePayload(0, 0x201, 20)),
+        command(OP.SET_TEXTURE, u32(DEVICE, 0, 0xE10, 0)),
+        command(OP.DRAW_PRIMITIVE, drawPrimitivePayload(4, 0, 1)),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
+    ], { present: true }));
+    await executor.idle();
+
+    assert.equal(executor.stats.droppedDraws, 0);
+    assert.equal(executor.stats.drawsWithIncompleteMipChain, 0,
+        "a texture with no writes must not masquerade as a partial chain");
+});
+
+await test("a partially uploaded mip chain still reports missing levels",
+        async () => {
+    const D3DFMT_A8R8G8B8 = 21;
+    const { executor } = makeExecutor();
+    const update = Buffer.alloc(48);
+    update.writeUInt32LE(0xE11, 0);
+    update.writeUInt32LE(0, 4);    // level
+    update.writeUInt32LE(0, 8);    // x
+    update.writeUInt32LE(0, 12);   // y
+    update.writeUInt32LE(0, 16);   // z
+    update.writeUInt32LE(4, 20);   // width
+    update.writeUInt32LE(4, 24);   // height
+    update.writeUInt32LE(1, 28);   // depth
+    update.writeUInt32LE(16, 32);  // row pitch
+    update.writeUInt32LE(0, 36);   // slice pitch
+    update.writeUInt32LE(64, 40);  // data bytes
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+        command(OP.CREATE_BUFFER, createBufferPayload(0x201, 1, 60)),
+        command(OP.CREATE_TEXTURE_2D,
+            u32(DEVICE, 0xE11, 4, 4, 3, D3DFMT_A8R8G8B8, 0, 0)),
+        command(OP.UPDATE_TEXTURE, update, Buffer.alloc(64, 0x80), 44),
+        command(OP.SET_FVF, fvfPayload(0x104, [
+            element(0, 0, DECLTYPE.FLOAT3, DECLUSAGE.POSITION),
+            element(0, 12, DECLTYPE.FLOAT2, DECLUSAGE.TEXCOORD, 0)])),
+        command(OP.SET_STREAM_SOURCE, setStreamSourcePayload(0, 0x201, 20)),
+        command(OP.SET_TEXTURE, u32(DEVICE, 0, 0xE11, 0)),
+        command(OP.DRAW_PRIMITIVE, drawPrimitivePayload(4, 0, 1)),
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 640, 480)),
+    ], { present: true }));
+    await executor.idle();
+
+    assert.equal(executor.stats.drawsWithIncompleteMipChain, 1,
+        "writing only level 0 of a three-level chain remains diagnostic");
+});
+
 await test("an autogen chain is regenerated only when level 0 changes",
         async () => {
     const D3DUSAGE_AUTOGENMIPMAP = 0x400;

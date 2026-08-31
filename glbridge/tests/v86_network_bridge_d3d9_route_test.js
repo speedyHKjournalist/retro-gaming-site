@@ -99,8 +99,24 @@ assert.equal(d3d9Canvas.style.display, "block");
 assert.equal(d3d9Canvas.style.visibility, "visible");
 assert.equal(canvas.style.display, "none");
 
+// A DDSCL_NORMAL primary is the whole desktop even when the application that
+// presents it is a small splash HWND. The dirty rectangle clips the overlay;
+// the HWND must not resize and stretch the desktop texture into 420x170.
+d3d9Options.onPresent({ hwnd: 0x1234, x: 302, y: 299, width: 420,
+    height: 170, displayWidth: 1024, displayHeight: 768,
+    ddDesktopPrimary: true, visible: true,
+    clipRect: { left: 302, top: 299, right: 722, bottom: 469,
+        baseWidth: 1024, baseHeight: 768 } }, {});
+assert.equal(d3d9Canvas.style.left, "0px");
+assert.equal(d3d9Canvas.style.top, "0px");
+assert.equal(d3d9Canvas.style.width, "1024px");
+assert.equal(d3d9Canvas.style.height, "768px");
+assert.notEqual(d3d9Canvas.style["clip-path"], "none",
+    "the desktop canvas must expose only the splash dirty rectangle");
+
 d3d9Options.onSurface({ hwnd: 0x1234, x: 30, y: 40, width: 640,
-    height: 480, displayWidth: 800, displayHeight: 600, visible: true }, "move");
+    height: 480, displayWidth: 800, displayHeight: 600,
+    ddDesktopPrimary: false, clipRect: null, visible: true }, "move");
 assert.equal(d3d9Canvas.style.left, "30px");
 assert.equal(d3d9Canvas.style.top, "40px");
 assert.equal(d3d9Canvas.style.width, "800px");

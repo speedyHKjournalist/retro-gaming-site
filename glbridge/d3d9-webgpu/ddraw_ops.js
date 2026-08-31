@@ -52,6 +52,7 @@
     const DDOVER_KEY_SOURCE_OVERRIDE = 1 << 6;
     const DDOVER_KEY_DESTINATION_OVERRIDE = 1 << 7;
 
+    const DDSCL_NORMAL = 1 << 0;
     const DDSCL_EXCLUSIVE = 1 << 1;
     const DDSCL_FULLSCREEN = 1 << 2;
 
@@ -328,6 +329,37 @@ ${body.join("\n")}
                     destinationHeight);
             if (!clipped) return;
 
+            // A DDSCL_NORMAL primary is the guest desktop, but the WebGPU
+            // canvas is a separate layer above v86's GDI canvas.  Remember
+            // which part DirectDraw actually changed so the page can clip the
+            // overlay to that region instead of covering the rest of the
+            // desktop with the retained back buffer.  Splash screens such as
+            // 3DMark 99/2000 update only their centred 420x170 rectangle.
+            const noteWindowedScreenWrite = () => {
+                if (destinationHandle || !state.ddClipPrimaryToWrites) return;
+                const viewport = clipped.viewport;
+                const next = {
+                    left: viewport[0], top: viewport[1],
+                    right: viewport[0] + viewport[2],
+                    bottom: viewport[1] + viewport[3],
+                    baseWidth: destinationWidth,
+                    baseHeight: destinationHeight,
+                };
+                const old = state.ddScreenWriteRect;
+                if (old) {
+                    next.left = Math.min(next.left, old.left);
+                    next.top = Math.min(next.top, old.top);
+                    next.right = Math.max(next.right, old.right);
+                    next.bottom = Math.max(next.bottom, old.bottom);
+                }
+                state.ddScreenWriteRect = next;
+                const coversScreen = next.left <= 0 && next.top <= 0 &&
+                    next.right >= destinationWidth &&
+                    next.bottom >= destinationHeight;
+                state.surface = { ...state.surface,
+                    clipRect: coversScreen ? null : next };
+            };
+
             if (flags & DDBLT_DEPTH_FILL) {
                 if (!destination || !destination.isDepth ||
                         destinationLevel >= (destination.levelCount || 1)) {
@@ -375,6 +407,7 @@ ${body.join("\n")}
                 : null;
 
             if (flags & DDBLT_COLOR_FILL) {
+                noteWindowedScreenWrite();
                 const frame = this.ensureFrame();
                 frame.ops.push({
                     kind: "ddblit",
@@ -401,6 +434,8 @@ ${body.join("\n")}
                     destinationSize: [destinationWidth, destinationHeight],
                 });
                 if (destination) destination.frameReferenced = frame.serial;
+                this.markTextureSubresourceWritten(destination,
+                    destinationLevel, destinationFace);
                 this.stats.ddFills = (this.stats.ddFills || 0) + 1;
                 if (destinationColorKey)
                     this.stats.ddBlitsDestinationKeyed =
@@ -490,6 +525,8 @@ ${body.join("\n")}
                     size: { width, height, depthOrArrayLayers: 1 } });
                 source.frameReferenced = frame.serial;
                 destination.frameReferenced = frame.serial;
+                this.markTextureSubresourceWritten(destination,
+                    destinationLevel, destinationFace);
                 this.stats.ddBlitsCopied = (this.stats.ddBlitsCopied || 0) + 1;
                 return;
             }
@@ -507,6 +544,7 @@ ${body.join("\n")}
             const du = width / sourceWidth;
             const dv = height / sourceHeight;
             const frame = this.ensureFrame();
+            noteWindowedScreenWrite();
             frame.ops.push({
                 kind: "ddblit",
                 sourceKind: sourceIndexed ? "index" : "float",
@@ -538,6 +576,8 @@ ${body.join("\n")}
             });
             if (source) source.frameReferenced = frame.serial;
             if (destination) destination.frameReferenced = frame.serial;
+            this.markTextureSubresourceWritten(destination, destinationLevel,
+                destinationFace);
             if (colorKey)
                 this.stats.ddBlitsColorKeyed =
                     (this.stats.ddBlitsColorKeyed || 0) + 1;
@@ -592,6 +632,10 @@ ${body.join("\n")}
             const exclusiveFullscreen =
                 (cooperativeFlags & DDSCL_EXCLUSIVE) !== 0 &&
                 (cooperativeFlags & DDSCL_FULLSCREEN) !== 0;
+            state.ddClipPrimaryToWrites =
+                (cooperativeFlags & DDSCL_NORMAL) !== 0 &&
+                !exclusiveFullscreen;
+            state.ddScreenWriteRect = null;
             if (width && height) {
                 const backBufferSizeChanged =
                     state.backBufferWidth !== width ||
@@ -618,6 +662,15 @@ ${body.join("\n")}
                     }
                 }
                 state.surface = { ...state.surface, width, height,
+                    // A DDSCL_NORMAL primary is the desktop, not the HWND's
+                    // client area. Present will still report that client's
+                    // rectangle, so retain the desktop geometry separately for
+                    // the page compositor and use the client-independent dirty
+                    // rectangle only as a visibility mask.
+                    ddDesktopPrimary: state.ddClipPrimaryToWrites,
+                    displayWidth: state.ddClipPrimaryToWrites ? width : 0,
+                    displayHeight: state.ddClipPrimaryToWrites ? height : 0,
+                    clipRect: null,
                     // Only a mode the guest really switched to puts the window
                     // at the origin covering the emulated screen. When
                     // ChangeDisplaySettings failed the guest keeps a window of

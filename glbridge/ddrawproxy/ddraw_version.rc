@@ -1,0 +1,31 @@
+#include <windows.h>
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+1 VERSIONINFO
+ FILEVERSION 4,7,0,700
+ PRODUCTVERSION 4,7,0,700
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "v86 WebGPU Project"
+            VALUE "FileDescription", "v86 WebGPU DirectDraw Proxy"
+            VALUE "FileVersion", "4.07.00.0700"
+            VALUE "InternalName", "ddraw"
+            VALUE "OriginalFilename", "ddraw.dll"
+            VALUE "ProductName", "v86 WebGPU DirectDraw Proxy"
+            VALUE "ProductVersion", "4.07.00.0700"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

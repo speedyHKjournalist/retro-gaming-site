@@ -504,6 +504,28 @@ await test("a plain same-format blit is a copy, not a render pass", async () => 
     assert.deepEqual(copies[0][2].origin, { x: 8, y: 8, z: 0 });
     assert.deepEqual(copies[0][3], { width: 32, height: 32, depthOrArrayLayers: 1 });
     assert.equal(executor.getStats().ddBlitsCopied, 1);
+    assert.deepEqual([...executor.resources.get(0x301).uploadedLevels], [0],
+        "a GPU copy must initialize the destination level");
+});
+
+await test("a scaled DirectDraw blit initializes its texture destination",
+        async () => {
+    const { executor, find } = makeExecutor();
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(640, 480)),
+        SURFACE_SETUP(0x300, 320, 320, FMT_X8R8G8B8),
+        SURFACE_SETUP(0x301, 256, 256, FMT_X8R8G8B8),
+        command(OP.DD_BLT, bltPayload({
+            sourceHandle: 0x300, sourceRect: [0, 0, 320, 320],
+            destinationHandle: 0x301, destinationRect: [0, 0, 256, 256],
+        })),
+    ], { present: true }));
+    const destination = executor.resources.get(0x301);
+    assert.deepEqual([...destination.uploadedLevels], [0],
+        "the render-blit path must count as a level-0 GPU write");
+    assert.ok(find("createRenderPipeline").some(call =>
+        String(call[1].label).startsWith("DirectDraw blit")),
+    "the test must exercise the scaled render-blit path");
 });
 
 await test("a colour-keyed indexed blit discards on the index and stays indexed",
@@ -859,6 +881,37 @@ await test("a colour fill needs no source binding at all", async () => {
     assert.equal(uniformBlock(find).fillIndex, 42,
         "an indexed fill carries the palette index, not a colour");
     assert.equal(executor.getStats().ddFills, 1);
+});
+
+await test("a normal primary presents only the 3DMark splash dirty rectangle",
+        async () => {
+    const presented = [];
+    const { executor } = makeExecutor({
+        onPresent: surface => presented.push({ ...surface,
+            clipRect: surface.clipRect && { ...surface.clipRect } }),
+    });
+    await executor.submit(buildBatch([
+        command(OP.CREATE_DEVICE, createDevicePayload(800, 600)),
+        command(OP.DD_SET_DISPLAY_MODE,
+            displayModePayload(800, 600, 32, 1 << 0, false)),
+        SURFACE_SETUP(0x300, 800, 600, FMT_X8R8G8B8),
+        command(OP.DD_BLT, bltPayload({
+            sourceHandle: 0x300, sourceRect: [190, 215, 610, 385],
+            destinationHandle: 0, destinationRect: [190, 215, 610, 385],
+        })),
+        // 3DMark reports the 800x600 desktop at Present even though it changed
+        // only the centred 420x170 splash rectangle.
+        command(OP.PRESENT, u32(DEVICE, 0x1234, 0, 0, 800, 600)),
+    ], { present: true }));
+    assert.equal(presented.length, 1);
+    assert.equal(presented[0].ddDesktopPrimary, true);
+    assert.equal(presented[0].displayWidth, 800);
+    assert.equal(presented[0].displayHeight, 600);
+    assert.deepEqual(presented[0].clipRect, {
+        left: 190, top: 215, right: 610, bottom: 385,
+        baseWidth: 800, baseHeight: 600,
+    });
+    assert.equal(presented[0].width, 800);
 });
 
 await test("an exclusive fullscreen display mode repositions the overlay",

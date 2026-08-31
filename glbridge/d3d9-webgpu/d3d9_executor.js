@@ -6382,7 +6382,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 ddIndexed,
                 textureDescriptor,
                 levelCount: Math.max(1, levelCount),
-                // A mip level the guest never uploads has undefined contents.
+                // A subresource the guest never initializes has undefined
+                // contents.  Initialization can arrive either as a CPU upload
+                // or as a GPU write such as DirectDraw Blt/StretchRect.
                 // Sampling one is not "slightly blurry" -- it is whatever was
                 // in that memory, which reads as a completely wrong texture.
                 // M1 could not hit this the same way because it sampled with
@@ -6607,9 +6609,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 ++this.stats.textureUploads;
                 this.stats.textureBytesUploaded += packed.length;
                 resource.ddContentSerial = (resource.ddContentSerial || 0) + 1;
-                if (level === 0) this.markMipsDirty(resource);
-                if (resource.uploadedLevels)
-                    resource.uploadedLevels.add(level * 6 + (z % 6));
+                this.markTextureSubresourceWritten(resource, level, z);
                 // Keep the primary r8uint texture current for indexed-to-
                 // indexed DirectDraw blits.  The RGBA sampling companion is
                 // derived lazily from the same shadow by ddIndexedSampleViewFor.
@@ -6656,13 +6656,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.stats.textureBytesUploaded += payload.length;
             // Only level 0 is the app's on an autogen texture, so only level 0
             // can invalidate what the driver generated from it.
-            if (level === 0) this.markMipsDirty(resource);
-            // Keyed per layer as well as per level: a cube whose face 0 has a
-            // full mip chain and whose face 5 has none is a real defect the
-            // per-level-only key would report as complete.
-            if (resource.uploadedLevels)
-                resource.uploadedLevels.add(resource.textureType === "3d"
-                    ? level : level * 6 + (z % 6));
+            this.markTextureSubresourceWritten(resource, level, z);
             // Retain a CPU copy of small top-level images. This is the one
             // piece of evidence that separates "the texture data we uploaded
             // is wrong" from "the data is right but we sample it wrong", and
@@ -6956,6 +6950,27 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // attachment -- so the trigger lives here rather than being guessed at
         // by the guest. GenerateMipSubLevels() arrives as its own opcode for
         // the case where the app asks explicitly.
+
+        // Remember every subresource write, irrespective of whether its pixels
+        // came over the wire or were produced on the GPU.  uploadedLevels keeps
+        // its historical name because it is also exposed in diagnostic state,
+        // but semantically it is the set of initialized levels/faces.
+        markTextureSubresourceWritten(resource, level, layer = 0) {
+            if (!resource) return;
+            if (resource.uploadedLevels) {
+                if (resource.textureType === "3d") {
+                    resource.uploadedLevels.add(level);
+                } else {
+                    const layerCount = Math.max(1, resource.layerCount || 1);
+                    const safeLayer = Math.max(0,
+                        Math.min(layer >>> 0, layerCount - 1));
+                    // Six slots per level preserve the existing cube-map key
+                    // layout while a 2D texture naturally occupies slot zero.
+                    resource.uploadedLevels.add(level * 6 + safeLayer);
+                }
+            }
+            if (level === 0) this.markMipsDirty(resource);
+        }
 
         markMipsDirty(resource) {
             if (!resource || !resource.autoGenerateMips) return;
@@ -7449,7 +7464,7 @@ fn d9_ps_main(stage_in: D9GammaOutput) -> @location(0) vec4<f32> {
                 const targetView = this.targetViewFor(resource, level, srgb,
                     face);
                 if (face) ++this.stats.cubeFaceTargetBinds;
-                if (level === 0) this.markMipsDirty(resource);
+                this.markTextureSubresourceWritten(resource, level, face);
                 colors.push({ view: targetView,
                     format: srgb ? resource.srgbFormat : resourceFormat,
                     swapchain: false,
@@ -7682,6 +7697,8 @@ fn d9_ps_main(stage_in: D9GammaOutput) -> @location(0) vec4<f32> {
                     size: { width, height, depthOrArrayLayers: 1 } });
                 source.frameReferenced = frame.serial;
                 destination.frameReferenced = frame.serial;
+                this.markTextureSubresourceWritten(destination,
+                    destinationLevel, destinationFace);
                 ++this.stats.blits;
                 return;
             }
@@ -7723,8 +7740,12 @@ fn d9_ps_main(stage_in: D9GammaOutput) -> @location(0) vec4<f32> {
                     destinationWidth, destinationHeight],
                 filterPoint,
             };
-            if (source && this.frame) source.frameReferenced = this.frame.serial;
-            this.ensureFrame().ops.push(op);
+            const frame = this.ensureFrame();
+            frame.ops.push(op);
+            if (source) source.frameReferenced = frame.serial;
+            if (destination) destination.frameReferenced = frame.serial;
+            this.markTextureSubresourceWritten(destination, destinationLevel,
+                destinationFace);
             ++this.stats.blits;
             if (swapchainInvolved) ++this.stats.blitsThroughBackBuffer;
         }
@@ -8767,11 +8788,12 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // unread-state list because it has a specific, recognisable
             // symptom -- a seam across cylindrically or spherically mapped
             // geometry where the coordinate crosses 0/1 -- and because it is
-            // the rare gap with no route to an implementation at all: the
-            // wrap decision is made per *triangle*, by comparing its three
-            // vertices' coordinates, and WebGPU has no stage that sees a whole
-            // primitive. A geometry shader or a compute pre-pass over every
-            // draw are the only shapes that could do it.
+            // the rare gap with no route inside this host renderer: the wrap
+            // decision is made per *triangle*, by comparing its three vertices'
+            // coordinates, and WebGPU has no stage that sees a whole primitive.
+            // The D3D7 frontend handles this before the wire while it still owns
+            // the source vertices; a WRAP state reaching here came through a
+            // frontend that cannot do that preprocessing.
             if (stateId >= D3DRS_WRAP0 && stateId <= D3DRS_WRAP7 && value !== 0)
                 this.warnOnce("render-state-wrap",
                     "D3DRS_WRAP" + (stateId - D3DRS_WRAP0) + " asks for " +
@@ -9210,6 +9232,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // nothing left running to remove it.
                 if (state.surface.visible === false && !report.noSurface)
                     return;
+                if (report.noSurface) {
+                    state.ddScreenWriteRect = null;
+                    state.surface = { ...state.surface, clipRect: null };
+                }
                 state.surface = { ...state.surface, visible: false,
                     noSurface: !!report.noSurface };
                 ++this.stats.surfaceChanges;
@@ -11350,15 +11376,26 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                 if (texture && this.frame) texture.frameReferenced = this.frame.serial;
                 const expectedUploads = texture
                     ? texture.levelCount * (texture.layerCount || 1) : 0;
+                // A completely untouched texture is not evidence of a lost
+                // upload.  D3D permits a dynamic/scratch texture to be bound
+                // before its first write (3DMark 99 does this for the 256x256
+                // frame-capture texture), and WebGPU safely zero-initialises
+                // the allocation meanwhile.  Only a partially initialised
+                // chain proves that the app supplied some subresources while
+                // leaving other mip levels or cube faces unavailable.
+                const initializedUploads = texture && texture.uploadedLevels
+                    ? texture.uploadedLevels.size : 0;
                 if (texture && texture.uploadedLevels &&
-                        texture.uploadedLevels.size < expectedUploads) {
+                        initializedUploads > 0 &&
+                        initializedUploads < expectedUploads) {
                     ++this.stats.drawsWithIncompleteMipChain;
                     this.warnOnce("incomplete-mips",
-                        "a bound texture declares more mip levels than were " +
-                        "ever uploaded; the missing levels contain undefined " +
-                        "data, so sampling them shows the wrong image " +
-                        "entirely. Try v86gl.d3d9Executor.debug.forceMipLevel0" +
-                        " = true to confirm.", {
+                        "a bound texture has a partially initialized mip or " +
+                        "cube-face chain; sampling a missing subresource can " +
+                        "show the wrong image. Try " +
+                        "v86gl.d3d9Executor.debug.forceMipLevel0 = true to " +
+                        "check whether missing mip levels are responsible.", {
+                            handle,
                             format: texture.format,
                             size: texture.width + "x" + texture.height,
                             declaredLevels: texture.levelCount,

@@ -617,6 +617,7 @@
             styleSet(canvas, "height", height + "px", "important");
             styleSet(canvas, "max-width", "none", "important");
             styleSet(canvas, "max-height", "none", "important");
+            styleSet(canvas, "clip-path", "none", "important");
             canvas.style.pointerEvents = "none";
             canvas.style.display = visible ? "block" : "none";
             canvas.style.visibility = visible ? "visible" : "hidden";
@@ -625,10 +626,17 @@
         ownerRect(owner) {
             const canvas = this.ownerCanvas(owner);
             const surface = this.ownerSurface(owner);
+            // DDSCL_NORMAL exposes the desktop primary. Its Present HWND is
+            // merely the application asking for scanout; using that HWND's
+            // client rectangle to place the canvas shrinks the entire desktop
+            // texture into a splash window and makes its logo fill the window.
+            // Keep the canvas coincident with the v86 desktop and let clipRect
+            // reveal only the primary pixels this application actually wrote.
+            const desktopPrimary = !!surface.ddDesktopPrimary;
             const w = surface.displayWidth || surface.width || canvas.width || 1;
             const h = surface.displayHeight || surface.height || canvas.height || 1;
-            let left = surface.x || 0;
-            let top = surface.y || 0;
+            let left = desktopPrimary ? 0 : (surface.x || 0);
+            let top = desktopPrimary ? 0 : (surface.y || 0);
             let width = w;
             let height = h;
             if (this.container && this.screenCanvas && this.screenCanvas.width &&
@@ -650,10 +658,24 @@
         positionOwner(owner, visible) {
             const canvas = this.ownerCanvas(owner);
             if (!canvas) return;
+            const surface = this.ownerSurface(owner);
             const rect = this.ownerRect(owner);
             this.styleOverlayCanvas(canvas, rect.left, rect.top,
                 rect.width, rect.height,
                 visible === undefined ? this.activeOwner === owner : visible);
+            const clip = surface && surface.clipRect;
+            if (clip && clip.baseWidth > 0 && clip.baseHeight > 0) {
+                const top = Math.max(0, clip.top) / clip.baseHeight * 100;
+                const right = Math.max(0, clip.baseWidth - clip.right) /
+                    clip.baseWidth * 100;
+                const bottom = Math.max(0, clip.baseHeight - clip.bottom) /
+                    clip.baseHeight * 100;
+                const left = Math.max(0, clip.left) /
+                    clip.baseWidth * 100;
+                styleSet(canvas, "clip-path", "inset(" + top + "% " +
+                    right + "% " + bottom + "% " + left + "%)",
+                    "important");
+            }
         }
 
         showOwner(owner) {

@@ -1566,28 +1566,47 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
 
 /* A blit into the swap-chain image (handle 0), which is what makes a surface
  * visible. Flip and "blit to the primary" both end here. */
-static BOOL emit_blt_to_screen(DDSurface *source)
+static BOOL emit_blt_to_screen(DDSurface *source, const RECT *dirty_rect)
 {
     D9WGDDBlt command;
     DDrawObject *object = source->owner;
+    RECT area;
 
     if (!sync_external_surface_for_read(source) || !ensure_device(object))
         return FALSE;
     if (!prepare_surface_for_host(source))
         return FALSE;
+    area.left = 0;
+    area.top = 0;
+    area.right = (LONG)source->width;
+    area.bottom = (LONG)source->height;
+    if (dirty_rect) {
+        if (dirty_rect->left > area.left) area.left = dirty_rect->left;
+        if (dirty_rect->top > area.top) area.top = dirty_rect->top;
+        if (dirty_rect->right < area.right) area.right = dirty_rect->right;
+        if (dirty_rect->bottom < area.bottom)
+            area.bottom = dirty_rect->bottom;
+    }
+    if (area.right <= area.left || area.bottom <= area.top)
+        return TRUE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = object->device_handle;
     command.source_handle = source->handle;
     command.source_level = source->mip_level;
     command.source_face = source->cube_face;
-    command.source_rect[2] = (int32_t)source->width;
-    command.source_rect[3] = (int32_t)source->height;
+    command.source_rect[0] = area.left;
+    command.source_rect[1] = area.top;
+    command.source_rect[2] = area.right;
+    command.source_rect[3] = area.bottom;
     command.destination_handle = 0;
-    command.destination_rect[2] = (int32_t)source->width;
-    command.destination_rect[3] = (int32_t)source->height;
+    command.destination_rect[0] = area.left;
+    command.destination_rect[1] = area.top;
+    command.destination_rect[2] = area.right;
+    command.destination_rect[3] = area.bottom;
     DDWG_TRACE_CHECKPOINT("SCREEN_BLT source=%lu level=%lu face=%lu "
-            "size=%lux%lu", source->handle, source->mip_level,
-            source->cube_face, source->width, source->height);
+            "rect=%ld,%ld-%ld,%ld surface=%lux%lu", source->handle,
+            source->mip_level, source->cube_face, area.left, area.top,
+            area.right, area.bottom, source->width, source->height);
     return emit_command(D9WG_OP_DD_BLT, &command, sizeof(command));
 }
 
@@ -2448,7 +2467,7 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
      * is no flip to wait for. This is how every windowed 2D title puts a frame
      * on screen. */
     if (ok && destination->primary && !destination->flip_next) {
-        emit_blt_to_screen(destination);
+        emit_blt_to_screen(destination, &effective_destination);
         emit_present_and_flush(destination->owner);
     }
     return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
@@ -2516,7 +2535,7 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
             !surface_readback(destination))
         ok = FALSE;
     if (ok && destination->primary && !destination->flip_next) {
-        emit_blt_to_screen(destination);
+        emit_blt_to_screen(destination, &destination_rect);
         emit_present_and_flush(destination->owner);
     }
     return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
@@ -2655,7 +2674,7 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
     if (override_surface) {
         /* Flip to a named surface: that surface's contents become the front
          * buffer, and the chain is not rotated. */
-        emit_blt_to_screen(override_surface);
+        emit_blt_to_screen(override_surface, NULL);
     } else if (surface->flip_next && surface->flip_next != surface) {
         /*
          * Real DirectDraw rotates which memory the display scans out while the
@@ -2693,9 +2712,9 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
                 walk = walk->flip_next)
             rebind_host_surface_state(walk);
         d3d7_rebind_after_flip(surface->owner);
-        emit_blt_to_screen(surface);
+        emit_blt_to_screen(surface, NULL);
     } else {
-        emit_blt_to_screen(surface);
+        emit_blt_to_screen(surface, NULL);
     }
     (void)flags; /* DDFLIP_NOVSYNC/WAIT/INTERVALn: the browser's presentation
                   * cadence is not ours to choose. Recorded in README.md. */
@@ -2711,7 +2730,16 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
 
     if (!caps || !out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (caps->dwCaps2 & DDSCAPS2_CUBEMAP_ALLFACES) {
+    /*
+     * Some DirectX 6 callers initialise only DDSCAPS2::dwCaps before asking
+     * for the next mip level.  Native DirectDraw does not interpret the
+     * unused dwCaps2 bits as a cube-face selector when the source surface is
+     * not a cube map.  Do the same here; otherwise stack garbage that happens
+     * to overlap DDSCAPS2_CUBEMAP_ALLFACES hides a valid mip attachment and
+     * turns the query into DDERR_NOTFOUND.
+     */
+    if ((surface->desc.ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP) &&
+            (caps->dwCaps2 & DDSCAPS2_CUBEMAP_ALLFACES)) {
         static const DWORD face_caps[6] = {
             DDSCAPS2_CUBEMAP_POSITIVEX, DDSCAPS2_CUBEMAP_NEGATIVEX,
             DDSCAPS2_CUBEMAP_POSITIVEY, DDSCAPS2_CUBEMAP_NEGATIVEY,
@@ -2990,7 +3018,7 @@ static HRESULT surface_finish_dc(DDSurface *surface, BOOL present)
     emit_surface_upload(surface, NULL);
     surface->memory->gpu_dirty = FALSE;
     if (present && surface->primary && !surface->flip_next) {
-        emit_blt_to_screen(surface);
+        emit_blt_to_screen(surface, NULL);
         emit_present_and_flush(surface->owner);
     }
     return DD_OK;
@@ -3290,7 +3318,7 @@ static HRESULT WINAPI surface_Unlock(IDirectDrawSurface7 *iface, LPRECT rect)
         emit_surface_upload(surface, &uploaded);
         surface->memory->gpu_dirty = FALSE;
         if (surface->primary && !surface->flip_next) {
-            emit_blt_to_screen(surface);
+            emit_blt_to_screen(surface, &uploaded);
             emit_present_and_flush(surface->owner);
         }
     }
@@ -5529,20 +5557,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 #ifdef DDWG_DIAGNOSTIC_TRACE
         pending_commands = g_command_count;
 #endif
-        /*
-         * Take the composited overlay down before the session goes, through
-         * the same report a released primary sends.
-         *
-         * SESSION_END already tells the host this process is gone, and the
-         * host does retire the devices for it -- but whether that reaches the
-         * page's canvas depends on the session bookkeeping lining up, and a
-         * frame left on screen after the app has exited is the one failure
-         * the user cannot work around: it covers the desktop with a picture
-         * of a program that no longer exists. Saying "nothing to show" first
-         * makes the teardown depend on the path that is already known to
-         * work, rather than on the last message of a dying process being
-         * matched up correctly.
-         */
+        /* Hide every live primary before closing the process session. */
         for (object = g_objects; object; object = object->next)
             emit_window_state_not_showing(object);
         emit_session_end();
