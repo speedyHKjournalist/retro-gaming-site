@@ -1765,7 +1765,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
  */
 /* Bumped whenever guest-visible behaviour changes, so the console can say
  * which DLL is actually loaded rather than leaving it to be inferred. */
-#define D9_PROXY_BUILD "autogen-mips-offscreen-20260822"
+#define D9_PROXY_BUILD "adapter-mode-boundary-20260903"
 
 #define D9_HOSTLOG_MAX_DISTINCT 128u
 
@@ -4257,7 +4257,12 @@ static UINT enumerate_adapter_modes(D3DFORMAT format, UINT wanted,
         }
         ++matched;
     }
-    return matched;
+    /* Counting returns the complete list length. Fetching must instead report
+     * whether the requested index was found. Returning `matched` here made
+     * every index past the end look successful whenever the adapter had at
+     * least one mode; Warcraft III consequently enumerated forever and never
+     * reached CreateDevice. */
+    return out ? 0 : matched;
 }
 
 static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D9 *iface, UINT adapter,
