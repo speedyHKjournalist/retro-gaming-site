@@ -71,18 +71,14 @@ and known semantic deviations are documented in
 
 ## Build
 
-Build the 32-bit app-local DLL with MinGW-w64:
-
 ```bash
-cd glbridge/openglproxy
-i686-w64-mingw32-gcc -shared -Os -s -nostdlib \
-  -Wl,--entry,_DllMain@12 -Wl,--kill-at \
-  -o opengl32.dll opengl32_proxy.c opengl32.def \
-  -lkernel32 -luser32 -lgdi32
+glbridge/openglproxy/build.sh              # opengl32.dll
 ```
 
-The resulting `opengl32.dll` is placed beside the guest game executable.
-Install and start the matching `v86gl.sys` from `../v86gl_driver/` first.
+This is a 32-bit, CRT-free MinGW-w64 build; the script fails if a C runtime
+import appears or if the export count drops below the 831-entry ABI. The
+resulting DLL goes beside the guest game executable. Install and start the
+matching `v86gl.sys` from `../v86gl_driver/` first.
 
 ## Host page
 

@@ -13,10 +13,14 @@ class FakeBuffer {
         this.size = descriptor.size;
         this.destroyed = false;
         this.writes = [];
+        // Persistent, so a test can seed what a readback will find -- a fresh
+        // buffer per getMappedRange would make every mapped result zero and
+        // hide the difference between "read a zero" and "read nothing".
+        this.storage = new ArrayBuffer(descriptor.size);
     }
     destroy() { this.destroyed = true; }
     mapAsync() { return Promise.resolve(); }
-    getMappedRange() { return new ArrayBuffer(this.size); }
+    getMappedRange() { return this.storage; }
     unmap() {}
 }
 
@@ -75,6 +79,10 @@ class FakeEncoder {
     copyTextureToTexture(...args) { this.copies.push(["t2t", ...args]); }
     copyTextureToBuffer(...args) { this.copies.push(["t2b", ...args]); }
     copyBufferToBuffer(...args) { this.copies.push(["b2b", ...args]); }
+    resolveQuerySet(querySet, first, count, destination, offset) {
+        this.log.queryResolves.push({ querySet, first, count, destination, offset });
+        this.copies.push(["resolve", querySet, first, count]);
+    }
     finish() { return { encoder: this }; }
 }
 
@@ -155,7 +163,11 @@ class FakeDevice {
         this.log.encoders.push(encoder);
         return encoder;
     }
-    createQuerySet(descriptor) { return { descriptor }; }
+    createQuerySet(descriptor) {
+        const set = { descriptor };
+        this.log.querySets.push(set);
+        return set;
+    }
 }
 
 function createFakeHost(canvas) {
@@ -163,6 +175,7 @@ function createFakeHost(canvas) {
         buffers: [], textures: [], samplers: [], modules: [], pipelines: [],
         bindGroups: [], encoders: [], passes: [], draws: [],
         bufferWrites: [], textureWrites: [], submits: [],
+        querySets: [], queryResolves: [],
         presented: 0,
     };
     const device = new FakeDevice(log);

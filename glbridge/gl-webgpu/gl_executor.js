@@ -57,10 +57,46 @@
     const MAX_TEXTURE_COORDS = 8;
     const MAX_LIGHTS = 8;
     const MAX_CLIP_PLANES = 6;
+
+    // glPushAttrib/glPushClientAttrib masks.  Keep these local to the executor:
+    // they are state-group selectors rather than wire opcodes, and spelling the
+    // groups out here makes it much harder for a newly added state field to be
+    // silently restored by the wrong mask.
+    const ATTRIB = {
+        CURRENT: 0x00000001, POINT: 0x00000002, LINE: 0x00000004,
+        POLYGON: 0x00000008, POLYGON_STIPPLE: 0x00000010,
+        PIXEL_MODE: 0x00000020, LIGHTING: 0x00000040, FOG: 0x00000080,
+        DEPTH_BUFFER: 0x00000100, ACCUM_BUFFER: 0x00000200,
+        STENCIL_BUFFER: 0x00000400, VIEWPORT: 0x00000800,
+        TRANSFORM: 0x00001000, ENABLE: 0x00002000,
+        COLOR_BUFFER: 0x00004000, HINT: 0x00008000,
+        EVAL: 0x00010000, LIST: 0x00020000, TEXTURE: 0x00040000,
+        SCISSOR: 0x00080000, MULTISAMPLE: 0x20000000,
+    };
+    const CLIENT_ATTRIB = { PIXEL_STORE: 0x00000001, VERTEX_ARRAY: 0x00000002 };
     const MAX_VERTEX_ATTRIBS = 16;
     const MAX_DRAW_BUFFERS = 8;
     const MODELVIEW_STACK_DEPTH = 32;
     const OTHER_STACK_DEPTH = 4;
+    /* A guest process can flush object-deletion records after its final
+     * DESTROY_CONTEXT record. destroyContext() has already retired every
+     * object in the orphaned share group, so replaying those deletes has no
+     * semantic work left and should not look like a rendering warning. */
+    const CONTEXT_FREE_TEARDOWN_OPS = new Set([
+        GLFN.DELETE_TEXTURES, GLFN.DELETE_BUFFERS, GLFN.DELETE_PROGRAMS_ARB,
+        GLFN.DELETE_PROGRAM, GLFN.DELETE_SHADER, GLFN.DELETE_FRAMEBUFFERS,
+        GLFN.DELETE_RENDERBUFFERS, GLFN.DELETE_QUERIES,
+    ]);
+
+    function isContextFreeTeardownNoop(fn, view, offset, size) {
+        if (CONTEXT_FREE_TEARDOWN_OPS.has(fn)) return true;
+        /* GLView unbinds both ARB targets after deleting its last HGLRC. The
+         * payload is {target, program}; only program zero is harmless. Keep a
+         * warning for a non-zero late bind because that can reveal a genuine
+         * control/GL stream ordering bug. */
+        return fn === GLFN.BIND_PROGRAM_ARB && size >= 8 &&
+            view.getUint32(offset + 4, true) === 0;
+    }
 
     const TEXTURE_USAGE_COPY_SRC = 0x01;
     const TEXTURE_USAGE_COPY_DST = 0x02;
@@ -72,6 +108,39 @@
     const BUFFER_USAGE_INDEX = 0x0010;
     const BUFFER_USAGE_VERTEX = 0x0020;
     const BUFFER_USAGE_UNIFORM = 0x0040;
+    const BUFFER_USAGE_QUERY_RESOLVE = 0x0200;
+    /* D-07. Matches V86GL_QUERY_VISIBLE_SAMPLES in the guest, which uses the
+     * same value when it has to answer a blocking GL_QUERY_RESULT itself. */
+    const OCCLUSION_VISIBLE_SAMPLES = 0x7FFFFFFF;
+
+    /*
+     * The first bytes of a record, as 32-bit words and as hex.
+     *
+     * Words because every payload in this protocol starts with a run of
+     * uint32 fields, so a decoded word list can be read straight against the
+     * struct in openglproxy/opengl32_proxy.c; hex because the bytes after
+     * them usually cannot.
+     */
+    function hexPreview(bytes, offset, size, limit) {
+        // `offset` is relative to the Uint8Array passed to submit(), just like
+        // DataView offsets and Uint8Array indices.  The array may itself be a
+        // view into guest RAM with a non-zero byteOffset; subtracting that
+        // backing-buffer offset a second time reads an unrelated batch.
+        const start = offset;
+        const count = Math.min(size, limit || 48);
+        if (start < 0 || count <= 0) return "";
+        const slice = bytes.subarray(start, start + count);
+        const words = [];
+        const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+        for (let i = 0; i + 4 <= slice.byteLength && words.length < 8; i += 4)
+            words.push(view.getUint32(i, true));
+        let hex = "";
+        for (let i = 0; i < slice.byteLength; ++i)
+            hex += (i && !(i % 4) ? " " : "") +
+                slice[i].toString(16).padStart(2, "0");
+        return "words[" + words.join(",") + "] " + hex +
+            (size > count ? " …(" + size + " bytes)" : "");
+    }
 
     /* The response region carved out of the tail of v86gl.sys's DMA
      * allocation, mirroring D9WG's layout so both paths look the same to
@@ -271,6 +340,17 @@
         [GL.MIN]: "min", [GL.MAX]: "max",
         [GL.MIN_EXT]: "min", [GL.MAX_EXT]: "max",
     };
+
+    /* The selected default pixel format is currently single-sampled, but ARB
+     * sample coverage still has observable all-or-nothing coverage there. */
+    function sampleCoverageMask(state) {
+        if (!state.enabled.has(GL.MULTISAMPLE) ||
+                !state.enabled.has(GL.SAMPLE_COVERAGE))
+            return 0xffffffff;
+        let covered = state.sampleCoverage.value > 0 ? 1 : 0;
+        if (state.sampleCoverage.invert) covered ^= 1;
+        return covered;
+    }
 
     const ADDRESS_MODES = {
         [GL.REPEAT]: "repeat",
@@ -532,7 +612,10 @@
         switch (internalFormat) {
         case GL.DEPTH_COMPONENT:
         case GL.DEPTH_COMPONENT24:
-            return { gpu: "depth24plus", depth: true, base: "DEPTH" };
+            // depth24plus has an implementation-defined texel layout and cannot
+            // receive queue.writeTexture data. depth32float preserves uploaded
+            // depth values and remains renderable/sampleable on core WebGPU.
+            return { gpu: "depth32float", depth: true, base: "DEPTH" };
         case GL.DEPTH_COMPONENT16:
             return { gpu: "depth16unorm", depth: true, base: "DEPTH" };
         case GL.DEPTH_COMPONENT32:
@@ -571,6 +654,7 @@
     const TYPE_BYTES = {
         [GL.UNSIGNED_BYTE]: 1, [GL.BYTE]: 1,
         [GL.UNSIGNED_SHORT]: 2, [GL.SHORT]: 2,
+        [GL.HALF_FLOAT]: 2,
         [GL.UNSIGNED_INT]: 4, [GL.INT]: 4, [GL.FLOAT]: 4,
         [GL.UNSIGNED_BYTE_3_3_2]: 1, [GL.UNSIGNED_BYTE_2_3_3_REV]: 1,
         [GL.UNSIGNED_SHORT_5_6_5]: 2, [GL.UNSIGNED_SHORT_5_6_5_REV]: 2,
@@ -837,6 +921,150 @@
         return out;
     }
 
+    function halfToFloat(value) {
+        const sign = (value & 0x8000) ? -1 : 1;
+        const exponent = (value >>> 10) & 0x1f;
+        const fraction = value & 0x3ff;
+        if (!exponent) return sign * Math.pow(2, -14) * (fraction / 1024);
+        if (exponent === 31) return fraction ? NaN : sign * Infinity;
+        return sign * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
+    }
+
+    function floatToHalf(value) {
+        if (Number.isNaN(value)) return 0x7e00;
+        const sign = value < 0 || Object.is(value, -0) ? 0x8000 : 0;
+        const absolute = Math.abs(value);
+        if (absolute === Infinity) return sign | 0x7c00;
+        if (absolute === 0) return sign;
+        let exponent = Math.floor(Math.log2(absolute));
+        let mantissa = absolute / Math.pow(2, exponent) - 1;
+        if (exponent < -14) {
+            const subnormal = Math.round(absolute / Math.pow(2, -24));
+            return sign | Math.min(0x3ff, subnormal);
+        }
+        if (exponent > 15) return sign | 0x7c00;
+        let fraction = Math.round(mantissa * 1024);
+        if (fraction === 1024) { fraction = 0; ++exponent; }
+        if (exponent > 15) return sign | 0x7c00;
+        return sign | ((exponent + 15) << 10) | (fraction & 0x3ff);
+    }
+
+    function readSourceTexelFloat(view, byteOffset, format, type, out) {
+        if (PACKED_TYPES.has(type)) {
+            const bytes = new Uint8Array(4);
+            readSourceTexel(view, byteOffset, format, type, bytes);
+            for (let i = 0; i < 4; ++i) out[i] = bytes[i] / 255;
+            return;
+        }
+        const typeBytes = TYPE_BYTES[type];
+        const components = SOURCE_COMPONENTS[format] || 1;
+        const read = i => {
+            const at = byteOffset + i * typeBytes;
+            switch (type) {
+            case GL.UNSIGNED_BYTE: return view.getUint8(at) / 255;
+            case GL.BYTE: return Math.max(view.getInt8(at) / 127, -1);
+            case GL.UNSIGNED_SHORT: return view.getUint16(at, true) / 65535;
+            case GL.SHORT: return Math.max(view.getInt16(at, true) / 32767, -1);
+            case GL.UNSIGNED_INT: return view.getUint32(at, true) / 4294967295;
+            case GL.INT: return Math.max(view.getInt32(at, true) / 2147483647, -1);
+            case GL.FLOAT: return view.getFloat32(at, true);
+            case GL.HALF_FLOAT: return halfToFloat(view.getUint16(at, true));
+            default: return 0;
+            }
+        };
+        const c = [];
+        for (let i = 0; i < components; ++i) c.push(read(i));
+        out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
+        switch (format) {
+        case GL.RED: out[0] = c[0]; break;
+        case GL.GREEN: out[1] = c[0]; break;
+        case GL.BLUE: out[2] = c[0]; break;
+        case GL.ALPHA: out[3] = c[0]; break;
+        case GL.LUMINANCE: out[0] = out[1] = out[2] = c[0]; break;
+        case GL.INTENSITY: out[0] = out[1] = out[2] = out[3] = c[0]; break;
+        case GL.DEPTH_COMPONENT:
+        case GL.COLOR_INDEX:
+        case GL.STENCIL_INDEX: out[0] = out[1] = out[2] = c[0]; break;
+        case GL.LUMINANCE_ALPHA:
+            out[0] = out[1] = out[2] = c[0]; out[3] = c[1]; break;
+        case GL.RGB: out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; break;
+        case GL.BGR: out[0] = c[2]; out[1] = c[1]; out[2] = c[0]; break;
+        case GL.RGBA: out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; out[3] = c[3]; break;
+        case GL.BGRA: out[0] = c[2]; out[1] = c[1]; out[2] = c[0]; out[3] = c[3]; break;
+        case GL.ABGR_EXT:
+            out[0] = c[3]; out[1] = c[2]; out[2] = c[1]; out[3] = c[0]; break;
+        default:
+            for (let i = 0; i < Math.min(4, c.length); ++i) out[i] = c[i];
+        }
+    }
+
+    function convertPixelsForStorage(source, byteOffset, width, height, depth,
+            format, type, storage, unpack) {
+        if (!storage.float && !storage.depth && !storage.palettised) {
+            const pixels = convertPixels(source, byteOffset, width, height, depth,
+                format, type, storage.base, unpack);
+            return pixels ? { pixels, bytesPerTexel: 4, componentType: "u8",
+                               componentCount: 4 } : null;
+        }
+        const texelBytes = sourceTexelBytes(format, type);
+        if (!texelBytes) return null;
+        const rowLength = unpack.rowLength || width;
+        const skipPixels = unpack.skipPixels || 0;
+        const skipRows = unpack.skipRows || 0;
+        const skipImages = unpack.skipImages || 0;
+        const alignment = unpack.alignment || 4;
+        const srcRowBytes = alignUp(rowLength * texelBytes, alignment);
+        const imageHeight = unpack.imageHeight || height;
+        const texels = width * height * depth;
+        let bytesPerTexel, componentType, componentCount, result, output;
+        if (storage.palettised) {
+            bytesPerTexel = 1; componentType = "u8"; componentCount = 1;
+            result = new Uint8Array(texels); output = result;
+        } else if (storage.gpu === "rgba16float") {
+            bytesPerTexel = 8; componentType = "f16"; componentCount = 4;
+            result = new Uint8Array(texels * bytesPerTexel);
+            output = new Uint16Array(result.buffer);
+        } else if (storage.gpu === "rgba32float") {
+            bytesPerTexel = 16; componentType = "f32"; componentCount = 4;
+            result = new Uint8Array(texels * bytesPerTexel);
+            output = new Float32Array(result.buffer);
+        } else if (storage.gpu === "depth16unorm") {
+            bytesPerTexel = 2; componentType = "u16"; componentCount = 1;
+            result = new Uint8Array(texels * bytesPerTexel);
+            output = new Uint16Array(result.buffer);
+        } else {
+            bytesPerTexel = 4; componentType = "f32"; componentCount = 1;
+            result = new Uint8Array(texels * bytesPerTexel);
+            output = new Float32Array(result.buffer);
+        }
+        const view = new DataView(source.buffer, source.byteOffset, source.byteLength);
+        const texel = new Float32Array(4);
+        let dst = 0;
+        for (let z = 0; z < depth; ++z) {
+            for (let y = 0; y < height; ++y) {
+                let src = byteOffset + (skipImages + z) * imageHeight * srcRowBytes +
+                    (skipRows + y) * srcRowBytes + skipPixels * texelBytes;
+                if (src + width * texelBytes > source.byteLength) return null;
+                for (let x = 0; x < width; ++x) {
+                    readSourceTexelFloat(view, src, format, type, texel);
+                    if (storage.palettised) {
+                        output[dst++] = clamp(Math.round(texel[0] * 255), 0, 255);
+                    } else if (componentCount === 1) {
+                        const value = clamp(texel[0], 0, 1);
+                        output[dst++] = componentType === "u16" ?
+                            Math.round(value * 65535) : value;
+                    } else {
+                        for (let c = 0; c < 4; ++c)
+                            output[dst++] = componentType === "f16" ?
+                                floatToHalf(texel[c]) : texel[c];
+                    }
+                    src += texelBytes;
+                }
+            }
+        }
+        return { pixels: result, bytesPerTexel, componentType, componentCount };
+    }
+
     /* ---- S3TC decode, used when the adapter has no BC support ---- */
 
     function decodeDXTColorBlock(src, at, out, outStride, x0, y0, width, height,
@@ -946,6 +1174,80 @@
     /* GL context state                                                   */
     /* ================================================================== */
 
+    function cloneStateValue(value) {
+        if (value === null || value === undefined || typeof value !== "object")
+            return value;
+        if (ArrayBuffer.isView(value)) return new value.constructor(value);
+        if (value instanceof Set) return new Set(value);
+        if (Array.isArray(value)) return value.map(cloneStateValue);
+        const copy = Object.create(Object.getPrototypeOf(value) === null ? null :
+            Object.prototype);
+        for (const key of Object.keys(value)) copy[key] = cloneStateValue(value[key]);
+        return copy;
+    }
+
+    function snapshotFields(state, fields) {
+        const snapshot = Object.create(null);
+        for (const field of fields) snapshot[field] = cloneStateValue(state[field]);
+        return snapshot;
+    }
+
+    function restoreFields(state, snapshot, fields) {
+        for (const field of fields)
+            if (Object.prototype.hasOwnProperty.call(snapshot, field))
+                state[field] = cloneStateValue(snapshot[field]);
+    }
+
+    const SERVER_ATTRIB_FIELDS = [
+        [ATTRIB.CURRENT, ["current"]],
+        [ATTRIB.POINT, ["pointSize", "point"]],
+        [ATTRIB.LINE, ["lineWidth", "lineStipple"]],
+        [ATTRIB.POLYGON, ["cullFace", "frontFace", "polygonMode", "polygonOffset"]],
+        [ATTRIB.POLYGON_STIPPLE, ["polygonStipple"]],
+        [ATTRIB.PIXEL_MODE, ["pixelTransfer", "pixelZoom", "readBuffer"]],
+        [ATTRIB.LIGHTING, ["lightModel", "lights", "material", "colorMaterial",
+                           "shadeModel"]],
+        [ATTRIB.FOG, ["fog"]],
+        [ATTRIB.DEPTH_BUFFER, ["depthFunc", "depthMask", "clearDepth"]],
+        [ATTRIB.ACCUM_BUFFER, ["clearAccum"]],
+        [ATTRIB.STENCIL_BUFFER, ["stencil", "clearStencil"]],
+        [ATTRIB.VIEWPORT, ["viewport", "depthRange"]],
+        [ATTRIB.TRANSFORM, ["matrixMode", "clipPlanes"]],
+        [ATTRIB.COLOR_BUFFER, ["clearColor", "colorMask", "blend", "alphaFunc",
+                              "logicOp", "drawBuffers"]],
+        [ATTRIB.TEXTURE, ["activeTexture", "textureUnits"]],
+        [ATTRIB.SCISSOR, ["scissor"]],
+        [ATTRIB.MULTISAMPLE, ["sampleCoverage"]],
+    ];
+
+    function fieldsForServerAttrib(mask) {
+        const fields = new Set();
+        for (const [bit, names] of SERVER_ATTRIB_FIELDS)
+            if (mask & bit) for (const name of names) fields.add(name);
+        if (mask & ATTRIB.ENABLE) fields.add("enabled");
+        return [...fields];
+    }
+
+    function captureEnableState(state) {
+        return {
+            enabled: new Set(state.enabled),
+            textureTargets: state.textureUnits.map(unit => new Set(unit.enabledTargets)),
+            texGen: state.textureUnits.map(unit => unit.texGen.map(gen => gen.enabled)),
+            lights: state.lights.map(light => light.enabled),
+            colorMaterial: state.colorMaterial.enabled,
+        };
+    }
+
+    function restoreEnableState(state, snapshot) {
+        state.enabled = new Set(snapshot.enabled);
+        state.textureUnits.forEach((unit, i) => {
+            unit.enabledTargets = new Set(snapshot.textureTargets[i]);
+            unit.texGen.forEach((gen, j) => { gen.enabled = snapshot.texGen[i][j]; });
+        });
+        state.lights.forEach((light, i) => { light.enabled = snapshot.lights[i]; });
+        state.colorMaterial.enabled = snapshot.colorMaterial;
+    }
+
     /*
      * One of these per wglCreateContext. Everything the GL spec calls "server
      * state" lives here, at its documented default -- and the defaults matter:
@@ -958,6 +1260,8 @@
             id, shareGroup,
             error: GL.NO_ERROR,
             errorQueue: [],
+            arbErrorString: "",
+            arbErrorPosition: -1,
 
             matrixMode: GL.MODELVIEW,
             stacks: {
@@ -1091,11 +1395,17 @@
             },
             pixelTransfer: { redScale: 1, greenScale: 1, blueScale: 1,
                              alphaScale: 1, redBias: 0, greenBias: 0,
-                             blueBias: 0, alphaBias: 0, mapColor: false },
+                             blueBias: 0, alphaBias: 0, mapColor: false,
+                             postColorMatrixScale:
+                                new Float32Array([1, 1, 1, 1]),
+                             postColorMatrixBias:
+                                new Float32Array([0, 0, 0, 0]) },
             pixelZoom: { x: 1, y: 1 },
 
             arrayBuffer: 0,
             elementArrayBuffer: 0,
+            pixelPackBuffer: 0,
+            pixelUnpackBuffer: 0,
             currentProgram: 0,
             arbVertexProgram: 0,
             arbFragmentProgram: 0,
@@ -1117,6 +1427,9 @@
                 enabled: false,
                 value: new Float32Array([0, 0, 0, 1]),
             })),
+
+            attribStack: [],
+            clientAttribStack: [],
         };
         // GL's default enables. Everything else starts off.
         state.enabled.add(GL.DITHER);
@@ -1299,6 +1612,10 @@
             this.options = options || {};
             this.host = this.options.host ||
                 (gpuHost ? gpuHost.acquire(canvas, this.options.hostOptions) : null);
+            // Mirrored for backwards-compatible diagnostics; query paths use
+            // the per-HGLRC fields in createContextState.
+            this.arbErrorString = "";
+            this.arbErrorPosition = -1;
             this.device = null;
             this.deviceFeatures = { bc: false };
             this.presenterToken = 0;
@@ -1500,16 +1817,30 @@
             const y = payload.byteLength >= 12 ? view.getInt32(8, true) : 0;
             const width = payload.byteLength >= 16 ? view.getUint32(12, true) : 0;
             const height = payload.byteLength >= 20 ? view.getUint32(16, true) : 0;
+            const protocolId = payload.byteLength >= 24 ? view.getUint32(20, true) : 0;
+            const protocolShareGroup = payload.byteLength >= 28 ?
+                view.getUint32(24, true) : 0;
+            const contextKey = protocolId ? "context:" + protocolId : "hwnd:" + hwnd;
 
-            let context = this.contexts.get(hwnd);
+            let context = this.contexts.get(contextKey);
             if (!context) {
-                const group = createShareGroup(this.nextShareGroupId++);
-                this.shareGroups.set(group.id, group);
+                const groupKey = protocolShareGroup ?
+                    "guest:" + protocolShareGroup : "private:" + this.nextShareGroupId;
+                let group = this.shareGroups.get(groupKey);
+                if (!group) {
+                    group = createShareGroup(this.nextShareGroupId++);
+                    group.protocolId = protocolShareGroup;
+                    this.shareGroups.set(groupKey, group);
+                }
                 context = createContextState(this.nextContextId++, group);
                 context.hwnd = hwnd;
-                this.contexts.set(hwnd, context);
+                context.protocolId = protocolId;
+                context.contextKey = contextKey;
+                context.shareGroupKey = groupKey;
+                this.contexts.set(contextKey, context);
                 this.framebuffers.set(context.id, new Map());
             }
+            context.hwnd = hwnd;
             this.current = context;
             if (width && height) {
                 if (!context.viewport.width) {
@@ -1527,15 +1858,40 @@
             this.current = null;
         }
 
-        destroyContext() {
+        destroyContext(payload) {
             this.finishFrame(false);
-            if (this.current) {
-                this.contexts.delete(this.current.hwnd);
-                this.framebuffers.delete(this.current.id);
+            let targets;
+            if (payload && payload.byteLength >= 4) {
+                const id = new DataView(payload.buffer, payload.byteOffset,
+                    payload.byteLength).getUint32(0, true);
+                const context = this.contexts.get("context:" + id);
+                targets = context ? [context] : [];
+            } else {
+                // A payload-less destroy is process teardown from an older guest.
+                targets = [...this.contexts.values()];
             }
-            this.current = null;
-            this.surface = { ...this.surface, visible: false };
-            this.notifySurface("hide");
+            for (const context of targets) {
+                this.contexts.delete(context.contextKey || ("hwnd:" + context.hwnd));
+                this.framebuffers.delete(context.id);
+                if (this.current === context) this.current = null;
+            }
+            for (const [key, group] of this.shareGroups) {
+                const live = [...this.contexts.values()].some(context =>
+                    context.shareGroup === group);
+                if (!live) {
+                    for (const texture of group.textures.values())
+                        this.retire(texture.gpuTexture);
+                    for (const buffer of group.buffers.values())
+                        this.retire(buffer.gpuBuffer);
+                    for (const rb of group.renderbuffers.values())
+                        this.retire(rb.gpuTexture);
+                    this.shareGroups.delete(key);
+                }
+            }
+            if (!this.current) {
+                this.surface = { ...this.surface, visible: false };
+                this.notifySurface("hide");
+            }
         }
 
         resetForReplay() {
@@ -1682,7 +2038,20 @@
                     this.dispatch(fn, bytes, view, offset, size, metadata);
                 } catch (error) {
                     if (error instanceof GLStreamError) {
-                        this.refuse("op" + fn, error.message, {});
+                        /*
+                         * A malformed record is a wire disagreement between
+                         * the guest and this decoder, and "refused op40:
+                         * client array blocks are truncated {}" says nothing
+                         * about which of the two is wrong. The name and the
+                         * first bytes do: the payload header is right there,
+                         * and against openglproxy's struct it is usually one
+                         * read to see whose offset moved.
+                         */
+                        this.refuse("op" + fn, error.message, {
+                            name: constants.NAME_BY_OPCODE[fn] || "?",
+                            size,
+                            head: hexPreview(bytes, offset, size),
+                        });
                     } else {
                         throw error;
                     }
@@ -1693,10 +2062,12 @@
         }
 
         dispatch(fn, bytes, view, offset, size, metadata) {
+
             if (fn === CTRL.MAKE_CURRENT)
                 return this.makeCurrent(bytes.subarray(offset, offset + size));
             if (fn === CTRL.RELEASE_CURRENT) return this.releaseCurrent();
-            if (fn === CTRL.DESTROY_CONTEXT) return this.destroyContext();
+            if (fn === CTRL.DESTROY_CONTEXT)
+                return this.destroyContext(bytes.subarray(offset, offset + size));
 
             const handler = this.handlers[fn];
             if (!handler) {
@@ -1705,6 +2076,9 @@
                 return;
             }
             if (!this.current && handler.needsContext !== false) {
+                if (!this.contexts.size &&
+                        isContextFreeTeardownNoop(fn, view, offset, size))
+                    return;
                 this.warnOnce("no-context",
                     "a GL command arrived with no current context; it is ignored",
                     { fn, name: constants.NAME_BY_OPCODE[fn] || "?" });
@@ -2166,16 +2540,54 @@
                 this.current.genericAttribs[index].enabled = false;
         });
 
-        /* ---- attribute stacks ----
-         *
-         * The guest keeps the real glPushAttrib/glPopAttrib stack: it has the
-         * shadow state already and only sends the differences, so the host
-         * never needs a second copy. These records exist so the state journal
-         * stays replayable, and are otherwise no-ops. */
-        define("PUSH_ATTRIB", function() {});
-        define("POP_ATTRIB", function() {});
-        define("PUSH_CLIENT_ATTRIB", function() {});
-        define("POP_CLIENT_ATTRIB", function() {});
+        /* ---- attribute stacks ---- */
+        define("PUSH_ATTRIB", function(a) {
+            const s = this.current;
+            if (s.attribStack.length >= 16) {
+                this.setError(GL.STACK_OVERFLOW);
+                return;
+            }
+            const mask = a[0] >>> 0;
+            const fields = fieldsForServerAttrib(mask);
+            s.attribStack.push({ mask, fields, state: snapshotFields(s, fields),
+                enableState: mask & ATTRIB.ENABLE ? captureEnableState(s) : null });
+        });
+        define("POP_ATTRIB", function() {
+            const s = this.current;
+            if (!s.attribStack.length) {
+                this.setError(GL.STACK_UNDERFLOW);
+                return;
+            }
+            const snapshot = s.attribStack.pop();
+            restoreFields(s, snapshot.state, snapshot.fields);
+            if (snapshot.enableState) restoreEnableState(s, snapshot.enableState);
+            this.endPass();
+            this.invalidateBindGroups();
+        });
+        define("PUSH_CLIENT_ATTRIB", function(a) {
+            const s = this.current;
+            if (s.clientAttribStack.length >= 16) {
+                this.setError(GL.STACK_OVERFLOW);
+                return;
+            }
+            const mask = a[0] >>> 0;
+            const fields = [];
+            if (mask & CLIENT_ATTRIB.PIXEL_STORE)
+                fields.push("pixelStore", "pixelPackBuffer", "pixelUnpackBuffer");
+            if (mask & CLIENT_ATTRIB.VERTEX_ARRAY)
+                fields.push("clientActiveTexture", "arrays", "arrayBuffer",
+                    "elementArrayBuffer", "genericAttribs");
+            s.clientAttribStack.push({ mask, fields, state: snapshotFields(s, fields) });
+        });
+        define("POP_CLIENT_ATTRIB", function() {
+            const s = this.current;
+            if (!s.clientAttribStack.length) {
+                this.setError(GL.STACK_UNDERFLOW);
+                return;
+            }
+            const snapshot = s.clientAttribStack.pop();
+            restoreFields(s, snapshot.state, snapshot.fields);
+        });
 
         /* ---- frame boundaries ---- */
 
@@ -2231,6 +2643,21 @@
         let text = "";
         for (let i = offset; i < end; ++i) text += String.fromCharCode(bytes[i]);
         return text;
+    }
+
+    /*
+     * Writes `text` NUL-terminated into a guest buffer of `capacity` bytes and
+     * returns the character count GL wants reported -- which excludes the
+     * terminator, the same convention openglproxy's own copy_gl_string_result
+     * uses when it answers one of these queries without the host.
+     */
+    function writeCString(bytes, offset, capacity, text) {
+        if (capacity <= 0) return 0;
+        const written = Math.min(text.length, capacity - 1);
+        for (let i = 0; i < written; ++i)
+            bytes[offset + i] = text.charCodeAt(i) & 0xff;
+        bytes[offset + written] = 0;
+        return written;
     }
 
     function installResourceHandlers(table) {
@@ -2319,7 +2746,7 @@
             const type = view.getUint32(at, true); at += 4;
             const dataSize = view.getUint32(at, true); at += 4;
             const data = dataSize ?
-                bytes.subarray(at - bytes.byteOffset, at - bytes.byteOffset + dataSize) :
+                bytes.subarray(at, at + dataSize) :
                 null;
             this.texImage(target, level, internalFormat, width, height, depth,
                 format, type, data, dataSize);
@@ -2349,7 +2776,7 @@
             const type = view.getUint32(at, true); at += 4;
             const dataSize = view.getUint32(at, true); at += 4;
             const data = dataSize ?
-                bytes.subarray(at - bytes.byteOffset, at - bytes.byteOffset + dataSize) :
+                bytes.subarray(at, at + dataSize) :
                 null;
             this.texSubImage(target, level, x, y, z, width, height, depth,
                 format, type, data, dataSize);
@@ -2372,8 +2799,7 @@
             const dataSize = view.getUint32(at, true); at += 4;
             if (at - offset + dataSize > size)
                 throw new GLStreamError("compressed texture record is truncated");
-            const data = bytes.subarray(at - bytes.byteOffset,
-                at - bytes.byteOffset + dataSize);
+            const data = bytes.subarray(at, at + dataSize);
             this.compressedTexImage(target, level, internalFormat, width, height,
                 depth, data);
         };
@@ -2402,8 +2828,7 @@
             const dataSize = view.getUint32(at, true); at += 4;
             if (at - offset + dataSize > size)
                 throw new GLStreamError("compressed subimage record is truncated");
-            const data = bytes.subarray(at - bytes.byteOffset,
-                at - bytes.byteOffset + dataSize);
+            const data = bytes.subarray(at, at + dataSize);
             this.compressedTexSubImage(target, level, x, y, z, width, height,
                 depth, format, data);
         };
@@ -2465,28 +2890,42 @@
                 group.buffers.set(name, createBuffer(name));
             if (target === GL.ELEMENT_ARRAY_BUFFER)
                 this.current.elementArrayBuffer = name;
-            else
+            else if (target === GL.PIXEL_PACK_BUFFER)
+                this.current.pixelPackBuffer = name;
+            else if (target === GL.PIXEL_UNPACK_BUFFER)
+                this.current.pixelUnpackBuffer = name;
+            else if (target === GL.ARRAY_BUFFER)
                 this.current.arrayBuffer = name;
+            else
+                return this.refuse("glBindBuffer", "unknown buffer target",
+                    { target }, GL.INVALID_ENUM);
         });
+        /*
+         * {target, size, usage, data_size} then the contents. The header is
+         * four words: reading the data from 12 shifts every vertex in the
+         * buffer by one attribute and draws geometry that is subtly wrong
+         * rather than reporting anything.
+         */
         define("BUFFER_DATA", function(a, bytes, view, offset, size) {
-            if (size < 12) throw new GLStreamError("glBufferData record is short");
+            if (size < 16) throw new GLStreamError("glBufferData record is short");
             const target = view.getUint32(offset, true);
             const byteCount = view.getUint32(offset + 4, true);
             const usage = view.getUint32(offset + 8, true);
-            const dataSize = size - 12;
+            const dataSize = Math.min(view.getUint32(offset + 12, true), size - 16);
             const data = dataSize ?
-                bytes.subarray(offset - bytes.byteOffset + 12,
-                    offset - bytes.byteOffset + 12 + Math.min(dataSize, byteCount)) :
+                bytes.subarray(offset + 16,
+                    offset + 16 + Math.min(dataSize, byteCount)) :
                 null;
             this.bufferData(target, byteCount, usage, data);
         });
+        /* {target, offset, size, data_size} then the contents. */
         define("BUFFER_SUB_DATA", function(a, bytes, view, offset, size) {
-            if (size < 12) throw new GLStreamError("glBufferSubData record is short");
+            if (size < 16) throw new GLStreamError("glBufferSubData record is short");
             const target = view.getUint32(offset, true);
             const dstOffset = view.getUint32(offset + 4, true);
-            const byteCount = view.getUint32(offset + 8, true);
-            const data = bytes.subarray(offset - bytes.byteOffset + 12,
-                offset - bytes.byteOffset + 12 + byteCount);
+            const byteCount = Math.min(view.getUint32(offset + 8, true), size - 16);
+            const data = bytes.subarray(offset + 16,
+                offset + 16 + byteCount);
             this.bufferSubData(target, dstOffset, data);
         });
 
@@ -2503,7 +2942,8 @@
                 type: view.getUint32(offset + 4, true),
                 stride: view.getInt32(offset + 8, true),
                 offset: view.getUint32(offset + 12, true),
-                normalized: false,
+                normalized: which === "color" || which === "secondaryColor" ||
+                    which === "normal",
                 fromVBO: true,
             };
             this.setArrayPointer(which, array);
@@ -2654,6 +3094,34 @@
     const SYNC_STATUS_FAILED = 2;
     const READ_PIXELS_HEADER_SIZE = 32;
 
+    /* openglproxy's V86GL_PROGRAM_PARAMETER_ENV / _LOCAL. */
+    const PROGRAM_PARAMETER_ENV = 1;
+    const PROGRAM_PARAMETER_LOCAL = 2;
+
+    /*
+     * V86GL_LOCATION_KIND_* and V86GL_ACTIVE_KIND_*. Uniform is 1 in both --
+     * getting the pair the other way round is invisible until an application
+     * asks for a uniform location and is handed an attribute's.
+     */
+    const LOCATION_KIND_ATTRIB = 2;
+    const ACTIVE_KIND_ATTRIB = 2;
+
+    /*
+     * ARB program environment and local parameters are context state that the
+     * extension lets an application set before -- or without ever -- handing
+     * the target a program that compiles, so the storage is allocated with the
+     * program object rather than at the end of a successful assemble.
+     */
+    function arbParameterStorage(program, kind) {
+        if (!program.env) {
+            program.env = new Float32Array(
+                arbProgram.MAX_PROGRAM_PARAMETERS * 4);
+            program.local = new Float32Array(
+                arbProgram.MAX_PROGRAM_PARAMETERS * 4);
+        }
+        return kind === PROGRAM_PARAMETER_LOCAL ? program.local : program.env;
+    }
+
     function installProgramHandlers(table) {
         const define = definer(table);
 
@@ -2695,8 +3163,7 @@
             if (!shader)
                 return this.refuse("glShaderSource", "unknown shader",
                     { name }, GL.INVALID_VALUE);
-            shader.source = readCString(bytes,
-                offset - bytes.byteOffset + 8, length);
+            shader.source = readCString(bytes, offset + 8, length);
             shader.compiled = null;
         });
         define("COMPILE_SHADER", function(a) {
@@ -2724,8 +3191,7 @@
             const nameLength = view.getUint32(offset + 8, true);
             const program = this.current.shareGroup.programs.get(programName);
             if (!program) return;
-            const attribute = readCString(bytes,
-                offset - bytes.byteOffset + 12, nameLength);
+            const attribute = readCString(bytes, offset + 12, nameLength);
             // Takes effect at the next link, exactly as GL specifies.
             program.bindAttribLocations.set(attribute, location);
         });
@@ -2807,7 +3273,7 @@
             view.setUint32(offset + 8, encoded.length, true);
             const limit = Math.min(encoded.length, capacity);
             for (let i = 0; i < limit; ++i)
-                bytes[offset - bytes.byteOffset + 16 + i] = encoded[i];
+                bytes[offset + 16 + i] = encoded[i];
         }, { needsContext: false });
 
         define("QUERY_LOCATION", function(a, bytes, view, offset, size) {
@@ -2819,8 +3285,7 @@
                 view.setUint32(offset + 12, SYNC_STATUS_FAILED, true);
                 return;
             }
-            const name = readCString(bytes,
-                offset - bytes.byteOffset + 32, nameLength);
+            const name = readCString(bytes, offset + 32, nameLength);
             const info = this.queryLocation(kind, programName, name);
             if (!info) {
                 view.setUint32(offset + 12, SYNC_STATUS_FAILED, true);
@@ -2864,47 +3329,51 @@
             view.setUint32(offset + 16, value >>> 0, true);
         });
 
+        /*
+         * {kind, name, buf_size, status, length, data_size} then the text.
+         * The header is six words, so the string starts at 24 and not at 20:
+         * openglproxy reads it back at sizeof(request), and four bytes of slip
+         * here hand glGetShaderInfoLog a log that is missing its first word.
+         */
         define("QUERY_OBJECT_LOG", function(a, bytes, view, offset, size) {
-            if (size < 20) throw new GLStreamError("query-log record is short");
+            if (size < 24) throw new GLStreamError("query-log record is short");
             const kind = view.getUint32(offset, true);
             const name = view.getUint32(offset + 4, true);
             const capacity = view.getUint32(offset + 8, true);
             const text = this.queryObjectLog(kind, name);
-            if (text === null || 20 + capacity > size) {
+            if (text === null || 24 + capacity > size) {
                 view.setUint32(offset + 12, SYNC_STATUS_FAILED, true);
                 return;
             }
-            const encoded = [];
-            for (let i = 0; i < text.length && i < capacity - 1; ++i)
-                encoded.push(text.charCodeAt(i) & 0xff);
-            encoded.push(0);
             view.setUint32(offset + 12, SYNC_STATUS_OK, true);
-            view.setUint32(offset + 16, encoded.length, true);
-            for (let i = 0; i < encoded.length; ++i)
-                bytes[offset - bytes.byteOffset + 20 + i] = encoded[i];
+            view.setUint32(offset + 16,
+                writeCString(bytes, offset + 24, capacity,
+                    text), true);
         });
 
+        /*
+         * {kind, program, index, buf_size, status, length, size, type,
+         * data_size, reserved} then the name -- ten words, so the name starts
+         * at 40. length comes before size and type, which is the order
+         * glGetActiveUniform's own out-parameters are in.
+         */
         define("QUERY_ACTIVE", function(a, bytes, view, offset, size) {
-            if (size < 32) throw new GLStreamError("query-active record is short");
+            if (size < 40) throw new GLStreamError("query-active record is short");
             const kind = view.getUint32(offset, true);
             const programName = view.getUint32(offset + 4, true);
             const index = view.getUint32(offset + 8, true);
             const capacity = view.getUint32(offset + 12, true);
             const info = this.queryActive(kind, programName, index);
-            if (!info || 32 + capacity > size) {
+            if (!info || 40 + capacity > size) {
                 view.setUint32(offset + 16, SYNC_STATUS_FAILED, true);
                 return;
             }
             view.setUint32(offset + 16, SYNC_STATUS_OK, true);
-            view.setUint32(offset + 20, info.size >>> 0, true);
-            view.setUint32(offset + 24, info.type >>> 0, true);
-            const encoded = [];
-            for (let i = 0; i < info.name.length && i < capacity - 1; ++i)
-                encoded.push(info.name.charCodeAt(i) & 0xff);
-            encoded.push(0);
-            view.setUint32(offset + 28, encoded.length, true);
-            for (let i = 0; i < encoded.length; ++i)
-                bytes[offset - bytes.byteOffset + 32 + i] = encoded[i];
+            view.setUint32(offset + 20,
+                writeCString(bytes, offset + 40, capacity,
+                    info.name), true);
+            view.setUint32(offset + 24, info.size >>> 0, true);
+            view.setUint32(offset + 28, info.type >>> 0, true);
         });
 
         define("CHECK_FRAMEBUFFER_STATUS", function(a, bytes, view, offset, size) {
@@ -2924,7 +3393,7 @@
                 if (name && !group.arbPrograms.has(name))
                     group.arbPrograms.set(name, {
                         name, target: 0, source: "", compiled: null,
-                        env: null, local: null,
+                        env: null, local: null, variants: new Map(),
                     });
         });
         define("DELETE_PROGRAMS_ARB", function(a, bytes, view, offset, size) {
@@ -2937,7 +3406,8 @@
             const group = this.current.shareGroup;
             if (name && !group.arbPrograms.has(name))
                 group.arbPrograms.set(name, { name, target, source: "",
-                    compiled: null, env: null, local: null });
+                    compiled: null, env: null, local: null,
+                    variants: new Map() });
             if (target === GL.VERTEX_PROGRAM_ARB) this.current.arbVertexProgram = name;
             else this.current.arbFragmentProgram = name;
         });
@@ -2947,8 +3417,7 @@
             const length = view.getInt32(offset + 8, true);
             if (length < 0 || 16 + length > size)
                 throw new GLStreamError("ARB program record is truncated");
-            const source = readCString(bytes,
-                offset - bytes.byteOffset + 16, length);
+            const source = readCString(bytes, offset + 16, length);
             this.programStringARB(target, source);
         });
         define("PROGRAM_PARAMETER_FV_ARB", function(a, bytes, view, offset, size) {
@@ -2972,20 +3441,28 @@
         define("QUERY_PROGRAM_PARAMETER_DV_ARB", function(a, bytes, view, offset, size) {
             this.queryProgramParameterARB(view, offset, size, true);
         });
+        /*
+         * {target, pname, status, length, data_size, reserved} then the
+         * program text at 24. glGetProgramStringARB has no buffer size of its
+         * own -- the caller is expected to have asked GL_PROGRAM_LENGTH_ARB
+         * first -- so data_size is what the guest allocated and the text is
+         * written without a terminator, exactly as the extension specifies.
+         */
         define("QUERY_PROGRAM_STRING_ARB", function(a, bytes, view, offset, size) {
-            if (size < 16) throw new GLStreamError("ARB string record is short");
+            if (size < 24) throw new GLStreamError("ARB string record is short");
             const target = view.getUint32(offset, true);
-            const capacity = view.getUint32(offset + 8, true);
+            const capacity = view.getUint32(offset + 16, true);
             const program = this.arbProgramFor(target);
-            if (!program || 16 + capacity > size) {
-                view.setUint32(offset + 4, SYNC_STATUS_FAILED, true);
+            if (!program || 24 + capacity > size) {
+                view.setUint32(offset + 8, SYNC_STATUS_FAILED, true);
                 return;
             }
             const text = program.source;
-            view.setUint32(offset + 4, SYNC_STATUS_OK, true);
-            view.setUint32(offset + 12, text.length, true);
-            for (let i = 0; i < text.length && i < capacity; ++i)
-                bytes[offset - bytes.byteOffset + 16 + i] = text.charCodeAt(i) & 0xff;
+            const written = Math.min(text.length, capacity);
+            view.setUint32(offset + 8, SYNC_STATUS_OK, true);
+            view.setUint32(offset + 12, written, true);
+            for (let i = 0; i < written; ++i)
+                bytes[offset + 24 + i] = text.charCodeAt(i) & 0xff;
         });
     }
 
@@ -3021,8 +3498,7 @@
                 enabled, size: enabled ? size : 0, type: enabled ? type : 0,
                 stride: enabled ? stride : 0,
                 data: enabled && dataSize ?
-                    bytes.subarray(at - bytes.byteOffset,
-                        at - bytes.byteOffset + dataSize) : null,
+                    bytes.subarray(at, at + dataSize) : null,
             });
             at += dataSize;
         }
@@ -3046,8 +3522,7 @@
             blocks.push({
                 index, normalized, enabled, size, type, stride,
                 data: enabled && dataSize ?
-                    bytes.subarray(at - bytes.byteOffset,
-                        at - bytes.byteOffset + dataSize) : null,
+                    bytes.subarray(at, at + dataSize) : null,
             });
             at += dataSize;
         }
@@ -3063,17 +3538,10 @@
             const mode = view.getUint32(at, true); at += 4;
             const count = view.getInt32(at, true); at += 4;
             let indexType = 0;
-            let indexData = null;
+            let indexDataSize = 0;
             if (indexed) {
                 indexType = view.getUint32(at, true); at += 4;
-                const indexDataSize = view.getUint32(at, true); at += 4;
-                if (at + indexDataSize > end)
-                    throw new GLStreamError("index data is truncated");
-                indexData = indexDataSize ?
-                    bytes.subarray(at - bytes.byteOffset,
-                        at - bytes.byteOffset + indexDataSize) : null;
-                // The magic word sits before the index data in the MT layout,
-                // so the header is read first and the indices skipped after.
+                indexDataSize = view.getUint32(at, true); at += 4;
             }
             let blocksAt;
             let texUnitCount = 0;
@@ -3081,9 +3549,21 @@
             let hasFog = false;
             let genericCount = 0;
             let arrayCount;
-
+            /*
+             * Where the index data starts depends on the layout, which is why
+             * it cannot be sliced while reading the fixed header. In the
+             * multitexture layout the guest writes its own header -- magic,
+             * the encoded array set, the client-active unit, and for the GL2
+             * opcodes a generic-attribute count -- *between* the fixed header
+             * and the indices. Slicing at the end of the fixed header instead
+             * read the magic word as the first two indices: every
+             * glDrawElements drew the wrong triangles, and did it quietly,
+             * because the block offset below was computed correctly and
+             * nothing downstream range-checks an index.
+             */
             const magicAt = indexed ? offset + 16 : offset + 8;
             const magic = magicAt + 4 <= end ? view.getUint32(magicAt, true) : 0;
+            let indexAt;
             if (magic === CLIENT_ARRAY_MT_MAGIC) {
                 const encoded = view.getUint32(magicAt + 4, true);
                 hasSecondary = (encoded & CLIENT_ARRAY_MT_SECONDARY_COLOR_BIT) !== 0;
@@ -3097,19 +3577,27 @@
                     genericCount = view.getUint32(headerEnd, true);
                     headerEnd += 4;
                 }
-                blocksAt = indexed ?
-                    headerEnd + (indexData ? indexData.byteLength : 0) : headerEnd;
+                indexAt = headerEnd;
                 arrayCount = 3 + texUnitCount + (hasSecondary ? 1 : 0) +
                     (hasFog ? 1 : 0);
             } else {
                 // The pre-multitexture layout: four blocks in vertex, colour,
-                // texcoord, normal order. No shipping guest emits it any more,
-                // but the state journal may still hold one.
-                blocksAt = indexed ?
-                    offset + 16 + (indexData ? indexData.byteLength : 0) :
-                    offset + 8;
+                // texcoord, normal order, with the indices straight after the
+                // fixed header. No shipping guest emits it any more, but the
+                // state journal may still hold one.
+                indexAt = offset + 16;
                 arrayCount = 4;
             }
+
+            let indexData = null;
+            if (indexed) {
+                if (indexAt + indexDataSize > end)
+                    throw new GLStreamError("index data is truncated");
+                indexData = indexDataSize ?
+                    bytes.subarray(indexAt, indexAt + indexDataSize) : null;
+            }
+            blocksAt = indexed ? indexAt + indexDataSize :
+                (magic === CLIENT_ARRAY_MT_MAGIC ? indexAt : offset + 8);
 
             const parsed = parseArrayBlocks(bytes, view, blocksAt, end, arrayCount);
             if (!parsed) throw new GLStreamError("client array blocks are truncated");
@@ -3215,8 +3703,7 @@
         define("POLYGON_STIPPLE", function(a, bytes, view, offset, size) {
             if (size < 128) throw new GLStreamError("polygon stipple is short");
             this.current.polygonStipple.set(
-                bytes.subarray(offset - bytes.byteOffset,
-                    offset - bytes.byteOffset + 128));
+                bytes.subarray(offset, offset + 128));
             this.polygonStippleTexture = null;
         });
         const pixelMap = () => function(a, bytes, view, offset, size) {
@@ -3565,6 +4052,20 @@
             case GL.BLUE_BIAS: t.blueBias = value; return;
             case GL.ALPHA_BIAS: t.alphaBias = value; return;
             case GL.MAP_COLOR: t.mapColor = value !== 0; return;
+            case GL.POST_COLOR_MATRIX_RED_SCALE_SGI:
+            case GL.POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+            case GL.POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+            case GL.POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+                t.postColorMatrixScale[pname -
+                    GL.POST_COLOR_MATRIX_RED_SCALE_SGI] = value;
+                return;
+            case GL.POST_COLOR_MATRIX_RED_BIAS_SGI:
+            case GL.POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+            case GL.POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+            case GL.POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+                t.postColorMatrixBias[pname -
+                    GL.POST_COLOR_MATRIX_RED_BIAS_SGI] = value;
+                return;
             default: return;    // depth/stencil scales have no effect here
             }
         },
@@ -3700,9 +4201,19 @@
             const face = CUBE_FACE_INDEX[target] || 0;
 
             let pixels = null;
+            let pixelLayout = {
+                bytesPerTexel: storage.palettised ? 1 :
+                    (storage.gpu === "rgba16float" ? 8 :
+                        (storage.gpu === "rgba32float" ? 16 :
+                            (storage.gpu === "depth16unorm" ? 2 : 4))),
+                componentType: storage.gpu === "rgba16float" ? "f16" :
+                    (storage.gpu === "depth16unorm" ? "u16" :
+                        (storage.gpu === "rgba32float" || storage.depth ? "f32" : "u8")),
+                componentCount: storage.palettised || storage.depth ? 1 : 4,
+            };
             if (data && data.byteLength) {
-                pixels = convertPixels(data, 0, width, height,
-                    depth, format, type, storage.base, {
+                const converted = convertPixelsForStorage(data, 0, width, height,
+                    depth, format, type, storage, {
                         rowLength: this.current.pixelStore.unpackRowLength,
                         skipPixels: this.current.pixelStore.unpackSkipPixels,
                         skipRows: this.current.pixelStore.unpackSkipRows,
@@ -3710,15 +4221,20 @@
                         imageHeight: this.current.pixelStore.unpackImageHeight,
                         alignment: this.current.pixelStore.unpackAlignment,
                     });
-                if (!pixels)
+                if (!converted)
                     return this.refuse("glTexImage", "unsupported pixel format",
                         { format, type, internalFormat }, GL.INVALID_ENUM);
+                pixels = converted.pixels;
+                pixelLayout = converted;
             }
 
             this.storeLevel(texture, kind, level, face, {
                 width, height, depth,
                 gpuFormat: storage.gpu, base: storage.base,
                 compressed: false, pixels,
+                bytesPerTexel: pixelLayout.bytesPerTexel,
+                componentType: pixelLayout.componentType,
+                componentCount: pixelLayout.componentCount,
             });
             ++this.stats.textureUploads;
             if (pixels) this.stats.textureBytes += pixels.byteLength;
@@ -3742,8 +4258,13 @@
                 return this.refuse("glTexSubImage",
                     "uncompressed update of a compressed level", { level },
                     GL.INVALID_OPERATION);
-            const pixels = convertPixels(data, 0, width, height,
-                depth, format, type, slot.base, {
+            const storage = { gpu: slot.gpuFormat, base: slot.base,
+                float: slot.componentType === "f16" ||
+                    (slot.componentType === "f32" && slot.componentCount === 4),
+                depth: slot.base === "DEPTH",
+                palettised: slot.base === "COLOR_INDEX" };
+            const converted = convertPixelsForStorage(data, 0, width, height,
+                depth, format, type, storage, {
                     rowLength: this.current.pixelStore.unpackRowLength,
                     skipPixels: this.current.pixelStore.unpackSkipPixels,
                     skipRows: this.current.pixelStore.unpackSkipRows,
@@ -3751,20 +4272,23 @@
                     imageHeight: this.current.pixelStore.unpackImageHeight,
                     alignment: this.current.pixelStore.unpackAlignment,
                 });
-            if (!pixels)
+            if (!converted)
                 return this.refuse("glTexSubImage", "unsupported pixel format",
                     { format, type }, GL.INVALID_ENUM);
             // Patch the shadow copy; the GPU upload happens with the rest of
             // the level so a run of subimage calls costs one writeTexture.
             for (let sz = 0; sz < depth; ++sz) {
                 for (let sy = 0; sy < height; ++sy) {
+                    const bytesPerTexel = slot.bytesPerTexel || 4;
                     const dstRow = (((z + sz) * slot.height + (y + sy)) *
-                        slot.width + x) * 4;
-                    const srcRow = ((sz * height + sy) * width) * 4;
-                    if (dstRow < 0 || dstRow + width * 4 > slot.pixels.length)
+                        slot.width + x) * bytesPerTexel;
+                    const srcRow = ((sz * height + sy) * width) * bytesPerTexel;
+                    if (dstRow < 0 ||
+                            dstRow + width * bytesPerTexel > slot.pixels.length)
                         continue;
                     slot.pixels.set(
-                        pixels.subarray(srcRow, srcRow + width * 4), dstRow);
+                        converted.pixels.subarray(srcRow,
+                            srcRow + width * bytesPerTexel), dstRow);
                 }
             }
             texture.dirty = true;
@@ -3789,6 +4313,7 @@
                 this.storeLevel(texture, kind, level, face, {
                     width, height, depth: 1, gpuFormat: "rgba8unorm",
                     base: storage.base, compressed: false, pixels,
+                    bytesPerTexel: 4, componentType: "u8", componentCount: 4,
                 });
                 return;
             }
@@ -3922,7 +4447,13 @@
             if (!shapeChanged && !texture.dirty) return texture.gpuTexture;
 
             if (shapeChanged) {
-                this.retire(texture.gpuTexture);
+                const oldTexture = texture.gpuTexture;
+                const oldWidth = texture.gpuWidth || 0;
+                const oldHeight = texture.gpuHeight || 0;
+                const oldDepth = texture.gpuDepth || 1;
+                const oldLayers = texture.gpuLayers || 1;
+                const oldLevels = texture.gpuLevels || 0;
+                const oldFormat = texture.gpuFormat;
                 texture.viewCache.clear();
                 const dimension = texture.kind === "3D" ? "3d" : "2d";
                 texture.gpuTexture = this.device.createTexture({
@@ -3944,6 +4475,37 @@
                 texture.gpuLayers = wanted.layers;
                 texture.gpuLevels = wanted.levelCount;
                 texture.gpuFormat = wanted.format;
+
+                // A level produced by CopyTexImage/FBO rendering has no CPU
+                // shadow.  Growing the texture to add mip levels must preserve
+                // those GPU-authored texels before the old allocation retires.
+                if (oldTexture && oldFormat === wanted.format &&
+                        oldWidth === wanted.width && oldHeight === wanted.height &&
+                        oldDepth === wanted.depth) {
+                    this.endPass();
+                    const encoder = this.ensureEncoder();
+                    const copyLevels = Math.min(oldLevels, wanted.levelCount);
+                    const copyLayers = Math.min(oldLayers, wanted.layers);
+                    for (let layer = 0; layer < copyLayers; ++layer) {
+                        const list = texture.levels[layer] || [];
+                        for (let level = 0; level < copyLevels; ++level) {
+                            const slot = list[level];
+                            if (!slot || slot.pixels) continue;
+                            encoder.copyTextureToTexture(
+                                { texture: oldTexture, mipLevel: level,
+                                  origin: { x: 0, y: 0,
+                                    z: texture.kind === "3D" ? 0 : layer } },
+                                { texture: texture.gpuTexture, mipLevel: level,
+                                  origin: { x: 0, y: 0,
+                                    z: texture.kind === "3D" ? 0 : layer } },
+                                { width: Math.max(1, wanted.width >> level),
+                                  height: Math.max(1, wanted.height >> level),
+                                  depthOrArrayLayers: texture.kind === "3D" ?
+                                    Math.max(1, wanted.depth >> level) : 1 });
+                        }
+                    }
+                }
+                this.retire(oldTexture);
             }
 
             for (let layer = 0; layer < layers; ++layer) {
@@ -3960,7 +4522,8 @@
 
         writeTextureLevel(texture, slot, level, layer) {
             const bytesPerRow = slot.compressed ?
-                Math.ceil(slot.width / 4) * slot.blockBytes : slot.width * 4;
+                Math.ceil(slot.width / 4) * slot.blockBytes :
+                slot.width * (slot.bytesPerTexel || 4);
             const rowsPerImage = slot.compressed ?
                 Math.ceil(slot.height / 4) : slot.height;
             const origin = texture.kind === "3D" ?
@@ -3991,13 +4554,14 @@
 
         generateMipmapFor(texture) {
             const layers = texture.kind === "Cube" ? 6 : 1;
+            let needsGPUGeneration = false;
             for (let layer = 0; layer < layers; ++layer) {
                 const list = texture.levels[layer];
-                if (!list || !list[0] || !list[0].pixels) continue;
+                if (!list || !list[0]) continue;
                 const base = list[0];
                 if (base.compressed) {
                     this.refuse("glGenerateMipmap",
-                        "a compressed level cannot be downsampled on the CPU",
+                        "a compressed level cannot be downsampled",
                         { name: texture.name }, GL.INVALID_OPERATION);
                     continue;
                 }
@@ -4008,20 +4572,26 @@
                     const height = Math.max(1, source.height >> 1);
                     const depth = texture.kind === "3D" ?
                         Math.max(1, source.depth >> 1) : 1;
-                    const pixels = downsampleBox(source.pixels, source.width,
-                        source.height, source.depth, width, height, depth);
+                    const pixels = source.pixels ?
+                        downsampleBoxStorage(source, width, height, depth) : null;
                     const slot = {
                         width, height, depth, gpuFormat: base.gpuFormat,
                         base: base.base, compressed: false, pixels,
+                        bytesPerTexel: base.bytesPerTexel || 4,
+                        componentType: base.componentType || "u8",
+                        componentCount: base.componentCount || 4,
                     };
                     list[level] = slot;
                     source = slot;
+                    if (!pixels) needsGPUGeneration = true;
                 }
                 list.length = levels;
             }
             texture.dirty = true;
             texture.viewCache.clear();
             this.invalidateBindGroups();
+            if (needsGPUGeneration)
+                this.generateTextureMipmapsGPU(texture);
         },
     });
 
@@ -4068,6 +4638,61 @@
         return out;
     }
 
+    function downsampleBoxStorage(source, dstW, dstH, dstD) {
+        const srcW = source.width, srcH = source.height, srcD = source.depth || 1;
+        const componentType = source.componentType || "u8";
+        const componentCount = source.componentCount || 4;
+        const bytesPerTexel = source.bytesPerTexel || 4;
+        if (componentType === "u8" && componentCount === 4)
+            return downsampleBox(source.pixels, srcW, srcH, srcD,
+                dstW, dstH, dstD);
+        const out = new Uint8Array(dstW * dstH * dstD * bytesPerTexel);
+        const srcView = new DataView(source.pixels.buffer,
+            source.pixels.byteOffset, source.pixels.byteLength);
+        const dstView = new DataView(out.buffer);
+        const read = (texel, component) => {
+            const at = texel * bytesPerTexel;
+            if (componentType === "f16")
+                return halfToFloat(srcView.getUint16(at + component * 2, true));
+            if (componentType === "f32")
+                return srcView.getFloat32(at + component * 4, true);
+            if (componentType === "u16")
+                return srcView.getUint16(at + component * 2, true);
+            return srcView.getUint8(at + component);
+        };
+        const write = (texel, component, value) => {
+            const at = texel * bytesPerTexel;
+            if (componentType === "f16")
+                dstView.setUint16(at + component * 2, floatToHalf(value), true);
+            else if (componentType === "f32")
+                dstView.setFloat32(at + component * 4, value, true);
+            else if (componentType === "u16")
+                dstView.setUint16(at + component * 2, Math.round(value), true);
+            else dstView.setUint8(at + component, Math.round(value));
+        };
+        const xScale = srcW / dstW, yScale = srcH / dstH, zScale = srcD / dstD;
+        for (let z = 0; z < dstD; ++z) for (let y = 0; y < dstH; ++y)
+            for (let x = 0; x < dstW; ++x) {
+                const x0 = Math.floor(x * xScale), y0 = Math.floor(y * yScale);
+                const z0 = Math.floor(z * zScale);
+                const x1 = Math.min(srcW - 1, x0 + (xScale > 1 ? 1 : 0));
+                const y1 = Math.min(srcH - 1, y0 + (yScale > 1 ? 1 : 0));
+                const z1 = Math.min(srcD - 1, z0 + (zScale > 1 ? 1 : 0));
+                const destination = (z * dstH + y) * dstW + x;
+                for (let c = 0; c < componentCount; ++c) {
+                    let sum = 0, samples = 0;
+                    for (const sz of z0 === z1 ? [z0] : [z0, z1])
+                        for (const sy of y0 === y1 ? [y0] : [y0, y1])
+                            for (const sx of x0 === x1 ? [x0] : [x0, x1]) {
+                                sum += read((sz * srcH + sy) * srcW + sx, c);
+                                ++samples;
+                            }
+                    write(destination, c, sum / samples);
+                }
+            }
+        return out;
+    }
+
     /* ================================================================== */
     /* Executor: buffers and programs                                     */
     /* ================================================================== */
@@ -4076,8 +4701,10 @@
 
         bufferFor(target) {
             const s = this.current;
-            const name = target === GL.ELEMENT_ARRAY_BUFFER ?
-                s.elementArrayBuffer : s.arrayBuffer;
+            const name = target === GL.ELEMENT_ARRAY_BUFFER ? s.elementArrayBuffer :
+                (target === GL.PIXEL_PACK_BUFFER ? s.pixelPackBuffer :
+                    (target === GL.PIXEL_UNPACK_BUFFER ? s.pixelUnpackBuffer :
+                        s.arrayBuffer));
             if (!name) return null;
             return s.shareGroup.buffers.get(name) || null;
         },
@@ -4322,7 +4949,7 @@
             const program = this.current.shareGroup.programs.get(programName);
             if (!program || !program.linked || !program.link) return null;
             const reflection = program.link.reflection;
-            if (kind === 1) {
+            if (kind === LOCATION_KIND_ATTRIB) {
                 // glGetAttribLocation
                 const attribute = reflection.attributes.find(a => a.name === name);
                 if (!attribute) return { location: -1, type: 0, size: 0 };
@@ -4435,11 +5062,12 @@
             return program ? program.log : null;
         },
 
+        /* openglproxy's V86GL_ACTIVE_KIND_UNIFORM is 1 and _ATTRIB is 2. */
         queryActive(kind, programName, index) {
             const program = this.current.shareGroup.programs.get(programName);
             if (!program || !program.link) return null;
             const reflection = program.link.reflection;
-            if (kind === 1) {
+            if (kind === ACTIVE_KIND_ATTRIB) {
                 const attribute = reflection.attributes[index];
                 if (!attribute) return null;
                 return { name: attribute.name, size: 1,
@@ -4723,6 +5351,30 @@
                     { mode }, GL.INVALID_ENUM);
             const program = this.currentProgramObject();
             const wanted = this.wantedAttributes(program);
+            let sourceIndices = null;
+            let packedVertexCount = count;
+            let drawIndexInfo = indexInfo;
+            if (indexInfo && indexInfo.data) {
+                const indices = readIndices(indexInfo.type, indexInfo.data, count);
+                const maxIndex = maximumIndex(indices);
+                const expandIndexedPoints = mode === GL.POINTS &&
+                    (this.current.point.size !== 1 ||
+                        this.current.enabled.has(GL.POINT_SPRITE));
+                if (expandIndexedPoints) {
+                    sourceIndices = indices;
+                    packedVertexCount = count;
+                    drawIndexInfo = null;
+                } else {
+                    packedVertexCount = maxIndex + 1;
+                }
+            }
+
+            const arbVertexOn = this.current.enabled.has(GL.VERTEX_PROGRAM_ARB);
+            if (!program && !arbVertexOn &&
+                    (!arrays.vertex || !arrays.vertex.data))
+                return this.refuse("glDrawArrays",
+                    "the fixed pipeline needs a vertex array", { mode },
+                    GL.INVALID_OPERATION);
 
             // Every array is widened to float32 and interleaved into one ring
             // slice. Packing costs a pass over the data, but it is the only
@@ -4731,21 +5383,34 @@
             const layout = [];
             let stride = 0;
             for (const entry of wanted) {
-                const block = arrays[entry.source];
-                if (!block || !block.data) continue;
-                const components = entry.components ||
-                    Math.min(4, Math.max(1, block.size || 4));
-                layout.push({ location: entry.location, block, components,
-                              offsetFloats: stride });
+                const source = this.resolveAttributeSource(arrays, entry,
+                    block => !!(block && block.data));
+                const block = arrays[source];
+                const constant = (!block || !block.data) ?
+                    this.currentAttributeValue(source, entry.location) : null;
+                if ((!block || !block.data) && !constant) continue;
+                const components = entry.components || (block ?
+                    Math.min(4, Math.max(1, block.size || 4)) : constant.length);
+                layout.push({ location: entry.location, source,
+                              block, constant, components, offsetFloats: stride });
                 stride += components;
             }
             if (!layout.length)
                 return this.refuse("glDrawArrays", "no vertex array is enabled",
                     { mode }, GL.INVALID_OPERATION);
 
-            const packed = new Float32Array(stride * count);
+            const packed = new Float32Array(stride * packedVertexCount);
             for (const item of layout) {
                 const block = item.block;
+                if (!block || !block.data) {
+                    for (let v = 0; v < packedVertexCount; ++v) {
+                        const dst = v * stride + item.offsetFloats;
+                        for (let c = 0; c < item.components; ++c)
+                            packed[dst + c] = c < item.constant.length ?
+                                item.constant[c] : (c === 3 ? 1 : 0);
+                    }
+                    continue;
+                }
                 const view = new DataView(block.data.buffer,
                     block.data.byteOffset, block.data.byteLength);
                 const size = Math.max(1, block.size || item.components);
@@ -4756,10 +5421,10 @@
                     return;
                 }
                 const srcStride = block.stride || size * elementBytes;
-                const normalized = block.type !== GL.FLOAT &&
-                    block.type !== GL.DOUBLE;
-                for (let v = 0; v < count; ++v) {
-                    const src = v * srcStride;
+                const normalized = this.arrayIsNormalized(item.source, block);
+                for (let v = 0; v < packedVertexCount; ++v) {
+                    const sourceVertex = sourceIndices ? sourceIndices[v] : v;
+                    const src = sourceVertex * srcStride;
                     const dst = v * stride + item.offsetFloats;
                     for (let c = 0; c < item.components; ++c) {
                         if (c < size && src + (c + 1) * elementBytes <=
@@ -4788,12 +5453,45 @@
             }];
 
             let index = null;
-            if (indexInfo && indexInfo.data) {
-                index = this.uploadIndices(mode, indexInfo.type, indexInfo.data,
+            if (drawIndexInfo && drawIndexInfo.data) {
+                index = this.uploadIndices(mode, drawIndexInfo.type, drawIndexInfo.data,
                     count);
                 if (!index) return;
             }
             this.issueDraw({ mode, vertexCount: count, buffers, index });
+        },
+
+        /* Which of the two aliased slots this attribute's array actually
+         * arrived in. `usable` differs between the packed and VBO paths, so
+         * the caller decides what counts as present. */
+        resolveAttributeSource(arrays, entry, usable) {
+            if (!entry.alias || !arrays) return entry.source;
+            if (usable(arrays[entry.source])) return entry.source;
+            if (usable(arrays[entry.alias])) return entry.alias;
+            return entry.source;
+        },
+
+        arrayIsNormalized(source, block) {
+            if (source.indexOf("generic") === 0) return !!block.normalized;
+            return source === "color" || source === "secondaryColor" ||
+                source === "normal";
+        },
+
+        currentAttributeValue(source, location) {
+            const s = this.current;
+            if (source === "color") return s.current.color;
+            if (source === "secondaryColor") return s.current.secondaryColor;
+            if (source === "normal") return s.current.normal;
+            if (source === "fogCoord") return [s.current.fogCoord];
+            const tex = /^texCoord(\d+)$/.exec(source);
+            if (tex) return s.current.texCoord[Number(tex[1])] || null;
+            if (source.indexOf("generic") === 0) {
+                const index = Number(source.substring(7));
+                return s.genericAttribs[index] ? s.genericAttribs[index].value : null;
+            }
+            if (location >= 0 && location < s.genericAttribs.length)
+                return s.genericAttribs[location].value;
+            return null;
         },
 
         /* Which attributes the current pipeline wants, and where each comes
@@ -4804,22 +5502,43 @@
                 return program.link.reflection.attributes.map(a => ({
                     location: a.location,
                     components: a.components,
-                    source: attributeSourceName(a.name),
+                    source: attributeSourceName(a.name, a.location),
                 }));
+            }
+            const s = this.current;
+            if (s.enabled.has(GL.VERTEX_PROGRAM_ARB)) {
+                const arb = this.arbProgramFor(GL.VERTEX_PROGRAM_ARB);
+                if (arb && arb.compiled && arb.compiled.ok) {
+                    return arb.compiled.reflection.attributes.map(a => {
+                        const source = attributeSourceName(a.name || a.field,
+                            a.location);
+                        // Only the ARB path carries an alias: GL defines the
+                        // aliasing for vertex program mode, and a GLSL program
+                        // names its own attributes.
+                        return { location: a.location,
+                                 components: a.components, source,
+                                 alias: aliasedAttributeSource(source) };
+                    });
+                }
             }
             const wanted = [{ location: ATTR.gl_Vertex, components: 4,
                               source: "vertex" }];
-            const s = this.current;
             wanted.push({ location: ATTR.gl_Color, components: 4, source: "color" });
-            wanted.push({ location: ATTR.gl_Normal, components: 3, source: "normal" });
-            wanted.push({ location: ATTR.gl_SecondaryColor, components: 4,
-                          source: "secondaryColor" });
-            wanted.push({ location: ATTR.gl_FogCoord, components: 1,
-                          source: "fogCoord" });
-            for (let unit = 0; unit < MAX_TEXTURE_COORDS; ++unit)
+            if (s.enabled.has(GL.LIGHTING))
+                wanted.push({ location: ATTR.gl_Normal, components: 3,
+                              source: "normal" });
+            if (s.enabled.has(GL.COLOR_SUM) ||
+                    s.lightModel.colorControl === GL.SEPARATE_SPECULAR_COLOR)
+                wanted.push({ location: ATTR.gl_SecondaryColor, components: 4,
+                              source: "secondaryColor" });
+            if (s.enabled.has(GL.FOG) && s.fog.coordSource === GL.FOG_COORD)
+                wanted.push({ location: ATTR.gl_FogCoord, components: 1,
+                              source: "fogCoord" });
+            for (let unit = 0; unit < MAX_TEXTURE_COORDS; ++unit) {
+                if (!this.effectiveTarget(s.textureUnits[unit])) continue;
                 wanted.push({ location: ATTR.gl_MultiTexCoord0 + unit,
                               components: 4, source: "texCoord" + unit });
-            void s;
+            }
             return wanted;
         },
 
@@ -4828,14 +5547,30 @@
         drawFromBuffers(mode, first, count, indexInfo) {
             if (count <= 0) return;
             const s = this.current;
+            if (indexInfo && mode === GL.POINTS &&
+                    (s.point.size !== 1 || s.enabled.has(GL.POINT_SPRITE)))
+                return this.drawFromShadowBuffers(mode, first, count, indexInfo,
+                    this.wantedAttributes(this.currentProgramObject()));
             const program = this.currentProgramObject();
             const wanted = this.wantedAttributes(program);
             const buffers = [];
             const byBuffer = new Map();
+            const constants = [];
 
             for (const entry of wanted) {
-                const array = s.arrays && s.arrays[entry.source];
-                if (!array || !array.enabled || !array.buffer) continue;
+                const source = this.resolveAttributeSource(s.arrays, entry,
+                    a => !!(a && a.enabled && a.buffer));
+                const array = s.arrays && s.arrays[source];
+                if (!array || !array.enabled || !array.buffer) {
+                    const value = this.currentAttributeValue(source,
+                        entry.location);
+                    if (value) {
+                        constants.push({ entry, value });
+                        continue;
+                    }
+                    return this.drawFromShadowBuffers(mode, first, count,
+                        indexInfo, wanted);
+                }
                 const buffer = s.shareGroup.buffers.get(array.buffer);
                 if (!buffer || !buffer.gpuBuffer) continue;
                 const size = Math.max(1, array.size || entry.components);
@@ -4849,6 +5584,24 @@
                 const stride = array.stride ||
                     size * componentBytes(array.type);
                 if (stride % 4 !== 0 || array.offset % 4 !== 0)
+                    return this.drawFromShadowBuffers(mode, first, count,
+                        indexInfo, wanted);
+                const shaderComponents = entry.components || size;
+                const attributeBytes = size * componentBytes(array.type);
+                /*
+                 * GL widens a size-2/3 array to the four-component attribute
+                 * consumed by an ARB program, supplying (0, 1) for the absent
+                 * components. WebGPU vertex formats do not perform that GL
+                 * conversion, and their attribute offset must describe one
+                 * element inside arrayStride. Pack these legal GL layouts from
+                 * the buffer's shadow copy instead of creating a mismatched or
+                 * invalid WebGPU vertex layout. The glview 1.5 test uses vec3
+                 * positions and vec2 texture coordinates with vec4 ARB inputs.
+                 */
+                if ((s.enabled.has(GL.VERTEX_PROGRAM_ARB) &&
+                            size !== shaderComponents) ||
+                        array.offset >= stride ||
+                        array.offset + attributeBytes > stride)
                     return this.drawFromShadowBuffers(mode, first, count,
                         indexInfo, wanted);
                 let group = byBuffer.get(buffer.gpuBuffer);
@@ -4871,6 +5624,30 @@
                 }
                 group.attributes.push({ location: entry.location, format,
                                         offset: array.offset });
+            }
+
+            if (constants.length) {
+                let components = 0;
+                for (const item of constants)
+                    components += item.entry.components || item.value.length;
+                const data = new Float32Array(components);
+                const attributes = [];
+                let at = 0;
+                for (const item of constants) {
+                    const count = item.entry.components || item.value.length;
+                    for (let c = 0; c < count; ++c)
+                        data[at + c] = c < item.value.length ? item.value[c] :
+                            (c === 3 ? 1 : 0);
+                    attributes.push({ location: item.entry.location,
+                        format: "float32" + (count > 1 ? "x" + count : ""),
+                        offset: at * 4 });
+                    at += count;
+                }
+                const slice = this.uploadVertices(new Uint8Array(data.buffer));
+                if (!slice) return;
+                buffers.push({ gpuBuffer: this.vertexRing,
+                    baseOffset: slice.offset, stride: components * 4,
+                    stepMode: "instance", attributes });
             }
 
             if (!buffers.length)
@@ -4905,22 +5682,7 @@
         drawFromShadowBuffers(mode, first, count, indexInfo, wanted) {
             const s = this.current;
             const arrays = Object.create(null);
-            for (const entry of wanted) {
-                const array = s.arrays && s.arrays[entry.source];
-                if (!array || !array.enabled) continue;
-                const buffer = array.buffer ?
-                    s.shareGroup.buffers.get(array.buffer) : null;
-                if (!buffer || !buffer.shadow) continue;
-                const size = Math.max(1, array.size || entry.components);
-                const stride = array.stride || size * componentBytes(array.type);
-                const start = array.offset + first * stride;
-                arrays[entry.source] = {
-                    enabled: true, size, type: array.type, stride,
-                    data: buffer.shadow.subarray(start,
-                        Math.min(buffer.shadow.byteLength,
-                            start + count * stride)),
-                };
-            }
+            let arrayVertexCount = count;
             let indices = null;
             if (indexInfo) {
                 const buffer = s.shareGroup.buffers.get(s.elementArrayBuffer);
@@ -4932,7 +5694,28 @@
                         data: buffer.shadow.subarray(indexInfo.bufferOffset,
                             indexInfo.bufferOffset + count * elementBytes),
                     };
+                    const values = readIndices(indexInfo.type, indices.data, count);
+                    arrayVertexCount = values.length ? maximumIndex(values) + 1 : 0;
                 }
+            }
+            for (const entry of wanted) {
+                const source = this.resolveAttributeSource(s.arrays, entry,
+                    a => !!(a && a.enabled && a.buffer));
+                const array = s.arrays && s.arrays[source];
+                if (!array || !array.enabled) continue;
+                const buffer = array.buffer ?
+                    s.shareGroup.buffers.get(array.buffer) : null;
+                if (!buffer || !buffer.shadow) continue;
+                const size = Math.max(1, array.size || entry.components);
+                const stride = array.stride || size * componentBytes(array.type);
+                const start = array.offset + first * stride;
+                arrays[source] = {
+                    enabled: true, size, type: array.type, stride,
+                    normalized: array.normalized,
+                    data: buffer.shadow.subarray(start,
+                        Math.min(buffer.shadow.byteLength,
+                            start + arrayVertexCount * stride)),
+                };
             }
             this.drawPacked(mode, count, arrays, indices);
         },
@@ -4998,7 +5781,35 @@
         },
     });
 
-    function attributeSourceName(name) {
+    /*
+     * ARB_vertex_program section 2.14.3 aliases the conventional vertex
+     * attributes onto generic slots 0-5 and 8-15: glVertexPointer's array and
+     * glVertexAttribPointerARB(0, ...) name the same attribute, and a program
+     * may spell it either way. The guest sends whichever the application used,
+     * so an attribute has to accept its alias -- otherwise a program written
+     * against vertex.position and fed generic attribute 0 read the generic
+     * attribute's (0, 0, 0, 1) default for every vertex and drew nothing, with
+     * no GL error to say why.
+     */
+    const GENERIC_ATTRIB_ALIAS = {
+        vertex: 0, weight: 1, normal: 2, color: 3,
+        secondaryColor: 4, fogCoord: 5,
+    };
+    for (let unit = 0; unit < MAX_TEXTURE_COORDS; ++unit)
+        GENERIC_ATTRIB_ALIAS["texCoord" + unit] = 8 + unit;
+
+    const CONVENTIONAL_ATTRIB_ALIAS = {};
+    for (const name of Object.keys(GENERIC_ATTRIB_ALIAS))
+        CONVENTIONAL_ATTRIB_ALIAS["generic" + GENERIC_ATTRIB_ALIAS[name]] = name;
+
+    function aliasedAttributeSource(source) {
+        if (source.indexOf("generic") === 0)
+            return CONVENTIONAL_ATTRIB_ALIAS[source] || null;
+        const index = GENERIC_ATTRIB_ALIAS[source];
+        return index === undefined ? null : "generic" + index;
+    }
+
+    function attributeSourceName(name, location) {
         const ATTR_SOURCES = {
             gl_Vertex: "vertex", gl_Normal: "normal", gl_Color: "color",
             gl_SecondaryColor: "secondaryColor", gl_FogCoord: "fogCoord",
@@ -5006,7 +5817,10 @@
         if (ATTR_SOURCES[name]) return ATTR_SOURCES[name];
         const texMatch = /^gl_MultiTexCoord(\d)$/.exec(name);
         if (texMatch) return "texCoord" + texMatch[1];
-        return name;      // a generic attribute keeps its own name
+        // Generic arrays are selected by attribute index, not by the spelling
+        // of the shader variable. glBindAttribLocation may assign any user name
+        // to a location, while the guest record necessarily carries that index.
+        return "generic" + location;
     }
 
     function vertexFormatFor(type, size, normalized) {
@@ -5035,6 +5849,13 @@
             }
         }
         return out;
+    }
+
+    function maximumIndex(indices) {
+        let maximum = 0;
+        for (let i = 0; i < indices.length; ++i)
+            if (indices[i] > maximum) maximum = indices[i];
+        return maximum;
     }
 
     /* ================================================================== */
@@ -5091,7 +5912,10 @@
                 color.push(resolved);
             }
             if (!color.length) color.push(null);
-            const depth = fbo.depth ? this.resolveAttachment(fbo.depth) : null;
+            // WebGPU exposes depth and stencil as one render-pass attachment.
+            // A stencil-only FBO therefore still needs to supply that view.
+            const depthRecord = fbo.depth || fbo.stencil;
+            const depth = depthRecord ? this.resolveAttachment(depthRecord) : null;
             return {
                 color,
                 depth: depth ? depth.view : null,
@@ -5209,6 +6033,9 @@
             }
             if (this.activeOcclusionQuerySet)
                 descriptor.occlusionQuerySet = this.activeOcclusionQuerySet;
+            // A pass can only run occlusion queries if it was *created* with
+            // the query set, so beginQuery has to know whether this one was.
+            this.passHasOcclusionQuerySet = !!this.activeOcclusionQuerySet;
             this.pass = encoder.beginRenderPass(descriptor);
             this.passTargets = targets;
             this.pendingClear = null;
@@ -5221,17 +6048,96 @@
                 this.pass.end();
                 this.pass = null;
                 this.passTargets = null;
+                this.passHasOcclusionQuerySet = false;
             }
         },
 
         flushFrame() {
             this.endPass();
+            const resolved = this.resolvePendingQueries();
             if (this.encoder) {
                 this.device.queue.submit([this.encoder.finish()]);
                 this.encoder = null;
                 this.recordedOps = 0;
                 this.releaseRetired();
             }
+            if (resolved) this.readQueryResults(resolved);
+        },
+
+        /*
+         * Occlusion results only exist after the GPU has run the pass, so they
+         * follow glReadPixels' shape: resolve into a buffer alongside the work
+         * that produced them, then map it once the submission lands. Until the
+         * map completes glGetQueryObjectuiv keeps answering NOT AVAILABLE,
+         * which is what the guest's own spin on GL_QUERY_RESULT_AVAILABLE is
+         * waiting for -- so a query that is never resolved is not a stale
+         * number, it is a guest that spins forever.
+         *
+         * Every query outstanding at the flush resolves in one pair of buffers.
+         * Cube 2 retires two thousand of them at a time, and one resolve of
+         * slots [0, high] costs the same as one of slot 3.
+         */
+        resolvePendingQueries() {
+            const pending = this.pendingQueries;
+            if (!pending || !pending.length || !this.activeOcclusionQuerySet)
+                return null;
+            this.pendingQueries = [];
+            let high = 0;
+            for (const query of pending)
+                if (query.slot >= 0 && query.slot + 1 > high) high = query.slot + 1;
+            if (!high) return null;
+            // resolveQuerySet writes a u64 per slot; a mapped buffer cannot
+            // also be a resolve target, hence the copy into staging.
+            const byteLength = alignUp(high * 8, 256);
+            const resolveBuffer = this.device.createBuffer({
+                label: "GL occlusion resolve",
+                size: byteLength,
+                usage: BUFFER_USAGE_QUERY_RESOLVE | BUFFER_USAGE_COPY_SRC,
+            });
+            const staging = this.device.createBuffer({
+                label: "GL occlusion readback",
+                size: byteLength,
+                usage: BUFFER_USAGE_COPY_DST | BUFFER_USAGE_MAP_READ,
+            });
+            const encoder = this.ensureEncoder();
+            encoder.resolveQuerySet(this.activeOcclusionQuerySet, 0, high,
+                resolveBuffer, 0);
+            encoder.copyBufferToBuffer(resolveBuffer, 0, staging, 0, byteLength);
+            // The slots are free again for the next frame's queries; the
+            // results are already on their way out of the set.
+            this.nextQuerySlot = 0;
+            return { queries: pending, resolveBuffer, staging, count: high };
+        },
+
+        readQueryResults(resolved) {
+            const { queries, resolveBuffer, staging } = resolved;
+            staging.mapAsync(1 /* GPUMapMode.READ */).then(() => {
+                const words = new Uint32Array(staging.getMappedRange().slice(0));
+                staging.unmap();
+                for (const query of queries) {
+                    if (query.slot < 0) { query.ready = true; continue; }
+                    const low = words[query.slot * 2];
+                    const high = words[query.slot * 2 + 1];
+                    // D-07: WebGPU answers "did any sample pass", not how many.
+                    // A visible query reports a saturated count rather than 1,
+                    // because callers threshold on it far more often than they
+                    // compare it to an expected sample total.
+                    query.result = (low || high) ? OCCLUSION_VISIBLE_SAMPLES : 0;
+                    query.ready = true;
+                }
+            }).catch(error => {
+                this.warnOnce("occlusion", "occlusion query readback failed",
+                    { message: String(error) });
+                // Never leave the guest spinning on AVAILABLE for a result the
+                // GPU will not deliver: report zero samples, but report it.
+                for (const query of queries) {
+                    query.result = 0;
+                    query.ready = true;
+                }
+            }).then(() => {
+                try { staging.destroy(); } catch (ignored) { /* already gone */ }
+                try { resolveBuffer.destroy(); } catch (ignored) { /* gone */ }
+            });
         },
 
         finishFrame(present) {
@@ -5701,21 +6607,18 @@ ${fragmentCode}`;
             const vertex = vertexOn ? this.arbProgramFor(GL.VERTEX_PROGRAM_ARB) : null;
             const fragment = fragmentOn ?
                 this.arbProgramFor(GL.FRAGMENT_PROGRAM_ARB) : null;
-            if (!vertexOn || !fragmentOn) {
-                // Mixing one ARB stage with the fixed pipeline needs the two to
-                // agree on a varying layout they were never designed to share.
-                // Refusing is honest; guessing produces a picture that is wrong
-                // in a way nobody can trace back here.
-                this.refuse("draw",
-                    "an ARB program on one stage with the fixed pipeline on the " +
-                    "other is not supported; enable both or neither",
-                    { vertexOn, fragmentOn }, 0);
-                return null;
-            }
-            if (!vertex || !vertex.compiled || !vertex.compiled.ok ||
-                    !fragment || !fragment.compiled || !fragment.compiled.ok) {
+            if ((vertexOn && (!vertex || !vertex.compiled || !vertex.compiled.ok)) ||
+                    (fragmentOn && (!fragment || !fragment.compiled ||
+                        !fragment.compiled.ok))) {
                 this.refuse("draw", "an enabled ARB program has not compiled",
                     {}, GL.INVALID_OPERATION);
+                return null;
+            }
+            if (vertexOn && !fragmentOn)
+                return this.arbVertexFixedFragmentShaders(vertex);
+            if (!vertexOn && fragmentOn) {
+                this.refuse("draw", "a fixed vertex stage paired with an ARB " +
+                    "fragment program is not implemented", {}, 0);
                 return null;
             }
             const stateFields = [...new Set([
@@ -5738,6 +6641,65 @@ ${fragmentCode}`;
                     target: entry.target === "CUBE" ? "Cube" : entry.target,
                     shadow: false,
                 })),
+            };
+        },
+
+        arbVertexFixedFragmentShaders(vertex) {
+            const variant = this.currentVariant();
+            if (variant.clipPlaneCount || variant.pointSprite) {
+                this.refuse("draw", "ARB vertex + fixed fragment does not yet " +
+                    "support clip planes or point sprites",
+                    { clipPlaneCount: variant.clipPlaneCount,
+                      pointSprite: variant.pointSprite }, 0);
+                return null;
+            }
+
+            const signature = this.fixedFunctionSignature(variant);
+            signature.varyingInterface = "arb";
+            // The two modules share one compact GLState block. Generate the
+            // fixed stage with the ARB stage's fields included so every field
+            // retains the same canonical byte offset in both modules.
+            signature.extraStateFields =
+                vertex.compiled.reflection.stateFields.slice();
+            const fixedKey = fixedFunction.signatureKey(signature);
+            let fixed = this.ffCache && this.ffCache.get(fixedKey);
+            if (!fixed) {
+                fixed = fixedFunction.generate(signature);
+                this.ffCache = this.ffCache || new Map();
+                this.ffCache.set(fixedKey, fixed);
+            }
+
+            const forcedTexCoords = fixed.textures.map(entry => entry.unit);
+            const variantKey = fixed.key + "|tc=" + forcedTexCoords.join(",");
+            vertex.variants = vertex.variants || new Map();
+            let compiledVertex = vertex.variants.get(variantKey);
+            if (!compiledVertex) {
+                compiledVertex = arbProgram.compileARBProgram(vertex.source, {
+                    forceStateFields: fixed.stateFields,
+                    forceVertexTexCoords: forcedTexCoords,
+                    forceFlatVaryings: variant.flatShading ? [0, 1] : [],
+                });
+                if (!compiledVertex.ok) {
+                    this.refuse("draw", "the mixed ARB vertex variant failed " +
+                        "to compile", { log: compiledVertex.log },
+                        GL.INVALID_OPERATION);
+                    return null;
+                }
+                vertex.variants.set(variantKey, compiledVertex);
+            }
+
+            return {
+                kind: "arb",
+                key: "arb-vp-ff:" + vertex.name + ":" + variantKey,
+                wgslVertex: compiledVertex.wgsl,
+                wgslFragment: fixed.wgslFragment,
+                stateFields: fixed.stateFields,
+                stateFloats: fixed.stateFloats,
+                uniformBytes: arbProgram.MAX_PROGRAM_PARAMETERS * 4 * 4 * 2,
+                colorTargets: fixed.colorTargets,
+                arbVertex: vertex,
+                arbFragment: null,
+                textures: fixed.textures,
             };
         },
 
@@ -5827,11 +6789,19 @@ ${fragmentCode}`;
             return {
                 attributes: {
                     position: { components: 4 },
-                    normal: has("normal", immediateUsed && immediateUsed.normal),
-                    color: has("color", immediateUsed && immediateUsed.color),
+                    normal: has("normal", immediateUsed && immediateUsed.normal) ||
+                        s.enabled.has(GL.LIGHTING),
+                    // Array draws use GL's current values when an array is
+                    // disabled. The draw assembler supplies those values as a
+                    // constant-rate vertex buffer, so the fixed shader must
+                    // consume the attribute rather than bake white/defaults.
+                    color: true,
                     secondaryColor: has("secondaryColor",
-                        immediateUsed && immediateUsed.secondaryColor),
-                    fogCoord: has("fogCoord", immediateUsed && immediateUsed.fogCoord),
+                        immediateUsed && immediateUsed.secondaryColor) ||
+                        s.enabled.has(GL.COLOR_SUM) ||
+                        s.lightModel.colorControl === GL.SEPARATE_SPECULAR_COLOR,
+                    fogCoord: has("fogCoord", immediateUsed && immediateUsed.fogCoord) ||
+                        (s.enabled.has(GL.FOG) && s.fog.coordSource === GL.FOG_COORD),
                     texCoord: Array.from({ length: MAX_TEXTURE_COORDS },
                         (unused, unit) => texture[unit] && texture[unit].enabled ?
                             { components: 4 } : null),
@@ -5941,6 +6911,7 @@ ${fragmentCode}`;
                 s.colorMask.map(v => v ? 1 : 0).join(""),
                 polygonOffsetKey(s),
                 s.enabled.has(GL.SAMPLE_ALPHA_TO_COVERAGE) ? "a2c" : "-",
+                sampleCoverageMask(s),
                 targets ? targets.color.map(c => c ? c.format : "-").join(",") : "-",
                 targets ? (targets.depthFormat || "-") : "-",
                 s.enabled.has(GL.DEPTH_CLAMP) ? "clamp" : "-",
@@ -5990,6 +6961,7 @@ ${fragmentCode}`;
                 },
                 multisample: {
                     count: 1,
+                    mask: sampleCoverageMask(s),
                     // WebGPU validation only permits alpha-to-coverage on a
                     // multisampled target. D-06 documents the current 1x path.
                     alphaToCoverageEnabled: false,
@@ -6047,11 +7019,16 @@ ${fragmentCode}`;
             const layout = stateLayout.buildLayout(shaders.stateFields);
             const stateSlice = this.writeStateUniforms(layout, shaders);
             if (!stateSlice) return null;
-            const uniformSlice = shaders.kind === "program" ?
-                this.writeProgramUniforms(shaders) :
-                (shaders.kind === "arb" ? this.writeARBParameters(shaders) :
-                    this.writeEmptyUniforms());
-            if (!uniformSlice) return null;
+            // binding 1 is the GLSL program's uniform block, or the ARB
+            // vertex program's parameters; binding 2 only ever holds an ARB
+            // fragment program's.
+            const bindingSlices = shaders.kind === "arb" ?
+                this.writeARBParameters(shaders) :
+                { 1: shaders.kind === "program" ?
+                    this.writeProgramUniforms(shaders) :
+                    this.writeEmptyUniforms() };
+            if (!bindingSlices || (shaders.kind !== "arb" && !bindingSlices[1]))
+                return null;
 
             const groups = [];
             try {
@@ -6063,18 +7040,29 @@ ${fragmentCode}`;
                         resource: { buffer: this.uniformRing,
                             offset: stateSlice.offset, size: stateSlice.size } });
                 }
-                if (shaderText.indexOf("@group(1) @binding(1)") >= 0) {
-                    uniformEntries.push({ binding: 1,
+                for (const binding of [1, 2]) {
+                    if (shaderText.indexOf("@group(1) @binding(" + binding +
+                            ")") < 0)
+                        continue;
+                    const slice = bindingSlices[binding];
+                    if (!slice)
+                        return this.refuse("draw", "a shader reads a uniform " +
+                            "binding nothing was written for",
+                            { binding, shader: shaders.key },
+                            GL.INVALID_OPERATION);
+                    uniformEntries.push({ binding,
                         resource: { buffer: this.uniformRing,
-                            offset: uniformSlice.offset, size: uniformSlice.size } });
+                            offset: slice.offset, size: slice.size } });
                 }
-                groups.push({
-                    index: 1,
-                    group: this.device.createBindGroup({
-                        layout: pipeline.getBindGroupLayout(1),
-                        entries: uniformEntries,
-                    }),
-                });
+                if (uniformEntries.length) {
+                    groups.push({
+                        index: 1,
+                        group: this.device.createBindGroup({
+                            layout: pipeline.getBindGroupLayout(1),
+                            entries: uniformEntries,
+                        }),
+                    });
+                }
                 const textureEntries = this.textureBindEntries(shaders);
                 if (textureEntries.length) {
                     groups.push({
@@ -6344,21 +7332,46 @@ ${fragmentCode}`;
             return slice;
         },
 
-        /* env then local, both stages sharing one block -- the generated ARB
-         * shaders declare exactly that shape. */
-        writeARBParameters(shaders) {
+        /*
+         * env then local for one program, in the shape its generated shader
+         * declares. Each stage gets its own block: program.env and
+         * program.local are per-program namespaces, so a bound vertex and
+         * fragment program hold different values at the same index, and
+         * folding them into one block left the vertex stage reading the
+         * fragment program's parameters -- silently, since nothing about the
+         * draw is invalid.
+         */
+        writeARBProgramParameters(program) {
             const count = arbProgram.MAX_PROGRAM_PARAMETERS * 4;
             const slice = this.allocateUniform(count * 4 * 2);
             if (!slice) return null;
             const floats = new Float32Array(this.uniformStaging.buffer,
                 slice.offset, count * 2);
-            const source = shaders.arbFragment.env ? shaders.arbFragment :
-                shaders.arbVertex;
-            floats.set(source.env.subarray(0, count), 0);
-            floats.set(source.local.subarray(0, count), count);
+            floats.set(program.env.subarray(0, count), 0);
+            floats.set(program.local.subarray(0, count), count);
             this.device.queue.writeBuffer(this.uniformRing, slice.offset,
                 this.uniformStaging, slice.offset, slice.size);
             return slice;
+        },
+
+        /* One slice per stage that declared a parameter block, keyed by the
+         * binding its shader reads. */
+        writeARBParameters(shaders) {
+            const slices = {};
+            const stages = [["vertex", shaders.arbVertex, shaders.wgslVertex],
+                            ["fragment", shaders.arbFragment, shaders.wgslFragment]];
+            for (const [stage, program, wgsl] of stages) {
+                const binding = arbProgram.PARAMETER_BINDING[stage];
+                if (wgsl.indexOf("@group(1) @binding(" + binding + ")") < 0)
+                    continue;
+                if (!program || !program.env || !program.local)
+                    return this.refuse("draw", "ARB parameter storage is missing",
+                        { stage }, GL.INVALID_OPERATION);
+                const slice = this.writeARBProgramParameters(program);
+                if (!slice) return null;
+                slices[binding] = slice;
+            }
+            return slices;
         },
 
         writeProgramUniforms(shaders) {
@@ -6627,7 +7640,273 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
 }
 `;
 
+    const COLOR_COPY_WGSL = `
+struct CopyParams {
+    sourceOrigin : vec2<i32>,
+    destinationOrigin : vec2<i32>,
+}
+@group(0) @binding(0) var sourceTexture : texture_2d<f32>;
+@group(0) @binding(1) var<uniform> params : CopyParams;
+@vertex fn vs_main(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
+    let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(i & 2u) * 2.0 - 1.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+@fragment fn fs_main(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
+    let source = params.sourceOrigin + vec2<i32>(p.xy) - params.destinationOrigin;
+    return textureLoad(sourceTexture, source, 0);
+}
+`;
+
+    const MIPMAP_WGSL = `
+@group(0) @binding(0) var sourceTexture : texture_2d<f32>;
+@vertex fn vs_main(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
+    let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(i & 2u) * 2.0 - 1.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+@fragment fn fs_main(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
+    let dimensions = vec2<i32>(textureDimensions(sourceTexture));
+    let maximum = dimensions - vec2<i32>(1);
+    let origin = vec2<i32>(p.xy) * 2;
+    let a = textureLoad(sourceTexture, min(origin, maximum), 0);
+    let b = textureLoad(sourceTexture,
+        min(origin + vec2<i32>(1, 0), maximum), 0);
+    let c = textureLoad(sourceTexture,
+        min(origin + vec2<i32>(0, 1), maximum), 0);
+    let d = textureLoad(sourceTexture,
+        min(origin + vec2<i32>(1, 1), maximum), 0);
+    return (a + b + c + d) * 0.25;
+}
+`;
+
+    const COLOR_BLIT_WGSL = `
+struct BlitParams {
+    sourceOrigin : vec2<f32>,
+    sourceExtent : vec2<f32>,
+    destinationOrigin : vec2<f32>,
+    destinationExtent : vec2<f32>,
+}
+@group(0) @binding(0) var sourceTexture : texture_2d<f32>;
+@group(0) @binding(1) var sourceSampler : sampler;
+@group(0) @binding(2) var<uniform> params : BlitParams;
+@vertex fn vs_main(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
+    let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(i & 2u) * 2.0 - 1.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+@fragment fn fs_main(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
+    let relative = (p.xy - params.destinationOrigin) / params.destinationExtent;
+    let sourcePosition = params.sourceOrigin + relative * params.sourceExtent;
+    let dimensions = vec2<f32>(textureDimensions(sourceTexture));
+    return textureSampleLevel(sourceTexture, sourceSampler,
+        sourcePosition / dimensions, 0.0);
+}
+`;
+
     Object.assign(GLWebGPUExecutor.prototype, {
+
+        colorCopyPipeline(format) {
+            this.colorCopyPipelines = this.colorCopyPipelines || new Map();
+            let pipeline = this.colorCopyPipelines.get(format);
+            if (pipeline) return pipeline;
+            const module = this.shaderModule(COLOR_COPY_WGSL);
+            try {
+                pipeline = this.device.createRenderPipeline({
+                    label: "GL colour format copy", layout: "auto",
+                    vertex: { module, entryPoint: "vs_main" },
+                    fragment: { module, entryPoint: "fs_main",
+                                targets: [{ format }] },
+                    primitive: { topology: "triangle-list" },
+                });
+            } catch (error) {
+                this.refuse("glCopyTexImage", "copy target is not renderable",
+                    { format, message: String(error) }, GL.INVALID_OPERATION);
+                return null;
+            }
+            this.colorCopyPipelines.set(format, pipeline);
+            return pipeline;
+        },
+
+        mipmapPipeline(format) {
+            this.mipmapPipelines = this.mipmapPipelines || new Map();
+            let pipeline = this.mipmapPipelines.get(format);
+            if (pipeline) return pipeline;
+            const module = this.shaderModule(MIPMAP_WGSL);
+            try {
+                pipeline = this.device.createRenderPipeline({
+                    label: "GL mipmap generator", layout: "auto",
+                    vertex: { module, entryPoint: "vs_main" },
+                    fragment: { module, entryPoint: "fs_main",
+                                targets: [{ format }] },
+                    primitive: { topology: "triangle-list" },
+                });
+            } catch (error) {
+                this.refuse("glGenerateMipmap", "texture format is not renderable",
+                    { format, message: String(error) }, GL.INVALID_OPERATION);
+                return null;
+            }
+            this.mipmapPipelines.set(format, pipeline);
+            return pipeline;
+        },
+
+        colorBlitPipeline(format) {
+            this.colorBlitPipelines = this.colorBlitPipelines || new Map();
+            let pipeline = this.colorBlitPipelines.get(format);
+            if (pipeline) return pipeline;
+            const module = this.shaderModule(COLOR_BLIT_WGSL);
+            try {
+                pipeline = this.device.createRenderPipeline({
+                    label: "GL colour blit", layout: "auto",
+                    vertex: { module, entryPoint: "vs_main" },
+                    fragment: { module, entryPoint: "fs_main",
+                                targets: [{ format }] },
+                    primitive: { topology: "triangle-list" },
+                });
+            } catch (error) {
+                this.refuse("glBlitFramebuffer", "blit target is not renderable",
+                    { format, message: String(error) }, GL.INVALID_OPERATION);
+                return null;
+            }
+            this.colorBlitPipelines.set(format, pipeline);
+            return pipeline;
+        },
+
+        blitColorTexture(source, destination, sx0, sy0, sx1, sy1,
+                dx0, dy0, dx1, dy1, filter) {
+            const pipeline = this.colorBlitPipeline(destination.format);
+            if (!pipeline) return false;
+            const uniform = this.allocateUniform(32);
+            if (!uniform) return false;
+            new Float32Array(this.uniformStaging.buffer, uniform.offset, 8).set([
+                sx0, sy0, sx1 - sx0, sy1 - sy0,
+                dx0, dy0, dx1 - dx0, dy1 - dy0,
+            ]);
+            this.device.queue.writeBuffer(this.uniformRing, uniform.offset,
+                this.uniformStaging, uniform.offset, uniform.size);
+            const sampler = this.device.createSampler({
+                minFilter: filter === GL.LINEAR ? "linear" : "nearest",
+                magFilter: filter === GL.LINEAR ? "linear" : "nearest",
+            });
+            const sourceView = source.view || source.texture.createView({
+                dimension: "2d", baseMipLevel: source.mipLevel || 0,
+                mipLevelCount: 1, baseArrayLayer: source.layer || 0,
+                arrayLayerCount: 1,
+            });
+            const left = Math.min(dx0, dx1), top = Math.min(dy0, dy1);
+            const width = Math.abs(dx1 - dx0), height = Math.abs(dy1 - dy0);
+            this.endPass();
+            const pass = this.ensureEncoder().beginRenderPass({
+                label: "GL scaled colour blit",
+                colorAttachments: [{ view: destination.view,
+                    loadOp: "load", storeOp: "store" }],
+            });
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, this.device.createBindGroup({
+                layout: pipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: sourceView },
+                    { binding: 1, resource: sampler },
+                    { binding: 2, resource: { buffer: this.uniformRing,
+                        offset: uniform.offset, size: uniform.size } },
+                ],
+            }));
+            pass.setViewport(left, top, width, height, 0, 1);
+            pass.setScissorRect(left, top, width, height);
+            pass.draw(3);
+            pass.end();
+            return true;
+        },
+
+        generateTextureMipmapsGPU(texture) {
+            const base = texture.levels[0] && texture.levels[0][0];
+            if (!base) return false;
+            if (texture.kind === "3D" || base.compressed ||
+                    base.base === "DEPTH" || base.base === "COLOR_INDEX") {
+                for (const list of texture.levels)
+                    if (list) list.length = Math.min(1, list.length);
+                return this.refuse("glGenerateMipmap",
+                    "GPU-authored mipmaps are unsupported for this texture type",
+                    { kind: texture.kind, format: base.gpuFormat },
+                    GL.INVALID_OPERATION);
+            }
+            const pipeline = this.mipmapPipeline(base.gpuFormat);
+            if (!pipeline) return false;
+            const gpuTexture = this.ensureTextureUploaded(texture);
+            if (!gpuTexture) return false;
+            const layers = texture.kind === "Cube" ? 6 : 1;
+            this.endPass();
+            for (let layer = 0; layer < layers; ++layer) {
+                const list = texture.levels[layer] || [];
+                for (let level = 1; level < list.length; ++level) {
+                    const sourceView = gpuTexture.createView({
+                        dimension: "2d", baseMipLevel: level - 1,
+                        mipLevelCount: 1, baseArrayLayer: layer,
+                        arrayLayerCount: 1,
+                    });
+                    const destinationView = gpuTexture.createView({
+                        dimension: "2d", baseMipLevel: level,
+                        mipLevelCount: 1, baseArrayLayer: layer,
+                        arrayLayerCount: 1,
+                    });
+                    const pass = this.ensureEncoder().beginRenderPass({
+                        label: "GL mipmap level " + level,
+                        colorAttachments: [{ view: destinationView,
+                            loadOp: "clear", storeOp: "store",
+                            clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+                    });
+                    pass.setPipeline(pipeline);
+                    pass.setBindGroup(0, this.device.createBindGroup({
+                        layout: pipeline.getBindGroupLayout(0),
+                        entries: [{ binding: 0, resource: sourceView }],
+                    }));
+                    pass.draw(3);
+                    pass.end();
+                }
+            }
+            texture.dirty = false;
+            return true;
+        },
+
+        copyColorTexture(source, destination, sourceX, sourceY,
+                destinationX, destinationY, width, height, loadOp) {
+            if (!source || !destination || width <= 0 || height <= 0) return false;
+            const pipeline = this.colorCopyPipeline(destination.format);
+            if (!pipeline) return false;
+            const uniform = this.allocateUniform(16);
+            if (!uniform) return false;
+            const values = new Int32Array(this.uniformStaging.buffer,
+                uniform.offset, 4);
+            values.set([sourceX, sourceY, destinationX, destinationY]);
+            this.device.queue.writeBuffer(this.uniformRing, uniform.offset,
+                this.uniformStaging, uniform.offset, uniform.size);
+            const sourceView = source.view || source.texture.createView({
+                dimension: "2d", baseMipLevel: source.mipLevel || 0,
+                mipLevelCount: 1, baseArrayLayer: source.layer || 0,
+                arrayLayerCount: 1,
+            });
+            this.endPass();
+            const pass = this.ensureEncoder().beginRenderPass({
+                label: "GL colour copy pass",
+                colorAttachments: [{ view: destination.view,
+                    loadOp: loadOp || "load", storeOp: "store",
+                    clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+            });
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, this.device.createBindGroup({
+                layout: pipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: sourceView },
+                    { binding: 1, resource: { buffer: this.uniformRing,
+                        offset: uniform.offset, size: uniform.size } },
+                ],
+            }));
+            pass.setViewport(destinationX, destinationY, width, height, 0, 1);
+            pass.setScissorRect(destinationX, destinationY, width, height);
+            pass.draw(3);
+            pass.end();
+            return true;
+        },
 
         presentToCanvas() {
             if (!this.host || !this.host.context) return false;
@@ -6750,6 +8029,18 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
             return rb ? { width: rb.width, height: rb.height } : null;
         },
 
+        attachmentFormat(record) {
+            if (!record) return null;
+            if (record.kind === "texture") {
+                const texture = this.current.shareGroup.textures.get(record.name);
+                const slot = texture && texture.levels[record.layer] &&
+                    texture.levels[record.layer][record.level];
+                return slot ? slot.gpuFormat : null;
+            }
+            const rb = this.current.shareGroup.renderbuffers.get(record.name);
+            return rb ? rb.gpuFormat : null;
+        },
+
         renderbufferStorage(internalFormat, width, height) {
             const s = this.current;
             const rb = s.shareGroup.renderbuffers.get(s.renderbuffer);
@@ -6762,9 +8053,9 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
             rb.internalFormat = internalFormat;
             // WebGPU has no renderbuffer: a texture with RENDER_ATTACHMENT is
             // the same thing with a different name.
-            rb.gpuFormat = storage.depth ? "depth24plus-stencil8" :
-                (internalFormat === GL.DEPTH24_STENCIL8 ?
-                    "depth24plus-stencil8" : storage.gpu);
+            const stencilFormat = internalFormat === GL.STENCIL_INDEX8_EXT ||
+                internalFormat === GL.DEPTH24_STENCIL8;
+            rb.gpuFormat = stencilFormat ? "depth24plus-stencil8" : storage.gpu;
             this.retire(rb.gpuTexture);
             rb.gpuTexture = this.device.createTexture({
                 label: "GL renderbuffer " + rb.name,
@@ -6800,35 +8091,83 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
                 if (!check(attachment)) return GL.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             if (!check(fbo.depth))
                 return GL.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+            if (!check(fbo.stencil))
+                return GL.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             if (!any) return GL.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+
+            for (const attachment of fbo.color) {
+                const format = this.attachmentFormat(attachment);
+                if (format && format.indexOf("depth") === 0)
+                    return GL.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+            }
+            const depthFormat = this.attachmentFormat(fbo.depth);
+            if (depthFormat && depthFormat.indexOf("depth") !== 0)
+                return GL.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+            const stencilFormat = this.attachmentFormat(fbo.stencil);
+            if (stencilFormat && stencilFormat.indexOf("stencil") < 0)
+                return GL.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+
+            if (fbo.depth && fbo.stencil &&
+                    (fbo.depth.kind !== fbo.stencil.kind ||
+                     fbo.depth.name !== fbo.stencil.name ||
+                     fbo.depth.level !== fbo.stencil.level ||
+                     fbo.depth.layer !== fbo.stencil.layer))
+                return GL.FRAMEBUFFER_UNSUPPORTED_EXT;
+
+            if (target !== GL.READ_FRAMEBUFFER) {
+                for (const buffer of s.drawBuffers) {
+                    if (buffer === GL.NONE) continue;
+                    const index = buffer >= GL.COLOR_ATTACHMENT0 ?
+                        buffer - GL.COLOR_ATTACHMENT0 : 0;
+                    if (!fbo.color[index])
+                        return GL.FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER_EXT;
+                }
+            }
+            if (target !== GL.DRAW_FRAMEBUFFER && s.readBuffer !== GL.NONE) {
+                const index = s.readBuffer >= GL.COLOR_ATTACHMENT0 ?
+                    s.readBuffer - GL.COLOR_ATTACHMENT0 : 0;
+                if (!fbo.color[index])
+                    return GL.FRAMEBUFFER_INCOMPLETE_READ_BUFFER_EXT;
+            }
+            fbo.width = width;
+            fbo.height = height;
             return GL.FRAMEBUFFER_COMPLETE;
         },
 
         blitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter) {
-            // A same-size, same-format colour blit is a texture copy; anything
-            // that scales or converts needs a draw, and depth blits cannot be
-            // expressed as one at all.
-            if (!(mask & GL.COLOR_BUFFER_BIT))
+            // A same-size, same-format colour blit is a texture copy. Scaling,
+            // axis reversal, or format conversion is implemented by a draw.
+            // Depth/stencil copies require aspect-typed pipelines and are
+            // rejected explicitly instead of producing a WebGPU validation
+            // error that invalidates the whole command buffer.
+            if (!(mask & GL.COLOR_BUFFER_BIT) ||
+                    (mask & ~GL.COLOR_BUFFER_BIT) !== 0)
                 return this.refuse("glBlitFramebuffer",
                     "only colour blits are implemented", { mask }, 0);
             const width = Math.abs(sx1 - sx0), height = Math.abs(sy1 - sy0);
             const dstWidth = Math.abs(dx1 - dx0), dstHeight = Math.abs(dy1 - dy0);
-            if (width !== dstWidth || height !== dstHeight)
-                return this.refuse("glBlitFramebuffer",
-                    "a scaling blit is not implemented", { width, height,
-                        dstWidth, dstHeight }, 0);
-            void filter;
             const source = this.readAttachmentView();
             const target = this.currentTargets();
             if (!source || !target || !target.color[0]) return;
-            this.endPass();
-            const encoder = this.ensureEncoder();
-            encoder.copyTextureToTexture(
-                { texture: source.texture, origin: { x: Math.min(sx0, sx1),
-                                                     y: Math.min(sy0, sy1), z: 0 } },
-                { texture: target.color[0].texture || this.backBuffer,
-                  origin: { x: Math.min(dx0, dx1), y: Math.min(dy0, dy1), z: 0 } },
-                { width, height, depthOrArrayLayers: 1 });
+            const destination = target.color[0];
+            const straight = sx1 >= sx0 && sy1 >= sy0 &&
+                dx1 >= dx0 && dy1 >= dy0;
+            if (straight && width === dstWidth && height === dstHeight &&
+                    source.format === destination.format &&
+                    source.texture !== destination.texture) {
+                this.endPass();
+                this.ensureEncoder().copyTextureToTexture(
+                    { texture: source.texture, mipLevel: source.mipLevel || 0,
+                      origin: { x: sx0, y: sy0, z: source.layer || 0 } },
+                    { texture: destination.texture || this.backBuffer,
+                      mipLevel: destination.mipLevel || 0,
+                      origin: { x: dx0, y: dy0,
+                        z: destination.origin ? destination.origin.z : 0 } },
+                    { width, height, depthOrArrayLayers: 1 });
+                return;
+            }
+            this.blitColorTexture(source, destination,
+                sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, filter);
         },
 
         readAttachmentView() {
@@ -6849,10 +8188,18 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
                 const gpuTexture = this.ensureTextureUploaded(texture);
                 return gpuTexture ? { texture: gpuTexture,
                     format: texture.gpuFormat,
-                    width: texture.gpuWidth, height: texture.gpuHeight } : null;
+                    mipLevel: record.level, layer: record.layer,
+                    view: gpuTexture.createView({
+                        dimension: "2d", baseMipLevel: record.level,
+                        mipLevelCount: 1, baseArrayLayer: record.layer,
+                        arrayLayerCount: 1,
+                    }),
+                    width: Math.max(1, texture.gpuWidth >> record.level),
+                    height: Math.max(1, texture.gpuHeight >> record.level) } : null;
             }
             const rb = s.shareGroup.renderbuffers.get(record.name);
             return rb && rb.gpuTexture ? { texture: rb.gpuTexture,
+                view: rb.gpuTexture.createView(),
                 format: rb.gpuFormat, width: rb.width, height: rb.height } : null;
         },
 
@@ -6865,22 +8212,35 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
             if (!texture) return;
             const storage = storageFormatFor(internalFormat, this.deviceFeatures);
             const kind = this.textureTargetKind(target);
+            if (kind === "3D" || storage.depth || storage.palettised ||
+                    storage.compressed)
+                return this.refuse("glCopyTexImage2D",
+                    "the requested target format cannot receive a colour copy",
+                    { target, internalFormat, format: storage.gpu },
+                    GL.INVALID_OPERATION);
             texture.target = kind === "Cube" ? GL.TEXTURE_CUBE_MAP : target;
+            const bytesPerTexel = storage.gpu === "rgba16float" ? 8 :
+                (storage.gpu === "rgba32float" ? 16 : 4);
+            const componentType = storage.gpu === "rgba16float" ? "f16" :
+                (storage.gpu === "rgba32float" ? "f32" : "u8");
             this.storeLevel(texture, kind, level, CUBE_FACE_INDEX[target] || 0, {
                 width, height, depth: 1, gpuFormat: storage.gpu,
                 base: storage.base, compressed: false,
-                pixels: new Uint8Array(width * height * 4),
+                // The level is authored on the GPU.  Keeping pixels null is
+                // important: a later lazy upload must not overwrite the copy
+                // with a zero-filled CPU shadow.
+                pixels: null, bytesPerTexel, componentType, componentCount: 4,
             });
             this.ensureTextureUploaded(texture);
-            this.endPass();
-            const encoder = this.ensureEncoder();
             // Framebuffer row y is GL's row y after the clip-space flip, so the
             // copy is direct rather than mirrored.
-            encoder.copyTextureToTexture(
-                { texture: source.texture, origin: { x, y, z: 0 } },
-                { texture: texture.gpuTexture, mipLevel: level,
-                  origin: { x: 0, y: 0, z: CUBE_FACE_INDEX[target] || 0 } },
-                { width, height, depthOrArrayLayers: 1 });
+            const view = texture.gpuTexture.createView({
+                dimension: "2d", baseMipLevel: level, mipLevelCount: 1,
+                baseArrayLayer: CUBE_FACE_INDEX[target] || 0,
+                arrayLayerCount: 1,
+            });
+            this.copyColorTexture(source, { view, format: storage.gpu },
+                x, y, 0, 0, width, height, "clear");
         },
 
         copyTexSubImage(target, level, xoffset, yoffset, zoffset, x, y, width,
@@ -6891,17 +8251,33 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
                     {}, GL.INVALID_FRAMEBUFFER_OPERATION);
             const texture = this.boundTexture(target);
             if (!texture) return;
+            const kind = this.textureTargetKind(target);
+            const layer = CUBE_FACE_INDEX[target] || 0;
+            const slot = this.levelSlot(texture, kind, level, layer);
+            if (!slot)
+                return this.refuse("glCopyTexSubImage",
+                    "destination level has no storage", { level, layer },
+                    GL.INVALID_OPERATION);
+            if (kind === "3D" || slot.compressed || slot.base === "DEPTH" ||
+                    slot.base === "COLOR_INDEX")
+                return this.refuse("glCopyTexSubImage",
+                    "the destination format cannot receive a colour copy",
+                    { target, format: slot.gpuFormat }, GL.INVALID_OPERATION);
             const gpuTexture = this.ensureTextureUploaded(texture);
             if (!gpuTexture) return;
-            this.endPass();
-            const encoder = this.ensureEncoder();
-            encoder.copyTextureToTexture(
-                { texture: source.texture, origin: { x, y, z: 0 } },
-                { texture: gpuTexture, mipLevel: level,
-                  origin: { x: xoffset, y: yoffset,
-                            z: texture.kind === "3D" ? zoffset :
-                                (CUBE_FACE_INDEX[target] || 0) } },
-                { width, height, depthOrArrayLayers: 1 });
+            void zoffset;
+            const view = gpuTexture.createView({
+                dimension: "2d", baseMipLevel: level, mipLevelCount: 1,
+                baseArrayLayer: layer, arrayLayerCount: 1,
+            });
+            if (this.copyColorTexture(source,
+                    { view, format: slot.gpuFormat }, x, y,
+                    xoffset, yoffset, width, height, "load")) {
+                // The CPU copy is no longer authoritative after a framebuffer
+                // copy.  Mipmap generation below can continue entirely on GPU.
+                slot.pixels = null;
+                texture.dirty = false;
+            }
         },
 
         /* ---- glReadPixels ----
@@ -6945,7 +8321,7 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
             this.flushFrame();
 
             const writeGuest = this.options.writeGuestMemory;
-            const recordOffset = offset - bytes.byteOffset;
+            const recordOffset = offset;
             staging.mapAsync(1 /* GPUMapMode.READ */).then(() => {
                 const mapped = new Uint8Array(staging.getMappedRange());
                 const out = new Uint8Array(dataSize);
@@ -7005,6 +8381,11 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
             query.ready = false;
             query.result = 0;
             this.activeQuery = query;
+            // The set is created lazily, so the pass that is already open on
+            // the first glBeginQuery of a session was built without it. Ending
+            // it makes ensurePass rebuild one that carries it; the rebuilt
+            // pass loads the attachments it just stored, so nothing is lost.
+            if (this.pass && !this.passHasOcclusionQuerySet) this.endPass();
             const pass = this.ensurePass();
             if (pass) pass.beginOcclusionQuery(query.slot);
         },
@@ -7152,12 +8533,29 @@ fn fs_main(inp : VSOut) -> @location(0) vec4<f32> {
                 transfer.blueScale, transfer.alphaScale];
             const biases = [transfer.redBias, transfer.greenBias,
                 transfer.blueBias, transfer.alphaBias];
+            const matrix = this.topOf(GL.COLOR);
             const mapNames = [GL.PIXEL_MAP_R_TO_R, GL.PIXEL_MAP_G_TO_G,
                 GL.PIXEL_MAP_B_TO_B, GL.PIXEL_MAP_A_TO_A];
             for (let at = 0; at < rgba.length; at += 4) {
+                const input = [0, 0, 0, 0];
                 for (let c = 0; c < 4; ++c) {
-                    let value = clamp(rgba[at + c] / 255 * scales[c] +
+                    input[c] = clamp(rgba[at + c] / 255 * scales[c] +
                         biases[c], 0, 1);
+                }
+                const transformed = [
+                    matrix[0] * input[0] + matrix[4] * input[1] +
+                        matrix[8] * input[2] + matrix[12] * input[3],
+                    matrix[1] * input[0] + matrix[5] * input[1] +
+                        matrix[9] * input[2] + matrix[13] * input[3],
+                    matrix[2] * input[0] + matrix[6] * input[1] +
+                        matrix[10] * input[2] + matrix[14] * input[3],
+                    matrix[3] * input[0] + matrix[7] * input[1] +
+                        matrix[11] * input[2] + matrix[15] * input[3],
+                ];
+                for (let c = 0; c < 4; ++c) {
+                    let value = clamp(transformed[c] *
+                        transfer.postColorMatrixScale[c] +
+                        transfer.postColorMatrixBias[c], 0, 1);
                     const map = transfer.mapColor ? maps[mapNames[c]] : null;
                     if (map && map.length) {
                         const index = clamp(Math.round(value * (map.length - 1)),
@@ -7556,42 +8954,73 @@ struct Params { value : vec4<f32>, }
             program.source = source;
             program.target = target;
             program.compiled = arbProgram.compileARBProgram(source, {});
+            if (program.variants) program.variants.clear();
             if (!program.compiled.ok) {
-                this.refuse("glProgramStringARB", "the ARB program did not compile",
-                    { target, log: program.compiled.log }, GL.INVALID_OPERATION);
+                /*
+                 * A program the *application* wrote wrongly is not a host
+                 * refusal: the extension defines exactly how to report it, and
+                 * an app that submits a deliberately bad program to check its
+                 * error handling -- which is what a conformance viewer does --
+                 * is behaving correctly. Counting it in stats.refusals would
+                 * make that counter useless as "how much of this frame did the
+                 * host fail to draw". So it takes GL's own channel: the error,
+                 * the error string and the error position, and one warning
+                 * rather than one error.
+                 */
+                this.arbErrorString = program.compiled.log;
+                this.arbErrorPosition = program.compiled.errorPosition >= 0 ?
+                    program.compiled.errorPosition : 0;
+                this.current.arbErrorString = this.arbErrorString;
+                this.current.arbErrorPosition = this.arbErrorPosition;
+                this.setError(GL.INVALID_OPERATION);
+                this.warnOnce("arbProgramCompile",
+                    "an ARB program did not compile; the app can read the " +
+                    "reason from GL_PROGRAM_ERROR_STRING_ARB",
+                    { target, log: program.compiled.log,
+                      position: this.arbErrorPosition });
                 return;
             }
-            if (!program.env) {
-                program.env = new Float32Array(
-                    arbProgram.MAX_PROGRAM_PARAMETERS * 4);
-                program.local = new Float32Array(
-                    arbProgram.MAX_PROGRAM_PARAMETERS * 4);
-            }
+            this.arbErrorString = "";
+            this.arbErrorPosition = -1;
+            this.current.arbErrorString = "";
+            this.current.arbErrorPosition = -1;
+            arbParameterStorage(program, PROGRAM_PARAMETER_ENV);
             ++this.stats.shaderLinks;
         },
 
-        /* {target, index, x, y, z, w} for env, or the local variant; the guest
-         * distinguishes them by the parameter kind word. */
+        /*
+         * {kind, target, index, count} then count*4 floats, or {kind, target,
+         * index, reserved} then four doubles. openglproxy sends the parameter
+         * kind first -- V86GL_PROGRAM_PARAMETER_ENV is 1 and _LOCAL is 2 --
+         * and the target second.
+         */
         programParameterARB(view, offset, size, doublePrecision) {
             const stride = doublePrecision ? 8 : 4;
-            if (size < 12 + 4 * stride)
+            if (size < 16 + 4 * stride)
                 throw new GLStreamError("ARB parameter record is short");
-            const target = view.getUint32(offset, true);
-            const kind = view.getUint32(offset + 4, true);
+            const kind = view.getUint32(offset, true);
+            const target = view.getUint32(offset + 4, true);
             const index = view.getUint32(offset + 8, true);
+            // The double-precision record carries exactly one parameter; the
+            // float one carries glProgramEnvParameters4fvEXT's whole run.
+            const count = doublePrecision ? 1 :
+                Math.max(1, view.getUint32(offset + 12, true));
             const program = this.arbProgramFor(target);
-            if (!program || !program.env)
+            if (!program)
                 return this.refuse("glProgramParameterARB",
-                    "no compiled ARB program is bound", { target },
+                    "no ARB program is bound", { target },
                     GL.INVALID_OPERATION);
-            if (index >= arbProgram.MAX_PROGRAM_PARAMETERS)
+            if (index >= arbProgram.MAX_PROGRAM_PARAMETERS ||
+                    count > arbProgram.MAX_PROGRAM_PARAMETERS - index)
                 return this.refuse("glProgramParameterARB",
                     "parameter index is beyond the advertised count",
-                    { index }, GL.INVALID_VALUE);
-            const storage = kind === 1 ? program.local : program.env;
-            for (let c = 0; c < 4; ++c) {
-                const at = offset + 12 + c * stride;
-                storage[index * 4 + c] = doublePrecision ?
+                    { index, count }, GL.INVALID_VALUE);
+            if (16 + count * 4 * stride > size)
+                throw new GLStreamError("ARB parameter record is truncated");
+            const storage = arbParameterStorage(program, kind);
+            for (let i = 0; i < count * 4; ++i) {
+                const at = offset + 16 + i * stride;
+                storage[index * 4 + i] = doublePrecision ?
                     view.getFloat64(at, true) : view.getFloat32(at, true);
             }
         },
@@ -7630,33 +9059,33 @@ struct Params { value : vec4<f32>, }
             case GL.PROGRAM_UNDER_NATIVE_LIMITS_ARB:
                 return program && program.compiled && program.compiled.ok ? 1 : 0;
             case GL.PROGRAM_ERROR_POSITION_ARB:
-                return program && program.compiled && !program.compiled.ok ?
-                    0 : -1;
+                // -1 means "the last ProgramString succeeded"; otherwise the
+                // character offset the parser stopped at.
+                return this.current && this.current.arbErrorPosition !== undefined ?
+                    this.current.arbErrorPosition : -1;
             default:
                 return 0;
             }
         },
 
+        /* {kind, target, index, status, data_size, reserved} then the four
+         * components at 24 -- the read-back twin of programParameterARB. */
         queryProgramParameterARB(view, offset, size, doublePrecision) {
-            if (size < 16) throw new GLStreamError("ARB query record is short");
-            const target = view.getUint32(offset, true);
-            const kind = view.getUint32(offset + 4, true);
+            if (size < 24) throw new GLStreamError("ARB query record is short");
+            const kind = view.getUint32(offset, true);
+            const target = view.getUint32(offset + 4, true);
             const index = view.getUint32(offset + 8, true);
             const program = this.arbProgramFor(target);
-            if (!program || !program.env ||
-                    index >= arbProgram.MAX_PROGRAM_PARAMETERS) {
-                view.setUint32(offset + 12, SYNC_STATUS_FAILED, true);
-                return;
-            }
-            const storage = kind === 1 ? program.local : program.env;
             const stride = doublePrecision ? 8 : 4;
-            if (16 + 4 * stride > size) {
+            if (!program || index >= arbProgram.MAX_PROGRAM_PARAMETERS ||
+                    24 + 4 * stride > size) {
                 view.setUint32(offset + 12, SYNC_STATUS_FAILED, true);
                 return;
             }
+            const storage = arbParameterStorage(program, kind);
             view.setUint32(offset + 12, SYNC_STATUS_OK, true);
             for (let c = 0; c < 4; ++c) {
-                const at = offset + 16 + c * stride;
+                const at = offset + 24 + c * stride;
                 if (doublePrecision) view.setFloat64(at, storage[index * 4 + c], true);
                 else view.setFloat32(at, storage[index * 4 + c], true);
             }
@@ -7733,6 +9162,7 @@ struct Params { value : vec4<f32>, }
                 "GL_ARB_texture_env_combine", "GL_ARB_texture_env_dot3",
                 "GL_ARB_texture_env_crossbar", "GL_ARB_texture_cube_map",
                 "GL_ARB_texture_border_clamp", "GL_ARB_texture_mirrored_repeat",
+                "GL_ARB_texture_compression", "GL_SGI_color_matrix",
                 "GL_ARB_texture_non_power_of_two", "GL_ARB_depth_texture",
                 "GL_ARB_shadow", "GL_ARB_point_parameters", "GL_ARB_point_sprite",
                 "GL_ARB_transpose_matrix", "GL_ARB_window_pos",
@@ -7749,7 +9179,7 @@ struct Params { value : vec4<f32>, }
                 "GL_EXT_packed_pixels", "GL_EXT_rescale_normal",
                 "GL_EXT_separate_specular_color", "GL_EXT_bgra",
                 "GL_EXT_framebuffer_object", "GL_EXT_framebuffer_blit",
-                "GL_EXT_paletted_texture",
+                "GL_EXT_paletted_texture", "GL_EXT_generate_mipmap",
                 "GL_SGIS_generate_mipmap", "GL_SGIS_texture_edge_clamp",
                 "GL_SGIS_texture_lod", "GL_NV_blend_square",
             ];
@@ -7758,8 +9188,7 @@ struct Params { value : vec4<f32>, }
             // S3TC will hand us compressed data forever, and saying so honestly
             // lets it choose.
             if (this.deviceFeatures.bc)
-                list.push("GL_EXT_texture_compression_s3tc",
-                    "GL_ARB_texture_compression");
+                list.push("GL_EXT_texture_compression_s3tc");
             if (this.deviceFeatures.float32Filterable)
                 list.push("GL_ARB_texture_float", "GL_ARB_half_float_pixel");
             if (this.deviceFeatures.depthClipControl)
@@ -7775,6 +9204,11 @@ struct Params { value : vec4<f32>, }
             case GL.VERSION: return "2.1 (v86gl/WebGPU)";
             case GL.SHADING_LANGUAGE_VERSION: return "1.20";
             case GL.EXTENSIONS: return this.extensionString();
+            case GL.PROGRAM_ERROR_STRING_ARB:
+                // Empty after a successful ProgramString, which is what the
+                // extension specifies -- not null, which would leave the guest
+                // reporting "unsupported query" for a legal one.
+                return this.current ? (this.current.arbErrorString || "") : "";
             default: return null;
             }
         },
@@ -7830,6 +9264,14 @@ struct Params { value : vec4<f32>, }
                 return Math.min(16384, limits.maxTextureDimension2D || 8192);
             case GL.NUM_COMPRESSED_TEXTURE_FORMATS:
                 return this.deviceFeatures.bc ? 4 : 0;
+            case GL.PROGRAM_ERROR_POSITION_ARB:
+                // This is the glGetIntegerv spelling, which is the one the
+                // extension actually defines and the one the guest uses. It
+                // must be -1 when the last glProgramStringARB succeeded: the
+                // generic default of 0 reads as "an error at character 0", so
+                // a conformance viewer reports a failure on a good program.
+                return s && s.arbErrorPosition !== undefined ?
+                    s.arbErrorPosition : -1;
             default: break;
             }
             if (!s) return null;
@@ -7841,6 +9283,8 @@ struct Params { value : vec4<f32>, }
             case GL.CURRENT_PROGRAM: return s.currentProgram;
             case GL.ARRAY_BUFFER_BINDING: return s.arrayBuffer;
             case GL.ELEMENT_ARRAY_BUFFER_BINDING: return s.elementArrayBuffer;
+            case GL.PIXEL_PACK_BUFFER_BINDING: return s.pixelPackBuffer;
+            case GL.PIXEL_UNPACK_BUFFER_BINDING: return s.pixelUnpackBuffer;
             case GL.FRAMEBUFFER_BINDING: return s.drawFramebuffer;
             case GL.RENDERBUFFER_BINDING: return s.renderbuffer;
             case GL.TEXTURE_BINDING_2D:

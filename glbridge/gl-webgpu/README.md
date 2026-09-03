@@ -35,6 +35,17 @@ reads the answer out of the record it submitted. Only `glReadPixels` and
 occlusion-query results need a GPU round trip, and those are the only two
 places the guest spins.
 
+Those two are worth stating precisely, because getting them wrong looks like
+success. Their answer cannot exist when the port write returns: it comes from
+a buffer mapping, and `mapAsync` resolves in a later browser turn. So the host
+writes `PENDING` into the record, completes it from the mapping callback
+(pixels first, status word last), and the guest waits -- `wait_for_host_status`
+for `glReadPixels`, a re-poll loop for `GL_QUERY_RESULT`. A guest that checks
+once always reads `PENDING`; a host that never resolves leaves a legal
+`while (!available)` loop spinning forever. `tests/gl_executor_test.js` asserts
+both halves, including that the status still reads `PENDING` the instant the
+batch returns.
+
 **Clip space is flipped once, in the vertex shader** (`clip.y = -clip.y`).
 Framebuffer row 0 is then GL's bottom row, so `glViewport`, `glScissor`,
 `glReadPixels`, `glCopyTexImage2D` and render-to-texture orientation all need
@@ -61,8 +72,8 @@ if a deviation is later eliminated the entry stays, marked as such.
 | D-03 | `GL_CLAMP`, `GL_CLAMP_TO_BORDER` | WebGPU has no border addressing; the sampler clamps to edge | A texture sampled outside [0,1] with a border colour shows the edge texel instead of the border |
 | D-04 | Line width > 1, `GL_LINE_SMOOTH`, `GL_POLYGON_SMOOTH` | WebGPU draws one-pixel lines and has no smooth hint. Wide lines are not yet expanded to quads | Wide or antialiased lines draw one pixel wide and hard-edged |
 | D-05 | User clip planes | Implemented as a fragment `discard` on an interpolated distance, not as geometry clipping (WebGPU's `clip-distances` feature is not yet available anywhere) | Geometry is not actually clipped, only its fragments; a depth pre-pass combined with clip planes can differ |
-| D-06 | Multisampling | The current render targets are single-sampled; sample-coverage state is retained but cannot change a 1x target | Edge antialiasing and coverage masks do not gain multisample quality |
-| D-07 | Occlusion query sample counts | WebGPU's occlusion query answers "did any sample pass"; a visible result reports a saturated count | An algorithm thresholding on the *number* of samples sees the saturated value |
+| D-06 | Multisampling | The current render targets are single-sampled; sample coverage maps to the one available coverage bit | Coverage value 0 can suppress samples, but intermediate coverage values do not gain multisample quality |
+| D-07 | Occlusion query sample counts | WebGPU's occlusion query answers "did any sample pass"; a visible result reports a saturated count. The set is resolved once per frame in `flushFrame`, so a result becomes available a frame after the draw, as on desktop | An algorithm thresholding on the *number* of samples sees the saturated value |
 | D-08 | `glDrawBuffer(GL_FRONT)` | There is no front buffer; writes to it are refused and counted | Old debugging code that draws directly to the front buffer produces nothing |
 | D-09 | Accumulation buffer | **Resolved with an RGBA16Float ping-pong accumulation target.** `GL_ACCUM`, `GL_LOAD`, `GL_RETURN`, `GL_MULT`, `GL_ADD` and masked/scissored clears are implemented | Extremely high dynamic-range accumulation has 16-bit-float precision rather than an implementation-selected desktop format |
 | D-10 | Texture fetch in non-uniform control flow | `textureSample` requires uniform control flow; a fetch inside a conditional or loop uses `textureSampleGrad` with the coordinate's derivatives. Counted as `stats.nonUniformSamples` | Mip selection inside a divergent branch can differ slightly from desktop |
@@ -73,7 +84,7 @@ if a deviation is later eliminated the entry stays, marked as such.
 | D-15 | `glDrawPixels`, `glBitmap`, `glCopyPixels` | Colour `DrawPixels`, bitmaps and colour copies use textured quads/copies with pixel-store, transfer, zoom, alpha, depth/stencil, blending, masks and scissor state. Depth/stencil pixel copies remain refused | Software paths that copy depth/stencil rectangles cannot use the pixel API |
 | D-16 | Line and polygon stipple | **Polygon stipple is resolved** with the exact 32x32 pattern in fragment coordinates. Line stipple is retained but not yet applied | Stippled lines draw solid; stippled polygons do not |
 | D-17 | `glPolygonMode(GL_LINE\|GL_POINT)` | **Resolved by converting triangles to edge or vertex index lists.** If front/back modes differ without culling, the front mode is used for both and reported | Shared triangle edges may be rasterized twice; different uncullled front/back modes cannot be represented in one WebGPU draw |
-| D-18 | An ARB program on one stage with the fixed pipeline on the other | Refused: the two do not share a varying layout | A program enabling only `GL_VERTEX_PROGRAM_ARB` draws nothing, loudly |
+| D-18 | An ARB fragment program with the fixed vertex pipeline | Refused: the two do not share a varying layout. The other direction -- `GL_VERTEX_PROGRAM_ARB` with the fixed fragment stage -- is resolved by generating the fixed fragment shader against the ARB stage's varyings | Enabling only `GL_FRAGMENT_PROGRAM_ARB` draws nothing, loudly |
 
 Refusals are never silent. Each one logs once with enough context to locate
 it, increments `getStats().refusals`, and -- where GL defines an error for the
@@ -92,6 +103,9 @@ executor implements against the adapter it actually got, never guessed:
 - `GL_ARB_texture_float` and `GL_ARB_half_float_pixel` require
   `float32-filterable`.
 - `GL_ARB_depth_clamp` requires `depth-clip-control`.
+- The GLView 1.3/1.4 contract includes generic texture compression, automatic
+  mipmap generation, sample coverage, and `GL_SGI_color_matrix`. Full
+  `GL_ARB_imaging` is deliberately not advertised.
 - `GL_MAX_TEXTURE_SIZE` and friends come from the device's limits.
 
 `glGetString(GL_VERSION)` reports `2.1` and `GL_SHADING_LANGUAGE_VERSION`

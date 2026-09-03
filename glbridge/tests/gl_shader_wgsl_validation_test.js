@@ -198,6 +198,22 @@ checkProgram("mrt",
     "  gl_FragData[1] = vec4(0.0, 1.0, 0.0, 1.0);\n" +
     "  gl_FragDepth = 0.5;\n}");
 
+// These shaders bypass the GLSL translator, so exercise them directly too.
+// A syntax error here otherwise appears only when CopyTexImage, mipmap, or a
+// scaling framebuffer blit first runs on a real adapter.
+const executorSource = fs.readFileSync(path.join(__dirname, "..", "gl-webgpu",
+    "gl_executor.js"), "utf8");
+for (const name of ["COLOR_COPY_WGSL", "MIPMAP_WGSL", "COLOR_BLIT_WGSL"]) {
+    const match = new RegExp("const\\s+" + name + "\\s*=\\s*`([\\s\\S]*?)`;" )
+        .exec(executorSource);
+    if (!match) failures.push([name, "shader constant is missing"]);
+    else {
+        const error = validate(name, match[1]);
+        if (error) failures.push([name, error]);
+        else ++passed;
+    }
+}
+
 for (const [name, log] of failures)
     console.error("FAIL: " + name + "\n" + String(log).slice(0, 900));
 console.log(passed + " shader pairs validated (" + corpus.length +

@@ -72,6 +72,26 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_COLOR_BUFFER_BIT   0x00004000
 #define GL_DEPTH_BUFFER_BIT   0x00000100
 #define GL_STENCIL_BUFFER_BIT 0x00000400
+#define GL_CURRENT_BIT        0x00000001
+#define GL_POINT_BIT          0x00000002
+#define GL_LINE_BIT           0x00000004
+#define GL_POLYGON_BIT        0x00000008
+#define GL_POLYGON_STIPPLE_BIT 0x00000010
+#define GL_PIXEL_MODE_BIT     0x00000020
+#define GL_LIGHTING_BIT       0x00000040
+#define GL_FOG_BIT            0x00000080
+#define GL_ACCUM_BUFFER_BIT   0x00000200
+#define GL_VIEWPORT_BIT       0x00000800
+#define GL_TRANSFORM_BIT      0x00001000
+#define GL_ENABLE_BIT         0x00002000
+#define GL_HINT_BIT           0x00008000
+#define GL_EVAL_BIT           0x00010000
+#define GL_LIST_BIT           0x00020000
+#define GL_TEXTURE_BIT        0x00040000
+#define GL_SCISSOR_BIT        0x00080000
+#define GL_MULTISAMPLE_BIT_ARB 0x20000000
+#define GL_CLIENT_PIXEL_STORE_BIT 0x00000001
+#define GL_CLIENT_VERTEX_ARRAY_BIT 0x00000002
 #define GL_NEVER              0x0200
 #define GL_LESS               0x0201
 #define GL_EQUAL              0x0202
@@ -207,6 +227,17 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_MODELVIEW_STACK_DEPTH 0x0BA3
 #define GL_PROJECTION_STACK_DEPTH 0x0BA4
 #define GL_TEXTURE_STACK_DEPTH 0x0BA5
+#define GL_COLOR_MATRIX_SGI 0x80B1
+#define GL_COLOR_MATRIX_STACK_DEPTH_SGI 0x80B2
+#define GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI 0x80B3
+#define GL_POST_COLOR_MATRIX_RED_SCALE_SGI 0x80B4
+#define GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI 0x80B5
+#define GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI 0x80B6
+#define GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI 0x80B7
+#define GL_POST_COLOR_MATRIX_RED_BIAS_SGI 0x80B8
+#define GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI 0x80B9
+#define GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI 0x80BA
+#define GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI 0x80BB
 #define GL_ATTRIB_STACK_DEPTH 0x0BB0
 #define GL_CLIENT_ATTRIB_STACK_DEPTH 0x0BB1
 #define GL_UNPACK_ALIGNMENT   0x0CF5
@@ -588,6 +619,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_PACK_IMAGE_HEIGHT  0x806C
 #define GL_BGR_EXT            0x80E0
 #define GL_BGRA_EXT           0x80E1
+#define GL_UNSIGNED_BYTE_3_3_2    0x8032
+#define GL_UNSIGNED_BYTE_2_3_3_REV 0x8362
 #define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
 #define GL_UNSIGNED_SHORT_5_5_5_1 0x8034
 #define GL_UNSIGNED_SHORT_5_6_5   0x8363
@@ -596,6 +629,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_UNSIGNED_SHORT_1_5_5_5_REV 0x8366
 #define GL_UNSIGNED_INT_8_8_8_8   0x8035
 #define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
+#define GL_UNSIGNED_INT_10_10_10_2 0x8036
+#define GL_UNSIGNED_INT_2_10_10_10_REV 0x8368
 #define GL_COLOR             0x1800
 #define GL_DEPTH             0x1801
 #define GL_STENCIL           0x1802
@@ -609,6 +644,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_INVALID_ENUM       0x0500
 #define GL_INVALID_VALUE      0x0501
 #define GL_INVALID_OPERATION  0x0502
+#define GL_STACK_OVERFLOW      0x0503
+#define GL_STACK_UNDERFLOW     0x0504
 #define GL_OUT_OF_MEMORY      0x0505
 #define GL_INVALID_FRAMEBUFFER_OPERATION_EXT 0x0506
 #define GL_VERTEX_ARRAY       0x8074
@@ -1095,6 +1132,8 @@ static int32_t g_last_surface_x = 0;
 static int32_t g_last_surface_y = 0;
 static uint32_t g_last_surface_width = 0;
 static uint32_t g_last_surface_height = 0;
+static uint32_t g_last_surface_context_id = 0;
+static uint32_t g_last_surface_share_group = 0;
 static BOOL g_have_last_surface = FALSE;
 static BOOL g_context_destroy_sent = FALSE;
 static BOOL g_renderer_lifecycle_started = FALSE;
@@ -1107,6 +1146,7 @@ typedef struct {
     HWND current_hwnd;
     BOOL ever_current;
     uint32_t share_group;
+    void* guest_state;
 } V86GLWGLContext;
 static V86GLWGLContext g_wgl_contexts[V86GL_MAX_WGL_CONTEXTS];
 static uint32_t g_wgl_context_count = 0;
@@ -1210,6 +1250,8 @@ static GLint g_unpack_image_height = 0;
 static GLint g_unpack_skip_images = 0;
 
 void APIENTRY glPixelStorei(GLenum pname, GLint param);
+void APIENTRY glPushClientAttrib(GLbitfield mask);
+void APIENTRY glPopClientAttrib(void);
 static GLint g_pack_alignment = 4;
 static GLint g_pack_row_length = 0;
 static GLint g_pack_skip_rows = 0;
@@ -1396,6 +1438,8 @@ static const char g_gl_extensions_wined3d_gl15[] =
     "GL_EXT_blend_minmax "
     "GL_ARB_texture_cube_map "
     "GL_ARB_multisample "
+    "GL_ARB_texture_compression "
+    "GL_SGI_color_matrix "
     "GL_ARB_texture_env_dot3 "
     "GL_ARB_draw_buffers "
     "GL_ARB_texture_border_clamp "
@@ -1430,6 +1474,8 @@ static const char g_gl_extensions_wined3d_gl15[] =
     "GL_EXT_draw_range_elements "
     "GL_EXT_texture_env_add "
     "GL_EXT_texture_env_combine "
+    "GL_EXT_generate_mipmap "
+    "GL_SGIS_generate_mipmap "
     "GL_EXT_texture_filter_anisotropic "
     "GL_EXT_texture_lod_bias "
     "GL_EXT_texture_object";
@@ -1452,6 +1498,10 @@ static const char g_gl_extensions_gl21_base[] =
     "GL_EXT_blend_subtract "
     "GL_EXT_blend_minmax "
     "GL_ARB_texture_cube_map "
+    "GL_ARB_multisample "
+    "GL_ARB_texture_compression "
+    "GL_ARB_texture_border_clamp "
+    "GL_SGI_color_matrix "
     "GL_ARB_texture_env_dot3 "
     "GL_ARB_draw_buffers "
     "GL_ARB_transpose_matrix "
@@ -1491,6 +1541,8 @@ static const char g_gl_extensions_gl21_base[] =
     "GL_EXT_draw_range_elements "
     "GL_EXT_texture_env_add "
     "GL_EXT_texture_env_combine "
+    "GL_EXT_generate_mipmap "
+    "GL_SGIS_generate_mipmap "
     "GL_EXT_texture_lod_bias "
     "GL_EXT_texture_object";
 #define V86GL_GL_EXTENSIONS_MAX 4096
@@ -1749,9 +1801,13 @@ static GLdouble g_map_grid2_v2 = 1.0;
 static GLfloat g_modelview_stack[32][16];
 static GLfloat g_projection_stack[2][16];
 static GLfloat g_texture_stack[2][16];
+static GLfloat g_color_matrix_stack[2][16];
 static GLint g_modelview_stack_depth = 0;
 static GLint g_projection_stack_depth = 0;
 static GLint g_texture_stack_depth = 0;
+static GLint g_color_matrix_stack_depth = 0;
+static GLfloat g_post_color_matrix_scale[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+static GLfloat g_post_color_matrix_bias[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 typedef struct {
     BOOL enabled;
@@ -1943,6 +1999,299 @@ static DisplayList* g_current_display_list = NULL;
 static GLenum g_current_display_list_mode = GL_COMPILE;
 static BOOL g_replaying_display_list = FALSE;
 
+#define V86GL_ATTRIB_STACK_DEPTH 16
+typedef struct {
+    GLbitfield mask;
+    GLfloat current_color[4], current_texcoord[4], current_normal[3];
+    GLfloat current_secondary_color[4], current_fog_coord;
+    GLfloat clear_color[4], clear_accum[4], clear_index;
+    GLfloat blend_color[4], sample_coverage_value;
+    GLdouble clear_depth, depth_range[2];
+    GLfloat point_size, line_width, polygon_offset_factor, polygon_offset_units;
+    GLint line_stipple_factor, viewport[4], scissor_box[4], clear_stencil;
+    GLushort line_stipple_pattern;
+    GLboolean current_edge_flag, depth_mask, color_mask[4], sample_coverage_invert;
+    GLenum depth_func, stencil_func, stencil_fail, stencil_zfail, stencil_zpass;
+    GLint stencil_ref, stencil_back_ref;
+    GLuint stencil_value_mask, stencil_write_mask;
+    GLuint stencil_back_value_mask, stencil_back_write_mask;
+    GLenum stencil_back_func, stencil_back_fail, stencil_back_zfail, stencil_back_zpass;
+    GLenum shade_model, cull_face_mode, front_face_mode;
+    GLenum blend_src, blend_dst, blend_src_alpha, blend_dst_alpha;
+    GLenum blend_equation_rgb, blend_equation_alpha, alpha_func;
+    GLfloat alpha_ref;
+    GLenum polygon_mode_front, polygon_mode_back;
+    GLenum color_material_face, color_material_param;
+    GLenum active_texture, matrix_mode;
+    GLuint list_base, index_mask;
+    BOOL have_viewport;
+    CapState cap_states[V86GL_MAX_CAP_STATES];
+    TextureUnitState texture_units[V86GL_MAX_TEXTURE_UNITS];
+    GLfloat fog_color[4], fog_index, fog_density, fog_start, fog_end;
+    GLenum fog_mode, fog_coordinate_source;
+    GLdouble clip_planes[6][4];
+    LightState lights[8];
+    MaterialState materials[2];
+    GLfloat light_model_ambient[4];
+    GLboolean light_model_local_viewer, light_model_two_side;
+    GLenum light_model_color_control;
+    GLfloat post_color_matrix_scale[4], post_color_matrix_bias[4];
+    GLubyte polygon_stipple[128];
+    GLint map_grid1_un, map_grid2_un, map_grid2_vn;
+    GLdouble map_grid1_u1, map_grid1_u2;
+    GLdouble map_grid2_u1, map_grid2_u2, map_grid2_v1, map_grid2_v2;
+    GLenum draw_buffers[V86GL_MAX_DRAW_BUFFERS];
+    GLenum point_sprite_coord_origin;
+} ServerAttribSnapshot;
+
+typedef struct {
+    GLbitfield mask;
+    GLint unpack_alignment, unpack_row_length, unpack_skip_rows, unpack_skip_pixels;
+    GLint unpack_image_height, unpack_skip_images;
+    GLint pack_alignment, pack_row_length, pack_skip_rows, pack_skip_pixels;
+    GLint pack_image_height, pack_skip_images;
+    GLenum client_active_texture;
+    GLuint array_buffer_binding, element_array_buffer_binding;
+    GLuint pixel_pack_buffer_binding, pixel_unpack_buffer_binding;
+    ClientArrayState vertex_array, color_array, index_array, normal_array;
+    ClientArrayState edge_flag_array, secondary_color_array, fog_coord_array;
+    ClientArrayState texcoord_arrays[V86GL_MAX_TEXTURE_UNITS];
+    GenericAttribState generic_attribs[V86GL_MAX_VERTEX_ATTRIBS];
+} ClientAttribSnapshot;
+
+static ServerAttribSnapshot g_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
+static ClientAttribSnapshot g_client_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
+static GLint g_attrib_stack_depth = 0;
+static GLint g_client_attrib_stack_depth = 0;
+
+static void capture_server_attrib(ServerAttribSnapshot* s, GLbitfield mask) {
+    ZeroMemory(s, sizeof(*s));
+    s->mask = mask;
+    CopyMemory(s->current_color, g_current_color, sizeof(s->current_color));
+    CopyMemory(s->current_texcoord, g_current_texcoord, sizeof(s->current_texcoord));
+    CopyMemory(s->current_normal, g_current_normal, sizeof(s->current_normal));
+    CopyMemory(s->current_secondary_color, g_current_secondary_color,
+               sizeof(s->current_secondary_color));
+    s->current_fog_coord = g_current_fog_coord;
+    s->current_edge_flag = g_current_edge_flag;
+    CopyMemory(s->clear_color, g_clear_color, sizeof(s->clear_color));
+    CopyMemory(s->clear_accum, g_clear_accum, sizeof(s->clear_accum));
+    s->clear_index = g_clear_index;
+    CopyMemory(s->blend_color, g_blend_color, sizeof(s->blend_color));
+    s->clear_depth = g_clear_depth;
+    CopyMemory(s->depth_range, g_depth_range, sizeof(s->depth_range));
+    s->point_size = g_point_size;
+    s->line_width = g_line_width;
+    s->line_stipple_factor = g_line_stipple_factor;
+    s->line_stipple_pattern = g_line_stipple_pattern;
+    s->polygon_offset_factor = g_polygon_offset_factor;
+    s->polygon_offset_units = g_polygon_offset_units;
+    CopyMemory(s->viewport, g_viewport, sizeof(s->viewport));
+    CopyMemory(s->scissor_box, g_scissor_box, sizeof(s->scissor_box));
+    s->clear_stencil = g_clear_stencil;
+    s->depth_mask = g_depth_mask;
+    CopyMemory(s->color_mask, g_color_mask, sizeof(s->color_mask));
+    s->sample_coverage_value = g_sample_coverage_value;
+    s->sample_coverage_invert = g_sample_coverage_invert;
+    s->depth_func = g_depth_func;
+    s->stencil_func = g_stencil_func; s->stencil_ref = g_stencil_ref;
+    s->stencil_value_mask = g_stencil_value_mask;
+    s->stencil_write_mask = g_stencil_write_mask;
+    s->stencil_fail = g_stencil_fail; s->stencil_zfail = g_stencil_zfail;
+    s->stencil_zpass = g_stencil_zpass;
+    s->stencil_back_func = g_stencil_back_func;
+    s->stencil_back_ref = g_stencil_back_ref;
+    s->stencil_back_value_mask = g_stencil_back_value_mask;
+    s->stencil_back_write_mask = g_stencil_back_write_mask;
+    s->stencil_back_fail = g_stencil_back_fail;
+    s->stencil_back_zfail = g_stencil_back_zfail;
+    s->stencil_back_zpass = g_stencil_back_zpass;
+    s->shade_model = g_shade_model; s->cull_face_mode = g_cull_face_mode;
+    s->front_face_mode = g_front_face_mode;
+    s->blend_src = g_blend_src; s->blend_dst = g_blend_dst;
+    s->blend_src_alpha = g_blend_src_alpha; s->blend_dst_alpha = g_blend_dst_alpha;
+    s->blend_equation_rgb = g_blend_equation_rgb;
+    s->blend_equation_alpha = g_blend_equation_alpha;
+    s->alpha_func = g_alpha_func; s->alpha_ref = g_alpha_ref;
+    s->polygon_mode_front = g_polygon_mode_front;
+    s->polygon_mode_back = g_polygon_mode_back;
+    s->color_material_face = g_color_material_face;
+    s->color_material_param = g_color_material_param;
+    s->active_texture = g_active_texture; s->matrix_mode = g_matrix_mode;
+    s->list_base = g_list_base; s->index_mask = g_index_mask;
+    s->have_viewport = g_have_viewport;
+    CopyMemory(s->cap_states, g_cap_states, sizeof(s->cap_states));
+    CopyMemory(s->texture_units, g_texture_units, sizeof(s->texture_units));
+    CopyMemory(s->fog_color, g_fog_color, sizeof(s->fog_color));
+    s->fog_index = g_fog_index; s->fog_density = g_fog_density;
+    s->fog_start = g_fog_start; s->fog_end = g_fog_end;
+    s->fog_mode = g_fog_mode; s->fog_coordinate_source = g_fog_coordinate_source;
+    CopyMemory(s->clip_planes, g_clip_planes, sizeof(s->clip_planes));
+    CopyMemory(s->lights, g_lights, sizeof(s->lights));
+    CopyMemory(s->materials, g_materials, sizeof(s->materials));
+    CopyMemory(s->light_model_ambient, g_light_model_ambient,
+               sizeof(s->light_model_ambient));
+    s->light_model_local_viewer = g_light_model_local_viewer;
+    s->light_model_two_side = g_light_model_two_side;
+    s->light_model_color_control = g_light_model_color_control;
+    CopyMemory(s->post_color_matrix_scale, g_post_color_matrix_scale,
+               sizeof(s->post_color_matrix_scale));
+    CopyMemory(s->post_color_matrix_bias, g_post_color_matrix_bias,
+               sizeof(s->post_color_matrix_bias));
+    CopyMemory(s->polygon_stipple, g_polygon_stipple, sizeof(s->polygon_stipple));
+    s->map_grid1_un = g_map_grid1_un; s->map_grid1_u1 = g_map_grid1_u1;
+    s->map_grid1_u2 = g_map_grid1_u2; s->map_grid2_un = g_map_grid2_un;
+    s->map_grid2_vn = g_map_grid2_vn; s->map_grid2_u1 = g_map_grid2_u1;
+    s->map_grid2_u2 = g_map_grid2_u2; s->map_grid2_v1 = g_map_grid2_v1;
+    s->map_grid2_v2 = g_map_grid2_v2;
+    CopyMemory(s->draw_buffers, g_draw_buffers, sizeof(s->draw_buffers));
+    s->point_sprite_coord_origin = g_point_sprite_coord_origin;
+}
+
+static void restore_server_attrib(const ServerAttribSnapshot* s) {
+    GLbitfield m = s->mask;
+    if (m & GL_CURRENT_BIT) {
+        CopyMemory(g_current_color, s->current_color, sizeof(g_current_color));
+        CopyMemory(g_current_texcoord, s->current_texcoord, sizeof(g_current_texcoord));
+        CopyMemory(g_current_normal, s->current_normal, sizeof(g_current_normal));
+        CopyMemory(g_current_secondary_color, s->current_secondary_color,
+                   sizeof(g_current_secondary_color));
+        g_current_fog_coord = s->current_fog_coord;
+        g_current_edge_flag = s->current_edge_flag;
+    }
+    if (m & GL_POINT_BIT) { g_point_size = s->point_size;
+        g_point_sprite_coord_origin = s->point_sprite_coord_origin; }
+    if (m & GL_LINE_BIT) { g_line_width = s->line_width;
+        g_line_stipple_factor = s->line_stipple_factor;
+        g_line_stipple_pattern = s->line_stipple_pattern; }
+    if (m & GL_POLYGON_BIT) { g_cull_face_mode = s->cull_face_mode;
+        g_front_face_mode = s->front_face_mode;
+        g_polygon_mode_front = s->polygon_mode_front;
+        g_polygon_mode_back = s->polygon_mode_back;
+        g_polygon_offset_factor = s->polygon_offset_factor;
+        g_polygon_offset_units = s->polygon_offset_units; }
+    if (m & GL_POLYGON_STIPPLE_BIT)
+        CopyMemory(g_polygon_stipple, s->polygon_stipple, sizeof(g_polygon_stipple));
+    if (m & GL_LIGHTING_BIT) {
+        CopyMemory(g_lights, s->lights, sizeof(g_lights));
+        CopyMemory(g_materials, s->materials, sizeof(g_materials));
+        CopyMemory(g_light_model_ambient, s->light_model_ambient,
+                   sizeof(g_light_model_ambient));
+        g_light_model_local_viewer = s->light_model_local_viewer;
+        g_light_model_two_side = s->light_model_two_side;
+        g_light_model_color_control = s->light_model_color_control;
+        g_color_material_face = s->color_material_face;
+        g_color_material_param = s->color_material_param;
+        g_shade_model = s->shade_model;
+    }
+    if (m & GL_FOG_BIT) { CopyMemory(g_fog_color, s->fog_color, sizeof(g_fog_color));
+        g_fog_index = s->fog_index; g_fog_density = s->fog_density;
+        g_fog_start = s->fog_start; g_fog_end = s->fog_end;
+        g_fog_mode = s->fog_mode; g_fog_coordinate_source = s->fog_coordinate_source; }
+    if (m & GL_DEPTH_BUFFER_BIT) { g_clear_depth = s->clear_depth;
+        g_depth_func = s->depth_func; g_depth_mask = s->depth_mask; }
+    if (m & GL_ACCUM_BUFFER_BIT)
+        CopyMemory(g_clear_accum, s->clear_accum, sizeof(g_clear_accum));
+    if (m & GL_PIXEL_MODE_BIT) {
+        CopyMemory(g_post_color_matrix_scale, s->post_color_matrix_scale,
+                   sizeof(g_post_color_matrix_scale));
+        CopyMemory(g_post_color_matrix_bias, s->post_color_matrix_bias,
+                   sizeof(g_post_color_matrix_bias));
+    }
+    if (m & GL_STENCIL_BUFFER_BIT) { g_clear_stencil = s->clear_stencil;
+        g_stencil_func = s->stencil_func; g_stencil_ref = s->stencil_ref;
+        g_stencil_value_mask = s->stencil_value_mask;
+        g_stencil_write_mask = s->stencil_write_mask;
+        g_stencil_fail = s->stencil_fail; g_stencil_zfail = s->stencil_zfail;
+        g_stencil_zpass = s->stencil_zpass;
+        g_stencil_back_func = s->stencil_back_func;
+        g_stencil_back_ref = s->stencil_back_ref;
+        g_stencil_back_value_mask = s->stencil_back_value_mask;
+        g_stencil_back_write_mask = s->stencil_back_write_mask;
+        g_stencil_back_fail = s->stencil_back_fail;
+        g_stencil_back_zfail = s->stencil_back_zfail;
+        g_stencil_back_zpass = s->stencil_back_zpass; }
+    if (m & GL_VIEWPORT_BIT) { CopyMemory(g_viewport, s->viewport, sizeof(g_viewport));
+        CopyMemory(g_depth_range, s->depth_range, sizeof(g_depth_range));
+        g_have_viewport = s->have_viewport; }
+    if (m & GL_TRANSFORM_BIT) { g_matrix_mode = s->matrix_mode;
+        CopyMemory(g_clip_planes, s->clip_planes, sizeof(g_clip_planes)); }
+    if (m & GL_ENABLE_BIT)
+        CopyMemory(g_cap_states, s->cap_states, sizeof(g_cap_states));
+    if (m & GL_COLOR_BUFFER_BIT) {
+        CopyMemory(g_clear_color, s->clear_color, sizeof(g_clear_color));
+        g_clear_index = s->clear_index; CopyMemory(g_color_mask, s->color_mask,
+                                                   sizeof(g_color_mask));
+        g_blend_src = s->blend_src; g_blend_dst = s->blend_dst;
+        g_blend_src_alpha = s->blend_src_alpha; g_blend_dst_alpha = s->blend_dst_alpha;
+        g_blend_equation_rgb = s->blend_equation_rgb;
+        g_blend_equation_alpha = s->blend_equation_alpha;
+        CopyMemory(g_blend_color, s->blend_color, sizeof(g_blend_color));
+        g_alpha_func = s->alpha_func; g_alpha_ref = s->alpha_ref;
+        g_index_mask = s->index_mask;
+        CopyMemory(g_draw_buffers, s->draw_buffers, sizeof(g_draw_buffers));
+    }
+    if (m & GL_LIST_BIT) g_list_base = s->list_base;
+    if (m & GL_TEXTURE_BIT) { g_active_texture = s->active_texture;
+        CopyMemory(g_texture_units, s->texture_units, sizeof(g_texture_units)); }
+    if (m & GL_SCISSOR_BIT)
+        CopyMemory(g_scissor_box, s->scissor_box, sizeof(g_scissor_box));
+    if (m & GL_MULTISAMPLE_BIT_ARB) { g_sample_coverage_value = s->sample_coverage_value;
+        g_sample_coverage_invert = s->sample_coverage_invert; }
+    if (m & GL_EVAL_BIT) { g_map_grid1_un = s->map_grid1_un;
+        g_map_grid1_u1 = s->map_grid1_u1; g_map_grid1_u2 = s->map_grid1_u2;
+        g_map_grid2_un = s->map_grid2_un; g_map_grid2_vn = s->map_grid2_vn;
+        g_map_grid2_u1 = s->map_grid2_u1; g_map_grid2_u2 = s->map_grid2_u2;
+        g_map_grid2_v1 = s->map_grid2_v1; g_map_grid2_v2 = s->map_grid2_v2; }
+}
+
+static void capture_client_attrib(ClientAttribSnapshot* s, GLbitfield mask) {
+    ZeroMemory(s, sizeof(*s)); s->mask = mask;
+    s->unpack_alignment = g_unpack_alignment; s->unpack_row_length = g_unpack_row_length;
+    s->unpack_skip_rows = g_unpack_skip_rows; s->unpack_skip_pixels = g_unpack_skip_pixels;
+    s->unpack_image_height = g_unpack_image_height; s->unpack_skip_images = g_unpack_skip_images;
+    s->pack_alignment = g_pack_alignment; s->pack_row_length = g_pack_row_length;
+    s->pack_skip_rows = g_pack_skip_rows; s->pack_skip_pixels = g_pack_skip_pixels;
+    s->pack_image_height = g_pack_image_height; s->pack_skip_images = g_pack_skip_images;
+    s->client_active_texture = g_client_active_texture;
+    s->array_buffer_binding = g_array_buffer_binding;
+    s->element_array_buffer_binding = g_element_array_buffer_binding;
+    s->pixel_pack_buffer_binding = g_pixel_pack_buffer_binding;
+    s->pixel_unpack_buffer_binding = g_pixel_unpack_buffer_binding;
+    s->vertex_array = g_vertex_array; s->color_array = g_color_array;
+    s->index_array = g_index_array; s->normal_array = g_normal_array;
+    s->edge_flag_array = g_edge_flag_array;
+    s->secondary_color_array = g_secondary_color_array;
+    s->fog_coord_array = g_fog_coord_array;
+    CopyMemory(s->texcoord_arrays, g_texcoord_arrays, sizeof(s->texcoord_arrays));
+    CopyMemory(s->generic_attribs, g_generic_attribs, sizeof(s->generic_attribs));
+}
+
+static void restore_client_attrib(const ClientAttribSnapshot* s) {
+    if (s->mask & GL_CLIENT_PIXEL_STORE_BIT) {
+        g_unpack_alignment = s->unpack_alignment; g_unpack_row_length = s->unpack_row_length;
+        g_unpack_skip_rows = s->unpack_skip_rows; g_unpack_skip_pixels = s->unpack_skip_pixels;
+        g_unpack_image_height = s->unpack_image_height; g_unpack_skip_images = s->unpack_skip_images;
+        g_pack_alignment = s->pack_alignment; g_pack_row_length = s->pack_row_length;
+        g_pack_skip_rows = s->pack_skip_rows; g_pack_skip_pixels = s->pack_skip_pixels;
+        g_pack_image_height = s->pack_image_height; g_pack_skip_images = s->pack_skip_images;
+        g_pixel_pack_buffer_binding = s->pixel_pack_buffer_binding;
+        g_pixel_unpack_buffer_binding = s->pixel_unpack_buffer_binding;
+    }
+    if (s->mask & GL_CLIENT_VERTEX_ARRAY_BIT) {
+        g_client_active_texture = s->client_active_texture;
+        g_array_buffer_binding = s->array_buffer_binding;
+        g_element_array_buffer_binding = s->element_array_buffer_binding;
+        g_vertex_array = s->vertex_array; g_color_array = s->color_array;
+        g_index_array = s->index_array; g_normal_array = s->normal_array;
+        g_edge_flag_array = s->edge_flag_array;
+        g_secondary_color_array = s->secondary_color_array;
+        g_fog_coord_array = s->fog_coord_array;
+        CopyMemory(g_texcoord_arrays, s->texcoord_arrays, sizeof(g_texcoord_arrays));
+        CopyMemory(g_generic_attribs, s->generic_attribs, sizeof(g_generic_attribs));
+    }
+}
+
 static void init_query_state(void) {
     uint32_t unit;
     uint32_t light;
@@ -2008,6 +2357,7 @@ static void init_query_state(void) {
         g_modelview_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
         g_projection_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
         g_texture_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
+        g_color_matrix_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
     }
     for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++) {
         g_generic_attribs[i].size = 4;
@@ -2015,6 +2365,172 @@ static void init_query_state(void) {
         g_generic_attribs[i].current[3] = 1.0f;
     }
     g_query_state_initialized = TRUE;
+}
+
+/*
+ * The OpenGL state above predates the WGL implementation and is stored in
+ * process globals.  That is fine while one HGLRC exists, but capability tools
+ * such as glview create a tiny probe context, delete it, and then create the
+ * real window context.  Without a per-context shadow, the probe's error flag,
+ * matrices, array pointers and bindings leak into the real context even though
+ * the WebGPU executor correctly created a fresh state object.
+ *
+ * Keep object namespaces process-wide for the existing sharing model, while
+ * saving all context-local shadow state on unbind and restoring it on bind.
+ */
+typedef struct {
+    ServerAttribSnapshot server;
+    ClientAttribSnapshot client;
+    GLfloat modelview_stack[32][16];
+    GLfloat projection_stack[2][16];
+    GLfloat texture_stack[2][16];
+    GLfloat color_matrix_stack[2][16];
+    GLint modelview_stack_depth, projection_stack_depth, texture_stack_depth;
+    GLint color_matrix_stack_depth;
+    ServerAttribSnapshot attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
+    ClientAttribSnapshot client_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
+    GLint attrib_stack_depth, client_attrib_stack_depth;
+    GLuint current_program, current_vertex_program_arb;
+    GLuint current_fragment_program_arb, current_samples_passed_query;
+    GLuint draw_framebuffer_binding, read_framebuffer_binding;
+    GLuint renderbuffer_binding;
+    GLenum error, render_mode, active_stencil_face_ext;
+    GLfloat current_index;
+    GLfloat current_raster_position[4], current_raster_color[4];
+    GLfloat current_raster_texcoord[4], current_raster_index;
+    GLfloat current_raster_distance;
+    GLboolean current_raster_valid;
+    GLuint name_stack[64];
+    GLint name_stack_depth;
+    char program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
+} GuestContextState;
+
+static GuestContextState g_default_guest_context_state;
+static BOOL g_default_guest_context_state_valid = FALSE;
+
+static void capture_guest_context_state(GuestContextState* state) {
+    capture_server_attrib(&state->server, 0xFFFFFFFFu);
+    capture_client_attrib(&state->client,
+                          GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT);
+    CopyMemory(state->modelview_stack, g_modelview_stack,
+               sizeof(state->modelview_stack));
+    CopyMemory(state->projection_stack, g_projection_stack,
+               sizeof(state->projection_stack));
+    CopyMemory(state->texture_stack, g_texture_stack,
+               sizeof(state->texture_stack));
+    CopyMemory(state->color_matrix_stack, g_color_matrix_stack,
+               sizeof(state->color_matrix_stack));
+    state->modelview_stack_depth = g_modelview_stack_depth;
+    state->projection_stack_depth = g_projection_stack_depth;
+    state->texture_stack_depth = g_texture_stack_depth;
+    state->color_matrix_stack_depth = g_color_matrix_stack_depth;
+    CopyMemory(state->attrib_stack, g_attrib_stack, sizeof(state->attrib_stack));
+    CopyMemory(state->client_attrib_stack, g_client_attrib_stack,
+               sizeof(state->client_attrib_stack));
+    state->attrib_stack_depth = g_attrib_stack_depth;
+    state->client_attrib_stack_depth = g_client_attrib_stack_depth;
+    state->current_program = g_current_program;
+    state->current_vertex_program_arb = g_current_vertex_program_arb;
+    state->current_fragment_program_arb = g_current_fragment_program_arb;
+    state->current_samples_passed_query = g_current_samples_passed_query;
+    state->draw_framebuffer_binding = g_draw_framebuffer_binding;
+    state->read_framebuffer_binding = g_read_framebuffer_binding;
+    state->renderbuffer_binding = g_renderbuffer_binding;
+    state->error = g_error;
+    state->render_mode = g_render_mode;
+    state->active_stencil_face_ext = g_active_stencil_face_ext;
+    state->current_index = g_current_index;
+    CopyMemory(state->current_raster_position, g_current_raster_position,
+               sizeof(state->current_raster_position));
+    CopyMemory(state->current_raster_color, g_current_raster_color,
+               sizeof(state->current_raster_color));
+    CopyMemory(state->current_raster_texcoord, g_current_raster_texcoord,
+               sizeof(state->current_raster_texcoord));
+    state->current_raster_index = g_current_raster_index;
+    state->current_raster_distance = g_current_raster_distance;
+    state->current_raster_valid = g_current_raster_valid;
+    CopyMemory(state->name_stack, g_name_stack, sizeof(state->name_stack));
+    state->name_stack_depth = g_name_stack_depth;
+    CopyMemory(state->program_error_string, g_program_error_string,
+               sizeof(state->program_error_string));
+}
+
+static void restore_guest_context_state(const GuestContextState* state) {
+    restore_server_attrib(&state->server);
+    restore_client_attrib(&state->client);
+    CopyMemory(g_modelview_stack, state->modelview_stack,
+               sizeof(state->modelview_stack));
+    CopyMemory(g_projection_stack, state->projection_stack,
+               sizeof(state->projection_stack));
+    CopyMemory(g_texture_stack, state->texture_stack,
+               sizeof(state->texture_stack));
+    CopyMemory(g_color_matrix_stack, state->color_matrix_stack,
+               sizeof(state->color_matrix_stack));
+    g_modelview_stack_depth = state->modelview_stack_depth;
+    g_projection_stack_depth = state->projection_stack_depth;
+    g_texture_stack_depth = state->texture_stack_depth;
+    g_color_matrix_stack_depth = state->color_matrix_stack_depth;
+    CopyMemory(g_attrib_stack, state->attrib_stack, sizeof(state->attrib_stack));
+    CopyMemory(g_client_attrib_stack, state->client_attrib_stack,
+               sizeof(state->client_attrib_stack));
+    g_attrib_stack_depth = state->attrib_stack_depth;
+    g_client_attrib_stack_depth = state->client_attrib_stack_depth;
+    g_current_program = state->current_program;
+    g_current_vertex_program_arb = state->current_vertex_program_arb;
+    g_current_fragment_program_arb = state->current_fragment_program_arb;
+    g_current_samples_passed_query = state->current_samples_passed_query;
+    g_draw_framebuffer_binding = state->draw_framebuffer_binding;
+    g_read_framebuffer_binding = state->read_framebuffer_binding;
+    g_renderbuffer_binding = state->renderbuffer_binding;
+    g_error = state->error;
+    g_render_mode = state->render_mode;
+    g_active_stencil_face_ext = state->active_stencil_face_ext;
+    g_current_index = state->current_index;
+    CopyMemory(g_current_raster_position, state->current_raster_position,
+               sizeof(g_current_raster_position));
+    CopyMemory(g_current_raster_color, state->current_raster_color,
+               sizeof(g_current_raster_color));
+    CopyMemory(g_current_raster_texcoord, state->current_raster_texcoord,
+               sizeof(g_current_raster_texcoord));
+    g_current_raster_index = state->current_raster_index;
+    g_current_raster_distance = state->current_raster_distance;
+    g_current_raster_valid = state->current_raster_valid;
+    CopyMemory(g_name_stack, state->name_stack, sizeof(g_name_stack));
+    g_name_stack_depth = state->name_stack_depth;
+    CopyMemory(g_program_error_string, state->program_error_string,
+               sizeof(g_program_error_string));
+}
+
+static GuestContextState* ensure_guest_context_state(V86GLWGLContext* context) {
+    GuestContextState* state;
+    if (!context) return NULL;
+    if (!g_default_guest_context_state_valid) {
+        init_query_state();
+        capture_guest_context_state(&g_default_guest_context_state);
+        g_default_guest_context_state_valid = TRUE;
+    }
+    state = (GuestContextState*)context->guest_state;
+    if (!state) {
+        state = (GuestContextState*)HeapAlloc(GetProcessHeap(), 0, sizeof(*state));
+        if (!state) return NULL;
+        CopyMemory(state, &g_default_guest_context_state, sizeof(*state));
+        context->guest_state = state;
+    }
+    return state;
+}
+
+static BOOL save_guest_context_state(V86GLWGLContext* context) {
+    GuestContextState* state = ensure_guest_context_state(context);
+    if (!state) return FALSE;
+    capture_guest_context_state(state);
+    return TRUE;
+}
+
+static BOOL load_guest_context_state(V86GLWGLContext* context) {
+    GuestContextState* state = ensure_guest_context_state(context);
+    if (!state) return FALSE;
+    restore_guest_context_state(state);
+    return TRUE;
 }
 
 static GLint active_texture_index(void) {
@@ -3170,6 +3686,10 @@ static GLfloat* current_matrix(GLint** depth, GLint* max_depth) {
         if (depth) *depth = &g_texture_stack_depth;
         if (max_depth) *max_depth = 2;
         return g_texture_stack[g_texture_stack_depth];
+    case GL_COLOR:
+        if (depth) *depth = &g_color_matrix_stack_depth;
+        if (max_depth) *max_depth = 2;
+        return g_color_matrix_stack[g_color_matrix_stack_depth];
     default:
         v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
@@ -3182,6 +3702,7 @@ static GLfloat* matrix_for_pname(GLenum pname) {
     case GL_MODELVIEW_MATRIX: return g_modelview_stack[g_modelview_stack_depth];
     case GL_PROJECTION_MATRIX: return g_projection_stack[g_projection_stack_depth];
     case GL_TEXTURE_MATRIX: return g_texture_stack[g_texture_stack_depth];
+    case GL_COLOR_MATRIX_SGI: return g_color_matrix_stack[g_color_matrix_stack_depth];
     default: return NULL;
     }
 }
@@ -3341,6 +3862,7 @@ static int get_value_count(GLenum pname) {
     case GL_MODELVIEW_MATRIX:
     case GL_PROJECTION_MATRIX:
     case GL_TEXTURE_MATRIX:
+    case GL_COLOR_MATRIX_SGI:
         return 16;
     case GL_VIEWPORT:
     case GL_SCISSOR_BOX:
@@ -3867,6 +4389,59 @@ static int emit_pci_record(uint16_t fn, const void* args, uint32_t args_size, BO
     return 1;
 }
 
+/*
+ * Wait for a host completion that cannot be answered inside the submitting
+ * port write.
+ *
+ * Everything else in this protocol is answered synchronously: the host runs
+ * the whole batch while the guest is blocked in DeviceIoControl, so a query's
+ * answer is already in the record when the IOCTL returns. glReadPixels cannot
+ * work that way -- the pixels come out of a GPU buffer the host can only map
+ * asynchronously, so its completion callback runs a JS turn *after* the port
+ * write returned. Checking the status word once therefore always reads
+ * PENDING, and every glReadPixels fails.
+ *
+ * The record aliases guest RAM, so the host writes the pixels and then the
+ * status word straight back into it (writeGuestMemory in gl_executor.js,
+ * status last, so an OK is never observed before the data it announces).
+ * This spins on that word. Sleep(1) rather than a bare busy loop: the host's
+ * mapAsync callback can only run once the emulator hands the browser its
+ * event loop back, and while v86 ends its slice on a timer regardless, a
+ * halted guest ends it immediately -- so sleeping gets the answer in the next
+ * turn instead of at the end of the current slice, and does not burn the
+ * whole wait spinning.
+ *
+ * The deadline is plain wall clock rather than the D3D9 readback path's
+ * host-silence heartbeat, because the two are not in the same situation:
+ * there the host can legitimately be thousands of batches behind, while here
+ * the batch itself already completed synchronously and only the mapping is
+ * outstanding. A host that has not finished one mapping in five seconds has
+ * stopped answering.
+ */
+#define V86GL_ASYNC_WAIT_MS 5000u
+/* An occlusion result is worth waiting for, but not at the price of a visible
+ * stall: past this the caller gets the conservative "visible" answer. */
+#define V86GL_QUERY_RESULT_WAIT_MS 1000u
+
+static BOOL wait_for_host_status(const uint8_t* status_field, const char* what) {
+    volatile const uint32_t* status = (volatile const uint32_t*)status_field;
+    DWORD start = GetTickCount();
+    uint32_t value;
+
+    for (;;) {
+        value = *status;
+        if (value != V86GL_READ_PIXELS_STATUS_PENDING) {
+            return value == V86GL_READ_PIXELS_STATUS_OK;
+        }
+        if (GetTickCount() - start >= V86GL_ASYNC_WAIT_MS) {
+            v86gl_trace("%s: host silent for %lums (status still pending)",
+                        what, (unsigned long)(GetTickCount() - start));
+            return FALSE;
+        }
+        Sleep(1);
+    }
+}
+
 static int emit_read_pixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, uint32_t data_size,
                             GLvoid* pixels) {
@@ -3917,8 +4492,13 @@ static int emit_read_pixels(GLint x, GLint y, GLsizei width, GLsizei height,
      * can update only actual pixels without clobbering those bytes. */
     CopyMemory(args + sizeof(request), pixels, data_size);
 
-    if (!emit_pci_batch(FALSE) ||
-        read_u32le(args + 28) != V86GL_READ_PIXELS_STATUS_OK) {
+    if (!emit_pci_batch(FALSE)) {
+        return 0;
+    }
+
+    /* Unlike every other query here, this one is finished after the port write
+     * returned; see wait_for_host_status. */
+    if (!wait_for_host_status(args + 28, "glReadPixels")) {
         return 0;
     }
 
@@ -5053,6 +5633,8 @@ static BOOL emit_frame(void) {
 
 static void emit_current_surface(HWND hwnd) {
     BOOL force = !g_have_last_surface;
+    V86GLWGLContext* current_context = NULL;
+    uint32_t i;
     POINT client_origin;
     RECT rc;
     ZeroMemory(&client_origin, sizeof(client_origin));
@@ -5069,13 +5651,27 @@ static void emit_current_surface(HWND hwnd) {
         int32_t y;
         uint32_t width;
         uint32_t height;
+        uint32_t context_id;
+        uint32_t share_group;
     } payload;
+
+    for (i = 0; i < V86GL_MAX_WGL_CONTEXTS; i++) {
+        V86GLWGLContext* context = &g_wgl_contexts[i];
+        if (context->used && context->owner_thread &&
+            context->current_hwnd == hwnd) {
+            current_context = context;
+            break;
+        }
+    }
 
     payload.hwnd = (uint32_t)(uintptr_t)hwnd;
     payload.x = client_origin.x;
     payload.y = client_origin.y;
     payload.width = (uint32_t)(rc.right - rc.left);
     payload.height = (uint32_t)(rc.bottom - rc.top);
+    payload.context_id = current_context ?
+        (uint32_t)(current_context - g_wgl_contexts) + 1u : 0u;
+    payload.share_group = current_context ? current_context->share_group : 0u;
 
     if (!payload.width) {
         payload.width = 640;
@@ -5089,7 +5685,9 @@ static void emit_current_surface(HWND hwnd) {
         payload.x == g_last_surface_x &&
         payload.y == g_last_surface_y &&
         payload.width == g_last_surface_width &&
-        payload.height == g_last_surface_height) {
+        payload.height == g_last_surface_height &&
+        payload.context_id == g_last_surface_context_id &&
+        payload.share_group == g_last_surface_share_group) {
         return;
     }
 
@@ -5097,10 +5695,14 @@ static void emit_current_surface(HWND hwnd) {
     g_last_surface_y = payload.y;
     g_last_surface_width = payload.width;
     g_last_surface_height = payload.height;
+    g_last_surface_context_id = payload.context_id;
+    g_last_surface_share_group = payload.share_group;
     g_have_last_surface = TRUE;
 
-    v86gl_trace("make-current hwnd=%08lx x=%ld y=%ld size=%lux%lu",
+    v86gl_trace("make-current hwnd=%08lx context=%lu share=%lu x=%ld y=%ld size=%lux%lu",
                 (unsigned long)payload.hwnd,
+                (unsigned long)payload.context_id,
+                (unsigned long)payload.share_group,
                 (long)payload.x,
                 (long)payload.y,
                 (unsigned long)payload.width,
@@ -5218,6 +5820,9 @@ static uint32_t gl_pixel_bytes(GLenum format, GLenum type) {
     case GL_BYTE:
     case GL_UNSIGNED_BYTE:
         return comps;
+    case GL_UNSIGNED_BYTE_3_3_2:
+    case GL_UNSIGNED_BYTE_2_3_3_REV:
+        return 1u;
     case GL_SHORT:
     case GL_UNSIGNED_SHORT:
     case GL_HALF_FLOAT_ARB:
@@ -5235,6 +5840,8 @@ static uint32_t gl_pixel_bytes(GLenum format, GLenum type) {
         return 2u;
     case GL_UNSIGNED_INT_8_8_8_8:
     case GL_UNSIGNED_INT_8_8_8_8_REV:
+    case GL_UNSIGNED_INT_10_10_10_2:
+    case GL_UNSIGNED_INT_2_10_10_10_REV:
     case GL_UNSIGNED_INT_24_8:
         return 4u;
     case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
@@ -6696,6 +7303,10 @@ HGLRC APIENTRY wglCreateContext(HDC hdc) {
         context->used = TRUE;
         context->share_group = g_next_share_group++;
         if (!g_next_share_group) g_next_share_group = 1;
+        if (!ensure_guest_context_state(context)) {
+            ZeroMemory(context, sizeof(*context));
+            break;
+        }
         g_wgl_context_count++;
         g_context_destroy_sent = FALSE;
         result = (HGLRC)context;
@@ -6781,7 +7392,9 @@ static BOOL release_thread_current_context(DWORD thread_id,
 
     if (replacement_hwnd) *replacement_hwnd = NULL;
     if (!current) return FALSE;
+    save_guest_context_state(current);
     clear_wgl_context_binding(current);
+    g_error = GL_NO_ERROR;
     replacement = find_any_current_context();
     if (replacement_hwnd && replacement) {
         *replacement_hwnd = replacement->current_hwnd;
@@ -7003,6 +7616,8 @@ __declspec(dllexport)
 BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
     V86GLWGLContext* context;
     BOOL last_context = FALSE;
+    uint32_t context_id = 0;
+    void* guest_state = NULL;
 
     EnterCriticalSection(&g_wgl_context_lock);
     reap_terminated_wgl_contexts();
@@ -7015,11 +7630,16 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
         LeaveCriticalSection(&g_wgl_context_lock);
         return FALSE;
     }
+    context_id = (uint32_t)(context - g_wgl_contexts) + 1u;
+    guest_state = context->guest_state;
     ZeroMemory(context, sizeof(*context));
     if (g_wgl_context_count) g_wgl_context_count--;
     v86gl_trace("delete context frame=%lu", (unsigned long)g_frame_id);
     last_context = !g_wgl_context_count;
     LeaveCriticalSection(&g_wgl_context_lock);
+    if (guest_state) HeapFree(GetProcessHeap(), 0, guest_state);
+    emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, &context_id,
+                    sizeof(context_id), TRUE);
     if (last_context) {
         restore_window_proc();
         /* WineD3D's caps context and device context are consecutive users of
@@ -7034,6 +7654,7 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
 __declspec(dllexport)
 BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
     DWORD thread_id = GetCurrentThreadId();
+
     V86GLWGLContext* context;
     V86GLWGLContext* previous;
     HWND replacement_hwnd = NULL;
@@ -7076,7 +7697,19 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
 
     previous = find_thread_current_context(thread_id);
     if (previous != context) {
-        if (previous) clear_wgl_context_binding(previous);
+        if (previous) {
+            if (!save_guest_context_state(previous)) {
+                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                LeaveCriticalSection(&g_wgl_context_lock);
+                return FALSE;
+            }
+            clear_wgl_context_binding(previous);
+        }
+        if (!load_guest_context_state(context)) {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            LeaveCriticalSection(&g_wgl_context_lock);
+            return FALSE;
+        }
         g_have_last_surface = FALSE;
     }
     context->owner_thread = thread_id;
@@ -7264,6 +7897,94 @@ static void define_placeholder_bitmap_glyph(GLuint list, BOOL visible,
     glEndList();
 }
 
+/*
+ * Rasterise one glyph with GDI and compile it into a display list as a
+ * glBitmap, which is what wglUseFontBitmaps is for. Returns FALSE when GDI
+ * cannot produce an outline -- a raster (non-TrueType) font, or a codepoint
+ * the face does not have -- and the caller falls back to the placeholder box.
+ *
+ * The two formats very nearly agree, which is why this is short. GGO_BITMAP
+ * rows are MSB-first and padded to a DWORD, and so is what glBitmap reads at
+ * GL_UNPACK_LSB_FIRST=FALSE and GL_UNPACK_ALIGNMENT=4 -- which the caller
+ * sets, rather than assuming, because those are only the *initial* values and
+ * an app that uploaded a tightly packed texture earlier has left alignment at
+ * 1. The one real difference is direction: GDI hands back the top row first,
+ * GL wants the bottom row first, so the rows are copied in reverse.
+ *
+ * The origin has to be translated too. GDI reports gmptGlyphOrigin as the
+ * top-left of the black box relative to the pen position, with y up; glBitmap
+ * takes the origin *inside* the bitmap measured from its lower-left corner.
+ * Hence xorig = -originX and yorig = blackBoxY - originY: a glyph with a
+ * descender (originY smaller than its height) gets a negative yorig and hangs
+ * below the baseline, which is exactly right for 'g' and 'y'.
+ */
+static BOOL define_gdi_bitmap_glyph(HDC hdc, UINT codepoint, GLuint list) {
+    static const MAT2 identity = {
+        { 0, 1 }, { 0, 0 }, { 0, 0 }, { 0, 1 }
+    };
+    GLYPHMETRICS metrics;
+    DWORD size;
+    DWORD stride;
+    DWORD row;
+    uint8_t* gdi_bits;
+    uint8_t* gl_bits = NULL;
+    BOOL ok = FALSE;
+
+    if (!hdc) {
+        return FALSE;
+    }
+
+    ZeroMemory(&metrics, sizeof(metrics));
+    size = GetGlyphOutlineA(hdc, codepoint, GGO_BITMAP, &metrics, 0, NULL,
+                            &identity);
+    if (size == GDI_ERROR) {
+        return FALSE;
+    }
+
+    /* A blank glyph -- a space -- has no black box at all, but still advances
+     * the pen. GetGlyphOutline reports size 0 and valid metrics for it. */
+    if (size == 0 || metrics.gmBlackBoxX == 0 || metrics.gmBlackBoxY == 0) {
+        glNewList(list, GL_COMPILE);
+        glBitmap(0, 0, 0.0f, 0.0f, (GLfloat)metrics.gmCellIncX,
+                 (GLfloat)metrics.gmCellIncY, NULL);
+        glEndList();
+        return TRUE;
+    }
+
+    gdi_bits = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+    if (!gdi_bits) {
+        return FALSE;
+    }
+    if (GetGlyphOutlineA(hdc, codepoint, GGO_BITMAP, &metrics, size, gdi_bits,
+                         &identity) != GDI_ERROR) {
+        stride = ((metrics.gmBlackBoxX + 31u) / 32u) * 4u;
+        if (stride && metrics.gmBlackBoxY <= size / stride) {
+            gl_bits = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                          (SIZE_T)stride * metrics.gmBlackBoxY);
+        }
+        if (gl_bits) {
+            for (row = 0; row < metrics.gmBlackBoxY; row++) {
+                CopyMemory(gl_bits + (SIZE_T)row * stride,
+                           gdi_bits + (SIZE_T)(metrics.gmBlackBoxY - 1u - row) *
+                                   stride,
+                           stride);
+            }
+            glNewList(list, GL_COMPILE);
+            glBitmap((GLsizei)metrics.gmBlackBoxX, (GLsizei)metrics.gmBlackBoxY,
+                     (GLfloat)-metrics.gmptGlyphOrigin.x,
+                     (GLfloat)((LONG)metrics.gmBlackBoxY -
+                               metrics.gmptGlyphOrigin.y),
+                     (GLfloat)metrics.gmCellIncX, (GLfloat)metrics.gmCellIncY,
+                     gl_bits);
+            glEndList();
+            HeapFree(GetProcessHeap(), 0, gl_bits);
+            ok = TRUE;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, gdi_bits);
+    return ok;
+}
+
 static BOOL use_font_bitmaps_common(HDC hdc, DWORD first, DWORD count,
                                     DWORD list_base) {
     DWORD i;
@@ -7272,12 +7993,26 @@ static BOOL use_font_bitmaps_common(HDC hdc, DWORD first, DWORD count,
 
     (void)height;
     font_metrics_from_dc(hdc, &advance, &height);
+    /* glBitmap reads its rows through the unpack state in force when the list
+     * is compiled, so pin that state to what GDI actually produced instead of
+     * inheriting whatever the app last set. */
+    glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
     for (i = 0; i < count; i++) {
         DWORD codepoint = first + i;
-        define_placeholder_bitmap_glyph(list_base + i,
-                                        codepoint > 0x20u ? TRUE : FALSE,
-                                        advance);
+        /* Real glyphs where GDI can give them, boxes only where it cannot --
+         * a raster font or a codepoint the face is missing. */
+        if (!define_gdi_bitmap_glyph(hdc, codepoint, list_base + i)) {
+            define_placeholder_bitmap_glyph(list_base + i,
+                                            codepoint > 0x20u ? TRUE : FALSE,
+                                            advance);
+        }
     }
+    glPopClientAttrib();
     return TRUE;
 }
 
@@ -7661,6 +8396,7 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_MODELVIEW_MATRIX:
     case GL_PROJECTION_MATRIX:
     case GL_TEXTURE_MATRIX:
+    case GL_COLOR_MATRIX_SGI:
         for (i = 0; i < 16; i++) params[i] = (GLint)matrix_for_pname(pname)[i];
         break;
     case GL_VIEWPORT:
@@ -7775,6 +8511,20 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_SAMPLE_COVERAGE_INVERT:
         params[0] = g_sample_coverage_invert ? GL_TRUE : GL_FALSE;
+        break;
+    case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
+    case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+    case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+    case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+        params[0] = (GLint)g_post_color_matrix_scale[
+            pname - GL_POST_COLOR_MATRIX_RED_SCALE_SGI];
+        break;
+    case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
+    case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+    case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+    case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+        params[0] = (GLint)g_post_color_matrix_bias[
+            pname - GL_POST_COLOR_MATRIX_RED_BIAS_SGI];
         break;
     case GL_ALPHA_TEST_FUNC:
         params[0] = (GLint)g_alpha_func;
@@ -7915,17 +8665,13 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = query_limit_or_default(pname, 4096, 0);
         break;
     case GL_NUM_COMPRESSED_TEXTURE_FORMATS:
-        params[0] = 8;
+        params[0] = 4;
         break;
     case GL_COMPRESSED_TEXTURE_FORMATS:
         params[0] = GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
         params[1] = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
         params[2] = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT;
         params[3] = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
-        params[4] = GL_COMPRESSED_SRGB_S3TC_DXT1_EXT;
-        params[5] = GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT;
-        params[6] = GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT;
-        params[7] = GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT;
         break;
     case GL_POINT_SPRITE_COORD_ORIGIN:
         params[0] = (GLint)g_point_sprite_coord_origin;
@@ -8129,6 +8875,9 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_MAX_TEXTURE_STACK_DEPTH:
         params[0] = 2;
         break;
+    case GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI:
+        params[0] = 2;
+        break;
     case GL_MAX_ATTRIB_STACK_DEPTH:
         params[0] = 16;
         break;
@@ -8144,9 +8893,14 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     case GL_TEXTURE_STACK_DEPTH:
         params[0] = g_texture_stack_depth + 1;
         break;
+    case GL_COLOR_MATRIX_STACK_DEPTH_SGI:
+        params[0] = g_color_matrix_stack_depth + 1;
+        break;
     case GL_ATTRIB_STACK_DEPTH:
+        params[0] = g_attrib_stack_depth;
+        break;
     case GL_CLIENT_ATTRIB_STACK_DEPTH:
-        params[0] = 1;
+        params[0] = g_client_attrib_stack_depth;
         break;
     case GL_SUBPIXEL_BITS:
         params[0] = 4;
@@ -8290,6 +9044,20 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     case GL_SAMPLE_COVERAGE_INVERT:
         params[0] = g_sample_coverage_invert ? 1.0f : 0.0f;
         break;
+    case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
+    case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+    case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+    case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+        params[0] = g_post_color_matrix_scale[
+            pname - GL_POST_COLOR_MATRIX_RED_SCALE_SGI];
+        break;
+    case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
+    case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+    case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+    case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+        params[0] = g_post_color_matrix_bias[
+            pname - GL_POST_COLOR_MATRIX_RED_BIAS_SGI];
+        break;
     case GL_FOG_INDEX:
         params[0] = g_fog_index;
         break;
@@ -8353,6 +9121,7 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     case GL_MODELVIEW_MATRIX:
     case GL_PROJECTION_MATRIX:
     case GL_TEXTURE_MATRIX:
+    case GL_COLOR_MATRIX_SGI:
         CopyMemory(params, matrix_for_pname(pname), sizeof(GLfloat) * 16);
         break;
     default: {
@@ -8647,7 +9416,8 @@ void APIENTRY glFinish(void) {
 __declspec(dllexport)
 void APIENTRY glMatrixMode(GLenum mode) {
     uint32_t payload = (uint32_t)mode;
-    if (mode != GL_MODELVIEW && mode != GL_PROJECTION && mode != GL_TEXTURE) {
+    if (mode != GL_MODELVIEW && mode != GL_PROJECTION && mode != GL_TEXTURE &&
+        mode != GL_COLOR) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -9094,22 +9864,72 @@ void APIENTRY glHint(GLenum target, GLenum mode) {
 __declspec(dllexport)
 void APIENTRY glPushAttrib(GLbitfield mask) {
     uint32_t payload = (uint32_t)mask;
+    const GLbitfield allowed = 0x000FFFFFu | GL_MULTISAMPLE_BIT_ARB;
+    if (mask & ~allowed) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (g_current_display_list && !g_replaying_display_list &&
+        g_current_display_list_mode == GL_COMPILE) {
+        emit_gl_call(GLFN_PUSH_ATTRIB, &payload, sizeof(payload));
+        return;
+    }
+    if (g_attrib_stack_depth >= V86GL_ATTRIB_STACK_DEPTH) {
+        v86gl_set_error(GL_STACK_OVERFLOW);
+        return;
+    }
+    init_query_state();
+    capture_server_attrib(&g_attrib_stack[g_attrib_stack_depth++], mask);
     emit_gl_call(GLFN_PUSH_ATTRIB, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPopAttrib(void) {
+    if (g_current_display_list && !g_replaying_display_list &&
+        g_current_display_list_mode == GL_COMPILE) {
+        emit_gl_call(GLFN_POP_ATTRIB, NULL, 0);
+        return;
+    }
+    if (g_attrib_stack_depth <= 0) {
+        v86gl_set_error(GL_STACK_UNDERFLOW);
+        return;
+    }
+    restore_server_attrib(&g_attrib_stack[--g_attrib_stack_depth]);
     emit_gl_call(GLFN_POP_ATTRIB, NULL, 0);
 }
 
 __declspec(dllexport)
 void APIENTRY glPushClientAttrib(GLbitfield mask) {
     uint32_t payload = (uint32_t)mask;
+    if (mask & ~(GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT)) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (g_current_display_list && !g_replaying_display_list &&
+        g_current_display_list_mode == GL_COMPILE) {
+        emit_gl_call(GLFN_PUSH_CLIENT_ATTRIB, &payload, sizeof(payload));
+        return;
+    }
+    if (g_client_attrib_stack_depth >= V86GL_ATTRIB_STACK_DEPTH) {
+        v86gl_set_error(GL_STACK_OVERFLOW);
+        return;
+    }
+    capture_client_attrib(&g_client_attrib_stack[g_client_attrib_stack_depth++], mask);
     emit_gl_call(GLFN_PUSH_CLIENT_ATTRIB, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPopClientAttrib(void) {
+    if (g_current_display_list && !g_replaying_display_list &&
+        g_current_display_list_mode == GL_COMPILE) {
+        emit_gl_call(GLFN_POP_CLIENT_ATTRIB, NULL, 0);
+        return;
+    }
+    if (g_client_attrib_stack_depth <= 0) {
+        v86gl_set_error(GL_STACK_UNDERFLOW);
+        return;
+    }
+    restore_client_attrib(&g_client_attrib_stack[--g_client_attrib_stack_depth]);
     emit_gl_call(GLFN_POP_CLIENT_ATTRIB, NULL, 0);
 }
 
@@ -11377,9 +12197,29 @@ static BOOL query_object_value(QueryObjectState* state, GLenum pname, GLuint* va
 
     if (pname == GL_QUERY_RESULT) {
         if (!state->available) {
-            /* WebGPU cannot synchronously wait for a GPU query. Desktop GL's
-             * blocking RESULT contract is emulated conservatively: treat the
-             * object as visible rather than incorrectly culling geometry. */
+            /* Desktop GL's RESULT blocks until the GPU has answered, and the
+             * host can only answer after a mapAsync completes, which needs the
+             * browser event loop. Sleep(1) between polls hands the slice back
+             * so that happens promptly, instead of re-polling a host that
+             * cannot have changed its answer yet. poll_frame is cleared each
+             * time because emit_query_object_batch skips an object already
+             * polled this frame, and the whole wait happens inside one. */
+            DWORD start = GetTickCount();
+            while (!state->available &&
+                   GetTickCount() - start < V86GL_QUERY_RESULT_WAIT_MS) {
+                Sleep(1);
+                state->poll_frame = 0;
+                state->poll_skip = 0;
+                if (!emit_query_object_batch()) {
+                    break;
+                }
+            }
+        }
+        if (!state->available) {
+            /* The GPU still has not answered. Report the object visible rather
+             * than culling geometry that may well be on screen: a frame with
+             * one occluder drawn needlessly is a far cheaper error than a
+             * frame missing something it should have shown. */
             state->result = V86GL_QUERY_VISIBLE_SAMPLES;
             state->available = GL_TRUE;
             state->poll_skip = 0;
@@ -16314,6 +17154,13 @@ void APIENTRY glPixelStoref(GLenum pname, GLfloat param) {
 __declspec(dllexport)
 void APIENTRY glPixelTransferf(GLenum pname, GLfloat param) {
     struct { uint32_t pname; float param; } payload;
+    if (pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI &&
+        pname <= GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI) {
+        g_post_color_matrix_scale[pname - GL_POST_COLOR_MATRIX_RED_SCALE_SGI] = param;
+    } else if (pname >= GL_POST_COLOR_MATRIX_RED_BIAS_SGI &&
+               pname <= GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI) {
+        g_post_color_matrix_bias[pname - GL_POST_COLOR_MATRIX_RED_BIAS_SGI] = param;
+    }
     payload.pname = (uint32_t)pname;
     payload.param = param;
     emit_gl_call(GLFN_PIXEL_TRANSFERF, &payload, sizeof(payload));
@@ -16322,6 +17169,15 @@ void APIENTRY glPixelTransferf(GLenum pname, GLfloat param) {
 __declspec(dllexport)
 void APIENTRY glPixelTransferi(GLenum pname, GLint param) {
     struct { uint32_t pname; int32_t param; } payload;
+    if (pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI &&
+        pname <= GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI) {
+        g_post_color_matrix_scale[pname - GL_POST_COLOR_MATRIX_RED_SCALE_SGI] =
+            (GLfloat)param;
+    } else if (pname >= GL_POST_COLOR_MATRIX_RED_BIAS_SGI &&
+               pname <= GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI) {
+        g_post_color_matrix_bias[pname - GL_POST_COLOR_MATRIX_RED_BIAS_SGI] =
+            (GLfloat)param;
+    }
     payload.pname = (uint32_t)pname;
     payload.param = param;
     emit_gl_call(GLFN_PIXEL_TRANSFERI, &payload, sizeof(payload));

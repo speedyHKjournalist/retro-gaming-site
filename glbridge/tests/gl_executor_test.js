@@ -28,6 +28,18 @@ function test(name, fn) {
     }
 }
 
+/*
+ * Two results in this path cannot be answered inside the batch that asked for
+ * them -- glReadPixels and occlusion queries both wait on a buffer mapping.
+ * Their tests therefore have to await the same microtask the real bridge does,
+ * which is the whole point: a synchronous assertion would pass against an
+ * executor that never completes them at all.
+ */
+const asyncTests = [];
+function asyncTest(name, fn) {
+    asyncTests.push([name, fn]);
+}
+
 function newExecutor(options) {
     const { host, log } = createFakeHost();
     const executor = new executorModule.GLWebGPUExecutor(null,
@@ -83,6 +95,48 @@ test("a context is created on demand and keeps GL's defaults", () => {
         "the default front material ambient is 0.2, 0.2, 0.2, 1");
 });
 
+test("WGL context ids separate state while share-group ids share objects", () => {
+    const { executor } = newExecutor();
+    run(executor, new GLStream().makeCurrent(77, 0, 0, 64, 64, 1, 11)
+        .names(GLFN.GEN_TEXTURES, [91]));
+    const first = executor.current;
+
+    run(executor, new GLStream().makeCurrent(77, 0, 0, 64, 64, 2, 22));
+    const second = executor.current;
+    assert.notStrictEqual(second, first,
+        "two HGLRCs on one HWND must not alias context state");
+    assert.notStrictEqual(second.shareGroup, first.shareGroup);
+    assert.ok(!second.shareGroup.textures.has(91));
+
+    run(executor, new GLStream().makeCurrent(88, 0, 0, 64, 64, 3, 11));
+    const shared = executor.current;
+    assert.notStrictEqual(shared, first);
+    assert.strictEqual(shared.shareGroup, first.shareGroup,
+        "wglShareLists contexts use the same object namespace");
+    assert.ok(shared.shareGroup.textures.has(91));
+});
+
+test("late teardown deletes and ARB unbinds are silent no-ops", () => {
+    const { executor } = newExecutor();
+    let warnings = 0;
+    const originalWarn = console.warn;
+    console.warn = () => { ++warnings; };
+    try {
+        run(executor, new GLStream()
+            .names(GLFN.DELETE_TEXTURES, [91])
+            .call("BIND_PROGRAM_ARB", GL.VERTEX_PROGRAM_ARB, 0)
+            .call("BIND_PROGRAM_ARB", GL.FRAGMENT_PROGRAM_ARB, 0));
+        assert.strictEqual(warnings, 0,
+            "process-detach cleanup must not produce a no-context warning");
+        run(executor, new GLStream()
+            .call("BIND_PROGRAM_ARB", GL.VERTEX_PROGRAM_ARB, 7));
+        assert.strictEqual(warnings, 1,
+            "a non-zero context-free bind still exposes a real ordering bug");
+    } finally {
+        console.warn = originalWarn;
+    }
+});
+
 test("the matrix stack multiplies in GL's order", () => {
     const { executor } = newExecutor();
     const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
@@ -97,6 +151,18 @@ test("the matrix stack multiplies in GL's order", () => {
     assert.strictEqual(m[12], 1);
     assert.strictEqual(m[13], 2);
     assert.strictEqual(m[14], 3);
+});
+
+test("SGI color matrix transforms pixel rectangles before post scale and bias", () => {
+    const { executor } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("MATRIX_MODE", GL.COLOR)
+        .call("LOAD_IDENTITY")
+        .call("SCALEF", 0.5, 1, 1)
+        .call("PIXEL_TRANSFERF", GL.POST_COLOR_MATRIX_RED_BIAS_SGI, 0.25));
+    const rgba = new Uint8Array([200, 64, 0, 255]);
+    executor.applyPixelTransfer(rgba);
+    assert.deepStrictEqual([...rgba], [164, 64, 0, 255]);
 });
 
 test("glPushMatrix past the stack depth raises GL_STACK_OVERFLOW", () => {
@@ -177,6 +243,24 @@ test("the extension string only advertises what the adapter backs", () => {
     assert.ok(withoutBC.indexOf("GL_EXT_texture_compression_s3tc") < 0,
         "S3TC is not advertised when the adapter has no BC formats");
     assert.ok(withoutBC.indexOf("GL_ARB_multitexture") >= 0);
+    for (const extension of [
+        "GL_ARB_texture_compression", "GL_ARB_multisample",
+        "GL_ARB_texture_border_clamp", "GL_EXT_generate_mipmap",
+        "GL_SGI_color_matrix",
+    ]) {
+        assert.ok(withoutBC.split(" ").includes(extension),
+            extension + " is part of the bridge-guaranteed 1.3/1.4 profile");
+    }
+});
+
+test("ARB sample coverage reaches the WebGPU pipeline mask", () => {
+    const { executor, log } = newExecutor();
+    run(executor, immediateTriangle(
+        new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("ENABLE", GL.SAMPLE_COVERAGE)
+        .call("SAMPLE_COVERAGE", 0, 0)));
+    assert.strictEqual(log.draws[0].pipeline.descriptor.multisample.mask, 0,
+        "zero sample coverage suppresses the one-sample framebuffer");
 });
 
 test("glGetString reports GL 2.1 and GLSL 1.20", () => {
@@ -592,9 +676,11 @@ test("glGetUniformLocation and glGetAttribLocation answer synchronously", () => 
     const { executor } = newExecutor();
     linkedProgram(executor);
     const stream = new GLStream();
-    const uniform = stream.queryLocation(0, 1, "tint", 32);
-    const attribute = stream.queryLocation(1, 1, "vvertex", 32);
-    const missing = stream.queryLocation(0, 1, "nosuch", 32);
+    // V86GL_LOCATION_KIND_UNIFORM is 1 and _ATTRIB is 2, which is the order
+    // openglproxy sends and the opposite of what this test used to assume.
+    const uniform = stream.queryLocation(1, 1, "tint", 32);
+    const attribute = stream.queryLocation(2, 1, "vvertex", 32);
+    const missing = stream.queryLocation(1, 1, "nosuch", 32);
     run(executor, stream);
     const status = a => a.view.getUint32(12, true);
     const location = a => a.view.getInt32(16, true);
@@ -703,9 +789,791 @@ test("a truncated record stops the batch instead of reading past it", () => {
     assert.ok(executor.stats.refusals >= 1);
 });
 
+
+
+test("glDrawElements draws with the indices the guest sent", () => {
+    const { executor, log } = newExecutor();
+    // 0x544D4143 is the multitexture magic that sits between the fixed header
+    // and the indices. Reading the indices from the end of the fixed header
+    // instead yielded 16707 and 21581 -- the two halves of that word -- so
+    // every indexed draw referenced vertices that were never there.
+    const indices = new Uint8Array(new Uint16Array([2, 0, 1]).buffer);
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .drawElements(GL.TRIANGLES, indices, GL.UNSIGNED_SHORT, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(36) } }));
+
+    assert.strictEqual(log.draws.length, 1, "the indexed draw must reach the GPU");
+    const bind = log.draws[0].pass.calls.filter(call => call[0] === "indexBuffer").pop();
+    assert.ok(bind, "an indexed draw binds an index buffer");
+    const uploaded = new Uint32Array(executor.vertexStaging.buffer,
+        executor.vertexStaging.byteOffset + bind[3], 3);
+    assert.deepStrictEqual([...uploaded], [2, 0, 1],
+        "the indices must be the guest's own, not the bytes of the header " +
+        "that precedes them");
+});
+
+/* ---- ARB program error reporting ---- */
+
+function readQueriedString(answer) {
+    const payload = answer.bytes;
+    let text = "";
+    for (let i = 16; i < payload.length && payload[i]; ++i)
+        text += String.fromCharCode(payload[i]);
+    return text;
+}
+
+test("a bad ARB program is the app's error, not a host refusal", () => {
+    const { executor } = newExecutor();
+    const bad = "this is not a program\nEND\n";
+    const payload = new Uint8Array(16 + bad.length);
+    const view = new DataView(payload.buffer);
+    view.setUint32(0, GL.VERTEX_PROGRAM_ARB, true);
+    view.setUint32(4, GL.PROGRAM_FORMAT_ASCII_ARB, true);
+    view.setInt32(8, bad.length, true);
+    for (let i = 0; i < bad.length; ++i) payload[16 + i] = bad.charCodeAt(i);
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_PROGRAMS_ARB, [1])
+        .call("BIND_PROGRAM_ARB", GL.VERTEX_PROGRAM_ARB, 1)
+        .record(GLFN.PROGRAM_STRING_ARB, payload);
+    const position = stream.queryInteger(GL.PROGRAM_ERROR_POSITION_ARB);
+    const text = stream.queryString(GL.PROGRAM_ERROR_STRING_ARB, 256);
+    const error = stream.queryError();
+    const before = executor.stats.refusals;
+    const warn = console.warn;
+    console.warn = () => {};
+    try { run(executor, stream); } finally { console.warn = warn; }
+
+    assert.strictEqual(executor.stats.refusals, before,
+        "the app wrote a bad program; the host refused nothing. Counting it " +
+        "would make refusals useless as 'what did the host fail to draw'");
+    assert.strictEqual(error.view.getUint32(4, true), GL.INVALID_OPERATION,
+        "the extension reports a bad program through glGetError");
+    assert.ok(readQueriedString(text).length > 0,
+        "GL_PROGRAM_ERROR_STRING_ARB must say why, or the app shows a blank " +
+        "error dialog");
+    assert.ok(position.view.getInt32(8, true) >= 0,
+        "GL_PROGRAM_ERROR_POSITION_ARB is a character offset into the source");
+});
+
+test("GL_PROGRAM_ERROR_POSITION_ARB is -1 when nothing failed", () => {
+    const { executor } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64);
+    const position = stream.queryInteger(GL.PROGRAM_ERROR_POSITION_ARB);
+    const text = stream.queryString(GL.PROGRAM_ERROR_STRING_ARB, 64);
+    run(executor, stream);
+    assert.strictEqual(position.view.getInt32(8, true), -1,
+        "0 would read as 'an error at character 0' and make a conformance " +
+        "viewer report a failure on a program that compiled");
+    assert.strictEqual(readQueriedString(text), "");
+});
+
+/* ---- results that arrive after the batch ---- */
+
+function findBuffer(log, label) {
+    return log.buffers.filter(buffer => buffer.descriptor.label === label).pop();
+}
+
+asyncTest("an occlusion query resolves and reports a visible result", async () => {
+    const { executor, log } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_QUERIES, [5])
+        .call("BEGIN_QUERY", GL.SAMPLES_PASSED, 5)
+        .drawArrays(GL.TRIANGLES, 3, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(36) } })
+        .call("END_QUERY", GL.SAMPLES_PASSED);
+    run(executor, stream);
+    executor.flushFrame();
+
+    assert.strictEqual(log.queryResolves.length, 1,
+        "ending a query must resolve the set with the work that produced it");
+    assert.strictEqual(log.queryResolves[0].first, 0);
+    assert.strictEqual(log.queryResolves[0].count, 1,
+        "one query in flight resolves one slot");
+
+    // The GPU says slot 0 had samples pass.
+    const staging = findBuffer(log, "GL occlusion readback");
+    assert.ok(staging, "the resolved set is copied into a mappable buffer");
+    new DataView(staging.storage).setUint32(0, 1, true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const query = executor.queries.get(5);
+    assert.strictEqual(query.ready, true,
+        "the guest spins on GL_QUERY_RESULT_AVAILABLE; it must become true");
+    assert.ok(query.result > 0, "a visible query reports a saturated count");
+});
+
+asyncTest("a query the GPU says was fully occluded reports zero", async () => {
+    const { executor, log } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_QUERIES, [9])
+        .call("BEGIN_QUERY", GL.SAMPLES_PASSED, 9)
+        .drawArrays(GL.TRIANGLES, 3, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(36) } })
+        .call("END_QUERY", GL.SAMPLES_PASSED));
+    executor.flushFrame();
+    findBuffer(log, "GL occlusion readback");   // left zeroed
+    await Promise.resolve();
+    await Promise.resolve();
+    const query = executor.queries.get(9);
+    assert.strictEqual(query.ready, true, "an occluded query is still answered");
+    assert.strictEqual(query.result, 0);
+});
+
+asyncTest("query slots are reused after each resolve", async () => {
+    const { executor, log } = newExecutor();
+    const frame = name => new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_QUERIES, [name])
+        .call("BEGIN_QUERY", GL.SAMPLES_PASSED, name)
+        .drawArrays(GL.TRIANGLES, 3, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(36) } })
+        .call("END_QUERY", GL.SAMPLES_PASSED);
+    run(executor, frame(1));
+    executor.flushFrame();
+    run(executor, frame(2));
+    executor.flushFrame();
+    assert.strictEqual(log.queryResolves.length, 2);
+    assert.deepStrictEqual(
+        log.queryResolves.map(resolve => resolve.first), [0, 0],
+        "a frame's queries start again at slot 0, or the set fills up and " +
+        "later queries are refused");
+    await Promise.resolve();
+});
+
+asyncTest("a pass already open is rebuilt to carry the occlusion query set", () => {
+    const { executor, log } = newExecutor();
+    const triangle = { vertex: { size: 3, type: GL.FLOAT,
+        data: new Uint8Array(36) } };
+    // Draw first, so a render pass exists before any query set does.
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .drawArrays(GL.TRIANGLES, 3, triangle)
+        .names(GLFN.GEN_QUERIES, [3])
+        .call("BEGIN_QUERY", GL.SAMPLES_PASSED, 3)
+        .drawArrays(GL.TRIANGLES, 3, triangle)
+        .call("END_QUERY", GL.SAMPLES_PASSED));
+    const querying = log.passes.filter(pass =>
+        pass.calls.some(call => call[0] === "beginQuery"));
+    assert.strictEqual(querying.length, 1);
+    assert.ok(querying[0].descriptor.occlusionQuerySet,
+        "beginOcclusionQuery is a validation error unless the pass was " +
+        "created with the set");
+    return Promise.resolve();
+});
+
+asyncTest("glReadPixels writes the pixels and then the status word", async () => {
+    const { executor, log } = newExecutor();
+    const writes = [];
+    executor.options.writeGuestMemory = (offset, data) =>
+        writes.push({ offset, bytes: Uint8Array.from(data) });
+    executor.current = executor.current || null;
+    const stream = new GLStream().makeCurrent(1, 0, 0, 4, 4)
+        // Read back something that exists: the attachment is created by work,
+        // and a readPixels with no colour buffer is a legitimate failure.
+        .drawArrays(GL.TRIANGLES, 3, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(36) } });
+    const payload = new Uint8Array(32 + 4 * 4 * 4);
+    const view = new DataView(payload.buffer);
+    view.setInt32(0, 0, true);        // x
+    view.setInt32(4, 0, true);        // y
+    view.setInt32(8, 4, true);        // width
+    view.setInt32(12, 4, true);       // height
+    view.setUint32(16, GL.RGBA, true);
+    view.setUint32(20, GL.UNSIGNED_BYTE, true);
+    view.setUint32(24, 4 * 4 * 4, true);
+    stream.record(GLFN.READ_PIXELS, payload);
+    const record = stream.payloadView();
+    run(executor, stream);
+
+    assert.strictEqual(record.view.getUint32(28, true), 0,
+        "the status must still read PENDING when the batch returns -- the " +
+        "guest's single check was exactly this bug");
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.strictEqual(record.view.getUint32(28, true), 1,
+        "the mapping completes and the status becomes OK");
+    assert.deepStrictEqual(writes.map(write => write.offset).slice(-2).sort(
+        (a, b) => a - b).length, 2);
+    const last = writes[writes.length - 1];
+    assert.strictEqual(last.bytes.byteLength, 4,
+        "the status word is written last, after the pixels it announces");
+});
+
+/* ---- buffer objects and the VBO-direct draw path ---- */
+
+/*
+ * openglproxy sends GL_ARRAY_BUFFER_ARB (0x8892) -- the name ARB_vertex_buffer_object
+ * gave the target, and the only one any GL 1.5 caller uses. The host's enum
+ * table happened to carry ARRAY_BUFFER_ARB but not ARRAY_BUFFER, so the
+ * comparison in glBindBuffer read `undefined` and refused every array binding
+ * ever made: no vertex data reached the GPU and every VBO draw was skipped.
+ * That is what a GLview render test looks like as a black window.
+ */
+test("glBindBuffer accepts GL_ARRAY_BUFFER and glBufferData fills it", () => {
+    const { executor, log } = newExecutor();
+    const data = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_BUFFERS, [4])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 4)
+        .bufferData(GL.ARRAY_BUFFER, data.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(data.buffer)));
+
+    assert.deepStrictEqual(log.refusals || [], [],
+        "binding the array buffer is not a refusal");
+    assert.strictEqual(executor.current.arrayBuffer, 4);
+    const buffer = executor.current.shareGroup.buffers.get(4);
+    assert.ok(buffer && buffer.gpuBuffer, "glBufferData allocated storage");
+    assert.strictEqual(buffer.size, data.byteLength);
+    assert.deepStrictEqual(new Float32Array(buffer.shadow.buffer,
+        buffer.shadow.byteOffset, 9), data);
+});
+
+test("a client-array draw promoted to VBOs reaches the GPU", () => {
+    const { executor, log } = newExecutor();
+    const vertices = new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]);
+    const indices = new Uint16Array([0, 1, 2]);
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_BUFFERS, [1, 2])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 1)
+        .bufferData(GL.ARRAY_BUFFER, vertices.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(vertices.buffer))
+        .call("BIND_BUFFER", GL.ELEMENT_ARRAY_BUFFER, 2)
+        .bufferData(GL.ELEMENT_ARRAY_BUFFER, indices.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(indices.buffer))
+        .call("ENABLE_CLIENT_STATE", GL.VERTEX_ARRAY)
+        .pointerVBO("VERTEX_POINTER_VBO", 3, GL.FLOAT, 12, 0)
+        .drawElementsDirect(GL.TRIANGLES, 3, GL.UNSIGNED_SHORT, 0));
+
+    assert.strictEqual(log.draws.length, 1, "the VBO draw was issued");
+    assert.strictEqual(log.draws[0].indexed, true);
+    assert.strictEqual(log.draws[0].count, 3);
+    const bound = log.draws[0].pass.calls.filter(call => call[0] === "vertexBuffer");
+    assert.ok(bound.length >= 1, "the vertex buffer was bound to the pass");
+    assert.strictEqual(bound[0][2],
+        executor.current.shareGroup.buffers.get(1).gpuBuffer,
+        "the pass reads the buffer glBufferData filled, not a scratch upload");
+});
+
+/* ---- the ARB program parameter and info-log records ---- */
+
+/*
+ * These six-word query headers are where the two sides disagreed silently:
+ * every one of them writes its answer back into the record the guest is still
+ * holding, so a field in the wrong place is not an error anywhere, just a
+ * wrong number handed to the application.
+ */
+const ARB_PARAMETER_ENV = 1;
+const ARB_PARAMETER_LOCAL = 2;
+
+const ARB_VERTEX_PROGRAM = "!!ARBvp1.0\n" +
+    "PARAM mvp[4] = { state.matrix.mvp };\n" +
+    "TEMP position;\n" +
+    "DP4 position.x, mvp[0], vertex.position;\n" +
+    "DP4 position.y, mvp[1], vertex.position;\n" +
+    "DP4 position.z, mvp[2], vertex.position;\n" +
+    "DP4 position.w, mvp[3], vertex.position;\n" +
+    "MOV result.position, position;\n" +
+    "MOV result.color, program.env[3];\n" +
+    "END\n";
+
+const ARB_MULTITEXTURE_VERTEX_PROGRAM = "!!ARBvp1.0\n" +
+    "MOV result.position, vertex.position;\n" +
+    "MOV result.color, vertex.color;\n" +
+    "MOV result.texcoord[0], vertex.texcoord[0];\n" +
+    "MOV result.texcoord[1], vertex.texcoord[1];\n" +
+    "END\n";
+
+function boundARBProgram(executor, stream) {
+    return stream.names(GLFN.GEN_PROGRAMS_ARB, [1])
+        .call("BIND_PROGRAM_ARB", GL.VERTEX_PROGRAM_ARB, 1);
+}
+
+test("an ARB program string arrives intact and assembles", () => {
+    const { executor, log } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_VERTEX_PROGRAM);
+    run(executor, stream);
+    const program = executor.current.shareGroup.arbPrograms.get(1);
+    assert.strictEqual(program.source, ARB_VERTEX_PROGRAM,
+        "the assembly text is read from offset 16, after {target, format, " +
+        "length, reserved}");
+    assert.ok(program.compiled && program.compiled.ok,
+        "it assembled: " + (program.compiled && program.compiled.log));
+    assert.strictEqual(executor.arbErrorPosition, -1);
+});
+
+test("an ARB vertex program drives the fixed multitexture fragment stage", () => {
+    const { executor, log } = newExecutor();
+    const vertices = new Float32Array([
+        -1, -1, 0, 1,  -1, 1, 0, 1,  1, -1, 0, 1,
+    ]);
+    const tex0 = new Float32Array([0, 0, 0, 1, 1, 0]);
+    const tex1 = new Float32Array([0, 1, 1, 1, 1, 0]);
+    const block = (data, size) => ({
+        size, type: GL.FLOAT, stride: 0,
+        data: new Uint8Array(data.buffer),
+    });
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB,
+            ARB_MULTITEXTURE_VERTEX_PROGRAM)
+        .call("ENABLE", GL.VERTEX_PROGRAM_ARB)
+        .call("SHADE_MODEL", GL.FLAT)
+        .call("ACTIVE_TEXTURE", GL.TEXTURE0)
+        .call("ENABLE", GL.TEXTURE_2D)
+        .call("ACTIVE_TEXTURE", GL.TEXTURE0 + 1)
+        .call("ENABLE", GL.TEXTURE_2D)
+        .drawElements(GL.TRIANGLES, new Uint16Array([0, 1, 2]),
+            GL.UNSIGNED_SHORT, {
+                vertex: block(vertices, 4),
+                texCoord0: block(tex0, 2),
+                texCoord1: block(tex1, 2),
+            });
+    run(executor, stream);
+
+    assert.deepStrictEqual(log.refusals || [], [],
+        "the mixed ARB/fixed pipeline is no longer refused");
+    assert.strictEqual(log.draws.length, 1,
+        "glDrawElements reaches the GPU instead of producing a black frame");
+    const pipeline = log.draws[0].pipeline.descriptor;
+    assert.ok(pipeline.vertex.module.code.includes(
+        "generated by gl_arb_program.js r2"));
+    assert.ok(pipeline.fragment.module.code.includes(
+        "generated by gl_fixed_function.js r2"));
+    assert.ok(pipeline.fragment.module.code.includes(
+        "@location(3) v3 : vec4<f32>"));
+    assert.ok(pipeline.fragment.module.code.includes(
+        "@location(4) v4 : vec4<f32>"));
+    assert.ok(pipeline.vertex.module.code.includes(
+        "@interpolate(flat) @location(0) frontColor"));
+    assert.ok(pipeline.fragment.module.code.includes(
+        "@interpolate(flat) @location(0) v0"),
+        "GL_FLAT has matching interpolation on both shader stages");
+    assert.ok(!pipeline.vertex.module.code.includes(
+        "@group(1) @binding(1)"),
+        "the parameter-free ARB program does not declare an unused binding");
+    const uniformGroup = log.bindGroups.find(group =>
+        group.descriptor.layout.index === 1);
+    assert.deepStrictEqual(uniformGroup.descriptor.entries.map(entry =>
+        entry.binding), [0],
+        "the bind group matches the browser layout after unused binding removal");
+});
+
+/*
+ * ARB_vertex_program section 2.14.3: generic attributes 0-5 and 8-15 alias the
+ * conventional ones. glview's 1.4 vertex-program test draws through that
+ * aliasing, and the two directions below both used to pack the generic
+ * attribute's (0, 0, 0, 1) default into every vertex -- a black frame with no
+ * refusal, no GL error and a draw that reached the GPU looking healthy.
+ */
+const ARB_ALIASED_POSITION_PROGRAM = "!!ARBvp1.0\n" +
+    "MOV result.position, vertex.position;\n" +
+    "MOV result.texcoord[0], vertex.texcoord[0];\n" +
+    "END\n";
+
+const ARB_GENERIC_POSITION_PROGRAM = "!!ARBvp1.0\n" +
+    "MOV result.position, vertex.attrib[0];\n" +
+    "MOV result.texcoord[0], vertex.attrib[8];\n" +
+    "END\n";
+
+const ALIAS_VERTICES = new Float32Array([
+    -1, -1, 0, 1,  -1, 1, 0, 1,  1, -1, 0, 1,
+]);
+const ALIAS_TEXCOORDS = new Float32Array([0, 0, 0, 1, 1, 0]);
+
+/* The packed vertex data the draw uploaded, as {location -> [components]}. */
+function packedAttributes(executor, log, vertexCount) {
+    const draw = log.draws[0];
+    const buffer = draw.pipeline.descriptor.vertex.buffers[0];
+    const stride = buffer.arrayStride / 4;
+    const floats = new Float32Array(executor.vertexStaging.buffer, 0,
+        stride * vertexCount);
+    const out = {};
+    for (const attribute of buffer.attributes) {
+        const components = Number(/x(\d)$/.exec(attribute.format) ?
+            /x(\d)$/.exec(attribute.format)[1] : 1);
+        const at = attribute.offset / 4;
+        out[attribute.shaderLocation] = [];
+        for (let v = 0; v < vertexCount; ++v)
+            out[attribute.shaderLocation].push(
+                Array.from(floats.subarray(v * stride + at,
+                    v * stride + at + components)));
+    }
+    return out;
+}
+
+test("vertex.position reads the array sent as generic attribute 0", () => {
+    const { executor, log } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_ALIASED_POSITION_PROGRAM)
+        .call("ENABLE", GL.VERTEX_PROGRAM_ARB)
+        .call("ACTIVE_TEXTURE", GL.TEXTURE0)
+        .call("ENABLE", GL.TEXTURE_2D)
+        .drawElementsGL2(GL.TRIANGLES, new Uint16Array([0, 1, 2]),
+            GL.UNSIGNED_SHORT, {}, [
+                { index: 0, size: 4, type: GL.FLOAT, stride: 0,
+                  normalized: false,
+                  data: new Uint8Array(ALIAS_VERTICES.buffer) },
+                { index: 8, size: 2, type: GL.FLOAT, stride: 0,
+                  normalized: false,
+                  data: new Uint8Array(ALIAS_TEXCOORDS.buffer) },
+            ]);
+    run(executor, stream);
+
+    assert.deepStrictEqual(log.refusals || [], []);
+    assert.strictEqual(log.draws.length, 1);
+    const packed = packedAttributes(executor, log, 3);
+    assert.deepStrictEqual(packed[0][0], [-1, -1, 0, 1],
+        "generic attribute 0 feeds vertex.position rather than its default");
+    assert.deepStrictEqual(packed[0][1], [-1, 1, 0, 1]);
+    assert.deepStrictEqual(packed[8][1], [0, 1, 0, 1],
+        "generic attribute 8 feeds vertex.texcoord[0]");
+});
+
+test("vertex.attrib[0] reads the array sent through glVertexPointer", () => {
+    const { executor, log } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_GENERIC_POSITION_PROGRAM)
+        .call("ENABLE", GL.VERTEX_PROGRAM_ARB)
+        .call("ACTIVE_TEXTURE", GL.TEXTURE0)
+        .call("ENABLE", GL.TEXTURE_2D)
+        .drawElementsGL2(GL.TRIANGLES, new Uint16Array([0, 1, 2]),
+            GL.UNSIGNED_SHORT, {
+                vertex: { size: 4, type: GL.FLOAT, stride: 0,
+                          data: new Uint8Array(ALIAS_VERTICES.buffer) },
+                texCoord0: { size: 2, type: GL.FLOAT, stride: 0,
+                             data: new Uint8Array(ALIAS_TEXCOORDS.buffer) },
+            }, []);
+    run(executor, stream);
+
+    assert.deepStrictEqual(log.refusals || [], []);
+    assert.strictEqual(log.draws.length, 1);
+    const packed = packedAttributes(executor, log, 3);
+    assert.deepStrictEqual(packed[0][0], [-1, -1, 0, 1],
+        "glVertexPointer's array feeds vertex.attrib[0]");
+    assert.deepStrictEqual(packed[8][1], [0, 1, 0, 1],
+        "glTexCoordPointer's array feeds vertex.attrib[8]");
+});
+
+test("glview's ARB bump program draws from widened interleaved VBO arrays", () => {
+    const { executor, log } = newExecutor();
+    const program = `!!ARBvp1.0
+ATTRIB iPos = vertex.position;
+ATTRIB iNormal = vertex.normal;
+ATTRIB iTangent = vertex.attrib[6];
+ATTRIB iTex0 = vertex.texcoord[0];
+ATTRIB iTex1 = vertex.texcoord[1];
+PARAM mvp[4] = { state.matrix.mvp };
+PARAM lightDir = program.env[0];
+PARAM half = 0.5;
+OUTPUT oPos = result.position;
+OUTPUT oColor = result.color;
+OUTPUT oTex0 = result.texcoord[0];
+OUTPUT oTex1 = result.texcoord[1];
+TEMP T;
+TEMP N;
+TEMP B;
+TEMP light_surf;
+DP4 oPos.x, mvp[0], iPos;
+DP4 oPos.y, mvp[1], iPos;
+DP4 oPos.z, mvp[2], iPos;
+DP4 oPos.w, mvp[3], iPos;
+MOV T, iTangent;
+MOV N, iNormal;
+MUL B, N.zxyw, T.yzxw;
+MAD B, N.yzxw, T.zxyw, -B;
+MUL B.xyz, B, T.w;
+DP3 light_surf.x, T, lightDir;
+DP3 light_surf.y, B, lightDir;
+DP3 light_surf.z, N, lightDir;
+MAD oColor, light_surf, half, half;
+MOV oTex0, iTex0;
+MOV oTex1, iTex1;
+END`;
+    // position3, normal3, tangent4, texcoord0.xy, texcoord1.xy
+    const vertices = new Float32Array([
+        -1, -1, 0,  0, 0, 1,  1, 0, 0, 1,  0, 0,  0, 0,
+         1, -1, 0,  0, 0, 1,  1, 0, 0, 1,  1, 0,  1, 0,
+         0,  1, 0,  0, 0, 1,  1, 0, 0, 1,  0, 1,  0, 1,
+    ]);
+    const indices = new Uint16Array([0, 1, 2]);
+    const stride = 14 * 4;
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, program)
+        .programParameterARB(ARB_PARAMETER_ENV, GL.VERTEX_PROGRAM_ARB, 0,
+            [0, 0, 1, 0])
+        .call("ENABLE", GL.VERTEX_PROGRAM_ARB)
+        .call("ACTIVE_TEXTURE", GL.TEXTURE0)
+        .call("ENABLE", GL.TEXTURE_2D)
+        .call("ACTIVE_TEXTURE", GL.TEXTURE0 + 1)
+        .call("ENABLE", GL.TEXTURE_2D)
+        .names(GLFN.GEN_BUFFERS, [1, 2])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 1)
+        .bufferData(GL.ARRAY_BUFFER, vertices.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(vertices.buffer))
+        .pointerVBO("VERTEX_POINTER_VBO", 3, GL.FLOAT, stride, 0)
+        .pointerVBO("NORMAL_POINTER_VBO", 3, GL.FLOAT, stride, 3 * 4)
+        .attribPointerVBO(6, 4, GL.FLOAT, false, stride, 6 * 4)
+        .call("CLIENT_ACTIVE_TEXTURE", GL.TEXTURE0)
+        .pointerVBO("TEX_COORD_POINTER_VBO", 2, GL.FLOAT, stride, 10 * 4)
+        .call("CLIENT_ACTIVE_TEXTURE", GL.TEXTURE0 + 1)
+        .pointerVBO("TEX_COORD_POINTER_VBO", 2, GL.FLOAT, stride, 12 * 4)
+        .call("BIND_BUFFER", GL.ELEMENT_ARRAY_BUFFER, 2)
+        .bufferData(GL.ELEMENT_ARRAY_BUFFER, indices.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(indices.buffer))
+        .drawElementsDirect(GL.TRIANGLES, 3, GL.UNSIGNED_SHORT, 0);
+    run(executor, stream);
+
+    assert.deepStrictEqual(log.refusals || [], []);
+    assert.strictEqual(log.draws.length, 1,
+        "the exact 1.5 program/VBO shape reaches a draw");
+    const descriptor = log.draws[0].pipeline.descriptor.vertex;
+    assert.deepStrictEqual(descriptor.buffers[0].attributes.map(a =>
+        [a.shaderLocation, a.format]), [
+        [0, "float32x4"], [6, "float32x4"], [2, "float32x3"],
+        [8, "float32x4"], [9, "float32x4"],
+    ], "GL size-3/2 arrays are widened to the ARB program input widths");
+    const packed = packedAttributes(executor, log, 3);
+    assert.deepStrictEqual(packed[0][0], [-1, -1, 0, 1]);
+    assert.deepStrictEqual(packed[8][1], [1, 0, 0, 1]);
+    assert.deepStrictEqual(packed[9][2], [0, 1, 0, 1]);
+    assert.ok(descriptor.module.code.includes(
+        "vec4<f32>(0.5, 0.5, 0.5, 0.5)"),
+        "the shared 1.4 scalar-PARAM fix is present in the 1.5 shader too");
+});
+
+test("a vertex and a fragment program keep separate parameter namespaces", () => {
+    const { executor, log } = newExecutor();
+    const vertexProgram = "!!ARBvp1.0\n" +
+        "PARAM scale = program.local[0];\n" +
+        "MUL result.position, vertex.position, scale;\n" +
+        "END\n";
+    const fragmentProgram = "!!ARBfp1.0\n" +
+        "PARAM tint = program.local[0];\n" +
+        "MOV result.color, tint;\n" +
+        "END\n";
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_PROGRAMS_ARB, [1, 2])
+        .call("BIND_PROGRAM_ARB", GL.VERTEX_PROGRAM_ARB, 1)
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, vertexProgram)
+        .programParameterARB(ARB_PARAMETER_LOCAL, GL.VERTEX_PROGRAM_ARB, 0,
+            [7, 7, 7, 7])
+        .call("BIND_PROGRAM_ARB", GL.FRAGMENT_PROGRAM_ARB, 2)
+        .programStringARB(GL.FRAGMENT_PROGRAM_ARB, fragmentProgram)
+        .programParameterARB(ARB_PARAMETER_LOCAL, GL.FRAGMENT_PROGRAM_ARB, 0,
+            [0.25, 0.5, 0.75, 1])
+        .call("ENABLE", GL.VERTEX_PROGRAM_ARB)
+        .call("ENABLE", GL.FRAGMENT_PROGRAM_ARB)
+        .drawElements(GL.TRIANGLES, new Uint16Array([0, 1, 2]),
+            GL.UNSIGNED_SHORT, {
+                vertex: { size: 4, type: GL.FLOAT, stride: 0,
+                          data: new Uint8Array(ALIAS_VERTICES.buffer) },
+            });
+    run(executor, stream);
+
+    assert.deepStrictEqual(log.refusals || [], []);
+    assert.strictEqual(log.draws.length, 1);
+    const group = log.bindGroups.find(entry =>
+        entry.descriptor.layout.index === 1);
+    assert.deepStrictEqual(group.descriptor.entries.map(e => e.binding),
+        [1, 2], "each stage's parameters get a binding of their own");
+
+    // program.local is per-program: the vertex stage must not be handed the
+    // fragment program's block, which is what one shared binding did.
+    const count = 28 * 4;
+    const localOf = binding => {
+        const entry = group.descriptor.entries.find(e => e.binding === binding);
+        return Array.from(new Float32Array(executor.uniformStaging.buffer,
+            entry.resource.offset, count * 2).subarray(count, count + 4));
+    };
+    assert.deepStrictEqual(localOf(1), [7, 7, 7, 7]);
+    assert.deepStrictEqual(localOf(2), [0.25, 0.5, 0.75, 1]);
+});
+
+test("glProgramEnvParameter4fv lands in env, not in local", () => {
+    const { executor } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_VERTEX_PROGRAM)
+        .programParameterARB(ARB_PARAMETER_ENV, GL.VERTEX_PROGRAM_ARB, 3,
+            [0.25, 0.5, 0.75, 1])
+        .programParameterARB(ARB_PARAMETER_LOCAL, GL.VERTEX_PROGRAM_ARB, 2,
+            [9, 8, 7, 6]);
+    run(executor, stream);
+
+    const program = executor.current.shareGroup.arbPrograms.get(1);
+    assert.deepStrictEqual([...program.env.subarray(12, 16)],
+        [0.25, 0.5, 0.75, 1]);
+    assert.deepStrictEqual([...program.local.subarray(8, 12)], [9, 8, 7, 6]);
+    assert.deepStrictEqual([...program.local.subarray(12, 16)], [0, 0, 0, 0],
+        "the env write must not have gone to local as well");
+});
+
+test("glProgramEnvParameters4fv writes the whole run", () => {
+    const { executor } = newExecutor();
+    const values = [];
+    for (let i = 0; i < 12; ++i) values.push(i + 1);
+    run(executor, boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_VERTEX_PROGRAM)
+        .programParameterARB(ARB_PARAMETER_ENV, GL.VERTEX_PROGRAM_ARB, 1, values));
+    const program = executor.current.shareGroup.arbPrograms.get(1);
+    assert.deepStrictEqual([...program.env.subarray(4, 16)], values,
+        "the count word is honoured, not ignored after the first parameter");
+});
+
+test("an env parameter set before the program compiles is accepted", () => {
+    const { executor, log } = newExecutor();
+    run(executor, boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programParameterARB(ARB_PARAMETER_ENV, GL.VERTEX_PROGRAM_ARB, 0,
+            [1, 2, 3, 4]));
+    assert.deepStrictEqual(log.refusals || [], [],
+        "ARB environment parameters are context state, not program state");
+    assert.deepStrictEqual(
+        [...executor.current.shareGroup.arbPrograms.get(1).env.subarray(0, 4)],
+        [1, 2, 3, 4]);
+});
+
+test("glGetProgramEnvParameterfv reads back what was written", () => {
+    const { executor } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_VERTEX_PROGRAM)
+        .programParameterARB(ARB_PARAMETER_ENV, GL.VERTEX_PROGRAM_ARB, 5,
+            [1.5, 2.5, 3.5, 4.5]);
+    const answer = stream.queryProgramParameterARB(ARB_PARAMETER_ENV,
+        GL.VERTEX_PROGRAM_ARB, 5);
+    run(executor, stream);
+
+    assert.strictEqual(answer.view.getUint32(12, true), 1, "status is OK");
+    assert.deepStrictEqual([24, 28, 32, 36].map(at =>
+        answer.view.getFloat32(at, true)), [1.5, 2.5, 3.5, 4.5]);
+});
+
+test("glGetProgramStringARB returns the text at the offset the guest reads", () => {
+    const { executor } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_VERTEX_PROGRAM);
+    const answer = stream.queryProgramStringARB(GL.VERTEX_PROGRAM_ARB,
+        ARB_VERTEX_PROGRAM.length);
+    run(executor, stream);
+
+    assert.strictEqual(answer.view.getUint32(8, true), 1, "status is OK");
+    assert.strictEqual(answer.view.getUint32(12, true), ARB_VERTEX_PROGRAM.length);
+    let text = "";
+    for (let i = 0; i < ARB_VERTEX_PROGRAM.length; ++i)
+        text += String.fromCharCode(answer.bytes[24 + i]);
+    assert.strictEqual(text, ARB_VERTEX_PROGRAM);
+});
+
+test("glGetShaderInfoLog reaches the guest's buffer whole", () => {
+    const { executor } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("CREATE_SHADER", 1, GL.FRAGMENT_SHADER)
+        .shaderSource(1, "void main() { this is not GLSL }")
+        .call("COMPILE_SHADER", 1);
+    const status = stream.queryObjectiv(1, 1, GL.COMPILE_STATUS);
+    const answer = stream.queryObjectLog(1, 1, 256);
+    run(executor, stream);
+
+    assert.strictEqual(status.view.getUint32(12, true), 1, "the query answered");
+    assert.strictEqual(status.view.getUint32(16, true), 0, "it did not compile");
+    assert.strictEqual(answer.view.getUint32(12, true), 1, "log status is OK");
+    const length = answer.view.getUint32(16, true);
+    let text = "";
+    for (let i = 0; i < length; ++i)
+        text += String.fromCharCode(answer.bytes[24 + i]);
+    assert.strictEqual(text,
+        executor.current.shareGroup.shaders.get(1).compiled.log,
+        "the log starts at 24 -- four bytes earlier and its first word is lost");
+    assert.ok(length > 0, "a failed compile says why");
+    assert.strictEqual(answer.bytes[24 + length], 0, "and is NUL-terminated");
+});
+
+test("glGetActiveUniform's name, size and type land in the right words", () => {
+    const { executor } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("CREATE_PROGRAM", 1)
+        .call("CREATE_SHADER", 2, GL.VERTEX_SHADER)
+        .shaderSource(2, "uniform vec4 tint;\nvoid main() {\n" +
+            "  gl_Position = gl_Vertex + tint;\n}\n")
+        .call("COMPILE_SHADER", 2)
+        .call("CREATE_SHADER", 3, GL.FRAGMENT_SHADER)
+        .shaderSource(3, "void main() { gl_FragColor = vec4(1.0); }\n")
+        .call("COMPILE_SHADER", 3)
+        .call("ATTACH_SHADER", 1, 2)
+        .call("ATTACH_SHADER", 1, 3)
+        .call("LINK_PROGRAM", 1);
+    const answer = stream.queryActive(1, 1, 0, 64);
+    run(executor, stream);
+
+    assert.strictEqual(answer.view.getUint32(16, true), 1, "status is OK");
+    const length = answer.view.getUint32(20, true);
+    let name = "";
+    for (let i = 0; i < length; ++i)
+        name += String.fromCharCode(answer.bytes[40 + i]);
+    assert.strictEqual(name, "tint");
+    assert.strictEqual(answer.view.getUint32(24, true), 1, "size is one element");
+    assert.strictEqual(answer.view.getUint32(28, true), GL.FLOAT_VEC4);
+});
+
+test("variable payloads survive a non-zero batch byteOffset", () => {
+    const { executor } = newExecutor();
+    const bufferBytes = Uint8Array.from([11, 22, 33, 44, 55, 66, 77, 88]);
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_BUFFERS, [4])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 4)
+        .bufferData(GL.ARRAY_BUFFER, bufferBytes.length, GL.STATIC_DRAW,
+            bufferBytes)
+        .names(GLFN.GEN_TEXTURES, [5])
+        .call("BIND_TEXTURE", GL.TEXTURE_2D, 5)
+        .texImage2D(GL.TEXTURE_2D, 0, GL.RGBA, 1, 1, GL.RGBA,
+            GL.UNSIGNED_BYTE, Uint8Array.from([1, 2, 3, 4]))
+        .call("CREATE_SHADER", 7, GL.VERTEX_SHADER)
+        .shaderSource(7, "void main() { gl_Position = gl_Vertex; }")
+        .call("COMPILE_SHADER", 7);
+    boundARBProgram(executor, stream)
+        .programStringARB(GL.VERTEX_PROGRAM_ARB, ARB_VERTEX_PROGRAM);
+    stream.queryString(GL.RENDERER, 64);
+
+    // PCI batches are views into the emulator's RAM and therefore normally
+    // have a non-zero byteOffset.  Unit fixtures used to start at byte zero,
+    // hiding a double-subtraction that corrupted every variable-size payload.
+    const encoded = stream.bytes();
+    const guestRAM = new Uint8Array(encoded.byteLength + 160);
+    guestRAM.set(encoded, 96);
+    executor.submit(guestRAM.subarray(96, 96 + encoded.byteLength), {});
+
+    const group = executor.current.shareGroup;
+    assert.deepStrictEqual([...group.buffers.get(4).shadow], [...bufferBytes]);
+    assert.deepStrictEqual([...group.textures.get(5).levels[0][0].pixels],
+        [1, 2, 3, 4]);
+    assert.ok(group.shaders.get(7).compiled.ok,
+        group.shaders.get(7).compiled.log);
+    assert.strictEqual(group.arbPrograms.get(1).source, ARB_VERTEX_PROGRAM);
+    assert.ok(group.arbPrograms.get(1).compiled.ok);
+    assert.ok(new TextDecoder().decode(guestRAM).includes("v86 WebGPU bridge"),
+        "variable-size query output is written into the submitted view");
+});
+
 /* ---- report ---- */
 
-for (const [name, error] of failures)
-    console.error("FAIL: " + name + "\n    " + (error && error.message));
-console.log(passed + " passed, " + failures.length + " failed");
-process.exit(failures.length ? 1 : 0);
+(async () => {
+    for (const [name, fn] of asyncTests) {
+        try {
+            await fn();
+            ++passed;
+        } catch (error) {
+            failures.push([name, error]);
+        }
+    }
+    for (const [name, error] of failures)
+        console.error("FAIL: " + name + "\n    " + (error && error.message));
+    console.log(passed + " passed, " + failures.length + " failed");
+    process.exit(failures.length ? 1 : 0);
+})();

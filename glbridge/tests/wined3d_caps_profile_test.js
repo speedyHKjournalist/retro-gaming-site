@@ -67,6 +67,22 @@ assert.equal(proxy.includes('case GL_VENDOR:     return (const GLubyte*)"v86"'),
     false, "unknown vendor must not trigger WineD3D's NVIDIA/GeForce FX fallback");
 assert.ok(gl21.includes("GL_ARB_texture_non_power_of_two"),
     "the WebGPU profile must retain the NPOT capability selected by SVGA3D");
+for (const extension of [
+    "GL_ARB_texture_compression", "GL_ARB_multisample",
+    "GL_ARB_texture_border_clamp", "GL_EXT_generate_mipmap",
+    "GL_SGI_color_matrix",
+]) {
+    assert.ok(gl21.split(" ").includes(extension),
+        "GLView 1.3/1.4 capability is missing " + extension);
+}
+assert.match(proxy,
+    /case GL_COLOR:[\s\S]*return g_color_matrix_stack\[g_color_matrix_stack_depth\]/,
+    "GL_SGI_color_matrix needs a real matrix stack");
+assert.match(proxy,
+    /pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI[\s\S]*g_post_color_matrix_scale/,
+    "GL_SGI_color_matrix post-transfer state must be retained in the proxy");
+assert.equal(gl21.includes("GL_ARB_imaging"), false,
+    "do not claim the unimplemented full imaging subset");
 
 for (const stage of [
     "23 VertexBuffer::Release",

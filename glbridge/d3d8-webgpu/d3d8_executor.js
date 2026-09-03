@@ -8,6 +8,31 @@
 (function(global) {
     "use strict";
 
+    /*
+     * The device and the canvas configuration belong to webgpu_host.js. See the
+     * same note in d3d9_executor.js: a GPUCanvasContext belongs to whichever
+     * device last configured it, so a backend that brings its own device makes
+     * every other backend's swap-chain texture unusable. This path also used to
+     * request a device with no optional features at all, which would have left
+     * a shared device without BCn had it won the race.
+     */
+    /*
+     * Resolved when an executor is constructed, not when this file is
+     * evaluated: the page's script order is not this module's to depend on,
+     * and reading global.V86GPUHost at load time silently yields null when
+     * webgpu_host.js happens to come later -- which reads downstream as
+     * "WebGPU is unavailable" rather than as the load-order mistake it is.
+     */
+    function resolveGPUHost() {
+        if (global.V86GPUHost) return global.V86GPUHost;
+        try {
+            return typeof require === "function" ?
+                require("../webgpu_host.js") : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
     const D8WG_MAGIC = 0x47573844; // "D8WG"
     const D8WG_CHECKPOINT_MAGIC = 0x43533844; // "D8SC"
     const D8WG_CHECKPOINT_VERSION = 1;
@@ -1537,6 +1562,16 @@ ${body.join("\n")}
             this.adapter = this.options.adapter || null;
             this.device = this.options.device || null;
             this.context = this.options.context || null;
+            // Skipped when a device was supplied: that caller configures the
+            // canvas itself. See the gpuHost note at the top of this file.
+            this.host = this.options.host || (this.device ? null :
+                ((host => host ? host.acquire(canvas, {
+                    gpu: this.gpu,
+                    adapter: this.adapter,
+                    context: this.context,
+                    format: this.options.format || null,
+                    ...(this.options.hostOptions || {}),
+                }) : null)(resolveGPUHost())));
             this.format = this.options.format || null;
             this.sessions = new Map();
             this.activeSession = null;
@@ -1694,16 +1729,16 @@ ${body.join("\n")}
             if (this.readyPromise) return this.readyPromise;
             this.readyPromise = (async () => {
                 if (!this.device) {
-                    if (!this.gpu || typeof this.gpu.requestAdapter !== "function") {
-                        throw new Error("WebGPU is unavailable");
-                    }
-                    this.adapter = this.adapter || await this.gpu.requestAdapter({
-                        powerPreference: "high-performance",
-                    });
-                    if (!this.adapter) throw new Error("WebGPU adapter request failed");
-                    this.device = await this.adapter.requestDevice();
+                    if (!this.host) throw new Error("WebGPU is unavailable");
+                    await this.host.initialize();
+                    this.adapter = this.host.adapter;
+                    this.device = this.host.device;
+                    this.context = this.context || this.host.context;
+                    this.format = this.format || this.host.format;
                 }
-                this.context = this.context || this.canvas.getContext("webgpu");
+                this.context = this.context ||
+                    (this.canvas && typeof this.canvas.getContext === "function" ?
+                        this.canvas.getContext("webgpu") : null);
                 if (!this.context) throw new Error("could not acquire a WebGPU canvas context");
                 this.format = this.format || (this.gpu &&
                     typeof this.gpu.getPreferredCanvasFormat === "function" ?
@@ -1748,6 +1783,14 @@ ${body.join("\n")}
         }
 
         configureContext() {
+            // Reconfiguring is how this path has always followed a device
+            // reset's new back-buffer size. When the host owns the device it
+            // must also own the configuration, or this call would hand the
+            // canvas to a device the other backends do not share.
+            if (this.host) {
+                this.host.configureCanvas();
+                return;
+            }
             this.context.configure({
                 device: this.device,
                 format: this.format,

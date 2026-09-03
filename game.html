@@ -217,27 +217,31 @@
     </footer>
 
     <script src="libv86.js?v=parallel-port-20260809"></script>
-    <script src="glbridge/d3d8-webgpu/d3d8_executor.js?v=direct-webgpu-m6-session-v4-20260802"></script>
+    <!-- The single owner of the GPUDevice and of the canvas configuration, for
+         all three backends. It must load first: a GPUCanvasContext belongs to
+         whichever device last configured it, so if a backend came up before
+         this and configured the canvas itself, every other backend's
+         swap-chain texture would fail validation. -->
+    <script src="glbridge/webgpu_host.js?v=gl-shared-device-20260903"></script>
+    <script src="glbridge/d3d8-webgpu/d3d8_executor.js?v=gl-shared-device-20260901b"></script>
     <!-- d3d9_executor.js requires the shader translator to already be on the
          page: it resolves D3D9ShaderPipeline at load time, not lazily. -->
     <script src="glbridge/d3d9-webgpu/d3d9_shader_pipeline.js?v=vs1-address-register-20260828"></script>
-    <script src="glbridge/d3d9-webgpu/d3d9_executor.js?v=ddraw-partial-mips-20260831"></script>
+    <script src="glbridge/d3d9-webgpu/d3d9_executor.js?v=gl-shared-device-20260901b"></script>
     <!-- DirectDraw shares the D3D9 executor, but its 0x500 opcode handlers live
          in this sibling module and must be installed before the bridge creates
          the executor. -->
     <script src="glbridge/d3d9-webgpu/ddraw_ops.js?v=ddraw-desktop-primary-20260831"></script>
     <!-- The OpenGL path on WebGPU. Load order matters: the executor resolves
          its constants, wire format, state layout, translator and fixed-function
-         generator at load time, not lazily, and webgpu_host.js has to exist
-         before any executor asks for the shared device. -->
-    <script src="glbridge/webgpu_host.js?v=gl-webgpu-m1-20260824"></script>
-    <script src="glbridge/gl-webgpu/gl_constants.js?v=gl-webgpu-m1-20260824"></script>
+         generator at load time, not lazily. -->
+    <script src="glbridge/gl-webgpu/gl_constants.js?v=gl-opengl13-15-20260903"></script>
     <script src="glbridge/gl-webgpu/gl_wire.js?v=gl-webgpu-m1-20260824"></script>
     <script src="glbridge/gl-webgpu/gl_state_layout.js?v=gl-webgpu-m1-20260824"></script>
     <script src="glbridge/gl-webgpu/gl_shader_translator.js?v=gl-webgpu-m1-20260824"></script>
-    <script src="glbridge/gl-webgpu/gl_fixed_function.js?v=gl-webgpu-m1-20260824"></script>
-    <script src="glbridge/gl-webgpu/gl_arb_program.js?v=gl-webgpu-m1-20260824"></script>
-    <script src="glbridge/gl-webgpu/gl_executor.js?v=gl-webgpu-m1-20260824"></script>
+    <script src="glbridge/gl-webgpu/gl_fixed_function.js?v=gl-opengl13-15-20260903"></script>
+    <script src="glbridge/gl-webgpu/gl_arb_program.js?v=gl-opengl13-15-20260903"></script>
+    <script src="glbridge/gl-webgpu/gl_executor.js?v=gl-opengl13-15-20260903"></script>
     <script src="glbridge/v86_network_bridge.js?v=ddraw-desktop-primary-20260831"></script>
     <script src="file-transfer/v8ft-protocol.js?v=v8ft-v1-phase3-20260811"></script>
     <script src="file-transfer/v8ft-client.js?v=v8ft-v1-phase4-20260812"></script>

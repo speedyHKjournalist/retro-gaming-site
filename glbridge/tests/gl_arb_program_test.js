@@ -34,8 +34,8 @@ function test(name, fn) {
     try { fn(); ++passed; } catch (error) { failures.push([name, error]); }
 }
 
-function compile(source, label) {
-    const result = arb.compileARBProgram(source, {});
+function compile(source, label, options) {
+    const result = arb.compileARBProgram(source, options || {});
     if (!result.ok) throw new Error(result.log);
     if (naga) {
         const file = path.join(outputDir,
@@ -74,6 +74,25 @@ test("the canonical DP4 transform translates", () => {
     assert.ok(result.wgsl.indexOf("clip.z = (clip.z + clip.w) * 0.5;") >= 0);
     const attributes = result.reflection.attributes.map(a => a.location);
     assert.ok(attributes.indexOf(0) >= 0, "vertex.position is attribute 0");
+});
+
+test("a fixed fragment stage can require ARB texture-coordinate outputs", () => {
+    const result = compile(`!!ARBvp1.0
+MOV result.position, vertex.position;
+END`, "fixed_fragment_outputs", {
+        forceVertexTexCoords: [0, 1],
+        forceStateFields: ["mvp", "texEnvColor"],
+        forceFlatVaryings: [0, 1],
+    });
+    assert.ok(result.wgsl.includes(
+        "@location(3) texcoord0 : vec4<f32>"));
+    assert.ok(result.wgsl.includes(
+        "@location(4) texcoord1 : vec4<f32>"));
+    assert.ok(result.wgsl.includes("out.texcoord0 = texcoord0;"));
+    assert.ok(result.wgsl.includes(
+        "@interpolate(flat) @location(0) frontColor"));
+    assert.ok(result.wgsl.includes("texEnvColor"),
+        "the mixed stages use a byte-identical GLState layout");
 });
 
 test("a write mask writes only the components it names", () => {
@@ -209,10 +228,23 @@ MOV result.position, r0;
 END`, "params");
     assert.ok(result.wgsl.indexOf("arbParams.env[7]") >= 0);
     assert.ok(result.wgsl.indexOf("arbParams.local[3]") >= 0);
+    assert.ok(result.wgsl.indexOf("@group(1) @binding(1)") >= 0,
+        "a program which reads parameters declares their uniform binding");
     assert.strictEqual(result.reflection.usesEnv, true);
     assert.strictEqual(result.reflection.usesLocal, true);
     assert.strictEqual(result.reflection.maxParameters, 28,
         "28, not the ARB minimum of 24 -- see openglproxy/README.md");
+});
+
+test("an ARB program without parameters omits their unused binding", () => {
+    const result = compile(`!!ARBvp1.0
+MOV result.position, vertex.position;
+MOV result.color, vertex.color;
+END`, "no_params");
+    assert.strictEqual(result.reflection.usesEnv, false);
+    assert.strictEqual(result.reflection.usesLocal, false);
+    assert.ok(result.wgsl.indexOf("@group(1) @binding(1)") < 0,
+        "auto pipeline layout must not lose a declared-but-unused binding");
 });
 
 test("a parameter beyond the advertised count is refused", () => {
@@ -279,6 +311,20 @@ MUL r0, vertex.position, half;
 MOV result.position, r0;
 END`, "literal");
     assert.ok(result.wgsl.indexOf("vec4<f32>(0.5, 0.5, 0.5, 1.0)") >= 0);
+});
+
+test("a scalar PARAM splats all four components like glview's half", () => {
+    const result = compile(`!!ARBvp1.0
+PARAM half = 0.5;
+TEMP light_surf;
+MAD result.color, light_surf, half, half;
+MOV result.position, vertex.position;
+END`, "glview_scalar_param");
+    assert.ok(result.wgsl.indexOf(
+        "vec4<f32>(0.5, 0.5, 0.5, 0.5)") >= 0, result.wgsl);
+    assert.ok(result.wgsl.indexOf(
+        "vec4<f32>(0.5, 0.0, 0.0, 1.0)") < 0,
+        "a PARAM scalar is not expanded like a one-component vertex array");
 });
 
 test("ALIAS and ATTRIB declarations resolve", () => {

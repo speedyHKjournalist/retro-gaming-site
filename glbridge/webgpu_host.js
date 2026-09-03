@@ -14,6 +14,19 @@
 // what makes a future "GDI/DirectDraw surface composited under a GL overlay"
 // possible at all -- separate devices could never do that.
 //
+// The three-way race was not hypothetical. This module shipped with only the
+// OpenGL executor using it, while D3D8 and D3D9/DDraw kept acquiring their own
+// devices -- and since DDraw drives the Windows desktop, the canvas was always
+// already configured by the D3D9 device before any GL app started. Every
+// OpenGL present pass then died with
+//
+//   [TextureView of Texture "...WebgpuSwapChainTexture..."] is associated with
+//   [Device], and cannot be used with [Device]
+//
+// All three now acquire through here. tests/webgpu_shared_device_test.js
+// builds all three on one canvas and asserts they land on one device, because
+// each executor's own suite only ever constructs one and so cannot see this.
+//
 // See docs/opengl-webgpu-implementation-plan.zh-CN.md section 4.2.
 
 (function(global) {

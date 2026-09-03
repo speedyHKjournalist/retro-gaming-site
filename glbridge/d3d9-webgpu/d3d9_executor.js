@@ -56,6 +56,34 @@
         throw new Error("d3d9_executor.js requires d3d9_shader_pipeline.js to " +
             "be loaded first");
 
+    /*
+     * The device and the canvas configuration belong to webgpu_host.js, not to
+     * this file. A GPUCanvasContext belongs to whichever device last configured
+     * it, and getCurrentTexture() then hands out a texture only that device may
+     * use -- so when this executor requested its own device and configured the
+     * canvas with it, the OpenGL executor's present pass got a swap-chain
+     * texture from the wrong device and every frame died in validation. The
+     * page loads all three backends whether or not the guest uses them, and
+     * DDraw drives the desktop through this one, so the collision was the
+     * normal case rather than an edge.
+     */
+    /*
+     * Resolved when an executor is constructed, not when this file is
+     * evaluated: the page's script order is not this module's to depend on,
+     * and reading global.V86GPUHost at load time silently yields null when
+     * webgpu_host.js happens to come later -- which reads downstream as
+     * "WebGPU is unavailable" rather than as the load-order mistake it is.
+     */
+    function resolveGPUHost() {
+        if (global.V86GPUHost) return global.V86GPUHost;
+        try {
+            return typeof require === "function" ?
+                require("../webgpu_host.js") : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
     const DEFAULT_SHADER_WORKER_URL = (() => {
         try {
             if (typeof document === "undefined" || !document.currentScript ||
@@ -2938,6 +2966,19 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.device = this.options.device || null;
             this.context = this.options.context || null;
             this.format = this.options.format || null;
+            // Skipped entirely when a device was supplied -- a caller that
+            // brought its own device configures the canvas itself. Otherwise
+            // the gpu/adapter/context overrides go to the host, so that a
+            // caller injecting a fake WebGPU still gets one device and one
+            // canvas configuration rather than two.
+            this.host = this.options.host || (this.device ? null :
+                ((host => host ? host.acquire(canvas, {
+                    gpu: this.gpu,
+                    adapter: this.adapter,
+                    context: this.context,
+                    format: this.format,
+                    ...(this.options.hostOptions || {}),
+                }) : null)(resolveGPUHost())));
             this.devices = new Map();      // device_handle -> device state
             this.resources = new Map();    // resource_handle -> resource state
             this.pipelineCache = new Map(); // layout signature -> GPURenderPipeline
@@ -3267,43 +3308,19 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.restorePersistentShaderCache();
                 this.initializeShaderWorker();
                 if (!this.device) {
-                    if (!this.gpu || typeof this.gpu.requestAdapter !== "function")
-                        throw new Error("WebGPU is unavailable");
-                    this.adapter = this.adapter ||
-                        await this.gpu.requestAdapter({ powerPreference: "high-performance" });
-                    if (!this.adapter) throw new Error("WebGPU adapter request failed");
-                    // A WebGPU device gets *no* optional features unless it asks
-                    // for them by name at creation. Without this, every
-                    // createTexture for a DXT format throws
-                    // ("Use of the 'bc2-rgba-unorm' texture format requires the
-                    // 'texture-compression-bc' feature"), which killed the whole
-                    // batch and with it the frame -- and since DXT1/3/5 are the
-                    // formats a 2002-and-later D3D9 game keeps almost all of its
-                    // art in, that is most of the screen. The format table has
-                    // listed BCn since M1, so this was a promise the device
-                    // setup never kept.
-                    const requested = [];
-                    const features = this.adapter.features;
-                    const supports = name => !!(features &&
-                        typeof features.has === "function" && features.has(name));
-                    if (supports("texture-compression-bc"))
-                        requested.push("texture-compression-bc");
-                    if (supports("float32-filterable"))
-                        requested.push("float32-filterable");
-                    if (supports("float32-blendable"))
-                        requested.push("float32-blendable");
-                    if (supports("timestamp-query"))
-                        requested.push("timestamp-query");
-                    this.deviceFeatures = {
-                        bc: requested.includes("texture-compression-bc"),
-                        float32Filterable: requested.includes(
-                            "float32-filterable"),
-                        float32Blendable: requested.includes(
-                            "float32-blendable"),
-                        timestampQuery: requested.includes("timestamp-query"),
-                    };
-                    this.device = await this.adapter.requestDevice(
-                        requested.length ? { requiredFeatures: requested } : {});
+                    if (!this.host) throw new Error("WebGPU is unavailable");
+                    // The host asks the adapter for the union of what every
+                    // backend needs, BCn included. Without those features every
+                    // createTexture for a DXT format throws, which kills the
+                    // batch and with it the frame -- and DXT1/3/5 are the
+                    // formats a 2002-and-later D3D9 game keeps almost all of
+                    // its art in, so that is most of the screen.
+                    await this.host.initialize();
+                    this.adapter = this.host.adapter;
+                    this.device = this.host.device;
+                    this.deviceFeatures = this.host.deviceFeatures;
+                    this.context = this.context || this.host.context;
+                    this.format = this.format || this.host.format;
                 }
                 // A device supplied by the caller (the fake device in tests, or
                 // a shared one) reports its own features.
@@ -3319,26 +3336,31 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                         timestampQuery: has("timestamp-query"),
                     };
                 }
-                this.context = this.context || this.canvas.getContext("webgpu");
+                // The host configured the canvas with the same usage set this
+                // file used to: a context defaults to RENDER_ATTACHMENT alone,
+                // but StretchRect to and from the back buffer is how a D3D9
+                // game does full-screen post-processing, so COPY_SRC/COPY_DST
+                // and TEXTURE_BINDING are not optional. Only a caller that
+                // supplied its own device still has to configure for itself.
+                this.context = this.context ||
+                    (this.canvas && typeof this.canvas.getContext === "function" ?
+                        this.canvas.getContext("webgpu") : null);
                 if (!this.context) throw new Error("could not acquire a WebGPU canvas context");
                 this.format = this.format || (this.gpu &&
                     typeof this.gpu.getPreferredCanvasFormat === "function" ?
                     this.gpu.getPreferredCanvasFormat() : "bgra8unorm");
                 this.swapchainSrgbFormat = srgbSiblingOf(this.format);
-                // A canvas context defaults to RENDER_ATTACHMENT only. The
-                // back buffer also has to be readable and writable as a texture,
-                // because StretchRect to and from it is how a D3D9 game does
-                // full-screen post-processing: grab the frame into a texture,
-                // process it, put it back.
-                this.context.configure({
-                    device: this.device, format: this.format,
-                    ...(this.swapchainSrgbFormat
-                        ? { viewFormats: [this.swapchainSrgbFormat] } : {}),
-                    alphaMode: "opaque",
-                    usage: TEXTURE_USAGE_RENDER_ATTACHMENT |
-                        TEXTURE_USAGE_COPY_SRC | TEXTURE_USAGE_COPY_DST |
-                        TEXTURE_USAGE_TEXTURE_BINDING,
-                });
+                if (!this.host && typeof this.context.configure === "function") {
+                    this.context.configure({
+                        device: this.device, format: this.format,
+                        ...(this.swapchainSrgbFormat
+                            ? { viewFormats: [this.swapchainSrgbFormat] } : {}),
+                        alphaMode: "opaque",
+                        usage: TEXTURE_USAGE_RENDER_ATTACHMENT |
+                            TEXTURE_USAGE_COPY_SRC | TEXTURE_USAGE_COPY_DST |
+                            TEXTURE_USAGE_TEXTURE_BINDING,
+                    });
+                }
                 this.fallbackTexture = this.device.createTexture({
                     label: "D3D9 fallback white texture",
                     size: { width: 1, height: 1, depthOrArrayLayers: 1 },

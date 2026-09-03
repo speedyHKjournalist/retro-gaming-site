@@ -96,6 +96,28 @@ test("attributes sit at their historical locations", () => {
     assert.strictEqual(byName.get("texCoord2"), 10);
 });
 
+test("an ARB vertex program can feed the fixed multitexture fragment stage", () => {
+    const result = generate({
+        _name: "arb_vertex_fixed_fragment",
+        varyingInterface: "arb",
+        attributes: { position: { components: 4 }, color: true,
+                      texCoord: [{ components: 4 }, { components: 4 }] },
+        texture: [
+            { enabled: true, target: "2D", env: { mode: "MODULATE" } },
+            { enabled: true, target: "2D", env: { mode: "ADD" } },
+        ],
+    });
+    const fragment = result.wgslFragment;
+    assert.ok(fragment.includes("@location(0) v0 : vec4<f32>"),
+        "ARB result.color is the primary fixed-function colour");
+    assert.ok(fragment.includes("@location(3) v3 : vec4<f32>"),
+        "ARB result.texcoord[0] keeps its compatibility location");
+    assert.ok(fragment.includes("@location(4) v4 : vec4<f32>"),
+        "ARB result.texcoord[1] keeps its compatibility location");
+    assert.ok(!fragment.includes("@location(1) v1 : vec4<f32>"),
+        "unused compatibility outputs are not required from the vertex stage");
+});
+
 /* ---- texture environment, GL 1.5 table 3.22 ---- */
 
 test("GL_REPLACE on an RGB texture leaves alpha alone", () => {

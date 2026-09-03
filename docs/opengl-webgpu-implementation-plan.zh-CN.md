@@ -105,8 +105,9 @@ D3D8/D3D9/DirectDraw 三条路径当时已经落到 WebGPU，而 OpenGL 仍挂�
 - **不实现 OpenGL 3.0+**。`glGetString(GL_VERSION)` 继续报 `2.1`，GLSL 报
   `1.20`。目标游戏没有一个要求更高，而 3.x core profile 的 VAO/UBO/几何着色器
   会把 GLSL 编译器的规模再翻一倍。
-- **不实现 `GL_ARB_imaging`**（颜色矩阵、卷积、直方图、颜色表）。它今天也没有
-  被声明，没有目标游戏用它。
+- **不实现完整的 `GL_ARB_imaging`**（卷积、直方图、颜色表）。为满足 OpenGL
+  1.4 能力检查，单独实现等价且范围更小的 `GL_SGI_color_matrix`：颜色矩阵栈、
+  查询以及 post-color-matrix scale/bias 都会作用于像素矩形。
 - **不实现颜色索引（color index）渲染模式**。`glIndex*`、
   `GL_COLOR_INDEX` 帧缓冲、`glPixelTransfer` 的索引映射。1996 年的路径，
   WGL 的 pixel format 里我们从不枚举它。注意：这与 **纹理** 的
@@ -991,7 +992,10 @@ shader model 1.x/2.0 结构上极其接近：有限的临时/输入/输出/参�
 
 要点：
 
-- 程序参数：`program.env[0..N]`、`program.local[0..N]`，以及状态绑定
+- 程序参数：`program.env[0..N]`、`program.local[0..N]` 是**每个程序各自的
+  命名空间**，顶点与片段程序在同一索引上可以是不同的值，因此两级各占一个
+  binding（顶点 `@group(1) @binding(1)`、片段 `@group(1) @binding(2)`）；
+  合并成一个 block 会让其中一级读到另一级的参数。以及状态绑定
   `state.matrix.*`（modelview/projection/mvp/texture[n]，含 `.inverse`/
   `.transpose`/`.invtrans` 与行区间选择）、`state.light[n].*`、
   `state.material.*`、`state.fog.*`、`state.texenv[n].color`、
@@ -1495,6 +1499,98 @@ opengl32.dll ─> 裸 GL 记录流 ────> gl_executor.js ──┘
       默认帧缓冲 MSAA 和深度/模板 pixel rectangle 保留为登记偏差。
 - [ ] **M7** —— gl4es 与 A/B 开关已删除，host save/load 重放测试已通过；XP guest
       中的 save/load 端到端验证、render bundle 与性能对比仍待真实环境验收。
+
+### 2026-09-01：为 guest 实机测试做的三处修复
+
+准备用 glviewer 与魔兽争霸 OpenGL 模式实测前，审计了 guest↔host 之间两条
+"不能在批次内回答"的路径，两条都是坏的——静态测试全绿正是因为它们都没被
+断言过。
+
+1. **`glReadPixels` 从来不可能成功。** host 把 status 置 PENDING，在
+   `mapAsync` 回调里才写回 OK；而 guest 在 `emit_pci_batch` 返回后**只查一次**
+   status，此刻回调必然还没运行（它要等浏览器事件循环）。于是每一次
+   `glReadPixels` 都返回失败、目标缓冲区原样不动。修法是计划第 6.3 节一直预告
+   的那条 guest 端改动：`wait_for_host_status()` 自旋等待，`Sleep(1)` 把时间片
+   还给模拟器，5 秒静默上限。
+
+2. **遮挡查询的结果从来没有被回读。** `endQuery` 往 `pendingQueries` 里推，
+   但没有任何地方消费它——`resolveQuerySet` 在整个 executor 里一次都没出现，
+   `query.ready` 永远是 false。后果比"结果不准"严重得多：合法的
+   `while (!available) glGetQueryObjectuiv(...)` 循环会**永远转下去**。现在
+   `flushFrame` 把当帧所有未决查询一次 resolve 到 buffer、copy 到 staging、
+   map 后回填，并把 slot 归零复用。
+
+   同时修掉一个连带问题：query set 是懒创建的，所以本次会话第一个
+   `glBeginQuery` 遇到的 pass 是在没有 set 的情况下建的，
+   `beginOcclusionQuery` 会直接触发 WebGPU 校验错误。现在 `beginQuery` 发现
+   当前 pass 不带 set 就先结束它，让 `ensurePass` 重建一个带 set 的。
+
+   guest 侧 `GL_QUERY_RESULT` 原本在结果未就绪时直接返回"可见"。现在先自旋
+   1 秒争取真实答案，超时才退回保守的"可见"——宁可多画一个遮挡物，也不要漏画。
+
+3. **`wglUseFontBitmaps` 画的是占位方块，不是字形。** 改为用
+   `GetGlyphOutlineA(GGO_BITMAP)` 真正光栅化，按 GL 的 bottom-up 行序翻转、
+   按 GDI 的原点约定换算 `glBitmap` 的 xorig/yorig；只在 GDI 给不出轮廓
+   （点阵字体、字面缺字）时才退回方块。编译字形前用
+   `glPushClientAttrib` 钉住 unpack 状态，因为那些只是*初始*值，先前上传过
+   紧凑纹理的应用会把 alignment 留在 1。
+
+`tests/gl_executor_test.js` 新增 5 条断言覆盖前两项（含一条专门断言批次返回
+瞬间 status 仍是 PENDING——guest 那次单查正是死在这里）。
+
+### 2026-09-01（二）：glview 首次在 guest 里跑，暴露的两件事
+
+**1. 三个 backend 各自持有一个 GPUDevice —— OpenGL 的每一帧 present 都挂。**
+
+```
+[TextureView of Texture "...WebgpuSwapChainTexture..."] is associated with
+[Device], and cannot be used with [Device].
+ - While validating colorAttachments[0].
+ - While encoding [CommandEncoder "GL frame"].BeginRenderPass(...)
+```
+
+`webgpu_host.js` 当初就是为了防这件事写的，但只有 GL executor 接了进去；
+`d3d8_executor.js` 和 `d3d9_executor.js` 仍旧各自 `requestAdapter()` /
+`requestDevice()` / `context.configure()`。GPUCanvasContext 属于**最后一个
+configure 它的 device**，而 DDraw 走 D3D9 executor 驱动 Windows 桌面，所以在
+任何 GL 程序启动之前，canvas 早就被 D3D9 的 device 占了。于是
+`getCurrentTexture()` 交回来的纹理 GL 的 device 根本不能用。
+
+这在单元测试里看不见：每个 executor 的套件都只构造它自己那一个。现在三个都从
+`webgpu_host` 取 device，新增 `tests/webgpu_shared_device_test.js` 在同一块
+canvas 上把三个都建起来，断言它们落在同一个 device、canvas 只被配置一次、且
+配置里带着三方都需要的 usage 位。顺带修掉两个连带问题：d3d8 原本请求的 device
+**不带任何可选特性**（它若先跑，共享 device 就没有 BCn）；host 的解析改成构造
+时惰性求值，不再依赖 `game.html` 的 script 顺序（顺序也一并改正了，
+`webgpu_host.js` 现在最先加载）。
+
+**2. ARB 程序的错误上报是坏的。**
+
+glview 提交了一个编译不过的 ARB 程序（一个 conformance 工具本来就会这么做），
+暴露出三点：`GL_PROGRAM_ERROR_STRING_ARB` 在 host 端**根本没实现**，应用永远
+拿不到失败原因；`GL_PROGRAM_ERROR_POSITION_ARB` 走 `glGetIntegerv` 这条路时落
+进 `default: return 0`，也就是在程序**编译成功**时也报"第 0 个字符出错"；而
+编译失败被记成 host `refusal`，让那个计数器失去了"这一帧 host 没画出什么"的
+含义。现在三者都按扩展规范走 GL 自己的通道，lexer 记录字符偏移供
+`ERROR_POSITION` 使用。
+
+### 2026-09-01（三）：修复索引数据偏移
+
+**`glDrawElements` 一直在用错误的索引画。** 打包 draw 的载荷布局是
+`[固定头 16B][MT 头 12B][索引数据][客户端数组块]`，但 executor 读完固定头就
+地切索引，也就是从 offset+16 切——切到的是 MT 头。实测索引 `[0,1,2]` 被读成
+`[16707, 21581, 8]`，即 magic word `CAMT` 的两个半字加上 tex_unit_count。
+块偏移算的是对的，所以解码不报错，画面只是错——这类 bug 最难查。
+
+原因是测试盲区：`gl_stream_builder.js` 只有 `drawArrays`，整个套件没有一条
+indexed draw 的 fixture，所以 MT 头和索引的相对位置从来没被断言过。现在补了
+`drawElements` builder 和一条断言"索引必须是 guest 发的那些，不是它前面那个
+头的字节"。顺带把索引的边界检查改成用声明的 `index_data_size` 而不是
+`subarray` 之后的长度——后者会被静默钳位。
+
+同时让流解码错误自带上下文：`refused op40: ... {}` 现在会带上操作码名字、
+记录大小和头部的 32 位字与十六进制，对着 `opengl32_proxy.c` 里的 struct 一眼
+就能看出是哪边的偏移错了。
 
 ### 未落地（按优先级）
 

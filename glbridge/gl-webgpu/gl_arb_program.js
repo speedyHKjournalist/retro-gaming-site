@@ -25,7 +25,7 @@
     const translator = nodeRequire ? nodeRequire("./gl_shader_translator.js") :
         global.GLShaderTranslator;
 
-    const ARB_REVISION = 1;
+    const ARB_REVISION = 2;
 
     /*
      * Twenty-eight, not the ARB minimum of twenty-four.
@@ -36,14 +36,21 @@
      * the guest, which clamps to whatever is advertised here.
      */
     const MAX_PROGRAM_PARAMETERS = 28;
+    /* Group 1 binding 0 is the shared GL state block; each stage's ARB
+     * parameter block gets a binding of its own. */
+    const PARAMETER_BINDING = { vertex: 1, fragment: 2 };
     const MAX_TEMPORARIES = 32;
     const MAX_TEXTURE_UNITS = stateLayout.MAX_TEXTURE_UNITS;
     const ATTR = translator.COMPAT_ATTRIBUTE_LOCATIONS;
 
     class ARBError extends Error {
-        constructor(message, line) {
+        constructor(message, line, offset) {
             super(message);
             this.arbLine = line || 0;
+            // GL_PROGRAM_ERROR_POSITION_ARB is a character offset into the
+            // program string, not a line: the extension expects the caller to
+            // be able to point at the exact token it rejected.
+            this.arbOffset = offset === undefined ? -1 : offset;
         }
     }
 
@@ -63,16 +70,18 @@
                 for (const ch of match[0]) if (ch === "\n") ++line;
                 continue;
             }
+            const at = match.index;
             if (match[1] !== undefined)
-                tokens.push({ type: "header", value: match[1], line });
+                tokens.push({ type: "header", value: match[1], line, at });
             else if (match[2] !== undefined)
-                tokens.push({ type: "ident", value: match[2], line });
+                tokens.push({ type: "ident", value: match[2], line, at });
             else if (match[3] !== undefined)
-                tokens.push({ type: "number", value: parseFloat(match[3]), line });
+                tokens.push({ type: "number", value: parseFloat(match[3]),
+                             line, at });
             else
-                tokens.push({ type: "punct", value: match[6], line });
+                tokens.push({ type: "punct", value: match[6], line, at });
         }
-        tokens.push({ type: "eof", value: "", line });
+        tokens.push({ type: "eof", value: "", line, at: source.length });
         return tokens;
     }
 
@@ -329,6 +338,14 @@
         }
 
         peek(offset) { return this.tokens[this.pos + (offset || 0)]; }
+        /* Where the parser stopped, for GL_PROGRAM_ERROR_POSITION_ARB. Errors
+         * thrown deeper in the parse do not each have to carry an offset: the
+         * token the parser was looking at when it gave up is the position the
+         * extension asks for. */
+        currentOffset() {
+            const token = this.tokens[Math.min(this.pos, this.tokens.length - 1)];
+            return token && token.at !== undefined ? token.at : 0;
+        }
         next() { return this.tokens[this.pos++]; }
         get line() { return this.peek().line; }
         at(value) {
@@ -355,7 +372,7 @@
             const header = this.next();
             if (header.type !== "header")
                 throw new ARBError("a program must begin with !!ARBvp1.0 or " +
-                    "!!ARBfp1.0", header.line);
+                    "!!ARBfp1.0", header.line, header.at);
             this.target = header.value === "!!ARBvp1.0" ? "vertex" : "fragment";
             for (;;) {
                 const token = this.peek();
@@ -508,8 +525,24 @@
             let entries;
             if (!arraySize && items.every(item => item.kind === "number")) {
                 const values = items.map(item => item.value);
-                while (values.length < 4)
-                    values.push(values.length === 3 ? 1 : 0);
+                /*
+                 * ARB program scalar constants are scalar vector initialisers:
+                 *
+                 *     PARAM half = 0.5;
+                 *
+                 * names { 0.5, 0.5, 0.5, 0.5 }, not the conventional GL
+                 * vertex expansion { 0.5, 0, 0, 1 }.  glview's bump-map
+                 * vertex program uses exactly that spelling for both operands
+                 * of its final MAD; expanding it like a vertex made the DOT3
+                 * combiner receive a mostly negative light vector and reduced
+                 * the whole 1.4/1.5 test to the clear colour.
+                 */
+                if (values.length === 1) {
+                    values.push(values[0], values[0], values[0]);
+                } else {
+                    while (values.length < 4)
+                        values.push(values.length === 3 ? 1 : 0);
+                }
                 entries = [{ kind: "constant", values }];
             } else {
                 entries = items.map(item => {
@@ -665,6 +698,23 @@
             for (const instruction of this.parsed.instructions)
                 body.push(...this.instruction(instruction));
 
+            // WebGPU validates the inter-stage interface strictly. Desktop GL
+            // leaves an unwritten ARB vertex result undefined, so when a
+            // fixed-function fragment stage consumes an enabled unit we
+            // materialise its missing output using this shell's existing zero
+            // value for undefined results.
+            if (this.stage === "vertex") {
+                for (const unit of this.options.forceVertexTexCoords || []) {
+                    if (unit >= 0 && unit < MAX_TEXTURE_UNITS)
+                        this.usedResults.add("texcoord" + unit);
+                }
+            }
+            // Both stages share one compact GLState uniform. Supplying the
+            // union makes the canonical field offsets identical in each WGSL
+            // module even when the stages read different pieces of GL state.
+            for (const field of this.options.forceStateFields || [])
+                this.stateFields.add(field);
+
             const out = [];
             out.push("// generated by gl_arb_program.js r" + ARB_REVISION +
                 " (" + this.stage + " program)");
@@ -676,17 +726,30 @@
                 out.push("");
             }
             /*
-             * program.env and program.local share one binding: they are the
-             * same shape, the guest writes both through the same entry point,
-             * and a program that uses neither still needs the slot so the bind
-             * group layout does not change shape per program.
+             * program.env and program.local share one binding: they have the
+             * same shape and the guest writes both through the same entry
+             * point.  Do not declare the binding when neither namespace is
+             * read.  WebGPU's automatic pipeline layout drops unused globals;
+             * retaining the declaration here made the executor submit a
+             * binding which was absent from the resulting layout.
+             *
+             * The two stages take *different* bindings because program.env and
+             * program.local are per-program namespaces: a bound vertex and
+             * fragment program each carry their own, and a single shared block
+             * left one stage reading the other program's parameters.
              */
-            out.push("struct ARBParams {");
-            out.push("    env : array<vec4<f32>, " + MAX_PROGRAM_PARAMETERS + ">,");
-            out.push("    local : array<vec4<f32>, " + MAX_PROGRAM_PARAMETERS + ">,");
-            out.push("}");
-            out.push("@group(1) @binding(1) var<uniform> arbParams : ARBParams;");
-            out.push("");
+            if (this.envUsed || this.localUsed) {
+                out.push("struct ARBParams {");
+                out.push("    env : array<vec4<f32>, " +
+                    MAX_PROGRAM_PARAMETERS + ">,");
+                out.push("    local : array<vec4<f32>, " +
+                    MAX_PROGRAM_PARAMETERS + ">,");
+                out.push("}");
+                out.push("@group(1) @binding(" +
+                    PARAMETER_BINDING[this.stage] +
+                    ") var<uniform> arbParams : ARBParams;");
+                out.push("");
+            }
             for (const [unit, target] of this.textureUnits) {
                 out.push("@group(2) @binding(" + (unit * 2) + ") var t" + unit +
                     " : " + wgslTextureType(target) + ";");
@@ -702,6 +765,10 @@
         }
 
         emitVertexShell(out, body) {
+            const flatLocations = new Set(this.options.forceFlatVaryings || []);
+            const varying = location => (flatLocations.has(location) ?
+                "    @interpolate(flat) " : "    ") +
+                "@location(" + location + ") ";
             out.push("struct VSIn {");
             for (const [, info] of this.usedAttributes)
                 out.push("    @location(" + info.location + ") " + info.field +
@@ -712,12 +779,12 @@
             out.push("");
             out.push("struct VSOut {");
             out.push("    @builtin(position) position : vec4<f32>,");
-            out.push("    @location(0) frontColor : vec4<f32>,");
-            out.push("    @location(1) frontSecondary : vec4<f32>,");
-            out.push("    @location(2) fogCoord : vec4<f32>,");
+            out.push(varying(0) + "frontColor : vec4<f32>,");
+            out.push(varying(1) + "frontSecondary : vec4<f32>,");
+            out.push(varying(2) + "fogCoord : vec4<f32>,");
             for (let i = 0; i < 8; ++i)
                 if (this.usedResults.has("texcoord" + i))
-                    out.push("    @location(" + (3 + i) + ") texcoord" + i +
+                    out.push(varying(3 + i) + "texcoord" + i +
                         " : vec4<f32>,");
             out.push("}");
             out.push("");
@@ -1165,9 +1232,10 @@
     /* ================================================================== */
 
     function compileARBProgram(source, options) {
-        const result = { ok: false, log: "", target: null };
+        const result = { ok: false, log: "", target: null, errorPosition: -1 };
+        const parser = new Parser(source);
         try {
-            const parsed = new Parser(source).parse();
+            const parsed = parser.parse();
             const generator = new Generator(parsed, options);
             result.wgsl = generator.generate();
             result.target = parsed.target;
@@ -1191,12 +1259,15 @@
             if (!(error instanceof ARBError)) throw error;
             result.log = "ERROR: line " + (error.arbLine || 0) + ": " +
                 error.message;
+            result.errorPosition = error.arbOffset >= 0 ? error.arbOffset :
+                parser.currentOffset();
         }
         return result;
     }
 
     const api = {
         ARB_REVISION, MAX_PROGRAM_PARAMETERS, MAX_TEMPORARIES,
+        PARAMETER_BINDING,
         compileARBProgram, lex, Parser, Generator, ARBError,
         INSTRUCTIONS, STATE_BINDINGS, applySwizzle,
     };

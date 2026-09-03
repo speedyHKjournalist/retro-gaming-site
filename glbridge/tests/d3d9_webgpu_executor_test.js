@@ -441,6 +441,10 @@ function makeFakeWebGPU(options) {
     const device = {
         queue,
         lost: new Promise(() => {}),
+        // A real GPUDevice reports the features it was actually created with,
+        // which is what the shared host reads to decide capability flags --
+        // the adapter's list is only what *could* have been requested.
+        features: new Set(["texture-compression-bc", "timestamp-query"]),
         createShaderModule(descriptor) {
             const module = { descriptor, code: descriptor.code,
                 getCompilationInfo: async () => ({ messages: [] }) };

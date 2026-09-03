@@ -90,14 +90,19 @@ class GLStream {
         return this.record(GLFN[name], payload);
     }
 
-    makeCurrent(hwnd, x, y, width, height) {
-        const payload = new Uint8Array(20);
+    makeCurrent(hwnd, x, y, width, height, contextId, shareGroup) {
+        const extended = contextId !== undefined || shareGroup !== undefined;
+        const payload = new Uint8Array(extended ? 28 : 20);
         const view = new DataView(payload.buffer);
         view.setUint32(0, hwnd, true);
         view.setInt32(4, x, true);
         view.setInt32(8, y, true);
         view.setUint32(12, width, true);
         view.setUint32(16, height, true);
+        if (extended) {
+            view.setUint32(20, (contextId || 0) >>> 0, true);
+            view.setUint32(24, (shareGroup || 0) >>> 0, true);
+        }
         return this.record(constants.CTRL.MAKE_CURRENT, payload);
     }
 
@@ -186,6 +191,123 @@ class GLStream {
         return this.record(GLFN.DRAW_ARRAYS, payload);
     }
 
+    /*
+     * The indexed twin of drawArrays. It exists because the suite had none:
+     * the multitexture header sits between the fixed header and the indices,
+     * and with no indexed fixture nothing noticed that the executor was
+     * slicing its indices from the wrong offset and drawing the magic word.
+     */
+    drawElements(mode, indices, indexType, arrays) {
+        const order = ["vertex", "color", "normal",
+            "texCoord0", "texCoord1", "texCoord2", "texCoord3",
+            "texCoord4", "texCoord5", "texCoord6", "texCoord7",
+            "secondaryColor", "fogCoord"];
+        const blocks = order.map(name => arrays[name] || null);
+        const count = indexType === GL.UNSIGNED_SHORT ? indices.byteLength / 2 :
+            (indexType === GL.UNSIGNED_INT ? indices.byteLength / 4 :
+                indices.byteLength);
+        let size = 28 + indices.byteLength;
+        for (const block of blocks)
+            size += 20 + (block && block.data ? block.data.byteLength : 0);
+        const payload = new Uint8Array(size);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, mode, true);
+        view.setInt32(4, count, true);
+        view.setUint32(8, indexType, true);
+        view.setUint32(12, indices.byteLength, true);
+        view.setUint32(16, 0x544D4143, true);
+        view.setUint32(20, (8 | 0x80000000 | 0x40000000) >>> 0, true);
+        view.setUint32(24, 0, true);
+        let at = 28;
+        payload.set(indices, at); at += indices.byteLength;
+        for (const block of blocks) {
+            const data = block && block.data ? block.data : null;
+            view.setUint32(at, block ? 1 : 0, true);
+            view.setInt32(at + 4, block ? block.size : 0, true);
+            view.setUint32(at + 8, block ? block.type : 0, true);
+            view.setInt32(at + 12, block ? (block.stride || 0) : 0, true);
+            view.setUint32(at + 16, data ? data.byteLength : 0, true);
+            at += 20;
+            if (data) { payload.set(data, at); at += data.byteLength; }
+        }
+        return this.record(GLFN.DRAW_ELEMENTS, payload);
+    }
+
+    /*
+     * The GL2 variants. The guest switches to these the moment any generic
+     * vertex attribute array is enabled: same layout, plus a generic-attribute
+     * count in the header and a block per enabled attribute after the
+     * conventional ones. Each generic block is seven words -- index,
+     * normalized, enabled, size, type, stride, byte count -- then its data.
+     */
+    drawElementsGL2(mode, indices, indexType, arrays, generics) {
+        return this.packedGL2Draw(mode, indices, indexType, arrays,
+            generics || []);
+    }
+
+    drawArraysGL2(mode, count, arrays, generics) {
+        return this.packedGL2Draw(mode, count, null, arrays, generics || []);
+    }
+
+    packedGL2Draw(mode, indicesOrCount, indexType, arrays, generics) {
+        const order = ["vertex", "color", "normal",
+            "texCoord0", "texCoord1", "texCoord2", "texCoord3",
+            "texCoord4", "texCoord5", "texCoord6", "texCoord7",
+            "secondaryColor", "fogCoord"];
+        const indexed = indexType !== null;
+        const indices = indexed ? indicesOrCount : null;
+        const count = indexed ?
+            (indexType === GL.UNSIGNED_SHORT ? indices.byteLength / 2 :
+                (indexType === GL.UNSIGNED_INT ? indices.byteLength / 4 :
+                    indices.byteLength)) : indicesOrCount;
+        const blocks = order.map(name => arrays[name] || null);
+        const headerBytes = indexed ? 32 : 24;
+        let size = headerBytes + (indexed ? indices.byteLength : 0);
+        for (const block of blocks)
+            size += 20 + (block && block.data ? block.data.byteLength : 0);
+        for (const generic of generics)
+            size += 28 + (generic.data ? generic.data.byteLength : 0);
+        const payload = new Uint8Array(size);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, mode, true);
+        view.setInt32(4, count, true);
+        let at = 8;
+        if (indexed) {
+            view.setUint32(at, indexType, true);
+            view.setUint32(at + 4, indices.byteLength, true);
+            at += 8;
+        }
+        view.setUint32(at, 0x544D4143, true);
+        view.setUint32(at + 4, (8 | 0x80000000 | 0x40000000) >>> 0, true);
+        view.setUint32(at + 8, 0, true);
+        view.setUint32(at + 12, generics.length, true);
+        at += 16;
+        if (indexed) { payload.set(indices, at); at += indices.byteLength; }
+        for (const block of blocks) {
+            const data = block && block.data ? block.data : null;
+            view.setUint32(at, block ? 1 : 0, true);
+            view.setInt32(at + 4, block ? block.size : 0, true);
+            view.setUint32(at + 8, block ? block.type : 0, true);
+            view.setInt32(at + 12, block ? (block.stride || 0) : 0, true);
+            view.setUint32(at + 16, data ? data.byteLength : 0, true);
+            at += 20;
+            if (data) { payload.set(data, at); at += data.byteLength; }
+        }
+        for (const generic of generics) {
+            const data = generic.data || null;
+            view.setUint32(at, generic.index, true);
+            view.setUint32(at + 4, generic.normalized ? 1 : 0, true);
+            view.setUint32(at + 8, 1, true);
+            view.setInt32(at + 12, generic.size, true);
+            view.setUint32(at + 16, generic.type, true);
+            view.setInt32(at + 20, generic.stride || 0, true);
+            view.setUint32(at + 24, data ? data.byteLength : 0, true);
+            at += 28;
+            if (data) { payload.set(data, at); at += data.byteLength; }
+        }
+        return this.record(indexed ? GLFN.DRAW_ELEMENTS_GL2 :
+            GLFN.DRAW_ARRAYS_GL2, payload);
+    }
     shaderSource(shader, source) {
         const text = source + "\0";
         const payload = new Uint8Array(8 + text.length);
@@ -195,6 +317,124 @@ class GLStream {
         for (let i = 0; i < text.length; ++i)
             payload[8 + i] = text.charCodeAt(i) & 0xff;
         return this.record(GLFN.SHADER_SOURCE, payload);
+    }
+
+    /* {target, size, usage, data_size} then the contents. */
+    bufferData(target, byteCount, usage, data) {
+        const bytes = data || new Uint8Array(0);
+        const payload = new Uint8Array(16 + bytes.byteLength);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, target, true);
+        view.setInt32(4, byteCount, true);
+        view.setUint32(8, usage, true);
+        view.setUint32(12, bytes.byteLength, true);
+        payload.set(bytes, 16);
+        return this.record(GLFN.BUFFER_DATA, payload);
+    }
+
+    /* The VBOPointerPayload the guest sends once the array lives in a buffer:
+     * no data travels, only where in the bound buffer to read it. */
+    pointerVBO(name, size, type, stride, offset) {
+        const payload = new Uint8Array(16);
+        const view = new DataView(payload.buffer);
+        view.setInt32(0, size, true);
+        view.setUint32(4, type, true);
+        view.setInt32(8, stride, true);
+        view.setUint32(12, offset, true);
+        return this.record(GLFN[name], payload);
+    }
+
+    attribPointerVBO(index, size, type, normalized, stride, offset) {
+        const payload = new Uint8Array(24);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, index, true);
+        view.setInt32(4, size, true);
+        view.setUint32(8, type, true);
+        view.setUint32(12, normalized ? 1 : 0, true);
+        view.setInt32(16, stride, true);
+        view.setUint32(20, offset, true);
+        return this.record(GLFN.VERTEX_ATTRIB_POINTER_VBO, payload);
+    }
+
+    drawElementsDirect(mode, count, type, offset, start, end) {
+        const payload = new Uint8Array(24);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, mode, true);
+        view.setUint32(4, start || 0, true);
+        view.setUint32(8, end === undefined ? count : end, true);
+        view.setInt32(12, count, true);
+        view.setUint32(16, type, true);
+        view.setUint32(20, offset, true);
+        return this.record(GLFN.DRAW_ELEMENTS_DIRECT, payload);
+    }
+
+    /* {target, format, length, reserved} then the assembly text. */
+    programStringARB(target, source) {
+        const payload = new Uint8Array(16 + source.length);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, target, true);
+        view.setUint32(4, GL.PROGRAM_FORMAT_ASCII_ARB, true);
+        view.setInt32(8, source.length, true);
+        for (let i = 0; i < source.length; ++i)
+            payload[16 + i] = source.charCodeAt(i) & 0xff;
+        return this.record(GLFN.PROGRAM_STRING_ARB, payload);
+    }
+
+    /* {kind, target, index, count} then count*4 floats -- the parameter kind
+     * leads, and it is 1 for env and 2 for local. */
+    programParameterARB(kind, target, index, values) {
+        const payload = new Uint8Array(16 + values.length * 4);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, kind, true);
+        view.setUint32(4, target, true);
+        view.setUint32(8, index, true);
+        view.setUint32(12, values.length / 4, true);
+        values.forEach((value, i) => view.setFloat32(16 + i * 4, value, true));
+        return this.record(GLFN.PROGRAM_PARAMETER_FV_ARB, payload);
+    }
+
+    queryProgramParameterARB(kind, target, index) {
+        const payload = new Uint8Array(40);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, kind, true);
+        view.setUint32(4, target, true);
+        view.setUint32(8, index, true);
+        view.setUint32(16, 16, true);
+        this.record(GLFN.QUERY_PROGRAM_PARAMETER_FV_ARB, payload);
+        return this.payloadView();
+    }
+
+    queryProgramStringARB(target, capacity) {
+        const payload = new Uint8Array(24 + capacity);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, target, true);
+        view.setUint32(4, GL.PROGRAM_STRING_ARB, true);
+        view.setUint32(16, capacity, true);
+        this.record(GLFN.QUERY_PROGRAM_STRING_ARB, payload);
+        return this.payloadView();
+    }
+
+    queryObjectLog(kind, name, capacity) {
+        const payload = new Uint8Array(24 + capacity);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, kind, true);
+        view.setUint32(4, name, true);
+        view.setUint32(8, capacity, true);
+        view.setUint32(20, capacity, true);
+        this.record(GLFN.QUERY_OBJECT_LOG, payload);
+        return this.payloadView();
+    }
+
+    queryActive(kind, program, index, capacity) {
+        const payload = new Uint8Array(40 + capacity);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, kind, true);
+        view.setUint32(4, program, true);
+        view.setUint32(8, index, true);
+        view.setUint32(12, capacity, true);
+        view.setUint32(32, capacity, true);
+        this.record(GLFN.QUERY_ACTIVE, payload);
+        return this.payloadView();
     }
 
     queryInteger(pname) {

@@ -26,7 +26,7 @@
     const translator = (typeof require === "function" && typeof module !== "undefined") ?
         require("./gl_shader_translator.js") : global.GLShaderTranslator;
 
-    const FIXED_FUNCTION_REVISION = 1;
+    const FIXED_FUNCTION_REVISION = 2;
 
     const MAX_TEXTURE_UNITS = stateLayout.MAX_TEXTURE_UNITS;
     const MAX_LIGHTS = stateLayout.MAX_LIGHTS;
@@ -99,6 +99,12 @@
             } : { enabled: false });
         }
         return {
+            // ARB vertex programs expose the historical compatibility
+            // varying ABI: primary/secondary/fog at locations 0/1/2 and
+            // texture coordinates at 3+n. A fixed fragment stage paired with
+            // one must consume that ABI instead of our compact internal one.
+            varyingInterface: s.varyingInterface === "arb" ? "arb" : "packed",
+            extraStateFields: Array.from(new Set(s.extraStateFields || [])).sort(),
             attributes: {
                 position: { components: (attributes.position &&
                     attributes.position.components) || 4 },
@@ -177,6 +183,7 @@
      */
     function stateFieldsFor(sig) {
         const fields = new Set(["mvp"]);
+        for (const field of sig.extraStateFields || []) fields.add(field);
         const lighting = sig.lighting;
         const needsEye = lighting.enabled ||
             sig.texture.some(t => t.enabled && t.texGen &&
@@ -263,6 +270,38 @@
                          backSecondary: null, fog: null, texCoord: [],
                          clip: -1, pointCoord: -1 };
 
+        if (sig.varyingInterface === "arb") {
+            const fixed = (name, components, slot, extra) => {
+                const entry = { name, components, slot, offset: 0,
+                                ...(extra || {}) };
+                entries.push(entry);
+                if (slots.indexOf(slot) < 0) slots.push(slot);
+                return entry;
+            };
+            layout.color = fixed("color", 4, 0, { flat: sig.flatShading });
+            if (sig.lighting.enabled && sig.lighting.separateSpecular)
+                layout.secondary = fixed("secondary", 3, 1,
+                    { flat: sig.flatShading });
+            for (let i = 0; i < MAX_TEXTURE_UNITS; ++i) {
+                if (!sig.texture[i].enabled) {
+                    layout.texCoord.push(null);
+                    continue;
+                }
+                layout.texCoord.push(fixed("texCoord" + i,
+                    textureCoordComponents(sig.texture[i]), 3 + i));
+            }
+            if (sig.fog.enabled) layout.fog = fixed("fog", 1, 2);
+            slots.sort((a, b) => a - b);
+            layout.slotIndices = slots;
+            layout.packedSlots = slots.length;
+            layout.slotCount = slots.length ? slots[slots.length - 1] + 1 : 0;
+            if (layout.slotCount > translator.MAX_INTER_STAGE_SLOTS)
+                throw new Error("fixed-function ARB interface needs location " +
+                    (layout.slotCount - 1) + "; only " +
+                    translator.MAX_INTER_STAGE_SLOTS + " slots are available");
+            return layout;
+        }
+
         layout.color = place("color", 4, { flat: sig.flatShading });
         if (sig.lighting.enabled && sig.lighting.separateSpecular)
             layout.secondary = place("secondary", 3, { flat: sig.flatShading });
@@ -284,6 +323,8 @@
         if (sig.pointSprite) layout.pointCoord = next++;
         layout.slotCount = next;
         layout.packedSlots = slots.length;
+        layout.slotIndices = Array.from({ length: slots.length },
+            (unused, i) => i);
         if (next > translator.MAX_INTER_STAGE_SLOTS)
             throw new Error("fixed-function signature needs " + next +
                 " varying slots; only " + translator.MAX_INTER_STAGE_SLOTS +
@@ -343,7 +384,7 @@
 
         emit("struct VSOut {");
         emit("    @builtin(position) position : vec4<f32>,");
-        for (let i = 0; i < layout.packedSlots; ++i) {
+        for (const i of layout.slotIndices) {
             const flat = layout.entries.some(e => e.slot === i && e.flat);
             emit("    " + (flat ? "@interpolate(flat) " : "") +
                 "@location(" + i + ") v" + i + " : vec4<f32>,");
@@ -724,7 +765,7 @@
         emit("    @builtin(position) position : vec4<f32>,");
         if (sig.lighting.enabled && sig.lighting.twoSide)
             emit("    @builtin(front_facing) frontFacing : bool,");
-        for (let i = 0; i < layout.packedSlots; ++i) {
+        for (const i of layout.slotIndices) {
             const flat = layout.entries.some(e => e.slot === i && e.flat);
             emit("    " + (flat ? "@interpolate(flat) " : "") +
                 "@location(" + i + ") v" + i + " : vec4<f32>,");
