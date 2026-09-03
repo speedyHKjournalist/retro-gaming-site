@@ -14,6 +14,80 @@
 #include <string.h>
 #include "v86gl_ioctl.h"
 
+/*
+ * File tracing is compiled only into opengl32-diagnostic.dll. Immediate-mode
+ * OpenGL can produce tens of thousands of records per frame, so the default
+ * trace is a bounded summary; V86GL_TRACE_CALLS=1 additionally enables the
+ * existing per-record OutputDebugString path in that diagnostic build.
+ */
+#ifdef V86GL_DIAGNOSTIC_TRACE
+#define V86WG_DIAGNOSTIC_COMPONENT "opengl32-webgpu"
+#define V86WG_DIAGNOSTIC_FILE_STEM "opengl32_trace"
+#include "../diagnostic_trace.h"
+#include "gl_opcode_names.h"
+#define V86GL_DIAG(...) v86wg_diagnostic_write(__VA_ARGS__)
+#define V86GL_DIAG_FLUSH() v86wg_diagnostic_flush()
+#define V86GL_DIAG_ENABLED 1
+#else
+#define V86GL_DIAG(...) ((void)0)
+#define V86GL_DIAG_FLUSH() ((void)0)
+#define V86GL_DIAG_ENABLED 0
+#endif
+
+#if V86GL_DIAG_ENABLED
+static uint32_t g_diag_opcode_count[V86GL_OPCODE_NAME_COUNT];
+static uint32_t g_diag_frame_records;
+static uint32_t g_diag_frame_bytes;
+static uint32_t g_diag_frame_batches;
+static uint32_t g_diag_total_records;
+static uint32_t g_diag_total_batches;
+static uint32_t g_diag_errors;
+static uint32_t g_diag_last_opcode;
+static uint32_t g_diag_last_payload;
+static DWORD g_diag_frame_start_tick;
+
+static void v86gl_diag_histogram(const char *reason)
+{
+    unsigned int opcode;
+    unsigned int printed = 0;
+
+    V86GL_DIAG("HISTOGRAM begin reason=%s records=%lu batches=%lu errors=%lu",
+               reason, (unsigned long)g_diag_total_records,
+               (unsigned long)g_diag_total_batches,
+               (unsigned long)g_diag_errors);
+    for (;;) {
+        unsigned int best = 0;
+        uint32_t best_count = 0;
+        for (opcode = 1; opcode < V86GL_OPCODE_NAME_COUNT; ++opcode) {
+            if (g_diag_opcode_count[opcode] > best_count) {
+                best_count = g_diag_opcode_count[opcode];
+                best = opcode;
+            }
+        }
+        if (!best)
+            break;
+        V86GL_DIAG("HISTOGRAM op=%u name=%s calls=%lu", best,
+                   v86gl_opcode_name(best), (unsigned long)best_count);
+        g_diag_opcode_count[best] = 0;
+        if (++printed >= V86GL_OPCODE_NAME_COUNT)
+            break;
+    }
+    V86GL_DIAG("HISTOGRAM end distinct=%u", printed);
+    V86GL_DIAG_FLUSH();
+}
+
+#define V86GL_DIAG_RECORD(fn, size) do { \
+    unsigned int diag_op_ = (unsigned int)(fn); \
+    if (diag_op_ < V86GL_OPCODE_NAME_COUNT) g_diag_opcode_count[diag_op_]++; \
+    g_diag_last_opcode = diag_op_; \
+    g_diag_last_payload = (uint32_t)(size); \
+    g_diag_frame_records++; \
+    g_diag_total_records++; \
+} while (0)
+#else
+#define V86GL_DIAG_RECORD(fn, size) ((void)0)
+#endif
+
 #ifndef APIENTRY
 #define APIENTRY __stdcall
 #endif
@@ -1281,6 +1355,15 @@ static GLenum g_error = 0;
 static void v86gl_set_error(GLenum error) {
     if (error != GL_NO_ERROR && g_error == GL_NO_ERROR) {
         g_error = error;
+#if V86GL_DIAG_ENABLED
+        g_diag_errors++;
+        V86GL_DIAG("GLERROR code=%04lX after op=%u name=%s payload=%lu frame=%lu",
+                   (unsigned long)error, (unsigned int)g_diag_last_opcode,
+                   v86gl_opcode_name(g_diag_last_opcode),
+                   (unsigned long)g_diag_last_payload,
+                   (unsigned long)g_frame_id);
+        V86GL_DIAG_FLUSH();
+#endif
     }
 }
 /* Optional transport tracing is off by default; set V86GL_TRACE=1 or
@@ -1316,6 +1399,9 @@ static void v86gl_logv(BOOL force, const char* format, va_list args) {
     lstrcpyA(message, "[v86gl.dll] ");
     length = lstrlenA(message);
     wvsprintfA(message + length, format, args);
+#if V86GL_DIAG_ENABLED
+    V86GL_DIAG("%s", message + length);
+#endif
     lstrcatA(message, "\r\n");
     OutputDebugStringA(message);
 }
@@ -4294,6 +4380,14 @@ static int emit_pci_batch(BOOL force_present) {
                     (unsigned long)error,
                     (unsigned long)desc->command_count,
                     (unsigned long)desc->command_bytes);
+#if V86GL_DIAG_ENABLED
+        V86GL_DIAG("SUBMIT_FAILED frame=%lu winerr=%lu commands=%lu bytes=%lu "
+                   "-- the transport is gone; every later call is a no-op",
+                   (unsigned long)desc->frame_id, (unsigned long)error,
+                   (unsigned long)desc->command_count,
+                   (unsigned long)desc->command_bytes);
+        V86GL_DIAG_FLUSH();
+#endif
         close_v86gl();
         g_v86gl_failed = TRUE;
         reset_pci_stream();
@@ -4302,6 +4396,11 @@ static int emit_pci_batch(BOOL force_present) {
 
     v86gl_trace("submit <- sys accepted frame=%lu",
                 (unsigned long)desc->frame_id);
+#if V86GL_DIAG_ENABLED
+    g_diag_frame_batches++;
+    g_diag_total_batches++;
+    g_diag_frame_bytes += desc->command_bytes;
+#endif
     reset_pci_stream();
     return 1;
 }
@@ -4363,6 +4462,7 @@ static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
 
     g_dma_size += record_size;
     g_dma_command_count++;
+    V86GL_DIAG_RECORD(fn, args_size);
 
     if (g_trace_calls) {
         v86gl_trace("record frame=%lu index=%lu fn=%u payload=%lu streamBytes=%lu",
@@ -4436,6 +4536,13 @@ static BOOL wait_for_host_status(const uint8_t* status_field, const char* what) 
         if (GetTickCount() - start >= V86GL_ASYNC_WAIT_MS) {
             v86gl_trace("%s: host silent for %lums (status still pending)",
                         what, (unsigned long)(GetTickCount() - start));
+#if V86GL_DIAG_ENABLED
+            V86GL_DIAG("READBACK_TIMEOUT what=%s waited=%lums frame=%lu -- "
+                       "the caller's buffer is left untouched", what,
+                       (unsigned long)(GetTickCount() - start),
+                       (unsigned long)g_frame_id);
+            V86GL_DIAG_FLUSH();
+#endif
             return FALSE;
         }
         Sleep(1);
@@ -4682,6 +4789,22 @@ static int emit_query_object_log(uint32_t object_kind, GLuint name, GLsizei bufS
     }
     return 1;
 }
+
+#if V86GL_DIAG_ENABLED
+static void v86gl_diag_object_log(uint32_t object_kind, GLuint name,
+                                  const char* what) {
+    char log[512];
+    GLsizei length = 0;
+
+    log[0] = '\0';
+    if (!emit_query_object_log(object_kind, name, sizeof(log), &length, log)) {
+        lstrcpyA(log, "<unable to query info log>");
+    }
+    V86GL_DIAG("%s FAILED name=%u frame=%lu log=%s", what,
+               (unsigned int)name, (unsigned long)g_frame_id, log);
+    V86GL_DIAG_FLUSH();
+}
+#endif
 
 static int emit_query_active(uint32_t active_kind, GLuint program, GLuint index,
                              GLsizei bufSize, GLsizei* length, GLint* size,
@@ -5620,6 +5743,27 @@ static BOOL emit_frame(void) {
                 (unsigned long)g_dma_command_count,
                 (unsigned long)g_dma_size);
     submitted = emit_pci_batch(TRUE) ? TRUE : FALSE;
+#if V86GL_DIAG_ENABLED
+    {
+        DWORD now = GetTickCount();
+        V86GL_DIAG("FRAME id=%lu submitted=%lu records=%lu bytes=%lu "
+                   "batches=%lu ms=%lu errors=%lu",
+                   (unsigned long)g_frame_id,
+                   (unsigned long)(submitted ? 1 : 0),
+                   (unsigned long)g_diag_frame_records,
+                   (unsigned long)g_diag_frame_bytes,
+                   (unsigned long)g_diag_frame_batches,
+                   (unsigned long)(now - g_diag_frame_start_tick),
+                   (unsigned long)g_diag_errors);
+        g_diag_frame_records = 0;
+        g_diag_frame_bytes = 0;
+        g_diag_frame_batches = 0;
+        g_diag_frame_start_tick = now;
+        if (g_frame_id && g_frame_id % 300u == 0)
+            v86gl_diag_histogram("periodic");
+        V86GL_DIAG_FLUSH();
+    }
+#endif
     if (submitted) {
         g_frame_id++;
         if (!g_frame_id) {
@@ -5707,6 +5851,14 @@ static void emit_current_surface(HWND hwnd) {
                 (long)payload.y,
                 (unsigned long)payload.width,
                 (unsigned long)payload.height);
+#if V86GL_DIAG_ENABLED
+    V86GL_DIAG("SURFACE hwnd=%08lx context=%lu share=%lu x=%ld y=%ld size=%lux%lu",
+               (unsigned long)payload.hwnd,
+               (unsigned long)payload.context_id,
+               (unsigned long)payload.share_group, (long)payload.x,
+               (long)payload.y, (unsigned long)payload.width,
+               (unsigned long)payload.height);
+#endif
     emit_pci_record(V86GL_CTRL_MAKE_CURRENT, &payload, sizeof(payload), TRUE);
 }
 
@@ -7252,6 +7404,14 @@ BOOL WINAPI DllMain
 
     if (reason == DLL_PROCESS_ATTACH) {
         g_instance = hinst;
+#if V86GL_DIAG_ENABLED
+        v86wg_diagnostic_process_attach(hinst);
+        V86GL_DIAG("MODE calls=%lu -- set V86GL_TRACE_CALLS=1 for the "
+                   "per-record trace; this is the summary",
+                   (unsigned long)(trace_environment_enabled(
+                           "V86GL_TRACE_CALLS") ? 1 : 0));
+        g_diag_frame_start_tick = GetTickCount();
+#endif
         InitializeCriticalSection(&g_wgl_context_lock);
         g_wgl_context_lock_initialized = TRUE;
         v86gl_trace("loaded");
@@ -7281,6 +7441,10 @@ BOOL WINAPI DllMain
             DeleteCriticalSection(&g_wgl_context_lock);
             g_wgl_context_lock_initialized = FALSE;
         }
+#if V86GL_DIAG_ENABLED
+        v86gl_diag_histogram("process_detach");
+        v86wg_diagnostic_process_detach(reserved, g_dma_command_count);
+#endif
     }
 
     return TRUE;
@@ -7290,6 +7454,9 @@ __declspec(dllexport)
 HGLRC APIENTRY wglCreateContext(HDC hdc) {
     uint32_t i;
     HGLRC result = NULL;
+
+    V86GL_DIAG("WGL wglCreateContext hdc=%08lx",
+               (unsigned long)(uintptr_t)hdc);
 
     if (!hdc) {
         SetLastError(ERROR_INVALID_HANDLE);
@@ -7567,6 +7734,11 @@ BOOL APIENTRY wglGetPixelFormatAttribfvARB(HDC hdc, int pixel_format,
 
 __declspec(dllexport)
 BOOL APIENTRY wglSetPixelFormat(HDC hdc, int format, const PIXELFORMATDESCRIPTOR* ppfd) {
+#if V86GL_DIAG_ENABLED
+    V86GL_DIAG("WGL wglSetPixelFormat hdc=%08lx format=%d ppfd=%08lx",
+               (unsigned long)(uintptr_t)hdc, format,
+               (unsigned long)(uintptr_t)ppfd);
+#endif
     (void)hdc;
     (void)format;
     (void)ppfd;
@@ -7619,6 +7791,9 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
     uint32_t context_id = 0;
     void* guest_state = NULL;
 
+    V86GL_DIAG("WGL wglDeleteContext ctx=%08lx",
+               (unsigned long)(uintptr_t)ctx);
+
     EnterCriticalSection(&g_wgl_context_lock);
     reap_terminated_wgl_contexts();
     if (!validate_wgl_context(ctx, &context)) {
@@ -7660,6 +7835,10 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) {
     HWND replacement_hwnd = NULL;
     HWND hwnd;
     BOOL released;
+
+    V86GL_DIAG("WGL wglMakeCurrent hdc=%08lx ctx=%08lx",
+               (unsigned long)(uintptr_t)hdc,
+               (unsigned long)(uintptr_t)ctx);
 
     if (!hdc && !ctx) {
         EnterCriticalSection(&g_wgl_context_lock);
@@ -10190,6 +10369,19 @@ void APIENTRY glProgramStringARB(GLenum target, GLenum format, GLsizei len,
     }
     emit_gl_call(GLFN_PROGRAM_STRING_ARB, payload, total_size);
     HeapFree(GetProcessHeap(), 0, payload);
+#if V86GL_DIAG_ENABLED
+    {
+        GLint error_position = -1;
+        if (emit_query_integer(GL_PROGRAM_ERROR_POSITION_ARB,
+                               &error_position) && error_position >= 0) {
+            V86GL_DIAG("ARB_PROGRAM FAILED target=%04lX length=%ld "
+                       "position=%ld frame=%lu",
+                       (unsigned long)target, (long)len,
+                       (long)error_position, (unsigned long)g_frame_id);
+            V86GL_DIAG_FLUSH();
+        }
+    }
+#endif
 }
 
 void APIENTRY glBindProgramARB(GLenum target, GLuint program) {
@@ -10638,6 +10830,11 @@ void APIENTRY glCompileShader(GLuint shader) {
     } else {
         state->compiled = GL_FALSE;
     }
+#if V86GL_DIAG_ENABLED
+    if (!state->compiled)
+        v86gl_diag_object_log(V86GL_OBJECT_KIND_SHADER, shader,
+                              "COMPILE_SHADER");
+#endif
 }
 
 void APIENTRY glLinkProgram(GLuint program) {
@@ -10657,6 +10854,11 @@ void APIENTRY glLinkProgram(GLuint program) {
     } else {
         state->linked = GL_FALSE;
     }
+#if V86GL_DIAG_ENABLED
+    if (!state->linked)
+        v86gl_diag_object_log(V86GL_OBJECT_KIND_PROGRAM, program,
+                              "LINK_PROGRAM");
+#endif
 }
 
 void APIENTRY glValidateProgram(GLuint program) {

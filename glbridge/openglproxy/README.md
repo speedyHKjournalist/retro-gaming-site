@@ -73,12 +73,27 @@ and known semantic deviations are documented in
 
 ```bash
 glbridge/openglproxy/build.sh              # opengl32.dll
+glbridge/openglproxy/build_diagnostic.sh   # opengl32-diagnostic.dll
 ```
 
 This is a 32-bit, CRT-free MinGW-w64 build; the script fails if a C runtime
 import appears or if the export count drops below the 831-entry ABI. The
 resulting DLL goes beside the guest game executable. Install and start the
 matching `v86gl.sys` from `../v86gl_driver/` first.
+
+## Diagnostic build
+
+`opengl32-diagnostic.dll` keeps the same 831-entry ABI as the shipping DLL,
+but adds the persistent trace used to diagnose guest-only failures. Copy it
+beside the game and rename it to `opengl32.dll`. It writes
+`opengl32_trace_<pid>.log` beside the DLL, falling back to `%TEMP%` when the
+game directory is read-only.
+
+The default log is bounded: it records process and WGL lifetime, surfaces,
+frame/batch summaries, GL errors, transport/readback failures, shader and ARB
+program failures, and an opcode histogram. Set `V86GL_TRACE_CALLS=1` in the
+guest process only when a full per-record trace is required. Diagnostic code
+is compiled out of the normal `opengl32.dll` built by `build.sh`.
 
 ## Host page
 

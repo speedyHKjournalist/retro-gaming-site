@@ -5203,12 +5203,53 @@
                 stride: 0,
                 used: { color: false, normal: false, secondaryColor: false,
                         fogCoord: false,
-                        texCoord: new Array(MAX_TEXTURE_COORDS).fill(false) },
+                        texCoord: new Array(MAX_TEXTURE_COORDS).fill(false),
+                        generic: [] },
             };
-            // Which attributes the batch carries is decided by what the app has
-            // set at least once before the first vertex, plus anything it sets
-            // during the batch; the layout is fixed at glEnd.
-            s.immediate.used.color = true;
+            const used = s.immediate.used;
+            const program = this.currentProgramObject();
+            const arbVertex = s.enabled.has(GL.VERTEX_PROGRAM_ARB);
+            // Immediate vertices must satisfy the active shader interface, not
+            // stale client-array enables. Legacy renderers commonly keep a
+            // normal array enabled while drawing glBegin/glEnd UI geometry;
+            // conversely an ARB vertex program may read vertex.normal with
+            // fixed-function lighting disabled. In both cases deriving this
+            // layout only from GL_LIGHTING/client-array state leaves
+            // @location(2) unbound.
+            for (const entry of this.wantedAttributes(program)) {
+                let source = entry.source;
+                if (source.indexOf("generic") === 0 && entry.alias &&
+                        (entry.alias === "vertex" || entry.alias === "normal" ||
+                         entry.alias === "color" ||
+                         entry.alias === "secondaryColor" ||
+                         entry.alias === "fogCoord" ||
+                         entry.alias.indexOf("texCoord") === 0))
+                    source = entry.alias;
+                if (source === "color") used.color = true;
+                else if (source === "normal") used.normal = true;
+                else if (source === "secondaryColor") used.secondaryColor = true;
+                else if (source === "fogCoord") used.fogCoord = true;
+                else if (source.indexOf("texCoord") === 0) {
+                    const unit = Number(source.substring(8));
+                    if (unit >= 0 && unit < MAX_TEXTURE_COORDS)
+                        used.texCoord[unit] = true;
+                } else if (source.indexOf("generic") === 0) {
+                    const index = Number(source.substring(7));
+                    if (index >= 0 && index < MAX_VERTEX_ATTRIBS &&
+                            !used.generic.some(item =>
+                                item.location === entry.location)) {
+                        used.generic.push({
+                            index, location: entry.location,
+                            components: Math.min(4,
+                                Math.max(1, entry.components || 4)),
+                        });
+                    }
+                }
+            }
+            // The fixed pipeline always consumes current colour even when no
+            // colour command occurs in the batch. Programmable shaders carry
+            // it only when reflection above says they actually read it.
+            if (!program && !arbVertex) used.color = true;
         },
 
         immediateVertex(x, y, z, w) {
@@ -5269,6 +5310,11 @@
                 data[at++] = tc[0]; data[at++] = tc[1];
                 data[at++] = tc[2]; data[at++] = tc[3];
             }
+            for (const item of used.generic) {
+                const value = s.genericAttribs[item.index].value;
+                for (let c = 0; c < item.components; ++c)
+                    data[at++] = value[c];
+            }
             ++batch.count;
         },
 
@@ -5280,6 +5326,7 @@
             if (used.fogCoord) stride += 1;
             for (let unit = 0; unit < MAX_TEXTURE_COORDS; ++unit)
                 if (used.texCoord[unit]) stride += 4;
+            for (const item of used.generic) stride += item.components;
             return stride;
         },
 
@@ -5296,8 +5343,10 @@
         endImmediate() {
             const s = this.current;
             const batch = s.immediate;
-            s.immediate = null;
-            if (!batch || !batch.count) return;
+            if (!batch || !batch.count) {
+                s.immediate = null;
+                return;
+            }
             ++this.stats.immediateBatches;
 
             const attributes = [];
@@ -5319,27 +5368,36 @@
                 if (batch.used.texCoord[unit])
                     push(translator.COMPAT_ATTRIBUTE_LOCATIONS.gl_MultiTexCoord0 +
                         unit, 4);
+            for (const item of batch.used.generic)
+                push(item.location, item.components);
 
             const bytes = new Uint8Array(batch.data.buffer, 0,
                 batch.count * batch.stride * 4);
             const slice = this.uploadVertices(bytes);
-            if (!slice) return;
-            this.issueDraw({
-                mode: batch.mode,
-                vertexCount: batch.count,
-                buffers: [{
-                    gpuBuffer: this.vertexRing,
-                    baseOffset: slice.offset,
-                    stride: batch.stride * 4,
-                    attributes: attributes.map(a => ({
-                        location: a.location,
-                        format: "float32" + (a.components > 1 ?
-                            "x" + a.components : ""),
-                        offset: a.offsetFloats * 4,
-                    })),
-                }],
-                index: null,
-            });
+            if (!slice) {
+                s.immediate = null;
+                return;
+            }
+            try {
+                this.issueDraw({
+                    mode: batch.mode,
+                    vertexCount: batch.count,
+                    buffers: [{
+                        gpuBuffer: this.vertexRing,
+                        baseOffset: slice.offset,
+                        stride: batch.stride * 4,
+                        attributes: attributes.map(a => ({
+                            location: a.location,
+                            format: "float32" + (a.components > 1 ?
+                                "x" + a.components : ""),
+                            offset: a.offsetFloats * 4,
+                        })),
+                    }],
+                    index: null,
+                });
+            } finally {
+                s.immediate = null;
+            }
         },
 
         /* ---- packed client arrays ---- */
@@ -5521,23 +5579,33 @@
                     });
                 }
             }
+            /* Derive the fixed-function input layout from the same signature
+             * that generates VSIn. Warcraft keeps several client arrays
+             * enabled across unlit UI passes; consulting those enables in the
+             * shader but semantic state here made VSIn require location 2
+             * while the vertex layout omitted it, invalidating the pipeline.
+             * One signature is now authoritative for both sides. */
+            const attributes = this.fixedFunctionSignature(
+                this.currentVariant()).attributes;
             const wanted = [{ location: ATTR.gl_Vertex, components: 4,
                               source: "vertex" }];
-            wanted.push({ location: ATTR.gl_Color, components: 4, source: "color" });
-            if (s.enabled.has(GL.LIGHTING))
+            if (attributes.color)
+                wanted.push({ location: ATTR.gl_Color, components: 4,
+                              source: "color" });
+            if (attributes.normal)
                 wanted.push({ location: ATTR.gl_Normal, components: 3,
                               source: "normal" });
-            if (s.enabled.has(GL.COLOR_SUM) ||
-                    s.lightModel.colorControl === GL.SEPARATE_SPECULAR_COLOR)
+            if (attributes.secondaryColor)
                 wanted.push({ location: ATTR.gl_SecondaryColor, components: 4,
                               source: "secondaryColor" });
-            if (s.enabled.has(GL.FOG) && s.fog.coordSource === GL.FOG_COORD)
+            if (attributes.fogCoord)
                 wanted.push({ location: ATTR.gl_FogCoord, components: 1,
                               source: "fogCoord" });
             for (let unit = 0; unit < MAX_TEXTURE_COORDS; ++unit) {
-                if (!this.effectiveTarget(s.textureUnits[unit])) continue;
+                if (!attributes.texCoord[unit]) continue;
                 wanted.push({ location: ATTR.gl_MultiTexCoord0 + unit,
-                              components: 4, source: "texCoord" + unit });
+                              components: attributes.texCoord[unit].components,
+                              source: "texCoord" + unit });
             }
             return wanted;
         },
@@ -6757,14 +6825,6 @@ ${fragmentCode}`;
 
         fixedFunctionSignature(variant) {
             const s = this.current;
-            const arrays = s.arrays || {};
-            const enabledArray = name => {
-                const array = arrays[name];
-                return !!(array && array.enabled);
-            };
-            const immediateUsed = s.immediate ? s.immediate.used : null;
-            const has = (name, immediateFlag) =>
-                enabledArray(name) || (immediateUsed ? !!immediateFlag : false);
 
             const texture = [];
             for (let unit = 0; unit < MAX_TEXTURE_UNITS; ++unit) {
@@ -6785,23 +6845,23 @@ ${fragmentCode}`;
                     env: this.texEnvSignature(state.env),
                 });
             }
+            const texGenNeedsNormal = texture.some(unit => unit.enabled &&
+                unit.texGen.some(mode => mode === "SPHERE" ||
+                    mode === "REFLECTION" || mode === "NORMAL"));
 
             return {
                 attributes: {
                     position: { components: 4 },
-                    normal: has("normal", immediateUsed && immediateUsed.normal) ||
-                        s.enabled.has(GL.LIGHTING),
+                    normal: s.enabled.has(GL.LIGHTING) || texGenNeedsNormal,
                     // Array draws use GL's current values when an array is
                     // disabled. The draw assembler supplies those values as a
                     // constant-rate vertex buffer, so the fixed shader must
                     // consume the attribute rather than bake white/defaults.
                     color: true,
-                    secondaryColor: has("secondaryColor",
-                        immediateUsed && immediateUsed.secondaryColor) ||
-                        s.enabled.has(GL.COLOR_SUM) ||
+                    secondaryColor: s.enabled.has(GL.COLOR_SUM) ||
                         s.lightModel.colorControl === GL.SEPARATE_SPECULAR_COLOR,
-                    fogCoord: has("fogCoord", immediateUsed && immediateUsed.fogCoord) ||
-                        (s.enabled.has(GL.FOG) && s.fog.coordSource === GL.FOG_COORD),
+                    fogCoord: s.enabled.has(GL.FOG) &&
+                        s.fog.coordSource === GL.FOG_COORD,
                     texCoord: Array.from({ length: MAX_TEXTURE_COORDS },
                         (unused, unit) => texture[unit] && texture[unit].enabled ?
                             { components: 4 } : null),

@@ -161,7 +161,8 @@ static HRESULT __attribute__((unused)) v86wg_diagnostic_result(HRESULT result,
     return result;
 }
 
-static HRESULT v86wg_diagnostic_hresult(HRESULT result,
+/* Not every proxy using this header exposes HRESULT-returning entry points. */
+static HRESULT __attribute__((unused)) v86wg_diagnostic_hresult(HRESULT result,
         const char *function, int line)
 {
     DWORD win32_error;

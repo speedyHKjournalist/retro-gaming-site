@@ -339,6 +339,21 @@ test("an immediate-mode triangle produces one draw with one vertex buffer", () =
     assert.strictEqual(executor.stats.immediateBatches, 1);
 });
 
+test("immediate mode ignores stale client-array attributes", () => {
+    const { executor, log } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 320, 240)
+        .call("ENABLE_CLIENT_STATE", GL.NORMAL_ARRAY);
+    immediateTriangle(stream);
+    run(executor, stream);
+
+    const descriptor = log.draws[0].pipeline.descriptor.vertex;
+    assert.ok(!descriptor.module.code.includes("@location(2) normal"),
+        "an enabled normal array is irrelevant to glBegin/glEnd vertices");
+    assert.deepStrictEqual(descriptor.buffers[0].attributes.map(attribute =>
+        attribute.shaderLocation).sort((a, b) => a - b), [0, 3],
+        "the shader and immediate buffer agree on their attribute slots");
+});
+
 test("GL_QUADS expands to two triangles with GL's provoking vertex first", () => {
     const expanded = executorModule.expandIndices(GL.QUADS, 4, 0);
     assert.strictEqual(expanded.length, 6);
@@ -523,6 +538,36 @@ test("a client-array draw packs every enabled array into one buffer", () => {
     assert.strictEqual(buffers.length, 1);
     assert.strictEqual(buffers[0].arrayStride, (4 + 4) * 4,
         "position is always a vec4 and colour is widened to float");
+});
+
+test("Warcraft unlit indexed draws ignore a stale normal array", () => {
+    const { executor, log } = newExecutor();
+    const positions = new Float32Array([
+        -1, -1, 0, 1, -1, 0, 0, 1, 0,
+    ]);
+    const normals = new Float32Array([
+        0, 0, 1, 0, 0, 1, 0, 0, 1,
+    ]);
+    const indices = new Uint16Array([0, 1, 2]);
+    const stream = new GLStream().makeCurrent(1, 0, 0, 320, 240)
+        .call("ENABLE_CLIENT_STATE", GL.VERTEX_ARRAY)
+        .call("ENABLE_CLIENT_STATE", GL.NORMAL_ARRAY)
+        .drawElements(GL.TRIANGLES,
+            new Uint8Array(indices.buffer), GL.UNSIGNED_SHORT, {
+                vertex: { size: 3, type: GL.FLOAT, stride: 12,
+                    data: new Uint8Array(positions.buffer) },
+                normal: { size: 3, type: GL.FLOAT, stride: 12,
+                    data: new Uint8Array(normals.buffer) },
+            });
+    run(executor, stream);
+
+    assert.strictEqual(log.draws.length, 1);
+    const vertex = log.draws[0].pipeline.descriptor.vertex;
+    assert.ok(!vertex.module.code.includes("@location(2) normal"),
+        "an unlit pass must not make VSIn consume the stale normal array");
+    assert.deepStrictEqual(vertex.buffers[0].attributes.map(attribute =>
+        attribute.shaderLocation).sort((a, b) => a - b), [0, 3],
+        "the fixed shader and the packed layout expose the same slots");
 });
 
 /* ---- textures ---- */
@@ -1082,10 +1127,37 @@ const ARB_MULTITEXTURE_VERTEX_PROGRAM = "!!ARBvp1.0\n" +
     "MOV result.texcoord[1], vertex.texcoord[1];\n" +
     "END\n";
 
+const ARB_IMMEDIATE_VERTEX_PROGRAM = "!!ARBvp1.0\n" +
+    "MOV result.position, vertex.position;\n" +
+    "ADD result.color, vertex.normal, vertex.attrib[6];\n" +
+    "END\n";
+
 function boundARBProgram(executor, stream) {
     return stream.names(GLFN.GEN_PROGRAMS_ARB, [1])
         .call("BIND_PROGRAM_ARB", GL.VERTEX_PROGRAM_ARB, 1);
 }
+
+test("ARB immediate mode binds every shader-read vertex attribute", () => {
+    const { executor, log } = newExecutor();
+    const stream = boundARBProgram(executor,
+        new GLStream().makeCurrent(1, 0, 0, 64, 64))
+        .programStringARB(GL.VERTEX_PROGRAM_ARB,
+            ARB_IMMEDIATE_VERTEX_PROGRAM)
+        .call("ENABLE", GL.VERTEX_PROGRAM_ARB)
+        .call("NORMAL3F", 0, 0, 1)
+        .call("VERTEX_ATTRIB4F", 6, 0.25, 0.5, 0.75, 1);
+    immediateTriangle(stream);
+    run(executor, stream);
+
+    assert.strictEqual(log.draws.length, 1);
+    const descriptor = log.draws[0].pipeline.descriptor.vertex;
+    assert.deepStrictEqual(descriptor.buffers[0].attributes.map(attribute =>
+        attribute.shaderLocation).sort((a, b) => a - b), [0, 2, 6],
+        "normal slot 2 and unaliased generic slot 6 are both present");
+    const packed = packedAttributes(executor, log, 3);
+    assert.deepStrictEqual(packed[2][0], [0, 0, 1]);
+    assert.deepStrictEqual(packed[6][0], [0.25, 0.5, 0.75, 1]);
+});
 
 test("an ARB program string arrives intact and assembles", () => {
     const { executor, log } = newExecutor();
