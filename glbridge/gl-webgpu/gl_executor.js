@@ -176,6 +176,77 @@
         return value < low ? low : (value > high ? high : value);
     }
 
+    function formatHasStencil(format) {
+        return typeof format === "string" && format.indexOf("stencil") >= 0;
+    }
+
+    /*
+     * An automatic WebGPU pipeline layout contains only bindings statically
+     * reachable from the selected entry points.  A declaration referenced by
+     * an uncalled helper function is deliberately absent.  GLSL applications
+     * commonly leave helpers (and their fixed-state uniforms or samplers) in
+     * a compiled shader, so looking for binding declarations alone creates a
+     * bind group which is invalid against the pipeline's narrower layout.
+     *
+     * Generated WGSL has no function pointers or indirect calls.  Walking its
+     * small, explicit call graph therefore gives the same binding set as the
+     * automatic-layout algorithm without making draw submission asynchronous
+     * merely to probe validation error scopes.
+     */
+    function collectReachableWgslBindings(source, entryPoint, result) {
+        const text = String(source || "")
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\/\/[^\r\n]*/g, "");
+        const bindings = new Map();
+        const bindingPattern = /@group\s*\(\s*(\d+)\s*\)\s*@binding\s*\(\s*(\d+)\s*\)\s*var(?:\s*<[^>]*>)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*:/g;
+        for (const match of text.matchAll(bindingPattern))
+            bindings.set(match[3], match[1] + ":" + match[2]);
+
+        const functions = new Map();
+        const functionPattern = /\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+        for (let match; (match = functionPattern.exec(text));) {
+            const open = text.indexOf("{", functionPattern.lastIndex);
+            if (open < 0) break;
+            let depth = 1;
+            let end = open + 1;
+            while (end < text.length && depth) {
+                if (text[end] === "{") ++depth;
+                else if (text[end] === "}") --depth;
+                ++end;
+            }
+            if (depth) break;
+            functions.set(match[1], text.slice(open + 1, end - 1));
+            functionPattern.lastIndex = end;
+        }
+
+        const pending = [entryPoint];
+        const visited = new Set();
+        while (pending.length) {
+            const name = pending.pop();
+            if (visited.has(name)) continue;
+            visited.add(name);
+            const body = functions.get(name);
+            if (body === undefined) continue;
+
+            for (const [variable, key] of bindings) {
+                const use = new RegExp("\\b" + variable + "\\b");
+                if (use.test(body)) result.add(key);
+            }
+            const callPattern = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+            for (const call of body.matchAll(callPattern)) {
+                if (functions.has(call[1]) && !visited.has(call[1]))
+                    pending.push(call[1]);
+            }
+        }
+    }
+
+    function activeShaderBindings(wgslVertex, wgslFragment) {
+        const result = new Set();
+        collectReachableWgslBindings(wgslVertex, "vs_main", result);
+        collectReachableWgslBindings(wgslFragment, "fs_main", result);
+        return result;
+    }
+
     class GLStreamError extends Error {}
 
     /* ---- matrices: column-major, the same order GL and WGSL both use ---- */
@@ -1624,6 +1695,11 @@
             this.contexts = new Map();
             this.nextContextId = 1;
             this.nextShareGroupId = 1;
+            // Uniform locations are opaque GLint handles.  opengl32.dll keeps
+            // them in one process-wide lookup table, even across non-shared
+            // HGLRCs, so the executor must not expose the translator's
+            // per-program 0..N locations directly.
+            this.nextUniformLocation = 1;
             this.current = null;
 
             this.framebuffers = new Map();  // per context id -> Map(name -> fbo)
@@ -1646,6 +1722,8 @@
             this.pass = null;
             this.passTarget = null;
             this.recordedOps = 0;
+            this.pendingVertexBuffers = new WeakSet();
+            this.uploadPages = [];
             this.flushThreshold = Math.max(1024, this.options.flushThreshold || 16384);
 
             this.uniformRing = null;
@@ -1923,6 +2001,7 @@
             this.queries.clear();
             this.nextContextId = 1;
             this.nextShareGroupId = 1;
+            this.nextUniformLocation = 1;
             this.current = null;
             this.pipelineCache.clear();
             this.bindGroupCache.clear();
@@ -2036,6 +2115,9 @@
                 ++this.stats.commands;
                 try {
                     this.dispatch(fn, bytes, view, offset, size, metadata);
+                    // Non-draw upload users (blits, pixel rectangles) also
+                    // retire pages only once their complete GL command is encoded.
+                    if (this.retireUploadPages()) this.flushFrame();
                 } catch (error) {
                     if (error instanceof GLStreamError) {
                         /*
@@ -2531,13 +2613,17 @@
         });
         define("ENABLE_VERTEX_ATTRIB_ARRAY", function(a) {
             const index = a[0] >>> 0;
-            if (index < MAX_VERTEX_ATTRIBS)
+            if (index < MAX_VERTEX_ATTRIBS) {
                 this.current.genericAttribs[index].enabled = true;
+                this.arrayState("generic" + index).enabled = true;
+            }
         });
         define("DISABLE_VERTEX_ATTRIB_ARRAY", function(a) {
             const index = a[0] >>> 0;
-            if (index < MAX_VERTEX_ATTRIBS)
+            if (index < MAX_VERTEX_ATTRIBS) {
                 this.current.genericAttribs[index].enabled = false;
+                this.arrayState("generic" + index).enabled = false;
+            }
         });
 
         /* ---- attribute stacks ---- */
@@ -2786,20 +2872,27 @@
         define("TEX_SUB_IMAGE_3D", texSubImage(3));
 
         const compressedTexImage = dimensions => function(a, bytes, view, offset, size) {
+            // The guest deliberately uses one fixed wire struct for the 1D,
+            // 2D and 3D entry points.  height and depth are therefore present
+            // even for a 2D command (where depth is 1).  Parsing a
+            // dimension-dependent header used to read the 2D border field as
+            // imageSize, turning every real DXT payload into zero bytes.
+            if (size < 32)
+                throw new GLStreamError("compressed texture record is too short");
             let at = offset;
             const target = view.getUint32(at, true); at += 4;
             const level = view.getInt32(at, true); at += 4;
             const internalFormat = view.getUint32(at, true); at += 4;
             const width = view.getInt32(at, true); at += 4;
-            const height = dimensions >= 2 ? view.getInt32(at, true) : 1;
-            if (dimensions >= 2) at += 4;
-            const depth = dimensions >= 3 ? view.getInt32(at, true) : 1;
-            if (dimensions >= 3) at += 4;
+            const wireHeight = view.getInt32(at, true); at += 4;
+            const wireDepth = view.getInt32(at, true); at += 4;
             at += 4;                            // border
             const dataSize = view.getUint32(at, true); at += 4;
             if (at - offset + dataSize > size)
                 throw new GLStreamError("compressed texture record is truncated");
             const data = bytes.subarray(at, at + dataSize);
+            const height = dimensions >= 2 ? wireHeight : 1;
+            const depth = dimensions >= 3 ? wireDepth : 1;
             this.compressedTexImage(target, level, internalFormat, width, height,
                 depth, data);
         };
@@ -2811,24 +2904,28 @@
             // A partial update of a compressed level must land on block
             // boundaries; GL requires it and WebGPU enforces it, so a
             // misaligned rectangle is refused rather than silently rounded.
+            // As above, the guest payload is the same fixed 40-byte struct for
+            // all three dimensionalities.
+            if (size < 40)
+                throw new GLStreamError("compressed subimage record is too short");
             let at = offset;
             const target = view.getUint32(at, true); at += 4;
             const level = view.getInt32(at, true); at += 4;
             const x = view.getInt32(at, true); at += 4;
-            const y = dimensions >= 2 ? view.getInt32(at, true) : 0;
-            if (dimensions >= 2) at += 4;
-            const z = dimensions >= 3 ? view.getInt32(at, true) : 0;
-            if (dimensions >= 3) at += 4;
+            const wireY = view.getInt32(at, true); at += 4;
+            const wireZ = view.getInt32(at, true); at += 4;
             const width = view.getInt32(at, true); at += 4;
-            const height = dimensions >= 2 ? view.getInt32(at, true) : 1;
-            if (dimensions >= 2) at += 4;
-            const depth = dimensions >= 3 ? view.getInt32(at, true) : 1;
-            if (dimensions >= 3) at += 4;
+            const wireHeight = view.getInt32(at, true); at += 4;
+            const wireDepth = view.getInt32(at, true); at += 4;
             const format = view.getUint32(at, true); at += 4;
             const dataSize = view.getUint32(at, true); at += 4;
             if (at - offset + dataSize > size)
                 throw new GLStreamError("compressed subimage record is truncated");
             const data = bytes.subarray(at, at + dataSize);
+            const y = dimensions >= 2 ? wireY : 0;
+            const z = dimensions >= 3 ? wireZ : 0;
+            const height = dimensions >= 2 ? wireHeight : 1;
+            const depth = dimensions >= 3 ? wireDepth : 1;
             this.compressedTexSubImage(target, level, x, y, z, width, height,
                 depth, format, data);
         };
@@ -2936,7 +3033,6 @@
                 throw new GLStreamError("VBO pointer record is short");
             const s = this.current;
             const array = {
-                enabled: true,
                 buffer: s.arrayBuffer,
                 size: view.getInt32(offset, true),
                 type: view.getUint32(offset + 4, true),
@@ -2957,7 +3053,7 @@
             if (size < 16) throw new GLStreamError("VBO pointer record is short");
             const s = this.current;
             this.setArrayPointer("texCoord" + s.clientActiveTexture, {
-                enabled: true, buffer: s.arrayBuffer,
+                buffer: s.arrayBuffer,
                 size: view.getInt32(offset, true),
                 type: view.getUint32(offset + 4, true),
                 stride: view.getInt32(offset + 8, true),
@@ -2972,7 +3068,13 @@
                 return this.refuse("glVertexAttribPointer", "index out of range",
                     { index }, GL.INVALID_VALUE);
             this.setArrayPointer("generic" + index, {
-                enabled: true, buffer: this.current.arrayBuffer,
+                // glVertexAttribPointer changes the array format only.  Its
+                // enable is independent state controlled by
+                // glEnable/DisableVertexAttribArray; forcing it on here made
+                // Cube 2's disabled vcolor array keep reading a stale world
+                // VBO instead of the current constant colour used by models.
+                enabled: this.current.genericAttribs[index].enabled,
+                buffer: this.current.arrayBuffer,
                 size: view.getInt32(offset + 4, true),
                 type: view.getUint32(offset + 8, true),
                 normalized: view.getUint32(offset + 12, true) !== 0,
@@ -3077,7 +3179,8 @@
             for (const name of names)
                 if (name && !this.queries.has(name))
                     this.queries.set(name, { name, result: 0, ready: true,
-                                             active: false, slot: -1 });
+                                             active: false, slot: -1,
+                                             generation: 0 });
         });
         define("DELETE_QUERIES", function(a, bytes, view, offset, size) {
             const names = readNameArray(view, offset, size);
@@ -4197,7 +4300,19 @@
                     GL.INVALID_OPERATION);
             const kind = this.textureTargetKind(target);
             texture.target = kind === "Cube" ? GL.TEXTURE_CUBE_MAP : target;
-            const storage = storageFormatFor(internalFormat, this.deviceFeatures);
+            let storage = storageFormatFor(internalFormat, this.deviceFeatures);
+            if (storage.compressed) {
+                // glTexImage* receives ordinary pixels even when the requested
+                // internal format is a specific S3TC format; desktop GL then
+                // performs the compression.  queue.writeTexture cannot encode
+                // RGBA bytes into BC blocks, and these levels are often later
+                // filled by CopyTexSubImage while Cube 2 builds environment
+                // maps.  Keep the logical base format but use renderable RGBA8
+                // storage.  glCompressedTexImage* below still preserves native
+                // BC blocks when the application actually supplies them.
+                storage = { gpu: "rgba8unorm", compressed: false,
+                    base: storage.base };
+            }
             const face = CUBE_FACE_INDEX[target] || 0;
 
             let pixels = null;
@@ -4456,6 +4571,15 @@
                 const oldFormat = texture.gpuFormat;
                 texture.viewCache.clear();
                 const dimension = texture.kind === "3D" ? "3d" : "2d";
+                // BC formats are sampled/copied block data; WebGPU does not
+                // make them color-renderable.  Giving every GL texture
+                // RENDER_ATTACHMENT used to invalidate ordinary DXT textures
+                // as soon as Cube 2 sampled them while rendering an envmap.
+                // CopyTexImage/FBO paths already reject compressed levels, so
+                // only uncompressed textures need the attachment capability.
+                const usage = TEXTURE_USAGE_TEXTURE_BINDING |
+                    TEXTURE_USAGE_COPY_DST | TEXTURE_USAGE_COPY_SRC |
+                    (base.compressed ? 0 : TEXTURE_USAGE_RENDER_ATTACHMENT);
                 texture.gpuTexture = this.device.createTexture({
                     label: "GL texture " + texture.name,
                     size: {
@@ -4466,8 +4590,7 @@
                     dimension,
                     mipLevelCount: wanted.levelCount,
                     format: wanted.format,
-                    usage: TEXTURE_USAGE_TEXTURE_BINDING | TEXTURE_USAGE_COPY_DST |
-                        TEXTURE_USAGE_COPY_SRC | TEXTURE_USAGE_RENDER_ATTACHMENT,
+                    usage,
                 });
                 texture.gpuWidth = wanted.width;
                 texture.gpuHeight = wanted.height;
@@ -4533,7 +4656,12 @@
                 slot.pixels,
                 { offset: 0, bytesPerRow, rowsPerImage },
                 {
-                    width: slot.width, height: slot.height,
+                    // WebGPU expresses BC copies in complete physical blocks.
+                    // The logical 2x2 and 1x1 tail mips still occupy one 4x4
+                    // block, so their copy extent must be rounded up even
+                    // though the texture's logical mip size remains smaller.
+                    width: slot.compressed ? alignUp(slot.width, 4) : slot.width,
+                    height: slot.compressed ? alignUp(slot.height, 4) : slot.height,
                     depthOrArrayLayers: texture.kind === "3D" ? slot.depth : 1,
                 });
         },
@@ -4720,19 +4848,27 @@
             buffer.shadow = new Uint8Array(byteCount);
             if (data) buffer.shadow.set(data.subarray(0,
                 Math.min(data.byteLength, byteCount)));
+            this.replaceBufferStorage(buffer);
+        },
+
+        replaceBufferStorage(buffer) {
             this.retire(buffer.gpuBuffer);
             // The same buffer may be bound as vertex data now and as indices
             // later, and GL never says which; asking for both costs nothing.
+            const byteCount = buffer.shadow.byteLength;
+            const size = alignUp(byteCount, 4);
             buffer.gpuBuffer = byteCount ? this.device.createBuffer({
                 label: "GL buffer " + buffer.name,
-                size: alignUp(Math.max(4, byteCount), 4),
+                size,
                 usage: BUFFER_USAGE_VERTEX | BUFFER_USAGE_INDEX |
                     BUFFER_USAGE_COPY_DST | BUFFER_USAGE_COPY_SRC,
             }) : null;
-            if (buffer.gpuBuffer && byteCount)
-                this.device.queue.writeBuffer(buffer.gpuBuffer, 0, buffer.shadow,
-                    0, alignUp(byteCount, 4) <= buffer.shadow.byteLength ?
-                        byteCount & ~3 : byteCount - (byteCount & 3));
+            if (buffer.gpuBuffer) {
+                const upload = size === byteCount ? buffer.shadow :
+                    new Uint8Array(size);
+                if (upload !== buffer.shadow) upload.set(buffer.shadow);
+                this.device.queue.writeBuffer(buffer.gpuBuffer, 0, upload, 0, size);
+            }
         },
 
         bufferSubData(target, offset, data) {
@@ -4745,16 +4881,32 @@
                     { offset, size: data.byteLength }, GL.INVALID_VALUE);
             buffer.shadow.set(data, offset);
             if (buffer.gpuBuffer) {
+                // Queue writes execute before a command buffer submitted later,
+                // even if its draw was encoded first. Rename live storage so a
+                // dynamic model update cannot change already-recorded geometry.
+                // No pass/occlusion-query split is needed for this copy-on-write.
+                if (this.pendingVertexBuffers.has(buffer.gpuBuffer)) {
+                    this.replaceBufferStorage(buffer);
+                    return;
+                }
                 // writeBuffer wants 4-byte alignment at both ends; a ragged
                 // update is widened to the enclosing aligned span, which is
                 // safe because the shadow copy holds the true contents.
                 const start = offset & ~3;
                 const end = alignUp(offset + data.byteLength, 4);
                 const clampedEnd = Math.min(end, buffer.shadow.byteLength);
-                const span = clampedEnd - start;
-                if (span > 0)
-                    this.device.queue.writeBuffer(buffer.gpuBuffer, start,
-                        buffer.shadow, start, span & ~3 || span);
+                const span = end - start;
+                if (span > 0) {
+                    if (end <= buffer.shadow.byteLength) {
+                        this.device.queue.writeBuffer(buffer.gpuBuffer, start,
+                            buffer.shadow, start, span);
+                    } else {
+                        const upload = new Uint8Array(span);
+                        upload.set(buffer.shadow.subarray(start, clampedEnd));
+                        this.device.queue.writeBuffer(buffer.gpuBuffer, start,
+                            upload, 0, span);
+                    }
+                }
             }
         },
 
@@ -4848,19 +5000,27 @@
             program.uniformByName.clear();
             program.uniformByLocation.clear();
             for (const uniform of reflection.uniforms) {
-                program.uniformByName.set(uniform.name, uniform);
-                for (let i = 0; i < Math.max(1, uniform.arraySize); ++i)
-                    program.uniformByLocation.set(uniform.location + i,
-                        { uniform, element: i });
+                const count = Math.max(1, uniform.arraySize);
+                const location = this.nextUniformLocation;
+                this.nextUniformLocation += count;
+                const mapped = Object.assign({}, uniform, { location });
+                program.uniformByName.set(mapped.name, mapped);
+                for (let i = 0; i < count; ++i)
+                    program.uniformByLocation.set(location + i,
+                        { uniform: mapped, element: i });
             }
             program.samplerUnits.clear();
             for (const sampler of reflection.samplers) {
-                program.uniformByName.set(sampler.name, sampler);
-                for (let i = 0; i < Math.max(1, sampler.arraySize); ++i) {
-                    program.uniformByLocation.set(sampler.location + i,
-                        { sampler, element: i });
-                    program.samplerUnits.set(sampler.name +
-                        (sampler.arraySize ? "[" + i + "]" : ""), 0);
+                const count = Math.max(1, sampler.arraySize);
+                const location = this.nextUniformLocation;
+                this.nextUniformLocation += count;
+                const mapped = Object.assign({}, sampler, { location });
+                program.uniformByName.set(mapped.name, mapped);
+                for (let i = 0; i < count; ++i) {
+                    program.uniformByLocation.set(location + i,
+                        { sampler: mapped, element: i });
+                    program.samplerUnits.set(mapped.name +
+                        (mapped.arraySize ? "[" + i + "]" : ""), 0);
                 }
             }
         },
@@ -5383,7 +5543,7 @@
                     mode: batch.mode,
                     vertexCount: batch.count,
                     buffers: [{
-                        gpuBuffer: this.vertexRing,
+                        gpuBuffer: slice.buffer,
                         baseOffset: slice.offset,
                         stride: batch.stride * 4,
                         attributes: attributes.map(a => ({
@@ -5499,7 +5659,7 @@
             const slice = this.uploadVertices(new Uint8Array(packed.buffer));
             if (!slice) return;
             const buffers = [{
-                gpuBuffer: this.vertexRing,
+                gpuBuffer: slice.buffer,
                 baseOffset: slice.offset,
                 stride: stride * 4,
                 attributes: layout.map(item => ({
@@ -5713,7 +5873,7 @@
                 }
                 const slice = this.uploadVertices(new Uint8Array(data.buffer));
                 if (!slice) return;
-                buffers.push({ gpuBuffer: this.vertexRing,
+                buffers.push({ gpuBuffer: slice.buffer,
                     baseOffset: slice.offset, stride: components * 4,
                     stepMode: "instance", attributes });
             }
@@ -5790,6 +5950,29 @@
 
         /* ---- ring uploads ---- */
 
+        rotateUploadPage(kind) {
+            const vertex = kind === "vertex";
+            const key = vertex ? "vertexRing" : "uniformRing";
+            // A draw may already own slices from this page but not yet be
+            // encoded. Neither overwrite nor retire it in an intermediate
+            // flush; keep it until the draw/command has been fully recorded.
+            this.uploadPages.push(this[key]);
+            this[key] = this.device.createBuffer({
+                label: vertex ? "GL vertex ring" : "GL uniform ring",
+                size: vertex ? this.vertexCapacity : this.uniformCapacity,
+                usage: BUFFER_USAGE_COPY_DST | (vertex ?
+                    BUFFER_USAGE_VERTEX | BUFFER_USAGE_INDEX : BUFFER_USAGE_UNIFORM),
+            });
+            this[vertex ? "vertexCursor" : "uniformCursor"] = 0;
+        },
+
+        retireUploadPages() {
+            if (!this.uploadPages.length) return false;
+            for (const page of this.uploadPages) this.retire(page);
+            this.uploadPages.length = 0;
+            return true;
+        },
+
         uploadVertices(bytes) {
             const size = alignUp(bytes.byteLength, 4);
             if (size > this.vertexCapacity) {
@@ -5797,18 +5980,14 @@
                     { size, capacity: this.vertexCapacity }, GL.OUT_OF_MEMORY);
                 return null;
             }
-            if (this.vertexCursor + size > this.vertexCapacity) {
-                // Wrapping mid-frame would overwrite data an already recorded
-                // draw still points at, so the frame is submitted first.
-                this.flushFrame();
-                this.vertexCursor = 0;
-            }
+            if (this.vertexCursor + size > this.vertexCapacity)
+                this.rotateUploadPage("vertex");
             const offset = this.vertexCursor;
             this.vertexStaging.set(bytes, offset);
             this.device.queue.writeBuffer(this.vertexRing, offset,
                 this.vertexStaging, offset, size);
             this.vertexCursor = offset + size;
-            return { offset, size };
+            return { buffer: this.vertexRing, offset, size };
         },
 
         /*
@@ -5831,7 +6010,7 @@
                 indices.byteLength);
             const slice = this.uploadVertices(bytes);
             if (!slice) return null;
-            return { offset: slice.offset, count: indices.length,
+            return { buffer: slice.buffer, offset: slice.offset, count: indices.length,
                      format: "uint32", cpu: indices, source };
         },
 
@@ -6067,7 +6246,13 @@
         },
 
         ensurePass() {
-            if (this.pass) return this.pass;
+            if (this.activeQuery && this.activeQuery.slot < 0 &&
+                    this.nextQuerySlot >= this.occlusionCapacity)
+                this.flushFrame();
+            if (this.pass) {
+                this.beginOcclusionSegment();
+                return this.pass;
+            }
             const targets = this.currentTargets();
             if (!targets) return null;
             const encoder = this.ensureEncoder();
@@ -6091,12 +6276,20 @@
                     depthClearValue: this.pendingClear && this.pendingClear.depth !== undefined ?
                         this.pendingClear.depth : undefined,
                     depthStoreOp: "store",
-                    stencilLoadOp: this.pendingClear && this.pendingClear.stencil !== undefined ?
-                        "clear" : "load",
-                    stencilClearValue: this.pendingClear &&
-                        this.pendingClear.stencil !== undefined ?
-                        this.pendingClear.stencil : undefined,
-                    stencilStoreOp: "store",
+                    // WebGPU requires stencil operations to be absent when the
+                    // attachment format has no stencil aspect.  Cube 2 uses a
+                    // depth24 renderbuffer while generating environment maps;
+                    // unconditionally adding these fields invalidates the
+                    // complete command encoder at finish().
+                    ...(formatHasStencil(targets.depthFormat) ? {
+                        stencilLoadOp: this.pendingClear &&
+                            this.pendingClear.stencil !== undefined ?
+                            "clear" : "load",
+                        stencilClearValue: this.pendingClear &&
+                            this.pendingClear.stencil !== undefined ?
+                            this.pendingClear.stencil : undefined,
+                        stencilStoreOp: "store",
+                    } : {}),
                 };
             }
             if (this.activeOcclusionQuerySet)
@@ -6108,11 +6301,13 @@
             this.passTargets = targets;
             this.pendingClear = null;
             this.passStateApplied = false;
+            this.beginOcclusionSegment();
             return this.pass;
         },
 
         endPass() {
             if (this.pass) {
+                this.endOcclusionSegment();
                 this.pass.end();
                 this.pass = null;
                 this.passTargets = null;
@@ -6127,6 +6322,7 @@
                 this.device.queue.submit([this.encoder.finish()]);
                 this.encoder = null;
                 this.recordedOps = 0;
+                this.pendingVertexBuffers = new WeakSet();
                 this.releaseRetired();
             }
             if (resolved) this.readQueryResults(resolved);
@@ -6151,8 +6347,9 @@
                 return null;
             this.pendingQueries = [];
             let high = 0;
-            for (const query of pending)
-                if (query.slot >= 0 && query.slot + 1 > high) high = query.slot + 1;
+            for (const record of pending)
+                if (record.slot >= 0 && record.slot + 1 > high)
+                    high = record.slot + 1;
             if (!high) return null;
             // resolveQuerySet writes a u64 per slot; a mapped buffer cannot
             // also be a resolve target, hence the copy into staging.
@@ -6182,25 +6379,34 @@
             staging.mapAsync(1 /* GPUMapMode.READ */).then(() => {
                 const words = new Uint32Array(staging.getMappedRange().slice(0));
                 staging.unmap();
-                for (const query of queries) {
-                    if (query.slot < 0) { query.ready = true; continue; }
-                    const low = words[query.slot * 2];
-                    const high = words[query.slot * 2 + 1];
+                for (const record of queries) {
+                    const { query, slot, generation } = record;
+                    // Query names are deliberately recycled every couple of
+                    // frames by Cube 2. Mapping is asynchronous, so an older
+                    // readback may finish after the same object has started a
+                    // newer query. Never publish that stale generation into
+                    // the new one (which can otherwise cull visible geometry).
+                    if (query.generation !== generation) continue;
+                    const low = words[slot * 2];
+                    const high = words[slot * 2 + 1];
                     // D-07: WebGPU answers "did any sample pass", not how many.
                     // A visible query reports a saturated count rather than 1,
                     // because callers threshold on it far more often than they
                     // compare it to an expected sample total.
-                    query.result = (low || high) ? OCCLUSION_VISIBLE_SAMPLES : 0;
-                    query.ready = true;
+                    const visible = !!(low || high);
+                    this.completeOcclusionSegment(record,
+                        visible ? OCCLUSION_VISIBLE_SAMPLES : 0);
                 }
             }).catch(error => {
                 this.warnOnce("occlusion", "occlusion query readback failed",
                     { message: String(error) });
                 // Never leave the guest spinning on AVAILABLE for a result the
-                // GPU will not deliver: report zero samples, but report it.
-                for (const query of queries) {
-                    query.result = 0;
-                    query.ready = true;
+                // GPU will not deliver.  A failed readback contains no evidence
+                // of occlusion, so the only rendering-safe fallback is visible.
+                for (const record of queries) {
+                    const { query, generation } = record;
+                    if (query.generation !== generation) continue;
+                    this.completeOcclusionSegment(record, OCCLUSION_VISIBLE_SAMPLES);
                 }
             }).then(() => {
                 try { staging.destroy(); } catch (ignored) { /* already gone */ }
@@ -6280,7 +6486,9 @@
                 ...(targets.depth ? { depthStencilAttachment: {
                     view: targets.depth,
                     depthLoadOp: "load", depthStoreOp: "store",
-                    stencilLoadOp: "load", stencilStoreOp: "store",
+                    ...(formatHasStencil(targets.depthFormat) ? {
+                        stencilLoadOp: "load", stencilStoreOp: "store",
+                    } : {}),
                 } } : {}),
             });
             this.applyAccumScissor(pass, targets);
@@ -6423,7 +6631,8 @@ ${fragmentCode}`;
                         rasterIndices.buffer, rasterIndices.byteOffset,
                         rasterIndices.byteLength));
                     if (!slice) return;
-                    index = { offset: slice.offset, count: rasterIndices.length,
+                    index = { buffer: slice.buffer, offset: slice.offset,
+                        count: rasterIndices.length,
                         format: "uint32", cpu: rasterIndices };
                     request = { ...request,
                         mode: rasterMode === GL.LINE ? GL.LINES : GL.POINTS };
@@ -6440,8 +6649,7 @@ ${fragmentCode}`;
             if (!shaders) return;
             if (s.enabled.has(GL.COLOR_LOGIC_OP) && s.logicOp !== GL.COPY &&
                     !this.prepareLogicOpTargets()) return;
-            const pass = this.ensurePass();
-            if (!pass) {
+            if (!this.ensurePass()) {
                 this.refuse("draw", "no render target is bound", {},
                     GL.INVALID_FRAMEBUFFER_OPERATION);
                 return;
@@ -6468,7 +6676,7 @@ ${fragmentCode}`;
                         ...buffer,
                         stepMode: "instance",
                     })).concat([{
-                        gpuBuffer: this.vertexRing,
+                        gpuBuffer: cornerSlice.buffer,
                         baseOffset: cornerSlice.offset,
                         stride: 8,
                         stepMode: "vertex",
@@ -6488,7 +6696,8 @@ ${fragmentCode}`;
                 const slice = this.uploadVertices(new Uint8Array(expanded.buffer,
                     expanded.byteOffset, expanded.byteLength));
                 if (!slice) return;
-                index = { offset: slice.offset, count: expanded.length,
+                index = { buffer: slice.buffer, offset: slice.offset,
+                          count: expanded.length,
                           format: "uint32", cpu: expanded };
             }
 
@@ -6497,15 +6706,20 @@ ${fragmentCode}`;
             const bindGroups = this.buildBindGroups(pipeline, shaders);
             if (!bindGroups) return;
 
+            // Texture preparation may have split the pass. Always bind to
+            // the current pass after all uploads and resource preparation.
+            const pass = this.ensurePass();
+            if (!pass) return;
             pass.setPipeline(pipeline);
             this.applyPassState(pass);
             for (const entry of bindGroups)
                 pass.setBindGroup(entry.index, entry.group);
             request.buffers.forEach((buffer, i) => {
                 pass.setVertexBuffer(i, buffer.gpuBuffer, buffer.baseOffset);
+                this.pendingVertexBuffers.add(buffer.gpuBuffer);
             });
             if (index) {
-                pass.setIndexBuffer(this.vertexRing, index.format, index.offset);
+                pass.setIndexBuffer(index.buffer, index.format, index.offset);
                 pass.drawIndexed(index.count, 1, 0, request.firstVertex || 0, 0);
             } else if (expandedPoints) {
                 pass.draw(6, request.vertexCount, 0, request.firstVertex || 0);
@@ -6513,7 +6727,8 @@ ${fragmentCode}`;
                 pass.draw(request.vertexCount, 1, request.firstVertex || 0, 0);
             }
             ++this.stats.draws;
-            if (++this.recordedOps >= this.flushThreshold) {
+            ++this.recordedOps;
+            if (this.retireUploadPages() || this.recordedOps >= this.flushThreshold) {
                 // A frame's draw count is unbounded; flushing keeps both the
                 // command buffer and the ring allocations proportional to work
                 // done rather than to the frame's length.
@@ -6953,7 +7168,7 @@ ${fragmentCode}`;
             const topology = PRIMITIVE_TOPOLOGY[request.mode];
             const strip = topology === "triangle-strip" || topology === "line-strip";
             const layoutKey = request.buffers.map(b =>
-                b.stride + "@" + b.attributes.map(a =>
+                b.stride + ":" + (b.stepMode || "vertex") + "@" + b.attributes.map(a =>
                     a.location + ":" + a.format + ":" + a.offset).join(",")).join("|");
             const signature = [
                 shaders.key,
@@ -7054,6 +7269,8 @@ ${fragmentCode}`;
             if (this.pipelineCache.size > 4096) this.pipelineCache.clear();
             this.pipelineCache.set(signature, pipeline);
             pipeline.glShaders = shaders;
+            pipeline.glActiveBindings = activeShaderBindings(
+                shaders.wgslVertex, shaders.wgslFragment);
             return pipeline;
         },
 
@@ -7069,11 +7286,11 @@ ${fragmentCode}`;
         /* ---- bind groups ---- */
 
         /*
-         * Group 1 holds the two uniform buffers, group 2 the textures and
-         * samplers. The layouts come from the pipeline's automatic layout, so a
-         * group the shader does not declare is simply not created rather than
-         * bound empty -- asking for getBindGroupLayout on an absent group is an
-         * error, and a fixed-function draw with no textures has no group 2.
+         * Group 1 holds the uniform buffers, group 2 the textures and samplers.
+         * The layouts come from the pipeline's automatic layout, so a group the
+         * entry points do not statically use is not created or bound.  Merely
+         * scanning declarations is insufficient: WebGPU omits a binding which
+         * is read only by an uncalled GLSL helper function.
          */
         buildBindGroups(pipeline, shaders) {
             const layout = stateLayout.buildLayout(shaders.stateFields);
@@ -7092,18 +7309,19 @@ ${fragmentCode}`;
 
             const groups = [];
             try {
-                const shaderText = shaders.wgslVertex + "\n" +
-                    shaders.wgslFragment;
+                const activeBindings = pipeline.glActiveBindings ||
+                    activeShaderBindings(shaders.wgslVertex,
+                        shaders.wgslFragment);
+                const bindingIsActive = (group, binding) =>
+                    activeBindings.has(group + ":" + binding);
                 const uniformEntries = [];
-                if (shaderText.indexOf("@group(1) @binding(0)") >= 0) {
+                if (bindingIsActive(1, 0)) {
                     uniformEntries.push({ binding: 0,
-                        resource: { buffer: this.uniformRing,
+                        resource: { buffer: stateSlice.buffer,
                             offset: stateSlice.offset, size: stateSlice.size } });
                 }
                 for (const binding of [1, 2]) {
-                    if (shaderText.indexOf("@group(1) @binding(" + binding +
-                            ")") < 0)
-                        continue;
+                    if (!bindingIsActive(1, binding)) continue;
                     const slice = bindingSlices[binding];
                     if (!slice)
                         return this.refuse("draw", "a shader reads a uniform " +
@@ -7111,7 +7329,7 @@ ${fragmentCode}`;
                             { binding, shader: shaders.key },
                             GL.INVALID_OPERATION);
                     uniformEntries.push({ binding,
-                        resource: { buffer: this.uniformRing,
+                        resource: { buffer: slice.buffer,
                             offset: slice.offset, size: slice.size } });
                 }
                 if (uniformEntries.length) {
@@ -7123,7 +7341,8 @@ ${fragmentCode}`;
                         }),
                     });
                 }
-                const textureEntries = this.textureBindEntries(shaders);
+                const textureEntries = this.textureBindEntries(shaders)
+                    .filter(entry => bindingIsActive(2, entry.binding));
                 if (textureEntries.length) {
                     groups.push({
                         index: 2,
@@ -7136,18 +7355,22 @@ ${fragmentCode}`;
                 if (this.current.enabled.has(GL.COLOR_LOGIC_OP) &&
                         this.current.logicOp !== GL.COPY) {
                     const views = this.logicTargetViews || [];
-                    groups.push({
-                        index: 3,
-                        group: this.device.createBindGroup({
-                            layout: pipeline.getBindGroupLayout(3),
-                            entries: Array.from({ length: shaders.colorTargets || 1 },
-                                (unused, binding) => ({
-                                    binding,
-                                    resource: views[binding] || views[0] ||
-                                        this.fallbackView,
-                                })),
-                        }),
-                    });
+                    const logicEntries = Array.from({
+                        length: shaders.colorTargets || 1,
+                    }, (unused, binding) => ({
+                        binding,
+                        resource: views[binding] || views[0] ||
+                            this.fallbackView,
+                    })).filter(entry => bindingIsActive(3, entry.binding));
+                    if (logicEntries.length) {
+                        groups.push({
+                            index: 3,
+                            group: this.device.createBindGroup({
+                                layout: pipeline.getBindGroupLayout(3),
+                                entries: logicEntries,
+                            }),
+                        });
+                    }
                 }
             } catch (error) {
                 this.refuse("draw", "could not build the bind groups",
@@ -7354,13 +7577,11 @@ ${fragmentCode}`;
                     { size }, GL.OUT_OF_MEMORY);
                 return null;
             }
-            if (this.uniformCursor + size > this.uniformCapacity) {
-                this.flushFrame();
-                this.uniformCursor = 0;
-            }
+            if (this.uniformCursor + size > this.uniformCapacity)
+                this.rotateUploadPage("uniform");
             const offset = this.uniformCursor;
             this.uniformCursor = offset + size;
-            return { offset, size };
+            return { buffer: this.uniformRing, offset, size };
         },
 
         /*
@@ -7376,7 +7597,7 @@ ${fragmentCode}`;
                 slice.offset, layout.floats);
             const snapshot = this.stateSnapshot(shaders);
             stateLayout.writeLayout(layout, snapshot, floats, 0);
-            this.device.queue.writeBuffer(this.uniformRing, slice.offset,
+            this.device.queue.writeBuffer(slice.buffer, slice.offset,
                 this.uniformStaging, slice.offset, slice.size);
             return slice;
         },
@@ -7387,7 +7608,7 @@ ${fragmentCode}`;
             const zeros = new Float32Array(this.uniformStaging.buffer,
                 slice.offset, 4);
             zeros.fill(0);
-            this.device.queue.writeBuffer(this.uniformRing, slice.offset,
+            this.device.queue.writeBuffer(slice.buffer, slice.offset,
                 this.uniformStaging, slice.offset, slice.size);
             return slice;
         },
@@ -7409,7 +7630,7 @@ ${fragmentCode}`;
                 slice.offset, count * 2);
             floats.set(program.env.subarray(0, count), 0);
             floats.set(program.local.subarray(0, count), count);
-            this.device.queue.writeBuffer(this.uniformRing, slice.offset,
+            this.device.queue.writeBuffer(slice.buffer, slice.offset,
                 this.uniformStaging, slice.offset, slice.size);
             return slice;
         },
@@ -7442,7 +7663,7 @@ ${fragmentCode}`;
             this.uniformStaging.set(
                 program.uniformData.subarray(0, Math.min(bytes,
                     program.uniformData.byteLength)), slice.offset);
-            this.device.queue.writeBuffer(this.uniformRing, slice.offset,
+            this.device.queue.writeBuffer(slice.buffer, slice.offset,
                 this.uniformStaging, slice.offset, slice.size);
             return slice;
         },
@@ -7842,7 +8063,7 @@ struct BlitParams {
                 sx0, sy0, sx1 - sx0, sy1 - sy0,
                 dx0, dy0, dx1 - dx0, dy1 - dy0,
             ]);
-            this.device.queue.writeBuffer(this.uniformRing, uniform.offset,
+            this.device.queue.writeBuffer(uniform.buffer, uniform.offset,
                 this.uniformStaging, uniform.offset, uniform.size);
             const sampler = this.device.createSampler({
                 minFilter: filter === GL.LINEAR ? "linear" : "nearest",
@@ -7867,7 +8088,7 @@ struct BlitParams {
                 entries: [
                     { binding: 0, resource: sourceView },
                     { binding: 1, resource: sampler },
-                    { binding: 2, resource: { buffer: this.uniformRing,
+                    { binding: 2, resource: { buffer: uniform.buffer,
                         offset: uniform.offset, size: uniform.size } },
                 ],
             }));
@@ -7938,7 +8159,7 @@ struct BlitParams {
             const values = new Int32Array(this.uniformStaging.buffer,
                 uniform.offset, 4);
             values.set([sourceX, sourceY, destinationX, destinationY]);
-            this.device.queue.writeBuffer(this.uniformRing, uniform.offset,
+            this.device.queue.writeBuffer(uniform.buffer, uniform.offset,
                 this.uniformStaging, uniform.offset, uniform.size);
             const sourceView = source.view || source.texture.createView({
                 dimension: "2d", baseMipLevel: source.mipLevel || 0,
@@ -7957,7 +8178,7 @@ struct BlitParams {
                 layout: pipeline.getBindGroupLayout(0),
                 entries: [
                     { binding: 0, resource: sourceView },
-                    { binding: 1, resource: { buffer: this.uniformRing,
+                    { binding: 1, resource: { buffer: uniform.buffer,
                         offset: uniform.offset, size: uniform.size } },
                 ],
             }));
@@ -8427,37 +8648,66 @@ struct BlitParams {
             if (!query)
                 return this.refuse("glBeginQuery", "unknown query object",
                     { name }, GL.INVALID_OPERATION);
-            this.ensureOcclusionQuerySet();
             if (this.activeQuery)
                 return this.refuse("glBeginQuery", "a query is already active",
                     { name }, GL.INVALID_OPERATION);
-            query.slot = this.nextQuerySlot++;
-            if (query.slot >= this.occlusionCapacity) {
-                query.slot = -1;
-                return this.refuse("glBeginQuery",
-                    "the occlusion query set is full for this frame",
-                    { name }, 0);
-            }
+            query.generation = (query.generation || 0) + 1;
             query.ready = false;
             query.result = 0;
+            query.pendingSegments = 0;
+            query.ended = false;
+            query.slot = -1;
+            this.ensureOcclusionQuerySet();
             this.activeQuery = query;
             // The set is created lazily, so the pass that is already open on
             // the first glBeginQuery of a session was built without it. Ending
             // it makes ensurePass rebuild one that carries it; the rebuilt
             // pass loads the attachments it just stored, so nothing is lost.
             if (this.pass && !this.passHasOcclusionQuerySet) this.endPass();
-            const pass = this.ensurePass();
-            if (pass) pass.beginOcclusionQuery(query.slot);
+            this.ensurePass();
         },
 
         endQuery(target) {
             void target;
             const query = this.activeQuery;
-            this.activeQuery = null;
             if (!query) return;
-            if (this.pass) this.pass.endOcclusionQuery();
+            this.endOcclusionSegment();
+            this.activeQuery = null;
+            query.ended = true;
+            query.ready = query.pendingSegments === 0;
+        },
+
+        beginOcclusionSegment() {
+            const query = this.activeQuery;
+            if (!query || !this.pass || query.slot >= 0) return;
+            query.slot = this.nextQuerySlot++;
+            this.pass.beginOcclusionQuery(query.slot);
+        },
+
+        endOcclusionSegment() {
+            const query = this.activeQuery;
+            if (!query || !this.pass || query.slot < 0) return;
+            this.pass.endOcclusionQuery();
+            ++query.pendingSegments;
             this.pendingQueries = this.pendingQueries || [];
-            this.pendingQueries.push(query);
+            // Keep the slot and generation immutable while mapAsync is in
+            // flight. The query object itself is immediately reusable.
+            this.pendingQueries.push({
+                query,
+                slot: query.slot,
+                generation: query.generation,
+            });
+            query.slot = -1;
+        },
+
+        completeOcclusionSegment(record, result) {
+            const { query, generation } = record;
+            if (query.generation !== generation) return;
+            // D-07 exposes visibility, so OR all pass/submission segments.
+            // A later zero must not erase visibility from an earlier pass.
+            if (result) query.result = OCCLUSION_VISIBLE_SAMPLES;
+            --query.pendingSegments;
+            query.ready = query.ended && query.pendingSegments === 0;
         },
 
         ensureOcclusionQuerySet() {
@@ -8699,7 +8949,7 @@ struct BlitParams {
             if (!pipeline) return;
             pass.setPipeline(pipeline);
             this.applyPassState(pass);
-            pass.setVertexBuffer(0, this.vertexRing, slice.offset);
+            pass.setVertexBuffer(0, slice.buffer, slice.offset);
             pass.setBindGroup(0, this.device.createBindGroup({
                 layout: pipeline.getBindGroupLayout(0),
                 entries: [
@@ -8827,7 +9077,7 @@ ${outputWrites}
             if (!params) return;
             new Float32Array(this.uniformStaging.buffer, params.offset, 4)
                 .set([value, 0, 0, 0]);
-            this.device.queue.writeBuffer(this.uniformRing, params.offset,
+            this.device.queue.writeBuffer(params.buffer, params.offset,
                 this.uniformStaging, params.offset, params.size);
             const pass = this.ensureEncoder().beginRenderPass({
                 label: "GL accumulation operation",
@@ -8842,7 +9092,7 @@ ${outputWrites}
                     { binding: 0, resource: accum.currentView },
                     { binding: 1, resource: returning ? this.fallbackView :
                         targets.color[0].view },
-                    { binding: 2, resource: { buffer: this.uniformRing,
+                    { binding: 2, resource: { buffer: params.buffer,
                         offset: params.offset, size: 16 } },
                 ],
             }));
@@ -9389,7 +9639,7 @@ struct Params { value : vec4<f32>, }
         expandIndices, expandIndexArray, expandedIndexCount,
         convertPixels, decodeDXT, storageFormatFor, readSourceTexel,
         applyBaseFormat, normalMatrixOf, multiply4, invert4, transpose4,
-        createContextState, buildHandlerTable,
+        createContextState, buildHandlerTable, activeShaderBindings,
         PRIMITIVE_TOPOLOGY, BLEND_FACTORS, COMPARE_FUNCTIONS,
         STENCIL_OPERATIONS, ADDRESS_MODES,
         GLWG_RESPONSE_REGION_BYTES, GLWG_QUERY_REGION_BYTES,

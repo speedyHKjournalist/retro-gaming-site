@@ -81,6 +81,24 @@ const corpus = globalThis.CUBE2_DIRECT_GLSL_CORPUS_R6889;
 assert.ok(corpus && corpus.length, "the Cube 2 corpus is present");
 for (const entry of corpus)
     checkProgram("cube2_" + entry.name, entry.vertex, entry.fragment);
+
+// Cube 2 rewrites skyfog's //:variantoverride directive after showing the
+// "Shader: skyfog" loading message, then compiles the rewritten source as a
+// second program.  Keep that runtime-only source in the real WGSL compiler
+// corpus as well; the direct cfg extraction above contains only the base text.
+const skyfog = corpus.find(entry => entry.name === "skyfog");
+assert.ok(skyfog, "the Cube 2 corpus contains skyfog");
+const skyfogVariantLines = skyfog.fragment.split("\n");
+const skyfogVariantLine = skyfogVariantLines.findIndex(line =>
+    line.indexOf("//:variantoverride") >= 0);
+assert.ok(skyfogVariantLine >= 0 && skyfogVariantLine + 1 < skyfogVariantLines.length,
+    "skyfog contains the generic variant directive and overridden line");
+skyfogVariantLines[skyfogVariantLine] = skyfogVariantLines[skyfogVariantLine]
+    .replace("//:variantoverride", " ".repeat("//:variantoverride".length));
+skyfogVariantLines[skyfogVariantLine + 1] =
+    " ".repeat(skyfogVariantLines[skyfogVariantLine + 1].length);
+checkProgram("cube2_skyfog_generic_variant", skyfog.vertex,
+    skyfogVariantLines.join("\n"));
 const corpusFailures = failures.length;
 
 /* ---- the compatibility surface, which the corpus barely touches ---- */

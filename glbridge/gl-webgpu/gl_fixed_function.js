@@ -383,7 +383,7 @@
         emit("");
 
         emit("struct VSOut {");
-        emit("    @builtin(position) position : vec4<f32>,");
+        emit("    @invariant @builtin(position) position : vec4<f32>,");
         for (const i of layout.slotIndices) {
             const flat = layout.entries.some(e => e.slot === i && e.flat);
             emit("    " + (flat ? "@interpolate(flat) " : "") +

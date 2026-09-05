@@ -15,10 +15,13 @@
 #include "v86gl_ioctl.h"
 
 /*
- * File tracing is compiled only into opengl32-diagnostic.dll. Immediate-mode
- * OpenGL can produce tens of thousands of records per frame, so the default
- * trace is a bounded summary; V86GL_TRACE_CALLS=1 additionally enables the
- * existing per-record OutputDebugString path in that diagnostic build.
+ * File tracing is compiled only into opengl32-diagnostic.dll, and needs no
+ * guest environment variable to produce a log. Immediate-mode OpenGL can emit
+ * tens of thousands of records per frame, so the per-call detail rides on top
+ * of the bounded summary under a per-frame budget
+ * (V86GL_TRACE_CALL_BUDGET, 512 lines by default). V86GL_TRACE_CALLS=1 removes
+ * that budget and restores the uncapped firehose; V86GL_TRACE_CALLS=0 drops
+ * the per-call detail and keeps the summary.
  */
 #ifdef V86GL_DIAGNOSTIC_TRACE
 #define V86WG_DIAGNOSTIC_COMPONENT "opengl32-webgpu"
@@ -1366,31 +1369,102 @@ static void v86gl_set_error(GLenum error) {
 #endif
     }
 }
-/* Optional transport tracing is off by default; set V86GL_TRACE=1 or
- * V86GL_TRACE_CALLS=1 in the guest process when low-level logging is needed. */
+/*
+ * The shipping opengl32.dll stays silent unless the guest sets V86GL_TRACE=1
+ * or V86GL_TRACE_CALLS=1.  The diagnostic DLL exists to produce a log, so it
+ * traces without any environment variable: a guest game started from a .bat
+ * behind a portable launcher has nowhere convenient to set one, and the v86
+ * disk is a cold-booted in-memory overlay that loses the edit anyway.
+ *
+ * Per-call detail is therefore on by default in the diagnostic build, but it
+ * is capped per frame.  An immediate-mode frame emits one record per vertex,
+ * and because guest writes land in that same in-memory overlay a runaway log
+ * is charged to browser RAM rather than to a disk.
+ */
+#define V86GL_TRACE_CALL_BUDGET_DEFAULT 512u
+
+typedef enum V86GLTraceFlag {
+    V86GL_TRACE_FLAG_UNSET = 0,
+    V86GL_TRACE_FLAG_OFF = 1,
+    V86GL_TRACE_FLAG_ON = 2
+} V86GLTraceFlag;
+
 static BOOL g_trace_initialized = FALSE;
 static BOOL g_trace_enabled = FALSE;
-static BOOL g_trace_calls = FALSE;
+static BOOL g_trace_debug_string = FALSE;
+static BOOL g_trace_calls_enabled = FALSE;
+static uint32_t g_trace_call_budget = 0;        /* 0 == uncapped */
+static uint32_t g_trace_calls_this_frame = 0;
+static uint32_t g_trace_calls_suppressed = 0;
 
-static BOOL trace_environment_enabled(const char* name) {
+static V86GLTraceFlag trace_environment_flag(const char* name) {
     char value[2];
     DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
 
-    return length && value[0] != '0';
+    if (!length) {
+        return V86GL_TRACE_FLAG_UNSET;
+    }
+    /* A value of more than one character leaves the buffer undefined, so take
+     * anything the caller bothered to set as a request to trace. */
+    if (length >= sizeof(value)) {
+        return V86GL_TRACE_FLAG_ON;
+    }
+    return value[0] != '0' ? V86GL_TRACE_FLAG_ON : V86GL_TRACE_FLAG_OFF;
+}
+
+#if V86GL_DIAG_ENABLED
+/* Only the diagnostic build has a per-frame budget to size. */
+static uint32_t trace_environment_count(const char* name, uint32_t fallback) {
+    char value[12];
+    DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
+    uint32_t result = 0;
+    DWORD index;
+
+    if (!length || length >= sizeof(value)) {
+        return fallback;
+    }
+    for (index = 0; index < length; index++) {
+        if (value[index] < '0' || value[index] > '9') {
+            return fallback;
+        }
+        result = result * 10u + (uint32_t)(value[index] - '0');
+    }
+    return result;
+}
+#endif
+
+static void v86gl_trace_initialize(void) {
+    V86GLTraceFlag transport;
+    V86GLTraceFlag calls;
+
+    if (g_trace_initialized) {
+        return;
+    }
+    transport = trace_environment_flag("V86GL_TRACE");
+    calls = trace_environment_flag("V86GL_TRACE_CALLS");
+    g_trace_debug_string = transport == V86GL_TRACE_FLAG_ON ||
+            calls == V86GL_TRACE_FLAG_ON;
+#if V86GL_DIAG_ENABLED
+    g_trace_enabled = transport != V86GL_TRACE_FLAG_OFF;
+    g_trace_calls_enabled = g_trace_enabled && calls != V86GL_TRACE_FLAG_OFF;
+    /* An explicit V86GL_TRACE_CALLS=1 keeps its documented meaning: every
+     * record, uncapped.  Leaving it unset means the bounded default. */
+    g_trace_call_budget = calls == V86GL_TRACE_FLAG_ON ? 0u :
+            trace_environment_count("V86GL_TRACE_CALL_BUDGET",
+                    V86GL_TRACE_CALL_BUDGET_DEFAULT);
+#else
+    g_trace_enabled = g_trace_debug_string;
+    g_trace_calls_enabled = calls == V86GL_TRACE_FLAG_ON;
+    g_trace_call_budget = 0u;
+#endif
+    g_trace_initialized = TRUE;
 }
 
 static void v86gl_logv(BOOL force, const char* format, va_list args) {
     char message[1024];
     int length;
 
-    if (!g_trace_initialized) {
-        g_trace_enabled = trace_environment_enabled("V86GL_TRACE");
-        g_trace_calls = trace_environment_enabled("V86GL_TRACE_CALLS");
-        if (g_trace_calls) {
-            g_trace_enabled = TRUE;
-        }
-        g_trace_initialized = TRUE;
-    }
+    v86gl_trace_initialize();
 
     if (!force && !g_trace_enabled) {
         return;
@@ -1402,8 +1476,14 @@ static void v86gl_logv(BOOL force, const char* format, va_list args) {
 #if V86GL_DIAG_ENABLED
     V86GL_DIAG("%s", message + length);
 #endif
-    lstrcatA(message, "\r\n");
-    OutputDebugStringA(message);
+    /* With no debugger attached OutputDebugString raises a first-chance
+     * exception per line, which costs far more than the file write.  Now that
+     * the diagnostic build traces by default, keep that path behind the
+     * environment variable that used to gate all tracing. */
+    if (force || g_trace_debug_string) {
+        lstrcatA(message, "\r\n");
+        OutputDebugStringA(message);
+    }
 }
 
 static void v86gl_trace(const char* format, ...) {
@@ -1420,6 +1500,24 @@ static void v86gl_error(const char* format, ...) {
     va_start(args, format);
     v86gl_logv(TRUE, format, args);
     va_end(args);
+}
+
+/* Guards every per-call trace site.  Returns FALSE once the frame has spent
+ * its budget, counting what it dropped so the frame line can report it. */
+static BOOL v86gl_trace_call_allowed(void) {
+    v86gl_trace_initialize();
+    if (!g_trace_calls_enabled) {
+        return FALSE;
+    }
+    if (!g_trace_call_budget) {
+        return TRUE;
+    }
+    if (g_trace_calls_this_frame >= g_trace_call_budget) {
+        g_trace_calls_suppressed++;
+        return FALSE;
+    }
+    g_trace_calls_this_frame++;
+    return TRUE;
 }
 
 typedef enum V86GLCapsProfile {
@@ -4464,7 +4562,7 @@ static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
     g_dma_command_count++;
     V86GL_DIAG_RECORD(fn, args_size);
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("record frame=%lu index=%lu fn=%u payload=%lu streamBytes=%lu",
                     (unsigned long)g_frame_id,
                     (unsigned long)g_dma_command_count,
@@ -4666,6 +4764,11 @@ static int emit_query_object_batch(void) {
     uint32_t i;
     uint32_t entry_index = 0;
     uint8_t* args;
+#if V86GL_DIAG_ENABLED
+    uint32_t ready_count = 0;
+    uint32_t zero_count = 0;
+    uint32_t visible_count = 0;
+#endif
 
     for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
         QueryObjectState* state = &g_query_objects[i];
@@ -4723,11 +4826,23 @@ static int emit_query_object_batch(void) {
         state->poll_frame = g_frame_id;
         state->poll_skip = 8;
         if (read_u32le(entry + 4)) {
+#if V86GL_DIAG_ENABLED
+            ready_count++;
+            if (read_u32le(entry + 8)) visible_count++;
+            else zero_count++;
+#endif
             state->available = GL_TRUE;
             state->result = read_u32le(entry + 8);
             state->poll_skip = 0;
         }
     }
+#if V86GL_DIAG_ENABLED
+    V86GL_DIAG("QUERY_BATCH frame=%lu count=%lu ready=%lu zero=%lu visible=%lu pending=%lu",
+               (unsigned long)g_frame_id, (unsigned long)count,
+               (unsigned long)ready_count, (unsigned long)zero_count,
+               (unsigned long)visible_count,
+               (unsigned long)(count - ready_count));
+#endif
     return 1;
 }
 
@@ -5759,6 +5874,15 @@ static BOOL emit_frame(void) {
         g_diag_frame_bytes = 0;
         g_diag_frame_batches = 0;
         g_diag_frame_start_tick = now;
+        if (g_trace_calls_suppressed) {
+            V86GL_DIAG("CALLS suppressed=%lu budget=%lu -- raise "
+                       "V86GL_TRACE_CALL_BUDGET or set V86GL_TRACE_CALLS=1 "
+                       "for the uncapped per-record trace",
+                       (unsigned long)g_trace_calls_suppressed,
+                       (unsigned long)g_trace_call_budget);
+            g_trace_calls_suppressed = 0;
+        }
+        g_trace_calls_this_frame = 0;
         if (g_frame_id && g_frame_id % 300u == 0)
             v86gl_diag_histogram("periodic");
         V86GL_DIAG_FLUSH();
@@ -7406,10 +7530,14 @@ BOOL WINAPI DllMain
         g_instance = hinst;
 #if V86GL_DIAG_ENABLED
         v86wg_diagnostic_process_attach(hinst);
-        V86GL_DIAG("MODE calls=%lu -- set V86GL_TRACE_CALLS=1 for the "
-                   "per-record trace; this is the summary",
-                   (unsigned long)(trace_environment_enabled(
-                           "V86GL_TRACE_CALLS") ? 1 : 0));
+        v86gl_trace_initialize();
+        V86GL_DIAG("MODE transport=%lu calls=%lu budget=%lu -- tracing needs "
+                   "no environment variable; V86GL_TRACE_CALLS=1 removes the "
+                   "per-frame budget, V86GL_TRACE_CALLS=0 drops per-call "
+                   "detail",
+                   (unsigned long)(g_trace_enabled ? 1 : 0),
+                   (unsigned long)(g_trace_calls_enabled ? 1 : 0),
+                   (unsigned long)g_trace_call_budget);
         g_diag_frame_start_tick = GetTickCount();
 #endif
         InitializeCriticalSection(&g_wgl_context_lock);
@@ -7627,7 +7755,7 @@ BOOL APIENTRY wglChoosePixelFormatARB(HDC hdc, const int* int_attribs,
                                       const FLOAT* float_attribs,
                                       UINT max_formats, int* formats,
                                       UINT* format_count) {
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("wglChoosePixelFormatARB max=%lu attrs=%08lx floatAttrs=%08lx",
                     (unsigned long)max_formats, (unsigned long)(uintptr_t)int_attribs,
                     (unsigned long)(uintptr_t)float_attribs);
@@ -8299,7 +8427,7 @@ void APIENTRY glAddSwapHintRectWIN(int x, int y, int width, int height) {
 __declspec(dllexport)
 const char* APIENTRY wglGetExtensionsStringARB(HDC hdc) {
     (void)hdc;
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("wglGetExtensionsStringARB -> %08lx", (unsigned long)(uintptr_t)g_wgl_extensions);
     }
     return g_wgl_extensions;
@@ -8307,7 +8435,7 @@ const char* APIENTRY wglGetExtensionsStringARB(HDC hdc) {
 
 __declspec(dllexport)
 const char* APIENTRY wglGetExtensionsStringEXT(void) {
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("wglGetExtensionsStringEXT -> %08lx", (unsigned long)(uintptr_t)g_wgl_extensions);
     }
     return g_wgl_extensions;
@@ -8444,7 +8572,7 @@ static const char* current_gl_extensions(void) {
 
 __declspec(dllexport)
 const GLubyte* APIENTRY glGetString(GLenum name) {
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetString name=0x%04lx", (unsigned long)name);
     }
 
@@ -8498,7 +8626,7 @@ GLenum APIENTRY glGetError(void) {
             e = backend_error;
         }
     }
-    if (g_trace_calls || e) {
+    if (v86gl_trace_call_allowed() || e) {
         v86gl_error("glGetError -> 0x%04lx frame=%lu queuedCommands=%lu",
                     (unsigned long)e,
                     (unsigned long)g_frame_id,
@@ -8516,13 +8644,13 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
     int i;
 
     if (!params) {
-        if (g_trace_calls) {
+        if (v86gl_trace_call_allowed()) {
             v86gl_trace("glGetIntegerv pname=0x%04lx params=NULL", (unsigned long)pname);
         }
         return;
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetIntegerv pname=0x%04lx", (unsigned long)pname);
     }
 
@@ -9136,7 +9264,7 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetIntegerv result=0x%04lx value=%ld error=0x%04lx",
                     (unsigned long)pname, (long)params[0], (unsigned long)g_error);
     }
@@ -9149,13 +9277,13 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     int i;
 
     if (!params) {
-        if (g_trace_calls) {
+        if (v86gl_trace_call_allowed()) {
             v86gl_trace("glGetFloatv pname=0x%04lx params=NULL", (unsigned long)pname);
         }
         return;
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetFloatv pname=0x%04lx", (unsigned long)pname);
     }
 
@@ -9326,13 +9454,13 @@ void APIENTRY glGetDoublev(GLenum pname, GLdouble* params) {
     GLenum old_error;
 
     if (!params) {
-        if (g_trace_calls) {
+        if (v86gl_trace_call_allowed()) {
             v86gl_trace("glGetDoublev pname=0x%04lx params=NULL", (unsigned long)pname);
         }
         return;
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetDoublev pname=0x%04lx", (unsigned long)pname);
     }
 
@@ -9356,13 +9484,13 @@ void APIENTRY glGetBooleanv(GLenum pname, GLboolean* params) {
     GLenum old_error;
 
     if (!params) {
-        if (g_trace_calls) {
+        if (v86gl_trace_call_allowed()) {
             v86gl_trace("glGetBooleanv pname=0x%04lx params=NULL", (unsigned long)pname);
         }
         return;
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetBooleanv pname=0x%04lx", (unsigned long)pname);
     }
 
@@ -9413,7 +9541,7 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
         break;
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glIsEnabled cap=0x%04lx result=%u",
                     (unsigned long)cap, (unsigned int)enabled);
     }
@@ -9463,7 +9591,7 @@ void APIENTRY glClear(GLbitfield mask) {
 __declspec(dllexport)
 void APIENTRY glBegin(GLenum mode) {
     uint32_t payload = (uint32_t)mode;
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glBegin mode=0x%04lx", (unsigned long)mode);
     }
     g_immediate_mode = mode;
@@ -9616,7 +9744,7 @@ __declspec(dllexport)
 void APIENTRY glLoadMatrixf(const GLfloat* m) {
     float payload[16];
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glLoadMatrixf enter matrixMode=0x%04lx activeTexture=0x%04lx ptr=%08lx",
                     (unsigned long)g_matrix_mode, (unsigned long)g_active_texture,
                     (unsigned long)(uintptr_t)m);
@@ -9630,7 +9758,7 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) {
     if (!current_matrix(NULL, NULL)) return;
     CopyMemory(current_matrix(NULL, NULL), m, sizeof(payload));
     emit_gl_call(GLFN_LOAD_MATRIXF, payload, sizeof(payload));
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glLoadMatrixf leave queued=%lu", (unsigned long)g_dma_command_count);
     }
 }
@@ -14688,7 +14816,7 @@ static void emit_multi_tex_coord4f(GLenum target, GLfloat s, GLfloat t, GLfloat 
         float q;
     } payload;
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glMultiTexCoord4f enter target=0x%04lx", (unsigned long)target);
     }
     if (target < GL_TEXTURE0_ARB ||
@@ -15867,7 +15995,7 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         uint32_t generic_attrib_count;
     } header_gl2;
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glDrawArrays enter mode=0x%04lx first=%ld count=%ld vertexPtr=%08lx",
                     (unsigned long)mode, (long)first, (long)count,
                     (unsigned long)(uintptr_t)g_vertex_array.pointer);
@@ -16001,7 +16129,7 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
     commit_packed_draw_payload(draw_fn, payload, total_size,
                                payload_is_dma);
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glDrawArrays leave queued=%lu", (unsigned long)g_dma_command_count);
     }
 }
@@ -16045,7 +16173,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         uint32_t generic_attrib_count;
     } header_gl2;
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glDrawElements enter mode=0x%04lx count=%ld type=0x%04lx indices=%08lx vertexPtr=%08lx",
                     (unsigned long)mode, (long)count, (unsigned long)type,
                     (unsigned long)(uintptr_t)indices,
@@ -16230,7 +16358,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 
     commit_packed_draw_payload(draw_fn, payload, total_size,
                                payload_is_dma);
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glDrawElements leave queued=%lu", (unsigned long)g_dma_command_count);
     }
 }
@@ -17649,7 +17777,7 @@ __declspec(dllexport)
 void APIENTRY glNewList(GLuint list, GLenum mode) {
     DisplayList* entry;
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glNewList list=%lu mode=0x%04lx",
                     (unsigned long)list, (unsigned long)mode);
     }
@@ -17676,7 +17804,7 @@ void APIENTRY glNewList(GLuint list, GLenum mode) {
 
 __declspec(dllexport)
 void APIENTRY glEndList(void) {
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glEndList");
     }
 
@@ -17686,7 +17814,7 @@ void APIENTRY glEndList(void) {
     }
 
     g_current_display_list->defined = TRUE;
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glEndList list=%lu commands=%lu bytes=%lu",
                     (unsigned long)g_current_display_list->name,
                     (unsigned long)g_current_display_list->command_count,
@@ -17700,7 +17828,7 @@ __declspec(dllexport)
 void APIENTRY glCallList(GLuint list) {
     DisplayList* entry = find_display_list(list, FALSE);
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("glCallList list=%lu",
                     (unsigned long)list);
     }
@@ -19409,7 +19537,7 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
 
     exported = g_instance ? GetProcAddress((HMODULE)g_instance, name) : NULL;
     if (exported) {
-        if (g_trace_calls) {
+        if (v86gl_trace_call_allowed()) {
             v86gl_trace("wglGetProcAddress name=%s result=%08lx source=export",
                         name, (unsigned long)(uintptr_t)exported);
         }
@@ -19418,7 +19546,7 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
 
     for (i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
         if (lstrcmpA(name, entries[i].name) == 0) {
-            if (g_trace_calls) {
+            if (v86gl_trace_call_allowed()) {
                 v86gl_trace("wglGetProcAddress name=%s result=%08lx source=fallback",
                             name, (unsigned long)(uintptr_t)entries[i].proc);
             }
@@ -19426,7 +19554,7 @@ PROC APIENTRY wglGetProcAddress(LPCSTR name) {
         }
     }
 
-    if (g_trace_calls) {
+    if (v86gl_trace_call_allowed()) {
         v86gl_trace("wglGetProcAddress name=%s result=00000000 source=missing", name);
     }
     return NULL;

@@ -42,37 +42,31 @@ static char g_v86wg_trace_path[MAX_PATH];
 #define DBG_PRINTEXCEPTION_WIDE_C ((DWORD)0x4001000AL)
 #endif
 
-static void v86wg_diagnostic_open(HINSTANCE instance)
+static BOOL v86wg_diagnostic_directory_from_path(const char *path,
+        char *directory)
 {
-    char directory[MAX_PATH];
-    DWORD length;
     int index;
     int cut = -1;
 
-    g_v86wg_trace_self_module = (HMODULE)instance;
-    g_v86wg_trace_exe_module = GetModuleHandleA(NULL);
-    ZeroMemory(g_v86wg_trace_exe_path, sizeof(g_v86wg_trace_exe_path));
-    ZeroMemory(g_v86wg_trace_self_path, sizeof(g_v86wg_trace_self_path));
-    ZeroMemory(g_v86wg_trace_path, sizeof(g_v86wg_trace_path));
-    GetModuleFileNameA(g_v86wg_trace_exe_module, g_v86wg_trace_exe_path,
-            MAX_PATH - 1);
-    length = GetModuleFileNameA(g_v86wg_trace_self_module,
-            g_v86wg_trace_self_path, MAX_PATH - 1);
-    if (length && length < MAX_PATH) {
-        lstrcpynA(directory, g_v86wg_trace_self_path, MAX_PATH);
-        for (index = 0; directory[index]; ++index) {
-            if (directory[index] == '\\' || directory[index] == '/')
-                cut = index;
-        }
-        directory[cut + 1] = 0;
-    } else {
-        length = GetTempPathA(MAX_PATH, directory);
-        if (!length || length >= MAX_PATH)
-            return;
+    if (!path || !path[0])
+        return FALSE;
+    lstrcpynA(directory, path, MAX_PATH);
+    directory[MAX_PATH - 1] = 0;
+    for (index = 0; directory[index]; ++index) {
+        if (directory[index] == '\\' || directory[index] == '/')
+            cut = index;
     }
+    if (cut < 0)
+        return FALSE;
+    directory[cut + 1] = 0;
+    return TRUE;
+}
+
+static BOOL v86wg_diagnostic_try_directory(const char *directory)
+{
     if (lstrlenA(directory) + (int)sizeof(V86WG_DIAGNOSTIC_FILE_STEM
             "_4294967295.log") > MAX_PATH)
-        return;
+        return FALSE;
     wsprintfA(g_v86wg_trace_path, "%s%s_%lu.log", directory,
             V86WG_DIAGNOSTIC_FILE_STEM, GetCurrentProcessId());
     /* A process may LoadLibrary/FreeLibrary the proxy several times. Keep all
@@ -82,22 +76,42 @@ static void v86wg_diagnostic_open(HINSTANCE instance)
     g_v86wg_trace_file = CreateFileA(g_v86wg_trace_path, FILE_APPEND_DATA,
             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, NULL);
-    if (g_v86wg_trace_file != INVALID_HANDLE_VALUE)
+    return g_v86wg_trace_file != INVALID_HANDLE_VALUE;
+}
+
+static void v86wg_diagnostic_open(HINSTANCE instance)
+{
+    char directory[MAX_PATH];
+    DWORD length;
+
+    g_v86wg_trace_self_module = (HMODULE)instance;
+    g_v86wg_trace_exe_module = GetModuleHandleA(NULL);
+    ZeroMemory(g_v86wg_trace_exe_path, sizeof(g_v86wg_trace_exe_path));
+    ZeroMemory(g_v86wg_trace_self_path, sizeof(g_v86wg_trace_self_path));
+    ZeroMemory(g_v86wg_trace_path, sizeof(g_v86wg_trace_path));
+    GetModuleFileNameA(g_v86wg_trace_exe_module, g_v86wg_trace_exe_path,
+            MAX_PATH - 1);
+    GetModuleFileNameA(g_v86wg_trace_self_module, g_v86wg_trace_self_path,
+            MAX_PATH - 1);
+
+    /* The executable directory is the game directory even if a launcher or a
+     * compatibility layer loaded the proxy from somewhere else.  Put the
+     * trace there first so it is discoverable beside the program the user is
+     * testing, then try the DLL directory and finally the guest temp folder. */
+    if (v86wg_diagnostic_directory_from_path(g_v86wg_trace_exe_path,
+            directory) && v86wg_diagnostic_try_directory(directory))
+        return;
+    if (v86wg_diagnostic_directory_from_path(g_v86wg_trace_self_path,
+            directory) && v86wg_diagnostic_try_directory(directory))
         return;
 
-    /* An app directory may be read-only. Keep diagnostics usable by falling
+    /* Both application locations may be read-only. Keep diagnostics usable by falling
      * back to the guest's temporary directory rather than silently tracing
      * nowhere. */
     length = GetTempPathA(MAX_PATH, directory);
-    if (!length || length >= MAX_PATH ||
-            lstrlenA(directory) + (int)sizeof(V86WG_DIAGNOSTIC_FILE_STEM
-                    "_4294967295.log") > MAX_PATH)
+    if (!length || length >= MAX_PATH)
         return;
-    wsprintfA(g_v86wg_trace_path, "%s%s_%lu.log", directory,
-            V86WG_DIAGNOSTIC_FILE_STEM, GetCurrentProcessId());
-    g_v86wg_trace_file = CreateFileA(g_v86wg_trace_path, FILE_APPEND_DATA,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL, NULL);
+    v86wg_diagnostic_try_directory(directory);
 }
 
 static void v86wg_diagnostic_write(const char *format, ...)

@@ -312,6 +312,56 @@ test("scissored and masked clears are rendered instead of widening the clear", (
         1 | 4);
 });
 
+test("a depth-only FBO omits stencil operations from its render pass", () => {
+    const { executor, log } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_FRAMEBUFFERS, [1])
+        .names(GLFN.GEN_RENDERBUFFERS, [1])
+        .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 1)
+        .call("RENDERBUFFER_STORAGE", GL.RENDERBUFFER_EXT,
+            GL.DEPTH_COMPONENT24, 64, 64)
+        .call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 1)
+        .call("FRAMEBUFFER_RENDERBUFFER", GL.FRAMEBUFFER_EXT,
+            GL.DEPTH_ATTACHMENT, GL.RENDERBUFFER_EXT, 1)
+        .call("DRAW_BUFFER", GL.NONE)
+        .call("CLEAR", GL.DEPTH_BUFFER_BIT);
+    immediateTriangle(stream);
+    run(executor, stream);
+
+    const pass = log.passes.find(entry =>
+        entry.descriptor.label === "GL pass");
+    const attachment = pass.descriptor.depthStencilAttachment;
+    assert.strictEqual(attachment.view.texture.descriptor.format,
+        "depth32float");
+    assert.strictEqual(attachment.depthLoadOp, "clear");
+    assert.ok(!("stencilLoadOp" in attachment));
+    assert.ok(!("stencilStoreOp" in attachment));
+    assert.ok(!("stencilClearValue" in attachment));
+});
+
+test("a masked depth clear also omits stencil operations on a depth-only FBO", () => {
+    const { executor, log } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_FRAMEBUFFERS, [1])
+        .names(GLFN.GEN_RENDERBUFFERS, [1])
+        .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 1)
+        .call("RENDERBUFFER_STORAGE", GL.RENDERBUFFER_EXT,
+            GL.DEPTH_COMPONENT24, 64, 64)
+        .call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 1)
+        .call("FRAMEBUFFER_RENDERBUFFER", GL.FRAMEBUFFER_EXT,
+            GL.DEPTH_ATTACHMENT, GL.RENDERBUFFER_EXT, 1)
+        .call("DRAW_BUFFER", GL.NONE)
+        .call("ENABLE", GL.SCISSOR_TEST)
+        .call("SCISSOR", 2, 2, 32, 32)
+        .call("CLEAR", GL.DEPTH_BUFFER_BIT));
+
+    const pass = log.passes.find(entry =>
+        entry.descriptor.label === "GL masked/scissored clear");
+    const attachment = pass.descriptor.depthStencilAttachment;
+    assert.ok(!("stencilLoadOp" in attachment));
+    assert.ok(!("stencilStoreOp" in attachment));
+});
+
 /* ---- drawing ---- */
 
 function immediateTriangle(stream) {
@@ -683,6 +733,91 @@ test("DXT1 decodes deterministically when the adapter has no BC", () => {
     assert.deepStrictEqual([...rgba.subarray(0, 4)], [255, 0, 0, 255]);
 });
 
+test("native BC textures omit render-attachment usage", () => {
+    const { executor, log } = newExecutor();
+    const blocks = new Uint8Array(16).fill(0x5a);
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_TEXTURES, [227])
+        .call("BIND_TEXTURE", GL.TEXTURE_2D, 227)
+        .call("TEX_PARAMETERI", GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER,
+            GL.LINEAR)
+        .compressedTexImage2D(GL.TEXTURE_2D, 0,
+            GL.COMPRESSED_RGBA_S3TC_DXT5_EXT, 4, 4, blocks));
+    const texture = executor.current.shareGroup.textures.get(227);
+    assert.deepStrictEqual([...texture.levels[0][0].pixels], [...blocks],
+        "the fixed 2D wire header must not consume the DXT payload");
+    const gpuTexture = executor.ensureTextureUploaded(texture);
+    assert.ok(gpuTexture, "the BC3 texture is created successfully");
+    assert.strictEqual(gpuTexture.descriptor.format, "bc3-rgba-unorm");
+    assert.strictEqual(gpuTexture.descriptor.usage & 0x10, 0,
+        "RENDER_ATTACHMENT is illegal for block-compressed formats");
+    assert.ok(gpuTexture.descriptor.usage & 0x04,
+        "the compressed texture remains sampleable");
+    assert.strictEqual(log.textureWrites.length, 1,
+        "the authored DXT block is uploaded normally");
+});
+
+test("compressed 2D subimages use the guest's fixed z/depth wire fields", () => {
+    const { executor } = newExecutor();
+    const initial = new Uint8Array(8).fill(1);
+    const replacement = new Uint8Array(8).fill(7);
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_TEXTURES, [228])
+        .call("BIND_TEXTURE", GL.TEXTURE_2D, 228)
+        .call("TEX_PARAMETERI", GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER,
+            GL.LINEAR)
+        .compressedTexImage2D(GL.TEXTURE_2D, 0,
+            GL.COMPRESSED_RGBA_S3TC_DXT1_EXT, 4, 4, initial)
+        .compressedTexSubImage2D(GL.TEXTURE_2D, 0, 0, 0, 4, 4,
+            GL.COMPRESSED_RGBA_S3TC_DXT1_EXT, replacement));
+    const texture = executor.current.shareGroup.textures.get(228);
+    assert.deepStrictEqual([...texture.levels[0][0].pixels], [...replacement]);
+});
+
+test("native BC tail mips upload using their complete physical block", () => {
+    for (const [name, size] of [[229, 2], [230, 1]]) {
+        const { executor, log } = newExecutor();
+        const block = new Uint8Array(8).fill(size);
+        run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+            .names(GLFN.GEN_TEXTURES, [name])
+            .call("BIND_TEXTURE", GL.TEXTURE_2D, name)
+            .call("TEX_PARAMETERI", GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER,
+                GL.LINEAR)
+            .compressedTexImage2D(GL.TEXTURE_2D, 0,
+                GL.COMPRESSED_RGBA_S3TC_DXT1_EXT, size, size, block));
+        const texture = executor.current.shareGroup.textures.get(name);
+        executor.ensureTextureUploaded(texture);
+        const write = log.textureWrites.at(-1);
+        assert.deepStrictEqual(write.size,
+            { width: 4, height: 4, depthOrArrayLayers: 1 },
+            size + "x" + size + " still occupies one DXT block");
+        assert.strictEqual(write.byteLength, 8);
+    }
+});
+
+test("glTexImage with an S3TC internal format stores ordinary pixels as RGBA8", () => {
+    const { executor, log } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_TEXTURES, [43])
+        .call("BIND_TEXTURE", GL.TEXTURE_2D, 43)
+        .call("TEX_PARAMETERI", GL.TEXTURE_2D, GL.TEXTURE_MIN_FILTER,
+            GL.LINEAR)
+        .texImage2D(GL.TEXTURE_2D, 0,
+            GL.COMPRESSED_RGBA_S3TC_DXT1_EXT, 4, 4,
+            GL.RGBA, GL.UNSIGNED_BYTE, new Uint8Array(4 * 4 * 4).fill(127)));
+    const texture = executor.current.shareGroup.textures.get(43);
+    const level = texture.levels[0][0];
+    assert.strictEqual(level.compressed, false,
+        "glTexImage input consists of texels, not pre-encoded BC blocks");
+    assert.strictEqual(level.gpuFormat, "rgba8unorm");
+    const gpuTexture = executor.ensureTextureUploaded(texture);
+    assert.strictEqual(gpuTexture.descriptor.format, "rgba8unorm");
+    assert.ok(gpuTexture.descriptor.usage & 0x10,
+        "the compatibility allocation can receive environment-map rendering");
+    assert.strictEqual(log.textureWrites.at(-1).byteLength, 4 * 4 * 4,
+        "all RGBA source texels are uploaded");
+});
+
 /* ---- programs ---- */
 
 const VS = "attribute vec4 vvertex;\nuniform mat4 mvp;\nvarying vec2 tc;\n" +
@@ -735,6 +870,63 @@ test("glGetUniformLocation and glGetAttribLocation answer synchronously", () => 
     assert.strictEqual(location(missing), -1);
 });
 
+test("uniform locations do not alias across GLSL programs", () => {
+    const { executor } = newExecutor();
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64);
+    for (const [program, vertex, fragment] of [[1, 10, 11], [2, 20, 21]]) {
+        stream.call("CREATE_PROGRAM", program)
+            .call("CREATE_SHADER", vertex, GL.VERTEX_SHADER)
+            .call("CREATE_SHADER", fragment, GL.FRAGMENT_SHADER)
+            .shaderSource(vertex, VS)
+            .shaderSource(fragment, FS)
+            .call("COMPILE_SHADER", vertex)
+            .call("COMPILE_SHADER", fragment)
+            .call("ATTACH_SHADER", program, vertex)
+            .call("ATTACH_SHADER", program, fragment)
+            .call("LINK_PROGRAM", program);
+    }
+    run(executor, stream);
+
+    const first = executor.current.shareGroup.programs.get(1);
+    const second = executor.current.shareGroup.programs.get(2);
+    const firstTint = first.uniformByName.get("tint");
+    const secondTint = second.uniformByName.get("tint");
+    assert.notStrictEqual(firstTint.location, secondTint.location,
+        "the guest proxy indexes locations globally, not by current program");
+
+    run(executor, new GLStream().call("USE_PROGRAM", 2)
+        .uniformfv(secondTint.location, 4, 1, [0.1, 0.2, 0.3, 0.4]));
+    const at = secondTint.offsetBytes >> 2;
+    assert.ok(Math.abs(second.uniformFloats[at] - 0.1) < 1e-6);
+    assert.strictEqual(first.uniformFloats[firstTint.offsetBytes >> 2], 0,
+        "updating program B must not land in program A's uniform storage");
+});
+
+test("uniform locations also remain unique across non-shared contexts", () => {
+    const { executor } = newExecutor();
+    const link = (context, shareGroup, vertex, fragment) => {
+        const stream = new GLStream().makeCurrent(context, 0, 0, 64, 64,
+            context, shareGroup)
+            .call("CREATE_PROGRAM", 1)
+            .call("CREATE_SHADER", vertex, GL.VERTEX_SHADER)
+            .call("CREATE_SHADER", fragment, GL.FRAGMENT_SHADER)
+            .shaderSource(vertex, VS)
+            .shaderSource(fragment, FS)
+            .call("COMPILE_SHADER", vertex)
+            .call("COMPILE_SHADER", fragment)
+            .call("ATTACH_SHADER", 1, vertex)
+            .call("ATTACH_SHADER", 1, fragment)
+            .call("LINK_PROGRAM", 1);
+        run(executor, stream);
+        return executor.current.shareGroup.programs.get(1);
+    };
+    const first = link(1, 11, 10, 11);
+    const second = link(2, 22, 20, 21);
+    assert.notStrictEqual(first.uniformByName.get("tint").location,
+        second.uniformByName.get("tint").location,
+        "the guest location table spans every HGLRC in the process");
+});
+
 test("glUniform4fv lands where the reflection says it does", () => {
     const { executor } = newExecutor();
     const program = linkedProgram(executor);
@@ -749,7 +941,7 @@ test("glUniform4fv lands where the reflection says it does", () => {
 test("glUniform1i on a sampler rebinds a texture unit rather than writing a value", () => {
     const { executor } = newExecutor();
     const program = linkedProgram(executor);
-    const sampler = program.link.reflection.samplers[0];
+    const sampler = program.uniformByName.get("tex0");
     run(executor, new GLStream().uniformiv(sampler.location, 1, 1, [3]));
     assert.strictEqual(program.samplerUnits.get("tex0"), 3);
 });
@@ -771,7 +963,7 @@ test("glGetShaderiv reports a compile failure with a usable log", () => {
 test("a program draw binds the sampler's unit, not the sampler's index", () => {
     const { executor, log } = newExecutor();
     const program = linkedProgram(executor);
-    const sampler = program.link.reflection.samplers[0];
+    const sampler = program.uniformByName.get("tex0");
     const stream = new GLStream()
         .names(GLFN.GEN_TEXTURES, [30])
         .call("ACTIVE_TEXTURE", GL.TEXTURE0 + 2)
@@ -786,6 +978,55 @@ test("a program draw binds the sampler's unit, not the sampler's index", () => {
     const groups = log.bindGroups.filter(g =>
         g.descriptor.layout.index === 2);
     assert.ok(groups.length, "the texture group is created");
+});
+
+test("program bind groups omit resources used only by uncalled helpers", () => {
+    const { executor, log } = newExecutor();
+    const vertex =
+        "uniform mat4 transform;\n" +
+        "vec4 deadState(void) {\n" +
+        "  return gl_ModelViewMatrix * gl_Vertex;\n" +
+        "}\n" +
+        "vec4 livePosition(void) { return transform * gl_Vertex; }\n" +
+        "void main(void) { gl_Position = livePosition(); }\n";
+    const fragment =
+        "uniform sampler2D deadTexture;\n" +
+        "uniform sampler2D liveTexture;\n" +
+        "vec4 deadSample(void) {\n" +
+        "  return texture2D(deadTexture, vec2(0.5));\n" +
+        "}\n" +
+        "vec4 liveSample(void) {\n" +
+        "  return texture2D(liveTexture, vec2(0.5));\n" +
+        "}\n" +
+        "void main(void) {\n" +
+        "  gl_FragColor = liveSample();\n" +
+        "}\n";
+    const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("CREATE_PROGRAM", 1)
+        .call("CREATE_SHADER", 10, GL.VERTEX_SHADER)
+        .call("CREATE_SHADER", 11, GL.FRAGMENT_SHADER)
+        .shaderSource(10, vertex)
+        .shaderSource(11, fragment)
+        .call("COMPILE_SHADER", 10)
+        .call("COMPILE_SHADER", 11)
+        .call("ATTACH_SHADER", 1, 10)
+        .call("ATTACH_SHADER", 1, 11)
+        .call("LINK_PROGRAM", 1)
+        .call("USE_PROGRAM", 1);
+    immediateTriangle(stream);
+    run(executor, stream);
+
+    assert.strictEqual(log.draws.length, 1);
+    const uniformGroup = log.bindGroups.find(group =>
+        group.descriptor.layout.index === 1);
+    assert.deepStrictEqual(uniformGroup.descriptor.entries.map(entry =>
+        entry.binding), [1],
+        "deadState must not add fixed-state binding 0 to the auto layout");
+    const textureGroup = log.bindGroups.find(group =>
+        group.descriptor.layout.index === 2);
+    assert.deepStrictEqual(textureGroup.descriptor.entries.map(entry =>
+        entry.binding), [2, 3],
+        "only the sampler reachable from fs_main belongs to the auto layout");
 });
 
 /* ---- refusals ---- */
@@ -914,6 +1155,130 @@ test("GL_PROGRAM_ERROR_POSITION_ARB is -1 when nothing failed", () => {
 
 /* ---- results that arrive after the batch ---- */
 
+test("vertex ring rollover during index expansion keeps the draw's allocations alive", () => {
+    const { executor, log } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64));
+    executor.vertexCapacity = 1024;
+    const stride = executor.wantedAttributes(null).reduce((n, a) => n + a.components, 0) * 4;
+    executor.vertexCursor = 1024 - 4 * stride;
+    const original = executor.vertexRing;
+    run(executor, new GLStream().drawArrays(GL.QUADS, 4, { vertex: { size: 3, type: GL.FLOAT,
+            data: new Uint8Array(48) } }));
+    assert.strictEqual(executor.stats.refusals, 0);
+    assert.strictEqual(log.draws.length, 1);
+    const calls = log.draws[0].pass.calls;
+    const vb = calls.find(c => c[0] === "vertexBuffer");
+    const ib = calls.find(c => c[0] === "indexBuffer");
+    assert.strictEqual(vb[2], original);
+    assert.notStrictEqual(vb[2], ib[1], "indices use the new page, vertices the old one");
+    assert.strictEqual(ib[3], 0);
+    assert.strictEqual(log.submits.length, 1, "submit only after encoding the whole draw");
+});
+
+test("uniform rollover retains both uniform slices and an open draw pass", () => {
+    const { executor, log } = newExecutor();
+    executor.uniformCapacity = 1024;
+    executor.uniformCursor = 1024 - 256;
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .drawArrays(GL.TRIANGLES, 3, { vertex: { size: 3, type: GL.FLOAT,
+            data: new Uint8Array(36) } }));
+    assert.strictEqual(executor.stats.refusals, 0);
+    assert.strictEqual(log.draws.length, 1);
+    assert.strictEqual(log.submits.length, 1);
+});
+
+test("bind groups use each uniform slice's page across a rollover", () => {
+    const { executor } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("CREATE_PROGRAM", 1)
+        .call("CREATE_SHADER", 2, GL.VERTEX_SHADER)
+        .call("CREATE_SHADER", 3, GL.FRAGMENT_SHADER)
+        .shaderSource(2, "void main() { gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex; }")
+        .shaderSource(3, "uniform vec4 tint; void main() { gl_FragColor = tint; }")
+        .call("COMPILE_SHADER", 2).call("COMPILE_SHADER", 3)
+        .call("ATTACH_SHADER", 1, 2).call("ATTACH_SHADER", 1, 3)
+        .call("LINK_PROGRAM", 1).call("USE_PROGRAM", 1));
+    executor.uniformCapacity = 1024;
+    executor.uniformCursor = 768;
+    const original = executor.uniformRing;
+    executor.ensurePass();
+    const shaders = executor.resolveShaders();
+    const pipeline = executor.ensurePipeline(shaders, { mode: GL.TRIANGLES,
+        buffers: [] }, null);
+    const groups = executor.buildBindGroups(pipeline, shaders);
+    const entries = groups.find(g => g.index === 1).group.descriptor.entries;
+    assert.ok(entries[0].resource.buffer === original);
+    assert.ok(entries[1].resource.buffer === executor.uniformRing);
+    assert.notStrictEqual(entries[0].resource.buffer, entries[1].resource.buffer);
+    assert.strictEqual(entries[0].resource.offset, 768);
+    assert.strictEqual(entries[1].resource.offset, 0);
+});
+
+asyncTest("query slot exhaustion submits completed segments and resumes the same GL query", async () => {
+    const { executor, log } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_QUERIES, [1]).call("BEGIN_QUERY", GL.SAMPLES_PASSED, 1));
+    executor.occlusionCapacity = 2;
+    executor.endPass(); executor.ensurePass();
+    executor.endPass(); executor.ensurePass();
+    executor.endQuery(GL.SAMPLES_PASSED);
+    executor.flushFrame();
+    await Promise.resolve(); await Promise.resolve();
+    assert.deepStrictEqual(log.queryResolves.map(r => r.count), [2, 1]);
+    assert.strictEqual(executor.queries.get(1).ready, true);
+    assert.strictEqual(executor.queries.get(1).result, 0);
+    assert.strictEqual(executor.stats.refusals, 0);
+});
+
+asyncTest("occlusion segments across passes are ORed, not overwritten", async () => {
+    for (const samples of [[1, 0], [0, 1], [0, 0]]) {
+        const { executor, log } = newExecutor();
+        run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+            .names(GLFN.GEN_QUERIES, [1]).call("BEGIN_QUERY", GL.SAMPLES_PASSED, 1));
+        executor.endPass();
+        executor.ensurePass();
+        executor.endQuery(GL.SAMPLES_PASSED);
+        executor.flushFrame();
+        const staging = findBuffer(log, "GL occlusion readback");
+        const words = new Uint32Array(staging.storage);
+        samples.forEach((sample, slot) => { words[slot * 2] = sample; });
+        await Promise.resolve(); await Promise.resolve();
+        assert.strictEqual(log.queryResolves[0].count, 2);
+        const query = executor.queries.get(1);
+        assert.strictEqual(query.ready, true);
+        assert.strictEqual(query.result > 0, samples.some(Boolean));
+    }
+});
+
+asyncTest("query spanning submissions waits for every segment, even out of order", async () => {
+    const { executor, log } = newExecutor();
+    const maps = [];
+    const create = executor.device.createBuffer.bind(executor.device);
+    executor.device.createBuffer = desc => {
+        const buffer = create(desc);
+        if (desc.label === "GL occlusion readback")
+            buffer.mapAsync = () => new Promise(resolve => maps.push(resolve));
+        return buffer;
+    };
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_QUERIES, [1]).call("BEGIN_QUERY", GL.SAMPLES_PASSED, 1));
+    executor.flushFrame();
+    const first = findBuffer(log, "GL occlusion readback");
+    executor.ensurePass();
+    executor.endQuery(GL.SAMPLES_PASSED);
+    executor.flushFrame();
+    assert.strictEqual(maps.length, 2);
+    const query = executor.queries.get(1);
+    maps[1]();
+    await Promise.resolve(); await Promise.resolve();
+    assert.strictEqual(query.ready, false, "the earlier submission is still pending");
+    new Uint32Array(first.storage)[0] = 1;
+    maps[0]();
+    await Promise.resolve(); await Promise.resolve();
+    assert.strictEqual(query.ready, true);
+    assert.ok(query.result > 0);
+});
+
 function findBuffer(log, label) {
     return log.buffers.filter(buffer => buffer.descriptor.label === label).pop();
 }
@@ -965,6 +1330,31 @@ asyncTest("a query the GPU says was fully occluded reports zero", async () => {
     assert.strictEqual(query.result, 0);
 });
 
+asyncTest("a failed occlusion readback falls back to visible", async () => {
+    const { executor } = newExecutor();
+    const originalCreateBuffer = executor.device.createBuffer.bind(executor.device);
+    executor.device.createBuffer = descriptor => {
+        const buffer = originalCreateBuffer(descriptor);
+        if (descriptor.label === "GL occlusion readback")
+            buffer.mapAsync = () => Promise.reject(new Error("map failed"));
+        return buffer;
+    };
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_QUERIES, [11])
+        .call("BEGIN_QUERY", GL.SAMPLES_PASSED, 11)
+        .drawArrays(GL.TRIANGLES, 3, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(36) } })
+        .call("END_QUERY", GL.SAMPLES_PASSED));
+    executor.flushFrame();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    const query = executor.queries.get(11);
+    assert.strictEqual(query.ready, true);
+    assert.ok(query.result > 0,
+        "a transport failure is not proof that the geometry was occluded");
+});
+
 asyncTest("query slots are reused after each resolve", async () => {
     const { executor, log } = newExecutor();
     const frame = name => new GLStream().makeCurrent(1, 0, 0, 64, 64)
@@ -983,6 +1373,55 @@ asyncTest("query slots are reused after each resolve", async () => {
         "a frame's queries start again at slot 0, or the set fills up and " +
         "later queries are refused");
     await Promise.resolve();
+});
+
+asyncTest("a late query readback cannot overwrite a reused Cube 2 query", async () => {
+    const { executor } = newExecutor();
+    const originalCreateBuffer = executor.device.createBuffer.bind(executor.device);
+    const stagingBuffers = [];
+    const mapResolvers = [];
+    executor.device.createBuffer = descriptor => {
+        const buffer = originalCreateBuffer(descriptor);
+        if (descriptor.label === "GL occlusion readback") {
+            stagingBuffers.push(buffer);
+            buffer.mapAsync = () => new Promise(resolve => mapResolvers.push(resolve));
+        }
+        return buffer;
+    };
+    const triangle = { vertex: { size: 3, type: GL.FLOAT,
+        data: new Uint8Array(36) } };
+    const queryFrame = includeName => {
+        const stream = new GLStream().makeCurrent(1, 0, 0, 64, 64);
+        if (includeName) stream.names(GLFN.GEN_QUERIES, [7]);
+        return stream.call("BEGIN_QUERY", GL.SAMPLES_PASSED, 7)
+            .drawArrays(GL.TRIANGLES, 3, triangle)
+            .call("END_QUERY", GL.SAMPLES_PASSED);
+    };
+
+    run(executor, queryFrame(true));
+    executor.flushFrame();
+    run(executor, queryFrame(false));
+    executor.flushFrame();
+    assert.strictEqual(mapResolvers.length, 2,
+        "both generations should have independent asynchronous readbacks");
+
+    // Complete generation one as occluded after generation two has already
+    // reused the object. It must not make generation two ready with stale 0.
+    mapResolvers[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    const query = executor.queries.get(7);
+    assert.strictEqual(query.generation, 2);
+    assert.strictEqual(query.ready, false,
+        "a stale readback must not publish into the current generation");
+
+    // The current generation remains authoritative and completes normally.
+    new DataView(stagingBuffers[1].storage).setUint32(0, 1, true);
+    mapResolvers[1]();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.strictEqual(query.ready, true);
+    assert.ok(query.result > 0);
 });
 
 asyncTest("a pass already open is rebuilt to carry the occlusion query set", () => {
@@ -1045,6 +1484,74 @@ asyncTest("glReadPixels writes the pixels and then the status word", async () =>
 
 /* ---- buffer objects and the VBO-direct draw path ---- */
 
+test("pipeline cache separates constant attributes from vertex streams", () => {
+    const { executor } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64));
+    executor.ensurePass();
+    const shaders = executor.resolveShaders();
+    const request = { mode: GL.TRIANGLES, buffers: [{ stride: 16,
+        attributes: [{ location: 0, format: "float32x4", offset: 0 }] }] };
+    const vertex = executor.ensurePipeline(shaders, request, null);
+    const constant = executor.ensurePipeline(shaders, { ...request,
+        buffers: request.buffers.map(b => ({ ...b, stepMode: "instance" })) }, null);
+    assert.notStrictEqual(vertex, constant,
+        "the same attribute layout with a different stepping rule is a different pipeline");
+    assert.strictEqual(constant.descriptor.vertex.buffers[0].stepMode, "instance");
+    assert.strictEqual(executor.ensurePipeline(shaders, request, null), vertex);
+});
+
+test("VBO subdata preserves storage referenced by an unsubmitted draw", () => {
+    const { executor, log } = newExecutor();
+    const data = new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]);
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_BUFFERS, [4])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 4)
+        .bufferData(GL.ARRAY_BUFFER, data.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(data.buffer))
+        .call("ENABLE_CLIENT_STATE", GL.VERTEX_ARRAY)
+        .pointerVBO("VERTEX_POINTER_VBO", 3, GL.FLOAT, 12, 0)
+        .call("DRAW_ARRAYS_DIRECT", GL.TRIANGLES, 0, 3));
+    const buffer = executor.current.shareGroup.buffers.get(4);
+    const original = buffer.gpuBuffer;
+    const writeCount = log.bufferWrites.filter(w => w.buffer === original).length;
+    executor.bufferSubData(GL.ARRAY_BUFFER, 0,
+        new Uint8Array(new Float32Array([2, 2, 2]).buffer));
+    assert.notStrictEqual(buffer.gpuBuffer, original,
+        "queue.writeBuffer precedes submission, so pending draws need the old storage");
+    assert.strictEqual(log.bufferWrites.filter(w => w.buffer === original).length,
+        writeCount, "old geometry is never overwritten before its draw executes");
+    assert.strictEqual(original.destroyed, false, "retire only after submission");
+    const replacement = buffer.gpuBuffer;
+    executor.bufferSubData(GL.ARRAY_BUFFER, 12, new Uint8Array([1, 2, 3, 4]));
+    assert.strictEqual(buffer.gpuBuffer, replacement,
+        "storage not yet used by a draw can still be updated in place");
+    executor.flushFrame();
+    assert.strictEqual(original.destroyed, true);
+});
+
+test("odd-sized VBO data and subdata retain their final bytes", () => {
+    const { executor, log } = newExecutor();
+    const uploads = [];
+    const write = executor.device.queue.writeBuffer;
+    executor.device.queue.writeBuffer = (buffer, offset, data, start, size) => {
+        write(buffer, offset, data, start, size);
+        uploads.push(new Uint8Array(data.buffer, data.byteOffset + start, size).slice());
+    };
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .names(GLFN.GEN_BUFFERS, [4])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 4)
+        .bufferData(GL.ARRAY_BUFFER, 6, GL.STATIC_DRAW,
+            new Uint8Array([1, 2, 3, 4, 5, 6])));
+    assert.strictEqual(log.bufferWrites.at(-1).size, 8,
+        "upload the padded storage, not just its first four bytes");
+    assert.deepStrictEqual([...uploads.at(-1)], [1, 2, 3, 4, 5, 6, 0, 0]);
+    executor.bufferSubData(GL.ARRAY_BUFFER, 5, new Uint8Array([7]));
+    assert.strictEqual(log.bufferWrites.at(-1).size, 4);
+    assert.deepStrictEqual([...uploads.at(-1)], [5, 7, 0, 0]);
+    assert.deepStrictEqual([...executor.bufferFor(GL.ARRAY_BUFFER).shadow],
+        [1, 2, 3, 4, 5, 7], "the GL-visible storage remains its requested size");
+});
+
 /*
  * openglproxy sends GL_ARRAY_BUFFER_ARB (0x8892) -- the name ARB_vertex_buffer_object
  * gave the target, and the only one any GL 1.5 caller uses. The host's enum
@@ -1096,6 +1603,74 @@ test("a client-array draw promoted to VBOs reaches the GPU", () => {
     assert.strictEqual(bound[0][2],
         executor.current.shareGroup.buffers.get(1).gpuBuffer,
         "the pass reads the buffer glBufferData filled, not a scratch upload");
+});
+
+test("glVertexAttribPointer does not re-enable Cube 2's constant model color", () => {
+    const { executor, log } = newExecutor();
+    const vertexShader = "attribute vec4 vvertex, vcolor;\n" +
+        "varying vec4 color;\n" +
+        "void main() { gl_Position = vvertex; color = vcolor; }";
+    const fragmentShader = "varying vec4 color;\n" +
+        "void main() { gl_FragColor = color; }";
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("CREATE_PROGRAM", 1)
+        .call("CREATE_SHADER", 2, GL.VERTEX_SHADER)
+        .call("CREATE_SHADER", 3, GL.FRAGMENT_SHADER)
+        .shaderSource(2, vertexShader)
+        .shaderSource(3, fragmentShader)
+        .call("COMPILE_SHADER", 2)
+        .call("COMPILE_SHADER", 3)
+        .call("ATTACH_SHADER", 1, 2)
+        .call("ATTACH_SHADER", 1, 3)
+        .call("LINK_PROGRAM", 1)
+        .call("USE_PROGRAM", 1));
+
+    const program = executor.current.shareGroup.programs.get(1);
+    assert.ok(program.linked, program.log);
+    const vertexLocation = program.link.reflection.attributes.find(
+        attribute => attribute.name === "vvertex").location;
+    const colorLocation = program.link.reflection.attributes.find(
+        attribute => attribute.name === "vcolor").location;
+    const vertices = new Float32Array([
+        -1, -1, 0, 1,
+         1, -1, 0, 1,
+         0,  1, 0, 1,
+    ]);
+    const indices = new Uint16Array([0, 1, 2]);
+    const draw = new GLStream()
+        .names(GLFN.GEN_BUFFERS, [11, 12])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 11)
+        .bufferData(GL.ARRAY_BUFFER, vertices.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(vertices.buffer))
+        .attribPointerVBO(vertexLocation, 4, GL.FLOAT, false, 16, 0)
+        .call("ENABLE_VERTEX_ATTRIB_ARRAY", vertexLocation)
+        .attribPointerVBO(colorLocation, 4, GL.FLOAT, false, 16, 0)
+        .call("ENABLE_VERTEX_ATTRIB_ARRAY", colorLocation)
+        .call("DISABLE_VERTEX_ATTRIB_ARRAY", colorLocation)
+        .call("VERTEX_ATTRIB4F", colorLocation, 1, 1, 1, 1)
+        // Cube 2 is allowed to update the dormant pointer while keeping the
+        // array disabled.  The draw must still consume the current constant.
+        .attribPointerVBO(colorLocation, 4, GL.FLOAT, false, 16, 0)
+        .call("BIND_BUFFER", GL.ELEMENT_ARRAY_BUFFER, 12)
+        .bufferData(GL.ELEMENT_ARRAY_BUFFER, indices.byteLength,
+            GL.STATIC_DRAW, new Uint8Array(indices.buffer))
+        .drawElementsDirect(GL.TRIANGLES, 3, GL.UNSIGNED_SHORT, 0);
+    run(executor, draw);
+
+    assert.strictEqual(executor.current.genericAttribs[colorLocation].enabled,
+        false);
+    assert.strictEqual(executor.current.arrays["generic" + colorLocation].enabled,
+        false, "the VBO array view follows the generic attribute enable");
+    assert.strictEqual(log.draws.length, 1);
+    const buffers = log.draws[0].pipeline.descriptor.vertex.buffers;
+    const constant = buffers.find(buffer => buffer.stepMode === "instance" &&
+        buffer.attributes.some(attribute =>
+            attribute.shaderLocation === colorLocation));
+    assert.ok(constant, "disabled vcolor is supplied by a constant buffer");
+    assert.ok(!buffers.some(buffer => buffer.stepMode !== "instance" &&
+        buffer.attributes.some(attribute =>
+            attribute.shaderLocation === colorLocation)),
+        "the stale color VBO is not read by the model draw");
 });
 
 /* ---- the ARB program parameter and info-log records ---- */
@@ -1226,9 +1801,9 @@ test("an ARB vertex program drives the fixed multitexture fragment stage", () =>
         "the parameter-free ARB program does not declare an unused binding");
     const uniformGroup = log.bindGroups.find(group =>
         group.descriptor.layout.index === 1);
-    assert.deepStrictEqual(uniformGroup.descriptor.entries.map(entry =>
-        entry.binding), [0],
-        "the bind group matches the browser layout after unused binding removal");
+    assert.strictEqual(uniformGroup, undefined,
+        "the shared state declaration is used by neither selected entry point, " +
+        "so WebGPU omits group 1 from the automatic pipeline layout");
 });
 
 /*
@@ -1387,12 +1962,17 @@ END`;
         .bufferData(GL.ARRAY_BUFFER, vertices.byteLength, GL.STATIC_DRAW,
             new Uint8Array(vertices.buffer))
         .pointerVBO("VERTEX_POINTER_VBO", 3, GL.FLOAT, stride, 0)
+        .call("ENABLE_CLIENT_STATE", GL.VERTEX_ARRAY)
         .pointerVBO("NORMAL_POINTER_VBO", 3, GL.FLOAT, stride, 3 * 4)
+        .call("ENABLE_CLIENT_STATE", GL.NORMAL_ARRAY)
         .attribPointerVBO(6, 4, GL.FLOAT, false, stride, 6 * 4)
+        .call("ENABLE_VERTEX_ATTRIB_ARRAY", 6)
         .call("CLIENT_ACTIVE_TEXTURE", GL.TEXTURE0)
         .pointerVBO("TEX_COORD_POINTER_VBO", 2, GL.FLOAT, stride, 10 * 4)
+        .call("ENABLE_CLIENT_STATE", GL.TEXTURE_COORD_ARRAY)
         .call("CLIENT_ACTIVE_TEXTURE", GL.TEXTURE0 + 1)
         .pointerVBO("TEX_COORD_POINTER_VBO", 2, GL.FLOAT, stride, 12 * 4)
+        .call("ENABLE_CLIENT_STATE", GL.TEXTURE_COORD_ARRAY)
         .call("BIND_BUFFER", GL.ELEMENT_ARRAY_BUFFER, 2)
         .bufferData(GL.ELEMENT_ARRAY_BUFFER, indices.byteLength, GL.STATIC_DRAW,
             new Uint8Array(indices.buffer))

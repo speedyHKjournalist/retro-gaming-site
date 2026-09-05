@@ -86,14 +86,58 @@ matching `v86gl.sys` from `../v86gl_driver/` first.
 `opengl32-diagnostic.dll` keeps the same 831-entry ABI as the shipping DLL,
 but adds the persistent trace used to diagnose guest-only failures. Copy it
 beside the game and rename it to `opengl32.dll`. It writes
-`opengl32_trace_<pid>.log` beside the DLL, falling back to `%TEMP%` when the
-game directory is read-only.
+`opengl32_trace_<pid>.log` beside the game executable, then beside the DLL,
+falling back to `%TEMP%` when both directories are read-only. A file left under
+the name `opengl32-diagnostic.dll` is not selected by the Windows OpenGL loader.
+For launcher-based packages, "beside the game" means beside the child process
+that imports OpenGL, not beside the launcher. In SauerbratenPortable that is
+`App\Sauerbraten\bin\sauerbraten.exe`, so the diagnostic must replace
+`App\Sauerbraten\bin\opengl32.dll` while the game is stopped.
 
-The default log is bounded: it records process and WGL lifetime, surfaces,
-frame/batch summaries, GL errors, transport/readback failures, shader and ARB
-program failures, and an opcode histogram. Set `V86GL_TRACE_CALLS=1` in the
-guest process only when a full per-record trace is required. Diagnostic code
-is compiled out of the normal `opengl32.dll` built by `build.sh`.
+**No guest environment variable is required.** The diagnostic DLL traces as
+soon as it is loaded. A guest game is usually started from a `.bat` behind a
+portable launcher, and the v86 disk is a cold-booted in-memory overlay, so a
+variable is both awkward to set and lost on the next run.
+
+The log records process and WGL lifetime, surfaces, frame/batch summaries, GL
+errors, transport/readback failures, shader and ARB program failures, an
+opcode histogram, and per-call detail. Per-call detail is capped at
+`V86GL_TRACE_CALL_BUDGET` lines per frame (512 by default) because an
+immediate-mode frame emits one record per vertex, and guest writes land in
+that same in-memory overlay, so a runaway log is charged to browser RAM. A
+frame that hit the cap writes a `CALLS suppressed=` line rather than dropping
+detail silently.
+
+| Guest setting | Effect |
+| --- | --- |
+| nothing set | summary plus per-call detail, budgeted per frame |
+| `V86GL_TRACE_CALL_BUDGET=N` | change the per-frame budget; `0` is uncapped |
+| `V86GL_TRACE_CALLS=1` | uncapped per-record firehose |
+| `V86GL_TRACE_CALLS=0` | summary only, no per-call detail |
+| `V86GL_TRACE=0` | summary only; also drops the transport and lifetime lines |
+
+The process, frame, error and histogram summary is written directly and is not
+affected by any of these settings; the table controls the transport, lifetime
+and per-call lines layered on top of it.
+
+`V86GL_TRACE`/`V86GL_TRACE_CALLS` additionally enable the `OutputDebugString`
+path, which is left opt-in: with no debugger attached it raises a first-chance
+exception per line, which costs far more than the file write.
+
+Diagnostic code is compiled out of the normal `opengl32.dll` built by
+`build.sh`, which still traces nothing unless one of those variables is set.
+
+### Where the log lands
+
+The trace goes beside the **executable**, not beside the game's top-level
+folder. Sauerbraten's `sauerbraten.bat` starts `bin\sauerbraten.exe`, so the
+log appears in `...\App\Sauerbraten\bin\`. The proxy falls back to the DLL
+directory, then `%TEMP%`, when the executable directory is read-only.
+
+The file exists only inside the running VM. v86 mounts the game image with
+`async: true`, so guest writes stay in an in-memory block cache and never
+reach the `.img` on the host. Read the log inside the guest, or copy it out
+with the file-transfer tool, before the page reloads.
 
 ## Host page
 
@@ -133,4 +177,5 @@ node glbridge/tests/cube2_gl_proc_coverage_test.js
 node glbridge/tests/wined3d_caps_profile_test.js
 node glbridge/tests/gl_executor_test.js
 node glbridge/tests/v86_network_bridge_gl_route_test.js
+node glbridge/tests/gl_proxy_diagnostic_trace_test.js
 ```

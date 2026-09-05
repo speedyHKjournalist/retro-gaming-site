@@ -1,0 +1,208 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>GL multipass pixel regression</title>
+<canvas id="gpu" width="128" height="128"></canvas>
+<pre id="result">RUNNING</pre>
+<script src="../webgpu_host.js"></script>
+<script src="../gl-webgpu/gl_constants.js"></script>
+<script src="../gl-webgpu/gl_wire.js"></script>
+<script src="../gl-webgpu/gl_state_layout.js"></script>
+<script src="../gl-webgpu/gl_shader_translator.js"></script>
+<script src="../gl-webgpu/gl_fixed_function.js"></script>
+<script src="../gl-webgpu/gl_arb_program.js"></script>
+<script src="../gl-webgpu/gl_executor.js"></script>
+<script src="gl_stream_builder.js"></script>
+<script>
+(async () => {
+    const { GLStream, GL, GLFN } = GLTestStream;
+    const executor = new GLWebGPUExecutorModule.GLWebGPUExecutor(
+        document.getElementById("gpu"));
+    await executor.initialize();
+    const device = executor.device;
+    device.pushErrorScope("validation");
+    const run = stream => executor.submit(stream.bytes(), {});
+    run(new GLStream().makeCurrent(1, 0, 0, 128, 128));
+    const position = "attribute vec4 vvertex; uniform mat4 camprojmatrix;";
+    const transform = "gl_Position = camprojmatrix * vvertex;";
+    const programs = [
+        [position + "void main() {" + transform + "}", "void main() {}"],
+        [position + "attribute vec4 vcolor; varying vec4 color;" +
+            "void main() {" + transform + "color = vcolor;}",
+            "varying vec4 color; void main() {gl_FragColor = color;}"],
+        [position + "attribute vec4 vcolor; attribute vec3 vnormal; varying vec4 color;" +
+            "void main() {" + transform + "color = vcolor * abs(vnormal.z);}",
+            "varying vec4 color; void main() {gl_FragColor = color;}"],
+    ];
+    for (let i = 0; i < programs.length; ++i) {
+        const name = i + 1, vs = 10 + i * 2, fs = vs + 1;
+        run(new GLStream().call("CREATE_PROGRAM", name)
+            .call("CREATE_SHADER", vs, GL.VERTEX_SHADER)
+            .call("CREATE_SHADER", fs, GL.FRAGMENT_SHADER)
+            .shaderSource(vs, programs[i][0]).shaderSource(fs, programs[i][1])
+            .call("COMPILE_SHADER", vs).call("COMPILE_SHADER", fs)
+            .call("ATTACH_SHADER", name, vs).call("ATTACH_SHADER", name, fs));
+        const p = executor.current.shareGroup.programs.get(name);
+        // Cube 2 binds position at 0 and color at 1 before linking.
+        p.bindAttribLocations.set("vvertex", 0);
+        p.bindAttribLocations.set("vcolor", 1);
+        p.bindAttribLocations.set("vnormal", 2);
+        run(new GLStream().call("LINK_PROGRAM", name));
+        if (!p.linked) throw new Error(p.log);
+    }
+    const attributes = name => executor.current.shareGroup.programs.get(name)
+        .link.reflection.attributes;
+    const location = (name, attribute) => attributes(name)
+        .find(a => a.name === attribute).location;
+    const colorLocation = location(2, "vcolor");
+    const vertices = [];
+    // Large world coordinates and sloping planes stress depth equality after
+    // cancellation in camprojmatrix * vvertex, as in Cube 2's world prepass.
+    for (let i = 0; i < 12; ++i) {
+        const d = 32 * (i + 1), s = d * 0.72;
+        for (const [x, y, z] of [[-s,-s,-d], [s,-s,-d*1.1], [s,s,-d*1.1],
+                [-s,-s,-d], [s,s,-d*1.1], [-s,s,-d]])
+            vertices.push(4096 + x, 4096 + y, 4096 + z);
+    }
+    const data = new Float32Array(vertices);
+    const colors = new Float32Array(vertices.length / 3 * 4);
+    const normals = new Int8Array(colors.length);
+    for (let i = 0; i < colors.length; i += 4) colors.set([0, 1, 0, 1], i);
+    for (let i = 0; i < normals.length; i += 4) normals.set([0, 0, 127, 0], i);
+    run(new GLStream().names(GLFN.GEN_BUFFERS, [1, 2, 3])
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 1)
+        .bufferData(GL.ARRAY_BUFFER, data.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(data.buffer))
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 2)
+        .bufferData(GL.ARRAY_BUFFER, colors.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(colors.buffer))
+        .attribPointerVBO(colorLocation, 4, GL.FLOAT, false, 16, 0)
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 3)
+        .bufferData(GL.ARRAY_BUFFER, normals.byteLength, GL.STATIC_DRAW,
+            new Uint8Array(normals.buffer)));
+
+    function draw(program, constantColor) {
+        const vertexLocation = location(program, "vvertex");
+        const stream = new GLStream().call("USE_PROGRAM", program)
+            .call("BIND_BUFFER", GL.ARRAY_BUFFER, 1)
+            .attribPointerVBO(vertexLocation, 3, GL.FLOAT, false, 12, 0)
+            .call("ENABLE_VERTEX_ATTRIB_ARRAY", vertexLocation);
+        if (program >= 2) {
+            stream.call(constantColor ? "DISABLE_VERTEX_ATTRIB_ARRAY" :
+                "ENABLE_VERTEX_ATTRIB_ARRAY", colorLocation)
+                .call("VERTEX_ATTRIB4F", colorLocation, 0, 1, 0, 1);
+        }
+        if (program === 3) {
+            stream.call("BIND_BUFFER", GL.ARRAY_BUFFER, 3)
+                .attribPointerVBO(2, 3, GL.BYTE, true, 4, 0)
+                .call("ENABLE_VERTEX_ATTRIB_ARRAY", 2);
+        }
+        run(stream.call("DRAW_ARRAYS_DIRECT", GL.TRIANGLES, 0, data.length / 3));
+    }
+    async function pixels(prepass, constantColor, eyeOffset, packed) {
+        const n = 1, f = 100000, a = (f+n)/(n-f), b = 2*f*n/(n-f);
+        const matrix = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,a,-1,
+            -4096-eyeOffset, -4096, b-a*4096, 4096]);
+        for (const p of executor.current.shareGroup.programs.values()) {
+            const u = p.uniformByName.get("camprojmatrix");
+            p.uniformFloats.set(matrix, u.offsetBytes / 4);
+        }
+        run(new GLStream().call("CLEAR_COLOR", 0, 0, 0, 1)
+            .call("CLEAR_DEPTH", 1).call("DEPTH_MASK", 1)
+            .call("COLOR_MASK", 1, 1, 1, 1)
+            .call("CLEAR", GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT)
+            .call("ENABLE", GL.DEPTH_TEST).call("DEPTH_FUNC", GL.LESS));
+        if (prepass) {
+            run(new GLStream().call("COLOR_MASK", 0, 0, 0, 0));
+            draw(1, false);
+            run(new GLStream().call("COLOR_MASK", 1, 1, 1, 1)
+                .call("DEPTH_MASK", 0).call("DEPTH_FUNC", GL.LEQUAL));
+        }
+        draw(packed ? 3 : 2, constantColor);
+        executor.flushFrame();
+        return readBack();
+    }
+    async function readBack() {
+        const staging = device.createBuffer({ size: 128*128*4,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: executor.backBuffer },
+            { buffer: staging, bytesPerRow: 128*4 }, [128,128]);
+        device.queue.submit([encoder.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);
+        const result = new Uint8Array(staging.getMappedRange().slice(0));
+        staging.unmap(); staging.destroy();
+        return result;
+    }
+    let checkedPixels = 0;
+    for (const packed of [false, true]) for (const eye of [0, 0.123, 3.17, -9.41]) {
+        const reference = await pixels(false, false, eye, packed);
+        if (!reference.some((v,i) => i % 4 === 1 && v > 128))
+            throw new Error("reference scene is empty");
+        for (const constant of [false, true]) {
+            const actual = await pixels(true, constant, eye, packed);
+            let mismatched = 0;
+            for (let i=0; i<actual.length; i+=4)
+                if (actual[i+1] !== reference[i+1]) ++mismatched;
+            if (mismatched) throw new Error(JSON.stringify({ eye, packed, constant, mismatched }));
+            checkedPixels += 128*128;
+        }
+    }
+    // Force both rings to roll inside a GL query and during a quad draw.
+    // This reproduces the game's 8 MiB boundary without loading a full map.
+    const p = executor.current.shareGroup.programs.get(2);
+    p.uniformFloats.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+        p.uniformByName.get("camprojmatrix").offsetBytes / 4);
+    const quad = new Float32Array([-0.75,-0.75,0, 0.75,-0.75,0,
+        0.75,0.75,0, -0.75,0.75,0]);
+    const quadStream = () => new GLStream().drawArraysGL2(GL.QUADS, 4, {}, [
+        { index: 0, enabled: true, size: 3, type: GL.FLOAT,
+            data: new Uint8Array(quad.buffer) },
+    ]);
+    async function ringFrame(stress) {
+        run(new GLStream().call("USE_PROGRAM", 2).call("DISABLE", GL.DEPTH_TEST)
+            .call("COLOR_MASK", 1,1,1,1).call("CLEAR_COLOR", 0,0,0,1)
+            .call("CLEAR", GL.COLOR_BUFFER_BIT)
+            .call("VERTEX_ATTRIB4F", 1, 0,1,0,1));
+        if (stress) {
+            run(new GLStream().names(GLFN.GEN_QUERIES, [77])
+                .call("BEGIN_QUERY", GL.SAMPLES_PASSED, 77));
+            // Four packed vec4 positions + vec4 colors exactly fill the page;
+            // expanded indices need a new page. Uniform blocks straddle pages too.
+            executor.vertexCursor = executor.vertexCapacity - 128;
+            executor.uniformCursor = executor.uniformCapacity - 256;
+        }
+        run(quadStream());
+        if (stress) {
+            executor.endPass(); // resume without a submission
+            run(quadStream());
+            executor.flushFrame(); // resume across submissions
+            run(quadStream().call("END_QUERY", GL.SAMPLES_PASSED));
+        }
+        executor.flushFrame();
+        return readBack();
+    }
+    const plain = await ringFrame(false), wrapped = await ringFrame(true);
+    if (!plain.some((v,i) => i % 4 === 1 && v > 128))
+        throw new Error("ring reference is empty");
+    if (plain.some((v,i) => v !== wrapped[i]))
+        throw new Error("ring rollover changed rendered pixels");
+    checkedPixels += 128*128;
+    const query = executor.queries.get(77);
+    const deadline = performance.now() + 5000;
+    while (!query.ready && performance.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 5));
+    if (!query.ready || !query.result) throw new Error("segmented visible query did not complete");
+    const error = await device.popErrorScope();
+    if (error || executor.getStats().refusals) throw new Error(
+        error ? error.message : "executor refused a draw");
+    const info = executor.host.adapter.info;
+    return { status: "PASS", checkedPixels,
+        adapter: { vendor: info.vendor, architecture: info.architecture },
+        stats: executor.getStats() };
+})().catch(error => ({ status: "FAIL", error: error.stack })).then(async result => {
+    document.getElementById("result").textContent = JSON.stringify(result);
+    document.title = result.status + " GL multipass pixel regression";
+    if (new URLSearchParams(location.search).has("report"))
+        await fetch("/__test_result", { method: "POST", body: JSON.stringify(result) });
+});
+</script>

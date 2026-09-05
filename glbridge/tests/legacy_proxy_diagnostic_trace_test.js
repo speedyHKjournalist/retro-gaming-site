@@ -17,6 +17,8 @@ const ddraw = [
 ].join("\n");
 const d3d8Build = read("d3d8proxy/build_diagnostic.sh");
 const ddrawBuild = read("ddrawproxy/build_diagnostic.sh");
+const opengl = read("openglproxy/opengl32_proxy.c");
+const openglBuild = read("openglproxy/build_diagnostic.sh");
 
 assert.match(shared, /AddVectoredExceptionHandler/,
     "diagnostic DLLs must record first-chance exceptions");
@@ -28,6 +30,9 @@ assert.match(shared, /MEM reason=%s/,
     "process attach/detach must include guest memory state");
 assert.match(shared, /GetTempPathA/,
     "a read-only application directory needs a trace fallback");
+assert.match(shared,
+    /g_v86wg_trace_exe_path,[\s\S]*?v86wg_diagnostic_try_directory\(directory\)[\s\S]*?g_v86wg_trace_self_path/,
+    "the trace must prefer the game executable directory before the DLL directory");
 assert.match(shared, /FILE_APPEND_DATA[\s\S]*?OPEN_ALWAYS/,
     "a second DLL attach in the same PID must append instead of erasing trace");
 assert.doesNotMatch(shared, /CREATE_ALWAYS/,
@@ -39,8 +44,14 @@ assert.match(shared, /RESULT function=%s line=%d hr=%08lX/,
 
 assert.match(d3d8Build, /-DD8WG_DIAGNOSTIC_TRACE=1/);
 assert.match(ddrawBuild, /-DDDWG_DIAGNOSTIC_TRACE=1/);
+assert.match(openglBuild, /-DV86GL_DIAGNOSTIC_TRACE=1/);
 assert.match(d3d8Build, /d3d8-diagnostic\.dll/);
 assert.match(ddrawBuild, /ddraw-diagnostic\.dll/);
+assert.match(openglBuild, /opengl32-diagnostic\.dll/);
+assert.match(opengl, /v86wg_diagnostic_process_attach\(hinst\)/,
+    "the OpenGL diagnostic build must open its trace from DllMain");
+assert.match(opengl, /PROCESS_DETACH[\s\S]*?v86wg_diagnostic_process_detach/,
+    "the OpenGL diagnostic build must flush its trace at process detach");
 
 for (const [name, source, macro, minimum] of [
     ["D3D8", d3d8, "D8WG_TRACE_ERROR", 300],

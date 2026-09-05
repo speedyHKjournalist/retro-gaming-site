@@ -1,6 +1,11 @@
 #!/bin/sh
 # Build the trace-enabled proxy. Deploy the result as opengl32.dll in the
-# guest; it writes opengl32_trace_<pid>.log beside the executable or in %TEMP%.
+# guest; it writes opengl32_trace_<pid>.log beside the executable, then beside
+# the loaded DLL, or finally in %TEMP%. The result still must be renamed to
+# opengl32.dll when deployed so the Windows OpenGL loader selects it.
+#
+# It traces with no guest environment variable set. Per-call detail is capped
+# per frame; see the diagnostic section of README.md for the knobs.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -40,3 +45,4 @@ fi
 printf '%s\n' "Built diagnostic $output"
 printf '%s\n' "$imports"
 printf '%s\n' "$export_count GL/WGL exports"
+printf '%s\n' "Deploy as opengl32.dll beside the actual game executable (not beside its launcher)."

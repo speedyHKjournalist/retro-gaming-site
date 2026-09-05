@@ -34,6 +34,20 @@ function link(vsSource, fsSource, options) {
 
 const TRIVIAL_VS = "void main(void) { gl_Position = ftransform(); }";
 
+test("depth prepass and shaded programs declare invariant clip positions", () => {
+    const position = "attribute vec4 vvertex; uniform mat4 camprojmatrix;\n" +
+        "void main() { gl_Position = camprojmatrix * vvertex; }";
+    for (const fragment of ["void main() {}",
+            "void main() { gl_FragColor = vec4(1.0); }"]) {
+        const result = link(position, fragment);
+        assert.ok(result.ok, result.log);
+        assert.match(result.wgslVertex,
+            /@invariant\s+@builtin\(position\) position/);
+        assert.ok(!result.wgslFragment.includes("@invariant"),
+            "invariance applies to vertex outputs, not fragment inputs");
+    }
+});
+
 /* ---- preprocessor ---- */
 
 test("#define with parameters expands", () => {

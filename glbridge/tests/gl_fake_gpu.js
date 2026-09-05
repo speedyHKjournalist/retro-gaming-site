@@ -46,7 +46,10 @@ class FakeRenderPass {
         log.passes.push(this);
         this.calls = [];
     }
-    setPipeline(pipeline) { this.pipeline = pipeline; this.calls.push(["pipeline", pipeline]); }
+    checkOpen() {
+        if (this.ended) throw new Error("render pass is already ended");
+    }
+    setPipeline(pipeline) { this.checkOpen(); this.pipeline = pipeline; this.calls.push(["pipeline", pipeline]); }
     setBindGroup(index, group) { this.calls.push(["bindGroup", index, group]); }
     setVertexBuffer(slot, buffer, offset) {
         this.calls.push(["vertexBuffer", slot, buffer, offset]);
@@ -58,24 +61,56 @@ class FakeRenderPass {
     setScissorRect(...args) { this.scissor = args; }
     setStencilReference(value) { this.stencilReference = value; }
     setBlendConstant(value) { this.blendConstant = value; }
-    beginOcclusionQuery(index) { this.calls.push(["beginQuery", index]); }
-    endOcclusionQuery() { this.calls.push(["endQuery"]); }
+    beginOcclusionQuery(index) {
+        this.checkOpen();
+        if (!this.descriptor.occlusionQuerySet || this.activeQuery !== undefined)
+            throw new Error("invalid occlusion query begin");
+        this.usedQueries = this.usedQueries || new Set();
+        if (this.usedQueries.has(index)) throw new Error("query slot reused in one pass");
+        this.usedQueries.add(index);
+        this.activeQuery = index;
+        this.calls.push(["beginQuery", index]);
+    }
+    endOcclusionQuery() {
+        this.checkOpen();
+        if (this.activeQuery === undefined) throw new Error("no occlusion query is active");
+        this.activeQuery = undefined;
+        this.calls.push(["endQuery"]);
+    }
     draw(count, instances, first) {
+        this.checkOpen();
         this.log.draws.push({ pass: this, count, instances, first,
                               pipeline: this.pipeline });
         this.calls.push(["draw", count]);
     }
     drawIndexed(count, instances, firstIndex, baseVertex) {
+        this.checkOpen();
         this.log.draws.push({ pass: this, count, instances, firstIndex,
                               baseVertex, indexed: true, pipeline: this.pipeline });
         this.calls.push(["drawIndexed", count]);
     }
-    end() { this.ended = true; }
+    end() {
+        this.checkOpen();
+        if (this.activeQuery !== undefined) throw new Error("incomplete occlusion query");
+        this.ended = true;
+    }
 }
 
 class FakeEncoder {
     constructor(log) { this.log = log; this.copies = []; }
-    beginRenderPass(descriptor) { return new FakeRenderPass(descriptor, this.log); }
+    beginRenderPass(descriptor) {
+        const attachment = descriptor.depthStencilAttachment;
+        if (attachment) {
+            const format = attachment.view && attachment.view.texture &&
+                attachment.view.texture.descriptor.format;
+            if (format && format.indexOf("stencil") < 0 &&
+                    ("stencilLoadOp" in attachment ||
+                     "stencilStoreOp" in attachment ||
+                     "stencilClearValue" in attachment))
+                throw new Error("stencil operations require a stencil aspect");
+        }
+        return new FakeRenderPass(descriptor, this.log);
+    }
     copyTextureToTexture(...args) { this.copies.push(["t2t", ...args]); }
     copyTextureToBuffer(...args) { this.copies.push(["t2b", ...args]); }
     copyBufferToBuffer(...args) { this.copies.push(["b2b", ...args]); }
@@ -101,6 +136,17 @@ class FakeDevice {
                 log.bufferWrites.push({ buffer, offset, size });
             },
             writeTexture: (destination, data, layout, size) => {
+                const format = destination.texture &&
+                    destination.texture.descriptor.format || "";
+                if (/^bc\d-/.test(format)) {
+                    if ((size.width & 3) || (size.height & 3))
+                        throw new Error("compressed copies require whole 4x4 blocks");
+                    const blockBytes = format.indexOf("bc1-") === 0 ? 8 : 16;
+                    const required = (size.width >> 2) * (size.height >> 2) *
+                        (size.depthOrArrayLayers || 1) * blockBytes;
+                    if (data.byteLength < required)
+                        throw new Error("compressed texture upload is truncated");
+                }
                 log.textureWrites.push({ destination, layout, size,
                                          byteLength: data.byteLength });
             },
@@ -114,6 +160,9 @@ class FakeDevice {
         return buffer;
     }
     createTexture(descriptor) {
+        if (/^bc\d-/.test(descriptor.format || "") &&
+                (descriptor.usage & 0x10))
+            throw new Error("compressed textures cannot be render attachments");
         const texture = new FakeTexture(descriptor);
         this.log.textures.push(texture);
         return texture;

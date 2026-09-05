@@ -778,7 +778,7 @@
             out.push("}");
             out.push("");
             out.push("struct VSOut {");
-            out.push("    @builtin(position) position : vec4<f32>,");
+            out.push("    @invariant @builtin(position) position : vec4<f32>,");
             out.push(varying(0) + "frontColor : vec4<f32>,");
             out.push(varying(1) + "frontSecondary : vec4<f32>,");
             out.push(varying(2) + "fogCoord : vec4<f32>,");

@@ -73,7 +73,7 @@ if a deviation is later eliminated the entry stays, marked as such.
 | D-04 | Line width > 1, `GL_LINE_SMOOTH`, `GL_POLYGON_SMOOTH` | WebGPU draws one-pixel lines and has no smooth hint. Wide lines are not yet expanded to quads | Wide or antialiased lines draw one pixel wide and hard-edged |
 | D-05 | User clip planes | Implemented as a fragment `discard` on an interpolated distance, not as geometry clipping (WebGPU's `clip-distances` feature is not yet available anywhere) | Geometry is not actually clipped, only its fragments; a depth pre-pass combined with clip planes can differ |
 | D-06 | Multisampling | The current render targets are single-sampled; sample coverage maps to the one available coverage bit | Coverage value 0 can suppress samples, but intermediate coverage values do not gain multisample quality |
-| D-07 | Occlusion query sample counts | WebGPU's occlusion query answers "did any sample pass"; a visible result reports a saturated count. The set is resolved once per frame in `flushFrame`, so a result becomes available a frame after the draw, as on desktop | An algorithm thresholding on the *number* of samples sees the saturated value |
+| D-07 | Occlusion query sample counts | WebGPU's occlusion query answers "did any sample pass"; a visible result reports a saturated count. A GL query spanning passes/submissions is split into GPU segments, whose visibility is ORed. Availability waits for GL end and every segment's readback; stale generations are discarded, and failed readbacks conservatively report visible | An algorithm thresholding on the *number* of samples sees the saturated value rather than an exact count |
 | D-08 | `glDrawBuffer(GL_FRONT)` | There is no front buffer; writes to it are refused and counted | Old debugging code that draws directly to the front buffer produces nothing |
 | D-09 | Accumulation buffer | **Resolved with an RGBA16Float ping-pong accumulation target.** `GL_ACCUM`, `GL_LOAD`, `GL_RETURN`, `GL_MULT`, `GL_ADD` and masked/scissored clears are implemented | Extremely high dynamic-range accumulation has 16-bit-float precision rather than an implementation-selected desktop format |
 | D-10 | Texture fetch in non-uniform control flow | `textureSample` requires uniform control flow; a fetch inside a conditional or loop uses `textureSampleGrad` with the coordinate's derivatives. Counted as `stats.nonUniformSamples` | Mip selection inside a divergent branch can differ slightly from desktop |
@@ -137,6 +137,31 @@ python3 -m http.server 8765
 
 It reports `PASS` in both the page title and body only after the WebGPU error
 scope is clean.
+
+The multipass pixel regression runs an isolated headless Chrome profile (set
+`GL_CHROME` to the Chromium executable on non-macOS hosts):
+
+```bash
+# From the repository root
+node glbridge/tests/gl_multipass_browser_runner.js
+```
+
+It compares 262,144 pixels across moving viewpoints, constant/array color
+attributes, and direct-VBO/packed-vertex paths. In particular, Cube 2's depth
+prepass reads a three-component position directly, while packed byte normals
+can force its shaded pass through CPU packing. Both vertex outputs must be
+[`@invariant`](https://www.w3.org/TR/WGSL/#invariant) to preserve depth equality
+across backend optimization. The pipeline key must also include `stepMode` so
+a constant model color never reuses a per-vertex color layout. On the local
+Chrome/WebGPU regression, removing either fix independently produces 7,740
+incorrect pixels; with both fixes the test passes without validation errors.
+An additional 16,384-pixel case forces vertex/index and uniform allocations
+across ring boundaries while an occlusion query spans passes and submissions
+(278,528 pixels total). Old upload pages stay alive until the complete draw
+is encoded, and slices bind their own buffer rather than the current ring.
+The test checks unchanged pixels, a completed visible query, and clean native
+WebGPU validation; ordinary occluded queries still return zero.
+This isolates the rendering defects; it is not an end-to-end game test.
 
 The three suites that say "through naga" validate their generated WGSL with
 the compiler wgpu and Firefox use. It is optional -- they skip without it --

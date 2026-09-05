@@ -3689,7 +3689,10 @@
                 this.emit("");
                 this.emit("struct VSOut {");
                 ++this.indent;
-                this.emit("@builtin(position) position : vec4<f32>,");
+                // GL engines share the position calculation between depth-only
+                // and shaded programs. Preserve it across backend optimization
+                // so LEQUAL/EQUAL multipass rendering does not develop holes.
+                this.emit("@invariant @builtin(position) position : vec4<f32>,");
                 for (const d of slotDecls)
                     this.emit((d.flat ? "@interpolate(flat) " : "") +
                         "@location(" + d.slot + ") v" + d.slot + " : vec4<f32>,");

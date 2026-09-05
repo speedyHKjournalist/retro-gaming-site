@@ -7,8 +7,10 @@
 
 "use strict";
 
-const wire = require("../gl-webgpu/gl_wire.js");
-const constants = require("../gl-webgpu/gl_constants.js");
+const wire = typeof require === "function" ?
+    require("../gl-webgpu/gl_wire.js") : globalThis.GLWireFormat;
+const constants = typeof require === "function" ?
+    require("../gl-webgpu/gl_constants.js") : globalThis.GLWGConstants;
 
 const GL = constants.GL;
 const GLFN = constants.GLFN;
@@ -126,6 +128,45 @@ class GLStream {
         }
         payload.set(bytes, at);
         return this.record(GLFN.TEX_IMAGE_2D, payload.subarray(0, at + bytes.byteLength));
+    }
+
+    compressedTexImage2D(target, level, internalFormat, width, height, data,
+            border) {
+        const bytes = data || new Uint8Array(0);
+        // This is the guest proxy's fixed CompressedTexImage wire struct.  It
+        // retains a depth word for 2D uploads rather than using a shorter
+        // dimension-specific record.
+        const payload = new Uint8Array(32 + bytes.byteLength);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, target >>> 0, true);
+        view.setInt32(4, level | 0, true);
+        view.setUint32(8, internalFormat >>> 0, true);
+        view.setInt32(12, width | 0, true);
+        view.setInt32(16, height | 0, true);
+        view.setInt32(20, 1, true);
+        view.setInt32(24, (border || 0) | 0, true);
+        view.setUint32(28, bytes.byteLength >>> 0, true);
+        payload.set(bytes, 32);
+        return this.record(GLFN.COMPRESSED_TEX_IMAGE_2D, payload);
+    }
+
+    compressedTexSubImage2D(target, level, x, y, width, height, format, data) {
+        const bytes = data || new Uint8Array(0);
+        // The subimage command likewise always includes z and depth.
+        const payload = new Uint8Array(40 + bytes.byteLength);
+        const view = new DataView(payload.buffer);
+        view.setUint32(0, target >>> 0, true);
+        view.setInt32(4, level | 0, true);
+        view.setInt32(8, x | 0, true);
+        view.setInt32(12, y | 0, true);
+        view.setInt32(16, 0, true);
+        view.setInt32(20, width | 0, true);
+        view.setInt32(24, height | 0, true);
+        view.setInt32(28, 1, true);
+        view.setUint32(32, format >>> 0, true);
+        view.setUint32(36, bytes.byteLength >>> 0, true);
+        payload.set(bytes, 40);
+        return this.record(GLFN.COMPRESSED_TEX_SUB_IMAGE_2D, payload);
     }
 
     drawPixels(width, height, format, type, data) {
@@ -507,4 +548,7 @@ class GLStream {
     }
 }
 
-module.exports = { GLStream, GL, GLFN };
+if (typeof module !== "undefined" && module.exports)
+    module.exports = { GLStream, GL, GLFN };
+else
+    globalThis.GLTestStream = { GLStream, GL, GLFN };
