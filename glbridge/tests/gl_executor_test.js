@@ -1175,10 +1175,10 @@ test("vertex ring rollover during index expansion keeps the draw's allocations a
     assert.strictEqual(log.submits.length, 1, "submit only after encoding the whole draw");
 });
 
-test("uniform rollover retains both uniform slices and an open draw pass", () => {
+test("uniform rollover retains active uniform slices and an open draw pass", () => {
     const { executor, log } = newExecutor();
     executor.uniformCapacity = 1024;
-    executor.uniformCursor = 1024 - 256;
+    executor.uniformCursor = 1024;
     run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
         .drawArrays(GL.TRIANGLES, 3, { vertex: { size: 3, type: GL.FLOAT,
             data: new Uint8Array(36) } }));
@@ -1831,20 +1831,23 @@ const ALIAS_TEXCOORDS = new Float32Array([0, 0, 0, 1, 1, 0]);
 /* The packed vertex data the draw uploaded, as {location -> [components]}. */
 function packedAttributes(executor, log, vertexCount) {
     const draw = log.draws[0];
-    const buffer = draw.pipeline.descriptor.vertex.buffers[0];
-    const stride = buffer.arrayStride / 4;
-    const floats = new Float32Array(executor.vertexStaging.buffer, 0,
-        stride * vertexCount);
     const out = {};
-    for (const attribute of buffer.attributes) {
-        const components = Number(/x(\d)$/.exec(attribute.format) ?
-            /x(\d)$/.exec(attribute.format)[1] : 1);
-        const at = attribute.offset / 4;
-        out[attribute.shaderLocation] = [];
-        for (let v = 0; v < vertexCount; ++v)
-            out[attribute.shaderLocation].push(
-                Array.from(floats.subarray(v * stride + at,
-                    v * stride + at + components)));
+    for (const [slot, buffer] of draw.pipeline.descriptor.vertex.buffers.entries()) {
+        const binding = draw.pass.calls.find(c => c[0] === "vertexBuffer" && c[1] === slot);
+        const floats = new Float32Array(binding[2].storage, binding[3] || 0);
+        const stride = buffer.arrayStride / 4;
+        for (const attribute of buffer.attributes) {
+            assert.ok(attribute.format.startsWith("float32"));
+            const components = Number(/x(\d)$/.exec(attribute.format) ?
+                /x(\d)$/.exec(attribute.format)[1] : 1);
+            const at = attribute.offset / 4;
+            out[attribute.shaderLocation] = [];
+            for (let v = 0; v < vertexCount; ++v) {
+                const start = (buffer.stepMode === "instance" ? 0 : v * stride) + at;
+                out[attribute.shaderLocation].push(
+                    Array.from(floats.subarray(start, start + components)));
+            }
+        }
     }
     return out;
 }
@@ -1983,11 +1986,12 @@ END`;
     assert.strictEqual(log.draws.length, 1,
         "the exact 1.5 program/VBO shape reaches a draw");
     const descriptor = log.draws[0].pipeline.descriptor.vertex;
-    assert.deepStrictEqual(descriptor.buffers[0].attributes.map(a =>
-        [a.shaderLocation, a.format]), [
+    assert.deepStrictEqual(descriptor.buffers.flatMap(b => b.attributes).map(a =>
+        [a.shaderLocation, a.format]).sort((a, b) => a[0] - b[0]), [
         [0, "float32x4"], [6, "float32x4"], [2, "float32x3"],
         [8, "float32x4"], [9, "float32x4"],
-    ], "GL size-3/2 arrays are widened to the ARB program input widths");
+    ].sort((a, b) => a[0] - b[0]),
+    "GL size-3/2 arrays are widened to the ARB program input widths");
     const packed = packedAttributes(executor, log, 3);
     assert.deepStrictEqual(packed[0][0], [-1, -1, 0, 1]);
     assert.deepStrictEqual(packed[8][1], [1, 0, 0, 1]);
@@ -2211,6 +2215,181 @@ test("variable payloads survive a non-zero batch byteOffset", () => {
     assert.ok(group.arbPrograms.get(1).compiled.ok);
     assert.ok(new TextDecoder().decode(guestRAM).includes("v86 WebGPU bridge"),
         "variable-size query output is written into the submitted view");
+});
+
+/* ---- draw hot-path regressions ---- */
+
+test("packed indexed draws discard unused prefixes and sparse gaps", () => {
+    for (const source of [[60002, 60000, 60001], [60000, 2, 40000, 60000]]) {
+        const { executor, log } = newExecutor();
+        run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64));
+        const values = new Float32Array(60003 * 3);
+        for (const i of source) values.set([i, i + 1, i + 2], i * 3);
+        let request;
+        executor.issueDraw = r => { request = r; };
+        executor.drawPacked(GL.TRIANGLES, source.length, {
+            vertex: { size: 3, type: GL.FLOAT, data: new Uint8Array(values.buffer) },
+        }, { type: GL.UNSIGNED_INT, data: new Uint8Array(new Uint32Array(source).buffer) });
+        assert.ok(request);
+        const vb = request.buffers[0];
+        const uploaded = new Float32Array(vb.gpuBuffer.storage, vb.baseOffset);
+        assert.deepStrictEqual(Array.from(request.index.source, i =>
+            uploaded[i * vb.stride / 4]), source);
+        assert.ok(log.bufferWrites.reduce((n, w) => n + w.size, 0) < 256,
+            "a three-vertex draw must not upload 60003 vertices");
+    }
+});
+
+function normalVBOScene(executor) {
+    const data = new Uint8Array(3 * 16);
+    const view = new DataView(data.buffer);
+    for (let i = 0; i < 3; ++i) {
+        view.setFloat32(i * 16, i - 1, true);
+        data.set([127, 0, 129], i * 16 + 12);
+    }
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64)
+        .call("BIND_BUFFER", GL.ARRAY_BUFFER, 10)
+        .bufferData(GL.ARRAY_BUFFER, data.length, GL.STATIC_DRAW, data)
+        .pointerVBO("VERTEX_POINTER_VBO", 3, GL.FLOAT, 16, 0)
+        .pointerVBO("NORMAL_POINTER_VBO", 3, GL.BYTE, 16, 12)
+        .call("ENABLE_CLIENT_STATE", GL.VERTEX_ARRAY)
+        .call("ENABLE_CLIENT_STATE", GL.NORMAL_ARRAY)
+        .call("ENABLE", GL.LIGHTING)
+        .call("BIND_BUFFER", GL.ELEMENT_ARRAY_BUFFER, 11)
+        .bufferData(GL.ELEMENT_ARRAY_BUFFER, 8, GL.STATIC_DRAW,
+            new Uint8Array(new Uint16Array([99, 0, 1, 2]).buffer)));
+}
+
+test("only incompatible VBO attributes are converted and unchanged draws reuse them", () => {
+    const { executor, log } = newExecutor();
+    normalVBOScene(executor);
+    const s = executor.current;
+    const vb = s.shareGroup.buffers.get(10);
+    const eb = s.shareGroup.buffers.get(11);
+    executor.drawFromBuffers(GL.TRIANGLES, 0, 3,
+        { type: GL.UNSIGNED_SHORT, bufferOffset: 2 });
+    const converted = [...vb.convertedAttributes.values()][0].gpuBuffer;
+    assert.deepStrictEqual(Array.from(new Float32Array(converted.storage, 0, 3)),
+        [1, 0, -1], "conventional signed-byte normals are normalized");
+    const calls = log.draws[0].pass.calls;
+    assert.ok(calls.some(c => c[0] === "vertexBuffer" && c[2] === vb.gpuBuffer));
+    assert.ok(calls.some(c => c[0] === "vertexBuffer" && c[2] === converted));
+    assert.ok(calls.some(c => c[0] === "indexBuffer" && c[1] === eb.gpuBuffer &&
+        c[2] === "uint16" && c[3] === 2));
+    const writes = log.bufferWrites.length;
+    executor.drawFromBuffers(GL.TRIANGLES, 0, 3,
+        { type: GL.UNSIGNED_SHORT, bufferOffset: 2 });
+    // Constant current attributes still have a tiny per-draw instance upload.
+    assert.ok(log.bufferWrites.slice(writes).every(w =>
+        w.buffer === executor.vertexRing && w.size <= 32));
+    assert.strictEqual(log.bufferWrites.filter(w => w.buffer === converted).length, 1);
+});
+
+test("VBO and direct EBO mutations preserve already encoded draw snapshots", () => {
+    const { executor } = newExecutor();
+    normalVBOScene(executor);
+    executor.drawFromBuffers(GL.TRIANGLES, 0, 3,
+        { type: GL.UNSIGNED_SHORT, bufferOffset: 2 });
+    const vb = executor.current.shareGroup.buffers.get(10);
+    const eb = executor.current.shareGroup.buffers.get(11);
+    const oldNormal = [...vb.convertedAttributes.values()][0].gpuBuffer;
+    const oldIndex = eb.gpuBuffer;
+    executor.bufferSubData(GL.ARRAY_BUFFER, 12, new Uint8Array([0, 127, 0]));
+    executor.bufferSubData(GL.ELEMENT_ARRAY_BUFFER, 2,
+        new Uint8Array(new Uint16Array([2, 1, 0]).buffer));
+    assert.notStrictEqual(oldIndex, eb.gpuBuffer);
+    assert.deepStrictEqual(Array.from(new Uint16Array(oldIndex.storage, 2, 3)), [0, 1, 2]);
+    assert.strictEqual(oldNormal.destroyed, false);
+    executor.drawFromBuffers(GL.TRIANGLES, 0, 3,
+        { type: GL.UNSIGNED_SHORT, bufferOffset: 2 });
+    const nextNormal = [...vb.convertedAttributes.values()][0].gpuBuffer;
+    assert.notStrictEqual(oldNormal, nextNormal);
+    assert.deepStrictEqual(Array.from(new Float32Array(nextNormal.storage, 0, 3)), [0, 1, 0]);
+    executor.flushFrame();
+    assert.strictEqual(oldNormal.destroyed, true);
+    assert.strictEqual(oldIndex.destroyed, true);
+    run(executor, new GLStream().names(GLFN.DELETE_BUFFERS, [10]));
+    assert.strictEqual(executor.convertedVertexBytes, 0);
+    assert.strictEqual(executor.convertedVertexCache.size, 0);
+});
+
+test("conversion keys include normalization and component defaults and reset releases them", () => {
+    const { executor } = newExecutor();
+    normalVBOScene(executor);
+    const buffer = executor.current.shareGroup.buffers.get(10);
+    const array = executor.current.arrays.normal;
+    const a = executor.convertVertexAttribute(buffer, array, 4, true);
+    const b = executor.convertVertexAttribute(buffer, array, 3, false);
+    assert.deepStrictEqual(Array.from(new Float32Array(a.storage, 0, 4)), [1, 0, -1, 1]);
+    assert.deepStrictEqual(Array.from(new Float32Array(b.storage, 0, 3)), [127, 0, -127]);
+    executor.resetForReplay();
+    assert.strictEqual(a.destroyed, true);
+    assert.strictEqual(b.destroyed, true);
+    assert.strictEqual(executor.convertedVertexBytes, 0);
+});
+
+test("uint32 list indices are direct while strips and polygon edges retain CPU indices", () => {
+    const { executor } = newExecutor();
+    normalVBOScene(executor);
+    executor.bufferData(GL.ELEMENT_ARRAY_BUFFER, 12, GL.STATIC_DRAW,
+        new Uint8Array(new Uint32Array([0, 1, 2]).buffer));
+    let request;
+    executor.issueDraw = r => { request = r; };
+    const info = { type: GL.UNSIGNED_INT, bufferOffset: 0 };
+    executor.drawFromBuffers(GL.TRIANGLES, 0, 3, info);
+    assert.strictEqual(request.index.buffer, executor.bufferFor(GL.ELEMENT_ARRAY_BUFFER).gpuBuffer);
+    assert.strictEqual(request.index.format, "uint32");
+    executor.drawFromBuffers(GL.TRIANGLE_STRIP, 0, 3, info);
+    assert.deepStrictEqual(Array.from(request.index.source), [0, 1, 2]);
+    run(executor, new GLStream().call("POLYGON_MODE", GL.FRONT_AND_BACK, GL.LINE));
+    executor.drawFromBuffers(GL.TRIANGLES, 0, 3, info);
+    assert.deepStrictEqual(Array.from(request.index.source), [0, 1, 2]);
+});
+
+test("uniform snapshots reuse unchanged bytes without overwriting earlier draws", () => {
+    const { executor, log } = newExecutor();
+    const values = new Uint8Array([1, 2, 3, 4]);
+    const a = executor.writeUniformSnapshot("test", values);
+    assert.strictEqual(executor.writeUniformSnapshot("test", values), a);
+    assert.strictEqual(log.bufferWrites.length, 1);
+    values[0] = 9;
+    const b = executor.writeUniformSnapshot("test", values);
+    assert.notStrictEqual(a.offset, b.offset);
+    assert.strictEqual(new Uint8Array(a.buffer.storage)[a.offset], 1);
+    assert.strictEqual(new Uint8Array(b.buffer.storage)[b.offset], 9);
+    executor.finishFrame(false);
+    const writes = log.bufferWrites.length;
+    executor.writeUniformSnapshot("test", values);
+    assert.strictEqual(log.bufferWrites.length, writes + 1,
+        "rewound ring slices are never reused from the preceding frame");
+});
+
+test("bind group cache keys include pipeline, resource identity and buffer offset", () => {
+    const { executor, log, host } = newExecutor();
+    const descriptor = { vertex: { module: { code: "@group(1) @binding(0)" } } };
+    const a = host.device.createRenderPipeline(descriptor);
+    const b = host.device.createRenderPipeline(descriptor);
+    const entries = offset => [{ binding: 0, resource: {
+        buffer: executor.uniformRing, offset, size: 256,
+    } }];
+    const first = executor.cachedBindGroup(a, 1, entries(0));
+    assert.strictEqual(executor.cachedBindGroup(a, 1, entries(0)), first);
+    assert.notStrictEqual(executor.cachedBindGroup(a, 1, entries(256)), first);
+    assert.notStrictEqual(executor.cachedBindGroup(b, 1, entries(0)), first);
+    assert.strictEqual(log.bindGroups.length, 3);
+});
+
+test("inactive uniform blocks allocate and upload nothing", () => {
+    const { executor, log, host } = newExecutor();
+    run(executor, new GLStream().makeCurrent(1, 0, 0, 64, 64));
+    const pipeline = host.device.createRenderPipeline({});
+    pipeline.glActiveBindings = new Set();
+    const shaders = { kind: "ff", stateFields: [], textures: [],
+        wgslVertex: "", wgslFragment: "" };
+    const writes = log.bufferWrites.length;
+    assert.deepStrictEqual(executor.buildBindGroups(pipeline, shaders), []);
+    assert.strictEqual(log.bufferWrites.length, writes);
+    assert.strictEqual(executor.uniformCursor, 0);
 });
 
 /* ---- report ---- */

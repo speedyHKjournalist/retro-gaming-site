@@ -59,6 +59,34 @@ the hardest class of bug in this directory to find;
 `tests/gl_fixed_function_wgsl_test.js` walks every signature field to keep it
 honest.
 
+## Draw-path caching
+
+Indexed client-array packing removes unused prefixes; sparse index ranges are
+compacted by referenced vertex, with the draw indices remapped consistently.
+VBO attributes that WebGPU can read remain native. Incompatible attributes
+(including Cube 2's signed byte3 normals) are converted separately and cached
+by buffer object, type, size, stride, offset, normalization and shader width.
+BufferData/SubData invalidates the buffer's conversions conservatively;
+deletion, replay reset, context teardown and device loss release them. Resident
+conversion storage is capped at 64 MiB / 256 entries; saturation uses the
+compact per-draw fallback rather than evicting a not-yet-encoded draw's data.
+
+Unsigned-short/int EBOs for triangle, line and point lists bind directly.
+Strips and polygon edge/point expansion retain the CPU index path. Pending
+index reads participate in the same copy-on-write protection as vertex reads.
+
+Uniform layouts are cached; inactive bindings allocate nothing. Active blocks
+are serialized and compared byte-for-byte, uploading only changed snapshots
+within a submission. Bind groups reuse identical pipeline/resource/slice keys.
+Submission clears these caches before rings can rewind; changed uniforms always
+get a new slice. This preserves multipass and query correctness rather than
+mutating data referenced by earlier draws. State serialization is still CPU
+work; these changes do not move v86 or rendering off the main thread.
+
+Regression coverage: `gl_executor_test.js`, `gl_multipass_browser_runner.js`
+(real GPU pixels, sparse/native indices, cached normals, ring rollover and
+segmented queries), and `gl_diagnostic_buffer_test.js` for the guest writer.
+
 ## Known deviations
 
 WebGPU cannot express some of OpenGL exactly. Every case is listed here with

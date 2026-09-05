@@ -31,6 +31,41 @@ static char g_v86wg_trace_exe_path[MAX_PATH];
 static char g_v86wg_trace_self_path[MAX_PATH];
 static char g_v86wg_trace_path[MAX_PATH];
 
+/* Opt-in: legacy DirectX diagnostics retain their synchronous writer. */
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+static char g_v86wg_trace_buffer[V86WG_DIAGNOSTIC_BUFFER_BYTES];
+static DWORD g_v86wg_trace_buffer_used;
+static CRITICAL_SECTION g_v86wg_trace_lock;
+static DWORD g_v86wg_trace_checkpoint_tick;
+static DWORD g_v86wg_trace_flush_ms = 1000;
+
+/* Caller owns the lock. Retain an unwritten tail on short/failed writes. */
+static void v86wg_diagnostic_drain(void)
+{
+    DWORD written, index;
+    while (g_v86wg_trace_buffer_used) {
+        written = 0;
+        if (!WriteFile(g_v86wg_trace_file, g_v86wg_trace_buffer,
+                g_v86wg_trace_buffer_used, &written, NULL) || !written)
+            break;
+        g_v86wg_trace_buffer_used -= written;
+        /* No CRT/memmove import in the XP proxy. Forward copy is safe here. */
+        for (index = 0; index < g_v86wg_trace_buffer_used; ++index)
+            g_v86wg_trace_buffer[index] = g_v86wg_trace_buffer[index + written];
+    }
+}
+
+static BOOL v86wg_diagnostic_lock(void)
+{
+    /* A VEH may interrupt the writer or fault on another thread. Never wait
+     * for that thread while trying to report the fault. */
+    if (g_v86wg_trace_in_exception)
+        return TryEnterCriticalSection(&g_v86wg_trace_lock);
+    EnterCriticalSection(&g_v86wg_trace_lock);
+    return TRUE;
+}
+#endif
+
 /* OutputDebugString raises these first-chance exceptions when no debugger
  * consumes the string. They describe the tracing mechanism itself, not a
  * fault in the application, and recording them recursively drowns out the
@@ -120,6 +155,7 @@ static void v86wg_diagnostic_write(const char *format, ...)
     char line[896];
     DWORD written;
     va_list arguments;
+    DWORD saved_error = GetLastError();
 
     if (g_v86wg_trace_file == INVALID_HANDLE_VALUE)
         return;
@@ -129,8 +165,27 @@ static void v86wg_diagnostic_write(const char *format, ...)
     wsprintfA(line, "[%08lX %lu:%lu #%ld] %s\r\n", GetTickCount(),
             GetCurrentProcessId(), GetCurrentThreadId(),
             InterlockedIncrement(&g_v86wg_trace_sequence), message);
-    WriteFile(g_v86wg_trace_file, line, (DWORD)lstrlenA(line), &written,
-            NULL);
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+    if (v86wg_diagnostic_lock()) {
+        DWORD length = (DWORD)lstrlenA(line);
+        if (g_v86wg_trace_buffer_used + length > sizeof(g_v86wg_trace_buffer))
+            v86wg_diagnostic_drain();
+        if (g_v86wg_trace_buffer_used + length <= sizeof(g_v86wg_trace_buffer)) {
+            CopyMemory(g_v86wg_trace_buffer + g_v86wg_trace_buffer_used,
+                    line, length);
+            g_v86wg_trace_buffer_used += length;
+        } else {
+            /* Disk failure must not turn diagnostics into an unbounded queue. */
+            WriteFile(g_v86wg_trace_file, line, length, &written, NULL);
+        }
+        LeaveCriticalSection(&g_v86wg_trace_lock);
+    } else {
+        WriteFile(g_v86wg_trace_file, line, (DWORD)lstrlenA(line), &written, NULL);
+    }
+#else
+    WriteFile(g_v86wg_trace_file, line, (DWORD)lstrlenA(line), &written, NULL);
+#endif
+    SetLastError(saved_error);
 }
 
 static void v86wg_diagnostic_memory(const char *reason)
@@ -152,9 +207,29 @@ static void v86wg_diagnostic_memory(const char *reason)
 
 static void v86wg_diagnostic_flush(void)
 {
+    DWORD saved_error = GetLastError();
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+    if (g_v86wg_trace_file != INVALID_HANDLE_VALUE && v86wg_diagnostic_lock()) {
+        v86wg_diagnostic_drain();
+        FlushFileBuffers(g_v86wg_trace_file);
+        g_v86wg_trace_checkpoint_tick = GetTickCount();
+        LeaveCriticalSection(&g_v86wg_trace_lock);
+    }
+#else
     if (g_v86wg_trace_file != INVALID_HANDLE_VALUE)
         FlushFileBuffers(g_v86wg_trace_file);
+#endif
+    SetLastError(saved_error);
 }
+
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+static void v86wg_diagnostic_checkpoint(void)
+{
+    if ((DWORD)(GetTickCount() - g_v86wg_trace_checkpoint_tick) >=
+            g_v86wg_trace_flush_ms)
+        v86wg_diagnostic_flush();
+}
+#endif
 
 /* Unlike v86wg_diagnostic_hresult, this records successful returns too. It is
  * used only on the high-value display path so the diagnostic DLL remains
@@ -240,14 +315,28 @@ static LONG WINAPI v86wg_diagnostic_exception(PEXCEPTION_POINTERS pointers)
             g_v86wg_trace_last_function,
             InterlockedCompareExchange(&g_v86wg_trace_last_line, 0, 0),
             (DWORD)InterlockedCompareExchange(&g_v86wg_trace_last_hr, 0, 0));
-    if (g_v86wg_trace_file != INVALID_HANDLE_VALUE)
-        FlushFileBuffers(g_v86wg_trace_file);
+    v86wg_diagnostic_flush();
     InterlockedExchange(&g_v86wg_trace_in_exception, 0);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
 static void v86wg_diagnostic_process_attach(HINSTANCE instance)
 {
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+    char interval[16];
+    DWORD length, value = 0, index;
+    InitializeCriticalSection(&g_v86wg_trace_lock);
+    length = GetEnvironmentVariableA("V86GL_TRACE_FLUSH_MS", interval,
+            sizeof(interval));
+    if (length && length < sizeof(interval)) {
+        for (index = 0; index < length; ++index) {
+            if (interval[index] < '0' || interval[index] > '9') break;
+            value = value * 10 + (DWORD)(interval[index] - '0');
+            if (value > 60000) break;
+        }
+        if (index == length) g_v86wg_trace_flush_ms = value;
+    }
+#endif
     v86wg_diagnostic_open(instance);
     g_v86wg_trace_veh = AddVectoredExceptionHandler(1,
             v86wg_diagnostic_exception);
@@ -261,8 +350,11 @@ static void v86wg_diagnostic_process_attach(HINSTANCE instance)
             (DWORD)(uintptr_t)g_v86wg_trace_self_module,
             g_v86wg_trace_self_path);
     v86wg_diagnostic_memory("process_attach");
-    if (g_v86wg_trace_file != INVALID_HANDLE_VALUE)
-        FlushFileBuffers(g_v86wg_trace_file);
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+    v86wg_diagnostic_write("TRACE_IO buffer_bytes=%lu flush_ms=%lu",
+            (DWORD)sizeof(g_v86wg_trace_buffer), g_v86wg_trace_flush_ms);
+#endif
+    v86wg_diagnostic_flush();
 }
 
 static void v86wg_diagnostic_process_detach(LPVOID reserved,
@@ -276,8 +368,7 @@ static void v86wg_diagnostic_process_detach(LPVOID reserved,
             g_v86wg_trace_last_function,
             InterlockedCompareExchange(&g_v86wg_trace_last_line, 0, 0),
             (DWORD)InterlockedCompareExchange(&g_v86wg_trace_last_hr, 0, 0));
-    if (g_v86wg_trace_file != INVALID_HANDLE_VALUE)
-        FlushFileBuffers(g_v86wg_trace_file);
+    v86wg_diagnostic_flush();
     if (g_v86wg_trace_veh) {
         RemoveVectoredExceptionHandler(g_v86wg_trace_veh);
         g_v86wg_trace_veh = NULL;
@@ -286,6 +377,9 @@ static void v86wg_diagnostic_process_detach(LPVOID reserved,
         CloseHandle(g_v86wg_trace_file);
         g_v86wg_trace_file = INVALID_HANDLE_VALUE;
     }
+#ifdef V86WG_DIAGNOSTIC_BUFFER_BYTES
+    DeleteCriticalSection(&g_v86wg_trace_lock);
+#endif
 }
 
 #endif /* V86WG_DIAGNOSTIC_TRACE_H */

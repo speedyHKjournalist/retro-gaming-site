@@ -134,6 +134,13 @@ class FakeDevice {
         this.queue = {
             writeBuffer: (buffer, offset, data, dataOffset, size) => {
                 log.bufferWrites.push({ buffer, offset, size });
+                const elementBytes = data.BYTES_PER_ELEMENT || 1;
+                const start = (dataOffset || 0) * elementBytes;
+                const length = size === undefined ? data.byteLength - start :
+                    size * elementBytes;
+                const bytes = new Uint8Array(data.buffer || data,
+                    (data.byteOffset || 0) + start, length);
+                new Uint8Array(buffer.storage).set(bytes, offset);
             },
             writeTexture: (destination, data, layout, size) => {
                 const format = destination.texture &&

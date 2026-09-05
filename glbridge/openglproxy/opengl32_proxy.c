@@ -26,6 +26,7 @@
 #ifdef V86GL_DIAGNOSTIC_TRACE
 #define V86WG_DIAGNOSTIC_COMPONENT "opengl32-webgpu"
 #define V86WG_DIAGNOSTIC_FILE_STEM "opengl32_trace"
+#define V86WG_DIAGNOSTIC_BUFFER_BYTES 65536u
 #include "../diagnostic_trace.h"
 #include "gl_opcode_names.h"
 #define V86GL_DIAG(...) v86wg_diagnostic_write(__VA_ARGS__)
@@ -5885,7 +5886,7 @@ static BOOL emit_frame(void) {
         g_trace_calls_this_frame = 0;
         if (g_frame_id && g_frame_id % 300u == 0)
             v86gl_diag_histogram("periodic");
-        V86GL_DIAG_FLUSH();
+        v86wg_diagnostic_checkpoint();
     }
 #endif
     if (submitted) {

@@ -21,6 +21,7 @@ const proxy = read("openglproxy/opengl32_proxy.c");
 const build = read("openglproxy/build_diagnostic.sh");
 const shipping = read("openglproxy/build.sh");
 const readme = read("openglproxy/README.md");
+const writer = read("diagnostic_trace.h");
 
 assert.match(build, /-DV86GL_DIAGNOSTIC_TRACE=1/,
     "the diagnostic build must define the trace switch");
@@ -33,6 +34,16 @@ assert.match(proxy, /v86wg_diagnostic_process_attach\(hinst\)/,
     "the diagnostic build must open its trace at process attach");
 assert.match(proxy, /v86wg_diagnostic_process_detach\(/,
     "the diagnostic build must flush its tail at process detach");
+assert.match(proxy, /#define V86WG_DIAGNOSTIC_BUFFER_BYTES 65536u/,
+    "only the OpenGL diagnostic build opts into bounded batched writes");
+assert.match(writer, /g_v86wg_trace_flush_ms = 1000;/,
+    "normal diagnostic frame checkpoints must default to one second");
+assert.match(proxy, /g_trace_calls_this_frame = 0;[\s\S]*?v86wg_diagnostic_checkpoint\(\);/,
+    "frame summaries must checkpoint rather than flush the disk every frame");
+assert.match(writer, /static void v86wg_diagnostic_process_detach[\s\S]*?v86wg_diagnostic_flush\(\);/,
+    "normal exit must drain the batch before closing the log");
+assert.match(readme, /V86GL_TRACE_FLUSH_MS=0/,
+    "the synchronous diagnostic escape hatch must remain documented");
 
 /* The default: tracing without an environment variable. */
 assert.match(proxy,

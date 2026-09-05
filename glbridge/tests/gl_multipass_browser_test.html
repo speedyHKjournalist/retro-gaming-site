@@ -167,9 +167,9 @@
             run(new GLStream().names(GLFN.GEN_QUERIES, [77])
                 .call("BEGIN_QUERY", GL.SAMPLES_PASSED, 77));
             // Four packed vec4 positions + vec4 colors exactly fill the page;
-            // expanded indices need a new page. Uniform blocks straddle pages too.
+            // expanded indices need a new page. Force active uniforms to rotate too.
             executor.vertexCursor = executor.vertexCapacity - 128;
-            executor.uniformCursor = executor.uniformCapacity - 256;
+            executor.uniformCursor = executor.uniformCapacity;
         }
         run(quadStream());
         if (stress) {
@@ -192,6 +192,57 @@
     while (!query.ready && performance.now() < deadline)
         await new Promise(resolve => setTimeout(resolve, 5));
     if (!query.ready || !query.result) throw new Error("segmented visible query did not complete");
+
+    // Compare compact client indices and native EBOs + cached byte3 normal
+    // conversion against the same non-indexed reference, including sparse gaps.
+    const litProgram = executor.current.shareGroup.programs.get(3);
+    litProgram.uniformFloats.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+        litProgram.uniformByName.get("camprojmatrix").offsetBytes / 4);
+    for (const slots of [[60000,60001,60002,60003], [60000,2,40000,9]]) {
+        const positions = new Float32Array(60004 * 3);
+        const normals = new Uint8Array(60004 * 4);
+        for (let i = 0; i < 4; ++i) {
+            positions.set(quad.subarray(i * 3, i * 3 + 3), slots[i] * 3);
+            normals[slots[i] * 4 + 2] = 127;
+        }
+        const indices = new Uint16Array([slots[0], slots[1], slots[2],
+            slots[0], slots[2], slots[3]]);
+        for (const resident of [false, true]) {
+            run(new GLStream().call("USE_PROGRAM", 3)
+                .call("CLEAR", GL.COLOR_BUFFER_BIT)
+                .call("DISABLE_VERTEX_ATTRIB_ARRAY", 1)
+                .call("VERTEX_ATTRIB4F", 1, 0,1,0,1));
+            if (resident) {
+                run(new GLStream().call("BIND_BUFFER", GL.ARRAY_BUFFER, 90)
+                    .bufferData(GL.ARRAY_BUFFER, positions.byteLength, GL.STATIC_DRAW,
+                        new Uint8Array(positions.buffer))
+                    .attribPointerVBO(0, 3, GL.FLOAT, false, 12, 0)
+                    .call("ENABLE_VERTEX_ATTRIB_ARRAY", 0)
+                    .call("BIND_BUFFER", GL.ARRAY_BUFFER, 91)
+                    .bufferData(GL.ARRAY_BUFFER, normals.byteLength, GL.STATIC_DRAW, normals)
+                    .attribPointerVBO(2, 3, GL.BYTE, true, 4, 0)
+                    .call("ENABLE_VERTEX_ATTRIB_ARRAY", 2)
+                    .call("BIND_BUFFER", GL.ELEMENT_ARRAY_BUFFER, 92)
+                    .bufferData(GL.ELEMENT_ARRAY_BUFFER, indices.byteLength,
+                        GL.STATIC_DRAW, new Uint8Array(indices.buffer))
+                    .drawElementsDirect(GL.TRIANGLES, 6, GL.UNSIGNED_SHORT, 0)
+                    .drawElementsDirect(GL.TRIANGLES, 6, GL.UNSIGNED_SHORT, 0));
+            } else {
+                run(new GLStream().drawElementsGL2(GL.TRIANGLES, indices,
+                    GL.UNSIGNED_SHORT, {}, [
+                        { index: 0, size: 3, type: GL.FLOAT,
+                            data: new Uint8Array(positions.buffer) },
+                        { index: 2, size: 3, type: GL.BYTE, stride: 4,
+                            normalized: true, data: normals },
+                    ]));
+            }
+            executor.flushFrame();
+            const actual = await readBack();
+            if (plain.some((v, i) => v !== actual[i]))
+                throw new Error("indexed conversion pixels differ: " + JSON.stringify({ slots, resident }));
+            checkedPixels += 128*128;
+        }
+    }
     const error = await device.popErrorScope();
     if (error || executor.getStats().refusals) throw new Error(
         error ? error.message : "executor refused a draw");

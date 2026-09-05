@@ -1707,6 +1707,12 @@
 
             this.pipelineCache = new Map();
             this.bindGroupCache = new Map();
+            this.convertedVertexCache = new Map();
+            this.convertedVertexBytes = 0;
+            this.uniformValueCache = new Map();
+            this.stateUniformLayouts = new WeakMap();
+            this.resourceIds = new WeakMap();
+            this.nextResourceId = 1;
             this.samplerCache = new Map();
             this.moduleCache = new Map();
             this.shaderCache = new Map();   // link cache key -> link result
@@ -1812,6 +1818,7 @@
         }
 
         onDeviceLost() {
+            this.uniformValueCache.clear();
             // Every GPU object belonged to the old device. The GL state machine
             // does not: it is plain JavaScript, so the resources rebuild from
             // the shadow copies the next time each is used.
@@ -1830,8 +1837,10 @@
                     texture.viewCache.clear();
                     texture.dirty = true;
                 }
-                for (const buffer of group.buffers.values())
+                for (const buffer of group.buffers.values()) {
+                    this.invalidateVertexConversions(buffer);
                     buffer.gpuBuffer = null;
+                }
                 for (const program of group.programs.values())
                     program.variants.clear();
             }
@@ -1959,8 +1968,10 @@
                 if (!live) {
                     for (const texture of group.textures.values())
                         this.retire(texture.gpuTexture);
-                    for (const buffer of group.buffers.values())
+                    for (const buffer of group.buffers.values()) {
+                        this.invalidateVertexConversions(buffer);
                         this.retire(buffer.gpuBuffer);
+                    }
                     for (const rb of group.renderbuffers.values())
                         this.retire(rb.gpuTexture);
                     this.shareGroups.delete(key);
@@ -1981,8 +1992,10 @@
             for (const group of this.shareGroups.values()) {
                 for (const texture of group.textures.values())
                     release(texture.gpuTexture);
-                for (const buffer of group.buffers.values())
+                for (const buffer of group.buffers.values()) {
+                    this.invalidateVertexConversions(buffer);
                     release(buffer.gpuBuffer);
+                }
                 for (const rb of group.renderbuffers.values())
                     release(rb.gpuTexture);
             }
@@ -2973,6 +2986,7 @@
             for (const name of names) {
                 const buffer = group.buffers.get(name);
                 if (!buffer) continue;
+                this.invalidateVertexConversions(buffer);
                 this.retire(buffer.gpuBuffer);
                 group.buffers.delete(name);
                 if (this.current.arrayBuffer === name) this.current.arrayBuffer = 0;
@@ -4852,6 +4866,7 @@
         },
 
         replaceBufferStorage(buffer) {
+            this.invalidateVertexConversions(buffer);
             this.retire(buffer.gpuBuffer);
             // The same buffer may be bound as vertex data now and as indices
             // later, and GL never says which; asking for both costs nothing.
@@ -4879,6 +4894,7 @@
             if (offset + data.byteLength > buffer.shadow.byteLength)
                 return this.refuse("glBufferSubData", "update is out of range",
                     { offset, size: data.byteLength }, GL.INVALID_VALUE);
+            this.invalidateVertexConversions(buffer);
             buffer.shadow.set(data, offset);
             if (buffer.gpuBuffer) {
                 // Queue writes execute before a command buffer submitted later,
@@ -5570,11 +5586,12 @@
             const program = this.currentProgramObject();
             const wanted = this.wantedAttributes(program);
             let sourceIndices = null;
+            let firstSourceVertex = 0;
             let packedVertexCount = count;
             let drawIndexInfo = indexInfo;
             if (indexInfo && indexInfo.data) {
-                const indices = readIndices(indexInfo.type, indexInfo.data, count);
-                const maxIndex = maximumIndex(indices);
+                const indices = indexInfo.decoded ||
+                    readIndices(indexInfo.type, indexInfo.data, count);
                 const expandIndexedPoints = mode === GL.POINTS &&
                     (this.current.point.size !== 1 ||
                         this.current.enabled.has(GL.POINT_SPRITE));
@@ -5583,7 +5600,34 @@
                     packedVertexCount = count;
                     drawIndexInfo = null;
                 } else {
-                    packedVertexCount = maxIndex + 1;
+                    let min = 0xffffffff, max = 0;
+                    for (const value of indices) {
+                        min = Math.min(min, value);
+                        max = Math.max(max, value);
+                    }
+                    const rebased = new Uint32Array(indices.length);
+                    if (max - min + 1 <= count * 2) {
+                        firstSourceVertex = min;
+                        packedVertexCount = max - min + 1;
+                        for (let i = 0; i < indices.length; ++i)
+                            rebased[i] = indices[i] - min;
+                    } else {
+                        // Sparse draws must not allocate the entire unused
+                        // interval between their lowest and highest index.
+                        const remap = new Map();
+                        sourceIndices = [];
+                        for (let i = 0; i < indices.length; ++i) {
+                            const value = indices[i];
+                            if (!remap.has(value)) {
+                                remap.set(value, sourceIndices.length);
+                                sourceIndices.push(value);
+                            }
+                            rebased[i] = remap.get(value);
+                        }
+                        packedVertexCount = sourceIndices.length;
+                    }
+                    drawIndexInfo = { type: GL.UNSIGNED_INT,
+                        data: new Uint8Array(rebased.buffer), decoded: rebased };
                 }
             }
 
@@ -5641,7 +5685,8 @@
                 const srcStride = block.stride || size * elementBytes;
                 const normalized = this.arrayIsNormalized(item.source, block);
                 for (let v = 0; v < packedVertexCount; ++v) {
-                    const sourceVertex = sourceIndices ? sourceIndices[v] : v;
+                    const sourceVertex = sourceIndices ? sourceIndices[v] :
+                        firstSourceVertex + v;
                     const src = sourceVertex * srcStride;
                     const dst = v * stride + item.offsetFloats;
                     for (let c = 0; c < item.components; ++c) {
@@ -5673,7 +5718,7 @@
             let index = null;
             if (drawIndexInfo && drawIndexInfo.data) {
                 index = this.uploadIndices(mode, drawIndexInfo.type, drawIndexInfo.data,
-                    count);
+                    count, drawIndexInfo.decoded);
                 if (!index) return;
             }
             this.issueDraw({ mode, vertexCount: count, buffers, index });
@@ -5802,18 +5847,10 @@
                 const buffer = s.shareGroup.buffers.get(array.buffer);
                 if (!buffer || !buffer.gpuBuffer) continue;
                 const size = Math.max(1, array.size || entry.components);
-                const format = vertexFormatFor(array.type, size, array.normalized);
-                if (!format) {
-                    // A type WebGPU cannot read directly; fall back to packing
-                    // it out of the shadow copy.
-                    return this.drawFromShadowBuffers(mode, first, count,
-                        indexInfo, wanted);
-                }
+                const normalized = this.arrayIsNormalized(source, array);
+                const format = vertexFormatFor(array.type, size, normalized);
                 const stride = array.stride ||
                     size * componentBytes(array.type);
-                if (stride % 4 !== 0 || array.offset % 4 !== 0)
-                    return this.drawFromShadowBuffers(mode, first, count,
-                        indexInfo, wanted);
                 const shaderComponents = entry.components || size;
                 const attributeBytes = size * componentBytes(array.type);
                 /*
@@ -5826,12 +5863,24 @@
                  * invalid WebGPU vertex layout. The glview 1.5 test uses vec3
                  * positions and vec2 texture coordinates with vec4 ARB inputs.
                  */
-                if ((s.enabled.has(GL.VERTEX_PROGRAM_ARB) &&
+                if (!format || stride % 4 !== 0 || array.offset % 4 !== 0 ||
+                        (s.enabled.has(GL.VERTEX_PROGRAM_ARB) &&
                             size !== shaderComponents) ||
                         array.offset >= stride ||
-                        array.offset + attributeBytes > stride)
-                    return this.drawFromShadowBuffers(mode, first, count,
-                        indexInfo, wanted);
+                        array.offset + attributeBytes > stride) {
+                    const converted = this.convertVertexAttribute(buffer,
+                        array, shaderComponents, normalized);
+                    if (!converted)
+                        return this.drawFromShadowBuffers(mode, first, count,
+                            indexInfo, wanted);
+                    buffers.push({ gpuBuffer: converted, baseOffset: 0,
+                        stride: shaderComponents * 4, attributes: [{
+                            location: entry.location, offset: 0,
+                            format: "float32" + (shaderComponents > 1 ?
+                                "x" + shaderComponents : ""),
+                        }] });
+                    continue;
+                }
                 let group = byBuffer.get(buffer.gpuBuffer);
                 if (!group) {
                     group = { gpuBuffer: buffer.gpuBuffer, stride,
@@ -5897,11 +5946,77 @@
                     (indexInfo.type === GL.UNSIGNED_SHORT ? 2 : 4);
                 const data = buffer.shadow.subarray(indexInfo.bufferOffset,
                     indexInfo.bufferOffset + count * elementBytes);
-                index = this.uploadIndices(mode, indexInfo.type, data, count);
+                // Strips use WebGPU's fixed restart index, unlike legacy GL;
+                // keep their widening/expansion path. Polygon line/point mode
+                // also needs a CPU source index array to build its edges.
+                const direct = (mode === GL.TRIANGLES || mode === GL.LINES ||
+                    mode === GL.POINTS) && this.effectivePolygonMode() === GL.FILL &&
+                    (indexInfo.type === GL.UNSIGNED_SHORT ||
+                        indexInfo.type === GL.UNSIGNED_INT) &&
+                    indexInfo.bufferOffset % elementBytes === 0 &&
+                    data.byteLength === count * elementBytes && buffer.gpuBuffer;
+                index = direct ? { buffer: buffer.gpuBuffer,
+                    offset: indexInfo.bufferOffset, count,
+                    format: elementBytes === 2 ? "uint16" : "uint32" } :
+                    this.uploadIndices(mode, indexInfo.type, data, count);
                 if (!index) return;
             }
             this.issueDraw({ mode, vertexCount: count, firstVertex: first,
                              buffers, index });
+        },
+
+        invalidateVertexConversions(buffer) {
+            if (!buffer.convertedAttributes) return;
+            for (const entry of buffer.convertedAttributes.values()) {
+                this.convertedVertexCache.delete(entry);
+                this.convertedVertexBytes -= entry.bytes;
+                this.retire(entry.gpuBuffer);
+            }
+            buffer.convertedAttributes.clear();
+        },
+
+        convertVertexAttribute(buffer, array, components, normalized) {
+            const elementBytes = componentBytes(array.type);
+            const size = Math.max(1, array.size || components);
+            const stride = array.stride || size * elementBytes;
+            if (!elementBytes || !stride || !buffer.shadow) return null;
+            const key = [array.type, size, stride, array.offset, components,
+                normalized ? 1 : 0].join(":");
+            const cache = buffer.convertedAttributes ||
+                (buffer.convertedAttributes = new Map());
+            let entry = cache.get(key);
+            if (entry) return entry.gpuBuffer;
+            const count = Math.max(0, 1 + Math.floor((buffer.shadow.byteLength -
+                array.offset - size * elementBytes) / stride));
+            const bytes = count * components * 4;
+            // Bound resident conversion storage, including many layout variants.
+            // Oversized objects use the compact per-draw packing path instead.
+            const budget = 64 * 1024 * 1024;
+            if (!bytes || bytes > budget) return null;
+            // Do not evict here: another attribute of the current, not yet
+            // encoded draw may already reference an entry. Fall back safely
+            // when full; mutation/deletion/context teardown releases entries.
+            if (this.convertedVertexBytes + bytes > budget ||
+                    this.convertedVertexCache.size >= 256) return null;
+            const values = new Float32Array(count * components);
+            const view = new DataView(buffer.shadow.buffer,
+                buffer.shadow.byteOffset, buffer.shadow.byteLength);
+            for (let v = 0; v < count; ++v)
+                for (let c = 0; c < components; ++c)
+                    values[v * components + c] = c < size ?
+                        readComponent(view, array.offset + v * stride +
+                            c * elementBytes, array.type, normalized) :
+                        (c === 3 ? 1 : 0);
+            const gpuBuffer = this.device.createBuffer({
+                label: "GL converted attribute " + buffer.name, size: bytes,
+                usage: BUFFER_USAGE_VERTEX | BUFFER_USAGE_COPY_DST,
+            });
+            this.device.queue.writeBuffer(gpuBuffer, 0, values.buffer, 0, bytes);
+            entry = { gpuBuffer, bytes };
+            cache.set(key, entry);
+            this.convertedVertexCache.set(entry, true);
+            this.convertedVertexBytes += bytes;
+            return gpuBuffer;
         },
 
         /* The fallback when a VBO's layout is not something WebGPU can bind
@@ -5923,6 +6038,7 @@
                             indexInfo.bufferOffset + count * elementBytes),
                     };
                     const values = readIndices(indexInfo.type, indices.data, count);
+                    indices.decoded = values;
                     arrayVertexCount = values.length ? maximumIndex(values) + 1 : 0;
                 }
             }
@@ -5996,14 +6112,14 @@
          * cached because a Half-Life frame issues thousands of GL_QUADS draws
          * whose index pattern depends on nothing but the vertex count.
          */
-        uploadIndices(mode, type, data, count) {
-            const source = readIndices(type, data, count);
+        uploadIndices(mode, type, data, count, decoded) {
+            const source = decoded || readIndices(type, data, count);
             let indices;
             if (needsIndexExpansion(mode)) {
                 indices = expandIndexArray(mode, source);
                 ++this.stats.expandedIndices;
             } else {
-                indices = readIndices(type, data, count);
+                indices = source;
             }
             if (!indices.length) return null;
             const bytes = new Uint8Array(indices.buffer, indices.byteOffset,
@@ -6317,6 +6433,9 @@
 
         flushFrame() {
             this.endPass();
+            // finishFrame may rewind the rings after this submission.
+            this.uniformValueCache.clear();
+            this.bindGroupCache.clear();
             const resolved = this.resolvePendingQueries();
             if (this.encoder) {
                 this.device.queue.submit([this.encoder.finish()]);
@@ -6720,6 +6839,7 @@ ${fragmentCode}`;
             });
             if (index) {
                 pass.setIndexBuffer(index.buffer, index.format, index.offset);
+                this.pendingVertexBuffers.add(index.buffer);
                 pass.drawIndexed(index.count, 1, 0, request.firstVertex || 0, 0);
             } else if (expandedPoints) {
                 pass.draw(6, request.vertexCount, 0, request.firstVertex || 0);
@@ -7293,27 +7413,33 @@ ${fragmentCode}`;
          * is read only by an uncalled GLSL helper function.
          */
         buildBindGroups(pipeline, shaders) {
-            const layout = stateLayout.buildLayout(shaders.stateFields);
-            const stateSlice = this.writeStateUniforms(layout, shaders);
-            if (!stateSlice) return null;
+            const activeBindings = pipeline.glActiveBindings ||
+                (pipeline.glActiveBindings = activeShaderBindings(
+                    shaders.wgslVertex, shaders.wgslFragment));
+            const bindingIsActive = (group, binding) =>
+                activeBindings.has(group + ":" + binding);
+            let layout = this.stateUniformLayouts.get(shaders.stateFields);
+            if (!layout) {
+                layout = stateLayout.buildLayout(shaders.stateFields);
+                this.stateUniformLayouts.set(shaders.stateFields, layout);
+            }
+            const stateSlice = bindingIsActive(1, 0) ?
+                this.writeStateUniforms(layout, shaders) : null;
+            if (bindingIsActive(1, 0) && !stateSlice) return null;
             // binding 1 is the GLSL program's uniform block, or the ARB
             // vertex program's parameters; binding 2 only ever holds an ARB
             // fragment program's.
             const bindingSlices = shaders.kind === "arb" ?
-                this.writeARBParameters(shaders) :
-                { 1: shaders.kind === "program" ?
+                this.writeARBParameters(shaders, activeBindings) :
+                { 1: !bindingIsActive(1, 1) ? null : shaders.kind === "program" ?
                     this.writeProgramUniforms(shaders) :
                     this.writeEmptyUniforms() };
-            if (!bindingSlices || (shaders.kind !== "arb" && !bindingSlices[1]))
+            if (!bindingSlices || (shaders.kind !== "arb" &&
+                    bindingIsActive(1, 1) && !bindingSlices[1]))
                 return null;
 
             const groups = [];
             try {
-                const activeBindings = pipeline.glActiveBindings ||
-                    activeShaderBindings(shaders.wgslVertex,
-                        shaders.wgslFragment);
-                const bindingIsActive = (group, binding) =>
-                    activeBindings.has(group + ":" + binding);
                 const uniformEntries = [];
                 if (bindingIsActive(1, 0)) {
                     uniformEntries.push({ binding: 0,
@@ -7335,10 +7461,7 @@ ${fragmentCode}`;
                 if (uniformEntries.length) {
                     groups.push({
                         index: 1,
-                        group: this.device.createBindGroup({
-                            layout: pipeline.getBindGroupLayout(1),
-                            entries: uniformEntries,
-                        }),
+                        group: this.cachedBindGroup(pipeline, 1, uniformEntries),
                     });
                 }
                 const textureEntries = this.textureBindEntries(shaders)
@@ -7346,10 +7469,7 @@ ${fragmentCode}`;
                 if (textureEntries.length) {
                     groups.push({
                         index: 2,
-                        group: this.device.createBindGroup({
-                            layout: pipeline.getBindGroupLayout(2),
-                            entries: textureEntries,
-                        }),
+                        group: this.cachedBindGroup(pipeline, 2, textureEntries),
                     });
                 }
                 if (this.current.enabled.has(GL.COLOR_LOGIC_OP) &&
@@ -7365,10 +7485,7 @@ ${fragmentCode}`;
                     if (logicEntries.length) {
                         groups.push({
                             index: 3,
-                            group: this.device.createBindGroup({
-                                layout: pipeline.getBindGroupLayout(3),
-                                entries: logicEntries,
-                            }),
+                            group: this.cachedBindGroup(pipeline, 3, logicEntries),
                         });
                     }
                 }
@@ -7378,8 +7495,38 @@ ${fragmentCode}`;
                     GL.INVALID_OPERATION);
                 return null;
             }
-            ++this.stats.bindGroups;
             return groups;
+        },
+
+        resourceId(object) {
+            let id = this.resourceIds.get(object);
+            if (!id) {
+                id = this.nextResourceId++;
+                this.resourceIds.set(object, id);
+            }
+            return id;
+        },
+
+        cachedBindGroup(pipeline, index, entries) {
+            // Automatic layouts are pipeline-specific. Key by actual view /
+            // sampler / GPUBuffer identity, never by a recyclable GL name.
+            const key = this.resourceId(pipeline) + ":" + index + ":" +
+                entries.map(entry => {
+                    const r = entry.resource;
+                    return entry.binding + ":" + (r.buffer ?
+                        [this.resourceId(r.buffer), r.offset || 0, r.size].join("/") :
+                        this.resourceId(r));
+                }).join("|");
+            let group = this.bindGroupCache.get(key);
+            if (!group) {
+                group = this.device.createBindGroup({
+                    layout: pipeline.getBindGroupLayout(index), entries,
+                });
+                if (this.bindGroupCache.size >= 2048) this.bindGroupCache.clear();
+                this.bindGroupCache.set(key, group);
+                ++this.stats.bindGroups;
+            }
+            return group;
         },
 
         textureBindEntries(shaders) {
@@ -7590,26 +7737,37 @@ ${fragmentCode}`;
          * hundred the full table would.
          */
         writeStateUniforms(layout, shaders) {
-            const bytes = layout.floats * 4;
-            const slice = this.allocateUniform(bytes);
-            if (!slice) return null;
-            const floats = new Float32Array(this.uniformStaging.buffer,
-                slice.offset, layout.floats);
+            const floats = layout.uniformScratch ||
+                (layout.uniformScratch = new Float32Array(layout.floats));
+            floats.fill(0);
             const snapshot = this.stateSnapshot(shaders);
             stateLayout.writeLayout(layout, snapshot, floats, 0);
-            this.device.queue.writeBuffer(slice.buffer, slice.offset,
-                this.uniformStaging, slice.offset, slice.size);
-            return slice;
+            return this.writeUniformSnapshot("state:" + this.resourceId(layout),
+                new Uint8Array(floats.buffer));
         },
 
         writeEmptyUniforms() {
-            const slice = this.allocateUniform(16);
+            return this.writeUniformSnapshot("empty", new Uint8Array(16));
+        },
+
+        writeUniformSnapshot(key, bytes) {
+            const cached = this.uniformValueCache.get(key);
+            if (cached && cached.bytes.length === bytes.length) {
+                let i = 0;
+                while (i < bytes.length && cached.bytes[i] === bytes[i]) ++i;
+                if (i === bytes.length) return cached.slice;
+            }
+            const slice = this.allocateUniform(Math.max(16, bytes.byteLength));
             if (!slice) return null;
-            const zeros = new Float32Array(this.uniformStaging.buffer,
-                slice.offset, 4);
-            zeros.fill(0);
+            this.uniformStaging.fill(0, slice.offset, slice.offset + slice.size);
+            this.uniformStaging.set(bytes, slice.offset);
             this.device.queue.writeBuffer(slice.buffer, slice.offset,
                 this.uniformStaging, slice.offset, slice.size);
+            if (this.uniformValueCache.size >= 256) this.uniformValueCache.clear();
+            // Never update an earlier draw's slice in place. Compare bytes,
+            // including integer uniforms, so context switches and every setter
+            // are covered without relying on an incomplete dirty-state list.
+            this.uniformValueCache.set(key, { bytes: bytes.slice(), slice });
             return slice;
         },
 
@@ -7624,25 +7782,23 @@ ${fragmentCode}`;
          */
         writeARBProgramParameters(program) {
             const count = arbProgram.MAX_PROGRAM_PARAMETERS * 4;
-            const slice = this.allocateUniform(count * 4 * 2);
-            if (!slice) return null;
-            const floats = new Float32Array(this.uniformStaging.buffer,
-                slice.offset, count * 2);
+            const floats = program.parameterScratch ||
+                (program.parameterScratch = new Float32Array(count * 2));
             floats.set(program.env.subarray(0, count), 0);
             floats.set(program.local.subarray(0, count), count);
-            this.device.queue.writeBuffer(slice.buffer, slice.offset,
-                this.uniformStaging, slice.offset, slice.size);
-            return slice;
+            return this.writeUniformSnapshot("arb:" + this.resourceId(program),
+                new Uint8Array(floats.buffer));
         },
 
         /* One slice per stage that declared a parameter block, keyed by the
          * binding its shader reads. */
-        writeARBParameters(shaders) {
+        writeARBParameters(shaders, activeBindings) {
             const slices = {};
             const stages = [["vertex", shaders.arbVertex, shaders.wgslVertex],
                             ["fragment", shaders.arbFragment, shaders.wgslFragment]];
             for (const [stage, program, wgsl] of stages) {
                 const binding = arbProgram.PARAMETER_BINDING[stage];
+                if (activeBindings && !activeBindings.has("1:" + binding)) continue;
                 if (wgsl.indexOf("@group(1) @binding(" + binding + ")") < 0)
                     continue;
                 if (!program || !program.env || !program.local)
@@ -7658,14 +7814,11 @@ ${fragmentCode}`;
         writeProgramUniforms(shaders) {
             const program = shaders.program;
             const bytes = Math.max(16, shaders.uniformBytes);
-            const slice = this.allocateUniform(bytes);
-            if (!slice) return null;
-            this.uniformStaging.set(
-                program.uniformData.subarray(0, Math.min(bytes,
-                    program.uniformData.byteLength)), slice.offset);
-            this.device.queue.writeBuffer(slice.buffer, slice.offset,
-                this.uniformStaging, slice.offset, slice.size);
-            return slice;
+            const data = program.uniformData.byteLength >= bytes ?
+                program.uniformData.subarray(0, bytes) : new Uint8Array(bytes);
+            if (data.buffer !== program.uniformData.buffer)
+                data.set(program.uniformData);
+            return this.writeUniformSnapshot("program:" + this.resourceId(program), data);
         },
 
         /*

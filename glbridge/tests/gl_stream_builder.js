@@ -239,6 +239,7 @@ class GLStream {
      * slicing its indices from the wrong offset and drawing the magic word.
      */
     drawElements(mode, indices, indexType, arrays) {
+        indices = new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength);
         const order = ["vertex", "color", "normal",
             "texCoord0", "texCoord1", "texCoord2", "texCoord3",
             "texCoord4", "texCoord5", "texCoord6", "texCoord7",
@@ -291,6 +292,9 @@ class GLStream {
     }
 
     packedGL2Draw(mode, indicesOrCount, indexType, arrays, generics) {
+        if (indexType !== null)
+            indicesOrCount = new Uint8Array(indicesOrCount.buffer,
+                indicesOrCount.byteOffset, indicesOrCount.byteLength);
         const order = ["vertex", "color", "normal",
             "texCoord0", "texCoord1", "texCoord2", "texCoord3",
             "texCoord4", "texCoord5", "texCoord6", "texCoord7",

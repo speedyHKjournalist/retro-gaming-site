@@ -115,6 +115,7 @@ detail silently.
 | `V86GL_TRACE_CALLS=1` | uncapped per-record firehose |
 | `V86GL_TRACE_CALLS=0` | summary only, no per-call detail |
 | `V86GL_TRACE=0` | summary only; also drops the transport and lifetime lines |
+| `V86GL_TRACE_FLUSH_MS=N` | diagnostic file checkpoint interval, 0–60000 ms; default 1000; `0` restores a durable flush every frame |
 
 The process, frame, error and histogram summary is written directly and is not
 affected by any of these settings; the table controls the transport, lifetime
@@ -126,6 +127,22 @@ exception per line, which costs far more than the file write.
 
 Diagnostic code is compiled out of the normal `opengl32.dll` built by
 `build.sh`, which still traces nothing unless one of those variables is set.
+
+The OpenGL diagnostic writer batches lines in a 64 KiB buffer. Full buffers
+are written without a disk flush; frame checkpoints flush about once per
+second by default. Attach, normal exit, reported errors and caught exceptions
+force a flush (exception handling is best-effort if another thread owns the
+writer lock). `TRACE_IO buffer_bytes=65536 flush_ms=1000` in the log confirms
+the new build and its effective setting. Abrupt process termination, a browser
+crash, or a stalled application can lose the unflushed tail; use
+`V86GL_TRACE_FLUSH_MS=0` when investigating such failures. This does not change
+the legacy DirectX diagnostic writer's default behavior.
+
+For performance comparisons, run the **normal** `opengl32.dll` first using
+the same save, route, resolution and video settings. Then compare the diagnostic
+build (optionally `V86GL_TRACE_CALLS=0`). Summary-only diagnostics still format
+and write log records, so they are not equivalent to the normal build. Compare
+visible frame intervals and long-task durations, not just the in-game FPS HUD.
 
 ### Where the log lands
 
@@ -178,4 +195,5 @@ node glbridge/tests/wined3d_caps_profile_test.js
 node glbridge/tests/gl_executor_test.js
 node glbridge/tests/v86_network_bridge_gl_route_test.js
 node glbridge/tests/gl_proxy_diagnostic_trace_test.js
+node glbridge/tests/gl_diagnostic_buffer_test.js
 ```
