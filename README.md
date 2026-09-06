@@ -1,6 +1,8 @@
 # Retro Gaming Site
 
-A browser-based retro gaming site built on v86, with a direct D3D8-to-WebGPU path.
+A browser-based retro gaming site built on v86, with OpenGL and legacy Direct3D/DirectDraw proxies rendered by v86’s optional WebGPU graphics bundle.
+
+Build and sync the runtime before serving a fresh checkout; see [graphics runtime setup](glbridge/README.md).
 
 ## Site structure
 

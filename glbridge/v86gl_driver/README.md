@@ -1,57 +1,34 @@
-# v86gl XP driver
+# v86gl XP driver: custom virtio transport
 
-This WDM driver is the PCI-only transport used by `opengl32_proxy.c`.
+The updated source uses v86's modern virtio PCI capabilities and split queue.
+It discovers the assigned I/O BARs, negotiates VERSION_1 and SHARED_ARENA,
+then registers the existing 16 MiB command/response arena. The `\\.\v86gl`
+name and proxy DLL IOCTL ABI are unchanged.
 
-It allocates a 16 MiB physically contiguous buffer below 4 GiB, maps that
-buffer into the calling process, and submits the buffer's guest physical
-address to the v86gl PCI I/O BAR at `0xF100`.
+Game → existing proxy DLL → MAP_BUFFER / SUBMIT IOCTL → virtqueue →
+registered shared RAM → browser graphics adapter → WebGPU.
 
-## Architecture
+**The checked-in `v86gl.sys` is the old PCI driver.** The new cross-build is
+named `v86gl-virtio.sys` to make deployment explicit. Do not use the old binary
+with the new host device. The new driver has been cross-compiled and the host
+protocol tested, but XP boot/service/game validation remains required.
 
-```text
-┌────────────────────────────── v86 VM: Windows XP guest ──────────────────────────────┐
-│                                                                                        │
-│  ┌──────────────┐   OpenGL 1.x / WGL   ┌────────────────────────────────────────────┐ │
-│  │ Game / app   │ ───────────────────▶ │ opengl32.dll (OpenGL proxy)                │ │
-│  └──────────────┘                      │ • Encodes intercepted GL calls             │ │
-│                                        │ • Writes descriptor and command records    │ │
-│                                        └──────────────┬─────────────────────────────┘ │
-│                                                       │ MAP_BUFFER / SUBMIT (IOCTL)    │
-│                                                       ▼                                │
-│  ┌────────────────────────────────────────────────────────────────────────────────┐  │
-│  │ v86gl.sys (WDM kernel driver)                                                   │  │
-│  │ • Allocates and maps 16 MiB contiguous RAM below 4 GiB                          │  │
-│  │ • Validates the DMA descriptor                                                   │  │
-│  │ • Writes DESC_LO / DESC_LEN / COMMAND to the PCI I/O BAR                        │  │
-│  └─────────────┬──────────────────────────────────────────────────┬───────────────┘  │
-│                │ mapped user address                              │ doorbell          │
-│                ▼                                                  ▼                   │
-│  ┌────────────────────────────────────┐          ┌────────────────────────────────┐ │
-│  │ Shared guest RAM (16 MiB)           │ ◀─ DMA ─ │ v86gl PCI device (BAR 0xF100) │ │
-│  │ [ V86GLDMADesc | GL records ... ]   │  read    │ • SUBMIT / FORCE_PRESENT        │ │
-│  └────────────────────────────────────┘          │ • STATUS / ERROR / LAST_FRAME   │ │
-│                                                   └───────────────┬────────────────┘ │
-└───────────────────────────────────────────────────────────────────┼──────────────────┘
-                                                                    │ v86gl-pci-frame
-                                                                    ▼
-┌──────────────────────────────────── Browser / host ───────────────────────────────────┐
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐ │
-│  │ v86_network_bridge.js: routes untagged VGL2 records to the GL WebGPU executor    │ │
-│  └──────────────────────────────────────────┬──────────────────────────────────────┘ │
-│                                             ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐ │
-│  │ gl-webgpu/gl_executor.js: GL state, GLSL/fixed-function WGSL, resources, draws  │ │
-│  └──────────────────────────────────────────┬──────────────────────────────────────┘ │
-│                                             ▼                                         │
-│                              ┌──────────────────────────────────┐                    │
-│                              │ WebGPU / WGSL                    │                    │
-│                              │ d3d_webgpu_canvas (shared)       │                    │
-│                              └──────────────────────────────────┘                    │
-└───────────────────────────────────────────────────────────────────────────────────────┘
+## Cross-build
 
-  ◀── Status readback: PCI STATUS / ERROR → v86gl.sys → IOCTL return
-  ◀── glReadPixels: host writes the synchronous result into shared guest RAM
+With the i686 mingw-w64 toolchain installed, from the repo root:
+
+```sh
+sh glbridge/v86gl_driver/build.sh
 ```
+
+Output: `glbridge/v86gl_driver/v86gl-virtio.sys`. The script accepts an output
+path as its first argument; `CC` and `V86GL_DDK_INCLUDE` override tool locations.
+It targets PE32, native subsystem 5.1 and only imports kernel/HAL routines.
+
+## XP DDK build
+
+Copy `virtio_transport.h` with `v86gl_driver.c`, and preserve the relative
+`../openglproxy/v86gl_ioctl.h` include path.
 
 Build with the Windows Server 2003 SP1 DDK (`3790.1830`) or another
 Windows XP-compatible WDK. In this legacy DDK, x86 is the default target;
@@ -90,30 +67,38 @@ For a complete DDK 3790.1830 installation, `setenv.bat` normally selects
 this project: repair or reinstall the complete DDK build environment, then
 run `setenv.bat` again.
 
-Install the resulting `v86gl.sys` as a demand-start kernel service, then start
-it before launching the guest OpenGL program:
+## Install and test
 
-```text
+Close all proxy applications, stop the old service, and replace its installed
+binary with the new build. Keep the old driver with the old emulator build.
+For a new installation, after copying the new binary to `C:\v86gl\v86gl.sys`:
+
+```bat
 sc create v86gl type= kernel start= demand binPath= C:\v86gl\v86gl.sys
 sc start v86gl
 ```
 
-The driver exposes `\\.\v86gl`. Its `MAP_BUFFER` IOCTL maps the contiguous
-guest RAM into `opengl32.dll`; `SUBMIT` writes descriptor address, byte length,
-and doorbell through the PCI I/O BAR. The shared user/kernel declarations are
-in `../openglproxy/v86gl_ioctl.h`.
+Use a cold boot instead of resuming an old PCI-device memory snapshot. Select
+**Enable graphics proxy (WebGPU)** in index.html/debug.html. Test the D3D9 clear
+and triangle samples before the game. The service now fails startup if the
+custom virtio device/capabilities/features cannot be found and initialized.
+DebugView's kernel capture shows discovery, negotiation failures and failed
+virtqueue requests under `[v86gl.sys]`.
 
-## Transport diagnostics
+The driver serializes map, submit and unmap operations. Unregister/reset
+revokes host arena access before memory is released. Queue completion acknowledges
+batch acceptance; GPU query/readback completion still follows the existing
+GLWG/D9WG response flags. No new GPU-fence semantics are promised.
 
-Every map, submit, descriptor validation failure, PCI doorbell, and completion
-is written as a `[v86gl.sys]` `DbgPrint` record. Use DebugView in the guest
-with **Capture Kernel** enabled. A successful submit includes the same
-`frame`, command count, and command byte count recorded by `opengl32.dll`,
-then reads `STATUS`, `LAST_FRAME`, `LAST_BYTES`, and `ERROR` back from the PCI
-device. This makes a missing/failed transition visible without a kernel
-debugger.
+Full protocol, provisional device identity, snapshot compatibility and reproducible
+host build instructions: [v86/docs/v86gl-virtio.md](../../../v86/docs/v86gl-virtio.md).
 
-`V86GLDMADesc.reserved0` and `reserved1` remain reserved and must be zero.
-The PRESENT flag asks the synchronous browser listener to issue the explicit
-WebGPU present blit. It does not claim that the browser compositor has already
-displayed the canvas, so no Present-completion extension is defined.
+## Submission fast path
+
+The optimized driver uses FAST_MUTEX in a critical region instead of KMUTEX,
+and completes IRPs after releasing the lock. The IOCTL/virtio wire ABI is unchanged.
+The log identifies this build as `virtio perf1`. Before replacing a driver, run
+`sc qc v86gl` and use its actual `BINARY_PATH_NAME`; copying a new binary elsewhere
+does not update the service. Optimized-driver XP performance remains to be tested.
+
+See [the host/driver optimization report](../../../v86/docs/v86gl-virtio-perf.md).

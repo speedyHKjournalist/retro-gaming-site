@@ -13,8 +13,8 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const wire = require("../gl-webgpu/gl_wire.js");
-const constants = require("../gl-webgpu/gl_constants.js");
+const wire = require(require("./host_paths.js").hostPath("gl-webgpu/gl_wire.js"));
+const constants = require(require("./host_paths.js").hostPath("gl-webgpu/gl_constants.js"));
 
 const proxyPath = path.join(__dirname, "..", "openglproxy", "opengl32_proxy.c");
 const source = fs.readFileSync(proxyPath, "utf8");
@@ -90,7 +90,7 @@ test("decodeArgs refuses a payload that is one byte short", () => {
 });
 
 test("the response region matches the D9WG layout the D3D path uses", () => {
-    const executor = require("../gl-webgpu/gl_executor.js");
+    const executor = require(require("./host_paths.js").hostPath("gl-webgpu/gl_executor.js"));
     // Both paths carve the same tail out of v86gl.sys's arena so that guest
     // memory looks the same whichever DLL is loaded (plan 6.2).
     assert.strictEqual(executor.GLWG_RESPONSE_REGION_BYTES, 4 * 1024 * 1024);
@@ -217,11 +217,11 @@ test("the object, location and parameter kinds are the guest's numbers", () => {
 });
 
 test("the executor has a handler for every opcode it claims to implement", () => {
-    const executor = require("../gl-webgpu/gl_executor.js");
+    const executor = require(require("./host_paths.js").hostPath("gl-webgpu/gl_executor.js"));
     const table = executor.buildHandlerTable();
     // buildHandlerTable() alone covers the state opcodes; the installers add
     // the rest, and the executor's constructor calls all of them.
-    const { createFakeHost } = require("./gl_fake_gpu.js");
+    const { createFakeHost } = require(require("./host_paths.js").testPath("gl_fake_gpu.js"));
     const { host } = createFakeHost();
     const live = new executor.GLWebGPUExecutor(null, { host });
     let implemented = 0;

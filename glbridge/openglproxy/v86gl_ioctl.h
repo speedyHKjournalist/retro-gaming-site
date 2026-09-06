@@ -13,21 +13,8 @@ typedef uint32_t V86GLU32;
 #define V86GL_MAGIC 0x324C4756u
 #define V86GL_VERSION 1u
 
-#define V86GL_PCI_PORT_DEFAULT 0xF100u
-#define V86GL_REG_STATUS 0x0Cu
-#define V86GL_REG_DESC_LO 0x10u
-#define V86GL_REG_DESC_HI 0x14u
-#define V86GL_REG_DESC_LEN 0x18u
-#define V86GL_REG_COMMAND 0x1Cu
-#define V86GL_REG_LAST_FRAME 0x20u
-#define V86GL_REG_LAST_BYTES 0x24u
-#define V86GL_REG_ERROR 0x28u
-
-#define V86GL_CMD_SUBMIT (1u << 0)
-#define V86GL_CMD_FORCE_PRESENT (1u << 1)
-
-#define V86GL_STATUS_ERROR (1u << 1)
-#define V86GL_STATUS_SUBMITTED (1u << 7)
+/* User/kernel IOCTL ABI is unchanged. The kernel transport now uses virtio;
+ * legacy PCI register definitions are intentionally removed. */
 
 #define V86GL_DESC_FLAG_PRESENT (1u << 0)
 #define V86GL_SUBMIT_FORCE_PRESENT (1u << 0)

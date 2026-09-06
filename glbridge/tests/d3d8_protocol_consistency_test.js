@@ -22,7 +22,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
+const read = relative => fs.readFileSync(/^(gl-webgpu|d3d8-webgpu|d3d9-webgpu)\//.test(relative) ? require("./host_paths.js").hostPath(relative) : path.join(root, relative), "utf8");
 
 const guest = read("d3d8proxy/d3d8_proxy.c");
 const bridge = read("d3d8proxy/d3d8_protocol.h");
@@ -432,7 +432,7 @@ for (const name of D3D8_SM1_OPCODES) {
 // all, which is what a black screen from every vertex-shader test looked
 // like. Compare them by running both rather than by reading either.
 
-const shaderPipeline = require("../d3d9-webgpu/d3d9_shader_pipeline.js");
+const shaderPipeline = require(require("./host_paths.js").hostPath("d3d9-webgpu/d3d9_shader_pipeline.js"));
 
 const guestUsageValues = new Map();
 for (const match of bridge.matchAll(/#define (D3D9DECLUSAGE_\w+) (\d+)u/g))

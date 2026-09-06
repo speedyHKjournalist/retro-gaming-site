@@ -1238,7 +1238,7 @@ input:focus-visible {
     pointer-events: none;
 }
 
-#screen_container canvas {
+#screen_container canvas:not([data-v86-graphics]) {
     display: block;
     max-width: 100% !important;
     max-height: 100% !important;
@@ -1248,7 +1248,7 @@ input:focus-visible {
     image-rendering: pixelated;
 }
 
-#d3d_webgpu_canvas {
+#screen_container canvas[data-v86-graphics] {
     position: absolute;
     z-index: 5;
     top: 0;
@@ -1321,7 +1321,7 @@ input:focus-visible {
     background: #000;
 }
 
-#screen_container:fullscreen canvas {
+#screen_container:fullscreen canvas:not([data-v86-graphics]) {
     width: 100vw !important;
     height: 100vh !important;
     max-width: none !important;

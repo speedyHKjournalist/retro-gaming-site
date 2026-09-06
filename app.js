@@ -5,6 +5,7 @@ let v86gl = null;
 let v8ftManager = null;
 let v8ftUI = null;
 let operationCoordinator = null;
+let emulatorLaunchQueue = Promise.resolve();
 
 function createOperationCoordinator() {
     if (typeof window.V86OperationCoordinator === "function") {
@@ -389,7 +390,7 @@ async function refreshMapleStoryNetwork(activeEmulator) {
     }
 }
 
-function startEmulator9xMultiDisk(gameId) {
+async function startEmulator9xMultiDisk(gameId) {
 
     const game = GAMES[gameId];
 
@@ -401,20 +402,15 @@ function startEmulator9xMultiDisk(gameId) {
             window.v86FileTransferManager = null;
             window.v86FileTransferV1 = null;
         }
-        emulator.stop();
-        emulator.destroy();
+        await emulator.destroy();
         emulator = null;
         v86gl = null;
-
-        const graphicsCanvas = document.getElementById("d3d_webgpu_canvas");
-        if (graphicsCanvas) {
-            graphicsCanvas.style.display = "none";
-        }
     }
 
     emulator = new V86({
         memory_size: game.memorySize,
         vga_memory_size: 16 * 1024 * 1024,
+        graphics_adapter: installV86GLGraphicsAdapter,
         bios: { url: "bios/seabios.bin" },
         vga_bios: { url: "bios/vgabios.bin" },
         wasm_path: "v86.wasm",
@@ -469,54 +465,12 @@ function startEmulator9xMultiDisk(gameId) {
 }
 
 function attachEmulatorListeners(emulator, gameId) {
-    // OpenGL, D3D8 and D3D9 are mutually exclusive for a game directory and
-    // share one WebGPU overlay. The tagged PCI envelopes choose the executor.
-    const graphicsCanvas = document.getElementById("d3d_webgpu_canvas");
-    let glCanvasObserver = null;
-
-    function syncGLCanvasPosition() {
-        if (!v86gl || typeof v86gl.positionCanvas !== "function") return;
-        // v86 changes the VGA canvas size after the bridge is created. Refresh
-        // the reference and calculate the overlay from the final canvas rect.
-        if (typeof v86gl.findScreenCanvas === "function") {
-            v86gl.screenCanvas = v86gl.findScreenCanvas();
-        }
-        v86gl.positionCanvas();
-    }
-
-    const installV86GLBridge =
-        typeof installV86GLNetworkBridge === "function" ? installV86GLNetworkBridge : null;
-
-    if (graphicsCanvas && installV86GLBridge) {
-        try {
-            v86gl = installV86GLBridge(emulator, graphicsCanvas, {
-                graphicsCanvas: graphicsCanvas,
-            });
-            window.v86gl = v86gl;
-
-            const screenCanvas = document.querySelector(
-                "#screen_container canvas:not(#d3d_webgpu_canvas)");
-            if (screenCanvas && typeof ResizeObserver === "function") {
-                glCanvasObserver = new ResizeObserver(function() {
-                    requestAnimationFrame(syncGLCanvasPosition);
-                });
-                glCanvasObserver.observe(screenCanvas);
-                glCanvasObserver.observe(document.getElementById("screen_container"));
-            }
-        } catch (err) {
-            console.warn("Failed to start v86 GL network bridge:", err);
-        }
-    }
-
-    emulator.add_listener("screen-set-size", function() {
-        requestAnimationFrame(syncGLCanvasPosition);
-    });
+    v86gl = null;
+    window.v86gl = null;
 
     emulator.add_listener("emulator-loaded", function() {
-        const pci = emulator.v86 && emulator.v86.cpu && emulator.v86.cpu.devices.v86gl_pci;
-        if (!pci) {
-            console.error("[v86gl] PCI device is missing from this libv86.js build");
-        }
+        v86gl = emulator.graphics_adapter;
+        window.v86gl = v86gl;
         if (gameId === "maplestory") {
             refreshMapleStoryNetwork(emulator);
         }
@@ -539,20 +493,6 @@ function attachEmulatorListeners(emulator, gameId) {
         updateStatus("Emulator ready — click the screen to capture your mouse");
         const placeholder = document.getElementById("screen_placeholder");
         if (placeholder) placeholder.classList.add("is-hidden");
-
-        // Some initial states emit an early empty GL frame while the VGA canvas
-        // is still changing size. Do not leave that 300x150 bootstrap canvas on
-        // top of the Windows desktop; the next real GL frame will show it again.
-        requestAnimationFrame(function() {
-            syncGLCanvasPosition();
-            if (v86gl && typeof v86gl.hideOverlayCanvas === "function") {
-                v86gl.hideOverlayCanvas();
-            }
-        });
-    });
-
-    window.addEventListener("resize", function() {
-        requestAnimationFrame(syncGLCanvasPosition);
     });
 }
 
@@ -577,7 +517,10 @@ function launchGameMultiDisk(gameId) {
     }
     
     updateStatus("Starting " + game.name + "...");
-    startEmulator9xMultiDisk(gameId);
+    emulatorLaunchQueue = emulatorLaunchQueue.then(() => startEmulator9xMultiDisk(gameId)).catch(error => {
+        console.error("Failed to start emulator", error);
+        updateStatus("Start failed: " + (error.message || error));
+    });
 }
 
 // Initialize on page load
@@ -616,18 +559,12 @@ window.onload = function() {
 
         const button = this;
         const activeEmulator = emulator;
-        const activeBridge = v86gl;
         const wasRunning = activeEmulator.is_running();
         button.disabled = true;
         updateStatus("Saving state...");
         try {
             if (wasRunning) {
                 await activeEmulator.stop();
-            }
-            if (activeBridge && typeof activeBridge.prepareSaveState === "function") {
-                const glState = activeBridge.prepareSaveState();
-                const glMiB = (glState.bytes / 1024 / 1024).toFixed(1);
-                updateStatus("Saving state (OpenGL checkpoint " + glMiB + " MiB)...");
             }
 
             const state_data = await activeEmulator.save_state();
@@ -676,9 +613,7 @@ window.onload = function() {
 
         const input = this;
         const activeEmulator = emulator;
-        const activeBridge = v86gl;
         const wasRunning = activeEmulator.is_running();
-        let bridgeRestorePending = false;
         let restoreCompleted = false;
         let reconnectManager = false;
         updateStatus("Restoring state...");
@@ -693,18 +628,10 @@ window.onload = function() {
             if (v8ftManager && v8ftManager.emulator === activeEmulator) {
                 v8ftManager.clearRestoreInput("pre-restore");
             }
-            if (activeBridge && typeof activeBridge.beginStateRestore === "function") {
-                activeBridge.beginStateRestore();
-                bridgeRestorePending = true;
-            }
 
             await activeEmulator.restore_state(stateData);
             if (v8ftManager && v8ftManager.emulator === activeEmulator) {
                 v8ftManager.finishStateRestoreBeforeRun();
-            }
-            if (activeBridge && typeof activeBridge.finishStateRestore === "function") {
-                await activeBridge.finishStateRestore();
-                bridgeRestorePending = false;
             }
             restoreCompleted = true;
 
@@ -720,10 +647,6 @@ window.onload = function() {
 
             updateStatus("State Restored!");
         } catch (err) {
-            if (bridgeRestorePending && activeBridge &&
-                typeof activeBridge.cancelStateRestore === "function") {
-                activeBridge.cancelStateRestore();
-            }
             console.error("Failed to restore emulator state:", err);
             updateStatus((restoreCompleted ? "State restored, but resume failed: " : "Restore Failed: ") +
                 (err && err.message || err));
@@ -808,7 +731,7 @@ window.onload = function() {
     });
 
     // Setup mouse lock
-    var canvas = document.querySelector("#screen_container canvas");
+    var canvas = document.querySelector("#screen_container canvas:not([data-v86-graphics])");
     if (canvas) {
         canvas.addEventListener("mousedown", function() {
             canvas.requestPointerLock();

@@ -25,10 +25,10 @@ const guestSource = fs.readFileSync(
 const exportsFile = fs.readFileSync(
     path.resolve(__dirname, "../ddrawproxy/ddraw.def"), "utf8");
 const hostSource = fs.readFileSync(
-    path.resolve(__dirname, "../d3d9-webgpu/ddraw_ops.js"), "utf8");
+    require("./host_paths.js").hostPath("d3d9-webgpu/ddraw_ops.js"), "utf8");
 const executorSource = fs.readFileSync(
-    path.resolve(__dirname, "../d3d9-webgpu/d3d9_executor.js"), "utf8");
-const ddraw = require("../d3d9-webgpu/ddraw_ops.js");
+    require("./host_paths.js").hostPath("d3d9-webgpu/d3d9_executor.js"), "utf8");
+const ddraw = require(require("./host_paths.js").hostPath("d3d9-webgpu/ddraw_ops.js"));
 
 const failures = [];
 let passed = 0;

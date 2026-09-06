@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
+const read = relative => fs.readFileSync(/^(gl-webgpu|d3d8-webgpu|d3d9-webgpu)\//.test(relative) ? require("./host_paths.js").hostPath(relative) : path.join(root, relative), "utf8");
 
 const shared = read("diagnostic_trace.h");
 const d3d8 = read("d3d8proxy/d3d8_proxy.c");
