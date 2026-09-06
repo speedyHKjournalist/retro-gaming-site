@@ -693,6 +693,8 @@ static void trace_close(void)
 #define D9FMT_DF16 D9_FOURCC('D', 'F', '1', '6')
 #define D9FMT_DF24 D9_FOURCC('D', 'F', '2', '4')
 #define D9FMT_INTZ D9_FOURCC('I', 'N', 'T', 'Z')
+/* 3DMark05 uses this as a negative PCF capability probe, not a texture. */
+#define D9FOURCC_NO_PCF D9_FOURCC('-', 'P', 'C', 'F')
 /*
  * ATI's 3Dc compressed formats, which are BC4 and BC5 under their pre-DX10
  * names. A normal map stored as ATI2N keeps only X and Y and the shader
@@ -1765,7 +1767,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
  */
 /* Bumped whenever guest-visible behaviour changes, so the console can say
  * which DLL is actually loaded rather than leaving it to be inferred. */
-#define D9_PROXY_BUILD "adapter-mode-boundary-20260903"
+#define D9_PROXY_BUILD "negative-pcf-probe-20260906"
 
 #define D9_HOSTLOG_MAX_DISTINCT 128u
 
@@ -4362,6 +4364,18 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
     BOOL ok = FALSE;
     HRESULT result;
     (void)iface; (void)adapter_format;
+    /* 3DMark05's 0x0046F240 probe stops looking for filtered depth textures
+     * when '-PCF' succeeds. Our depth comparison sampler supports PCF, so
+     * NOTAVAILABLE is the expected answer here. Keep this query out of the
+     * generic refusal warning; never advertise it as a creatable format. */
+    if (!adapter && type == D3DDEVTYPE_HAL && !usage
+            && resource_type == D3DRTYPE_TEXTURE && format == D9FOURCC_NO_PCF) {
+        TRACE("PROBE CheckDeviceFormat -PCF -> %08lX (expected negative probe)",
+                (DWORD)D3DERR_NOTAVAILABLE);
+        HOSTLOG_INFO("CheckDeviceFormat -PCF: negative capability probe; "
+                "depth comparison filtering is available");
+        return D3DERR_NOTAVAILABLE;
+    }
     if (!adapter && type == D3DDEVTYPE_HAL) {
         /* D3DUSAGE_QUERY_* bits exist only in this call and never reach a
          * Create*, so they are answered here and masked off before the shared
