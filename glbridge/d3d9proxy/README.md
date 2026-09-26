@@ -202,15 +202,21 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
   one the guest can actually switch into.
 - **Presentation-interval fix:** `Present` honours
   `D3DPRESENT_INTERVAL_ONE`..`FOUR` (and `DEFAULT`, which D3D9 documents as
-  equivalent to `ONE`) by sleeping out the remainder of the interval since the
-  previous `Present`, from `GetTickCount` against the device's reported refresh
-  rate. That wait is the *only* back-pressure a D3D9 title has on its own frame
-  rate — the render loop is `while (running) { render(); Present(); }` and
-  nothing else in it sleeps — so returning immediately let San Andreas' loading
-  screen reach roughly 1000 `Present`/s, starving every other thread in the
-  guest of timeslices. It costs nothing when the guest is already the
-  bottleneck, since the elapsed time then exceeds the interval; `IMMEDIATE` is
-  never throttled, and `D9WG_PRESENT_NO_THROTTLE=1` disables it outright.
+  equivalent to `ONE`) by sleeping until a deadline one interval after the
+  previous `Present`'s, at the device's reported refresh rate. That wait is the
+  *only* back-pressure a D3D9 title has on its own frame rate — the render loop
+  is `while (running) { render(); Present(); }` and nothing else in it sleeps —
+  so returning immediately let San Andreas' loading screen reach roughly 1000
+  `Present`/s, starving every other thread in the guest of timeslices. A frame
+  that finishes late by less than an interval keeps the cadence (the next
+  frame waits less), so frames that straddle the interval still average the
+  refresh rate; later than that, the cadence restarts. The clock is
+  `QueryPerformanceCounter`: the first version measured from `GetTickCount`,
+  which advances in whole 10 ms clock ticks on XP, so a 14 ms frame read as
+  10 ms and slept 6 more -- a KartRider race whose frames took 14 ms ran at
+  50 frames/s with a fifth of the game thread asleep, and no frame time could
+  reach 60. `IMMEDIATE` is never throttled, and `D9WG_PRESENT_NO_THROTTLE=1`
+  disables it outright.
 - **GTA San Andreas legal-screen exit fix:** GTA's frontend loader exits when
   `CGame::InitialiseEssentialsAfterRW()` fails. The failing branch is the car
   environment-map pipeline's caps gate: it requires

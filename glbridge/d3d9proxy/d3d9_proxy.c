@@ -983,8 +983,11 @@ struct D9Device {
     LONG saved_window_style;
     LONG saved_window_exstyle;
     /* Reconstructs the vertical-retrace wait Present owes the app; see
-     * throttle_to_presentation_interval(). */
-    DWORD last_present_tick;
+     * throttle_to_presentation_interval().  Times are present_clock() ticks. */
+    DWORD present_deadline;
+    DWORD present_clock_hz;
+    BYTE present_clock_shift;
+    BOOL present_paced;
     /* Rate limiting for maintain_fullscreen_foreground(). */
     DWORD last_foreground_claim;
     DWORD foreground_claims;
@@ -5785,10 +5788,19 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
  * process of timeslices and spends the emulator's budget on frames nobody sees.
  *
  * There is no retrace to wait on here, so the wait is reconstructed from the
- * clock: sleep out whatever is left of the interval since the previous Present.
- * When the guest is already the bottleneck the elapsed time exceeds the
- * interval and this costs nothing, so the throttle only engages on the frames
- * that were running too fast.
+ * clock: each Present may return no earlier than a deadline one interval after
+ * the previous one's.  A frame that finishes late by less than an interval
+ * keeps the cadence -- the next frame's wait is shorter -- so frames that
+ * straddle the interval still average the refresh rate, as with a retrace
+ * wait and a render-ahead queue; later than that, the cadence restarts from
+ * now instead of letting the frames that follow run unthrottled to catch up.
+ *
+ * The clock must resolve well under a millisecond.  GetTickCount advances in
+ * whole clock-interrupt periods -- 10 ms on the XP HAL v86 runs -- so the
+ * elapsed time it reports for a 14 ms frame is 10 ms or 20 ms.  Measuring
+ * from it held a KartRider race at 50 frames/s with a fifth of the game
+ * thread asleep, while the frames themselves took 14 ms, and capped even an
+ * idle loop below 60.
  */
 static BOOL present_throttle_disabled(void)
 {
@@ -5799,9 +5811,35 @@ static BOOL present_throttle_disabled(void)
     return cached != 0;
 }
 
+/* QueryPerformanceCounter, shifted down to at most 2^20 ticks/s (a
+ * microsecond or so) so that pacing needs only 32-bit arithmetic -- this DLL
+ * links no compiler runtime for 64-bit division -- and still wraps only about
+ * once an hour, which the signed differences below tolerate.  GetTickCount is
+ * the fallback where there is no performance counter. */
+static DWORD present_clock(D9Device *device)
+{
+    LARGE_INTEGER value;
+
+    if (!device->present_clock_hz) {
+        BYTE shift = 0;
+        if (!QueryPerformanceFrequency(&value) || value.QuadPart <= 0) {
+            device->present_clock_shift = 0xFF;
+            device->present_clock_hz = 1000u;
+        } else {
+            while ((value.QuadPart >> shift) > (1 << 20))
+                ++shift;
+            device->present_clock_shift = shift;
+            device->present_clock_hz = (DWORD)(value.QuadPart >> shift);
+        }
+    }
+    if (device->present_clock_shift == 0xFF || !QueryPerformanceCounter(&value))
+        return GetTickCount();
+    return (DWORD)(value.QuadPart >> device->present_clock_shift);
+}
+
 static void throttle_to_presentation_interval(D9Device *device)
 {
-    DWORD frames, refresh, interval_ms, elapsed;
+    DWORD frames, refresh, interval, now, deadline;
 
     if (present_throttle_disabled())
         return;
@@ -5819,18 +5857,27 @@ static void throttle_to_presentation_interval(D9Device *device)
     refresh = device->display_mode.RefreshRate;
     if (refresh < 20u || refresh > 240u)
         refresh = 60u;
-    interval_ms = (1000u * frames) / refresh;
-    if (!interval_ms)
+    now = present_clock(device);
+    interval = device->present_clock_hz * frames / refresh;
+    if (!interval)
         return;
 
-    /* Unsigned wraparound makes this correct across GetTickCount()'s 49.7-day
-     * rollover.  The very first Present subtracts a zero timestamp and so
-     * measures the time since boot, which never sleeps -- exactly what a first
-     * frame with no predecessor should do. */
-    elapsed = GetTickCount() - device->last_present_tick;
-    if (elapsed < interval_ms)
-        Sleep(interval_ms - elapsed);
-    device->last_present_tick = GetTickCount();
+    deadline = device->present_deadline;
+    /* The first Present has no predecessor to wait for. */
+    if (device->present_paced && (LONG)(deadline - now) > 0) {
+        /* Whole milliseconds: Sleep cannot do better, and waking up to a
+         * millisecond early is absorbed by the next frame's deadline. */
+        DWORD wait = deadline - now <= interval
+                ? (deadline - now) * 1000u / device->present_clock_hz : 0;
+        if (wait)
+            Sleep(wait);
+        now = present_clock(device);
+    }
+    if (!device->present_paced || (LONG)(now - deadline) >= (LONG)interval
+            || (LONG)(deadline - now) > (LONG)interval)
+        deadline = now;
+    device->present_deadline = deadline + interval;
+    device->present_paced = TRUE;
 }
 
 static HRESULT WINAPI device_present(IDirect3DDevice9 *iface,
@@ -7900,16 +7947,26 @@ static HRESULT WINAPI device_get_raster_status(IDirect3DDevice9 *iface,
         UINT swapchain, D3DRASTER_STATUS *status)
 {
     D9Device *device = device_from_iface(iface);
-    DWORD phase;
+    DWORD now, period, visible;
     if (swapchain || !status)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     /* D3D9 exposes this as advisory scan-out timing. Reconstruct a stable
      * 60-Hz raster from the guest monotonic clock so polling loops progress
-     * and observe a real vblank interval instead of a permanent constant. */
-    phase = GetTickCount() % 17u;
-    status->InVBlank = phase >= 16u;
+     * and observe a real vblank interval instead of a permanent constant:
+     * the last 1/17 of each frame is the blank.  present_clock(), because
+     * GetTickCount's 10 ms steps land in a 1 ms blank once every 170 ms. */
+    now = present_clock(device);
+    period = device->present_clock_hz / 60u;
+    visible = period * 16u / 17u;
+    if (!visible) {
+        status->InVBlank = FALSE;
+        status->ScanLine = 0;
+        return D3D_OK;
+    }
+    now %= period;
+    status->InVBlank = now >= visible;
     status->ScanLine = status->InVBlank || !device->display_mode.Height
-            ? 0u : phase * device->display_mode.Height / 16u;
+            ? 0u : now * device->display_mode.Height / visible;
     return D3D_OK;
 }
 static D9VolumeTexture *volume_texture_from_iface(
