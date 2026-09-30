@@ -47,6 +47,7 @@ interface version and the Direct3D 1-7 fixed-function object models:
 | `Flip`, including storage rotation around a chain | done |
 | `IDirectDrawPalette`, palettised surfaces kept as GPU-side indices | done |
 | `IDirectDrawClipper`, resolved guest-side into per-rectangle blits | done |
+| Window state: where the cooperative window's client area is and what of it other windows leave showing (`D9WG_OP_WINDOW_STATE` with `D9WG_WINDOW_OCCLUDED`/`D9WG_WINDOW_REGION`), sent with each present and from a `SetWinEventHook` while there is a primary | done, not yet run in the guest |
 | `GetDC`/`ReleaseDC` over a DIB section | done |
 | Windowed primary initial contents | seeded from the current GDI desktop, so save-under splash screens preserve rather than black out their background |
 | Overlay show/hide, position/stretch, dirty refresh, source/destination keys and overrides, mirroring, enumeration and all z-order operations | done as a non-destructive present-time composite |

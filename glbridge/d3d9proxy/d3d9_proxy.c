@@ -33,6 +33,7 @@
 #endif
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d9_protocol.h"
+#include "../window_region.h"
 
 #ifndef D3DSTREAMSOURCE_INDEXEDDATA
 #define D3DSTREAMSOURCE_INDEXEDDATA 0x40000000u
@@ -993,6 +994,11 @@ struct D9Device {
     DWORD foreground_claims;
     uint32_t last_window_flags;
     uint32_t last_foreground;
+    /* The visible part of the client area last reported (D9WG_WINDOW_REGION) */
+    V86WindowRegion last_region;
+    /* The window emit_window_state() last reported, which the window-event
+     * hook reports again when anything on the screen changes. */
+    HWND state_window;
     /*
      * D3D9's constant registers are device state, not shader state: they
      * survive SetVertexShader and are what the app expects to still be there
@@ -1305,7 +1311,9 @@ static D9Surface *surface_from_iface(IDirect3DSurface9 *iface)
 }
 static void emit_cursor_position(D9Device *device, int x, int y, DWORD flags);
 static void update_system_cursor(D9Device *device, HWND window);
-static void emit_window_state(D9Device *device, HWND window);
+static BOOL emit_window_state(D9Device *device, HWND window);
+static void watch_window_state(D9Device *device);
+static void unwatch_window_state(D9Device *device);
 static void claim_fullscreen_foreground(D9Device *device, HWND window);
 static void maintain_fullscreen_foreground(D9Device *device, HWND window);
 static void restore_display_mode(D9Device *device);
@@ -4737,6 +4745,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     }
     claim_fullscreen_foreground(device, window);
     emit_window_state(device, window);
+    watch_window_state(device);
     *device_out = &device->iface;
 #ifdef D9WG_DIAGNOSTIC_TRACE
     g_trace_device_window = window;
@@ -4807,6 +4816,7 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
         D9WGDestroyResource destroy;
         TRACE("Device.Release destroy object=%08lX handle=%08lX pending=%lu",
                 (DWORD)(uintptr_t)iface, device->handle, g_command_count);
+        unwatch_window_state(device);
         restore_display_mode(device);
         destroy.resource_handle = device->handle;
         destroy.resource_kind = 0;
@@ -4996,46 +5006,201 @@ static HRESULT WINAPI device_set_cursor_properties(IDirect3DDevice9 *iface,
  * owns those pixels. That failure is invisible in the picture by construction,
  * so it has to be reported rather than deduced.
  */
-static void emit_window_state(D9Device *device, HWND window)
+/*
+ * Whether other windows cover all of the device window's client area.
+ *
+ * Without a desktop compositor (Windows 2000/XP) a window's DC is clipped to
+ * the part of it nothing else is drawn over, so an empty clip box means
+ * nothing of it shows -- which is how Warcraft III plays its cinematics: a
+ * topmost "Blizzard Player" popup over the whole screen, the D3D window
+ * untouched behind it. An empty client rect is not evidence either way (it is
+ * what GetClientRect reports for some fullscreen windows), so it never counts
+ * as covered; neither does anything under a compositor, where the clip box is
+ * always the whole window.
+ */
+static BOOL window_fully_covered(HWND window)
 {
-    D9WGWindowState command;
+    RECT client;
+    RECT box;
+    HDC dc;
+    int kind;
+
+    if (!window || !IsWindow(window) || !IsWindowVisible(window)
+            || IsIconic(window))
+        return FALSE;
+    if (!GetClientRect(window, &client) || IsRectEmpty(&client))
+        return FALSE;
+    dc = GetDC(window);
+    if (!dc)
+        return FALSE;
+    kind = GetClipBox(dc, &box);
+    ReleaseDC(window, dc);
+    return kind == NULLREGION;
+}
+
+static BOOL emit_window_state(D9Device *device, HWND window)
+{
+    D9WGWindowStateWithRegion report;
+    D9WGWindowState *command = &report.state;
+    V86WindowRegion region;
     HWND foreground = GetForegroundWindow();
     RECT window_rect;
     RECT client;
+    POINT origin;
     uint32_t flags = 0;
+    uint32_t i;
 
     SetRect(&window_rect, 0, 0, 0, 0);
     SetRect(&client, 0, 0, 0, 0);
+    origin.x = 0;
+    origin.y = 0;
+    region.count = 0;
     if (window && IsWindow(window)) {
         flags |= D9WG_WINDOW_IS_WINDOW;
         if (IsWindowVisible(window)) flags |= D9WG_WINDOW_VISIBLE;
         if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
         if (window == foreground) flags |= D9WG_WINDOW_FOREGROUND;
+        switch (v86_window_visible_region(window, &region)) {
+        case V86_WINDOW_REGION_NONE:
+            flags |= D9WG_WINDOW_OCCLUDED;
+            break;
+        case V86_WINDOW_REGION_PART:
+            flags |= D9WG_WINDOW_REGION;
+            break;
+        }
         GetWindowRect(window, &window_rect);
         GetClientRect(window, &client);
+        ClientToScreen(window, &origin);
     }
     if (!device->present.Windowed)
         flags |= D9WG_WINDOW_FULLSCREEN;
 
-    command.device_handle = device->handle;
-    command.hwnd = (uint32_t)(uintptr_t)window;
-    command.foreground_hwnd = (uint32_t)(uintptr_t)foreground;
-    command.flags = flags;
-    command.window_x = window_rect.left;
-    command.window_y = window_rect.top;
-    command.window_width = (uint32_t)(window_rect.right - window_rect.left);
-    command.window_height = (uint32_t)(window_rect.bottom - window_rect.top);
-    command.client_width = (uint32_t)(client.right - client.left);
-    command.client_height = (uint32_t)(client.bottom - client.top);
+    command->device_handle = device->handle;
+    command->hwnd = (uint32_t)(uintptr_t)window;
+    command->foreground_hwnd = (uint32_t)(uintptr_t)foreground;
+    command->flags = flags;
+    /* Where the client area is, as D9WGPresent says it: the host places the
+     * picture from this report too */
+    command->window_x = origin.x;
+    command->window_y = origin.y;
+    command->window_width = (uint32_t)(window_rect.right - window_rect.left);
+    command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
+    command->client_width = (uint32_t)(client.right - client.left);
+    command->client_height = (uint32_t)(client.bottom - client.top);
+    report.region.rect_count = region.count;
+    for (i = 0; i < region.count; ++i) {
+        report.region.rects[i][0] = region.rects[i][0];
+        report.region.rects[i][1] = region.rects[i][1];
+        report.region.rects[i][2] = region.rects[i][2];
+        report.region.rects[i][3] = region.rects[i][3];
+    }
 
+    device->state_window = window;
     if (device->window_state_sent
             && device->last_window_flags == flags
-            && device->last_foreground == command.foreground_hwnd)
-        return;
+            && device->last_foreground == command->foreground_hwnd
+            && v86_window_region_equal(&device->last_region, &region))
+        return FALSE;
     device->window_state_sent = TRUE;
     device->last_window_flags = flags;
-    device->last_foreground = command.foreground_hwnd;
-    emit_command(D9WG_OP_WINDOW_STATE, &command, sizeof(command));
+    device->last_foreground = command->foreground_hwnd;
+    v86_window_region_copy(&device->last_region, &region);
+    return emit_command(D9WG_OP_WINDOW_STATE, &report,
+            (uint32_t)D9WG_WINDOW_STATE_BYTES(&report));
+}
+
+/*
+ * Present is not a reliable heartbeat: a game that shows a video, a dialog or
+ * a loading screen through another window may not present at all until it is
+ * done, and the host has to learn about that window meanwhile. A WinEvent hook
+ * on the device's thread hears about every window that is shown, hidden,
+ * moved, restacked or brought to the foreground, in any process, and the
+ * window state is reported and sent right away. emit_window_state() only
+ * emits when something it reports changed, so the frequent events (moves,
+ * the pointer's location changes) cost one GetClipBox each.
+ *
+ * Out-of-context hooks are delivered while the installing thread retrieves
+ * messages, which the device's window thread does, video or not.
+ */
+#define D9_MAX_WATCHED_DEVICES 8
+static D9Device *g_watched_devices[D9_MAX_WATCHED_DEVICES];
+static UINT g_watched_device_count;
+static HWINEVENTHOOK g_foreground_hook;
+static HWINEVENTHOOK g_window_hook;
+
+static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
+        LONG object, LONG child, DWORD thread, DWORD time)
+{
+    BOOL emitted = FALSE;
+    UINT i;
+
+    (void)hook; (void)thread; (void)time;
+    if (event != EVENT_SYSTEM_FOREGROUND) {
+        if (object != OBJID_WINDOW || child != CHILDID_SELF || !window)
+            return;
+        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
+                && event != EVENT_OBJECT_DESTROY
+                && event != EVENT_OBJECT_REORDER
+                && event != EVENT_OBJECT_LOCATIONCHANGE)
+            return;
+    }
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_device_count; ++i) {
+        D9Device *device = g_watched_devices[i];
+        if (device->state_window
+                && emit_window_state(device, device->state_window))
+            emitted = TRUE;
+    }
+    if (emitted && g_command_count)
+        submit_batch_locked(FALSE);
+    LeaveCriticalSection(&g_transport_lock);
+}
+
+static void watch_window_state(D9Device *device)
+{
+    UINT i;
+
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_device_count; ++i) {
+        if (g_watched_devices[i] == device) {
+            LeaveCriticalSection(&g_transport_lock);
+            return;
+        }
+    }
+    if (g_watched_device_count < D9_MAX_WATCHED_DEVICES) {
+        g_watched_devices[g_watched_device_count++] = device;
+        if (!g_foreground_hook)
+            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
+                    WINEVENT_OUTOFCONTEXT);
+        if (!g_window_hook)
+            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
+                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
+                    WINEVENT_OUTOFCONTEXT);
+    }
+    LeaveCriticalSection(&g_transport_lock);
+}
+
+static void unwatch_window_state(D9Device *device)
+{
+    UINT i;
+
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_device_count; ++i) {
+        if (g_watched_devices[i] == device) {
+            g_watched_devices[i] = g_watched_devices[--g_watched_device_count];
+            break;
+        }
+    }
+    if (!g_watched_device_count) {
+        if (g_foreground_hook)
+            UnhookWinEvent(g_foreground_hook);
+        if (g_window_hook)
+            UnhookWinEvent(g_window_hook);
+        g_foreground_hook = NULL;
+        g_window_hook = NULL;
+    }
+    LeaveCriticalSection(&g_transport_lock);
 }
 
 /*
@@ -5197,6 +5362,12 @@ static void maintain_fullscreen_foreground(D9Device *device, HWND window)
     if (device->present.Windowed || !window || !IsWindow(window))
         return;
     if (GetForegroundWindow() == window)
+        return;
+    /* Something the game itself put over its whole window -- Warcraft III's
+     * cinematic player -- owns the screen and the keyboard (Esc skips the
+     * video) until it goes away. A splash or a message-only window does not
+     * cover the device window, so NFS's case below still re-claims. */
+    if (window_fully_covered(window))
         return;
     now = GetTickCount();
     /* GetTickCount wraps every ~49 days; the subtraction is unsigned so the

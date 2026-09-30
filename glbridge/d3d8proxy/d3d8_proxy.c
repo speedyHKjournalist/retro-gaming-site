@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
+#include "../window_region.h"
 
 /* These legacy D3D shade-cap bits are omitted by some d3d8.h variants. */
 #ifndef D3DPSHADECAPS_COLORFLATRGB
@@ -227,6 +228,10 @@ struct D8Device {
     BOOL palette_set[D8WG_MAX_PALETTES];
     UINT current_palette;
     BOOL has_last_surface;
+    /* Whether the last report said other windows cover all of the window */
+    BOOL last_occluded;
+    /* The visible part of the client area last reported (D9WG_WINDOW_REGION) */
+    V86WindowRegion last_region;
     D8StateBlock *state_blocks;
     D8StateBlock *recording_state_block;
     DWORD next_state_block_token;
@@ -1931,10 +1936,16 @@ static BOOL same_surface(const D8ClientArea *left,
 static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
         BOOL hidden, BOOL force)
 {
-    D9WGWindowState state;
+    D9WGWindowStateWithRegion report;
+    D9WGWindowState *command = &report.state;
+    V86WindowRegion region;
     D8ClientArea surface;
     uint8_t *payload;
+    uint32_t bytes;
+    uint32_t i;
     BOOL result;
+    BOOL occluded;
+    int visible;
 
     if (hidden) {
         ZeroMemory(&surface, sizeof(surface));
@@ -1943,15 +1954,24 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
     } else {
         capture_surface(device, window, &surface);
     }
+    /* What of the client area other windows leave showing; see
+     * window_region.h (none of it: D9WG_WINDOW_OCCLUDED, part of it:
+     * D9WG_WINDOW_REGION) */
+    region.count = 0;
+    visible = hidden ? V86_WINDOW_REGION_ALL
+            : v86_window_visible_region(window, &region);
+    occluded = visible == V86_WINDOW_REGION_NONE;
     if (!force && device->has_last_surface
-            && same_surface(&device->last_surface, &surface))
+            && same_surface(&device->last_surface, &surface)
+            && device->last_occluded == occluded
+            && v86_window_region_equal(&device->last_region, &region))
         return TRUE;
 
     EnterCriticalSection(&g_transport_lock);
-    ZeroMemory(&state, sizeof(state));
-    state.device_handle = surface.device_handle;
-    state.hwnd = surface.hwnd;
-    state.foreground_hwnd = (uint32_t)(uintptr_t)GetForegroundWindow();
+    ZeroMemory(&report, sizeof(report));
+    command->device_handle = surface.device_handle;
+    command->hwnd = surface.hwnd;
+    command->foreground_hwnd = (uint32_t)(uintptr_t)GetForegroundWindow();
     /*
      * The host both logs this and moves the overlay from it
      * (applyWindowStateGeometry), so the flags have to be real: with none set
@@ -1959,37 +1979,142 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
      * above deliberately leaves them clear, which is exactly that meaning.
      */
     if (!hidden && window && IsWindow(window)) {
-        state.flags = D9WG_WINDOW_IS_WINDOW;
+        command->flags = D9WG_WINDOW_IS_WINDOW;
         if (IsWindowVisible(window))
-            state.flags |= D9WG_WINDOW_VISIBLE;
+            command->flags |= D9WG_WINDOW_VISIBLE;
         if (IsIconic(window))
-            state.flags |= D9WG_WINDOW_ICONIC;
+            command->flags |= D9WG_WINDOW_ICONIC;
         if (GetForegroundWindow() == window)
-            state.flags |= D9WG_WINDOW_FOREGROUND;
+            command->flags |= D9WG_WINDOW_FOREGROUND;
         if (!device->present.Windowed)
-            state.flags |= D9WG_WINDOW_FULLSCREEN;
+            command->flags |= D9WG_WINDOW_FULLSCREEN;
+        if (occluded)
+            command->flags |= D9WG_WINDOW_OCCLUDED;
+        if (visible == V86_WINDOW_REGION_PART)
+            command->flags |= D9WG_WINDOW_REGION;
     }
-    state.window_x = surface.x;
-    state.window_y = surface.y;
-    state.window_width = surface.width;
-    state.window_height = surface.height;
+    command->window_x = surface.x;
+    command->window_y = surface.y;
+    command->window_width = surface.width;
+    command->window_height = surface.height;
     /* capture_surface() measures the client rect, so these are the same
      * rectangle -- the window rect would include the frame and place the
      * overlay over the title bar. */
-    state.client_width = surface.width;
-    state.client_height = surface.height;
-    result = reserve_command_locked(D9WG_OP_WINDOW_STATE, sizeof(state), 0,
+    command->client_width = surface.width;
+    command->client_height = surface.height;
+    report.region.rect_count = region.count;
+    for (i = 0; i < region.count; ++i) {
+        report.region.rects[i][0] = region.rects[i][0];
+        report.region.rects[i][1] = region.rects[i][1];
+        report.region.rects[i][2] = region.rects[i][2];
+        report.region.rects[i][3] = region.rects[i][3];
+    }
+    bytes = (uint32_t)D9WG_WINDOW_STATE_BYTES(&report);
+    result = reserve_command_locked(D9WG_OP_WINDOW_STATE, bytes, 0,
             NULL, &payload, NULL);
     if (result) {
-        CopyMemory(payload, &state, sizeof(state));
+        CopyMemory(payload, &report, bytes);
         result = submit_batch_locked(FALSE);
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result) {
         device->last_surface = surface;
         device->has_last_surface = TRUE;
+        device->last_occluded = occluded;
+        v86_window_region_copy(&device->last_region, &region);
     }
     return result;
+}
+
+/*
+ * The subclassed window procedure hears about its own window only; another
+ * window covering it -- a video or dialog the game shows while it stops
+ * presenting -- sends it nothing. A WinEvent hook on the device's thread hears
+ * about every window shown, hidden, moved, restacked or activated, in any
+ * process, and the report goes out right away. Nothing is sent unless the
+ * report changed. Out-of-context hooks are delivered while the thread
+ * retrieves messages, as the device window's thread does.
+ */
+#define D8_MAX_WATCHED_DEVICES 8
+static D8Device *g_watched_devices[D8_MAX_WATCHED_DEVICES];
+static UINT g_watched_device_count;
+static HWINEVENTHOOK g_foreground_hook;
+static HWINEVENTHOOK g_window_hook;
+
+static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
+        LONG object, LONG child, DWORD thread, DWORD time)
+{
+    D8Device *devices[D8_MAX_WATCHED_DEVICES];
+    UINT count;
+    UINT i;
+
+    (void)hook; (void)thread; (void)time;
+    if (event != EVENT_SYSTEM_FOREGROUND) {
+        if (object != OBJID_WINDOW || child != CHILDID_SELF || !window)
+            return;
+        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
+                && event != EVENT_OBJECT_DESTROY
+                && event != EVENT_OBJECT_REORDER
+                && event != EVENT_OBJECT_LOCATIONCHANGE)
+            return;
+    }
+    EnterCriticalSection(&g_transport_lock);
+    count = g_watched_device_count;
+    CopyMemory(devices, g_watched_devices, count * sizeof(devices[0]));
+    LeaveCriticalSection(&g_transport_lock);
+    for (i = 0; i < count; ++i) {
+        HWND tracked = devices[i]->tracked_window;
+        if (tracked && IsWindow(tracked))
+            emit_surface_update_and_flush(devices[i], tracked,
+                    !IsWindowVisible(tracked) || IsIconic(tracked), FALSE);
+    }
+}
+
+static void watch_device_window(D8Device *device)
+{
+    UINT i;
+
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_device_count; ++i) {
+        if (g_watched_devices[i] == device) {
+            LeaveCriticalSection(&g_transport_lock);
+            return;
+        }
+    }
+    if (g_watched_device_count < D8_MAX_WATCHED_DEVICES) {
+        g_watched_devices[g_watched_device_count++] = device;
+        if (!g_foreground_hook)
+            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
+                    WINEVENT_OUTOFCONTEXT);
+        if (!g_window_hook)
+            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
+                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
+                    WINEVENT_OUTOFCONTEXT);
+    }
+    LeaveCriticalSection(&g_transport_lock);
+}
+
+static void unwatch_device_window(D8Device *device)
+{
+    UINT i;
+
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_device_count; ++i) {
+        if (g_watched_devices[i] == device) {
+            g_watched_devices[i] = g_watched_devices[--g_watched_device_count];
+            break;
+        }
+    }
+    if (!g_watched_device_count) {
+        if (g_foreground_hook)
+            UnhookWinEvent(g_foreground_hook);
+        if (g_window_hook)
+            UnhookWinEvent(g_window_hook);
+        g_foreground_hook = NULL;
+        g_window_hook = NULL;
+    }
+    LeaveCriticalSection(&g_transport_lock);
 }
 
 static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
@@ -2074,6 +2199,7 @@ static void detach_device_window(D8Device *device)
 {
     HWND window = device->tracked_window;
 
+    unwatch_device_window(device);
     if (!device->window_subclassed || !window)
         return;
     if ((D8Device *)GetPropA(window, D8WG_WINDOW_PROPERTY) == device) {
@@ -2104,6 +2230,7 @@ static void attach_device_window(D8Device *device, HWND window)
     device->tracked_window = window;
     if (!window || !IsWindow(window))
         return;
+    watch_device_window(device);
     if (GetPropA(window, D8WG_WINDOW_PROPERTY))
         return;
     device->window_unicode = IsWindowUnicode(window);

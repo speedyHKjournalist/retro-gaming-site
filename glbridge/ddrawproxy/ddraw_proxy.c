@@ -39,6 +39,7 @@
 #include <stdarg.h>
 #include "../openglproxy/v86gl_ioctl.h"
 #include "ddraw_protocol.h"
+#include "../window_region.h"
 
 /* The legacy DirectX SDK declared these in auxiliary headers; current MinGW
  * intentionally omits them although the COM methods still take the values. */
@@ -815,6 +816,14 @@ struct DDrawObject {
     uint32_t next_palette_slot;
     D3D7Device *d3d7_device;
     D3DLegacyMaterial *legacy_materials;
+    /* The last window-state report while showing (emit_window_state_showing) */
+    BOOL window_state_sent;
+    uint32_t last_window_flags;
+    int32_t last_window_x;
+    int32_t last_window_y;
+    uint32_t last_client_width;
+    uint32_t last_client_height;
+    V86WindowRegion last_region;
     DDrawObject *next;
 };
 
@@ -1685,6 +1694,10 @@ static BOOL emit_overlay_state(DDSurface *surface)
     return result;
 }
 
+static void emit_window_state_showing(DDrawObject *object, BOOL flush);
+static void watch_object_window(DDrawObject *object);
+static void unwatch_object_window(DDrawObject *object);
+
 static BOOL emit_present_and_flush(DDrawObject *object)
 {
     D9WGPresent present;
@@ -1728,6 +1741,9 @@ static BOOL emit_present_and_flush(DDrawObject *object)
         present.width = object->mode_width;
         present.height = object->mode_height;
     }
+    /* Where the window is and what of it shows, in the same batch (sent
+     * only when it changed) */
+    emit_window_state_showing(object, FALSE);
     DDWG_TRACE_CHECKPOINT("PRESENT BEGIN device=%lu hwnd=%08lX "
             "rect=%ld,%ld %lux%lu frame=%lu", present.device_handle,
             present.hwnd, present.x, present.y, present.width,
@@ -4109,6 +4125,7 @@ static void emit_window_state_not_showing(DDrawObject *object)
      * minimised window and warns that input is going elsewhere -- for a title
      * that has simply finished drawing and whose window is fine. */
     flags |= D9WG_WINDOW_NO_SURFACE;
+    object->window_state_sent = FALSE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = object->device_handle;
     command.hwnd = (uint32_t)(uintptr_t)window;
@@ -4129,6 +4146,192 @@ static void emit_window_state_not_showing(DDrawObject *object)
      * hide that arrives then is no hide at all. */
     EnterCriticalSection(&g_transport_lock);
     submit_batch_locked(FALSE);
+    LeaveCriticalSection(&g_transport_lock);
+}
+
+/*
+ * Tell the host where the device window's client area is and what of it other
+ * windows leave showing (window_region.h): none of it -- a video or dialog
+ * over the game -- hides the picture (D9WG_WINDOW_OCCLUDED), part of it -- a
+ * message box, the Alt+Tab switcher -- limits the picture to the rest
+ * (D9WG_WINDOW_REGION). Only while there is a primary: without one the host
+ * has been told there is nothing to show (emit_window_state_not_showing), and
+ * that stands. Sent only when something in it changed.
+ */
+static void emit_window_state_showing(DDrawObject *object, BOOL flush)
+{
+    D9WGWindowStateWithRegion report;
+    D9WGWindowState *command = &report.state;
+    V86WindowRegion region;
+    HWND window;
+    RECT window_rect;
+    RECT client;
+    POINT origin;
+    uint32_t flags;
+    uint32_t i;
+
+    if (!object || !object->device_created || !object->device_handle
+            || !object->primary)
+        return;
+    window = object->window;
+    if (!window || !IsWindow(window))
+        return;
+    ZeroMemory(&report, sizeof(report));
+    flags = D9WG_WINDOW_IS_WINDOW;
+    if (IsWindowVisible(window)) flags |= D9WG_WINDOW_VISIBLE;
+    if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
+    if (window == GetForegroundWindow()) flags |= D9WG_WINDOW_FOREGROUND;
+    if (object->cooperative_flags & DDSCL_FULLSCREEN)
+        flags |= D9WG_WINDOW_FULLSCREEN;
+    switch (v86_window_visible_region(window, &region)) {
+    case V86_WINDOW_REGION_NONE:
+        flags |= D9WG_WINDOW_OCCLUDED;
+        break;
+    case V86_WINDOW_REGION_PART:
+        flags |= D9WG_WINDOW_REGION;
+        break;
+    }
+    SetRect(&window_rect, 0, 0, 0, 0);
+    SetRect(&client, 0, 0, 0, 0);
+    GetWindowRect(window, &window_rect);
+    GetClientRect(window, &client);
+    origin.x = 0;
+    origin.y = 0;
+    ClientToScreen(window, &origin);
+    /* An exclusive-fullscreen title whose mode change really happened owns
+     * the whole screen, as emit_present_and_flush() reports it */
+    if ((object->cooperative_flags & DDSCL_FULLSCREEN)
+            && object->guest_mode_changed) {
+        origin.x = 0;
+        origin.y = 0;
+    }
+
+    if (object->window_state_sent && object->last_window_flags == flags
+            && object->last_window_x == origin.x
+            && object->last_window_y == origin.y
+            && object->last_client_width == (uint32_t)client.right
+            && object->last_client_height == (uint32_t)client.bottom
+            && v86_window_region_equal(&object->last_region, &region))
+        return;
+    object->window_state_sent = TRUE;
+    object->last_window_flags = flags;
+    object->last_window_x = origin.x;
+    object->last_window_y = origin.y;
+    object->last_client_width = (uint32_t)client.right;
+    object->last_client_height = (uint32_t)client.bottom;
+    v86_window_region_copy(&object->last_region, &region);
+
+    command->device_handle = object->device_handle;
+    command->hwnd = (uint32_t)(uintptr_t)window;
+    command->foreground_hwnd = (uint32_t)(uintptr_t)GetForegroundWindow();
+    command->flags = flags;
+    command->window_x = origin.x;
+    command->window_y = origin.y;
+    command->window_width = (uint32_t)(window_rect.right - window_rect.left);
+    command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
+    command->client_width = (uint32_t)client.right;
+    command->client_height = (uint32_t)client.bottom;
+    report.region.rect_count = region.count;
+    for (i = 0; i < region.count; ++i) {
+        report.region.rects[i][0] = region.rects[i][0];
+        report.region.rects[i][1] = region.rects[i][1];
+        report.region.rects[i][2] = region.rects[i][2];
+        report.region.rects[i][3] = region.rects[i][3];
+    }
+    DDWG_TRACE_CHECKPOINT("WINDOW_STATE showing device=%lu hwnd=%08lX "
+            "flags=%08lX rects=%lu", command->device_handle, command->hwnd,
+            flags, region.count);
+    if (!emit_command(D9WG_OP_WINDOW_STATE, &report,
+            (uint32_t)D9WG_WINDOW_STATE_BYTES(&report)))
+        return;
+    if (flush) {
+        EnterCriticalSection(&g_transport_lock);
+        submit_batch_locked(FALSE);
+        LeaveCriticalSection(&g_transport_lock);
+    }
+}
+
+/*
+ * A DirectDraw title presents only when it draws, and a video or dialog it
+ * shows through another window may stop it drawing altogether. A WinEvent
+ * hook on the thread that created the primary hears about every window shown,
+ * hidden, moved, restacked or activated, in any process, and the window state
+ * goes out right away. Out-of-context hooks are delivered while that thread
+ * retrieves messages, which the thread of a title's window does.
+ */
+#define DDWG_MAX_WATCHED_OBJECTS 8
+static DDrawObject *g_watched_objects[DDWG_MAX_WATCHED_OBJECTS];
+static UINT g_watched_object_count;
+static HWINEVENTHOOK g_foreground_hook;
+static HWINEVENTHOOK g_window_hook;
+
+static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
+        LONG object_id, LONG child, DWORD thread, DWORD time)
+{
+    UINT i;
+
+    (void)hook; (void)thread; (void)time;
+    if (event != EVENT_SYSTEM_FOREGROUND) {
+        if (object_id != OBJID_WINDOW || child != CHILDID_SELF || !window)
+            return;
+        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
+                && event != EVENT_OBJECT_DESTROY
+                && event != EVENT_OBJECT_REORDER
+                && event != EVENT_OBJECT_LOCATIONCHANGE)
+            return;
+    }
+    /* The transport lock guards the list; emitting takes it again, which a
+     * critical section allows, and the object lock is never taken inside it */
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_object_count; ++i)
+        emit_window_state_showing(g_watched_objects[i], TRUE);
+    LeaveCriticalSection(&g_transport_lock);
+}
+
+static void watch_object_window(DDrawObject *object)
+{
+    UINT i;
+
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_object_count; ++i) {
+        if (g_watched_objects[i] == object) {
+            LeaveCriticalSection(&g_transport_lock);
+            return;
+        }
+    }
+    if (g_watched_object_count < DDWG_MAX_WATCHED_OBJECTS) {
+        g_watched_objects[g_watched_object_count++] = object;
+        if (!g_foreground_hook)
+            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
+                    WINEVENT_OUTOFCONTEXT);
+        if (!g_window_hook)
+            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
+                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
+                    WINEVENT_OUTOFCONTEXT);
+    }
+    LeaveCriticalSection(&g_transport_lock);
+}
+
+static void unwatch_object_window(DDrawObject *object)
+{
+    UINT i;
+
+    EnterCriticalSection(&g_transport_lock);
+    for (i = 0; i < g_watched_object_count; ++i) {
+        if (g_watched_objects[i] == object) {
+            g_watched_objects[i] = g_watched_objects[--g_watched_object_count];
+            break;
+        }
+    }
+    if (!g_watched_object_count) {
+        if (g_foreground_hook)
+            UnhookWinEvent(g_foreground_hook);
+        if (g_window_hook)
+            UnhookWinEvent(g_window_hook);
+        g_foreground_hook = NULL;
+        g_window_hook = NULL;
+    }
     LeaveCriticalSection(&g_transport_lock);
 }
 
@@ -4461,6 +4664,7 @@ static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
             if (*link) *link = object->next;
         }
         LeaveCriticalSection(&g_object_lock);
+        unwatch_object_window(object);
         if (object->guest_mode_changed)
             ChangeDisplaySettingsA(NULL, 0);
         emit_device_destroy(object);
@@ -4640,6 +4844,7 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
         object->primary = surface;
+        watch_object_window(object);
         surface->front_of_chain = back_buffers > 0;
         if (!back_buffers)
             (void)seed_windowed_primary_from_screen(surface);

@@ -35,6 +35,20 @@ are in `../gl-webgpu/gl_constants.js` and the decoder table is in
 `../gl-webgpu/gl_wire.js`. `../tests/gl_protocol_consistency_test.js` checks
 that these views stay identical.
 
+## Window state
+
+The host shows the GL picture as a layer over the guest's desktop, so it has
+to know when other guest windows lie over the drawing window. The proxy sends
+`V86GL_CTRL_WINDOW_STATE` (0xFFF3) whenever that changes: the window's client
+origin and size, whether it is shown, minimised, covered entirely
+(`V86GL_WINDOW_OCCLUDED` -- Warcraft III's cinematic popup) or in part
+(`V86GL_WINDOW_REGION`, followed by the rectangles that show, from
+`../window_region.h`). The flag bits are D9WG's (`d3d9_protocol.h`). It goes
+out with each frame, from the subclassed window procedure on moves, and from a
+`SetWinEventHook` that the drawing thread installs, so a game that stops
+drawing while another window covers it is still heard from. A host that
+predates the record refuses it as an unknown opcode and draws as before.
+
 ## Synchronous calls
 
 The host executes a submitted batch synchronously while the guest is blocked

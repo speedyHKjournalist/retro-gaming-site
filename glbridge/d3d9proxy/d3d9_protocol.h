@@ -741,7 +741,34 @@ typedef struct D9WGShowCursor {
  * instead of it.
  */
 #define D9WG_WINDOW_NO_SURFACE   (1u << 5)
+/*
+ * Other windows cover all of the device window's client area, so none of its
+ * frame is on the guest's screen: Warcraft III plays its cinematics in a
+ * topmost popup over its own D3D window, and the host would otherwise keep
+ * compositing the last D3D frame over the video. The host hides the device's
+ * picture exactly as for a hidden window; the window is still up.
+ */
+#define D9WG_WINDOW_OCCLUDED     (1u << 6)
+/*
+ * Other windows cover part of the client area -- a message box, an IME
+ * candidate list, the Alt+Tab switcher -- and a D9WGWindowRegion follows the
+ * record: the parts that show, in client coordinates. The host draws the
+ * device's picture only there, so the guest's windows on top stay visible.
+ * Without this bit all of the client area shows. A host that predates it
+ * reads the fixed-size record and ignores what follows.
+ *
+ * The region is the window DC's system region (GetRandomRgn SYSRGN), which
+ * describes this only without a desktop compositor; see glbridge/window_region.h.
+ */
+#define D9WG_WINDOW_REGION       (1u << 7)
+#define D9WG_WINDOW_REGION_MAX_RECTS 32u
 
+/*
+ * window_x/window_y are where the client area's top-left corner is on the
+ * guest's screen: the host places the device's picture there, exactly as it
+ * does from D9WGPresent. window_width/window_height are the whole window's
+ * size, frame included (diagnostic only).
+ */
 typedef struct D9WGWindowState {
     uint32_t device_handle;
     uint32_t hwnd;
@@ -754,6 +781,23 @@ typedef struct D9WGWindowState {
     uint32_t client_width;
     uint32_t client_height;
 } D9WGWindowState;
+
+/* Follows D9WGWindowState when D9WG_WINDOW_REGION is set, with rect_count
+ * rectangles (left, top, right, bottom) of which only those are sent */
+typedef struct D9WGWindowRegion {
+    uint32_t rect_count;
+    int32_t  rects[D9WG_WINDOW_REGION_MAX_RECTS][4];
+} D9WGWindowRegion;
+
+typedef struct D9WGWindowStateWithRegion {
+    D9WGWindowState  state;
+    D9WGWindowRegion region;
+} D9WGWindowStateWithRegion;
+
+/* Bytes of a D9WGWindowStateWithRegion to send */
+#define D9WG_WINDOW_STATE_BYTES(with_region) \
+    (sizeof(D9WGWindowState) + ((with_region)->state.flags & D9WG_WINDOW_REGION ? \
+        sizeof(uint32_t) + (with_region)->region.rect_count * 4u * sizeof(int32_t) : 0u))
 
 typedef struct D9WGCreateQuery {
     uint32_t device_handle;

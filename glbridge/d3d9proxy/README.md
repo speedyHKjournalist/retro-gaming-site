@@ -128,6 +128,28 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
   compatible texture/target views; blend constants, separate-alpha blending,
   front/back stencil state, stencil reference, constant/slope depth bias, and
   per-draw scissor reset are all carried into WebGPU;
+- **Warcraft III cinematic fix (not yet run in the guest):** the patch 1.27+
+  client plays its cinematics through DirectShow in a topmost "Blizzard
+  Player" popup over its own D3D window, and stops presenting meanwhile. The
+  host kept compositing the last D3D frame over the video (black picture,
+  sound playing). The proxy now reports `D9WG_WINDOW_OCCLUDED` when other
+  windows cover the whole client area (on XP a window DC's clip box is empty
+  exactly then), the host hides the device's picture for it, and a
+  `SetWinEventHook` on the device thread sends the report as soon as a window
+  anywhere is shown, hidden, moved, restacked or activated, without waiting for
+  a Present. `maintain_fullscreen_foreground` no longer takes the foreground
+  back from a window covering the game, so Esc reaches the video player. The
+  D3D8, DirectDraw and OpenGL proxies report the same (`-opengl` runs of
+  Warcraft III draw through the OpenGL one). A window covered only in part --
+  a message box, an IME candidate list, the Alt+Tab switcher -- is reported
+  with the parts that show (`D9WG_WINDOW_REGION`, from the window DC's system
+  region: `../window_region.h`), and the host draws the picture only there.
+  Being covered is window state rather than a hide: it holds across Presents
+  until the guest reports the window uncovered, so a game that keeps rendering
+  behind the popup stays hidden. `D9WGWindowState.window_x/window_y` are now
+  the client area's origin, as `D9WGPresent` reports it; they were the frame's
+  corner, which put the picture over the title bar until the next Present.
+  See v86 `docs/display-decoupling-plan.zh-CN.md`, section 4.
 - **Warcraft III shadow fix:** projected texture division now preserves the
   sign of `q` in both fixed-function and shader-modifier paths. Clamping a
   negative `q` to positive epsilon made behind-projector UVs sample an opaque

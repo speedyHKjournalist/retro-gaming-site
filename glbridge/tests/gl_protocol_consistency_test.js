@@ -42,11 +42,24 @@ test("every guest opcode has the same number in gl_constants.js", () => {
 
 test("the control record codes match the guest", () => {
     for (const [name, value] of [["MAKE_CURRENT", 0xFFF0],
-            ["RELEASE_CURRENT", 0xFFF1], ["DESTROY_CONTEXT", 0xFFF2]]) {
+            ["RELEASE_CURRENT", 0xFFF1], ["DESTROY_CONTEXT", 0xFFF2],
+            ["WINDOW_STATE", 0xFFF3]]) {
         assert.strictEqual(constants.CTRL[name], value);
         assert.ok(source.indexOf("V86GL_CTRL_" + name + " 0x" +
             value.toString(16).toUpperCase() + "u") >= 0,
             "the guest still defines V86GL_CTRL_" + name);
+    }
+});
+
+// The window-state flags are D9WGWindowState's, which gl_executor.js decodes
+test("the window-state flags match D9WG's", () => {
+    const d3d9 = fs.readFileSync(path.join(__dirname, "../d3d9proxy/d3d9_protocol.h"), "utf8");
+    for (const [gl, d9] of [["IS_WINDOW", "IS_WINDOW"], ["VISIBLE", "VISIBLE"], ["ICONIC", "ICONIC"],
+            ["OCCLUDED", "OCCLUDED"], ["REGION", "REGION"]]) {
+        const guest = source.match(new RegExp("#define V86GL_WINDOW_" + gl + " +\\(1u << (\\d+)\\)"));
+        const d9wg = d3d9.match(new RegExp("#define D9WG_WINDOW_" + d9 + " +\\(1u << (\\d+)\\)"));
+        assert.ok(guest && d9wg, gl + " is defined on both sides");
+        assert.strictEqual(guest[1], d9wg[1], gl);
     }
 });
 

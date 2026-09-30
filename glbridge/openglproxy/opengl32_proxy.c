@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <string.h>
 #include "v86gl_ioctl.h"
+#include "../window_region.h"
 
 /*
  * File tracing is compiled only into opengl32-diagnostic.dll, and needs no
@@ -940,6 +941,14 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define V86GL_CTRL_MAKE_CURRENT 0xFFF0u
 #define V86GL_CTRL_RELEASE_CURRENT 0xFFF1u
 #define V86GL_CTRL_DESTROY_CONTEXT 0xFFF2u
+/* The drawing window as the guest's window manager sees it (emit_window_state) */
+#define V86GL_CTRL_WINDOW_STATE 0xFFF3u
+/* Its flags: D9WGWindowState's (d3d9proxy/d3d9_protocol.h) */
+#define V86GL_WINDOW_IS_WINDOW  (1u << 0)
+#define V86GL_WINDOW_VISIBLE    (1u << 1)
+#define V86GL_WINDOW_ICONIC     (1u << 2)
+#define V86GL_WINDOW_OCCLUDED   (1u << 6)
+#define V86GL_WINDOW_REGION     (1u << 7)
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
 #define V86GL_READ_PIXELS_HEADER_SIZE 32u
 #define V86GL_READ_PIXELS_STATUS_PENDING 0u
@@ -1213,6 +1222,17 @@ static uint32_t g_last_surface_height = 0;
 static uint32_t g_last_surface_context_id = 0;
 static uint32_t g_last_surface_share_group = 0;
 static BOOL g_have_last_surface = FALSE;
+/* The last V86GL_CTRL_WINDOW_STATE sent (emit_window_state) */
+static BOOL g_window_state_sent = FALSE;
+static HWND g_last_window_state_hwnd = NULL;
+static uint32_t g_last_window_flags = 0;
+static int32_t g_last_window_x = 0;
+static int32_t g_last_window_y = 0;
+static uint32_t g_last_window_width = 0;
+static uint32_t g_last_window_height = 0;
+static V86WindowRegion g_last_window_region;
+static HWINEVENTHOOK g_foreground_hook = NULL;
+static HWINEVENTHOOK g_window_hook = NULL;
 static BOOL g_context_destroy_sent = FALSE;
 static BOOL g_renderer_lifecycle_started = FALSE;
 #define V86GL_MAX_WGL_CONTEXTS 32
@@ -5850,9 +5870,14 @@ static int emit_display_list_stream(const uint8_t* data, uint32_t size) {
     return 1;
 }
 
+static void emit_window_state(HWND hwnd, BOOL flush);
+
 static BOOL emit_frame(void) {
     BOOL submitted;
     GLenum saved_gl_error = g_error;
+
+    /* In the frame's batch, when it changed */
+    emit_window_state(g_current_hwnd, FALSE);
 
     v86gl_trace("present requested frame=%lu queuedCommands=%lu queuedBytes=%lu",
                 (unsigned long)g_frame_id,
@@ -5987,10 +6012,160 @@ static void emit_current_surface(HWND hwnd) {
     emit_pci_record(V86GL_CTRL_MAKE_CURRENT, &payload, sizeof(payload), TRUE);
 }
 
+/*
+ * What the guest's window manager says about the drawing window, for the host
+ * to show the picture only where the window shows: not at all while it is
+ * hidden or minimised, or while other windows cover it entirely -- Warcraft
+ * III plays its cinematics in a topmost popup over its own window, and run
+ * with -opengl it draws here -- and only in the parts other windows leave
+ * showing when they cover some of it (window_region.h). Sent only when it
+ * changed; `flush` sends it right away rather than with the next frame.
+ *
+ *   u32 hwnd, u32 flags (V86GL_WINDOW_*), i32 x, i32 y (the client area's
+ *   top-left corner on the screen), u32 width, u32 height (the client area),
+ *   then with V86GL_WINDOW_REGION: u32 count and count rectangles
+ *   (i32 left, top, right, bottom) in client coordinates.
+ */
+static void emit_window_state(HWND hwnd, BOOL flush) {
+    struct {
+        uint32_t hwnd;
+        uint32_t flags;
+        int32_t x;
+        int32_t y;
+        uint32_t width;
+        uint32_t height;
+        uint32_t rect_count;
+        int32_t rects[V86_WINDOW_REGION_MAX_RECTS][4];
+    } payload;
+    V86WindowRegion region;
+    POINT origin;
+    RECT rc;
+    uint32_t size = 24u;
+    uint32_t i;
+
+    if (!hwnd || !g_v86gl_ready) {
+        return;
+    }
+    ZeroMemory(&payload, sizeof(payload));
+    region.count = 0;
+    origin.x = 0;
+    origin.y = 0;
+    SetRect(&rc, 0, 0, 0, 0);
+    payload.hwnd = (uint32_t)(uintptr_t)hwnd;
+    if (IsWindow(hwnd)) {
+        payload.flags = V86GL_WINDOW_IS_WINDOW;
+        if (IsWindowVisible(hwnd)) payload.flags |= V86GL_WINDOW_VISIBLE;
+        if (IsIconic(hwnd)) payload.flags |= V86GL_WINDOW_ICONIC;
+        switch (v86_window_visible_region(hwnd, &region)) {
+        case V86_WINDOW_REGION_NONE:
+            payload.flags |= V86GL_WINDOW_OCCLUDED;
+            break;
+        case V86_WINDOW_REGION_PART:
+            payload.flags |= V86GL_WINDOW_REGION;
+            break;
+        }
+        GetClientRect(hwnd, &rc);
+        ClientToScreen(hwnd, &origin);
+    }
+    payload.x = origin.x;
+    payload.y = origin.y;
+    payload.width = (uint32_t)(rc.right - rc.left);
+    payload.height = (uint32_t)(rc.bottom - rc.top);
+    if (payload.flags & V86GL_WINDOW_REGION) {
+        payload.rect_count = region.count;
+        for (i = 0; i < region.count; ++i) {
+            payload.rects[i][0] = region.rects[i][0];
+            payload.rects[i][1] = region.rects[i][1];
+            payload.rects[i][2] = region.rects[i][2];
+            payload.rects[i][3] = region.rects[i][3];
+        }
+        size += 4u + region.count * 16u;
+    }
+
+    if (g_window_state_sent && g_last_window_state_hwnd == hwnd &&
+        g_last_window_flags == payload.flags &&
+        g_last_window_x == payload.x && g_last_window_y == payload.y &&
+        g_last_window_width == payload.width &&
+        g_last_window_height == payload.height &&
+        v86_window_region_equal(&g_last_window_region, &region)) {
+        return;
+    }
+    if (!emit_pci_record(V86GL_CTRL_WINDOW_STATE, &payload, size, flush)) {
+        return;
+    }
+    g_window_state_sent = TRUE;
+    g_last_window_state_hwnd = hwnd;
+    g_last_window_flags = payload.flags;
+    g_last_window_x = payload.x;
+    g_last_window_y = payload.y;
+    g_last_window_width = payload.width;
+    g_last_window_height = payload.height;
+    v86_window_region_copy(&g_last_window_region, &region);
+    v86gl_trace("window-state hwnd=%08lx flags=%08lx rects=%lu",
+                (unsigned long)payload.hwnd, (unsigned long)payload.flags,
+                (unsigned long)region.count);
+}
+
+/*
+ * The window procedure hears about its own window only; another window
+ * covering it -- a video or a dialog the game shows while it stops drawing --
+ * sends it nothing. A WinEvent hook hears about every window shown, hidden,
+ * moved, restacked or activated, in any process. It is installed by the
+ * thread that draws into the window, and out-of-context hooks are delivered
+ * while that thread retrieves messages: between its frames, never inside a GL
+ * call.
+ */
+static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
+                                  LONG object, LONG child, DWORD thread,
+                                  DWORD time) {
+    (void)hook;
+    (void)thread;
+    (void)time;
+    if (event != EVENT_SYSTEM_FOREGROUND) {
+        if (object != OBJID_WINDOW || child != CHILDID_SELF || !hwnd) {
+            return;
+        }
+        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE &&
+            event != EVENT_OBJECT_DESTROY && event != EVENT_OBJECT_REORDER &&
+            event != EVENT_OBJECT_LOCATIONCHANGE) {
+            return;
+        }
+    }
+    emit_window_state(g_current_hwnd, TRUE);
+}
+
+static void watch_window_state(void) {
+    if (!g_foreground_hook) {
+        g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
+                                            EVENT_SYSTEM_FOREGROUND, NULL,
+                                            window_event, 0, 0,
+                                            WINEVENT_OUTOFCONTEXT);
+    }
+    if (!g_window_hook) {
+        g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
+                                        EVENT_OBJECT_LOCATIONCHANGE, NULL,
+                                        window_event, 0, 0,
+                                        WINEVENT_OUTOFCONTEXT);
+    }
+}
+
+static void unwatch_window_state(void) {
+    if (g_foreground_hook) {
+        UnhookWinEvent(g_foreground_hook);
+    }
+    if (g_window_hook) {
+        UnhookWinEvent(g_window_hook);
+    }
+    g_foreground_hook = NULL;
+    g_window_hook = NULL;
+    g_window_state_sent = FALSE;
+}
+
 static void restore_window_proc(void) {
     if (g_current_hwnd && g_original_wndproc) {
         SetWindowLongA(g_current_hwnd, GWL_WNDPROC, (LONG)g_original_wndproc);
     }
+    unwatch_window_state();
 
     g_current_hwnd = NULL;
     g_original_wndproc = NULL;
@@ -6018,9 +6193,11 @@ static LRESULT CALLBACK vgl_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
     if (msg == WM_MOVE || msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED) {
         emit_current_surface(hwnd);
+        emit_window_state(hwnd, TRUE);
     }
 
     if (msg == WM_NCDESTROY && hwnd == g_current_hwnd) {
+        unwatch_window_state();
         force_release_window_contexts(hwnd);
         emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
         g_current_hwnd = NULL;
@@ -6049,6 +6226,7 @@ static void hook_window(HWND hwnd) {
 
     if (g_original_wndproc) {
         g_current_hwnd = hwnd;
+        watch_window_state();
     }
 }
 
