@@ -8,13 +8,16 @@ requires the updated driver; see [driver build and deployment](v86gl_driver/READ
 After changing v86 or its graphics runtime, build and refresh the site:
 
 ```sh
-make -C ../v86 build/libv86.js glbridge
+make -C ../v86 build/libv86.js build/v86.wasm build/cpu-worker.js build/v86-bochs-vga.js glbridge
 node utils/sync-v86.mjs ../v86
 ```
 
 Run these commands from the retro-gaming-site root. The sync tool copies the
-v86 JS/WASM and the generated graphics bundle/worker resources, and updates
-the page's cache-busting versions. `vendor/v86/` contains generated assets
+v86 core (`libv86.js`, `v86.wasm`, the CPU worker `cpu-worker.js` and the
+Bochs VGA display plugin `v86-bochs-vga.js`, all to the site root) and the
+generated graphics bundle/worker resources, and updates the page's
+cache-busting versions: the four core files share one revision, which
+`app.js` reads from the `libv86.js` tag and puts on the other three. `vendor/v86/` contains generated assets
 and is ignored by Git: run the sync step before serving or packaging a fresh
 checkout. Include the generated directory in the deployed static site.
 
@@ -23,8 +26,10 @@ Host tests now run with `make -C ../v86 test-glbridge`. Guest tests remain
 sibling v86 checkout or use the `V86_ROOT` environment variable. Use matched
 v86/Guest commits when publishing a release.
 
-The page passes `installV86GLGraphicsAdapter` to v86 and keeps
-`window.v86gl = emulator.graphics_adapter` for diagnostics. VGA alignment,
+The page runs the CPU in v86's worker (`cpu_worker: true`), selects the display
+hardware with `graphics_adapter: "bochs_vga"`, turns the proxy on with
+`graphics_proxy: true`, and keeps `window.v86gl = emulator.graphics_proxy` for
+diagnostics. VGA alignment,
 graphics lifecycle, and graphics state hooks are owned by v86. See
 `../v86/docs/glbridge.md` (from the site root) for embedding details and the
 existing D9WG snapshot limitation.

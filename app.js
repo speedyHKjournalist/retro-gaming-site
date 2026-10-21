@@ -353,6 +353,16 @@ function hideProgress() {
     progressContainer.classList.add("hidden");
 }
 
+// The v86 runtime's files are from one build: utils/sync-v86.mjs writes its
+// revision into game.html's libv86.js tag, and the CPU worker, the wasm and
+// the display plugin are loaded with the same one, so a cached file of an
+// older build is never mixed in.
+function v86RuntimeUrl(file) {
+    const script = document.querySelector('script[src^="libv86.js"]');
+    const revision = script ? new URL(script.src, window.location.href).searchParams.get("v") : null;
+    return revision ? file + "?v=" + revision : file;
+}
+
 function waitForGuest(milliseconds) {
     return new Promise(function(resolve) {
         setTimeout(resolve, milliseconds);
@@ -409,11 +419,18 @@ async function startEmulator9xMultiDisk(gameId) {
 
     emulator = new V86({
         memory_size: game.memorySize,
-        vga_memory_size: 16 * 1024 * 1024,
-        graphics_adapter: installV86GLGraphicsAdapter,
+        vram_size: 16 * 1024 * 1024,
+        // The display hardware (Bochs VGA, as before) and the D3D/DirectDraw/GL
+        // proxy of vendor/v86/glbridge/libv86-webgpu.js
+        graphics_adapter: "bochs_vga",
+        graphics_adapter_path: v86RuntimeUrl("v86-bochs-vga.js"),
+        graphics_proxy: true,
+        // The CPU runs in its own thread, so the page stays responsive
+        cpu_worker: true,
+        cpu_worker_url: v86RuntimeUrl("cpu-worker.js"),
         bios: { url: "bios/seabios.bin" },
         vga_bios: { url: "bios/vgabios.bin" },
-        wasm_path: "v86.wasm",
+        wasm_path: v86RuntimeUrl("v86.wasm"),
         screen_container: document.getElementById("screen_container"),
         hda: {
             url: R2_URL_1 + game.systemDisk,
@@ -439,10 +456,6 @@ async function startEmulator9xMultiDisk(gameId) {
         },
         preserve_mac_from_state_image: false,
         mac_address_translation: true,
-        v86gl_pci: {
-            port: 0xF100,
-            maxBatchBytes: 16 * 1024 * 1024
-        },
         preserve_fixed_proportions: true,
         boot_order: 0x213,
         audio: true,
@@ -469,7 +482,8 @@ function attachEmulatorListeners(emulator, gameId) {
     window.v86gl = null;
 
     emulator.add_listener("emulator-loaded", function() {
-        v86gl = emulator.graphics_adapter;
+        // (the graphics proxy, for diagnostics)
+        v86gl = emulator.graphics_proxy;
         window.v86gl = v86gl;
         if (gameId === "maplestory") {
             refreshMapleStoryNetwork(emulator);
@@ -730,13 +744,19 @@ window.onload = function() {
         }
     });
 
-    // Setup mouse lock
-    var canvas = document.querySelector("#screen_container canvas:not([data-v86-graphics])");
-    if (canvas) {
-        canvas.addEventListener("mousedown", function() {
-            canvas.requestPointerLock();
+    // Setup mouse lock (v86 locks its screen: the display may replace the canvas)
+    document.getElementById("screen_container").addEventListener("mousedown", function() {
+        if (!emulator || document.pointerLockElement) return;
+        Promise.resolve(emulator.lock_mouse()).catch(function(err) {
+            // Chrome refuses a new lock for about a second after the user
+            // left the previous one (Esc); the next click captures the mouse.
+            if (err && err.name === "SecurityError") {
+                updateStatus("Click the screen again to capture your mouse");
+                return;
+            }
+            console.warn("Mouse lock failed:", err);
         });
-    }
+    });
 
     launchGameMultiDisk(gameId);
 };

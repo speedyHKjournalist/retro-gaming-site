@@ -13,7 +13,7 @@ test("site attaches graphics diagnostics after v86 loads and leaves canvas lifec
     } };
     const events = new Map();
     const adapter = { hideOverlayCanvas() { throw new Error("site must not hide a restored checkpoint"); } };
-    const emulator = { graphics_adapter: undefined, add_listener(name, fn) { events.set(name, fn); } };
+    const emulator = { graphics_adapter: "bochs_vga", graphics_proxy: undefined, add_listener(name, fn) { events.set(name, fn); } };
     const window = { addEventListener() { throw new Error("site must not install duplicate graphics observers"); } };
     const context = vm.createContext({ document, window, console,
         requestAnimationFrame(fn) { fn(); }, URLSearchParams });
@@ -21,7 +21,7 @@ test("site attaches graphics diagnostics after v86 loads and leaves canvas lifec
     context.attachEmulatorListeners(emulator, "warcraft3");
     events.get("emulator-ready")();
     assert.equal(window.v86gl, null, "graphics is not yet available while WASM initializes");
-    emulator.graphics_adapter = adapter;
+    emulator.graphics_proxy = adapter;
     events.get("emulator-loaded")();
     assert.equal(window.v86gl, adapter);
     events.get("download-progress")({ lengthComputable: true, loaded: 5, total: 10 });

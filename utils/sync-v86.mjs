@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// Run after `make -C ../v86 build/libv86.js glbridge`.
+// Run after `make -C ../v86 build/libv86.js build/v86.wasm build/cpu-worker.js build/v86-bochs-vga.js glbridge`.
+// The core files go to the site root (app.js loads the CPU worker, the wasm
+// and the display plugin with the revision of game.html's libv86.js tag, so
+// all four are always from one build); the graphics bundle to vendor/v86/glbridge.
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,14 +13,16 @@ const graphics = join(v86, "build/glbridge");
 const manifest = JSON.parse(await readFile(join(graphics, "manifest.json"), "utf8"));
 const output = join(site, "vendor/v86/glbridge");
 // Validate every input before replacing any site assets.
-const names = ["libv86.js", "v86.wasm"];
+const names = ["libv86.js", "v86.wasm", "cpu-worker.js", "v86-bochs-vga.js"];
 const core = await Promise.all(names.map(name => readFile(join(v86, "build", name))));
 const assets = await Promise.all(manifest.files.map(name => readFile(join(graphics, name))));
 await mkdir(output, { recursive: true });
 for (let i = 0; i < names.length; i++) await writeFile(join(site, names[i]), core[i]);
 for (let i = 0; i < manifest.files.length; i++) await writeFile(join(output, manifest.files[i]), assets[i]);
 await copyFile(join(graphics, "manifest.json"), join(output, "manifest.json"));
-const coreRevision = createHash("sha256").update(core[0]).digest("hex").slice(0, 20);
+const coreHash = createHash("sha256");
+for (const file of core) coreHash.update(file);
+const coreRevision = coreHash.digest("hex").slice(0, 20);
 const appRevision = createHash("sha256").update(await readFile(join(site, "app.js"))).digest("hex").slice(0, 20);
 const styleRevision = createHash("sha256").update(await readFile(join(site, "styles.css"))).digest("hex").slice(0, 20);
 const page = join(site, "game.html");
