@@ -17,9 +17,9 @@ v86 core (`libv86.js`, `v86.wasm`, the CPU worker `cpu-worker.js` and the
 Bochs VGA display plugin `v86-bochs-vga.js`, all to the site root) and the
 generated graphics bundle/worker resources, and updates the page's
 cache-busting versions: the four core files share one revision, which
-`app.js` reads from the `libv86.js` tag and puts on the other three. `vendor/v86/` contains generated assets
-and is ignored by Git: run the sync step before serving or packaging a fresh
-checkout. Include the generated directory in the deployed static site.
+`app.js` reads from the `libv86.js` tag and puts on the other three. `vendor/v86/` contains generated assets:
+commit them with the core files (the site is deployed from Git, and without
+them a game fails with "graphics_proxy requires libv86-webgpu.js").
 
 Host tests now run with `make -C ../v86 test-glbridge`. Guest tests remain
 `node glbridge/tests/<name>_test.js`; cross-repository tests default to the
