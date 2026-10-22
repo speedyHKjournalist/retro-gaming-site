@@ -305,6 +305,22 @@ input:focus-visible {
     opacity: 0.5;
 }
 
+/* A rail with its AdSense unit (ads.js): the label above a 120 x 600 ad */
+.ad-rail.has-ad {
+    height: auto;
+    align-self: start;
+    justify-content: flex-start;
+    gap: 8px;
+    border: 0;
+    background: none;
+}
+
+.ad-rail ins.adsbygoogle {
+    display: block;
+    width: 120px;
+    height: 600px;
+}
+
 .section-heading {
     display: flex;
     margin-bottom: 23px;
