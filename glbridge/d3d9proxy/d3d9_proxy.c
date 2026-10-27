@@ -46,7 +46,7 @@
 #ifdef D9WG_DIAGNOSTIC_TRACE
 /*
  * Small, CRT-free first-chance diagnostic trace. This is compiled only by
- * build_diagnostic.sh; the ordinary d3d9.dll has no file I/O or VEH overhead.
+ * build.sh --diagnostic; the ordinary d3d9.dll has no file I/O or VEH overhead.
  * Every line is one WriteFile call.  Ordinary calls are flushed in batches so
  * tracing does not perturb the game as much; an exception and process detach
  * explicitly flush their complete diagnostic tail.

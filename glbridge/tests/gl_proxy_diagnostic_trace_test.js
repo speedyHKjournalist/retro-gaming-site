@@ -18,8 +18,9 @@ const root = path.resolve(__dirname, "..");
 const read = relative => fs.readFileSync(/^(gl-webgpu|d3d8-webgpu|d3d9-webgpu)\//.test(relative) ? require("./host_paths.js").hostPath(relative) : path.join(root, relative), "utf8");
 
 const proxy = read("openglproxy/opengl32_proxy.c");
-const build = read("openglproxy/build_diagnostic.sh");
-const shipping = read("openglproxy/build.sh");
+// One build script: --diagnostic's branch builds the trace in, nothing else does
+const script = read("openglproxy/build.sh");
+const build = script.match(/^\s*diagnostic\)\n([\s\S]*?)^\s*;;/m)[1];
 const readme = read("openglproxy/README.md");
 const writer = read("diagnostic_trace.h");
 
@@ -27,7 +28,7 @@ assert.match(build, /-DV86GL_DIAGNOSTIC_TRACE=1/,
     "the diagnostic build must define the trace switch");
 assert.match(build, /opengl32-diagnostic\.dll/,
     "the diagnostic build must produce a separately named DLL");
-assert.ok(!/V86GL_DIAGNOSTIC_TRACE/.test(shipping),
+assert.equal(script.match(/V86GL_DIAGNOSTIC_TRACE/g).length, 1,
     "the shipping DLL must compile the file trace out entirely");
 
 assert.match(proxy, /v86wg_diagnostic_process_attach\(hinst\)/,

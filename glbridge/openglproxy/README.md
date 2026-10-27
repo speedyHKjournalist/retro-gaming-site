@@ -86,8 +86,8 @@ and known semantic deviations are documented in
 ## Build
 
 ```bash
-glbridge/openglproxy/build.sh              # opengl32.dll
-glbridge/openglproxy/build_diagnostic.sh   # opengl32-diagnostic.dll
+glbridge/openglproxy/build.sh               # opengl32.dll
+glbridge/openglproxy/build.sh --diagnostic  # opengl32-diagnostic.dll
 ```
 
 This is a 32-bit, CRT-free MinGW-w64 build; the script fails if a C runtime

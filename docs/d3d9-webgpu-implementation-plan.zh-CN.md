@@ -1033,7 +1033,7 @@ D3D9 API 的一部分,而是微软提供的独立辅助库，常见用途：
 **2026-08-06 状态记录**：guest DLL（`d3d9_proxy.c`）与 host executor
 （`d3d9_executor.js`）已经按本节范围实现，并且用 5 个独立的真实环境
 smoke test 逐条验证过（`glbridge/sample/d3d9_{clear,triangle,texture,
-world,reset}_test.c`，构建脚本见 `glbridge/d3d9proxy/build_smoke_test.sh`）：
+world,reset}_test.c`，构建命令见 `glbridge/d3d9proxy/build.sh --tests`）：
 `Direct3DCreate9`/`CreateDevice`/`Clear`/`Present` 链路、顶点缓冲+`SetFVF`+
 `DrawPrimitive`、纹理上传+索引缓冲+`DrawIndexedPrimitive`、真实
 `IDirect3DVertexDeclaration9`+`SetTransform`（验证了 host 端矩阵转置/乘法
@@ -2034,7 +2034,7 @@ vkd3d-shader(wasm)、Tint(wasm) 的构建脚本
    `D9WG_SHADER_MODEL=0` 仍兼容）。这是目前唯一
    卡在自动化之外的验证。
 2. 顺带在同一次运行里跑 `glbridge/sample/d3d9_shader_test.exe`（已随
-   `build_smoke_test.sh` 构建），它比整局游戏更容易定位失败点。
+   `build.sh --tests` 构建），它比整局游戏更容易定位失败点。
 3. 阶段 0（第 5 章）的 API trace 采集仍未做。M2 的翻译器目前是按 D3D9
    规格书实现的，没有真实游戏的 shader 语料做覆盖率参考——这在进入 M5
    （WoW，shader 种类事实上无上限）之前必须补上。

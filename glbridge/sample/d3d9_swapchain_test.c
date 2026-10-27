@@ -5,7 +5,7 @@
 // games before they render their first frame, including rejection of an
 // out-of-range swap-chain index.
 //
-// Build for Windows XP with ../d3d9proxy/build_smoke_test.sh.  The build uses
+// Build for Windows XP with ../d3d9proxy/build.sh --tests.  The build uses
 // a 32-bit MinGW compiler and deliberately avoids the MinGW C runtime.
 
 #define WIN32_LEAN_AND_MEAN

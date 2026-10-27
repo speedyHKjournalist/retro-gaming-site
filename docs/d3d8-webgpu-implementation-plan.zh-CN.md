@@ -1100,7 +1100,7 @@ cache 必须有计数、命中率和上限。不要无界增长；场景切换�
 - `d3d8_webgpu_executor_test.js`：每条支持指令一条数值断言；write mask/saturate/destination shift/source modifier/swizzle/`def` 折叠；拒绝用例覆盖 vs_1_0、ps_1_5/ps_2_0、版本不匹配的 `cnd`/`cmp`、跨类型 opcode、未声明的 vertex input、越界常量寄存器、超出两级的纹理 stage、不支持的 source modifier、截断指令和截断 `def`；comment token 按长度跳过而非扫描 opcode。
 - `d3d8_webgpu_executor_test.js`：端到端真实 shader 绘制，校验生成模块只声明一次 uniform block、vertex layout 来自 declaration 而非 FVF、第二次相同绘制 `pipelineCreations` 不增长，以及未知 shader handle 会让整个 batch 失败。
 - `d3d8_protocol_consistency_test.js`：新 opcode/resource kind/结构字段顺序/`sizeof` 断言的 C↔JS 一致性。
-- `d3d8_caps_audit_test.exe`（`build_stage6_tests.sh`）：要求 caps 如实宣告 SM1.x，执行真实 VS1.1+PS1.1 创建/绑定/绘制/删除，并确认版本错误与不支持 opcode 的 shader 仍被拒绝且句柄清零。
+- `d3d8_caps_audit_test.exe`（`build.sh --tests`）：要求 caps 如实宣告 SM1.x，执行真实 VS1.1+PS1.1 创建/绑定/绘制/删除，并确认版本错误与不支持 opcode 的 shader 仍被拒绝且句柄清零。
 
 发布门槛仍需一次真实 XP/browser 人工运行：Stage 6 exe 标题为 `PASS`，且在真实 WebGPU 下确认生成的 WGSL 能通过浏览器校验（自动测试使用 fake device，不做 WGSL 编译）。
 
@@ -1627,15 +1627,15 @@ v1.7（阶段 6）新增：
 - VS 1.1 与 PS 1.1–1.4 的 bytecode → WGSL 翻译器，guest/host 双端按同一支持指令表校验，不支持的合法 opcode 明确拒绝；
 - shader 专用 pipeline/bind-group/常量 uniform 路径，与固定管线共用缓存但命名空间隔离；
 - shader 随 `Reset` 在新 device epoch 下重建，常量 bank 一并重发；
-- Stage 6 的 XP 回归构建脚本 `build_stage6_tests.sh`。
+- Stage 6 的 XP 回归测试程序（由 `glbridge/d3d8proxy/build.sh --tests` 构建）。
 
 本地自动验证已覆盖：guest DLL 的 XP 5.1/无 CRT 编译与 import 审计、Stage 3/4/5/6 测试程序交叉编译、协议 C/JS 一致性、device-lost 恢复、save/load checkpoint、192 次资源压力、24 次 host Reset、stale epoch 拒绝，以及 SM1.x 的逐指令数值翻译、非法 bytecode 拒绝和 shader pipeline 缓存复用。真实 GPU 页面仍位于 `glbridge/tests/d3d8_webgpu_browser_test.html`。
 
 下一步按以下顺序关闭阶段 5/6 的真实运行门槛：
 
 1. 同步部署 v1.7 `d3d8.dll`、`d3d8_executor.js` 和 bridge，硬刷新并确认版本串一致。
-2. 运行 `build_stage5_tests.sh` 生成的四个 exe，确认标题均为 `PASS`；特别观察第二次 Reset、additional swap-chain blocker 和 RT readback。
-3. 运行 `build_stage6_tests.sh` 生成的 exe，确认标题为 `PASS`，并在真实 WebGPU 浏览器下确认生成的 shader WGSL 没有 validation error（自动测试使用 fake device，不做 WGSL 编译）。
+2. 运行 `build.sh --tests` 生成的 stage 5 的四个 exe（`stateblock`、`reset_lifecycle`、`lifecycle_compat`、`caps_audit`），确认标题均为 `PASS`；特别观察第二次 Reset、additional swap-chain blocker 和 RT readback。
+3. 运行 stage 6 的 `d3d8_caps_audit_test.exe`（同样由 `build.sh --tests` 生成），确认标题为 `PASS`，并在真实 WebGPU 浏览器下确认生成的 shader WGSL 没有 validation error（自动测试使用 fake device，不做 WGSL 编译）。
 4. 启动 MapleStory，完成登录、角色选择、至少十次地图切换和 10–30 分钟运行，记录 `resourcesLive`、pipeline/cache 和浏览器 GPU memory 是否回到稳定平台。
 5. 保存 v86 state，继续改变地图/资源后再加载，确认恢复的画面和逻辑可继续绘制，且旧时间线没有闪回或 stale-handle warning。
 6. 用测试注入一次 device lost，确认 replacement device 恢复后仍可 Present；任何恢复失败都必须作为明确错误上报，不能静默黑屏。

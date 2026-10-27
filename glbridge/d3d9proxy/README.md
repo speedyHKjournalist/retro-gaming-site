@@ -789,6 +789,10 @@ Build an XP-compatible DLL without a C runtime dependency:
 ./glbridge/d3d9proxy/build.sh /private/tmp/d3d9.dll
 ```
 
+`build.sh --diagnostic [out.dll]` builds `d3d9-diagnostic.dll` (the trace
+file and exception log), `build.sh --tests [dir]` the XP smoke tests of
+`../sample` with the shipping `d3d9.dll` beside them.
+
 The build enforces `-Wall -Wextra -Werror` and asserts the output imports
 only `KERNEL32.dll`/`USER32.dll`/`GDI32.dll` — no MSVCRT/UCRT dependency,
 matching the D3D8 path's XP-compatibility requirement.
@@ -835,4 +839,4 @@ Tests:
   message. Opt-in via `D9_SHADER_CORPUS`; it is a measurement, not a gate,
   unless `D9_CORPUS_STRICT=1`;
 - `../sample/d3d9_shader_test.c` — the real DLL in the real XP guest
-  (`./build_smoke_test.sh`);
+  (`./build.sh --tests`);

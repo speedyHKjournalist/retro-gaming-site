@@ -8,7 +8,7 @@
 // alias before releasing its old binding; doing those operations in the other
 // order destroys the object and immediately calls AddRef through freed memory.
 //
-// Build for Windows XP with ../d3d9proxy/build_smoke_test.sh.  Like the other
+// Build for Windows XP with ../d3d9proxy/build.sh --tests.  Like the other
 // smoke tests, this avoids the MinGW C runtime.
 
 #define WIN32_LEAN_AND_MEAN

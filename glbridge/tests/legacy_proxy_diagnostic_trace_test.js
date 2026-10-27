@@ -15,10 +15,13 @@ const ddraw = [
     read("ddrawproxy/d3d7_proxy.inc"),
     read("ddrawproxy/d3d_legacy_proxy.inc"),
 ].join("\n");
-const d3d8Build = read("d3d8proxy/build_diagnostic.sh");
-const ddrawBuild = read("ddrawproxy/build_diagnostic.sh");
+// --diagnostic's branch of a proxy's one build script
+const diagnosticBuild = relative =>
+    read(relative).match(/^\s*diagnostic\)\n([\s\S]*?)^\s*;;/m)[1];
+const d3d8Build = diagnosticBuild("d3d8proxy/build.sh");
+const ddrawBuild = diagnosticBuild("ddrawproxy/build.sh");
 const opengl = read("openglproxy/opengl32_proxy.c");
-const openglBuild = read("openglproxy/build_diagnostic.sh");
+const openglBuild = diagnosticBuild("openglproxy/build.sh");
 
 assert.match(shared, /AddVectoredExceptionHandler/,
     "diagnostic DLLs must record first-chance exceptions");

@@ -250,7 +250,7 @@ For an XP diagnostic build that records proxy failures and first-chance
 exceptions:
 
 ```sh
-./glbridge/d3d8proxy/build_diagnostic.sh
+./glbridge/d3d8proxy/build.sh --diagnostic
 ```
 
 This produces `d3d8-diagnostic.dll`. Deploy it under the loader-visible name
@@ -325,6 +325,6 @@ node glbridge/tests/d3d9_shader_pipeline_test.js
 node glbridge/tests/d3d9_shader_corpus_test.js
 ```
 
-The XP acceptance-test builders (`build_stage3_tests.sh` through
-`build_stage6_tests.sh`) still build against the D3D8 API surface and remain
-the way to exercise the DLL in the guest.
+The XP acceptance tests of stages 3 to 6 (`build.sh --tests [dir]`, which
+puts the shipping `d3d8.dll` beside them) still build against the D3D8 API
+surface and remain the way to exercise the DLL in the guest.

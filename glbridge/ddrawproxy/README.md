@@ -175,8 +175,8 @@ instead of a full-surface repaint.
 
 ```sh
 ./build.sh                 # produces ddraw.dll next to this README
-./build_diagnostic.sh      # produces ddraw-diagnostic.dll with full tracing
-./build_smoke_test.sh /private/tmp/ddraw-d3d7-smoke
+./build.sh --diagnostic    # produces ddraw-diagnostic.dll with full tracing
+./build.sh --tests /private/tmp/ddraw-d3d7-smoke
                            # produces the DLL + four XP-compatible EXEs
 ```
 
