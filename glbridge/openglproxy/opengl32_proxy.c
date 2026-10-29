@@ -9103,8 +9103,9 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         break;
     case GL_LINE_WIDTH_RANGE:
     case GL_ALIASED_LINE_WIDTH_RANGE:
+        /* the host widens lines into quads (no antialiasing), as points */
         params[0] = 1;
-        params[1] = 1;
+        params[1] = 64;
         break;
     case GL_MAX_TEXTURE_SIZE:
         params[0] = query_limit_or_default(pname, 2048, 0);
@@ -9373,7 +9374,7 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
     case GL_LINE_WIDTH_RANGE:
     case GL_ALIASED_LINE_WIDTH_RANGE:
         params[0] = 1.0f;
-        params[1] = 1.0f;
+        params[1] = 64.0f;
         break;
     case GL_POLYGON_OFFSET_FACTOR:
         params[0] = g_polygon_offset_factor;
