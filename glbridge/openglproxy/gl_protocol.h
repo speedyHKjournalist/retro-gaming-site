@@ -270,6 +270,12 @@ enum {
 #define V86GL_OPCODE_COUNT 217u
 
 /* The fixed header of each hand-written record; its data follows it */
+typedef struct V86GLRecordGenTextures {
+    uint32_t count;
+} V86GLRecordGenTextures;
+typedef struct V86GLRecordDeleteTextures {
+    uint32_t count;
+} V86GLRecordDeleteTextures;
 typedef struct V86GLRecordTexImage2d {
     uint32_t target;
     int32_t level;
@@ -302,6 +308,16 @@ typedef struct V86GLRecordReadPixels {
     uint32_t data_size;
     uint32_t status;
 } V86GLRecordReadPixels;
+typedef struct V86GLRecordCompressedTexImage2d {
+    uint32_t target;
+    int32_t level;
+    uint32_t internalformat;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    int32_t border;
+    uint32_t image_size;
+} V86GLRecordCompressedTexImage2d;
 typedef struct V86GLRecordTexImage3d {
     uint32_t target;
     int32_t level;
@@ -327,6 +343,62 @@ typedef struct V86GLRecordTexSubImage3d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage3d;
+typedef struct V86GLRecordCompressedTexImage1d {
+    uint32_t target;
+    int32_t level;
+    uint32_t internalformat;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    int32_t border;
+    uint32_t image_size;
+} V86GLRecordCompressedTexImage1d;
+typedef struct V86GLRecordCompressedTexImage3d {
+    uint32_t target;
+    int32_t level;
+    uint32_t internalformat;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    int32_t border;
+    uint32_t image_size;
+} V86GLRecordCompressedTexImage3d;
+typedef struct V86GLRecordCompressedTexSubImage1d {
+    uint32_t target;
+    int32_t level;
+    int32_t xoffset;
+    int32_t yoffset;
+    int32_t zoffset;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    uint32_t format;
+    uint32_t image_size;
+} V86GLRecordCompressedTexSubImage1d;
+typedef struct V86GLRecordCompressedTexSubImage2d {
+    uint32_t target;
+    int32_t level;
+    int32_t xoffset;
+    int32_t yoffset;
+    int32_t zoffset;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    uint32_t format;
+    uint32_t image_size;
+} V86GLRecordCompressedTexSubImage2d;
+typedef struct V86GLRecordCompressedTexSubImage3d {
+    uint32_t target;
+    int32_t level;
+    int32_t xoffset;
+    int32_t yoffset;
+    int32_t zoffset;
+    int32_t width;
+    int32_t height;
+    int32_t depth;
+    uint32_t format;
+    uint32_t image_size;
+} V86GLRecordCompressedTexSubImage3d;
 typedef struct V86GLRecordTexImage1d {
     uint32_t target;
     int32_t level;
@@ -346,6 +418,9 @@ typedef struct V86GLRecordTexSubImage1d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage1d;
+typedef struct V86GLRecordDrawBuffers {
+    uint32_t count;
+} V86GLRecordDrawBuffers;
 typedef struct V86GLRecordShaderSource {
     uint32_t shader;
     uint32_t length;
@@ -378,6 +453,18 @@ typedef struct V86GLRecordUniformMatrixRectFv {
     int32_t count;
     uint32_t transpose;
 } V86GLRecordUniformMatrixRectFv;
+typedef struct V86GLRecordGenFramebuffers {
+    uint32_t count;
+} V86GLRecordGenFramebuffers;
+typedef struct V86GLRecordDeleteFramebuffers {
+    uint32_t count;
+} V86GLRecordDeleteFramebuffers;
+typedef struct V86GLRecordGenRenderbuffers {
+    uint32_t count;
+} V86GLRecordGenRenderbuffers;
+typedef struct V86GLRecordDeleteRenderbuffers {
+    uint32_t count;
+} V86GLRecordDeleteRenderbuffers;
 typedef struct V86GLRecordQueryObjectIv {
     uint32_t object_kind;
     uint32_t name;
@@ -412,6 +499,18 @@ typedef struct V86GLRecordQueryActive {
     uint32_t data_size;
     uint32_t reserved;
 } V86GLRecordQueryActive;
+typedef struct V86GLRecordGenQueries {
+    uint32_t count;
+} V86GLRecordGenQueries;
+typedef struct V86GLRecordDeleteQueries {
+    uint32_t count;
+} V86GLRecordDeleteQueries;
+typedef struct V86GLRecordGenProgramsArb {
+    uint32_t count;
+} V86GLRecordGenProgramsArb;
+typedef struct V86GLRecordDeleteProgramsArb {
+    uint32_t count;
+} V86GLRecordDeleteProgramsArb;
 typedef struct V86GLRecordProgramStringArb {
     uint32_t target;
     uint32_t format;
@@ -473,6 +572,12 @@ typedef struct V86GLRecordQueryInteger {
     int32_t value;
     uint32_t reserved;
 } V86GLRecordQueryInteger;
+typedef struct V86GLRecordGenBuffers {
+    uint32_t count;
+} V86GLRecordGenBuffers;
+typedef struct V86GLRecordDeleteBuffers {
+    uint32_t count;
+} V86GLRecordDeleteBuffers;
 typedef struct V86GLRecordBufferData {
     uint32_t target;
     int32_t size;
@@ -541,6 +646,10 @@ typedef struct V86GLRecordDestroyContext {
 } V86GLRecordDestroyContext;
 
 /* The layout gl_protocol.js describes: every header's size and every field's offset */
+typedef char V86GLRecordGenTexturesSize[sizeof(V86GLRecordGenTextures) == 4 ? 1 : -1];
+typedef char V86GLRecordGenTextures_count[offsetof(V86GLRecordGenTextures, count) == 0 ? 1 : -1];
+typedef char V86GLRecordDeleteTexturesSize[sizeof(V86GLRecordDeleteTextures) == 4 ? 1 : -1];
+typedef char V86GLRecordDeleteTextures_count[offsetof(V86GLRecordDeleteTextures, count) == 0 ? 1 : -1];
 typedef char V86GLRecordTexImage2dSize[sizeof(V86GLRecordTexImage2d) == 36 ? 1 : -1];
 typedef char V86GLRecordTexImage2d_target[offsetof(V86GLRecordTexImage2d, target) == 0 ? 1 : -1];
 typedef char V86GLRecordTexImage2d_level[offsetof(V86GLRecordTexImage2d, level) == 4 ? 1 : -1];
@@ -570,6 +679,15 @@ typedef char V86GLRecordReadPixels_format[offsetof(V86GLRecordReadPixels, format
 typedef char V86GLRecordReadPixels_type[offsetof(V86GLRecordReadPixels, type) == 20 ? 1 : -1];
 typedef char V86GLRecordReadPixels_data_size[offsetof(V86GLRecordReadPixels, data_size) == 24 ? 1 : -1];
 typedef char V86GLRecordReadPixels_status[offsetof(V86GLRecordReadPixels, status) == 28 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2dSize[sizeof(V86GLRecordCompressedTexImage2d) == 32 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_target[offsetof(V86GLRecordCompressedTexImage2d, target) == 0 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_level[offsetof(V86GLRecordCompressedTexImage2d, level) == 4 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_internalformat[offsetof(V86GLRecordCompressedTexImage2d, internalformat) == 8 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_width[offsetof(V86GLRecordCompressedTexImage2d, width) == 12 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_height[offsetof(V86GLRecordCompressedTexImage2d, height) == 16 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_depth[offsetof(V86GLRecordCompressedTexImage2d, depth) == 20 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_border[offsetof(V86GLRecordCompressedTexImage2d, border) == 24 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage2d_image_size[offsetof(V86GLRecordCompressedTexImage2d, image_size) == 28 ? 1 : -1];
 typedef char V86GLRecordTexImage3dSize[sizeof(V86GLRecordTexImage3d) == 40 ? 1 : -1];
 typedef char V86GLRecordTexImage3d_target[offsetof(V86GLRecordTexImage3d, target) == 0 ? 1 : -1];
 typedef char V86GLRecordTexImage3d_level[offsetof(V86GLRecordTexImage3d, level) == 4 ? 1 : -1];
@@ -593,6 +711,57 @@ typedef char V86GLRecordTexSubImage3d_depth[offsetof(V86GLRecordTexSubImage3d, d
 typedef char V86GLRecordTexSubImage3d_format[offsetof(V86GLRecordTexSubImage3d, format) == 32 ? 1 : -1];
 typedef char V86GLRecordTexSubImage3d_type[offsetof(V86GLRecordTexSubImage3d, type) == 36 ? 1 : -1];
 typedef char V86GLRecordTexSubImage3d_data_size[offsetof(V86GLRecordTexSubImage3d, data_size) == 40 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1dSize[sizeof(V86GLRecordCompressedTexImage1d) == 32 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_target[offsetof(V86GLRecordCompressedTexImage1d, target) == 0 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_level[offsetof(V86GLRecordCompressedTexImage1d, level) == 4 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_internalformat[offsetof(V86GLRecordCompressedTexImage1d, internalformat) == 8 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_width[offsetof(V86GLRecordCompressedTexImage1d, width) == 12 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_height[offsetof(V86GLRecordCompressedTexImage1d, height) == 16 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_depth[offsetof(V86GLRecordCompressedTexImage1d, depth) == 20 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_border[offsetof(V86GLRecordCompressedTexImage1d, border) == 24 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage1d_image_size[offsetof(V86GLRecordCompressedTexImage1d, image_size) == 28 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3dSize[sizeof(V86GLRecordCompressedTexImage3d) == 32 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_target[offsetof(V86GLRecordCompressedTexImage3d, target) == 0 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_level[offsetof(V86GLRecordCompressedTexImage3d, level) == 4 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_internalformat[offsetof(V86GLRecordCompressedTexImage3d, internalformat) == 8 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_width[offsetof(V86GLRecordCompressedTexImage3d, width) == 12 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_height[offsetof(V86GLRecordCompressedTexImage3d, height) == 16 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_depth[offsetof(V86GLRecordCompressedTexImage3d, depth) == 20 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_border[offsetof(V86GLRecordCompressedTexImage3d, border) == 24 ? 1 : -1];
+typedef char V86GLRecordCompressedTexImage3d_image_size[offsetof(V86GLRecordCompressedTexImage3d, image_size) == 28 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1dSize[sizeof(V86GLRecordCompressedTexSubImage1d) == 40 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_target[offsetof(V86GLRecordCompressedTexSubImage1d, target) == 0 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_level[offsetof(V86GLRecordCompressedTexSubImage1d, level) == 4 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_xoffset[offsetof(V86GLRecordCompressedTexSubImage1d, xoffset) == 8 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_yoffset[offsetof(V86GLRecordCompressedTexSubImage1d, yoffset) == 12 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_zoffset[offsetof(V86GLRecordCompressedTexSubImage1d, zoffset) == 16 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_width[offsetof(V86GLRecordCompressedTexSubImage1d, width) == 20 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_height[offsetof(V86GLRecordCompressedTexSubImage1d, height) == 24 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_depth[offsetof(V86GLRecordCompressedTexSubImage1d, depth) == 28 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_format[offsetof(V86GLRecordCompressedTexSubImage1d, format) == 32 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage1d_image_size[offsetof(V86GLRecordCompressedTexSubImage1d, image_size) == 36 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2dSize[sizeof(V86GLRecordCompressedTexSubImage2d) == 40 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_target[offsetof(V86GLRecordCompressedTexSubImage2d, target) == 0 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_level[offsetof(V86GLRecordCompressedTexSubImage2d, level) == 4 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_xoffset[offsetof(V86GLRecordCompressedTexSubImage2d, xoffset) == 8 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_yoffset[offsetof(V86GLRecordCompressedTexSubImage2d, yoffset) == 12 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_zoffset[offsetof(V86GLRecordCompressedTexSubImage2d, zoffset) == 16 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_width[offsetof(V86GLRecordCompressedTexSubImage2d, width) == 20 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_height[offsetof(V86GLRecordCompressedTexSubImage2d, height) == 24 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_depth[offsetof(V86GLRecordCompressedTexSubImage2d, depth) == 28 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_format[offsetof(V86GLRecordCompressedTexSubImage2d, format) == 32 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage2d_image_size[offsetof(V86GLRecordCompressedTexSubImage2d, image_size) == 36 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3dSize[sizeof(V86GLRecordCompressedTexSubImage3d) == 40 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_target[offsetof(V86GLRecordCompressedTexSubImage3d, target) == 0 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_level[offsetof(V86GLRecordCompressedTexSubImage3d, level) == 4 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_xoffset[offsetof(V86GLRecordCompressedTexSubImage3d, xoffset) == 8 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_yoffset[offsetof(V86GLRecordCompressedTexSubImage3d, yoffset) == 12 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_zoffset[offsetof(V86GLRecordCompressedTexSubImage3d, zoffset) == 16 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_width[offsetof(V86GLRecordCompressedTexSubImage3d, width) == 20 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_height[offsetof(V86GLRecordCompressedTexSubImage3d, height) == 24 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_depth[offsetof(V86GLRecordCompressedTexSubImage3d, depth) == 28 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_format[offsetof(V86GLRecordCompressedTexSubImage3d, format) == 32 ? 1 : -1];
+typedef char V86GLRecordCompressedTexSubImage3d_image_size[offsetof(V86GLRecordCompressedTexSubImage3d, image_size) == 36 ? 1 : -1];
 typedef char V86GLRecordTexImage1dSize[sizeof(V86GLRecordTexImage1d) == 32 ? 1 : -1];
 typedef char V86GLRecordTexImage1d_target[offsetof(V86GLRecordTexImage1d, target) == 0 ? 1 : -1];
 typedef char V86GLRecordTexImage1d_level[offsetof(V86GLRecordTexImage1d, level) == 4 ? 1 : -1];
@@ -610,6 +779,8 @@ typedef char V86GLRecordTexSubImage1d_width[offsetof(V86GLRecordTexSubImage1d, w
 typedef char V86GLRecordTexSubImage1d_format[offsetof(V86GLRecordTexSubImage1d, format) == 16 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_type[offsetof(V86GLRecordTexSubImage1d, type) == 20 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_data_size[offsetof(V86GLRecordTexSubImage1d, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordDrawBuffersSize[sizeof(V86GLRecordDrawBuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawBuffers_count[offsetof(V86GLRecordDrawBuffers, count) == 0 ? 1 : -1];
 typedef char V86GLRecordShaderSourceSize[sizeof(V86GLRecordShaderSource) == 8 ? 1 : -1];
 typedef char V86GLRecordShaderSource_shader[offsetof(V86GLRecordShaderSource, shader) == 0 ? 1 : -1];
 typedef char V86GLRecordShaderSource_length[offsetof(V86GLRecordShaderSource, length) == 4 ? 1 : -1];
@@ -636,6 +807,14 @@ typedef char V86GLRecordUniformMatrixRectFv_columns[offsetof(V86GLRecordUniformM
 typedef char V86GLRecordUniformMatrixRectFv_rows[offsetof(V86GLRecordUniformMatrixRectFv, rows) == 8 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixRectFv_count[offsetof(V86GLRecordUniformMatrixRectFv, count) == 12 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixRectFv_transpose[offsetof(V86GLRecordUniformMatrixRectFv, transpose) == 16 ? 1 : -1];
+typedef char V86GLRecordGenFramebuffersSize[sizeof(V86GLRecordGenFramebuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordGenFramebuffers_count[offsetof(V86GLRecordGenFramebuffers, count) == 0 ? 1 : -1];
+typedef char V86GLRecordDeleteFramebuffersSize[sizeof(V86GLRecordDeleteFramebuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordDeleteFramebuffers_count[offsetof(V86GLRecordDeleteFramebuffers, count) == 0 ? 1 : -1];
+typedef char V86GLRecordGenRenderbuffersSize[sizeof(V86GLRecordGenRenderbuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordGenRenderbuffers_count[offsetof(V86GLRecordGenRenderbuffers, count) == 0 ? 1 : -1];
+typedef char V86GLRecordDeleteRenderbuffersSize[sizeof(V86GLRecordDeleteRenderbuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordDeleteRenderbuffers_count[offsetof(V86GLRecordDeleteRenderbuffers, count) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryObjectIvSize[sizeof(V86GLRecordQueryObjectIv) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryObjectIv_object_kind[offsetof(V86GLRecordQueryObjectIv, object_kind) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryObjectIv_name[offsetof(V86GLRecordQueryObjectIv, name) == 4 ? 1 : -1];
@@ -666,6 +845,14 @@ typedef char V86GLRecordQueryActive_size[offsetof(V86GLRecordQueryActive, size) 
 typedef char V86GLRecordQueryActive_type[offsetof(V86GLRecordQueryActive, type) == 28 ? 1 : -1];
 typedef char V86GLRecordQueryActive_data_size[offsetof(V86GLRecordQueryActive, data_size) == 32 ? 1 : -1];
 typedef char V86GLRecordQueryActive_reserved[offsetof(V86GLRecordQueryActive, reserved) == 36 ? 1 : -1];
+typedef char V86GLRecordGenQueriesSize[sizeof(V86GLRecordGenQueries) == 4 ? 1 : -1];
+typedef char V86GLRecordGenQueries_count[offsetof(V86GLRecordGenQueries, count) == 0 ? 1 : -1];
+typedef char V86GLRecordDeleteQueriesSize[sizeof(V86GLRecordDeleteQueries) == 4 ? 1 : -1];
+typedef char V86GLRecordDeleteQueries_count[offsetof(V86GLRecordDeleteQueries, count) == 0 ? 1 : -1];
+typedef char V86GLRecordGenProgramsArbSize[sizeof(V86GLRecordGenProgramsArb) == 4 ? 1 : -1];
+typedef char V86GLRecordGenProgramsArb_count[offsetof(V86GLRecordGenProgramsArb, count) == 0 ? 1 : -1];
+typedef char V86GLRecordDeleteProgramsArbSize[sizeof(V86GLRecordDeleteProgramsArb) == 4 ? 1 : -1];
+typedef char V86GLRecordDeleteProgramsArb_count[offsetof(V86GLRecordDeleteProgramsArb, count) == 0 ? 1 : -1];
 typedef char V86GLRecordProgramStringArbSize[sizeof(V86GLRecordProgramStringArb) == 16 ? 1 : -1];
 typedef char V86GLRecordProgramStringArb_target[offsetof(V86GLRecordProgramStringArb, target) == 0 ? 1 : -1];
 typedef char V86GLRecordProgramStringArb_format[offsetof(V86GLRecordProgramStringArb, format) == 4 ? 1 : -1];
@@ -718,6 +905,10 @@ typedef char V86GLRecordQueryInteger_pname[offsetof(V86GLRecordQueryInteger, pna
 typedef char V86GLRecordQueryInteger_status[offsetof(V86GLRecordQueryInteger, status) == 4 ? 1 : -1];
 typedef char V86GLRecordQueryInteger_value[offsetof(V86GLRecordQueryInteger, value) == 8 ? 1 : -1];
 typedef char V86GLRecordQueryInteger_reserved[offsetof(V86GLRecordQueryInteger, reserved) == 12 ? 1 : -1];
+typedef char V86GLRecordGenBuffersSize[sizeof(V86GLRecordGenBuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordGenBuffers_count[offsetof(V86GLRecordGenBuffers, count) == 0 ? 1 : -1];
+typedef char V86GLRecordDeleteBuffersSize[sizeof(V86GLRecordDeleteBuffers) == 4 ? 1 : -1];
+typedef char V86GLRecordDeleteBuffers_count[offsetof(V86GLRecordDeleteBuffers, count) == 0 ? 1 : -1];
 typedef char V86GLRecordBufferDataSize[sizeof(V86GLRecordBufferData) == 16 ? 1 : -1];
 typedef char V86GLRecordBufferData_target[offsetof(V86GLRecordBufferData, target) == 0 ? 1 : -1];
 typedef char V86GLRecordBufferData_size[offsetof(V86GLRecordBufferData, size) == 4 ? 1 : -1];
