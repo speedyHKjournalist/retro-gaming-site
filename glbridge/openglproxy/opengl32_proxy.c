@@ -4505,8 +4505,15 @@ static int emit_query_object_iv(uint32_t object_kind, GLuint name, GLenum pname,
     }
     CopyMemory(args, &request, sizeof(request));
 
-    if (!emit_pci_batch(FALSE) ||
-        read_u32le(args + 12) != V86GL_SYNC_QUERY_STATUS_OK) {
+    /* A shader's or program's answer is the CPU side's, there when the
+     * request returns; a query object's result is the renderer's, written
+     * into this record once it has it (in the CPU worker mode, later). */
+    if (!emit_pci_batch(FALSE)) {
+        return 0;
+    }
+    if (object_kind == V86GL_OBJECT_KIND_QUERY ?
+            !wait_for_host_status(args + 12, "glGetQueryObject") :
+            read_u32le(args + 12) != V86GL_SYNC_QUERY_STATUS_OK) {
         return 0;
     }
 
@@ -4574,8 +4581,10 @@ static int emit_query_object_batch(void) {
         entry_index++;
     }
 
+    /* the renderer writes the results into this record (in the CPU worker
+     * mode, after the request returned) */
     if (!emit_pci_batch(FALSE) ||
-        read_u32le(args + 8) != V86GL_SYNC_QUERY_STATUS_OK) {
+        !wait_for_host_status(args + 8, "query batch")) {
         return 0;
     }
 
@@ -9627,15 +9636,17 @@ void APIENTRY glFinish(void) {
     /* glFinish is a guest-visible completion point, not just another queued
      * command.  Include a status word in the DMA record and submit the batch
      * synchronously so WineD3D cannot continue after a missing/failed host
-     * export.  The mapped DMA storage remains valid after emit_pci_batch()
-     * resets the stream counters, just like the synchronous query helpers. */
+     * export.  The renderer writes the status once the GPU has done the work
+     * before it -- after the request returned -- so this waits for it.  The
+     * mapped DMA storage remains valid after emit_pci_batch() resets the
+     * stream counters, just like the synchronous query helpers. */
     if (!reserve_pci_record(GLFN_FINISH, NULL, sizeof(uint32_t), &args)) {
         return;
     }
     write_u32le(args, V86GL_SYNC_QUERY_STATUS_PENDING);
 
     if (!emit_pci_batch(FALSE) ||
-        read_u32le(args) != V86GL_SYNC_QUERY_STATUS_OK) {
+        !wait_for_host_status(args, "glFinish")) {
         v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
