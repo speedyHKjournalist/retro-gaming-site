@@ -235,19 +235,57 @@ failed:
     return STATUS_DEVICE_CONFIGURATION_ERROR;
 }
 
+/* Waits for the device to complete the request in flight */
+static NTSTATUS vgl_wait(VGL_TRANSPORT *t)
+{
+    volatile USHORT *used = (volatile USHORT *)((PUCHAR)t->queue_memory + VGL_USED_OFFSET);
+    volatile ULONG *used_entry;
+    ULONG attempt;
+    LARGE_INTEGER delay;
+    delay.QuadPart = -10000; /* 1 ms */
+    for(attempt = 0; attempt < 5000; ++attempt)
+    {
+        if(used[1] != t->used) break;
+        if(vgl_read8(t->common, 20) & 0xC0) break;
+        KeDelayExecutionThread(KernelMode, FALSE, &delay);
+    }
+    KeMemoryBarrier();
+    if(vgl_read8(t->common, 20) & 0xC0) return STATUS_DEVICE_PROTOCOL_ERROR;
+    if(used[1] != (USHORT)(t->used + 1)) return STATUS_IO_TIMEOUT;
+    used_entry = (volatile ULONG *)((PUCHAR)t->queue_memory + VGL_USED_OFFSET + 4 +
+        (t->used & (VGL_QUEUE_SIZE - 1)) * 8);
+    if(used_entry[0] != 0 || used_entry[1] != sizeof(VGL_REPLY))
+        return STATUS_DEVICE_PROTOCOL_ERROR;
+    ++t->used;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * A request the device did not complete in time, or a device reporting an
+ * error, resets the queue: the request is discarded with it -- the device
+ * must never read the arena later, when the owner is already writing the
+ * next batch there -- and the caller sees this one request fail. The
+ * transport itself lives on (it used to be torn down for good, which ended
+ * graphics until the guest rebooted, review S1-3); the next submit registers
+ * the arena again.
+ */
+static NTSTATUS vgl_transport_reset(VGL_TRANSPORT *t)
+{
+    DbgPrint(V86GL_LOG_PREFIX "virtio request not completed; resetting the queue\n");
+    vgl_transport_destroy(t);
+    return vgl_transport_init(t);
+}
+
 static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG length, ULONG flags)
 {
     VGL_REQUEST *request;
     volatile VGL_REPLY *reply;
-    volatile USHORT *avail, *used;
-    volatile ULONG *used_entry;
-    ULONG attempt;
-    LARGE_INTEGER delay;
-    if(!t->initialized) return STATUS_DEVICE_NOT_READY;
+    volatile USHORT *avail;
+    NTSTATUS status;
+    if(!t->initialized && !NT_SUCCESS(vgl_transport_init(t))) return STATUS_DEVICE_NOT_READY;
     request = (VGL_REQUEST *)((PUCHAR)t->queue_memory + VGL_REQUEST_OFFSET);
     reply = (volatile VGL_REPLY *)((PUCHAR)t->queue_memory + VGL_REPLY_OFFSET);
     avail = (volatile USHORT *)((PUCHAR)t->queue_memory + VGL_AVAIL_OFFSET);
-    used = (volatile USHORT *)((PUCHAR)t->queue_memory + VGL_USED_OFFSET);
     RtlZeroMemory(request, sizeof(*request));
     request->opcode = opcode; request->address_low = address;
     request->length = length; request->flags = flags;
@@ -257,29 +295,13 @@ static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG
     avail[1] = ++t->available;
     KeMemoryBarrier();
     vgl_write16(t->notify, 0, 0);
-    /* v86 normally accepts the command during the notification write. The
-     * bounded passive-level wait also handles delayed virtqueue completion. */
-    delay.QuadPart = -10000; /* 1 ms */
-    for(attempt = 0; attempt < 5000; ++attempt)
+    /* v86 normally accepts the command during the notification write */
+    status = vgl_wait(t);
+    if(!NT_SUCCESS(status))
     {
-        if(used[1] != t->used) break;
-        if(vgl_read8(t->common, 20) & 0xC0) break;
-        KeDelayExecutionThread(KernelMode, FALSE, &delay);
+        vgl_transport_reset(t);
+        return status;
     }
-    KeMemoryBarrier();
-    if(used[1] != (USHORT)(t->used + 1))
-    {
-        vgl_transport_destroy(t);
-        return STATUS_IO_TIMEOUT;
-    }
-    used_entry = (volatile ULONG *)((PUCHAR)t->queue_memory + VGL_USED_OFFSET + 4 +
-        (t->used & (VGL_QUEUE_SIZE - 1)) * 8);
-    if(used_entry[0] != 0 || used_entry[1] != sizeof(VGL_REPLY))
-    {
-        vgl_transport_destroy(t);
-        return STATUS_DEVICE_PROTOCOL_ERROR;
-    }
-    ++t->used;
     if(reply->status)
     {
         DbgPrint(V86GL_LOG_PREFIX "virtio request=%lu failed status=%lu\n", opcode, reply->status);

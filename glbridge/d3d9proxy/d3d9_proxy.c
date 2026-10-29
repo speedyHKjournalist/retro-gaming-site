@@ -1005,7 +1005,7 @@ struct D9Device {
      * after a Reset. Holding the authoritative copy here (rather than only on
      * the host) is what lets set_shader_constant_f() suppress the very common
      * "set the same matrix palette again every frame" traffic and lets
-     * recreate_device_resources() replay the live values after a Reset.
+     * emit_device_state_after_reset() replay the live values after a Reset.
      */
     float vs_const_f[D9_MAX_VS_CONST_F][4];
     int vs_const_i[D9_MAX_CONST_I][4];
@@ -1294,7 +1294,7 @@ static IDirect3DPixelShader9Vtbl g_pixel_shader_vtbl;
 static void device_clear_bindings(D9Device *device);
 static BOOL device_has_reset_blockers(D9Device *device);
 static void device_release_owned_references(D9Device *device);
-static BOOL recreate_device_resources(D9Device *device);
+static BOOL emit_device_state_after_reset(D9Device *device);
 static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture);
 static BOOL emit_cube_texture_update(D9CubeTexture *texture, UINT face,
         UINT level, const RECT *rect);
@@ -1504,7 +1504,17 @@ static uint32_t g_frame_id = 1;
 static uint32_t g_sequence = 1;
 static uint32_t g_session_id_low;
 static uint32_t g_session_id_high;
-static BOOL g_transport_failed;
+/*
+ * A transport failure is never permanent (review S1-3): the renderer may not
+ * be up yet, may be behind, or the page may have been reloaded. Opening is
+ * retried after D9_TRANSPORT_RETRY_MS; a batch the host refuses is dropped
+ * and counted, and the mapping -- with it the host's session, which ends when
+ * the arena is released -- is kept.
+ */
+#define D9_TRANSPORT_RETRY_MS 1000u
+static DWORD g_transport_retry_tick;
+static BOOL g_transport_retry_armed;
+static DWORD g_batches_dropped;
 static BOOL g_hello_emitted;
 static CRITICAL_SECTION g_transport_lock;
 static CRITICAL_SECTION g_readback_lock;
@@ -1599,14 +1609,18 @@ static BOOL open_transport_locked(void)
 
     if (g_dma_buffer)
         return TRUE;
-    if (g_transport_failed)
+    if (g_transport_retry_armed &&
+            GetTickCount() - g_transport_retry_tick < D9_TRANSPORT_RETRY_MS)
         return FALSE;
+    g_transport_retry_armed = TRUE;
+    g_transport_retry_tick = GetTickCount();
 
     g_transport = CreateFileA(V86GL_DEVICE_DOS_NAME,
             GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL, NULL);
     if (g_transport == INVALID_HANDLE_VALUE) {
-        g_transport_failed = TRUE;
+        TRACE("TRANSPORT open failed error=%lu; retrying in %lums",
+                GetLastError(), (DWORD)D9_TRANSPORT_RETRY_MS);
         return FALSE;
     }
 
@@ -1619,8 +1633,9 @@ static BOOL open_transport_locked(void)
                     + D9_VGL2_RECORD_HEADER_BYTES
                     + sizeof(D9WGBatchHeader)
                     + sizeof(D9WGCommandHeader)) {
+        TRACE("TRANSPORT map failed error=%lu (170: another process owns the "
+                "arena); retrying in %lums", GetLastError(), (DWORD)D9_TRANSPORT_RETRY_MS);
         close_transport_locked();
-        g_transport_failed = TRUE;
         return FALSE;
     }
 
@@ -1630,9 +1645,9 @@ static BOOL open_transport_locked(void)
             + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES
             + sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)) {
         close_transport_locked();
-        g_transport_failed = TRUE;
         return FALSE;
     }
+    g_transport_retry_armed = FALSE;
     ZeroMemory(response_region(), D9WG_RESPONSE_REGION_BYTES);
     reset_batch_locked();
     return TRUE;
@@ -1685,9 +1700,13 @@ static BOOL submit_batch_locked(BOOL present)
     submit.flags = 0;
     if (!DeviceIoControl(g_transport, V86GL_IOCTL_SUBMIT,
             &submit, sizeof(submit), NULL, 0, &returned, NULL)) {
-        close_transport_locked();
-        g_transport_failed = TRUE;
-        return FALSE;
+        /* No renderer yet, or the host timed out: this batch is lost, the
+         * stream goes on */
+        ++g_batches_dropped;
+        TRACE("SUBMIT failed error=%lu; %lu commands dropped (%lu batches so far)",
+                GetLastError(), g_command_count, g_batches_dropped);
+        reset_batch_locked();
+        return TRUE;
     }
 
     if (present)
@@ -3824,105 +3843,18 @@ static void device_release_owned_references(D9Device *device)
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
 }
 
-static BOOL recreate_device_resources(D9Device *device)
+/*
+ * After a Reset the host has a new device under the new handle, with
+ * default state; the resources -- buffers, textures, declarations, shaders --
+ * are the session's, not the device's, and keep their handles and contents
+ * there. They used to be created again under new handles and uploaded again,
+ * without the old ones ever being destroyed: every Reset doubled the GPU
+ * memory (review S1-9a). What the new device lacks is the shader constant
+ * registers, sent unconditionally because the host's copy is empty, not
+ * stale.
+ */
+static BOOL emit_device_state_after_reset(D9Device *device)
 {
-    D9VertexBuffer *vb;
-    D9IndexBuffer *ib;
-    D9Texture *texture;
-    D9CubeTexture *cube;
-    D9VolumeTexture *volume;
-    D9VertexDeclaration *decl;
-    D9Shader *shader;
-    UINT level;
-
-    for (vb = device->vertex_buffers; vb; vb = vb->next_device_resource) {
-        vb->handle = allocate_handle();
-        if (!emit_vertex_buffer_create(device, vb)
-                || !emit_buffer_update(vb->handle, 0, vb->shadow,
-                        vb->length, 0))
-            return FALSE;
-    }
-    for (ib = device->index_buffers; ib; ib = ib->next_device_resource) {
-        ib->handle = allocate_handle();
-        if (!emit_index_buffer_create(device, ib)
-                || !emit_buffer_update(ib->handle, 0, ib->shadow,
-                        ib->length, 0))
-            return FALSE;
-    }
-    for (texture = device->texture_resources; texture;
-            texture = texture->next_device_resource) {
-        texture->handle = allocate_handle();
-        if (!emit_texture_create(device, texture)) return FALSE;
-        for (level = 0; level < texture->level_count; ++level) {
-            RECT full;
-            SetRect(&full, 0, 0, (int)texture->levels[level].width,
-                    (int)texture->levels[level].height);
-            if (!emit_texture_update(texture, level, &full)) return FALSE;
-        }
-    }
-    for (cube = device->cube_textures; cube; cube = cube->next_device_resource) {
-        UINT face;
-        cube->handle = allocate_handle();
-        if (!emit_cube_texture_create(device, cube)) return FALSE;
-        for (face = 0; face < 6u; ++face) {
-            for (level = 0; level < cube->level_count; ++level) {
-                D9TextureLevel *level_data =
-                        &cube->levels[face * cube->level_count + level];
-                RECT full;
-                SetRect(&full, 0, 0, (int)level_data->width,
-                        (int)level_data->height);
-                if (!emit_cube_texture_update(cube, face, level, &full))
-                    return FALSE;
-            }
-        }
-    }
-    for (volume = device->volume_textures; volume;
-            volume = volume->next_device_resource) {
-        volume->handle = allocate_handle();
-        if (!emit_volume_texture_create(device, volume)) return FALSE;
-        for (level = 0; level < volume->level_count; ++level) {
-            D9TextureLevel *level_data = &volume->levels[level];
-            D3DBOX full;
-            full.Left = full.Top = full.Front = 0;
-            full.Right = level_data->width;
-            full.Bottom = level_data->height;
-            full.Back = level_data->depth;
-            if (!emit_volume_texture_update(volume, level, &full))
-                return FALSE;
-        }
-    }
-    for (decl = device->vertex_declarations; decl;
-            decl = decl->next_device_resource) {
-        D9WGVertexElement wire[D3DMAXDECLLENGTH];
-        UINT i;
-        decl->handle = allocate_handle();
-        for (i = 0; i < decl->element_count; ++i) {
-            wire[i].stream = decl->elements[i].Stream;
-            wire[i].offset = decl->elements[i].Offset;
-            wire[i].type = decl->elements[i].Type;
-            wire[i].method = decl->elements[i].Method;
-            wire[i].usage = decl->elements[i].Usage;
-            wire[i].usage_index = decl->elements[i].UsageIndex;
-        }
-        if (!emit_vertex_declaration_create(device, decl->handle, wire,
-                decl->element_count))
-            return FALSE;
-    }
-    /*
-     * Shaders and their constant registers are not pool-bound resources and
-     * so survive Reset from the app's point of view -- but the host's
-     * resource table is rebuilt from scratch, so both have to be replayed
-     * here or the first draw after a Reset binds a handle the host has never
-     * heard of. The constants go out unconditionally (bypassing the
-     * dirty-range suppression in set_constant_*, which compares against a
-     * shadow the host no longer shares) because after a Reset the host's
-     * copy is empty, not stale.
-     */
-    for (shader = device->shaders; shader; shader = shader->next_device_resource) {
-        shader->handle = allocate_shader_handle();
-        if (!emit_shader_create(device, shader))
-            return FALSE;
-    }
     if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
                     0, D9_MAX_VS_CONST_F, device->vs_const_f,
                     D9_MAX_VS_CONST_F * 16u)
@@ -4706,6 +4638,10 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     device->viewport.Height = device->display_mode.Height;
     device->viewport.MinZ = 0.0f;
     device->viewport.MaxZ = 1.0f;
+    /* D3D9's default scissor rect is the whole back buffer (a state block of
+     * D3DSBT_ALL captured it as {0,0,0,0}) */
+    SetRect(&device->scissor_rect, 0, 0, (int)device->display_mode.Width,
+            (int)device->display_mode.Height);
     device_init_states(device);
 
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
@@ -5686,7 +5622,10 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
             parameters ? (DWORD)parameters->AutoDepthStencilFormat : 0,
             parameters ? parameters->PresentationInterval : 0,
             parameters ? (DWORD)(uintptr_t)parameters->hDeviceWindow : 0);
-    if (!parameters || parameters->BackBufferCount > 1
+    /* D3D9 takes up to D3DPRESENT_BACK_BUFFERS_MAX (3) back buffers here,
+     * as CreateDevice does; refusing more than one failed every Reset of a
+     * double- or triple-buffered game (review S1-9b) */
+    if (!parameters || parameters->BackBufferCount > 3
             || device_has_reset_blockers(device)) {
         TRACE("FAIL Reset parameters=%lu multisample=%lu count=%lu "
                 "blockers=%lu -> %08lX", (DWORD)(parameters != NULL),
@@ -5793,8 +5732,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
     device->viewport.Height = reset.height;
     device->viewport.MinZ = 0.0f;
     device->viewport.MaxZ = 1.0f;
-    if (!recreate_device_resources(device)) {
-        TRACE("FAIL Reset recreate_device_resources -> %08lX",
+    SetRect(&device->scissor_rect, 0, 0, (int)reset.width, (int)reset.height);
+    if (!emit_device_state_after_reset(device)) {
+        TRACE("FAIL Reset emit_device_state_after_reset -> %08lX",
                 (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
@@ -7260,13 +7200,17 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
     return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
-static HRESULT WINAPI device_draw_indexed_primitive_up(
-        IDirect3DDevice9 *iface, D3DPRIMITIVETYPE primitive_type,
+/*
+ * The draw of DrawIndexedPrimitiveUP, without the API's side effect of
+ * unbinding stream 0 and the index buffer: patch tessellation draws through
+ * here, and must leave the application's bindings alone (review S2-28: every
+ * draw after a DrawRectPatch/DrawTriPatch was refused for want of stream 0).
+ */
+static HRESULT draw_indexed_up(D9Device *device, D3DPRIMITIVETYPE primitive_type,
         UINT min_vertex_index, UINT vertex_count, UINT primitive_count,
         const void *index_data, D3DFORMAT index_format,
         const void *vertex_data, UINT stride)
 {
-    D9Device *device = device_from_iface(iface);
     D9WGDrawIndexedPrimitiveUP command;
     UINT index_count;
     UINT index_size;
@@ -7304,13 +7248,27 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
     command.stride = stride;
     command.index_count = index_count;
     result = emit_draw_indexed_primitive_up(&command, index_data, vertex_data);
-    if (result) {
-        TRACE_FRAME_DRAW(primitive_count);
-        invalidate_render_target_mirrors(device);
+    if (!result) return D3DERR_DRIVERINTERNALERROR;
+    TRACE_FRAME_DRAW(primitive_count);
+    invalidate_render_target_mirrors(device);
+    return D3D_OK;
+}
+
+static HRESULT WINAPI device_draw_indexed_primitive_up(
+        IDirect3DDevice9 *iface, D3DPRIMITIVETYPE primitive_type,
+        UINT min_vertex_index, UINT vertex_count, UINT primitive_count,
+        const void *index_data, D3DFORMAT index_format,
+        const void *vertex_data, UINT stride)
+{
+    D9Device *device = device_from_iface(iface);
+    HRESULT result = draw_indexed_up(device, primitive_type, min_vertex_index,
+            vertex_count, primitive_count, index_data, index_format,
+            vertex_data, stride);
+    if (result == D3D_OK) {
         clear_stream_zero_after_up(device);
         clear_indices_after_indexed_up(device);
     }
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return result;
 }
 
 static HRESULT WINAPI device_create_vertex_declaration(
@@ -10740,7 +10698,7 @@ static HRESULT d9_draw_npatch(IDirect3DDevice9 *iface, D9Device *device,
                 quadratic_normal);
     }
 
-    result = device_draw_indexed_primitive_up(iface, D3DPT_TRIANGLELIST, 0,
+    result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             total_points, total_indices / 3u, out_indices, D3DFMT_INDEX16,
             vertices, format.stride);
     HeapFree(GetProcessHeap(), 0, vertices);
@@ -10894,7 +10852,7 @@ static HRESULT WINAPI device_draw_rect_patch(IDirect3DDevice9 *iface,
 
     d9_patch_grid_indices(segment_count, indices);
     index = segment_count * segment_count * 2u;
-    result = device_draw_indexed_primitive_up(iface, D3DPT_TRIANGLELIST, 0,
+    result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             grid * grid, index, indices, D3DFMT_INDEX16, vertices,
             format.stride);
 
@@ -11066,7 +11024,7 @@ static HRESULT WINAPI device_draw_tri_patch(IDirect3DDevice9 *iface,
 
     d9_patch_grid_indices(segment_count, indices);
     triangles = segment_count * segment_count * 2u;
-    result = device_draw_indexed_primitive_up(iface, D3DPT_TRIANGLELIST, 0,
+    result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             grid * grid, triangles, indices, D3DFMT_INDEX16, vertices,
             format.stride);
 
@@ -11339,12 +11297,20 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
      * source of "the render-to-texture pass only fills a corner". */
     if (index == 0 && surface) {
         D3DVIEWPORT9 viewport;
+        RECT scissor;
+        HRESULT hr;
         viewport.X = 0;
         viewport.Y = 0;
         viewport.Width = surface->width;
         viewport.Height = surface->height;
         viewport.MinZ = 0.0f;
         viewport.MaxZ = 1.0f;
+        /* ... and the scissor rect, or a render-to-texture pass is cut by the
+         * previous target's rect while the scissor test is on (review S2-29;
+         * wined3d's device.c resets both) */
+        SetRect(&scissor, 0, 0, (int)surface->width, (int)surface->height);
+        hr = IDirect3DDevice9_SetScissorRect(iface, &scissor);
+        if (FAILED(hr)) return hr;
         return IDirect3DDevice9_SetViewport(iface, &viewport);
     }
     return D3D_OK;
@@ -11633,10 +11599,14 @@ typedef struct D9Query {
     uint32_t request_id;
     BOOL issued;
     BOOL begun;
+    /* GetData's deadline: the heartbeat last seen, and since when */
+    uint32_t last_beat;
+    DWORD silent_since;
     struct D9Query *next_device_resource;
 } D9Query;
 
 static IDirect3DQuery9Vtbl g_query_vtbl;
+static uint32_t query_heartbeat(void);
 
 static D9Query *query_from_iface(IDirect3DQuery9 *iface)
 {
@@ -11779,7 +11749,39 @@ static HRESULT WINAPI query_issue(IDirect3DQuery9 *iface, DWORD flags)
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     query->begun = FALSE;
     query->issued = TRUE;
+    query->last_beat = query_heartbeat();
+    query->silent_since = GetTickCount();
     return D3D_OK;
+}
+
+/* The host bumps this once per batch it finishes (D9WG_HEARTBEAT_OFFSET) */
+static uint32_t query_heartbeat(void)
+{
+    uint8_t *base = response_region();
+    return base ? *(volatile uint32_t *)(base + D9WG_HEARTBEAT_OFFSET) : 0;
+}
+
+/*
+ * What GetData answers for a query the host reported as failed, or stopped
+ * answering: the value that keeps an application going and drawing rather
+ * than culling or spinning -- visible, signalled, disjoint (review S1-2:
+ * `while (GetData() == S_FALSE)` used to spin forever when the host dropped
+ * the frame the query was in).
+ */
+static ULONGLONG query_fallback_value(D9Query *query)
+{
+    switch (query->type) {
+    case D3DQUERYTYPE_OCCLUSION:
+        return (ULONGLONG)query->device->display_mode.Width
+                * query->device->display_mode.Height;
+    case D3DQUERYTYPE_TIMESTAMPFREQ:
+        return 1000000000u;
+    case D3DQUERYTYPE_TIMESTAMP:
+        /* nanoseconds, as the host's TIMESTAMPFREQ says */
+        return (ULONGLONG)GetTickCount() * 1000000u;
+    default:   /* EVENT signalled, TIMESTAMPDISJOINT disjoint */
+        return 1;
+    }
 }
 
 static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
@@ -11808,12 +11810,27 @@ static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     MemoryBarrier();
     if (response->request_id != query->request_id
-            || response->status == D9WG_RESPONSE_PENDING)
-        return S_FALSE;
-    if (response->status != D9WG_RESPONSE_OK)
-        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-
-    value = ((ULONGLONG)response->value_high << 32) | response->value_low;
+            || response->status == D9WG_RESPONSE_PENDING) {
+        /* The deadline measures host silence, as the readback's does: a
+         * host thousands of batches behind is slow, not gone */
+        uint32_t beat = query_heartbeat();
+        if (beat != query->last_beat) {
+            query->last_beat = beat;
+            query->silent_since = GetTickCount();
+        }
+        if (GetTickCount() - query->silent_since < 6000u)
+            return S_FALSE;
+        HOSTLOG_FAILED("GetData: the host has not answered query %08lX type %lu "
+                "for %lums; answering it as visible/signalled",
+                query->handle, (DWORD)query->type, GetTickCount() - query->silent_since);
+        value = query_fallback_value(query);
+    } else if (response->status != D9WG_RESPONSE_OK) {
+        /* the host dropped the frame the query was in */
+        TRACE("GetData query %08lX failed on the host; answering the fallback", query->handle);
+        value = query_fallback_value(query);
+    } else {
+        value = ((ULONGLONG)response->value_high << 32) | response->value_low;
+    }
     if (data) {
         if (expected == sizeof(ULONGLONG))
             *(ULONGLONG *)data = value;
@@ -15258,6 +15275,18 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 #endif
         TRACE_FLUSH();
         EnterCriticalSection(&g_transport_lock);
+        /* The host releases whatever this process left alive -- devices,
+         * resources, its last frame -- instead of keeping them until the page
+         * reloads (review S1-10; v86gl.sys's unmap covers a killed process) */
+        if (g_hello_emitted && g_dma_buffer) {
+            D9WGSessionEnd end;
+            uint8_t *destination;
+            end.session_id_low = g_session_id_low;
+            end.session_id_high = g_session_id_high;
+            if (reserve_command_locked(D9WG_OP_SESSION_END, sizeof(end), 0, NULL,
+                    &destination, NULL))
+                CopyMemory(destination, &end, sizeof(end));
+        }
         if (g_command_count)
             submit_batch_locked(FALSE);
         close_transport_locked();

@@ -36,9 +36,9 @@ static void v86gl_unmap_current_process(PV86GL_DEVICE_EXTENSION extension)
     {
         DbgPrint(V86GL_LOG_PREFIX "unmap user=%p process=%p\n",
                  extension->user_mapping, extension->mapping_process);
-        if(extension->transport.registered &&
-           !NT_SUCCESS(vgl_request(&extension->transport, VGL_UNREGISTER_ARENA, 0, 0, 0)))
-            vgl_transport_destroy(&extension->transport);
+        /* (the device tells the renderer the owner is gone: its sessions end) */
+        if(extension->transport.registered)
+            vgl_request(&extension->transport, VGL_UNREGISTER_ARENA, 0, 0, 0);
         MmUnmapLockedPages(extension->user_mapping, extension->buffer_mdl);
         extension->user_mapping = NULL;
         extension->mapping_process = NULL;
@@ -177,6 +177,14 @@ static NTSTATUS v86gl_submit(PV86GL_DEVICE_EXTENSION extension, PIRP irp,
 
     if(submit->flags & ~V86GL_SUBMIT_FORCE_PRESENT)
         return v86gl_result(irp, STATUS_INVALID_PARAMETER, 0);
+    /* a device that was reset since the mapping has no arena yet */
+    if(!extension->transport.registered)
+    {
+        PHYSICAL_ADDRESS physical = MmGetPhysicalAddress(extension->buffer);
+        status = vgl_request(&extension->transport, VGL_REGISTER_ARENA,
+                             physical.LowPart, extension->buffer_bytes, 0);
+        if(!NT_SUCCESS(status)) return v86gl_result(irp, status, 0);
+    }
     ++extension->submit_count;
     KeMemoryBarrier();
     status = vgl_request(&extension->transport, VGL_SUBMIT, 0,

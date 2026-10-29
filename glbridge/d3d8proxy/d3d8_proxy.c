@@ -442,7 +442,13 @@ static uint32_t g_sequence = 1;
 static uint32_t g_next_handle = D8WG_HANDLE_GENERATION_ONE;
 static uint32_t g_session_id_low;
 static uint32_t g_session_id_high;
-static BOOL g_transport_failed;
+/* A transport failure is never permanent (review S1-3; d3d9_proxy.c's
+ * open_transport_locked says why): opening is retried, a refused batch is
+ * dropped and the mapping kept */
+#define D8_TRANSPORT_RETRY_MS 1000u
+static DWORD g_transport_retry_tick;
+static BOOL g_transport_retry_armed;
+static DWORD g_batches_dropped;
 static BOOL g_hello_emitted;
 static CRITICAL_SECTION g_transport_lock;
 
@@ -458,7 +464,7 @@ static IDirect3DVolume8Vtbl g_volume_vtbl;
 static IDirect3DSwapChain8Vtbl g_swapchain_vtbl;
 
 static void state_block_release_references(D8StateBlock *block);
-static BOOL recreate_device_resources(D8Device *device);
+static BOOL emit_device_state_after_reset(D8Device *device);
 static BOOL device_has_reset_blockers(D8Device *device);
 static void device_clear_bindings(D8Device *device);
 static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
@@ -651,8 +657,11 @@ static BOOL open_transport_locked(void)
 
     if (g_dma_buffer)
         return TRUE;
-    if (g_transport_failed)
+    if (g_transport_retry_armed &&
+            GetTickCount() - g_transport_retry_tick < D8_TRANSPORT_RETRY_MS)
         return FALSE;
+    g_transport_retry_armed = TRUE;
+    g_transport_retry_tick = GetTickCount();
 
     g_transport = CreateFileA(V86GL_DEVICE_DOS_NAME,
             GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
@@ -661,7 +670,6 @@ static BOOL open_transport_locked(void)
 #ifdef D8WG_DIAGNOSTIC_TRACE
         error = GetLastError();
 #endif
-        g_transport_failed = TRUE;
         d8wg_log("could not open \\.\\v86gl");
         D8WG_TRACE("TRANSPORT OPEN_FAIL path=\\\\.\\v86gl "
                 "win32=%lu; start v86gl.sys before launching the program",
@@ -679,7 +687,6 @@ static BOOL open_transport_locked(void)
         D8WG_TRACE("TRANSPORT MAP_FAIL win32=%lu; win32=170 usually means "
                 "another process owns the DMA mapping", error);
         close_transport_locked();
-        g_transport_failed = TRUE;
         return FALSE;
     }
     if (returned != sizeof(mapping) || !mapping.user_address
@@ -694,10 +701,10 @@ static BOOL open_transport_locked(void)
                 (DWORD)sizeof(mapping), mapping.user_address,
                 mapping.buffer_bytes);
         close_transport_locked();
-        g_transport_failed = TRUE;
         return FALSE;
     }
 
+    g_transport_retry_armed = FALSE;
     g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
     g_dma_capacity = mapping.buffer_bytes;
     reset_batch_locked();
@@ -761,9 +768,9 @@ static BOOL submit_batch_locked(BOOL present)
         D8WG_TRACE("TRANSPORT SUBMIT_FAIL win32=%lu descriptor_bytes=%lu "
                 "commands=%lu present=%lu", error, submit.descriptor_bytes,
                 g_command_count, (DWORD)present);
-        close_transport_locked();
-        g_transport_failed = TRUE;
-        return FALSE;
+        ++g_batches_dropped;
+        reset_batch_locked();
+        return TRUE;
     }
 
     if (present)
@@ -3067,98 +3074,21 @@ static void device_release_owned_references(D8Device *device)
     }
 }
 
-static BOOL recreate_device_resources(D8Device *device)
+/*
+ * After a Reset the host has a new device under the new handle; buffers,
+ * textures and shaders belong to the session and keep their handles there
+ * (they used to be created again, leaking every one, review S1-9a). The new
+ * device lacks only the constant registers.
+ */
+static BOOL emit_device_state_after_reset(D8Device *device)
 {
-    D8VertexBuffer *vb;
-    D8IndexBuffer *ib;
-    D8Texture *texture;
-    UINT level;
-    for (vb = device->vertex_buffers; vb; vb = vb->next_device_resource) {
-        vb->handle = allocate_handle();
-        if (!emit_vertex_buffer_create(device, vb)
-                || !emit_buffer_update(vb->handle, 0, vb->shadow,
-                        vb->length, 0))
-            return FALSE;
-    }
-    for (ib = device->index_buffers; ib; ib = ib->next_device_resource) {
-        ib->handle = allocate_handle();
-        if (!emit_index_buffer_create(device, ib)
-                || !emit_buffer_update(ib->handle, 0, ib->shadow,
-                        ib->length, 0))
-            return FALSE;
-    }
-    for (texture = device->texture_resources; texture;
-            texture = texture->next_device_resource) {
-        texture->handle = allocate_handle();
-        if (!emit_texture_create(device, texture)) return FALSE;
-        for (level = 0; level < texture->level_count; ++level) {
-            RECT full;
-            SetRect(&full, 0, 0, (int)texture->levels[level].width,
-                    (int)texture->levels[level].height);
-            if (!emit_texture_update(texture, level, &full)) return FALSE;
-        }
-    }
-    {
-        D8CubeTexture *cube;
-        D8VolumeTexture *volume;
-        UINT face;
-        for (cube = device->cube_resources; cube;
-                cube = cube->next_device_resource) {
-            cube->handle = allocate_handle();
-            if (!emit_cube_texture_create(device, cube)) return FALSE;
-            for (face = 0; face < 6u; ++face) {
-                for (level = 0; level < cube->level_count; ++level) {
-                    D8TextureLevel *level_data =
-                            cube_level(cube, (D3DCUBEMAP_FACES)face, level);
-                    RECT full;
-                    SetRect(&full, 0, 0, (int)level_data->width,
-                            (int)level_data->height);
-                    if (!emit_level_update(cube->handle, cube->format,
-                            level_data, level, face, &full))
-                        return FALSE;
-                }
-            }
-        }
-        for (volume = device->volume_resources; volume;
-                volume = volume->next_device_resource) {
-            volume->handle = allocate_handle();
-            if (!emit_volume_texture_create(device, volume)) return FALSE;
-            for (level = 0; level < volume->level_count; ++level) {
-                D8TextureLevel *level_data = &volume->levels[level];
-                RECT full;
-                SetRect(&full, 0, 0, (int)level_data->width,
-                        (int)level_data->height);
-                if (!emit_volume_level_update(volume, level, &full, 0,
-                        level_data->depth))
-                    return FALSE;
-            }
-        }
-    }
-    {
-        D8Shader *shader;
-        /* Unlike buffers and textures -- whose handles are private and hidden
-         * behind COM pointers, so Reset can freely renumber them -- a shader
-         * handle is the opaque DWORD the application itself holds and will
-         * pass back to SetVertexShader after Reset. Keep it stable and let
-         * the host re-establish the same handle under the new device epoch. */
-        for (shader = device->vertex_shaders; shader; shader = shader->next) {
-            if (!emit_create_vertex_shader(device, shader)) return FALSE;
-        }
-        for (shader = device->pixel_shaders; shader; shader = shader->next) {
-            if (!emit_create_pixel_shader(device, shader)) return FALSE;
-        }
-        /* Host-side constant registers live under the old device_handle and
-         * do not survive Reset; resend the guest shadow banks so a shader
-         * bound again after Reset sees the same constants it had before. */
-        if (!emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
-                device, 0, &device->vs_constants[0][0],
-                D8WG_MAX_VS_CONSTANTS))
-            return FALSE;
-        if (!emit_set_shader_constant(D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
-                device, 0, &device->ps_constants[0][0], D8WG_MAX_PS_CONSTANTS))
-            return FALSE;
-    }
-    return TRUE;
+    /* Host-side constant registers live under the old device_handle and
+     * do not survive Reset; resend the guest shadow banks so a shader
+     * bound again after Reset sees the same constants it had before. */
+    return emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
+                device, 0, &device->vs_constants[0][0], D8WG_MAX_VS_CONSTANTS)
+            && emit_set_shader_constant(D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
+                device, 0, &device->ps_constants[0][0], D8WG_MAX_PS_CONSTANTS);
 }
 
 static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
@@ -3422,7 +3352,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     UINT new_front_bytes;
 
     if (!parameters || !supported_multisample_type(parameters->MultiSampleType)
-            || parameters->BackBufferCount > 1
+            || parameters->BackBufferCount > 3
             || device_has_reset_blockers(device))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
@@ -3494,7 +3424,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     device->viewport.MinZ = 0.0f;
     device->viewport.MaxZ = 1.0f;
     device->depth_surface_enabled = parameters->EnableAutoDepthStencil;
-    if (!recreate_device_resources(device))
+    if (!emit_device_state_after_reset(device))
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     if (window != device->tracked_window) {
         detach_device_window(device);
@@ -5648,7 +5578,7 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     *chain_out = NULL;
     if (!parameters || !parameters->Windowed
             || !supported_multisample_type(parameters->MultiSampleType)
-            || parameters->BackBufferCount > 1
+            || parameters->BackBufferCount > 3
             || parameters->BackBufferWidth > 8192
             || parameters->BackBufferHeight > 8192)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -8808,6 +8738,16 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         pending_commands = g_command_count;
 #endif
         EnterCriticalSection(&g_transport_lock);
+        /* the host releases what this process left alive (review S1-10) */
+        if (g_hello_emitted && g_dma_buffer) {
+            D9WGSessionEnd end;
+            uint8_t *destination;
+            end.session_id_low = g_session_id_low;
+            end.session_id_high = g_session_id_high;
+            if (reserve_command_locked(D9WG_OP_SESSION_END, sizeof(end), 0, NULL,
+                    &destination, NULL))
+                CopyMemory(destination, &end, sizeof(end));
+        }
         if (g_command_count)
             submit_batch_locked(FALSE);
         close_transport_locked();
