@@ -13,7 +13,7 @@ own payload shapes) — see `d3d9_protocol.h` and
 `src/browser/glbridge/d3d9-webgpu/d9wg_protocol.js` describes the protocol
 once, and `node <v86>/tools/gen_d9wg_header.mjs d3d9_protocol.h` writes this
 header from it, with a compile-time assert of every struct's size and every
-field's offset. `../tests/d9wg_header_generated_test.js` fails when the two
+field's offset. `../tests/generated_headers_test.js` fails when the two
 differ.
 
 The current protocol intentionally breaks compatibility with older DLL/page

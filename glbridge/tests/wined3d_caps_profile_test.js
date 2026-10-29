@@ -55,7 +55,9 @@ assert.match(proxy, /"gl21-fbo-ffp"/);
 assert.match(proxy,
     /profile == V86GL_CAPS_PROFILE_GL21 \|\|[\s\S]*V86GL_CAPS_PROFILE_GL21_FBO_FFP[\s\S]*append_gl_extension\("GL_EXT_framebuffer_object"\)/);
 assert.match(proxy, /append_gl_extension\("GL_EXT_framebuffer_blit"\)/);
-assert.match(proxy, /GLFN_BLIT_FRAMEBUFFER = 217/);
+assert.match(fs.readFileSync(path.join(__dirname, "..", "openglproxy", "gl_protocol.h"), "utf8"),
+    /GLFN_BLIT_FRAMEBUFFER = 217/);
+assert.match(proxy, /emit_gl_call\(GLFN_BLIT_FRAMEBUFFER,/);
 assert.match(proxy, /void APIENTRY glBlitFramebufferEXT\(/);
 assert.match(proxy,
     /profile == V86GL_CAPS_PROFILE_GL21_FBO_FFP[\s\S]*remove_gl_extension\("GL_ARB_vertex_program"\)[\s\S]*remove_gl_extension\("GL_ARB_fragment_program"\)/);

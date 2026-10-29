@@ -76,7 +76,6 @@ case $mode in
         ;;
     diagnostic)
         output=${1:-"$script_dir/opengl32-diagnostic.dll"}
-        python3 "$script_dir/../tools/gen_gl_opcode_names.py" >/dev/null
         build_dll "$output" -DV86GL_DIAGNOSTIC_TRACE=1
         printf '%s\n' "Built diagnostic $output" "$imports" \
             "$export_count GL/WGL exports" \

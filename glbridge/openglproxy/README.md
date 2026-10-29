@@ -30,10 +30,16 @@ authoritative GL state machine and all rendering live in `../gl-webgpu/`.
 - Exposes conservative extension profiles for OpenGL 1.5 WineD3D, ARB-program
   WineD3D and OpenGL 2.1 applications.
 
-The protocol schema is `../gl_protocol.json`; constants shared with the host
-are in `../gl-webgpu/gl_constants.js` and the decoder table is in
-`../gl-webgpu/gl_wire.js`. `../tests/gl_protocol_consistency_test.js` checks
-that these views stay identical.
+The protocol is described once, in v86's
+`src/browser/glbridge/gl-webgpu/gl_protocol.js`: the opcodes, the control
+records, the flat records' argument lists, the fixed headers of the
+hand-written records and the shared constants. `gl_protocol.h` and
+`gl_opcode_names.h` here are generated from it
+(`node <v86>/tools/gen_gl_protocol_header.mjs glbridge/openglproxy`, with a
+size/offset assert for every header); do not edit them.
+`../tests/generated_headers_test.js` fails when they are stale, and
+`../tests/gl_protocol_consistency_test.js` checks the payload structs this DLL
+still declares inline against the schema.
 
 ## Window state
 
