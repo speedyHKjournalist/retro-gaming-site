@@ -29,6 +29,8 @@ const hostSource = fs.readFileSync(
 const executorSource = fs.readFileSync(
     require("./host_paths.js").hostPath("d3d9-webgpu/d3d9_executor.js"), "utf8");
 const ddraw = require(require("./host_paths.js").hostPath("d3d9-webgpu/ddraw_ops.js"));
+// The protocol's one description, which the header above is generated from
+const D9WG = require(require("./host_paths.js").hostPath("d3d9-webgpu/d9wg_protocol.js"));
 
 const failures = [];
 let passed = 0;
@@ -64,6 +66,13 @@ function structLayout(name) {
     }
     layout.set("__size", offset);
     layout.components = components;
+    layout.struct = name;
+    // the protocol's description says the same
+    const described = D9WG.STRUCTS[name.slice("D9WG".length)];
+    assert.ok(described, name + " is not in d9wg_protocol.js");
+    assert.equal(described.size, offset, name + "'s size");
+    for (const [field, at] of layout)
+        if (field !== "__size") assert.equal(described.fields[field].offset, at, name + "." + field);
     return layout;
 }
 
@@ -107,17 +116,24 @@ function handlerSource(name) {
     return hostSource.slice(start, end);
 }
 
-// Reads written as `view.getUint32(offset + 32, true)`, plus the bare
-// `view.getUint32(offset, true)` that is field zero.
-function offsetsRead(source) {
+// Reads written as `view.getUint32(offset + D9WG.F.DDBlt.flags, true)`, an
+// array component as `... + D9WG.F.DDBlt.source_rect + 4`: the offsets they
+// come to, through the protocol's layout of `struct` (the header's name)
+function offsetsRead(source, struct) {
     const offsets = new Set();
-    for (const match of source.matchAll(/view\.get(?:Uint32|Int32|Float32)\(offset(?:\s*\+\s*(\d+))?\s*,/g))
-        offsets.add(match[1] ? Number(match[1]) : 0);
+    for (const match of source.matchAll(
+            /view\.get(?:Uint32|Int32|Float32)\(offset\s*\+\s*D9WG\.F\.(\w+)\.(\w+)(?:\s*\+\s*(\d+))?\s*,/g)) {
+        assert.equal("D9WG" + match[1], struct, "a read of " + match[1] + "." + match[2] + " in a " + struct + " handler");
+        assert.ok(match[2] in D9WG.F[match[1]], match[1] + " has no field " + match[2]);
+        offsets.add(D9WG.F[match[1]][match[2]] + (match[3] ? Number(match[3]) : 0));
+    }
+    assert.ok(!/view\.get(?:Uint32|Int32|Float32)\(offset\s*\+\s*\d/.test(source),
+        "a field read at a literal offset instead of through D9WG.F");
     return offsets;
 }
 
 function assertReadsFields(handler, layout, fields) {
-    const read = offsetsRead(handlerSource(handler));
+    const read = offsetsRead(handlerSource(handler), layout.struct);
     for (const field of fields) {
         const offset = layout.get(field);
         assert.notEqual(offset, undefined,
@@ -141,7 +157,7 @@ check("onDDBlt decodes every field of D9WGDDBlt at its own offset", () => {
         "destination_rect", "fill_color"]);
     // The rectangles are four consecutive int32s read one by one, so their
     // interior offsets have to be accepted as well as their starts.
-    const read = offsetsRead(handlerSource("onDDBlt"));
+    const read = offsetsRead(handlerSource("onDDBlt"), "D9WGDDBlt");
     for (const base of [BLT.get("source_rect"), BLT.get("destination_rect")])
         for (let index = 0; index < 4; ++index)
             assert.ok(read.has(base + index * 4),
@@ -170,7 +186,7 @@ check("onDDUpdateOverlay decodes identity, rectangles, state and destination",
     assertReadsFields("onDDUpdateOverlay", OVERLAY,
         ["surface_handle", "overlay_id", "source_rect", "destination_rect",
          "flags", "z_order", "destination_handle"]);
-    const read = offsetsRead(handlerSource("onDDUpdateOverlay"));
+    const read = offsetsRead(handlerSource("onDDUpdateOverlay"), "D9WGDDUpdateOverlay");
     for (const base of [OVERLAY.get("source_rect"),
             OVERLAY.get("destination_rect")])
         for (let index = 0; index < 4; ++index)
@@ -273,9 +289,10 @@ check("the overlay flag bits match between the header and host module", () => {
 check("the indexed-storage usage bit is the same number everywhere", () => {
     assert.match(headerConstant(protocolHeader, "D9WG_USAGE_DDRAW_INDEXED"),
         /0x80000000u/);
+    assert.equal(D9WG.C.D9WG_USAGE_DDRAW_INDEXED, 0x80000000);
     assert.match(executorSource,
-        /const D9WG_USAGE_DDRAW_INDEXED = 0x80000000;/,
-        "the executor's copy of the usage bit has drifted");
+        /const D9WG_USAGE_DDRAW_INDEXED = D9WG\.C\.D9WG_USAGE_DDRAW_INDEXED;/,
+        "the executor must take the usage bit from d9wg_protocol.js");
     assert.ok(guestSource.includes("D9WG_USAGE_DDRAW_INDEXED"),
         "the guest never marks a palettised surface as indexed");
 });
@@ -283,7 +300,8 @@ check("the indexed-storage usage bit is the same number everywhere", () => {
 check("the protocol minor version is 7 in the header, guest and executor",
         () => {
     assert.match(headerConstant(protocolHeader, "D9WG_VERSION_MINOR"), /^7u$/);
-    assert.match(executorSource, /const D9WG_VERSION_MINOR = 7;/);
+    assert.equal(D9WG.VERSION_MINOR, 7);
+    assert.match(executorSource, /const D9WG_VERSION_MINOR = D9WG\.C\.D9WG_VERSION_MINOR;/);
     // The guest gets its version from the header it includes, so the check
     // there is that it includes it rather than restating it.
     assert.ok(guestSource.includes("d3d9_protocol.h") ||
@@ -333,7 +351,8 @@ check("the guest emits the DirectDraw group by name, not by number", () => {
 check("DirectDraw teardown reaches both normal and process-wide host paths",
         () => {
     assert.equal(headerEnum("D9WG_OP_SESSION_END"), 13);
-    assert.match(executorSource, /const OP_SESSION_END = 13;/);
+    assert.equal(D9WG.OP.SESSION_END, 13);
+    assert.match(executorSource, /const OP_SESSION_END = D9WG\.OP\.SESSION_END;/);
     assert.match(executorSource,
         /\[OP_SESSION_END\]: this\.onSessionEnd/,
         "the executor must dispatch process teardown");
@@ -374,8 +393,10 @@ check("mip and cube subresources keep their level and face on every wire path",
     assert.ok(readbackStart >= 0, "the host has no readback handler");
     const readbackEnd = executorSource.indexOf("\n        // A \"frame\"", readbackStart);
     const readback = executorSource.slice(readbackStart, readbackEnd);
+    assert.deepEqual(D9WG.ADDED_FIELDS.ReadbackSurface, ["face"]);
+    assert.equal(D9WG.F.ReadbackSurface.face, 48);
     assert.match(readback,
-        /const face = length >= 52 \? view\.getUint32\(offset \+ 48, true\) : 0/,
+        /const face = D9WG\.has\(length, "ReadbackSurface", "face"\)\s*\? view\.getUint32\(offset \+ D9WG\.F\.ReadbackSurface\.face, true\) : 0/,
         "52-byte requests must select a cube face while old requests use face 0");
     assert.match(readback,
         /origin: \{ x: 0, y: firstRow, z: face \}/,

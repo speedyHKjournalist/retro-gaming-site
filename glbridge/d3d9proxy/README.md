@@ -9,6 +9,13 @@ protocol from D8WG (own opcode numbering, own resource handle namespace,
 own payload shapes) — see `d3d9_protocol.h` and
 `docs/d3d9-webgpu-implementation-plan.zh-CN.md` section 6.
 
+`d3d9_protocol.h` is generated, not edited: v86's
+`src/browser/glbridge/d3d9-webgpu/d9wg_protocol.js` describes the protocol
+once, and `node <v86>/tools/gen_d9wg_header.mjs d3d9_protocol.h` writes this
+header from it, with a compile-time assert of every struct's size and every
+field's offset. `../tests/d9wg_header_generated_test.js` fails when the two
+differ.
+
 The current protocol intentionally breaks compatibility with older DLL/page
 pairs. It adds an asynchronous host-to-guest response tail for GPU queries and
 readback, and implements the SM3/HDR/MSAA and resource paths needed by a

@@ -55,22 +55,16 @@ function protocolOpcodes() {
 
 const opcodeValues = protocolOpcodes();
 
-// Opcodes named in the executor's dispatch table, resolved through its own
-// `const OP_* = <n>` declarations rather than by trusting the names to match.
+// Opcodes the executor's dispatch table has a handler for, from the table
+// itself (its opcode constants come from d9wg_protocol.js, not from literals)
 function executorDecodedOpcodes() {
-    const table = executor.match(/this\._handlers = \{([\s\S]*?)\n {12}\};/);
-    assert.ok(table, "d3d9_executor.js must build a _handlers dispatch table");
-    const constants = new Map();
-    for (const match of executor.matchAll(
-            /const\s+(OP_\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)/g))
-        constants.set(match[1], Number.parseInt(match[2], 0));
-    const decoded = new Set();
-    for (const match of table[1].matchAll(/\[(OP_\w+)\]/g)) {
-        assert.ok(constants.has(match[1]),
-            "dispatch table names undeclared " + match[1]);
-        decoded.add(constants.get(match[1]));
-    }
-    return decoded;
+    const hostPath = require("./host_paths.js").hostPath;
+    const { D3D9WebGPUExecutor } = require(hostPath("d3d9-webgpu/d3d9_executor.js"));
+    require(hostPath("d3d9-webgpu/ddraw_ops.js"));
+    const handlers = Object.getOwnPropertyDescriptor(D3D9WebGPUExecutor.prototype, "handlers").get
+        .call(Object.create(D3D9WebGPUExecutor.prototype));
+    assert.ok(Object.keys(handlers).length > 50, "d3d9_executor.js must build a handler table");
+    return new Set(Object.keys(handlers).map(Number));
 }
 
 const decoded = executorDecodedOpcodes();
