@@ -99,8 +99,9 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
   it;
 - **Protocol 1.3:** real asynchronous `IDirect3DQuery9` results. `EVENT` waits
   for `GPUQueue.onSubmittedWorkDone`, `OCCLUSION` resolves a WebGPU query set,
-  and `TIMESTAMP`/`TIMESTAMPFREQ`/`TIMESTAMPDISJOINT` use timestamp queries with
-  a monotonic-clock fallback when the optional WebGPU feature is absent;
+  and `TIMESTAMP`/`TIMESTAMPFREQ`/`TIMESTAMPDISJOINT` answer from the page's
+  monotonic clock (nanoseconds) once the GPU has passed the query -- WebGPU no
+  longer has an encoder-level timestamp write;
 - **M3:** `D9WG_DUMP_SHADERS=1` writes every shader's raw token stream to
   `d3d9_dump\` beside this DLL, named by content hash, for offline replay
   through `../tests/d3d9_shader_corpus_test.js`. See the comment above
@@ -116,8 +117,11 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
   `UpdateTexture` for 2D/cube/volume resources, stream-frequency instancing,
   six user clip planes, `MultiplyTransform`, and clip/raster status state;
 - FP16/FP32 textures and render targets, MRT/depth pairing, sampling, blitting,
-  resolve and readback. Four-sample MSAA is advertised with one quality level
-  and resolved by the executor for swap-chain and texture render targets;
+  resolve and readback. Four-sample MSAA is advertised with one quality level:
+  a multisampled back buffer or render target renders into a multisampled
+  texture that every pass resolves into the texture D3D reads (Present,
+  StretchRect, GetRenderTargetData); a write outside a pass (StretchRect,
+  ColorFill) is drawn back into the samples before the next pass loads them;
 - **SM3:** the translator accepts SM1.x–SM3 bytecode, including VS3 vertex
   texture fetch. Pixel samplers s0–s15 and vertex samplers s0–s3 use disjoint
   bind-group ranges;
@@ -698,6 +702,28 @@ computes, and `naga` is what proves the gradient form really is legal there.
 
 Depth samplers are excluded from that path: WGSL has no
 `textureSampleCompareGrad`, so there is no gradient form to recover *to*.
+
+### Deviations from D3D9
+
+What WebGPU cannot express, done as near as it allows. Each has a case in
+v86's `tests/glbridge/d3d9_conformance.js` showing what it does.
+
+| Topic | D3D9 | Here |
+| --- | --- | --- |
+| `D3DRS_DEPTHBIAS`, `SLOPESCALEDEPTHBIAS` on points and lines (and `D3DFILL_WIREFRAME`/`POINT`) | biased | not biased: WebGPU allows no depth bias on point and line pipelines |
+| `D3DRS_MULTISAMPLEANTIALIAS = FALSE` on a multisampled target | every sample takes the pixel's value | every covered sample is written; the draw's edges stay antialiased |
+| An occlusion query spanning more than 4096 render passes in one frame | counted | answered FAILED (one WebGPU query set holds 4096 passes) |
+| A query whose frame the host had to drop, or whose host has stopped answering for 6 s | -- | `GetData` answers the value that keeps the application drawing: visible (the back buffer's pixel count), signalled, disjoint |
+
+### Transport failures
+
+No failure of the transport is permanent. Opening `\\.\v86gl` is retried
+every second; a batch the host refuses (no renderer yet, or the driver reset
+its queue after a request was not completed in time) is dropped and counted,
+and the mapping -- with the host's session -- is kept. The DLL ends its session
+(`SESSION_END`) when it unloads; when a process is killed instead, v86gl.sys
+unregisters the arena as the kernel closes the device, and the host ends every
+session submitted since the previous unregistration.
 
 ### One bad command is not a bad batch
 
