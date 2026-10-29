@@ -495,6 +495,18 @@ typedef struct V86GLRecordQueryUniform {
     uint32_t reserved0;
     uint32_t reserved1;
 } V86GLRecordQueryUniform;
+typedef struct V86GLRecordMakeCurrent {
+    uint32_t hwnd;
+    int32_t x;
+    int32_t y;
+    uint32_t width;
+    uint32_t height;
+    uint32_t context_id;
+    uint32_t share_group;
+} V86GLRecordMakeCurrent;
+typedef struct V86GLRecordDestroyContext {
+    uint32_t context_id;
+} V86GLRecordDestroyContext;
 
 /* The layout gl_protocol.js describes: every header's size and every field's offset */
 typedef char V86GLRecordTexImage2dSize[sizeof(V86GLRecordTexImage2d) == 36 ? 1 : -1];
@@ -695,5 +707,15 @@ typedef char V86GLRecordQueryUniform_value_count[offsetof(V86GLRecordQueryUnifor
 typedef char V86GLRecordQueryUniform_data_size[offsetof(V86GLRecordQueryUniform, data_size) == 20 ? 1 : -1];
 typedef char V86GLRecordQueryUniform_reserved0[offsetof(V86GLRecordQueryUniform, reserved0) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryUniform_reserved1[offsetof(V86GLRecordQueryUniform, reserved1) == 28 ? 1 : -1];
+typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 28 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_y[offsetof(V86GLRecordMakeCurrent, y) == 8 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_width[offsetof(V86GLRecordMakeCurrent, width) == 12 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_height[offsetof(V86GLRecordMakeCurrent, height) == 16 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_context_id[offsetof(V86GLRecordMakeCurrent, context_id) == 20 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_share_group[offsetof(V86GLRecordMakeCurrent, share_group) == 24 ? 1 : -1];
+typedef char V86GLRecordDestroyContextSize[sizeof(V86GLRecordDestroyContext) == 4 ? 1 : -1];
+typedef char V86GLRecordDestroyContext_context_id[offsetof(V86GLRecordDestroyContext, context_id) == 0 ? 1 : -1];
 
 #endif
