@@ -31,7 +31,7 @@ test("the guest takes its opcodes and protocol constants from gl_protocol.h", ()
     assert.ok(!/\bGLFN_[A-Z0-9_]+\s*=\s*\d+/.test(source), "the guest numbers no opcode itself");
     for (const [name] of wire.DEFINES)
         assert.ok(!new RegExp("#define\\s+" + name + "\\b").test(source), "the guest defines " + name + " itself");
-    assert.strictEqual(Object.keys(constants.GLFN).length, 217);
+    assert.strictEqual(Object.keys(constants.GLFN).length, 218);
     assert.strictEqual(constants.GLFN, wire.GLFN, "gl_constants.js takes GLFN from gl_protocol.js");
     assert.strictEqual(constants.CTRL, wire.CTRL, "and CTRL");
 });
@@ -209,7 +209,7 @@ test("the executor has a handler for every opcode it claims to implement", () =>
     void table;
     assert.deepStrictEqual(missing, [],
         "every opcode the guest can send needs a handler or an explicit refusal");
-    assert.strictEqual(implemented, 217);
+    assert.strictEqual(implemented, 218);
 });
 
 for (const [name, error] of failures)

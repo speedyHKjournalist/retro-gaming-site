@@ -265,9 +265,10 @@ enum {
     GLFN_INVALIDATE_PROGRAM_LOCATIONS = 214,
     GLFN_COPY_TEX_SUB_IMAGE_3D = 215,
     GLFN_QUERY_OBJECT_BATCH = 216,
-    GLFN_BLIT_FRAMEBUFFER = 217
+    GLFN_BLIT_FRAMEBUFFER = 217,
+    GLFN_EDGE_FLAG = 218
 };
-#define V86GL_OPCODE_COUNT 217u
+#define V86GL_OPCODE_COUNT 218u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {

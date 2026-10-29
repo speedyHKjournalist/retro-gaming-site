@@ -127,6 +127,7 @@ void APIENTRY glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yor
                        GLfloat xmove, GLfloat ymove, const GLubyte* bitmap);
 void APIENTRY glBegin(GLenum mode);
 void APIENTRY glEnd(void);
+void APIENTRY glArrayElement(GLint i);
 void APIENTRY glVertex2f(GLfloat x, GLfloat y);
 void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 
@@ -7392,6 +7393,32 @@ static int gl_index_bytes(GLenum type) {
     default:
         return 0;
     }
+}
+
+/* GL 2.1 section 2.6.2: independent triangles, quads and polygons carry each
+ * vertex's edge flag, which decides the edges and vertices glPolygonMode
+ * draws. The draw records have no edge flag array, so these draws go through
+ * glArrayElement, which sends each vertex's flag. */
+static BOOL draw_needs_edge_flags(GLenum mode) {
+    return g_edge_flag_array.enabled &&
+           (mode == GL_TRIANGLES || mode == GL_QUADS || mode == GL_POLYGON);
+}
+
+static void draw_array_elements(GLenum mode, GLint first, GLsizei count,
+                                const GLvoid* indices, GLenum type) {
+    GLsizei i;
+
+    glBegin(mode);
+    for (i = 0; i < count; i++) {
+        GLint element = first + i;
+        if (indices) {
+            element = type == GL_UNSIGNED_BYTE ? ((const GLubyte*)indices)[i] :
+                      type == GL_UNSIGNED_SHORT ? ((const uint16_t*)indices)[i] :
+                      (GLint)((const uint32_t*)indices)[i];
+        }
+        glArrayElement(element);
+    }
+    glEnd();
 }
 
 static int max_draw_index(const GLvoid* indices, GLsizei count, GLenum type, uint32_t* max_index) {
@@ -15953,6 +15980,11 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         return;
     }
 
+    if (draw_needs_edge_flags(mode)) {
+        draw_array_elements(mode, first, count, NULL, 0);
+        return;
+    }
+
     if (draw_arrays_can_use_vbo_direct()) {
         if (!validate_vbo_direct_arrays(first, count)) {
             return;
@@ -16142,6 +16174,18 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         if (g_render_mode == GL_SELECT) {
             record_selection_hit();
         }
+        return;
+    }
+
+    if (draw_needs_edge_flags(mode)) {
+        index_data = g_element_array_buffer_binding ?
+            buffer_data_at(g_element_array_buffer_binding, indices, index_data_size) :
+            (const uint8_t*)indices;
+        if (!index_data) {
+            v86gl_set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        draw_array_elements(mode, 0, count, index_data, type);
         return;
     }
 
@@ -16373,7 +16417,7 @@ void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
         return;
     }
 
-    if (primcount && draw_arrays_can_use_vbo_direct()) {
+    if (primcount && draw_arrays_can_use_vbo_direct() && !draw_needs_edge_flags(mode)) {
         GLint min_first = INT_MAX;
         GLint max_end = 0;
         for (i = 0; i < primcount; i++) {
@@ -16428,7 +16472,7 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
         return;
     }
 
-    if (primcount && draw_elements_can_use_vbo_direct()) {
+    if (primcount && draw_elements_can_use_vbo_direct() && !draw_needs_edge_flags(mode)) {
         uint32_t index_size = (uint32_t)gl_index_bytes(type);
         uint32_t max_index_all = 0;
         if (!index_size) {
@@ -17003,7 +17047,10 @@ void APIENTRY glIndexubv(const GLubyte* c) {
 
 __declspec(dllexport)
 void APIENTRY glEdgeFlag(GLboolean flag) {
+    uint32_t payload = flag ? 1u : 0u;
     g_current_edge_flag = flag ? GL_TRUE : GL_FALSE;
+    /* the host marks each vertex's boundary edges for glPolygonMode */
+    emit_gl_call(GLFN_EDGE_FLAG, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)

@@ -3,7 +3,7 @@
 #ifndef V86GL_OPCODE_NAMES_H
 #define V86GL_OPCODE_NAMES_H
 
-#define V86GL_OPCODE_NAME_COUNT 218u
+#define V86GL_OPCODE_NAME_COUNT 219u
 static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [0] = "UNKNOWN",
     [1] = "VIEWPORT",
@@ -223,6 +223,7 @@ static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [215] = "COPY_TEX_SUB_IMAGE_3D",
     [216] = "QUERY_OBJECT_BATCH",
     [217] = "BLIT_FRAMEBUFFER",
+    [218] = "EDGE_FLAG",
 };
 
 static const char *v86gl_opcode_name(unsigned int opcode)
