@@ -346,6 +346,38 @@ typedef struct V86GLRecordTexSubImage1d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage1d;
+typedef struct V86GLRecordShaderSource {
+    uint32_t shader;
+    uint32_t length;
+} V86GLRecordShaderSource;
+typedef struct V86GLRecordBindAttribLocation {
+    uint32_t program;
+    int32_t location;
+    uint32_t name_length;
+} V86GLRecordBindAttribLocation;
+typedef struct V86GLRecordUniformFv {
+    int32_t location;
+    int32_t components;
+    int32_t count;
+} V86GLRecordUniformFv;
+typedef struct V86GLRecordUniformIv {
+    int32_t location;
+    int32_t components;
+    int32_t count;
+} V86GLRecordUniformIv;
+typedef struct V86GLRecordUniformMatrixFv {
+    int32_t location;
+    int32_t dimension;
+    int32_t count;
+    uint32_t transpose;
+} V86GLRecordUniformMatrixFv;
+typedef struct V86GLRecordUniformMatrixRectFv {
+    int32_t location;
+    int32_t columns;
+    int32_t rows;
+    int32_t count;
+    uint32_t transpose;
+} V86GLRecordUniformMatrixRectFv;
 typedef struct V86GLRecordQueryObjectIv {
     uint32_t object_kind;
     uint32_t name;
@@ -578,6 +610,32 @@ typedef char V86GLRecordTexSubImage1d_width[offsetof(V86GLRecordTexSubImage1d, w
 typedef char V86GLRecordTexSubImage1d_format[offsetof(V86GLRecordTexSubImage1d, format) == 16 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_type[offsetof(V86GLRecordTexSubImage1d, type) == 20 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_data_size[offsetof(V86GLRecordTexSubImage1d, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordShaderSourceSize[sizeof(V86GLRecordShaderSource) == 8 ? 1 : -1];
+typedef char V86GLRecordShaderSource_shader[offsetof(V86GLRecordShaderSource, shader) == 0 ? 1 : -1];
+typedef char V86GLRecordShaderSource_length[offsetof(V86GLRecordShaderSource, length) == 4 ? 1 : -1];
+typedef char V86GLRecordBindAttribLocationSize[sizeof(V86GLRecordBindAttribLocation) == 12 ? 1 : -1];
+typedef char V86GLRecordBindAttribLocation_program[offsetof(V86GLRecordBindAttribLocation, program) == 0 ? 1 : -1];
+typedef char V86GLRecordBindAttribLocation_location[offsetof(V86GLRecordBindAttribLocation, location) == 4 ? 1 : -1];
+typedef char V86GLRecordBindAttribLocation_name_length[offsetof(V86GLRecordBindAttribLocation, name_length) == 8 ? 1 : -1];
+typedef char V86GLRecordUniformFvSize[sizeof(V86GLRecordUniformFv) == 12 ? 1 : -1];
+typedef char V86GLRecordUniformFv_location[offsetof(V86GLRecordUniformFv, location) == 0 ? 1 : -1];
+typedef char V86GLRecordUniformFv_components[offsetof(V86GLRecordUniformFv, components) == 4 ? 1 : -1];
+typedef char V86GLRecordUniformFv_count[offsetof(V86GLRecordUniformFv, count) == 8 ? 1 : -1];
+typedef char V86GLRecordUniformIvSize[sizeof(V86GLRecordUniformIv) == 12 ? 1 : -1];
+typedef char V86GLRecordUniformIv_location[offsetof(V86GLRecordUniformIv, location) == 0 ? 1 : -1];
+typedef char V86GLRecordUniformIv_components[offsetof(V86GLRecordUniformIv, components) == 4 ? 1 : -1];
+typedef char V86GLRecordUniformIv_count[offsetof(V86GLRecordUniformIv, count) == 8 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixFvSize[sizeof(V86GLRecordUniformMatrixFv) == 16 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixFv_location[offsetof(V86GLRecordUniformMatrixFv, location) == 0 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixFv_dimension[offsetof(V86GLRecordUniformMatrixFv, dimension) == 4 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixFv_count[offsetof(V86GLRecordUniformMatrixFv, count) == 8 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixFv_transpose[offsetof(V86GLRecordUniformMatrixFv, transpose) == 12 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixRectFvSize[sizeof(V86GLRecordUniformMatrixRectFv) == 20 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixRectFv_location[offsetof(V86GLRecordUniformMatrixRectFv, location) == 0 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixRectFv_columns[offsetof(V86GLRecordUniformMatrixRectFv, columns) == 4 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixRectFv_rows[offsetof(V86GLRecordUniformMatrixRectFv, rows) == 8 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixRectFv_count[offsetof(V86GLRecordUniformMatrixRectFv, count) == 12 ? 1 : -1];
+typedef char V86GLRecordUniformMatrixRectFv_transpose[offsetof(V86GLRecordUniformMatrixRectFv, transpose) == 16 ? 1 : -1];
 typedef char V86GLRecordQueryObjectIvSize[sizeof(V86GLRecordQueryObjectIv) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryObjectIv_object_kind[offsetof(V86GLRecordQueryObjectIv, object_kind) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryObjectIv_name[offsetof(V86GLRecordQueryObjectIv, name) == 4 ? 1 : -1];
