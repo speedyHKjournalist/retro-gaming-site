@@ -253,6 +253,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_COLOR_CLEAR_VALUE  0x0C22
 #define GL_COLOR_WRITEMASK    0x0C23
 #define GL_DOUBLEBUFFER       0x0C32
+#define GL_SAMPLE_BUFFERS     0x80A8
+#define GL_SAMPLES            0x80A9
 #define GL_STEREO             0x0C33
 #define GL_RENDER_MODE        0x0C40
 #define GL_RGBA_MODE          0x0C31
@@ -965,6 +967,8 @@ static uint32_t g_last_surface_width = 0;
 static uint32_t g_last_surface_height = 0;
 static uint32_t g_last_surface_context_id = 0;
 static uint32_t g_last_surface_share_group = 0;
+static uint32_t g_last_surface_format = 0;
+static uint32_t window_format_flags(HWND hwnd);
 static BOOL g_have_last_surface = FALSE;
 /* The last V86GL_CTRL_WINDOW_STATE sent (emit_window_state) */
 static BOOL g_window_state_sent = FALSE;
@@ -1501,6 +1505,7 @@ static const char* g_wgl_extensions =
     "WGL_ARB_extensions_string "
     "WGL_EXT_extensions_string "
     "WGL_ARB_pixel_format "
+    "WGL_ARB_multisample "
     "WGL_EXT_swap_control";
 static int g_swap_interval = 0;
 
@@ -5690,15 +5695,7 @@ static void emit_current_surface(HWND hwnd) {
         ClientToScreen(hwnd, &client_origin);
     }
 
-    struct {
-        uint32_t hwnd;
-        int32_t x;
-        int32_t y;
-        uint32_t width;
-        uint32_t height;
-        uint32_t context_id;
-        uint32_t share_group;
-    } payload;
+    V86GLRecordMakeCurrent payload;
 
     for (i = 0; i < V86GL_MAX_WGL_CONTEXTS; i++) {
         V86GLWGLContext* context = &g_wgl_contexts[i];
@@ -5717,6 +5714,7 @@ static void emit_current_surface(HWND hwnd) {
     payload.context_id = current_context ?
         (uint32_t)(current_context - g_wgl_contexts) + 1u : 0u;
     payload.share_group = current_context ? current_context->share_group : 0u;
+    payload.format = window_format_flags(hwnd);
 
     if (!payload.width) {
         payload.width = 640;
@@ -5732,9 +5730,11 @@ static void emit_current_surface(HWND hwnd) {
         payload.width == g_last_surface_width &&
         payload.height == g_last_surface_height &&
         payload.context_id == g_last_surface_context_id &&
-        payload.share_group == g_last_surface_share_group) {
+        payload.share_group == g_last_surface_share_group &&
+        payload.format == g_last_surface_format) {
         return;
     }
+    g_last_surface_format = payload.format;
 
     g_last_surface_x = payload.x;
     g_last_surface_y = payload.y;
@@ -7677,7 +7677,67 @@ static BOOL can_bind_wgl_context(V86GLWGLContext* context, DWORD thread_id) {
     return TRUE;
 }
 
-static void fill_default_pixel_format(PIXELFORMATDESCRIPTOR* pfd) {
+/* The pixel formats the canvas offers: 1 double-buffered, 2 the same with 4
+ * samples (WGL_ARB_multisample), 3 single-buffered. The host learns a
+ * window's from V86GL_CTRL_MAKE_CURRENT's format. */
+#define V86GL_PIXEL_FORMAT_COUNT 3
+static const struct {
+    BOOL double_buffer;
+    int samples;
+} g_pixel_formats[V86GL_PIXEL_FORMAT_COUNT] = {
+    { TRUE, 0 }, { TRUE, 4 }, { FALSE, 0 },
+};
+
+#define V86GL_MAX_FORMAT_WINDOWS 64
+static struct {
+    HWND hwnd;
+    int format;
+} g_window_formats[V86GL_MAX_FORMAT_WINDOWS];
+
+static BOOL pixel_format_valid(int format) {
+    return format >= 1 && format <= V86GL_PIXEL_FORMAT_COUNT;
+}
+
+/* A window's format, as SetPixelFormat chose it; the first before that */
+static int window_pixel_format(HWND hwnd) {
+    int i;
+    for (i = 0; hwnd && i < V86GL_MAX_FORMAT_WINDOWS; i++) {
+        if (g_window_formats[i].hwnd == hwnd) {
+            return g_window_formats[i].format;
+        }
+    }
+    return 1;
+}
+
+static void set_window_pixel_format(HWND hwnd, int format) {
+    int i, free_slot = -1;
+    if (!hwnd) {
+        return;
+    }
+    for (i = 0; i < V86GL_MAX_FORMAT_WINDOWS; i++) {
+        if (g_window_formats[i].hwnd == hwnd) {
+            g_window_formats[i].format = format;
+            return;
+        }
+        if (free_slot < 0 && (!g_window_formats[i].hwnd || !IsWindow(g_window_formats[i].hwnd))) {
+            free_slot = i;
+        }
+    }
+    if (free_slot < 0) {
+        free_slot = 0;
+    }
+    g_window_formats[free_slot].hwnd = hwnd;
+    g_window_formats[free_slot].format = format;
+}
+
+/* The window's format as MAKE_CURRENT carries it (V86GL_FORMAT_*) */
+static uint32_t window_format_flags(HWND hwnd) {
+    int format = window_pixel_format(hwnd);
+    return (g_pixel_formats[format - 1].double_buffer ? 0u : V86GL_FORMAT_SINGLE_BUFFER) |
+           ((uint32_t)g_pixel_formats[format - 1].samples << V86GL_FORMAT_SAMPLES_SHIFT);
+}
+
+static void fill_pixel_format(PIXELFORMATDESCRIPTOR* pfd, int format) {
     if (!pfd) {
         return;
     }
@@ -7685,7 +7745,8 @@ static void fill_default_pixel_format(PIXELFORMATDESCRIPTOR* pfd) {
     ZeroMemory(pfd, sizeof(*pfd));
     pfd->nSize = sizeof(*pfd);
     pfd->nVersion = 1;
-    pfd->dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd->dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL |
+                   (g_pixel_formats[format - 1].double_buffer ? PFD_DOUBLEBUFFER : 0);
     pfd->iPixelType = PFD_TYPE_RGBA;
     pfd->cColorBits = 32;
     pfd->cRedBits = 8;
@@ -7700,7 +7761,10 @@ static void fill_default_pixel_format(PIXELFORMATDESCRIPTOR* pfd) {
 __declspec(dllexport)
 int APIENTRY wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd) {
     (void)hdc;
-    (void)ppfd;
+    /* single-buffered when asked for (GLUT_SINGLE); never multisampled */
+    if (ppfd && !(ppfd->dwFlags & (PFD_DOUBLEBUFFER | PFD_DOUBLEBUFFER_DONTCARE))) {
+        return 3;
+    }
     return 1;
 }
 
@@ -7716,29 +7780,49 @@ BOOL APIENTRY wglChoosePixelFormatARB(HDC hdc, const int* int_attribs,
                     (unsigned long)max_formats, (unsigned long)(uintptr_t)int_attribs,
                     (unsigned long)(uintptr_t)float_attribs);
     }
+    int want_double = -1, min_samples = 0, i;
+    UINT found = 0;
+    static const int by_preference[V86GL_PIXEL_FORMAT_COUNT] = { 1, 2, 3 };
     (void)hdc;
-    (void)int_attribs;
     (void)float_attribs;
 
-    if (!max_formats || !formats || !format_count) {
+    if (!formats || !format_count) {
         if (format_count) *format_count = 0;
         return FALSE;
     }
-
-    formats[0] = 1;
-    *format_count = 1;
+    /* the attributes that tell the formats apart; the rest all match */
+    for (i = 0; int_attribs && int_attribs[i]; i += 2) {
+        switch (int_attribs[i]) {
+        case 0x2011: want_double = int_attribs[i + 1] ? 1 : 0; break; /* WGL_DOUBLE_BUFFER_ARB */
+        case 0x2041: if (int_attribs[i + 1] && !min_samples) min_samples = 1; break; /* WGL_SAMPLE_BUFFERS_ARB */
+        case 0x2042: if (int_attribs[i + 1] > min_samples) min_samples = int_attribs[i + 1]; break; /* WGL_SAMPLES_ARB */
+        default: break;
+        }
+    }
+    /* the best match first: no samples unless asked for */
+    for (i = 0; i < V86GL_PIXEL_FORMAT_COUNT && found < max_formats; i++) {
+        int format = by_preference[i];
+        int samples = g_pixel_formats[format - 1].samples;
+        if (want_double >= 0 && g_pixel_formats[format - 1].double_buffer != (BOOL)want_double) continue;
+        if (samples < min_samples) continue;
+        if (!min_samples && samples) continue;
+        formats[found++] = format;
+    }
+    *format_count = found;
     return TRUE;
 }
 
-static int wgl_pixel_format_attribute_value(int attribute) {
+static int wgl_pixel_format_attribute_value(int format, int attribute) {
     switch (attribute) {
-    case 0x2000: return 1;          /* WGL_NUMBER_PIXEL_FORMATS_ARB */
+    case 0x2000: return V86GL_PIXEL_FORMAT_COUNT; /* WGL_NUMBER_PIXEL_FORMATS_ARB */
+    case 0x2041: return g_pixel_formats[format - 1].samples ? 1 : 0; /* WGL_SAMPLE_BUFFERS_ARB */
+    case 0x2042: return g_pixel_formats[format - 1].samples;          /* WGL_SAMPLES_ARB */
     case 0x2001: return TRUE;       /* WGL_DRAW_TO_WINDOW_ARB */
     case 0x2002: return FALSE;      /* WGL_DRAW_TO_BITMAP_ARB */
     case 0x2003: return 0x2027;     /* WGL_FULL_ACCELERATION_ARB */
     case 0x200F: return FALSE;      /* WGL_SUPPORT_GDI_ARB */
     case 0x2010: return TRUE;       /* WGL_SUPPORT_OPENGL_ARB */
-    case 0x2011: return TRUE;       /* WGL_DOUBLE_BUFFER_ARB */
+    case 0x2011: return g_pixel_formats[format - 1].double_buffer; /* WGL_DOUBLE_BUFFER_ARB */
     case 0x2012: return FALSE;      /* WGL_STEREO_ARB */
     case 0x2013: return 0x202B;     /* WGL_TYPE_RGBA_ARB */
     case 0x2014: return 32;         /* WGL_COLOR_BITS_ARB */
@@ -7771,17 +7855,17 @@ BOOL APIENTRY wglGetPixelFormatAttribivARB(HDC hdc, int pixel_format,
             if (attributes[i] != 0x2000) { /* WGL_NUMBER_PIXEL_FORMATS_ARB */
                 return FALSE;
             }
-            values[i] = 1;
+            values[i] = V86GL_PIXEL_FORMAT_COUNT;
         }
         return TRUE;
     }
 
-    if (pixel_format != 1) {
+    if (!pixel_format_valid(pixel_format)) {
         return FALSE;
     }
 
     for (i = 0; i < count; i++) {
-        values[i] = wgl_pixel_format_attribute_value(attributes[i]);
+        values[i] = wgl_pixel_format_attribute_value(pixel_format, attributes[i]);
     }
     return TRUE;
 }
@@ -7800,17 +7884,17 @@ BOOL APIENTRY wglGetPixelFormatAttribfvARB(HDC hdc, int pixel_format,
             if (attributes[i] != 0x2000) { /* WGL_NUMBER_PIXEL_FORMATS_ARB */
                 return FALSE;
             }
-            values[i] = 1.0f;
+            values[i] = (FLOAT)V86GL_PIXEL_FORMAT_COUNT;
         }
         return TRUE;
     }
 
-    if (pixel_format != 1) {
+    if (!pixel_format_valid(pixel_format)) {
         return FALSE;
     }
 
     for (i = 0; i < count; i++) {
-        values[i] = (FLOAT)wgl_pixel_format_attribute_value(attributes[i]);
+        values[i] = (FLOAT)wgl_pixel_format_attribute_value(pixel_format, attributes[i]);
     }
     (void)hdc;
     return TRUE;
@@ -7823,26 +7907,37 @@ BOOL APIENTRY wglSetPixelFormat(HDC hdc, int format, const PIXELFORMATDESCRIPTOR
                (unsigned long)(uintptr_t)hdc, format,
                (unsigned long)(uintptr_t)ppfd);
 #endif
-    (void)hdc;
-    (void)format;
     (void)ppfd;
+    if (!pixel_format_valid(format)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    EnterCriticalSection(&g_wgl_context_lock);
+    set_window_pixel_format(WindowFromDC(hdc), format);
+    LeaveCriticalSection(&g_wgl_context_lock);
     return TRUE;
 }
 
 __declspec(dllexport)
 int APIENTRY wglDescribePixelFormat(HDC hdc, int format, UINT bytes, PIXELFORMATDESCRIPTOR* ppfd) {
     (void)hdc;
-    (void)format;
     if (ppfd && bytes >= sizeof(*ppfd)) {
-        fill_default_pixel_format(ppfd);
+        if (!pixel_format_valid(format)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        fill_pixel_format(ppfd, format);
     }
-    return 1;
+    return V86GL_PIXEL_FORMAT_COUNT;
 }
 
 __declspec(dllexport)
 int APIENTRY wglGetPixelFormat(HDC hdc) {
-    (void)hdc;
-    return 1;
+    int format;
+    EnterCriticalSection(&g_wgl_context_lock);
+    format = window_pixel_format(WindowFromDC(hdc));
+    LeaveCriticalSection(&g_wgl_context_lock);
+    return format;
 }
 
 __declspec(dllexport)
@@ -9182,6 +9277,15 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         params[0] = 8;
         break;
     case GL_DOUBLEBUFFER:
+        params[0] = (window_format_flags(g_current_hwnd) & V86GL_FORMAT_SINGLE_BUFFER) ? GL_FALSE : GL_TRUE;
+        break;
+    case GL_SAMPLE_BUFFERS:
+        params[0] = (window_format_flags(g_current_hwnd) & V86GL_FORMAT_SAMPLES_MASK) ? 1 : 0;
+        break;
+    case GL_SAMPLES:
+        params[0] = (GLint)((window_format_flags(g_current_hwnd) & V86GL_FORMAT_SAMPLES_MASK) >>
+                            V86GL_FORMAT_SAMPLES_SHIFT);
+        break;
     case GL_RGBA_MODE:
         params[0] = GL_TRUE;
         break;

@@ -17,6 +17,11 @@
 #define V86GL_WINDOW_ICONIC (1u << 2)
 #define V86GL_WINDOW_OCCLUDED (1u << 6)
 #define V86GL_WINDOW_REGION (1u << 7)
+/* MAKE_CURRENT's format: no back buffer */
+#define V86GL_FORMAT_SINGLE_BUFFER (1u << 0)
+/* and the samples per pixel (0 or 1: one) in bits 8-15 */
+#define V86GL_FORMAT_SAMPLES_SHIFT 8u
+#define V86GL_FORMAT_SAMPLES_MASK 0xFF00u
 /* a record size of this is followed by a u32 size */
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
 #define V86GL_READ_PIXELS_HEADER_SIZE 32u
@@ -641,6 +646,7 @@ typedef struct V86GLRecordMakeCurrent {
     uint32_t height;
     uint32_t context_id;
     uint32_t share_group;
+    uint32_t format;
 } V86GLRecordMakeCurrent;
 typedef struct V86GLRecordDestroyContext {
     uint32_t context_id;
@@ -957,7 +963,7 @@ typedef char V86GLRecordQueryUniform_value_count[offsetof(V86GLRecordQueryUnifor
 typedef char V86GLRecordQueryUniform_data_size[offsetof(V86GLRecordQueryUniform, data_size) == 20 ? 1 : -1];
 typedef char V86GLRecordQueryUniform_reserved0[offsetof(V86GLRecordQueryUniform, reserved0) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryUniform_reserved1[offsetof(V86GLRecordQueryUniform, reserved1) == 28 ? 1 : -1];
-typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 28 ? 1 : -1];
+typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_y[offsetof(V86GLRecordMakeCurrent, y) == 8 ? 1 : -1];
@@ -965,6 +971,7 @@ typedef char V86GLRecordMakeCurrent_width[offsetof(V86GLRecordMakeCurrent, width
 typedef char V86GLRecordMakeCurrent_height[offsetof(V86GLRecordMakeCurrent, height) == 16 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_context_id[offsetof(V86GLRecordMakeCurrent, context_id) == 20 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_share_group[offsetof(V86GLRecordMakeCurrent, share_group) == 24 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_format[offsetof(V86GLRecordMakeCurrent, format) == 28 ? 1 : -1];
 typedef char V86GLRecordDestroyContextSize[sizeof(V86GLRecordDestroyContext) == 4 ? 1 : -1];
 typedef char V86GLRecordDestroyContext_context_id[offsetof(V86GLRecordDestroyContext, context_id) == 0 ? 1 : -1];
 
