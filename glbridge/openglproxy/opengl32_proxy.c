@@ -4853,11 +4853,16 @@ static int emit_query_integer(GLenum pname, GLint* value) {
 static int emit_query_typed(uint16_t opcode, const void* request, uint32_t request_bytes,
                             unsigned int kind, void* values) {
     uint8_t* args;
-    unsigned int status, count, i;
+    unsigned int status, count, i, capacity;
     GLdouble value;
 
     if (!values) return -1;
-    if (!reserve_pci_record(opcode, NULL, request_bytes + 16u * sizeof(GLdouble), &args)) {
+    capacity = read_u32le((const uint8_t*)request + offsetof(V86GLRecordQueryState, data_size));
+    if (!capacity || capacity % sizeof(GLdouble) || capacity > V86GL_MAX_TYPED_QUERY_VALUES * sizeof(GLdouble)) {
+        v86gl_set_error(GL_INVALID_VALUE);
+        return -1;
+    }
+    if (!reserve_pci_record(opcode, NULL, request_bytes + capacity, &args)) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
     }
@@ -4874,7 +4879,7 @@ static int emit_query_typed(uint16_t opcode, const void* request, uint32_t reque
         return -1;
     }
     count = read_u32le(args + offsetof(V86GLRecordQueryState, count));
-    if (count > 16u) {
+    if (count > capacity / sizeof(GLdouble)) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
     }
@@ -4886,6 +4891,8 @@ static int emit_query_typed(uint16_t opcode, const void* request, uint32_t reque
         case V86GL_STATE_DOUBLE: ((GLdouble*)values)[i] = value; break;
         case V86GL_STATE_BOOLEAN: ((GLboolean*)values)[i] = value != 0.0 ? GL_TRUE : GL_FALSE; break;
         case V86GL_STATE_IS_ENABLED: ((GLboolean*)values)[i] = value != 0.0 ? GL_TRUE : GL_FALSE; break;
+        case V86GL_STATE_UNSIGNED_SHORT: ((GLushort*)values)[i] = (GLushort)value; break;
+        case V86GL_STATE_UNSIGNED_INT: ((GLuint*)values)[i] = (GLuint)value; break;
         }
     }
     return 1;
@@ -4900,16 +4907,21 @@ static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
     return emit_query_typed(GLFN_QUERY_STATE, &request, sizeof(request), kind, values);
 }
 
-static int emit_query_parameter(unsigned int query_kind, GLenum target, GLenum pname,
-                                unsigned int kind, void* values) {
+static int emit_query_parameter_count(unsigned int query_kind, GLenum target, GLenum pname,
+                                      unsigned int kind, void* values, unsigned int capacity) {
     V86GLRecordQueryParameter request;
     ZeroMemory(&request, sizeof(request));
     request.pname = (uint32_t)pname;
     request.value_kind = kind;
-    request.data_size = 16u * sizeof(GLdouble);
+    request.data_size = capacity * sizeof(GLdouble);
     request.query_kind = query_kind;
     request.target = (uint32_t)target;
     return emit_query_typed(GLFN_QUERY_PARAMETER, &request, sizeof(request), kind, values);
+}
+
+static int emit_query_parameter(unsigned int query_kind, GLenum target, GLenum pname,
+                                unsigned int kind, void* values) {
+    return emit_query_parameter_count(query_kind, target, pname, kind, values, 16u);
 }
 
 static GLint query_limit_or_default(GLenum pname, GLint fallback, GLint maximum) {
@@ -17707,6 +17719,23 @@ static int pixel_map_index(GLenum map) {
     return (int)(map - GL_PIXEL_MAP_I_TO_I);
 }
 
+static const void* pixel_map_source(GLenum map, GLsizei mapsize, const void* values, unsigned int stride) {
+    int index = pixel_map_index(map);
+    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return NULL; }
+    if (mapsize < 1 || mapsize > (GLsizei)V86GL_MAX_TYPED_QUERY_VALUES || (index < 6 && (mapsize & (mapsize - 1)))) {
+        v86gl_set_error(GL_INVALID_VALUE); return NULL;
+    }
+    if (g_pixel_unpack_buffer_binding) {
+        BufferObjectState* buffer = bound_buffer_state(GL_PIXEL_UNPACK_BUFFER);
+        if (!buffer || buffer->mapped || (uintptr_t)values % stride) { v86gl_set_error(GL_INVALID_OPERATION); return NULL; }
+    }
+    return unpack_pixel_pointer(values, (uint32_t)mapsize * stride);
+}
+
+static GLdouble pixel_map_color(GLdouble value) {
+    return value < 0.0 ? 0.0 : value > 1.0 ? 1.0 : value;
+}
+
 static int set_pixel_map(GLenum map, GLsizei mapsize, const GLdouble* values) {
     PixelMapState* state;
     GLdouble* copy = NULL;
@@ -17781,22 +17810,14 @@ void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
     GLdouble* converted;
     GLsizei i;
 
-    if (mapsize < 0 || (mapsize && !values)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!mapsize) {
-        if (set_pixel_map(map, 0, NULL)) {
-            emit_pixel_map(GLFN_PIXEL_MAPFV, map, 0, NULL, sizeof(GLfloat));
-        }
-        return;
-    }
+    values = (const GLfloat*)pixel_map_source(map, mapsize, values, sizeof(GLfloat));
+    if (!values) return;
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
     if (!converted) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
-    for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
+    for (i = 0; i < mapsize; i++) converted[i] = map >= GL_PIXEL_MAP_I_TO_R ? (GLdouble)(GLfloat)pixel_map_color((GLdouble)values[i]) : (GLdouble)values[i];
     if (set_pixel_map(map, mapsize, converted)) {
         emit_pixel_map(GLFN_PIXEL_MAPFV, map, mapsize, values, sizeof(GLfloat));
     }
@@ -17808,22 +17829,14 @@ void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
     GLdouble* converted;
     GLsizei i;
 
-    if (mapsize < 0 || (mapsize && !values)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!mapsize) {
-        if (set_pixel_map(map, 0, NULL)) {
-            emit_pixel_map(GLFN_PIXEL_MAPUIV, map, 0, NULL, sizeof(GLuint));
-        }
-        return;
-    }
+    values = (const GLuint*)pixel_map_source(map, mapsize, values, sizeof(GLuint));
+    if (!values) return;
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
     if (!converted) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
-    for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
+    for (i = 0; i < mapsize; i++) converted[i] = map >= GL_PIXEL_MAP_I_TO_R ? (GLdouble)(GLfloat)pixel_map_color((GLdouble)values[i] / 4294967295.0) : (GLdouble)values[i];
     if (set_pixel_map(map, mapsize, converted)) {
         emit_pixel_map(GLFN_PIXEL_MAPUIV, map, mapsize, values, sizeof(GLuint));
     }
@@ -17835,26 +17848,40 @@ void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values)
     GLdouble* converted;
     GLsizei i;
 
-    if (mapsize < 0 || (mapsize && !values)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!mapsize) {
-        if (set_pixel_map(map, 0, NULL)) {
-            emit_pixel_map(GLFN_PIXEL_MAPUSV, map, 0, NULL, sizeof(GLushort));
-        }
-        return;
-    }
+    values = (const GLushort*)pixel_map_source(map, mapsize, values, sizeof(GLushort));
+    if (!values) return;
     converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
     if (!converted) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
     }
-    for (i = 0; i < mapsize; i++) converted[i] = (GLdouble)values[i];
+    for (i = 0; i < mapsize; i++) converted[i] = map >= GL_PIXEL_MAP_I_TO_R ? (GLdouble)(GLfloat)pixel_map_color((GLdouble)values[i] / 65535.0) : (GLdouble)values[i];
     if (set_pixel_map(map, mapsize, converted)) {
         emit_pixel_map(GLFN_PIXEL_MAPUSV, map, mapsize, values, sizeof(GLushort));
     }
     HeapFree(GetProcessHeap(), 0, converted);
+}
+
+/* The CPU returns the whole map, so a query need not depend on the
+ * guest's old cached table size. PBO destinations use the exact CPU size. */
+static int emit_query_pixel_map(GLenum map, unsigned int kind, void* values, unsigned int item_bytes) {
+    GLint count = 0;
+    int result;
+    void* destination = values;
+    if (pixel_map_index(map) < 0) { v86gl_set_error(GL_INVALID_ENUM); return -1; }
+    if (g_pixel_pack_buffer_binding) {
+        BufferObjectState* buffer = bound_buffer_state(GL_PIXEL_PACK_BUFFER);
+        if (!buffer || buffer->mapped || (uintptr_t)values % item_bytes) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+        result = emit_query_state(GL_PIXEL_MAP_I_TO_I_SIZE + (map - GL_PIXEL_MAP_I_TO_I), V86GL_STATE_INTEGER, &count);
+        if (result <= 0) return result;
+        if (count < 1 || count > (GLint)V86GL_MAX_TYPED_QUERY_VALUES) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+        destination = pack_pixel_pointer(values, (uint32_t)count * item_bytes);
+        if (!destination) return -1;
+    }
+    result = emit_query_parameter_count(V86GL_PARAMETER_PIXEL_MAP, map, 0, kind, destination, V86GL_MAX_TYPED_QUERY_VALUES);
+    if (result > 0 && g_pixel_pack_buffer_binding)
+        emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)values, (GLsizeiptrARB)((uint32_t)count * item_bytes), destination);
+    return result;
 }
 
 __declspec(dllexport)
@@ -17862,6 +17889,7 @@ void APIENTRY glGetPixelMapfv(GLenum map, GLfloat* values) {
     PixelMapState* state;
     GLsizei i;
     int index = pixel_map_index(map);
+    if (emit_query_pixel_map(map, V86GL_STATE_FLOAT, values, sizeof(GLfloat))) return;
     if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!values) return;
     state = &g_pixel_maps[index];
@@ -17873,10 +17901,11 @@ void APIENTRY glGetPixelMapuiv(GLenum map, GLuint* values) {
     PixelMapState* state;
     GLsizei i;
     int index = pixel_map_index(map);
+    if (emit_query_pixel_map(map, V86GL_STATE_UNSIGNED_INT, values, sizeof(GLuint))) return;
     if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!values) return;
     state = &g_pixel_maps[index];
-    for (i = 0; i < state->size; i++) values[i] = (GLuint)state->values[i];
+    for (i = 0; i < state->size; i++) values[i] = (GLuint)(map >= GL_PIXEL_MAP_I_TO_R ? state->values[i] * 4294967295.0 : state->values[i]);
 }
 
 __declspec(dllexport)
@@ -17884,10 +17913,11 @@ void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) {
     PixelMapState* state;
     GLsizei i;
     int index = pixel_map_index(map);
+    if (emit_query_pixel_map(map, V86GL_STATE_UNSIGNED_SHORT, values, sizeof(GLushort))) return;
     if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!values) return;
     state = &g_pixel_maps[index];
-    for (i = 0; i < state->size; i++) values[i] = (GLushort)state->values[i];
+    for (i = 0; i < state->size; i++) values[i] = (GLushort)(map >= GL_PIXEL_MAP_I_TO_R ? state->values[i] * 65535.0 + 0.5 : state->values[i]);
 }
 
 __declspec(dllexport)

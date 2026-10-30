@@ -52,11 +52,17 @@
 #define V86GL_STATE_BOOLEAN 4u
 /* glIsEnabled: capability validation and one boolean answer */
 #define V86GL_STATE_IS_ENABLED 5u
+/* pixel map unsigned short output */
+#define V86GL_STATE_UNSIGNED_SHORT 6u
+/* pixel map unsigned integer output */
+#define V86GL_STATE_UNSIGNED_INT 7u
+#define V86GL_MAX_TYPED_QUERY_VALUES 0x100u
 #define V86GL_PARAMETER_LIGHT 1u
 #define V86GL_PARAMETER_MATERIAL 2u
 #define V86GL_PARAMETER_TEX_ENV 3u
 #define V86GL_PARAMETER_TEX_GEN 4u
 #define V86GL_PARAMETER_CLIP_PLANE 5u
+#define V86GL_PARAMETER_PIXEL_MAP 6u
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
@@ -467,6 +473,18 @@ typedef struct V86GLRecordTexSubImage1d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage1d;
+typedef struct V86GLRecordPixelMapfv {
+    uint32_t map;
+    int32_t count;
+} V86GLRecordPixelMapfv;
+typedef struct V86GLRecordPixelMapuiv {
+    uint32_t map;
+    int32_t count;
+} V86GLRecordPixelMapuiv;
+typedef struct V86GLRecordPixelMapusv {
+    uint32_t map;
+    int32_t count;
+} V86GLRecordPixelMapusv;
 typedef struct V86GLRecordDrawBuffers {
     uint32_t count;
 } V86GLRecordDrawBuffers;
@@ -861,6 +879,15 @@ typedef char V86GLRecordTexSubImage1d_width[offsetof(V86GLRecordTexSubImage1d, w
 typedef char V86GLRecordTexSubImage1d_format[offsetof(V86GLRecordTexSubImage1d, format) == 16 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_type[offsetof(V86GLRecordTexSubImage1d, type) == 20 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_data_size[offsetof(V86GLRecordTexSubImage1d, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordPixelMapfvSize[sizeof(V86GLRecordPixelMapfv) == 8 ? 1 : -1];
+typedef char V86GLRecordPixelMapfv_map[offsetof(V86GLRecordPixelMapfv, map) == 0 ? 1 : -1];
+typedef char V86GLRecordPixelMapfv_count[offsetof(V86GLRecordPixelMapfv, count) == 4 ? 1 : -1];
+typedef char V86GLRecordPixelMapuivSize[sizeof(V86GLRecordPixelMapuiv) == 8 ? 1 : -1];
+typedef char V86GLRecordPixelMapuiv_map[offsetof(V86GLRecordPixelMapuiv, map) == 0 ? 1 : -1];
+typedef char V86GLRecordPixelMapuiv_count[offsetof(V86GLRecordPixelMapuiv, count) == 4 ? 1 : -1];
+typedef char V86GLRecordPixelMapusvSize[sizeof(V86GLRecordPixelMapusv) == 8 ? 1 : -1];
+typedef char V86GLRecordPixelMapusv_map[offsetof(V86GLRecordPixelMapusv, map) == 0 ? 1 : -1];
+typedef char V86GLRecordPixelMapusv_count[offsetof(V86GLRecordPixelMapusv, count) == 4 ? 1 : -1];
 typedef char V86GLRecordDrawBuffersSize[sizeof(V86GLRecordDrawBuffers) == 4 ? 1 : -1];
 typedef char V86GLRecordDrawBuffers_count[offsetof(V86GLRecordDrawBuffers, count) == 0 ? 1 : -1];
 typedef char V86GLRecordShaderSourceSize[sizeof(V86GLRecordShaderSource) == 8 ? 1 : -1];
