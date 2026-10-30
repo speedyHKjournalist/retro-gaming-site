@@ -1600,6 +1600,7 @@ typedef struct {
     BOOL used;
     BOOL active;
     GLuint name;
+    uint32_t context_id;
     GLenum target;
     GLuint result;
     GLboolean available;
@@ -3135,7 +3136,7 @@ static QueryObjectState* find_query_state(GLuint name, BOOL create) {
 
     for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
         QueryObjectState* state = &g_query_objects[i];
-        if (state->used && state->name == name) {
+        if (state->used && state->name == name && state->context_id == g_last_surface_context_id) {
             return state;
         }
         if (!state->used && !free_state) {
@@ -3150,6 +3151,7 @@ static QueryObjectState* find_query_state(GLuint name, BOOL create) {
     ZeroMemory(free_state, sizeof(*free_state));
     free_state->used = TRUE;
     free_state->name = name;
+    free_state->context_id = g_last_surface_context_id;
     free_state->available = GL_TRUE;
     return free_state;
 }
@@ -3163,6 +3165,14 @@ static void delete_query_state(GLuint name) {
         g_current_samples_passed_query = 0;
     }
     ZeroMemory(state, sizeof(*state));
+}
+
+static void delete_query_context_state(uint32_t context_id) {
+    uint32_t i;
+    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++)
+        if (g_query_objects[i].used && g_query_objects[i].context_id == context_id)
+            ZeroMemory(&g_query_objects[i], sizeof(g_query_objects[i]));
+    if (g_last_surface_context_id == context_id) g_current_samples_passed_query = 0;
 }
 
 static void reset_query_object_state(void) {
@@ -4545,7 +4555,7 @@ static int emit_query_object_batch(void) {
 
     for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
         QueryObjectState* state = &g_query_objects[i];
-        if (state->used && state->target && !state->active &&
+        if (state->used && state->context_id == g_last_surface_context_id && state->target && !state->active &&
             !state->available && state->poll_frame != g_frame_id) {
             count++;
         }
@@ -4572,7 +4582,7 @@ static int emit_query_object_batch(void) {
     for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
         QueryObjectState* state = &g_query_objects[i];
         uint8_t* entry;
-        if (!state->used || !state->target || state->active ||
+        if (!state->used || state->context_id != g_last_surface_context_id || !state->target || state->active ||
             state->available || state->poll_frame == g_frame_id) {
             continue;
         }
@@ -8091,6 +8101,7 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
         return FALSE;
     }
     context_id = (uint32_t)(context - g_wgl_contexts) + 1u;
+    delete_query_context_state(context_id);
     guest_state = context->guest_state;
     ZeroMemory(context, sizeof(*context));
     if (g_wgl_context_count) g_wgl_context_count--;
@@ -12544,6 +12555,8 @@ void APIENTRY glGenQueries(GLsizei n, GLuint* ids) {
     uint32_t total_size;
     uint8_t* payload;
 
+    if (emit_query_names(V86GL_OBJECT_KIND_QUERY, GLFN_GEN_QUERIES, n, ids)) return;
+
     if (n < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -12585,6 +12598,8 @@ void APIENTRY glDeleteQueries(GLsizei n, const GLuint* ids) {
     uint32_t total_size;
     uint8_t* payload;
 
+    if (g_current_samples_passed_query) { v86gl_set_error(GL_INVALID_OPERATION); return; }
+
     if (n < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -12610,7 +12625,11 @@ void APIENTRY glDeleteQueries(GLsizei n, const GLuint* ids) {
 }
 
 GLboolean APIENTRY glIsQuery(GLuint id) {
-    return find_query_state(id, FALSE) ? GL_TRUE : GL_FALSE;
+    GLboolean answer = GL_FALSE;
+    QueryObjectState* state;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_QUERY, id, V86GL_STATE_BOOLEAN, &answer)) return answer;
+    state = find_query_state(id, FALSE);
+    return state && state->target ? GL_TRUE : GL_FALSE;
 }
 
 void APIENTRY glBeginQuery(GLenum target, GLuint id) {
@@ -12626,7 +12645,7 @@ void APIENTRY glBeginQuery(GLenum target, GLuint id) {
         return;
     }
 
-    state = find_query_state(id, FALSE);
+    state = find_query_state(id, TRUE);
     if (!state) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return;
@@ -12683,6 +12702,7 @@ void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) {
     if (!params) {
         return;
     }
+    if (emit_query_parameter(V86GL_PARAMETER_QUERY_TARGET, target, pname, V86GL_STATE_INTEGER, params)) return;
     if (!is_occlusion_query_target(target)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -12778,7 +12798,7 @@ static BOOL query_object_value(QueryObjectState* state, GLenum pname, GLuint* va
              * than culling geometry that may well be on screen: a frame with
              * one occluder drawn needlessly is a far cheaper error than a
              * frame missing something it should have shown. */
-            state->result = V86GL_QUERY_VISIBLE_SAMPLES;
+            state->result = state->target == GL_SAMPLES_PASSED ? V86GL_QUERY_VISIBLE_SAMPLES : 1u;
             state->available = GL_TRUE;
             state->poll_skip = 0;
         }
