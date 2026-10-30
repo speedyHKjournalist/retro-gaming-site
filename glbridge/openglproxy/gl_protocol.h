@@ -50,6 +50,8 @@
 #define V86GL_STATE_FLOAT 2u
 #define V86GL_STATE_DOUBLE 3u
 #define V86GL_STATE_BOOLEAN 4u
+/* glIsEnabled: capability validation and one boolean answer */
+#define V86GL_STATE_IS_ENABLED 5u
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u

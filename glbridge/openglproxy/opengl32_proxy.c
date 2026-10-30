@@ -4891,6 +4891,7 @@ static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
         case V86GL_STATE_FLOAT: ((GLfloat*)values)[i] = (GLfloat)value; break;
         case V86GL_STATE_DOUBLE: ((GLdouble*)values)[i] = value; break;
         case V86GL_STATE_BOOLEAN: ((GLboolean*)values)[i] = value != 0.0 ? GL_TRUE : GL_FALSE; break;
+        case V86GL_STATE_IS_ENABLED: ((GLboolean*)values)[i] = value != 0.0 ? GL_TRUE : GL_FALSE; break;
         }
     }
     return 1;
@@ -9632,6 +9633,9 @@ __declspec(dllexport)
 GLboolean APIENTRY glIsEnabled(GLenum cap) {
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
     GLboolean enabled;
+
+    enabled = GL_FALSE;
+    if (emit_query_state(cap, V86GL_STATE_IS_ENABLED, &enabled)) return enabled;
 
     switch (cap) {
     case GL_VERTEX_ARRAY:

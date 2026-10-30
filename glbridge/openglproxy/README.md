@@ -67,6 +67,15 @@ error and skips the original arguments. The generated protocol describes
 that tag. This is the first command family migrated under plan C6, not yet
 complete CPU-side error handling for every OpenGL command.
 
+The enable-bit, stencil and hint state families now also live in the CPU
+shadow. `glIsEnabled` uses its own query kind, so it validates capabilities
+instead of treating every `glGet` pname as a boolean capability. Texture
+and client texture-array enables follow their separate active units.
+Unsigned stencil masks retain their 32-bit pattern for integer queries
+and their unsigned magnitude for float/double queries. The native state
+query ABI test covers these conversions too. Independent front/back
+stencil references and masks still need renderer work in plan D2/D4.
+
 `../tests/generated_headers_test.js` fails when they are stale, and
 `../tests/gl_protocol_consistency_test.js` checks the payload structs this DLL
 still declares inline against the schema.

@@ -10,6 +10,7 @@ const { hostPath, testPath } = require("./host_paths.js");
 const { GLShadow } = require(hostPath("gl-webgpu/gl_shadow.js"));
 require(hostPath("gl-webgpu/gl_shadow_objects.js"));
 require(hostPath("gl-webgpu/gl_shadow_state.js"));
+require(hostPath("gl-webgpu/gl_shadow_raster.js"));
 const caps = require(hostPath("gl-webgpu/gl_caps.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
@@ -24,6 +25,10 @@ for (const [name, kind] of [["Integer", "INTEGER"], ["Float", "FLOAT"], ["Double
     const body = source.slice(source.indexOf("void APIENTRY glGet" + name + "v("));
     assert.ok(body.slice(0, body.indexOf("\n__declspec(dllexport)")).includes("emit_query_state(pname, V86GL_STATE_" + kind + ", params)"));
 }
+assert.ok(source.slice(source.indexOf("GLboolean APIENTRY glIsEnabled(")).startsWith(
+    "GLboolean APIENTRY glIsEnabled(GLenum cap)"));
+assert.ok(source.slice(source.indexOf("GLboolean APIENTRY glIsEnabled("), source.indexOf("void APIENTRY glViewport("))
+    .includes("emit_query_state(cap, V86GL_STATE_IS_ENABLED, &enabled)"));
 const c = `
 #include <assert.h>
 #include <stddef.h>
@@ -92,6 +97,11 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_DOUBLE, GL.DEPTH_RANGE, [0.25, 0.75]],
         [P.C.V86GL_STATE_BOOLEAN, GL.COLOR_WRITEMASK, [1, 0, 1, 0]],
         [P.C.V86GL_STATE_INTEGER, GL.COLOR_CLEAR_VALUE, [1073741823, 0, 2147483647, 536870911]],
+        [P.C.V86GL_STATE_INTEGER, GL.STENCIL_VALUE_MASK, [-1]],
+        [P.C.V86GL_STATE_FLOAT, GL.STENCIL_VALUE_MASK, [4294967296]],
+        [P.C.V86GL_STATE_DOUBLE, GL.STENCIL_VALUE_MASK, [4294967295]],
+        [P.C.V86GL_STATE_IS_ENABLED, GL.DITHER, [1]],
+        [P.C.V86GL_STATE_IS_ENABLED, GL.BLEND, [0]],
         [P.C.V86GL_STATE_DOUBLE, GL.MODELVIEW_MATRIX, [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1]],
         [P.C.V86GL_STATE_FLOAT, GL.CURRENT_INDEX, null], // not migrated: local fallback, untouched output
     ]) {
@@ -107,7 +117,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         const decoded = execFileSync(binary, ["0", String(kind), String(pname)], { input: answer });
         assert.equal(decoded.readInt32LE(0), expected ? 1 : 0);
         assert.equal(decoded.readUInt32LE(4), 0);
-        const output = decoded.subarray(8), itemBytes = kind === P.C.V86GL_STATE_DOUBLE ? 8 : kind === P.C.V86GL_STATE_BOOLEAN ? 1 : 4;
+        const boolean = kind === P.C.V86GL_STATE_BOOLEAN || kind === P.C.V86GL_STATE_IS_ENABLED;
+        const output = decoded.subarray(8), itemBytes = kind === P.C.V86GL_STATE_DOUBLE ? 8 : boolean ? 1 : 4;
         if (expected) expected.forEach((v, i) => {
             const at = 8 + i * itemBytes;
             const actual = kind === P.C.V86GL_STATE_INTEGER ? output.readInt32LE(at) : kind === P.C.V86GL_STATE_FLOAT ? output.readFloatLE(at) : kind === P.C.V86GL_STATE_DOUBLE ? output.readDoubleLE(at) : output[at];
@@ -122,5 +133,5 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         assert.equal(error.readInt32LE(0), -1); assert.equal(error.readUInt32LE(4), GL.INVALID_OPERATION);
         assert.ok(error.subarray(8).every(b => b === 0xA5));
     }
-    console.log("gl_state_query_abi_test: actual C encoder/decoder, real shadow/executor, four types, vectors and output guards passed");
+    console.log("gl_state_query_abi_test: actual C encoder/decoder, real shadow/executor, four types, enables, unsigned masks and output guards passed");
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
