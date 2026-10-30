@@ -60,6 +60,8 @@
 /* pixel map unsigned integer output */
 #define V86GL_STATE_UNSIGNED_INT 7u
 #define V86GL_MAX_TYPED_QUERY_VALUES 0x100u
+#define V86GL_MAX_EVAL_ORDER 8u
+#define V86GL_MAX_EVALUATOR_VALUES 0x100u
 #define V86GL_PARAMETER_LIGHT 1u
 #define V86GL_PARAMETER_MATERIAL 2u
 #define V86GL_PARAMETER_TEX_ENV 3u
@@ -347,9 +349,15 @@ enum {
     GLFN_RESOLVED_RASTER_STATE = 241,
     GLFN_CAPTURE_VERTICES = 242,
     GLFN_CAPTURE_RASTER_VERTEX = 243,
-    GLFN_RESOLVED_RASTER_ALL = 244
+    GLFN_RESOLVED_RASTER_ALL = 244,
+    GLFN_MAP_EVALUATOR = 245,
+    GLFN_EVALUATOR_GRID = 246,
+    GLFN_EVAL_COORD = 247,
+    GLFN_EVAL_MESH = 248,
+    GLFN_QUERY_EVALUATOR = 249,
+    GLFN_RESOLVED_EVAL_VERTEX = 250
 };
-#define V86GL_OPCODE_COUNT 244u
+#define V86GL_OPCODE_COUNT 250u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -995,6 +1003,50 @@ typedef struct V86GLRecordResolvedRasterAll {
     float fog;
     float coords[32];
 } V86GLRecordResolvedRasterAll;
+typedef struct V86GLRecordMapEvaluator {
+    uint32_t dimensions;
+    uint32_t target;
+    int32_t uorder;
+    int32_t vorder;
+    int32_t ustride;
+    int32_t vstride;
+    uint32_t data_size;
+    uint32_t reserved;
+    double domain[4];
+} V86GLRecordMapEvaluator;
+typedef struct V86GLRecordEvaluatorGrid {
+    uint32_t dimensions;
+    int32_t un;
+    int32_t vn;
+    uint32_t reserved;
+    double domain[4];
+} V86GLRecordEvaluatorGrid;
+typedef struct V86GLRecordEvalCoord {
+    uint32_t dimensions;
+    uint32_t operation;
+    double values[2];
+} V86GLRecordEvalCoord;
+typedef struct V86GLRecordEvalMesh {
+    uint32_t dimensions;
+    uint32_t mode;
+    int32_t indices[4];
+} V86GLRecordEvalMesh;
+typedef struct V86GLRecordQueryEvaluator {
+    uint32_t pname;
+    uint32_t value_kind;
+    uint32_t status;
+    uint32_t count;
+    uint32_t data_size;
+    uint32_t error;
+    uint32_t target;
+    uint32_t reserved;
+} V86GLRecordQueryEvaluator;
+typedef struct V86GLRecordResolvedEvalVertex {
+    float position[4];
+    float color[4];
+    float normal[4];
+    float texcoord[4];
+} V86GLRecordResolvedEvalVertex;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1621,6 +1673,44 @@ typedef char V86GLRecordResolvedRasterAll_secondary[offsetof(V86GLRecordResolved
 typedef char V86GLRecordResolvedRasterAll_distance[offsetof(V86GLRecordResolvedRasterAll, distance) == 52 ? 1 : -1];
 typedef char V86GLRecordResolvedRasterAll_fog[offsetof(V86GLRecordResolvedRasterAll, fog) == 56 ? 1 : -1];
 typedef char V86GLRecordResolvedRasterAll_coords[offsetof(V86GLRecordResolvedRasterAll, coords) == 60 ? 1 : -1];
+typedef char V86GLRecordMapEvaluatorSize[sizeof(V86GLRecordMapEvaluator) == 64 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_dimensions[offsetof(V86GLRecordMapEvaluator, dimensions) == 0 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_target[offsetof(V86GLRecordMapEvaluator, target) == 4 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_uorder[offsetof(V86GLRecordMapEvaluator, uorder) == 8 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_vorder[offsetof(V86GLRecordMapEvaluator, vorder) == 12 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_ustride[offsetof(V86GLRecordMapEvaluator, ustride) == 16 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_vstride[offsetof(V86GLRecordMapEvaluator, vstride) == 20 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_data_size[offsetof(V86GLRecordMapEvaluator, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_reserved[offsetof(V86GLRecordMapEvaluator, reserved) == 28 ? 1 : -1];
+typedef char V86GLRecordMapEvaluator_domain[offsetof(V86GLRecordMapEvaluator, domain) == 32 ? 1 : -1];
+typedef char V86GLRecordEvaluatorGridSize[sizeof(V86GLRecordEvaluatorGrid) == 48 ? 1 : -1];
+typedef char V86GLRecordEvaluatorGrid_dimensions[offsetof(V86GLRecordEvaluatorGrid, dimensions) == 0 ? 1 : -1];
+typedef char V86GLRecordEvaluatorGrid_un[offsetof(V86GLRecordEvaluatorGrid, un) == 4 ? 1 : -1];
+typedef char V86GLRecordEvaluatorGrid_vn[offsetof(V86GLRecordEvaluatorGrid, vn) == 8 ? 1 : -1];
+typedef char V86GLRecordEvaluatorGrid_reserved[offsetof(V86GLRecordEvaluatorGrid, reserved) == 12 ? 1 : -1];
+typedef char V86GLRecordEvaluatorGrid_domain[offsetof(V86GLRecordEvaluatorGrid, domain) == 16 ? 1 : -1];
+typedef char V86GLRecordEvalCoordSize[sizeof(V86GLRecordEvalCoord) == 24 ? 1 : -1];
+typedef char V86GLRecordEvalCoord_dimensions[offsetof(V86GLRecordEvalCoord, dimensions) == 0 ? 1 : -1];
+typedef char V86GLRecordEvalCoord_operation[offsetof(V86GLRecordEvalCoord, operation) == 4 ? 1 : -1];
+typedef char V86GLRecordEvalCoord_values[offsetof(V86GLRecordEvalCoord, values) == 8 ? 1 : -1];
+typedef char V86GLRecordEvalMeshSize[sizeof(V86GLRecordEvalMesh) == 24 ? 1 : -1];
+typedef char V86GLRecordEvalMesh_dimensions[offsetof(V86GLRecordEvalMesh, dimensions) == 0 ? 1 : -1];
+typedef char V86GLRecordEvalMesh_mode[offsetof(V86GLRecordEvalMesh, mode) == 4 ? 1 : -1];
+typedef char V86GLRecordEvalMesh_indices[offsetof(V86GLRecordEvalMesh, indices) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluatorSize[sizeof(V86GLRecordQueryEvaluator) == 32 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_pname[offsetof(V86GLRecordQueryEvaluator, pname) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_value_kind[offsetof(V86GLRecordQueryEvaluator, value_kind) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_status[offsetof(V86GLRecordQueryEvaluator, status) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_count[offsetof(V86GLRecordQueryEvaluator, count) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_data_size[offsetof(V86GLRecordQueryEvaluator, data_size) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_error[offsetof(V86GLRecordQueryEvaluator, error) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_target[offsetof(V86GLRecordQueryEvaluator, target) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryEvaluator_reserved[offsetof(V86GLRecordQueryEvaluator, reserved) == 28 ? 1 : -1];
+typedef char V86GLRecordResolvedEvalVertexSize[sizeof(V86GLRecordResolvedEvalVertex) == 64 ? 1 : -1];
+typedef char V86GLRecordResolvedEvalVertex_position[offsetof(V86GLRecordResolvedEvalVertex, position) == 0 ? 1 : -1];
+typedef char V86GLRecordResolvedEvalVertex_color[offsetof(V86GLRecordResolvedEvalVertex, color) == 16 ? 1 : -1];
+typedef char V86GLRecordResolvedEvalVertex_normal[offsetof(V86GLRecordResolvedEvalVertex, normal) == 32 ? 1 : -1];
+typedef char V86GLRecordResolvedEvalVertex_texcoord[offsetof(V86GLRecordResolvedEvalVertex, texcoord) == 48 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];

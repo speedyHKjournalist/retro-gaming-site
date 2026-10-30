@@ -3,7 +3,7 @@
 #ifndef V86GL_OPCODE_NAMES_H
 #define V86GL_OPCODE_NAMES_H
 
-#define V86GL_OPCODE_NAME_COUNT 245u
+#define V86GL_OPCODE_NAME_COUNT 251u
 static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [0] = "UNKNOWN",
     [1] = "VIEWPORT",
@@ -250,6 +250,12 @@ static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [242] = "CAPTURE_VERTICES",
     [243] = "CAPTURE_RASTER_VERTEX",
     [244] = "RESOLVED_RASTER_ALL",
+    [245] = "MAP_EVALUATOR",
+    [246] = "EVALUATOR_GRID",
+    [247] = "EVAL_COORD",
+    [248] = "EVAL_MESH",
+    [249] = "QUERY_EVALUATOR",
+    [250] = "RESOLVED_EVAL_VERTEX",
 };
 
 static const char *v86gl_opcode_name(unsigned int opcode)

@@ -70,8 +70,17 @@ capture or resolved-state records are rejected. Programmable RasterPos now
 updates CPU raster state through the same GPU result channel. The virtio
 submission waits for this state before returning subsequent getters; WindowPos
 encodes its own bypass command directly. `gl_raster_program_abi_test.js` covers
-the actual C helpers and typed getters in both modes. Evaluator migration and
-full GPU snapshot restoration remain in v86's phase C work.
+the actual C helpers and typed getters in both modes.
+
+Evaluator definitions, grids, evaluation, AUTO_NORMAL and typed GetMap queries
+now belong to the CPU context. The DLL captures strided float/double control
+points by value into bounded protocol records (245–249); it keeps no map cache
+and performs no evaluator arithmetic. Opcode 250 carries CPU-generated
+evaluated vertices and cannot be supplied by the guest. The frozen maximum
+order is eight. `gl_evaluator_abi_test.js` runs actual C encoding/query helpers,
+including a maximum-size surface, while the v86 native-reference and GPU tests
+cover feedback and rendered lighting. Full GPU snapshot restoration remains
+in v86's phase C work.
 
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving

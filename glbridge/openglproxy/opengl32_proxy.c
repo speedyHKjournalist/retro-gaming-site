@@ -1712,16 +1712,6 @@ typedef struct {
     GLdouble* values;
 } PixelMapState;
 
-typedef struct {
-    BOOL defined;
-    GLint dimensions;
-    GLint components;
-    GLint uorder;
-    GLint vorder;
-    GLdouble domain[4];
-    GLdouble* coefficients;
-    uint32_t coefficient_count;
-} MapState;
 
 static BOOL g_query_state_initialized = FALSE;
 static GLfloat g_fog_color[4];
@@ -1740,7 +1730,6 @@ static GLboolean g_light_model_two_side = GL_FALSE;
 static GLenum g_light_model_color_control = GL_SINGLE_COLOR;
 static PixelMapState g_pixel_maps[V86GL_MAX_PIXEL_MAPS];
 static GLubyte g_polygon_stipple[128];
-static MapState g_map_states[V86GL_MAX_MAP_TARGETS];
 static GLint g_map_grid1_un = 1;
 static GLdouble g_map_grid1_u1 = 0.0;
 static GLdouble g_map_grid1_u2 = 1.0;
@@ -18443,542 +18432,144 @@ void APIENTRY glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
     emit_gl_call(GLFN_COPY_TEX_SUB_IMAGE_1D, &payload, sizeof(payload));
 }
 
-static int map_target_index(GLenum target) {
-    if (target >= GL_MAP1_COLOR_4 && target <= GL_MAP1_VERTEX_4) return (int)(target - GL_MAP1_COLOR_4);
-    if (target >= GL_MAP2_COLOR_4 && target <= GL_MAP2_VERTEX_4) return 9 + (int)(target - GL_MAP2_COLOR_4);
-    return -1;
+/* Evaluator coefficients are client input. Capture only the addressed values;
+ * map definitions, grids, evaluation and queries belong to the CPU shadow. */
+static unsigned int evaluator_components(GLenum target, unsigned int dimensions) {
+    unsigned int index;
+    GLenum base = dimensions == 1 ? GL_MAP1_COLOR_4 : GL_MAP2_COLOR_4;
+    static const unsigned int sizes[9] = { 4, 1, 3, 1, 2, 3, 4, 3, 4 };
+    if (target < base || target > base + 8) return 0;
+    index = (unsigned int)(target - base);
+    return sizes[index];
 }
 
-static int map_target_components(GLenum target) {
-    switch (target) {
-    case GL_MAP1_COLOR_4: case GL_MAP2_COLOR_4:
-    case GL_MAP1_TEXTURE_COORD_4: case GL_MAP2_TEXTURE_COORD_4:
-    case GL_MAP1_VERTEX_4: case GL_MAP2_VERTEX_4: return 4;
-    case GL_MAP1_NORMAL: case GL_MAP2_NORMAL:
-    case GL_MAP1_TEXTURE_COORD_3: case GL_MAP2_TEXTURE_COORD_3:
-    case GL_MAP1_VERTEX_3: case GL_MAP2_VERTEX_3: return 3;
-    case GL_MAP1_TEXTURE_COORD_2: case GL_MAP2_TEXTURE_COORD_2: return 2;
-    default: return 1;
+static void emit_evaluator_map(unsigned int dimensions, GLenum target,
+                              GLdouble u1, GLdouble u2, GLint ustride, GLint uorder,
+                              GLdouble v1, GLdouble v2, GLint vstride, GLint vorder,
+                              const void* points, BOOL doubles) {
+    V86GLRecordMapEvaluator request;
+    uint8_t* args;
+    unsigned int components = evaluator_components(target, dimensions);
+    unsigned int nu = 0, nv = 0, i, j, c;
+    uint32_t data_bytes = 0;
+    uint64_t count, span;
+    ZeroMemory(&request, sizeof(request));
+    request.dimensions = dimensions; request.target = (uint32_t)target;
+    request.uorder = uorder; request.vorder = dimensions == 2 ? vorder : 1;
+    request.ustride = ustride; request.vstride = vstride;
+    request.domain[0] = u1; request.domain[1] = u2;
+    request.domain[2] = dimensions == 2 ? v1 : 0.0;
+    request.domain[3] = dimensions == 2 ? v2 : 1.0;
+    /* These guards bound guest-memory reads; the CPU still validates and
+     * reports every GL error, including errors deferred in display lists. */
+    if (points && components && uorder > 0 && uorder <= (GLint)V86GL_MAX_EVAL_ORDER &&
+        (dimensions == 1 || (vorder > 0 && vorder <= (GLint)V86GL_MAX_EVAL_ORDER)) &&
+        ustride >= (GLint)components && (dimensions == 1 || vstride >= (GLint)components) &&
+        u1 != u2 && (dimensions == 1 || v1 != v2)) {
+        nu = (unsigned int)uorder; nv = dimensions == 1 ? 1u : (unsigned int)vorder;
+        count = (uint64_t)nu * nv * components;
+        span = (uint64_t)(nu - 1) * (uint32_t)ustride + (uint64_t)(nv - 1) * (uint32_t)vstride + components;
+        if (count <= V86GL_MAX_EVALUATOR_VALUES && span <= UINT32_MAX / (doubles ? sizeof(GLdouble) : sizeof(GLfloat)))
+            data_bytes = (uint32_t)count * sizeof(GLdouble);
     }
-}
-
-static int map_target_dimensions(GLenum target) {
-    return target >= GL_MAP2_COLOR_4 && target <= GL_MAP2_VERTEX_4 ? 2 : 1;
-}
-
-static int define_map_state(GLenum target, GLdouble u1, GLdouble u2,
-                            GLint ustride, GLint uorder,
-                            GLdouble v1, GLdouble v2,
-                            GLint vstride, GLint vorder,
-                            const GLdouble* points) {
-    MapState* state;
-    GLdouble* coefficients;
-    uint64_t total;
-    int index = map_target_index(target);
-    int components;
-    int dimensions;
-    GLint u;
-    GLint v;
-    int c;
-
-    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return 0; }
-    components = map_target_components(target);
-    dimensions = map_target_dimensions(target);
-    if (uorder <= 0 || (dimensions == 2 && vorder <= 0) ||
-        ustride < components || (dimensions == 2 && vstride < components) || !points) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-    total = (uint64_t)(uint32_t)uorder * (uint32_t)(dimensions == 2 ? vorder : 1) * components;
-    if (total > UINT32_MAX / sizeof(*coefficients)) { v86gl_set_error(GL_OUT_OF_MEMORY); return 0; }
-    coefficients = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)total * sizeof(*coefficients));
-    if (!coefficients) { v86gl_set_error(GL_OUT_OF_MEMORY); return 0; }
-    for (u = 0; u < uorder; u++) {
-        for (v = 0; v < (dimensions == 2 ? vorder : 1); v++) {
-            const GLdouble* source = points + (uint32_t)u * ustride + (dimensions == 2 ? (uint32_t)v * vstride : 0);
-            for (c = 0; c < components; c++) {
-                coefficients[((uint32_t)u * (dimensions == 2 ? vorder : 1) + v) * components + c] = source[c];
-            }
+    request.data_size = data_bytes;
+    if (!reserve_pci_record(GLFN_MAP_EVALUATOR, NULL, sizeof(request) + data_bytes, &args)) return;
+    CopyMemory(args, &request, sizeof(request));
+    if (data_bytes) {
+        uint32_t output = (uint32_t)sizeof(request);
+        for (i = 0; i < nu; ++i) for (j = 0; j < nv; ++j) for (c = 0; c < components; ++c) {
+            size_t index = (size_t)i * (uint32_t)ustride + (size_t)j * (uint32_t)vstride + c;
+            GLdouble value = doubles ? ((const GLdouble*)points)[index] : (GLdouble)((const GLfloat*)points)[index];
+            CopyMemory(args + output, &value, sizeof(value)); output += sizeof(value);
         }
     }
-    state = &g_map_states[index];
-    if (state->coefficients) HeapFree(GetProcessHeap(), 0, state->coefficients);
-    ZeroMemory(state, sizeof(*state));
-    state->defined = TRUE;
-    state->dimensions = dimensions;
-    state->components = components;
-    state->uorder = uorder;
-    state->vorder = dimensions == 2 ? vorder : 0;
-    state->domain[0] = u1;
-    state->domain[1] = u2;
-    state->domain[2] = v1;
-    state->domain[3] = v2;
-    state->coefficients = coefficients;
-    state->coefficient_count = (uint32_t)total;
-    return 1;
+    (void)emit_pci_batch(FALSE);
 }
 
 __declspec(dllexport)
 void APIENTRY glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble* points) {
-    (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, points);
+    emit_evaluator_map(1, target, u1, u2, stride, order, 0, 1, 0, 1, points, TRUE);
 }
-
 __declspec(dllexport)
 void APIENTRY glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat* points) {
-    GLdouble* converted;
-    uint64_t count;
-    GLint i;
-    if (order <= 0 || !points || stride <= 0) { (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, NULL); return; }
-    count = (uint64_t)(uint32_t)(order - 1) * stride + map_target_components(target);
-    if (count > UINT32_MAX / sizeof(*converted)) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*converted));
-    if (!converted) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-    for (i = 0; i < (GLint)count; i++) converted[i] = (GLdouble)points[i];
-    (void)define_map_state(target, u1, u2, stride, order, 0.0, 0.0, 0, 0, converted);
-    HeapFree(GetProcessHeap(), 0, converted);
+    emit_evaluator_map(1, target, u1, u2, stride, order, 0, 1, 0, 1, points, FALSE);
 }
-
 __declspec(dllexport)
 void APIENTRY glMap2d(GLenum target, GLdouble u1, GLdouble u2, GLint ustride, GLint uorder,
                       GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble* points) {
-    (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points);
+    emit_evaluator_map(2, target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points, TRUE);
 }
-
 __declspec(dllexport)
 void APIENTRY glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
                       GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat* points) {
-    GLdouble* converted;
-    uint64_t count;
-    GLint i;
-    if (uorder <= 0 || vorder <= 0 || !points || ustride <= 0 || vstride <= 0) {
-        (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, NULL);
-        return;
-    }
-    count = (uint64_t)(uint32_t)(uorder - 1) * ustride + (uint64_t)(uint32_t)(vorder - 1) * vstride + map_target_components(target);
-    if (count > UINT32_MAX / sizeof(*converted)) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*converted));
-    if (!converted) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-    for (i = 0; i < (GLint)count; i++) converted[i] = (GLdouble)points[i];
-    (void)define_map_state(target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, converted);
-    HeapFree(GetProcessHeap(), 0, converted);
+    emit_evaluator_map(2, target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points, FALSE);
 }
 
-static GLdouble map_power(GLdouble base, GLint exponent) {
-    GLdouble result = 1.0;
-    GLint i;
-    for (i = 0; i < exponent; i++) {
-        result *= base;
-    }
-    return result;
+static void emit_evaluator_grid(unsigned int dimensions, GLint un, GLdouble u1, GLdouble u2,
+                               GLint vn, GLdouble v1, GLdouble v2) {
+    V86GLRecordEvaluatorGrid request;
+    ZeroMemory(&request, sizeof(request)); request.dimensions = dimensions; request.un = un; request.vn = vn;
+    request.domain[0] = u1; request.domain[1] = u2; request.domain[2] = v1; request.domain[3] = v2;
+    emit_gl_call(GLFN_EVALUATOR_GRID, &request, sizeof(request));
 }
-
-static GLdouble map_binomial(GLint n, GLint k) {
-    GLdouble result = 1.0;
-    GLint i;
-
-    if (k < 0 || k > n) {
-        return 0.0;
-    }
-    if (k > n - k) {
-        k = n - k;
-    }
-    for (i = 1; i <= k; i++) {
-        result = result * (GLdouble)(n - k + i) / (GLdouble)i;
-    }
-    return result;
-}
-
-static GLdouble map_bernstein(GLint degree, GLint index, GLdouble t) {
-    return map_binomial(degree, index) *
-           map_power(t, index) *
-           map_power(1.0 - t, degree - index);
-}
-
-static GLdouble map_normalized_coord(GLdouble value, GLdouble min_value, GLdouble max_value) {
-    if (max_value == min_value) {
-        return 0.0;
-    }
-    return (value - min_value) / (max_value - min_value);
-}
-
-static void evaluate_map_state_values(const MapState* state, GLdouble u, GLdouble v,
-                                      GLdouble* values) {
-    GLdouble uu;
-    GLdouble vv;
-    GLint udegree;
-    GLint vdegree;
-    GLint i;
-    GLint j;
-    GLint c;
-
-    for (c = 0; c < 4; c++) {
-        values[c] = 0.0;
-    }
-
-    if (!state || !state->defined || !state->coefficients || state->uorder <= 0) {
-        return;
-    }
-
-    uu = map_normalized_coord(u, state->domain[0], state->domain[1]);
-    udegree = state->uorder - 1;
-
-    if (state->dimensions == 1) {
-        for (i = 0; i < state->uorder; i++) {
-            GLdouble wu = map_bernstein(udegree, i, uu);
-            const GLdouble* coeff = state->coefficients + (uint32_t)i * state->components;
-            for (c = 0; c < state->components && c < 4; c++) {
-                values[c] += wu * coeff[c];
-            }
-        }
-        return;
-    }
-
-    if (state->vorder <= 0) {
-        return;
-    }
-
-    vv = map_normalized_coord(v, state->domain[2], state->domain[3]);
-    vdegree = state->vorder - 1;
-    for (i = 0; i < state->uorder; i++) {
-        GLdouble wu = map_bernstein(udegree, i, uu);
-        for (j = 0; j < state->vorder; j++) {
-            GLdouble w = wu * map_bernstein(vdegree, j, vv);
-            const GLdouble* coeff = state->coefficients +
-                ((uint32_t)i * (uint32_t)state->vorder + (uint32_t)j) *
-                (uint32_t)state->components;
-            for (c = 0; c < state->components && c < 4; c++) {
-                values[c] += w * coeff[c];
-            }
-        }
-    }
-}
-
-static void apply_evaluated_map(GLenum target, const GLdouble* values) {
-    switch (target) {
-    case GL_MAP1_COLOR_4:
-    case GL_MAP2_COLOR_4:
-        glColor4f((GLfloat)values[0], (GLfloat)values[1],
-                  (GLfloat)values[2], (GLfloat)values[3]);
-        break;
-    case GL_MAP1_INDEX:
-    case GL_MAP2_INDEX:
-        glIndexf((GLfloat)values[0]);
-        break;
-    case GL_MAP1_NORMAL:
-    case GL_MAP2_NORMAL:
-        glNormal3f((GLfloat)values[0], (GLfloat)values[1], (GLfloat)values[2]);
-        break;
-    case GL_MAP1_TEXTURE_COORD_1:
-    case GL_MAP2_TEXTURE_COORD_1:
-        glTexCoord1f((GLfloat)values[0]);
-        break;
-    case GL_MAP1_TEXTURE_COORD_2:
-    case GL_MAP2_TEXTURE_COORD_2:
-        glTexCoord2f((GLfloat)values[0], (GLfloat)values[1]);
-        break;
-    case GL_MAP1_TEXTURE_COORD_3:
-    case GL_MAP2_TEXTURE_COORD_3:
-        glTexCoord3f((GLfloat)values[0], (GLfloat)values[1], (GLfloat)values[2]);
-        break;
-    case GL_MAP1_TEXTURE_COORD_4:
-    case GL_MAP2_TEXTURE_COORD_4:
-        glTexCoord4f((GLfloat)values[0], (GLfloat)values[1],
-                     (GLfloat)values[2], (GLfloat)values[3]);
-        break;
-    case GL_MAP1_VERTEX_3:
-    case GL_MAP2_VERTEX_3:
-        glVertex3f((GLfloat)values[0], (GLfloat)values[1], (GLfloat)values[2]);
-        break;
-    case GL_MAP1_VERTEX_4:
-    case GL_MAP2_VERTEX_4:
-        glVertex4f((GLfloat)values[0], (GLfloat)values[1],
-                   (GLfloat)values[2], (GLfloat)values[3]);
-        break;
-    default:
-        break;
-    }
-}
-
-static void evaluate_enabled_maps_1(GLdouble u) {
-    GLenum target;
-    GLdouble values[4];
-
-    for (target = GL_MAP1_COLOR_4; target <= GL_MAP1_VERTEX_4; target++) {
-        int index;
-        if (!get_cap_state(target)) {
-            continue;
-        }
-        index = map_target_index(target);
-        if (index < 0) {
-            continue;
-        }
-        evaluate_map_state_values(&g_map_states[index], u, 0.0, values);
-        apply_evaluated_map(target, values);
-    }
-}
-
-static void evaluate_enabled_maps_2(GLdouble u, GLdouble v) {
-    GLenum target;
-    GLdouble values[4];
-
-    for (target = GL_MAP2_COLOR_4; target <= GL_MAP2_VERTEX_4; target++) {
-        int index;
-        if (!get_cap_state(target)) {
-            continue;
-        }
-        index = map_target_index(target);
-        if (index < 0) {
-            continue;
-        }
-        evaluate_map_state_values(&g_map_states[index], u, v, values);
-        apply_evaluated_map(target, values);
-    }
-}
-
-static GLdouble map_grid_coord(GLint index, GLint segments, GLdouble v1, GLdouble v2) {
-    if (segments == 0) {
-        return v1;
-    }
-    return v1 + ((GLdouble)index * (v2 - v1) / (GLdouble)segments);
-}
-
 __declspec(dllexport)
-void APIENTRY glMapGrid1d(GLint un, GLdouble u1, GLdouble u2) {
-    if (un < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    g_map_grid1_un = un;
-    g_map_grid1_u1 = u1;
-    g_map_grid1_u2 = u2;
-}
-
+void APIENTRY glMapGrid1d(GLint un, GLdouble u1, GLdouble u2) { emit_evaluator_grid(1, un, u1, u2, 1, 0, 1); }
 __declspec(dllexport)
-void APIENTRY glMapGrid1f(GLint un, GLfloat u1, GLfloat u2) {
-    glMapGrid1d(un, (GLdouble)u1, (GLdouble)u2);
-}
-
+void APIENTRY glMapGrid1f(GLint un, GLfloat u1, GLfloat u2) { glMapGrid1d(un, u1, u2); }
 __declspec(dllexport)
-void APIENTRY glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2) {
-    if (un < 0 || vn < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    g_map_grid2_un = un;
-    g_map_grid2_u1 = u1;
-    g_map_grid2_u2 = u2;
-    g_map_grid2_vn = vn;
-    g_map_grid2_v1 = v1;
-    g_map_grid2_v2 = v2;
-}
-
+void APIENTRY glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2) { emit_evaluator_grid(2, un, u1, u2, vn, v1, v2); }
 __declspec(dllexport)
-void APIENTRY glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2) {
-    glMapGrid2d(un, (GLdouble)u1, (GLdouble)u2, vn, (GLdouble)v1, (GLdouble)v2);
-}
+void APIENTRY glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2) { glMapGrid2d(un, u1, u2, vn, v1, v2); }
 
+static void emit_evaluator_coord(unsigned int dimensions, unsigned int operation, GLdouble u, GLdouble v) {
+    V86GLRecordEvalCoord request;
+    ZeroMemory(&request, sizeof(request)); request.dimensions = dimensions; request.operation = operation; request.values[0] = u; request.values[1] = v;
+    emit_gl_call(GLFN_EVAL_COORD, &request, sizeof(request));
+}
 __declspec(dllexport)
-void APIENTRY glEvalCoord1d(GLdouble u) {
-    evaluate_enabled_maps_1(u);
-}
-
+void APIENTRY glEvalCoord1d(GLdouble u) { emit_evaluator_coord(1, 0, u, 0); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1dv(const GLdouble* u) {
-    if (u) glEvalCoord1d(u[0]);
-}
-
+void APIENTRY glEvalCoord1dv(const GLdouble* u) { if (u) glEvalCoord1d(u[0]); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1f(GLfloat u) {
-    glEvalCoord1d((GLdouble)u);
-}
-
+void APIENTRY glEvalCoord1f(GLfloat u) { glEvalCoord1d(u); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1fv(const GLfloat* u) {
-    if (u) glEvalCoord1f(u[0]);
-}
-
+void APIENTRY glEvalCoord1fv(const GLfloat* u) { if (u) glEvalCoord1f(u[0]); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2d(GLdouble u, GLdouble v) {
-    evaluate_enabled_maps_2(u, v);
-}
-
+void APIENTRY glEvalCoord2d(GLdouble u, GLdouble v) { emit_evaluator_coord(2, 0, u, v); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2dv(const GLdouble* u) {
-    if (u) glEvalCoord2d(u[0], u[1]);
-}
-
+void APIENTRY glEvalCoord2dv(const GLdouble* u) { if (u) glEvalCoord2d(u[0], u[1]); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2f(GLfloat u, GLfloat v) {
-    glEvalCoord2d((GLdouble)u, (GLdouble)v);
-}
-
+void APIENTRY glEvalCoord2f(GLfloat u, GLfloat v) { glEvalCoord2d(u, v); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2fv(const GLfloat* u) {
-    if (u) glEvalCoord2f(u[0], u[1]);
-}
-
-__declspec(dllexport) void APIENTRY glEvalPoint1(GLint i);
-__declspec(dllexport) void APIENTRY glEvalPoint2(GLint i, GLint j);
-
+void APIENTRY glEvalCoord2fv(const GLfloat* u) { if (u) glEvalCoord2f(u[0], u[1]); }
 __declspec(dllexport)
-void APIENTRY glEvalMesh1(GLenum mode, GLint i1, GLint i2) {
-    GLint i;
-    GLenum primitive;
-
-    if (mode == GL_POINT) {
-        primitive = GL_POINTS;
-    } else if (mode == GL_LINE) {
-        primitive = GL_LINE_STRIP;
-    } else {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    glBegin(primitive);
-    for (i = i1; i <= i2; i++) {
-        glEvalPoint1(i);
-    }
-    glEnd();
-}
-
+void APIENTRY glEvalPoint1(GLint i) { emit_evaluator_coord(1, 1, (GLdouble)i, 0); }
 __declspec(dllexport)
-void APIENTRY glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) {
-    GLint i;
-    GLint j;
+void APIENTRY glEvalPoint2(GLint i, GLint j) { emit_evaluator_coord(2, 1, (GLdouble)i, (GLdouble)j); }
 
-    if (mode == GL_POINT) {
-        glBegin(GL_POINTS);
-        for (i = i1; i <= i2; i++) {
-            for (j = j1; j <= j2; j++) {
-                glEvalPoint2(i, j);
-            }
-        }
-        glEnd();
-        return;
-    }
-
-    if (mode == GL_LINE) {
-        for (i = i1; i <= i2; i++) {
-            glBegin(GL_LINE_STRIP);
-            for (j = j1; j <= j2; j++) {
-                glEvalPoint2(i, j);
-            }
-            glEnd();
-        }
-        for (j = j1; j <= j2; j++) {
-            glBegin(GL_LINE_STRIP);
-            for (i = i1; i <= i2; i++) {
-                glEvalPoint2(i, j);
-            }
-            glEnd();
-        }
-        return;
-    }
-
-    if (mode == GL_FILL) {
-        for (i = i1; i < i2; i++) {
-            glBegin(GL_QUAD_STRIP);
-            for (j = j1; j <= j2; j++) {
-                glEvalPoint2(i, j);
-                glEvalPoint2(i + 1, j);
-            }
-            glEnd();
-        }
-        return;
-    }
-
-    v86gl_set_error(GL_INVALID_ENUM);
+static void emit_evaluator_mesh(unsigned int dimensions, GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) {
+    V86GLRecordEvalMesh request;
+    ZeroMemory(&request, sizeof(request)); request.dimensions = dimensions; request.mode = mode;
+    request.indices[0] = i1; request.indices[1] = i2; request.indices[2] = j1; request.indices[3] = j2;
+    emit_gl_call(GLFN_EVAL_MESH, &request, sizeof(request));
 }
-
 __declspec(dllexport)
-void APIENTRY glEvalPoint1(GLint i) {
-    glEvalCoord1d(map_grid_coord(i, g_map_grid1_un, g_map_grid1_u1, g_map_grid1_u2));
-}
-
+void APIENTRY glEvalMesh1(GLenum mode, GLint i1, GLint i2) { emit_evaluator_mesh(1, mode, i1, i2, 0, 0); }
 __declspec(dllexport)
-void APIENTRY glEvalPoint2(GLint i, GLint j) {
-    GLdouble u = map_grid_coord(i, g_map_grid2_un, g_map_grid2_u1, g_map_grid2_u2);
-    GLdouble v = map_grid_coord(j, g_map_grid2_vn, g_map_grid2_v1, g_map_grid2_v2);
-    glEvalCoord2d(u, v);
-}
+void APIENTRY glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) { emit_evaluator_mesh(2, mode, i1, i2, j1, j2); }
 
-__declspec(dllexport)
-void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* v) {
-    MapState* state;
-    int index = map_target_index(target);
-    uint32_t i;
-    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
-    if (!v) return;
-    state = &g_map_states[index];
-    switch (query) {
-    case GL_COEFF:
-        for (i = 0; i < state->coefficient_count; i++) v[i] = state->coefficients[i];
-        break;
-    case GL_ORDER:
-        v[0] = (GLdouble)state->uorder;
-        if (state->dimensions == 2) v[1] = (GLdouble)state->vorder;
-        break;
-    case GL_DOMAIN:
-        v[0] = state->domain[0]; v[1] = state->domain[1];
-        if (state->dimensions == 2) { v[2] = state->domain[2]; v[3] = state->domain[3]; }
-        break;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        break;
-    }
+static void query_evaluator(GLenum target, GLenum query, unsigned int kind, void* values) {
+    V86GLRecordQueryEvaluator request;
+    ZeroMemory(&request, sizeof(request)); request.target = target; request.pname = query; request.value_kind = kind;
+    request.data_size = V86GL_MAX_EVALUATOR_VALUES * sizeof(GLdouble);
+    (void)emit_query_typed(GLFN_QUERY_EVALUATOR, &request, sizeof(request), kind, values);
 }
-
 __declspec(dllexport)
-void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* v) {
-    MapState* state;
-    int index = map_target_index(target);
-    uint32_t i;
-    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
-    if (!v) return;
-    state = &g_map_states[index];
-    switch (query) {
-    case GL_COEFF:
-        for (i = 0; i < state->coefficient_count; i++) v[i] = (GLfloat)state->coefficients[i];
-        break;
-    case GL_ORDER:
-        v[0] = (GLfloat)state->uorder;
-        if (state->dimensions == 2) v[1] = (GLfloat)state->vorder;
-        break;
-    case GL_DOMAIN:
-        v[0] = (GLfloat)state->domain[0]; v[1] = (GLfloat)state->domain[1];
-        if (state->dimensions == 2) { v[2] = (GLfloat)state->domain[2]; v[3] = (GLfloat)state->domain[3]; }
-        break;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        break;
-    }
-}
-
+void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* values) { query_evaluator(target, query, V86GL_STATE_DOUBLE, values); }
 __declspec(dllexport)
-void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* v) {
-    MapState* state;
-    int index = map_target_index(target);
-    uint32_t i;
-    if (index < 0) { v86gl_set_error(GL_INVALID_ENUM); return; }
-    if (!v) return;
-    state = &g_map_states[index];
-    switch (query) {
-    case GL_COEFF:
-        for (i = 0; i < state->coefficient_count; i++) v[i] = (GLint)state->coefficients[i];
-        break;
-    case GL_ORDER:
-        v[0] = state->uorder;
-        if (state->dimensions == 2) v[1] = state->vorder;
-        break;
-    case GL_DOMAIN:
-        v[0] = (GLint)state->domain[0]; v[1] = (GLint)state->domain[1];
-        if (state->dimensions == 2) { v[2] = (GLint)state->domain[2]; v[3] = (GLint)state->domain[3]; }
-        break;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        break;
-    }
-}
+void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* values) { query_evaluator(target, query, V86GL_STATE_FLOAT, values); }
+__declspec(dllexport)
+void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* values) { query_evaluator(target, query, V86GL_STATE_INTEGER, values); }
 
 static void raster_pos4f_compat(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
     struct { float x, y, z, w; } payload;

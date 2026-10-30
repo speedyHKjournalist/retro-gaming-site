@@ -12,6 +12,7 @@ require(hostPath("gl-webgpu/gl_shadow_textures.js"));
 require(hostPath("gl-webgpu/gl_shadow_stipple.js"));
 require(hostPath("gl-webgpu/gl_shadow_lists.js"));
 require(hostPath("gl-webgpu/gl_shadow_select.js"));
+require(hostPath("gl-webgpu/gl_shadow_evaluators.js"));
 require(hostPath("gl-webgpu/gl_shadow_fixed.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
