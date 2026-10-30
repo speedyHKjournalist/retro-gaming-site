@@ -341,9 +341,12 @@ enum {
     GLFN_POLYGON_STIPPLE_BITMAP = 235,
     GLFN_LIST_COMMAND = 236,
     GLFN_QUERY_LIST = 237,
-    GLFN_LIST_CALLS = 238
+    GLFN_LIST_CALLS = 238,
+    GLFN_QUERY_RENDER_MODE = 239,
+    GLFN_NAME_COMMAND = 240,
+    GLFN_RESOLVED_RASTER_STATE = 241
 };
-#define V86GL_OPCODE_COUNT 238u
+#define V86GL_OPCODE_COUNT 241u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -947,6 +950,29 @@ typedef struct V86GLRecordListCalls {
     uint32_t count;
     uint32_t data_size;
 } V86GLRecordListCalls;
+typedef struct V86GLRecordQueryRenderMode {
+    uint32_t operation;
+    int32_t size;
+    uint32_t type;
+    uint32_t pointer;
+    uint32_t offset;
+    uint32_t data_size;
+    uint32_t status;
+    uint32_t error;
+    int32_t result;
+    uint32_t ticket;
+    uint32_t total;
+} V86GLRecordQueryRenderMode;
+typedef struct V86GLRecordNameCommand {
+    uint32_t operation;
+    uint32_t name;
+    float value;
+} V86GLRecordNameCommand;
+typedef struct V86GLRecordResolvedRasterState {
+    uint32_t valid;
+    float position[4];
+    float color[4];
+} V86GLRecordResolvedRasterState;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1537,6 +1563,26 @@ typedef char V86GLRecordQueryList_result[offsetof(V86GLRecordQueryList, result) 
 typedef char V86GLRecordListCallsSize[sizeof(V86GLRecordListCalls) == 8 ? 1 : -1];
 typedef char V86GLRecordListCalls_count[offsetof(V86GLRecordListCalls, count) == 0 ? 1 : -1];
 typedef char V86GLRecordListCalls_data_size[offsetof(V86GLRecordListCalls, data_size) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryRenderModeSize[sizeof(V86GLRecordQueryRenderMode) == 44 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_operation[offsetof(V86GLRecordQueryRenderMode, operation) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_size[offsetof(V86GLRecordQueryRenderMode, size) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_type[offsetof(V86GLRecordQueryRenderMode, type) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_pointer[offsetof(V86GLRecordQueryRenderMode, pointer) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_offset[offsetof(V86GLRecordQueryRenderMode, offset) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_data_size[offsetof(V86GLRecordQueryRenderMode, data_size) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_status[offsetof(V86GLRecordQueryRenderMode, status) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_error[offsetof(V86GLRecordQueryRenderMode, error) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_result[offsetof(V86GLRecordQueryRenderMode, result) == 32 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_ticket[offsetof(V86GLRecordQueryRenderMode, ticket) == 36 ? 1 : -1];
+typedef char V86GLRecordQueryRenderMode_total[offsetof(V86GLRecordQueryRenderMode, total) == 40 ? 1 : -1];
+typedef char V86GLRecordNameCommandSize[sizeof(V86GLRecordNameCommand) == 12 ? 1 : -1];
+typedef char V86GLRecordNameCommand_operation[offsetof(V86GLRecordNameCommand, operation) == 0 ? 1 : -1];
+typedef char V86GLRecordNameCommand_name[offsetof(V86GLRecordNameCommand, name) == 4 ? 1 : -1];
+typedef char V86GLRecordNameCommand_value[offsetof(V86GLRecordNameCommand, value) == 8 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterStateSize[sizeof(V86GLRecordResolvedRasterState) == 36 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterState_valid[offsetof(V86GLRecordResolvedRasterState, valid) == 0 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterState_position[offsetof(V86GLRecordResolvedRasterState, position) == 4 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterState_color[offsetof(V86GLRecordResolvedRasterState, color) == 20 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
