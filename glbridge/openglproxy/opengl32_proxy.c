@@ -13663,18 +13663,7 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
                                           GLsizei width, GLsizei height, GLsizei depth,
                                           GLenum format, GLsizei image_size,
                                           const GLvoid* data) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t xoffset;
-        int32_t yoffset;
-        int32_t zoffset;
-        int32_t width;
-        int32_t height;
-        int32_t depth;
-        uint32_t format;
-        uint32_t image_size;
-    } meta;
+    V86GLRecordCompressedTexSubImage2d meta;
     TextureLevelState* state;
     int cache_result;
     uint32_t total_size;
@@ -13924,19 +13913,7 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
                                  GLint yoffset, GLint zoffset, GLsizei width,
                                  GLsizei height, GLsizei depth, GLenum format,
                                  GLenum type, const GLvoid* pixels) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t xoffset;
-        int32_t yoffset;
-        int32_t zoffset;
-        int32_t width;
-        int32_t height;
-        int32_t depth;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    V86GLRecordTexSubImage3d meta;
     uint32_t data_size = 0;
     uint8_t* payload;
     const GLvoid* pixel_data = NULL;
@@ -13990,17 +13967,7 @@ __declspec(dllexport)
 void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                               GLsizei width, GLsizei height,
                               GLenum format, GLenum type, const GLvoid* pixels) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t xoffset;
-        int32_t yoffset;
-        int32_t width;
-        int32_t height;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    V86GLRecordTexSubImage2d meta;
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
     uint32_t data_size = has_pixels ? gl_pixel_span(width, height, format, type) : 0;
     uint32_t total_size = sizeof(meta) + data_size;
@@ -18779,15 +18746,7 @@ __declspec(dllexport)
 void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                               GLsizei width, GLenum format, GLenum type,
                               const GLvoid* pixels) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t xoffset;
-        int32_t width;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    V86GLRecordTexSubImage1d meta;
     uint32_t data_size;
     uint32_t total_size;
     uint8_t* payload;
