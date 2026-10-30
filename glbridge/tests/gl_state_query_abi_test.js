@@ -133,6 +133,12 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_BOOLEAN, 9, [1], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_RENDERBUFFER],
         [P.C.V86GL_STATE_BOOLEAN, 3, [1], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_FRAMEBUFFER],
         [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_BINDING_2D, [7]],
+        [P.C.V86GL_STATE_INTEGER, 0x0C01, [GL.COLOR_ATTACHMENT0 + 2]],
+        [P.C.V86GL_STATE_INTEGER, 0x0C02, [GL.NONE]],
+        [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0, [GL.COLOR_ATTACHMENT0 + 2]],
+        [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0 + 1, [GL.NONE]],
+        [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0 + 2, [GL.COLOR_ATTACHMENT0 + 1]],
+        [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0 + 7, [GL.NONE]],
     ]) {
         const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : [])] : [])];
         const wire = execFileSync(binary, ["1", ...args]);
@@ -154,7 +160,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
             s.record(P.GLFN.PIXEL_MAPFV, payload);
         }
         s.names(P.GLFN.GEN_TEXTURES, [8]).call("BIND_TEXTURE", GL.TEXTURE_2D, 7)
-            .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 9).call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 3);
+            .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 9).call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 3)
+            .names(P.GLFN.DRAW_BUFFERS, [GL.COLOR_ATTACHMENT0 + 2, GL.NONE, GL.COLOR_ATTACHMENT0 + 1]).call("READ_BUFFER", GL.NONE);
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});
