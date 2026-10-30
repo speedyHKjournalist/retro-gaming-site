@@ -3116,6 +3116,9 @@ static BufferObjectState* find_buffer_state(GLuint name, BOOL create) {
 }
 
 static void delete_buffer_state(GLuint name) {
+    uint32_t i;
+    ClientArrayState* arrays[] = { &g_vertex_array, &g_color_array, &g_index_array,
+        &g_normal_array, &g_edge_flag_array, &g_secondary_color_array, &g_fog_coord_array };
     BufferObjectState* state = find_buffer_state(name, FALSE);
     if (!state) return;
     if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
@@ -3124,6 +3127,12 @@ static void delete_buffer_state(GLuint name) {
     if (g_element_array_buffer_binding == name) g_element_array_buffer_binding = 0;
     if (g_pixel_pack_buffer_binding == name) g_pixel_pack_buffer_binding = 0;
     if (g_pixel_unpack_buffer_binding == name) g_pixel_unpack_buffer_binding = 0;
+    for (i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++)
+        if (arrays[i]->buffer == name) arrays[i]->buffer = 0;
+    for (i = 0; i < V86GL_MAX_TEXTURE_UNITS; i++)
+        if (g_texcoord_arrays[i].buffer == name) g_texcoord_arrays[i].buffer = 0;
+    for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++)
+        if (g_generic_attribs[i].buffer == name) g_generic_attribs[i].buffer = 0;
 }
 
 static QueryObjectState* find_query_state(GLuint name, BOOL create) {
