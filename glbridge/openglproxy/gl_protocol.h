@@ -439,6 +439,15 @@ typedef struct V86GLRecordCompressedTexSubImage3d {
     uint32_t format;
     uint32_t image_size;
 } V86GLRecordCompressedTexSubImage3d;
+typedef struct V86GLRecordBitmap {
+    int32_t width;
+    int32_t height;
+    float xorig;
+    float yorig;
+    float xmove;
+    float ymove;
+    uint32_t data_size;
+} V86GLRecordBitmap;
 typedef struct V86GLRecordTexImage1d {
     uint32_t target;
     int32_t level;
@@ -827,6 +836,14 @@ typedef char V86GLRecordCompressedTexSubImage3d_height[offsetof(V86GLRecordCompr
 typedef char V86GLRecordCompressedTexSubImage3d_depth[offsetof(V86GLRecordCompressedTexSubImage3d, depth) == 28 ? 1 : -1];
 typedef char V86GLRecordCompressedTexSubImage3d_format[offsetof(V86GLRecordCompressedTexSubImage3d, format) == 32 ? 1 : -1];
 typedef char V86GLRecordCompressedTexSubImage3d_image_size[offsetof(V86GLRecordCompressedTexSubImage3d, image_size) == 36 ? 1 : -1];
+typedef char V86GLRecordBitmapSize[sizeof(V86GLRecordBitmap) == 28 ? 1 : -1];
+typedef char V86GLRecordBitmap_width[offsetof(V86GLRecordBitmap, width) == 0 ? 1 : -1];
+typedef char V86GLRecordBitmap_height[offsetof(V86GLRecordBitmap, height) == 4 ? 1 : -1];
+typedef char V86GLRecordBitmap_xorig[offsetof(V86GLRecordBitmap, xorig) == 8 ? 1 : -1];
+typedef char V86GLRecordBitmap_yorig[offsetof(V86GLRecordBitmap, yorig) == 12 ? 1 : -1];
+typedef char V86GLRecordBitmap_xmove[offsetof(V86GLRecordBitmap, xmove) == 16 ? 1 : -1];
+typedef char V86GLRecordBitmap_ymove[offsetof(V86GLRecordBitmap, ymove) == 20 ? 1 : -1];
+typedef char V86GLRecordBitmap_data_size[offsetof(V86GLRecordBitmap, data_size) == 24 ? 1 : -1];
 typedef char V86GLRecordTexImage1dSize[sizeof(V86GLRecordTexImage1d) == 32 ? 1 : -1];
 typedef char V86GLRecordTexImage1d_target[offsetof(V86GLRecordTexImage1d, target) == 0 ? 1 : -1];
 typedef char V86GLRecordTexImage1d_level[offsetof(V86GLRecordTexImage1d, level) == 4 ? 1 : -1];

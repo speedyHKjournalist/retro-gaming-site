@@ -13,6 +13,7 @@ require(hostPath("gl-webgpu/gl_shadow_state.js"));
 require(hostPath("gl-webgpu/gl_shadow_raster.js"));
 require(hostPath("gl-webgpu/gl_shadow_fixed.js"));
 require(hostPath("gl-webgpu/gl_shadow_misc.js"));
+require(hostPath("gl-webgpu/gl_shadow_rasterpos.js"));
 const caps = require(hostPath("gl-webgpu/gl_caps.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
@@ -108,6 +109,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_INTEGER, GL.FOG_COLOR, [1073741823, 0, 2147483647, 536870911]],
         [P.C.V86GL_STATE_DOUBLE, GL.POINT_DISTANCE_ATTENUATION, [1, 2, 3]],
         [P.C.V86GL_STATE_INTEGER, GL.INDEX_SHIFT, [3]],
+        [P.C.V86GL_STATE_DOUBLE, GL.CURRENT_RASTER_POSITION, [34, 22, 0.5, 2]],
+        [P.C.V86GL_STATE_BOOLEAN, GL.CURRENT_RASTER_POSITION_VALID, [1]],
         [P.C.V86GL_STATE_DOUBLE, GL.MODELVIEW_MATRIX, [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1]],
         [P.C.V86GL_STATE_DOUBLE, GL.POSITION, [7, 12, 19, 1], P.C.V86GL_PARAMETER_LIGHT, GL.LIGHT0 + 2],
         [P.C.V86GL_STATE_INTEGER, GL.DIFFUSE, [2147483647, 0, 1073741823, 2147483647], P.C.V86GL_PARAMETER_MATERIAL, GL.BACK],
@@ -128,6 +131,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
             .call("TEX_GENFV", GL.S, GL.OBJECT_PLANE, 4, 1, 2, 3, 4).call("CLIP_PLANE", GL.CLIP_PLANE0, 1, 0, 0, 0);
         s.call("FOGFV", GL.FOG_COLOR, 4, 0.5, 0, 1, 0.25).call("POINT_PARAMETERIV", GL.POINT_DISTANCE_ATTENUATION, 1, 2, 3)
             .call("PIXEL_TRANSFERF", GL.INDEX_SHIFT, 2.75);
+        s.call("PUSH_MATRIX").call("LOAD_IDENTITY").call("RASTER_POS4F", 0, 0, 0, 2).call("POP_MATRIX");
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});
