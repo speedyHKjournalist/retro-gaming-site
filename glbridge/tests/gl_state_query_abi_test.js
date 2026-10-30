@@ -28,6 +28,9 @@ const helper = source.slice(start, end);
 const fbStart = source.indexOf("void APIENTRY glGetFramebufferAttachmentParameterivEXT("),
     fbEnd = source.indexOf("void APIENTRY glGetFramebufferAttachmentParameteriv(", fbStart);
 assert.ok(fbStart >= 0 && fbEnd > fbStart);
+const rbStart = source.indexOf("void APIENTRY glGetRenderbufferParameterivEXT("),
+    rbEnd = source.indexOf("void APIENTRY glGetRenderbufferParameteriv(", rbStart);
+assert.ok(rbStart >= 0 && rbEnd > rbStart);
 // The four public getters must use this compiled function with the right type.
 for (const [name, kind] of [["Integer", "INTEGER"], ["Float", "FLOAT"], ["Double", "DOUBLE"], ["Boolean", "BOOLEAN"]]) {
     const body = source.slice(source.indexOf("void APIENTRY glGet" + name + "v("));
@@ -66,6 +69,15 @@ typedef int BOOL;
 #define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL_EXT 0x8CD2
 #define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE_EXT 0x8CD3
 #define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_3D_ZOFFSET_EXT 0x8CD4
+#define GL_RENDERBUFFER_WIDTH_EXT 0x8D42
+#define GL_RENDERBUFFER_HEIGHT_EXT 0x8D43
+#define GL_RENDERBUFFER_INTERNAL_FORMAT_EXT 0x8D44
+#define GL_RENDERBUFFER_RED_SIZE_EXT 0x8D50
+#define GL_RENDERBUFFER_GREEN_SIZE_EXT 0x8D51
+#define GL_RENDERBUFFER_BLUE_SIZE_EXT 0x8D52
+#define GL_RENDERBUFFER_ALPHA_SIZE_EXT 0x8D53
+#define GL_RENDERBUFFER_DEPTH_SIZE_EXT 0x8D54
+#define GL_RENDERBUFFER_STENCIL_SIZE_EXT 0x8D55
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
 static unsigned char buffer[4096];
@@ -93,6 +105,12 @@ static FramebufferAttachmentState* bound_framebuffer_attachment(GLenum target, G
     (void)target; (void)attachment; (void)create; return NULL;
 }
 ${source.slice(fbStart, fbEnd)}
+typedef struct { GLenum internalformat; GLint width, height; } RenderbufferObjectState;
+static GLuint g_renderbuffer_binding = 1;
+static int valid_renderbuffer_target(GLenum target) { (void)target; return 1; }
+static RenderbufferObjectState* find_renderbuffer_state(GLuint name, int create) { (void)name; (void)create; return NULL; }
+static GLint renderbuffer_component_bits(GLenum format, GLenum pname) { (void)format; (void)pname; return 0; }
+${source.slice(rbStart, rbEnd)}
 int main(int argc, char** argv) {
     union { GLdouble align; unsigned char bytes[4096]; } out;
     unsigned int kind, pname;
@@ -102,6 +120,9 @@ int main(int argc, char** argv) {
     memset(out.bytes, 0xA5, sizeof(out.bytes));
     if (argc == 8) {
         glGetFramebufferAttachmentParameterivEXT((GLenum)strtoul(argv[5], NULL, 0), (GLenum)strtoul(argv[7], NULL, 0), pname, (GLint*)(out.bytes+8));
+        result = error ? -1 : 1;
+    } else if (argc == 6 && atoi(argv[4]) == V86GL_PARAMETER_RENDERBUFFER) {
+        glGetRenderbufferParameterivEXT((GLenum)strtoul(argv[5], NULL, 0), pname, (GLint*)(out.bytes+8));
         result = error ? -1 : 1;
     } else result = argc == 4 ? emit_query_state(pname, kind, out.bytes+8) : argc == 6 ?
         emit_query_parameter((unsigned int)atoi(argv[4]), (GLenum)strtoul(argv[5], NULL, 0), pname, kind, out.bytes+8) :
@@ -163,6 +184,11 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME_EXT, [7], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
         [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL_EXT, [2], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
         [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE_EXT, [0], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
+        [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_WIDTH_EXT, [7], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
+        [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_HEIGHT_EXT, [5], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
+        [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_INTERNAL_FORMAT_EXT, [GL.STENCIL_INDEX16_EXT], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
+        [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_STENCIL_SIZE_EXT, [8], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
+        [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_DEPTH_SIZE_EXT, [0], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
     ]) {
         const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : []), ...(index !== undefined ? [String(index)] : [])] : [])];
         const wire = execFileSync(binary, ["1", ...args]);
@@ -187,6 +213,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
             .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 9).call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 3)
             .names(P.GLFN.DRAW_BUFFERS, [GL.COLOR_ATTACHMENT0 + 2, GL.NONE, GL.COLOR_ATTACHMENT0 + 1]).call("READ_BUFFER", GL.NONE);
         s.call("FRAMEBUFFER_TEXTURE", GL.FRAMEBUFFER_EXT, GL.COLOR_ATTACHMENT0, GL.TEXTURE_2D, 7, 2, 0);
+        s.call("RENDERBUFFER_STORAGE", GL.RENDERBUFFER_EXT, GL.STENCIL_INDEX16_EXT, 7, 5);
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});

@@ -13485,6 +13485,7 @@ void APIENTRY glGetRenderbufferParameterivEXT(GLenum target, GLenum pname,
     RenderbufferObjectState* state;
 
     if (!params) return;
+    if (emit_query_parameter(V86GL_PARAMETER_RENDERBUFFER, target, pname, V86GL_STATE_INTEGER, params)) return;
     if (!valid_renderbuffer_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (!g_renderbuffer_binding) { v86gl_set_error(GL_INVALID_OPERATION); return; }
     state = find_renderbuffer_state(g_renderbuffer_binding, FALSE);
