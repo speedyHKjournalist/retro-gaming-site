@@ -3198,7 +3198,7 @@ static const uint8_t* buffer_data_at(GLuint name, const GLvoid* offset, uint32_t
     BufferObjectState* state = find_buffer_state(name, FALSE);
     uintptr_t value = (uintptr_t)offset;
 
-    if (!state || !state->data || value > state->size || bytes > state->size - value) {
+    if (!state || state->mapped || !state->data || value > state->size || bytes > state->size - value) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return NULL;
     }
@@ -12905,6 +12905,11 @@ void APIENTRY glBufferSubDataARB(GLenum target, GLintptrARB offset,
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
+    if (state->mapped) {
+        emit_buffer_sub_data(target, offset, size, data);
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return;
+    }
     if (size) CopyMemory(state->data + offset, data, (SIZE_T)size);
     emit_buffer_sub_data(target, offset, size, data);
 }
@@ -12914,10 +12919,76 @@ void APIENTRY glBufferSubData(GLenum target, GLintptrARB offset,
     glBufferSubDataARB(target, offset, size, data);
 }
 
+/* The full remaining range travels with each bounded read. The CPU checks
+ * the entire interval before the first destination byte can be changed. */
+static int emit_query_buffer_data(GLenum target, GLintptrARB offset, GLsizeiptrARB size, GLvoid* data) {
+    uint32_t copied = 0;
+    int32_t remaining = size;
+    if (size > 0 && !data) { v86gl_set_error(GL_INVALID_VALUE); return -1; }
+    do {
+        V86GLRecordQueryBufferData request;
+        uint8_t* args;
+        uint32_t chunk = size < 0 || offset < 0 ? 0u : (uint32_t)remaining;
+        uint32_t status, error;
+        if (chunk > 256u * 1024u) chunk = 256u * 1024u;
+        ZeroMemory(&request, sizeof(request));
+        request.target = target; request.offset = offset + copied;
+        request.size = size < 0 ? size : (int32_t)chunk; request.range_size = remaining; request.data_size = chunk;
+        if (!reserve_pci_record(GLFN_QUERY_BUFFER_DATA, NULL, sizeof(request) + chunk, &args)) return -1;
+        CopyMemory(args, &request, sizeof(request));
+        if (!emit_pci_batch(FALSE)) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+        status = read_u32le(args + offsetof(V86GLRecordQueryBufferData, status));
+        if (status == V86GL_SYNC_QUERY_STATUS_PENDING || status == V86GL_STATE_QUERY_UNSUPPORTED) return 0;
+        if (status != V86GL_SYNC_QUERY_STATUS_OK) {
+            error = read_u32le(args + offsetof(V86GLRecordQueryBufferData, error));
+            v86gl_set_error(error ? (GLenum)error : GL_INVALID_OPERATION); return -1;
+        }
+        if (chunk) CopyMemory((uint8_t*)data + copied, args + sizeof(request), chunk);
+        copied += chunk; remaining -= chunk;
+    } while (remaining > 0);
+    return 1;
+}
+
+static int emit_query_buffer_map(GLenum target, GLenum access, GLvoid* pointer) {
+    V86GLRecordQueryBufferMap request;
+    uint8_t* args; uint32_t status, error;
+    ZeroMemory(&request, sizeof(request));
+    request.target = target; request.access = access; request.pointer = (uint32_t)(uintptr_t)pointer;
+    if (!reserve_pci_record(GLFN_QUERY_BUFFER_MAP, NULL, sizeof(request), &args)) return -1;
+    CopyMemory(args, &request, sizeof(request));
+    if (!emit_pci_batch(FALSE)) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+    status = read_u32le(args + offsetof(V86GLRecordQueryBufferMap, status));
+    if (status == V86GL_SYNC_QUERY_STATUS_PENDING || status == V86GL_STATE_QUERY_UNSUPPORTED) return 0;
+    if (status != V86GL_SYNC_QUERY_STATUS_OK) {
+        error = read_u32le(args + offsetof(V86GLRecordQueryBufferMap, error));
+        v86gl_set_error(error ? (GLenum)error : GL_INVALID_OPERATION); return -1;
+    }
+    return 1;
+}
+
+static int emit_query_buffer_unmap(GLenum target, GLboolean* result) {
+    V86GLRecordQueryBufferUnmap request;
+    uint8_t* args; uint32_t status, error;
+    ZeroMemory(&request, sizeof(request)); request.target = target;
+    if (!reserve_pci_record(GLFN_QUERY_BUFFER_UNMAP, NULL, sizeof(request), &args)) return -1;
+    CopyMemory(args, &request, sizeof(request));
+    if (!emit_pci_batch(FALSE)) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+    status = read_u32le(args + offsetof(V86GLRecordQueryBufferUnmap, status));
+    if (status == V86GL_SYNC_QUERY_STATUS_PENDING || status == V86GL_STATE_QUERY_UNSUPPORTED) return 0;
+    if (status != V86GL_SYNC_QUERY_STATUS_OK) {
+        error = read_u32le(args + offsetof(V86GLRecordQueryBufferUnmap, error));
+        v86gl_set_error(error ? (GLenum)error : GL_INVALID_OPERATION); return -1;
+    }
+    *result = read_u32le(args + offsetof(V86GLRecordQueryBufferUnmap, result)) ? GL_TRUE : GL_FALSE;
+    return 1;
+}
+
 __declspec(dllexport)
 void APIENTRY glGetBufferSubDataARB(GLenum target, GLintptrARB offset,
                                     GLsizeiptrARB size, GLvoid* data) {
-    BufferObjectState* state = bound_buffer_state(target);
+    BufferObjectState* state;
+    if (emit_query_buffer_data(target, offset, size, data)) return;
+    state = bound_buffer_state(target);
     if (!state) return;
     if (offset < 0 || size < 0 || (size && !data) ||
         (uint32_t)offset > state->size || (uint32_t)size > state->size - (uint32_t)offset) {
@@ -12943,8 +13014,28 @@ GLboolean APIENTRY glIsBuffer(GLuint buffer) {
 }
 
 GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) {
-    BufferObjectState* state = bound_buffer_state(target);
+    BufferObjectState* state;
+    GLint cpu_size = 0, mapped = 0;
+    int cpu = emit_query_parameter(V86GL_PARAMETER_BUFFER, target, GL_BUFFER_SIZE_ARB, V86GL_STATE_INTEGER, &cpu_size);
+    if (cpu < 0) return NULL;
+    state = bound_buffer_state(target);
     if (!state) return NULL;
+    if (cpu > 0) {
+        if (access != GL_READ_ONLY_ARB && access != GL_WRITE_ONLY_ARB && access != GL_READ_WRITE_ARB) {
+            emit_query_buffer_map(target, access, NULL); return NULL;
+        }
+        if (emit_query_parameter(V86GL_PARAMETER_BUFFER, target, GL_BUFFER_MAPPED_ARB, V86GL_STATE_INTEGER, &mapped) < 1) return NULL;
+        if (mapped) { emit_query_buffer_map(target, access, state->data); return NULL; }
+        if (!state->data || state->size != (uint32_t)cpu_size) {
+            uint8_t* staging = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, cpu_size ? (SIZE_T)cpu_size : 1u);
+            if (!staging) { v86gl_set_error(GL_OUT_OF_MEMORY); return NULL; }
+            if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+            state->data = staging; state->size = (uint32_t)cpu_size;
+        }
+        if (emit_query_buffer_data(target, 0, cpu_size, state->data) < 1 || emit_query_buffer_map(target, access, state->data) < 1) return NULL;
+        state->mapped = TRUE; state->access = access;
+        return state->data;
+    }
     if (access != GL_READ_ONLY_ARB && access != GL_WRITE_ONLY_ARB && access != GL_READ_WRITE_ARB) {
         v86gl_set_error(GL_INVALID_ENUM);
         return NULL;
@@ -12960,13 +13051,16 @@ GLvoid* APIENTRY glMapBuffer(GLenum target, GLenum access) {
 
 GLboolean APIENTRY glUnmapBufferARB(GLenum target) {
     BufferObjectState* state = bound_buffer_state(target);
+    GLboolean result = GL_FALSE;
+    int cpu = emit_query_buffer_unmap(target, &result);
+    if (cpu < 0) return GL_FALSE;
     if (!state) return GL_FALSE;
     state->mapped = FALSE;
     if (state->data && state->size &&
         (state->access == GL_WRITE_ONLY_ARB || state->access == GL_READ_WRITE_ARB)) {
         emit_buffer_sub_data(target, 0, (GLsizeiptrARB)state->size, state->data);
     }
-    return GL_TRUE;
+    return cpu > 0 ? result : GL_TRUE;
 }
 
 GLboolean APIENTRY glUnmapBuffer(GLenum target) {
@@ -12993,7 +13087,13 @@ void APIENTRY glGetBufferParameteriv(GLenum target, GLenum pname, GLint* params)
 }
 
 void APIENTRY glGetBufferPointervARB(GLenum target, GLenum pname, GLvoid** params) {
-    BufferObjectState* state = bound_buffer_state(target);
+    BufferObjectState* state;
+    GLuint pointer = 0;
+    int cpu;
+    if (!params) return;
+    cpu = emit_query_parameter(V86GL_PARAMETER_BUFFER_POINTER, target, pname, V86GL_STATE_UNSIGNED_INT, &pointer);
+    if (cpu) { if (cpu > 0) *params = (GLvoid*)(uintptr_t)pointer; return; }
+    state = bound_buffer_state(target);
     if (!state || !params) return;
     if (pname != GL_BUFFER_MAP_POINTER_ARB) { v86gl_set_error(GL_INVALID_ENUM); return; }
     *params = state->mapped ? state->data : NULL;
@@ -13790,6 +13890,8 @@ void APIENTRY glGetCompressedTexImageARB(GLenum target, GLint level,
         destination = pack_pixel_pointer(image, state->data_size);
         if (!destination) return;
         CopyMemory(destination, state->data, state->data_size);
+        if (g_pixel_pack_buffer_binding)
+            emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)image, (GLsizeiptrARB)state->data_size, destination);
     }
 }
 
@@ -16006,6 +16108,8 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
     if (!emit_read_pixels(x, y, width, height, format, type, data_size, destination)) {
         ZeroMemory(destination, data_size);
         v86gl_set_error(GL_INVALID_OPERATION);
+    } else if (g_pixel_pack_buffer_binding) {
+        emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)pixels, (GLsizeiptrARB)data_size, destination);
     }
 }
 
@@ -18471,6 +18575,8 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
                        state->data + source_row * row_bytes, row_bytes);
         }
     }
+    if (g_pixel_pack_buffer_binding)
+        emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)pixels, (GLsizeiptrARB)destination_span, destination);
 }
 
 static GLint texture_component_bits(const TextureLevelState* state, GLenum pname) {

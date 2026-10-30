@@ -69,6 +69,7 @@
 #define V86GL_PARAMETER_TEXTURE 10u
 #define V86GL_PARAMETER_TEXTURE_LEVEL 11u
 #define V86GL_PARAMETER_BUFFER 12u
+#define V86GL_PARAMETER_BUFFER_POINTER 13u
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
@@ -317,9 +318,12 @@ enum {
     GLFN_QUERY_STATE = 219,
     GLFN_QUERY_PARAMETER = 220,
     GLFN_PRIORITIZE_TEXTURES = 221,
-    GLFN_PROGRAM_LINK_FAILED = 222
+    GLFN_PROGRAM_LINK_FAILED = 222,
+    GLFN_QUERY_BUFFER_DATA = 223,
+    GLFN_QUERY_BUFFER_MAP = 224,
+    GLFN_QUERY_BUFFER_UNMAP = 225
 };
-#define V86GL_OPCODE_COUNT 222u
+#define V86GL_OPCODE_COUNT 225u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -823,6 +827,30 @@ typedef struct V86GLRecordQueryParameter {
 typedef struct V86GLRecordPrioritizeTextures {
     int32_t count;
 } V86GLRecordPrioritizeTextures;
+typedef struct V86GLRecordQueryBufferData {
+    uint32_t target;
+    int32_t offset;
+    int32_t size;
+    int32_t range_size;
+    uint32_t status;
+    uint32_t data_size;
+    uint32_t error;
+    uint32_t reserved;
+} V86GLRecordQueryBufferData;
+typedef struct V86GLRecordQueryBufferMap {
+    uint32_t target;
+    uint32_t access;
+    uint32_t pointer;
+    uint32_t status;
+    uint32_t error;
+    uint32_t reserved;
+} V86GLRecordQueryBufferMap;
+typedef struct V86GLRecordQueryBufferUnmap {
+    uint32_t target;
+    uint32_t status;
+    uint32_t result;
+    uint32_t error;
+} V86GLRecordQueryBufferUnmap;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1325,6 +1353,27 @@ typedef char V86GLRecordQueryParameter_index[offsetof(V86GLRecordQueryParameter,
 typedef char V86GLRecordQueryParameter_reserved[offsetof(V86GLRecordQueryParameter, reserved) == 36 ? 1 : -1];
 typedef char V86GLRecordPrioritizeTexturesSize[sizeof(V86GLRecordPrioritizeTextures) == 4 ? 1 : -1];
 typedef char V86GLRecordPrioritizeTextures_count[offsetof(V86GLRecordPrioritizeTextures, count) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryBufferDataSize[sizeof(V86GLRecordQueryBufferData) == 32 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_target[offsetof(V86GLRecordQueryBufferData, target) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_offset[offsetof(V86GLRecordQueryBufferData, offset) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_size[offsetof(V86GLRecordQueryBufferData, size) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_range_size[offsetof(V86GLRecordQueryBufferData, range_size) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_status[offsetof(V86GLRecordQueryBufferData, status) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_data_size[offsetof(V86GLRecordQueryBufferData, data_size) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_error[offsetof(V86GLRecordQueryBufferData, error) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_reserved[offsetof(V86GLRecordQueryBufferData, reserved) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMapSize[sizeof(V86GLRecordQueryBufferMap) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMap_target[offsetof(V86GLRecordQueryBufferMap, target) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMap_access[offsetof(V86GLRecordQueryBufferMap, access) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMap_pointer[offsetof(V86GLRecordQueryBufferMap, pointer) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMap_status[offsetof(V86GLRecordQueryBufferMap, status) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMap_error[offsetof(V86GLRecordQueryBufferMap, error) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryBufferMap_reserved[offsetof(V86GLRecordQueryBufferMap, reserved) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryBufferUnmapSize[sizeof(V86GLRecordQueryBufferUnmap) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryBufferUnmap_target[offsetof(V86GLRecordQueryBufferUnmap, target) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryBufferUnmap_status[offsetof(V86GLRecordQueryBufferUnmap, status) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryBufferUnmap_result[offsetof(V86GLRecordQueryBufferUnmap, result) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryBufferUnmap_error[offsetof(V86GLRecordQueryBufferUnmap, error) == 12 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
