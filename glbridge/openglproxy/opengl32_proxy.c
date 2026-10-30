@@ -12933,6 +12933,8 @@ void APIENTRY glGetBufferSubData(GLenum target, GLintptrARB offset,
 }
 
 GLboolean APIENTRY glIsBufferARB(GLuint buffer) {
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_BUFFER, buffer, V86GL_STATE_BOOLEAN, &answer)) return answer;
     return find_buffer_state(buffer, FALSE) ? GL_TRUE : GL_FALSE;
 }
 
@@ -12972,7 +12974,10 @@ GLboolean APIENTRY glUnmapBuffer(GLenum target) {
 }
 
 void APIENTRY glGetBufferParameterivARB(GLenum target, GLenum pname, GLint* params) {
-    BufferObjectState* state = bound_buffer_state(target);
+    BufferObjectState* state;
+    if (!params) return;
+    if (emit_query_parameter(V86GL_PARAMETER_BUFFER, target, pname, V86GL_STATE_INTEGER, params)) return;
+    state = bound_buffer_state(target);
     if (!state || !params) return;
     switch (pname) {
     case GL_BUFFER_SIZE_ARB: params[0] = (GLint)state->size; break;

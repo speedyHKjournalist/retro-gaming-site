@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
-const names = ["glIsShader", "glIsProgram", "glIsTexture", "glIsRenderbufferEXT", "glIsFramebufferEXT"];
+const names = ["glIsShader", "glIsProgram", "glIsTexture", "glIsRenderbufferEXT", "glIsFramebufferEXT", "glIsBufferARB"];
 function body(name) {
     const start = source.indexOf("GLboolean APIENTRY " + name + "("); assert.ok(start >= 0);
     let end = source.indexOf("{", start) + 1, depth = 1;
@@ -41,12 +41,13 @@ static ShaderObjectState* find_shader_state(GLuint n, int create, int type) { (v
 static void* find_framebuffer_state(GLuint n, int create) { (void)n; (void)create; return &program; }
 static void* find_renderbuffer_state(GLuint n, int create) { (void)n; (void)create; return &program; }
 static TextureObjectState* lookup_texture_state(GLuint n) { (void)n; return &texture; }
+static void* find_buffer_state(GLuint n, int create) { (void)n; (void)create; return &program; }
 ${names.map(body).join("\n")}
 int main(void) {
-    GLboolean (*getters[])(GLuint) = {glIsShader, glIsProgram, glIsTexture, glIsRenderbufferEXT, glIsFramebufferEXT};
+    GLboolean (*getters[])(GLuint) = {glIsShader, glIsProgram, glIsTexture, glIsRenderbufferEXT, glIsFramebufferEXT, glIsBufferARB};
     unsigned int kinds[] = {V86GL_OBJECT_KIND_SHADER, V86GL_OBJECT_KIND_PROGRAM, V86GL_OBJECT_KIND_TEXTURE,
-        V86GL_OBJECT_KIND_RENDERBUFFER, V86GL_OBJECT_KIND_FRAMEBUFFER};
-    for (unsigned int i = 0; i < 5; ++i) {
+        V86GL_OBJECT_KIND_RENDERBUFFER, V86GL_OBJECT_KIND_FRAMEBUFFER, V86GL_OBJECT_KIND_BUFFER};
+    for (unsigned int i = 0; i < 6; ++i) {
         expected_kind = kinds[i]; expected_name = 7;
         query_result = 1; query_value = 0; assert(getters[i](7) == 0);
         query_value = 1; assert(getters[i](7) == 1);
@@ -54,12 +55,12 @@ int main(void) {
         query_result = 0; assert(getters[i](7) == 1); /* older unsupported hosts only */
         expected_name = 0; query_result = 1; query_value = 0; assert(getters[i](0) == 0);
     }
-    assert(asked == 25); return 0;
+    assert(asked == 30); return 0;
 }
 `;
     fs.writeFileSync(path.join(dir, "test.c"), code);
     execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-I",
         path.join(__dirname, "../openglproxy"), path.join(dir, "test.c"), "-o", path.join(dir, "test")]);
     execFileSync(path.join(dir, "test"));
-    console.log("gl_object_query_abi_test: five actual C IsObject getters use CPU answers, including false, failure and zero names (passed)");
+    console.log("gl_object_query_abi_test: six actual C IsObject getters use CPU answers, including false, failure and zero names (passed)");
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
