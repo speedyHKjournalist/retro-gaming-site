@@ -6239,14 +6239,6 @@ static uint32_t gl_pixel_span_3d(GLsizei width, GLsizei height, GLsizei depth,
                                        g_unpack_image_height, g_unpack_skip_images);
 }
 
-static uint32_t gl_read_pixel_span_3d(GLsizei width, GLsizei height, GLsizei depth,
-                                      GLenum format, GLenum type) {
-    return gl_pixel_span_3d_with_state(width, height, depth, format, type,
-                                       g_pack_alignment, g_pack_row_length,
-                                       g_pack_skip_rows, g_pack_skip_pixels,
-                                       g_pack_image_height, g_pack_skip_images);
-}
-
 static uint32_t gl_bitmap_span(GLsizei width, GLsizei height) {
     uint32_t row_bits;
     uint32_t row_bytes;
@@ -6939,74 +6931,7 @@ static int read_framebuffer_tight(GLint x, GLint y, GLsizei width, GLsizei heigh
     return ok;
 }
 
-/* Refresh a texture level from the currently bound colour FBO when that
- * exact level is its attachment. The proxy has no glGetTexImage path, but WineD3D's
- * capability probes read a texture immediately after drawing to its bound
- * FBO. Returning the upload-only CPU cache here makes match_fbo_tex_update()
- * report a nonexistent driver bug and selects the wrong render-target path. */
-static int refresh_bound_fbo_texture_cache(TextureObjectState* texture,
-                                           GLenum target, GLint level,
-                                           TextureLevelState* state,
-                                           GLenum format, GLenum type) {
-    FramebufferObjectState* framebuffer;
-    FramebufferAttachmentState* attachment;
-    uint32_t slice_size;
-    uint32_t slice_index = 0;
-    uint8_t* tight;
 
-    if (!texture || !state || !g_draw_framebuffer_binding) {
-        return 0;
-    }
-    framebuffer = find_framebuffer_state(g_draw_framebuffer_binding, FALSE);
-    if (!framebuffer) {
-        return 0;
-    }
-    attachment = &framebuffer->attachments[0]; /* GL_COLOR_ATTACHMENT0 */
-    if (attachment->object_type != GL_TEXTURE ||
-        attachment->object_name != texture->name ||
-        attachment->texture_target != target ||
-        attachment->texture_level != level) {
-        return 0;
-    }
-    if (target == GL_TEXTURE_3D) {
-        if (attachment->texture_zoffset < 0 ||
-            attachment->texture_zoffset >= state->depth) {
-            v86gl_set_error(GL_INVALID_OPERATION);
-            return -1;
-        }
-        slice_index = (uint32_t)attachment->texture_zoffset;
-    }
-
-    slice_size = gl_pixel_tight_span(state->width, state->height, format, type);
-    if (!slice_size || slice_size > state->data_size ||
-        (uint64_t)slice_index * slice_size + slice_size > state->data_size) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return -1;
-    }
-    tight = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, slice_size);
-    if (!tight) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return -1;
-    }
-    if (!read_framebuffer_tight(0, 0, state->width, state->height,
-                                format, type, tight, slice_size)) {
-        HeapFree(GetProcessHeap(), 0, tight);
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return -1;
-    }
-    if (!state->data) {
-        state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                                          state->data_size);
-        if (!state->data) {
-            HeapFree(GetProcessHeap(), 0, tight);
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return -1;
-        }
-    }
-    CopyMemory(state->data + slice_index * slice_size, tight, slice_size);
-    HeapFree(GetProcessHeap(), 0, tight);
-    return 1;
-}
 
 typedef struct TextureSubImageCapture {
     BOOL valid;
@@ -13900,21 +13825,58 @@ void APIENTRY glCompressedTexImage3DARB(GLenum target, GLint level,
                               image_size, data);
 }
 
+static void emit_texture_image_query(GLenum target, GLint level, GLenum format,
+                                      GLenum type, BOOL compressed, GLvoid* pixels) {
+    uint32_t request[17] = {0};
+    uint32_t span, ticket, context_id, offset, count;
+    uint8_t* args;
+    GLvoid* destination;
+    request[0] = target; request[1] = (uint32_t)level;
+    request[2] = format; request[3] = type; request[4] = compressed;
+    request[6] = (uint32_t)(uintptr_t)pixels;
+    if (g_dma_size && !emit_pci_batch(FALSE)) return;
+    if (!reserve_pci_record(GLFN_QUERY_TEXTURE_IMAGE, request, sizeof(request), &args)) return;
+    CopyMemory(args, request, sizeof(request));
+    if (!emit_pci_batch(FALSE)) return;
+    if (!wait_for_host_status(args + 44, "glGetTexImage metadata")) {
+        v86gl_set_error(read_u32le(args + 48) ? read_u32le(args + 48) : GL_INVALID_OPERATION);
+        return;
+    }
+    span = read_u32le(args + 36); ticket = read_u32le(args + 40);
+    context_id = read_u32le(args + 64);
+    if (!span) return;
+    destination = pack_pixel_pointer(pixels, span);
+    if (!destination) goto cancel;
+    for (offset = 0; offset < span; offset += count) {
+        count = span - offset;
+        if (count > 262144u) count = 262144u;
+        request[5] = offset + count == span ? 2u : 1u;
+        request[7] = offset; request[8] = count;
+        request[10] = ticket; request[16] = context_id;
+        if (!reserve_pci_record(GLFN_QUERY_TEXTURE_IMAGE, NULL, sizeof(request) + count, &args)) goto cancel;
+        CopyMemory(args, request, sizeof(request));
+        CopyMemory(args + sizeof(request), (uint8_t*)destination + offset, count);
+        if (!emit_pci_batch(FALSE)) goto cancel;
+        if (!wait_for_host_status(args + 44, "glGetTexImage data")) {
+            v86gl_set_error(read_u32le(args + 48) ? read_u32le(args + 48) : GL_INVALID_OPERATION);
+            goto cancel;
+        }
+        CopyMemory((uint8_t*)destination + offset, args + sizeof(request), count);
+    }
+    if (g_pixel_pack_buffer_binding)
+        emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)pixels, (GLsizeiptrARB)span, destination);
+    return;
+cancel:
+    request[5] = 3; request[8] = 0; request[10] = ticket; request[16] = context_id;
+    if (reserve_pci_record(GLFN_QUERY_TEXTURE_IMAGE, NULL, sizeof(request), &args)) {
+        CopyMemory(args, request, sizeof(request));
+        emit_pci_batch(FALSE);
+    }
+}
+
 void APIENTRY glGetCompressedTexImageARB(GLenum target, GLint level,
                                          GLvoid* image) {
-    TextureLevelState* state = texture_level_state(target, level, FALSE);
-    GLvoid* destination;
-
-    if (!state || !state->defined || !state->compressed ||
-        (state->data_size && !state->data)) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-    } else if (state->data_size) {
-        destination = pack_pixel_pointer(image, state->data_size);
-        if (!destination) return;
-        CopyMemory(destination, state->data, state->data_size);
-        if (g_pixel_pack_buffer_binding)
-            emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)image, (GLsizeiptrARB)state->data_size, destination);
-    }
+    emit_texture_image_query(target, level, 0, 0, TRUE, image);
 }
 
 void APIENTRY glCompressedTexImage1D(GLenum target, GLint level,
@@ -18536,73 +18498,7 @@ void APIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble* params) {
 
 __declspec(dllexport)
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
-    TextureObjectState* texture;
-    TextureLevelState* state;
-    uint32_t pixel_bytes;
-    uint32_t destination_span;
-    uint32_t destination_stride;
-    uint32_t destination_image_stride;
-    uint32_t destination_offset;
-    uint64_t destination_offset_64;
-    uint32_t row_bytes;
-    uint64_t source_size;
-    GLsizei z;
-    GLsizei row;
-    GLvoid* destination;
-
-    texture = bound_texture_state(target, FALSE);
-    if (!texture) return;
-    state = texture_level_state(target, level, FALSE);
-    if (!state) return;
-    if (!state->defined) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-    if (!state->width || !state->height || !state->depth) return;
-    pixel_bytes = gl_pixel_bytes(format, type);
-    destination_span = gl_read_pixel_span_3d(state->width, state->height, state->depth,
-                                             format, type);
-    destination_stride = gl_pixel_row_stride(state->width, format, type,
-                                             g_pack_alignment, g_pack_row_length);
-    destination_image_stride = gl_pixel_image_stride(state->width, state->height,
-                                                      format, type, g_pack_alignment,
-                                                      g_pack_row_length, g_pack_image_height);
-    destination_offset_64 = (uint64_t)(g_pack_skip_images > 0 ? g_pack_skip_images : 0) *
-                            destination_image_stride +
-                            (uint64_t)(g_pack_skip_rows > 0 ? g_pack_skip_rows : 0) *
-                            destination_stride +
-                            (uint64_t)(g_pack_skip_pixels > 0 ? g_pack_skip_pixels : 0) * pixel_bytes;
-    if (!pixel_bytes || !destination_span || !destination_stride || !destination_image_stride ||
-        destination_offset_64 > UINT32_MAX ||
-        state->format != format || state->type != type) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (refresh_bound_fbo_texture_cache(texture, target, level, state,
-                                        format, type) < 0) {
-        return;
-    }
-    destination_offset = (uint32_t)destination_offset_64;
-    destination = pack_pixel_pointer(pixels, destination_span);
-    if (!destination) return;
-    if (!state->data) return;
-    row_bytes = (uint32_t)state->width * pixel_bytes;
-    source_size = (uint64_t)(uint32_t)state->width * (uint32_t)state->height *
-                  (uint32_t)state->depth * pixel_bytes;
-    if (source_size > state->data_size) {
-        return;
-    }
-    for (z = 0; z < state->depth; z++) {
-        for (row = 0; row < state->height; row++) {
-            uint32_t source_row = (uint32_t)z * (uint32_t)state->height + (uint32_t)row;
-            CopyMemory((uint8_t*)destination + destination_offset +
-                       (uint32_t)z * destination_image_stride +
-                       (uint32_t)row * destination_stride,
-                       state->data + source_row * row_bytes, row_bytes);
-        }
-    }
-    if (g_pixel_pack_buffer_binding)
-        emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER, (GLintptrARB)(uintptr_t)pixels, (GLsizeiptrARB)destination_span, destination);
+    emit_texture_image_query(target, level, format, type, FALSE, pixels);
 }
 
 static GLint texture_component_bits(const TextureLevelState* state, GLenum pname) {

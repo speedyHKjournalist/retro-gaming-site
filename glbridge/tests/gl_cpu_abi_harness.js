@@ -8,6 +8,7 @@ require(hostPath("gl-webgpu/gl_shadow_names.js"));
 require(hostPath("gl-webgpu/gl_shadow_queries.js"));
 require(hostPath("gl-webgpu/gl_shadow_arb.js"));
 require(hostPath("gl-webgpu/gl_shadow_glsl.js"));
+require(hostPath("gl-webgpu/gl_shadow_textures.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
 const { GLStream, GL } = require(testPath("gl_stream_builder.js"));
@@ -40,7 +41,7 @@ static void emit_gl_call(uint16_t opcode,const void* payload,uint32_t size) {
     uint8_t* args; reserve_pci_record(opcode,NULL,size,&args); if(size)memcpy(args,payload,size); assert(emit_pci_batch(0));
 }
 `;
-async function run(code, check) {
+async function run(code, check, configure) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-cpu-abi-"));
     try {
         fs.writeFileSync(path.join(dir, "test.c"), code);
@@ -49,6 +50,7 @@ async function run(code, check) {
             const shadow = new GLShadow(), { host } = createFakeHost(), gpu = new GLWebGPUExecutor(null, { host, strict: true }); await gpu.initialize();
             gpu.options.writeGuestMemory = (offset, data, metadata) => metadata.guestBytes.set(data, offset);
             const initial = new GLStream().makeCurrent(1, 0, 0, 64, 64, 1, 1).bytes(); shadow.process(initial); gpu.submit(initial, {});
+            if (configure) configure(shadow, gpu);
             const child = spawn(path.join(dir, "test")); let pending = Buffer.alloc(0), stderr = "", failure, count = 0;
             child.stderr.on("data", b => { stderr += b; });
             child.stdout.on("data", bytes => {
@@ -58,6 +60,7 @@ async function run(code, check) {
                     shadow.process(command); const answered = command.slice(), view = new DataView(command.buffer);
                     const fn = view.getUint16(0, true), at = view.getUint16(2, true) === 0xFFFF ? 8 : 4;
                     const query = fn === P.GLFN.QUERY_OBJECT_BATCH ? "QUERY_OBJECT_BATCH" :
+                        fn === P.GLFN.QUERY_TEXTURE_IMAGE ? "QUERY_TEXTURE_IMAGE" :
                         fn === P.GLFN.QUERY_OBJECT_IV && view.getUint32(at + P.F.QUERY_OBJECT_IV.object_kind, true) === P.C.V86GL_OBJECT_KIND_QUERY ? "QUERY_OBJECT_IV" : null;
                     const cpuAnswered = !query || view.getUint32(at + P.F[query].status, true) !== P.C.V86GL_SYNC_QUERY_STATUS_PENDING;
                     gpu.submit(copied ? command.slice() : command, { guestBytes: command });

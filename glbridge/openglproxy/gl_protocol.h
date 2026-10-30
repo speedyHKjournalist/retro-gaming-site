@@ -332,9 +332,10 @@ enum {
     GLFN_FRAMEBUFFER_TEXTURE_1D = 229,
     GLFN_FRAMEBUFFER_TEXTURE_2D = 230,
     GLFN_FRAMEBUFFER_TEXTURE_3D = 231,
-    GLFN_BIND_FRAMEBUFFER_EXT = 232
+    GLFN_BIND_FRAMEBUFFER_EXT = 232,
+    GLFN_QUERY_TEXTURE_IMAGE = 233
 };
-#define V86GL_OPCODE_COUNT 232u
+#define V86GL_OPCODE_COUNT 233u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -882,6 +883,25 @@ typedef struct V86GLRecordQueryNames {
     uint32_t data_size;
     uint32_t reserved;
 } V86GLRecordQueryNames;
+typedef struct V86GLRecordQueryTextureImage {
+    uint32_t target;
+    int32_t level;
+    uint32_t format;
+    uint32_t type;
+    uint32_t compressed;
+    uint32_t mode;
+    uint32_t pointer;
+    uint32_t offset;
+    uint32_t data_size;
+    uint32_t span;
+    uint32_t ticket;
+    uint32_t status;
+    uint32_t error;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth;
+    uint32_t context_id;
+} V86GLRecordQueryTextureImage;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1422,6 +1442,24 @@ typedef char V86GLRecordQueryNames_status[offsetof(V86GLRecordQueryNames, status
 typedef char V86GLRecordQueryNames_error[offsetof(V86GLRecordQueryNames, error) == 12 ? 1 : -1];
 typedef char V86GLRecordQueryNames_data_size[offsetof(V86GLRecordQueryNames, data_size) == 16 ? 1 : -1];
 typedef char V86GLRecordQueryNames_reserved[offsetof(V86GLRecordQueryNames, reserved) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImageSize[sizeof(V86GLRecordQueryTextureImage) == 68 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_target[offsetof(V86GLRecordQueryTextureImage, target) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_level[offsetof(V86GLRecordQueryTextureImage, level) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_format[offsetof(V86GLRecordQueryTextureImage, format) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_type[offsetof(V86GLRecordQueryTextureImage, type) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_compressed[offsetof(V86GLRecordQueryTextureImage, compressed) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_mode[offsetof(V86GLRecordQueryTextureImage, mode) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_pointer[offsetof(V86GLRecordQueryTextureImage, pointer) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_offset[offsetof(V86GLRecordQueryTextureImage, offset) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_data_size[offsetof(V86GLRecordQueryTextureImage, data_size) == 32 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_span[offsetof(V86GLRecordQueryTextureImage, span) == 36 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_ticket[offsetof(V86GLRecordQueryTextureImage, ticket) == 40 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_status[offsetof(V86GLRecordQueryTextureImage, status) == 44 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_error[offsetof(V86GLRecordQueryTextureImage, error) == 48 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_width[offsetof(V86GLRecordQueryTextureImage, width) == 52 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_height[offsetof(V86GLRecordQueryTextureImage, height) == 56 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_depth[offsetof(V86GLRecordQueryTextureImage, depth) == 60 ? 1 : -1];
+typedef char V86GLRecordQueryTextureImage_context_id[offsetof(V86GLRecordQueryTextureImage, context_id) == 64 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
