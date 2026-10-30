@@ -12,6 +12,7 @@ require(hostPath("gl-webgpu/gl_shadow_objects.js"));
 require(hostPath("gl-webgpu/gl_shadow_state.js"));
 require(hostPath("gl-webgpu/gl_shadow_raster.js"));
 require(hostPath("gl-webgpu/gl_shadow_fixed.js"));
+require(hostPath("gl-webgpu/gl_shadow_misc.js"));
 const caps = require(hostPath("gl-webgpu/gl_caps.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
@@ -104,6 +105,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_DOUBLE, GL.STENCIL_VALUE_MASK, [4294967295]],
         [P.C.V86GL_STATE_IS_ENABLED, GL.DITHER, [1]],
         [P.C.V86GL_STATE_IS_ENABLED, GL.BLEND, [0]],
+        [P.C.V86GL_STATE_INTEGER, GL.FOG_COLOR, [1073741823, 0, 2147483647, 536870911]],
+        [P.C.V86GL_STATE_DOUBLE, GL.POINT_DISTANCE_ATTENUATION, [1, 2, 3]],
+        [P.C.V86GL_STATE_INTEGER, GL.INDEX_SHIFT, [3]],
         [P.C.V86GL_STATE_DOUBLE, GL.MODELVIEW_MATRIX, [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1]],
         [P.C.V86GL_STATE_DOUBLE, GL.POSITION, [7, 12, 19, 1], P.C.V86GL_PARAMETER_LIGHT, GL.LIGHT0 + 2],
         [P.C.V86GL_STATE_INTEGER, GL.DIFFUSE, [2147483647, 0, 1073741823, 2147483647], P.C.V86GL_PARAMETER_MATERIAL, GL.BACK],
@@ -122,6 +126,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
             .call("MATERIALIV", GL.BACK, GL.DIFFUSE, 4, 2147483647, 0, 1073741824, 2147483647)
             .call("TEX_ENVIV", GL.TEXTURE_ENV, GL.TEXTURE_ENV_COLOR, 4, 2147483647, 0, 1073741824, 2147483647)
             .call("TEX_GENFV", GL.S, GL.OBJECT_PLANE, 4, 1, 2, 3, 4).call("CLIP_PLANE", GL.CLIP_PLANE0, 1, 0, 0, 0);
+        s.call("FOGFV", GL.FOG_COLOR, 4, 0.5, 0, 1, 0.25).call("POINT_PARAMETERIV", GL.POINT_DISTANCE_ATTENUATION, 1, 2, 3)
+            .call("PIXEL_TRANSFERF", GL.INDEX_SHIFT, 2.75);
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});

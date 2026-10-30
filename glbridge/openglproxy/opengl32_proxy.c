@@ -17458,10 +17458,13 @@ void APIENTRY glPointParameterfv(GLenum pname, const GLfloat* params) {
         return;
     }
 
+    ZeroMemory(&payload, sizeof(payload));
     payload.pname = (uint32_t)pname;
     payload.values[0] = params[0];
-    payload.values[1] = params[1];
-    payload.values[2] = params[2];
+    if (pname == GL_POINT_DISTANCE_ATTENUATION_ARB) {
+        payload.values[1] = params[1];
+        payload.values[2] = params[2];
+    }
     emit_gl_call(GLFN_POINT_PARAMETERFV, &payload, sizeof(payload));
 }
 
@@ -17484,10 +17487,13 @@ void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) {
         return;
     }
 
+    ZeroMemory(&payload, sizeof(payload));
     payload.pname = (uint32_t)pname;
     payload.values[0] = params[0];
-    payload.values[1] = params[1];
-    payload.values[2] = params[2];
+    if (pname == GL_POINT_DISTANCE_ATTENUATION_ARB) {
+        payload.values[1] = params[1];
+        payload.values[2] = params[2];
+    }
     emit_gl_call(GLFN_POINT_PARAMETERIV, &payload, sizeof(payload));
 }
 
@@ -18221,7 +18227,8 @@ void APIENTRY glFogiv(GLenum pname, const GLint* params) {
     }
 
     for (i = 0; i < count; i++) {
-        values[i] = (GLfloat)params[i];
+        values[i] = pname == GL_FOG_COLOR ? (params[i] == (-2147483647 - 1) ? -1.0f :
+            (GLfloat)((GLdouble)params[i] / 2147483647.0)) : (GLfloat)params[i];
     }
 
     glFogfv(pname, values);
