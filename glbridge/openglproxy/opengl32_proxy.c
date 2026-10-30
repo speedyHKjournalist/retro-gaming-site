@@ -12361,11 +12361,41 @@ void APIENTRY glGetVertexAttribPointervARB(GLuint index, GLenum pname, GLvoid** 
     glGetVertexAttribPointerv(index, pname, pointer);
 }
 
+static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuint* names) {
+    GLsizei generated = 0;
+    if (count > 0 && !names) { v86gl_set_error(GL_INVALID_VALUE); return -1; }
+    do {
+        V86GLRecordQueryNames request;
+        GLsizei chunk = count < 0 ? count : count - generated;
+        uint8_t* args; uint32_t status, error, data_size;
+        if (chunk > 65536) chunk = 65536;
+        data_size = chunk > 0 ? (uint32_t)chunk * sizeof(GLuint) : 0;
+        ZeroMemory(&request, sizeof(request)); request.object_kind = kind; request.count = chunk; request.data_size = data_size;
+        if (!reserve_pci_record(GLFN_QUERY_NAMES, NULL, sizeof(request) + data_size, &args)) return -1;
+        CopyMemory(args, &request, sizeof(request));
+        if (!emit_pci_batch(FALSE)) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+        status = read_u32le(args + offsetof(V86GLRecordQueryNames, status));
+        if (status == V86GL_SYNC_QUERY_STATUS_PENDING || status == V86GL_STATE_QUERY_UNSUPPORTED) return 0;
+        if (status != V86GL_SYNC_QUERY_STATUS_OK) {
+            error = read_u32le(args + offsetof(V86GLRecordQueryNames, error));
+            v86gl_set_error(error ? (GLenum)error : GL_INVALID_OPERATION); return -1;
+        }
+        if (chunk > 0) {
+            CopyMemory(names + generated, args + sizeof(request), data_size);
+            emit_name_array_call(opcode, chunk, names + generated);
+            generated += chunk;
+        }
+    } while (generated < count);
+    return 1;
+}
+
 __declspec(dllexport)
 void APIENTRY glGenTextures(GLsizei n, GLuint* textures) {
     uint32_t total_size;
     uint8_t* payload;
     GLint i;
+
+    if (emit_query_names(V86GL_OBJECT_KIND_TEXTURE, GLFN_GEN_TEXTURES, n, textures)) return;
 
     if (n < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
@@ -12492,6 +12522,7 @@ static void emit_buffer_sub_data(GLenum target, GLintptrARB offset,
 
 void APIENTRY glGenBuffersARB(GLsizei n, GLuint* buffers) {
     GLsizei i;
+    if (emit_query_names(V86GL_OBJECT_KIND_BUFFER, GLFN_GEN_BUFFERS, n, buffers)) return;
     if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!buffers) return;
     for (i = 0; i < n; i++) {
@@ -13136,6 +13167,8 @@ static void emit_name_array_call(uint16_t fn, GLsizei n, const GLuint* names) {
 void APIENTRY glGenFramebuffersEXT(GLsizei n, GLuint* framebuffers) {
     GLsizei i;
 
+    if (emit_query_names(V86GL_OBJECT_KIND_FRAMEBUFFER, GLFN_GEN_FRAMEBUFFERS, n, framebuffers)) return;
+
     if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!framebuffers || !n) return;
     for (i = 0; i < n; i++) {
@@ -13453,6 +13486,8 @@ void APIENTRY glGetFramebufferAttachmentParameteriv(GLenum target,
 
 void APIENTRY glGenRenderbuffersEXT(GLsizei n, GLuint* renderbuffers) {
     GLsizei i;
+
+    if (emit_query_names(V86GL_OBJECT_KIND_RENDERBUFFER, GLFN_GEN_RENDERBUFFERS, n, renderbuffers)) return;
 
     if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!renderbuffers || !n) return;

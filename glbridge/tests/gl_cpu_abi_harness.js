@@ -4,11 +4,14 @@ const { execFileSync, spawn } = require("node:child_process");
 const { hostPath, testPath } = require("./host_paths.js");
 const { GLShadow } = require(hostPath("gl-webgpu/gl_shadow.js"));
 require(hostPath("gl-webgpu/gl_shadow_objects.js")); require(hostPath("gl-webgpu/gl_shadow_images.js")); require(hostPath("gl-webgpu/gl_shadow_arrays.js"));
+require(hostPath("gl-webgpu/gl_shadow_names.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
 const { GLStream, GL } = require(testPath("gl_stream_builder.js"));
 function body(source, name, prefix) {
-    const at = source.indexOf(prefix + name + "("); assert.ok(at >= 0, name);
+    let at = source.indexOf(prefix + name + "(");
+    while (at >= 0 && source.indexOf(";", at) < source.indexOf("{", at)) at = source.indexOf(prefix + name + "(", at + 1);
+    assert.ok(at >= 0, name);
     let end = source.indexOf("{", at) + 1, depth = 1;
     for (; depth; ++end) { if (source[end] === "{") ++depth; if (source[end] === "}") --depth; }
     return source.slice(at, end);
