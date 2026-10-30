@@ -319,6 +319,9 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_TEXTURE_1D         0x0DE0
 #define GL_TEXTURE_2D         0x0DE1
 #define GL_TEXTURE_3D         0x806F
+#define GL_PROXY_TEXTURE_1D   0x8063
+#define GL_PROXY_TEXTURE_2D   0x8064
+#define GL_PROXY_TEXTURE_3D   0x8070
 #define GL_TEXTURE_WRAP_R     0x8072
 #define GL_TEXTURE_BINDING_1D 0x8068
 #define GL_POLYGON_OFFSET_FILL 0x8037
@@ -6348,6 +6351,30 @@ static void clear_texture_level(TextureLevelState* state) {
         HeapFree(GetProcessHeap(), 0, state->data);
     }
     ZeroMemory(state, sizeof(*state));
+}
+
+static BOOL is_proxy_texture_target(GLenum target) {
+    return target == GL_PROXY_TEXTURE_1D || target == GL_PROXY_TEXTURE_2D ||
+           target == GL_PROXY_TEXTURE_3D || target == GL_PROXY_TEXTURE_CUBE_MAP;
+}
+
+/* Probes contain metadata only. In particular, neither a client pointer nor
+ * an unpack-buffer offset may be read, mapped, cached or copied. */
+static BOOL emit_proxy_texture_image(uint16_t opcode, GLenum target, GLint level,
+                                     GLint internalformat, GLsizei width, GLsizei height,
+                                     GLsizei depth, GLint border, GLenum format, GLenum type) {
+    if (!is_proxy_texture_target(target)) return FALSE;
+    if (opcode == GLFN_TEX_IMAGE_1D) {
+        V86GLRecordTexImage1d image = {target, level, internalformat, width, border, format, type, 0};
+        emit_gl_call(opcode, &image, sizeof(image));
+    } else if (opcode == GLFN_TEX_IMAGE_2D) {
+        V86GLRecordTexImage2d image = {target, level, internalformat, width, height, border, format, type, 0};
+        emit_gl_call(opcode, &image, sizeof(image));
+    } else {
+        V86GLRecordTexImage3d image = {target, level, internalformat, width, height, depth, border, format, type, 0};
+        emit_gl_call(opcode, &image, sizeof(image));
+    }
+    return TRUE;
 }
 
 static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
@@ -13523,17 +13550,8 @@ __declspec(dllexport)
 void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLsizei height, GLint border,
                            GLenum format, GLenum type, const GLvoid* pixels) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t internalformat;
-        int32_t width;
-        int32_t height;
-        int32_t border;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    if (emit_proxy_texture_image(GLFN_TEX_IMAGE_2D, target, level, internalformat, width, height, 1, border, format, type)) return;
+    V86GLRecordTexImage2d meta;
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
     uint32_t data_size = has_pixels ? gl_pixel_span(width, height, format, type) : 0;
     uint32_t total_size = sizeof(meta) + data_size;
@@ -13593,6 +13611,11 @@ static void emit_compressed_tex_image(uint16_t opcode, GLenum target, GLint leve
 
     if (image_size < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (is_proxy_texture_target(target)) {
+        V86GLRecordCompressedTexImage2d image = {target, level, internalformat, width, height, depth, border, (uint32_t)image_size};
+        emit_gl_call(opcode, &image, sizeof(image));
         return;
     }
     pixel_data = unpack_pixel_pointer(data, (uint32_t)image_size);
@@ -13832,18 +13855,8 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
                               GLsizei width, GLsizei height, GLsizei depth,
                               GLint border, GLenum format, GLenum type,
                               const GLvoid* pixels) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t internalformat;
-        int32_t width;
-        int32_t height;
-        int32_t depth;
-        int32_t border;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    if (emit_proxy_texture_image(GLFN_TEX_IMAGE_3D, target, level, internalformat, width, height, depth, border, format, type)) return;
+    V86GLRecordTexImage3d meta;
     uint32_t data_size = 0;
     uint32_t total_size;
     uint8_t* payload;
@@ -18703,16 +18716,8 @@ __declspec(dllexport)
 void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLint border,
                            GLenum format, GLenum type, const GLvoid* pixels) {
-    struct {
-        uint32_t target;
-        int32_t level;
-        int32_t internalformat;
-        int32_t width;
-        int32_t border;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    if (emit_proxy_texture_image(GLFN_TEX_IMAGE_1D, target, level, internalformat, width, 1, 1, border, format, type)) return;
+    V86GLRecordTexImage1d meta;
     uint32_t data_size;
     uint32_t total_size;
     uint8_t* payload;
