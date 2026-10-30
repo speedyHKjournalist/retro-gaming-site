@@ -60,6 +60,15 @@ submission; dedicated D3D response slots keep their arena lifetime. The
 native `gl_async_wait_abi_test.js` covers progress, silence, tick-counter
 wrap and command-capacity boundaries.
 
+The CPU selection/feedback path now receives actual GLSL/ARB vertex outputs
+from bounded GPU compute jobs. Names, clipping, hit ordering, feedback tokens
+and result tickets remain CPU state. `glRenderMode` uses the existing pending
+status wait and chunk reader for these asynchronous results in either mode;
+`gl_selection_program_abi_test.js` runs the actual C APIs against that path.
+The regenerated header includes internal opcode 242; guest-supplied captures
+are rejected. Programmable RasterPos and full GPU snapshot restoration remain
+in v86's phase C work.
+
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving
 record sizes and inline response addresses; the page preserves their GL

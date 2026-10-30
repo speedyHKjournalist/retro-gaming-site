@@ -344,9 +344,10 @@ enum {
     GLFN_LIST_CALLS = 238,
     GLFN_QUERY_RENDER_MODE = 239,
     GLFN_NAME_COMMAND = 240,
-    GLFN_RESOLVED_RASTER_STATE = 241
+    GLFN_RESOLVED_RASTER_STATE = 241,
+    GLFN_CAPTURE_VERTICES = 242
 };
-#define V86GL_OPCODE_COUNT 241u
+#define V86GL_OPCODE_COUNT 242u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -973,6 +974,12 @@ typedef struct V86GLRecordResolvedRasterState {
     float position[4];
     float color[4];
 } V86GLRecordResolvedRasterState;
+typedef struct V86GLRecordCaptureVertices {
+    uint32_t job;
+    uint32_t first;
+    uint32_t count;
+    uint32_t total;
+} V86GLRecordCaptureVertices;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1583,6 +1590,11 @@ typedef char V86GLRecordResolvedRasterStateSize[sizeof(V86GLRecordResolvedRaster
 typedef char V86GLRecordResolvedRasterState_valid[offsetof(V86GLRecordResolvedRasterState, valid) == 0 ? 1 : -1];
 typedef char V86GLRecordResolvedRasterState_position[offsetof(V86GLRecordResolvedRasterState, position) == 4 ? 1 : -1];
 typedef char V86GLRecordResolvedRasterState_color[offsetof(V86GLRecordResolvedRasterState, color) == 20 ? 1 : -1];
+typedef char V86GLRecordCaptureVerticesSize[sizeof(V86GLRecordCaptureVertices) == 16 ? 1 : -1];
+typedef char V86GLRecordCaptureVertices_job[offsetof(V86GLRecordCaptureVertices, job) == 0 ? 1 : -1];
+typedef char V86GLRecordCaptureVertices_first[offsetof(V86GLRecordCaptureVertices, first) == 4 ? 1 : -1];
+typedef char V86GLRecordCaptureVertices_count[offsetof(V86GLRecordCaptureVertices, count) == 8 ? 1 : -1];
+typedef char V86GLRecordCaptureVertices_total[offsetof(V86GLRecordCaptureVertices, total) == 12 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
