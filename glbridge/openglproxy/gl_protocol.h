@@ -24,6 +24,12 @@
 #define V86GL_FORMAT_SAMPLES_MASK 0xFF00u
 /* a record size of this is followed by a u32 size */
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
+#define V86GL_REJECTED_RECORD_BIT 0x8000u
+#define V86GL_REJECTED_RECORD_MASK 0xF800u
+#define V86GL_REJECTED_ERROR_SHIFT 8u
+#define V86GL_REJECTED_ERROR_MASK 0x700u
+#define V86GL_REJECTED_ERROR_BASE 0x500u
+#define V86GL_REJECTED_OPCODE_MASK 255u
 #define V86GL_RESPONSE_REGION_BYTES 0x400000u
 /* reserved at the end of the arena, outside the GL command stream */
 #define V86GL_HEARTBEAT_BYTES 16u
@@ -318,6 +324,12 @@ typedef struct V86GLRecordTexSubImage2d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage2d;
+typedef struct V86GLRecordLoadMatrixf {
+    float values[16];
+} V86GLRecordLoadMatrixf;
+typedef struct V86GLRecordMultMatrixf {
+    float values[16];
+} V86GLRecordMultMatrixf;
 typedef struct V86GLRecordReadPixels {
     int32_t x;
     int32_t y;
@@ -699,6 +711,10 @@ typedef char V86GLRecordTexSubImage2d_height[offsetof(V86GLRecordTexSubImage2d, 
 typedef char V86GLRecordTexSubImage2d_format[offsetof(V86GLRecordTexSubImage2d, format) == 24 ? 1 : -1];
 typedef char V86GLRecordTexSubImage2d_type[offsetof(V86GLRecordTexSubImage2d, type) == 28 ? 1 : -1];
 typedef char V86GLRecordTexSubImage2d_data_size[offsetof(V86GLRecordTexSubImage2d, data_size) == 32 ? 1 : -1];
+typedef char V86GLRecordLoadMatrixfSize[sizeof(V86GLRecordLoadMatrixf) == 64 ? 1 : -1];
+typedef char V86GLRecordLoadMatrixf_values[offsetof(V86GLRecordLoadMatrixf, values) == 0 ? 1 : -1];
+typedef char V86GLRecordMultMatrixfSize[sizeof(V86GLRecordMultMatrixf) == 64 ? 1 : -1];
+typedef char V86GLRecordMultMatrixf_values[offsetof(V86GLRecordMultMatrixf, values) == 0 ? 1 : -1];
 typedef char V86GLRecordReadPixelsSize[sizeof(V86GLRecordReadPixels) == 32 ? 1 : -1];
 typedef char V86GLRecordReadPixels_x[offsetof(V86GLRecordReadPixels, x) == 0 ? 1 : -1];
 typedef char V86GLRecordReadPixels_y[offsetof(V86GLRecordReadPixels, y) == 4 ? 1 : -1];

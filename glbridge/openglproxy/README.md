@@ -60,6 +60,13 @@ submission; dedicated D3D response slots keep their arena lifetime. The
 native `gl_async_wait_abi_test.js` covers progress, silence, tick-counter
 wrap and command-capacity boundaries.
 
+The CPU now validates the migrated raster/pixel/matrix commands before
+changing state. Rejected calls are tagged in the opcode only, preserving
+record sizes and inline response addresses; the page preserves their GL
+error and skips the original arguments. The generated protocol describes
+that tag. This is the first command family migrated under plan C6, not yet
+complete CPU-side error handling for every OpenGL command.
+
 `../tests/generated_headers_test.js` fails when they are stale, and
 `../tests/gl_protocol_consistency_test.js` checks the payload structs this DLL
 still declares inline against the schema.
