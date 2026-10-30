@@ -14465,6 +14465,7 @@ void APIENTRY glGetTexParameteriv(GLenum target, GLenum pname, GLint* params) {
     if (!params) {
         return;
     }
+    if (emit_query_parameter(V86GL_PARAMETER_TEXTURE, target, pname, V86GL_STATE_INTEGER, params)) return;
 
     state = bound_texture_state(target, FALSE);
     if (!state) {
@@ -14524,6 +14525,7 @@ void APIENTRY glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params) 
     if (!params) {
         return;
     }
+    if (emit_query_parameter(V86GL_PARAMETER_TEXTURE, target, pname, V86GL_STATE_FLOAT, params)) return;
 
     state = bound_texture_state(target, FALSE);
     if (!state) {
@@ -18730,23 +18732,35 @@ __declspec(dllexport)
 void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLclampf* priorities) {
     GLsizei i;
     uint32_t j;
+    uint32_t size;
+    uint8_t* payload;
     if (n < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
 
-    if (!textures || !priorities) {
+    if (n && (!textures || !priorities)) {
+        v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
+    if ((uint32_t)n > (UINT32_MAX - 4u) / 8u) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
+    size = 4u + (uint32_t)n * 8u;
+    payload = alloc_payload(size);
+    if (!payload) return;
+    *(int32_t*)payload = n;
 
     for (i = 0; i < n; i++) {
+        ((uint32_t*)(payload + 4u + (uint32_t)i * 8u))[0] = textures[i];
+        CopyMemory(payload + 8u + (uint32_t)i * 8u, &priorities[i], sizeof(GLfloat));
         for (j = 0; j < V86GL_MAX_TEXTURE_STATES; j++) {
             if (g_texture_states[j].used && g_texture_states[j].name == textures[i]) {
-                g_texture_states[j].priority = priorities[i];
+                g_texture_states[j].priority = priorities[i] < 0 ? 0 : priorities[i] > 1 ? 1 : priorities[i];
                 break;
             }
         }
     }
+    emit_gl_call(GLFN_PRIORITIZE_TEXTURES, payload, size);
+    HeapFree(GetProcessHeap(), 0, payload);
 }
 
 __declspec(dllexport)

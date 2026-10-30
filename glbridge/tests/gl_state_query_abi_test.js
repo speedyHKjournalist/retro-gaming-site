@@ -16,6 +16,7 @@ require(hostPath("gl-webgpu/gl_shadow_misc.js"));
 require(hostPath("gl-webgpu/gl_shadow_rasterpos.js"));
 require(hostPath("gl-webgpu/gl_shadow_pixelmaps.js"));
 require(hostPath("gl-webgpu/gl_shadow_images.js"));
+require(hostPath("gl-webgpu/gl_shadow_textures.js"));
 const caps = require(hostPath("gl-webgpu/gl_caps.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
@@ -31,6 +32,14 @@ assert.ok(fbStart >= 0 && fbEnd > fbStart);
 const rbStart = source.indexOf("void APIENTRY glGetRenderbufferParameterivEXT("),
     rbEnd = source.indexOf("void APIENTRY glGetRenderbufferParameteriv(", rbStart);
 assert.ok(rbStart >= 0 && rbEnd > rbStart);
+function functionBody(name) {
+    const at = source.indexOf("void APIENTRY " + name + "("); assert.ok(at >= 0);
+    let end = source.indexOf("{", at) + 1, depth = 1;
+    for (; depth; ++end) { if (source[end] === "{") ++depth; if (source[end] === "}") --depth; }
+    return source.slice(at, end);
+}
+const texturePnames = ["TEXTURE_MIN_FILTER", "TEXTURE_MAG_FILTER", "TEXTURE_WRAP_S", "TEXTURE_WRAP_T", "TEXTURE_WRAP_R",
+    "TEXTURE_BASE_LEVEL", "TEXTURE_MAX_LEVEL", "TEXTURE_MIN_LOD", "TEXTURE_MAX_LOD", "TEXTURE_PRIORITY", "TEXTURE_RESIDENT", "TEXTURE_BORDER_COLOR"];
 // The four public getters must use this compiled function with the right type.
 for (const [name, kind] of [["Integer", "INTEGER"], ["Float", "FLOAT"], ["Double", "DOUBLE"], ["Boolean", "BOOLEAN"]]) {
     const body = source.slice(source.indexOf("void APIENTRY glGet" + name + "v("));
@@ -78,6 +87,7 @@ typedef int BOOL;
 #define GL_RENDERBUFFER_ALPHA_SIZE_EXT 0x8D53
 #define GL_RENDERBUFFER_DEPTH_SIZE_EXT 0x8D54
 #define GL_RENDERBUFFER_STENCIL_SIZE_EXT 0x8D55
+${texturePnames.map(p => "#define GL_" + p + " 0x" + GL[p].toString(16)).join("\n")}
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
 static unsigned char buffer[4096];
@@ -111,6 +121,11 @@ static int valid_renderbuffer_target(GLenum target) { (void)target; return 1; }
 static RenderbufferObjectState* find_renderbuffer_state(GLuint name, int create) { (void)name; (void)create; return NULL; }
 static GLint renderbuffer_component_bits(GLenum format, GLenum pname) { (void)format; (void)pname; return 0; }
 ${source.slice(rbStart, rbEnd)}
+typedef struct { GLint min_filter, mag_filter, wrap_s, wrap_t, wrap_r, base_level, max_level;
+    GLfloat min_lod, max_lod, priority, border_color[4]; } TextureObjectState;
+static TextureObjectState* bound_texture_state(GLenum target, int create) { (void)target; (void)create; return NULL; }
+${functionBody("glGetTexParameteriv")}
+${functionBody("glGetTexParameterfv")}
 int main(int argc, char** argv) {
     union { GLdouble align; unsigned char bytes[4096]; } out;
     unsigned int kind, pname;
@@ -123,6 +138,10 @@ int main(int argc, char** argv) {
         result = error ? -1 : 1;
     } else if (argc == 6 && atoi(argv[4]) == V86GL_PARAMETER_RENDERBUFFER) {
         glGetRenderbufferParameterivEXT((GLenum)strtoul(argv[5], NULL, 0), pname, (GLint*)(out.bytes+8));
+        result = error ? -1 : 1;
+    } else if (argc == 6 && atoi(argv[4]) == V86GL_PARAMETER_TEXTURE) {
+        if (kind == V86GL_STATE_INTEGER) glGetTexParameteriv((GLenum)strtoul(argv[5], NULL, 0), pname, (GLint*)(out.bytes+8));
+        else glGetTexParameterfv((GLenum)strtoul(argv[5], NULL, 0), pname, (GLfloat*)(out.bytes+8));
         result = error ? -1 : 1;
     } else result = argc == 4 ? emit_query_state(pname, kind, out.bytes+8) : argc == 6 ?
         emit_query_parameter((unsigned int)atoi(argv[4]), (GLenum)strtoul(argv[5], NULL, 0), pname, kind, out.bytes+8) :
@@ -189,6 +208,11 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_INTERNAL_FORMAT_EXT, [GL.STENCIL_INDEX16_EXT], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
         [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_STENCIL_SIZE_EXT, [8], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
         [P.C.V86GL_STATE_INTEGER, GL.RENDERBUFFER_DEPTH_SIZE_EXT, [0], P.C.V86GL_PARAMETER_RENDERBUFFER, GL.RENDERBUFFER_EXT],
+        [P.C.V86GL_STATE_FLOAT, GL.TEXTURE_BORDER_COLOR, [0, 0, 0.5, 1], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
+        [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_BORDER_COLOR, [0, 0, 1073741823, 2147483647], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
+        [P.C.V86GL_STATE_FLOAT, GL.TEXTURE_PRIORITY, [0.25], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
+        [P.C.V86GL_STATE_FLOAT, GL.TEXTURE_MAX_ANISOTROPY_EXT, [2.5], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
+        [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_MAX_ANISOTROPY_EXT, [3], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
     ]) {
         const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : []), ...(index !== undefined ? [String(index)] : [])] : [])];
         const wire = execFileSync(binary, ["1", ...args]);
@@ -214,6 +238,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
             .names(P.GLFN.DRAW_BUFFERS, [GL.COLOR_ATTACHMENT0 + 2, GL.NONE, GL.COLOR_ATTACHMENT0 + 1]).call("READ_BUFFER", GL.NONE);
         s.call("FRAMEBUFFER_TEXTURE", GL.FRAMEBUFFER_EXT, GL.COLOR_ATTACHMENT0, GL.TEXTURE_2D, 7, 2, 0);
         s.call("RENDERBUFFER_STORAGE", GL.RENDERBUFFER_EXT, GL.STENCIL_INDEX16_EXT, 7, 5);
+        s.call("TEX_PARAMETERIV", GL.TEXTURE_2D, GL.TEXTURE_BORDER_COLOR, 4, -2147483648, 0, 1073741824, 2147483647)
+            .call("TEX_PARAMETERF", GL.TEXTURE_2D, GL.TEXTURE_PRIORITY, 0.25).call("TEX_PARAMETERF", GL.TEXTURE_2D, GL.TEXTURE_MAX_ANISOTROPY_EXT, 2.5);
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});
