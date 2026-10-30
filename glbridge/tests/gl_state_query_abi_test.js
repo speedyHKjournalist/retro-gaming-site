@@ -25,6 +25,9 @@ const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_pro
 const start = source.indexOf("static int emit_query_typed("), end = source.indexOf("static GLint query_limit_or_default", start);
 assert.ok(start >= 0 && end > start);
 const helper = source.slice(start, end);
+const fbStart = source.indexOf("void APIENTRY glGetFramebufferAttachmentParameterivEXT("),
+    fbEnd = source.indexOf("void APIENTRY glGetFramebufferAttachmentParameteriv(", fbStart);
+assert.ok(fbStart >= 0 && fbEnd > fbStart);
 // The four public getters must use this compiled function with the right type.
 for (const [name, kind] of [["Integer", "INTEGER"], ["Float", "FLOAT"], ["Double", "DOUBLE"], ["Boolean", "BOOLEAN"]]) {
     const body = source.slice(source.indexOf("void APIENTRY glGet" + name + "v("));
@@ -55,6 +58,14 @@ typedef int BOOL;
 #define GL_TRUE 1
 #define GL_INVALID_OPERATION 0x502
 #define GL_INVALID_VALUE 0x501
+#define GL_INVALID_ENUM 0x500
+#define GL_NONE 0
+#define APIENTRY
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE_EXT 0x8CD0
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME_EXT 0x8CD1
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL_EXT 0x8CD2
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE_EXT 0x8CD3
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_3D_ZOFFSET_EXT 0x8CD4
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
 static unsigned char buffer[4096];
@@ -76,14 +87,23 @@ static int emit_pci_batch(BOOL present) {
     return 1;
 }
 ${helper}
+typedef struct { GLenum object_type, object_name, texture_target; GLint texture_level, texture_zoffset; } FramebufferAttachmentState;
+static int valid_framebuffer_target(GLenum target) { (void)target; return 1; }
+static FramebufferAttachmentState* bound_framebuffer_attachment(GLenum target, GLenum attachment, int create) {
+    (void)target; (void)attachment; (void)create; return NULL;
+}
+${source.slice(fbStart, fbEnd)}
 int main(int argc, char** argv) {
     union { GLdouble align; unsigned char bytes[4096]; } out;
     unsigned int kind, pname;
     int result;
-    assert(argc == 4 || argc == 6 || argc == 7);
+    assert(argc == 4 || argc == 6 || argc == 7 || argc == 8);
     encode = atoi(argv[1]); kind = (unsigned int)atoi(argv[2]); pname = (unsigned int)strtoul(argv[3], NULL, 0);
     memset(out.bytes, 0xA5, sizeof(out.bytes));
-    result = argc == 4 ? emit_query_state(pname, kind, out.bytes+8) : argc == 6 ?
+    if (argc == 8) {
+        glGetFramebufferAttachmentParameterivEXT((GLenum)strtoul(argv[5], NULL, 0), (GLenum)strtoul(argv[7], NULL, 0), pname, (GLint*)(out.bytes+8));
+        result = error ? -1 : 1;
+    } else result = argc == 4 ? emit_query_state(pname, kind, out.bytes+8) : argc == 6 ?
         emit_query_parameter((unsigned int)atoi(argv[4]), (GLenum)strtoul(argv[5], NULL, 0), pname, kind, out.bytes+8) :
         emit_query_parameter_count((unsigned int)atoi(argv[4]), (GLenum)strtoul(argv[5], NULL, 0), pname, kind, out.bytes+8, (unsigned int)atoi(argv[6]));
     if (!encode) {
@@ -101,7 +121,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
     execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror",
         "-I", path.join(__dirname, "../openglproxy"), file, "-o", binary]);
     const { host } = createFakeHost(), executor = new GLWebGPUExecutor(null, { host }); await executor.initialize();
-    for (const [kind, pname, expected, family, target, capacity] of [
+    for (const [kind, pname, expected, family, target, capacity, index] of [
         [P.C.V86GL_STATE_INTEGER, GL.VIEWPORT, [-11, 7, 90, 30]],
         [P.C.V86GL_STATE_FLOAT, GL.DEPTH_RANGE, [0.25, 0.75]],
         [P.C.V86GL_STATE_DOUBLE, GL.DEPTH_RANGE, [0.25, 0.75]],
@@ -139,8 +159,12 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0 + 1, [GL.NONE]],
         [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0 + 2, [GL.COLOR_ATTACHMENT0 + 1]],
         [P.C.V86GL_STATE_INTEGER, GL.DRAW_BUFFER0 + 7, [GL.NONE]],
+        [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE_EXT, [GL.TEXTURE], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
+        [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME_EXT, [7], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
+        [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL_EXT, [2], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
+        [P.C.V86GL_STATE_INTEGER, GL.FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE_EXT, [0], P.C.V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, GL.FRAMEBUFFER_EXT, 16, GL.COLOR_ATTACHMENT0],
     ]) {
-        const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : [])] : [])];
+        const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : []), ...(index !== undefined ? [String(index)] : [])] : [])];
         const wire = execFileSync(binary, ["1", ...args]);
         const s = new GLStream().makeCurrent(1, 0, 0, 64, 64, 1, 1)
             .call("VIEWPORT", -11, 7, 90, 30).call("DEPTH_RANGE", 0.25, 0.75)
@@ -162,6 +186,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         s.names(P.GLFN.GEN_TEXTURES, [8]).call("BIND_TEXTURE", GL.TEXTURE_2D, 7)
             .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 9).call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 3)
             .names(P.GLFN.DRAW_BUFFERS, [GL.COLOR_ATTACHMENT0 + 2, GL.NONE, GL.COLOR_ATTACHMENT0 + 1]).call("READ_BUFFER", GL.NONE);
+        s.call("FRAMEBUFFER_TEXTURE", GL.FRAMEBUFFER_EXT, GL.COLOR_ATTACHMENT0, GL.TEXTURE_2D, 7, 2, 0);
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});

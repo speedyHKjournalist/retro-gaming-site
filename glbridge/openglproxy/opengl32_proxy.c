@@ -4907,8 +4907,8 @@ static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
     return emit_query_typed(GLFN_QUERY_STATE, &request, sizeof(request), kind, values);
 }
 
-static int emit_query_parameter_count(unsigned int query_kind, GLenum target, GLenum pname,
-                                      unsigned int kind, void* values, unsigned int capacity) {
+static int emit_query_parameter_index_count(unsigned int query_kind, GLenum target, GLenum pname, unsigned int index,
+                                            unsigned int kind, void* values, unsigned int capacity) {
     V86GLRecordQueryParameter request;
     ZeroMemory(&request, sizeof(request));
     request.pname = (uint32_t)pname;
@@ -4916,7 +4916,13 @@ static int emit_query_parameter_count(unsigned int query_kind, GLenum target, GL
     request.data_size = capacity * sizeof(GLdouble);
     request.query_kind = query_kind;
     request.target = (uint32_t)target;
+    request.index = index;
     return emit_query_typed(GLFN_QUERY_PARAMETER, &request, sizeof(request), kind, values);
+}
+
+static int emit_query_parameter_count(unsigned int query_kind, GLenum target, GLenum pname,
+                                      unsigned int kind, void* values, unsigned int capacity) {
+    return emit_query_parameter_index_count(query_kind, target, pname, 0, kind, values, capacity);
 }
 
 static int emit_query_parameter(unsigned int query_kind, GLenum target, GLenum pname,
@@ -13280,6 +13286,7 @@ void APIENTRY glGetFramebufferAttachmentParameterivEXT(GLenum target,
     FramebufferAttachmentState* state;
 
     if (!params) return;
+    if (emit_query_parameter_index_count(V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, target, pname, attachment, V86GL_STATE_INTEGER, params, 16u)) return;
     if (!valid_framebuffer_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     state = bound_framebuffer_attachment(target, attachment, FALSE);
     if (!state || !state->object_type) {
