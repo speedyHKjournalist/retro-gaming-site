@@ -34,7 +34,6 @@ typedef unsigned char GLboolean;
 #define GL_FALSE 0
 #define GL_OUT_OF_MEMORY 0x505
 #define CopyMemory memcpy
-static GLuint g_array_buffer_binding = 7;
 static void v86gl_set_error(GLenum error) { (void)error; abort(); }
 static uint8_t* alloc_payload(uint32_t size) { return malloc(size); }
 static void* GetProcessHeap(void) { return NULL; }

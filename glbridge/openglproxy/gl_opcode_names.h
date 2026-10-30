@@ -3,7 +3,7 @@
 #ifndef V86GL_OPCODE_NAMES_H
 #define V86GL_OPCODE_NAMES_H
 
-#define V86GL_OPCODE_NAME_COUNT 226u
+#define V86GL_OPCODE_NAME_COUNT 228u
 static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [0] = "UNKNOWN",
     [1] = "VIEWPORT",
@@ -231,6 +231,8 @@ static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [223] = "QUERY_BUFFER_DATA",
     [224] = "QUERY_BUFFER_MAP",
     [225] = "QUERY_BUFFER_UNMAP",
+    [226] = "INDEX_POINTER_VBO",
+    [227] = "EDGE_FLAG_POINTER_VBO",
 };
 
 static const char *v86gl_opcode_name(unsigned int opcode)

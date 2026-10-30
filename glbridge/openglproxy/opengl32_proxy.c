@@ -5439,13 +5439,21 @@ static uint32_t pointer_offset_u32(const GLvoid* pointer) {
     return (uint32_t)(uintptr_t)pointer;
 }
 
+static BOOL valid_array_pointer_type(uint16_t fn, GLenum type) {
+    if (type == GL_FLOAT || type == GL_DOUBLE) return TRUE;
+    if (fn == GLFN_FOG_COORD_POINTER_VBO) return FALSE;
+    if (fn == GLFN_VERTEX_POINTER_VBO || fn == GLFN_TEX_COORD_POINTER_VBO)
+        return type == GL_SHORT || type == GL_INT;
+    if (fn == GLFN_NORMAL_POINTER_VBO)
+        return type == GL_BYTE || type == GL_SHORT || type == GL_INT;
+    if (fn == GLFN_INDEX_POINTER_VBO)
+        return type == GL_UNSIGNED_BYTE || type == GL_SHORT || type == GL_INT;
+    return type == GL_BYTE || type == GL_UNSIGNED_BYTE || type == GL_SHORT || type == GL_UNSIGNED_SHORT || type == GL_INT || type == GL_UNSIGNED_INT;
+}
+
 static void emit_vbo_pointer(uint16_t fn, GLint size, GLenum type,
                              GLsizei stride, const GLvoid* pointer) {
     VBOPointerPayload payload;
-
-    if (!g_array_buffer_binding) {
-        return;
-    }
 
     payload.size = size;
     payload.type = (uint32_t)type;
@@ -5458,10 +5466,6 @@ static void emit_vbo_attrib_pointer(GLuint index, GLint size, GLenum type,
                                     GLboolean normalized, GLsizei stride,
                                     const GLvoid* pointer) {
     VBOAttribPointerPayload payload;
-
-    if (!g_array_buffer_binding) {
-        return;
-    }
 
     payload.index = index;
     payload.size = size;
@@ -12007,7 +12011,7 @@ void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type,
     GenericAttribState* state;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (size < 1 || size > 4 || stride < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!gl_type_bytes(type)) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (!valid_array_pointer_type(GLFN_VERTEX_ATTRIB_POINTER_VBO, type)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     state = &g_generic_attribs[index];
     state->size = size;
     state->type = type;
@@ -12021,6 +12025,7 @@ void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type,
 void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) {
     GenericAttribState* state;
     if (!params) return;
+    if (emit_query_parameter(V86GL_PARAMETER_VERTEX_ATTRIB, index, pname, V86GL_STATE_FLOAT, params)) return;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     state = &g_generic_attribs[index];
     switch (pname) {
@@ -12054,6 +12059,7 @@ void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) {
 void APIENTRY glGetVertexAttribiv(GLuint index, GLenum pname, GLint* params) {
     GenericAttribState* state;
     if (!params) return;
+    if (emit_query_parameter(V86GL_PARAMETER_VERTEX_ATTRIB, index, pname, V86GL_STATE_INTEGER, params)) return;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     state = &g_generic_attribs[index];
     switch (pname) {
@@ -12091,12 +12097,18 @@ void APIENTRY glGetVertexAttribdv(GLuint index, GLenum pname, GLdouble* params) 
     GLfloat values[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     int i;
     if (!params) return;
+    if (emit_query_parameter(V86GL_PARAMETER_VERTEX_ATTRIB, index, pname, V86GL_STATE_DOUBLE, params)) return;
     glGetVertexAttribfv(index, pname, values);
     for (i = 0; i < 4; i++) params[i] = values[i];
 }
 
 void APIENTRY glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid** pointer) {
+    GLuint address = 0;
+    int cpu;
     if (!pointer) return;
+    cpu = emit_query_parameter_index_count(V86GL_PARAMETER_ARRAY_POINTER, GL_VERTEX_ATTRIB_ARRAY_POINTER, pname, index,
+        V86GL_STATE_UNSIGNED_INT, &address, 1u);
+    if (cpu) { if (cpu > 0) *pointer = (GLvoid*)(uintptr_t)address; return; }
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (pname != GL_VERTEX_ATTRIB_ARRAY_POINTER) { v86gl_set_error(GL_INVALID_ENUM); return; }
     *pointer = (GLvoid*)g_generic_attribs[index].pointer;
@@ -15468,7 +15480,7 @@ void APIENTRY glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
-    if (!gl_type_bytes(type)) {
+    if (!valid_array_pointer_type(GLFN_SECONDARY_COLOR_POINTER_VBO, type)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -16135,7 +16147,7 @@ void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLv
         return;
     }
 
-    if (!gl_type_bytes(type)) {
+    if (!valid_array_pointer_type(GLFN_VERTEX_POINTER_VBO, type)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -16160,7 +16172,7 @@ void APIENTRY glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvo
         return;
     }
 
-    if (!gl_type_bytes(type)) {
+    if (!valid_array_pointer_type(GLFN_COLOR_POINTER_VBO, type)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -16187,7 +16199,7 @@ void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const G
         return;
     }
 
-    if (!gl_type_bytes(type)) {
+    if (!valid_array_pointer_type(GLFN_TEX_COORD_POINTER_VBO, type)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -16207,7 +16219,7 @@ void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer
         return;
     }
 
-    if (!gl_type_bytes(type)) {
+    if (!valid_array_pointer_type(GLFN_NORMAL_POINTER_VBO, type)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -16869,14 +16881,14 @@ void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* p
     g_vertex_array.size = vertex_size;
     g_vertex_array.type = GL_FLOAT;
     g_vertex_array.stride = stride;
-    g_vertex_array.pointer = base ? base + vertex_offset : NULL;
+    g_vertex_array.pointer = (const GLvoid*)((uintptr_t)base + (uint32_t)vertex_offset);
     g_vertex_array.buffer = g_array_buffer_binding;
 
     if (tex_size) {
         texcoord->size = tex_size;
         texcoord->type = GL_FLOAT;
         texcoord->stride = stride;
-        texcoord->pointer = base ? base + tex_offset : NULL;
+        texcoord->pointer = (const GLvoid*)((uintptr_t)base + (uint32_t)tex_offset);
         texcoord->buffer = g_array_buffer_binding;
     }
 
@@ -16884,7 +16896,7 @@ void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* p
         g_color_array.size = color_size;
         g_color_array.type = color_type;
         g_color_array.stride = stride;
-        g_color_array.pointer = base ? base + color_offset : NULL;
+        g_color_array.pointer = (const GLvoid*)((uintptr_t)base + (uint32_t)color_offset);
         g_color_array.buffer = g_array_buffer_binding;
     }
 
@@ -16892,29 +16904,31 @@ void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* p
         g_normal_array.size = 3;
         g_normal_array.type = GL_FLOAT;
         g_normal_array.stride = stride;
-        g_normal_array.pointer = base ? base + normal_offset : NULL;
+        g_normal_array.pointer = (const GLvoid*)((uintptr_t)base + (uint32_t)normal_offset);
         g_normal_array.buffer = g_array_buffer_binding;
     }
 
     emit_vbo_pointer(GLFN_VERTEX_POINTER_VBO, vertex_size, GL_FLOAT, stride,
-                     base ? base + vertex_offset : NULL);
+                     (const GLvoid*)((uintptr_t)base + (uint32_t)vertex_offset));
     if (tex_size) {
         emit_vbo_pointer(GLFN_TEX_COORD_POINTER_VBO, tex_size, GL_FLOAT, stride,
-                         base ? base + tex_offset : NULL);
+                         (const GLvoid*)((uintptr_t)base + (uint32_t)tex_offset));
     }
     if (color_size) {
         emit_vbo_pointer(GLFN_COLOR_POINTER_VBO, color_size, color_type, stride,
-                         base ? base + color_offset : NULL);
+                         (const GLvoid*)((uintptr_t)base + (uint32_t)color_offset));
     }
     if (normal_offset >= 0) {
         emit_vbo_pointer(GLFN_NORMAL_POINTER_VBO, 3, GL_FLOAT, stride,
-                         base ? base + normal_offset : NULL);
+                         (const GLvoid*)((uintptr_t)base + (uint32_t)normal_offset));
     }
 
     (void)set_client_array_enabled(GL_VERTEX_ARRAY, TRUE, TRUE);
     (void)set_client_array_enabled(GL_TEXTURE_COORD_ARRAY, tex_size ? TRUE : FALSE, TRUE);
     (void)set_client_array_enabled(GL_COLOR_ARRAY, color_size ? TRUE : FALSE, TRUE);
     (void)set_client_array_enabled(GL_NORMAL_ARRAY, normal_offset >= 0 ? TRUE : FALSE, TRUE);
+    (void)set_client_array_enabled(GL_INDEX_ARRAY, FALSE, TRUE);
+    (void)set_client_array_enabled(GL_EDGE_FLAG_ARRAY, FALSE, TRUE);
 }
 
 __declspec(dllexport)
@@ -17334,7 +17348,7 @@ void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer)
         return;
     }
 
-    if (!gl_type_bytes(type)) {
+    if (!valid_array_pointer_type(GLFN_INDEX_POINTER_VBO, type)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -17344,6 +17358,7 @@ void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer)
     g_index_array.stride = stride;
     g_index_array.pointer = pointer;
     g_index_array.buffer = g_array_buffer_binding;
+    emit_vbo_pointer(GLFN_INDEX_POINTER_VBO, 1, type, stride, pointer);
 }
 
 __declspec(dllexport)
@@ -17358,6 +17373,7 @@ void APIENTRY glEdgeFlagPointer(GLsizei stride, const GLvoid* pointer) {
     g_edge_flag_array.stride = stride;
     g_edge_flag_array.pointer = pointer;
     g_edge_flag_array.buffer = g_array_buffer_binding;
+    emit_vbo_pointer(GLFN_EDGE_FLAG_POINTER_VBO, 1, GL_UNSIGNED_BYTE, stride, pointer);
 }
 
 static const uint8_t* client_array_element_ptr(const ClientArrayState* state, GLint index) {
@@ -18698,9 +18714,14 @@ void APIENTRY glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname,
 __declspec(dllexport)
 void APIENTRY glGetPointerv(GLenum pname, GLvoid** params) {
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
+    GLuint address = 0;
+    int cpu;
     if (!params) {
         return;
     }
+
+    cpu = emit_query_parameter(V86GL_PARAMETER_ARRAY_POINTER, 0, pname, V86GL_STATE_UNSIGNED_INT, &address);
+    if (cpu) { if (cpu > 0) *params = (GLvoid*)(uintptr_t)address; return; }
 
     switch (pname) {
     case GL_VERTEX_ARRAY_POINTER:

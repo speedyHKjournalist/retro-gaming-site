@@ -70,6 +70,8 @@
 #define V86GL_PARAMETER_TEXTURE_LEVEL 11u
 #define V86GL_PARAMETER_BUFFER 12u
 #define V86GL_PARAMETER_BUFFER_POINTER 13u
+#define V86GL_PARAMETER_VERTEX_ATTRIB 14u
+#define V86GL_PARAMETER_ARRAY_POINTER 15u
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
@@ -321,9 +323,11 @@ enum {
     GLFN_PROGRAM_LINK_FAILED = 222,
     GLFN_QUERY_BUFFER_DATA = 223,
     GLFN_QUERY_BUFFER_MAP = 224,
-    GLFN_QUERY_BUFFER_UNMAP = 225
+    GLFN_QUERY_BUFFER_UNMAP = 225,
+    GLFN_INDEX_POINTER_VBO = 226,
+    GLFN_EDGE_FLAG_POINTER_VBO = 227
 };
-#define V86GL_OPCODE_COUNT 225u
+#define V86GL_OPCODE_COUNT 227u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -851,6 +855,18 @@ typedef struct V86GLRecordQueryBufferUnmap {
     uint32_t result;
     uint32_t error;
 } V86GLRecordQueryBufferUnmap;
+typedef struct V86GLRecordIndexPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordIndexPointerVbo;
+typedef struct V86GLRecordEdgeFlagPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordEdgeFlagPointerVbo;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1374,6 +1390,16 @@ typedef char V86GLRecordQueryBufferUnmap_target[offsetof(V86GLRecordQueryBufferU
 typedef char V86GLRecordQueryBufferUnmap_status[offsetof(V86GLRecordQueryBufferUnmap, status) == 4 ? 1 : -1];
 typedef char V86GLRecordQueryBufferUnmap_result[offsetof(V86GLRecordQueryBufferUnmap, result) == 8 ? 1 : -1];
 typedef char V86GLRecordQueryBufferUnmap_error[offsetof(V86GLRecordQueryBufferUnmap, error) == 12 ? 1 : -1];
+typedef char V86GLRecordIndexPointerVboSize[sizeof(V86GLRecordIndexPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordIndexPointerVbo_size[offsetof(V86GLRecordIndexPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordIndexPointerVbo_type[offsetof(V86GLRecordIndexPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordIndexPointerVbo_stride[offsetof(V86GLRecordIndexPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordIndexPointerVbo_offset[offsetof(V86GLRecordIndexPointerVbo, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordEdgeFlagPointerVboSize[sizeof(V86GLRecordEdgeFlagPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordEdgeFlagPointerVbo_size[offsetof(V86GLRecordEdgeFlagPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordEdgeFlagPointerVbo_type[offsetof(V86GLRecordEdgeFlagPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordEdgeFlagPointerVbo_stride[offsetof(V86GLRecordEdgeFlagPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordEdgeFlagPointerVbo_offset[offsetof(V86GLRecordEdgeFlagPointerVbo, offset) == 12 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
