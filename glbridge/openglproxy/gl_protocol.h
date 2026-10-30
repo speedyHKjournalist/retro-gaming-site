@@ -333,9 +333,11 @@ enum {
     GLFN_FRAMEBUFFER_TEXTURE_2D = 230,
     GLFN_FRAMEBUFFER_TEXTURE_3D = 231,
     GLFN_BIND_FRAMEBUFFER_EXT = 232,
-    GLFN_QUERY_TEXTURE_IMAGE = 233
+    GLFN_QUERY_TEXTURE_IMAGE = 233,
+    GLFN_QUERY_POLYGON_STIPPLE = 234,
+    GLFN_POLYGON_STIPPLE_BITMAP = 235
 };
-#define V86GL_OPCODE_COUNT 233u
+#define V86GL_OPCODE_COUNT 235u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -902,6 +904,26 @@ typedef struct V86GLRecordQueryTextureImage {
     uint32_t depth;
     uint32_t context_id;
 } V86GLRecordQueryTextureImage;
+typedef struct V86GLRecordQueryPolygonStipple {
+    uint32_t mode;
+    uint32_t pointer;
+    uint32_t status;
+    uint32_t error;
+    uint32_t row_stride;
+    uint32_t start;
+    uint32_t row_bytes;
+    uint32_t bit_offset;
+    uint32_t lsb_first;
+    uint32_t pbo;
+    uint32_t span;
+    uint32_t data_size;
+} V86GLRecordQueryPolygonStipple;
+typedef struct V86GLRecordPolygonStippleBitmap {
+    uint32_t data_size;
+    uint32_t status;
+    uint32_t error;
+    uint32_t reserved;
+} V86GLRecordPolygonStippleBitmap;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1460,6 +1482,24 @@ typedef char V86GLRecordQueryTextureImage_width[offsetof(V86GLRecordQueryTexture
 typedef char V86GLRecordQueryTextureImage_height[offsetof(V86GLRecordQueryTextureImage, height) == 56 ? 1 : -1];
 typedef char V86GLRecordQueryTextureImage_depth[offsetof(V86GLRecordQueryTextureImage, depth) == 60 ? 1 : -1];
 typedef char V86GLRecordQueryTextureImage_context_id[offsetof(V86GLRecordQueryTextureImage, context_id) == 64 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStippleSize[sizeof(V86GLRecordQueryPolygonStipple) == 48 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_mode[offsetof(V86GLRecordQueryPolygonStipple, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_pointer[offsetof(V86GLRecordQueryPolygonStipple, pointer) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_status[offsetof(V86GLRecordQueryPolygonStipple, status) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_error[offsetof(V86GLRecordQueryPolygonStipple, error) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_row_stride[offsetof(V86GLRecordQueryPolygonStipple, row_stride) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_start[offsetof(V86GLRecordQueryPolygonStipple, start) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_row_bytes[offsetof(V86GLRecordQueryPolygonStipple, row_bytes) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_bit_offset[offsetof(V86GLRecordQueryPolygonStipple, bit_offset) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_lsb_first[offsetof(V86GLRecordQueryPolygonStipple, lsb_first) == 32 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_pbo[offsetof(V86GLRecordQueryPolygonStipple, pbo) == 36 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_span[offsetof(V86GLRecordQueryPolygonStipple, span) == 40 ? 1 : -1];
+typedef char V86GLRecordQueryPolygonStipple_data_size[offsetof(V86GLRecordQueryPolygonStipple, data_size) == 44 ? 1 : -1];
+typedef char V86GLRecordPolygonStippleBitmapSize[sizeof(V86GLRecordPolygonStippleBitmap) == 16 ? 1 : -1];
+typedef char V86GLRecordPolygonStippleBitmap_data_size[offsetof(V86GLRecordPolygonStippleBitmap, data_size) == 0 ? 1 : -1];
+typedef char V86GLRecordPolygonStippleBitmap_status[offsetof(V86GLRecordPolygonStippleBitmap, status) == 4 ? 1 : -1];
+typedef char V86GLRecordPolygonStippleBitmap_error[offsetof(V86GLRecordPolygonStippleBitmap, error) == 8 ? 1 : -1];
+typedef char V86GLRecordPolygonStippleBitmap_reserved[offsetof(V86GLRecordPolygonStippleBitmap, reserved) == 12 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];

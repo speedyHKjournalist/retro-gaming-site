@@ -17971,22 +17971,55 @@ void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) {
     for (i = 0; i < state->size; i++) values[i] = (GLushort)(map >= GL_PIXEL_MAP_I_TO_R ? state->values[i] * 65535.0 + 0.5 : state->values[i]);
 }
 
+static BOOL query_polygon_stipple(uint32_t mode, const GLvoid* pointer,
+                                  uint32_t result[12], uint8_t rows[320]) {
+    uint32_t request[12] = {0};
+    uint8_t* args;
+    request[0] = mode; request[1] = (uint32_t)(uintptr_t)pointer; request[11] = 320;
+    if (g_dma_size && !emit_pci_batch(FALSE)) return FALSE;
+    if (!reserve_pci_record(GLFN_QUERY_POLYGON_STIPPLE, NULL, sizeof(request) + 320, &args)) return FALSE;
+    ZeroMemory(args, sizeof(request) + 320);
+    CopyMemory(args, request, sizeof(request));
+    if (!emit_pci_batch(FALSE)) return FALSE;
+    if (!wait_for_host_status(args + 8, "polygon stipple")) {
+        v86gl_set_error(read_u32le(args + 12) ? read_u32le(args + 12) : GL_INVALID_OPERATION);
+        return FALSE;
+    }
+    CopyMemory(result, args, sizeof(request));
+    CopyMemory(rows, args + sizeof(request), 320);
+    return TRUE;
+}
+
 __declspec(dllexport)
 void APIENTRY glPolygonStipple(const GLubyte* mask) {
-    if (!mask) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    init_query_state();
-    CopyMemory(g_polygon_stipple, mask, sizeof(g_polygon_stipple));
-    emit_gl_call(GLFN_POLYGON_STIPPLE, mask, sizeof(g_polygon_stipple));
+    uint32_t layout[12], header[4] = {0}, row;
+    uint8_t rows[320], payload[16 + 160];
+    if (!query_polygon_stipple(1, mask, layout, rows) || layout[9] || !mask) return;
+    header[0] = 32 * layout[6];
+    CopyMemory(payload, header, sizeof(header));
+    for (row = 0; row < 32; row++)
+        CopyMemory(payload + sizeof(header) + row * layout[6], mask + layout[5] + row * layout[4], layout[6]);
+    emit_gl_call(GLFN_POLYGON_STIPPLE_BITMAP, payload, sizeof(header) + header[0]);
 }
 
 __declspec(dllexport)
 void APIENTRY glGetPolygonStipple(GLubyte* mask) {
-    if (!mask) return;
-    init_query_state();
-    CopyMemory(mask, g_polygon_stipple, sizeof(g_polygon_stipple));
+    uint32_t layout[12], row, byte, count;
+    uint8_t rows[320], *destination;
+    if (!query_polygon_stipple(0, mask, layout, rows)) return;
+    destination = (uint8_t*)pack_pixel_pointer(mask, layout[10]);
+    if (!destination) return;
+    count = 32 * layout[6];
+    for (row = 0; row < 32; row++) {
+        uint32_t start = layout[5] + row * layout[4];
+        for (byte = 0; byte < layout[6]; byte++) {
+            uint32_t index = row * layout[6] + byte;
+            uint8_t bits = rows[count + index];
+            destination[start + byte] = (destination[start + byte] & (uint8_t)~bits) | (rows[index] & bits);
+        }
+        if (layout[9]) emit_buffer_sub_data(GL_PIXEL_PACK_BUFFER,
+            (GLintptrARB)(uintptr_t)mask + start, (GLsizeiptrARB)layout[6], destination + start);
+    }
 }
 
 __declspec(dllexport)

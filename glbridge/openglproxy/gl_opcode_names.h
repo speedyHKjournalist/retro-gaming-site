@@ -3,7 +3,7 @@
 #ifndef V86GL_OPCODE_NAMES_H
 #define V86GL_OPCODE_NAMES_H
 
-#define V86GL_OPCODE_NAME_COUNT 234u
+#define V86GL_OPCODE_NAME_COUNT 236u
 static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [0] = "UNKNOWN",
     [1] = "VIEWPORT",
@@ -239,6 +239,8 @@ static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [231] = "FRAMEBUFFER_TEXTURE_3D",
     [232] = "BIND_FRAMEBUFFER_EXT",
     [233] = "QUERY_TEXTURE_IMAGE",
+    [234] = "QUERY_POLYGON_STIPPLE",
+    [235] = "POLYGON_STIPPLE_BITMAP",
 };
 
 static const char *v86gl_opcode_name(unsigned int opcode)
