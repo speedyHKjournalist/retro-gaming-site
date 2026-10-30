@@ -652,6 +652,8 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_4_BYTES            0x1409
 #define GL_DOUBLE             0x140A
 #define GL_HALF_FLOAT_ARB     0x140B
+#define GL_COLOR_INDEX        0x1900
+#define GL_STENCIL_INDEX      0x1901
 #define GL_RED                0x1903
 #define GL_GREEN              0x1904
 #define GL_BLUE               0x1905
@@ -6055,6 +6057,8 @@ static uint32_t align_u32(uint32_t value, uint32_t alignment) {
 
 static uint32_t gl_format_components(GLenum format) {
     switch (format) {
+    case GL_COLOR_INDEX:
+    case GL_STENCIL_INDEX:
     case GL_RED:
     case GL_GREEN:
     case GL_BLUE:
@@ -6126,8 +6130,8 @@ static uint32_t gl_pixel_span_with_state(GLsizei width, GLsizei height, GLenum f
                                          GLint skip_rows, GLint skip_pixels) {
     uint32_t pixel_bytes;
     uint32_t row_pixels;
-    uint32_t row_bytes;
-    uint32_t row_stride;
+    uint64_t row_bytes;
+    uint64_t row_stride;
     uint64_t skip_bytes;
     uint64_t total;
 
@@ -6141,14 +6145,13 @@ static uint32_t gl_pixel_span_with_state(GLsizei width, GLsizei height, GLenum f
     }
 
     row_pixels = row_length > 0 ? (uint32_t)row_length : (uint32_t)width;
-    if (row_pixels < (uint32_t)width) {
-        row_pixels = (uint32_t)width;
-    }
-
-    row_bytes = row_pixels * pixel_bytes;
-    row_stride = align_u32(row_bytes, (uint32_t)(alignment > 0 ? alignment : 1));
+    row_bytes = (uint64_t)row_pixels * pixel_bytes;
+    row_stride = (row_bytes + (uint32_t)(alignment > 0 ? alignment : 1) - 1u) &
+                 ~((uint64_t)(uint32_t)(alignment > 0 ? alignment : 1) - 1u);
+    if (row_stride > UINT32_MAX) return 0;
     skip_bytes = (uint64_t)(skip_rows > 0 ? skip_rows : 0) * row_stride +
                  (uint64_t)(skip_pixels > 0 ? skip_pixels : 0) * pixel_bytes;
+    if (skip_bytes > UINT32_MAX) return 0;
     total = skip_bytes +
             (uint64_t)((uint32_t)height - 1u) * row_stride +
             (uint64_t)(uint32_t)width * pixel_bytes;
@@ -6199,6 +6202,11 @@ static uint32_t gl_pixel_span_3d_with_state(GLsizei width, GLsizei height, GLsiz
 
     image_rows = image_height > 0 ? (uint32_t)image_height : (uint32_t)height;
     image_stride = (uint64_t)row_stride * image_rows;
+    if ((skip_images > 0 && image_stride > UINT32_MAX / (uint32_t)skip_images) ||
+        (skip_rows > 0 && row_stride > UINT32_MAX / (uint32_t)skip_rows) ||
+        (skip_pixels > 0 && pixel_bytes > UINT32_MAX / (uint32_t)skip_pixels) ||
+        (depth > 1 && image_stride > UINT32_MAX / ((uint32_t)depth - 1u)) ||
+        (height > 1 && row_stride > UINT32_MAX / ((uint32_t)height - 1u))) return 0;
     offset = (uint64_t)(skip_images > 0 ? skip_images : 0) * image_stride +
              (uint64_t)(skip_rows > 0 ? skip_rows : 0) * row_stride +
              (uint64_t)(skip_pixels > 0 ? skip_pixels : 0) * pixel_bytes;
@@ -6237,9 +6245,6 @@ static uint32_t gl_bitmap_span(GLsizei width, GLsizei height) {
     }
 
     row_bits = g_unpack_row_length > 0 ? (uint32_t)g_unpack_row_length : (uint32_t)width;
-    if (row_bits < (uint32_t)width) {
-        row_bits = (uint32_t)width;
-    }
 
     row_bytes = (row_bits + 7u) / 8u;
     row_stride = align_u32(row_bytes, (uint32_t)(g_unpack_alignment > 0 ? g_unpack_alignment : 1));
@@ -6247,7 +6252,7 @@ static uint32_t gl_bitmap_span(GLsizei width, GLsizei height) {
                  ((uint64_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) / 8u);
     total = skip_bytes +
             (uint64_t)((uint32_t)height - 1u) * row_stride +
-            (((uint64_t)(uint32_t)width + 7u) / 8u);
+            (((uint64_t)(uint32_t)width + ((uint32_t)g_unpack_skip_pixels & 7u) + 7u) / 8u);
 
     if (total > 0xFFFFFFFFu) {
         return 0;
@@ -6265,7 +6270,9 @@ static uint32_t gl_pixel_tight_span(GLsizei width, GLsizei height, GLenum format
     if (width < 0 || height < 0 || !pixel_bytes) {
         return 0;
     }
-    total = (uint64_t)(uint32_t)width * (uint32_t)height * pixel_bytes;
+    total = (uint64_t)(uint32_t)width * (uint32_t)height;
+    if (total > UINT32_MAX / pixel_bytes) return 0;
+    total *= pixel_bytes;
     return total <= UINT32_MAX ? (uint32_t)total : 0;
 }
 
@@ -6278,8 +6285,11 @@ static uint32_t gl_pixel_tight_span_3d(GLsizei width, GLsizei height, GLsizei de
         return 0;
     }
 
-    total = (uint64_t)(uint32_t)width * (uint32_t)height *
-            (uint32_t)depth * pixel_bytes;
+    total = (uint64_t)(uint32_t)width * (uint32_t)height;
+    if (total > UINT32_MAX / pixel_bytes) return 0;
+    total *= pixel_bytes;
+    if (depth && total > UINT32_MAX / (uint32_t)depth) return 0;
+    total *= (uint32_t)depth;
     return total <= UINT32_MAX ? (uint32_t)total : 0;
 }
 
@@ -6287,12 +6297,16 @@ static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
                                     GLint alignment, GLint row_length) {
     uint32_t pixel_bytes = gl_pixel_bytes(format, type);
     uint32_t row_pixels = row_length > 0 ? (uint32_t)row_length : (uint32_t)width;
+    uint64_t stride;
 
-    if (!pixel_bytes || width < 0 || row_pixels < (uint32_t)width ||
+    if (!pixel_bytes || width < 0 ||
         row_pixels > UINT32_MAX / pixel_bytes) {
         return 0;
     }
-    return align_u32(row_pixels * pixel_bytes, (uint32_t)(alignment > 0 ? alignment : 1));
+    stride = (uint64_t)row_pixels * pixel_bytes;
+    stride = (stride + (uint32_t)(alignment > 0 ? alignment : 1) - 1u) &
+             ~((uint64_t)(uint32_t)(alignment > 0 ? alignment : 1) - 1u);
+    return stride <= UINT32_MAX ? (uint32_t)stride : 0;
 }
 
 static uint32_t gl_pixel_image_stride(GLsizei width, GLsizei height,
