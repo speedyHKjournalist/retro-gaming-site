@@ -1008,8 +1008,8 @@ static uint32_t g_frame_id = 1;
 static GLuint g_next_texture_id = 1;
 static GLuint g_next_buffer_id = 1;
 static GLuint g_next_query_id = 1;
-static GLuint g_next_shader_id = 1;
-static GLuint g_next_program_id = 1;
+/* Shaders and programs share one GL object namespace. */
+static GLuint g_next_glsl_id = 1;
 static GLuint g_next_arb_program_id = 1;
 static GLuint g_current_vertex_program_arb = 0;
 static GLuint g_current_fragment_program_arb = 0;
@@ -3091,8 +3091,7 @@ static void free_gl2_state(void) {
     g_attrib_location_capacity = 0;
     ZeroMemory(g_framebuffer_objects, sizeof(g_framebuffer_objects));
     ZeroMemory(g_renderbuffer_objects, sizeof(g_renderbuffer_objects));
-    g_next_shader_id = 1;
-    g_next_program_id = 1;
+    g_next_glsl_id = 1;
     g_next_arb_program_id = 1;
     g_next_framebuffer_id = 1;
     g_next_renderbuffer_id = 1;
@@ -10911,11 +10910,21 @@ void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string)
     }
 }
 
+static GLuint allocate_glsl_name(void) {
+    GLuint first = g_next_glsl_id;
+    do {
+        GLuint name = g_next_glsl_id++;
+        if (name && !find_program_state(name, FALSE) && !find_shader_state(name, FALSE, 0)) return name;
+    } while (g_next_glsl_id != first);
+    v86gl_set_error(GL_OUT_OF_MEMORY);
+    return 0;
+}
+
 GLuint APIENTRY glCreateProgram(void) {
-    GLuint name = g_next_program_id++;
+    GLuint name = allocate_glsl_name();
     uint32_t payload;
 
-    if (!name) name = g_next_program_id++;
+    if (!name) return 0;
     if (!find_program_state(name, TRUE)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
@@ -10935,8 +10944,8 @@ GLuint APIENTRY glCreateShader(GLenum type) {
         return 0;
     }
 
-    name = g_next_shader_id++;
-    if (!name) name = g_next_shader_id++;
+    name = allocate_glsl_name();
+    if (!name) return 0;
     if (!find_shader_state(name, TRUE, type)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return 0;
