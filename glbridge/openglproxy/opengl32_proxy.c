@@ -10758,9 +10758,12 @@ void APIENTRY glDeleteProgramsARB(GLsizei n, const GLuint* programs) {
     emit_arb_program_name_array(GLFN_DELETE_PROGRAMS_ARB, n, programs);
 }
 
+static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuint* names);
+
 void APIENTRY glGenProgramsARB(GLsizei n, GLuint* programs) {
     GLsizei i;
 
+    if (emit_query_names(V86GL_OBJECT_KIND_ARB_PROGRAM, GLFN_GEN_PROGRAMS_ARB, n, programs)) return;
     if (n < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -10786,6 +10789,8 @@ void APIENTRY glGenProgramsARB(GLsizei n, GLuint* programs) {
 }
 
 GLboolean APIENTRY glIsProgramARB(GLuint program) {
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_ARB_PROGRAM, program, V86GL_STATE_BOOLEAN, &answer)) return answer;
     return find_arb_program_state(program, FALSE) ? GL_TRUE : GL_FALSE;
 }
 
