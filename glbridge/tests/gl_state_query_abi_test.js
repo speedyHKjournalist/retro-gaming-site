@@ -1,0 +1,126 @@
+#!/usr/bin/env node
+// Compile the DLL's actual typed-query function. Its requests go through the
+// real CPU shadow and executor, and the resulting bytes go back through the
+// C function's decoding: a wrong C layout/conversion cannot agree with itself.
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const { hostPath, testPath } = require("./host_paths.js");
+const { GLShadow } = require(hostPath("gl-webgpu/gl_shadow.js"));
+require(hostPath("gl-webgpu/gl_shadow_objects.js"));
+require(hostPath("gl-webgpu/gl_shadow_state.js"));
+const caps = require(hostPath("gl-webgpu/gl_caps.js"));
+const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
+const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
+const { GLStream, GL } = require(testPath("gl_stream_builder.js"));
+const P = require(hostPath("gl-webgpu/gl_protocol.js"));
+const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
+const start = source.indexOf("static int emit_query_state("), end = source.indexOf("static GLint query_limit_or_default", start);
+assert.ok(start >= 0 && end > start);
+const helper = source.slice(start, end);
+// The four public getters must use this compiled function with the right type.
+for (const [name, kind] of [["Integer", "INTEGER"], ["Float", "FLOAT"], ["Double", "DOUBLE"], ["Boolean", "BOOLEAN"]]) {
+    const body = source.slice(source.indexOf("void APIENTRY glGet" + name + "v("));
+    assert.ok(body.slice(0, body.indexOf("\n__declspec(dllexport)")).includes("emit_query_state(pname, V86GL_STATE_" + kind + ", params)"));
+}
+const c = `
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "gl_protocol.h"
+typedef unsigned int GLenum;
+typedef int32_t GLint;
+typedef float GLfloat;
+typedef double GLdouble;
+typedef unsigned char GLboolean;
+typedef int BOOL;
+#define FALSE 0
+#define GL_FALSE 0
+#define GL_TRUE 1
+#define GL_INVALID_OPERATION 0x502
+#define ZeroMemory(p,n) memset(p,0,n)
+#define CopyMemory memcpy
+static unsigned char buffer[1024];
+static unsigned int length, error;
+static int encode;
+static void v86gl_set_error(GLenum e) { if (!error) error = e; }
+static uint32_t read_u32le(const uint8_t* p) { uint32_t v; memcpy(&v,p,4); return v; }
+static int reserve_pci_record(uint16_t fn, const void* data, uint32_t size, uint8_t** out) {
+    uint16_t short_size = (uint16_t)size;
+    (void)data;
+    assert(fn == GLFN_QUERY_STATE && size < sizeof(buffer)-4);
+    memcpy(buffer, &fn, 2); memcpy(buffer+2, &short_size, 2);
+    length = size+4; *out = buffer+4; return 1;
+}
+static int emit_pci_batch(BOOL present) {
+    (void)present;
+    if (encode) { assert(fwrite(buffer,1,length,stdout) == length); return 0; }
+    assert(fread(buffer,1,length,stdin) == length);
+    return 1;
+}
+${helper}
+int main(int argc, char** argv) {
+    union { GLdouble align; unsigned char bytes[160]; } out;
+    unsigned int kind, pname;
+    int result;
+    assert(argc == 4);
+    encode = atoi(argv[1]); kind = (unsigned int)atoi(argv[2]); pname = (unsigned int)strtoul(argv[3], NULL, 0);
+    memset(out.bytes, 0xA5, sizeof(out.bytes));
+    result = emit_query_state(pname, kind, out.bytes+8);
+    if (!encode) {
+        assert(fwrite(&result,4,1,stdout) == 1);
+        assert(fwrite(&error,4,1,stdout) == 1);
+        assert(fwrite(out.bytes,1,sizeof(out.bytes),stdout) == sizeof(out.bytes));
+    }
+    return 0;
+}
+`;
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
+(async () => {
+    const file = path.join(dir, "test.c"), binary = path.join(dir, "test");
+    fs.writeFileSync(file, c);
+    execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror",
+        "-I", path.join(__dirname, "../openglproxy"), file, "-o", binary]);
+    const { host } = createFakeHost(), executor = new GLWebGPUExecutor(null, { host }); await executor.initialize();
+    for (const [kind, pname, expected] of [
+        [P.C.V86GL_STATE_INTEGER, GL.VIEWPORT, [-11, 7, 90, 30]],
+        [P.C.V86GL_STATE_FLOAT, GL.DEPTH_RANGE, [0.25, 0.75]],
+        [P.C.V86GL_STATE_DOUBLE, GL.DEPTH_RANGE, [0.25, 0.75]],
+        [P.C.V86GL_STATE_BOOLEAN, GL.COLOR_WRITEMASK, [1, 0, 1, 0]],
+        [P.C.V86GL_STATE_INTEGER, GL.COLOR_CLEAR_VALUE, [1073741823, 0, 2147483647, 536870911]],
+        [P.C.V86GL_STATE_DOUBLE, GL.MODELVIEW_MATRIX, [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1]],
+        [P.C.V86GL_STATE_FLOAT, GL.CURRENT_INDEX, null], // not migrated: local fallback, untouched output
+    ]) {
+        const wire = execFileSync(binary, ["1", String(kind), String(pname)]);
+        const s = new GLStream().makeCurrent(1, 0, 0, 64, 64, 1, 1)
+            .call("VIEWPORT", -11, 7, 90, 30).call("DEPTH_RANGE", 0.25, 0.75)
+            .call("COLOR_MASK", 1, 0, 1, 0).call("CLEAR_COLOR", 0.5, 0, 1, 0.25)
+            .call("TRANSLATEF", 5, 6, 7).call("SCALEF", 2, 3, 4);
+        const at = s.length; s.record(P.GLFN.QUERY_STATE, wire.subarray(4));
+        const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
+        shadow.process(bytes); executor.submit(bytes, {});
+        const answer = bytes.subarray(at);
+        const decoded = execFileSync(binary, ["0", String(kind), String(pname)], { input: answer });
+        assert.equal(decoded.readInt32LE(0), expected ? 1 : 0);
+        assert.equal(decoded.readUInt32LE(4), 0);
+        const output = decoded.subarray(8), itemBytes = kind === P.C.V86GL_STATE_DOUBLE ? 8 : kind === P.C.V86GL_STATE_BOOLEAN ? 1 : 4;
+        if (expected) expected.forEach((v, i) => {
+            const at = 8 + i * itemBytes;
+            const actual = kind === P.C.V86GL_STATE_INTEGER ? output.readInt32LE(at) : kind === P.C.V86GL_STATE_FLOAT ? output.readFloatLE(at) : kind === P.C.V86GL_STATE_DOUBLE ? output.readDoubleLE(at) : output[at];
+            assert.equal(actual, v);
+        });
+        assert.ok(output.subarray(0, 8).every(b => b === 0xA5));
+        assert.ok(output.subarray(8 + (expected ? expected.length : 0) * itemBytes).every(b => b === 0xA5));
+        // A transport/query failure must preserve output, even with a fake
+        // oversized count. It must not silently enter the old local path.
+        const failed = Buffer.from(answer); failed.writeUInt32LE(2, 4 + P.F.QUERY_STATE.status); failed.writeUInt32LE(GL.INVALID_OPERATION, 4 + P.F.QUERY_STATE.error);
+        const error = execFileSync(binary, ["0", String(kind), String(pname)], { input: failed });
+        assert.equal(error.readInt32LE(0), -1); assert.equal(error.readUInt32LE(4), GL.INVALID_OPERATION);
+        assert.ok(error.subarray(8).every(b => b === 0xA5));
+    }
+    console.log("gl_state_query_abi_test: actual C encoder/decoder, real shadow/executor, four types, vectors and output guards passed");
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => fs.rmSync(dir, { recursive: true, force: true }));

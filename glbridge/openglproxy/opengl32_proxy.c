@@ -4839,6 +4839,55 @@ static int emit_query_integer(GLenum pname, GLint* value) {
     return 1;
 }
 
+/* Return 0 only for a state family not migrated to the CPU yet. A failed
+ * query sets the error and leaves the caller's output alone (-1). The wire
+ * carries converted values as doubles, so vectors, booleans and GLint's
+ * exact limits do not depend on the page's asynchronous renderer. */
+static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
+    V86GLRecordQueryState request;
+    uint8_t* args;
+    unsigned int status, count, i;
+    GLdouble value;
+
+    if (!values) return -1;
+    ZeroMemory(&request, sizeof(request));
+    request.pname = (uint32_t)pname;
+    request.value_kind = kind;
+    request.data_size = 16u * sizeof(GLdouble);
+    if (!reserve_pci_record(GLFN_QUERY_STATE, NULL,
+                            sizeof(request) + request.data_size, &args)) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    CopyMemory(args, &request, sizeof(request));
+    if (!emit_pci_batch(FALSE)) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    status = read_u32le(args + offsetof(V86GLRecordQueryState, status));
+    if (status == V86GL_STATE_QUERY_UNSUPPORTED) return 0;
+    if (status != V86GL_SYNC_QUERY_STATUS_OK) {
+        unsigned int error = read_u32le(args + offsetof(V86GLRecordQueryState, error));
+        v86gl_set_error(error ? (GLenum)error : GL_INVALID_OPERATION);
+        return -1;
+    }
+    count = read_u32le(args + offsetof(V86GLRecordQueryState, count));
+    if (count > 16u) {
+        v86gl_set_error(GL_INVALID_OPERATION);
+        return -1;
+    }
+    for (i = 0; i < count; ++i) {
+        CopyMemory(&value, args + sizeof(request) + i * sizeof(value), sizeof(value));
+        switch (kind) {
+        case V86GL_STATE_INTEGER: ((GLint*)values)[i] = (GLint)value; break;
+        case V86GL_STATE_FLOAT: ((GLfloat*)values)[i] = (GLfloat)value; break;
+        case V86GL_STATE_DOUBLE: ((GLdouble*)values)[i] = value; break;
+        case V86GL_STATE_BOOLEAN: ((GLboolean*)values)[i] = value != 0.0 ? GL_TRUE : GL_FALSE; break;
+        }
+    }
+    return 1;
+}
+
 static GLint query_limit_or_default(GLenum pname, GLint fallback, GLint maximum) {
     GLint value = 0;
 
@@ -8705,6 +8754,7 @@ void APIENTRY glGetIntegerv(GLenum pname, GLint* params) {
         v86gl_trace("glGetIntegerv pname=0x%04lx", (unsigned long)pname);
     }
 
+    if (emit_query_state(pname, V86GL_STATE_INTEGER, params)) return;
     init_query_state();
     texture_unit = active_texture_unit_state();
 
@@ -9348,6 +9398,7 @@ void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) {
         v86gl_trace("glGetFloatv pname=0x%04lx", (unsigned long)pname);
     }
 
+    if (emit_query_state(pname, V86GL_STATE_FLOAT, params)) return;
     init_query_state();
 
     switch (pname) {
@@ -9525,6 +9576,7 @@ void APIENTRY glGetDoublev(GLenum pname, GLdouble* params) {
         v86gl_trace("glGetDoublev pname=0x%04lx", (unsigned long)pname);
     }
 
+    if (emit_query_state(pname, V86GL_STATE_DOUBLE, params)) return;
     old_error = g_error;
     ZeroMemory(values, sizeof(values));
     glGetFloatv(pname, values);
@@ -9555,6 +9607,7 @@ void APIENTRY glGetBooleanv(GLenum pname, GLboolean* params) {
         v86gl_trace("glGetBooleanv pname=0x%04lx", (unsigned long)pname);
     }
 
+    if (emit_query_state(pname, V86GL_STATE_BOOLEAN, params)) return;
     old_error = g_error;
     ZeroMemory(values, sizeof(values));
     glGetFloatv(pname, values);

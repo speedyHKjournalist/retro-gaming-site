@@ -37,6 +37,21 @@ hand-written records and the shared constants. `gl_protocol.h` and
 `gl_opcode_names.h` here are generated from it
 (`node <v86>/tools/gen_gl_protocol_header.mjs glbridge/openglproxy`, with a
 size/offset assert for every header); do not edit them.
+
+On the `refactor` branch, the four `glGet*v` entry points first use
+`QUERY_STATE` for state families migrated to v86's CPU-side
+`gl_shadow_state.js`. It carries vectors and converted integer, float,
+double and boolean values; the device writes the response before returning
+from submission in both local and CPU-worker modes. An explicit
+`UNSUPPORTED` response keeps the existing local query path for families
+not migrated yet. A failed query preserves application output and reports
+an error. `gl_state_query_abi_test.js` compiles the actual C encoder/decoder
+and tests its bytes against the CPU shadow and page executor. This does not
+complete the state migration or fix CPU-worker `glGetError`; see v86's
+`docs/opengl-webgpu-plan.md`, C3. Shipping DLLs and disk images are updated
+in phase F6 for guest acceptance; this source milestone only cross-compiles
+the DLL and does not deploy it.
+
 `../tests/generated_headers_test.js` fails when they are stale, and
 `../tests/gl_protocol_consistency_test.js` checks the payload structs this DLL
 still declares inline against the schema.
