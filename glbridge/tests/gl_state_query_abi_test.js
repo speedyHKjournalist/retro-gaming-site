@@ -15,6 +15,7 @@ require(hostPath("gl-webgpu/gl_shadow_fixed.js"));
 require(hostPath("gl-webgpu/gl_shadow_misc.js"));
 require(hostPath("gl-webgpu/gl_shadow_rasterpos.js"));
 require(hostPath("gl-webgpu/gl_shadow_pixelmaps.js"));
+require(hostPath("gl-webgpu/gl_shadow_images.js"));
 const caps = require(hostPath("gl-webgpu/gl_caps.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
@@ -126,6 +127,12 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_UNSIGNED_SHORT, 0, [0, 32768, 65535, 65535], P.C.V86GL_PARAMETER_PIXEL_MAP, GL.PIXEL_MAP_R_TO_R],
         [P.C.V86GL_STATE_FLOAT, 0, Array.from({ length: 32 }, (_, i) => Math.fround(i / 31)), P.C.V86GL_PARAMETER_PIXEL_MAP, GL.PIXEL_MAP_G_TO_G, 256],
         [P.C.V86GL_STATE_FLOAT, GL.CURRENT_INDEX, null], // not migrated: local fallback, untouched output
+        [P.C.V86GL_STATE_BOOLEAN, 0, [0], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_TEXTURE],
+        [P.C.V86GL_STATE_BOOLEAN, 7, [1], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_TEXTURE],
+        [P.C.V86GL_STATE_BOOLEAN, 8, [0], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_TEXTURE],
+        [P.C.V86GL_STATE_BOOLEAN, 9, [1], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_RENDERBUFFER],
+        [P.C.V86GL_STATE_BOOLEAN, 3, [1], P.C.V86GL_PARAMETER_IS_OBJECT, P.C.V86GL_OBJECT_KIND_FRAMEBUFFER],
+        [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_BINDING_2D, [7]],
     ]) {
         const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : [])] : [])];
         const wire = execFileSync(binary, ["1", ...args]);
@@ -146,6 +153,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
             payload.set(P.encodeRecord("PIXEL_MAPFV", { map, count: values.length })); values.forEach((v, i) => view.setFloat32(8 + i * 4, v, true));
             s.record(P.GLFN.PIXEL_MAPFV, payload);
         }
+        s.names(P.GLFN.GEN_TEXTURES, [8]).call("BIND_TEXTURE", GL.TEXTURE_2D, 7)
+            .call("BIND_RENDERBUFFER", GL.RENDERBUFFER_EXT, 9).call("BIND_FRAMEBUFFER", GL.FRAMEBUFFER_EXT, 3);
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});

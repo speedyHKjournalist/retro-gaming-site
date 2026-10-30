@@ -10994,11 +10994,15 @@ void APIENTRY glDeleteShader(GLuint shader) {
 }
 
 GLboolean APIENTRY glIsProgram(GLuint program) {
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_PROGRAM, program, V86GL_STATE_BOOLEAN, &answer)) return answer;
     ProgramObjectState* state = find_program_state(program, FALSE);
     return state ? GL_TRUE : GL_FALSE;
 }
 
 GLboolean APIENTRY glIsShader(GLuint shader) {
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_SHADER, shader, V86GL_STATE_BOOLEAN, &answer)) return answer;
     ShaderObjectState* state = find_shader_state(shader, FALSE, 0);
     return state ? GL_TRUE : GL_FALSE;
 }
@@ -13053,6 +13057,8 @@ void APIENTRY glBindFramebuffer(GLenum target, GLuint framebuffer) {
 }
 
 GLboolean APIENTRY glIsFramebufferEXT(GLuint framebuffer) {
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_FRAMEBUFFER, framebuffer, V86GL_STATE_BOOLEAN, &answer)) return answer;
     return find_framebuffer_state(framebuffer, FALSE) ? GL_TRUE : GL_FALSE;
 }
 
@@ -13368,6 +13374,8 @@ void APIENTRY glBindRenderbuffer(GLenum target, GLuint renderbuffer) {
 }
 
 GLboolean APIENTRY glIsRenderbufferEXT(GLuint renderbuffer) {
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_RENDERBUFFER, renderbuffer, V86GL_STATE_BOOLEAN, &answer)) return answer;
     return find_renderbuffer_state(renderbuffer, FALSE) ? GL_TRUE : GL_FALSE;
 }
 
@@ -18684,6 +18692,8 @@ void APIENTRY glGetPointerv(GLenum pname, GLvoid** params) {
 __declspec(dllexport)
 GLboolean APIENTRY glIsTexture(GLuint texture) {
     TextureObjectState* state;
+    GLboolean answer = GL_FALSE;
+    if (emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_TEXTURE, texture, V86GL_STATE_BOOLEAN, &answer)) return answer;
     if (!texture) {
         return GL_FALSE;
     }
