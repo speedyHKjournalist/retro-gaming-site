@@ -10970,9 +10970,12 @@ static GLuint allocate_glsl_name(void) {
 }
 
 GLuint APIENTRY glCreateProgram(void) {
-    GLuint name = allocate_glsl_name();
+    GLuint name = 0;
+    int allocated = emit_query_names(V86GL_OBJECT_KIND_PROGRAM, 0, 1, &name);
     uint32_t payload;
 
+    if (allocated < 0) return 0;
+    if (!allocated) name = allocate_glsl_name();
     if (!name) return 0;
     if (!find_program_state(name, TRUE)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
@@ -10986,6 +10989,7 @@ GLuint APIENTRY glCreateProgram(void) {
 
 GLuint APIENTRY glCreateShader(GLenum type) {
     GLuint name;
+    int allocated;
     struct { uint32_t shader, type; } payload;
 
     if (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) {
@@ -10993,7 +10997,9 @@ GLuint APIENTRY glCreateShader(GLenum type) {
         return 0;
     }
 
-    name = allocate_glsl_name();
+    allocated = emit_query_names(V86GL_OBJECT_KIND_SHADER, 0, 1, &name);
+    if (allocated < 0) return 0;
+    if (!allocated) name = allocate_glsl_name();
     if (!name) return 0;
     if (!find_shader_state(name, TRUE, type)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
@@ -12398,7 +12404,7 @@ static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuin
         }
         if (chunk > 0) {
             CopyMemory(names + generated, args + sizeof(request), data_size);
-            emit_name_array_call(opcode, chunk, names + generated);
+            if (opcode) emit_name_array_call(opcode, chunk, names + generated);
             generated += chunk;
         }
     } while (generated < count);

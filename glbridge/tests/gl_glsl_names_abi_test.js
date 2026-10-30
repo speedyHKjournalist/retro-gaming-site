@@ -21,6 +21,10 @@ try {
 #define GL_OUT_OF_MEMORY 0x505
 typedef uint32_t GLuint;
 typedef uint32_t GLenum;
+typedef int32_t GLsizei;
+static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuint* names) {
+    (void)kind; (void)opcode; (void)count; (void)names; return 0; /* legacy host */
+}
 static GLuint g_next_glsl_id = 1;
 static GLuint shaders[16], programs[16];
 static unsigned int shader_count, program_count, emitted, error;
