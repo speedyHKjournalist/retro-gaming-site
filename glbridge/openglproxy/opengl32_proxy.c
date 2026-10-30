@@ -1030,7 +1030,6 @@ static GLuint g_pixel_unpack_buffer_binding = 0;
 static GLuint g_draw_framebuffer_binding = 0;
 static GLuint g_read_framebuffer_binding = 0;
 static GLuint g_renderbuffer_binding = 0;
-static GLuint g_next_list_id = 1;
 static GLuint g_list_base = 0;
 static BOOL g_have_viewport = FALSE;
 static GLint g_viewport[4] = { 0, 0, 0, 0 };
@@ -1882,15 +1881,7 @@ typedef struct {
 
 typedef V86GLRecordGenericAttribBlock GenericAttribBlockHeader;
 
-typedef struct DisplayList {
-    GLuint name;
-    BOOL defined;
-    uint8_t* data;
-    uint32_t size;
-    uint32_t capacity;
-    uint32_t command_count;
-    struct DisplayList* next;
-} DisplayList;
+
 
 static ClientArrayState g_vertex_array = { FALSE, 3, GL_FLOAT, 0, NULL, 0 };
 static ClientArrayState g_color_array = { FALSE, 4, GL_FLOAT, 0, NULL, 0 };
@@ -1938,10 +1929,6 @@ static GLenum g_stencil_back_zpass = GL_KEEP;
 static GLenum g_active_stencil_face_ext = GL_FRONT;
 static GLenum g_point_sprite_coord_origin = GL_UPPER_LEFT;
 static char g_program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
-static DisplayList* g_display_lists = NULL;
-static DisplayList* g_current_display_list = NULL;
-static GLenum g_current_display_list_mode = GL_COMPILE;
-static BOOL g_replaying_display_list = FALSE;
 
 #define V86GL_ATTRIB_STACK_DEPTH 16
 typedef struct {
@@ -4036,162 +4023,19 @@ static uint32_t read_u32le(const uint8_t* p) {
            ((uint32_t)p[3] << 24);
 }
 
-static DisplayList* find_display_list(GLuint name, BOOL create) {
-    DisplayList* list;
 
-    if (!name) {
-        return NULL;
-    }
 
-    for (list = g_display_lists; list; list = list->next) {
-        if (list->name == name) {
-            return list;
-        }
-    }
 
-    if (!create) {
-        return NULL;
-    }
 
-    list = (DisplayList*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*list));
-    if (!list) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return NULL;
-    }
 
-    list->name = name;
-    list->next = g_display_lists;
-    g_display_lists = list;
-    return list;
-}
 
-static void clear_display_list(DisplayList* list) {
-    if (!list) {
-        return;
-    }
-    if (list->data) {
-        HeapFree(GetProcessHeap(), 0, list->data);
-    }
-    list->data = NULL;
-    list->size = 0;
-    list->capacity = 0;
-    list->command_count = 0;
-}
 
-static void free_display_lists(void) {
-    DisplayList* list = g_display_lists;
 
-    while (list) {
-        DisplayList* next = list->next;
-        clear_display_list(list);
-        HeapFree(GetProcessHeap(), 0, list);
-        list = next;
-    }
 
-    g_display_lists = NULL;
-    g_current_display_list = NULL;
-    g_current_display_list_mode = GL_COMPILE;
-    g_replaying_display_list = FALSE;
-}
 
-static int reserve_display_list_bytes(DisplayList* list, uint32_t bytes, uint8_t** out) {
-    uint32_t required;
-    uint32_t capacity;
-    uint8_t* data;
 
-    if (!list || !out) {
-        return 0;
-    }
-    if (bytes > UINT32_MAX - list->size) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return 0;
-    }
 
-    required = list->size + bytes;
-    if (required > list->capacity) {
-        capacity = list->capacity ? list->capacity : 4096u;
-        while (capacity < required) {
-            if (capacity > UINT32_MAX / 2u) {
-                capacity = required;
-                break;
-            }
-            capacity *= 2u;
-        }
-        data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, capacity);
-        if (!data) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return 0;
-        }
-        if (list->data && list->size) {
-            CopyMemory(data, list->data, list->size);
-            HeapFree(GetProcessHeap(), 0, list->data);
-        }
-        list->data = data;
-        list->capacity = capacity;
-    }
 
-    *out = list->data + list->size;
-    list->size = required;
-    return 1;
-}
-
-static int append_display_list_stream(DisplayList* list, const uint8_t* data,
-                                      uint32_t size, uint32_t command_count) {
-    uint8_t* out;
-
-    if (!list || (!data && size)) {
-        return 0;
-    }
-    if (!size) {
-        return 1;
-    }
-    if (!reserve_display_list_bytes(list, size, &out)) {
-        return 0;
-    }
-    CopyMemory(out, data, size);
-    list->command_count += command_count;
-    return 1;
-}
-
-static int append_display_list_record(DisplayList* list, uint16_t fn,
-                                      const void* args, uint32_t args_size) {
-    const BOOL extended = args_size >= V86GL_EXTENDED_RECORD_SIZE;
-    const uint32_t header_size = extended ? 8u : 4u;
-    uint32_t record_size;
-    uint8_t* p;
-
-    if (!list) {
-        return 0;
-    }
-    if (args_size > UINT32_MAX - header_size) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return 0;
-    }
-
-    record_size = header_size + args_size;
-    if (!reserve_display_list_bytes(list, record_size, &p)) {
-        return 0;
-    }
-
-    p[0] = (uint8_t)(fn & 0xFF);
-    p[1] = (uint8_t)(fn >> 8);
-    if (extended) {
-        p[2] = 0xFF;
-        p[3] = 0xFF;
-        write_u32le(p + 4, args_size);
-    } else {
-        p[2] = (uint8_t)(args_size & 0xFF);
-        p[3] = (uint8_t)(args_size >> 8);
-    }
-    if (args && args_size) {
-        CopyMemory(p + header_size, args, args_size);
-    }
-
-    list->command_count++;
-    return 1;
-}
-
-static int emit_display_list_stream(const uint8_t* data, uint32_t size);
 static uint8_t* alloc_payload(uint32_t size);
 static void emit_name_array_call(uint16_t fn, GLsizei n, const GLuint* names);
 static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count,
@@ -5296,14 +5140,7 @@ static void emit_gl_large_call(uint16_t fn, const void* args, uint32_t args_size
 }
 
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
-    if (g_current_display_list && !g_replaying_display_list) {
-        if (!append_display_list_record(g_current_display_list, fn, args, args_size)) {
-            return;
-        }
-        if (g_current_display_list_mode == GL_COMPILE) {
-            return;
-        }
-    }
+
 
     if (args_size >= V86GL_EXTENDED_RECORD_SIZE) {
         emit_gl_large_call(fn, args, args_size);
@@ -5321,9 +5158,8 @@ static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
  * normal path, reserve the PCI record first and write the header, indices, and
  * client-array blocks directly into the mapped DMA buffer.
  *
- * Display-list compilation retains the old temporary-payload path because
- * GL_COMPILE records without executing, while GL_COMPILE_AND_EXECUTE records
- * and submits the same payload.
+ * The CPU compiler owns display lists, so list draws use the same direct
+ * record storage as ordinary draws.
  */
 static int reserve_packed_draw_payload(uint16_t fn, uint32_t args_size,
                                        uint8_t** payload_out,
@@ -5337,7 +5173,7 @@ static int reserve_packed_draw_payload(uint16_t fn, uint32_t args_size,
     *payload_is_dma_out = FALSE;
 
 #if V86GL_PACKED_DIRECT_DMA
-    if (!g_current_display_list || g_replaying_display_list) {
+    {
         if (!reserve_pci_record(fn, NULL, args_size, payload_out)) {
             return 0;
         }
@@ -5666,54 +5502,7 @@ static BOOL emit_multi_draw_elements_direct(GLenum mode, const GLsizei* count,
     return TRUE;
 }
 
-static int emit_display_list_stream(const uint8_t* data, uint32_t size) {
-    uint32_t offset = 0;
-    BOOL previous_replay = g_replaying_display_list;
 
-    g_replaying_display_list = TRUE;
-    while (offset < size) {
-        uint16_t fn;
-        uint32_t header_size;
-        uint32_t args_size;
-
-        if (size - offset < 4u) {
-            v86gl_set_error(GL_INVALID_OPERATION);
-            g_replaying_display_list = previous_replay;
-            return 0;
-        }
-
-        fn = (uint16_t)(data[offset] | ((uint16_t)data[offset + 1] << 8));
-        if (data[offset + 2] == 0xFF && data[offset + 3] == 0xFF) {
-            if (size - offset < 8u) {
-                v86gl_set_error(GL_INVALID_OPERATION);
-                g_replaying_display_list = previous_replay;
-                return 0;
-            }
-            header_size = 8u;
-            args_size = read_u32le(data + offset + 4);
-        } else {
-            header_size = 4u;
-            args_size = (uint32_t)data[offset + 2] |
-                        ((uint32_t)data[offset + 3] << 8);
-        }
-
-        if (args_size > size - offset - header_size) {
-            v86gl_set_error(GL_INVALID_OPERATION);
-            g_replaying_display_list = previous_replay;
-            return 0;
-        }
-
-        if (!emit_pci_record(fn, data + offset + header_size, args_size, FALSE)) {
-            g_replaying_display_list = previous_replay;
-            return 0;
-        }
-
-        offset += header_size + args_size;
-    }
-
-    g_replaying_display_list = previous_replay;
-    return 1;
-}
 
 static void emit_window_state(HWND hwnd, BOOL flush);
 
@@ -7560,7 +7349,6 @@ BOOL WINAPI DllMain
         }
         restore_window_proc();
         emit_pci_batch(FALSE);
-        free_display_lists();
         free_gl2_state();
         close_v86gl();
         if (g_wgl_context_lock_initialized) {
@@ -10292,37 +10080,11 @@ void APIENTRY glHint(GLenum target, GLenum mode) {
 __declspec(dllexport)
 void APIENTRY glPushAttrib(GLbitfield mask) {
     uint32_t payload = (uint32_t)mask;
-    const GLbitfield allowed = 0x000FFFFFu | GL_MULTISAMPLE_BIT_ARB;
-    if (mask & ~allowed) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (g_current_display_list && !g_replaying_display_list &&
-        g_current_display_list_mode == GL_COMPILE) {
-        emit_gl_call(GLFN_PUSH_ATTRIB, &payload, sizeof(payload));
-        return;
-    }
-    if (g_attrib_stack_depth >= V86GL_ATTRIB_STACK_DEPTH) {
-        v86gl_set_error(GL_STACK_OVERFLOW);
-        return;
-    }
-    init_query_state();
-    capture_server_attrib(&g_attrib_stack[g_attrib_stack_depth++], mask);
     emit_gl_call(GLFN_PUSH_ATTRIB, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPopAttrib(void) {
-    if (g_current_display_list && !g_replaying_display_list &&
-        g_current_display_list_mode == GL_COMPILE) {
-        emit_gl_call(GLFN_POP_ATTRIB, NULL, 0);
-        return;
-    }
-    if (g_attrib_stack_depth <= 0) {
-        v86gl_set_error(GL_STACK_UNDERFLOW);
-        return;
-    }
-    restore_server_attrib(&g_attrib_stack[--g_attrib_stack_depth]);
     emit_gl_call(GLFN_POP_ATTRIB, NULL, 0);
 }
 
@@ -10333,11 +10095,7 @@ void APIENTRY glPushClientAttrib(GLbitfield mask) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
-    if (g_current_display_list && !g_replaying_display_list &&
-        g_current_display_list_mode == GL_COMPILE) {
-        emit_gl_call(GLFN_PUSH_CLIENT_ATTRIB, &payload, sizeof(payload));
-        return;
-    }
+
     if (g_client_attrib_stack_depth >= V86GL_ATTRIB_STACK_DEPTH) {
         v86gl_set_error(GL_STACK_OVERFLOW);
         return;
@@ -10348,11 +10106,7 @@ void APIENTRY glPushClientAttrib(GLbitfield mask) {
 
 __declspec(dllexport)
 void APIENTRY glPopClientAttrib(void) {
-    if (g_current_display_list && !g_replaying_display_list &&
-        g_current_display_list_mode == GL_COMPILE) {
-        emit_gl_call(GLFN_POP_CLIENT_ATTRIB, NULL, 0);
-        return;
-    }
+
     if (g_client_attrib_stack_depth <= 0) {
         v86gl_set_error(GL_STACK_UNDERFLOW);
         return;
@@ -16039,11 +15793,6 @@ void APIENTRY glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
 __declspec(dllexport)
 void APIENTRY glLineWidth(GLfloat width) {
     float payload = width;
-    if (width <= 0.0f) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
     g_line_width = width;
     emit_gl_call(GLFN_LINE_WIDTH, &payload, sizeof(payload));
 }
@@ -18022,129 +17771,55 @@ void APIENTRY glGetPolygonStipple(GLubyte* mask) {
     }
 }
 
-__declspec(dllexport)
-GLuint APIENTRY glGenLists(GLsizei range) {
-    GLuint first;
-
-    if (range <= 0) {
+static GLuint query_list(uint32_t operation, GLuint name, GLsizei range) {
+    uint32_t request[6] = {0};
+    uint8_t* args;
+    request[0] = operation; request[1] = name; request[2] = (uint32_t)range;
+    if (g_dma_size && !emit_pci_batch(FALSE)) return 0;
+    if (!reserve_pci_record(GLFN_QUERY_LIST, NULL, sizeof(request), &args)) return 0;
+    CopyMemory(args, request, sizeof(request));
+    if (!emit_pci_batch(FALSE)) return 0;
+    if (!wait_for_host_status(args + 12, "display list query")) {
+        v86gl_set_error(read_u32le(args + 16) ? read_u32le(args + 16) : GL_INVALID_OPERATION);
         return 0;
     }
+    return read_u32le(args + 20);
+}
 
-    first = g_next_list_id;
-    g_next_list_id += (GLuint)range;
-    if (g_next_list_id <= first) {
-        g_next_list_id = first + 1;
-    }
-    return first;
+__declspec(dllexport)
+GLuint APIENTRY glGenLists(GLsizei range) {
+    return query_list(0, 0, range);
 }
 
 __declspec(dllexport)
 void APIENTRY glDeleteLists(GLuint list, GLsizei range) {
-    DisplayList* entry;
-    GLuint last;
-
-    if (range < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!range) {
-        return;
-    }
-
-    last = list + (GLuint)range - 1u;
-    for (entry = g_display_lists; entry; entry = entry->next) {
-        if (entry->name >= list && entry->name <= last) {
-            clear_display_list(entry);
-            entry->defined = FALSE;
-        }
-    }
+    (void)query_list(2, list, range);
 }
 
 __declspec(dllexport)
 GLboolean APIENTRY glIsList(GLuint list) {
-    DisplayList* entry = find_display_list(list, FALSE);
-    return (entry && entry->defined) ? GL_TRUE : GL_FALSE;
+    return query_list(1, list, 0) ? GL_TRUE : GL_FALSE;
 }
 
 __declspec(dllexport)
 void APIENTRY glNewList(GLuint list, GLenum mode) {
-    DisplayList* entry;
-
-    if (v86gl_trace_call_allowed()) {
-        v86gl_trace("glNewList list=%lu mode=0x%04lx",
-                    (unsigned long)list, (unsigned long)mode);
-    }
-
-    if (!list || (mode != GL_COMPILE && mode != GL_COMPILE_AND_EXECUTE)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (g_current_display_list) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    entry = find_display_list(list, TRUE);
-    if (!entry) {
-        return;
-    }
-
-    clear_display_list(entry);
-    entry->defined = FALSE;
-    g_current_display_list = entry;
-    g_current_display_list_mode = mode;
+    uint32_t request[3] = {1, list, mode};
+    if (v86gl_trace_call_allowed()) v86gl_trace("glNewList list=%lu mode=0x%04lx", (unsigned long)list, (unsigned long)mode);
+    emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
 __declspec(dllexport)
 void APIENTRY glEndList(void) {
-    if (v86gl_trace_call_allowed()) {
-        v86gl_trace("glEndList");
-    }
-
-    if (!g_current_display_list) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    g_current_display_list->defined = TRUE;
-    if (v86gl_trace_call_allowed()) {
-        v86gl_trace("glEndList list=%lu commands=%lu bytes=%lu",
-                    (unsigned long)g_current_display_list->name,
-                    (unsigned long)g_current_display_list->command_count,
-                    (unsigned long)g_current_display_list->size);
-    }
-    g_current_display_list = NULL;
-    g_current_display_list_mode = GL_COMPILE;
+    uint32_t request[3] = {2, 0, 0};
+    if (v86gl_trace_call_allowed()) v86gl_trace("glEndList");
+    emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
 __declspec(dllexport)
 void APIENTRY glCallList(GLuint list) {
-    DisplayList* entry = find_display_list(list, FALSE);
-
-    if (v86gl_trace_call_allowed()) {
-        v86gl_trace("glCallList list=%lu",
-                    (unsigned long)list);
-    }
-
-    if (!entry || !entry->defined) {
-        return;
-    }
-    if (entry == g_current_display_list) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    if (g_current_display_list && !g_replaying_display_list) {
-        if (!append_display_list_stream(g_current_display_list, entry->data,
-                                        entry->size, entry->command_count)) {
-            return;
-        }
-        if (g_current_display_list_mode == GL_COMPILE) {
-            return;
-        }
-    }
-
-    (void)emit_display_list_stream(entry->data, entry->size);
+    uint32_t request[3] = {3, list, 0};
+    if (v86gl_trace_call_allowed()) v86gl_trace("glCallList list=%lu", (unsigned long)list);
+    emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
 static int display_list_name_from_array(GLsizei index, GLenum type,
@@ -18201,30 +17876,26 @@ static int display_list_name_from_array(GLsizei index, GLenum type,
 
 __declspec(dllexport)
 void APIENTRY glCallLists(GLsizei n, GLenum type, const GLvoid* lists) {
+    uint32_t* payload;
     GLsizei i;
-
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (n > 0 && !lists) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    for (i = 0; i < n; i++) {
-        GLuint name;
-        if (!display_list_name_from_array(i, type, lists, &name)) {
-            v86gl_set_error(GL_INVALID_ENUM);
-            return;
-        }
-        glCallList(g_list_base + name);
-    }
+    if (n < 0 || (uint32_t)n > (UINT32_MAX - 8) / 4) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    if (type != GL_BYTE && type != GL_UNSIGNED_BYTE && type != GL_SHORT && type != GL_UNSIGNED_SHORT &&
+        type != GL_INT && type != GL_UNSIGNED_INT && type != GL_FLOAT &&
+        type != GL_2_BYTES && type != GL_3_BYTES && type != GL_4_BYTES) { v86gl_set_error(GL_INVALID_ENUM); return; }
+    if (n && !lists) return;
+    payload = (uint32_t*)HeapAlloc(GetProcessHeap(), 0, 8 + (uint32_t)n * 4);
+    if (!payload) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
+    payload[0] = (uint32_t)n; payload[1] = (uint32_t)n * 4;
+    for (i = 0; i < n; i++) (void)display_list_name_from_array(i, type, lists, &payload[2 + i]);
+    emit_gl_call(GLFN_LIST_CALLS, payload, 8 + (uint32_t)n * 4);
+    HeapFree(GetProcessHeap(), 0, payload);
 }
 
 __declspec(dllexport)
 void APIENTRY glListBase(GLuint base) {
+    uint32_t request[3] = {4, base, 0};
     g_list_base = base;
+    emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
 __declspec(dllexport)

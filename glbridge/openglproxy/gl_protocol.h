@@ -335,9 +335,12 @@ enum {
     GLFN_BIND_FRAMEBUFFER_EXT = 232,
     GLFN_QUERY_TEXTURE_IMAGE = 233,
     GLFN_QUERY_POLYGON_STIPPLE = 234,
-    GLFN_POLYGON_STIPPLE_BITMAP = 235
+    GLFN_POLYGON_STIPPLE_BITMAP = 235,
+    GLFN_LIST_COMMAND = 236,
+    GLFN_QUERY_LIST = 237,
+    GLFN_LIST_CALLS = 238
 };
-#define V86GL_OPCODE_COUNT 235u
+#define V86GL_OPCODE_COUNT 238u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -924,6 +927,23 @@ typedef struct V86GLRecordPolygonStippleBitmap {
     uint32_t error;
     uint32_t reserved;
 } V86GLRecordPolygonStippleBitmap;
+typedef struct V86GLRecordListCommand {
+    uint32_t operation;
+    uint32_t name;
+    uint32_t value;
+} V86GLRecordListCommand;
+typedef struct V86GLRecordQueryList {
+    uint32_t operation;
+    uint32_t name;
+    int32_t range;
+    uint32_t status;
+    uint32_t error;
+    uint32_t result;
+} V86GLRecordQueryList;
+typedef struct V86GLRecordListCalls {
+    uint32_t count;
+    uint32_t data_size;
+} V86GLRecordListCalls;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1500,6 +1520,20 @@ typedef char V86GLRecordPolygonStippleBitmap_data_size[offsetof(V86GLRecordPolyg
 typedef char V86GLRecordPolygonStippleBitmap_status[offsetof(V86GLRecordPolygonStippleBitmap, status) == 4 ? 1 : -1];
 typedef char V86GLRecordPolygonStippleBitmap_error[offsetof(V86GLRecordPolygonStippleBitmap, error) == 8 ? 1 : -1];
 typedef char V86GLRecordPolygonStippleBitmap_reserved[offsetof(V86GLRecordPolygonStippleBitmap, reserved) == 12 ? 1 : -1];
+typedef char V86GLRecordListCommandSize[sizeof(V86GLRecordListCommand) == 12 ? 1 : -1];
+typedef char V86GLRecordListCommand_operation[offsetof(V86GLRecordListCommand, operation) == 0 ? 1 : -1];
+typedef char V86GLRecordListCommand_name[offsetof(V86GLRecordListCommand, name) == 4 ? 1 : -1];
+typedef char V86GLRecordListCommand_value[offsetof(V86GLRecordListCommand, value) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryListSize[sizeof(V86GLRecordQueryList) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryList_operation[offsetof(V86GLRecordQueryList, operation) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryList_name[offsetof(V86GLRecordQueryList, name) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryList_range[offsetof(V86GLRecordQueryList, range) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryList_status[offsetof(V86GLRecordQueryList, status) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryList_error[offsetof(V86GLRecordQueryList, error) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryList_result[offsetof(V86GLRecordQueryList, result) == 20 ? 1 : -1];
+typedef char V86GLRecordListCallsSize[sizeof(V86GLRecordListCalls) == 8 ? 1 : -1];
+typedef char V86GLRecordListCalls_count[offsetof(V86GLRecordListCalls, count) == 0 ? 1 : -1];
+typedef char V86GLRecordListCalls_data_size[offsetof(V86GLRecordListCalls, data_size) == 4 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];

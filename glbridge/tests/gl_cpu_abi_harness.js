@@ -10,6 +10,8 @@ require(hostPath("gl-webgpu/gl_shadow_arb.js"));
 require(hostPath("gl-webgpu/gl_shadow_glsl.js"));
 require(hostPath("gl-webgpu/gl_shadow_textures.js"));
 require(hostPath("gl-webgpu/gl_shadow_stipple.js"));
+require(hostPath("gl-webgpu/gl_shadow_lists.js"));
+require(hostPath("gl-webgpu/gl_shadow_fixed.js"));
 const { GLWebGPUExecutor } = require(hostPath("gl-webgpu/gl_executor.js"));
 const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
 const { GLStream, GL } = require(testPath("gl_stream_builder.js"));
@@ -58,14 +60,19 @@ async function run(code, check, configure) {
                 pending = Buffer.concat([pending, bytes]);
                 try { while (pending.length >= 4 && pending.length >= 4 + pending.readUInt32LE(0)) {
                     const length = pending.readUInt32LE(0), command = Uint8Array.from(pending.subarray(4, 4 + length)); pending = pending.subarray(4 + length); ++count;
-                    shadow.process(command); const answered = command.slice(), view = new DataView(command.buffer);
+                    const segments = shadow.process(command); const answered = command.slice(), view = new DataView(command.buffer);
                     const fn = view.getUint16(0, true), at = view.getUint16(2, true) === 0xFFFF ? 8 : 4;
                     const query = fn === P.GLFN.QUERY_OBJECT_BATCH ? "QUERY_OBJECT_BATCH" :
                         fn === P.GLFN.QUERY_TEXTURE_IMAGE ? "QUERY_TEXTURE_IMAGE" :
                         fn === P.GLFN.QUERY_ERROR ? "QUERY_ERROR" :
                         fn === P.GLFN.QUERY_OBJECT_IV && view.getUint32(at + P.F.QUERY_OBJECT_IV.object_kind, true) === P.C.V86GL_OBJECT_KIND_QUERY ? "QUERY_OBJECT_IV" : null;
                     const cpuAnswered = !query || view.getUint32(at + P.F[query].status, true) !== P.C.V86GL_SYNC_QUERY_STATUS_PENDING;
-                    gpu.submit(copied ? command.slice() : command, { guestBytes: command });
+                    if (segments) {
+                        for (const segment of segments) {
+                            const part = segment.bytes || command.subarray(segment.offset, segment.offset + segment.length);
+                            gpu.submit(copied ? part.slice() : part, { guestBytes: command });
+                        }
+                    } else gpu.submit(copied ? command.slice() : command, { guestBytes: command });
                     const finish = () => { if (cpuAnswered) assert.deepEqual(command, answered, "renderer changed CPU answers"); child.stdin.write(command); };
                     if (query && view.getUint32(at + P.F[query].status, true) === P.C.V86GL_SYNC_QUERY_STATUS_PENDING)
                         gpu.idle().then(finish).catch(error => { failure = error; child.kill(); });
