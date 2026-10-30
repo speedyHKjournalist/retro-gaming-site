@@ -24,6 +24,13 @@
 #define V86GL_FORMAT_SAMPLES_MASK 0xFF00u
 /* a record size of this is followed by a u32 size */
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
+#define V86GL_RESPONSE_REGION_BYTES 0x400000u
+/* reserved at the end of the arena, outside the GL command stream */
+#define V86GL_HEARTBEAT_BYTES 16u
+#define V86GL_HEARTBEAT_OFFSET 0x3FFFF0u
+#define V86GL_ASYNC_HOST_TIMEOUT_MS 0x1388u
+/* longer than the host's own readback deadline */
+#define V86GL_ASYNC_SILENCE_MS 0x1770u
 #define V86GL_READ_PIXELS_HEADER_SIZE 32u
 #define V86GL_READ_PIXELS_STATUS_PENDING 0u
 #define V86GL_READ_PIXELS_STATUS_OK 1u

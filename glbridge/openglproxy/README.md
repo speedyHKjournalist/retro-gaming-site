@@ -52,6 +52,14 @@ complete the state migration or fix CPU-worker `glGetError`; see v86's
 in phase F6 for guest acceptance; this source milestone only cross-compiles
 the DLL and does not deploy it.
 
+Asynchronous pixel/fence/query waits use a six-second host-silence deadline
+renewed by the heartbeat, while the renderer bounds its own GPU waits to
+five seconds. The last 16 arena bytes are reserved for that heartbeat and
+excluded from GL command capacity. Inline answers expire on the next
+submission; dedicated D3D response slots keep their arena lifetime. The
+native `gl_async_wait_abi_test.js` covers progress, silence, tick-counter
+wrap and command-capacity boundaries.
+
 `../tests/generated_headers_test.js` fails when they are stale, and
 `../tests/gl_protocol_consistency_test.js` checks the payload structs this DLL
 still declares inline against the schema.

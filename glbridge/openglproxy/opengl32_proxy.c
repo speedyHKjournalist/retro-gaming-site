@@ -4291,7 +4291,11 @@ static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
     }
 
     record_size = header_size + args_size;
-    command_capacity = g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc);
+    if (g_dma_capacity < (uint32_t)sizeof(V86GLDMADesc) + V86GL_HEARTBEAT_BYTES) {
+        v86gl_set_error(GL_OUT_OF_MEMORY);
+        return 0;
+    }
+    command_capacity = g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc) - V86GL_HEARTBEAT_BYTES;
     if (record_size > command_capacity) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         v86gl_error("drop GL record fn=%u payload=%lu capacity=%lu",
@@ -4359,13 +4363,10 @@ static int emit_pci_record(uint16_t fn, const void* args, uint32_t args_size, BO
  * Wait for a host completion that cannot be answered inside the submitting
  * port write.
  *
- * Everything else in this protocol is answered synchronously: the host runs
- * the whole batch while the guest is blocked in DeviceIoControl, so a query's
- * answer is already in the record when the IOCTL returns. glReadPixels cannot
- * work that way -- the pixels come out of a GPU buffer the host can only map
- * asynchronously, so its completion callback runs a JS turn *after* the port
- * write returned. Checking the status word once therefore always reads
- * PENDING, and every glReadPixels fails.
+ * CPU-shadow queries are answered before DeviceIoControl returns. Rendering
+ * runs on the page, across a copy in CPU-worker mode: pixels, GPU fences and
+ * query-object responses can arrive later. glReadPixels maps a GPU buffer;
+ * glFinish waits on the submitted work. Neither can test the status only once.
  *
  * The record aliases guest RAM, so the host writes the pixels and then the
  * status word straight back into it (writeGuestMemory in gl_executor.js,
@@ -4377,29 +4378,36 @@ static int emit_pci_record(uint16_t fn, const void* args, uint32_t args_size, BO
  * turn instead of at the end of the current slice, and does not burn the
  * whole wait spinning.
  *
- * The deadline is plain wall clock rather than the D3D9 readback path's
- * host-silence heartbeat, because the two are not in the same situation:
- * there the host can legitimately be thousands of batches behind, while here
- * the batch itself already completed synchronously and only the mapping is
- * outstanding. A host that has not finished one mapping in five seconds has
- * stopped answering.
+ * In CPU-worker mode the IOCTL only enqueues the page's copy. The deadline
+ * therefore measures host silence, like D3D9: completed batches advance the
+ * counter in the arena's reserved tail. The renderer bounds its own mapping
+ * and fence to five seconds; the guest's longer silence deadline lets that
+ * explicit failure arrive first.
  */
-#define V86GL_ASYNC_WAIT_MS 5000u
 /* An occlusion result is worth waiting for, but not at the price of a visible
  * stall: past this the caller gets the conservative "visible" answer. */
 #define V86GL_QUERY_RESULT_WAIT_MS 1000u
 
 static BOOL wait_for_host_status(const uint8_t* status_field, const char* what) {
     volatile const uint32_t* status = (volatile const uint32_t*)status_field;
+    volatile const uint32_t* heartbeat = g_dma_buffer && g_dma_capacity >= V86GL_HEARTBEAT_BYTES ?
+        (volatile const uint32_t*)(g_dma_buffer + g_dma_capacity - V86GL_HEARTBEAT_BYTES) : NULL;
+    uint32_t last_beat = heartbeat ? *heartbeat : 0;
     DWORD start = GetTickCount();
     uint32_t value;
 
     for (;;) {
+        DWORD now;
+        uint32_t beat;
+        MemoryBarrier();
         value = *status;
         if (value != V86GL_READ_PIXELS_STATUS_PENDING) {
             return value == V86GL_READ_PIXELS_STATUS_OK;
         }
-        if (GetTickCount() - start >= V86GL_ASYNC_WAIT_MS) {
+        now = GetTickCount();
+        beat = heartbeat ? *heartbeat : last_beat;
+        if (beat != last_beat) { last_beat = beat; start = now; }
+        if (now - start >= V86GL_ASYNC_SILENCE_MS) {
             v86gl_trace("%s: host silent for %lums (status still pending)",
                         what, (unsigned long)(GetTickCount() - start));
 #if V86GL_DIAG_ENABLED
