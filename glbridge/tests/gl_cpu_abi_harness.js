@@ -61,6 +61,7 @@ async function run(code, check, configure) {
                     const fn = view.getUint16(0, true), at = view.getUint16(2, true) === 0xFFFF ? 8 : 4;
                     const query = fn === P.GLFN.QUERY_OBJECT_BATCH ? "QUERY_OBJECT_BATCH" :
                         fn === P.GLFN.QUERY_TEXTURE_IMAGE ? "QUERY_TEXTURE_IMAGE" :
+                        fn === P.GLFN.QUERY_ERROR ? "QUERY_ERROR" :
                         fn === P.GLFN.QUERY_OBJECT_IV && view.getUint32(at + P.F.QUERY_OBJECT_IV.object_kind, true) === P.C.V86GL_OBJECT_KIND_QUERY ? "QUERY_OBJECT_IV" : null;
                     const cpuAnswered = !query || view.getUint32(at + P.F[query].status, true) !== P.C.V86GL_SYNC_QUERY_STATUS_PENDING;
                     gpu.submit(copied ? command.slice() : command, { guestBytes: command });

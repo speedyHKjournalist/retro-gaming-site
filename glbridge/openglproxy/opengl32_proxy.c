@@ -4968,7 +4968,7 @@ static int emit_query_error(GLenum* value) {
     }
     CopyMemory(args, &request, sizeof(request));
     if (!emit_pci_batch(FALSE) ||
-        read_u32le(args) != V86GL_SYNC_QUERY_STATUS_OK) {
+        !wait_for_host_status(args, "glGetError")) {
         return 0;
     }
     *value = (GLenum)read_u32le(args + 4);
@@ -8710,14 +8710,14 @@ const GLubyte* APIENTRY glGetString(GLenum name) {
 __declspec(dllexport)
 GLenum APIENTRY glGetError(void) {
     GLenum e;
+    GLenum backend_error = GL_NO_ERROR;
 
     e = g_error;
     g_error = 0;
-    if (e == GL_NO_ERROR) {
-        GLenum backend_error = GL_NO_ERROR;
-        if (emit_query_error(&backend_error)) {
-            e = backend_error;
-        }
+    if (emit_query_error(&backend_error)) {
+        if (e == GL_NO_ERROR) e = backend_error;
+        else if (backend_error != GL_NO_ERROR && backend_error != e)
+            g_error = backend_error;
     }
     if (v86gl_trace_call_allowed() || e) {
         v86gl_error("glGetError -> 0x%04lx frame=%lu queuedCommands=%lu",
