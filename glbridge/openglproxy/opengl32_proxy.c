@@ -18578,12 +18578,14 @@ static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname,
 __declspec(dllexport)
 void APIENTRY glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat* params) {
     GLint value;
+    if (emit_query_parameter_index_count(V86GL_PARAMETER_TEXTURE_LEVEL, target, pname, (GLuint)level, V86GL_STATE_FLOAT, params, 16u)) return;
     if (!params) return;
     if (get_texture_level_parameter(target, level, pname, &value)) params[0] = (GLfloat)value;
 }
 
 __declspec(dllexport)
 void APIENTRY glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params) {
+    if (emit_query_parameter_index_count(V86GL_PARAMETER_TEXTURE_LEVEL, target, pname, (GLuint)level, V86GL_STATE_INTEGER, params, 16u)) return;
     if (!params) return;
     (void)get_texture_level_parameter(target, level, pname, params);
 }

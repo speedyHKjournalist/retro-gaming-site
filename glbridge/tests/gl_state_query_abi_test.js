@@ -126,6 +126,11 @@ typedef struct { GLint min_filter, mag_filter, wrap_s, wrap_t, wrap_r, base_leve
 static TextureObjectState* bound_texture_state(GLenum target, int create) { (void)target; (void)create; return NULL; }
 ${functionBody("glGetTexParameteriv")}
 ${functionBody("glGetTexParameterfv")}
+static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname, GLint* value) {
+    (void)target; (void)level; (void)pname; (void)value; assert(0); return 0;
+}
+${functionBody("glGetTexLevelParameteriv")}
+${functionBody("glGetTexLevelParameterfv")}
 int main(int argc, char** argv) {
     union { GLdouble align; unsigned char bytes[4096]; } out;
     unsigned int kind, pname;
@@ -133,7 +138,11 @@ int main(int argc, char** argv) {
     assert(argc == 4 || argc == 6 || argc == 7 || argc == 8);
     encode = atoi(argv[1]); kind = (unsigned int)atoi(argv[2]); pname = (unsigned int)strtoul(argv[3], NULL, 0);
     memset(out.bytes, 0xA5, sizeof(out.bytes));
-    if (argc == 8) {
+    if (argc == 8 && atoi(argv[4]) == V86GL_PARAMETER_TEXTURE_LEVEL) {
+        if (kind == V86GL_STATE_INTEGER) glGetTexLevelParameteriv((GLenum)strtoul(argv[5], NULL, 0), atoi(argv[7]), pname, (GLint*)(out.bytes+8));
+        else glGetTexLevelParameterfv((GLenum)strtoul(argv[5], NULL, 0), atoi(argv[7]), pname, (GLfloat*)(out.bytes+8));
+        result = error ? -1 : 1;
+    } else if (argc == 8) {
         glGetFramebufferAttachmentParameterivEXT((GLenum)strtoul(argv[5], NULL, 0), (GLenum)strtoul(argv[7], NULL, 0), pname, (GLint*)(out.bytes+8));
         result = error ? -1 : 1;
     } else if (argc == 6 && atoi(argv[4]) == V86GL_PARAMETER_RENDERBUFFER) {
@@ -216,6 +225,10 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         [P.C.V86GL_STATE_FLOAT, GL.TEXTURE_PRIORITY, [0.25], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
         [P.C.V86GL_STATE_FLOAT, GL.TEXTURE_MAX_ANISOTROPY_EXT, [2.5], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
         [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_MAX_ANISOTROPY_EXT, [3], P.C.V86GL_PARAMETER_TEXTURE, GL.TEXTURE_2D],
+        [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_WIDTH, [3], P.C.V86GL_PARAMETER_TEXTURE_LEVEL, GL.TEXTURE_2D, 16, 0],
+        [P.C.V86GL_STATE_FLOAT, GL.TEXTURE_HEIGHT, [5], P.C.V86GL_PARAMETER_TEXTURE_LEVEL, GL.TEXTURE_2D, 16, 0],
+        [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_RED_SIZE, [4], P.C.V86GL_PARAMETER_TEXTURE_LEVEL, GL.TEXTURE_2D, 16, 0],
+        [P.C.V86GL_STATE_INTEGER, GL.TEXTURE_WIDTH, [0], P.C.V86GL_PARAMETER_TEXTURE_LEVEL, GL.TEXTURE_2D, 16, 1],
     ]) {
         const args = [String(kind), String(pname), ...(family ? [String(family), String(target), ...(capacity ? [String(capacity)] : []), ...(index !== undefined ? [String(index)] : [])] : [])];
         const wire = execFileSync(binary, ["1", ...args]);
@@ -243,6 +256,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-state-abi-"));
         s.call("RENDERBUFFER_STORAGE", GL.RENDERBUFFER_EXT, GL.STENCIL_INDEX16_EXT, 7, 5);
         s.call("TEX_PARAMETERIV", GL.TEXTURE_2D, GL.TEXTURE_BORDER_COLOR, 4, -2147483648, 0, 1073741824, 2147483647)
             .call("TEX_PARAMETERF", GL.TEXTURE_2D, GL.TEXTURE_PRIORITY, 0.25).call("TEX_PARAMETERF", GL.TEXTURE_2D, GL.TEXTURE_MAX_ANISOTROPY_EXT, 2.5);
+        s.texImage2D(GL.TEXTURE_2D, 0, GL.RGBA4, 3, 5, GL.RGBA, GL.UNSIGNED_BYTE, new Uint8Array(0));
         const at = s.length; s.record(family ? P.GLFN.QUERY_PARAMETER : P.GLFN.QUERY_STATE, wire.subarray(4));
         const bytes = s.bytes(), shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
         shadow.process(bytes); executor.submit(bytes, {});
