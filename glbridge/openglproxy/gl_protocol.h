@@ -52,6 +52,11 @@
 #define V86GL_STATE_BOOLEAN 4u
 /* glIsEnabled: capability validation and one boolean answer */
 #define V86GL_STATE_IS_ENABLED 5u
+#define V86GL_PARAMETER_LIGHT 1u
+#define V86GL_PARAMETER_MATERIAL 2u
+#define V86GL_PARAMETER_TEX_ENV 3u
+#define V86GL_PARAMETER_TEX_GEN 4u
+#define V86GL_PARAMETER_CLIP_PLANE 5u
 #define V86GL_OBJECT_KIND_SHADER 1u
 #define V86GL_OBJECT_KIND_PROGRAM 2u
 #define V86GL_OBJECT_KIND_QUERY 3u
@@ -293,9 +298,10 @@ enum {
     GLFN_QUERY_OBJECT_BATCH = 216,
     GLFN_BLIT_FRAMEBUFFER = 217,
     GLFN_EDGE_FLAG = 218,
-    GLFN_QUERY_STATE = 219
+    GLFN_QUERY_STATE = 219,
+    GLFN_QUERY_PARAMETER = 220
 };
-#define V86GL_OPCODE_COUNT 219u
+#define V86GL_OPCODE_COUNT 220u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -674,6 +680,18 @@ typedef struct V86GLRecordQueryState {
     uint32_t data_size;
     uint32_t error;
 } V86GLRecordQueryState;
+typedef struct V86GLRecordQueryParameter {
+    uint32_t pname;
+    uint32_t value_kind;
+    uint32_t status;
+    uint32_t count;
+    uint32_t data_size;
+    uint32_t error;
+    uint32_t query_kind;
+    uint32_t target;
+    uint32_t index;
+    uint32_t reserved;
+} V86GLRecordQueryParameter;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1010,6 +1028,17 @@ typedef char V86GLRecordQueryState_status[offsetof(V86GLRecordQueryState, status
 typedef char V86GLRecordQueryState_count[offsetof(V86GLRecordQueryState, count) == 12 ? 1 : -1];
 typedef char V86GLRecordQueryState_data_size[offsetof(V86GLRecordQueryState, data_size) == 16 ? 1 : -1];
 typedef char V86GLRecordQueryState_error[offsetof(V86GLRecordQueryState, error) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryParameterSize[sizeof(V86GLRecordQueryParameter) == 40 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_pname[offsetof(V86GLRecordQueryParameter, pname) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_value_kind[offsetof(V86GLRecordQueryParameter, value_kind) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_status[offsetof(V86GLRecordQueryParameter, status) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_count[offsetof(V86GLRecordQueryParameter, count) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_data_size[offsetof(V86GLRecordQueryParameter, data_size) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_error[offsetof(V86GLRecordQueryParameter, error) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_query_kind[offsetof(V86GLRecordQueryParameter, query_kind) == 24 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_target[offsetof(V86GLRecordQueryParameter, target) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_index[offsetof(V86GLRecordQueryParameter, index) == 32 ? 1 : -1];
+typedef char V86GLRecordQueryParameter_reserved[offsetof(V86GLRecordQueryParameter, reserved) == 36 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];

@@ -4851,23 +4851,18 @@ static int emit_query_integer(GLenum pname, GLint* value) {
  * query sets the error and leaves the caller's output alone (-1). The wire
  * carries converted values as doubles, so vectors, booleans and GLint's
  * exact limits do not depend on the page's asynchronous renderer. */
-static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
-    V86GLRecordQueryState request;
+static int emit_query_typed(uint16_t opcode, const void* request, uint32_t request_bytes,
+                            unsigned int kind, void* values) {
     uint8_t* args;
     unsigned int status, count, i;
     GLdouble value;
 
     if (!values) return -1;
-    ZeroMemory(&request, sizeof(request));
-    request.pname = (uint32_t)pname;
-    request.value_kind = kind;
-    request.data_size = 16u * sizeof(GLdouble);
-    if (!reserve_pci_record(GLFN_QUERY_STATE, NULL,
-                            sizeof(request) + request.data_size, &args)) {
+    if (!reserve_pci_record(opcode, NULL, request_bytes + 16u * sizeof(GLdouble), &args)) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
     }
-    CopyMemory(args, &request, sizeof(request));
+    CopyMemory(args, request, request_bytes);
     if (!emit_pci_batch(FALSE)) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return -1;
@@ -4885,7 +4880,7 @@ static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
         return -1;
     }
     for (i = 0; i < count; ++i) {
-        CopyMemory(&value, args + sizeof(request) + i * sizeof(value), sizeof(value));
+        CopyMemory(&value, args + request_bytes + i * sizeof(value), sizeof(value));
         switch (kind) {
         case V86GL_STATE_INTEGER: ((GLint*)values)[i] = (GLint)value; break;
         case V86GL_STATE_FLOAT: ((GLfloat*)values)[i] = (GLfloat)value; break;
@@ -4895,6 +4890,27 @@ static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
         }
     }
     return 1;
+}
+
+static int emit_query_state(GLenum pname, unsigned int kind, void* values) {
+    V86GLRecordQueryState request;
+    ZeroMemory(&request, sizeof(request));
+    request.pname = (uint32_t)pname;
+    request.value_kind = kind;
+    request.data_size = 16u * sizeof(GLdouble);
+    return emit_query_typed(GLFN_QUERY_STATE, &request, sizeof(request), kind, values);
+}
+
+static int emit_query_parameter(unsigned int query_kind, GLenum target, GLenum pname,
+                                unsigned int kind, void* values) {
+    V86GLRecordQueryParameter request;
+    ZeroMemory(&request, sizeof(request));
+    request.pname = (uint32_t)pname;
+    request.value_kind = kind;
+    request.data_size = 16u * sizeof(GLdouble);
+    request.query_kind = query_kind;
+    request.target = (uint32_t)target;
+    return emit_query_typed(GLFN_QUERY_PARAMETER, &request, sizeof(request), kind, values);
 }
 
 static GLint query_limit_or_default(GLenum pname, GLint fallback, GLint maximum) {
@@ -14593,7 +14609,7 @@ __declspec(dllexport)
 void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) {
     struct { uint32_t target, pname; int32_t param; } payload;
     TextureUnitState* state;
-    if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB) {
+    if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB && target != 0x8500u) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -14611,7 +14627,7 @@ __declspec(dllexport)
 void APIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param) {
     struct { uint32_t target, pname; float param; } payload;
     TextureUnitState* state;
-    if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB) {
+    if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB && target != 0x8500u) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -14636,7 +14652,7 @@ void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) {
     int count = texenv_value_count(pname);
     int i;
 
-    if (target != GL_TEXTURE_ENV || !count) {
+    if ((target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB && target != 0x8500u) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -14676,7 +14692,7 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) {
     int count = texenv_value_count(pname);
     int i;
 
-    if (target != GL_TEXTURE_ENV || !count) {
+    if ((target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB && target != 0x8500u) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
@@ -18204,6 +18220,7 @@ void APIENTRY glFogiv(GLenum pname, const GLint* params) {
 
 __declspec(dllexport)
 void APIENTRY glGetClipPlane(GLenum plane, GLdouble* equation) {
+    if (emit_query_parameter(V86GL_PARAMETER_CLIP_PLANE, plane, 0, V86GL_STATE_DOUBLE, equation)) return;
     if (!clip_plane_valid(plane)) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18217,6 +18234,7 @@ __declspec(dllexport)
 void APIENTRY glGetLightfv(GLenum light, GLenum pname, GLfloat* params) {
     int count = light_value_count(pname);
     LightState* state;
+    if (emit_query_parameter(V86GL_PARAMETER_LIGHT, light, pname, V86GL_STATE_FLOAT, params)) return;
     if (!light_name_valid(light) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18244,6 +18262,7 @@ void APIENTRY glGetLightiv(GLenum light, GLenum pname, GLint* params) {
     int count = light_value_count(pname);
     GLfloat values[4];
     int i;
+    if (emit_query_parameter(V86GL_PARAMETER_LIGHT, light, pname, V86GL_STATE_INTEGER, params)) return;
     if (!light_name_valid(light) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18258,6 +18277,7 @@ __declspec(dllexport)
 void APIENTRY glGetMaterialfv(GLenum face, GLenum pname, GLfloat* params) {
     int count = material_value_count(pname);
     MaterialState* state;
+    if (emit_query_parameter(V86GL_PARAMETER_MATERIAL, face, pname, V86GL_STATE_FLOAT, params)) return;
     if (!material_face_valid(face) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18283,6 +18303,7 @@ void APIENTRY glGetMaterialiv(GLenum face, GLenum pname, GLint* params) {
     int count = material_value_count(pname);
     GLfloat values[4];
     int i;
+    if (emit_query_parameter(V86GL_PARAMETER_MATERIAL, face, pname, V86GL_STATE_INTEGER, params)) return;
     if (!material_face_valid(face) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18295,6 +18316,7 @@ void APIENTRY glGetMaterialiv(GLenum face, GLenum pname, GLint* params) {
 
 __declspec(dllexport)
 void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) {
+    if (emit_query_parameter(V86GL_PARAMETER_TEX_ENV, target, pname, V86GL_STATE_FLOAT, params)) return;
     if (target != GL_TEXTURE_ENV || !params) {
         if (target != GL_TEXTURE_ENV) {
             v86gl_set_error(GL_INVALID_ENUM);
@@ -18313,6 +18335,7 @@ void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) {
 
 __declspec(dllexport)
 void APIENTRY glGetTexEnviv(GLenum target, GLenum pname, GLint* params) {
+    if (emit_query_parameter(V86GL_PARAMETER_TEX_ENV, target, pname, V86GL_STATE_INTEGER, params)) return;
     if (target != GL_TEXTURE_ENV || !params) {
         if (target != GL_TEXTURE_ENV) {
             v86gl_set_error(GL_INVALID_ENUM);
@@ -18333,6 +18356,7 @@ __declspec(dllexport)
 void APIENTRY glGetTexGenfv(GLenum coord, GLenum pname, GLfloat* params) {
     int count = texgen_value_count(pname);
     TexGenState* state;
+    if (emit_query_parameter(V86GL_PARAMETER_TEX_GEN, coord, pname, V86GL_STATE_FLOAT, params)) return;
     if (!texgen_coord_valid(coord) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18351,6 +18375,7 @@ void APIENTRY glGetTexGeniv(GLenum coord, GLenum pname, GLint* params) {
     int count = texgen_value_count(pname);
     GLfloat values[4];
     int i;
+    if (emit_query_parameter(V86GL_PARAMETER_TEX_GEN, coord, pname, V86GL_STATE_INTEGER, params)) return;
     if (!texgen_coord_valid(coord) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
@@ -18366,6 +18391,7 @@ void APIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble* params) {
     GLfloat values[4];
     int count = texgen_value_count(pname);
     int i;
+    if (emit_query_parameter(V86GL_PARAMETER_TEX_GEN, coord, pname, V86GL_STATE_DOUBLE, params)) return;
     if (!params) {
         return;
     }
