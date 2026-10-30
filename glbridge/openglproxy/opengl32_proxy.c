@@ -1770,13 +1770,7 @@ typedef struct {
     GLuint buffer;
 } ClientArrayState;
 
-typedef struct {
-    uint32_t enabled;
-    int32_t size;
-    uint32_t type;
-    int32_t stride;
-    uint32_t data_size;
-} ClientArrayBlockHeader;
+typedef V86GLRecordClientArrayBlock ClientArrayBlockHeader;
 
 typedef struct {
     BOOL enabled;
@@ -1880,15 +1874,7 @@ typedef struct {
     const uint8_t* data;
 } GenericAttribCopy;
 
-typedef struct {
-    uint32_t index;
-    uint32_t normalized;
-    uint32_t enabled;
-    int32_t size;
-    uint32_t type;
-    int32_t stride;
-    uint32_t data_size;
-} GenericAttribBlockHeader;
+typedef V86GLRecordGenericAttribBlock GenericAttribBlockHeader;
 
 typedef struct DisplayList {
     GLuint name;
@@ -4539,8 +4525,8 @@ static int emit_query_object_iv(uint32_t object_kind, GLuint name, GLenum pname,
  * per object dominates the actual WebGPU query work, so refresh every pending
  * object in one request and cache the results in the guest proxy. */
 static int emit_query_object_batch(void) {
-    const uint32_t header_size = 16u;
-    const uint32_t entry_size = 12u;
+    const uint32_t header_size = sizeof(V86GLRecordQueryObjectBatch);
+    const uint32_t entry_size = sizeof(V86GLRecordQueryObjectBatchEntry);
     uint32_t count = 0;
     uint32_t args_size;
     uint32_t i;
@@ -5441,21 +5427,8 @@ static void feedback_record_vertex(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
     feedback_write_vertex(x, y, z, w);
 }
 
-typedef struct {
-    int32_t size;
-    uint32_t type;
-    int32_t stride;
-    uint32_t offset;
-} VBOPointerPayload;
-
-typedef struct {
-    uint32_t index;
-    int32_t size;
-    uint32_t type;
-    uint32_t normalized;
-    int32_t stride;
-    uint32_t offset;
-} VBOAttribPointerPayload;
+typedef V86GLRecordVertexPointerVbo VBOPointerPayload;
+typedef V86GLRecordVertexAttribPointerVbo VBOAttribPointerPayload;
 
 static uint32_t pointer_offset_u32(const GLvoid* pointer) {
     return (uint32_t)(uintptr_t)pointer;
@@ -5584,14 +5557,7 @@ static void emit_draw_arrays_direct(GLenum mode, GLint first, GLsizei count) {
 
 static void emit_draw_elements_direct(uint16_t fn, GLenum mode, GLuint start, GLuint end,
                                       GLsizei count, GLenum type, const GLvoid* indices) {
-    struct {
-        uint32_t mode;
-        uint32_t start;
-        uint32_t end;
-        int32_t count;
-        uint32_t type;
-        uint32_t offset;
-    } payload;
+    V86GLRecordDrawElementsDirect payload;
 
     payload.mode = (uint32_t)mode;
     payload.start = start;
@@ -5607,26 +5573,28 @@ static BOOL emit_multi_draw_arrays_direct(GLenum mode, const GLint* first,
                                           GLsizei primcount) {
     uint32_t total_size;
     uint8_t* payload;
-    uint32_t* out;
+    V86GLRecordMultiDrawArraysDirect header;
     GLsizei i;
 
-    if ((uint32_t)primcount > (UINT32_MAX - 8u) / 8u) {
+    if ((uint32_t)primcount > (UINT32_MAX - sizeof(header)) / sizeof(V86GLRecordMultiDrawArraysEntry)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return FALSE;
     }
 
-    total_size = 8u + (uint32_t)primcount * 8u;
+    total_size = sizeof(header) + (uint32_t)primcount * sizeof(V86GLRecordMultiDrawArraysEntry);
     payload = alloc_payload(total_size);
     if (!payload) {
         return FALSE;
     }
 
-    out = (uint32_t*)payload;
-    out[0] = (uint32_t)mode;
-    out[1] = (uint32_t)primcount;
+    header.mode = (uint32_t)mode;
+    header.primcount = primcount;
+    CopyMemory(payload, &header, sizeof(header));
     for (i = 0; i < primcount; i++) {
-        out[2 + i * 2] = (uint32_t)first[i];
-        out[3 + i * 2] = (uint32_t)count[i];
+        V86GLRecordMultiDrawArraysEntry entry;
+        entry.first = first[i];
+        entry.count = count[i];
+        CopyMemory(payload + sizeof(header) + (uint32_t)i * sizeof(entry), &entry, sizeof(entry));
     }
 
     emit_gl_call(GLFN_MULTI_DRAW_ARRAYS_DIRECT, payload, total_size);
@@ -5640,27 +5608,29 @@ static BOOL emit_multi_draw_elements_direct(GLenum mode, const GLsizei* count,
                                             GLsizei primcount) {
     uint32_t total_size;
     uint8_t* payload;
-    uint32_t* out;
+    V86GLRecordMultiDrawElementsDirect header;
     GLsizei i;
 
-    if ((uint32_t)primcount > (UINT32_MAX - 12u) / 8u) {
+    if ((uint32_t)primcount > (UINT32_MAX - sizeof(header)) / sizeof(V86GLRecordMultiDrawElementsEntry)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return FALSE;
     }
 
-    total_size = 12u + (uint32_t)primcount * 8u;
+    total_size = sizeof(header) + (uint32_t)primcount * sizeof(V86GLRecordMultiDrawElementsEntry);
     payload = alloc_payload(total_size);
     if (!payload) {
         return FALSE;
     }
 
-    out = (uint32_t*)payload;
-    out[0] = (uint32_t)mode;
-    out[1] = (uint32_t)type;
-    out[2] = (uint32_t)primcount;
+    header.mode = (uint32_t)mode;
+    header.type = (uint32_t)type;
+    header.primcount = primcount;
+    CopyMemory(payload, &header, sizeof(header));
     for (i = 0; i < primcount; i++) {
-        out[3 + i * 2] = (uint32_t)count[i];
-        out[4 + i * 2] = pointer_offset_u32(indices[i]);
+        V86GLRecordMultiDrawElementsEntry entry;
+        entry.count = count[i];
+        entry.offset = pointer_offset_u32(indices[i]);
+        CopyMemory(payload + sizeof(header) + (uint32_t)i * sizeof(entry), &entry, sizeof(entry));
     }
 
     emit_gl_call(GLFN_MULTI_DRAW_ELEMENTS_DIRECT, payload, total_size);
@@ -16161,21 +16131,8 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     BOOL payload_is_dma;
     uint8_t* p;
     uint32_t i;
-    struct {
-        uint32_t mode;
-        int32_t count;
-        uint32_t magic;
-        uint32_t tex_unit_count;
-        uint32_t client_active_texture;
-    } header;
-    struct {
-        uint32_t mode;
-        int32_t count;
-        uint32_t magic;
-        uint32_t tex_unit_count;
-        uint32_t client_active_texture;
-        uint32_t generic_attrib_count;
-    } header_gl2;
+    V86GLRecordPackedDrawArraysMt header;
+    V86GLRecordPackedDrawArraysGl2Mt header_gl2;
 
     if (v86gl_trace_call_allowed()) {
         v86gl_trace("glDrawArrays enter mode=0x%04lx first=%ld count=%ld vertexPtr=%08lx",
@@ -16340,25 +16297,8 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     uint8_t* p;
     const uint8_t* index_data;
     uint32_t i;
-    struct {
-        uint32_t mode;
-        int32_t count;
-        uint32_t type;
-        uint32_t index_data_size;
-        uint32_t magic;
-        uint32_t tex_unit_count;
-        uint32_t client_active_texture;
-    } header;
-    struct {
-        uint32_t mode;
-        int32_t count;
-        uint32_t type;
-        uint32_t index_data_size;
-        uint32_t magic;
-        uint32_t tex_unit_count;
-        uint32_t client_active_texture;
-        uint32_t generic_attrib_count;
-    } header_gl2;
+    V86GLRecordPackedDrawElementsMt header;
+    V86GLRecordPackedDrawElementsGl2Mt header_gl2;
 
     if (v86gl_trace_call_allowed()) {
         v86gl_trace("glDrawElements enter mode=0x%04lx count=%ld type=0x%04lx indices=%08lx vertexPtr=%08lx",
@@ -17638,13 +17578,7 @@ void APIENTRY glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
 
 __declspec(dllexport)
 void APIENTRY glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels) {
-    struct {
-        int32_t width;
-        int32_t height;
-        uint32_t format;
-        uint32_t type;
-        uint32_t data_size;
-    } meta;
+    V86GLRecordDrawPixels meta;
     uint32_t data_size;
     uint32_t total_size;
     uint8_t* payload;

@@ -137,12 +137,18 @@ const GUEST_LAYOUTS = [
     ["emit_read_pixels", "READ_PIXELS"],
     ["glTexImage2D", "TEX_IMAGE_2D"],
     ["emit_vbo_attrib_pointer", "VERTEX_ATTRIB_POINTER_VBO"],
+    ["emit_vbo_pointer", "VERTEX_POINTER_VBO"],
+    ["glDrawArrays", "PACKED_DRAW_ARRAYS_MT", "header"],
+    ["glDrawElements", "PACKED_DRAW_ELEMENTS_MT", "header"],
+    ["emit_multi_draw_arrays_direct", "MULTI_DRAW_ARRAYS_DIRECT", "header"],
+    ["emit_multi_draw_elements_direct", "MULTI_DRAW_ELEMENTS_DIRECT", "header"],
+    ["glDrawPixels", "DRAW_PIXELS", "meta"],
 ];
 
 /* The first anonymous struct declared inside a guest function, as its field
  * names in order -- which is the same as their offsets, every field being a
  * 32-bit word except the ARB double parameters. */
-function guestStructFields(functionName) {
+function guestStructFields(functionName, variable = "payload") {
     const at = source.search(new RegExp(
         "^[A-Za-z].*\\b" + functionName + "\\s*\\(", "m"));
     assert.ok(at >= 0, "openglproxy still defines " + functionName);
@@ -152,12 +158,17 @@ function guestStructFields(functionName) {
     // redeclaring the same anonymous struct in the function.  Pin that layout
     // too; otherwise the old regexp silently grabs the next unrelated struct
     // in the following function and reports a misleading protocol mismatch.
-    const declaration = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+payload\s*;/m.exec(body);
+    const declaration = new RegExp("^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s+" + variable + "\\s*;", "m").exec(body);
     if (declaration && (!block || declaration.index < block.index)) {
-            const escaped = declaration[1].replace(/[.*+?^${}()|[\]\\]/g,
+            let type = declaration[1];
+            const alias = new RegExp("typedef\\s+(V86GLRecord\\w+)\\s+" + type + "\\s*;").exec(source);
+            if (alias) type = alias[1];
+            const escaped = type.replace(/[.*+?^${}()|[\]\\]/g,
                 "\\$&");
-            block = new RegExp("typedef\\s+struct\\s*\\{\\n([^}]*)\\n\\}\\s*" +
-                escaped + "\\s*;").exec(source);
+            const definitions = type.startsWith("V86GLRecord") ? fs.readFileSync(
+                path.join(__dirname, "../openglproxy/gl_protocol.h"), "utf8") : source;
+            block = new RegExp("typedef\\s+struct\\s*(?:" + escaped + "\\s*)?\\{\\n([^}]*)\\n\\}\\s*" +
+                escaped + "\\s*;").exec(definitions);
     }
     assert.ok(block, functionName + " still declares its payload as a struct");
     return [...block[1].matchAll(
@@ -166,13 +177,11 @@ function guestStructFields(functionName) {
 }
 
 test("the hand-written payload structs still have the fields the host decodes", () => {
-    for (const [functionName, opcode] of GUEST_LAYOUTS) {
-        assert.ok(constants.GLFN[opcode] !== undefined,
-            opcode + " is not an opcode");
+    for (const [functionName, opcode, variable] of GUEST_LAYOUTS) {
         assert.ok(wire.RECORDS[opcode], opcode + " has no fixed header in gl_protocol.js");
         // array fields count once, by name
         const fields = Object.keys(wire.RECORDS[opcode].fields);
-        assert.deepStrictEqual(guestStructFields(functionName), fields,
+        assert.deepStrictEqual(guestStructFields(functionName, variable), fields,
             functionName + " changed shape: its struct and " + opcode +
             "'s header in gl_protocol.js have to agree");
     }

@@ -347,6 +347,16 @@ typedef struct V86GLRecordTexSubImage2d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage2d;
+typedef struct V86GLRecordDrawArrays {
+    uint32_t mode;
+    int32_t count;
+} V86GLRecordDrawArrays;
+typedef struct V86GLRecordDrawElements {
+    uint32_t mode;
+    int32_t count;
+    uint32_t type;
+    uint32_t index_data_size;
+} V86GLRecordDrawElements;
 typedef struct V86GLRecordLoadMatrixf {
     float values[16];
 } V86GLRecordLoadMatrixf;
@@ -454,6 +464,13 @@ typedef struct V86GLRecordCompressedTexSubImage3d {
     uint32_t format;
     uint32_t image_size;
 } V86GLRecordCompressedTexSubImage3d;
+typedef struct V86GLRecordDrawPixels {
+    int32_t width;
+    int32_t height;
+    uint32_t format;
+    uint32_t type;
+    uint32_t data_size;
+} V86GLRecordDrawPixels;
 typedef struct V86GLRecordBitmap {
     int32_t width;
     int32_t height;
@@ -482,6 +499,9 @@ typedef struct V86GLRecordTexSubImage1d {
     uint32_t type;
     uint32_t data_size;
 } V86GLRecordTexSubImage1d;
+typedef struct V86GLRecordPolygonStipple {
+    uint32_t mask[32];
+} V86GLRecordPolygonStipple;
 typedef struct V86GLRecordPixelMapfv {
     uint32_t map;
     int32_t count;
@@ -522,6 +542,16 @@ typedef struct V86GLRecordUniformMatrixFv {
     int32_t count;
     uint32_t transpose;
 } V86GLRecordUniformMatrixFv;
+typedef struct V86GLRecordDrawArraysGl2 {
+    uint32_t mode;
+    int32_t count;
+} V86GLRecordDrawArraysGl2;
+typedef struct V86GLRecordDrawElementsGl2 {
+    uint32_t mode;
+    int32_t count;
+    uint32_t type;
+    uint32_t index_data_size;
+} V86GLRecordDrawElementsGl2;
 typedef struct V86GLRecordUniformMatrixRectFv {
     int32_t location;
     int32_t columns;
@@ -666,6 +696,42 @@ typedef struct V86GLRecordBufferSubData {
     int32_t size;
     uint32_t data_size;
 } V86GLRecordBufferSubData;
+typedef struct V86GLRecordVertexPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordVertexPointerVbo;
+typedef struct V86GLRecordColorPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordColorPointerVbo;
+typedef struct V86GLRecordTexCoordPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordTexCoordPointerVbo;
+typedef struct V86GLRecordNormalPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordNormalPointerVbo;
+typedef struct V86GLRecordSecondaryColorPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordSecondaryColorPointerVbo;
+typedef struct V86GLRecordFogCoordPointerVbo {
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t offset;
+} V86GLRecordFogCoordPointerVbo;
 typedef struct V86GLRecordVertexAttribPointerVbo {
     uint32_t index;
     int32_t size;
@@ -682,6 +748,23 @@ typedef struct V86GLRecordDrawElementsDirect {
     uint32_t type;
     uint32_t offset;
 } V86GLRecordDrawElementsDirect;
+typedef struct V86GLRecordDrawRangeElementsDirect {
+    uint32_t mode;
+    uint32_t start;
+    uint32_t end;
+    int32_t count;
+    uint32_t type;
+    uint32_t offset;
+} V86GLRecordDrawRangeElementsDirect;
+typedef struct V86GLRecordMultiDrawArraysDirect {
+    uint32_t mode;
+    int32_t primcount;
+} V86GLRecordMultiDrawArraysDirect;
+typedef struct V86GLRecordMultiDrawElementsDirect {
+    uint32_t mode;
+    uint32_t type;
+    int32_t primcount;
+} V86GLRecordMultiDrawElementsDirect;
 typedef struct V86GLRecordQueryError {
     uint32_t status;
     uint32_t value;
@@ -708,6 +791,12 @@ typedef struct V86GLRecordQueryUniform {
     uint32_t reserved0;
     uint32_t reserved1;
 } V86GLRecordQueryUniform;
+typedef struct V86GLRecordQueryObjectBatch {
+    uint32_t count;
+    uint32_t object_kind;
+    uint32_t status;
+    uint32_t reserved;
+} V86GLRecordQueryObjectBatch;
 typedef struct V86GLRecordQueryState {
     uint32_t pname;
     uint32_t value_kind;
@@ -744,6 +833,69 @@ typedef struct V86GLRecordMakeCurrent {
 typedef struct V86GLRecordDestroyContext {
     uint32_t context_id;
 } V86GLRecordDestroyContext;
+typedef struct V86GLRecordPackedDrawArraysMt {
+    uint32_t mode;
+    int32_t count;
+    uint32_t magic;
+    uint32_t tex_unit_count;
+    uint32_t client_active_texture;
+} V86GLRecordPackedDrawArraysMt;
+typedef struct V86GLRecordPackedDrawArraysGl2Mt {
+    uint32_t mode;
+    int32_t count;
+    uint32_t magic;
+    uint32_t tex_unit_count;
+    uint32_t client_active_texture;
+    uint32_t generic_attrib_count;
+} V86GLRecordPackedDrawArraysGl2Mt;
+typedef struct V86GLRecordPackedDrawElementsMt {
+    uint32_t mode;
+    int32_t count;
+    uint32_t type;
+    uint32_t index_data_size;
+    uint32_t magic;
+    uint32_t tex_unit_count;
+    uint32_t client_active_texture;
+} V86GLRecordPackedDrawElementsMt;
+typedef struct V86GLRecordPackedDrawElementsGl2Mt {
+    uint32_t mode;
+    int32_t count;
+    uint32_t type;
+    uint32_t index_data_size;
+    uint32_t magic;
+    uint32_t tex_unit_count;
+    uint32_t client_active_texture;
+    uint32_t generic_attrib_count;
+} V86GLRecordPackedDrawElementsGl2Mt;
+typedef struct V86GLRecordClientArrayBlock {
+    uint32_t enabled;
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t data_size;
+} V86GLRecordClientArrayBlock;
+typedef struct V86GLRecordGenericAttribBlock {
+    uint32_t index;
+    uint32_t normalized;
+    uint32_t enabled;
+    int32_t size;
+    uint32_t type;
+    int32_t stride;
+    uint32_t data_size;
+} V86GLRecordGenericAttribBlock;
+typedef struct V86GLRecordMultiDrawArraysEntry {
+    int32_t first;
+    int32_t count;
+} V86GLRecordMultiDrawArraysEntry;
+typedef struct V86GLRecordMultiDrawElementsEntry {
+    int32_t count;
+    uint32_t offset;
+} V86GLRecordMultiDrawElementsEntry;
+typedef struct V86GLRecordQueryObjectBatchEntry {
+    uint32_t name;
+    uint32_t available;
+    uint32_t result;
+} V86GLRecordQueryObjectBatchEntry;
 
 /* The layout gl_protocol.js describes: every header's size and every field's offset */
 typedef char V86GLRecordGenTexturesSize[sizeof(V86GLRecordGenTextures) == 4 ? 1 : -1];
@@ -770,6 +922,14 @@ typedef char V86GLRecordTexSubImage2d_height[offsetof(V86GLRecordTexSubImage2d, 
 typedef char V86GLRecordTexSubImage2d_format[offsetof(V86GLRecordTexSubImage2d, format) == 24 ? 1 : -1];
 typedef char V86GLRecordTexSubImage2d_type[offsetof(V86GLRecordTexSubImage2d, type) == 28 ? 1 : -1];
 typedef char V86GLRecordTexSubImage2d_data_size[offsetof(V86GLRecordTexSubImage2d, data_size) == 32 ? 1 : -1];
+typedef char V86GLRecordDrawArraysSize[sizeof(V86GLRecordDrawArrays) == 8 ? 1 : -1];
+typedef char V86GLRecordDrawArrays_mode[offsetof(V86GLRecordDrawArrays, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordDrawArrays_count[offsetof(V86GLRecordDrawArrays, count) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawElementsSize[sizeof(V86GLRecordDrawElements) == 16 ? 1 : -1];
+typedef char V86GLRecordDrawElements_mode[offsetof(V86GLRecordDrawElements, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordDrawElements_count[offsetof(V86GLRecordDrawElements, count) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawElements_type[offsetof(V86GLRecordDrawElements, type) == 8 ? 1 : -1];
+typedef char V86GLRecordDrawElements_index_data_size[offsetof(V86GLRecordDrawElements, index_data_size) == 12 ? 1 : -1];
 typedef char V86GLRecordLoadMatrixfSize[sizeof(V86GLRecordLoadMatrixf) == 64 ? 1 : -1];
 typedef char V86GLRecordLoadMatrixf_values[offsetof(V86GLRecordLoadMatrixf, values) == 0 ? 1 : -1];
 typedef char V86GLRecordMultMatrixfSize[sizeof(V86GLRecordMultMatrixf) == 64 ? 1 : -1];
@@ -866,6 +1026,12 @@ typedef char V86GLRecordCompressedTexSubImage3d_height[offsetof(V86GLRecordCompr
 typedef char V86GLRecordCompressedTexSubImage3d_depth[offsetof(V86GLRecordCompressedTexSubImage3d, depth) == 28 ? 1 : -1];
 typedef char V86GLRecordCompressedTexSubImage3d_format[offsetof(V86GLRecordCompressedTexSubImage3d, format) == 32 ? 1 : -1];
 typedef char V86GLRecordCompressedTexSubImage3d_image_size[offsetof(V86GLRecordCompressedTexSubImage3d, image_size) == 36 ? 1 : -1];
+typedef char V86GLRecordDrawPixelsSize[sizeof(V86GLRecordDrawPixels) == 20 ? 1 : -1];
+typedef char V86GLRecordDrawPixels_width[offsetof(V86GLRecordDrawPixels, width) == 0 ? 1 : -1];
+typedef char V86GLRecordDrawPixels_height[offsetof(V86GLRecordDrawPixels, height) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawPixels_format[offsetof(V86GLRecordDrawPixels, format) == 8 ? 1 : -1];
+typedef char V86GLRecordDrawPixels_type[offsetof(V86GLRecordDrawPixels, type) == 12 ? 1 : -1];
+typedef char V86GLRecordDrawPixels_data_size[offsetof(V86GLRecordDrawPixels, data_size) == 16 ? 1 : -1];
 typedef char V86GLRecordBitmapSize[sizeof(V86GLRecordBitmap) == 28 ? 1 : -1];
 typedef char V86GLRecordBitmap_width[offsetof(V86GLRecordBitmap, width) == 0 ? 1 : -1];
 typedef char V86GLRecordBitmap_height[offsetof(V86GLRecordBitmap, height) == 4 ? 1 : -1];
@@ -891,6 +1057,8 @@ typedef char V86GLRecordTexSubImage1d_width[offsetof(V86GLRecordTexSubImage1d, w
 typedef char V86GLRecordTexSubImage1d_format[offsetof(V86GLRecordTexSubImage1d, format) == 16 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_type[offsetof(V86GLRecordTexSubImage1d, type) == 20 ? 1 : -1];
 typedef char V86GLRecordTexSubImage1d_data_size[offsetof(V86GLRecordTexSubImage1d, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordPolygonStippleSize[sizeof(V86GLRecordPolygonStipple) == 128 ? 1 : -1];
+typedef char V86GLRecordPolygonStipple_mask[offsetof(V86GLRecordPolygonStipple, mask) == 0 ? 1 : -1];
 typedef char V86GLRecordPixelMapfvSize[sizeof(V86GLRecordPixelMapfv) == 8 ? 1 : -1];
 typedef char V86GLRecordPixelMapfv_map[offsetof(V86GLRecordPixelMapfv, map) == 0 ? 1 : -1];
 typedef char V86GLRecordPixelMapfv_count[offsetof(V86GLRecordPixelMapfv, count) == 4 ? 1 : -1];
@@ -922,6 +1090,14 @@ typedef char V86GLRecordUniformMatrixFv_location[offsetof(V86GLRecordUniformMatr
 typedef char V86GLRecordUniformMatrixFv_dimension[offsetof(V86GLRecordUniformMatrixFv, dimension) == 4 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixFv_count[offsetof(V86GLRecordUniformMatrixFv, count) == 8 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixFv_transpose[offsetof(V86GLRecordUniformMatrixFv, transpose) == 12 ? 1 : -1];
+typedef char V86GLRecordDrawArraysGl2Size[sizeof(V86GLRecordDrawArraysGl2) == 8 ? 1 : -1];
+typedef char V86GLRecordDrawArraysGl2_mode[offsetof(V86GLRecordDrawArraysGl2, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordDrawArraysGl2_count[offsetof(V86GLRecordDrawArraysGl2, count) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawElementsGl2Size[sizeof(V86GLRecordDrawElementsGl2) == 16 ? 1 : -1];
+typedef char V86GLRecordDrawElementsGl2_mode[offsetof(V86GLRecordDrawElementsGl2, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordDrawElementsGl2_count[offsetof(V86GLRecordDrawElementsGl2, count) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawElementsGl2_type[offsetof(V86GLRecordDrawElementsGl2, type) == 8 ? 1 : -1];
+typedef char V86GLRecordDrawElementsGl2_index_data_size[offsetof(V86GLRecordDrawElementsGl2, index_data_size) == 12 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixRectFvSize[sizeof(V86GLRecordUniformMatrixRectFv) == 20 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixRectFv_location[offsetof(V86GLRecordUniformMatrixRectFv, location) == 0 ? 1 : -1];
 typedef char V86GLRecordUniformMatrixRectFv_columns[offsetof(V86GLRecordUniformMatrixRectFv, columns) == 4 ? 1 : -1];
@@ -1040,6 +1216,36 @@ typedef char V86GLRecordBufferSubData_target[offsetof(V86GLRecordBufferSubData, 
 typedef char V86GLRecordBufferSubData_offset[offsetof(V86GLRecordBufferSubData, offset) == 4 ? 1 : -1];
 typedef char V86GLRecordBufferSubData_size[offsetof(V86GLRecordBufferSubData, size) == 8 ? 1 : -1];
 typedef char V86GLRecordBufferSubData_data_size[offsetof(V86GLRecordBufferSubData, data_size) == 12 ? 1 : -1];
+typedef char V86GLRecordVertexPointerVboSize[sizeof(V86GLRecordVertexPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordVertexPointerVbo_size[offsetof(V86GLRecordVertexPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordVertexPointerVbo_type[offsetof(V86GLRecordVertexPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordVertexPointerVbo_stride[offsetof(V86GLRecordVertexPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordVertexPointerVbo_offset[offsetof(V86GLRecordVertexPointerVbo, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordColorPointerVboSize[sizeof(V86GLRecordColorPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordColorPointerVbo_size[offsetof(V86GLRecordColorPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordColorPointerVbo_type[offsetof(V86GLRecordColorPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordColorPointerVbo_stride[offsetof(V86GLRecordColorPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordColorPointerVbo_offset[offsetof(V86GLRecordColorPointerVbo, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordTexCoordPointerVboSize[sizeof(V86GLRecordTexCoordPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordTexCoordPointerVbo_size[offsetof(V86GLRecordTexCoordPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordTexCoordPointerVbo_type[offsetof(V86GLRecordTexCoordPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordTexCoordPointerVbo_stride[offsetof(V86GLRecordTexCoordPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordTexCoordPointerVbo_offset[offsetof(V86GLRecordTexCoordPointerVbo, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordNormalPointerVboSize[sizeof(V86GLRecordNormalPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordNormalPointerVbo_size[offsetof(V86GLRecordNormalPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordNormalPointerVbo_type[offsetof(V86GLRecordNormalPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordNormalPointerVbo_stride[offsetof(V86GLRecordNormalPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordNormalPointerVbo_offset[offsetof(V86GLRecordNormalPointerVbo, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordSecondaryColorPointerVboSize[sizeof(V86GLRecordSecondaryColorPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordSecondaryColorPointerVbo_size[offsetof(V86GLRecordSecondaryColorPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordSecondaryColorPointerVbo_type[offsetof(V86GLRecordSecondaryColorPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordSecondaryColorPointerVbo_stride[offsetof(V86GLRecordSecondaryColorPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordSecondaryColorPointerVbo_offset[offsetof(V86GLRecordSecondaryColorPointerVbo, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordFogCoordPointerVboSize[sizeof(V86GLRecordFogCoordPointerVbo) == 16 ? 1 : -1];
+typedef char V86GLRecordFogCoordPointerVbo_size[offsetof(V86GLRecordFogCoordPointerVbo, size) == 0 ? 1 : -1];
+typedef char V86GLRecordFogCoordPointerVbo_type[offsetof(V86GLRecordFogCoordPointerVbo, type) == 4 ? 1 : -1];
+typedef char V86GLRecordFogCoordPointerVbo_stride[offsetof(V86GLRecordFogCoordPointerVbo, stride) == 8 ? 1 : -1];
+typedef char V86GLRecordFogCoordPointerVbo_offset[offsetof(V86GLRecordFogCoordPointerVbo, offset) == 12 ? 1 : -1];
 typedef char V86GLRecordVertexAttribPointerVboSize[sizeof(V86GLRecordVertexAttribPointerVbo) == 24 ? 1 : -1];
 typedef char V86GLRecordVertexAttribPointerVbo_index[offsetof(V86GLRecordVertexAttribPointerVbo, index) == 0 ? 1 : -1];
 typedef char V86GLRecordVertexAttribPointerVbo_size[offsetof(V86GLRecordVertexAttribPointerVbo, size) == 4 ? 1 : -1];
@@ -1054,6 +1260,20 @@ typedef char V86GLRecordDrawElementsDirect_end[offsetof(V86GLRecordDrawElementsD
 typedef char V86GLRecordDrawElementsDirect_count[offsetof(V86GLRecordDrawElementsDirect, count) == 12 ? 1 : -1];
 typedef char V86GLRecordDrawElementsDirect_type[offsetof(V86GLRecordDrawElementsDirect, type) == 16 ? 1 : -1];
 typedef char V86GLRecordDrawElementsDirect_offset[offsetof(V86GLRecordDrawElementsDirect, offset) == 20 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirectSize[sizeof(V86GLRecordDrawRangeElementsDirect) == 24 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirect_mode[offsetof(V86GLRecordDrawRangeElementsDirect, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirect_start[offsetof(V86GLRecordDrawRangeElementsDirect, start) == 4 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirect_end[offsetof(V86GLRecordDrawRangeElementsDirect, end) == 8 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirect_count[offsetof(V86GLRecordDrawRangeElementsDirect, count) == 12 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirect_type[offsetof(V86GLRecordDrawRangeElementsDirect, type) == 16 ? 1 : -1];
+typedef char V86GLRecordDrawRangeElementsDirect_offset[offsetof(V86GLRecordDrawRangeElementsDirect, offset) == 20 ? 1 : -1];
+typedef char V86GLRecordMultiDrawArraysDirectSize[sizeof(V86GLRecordMultiDrawArraysDirect) == 8 ? 1 : -1];
+typedef char V86GLRecordMultiDrawArraysDirect_mode[offsetof(V86GLRecordMultiDrawArraysDirect, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordMultiDrawArraysDirect_primcount[offsetof(V86GLRecordMultiDrawArraysDirect, primcount) == 4 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsDirectSize[sizeof(V86GLRecordMultiDrawElementsDirect) == 12 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsDirect_mode[offsetof(V86GLRecordMultiDrawElementsDirect, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsDirect_type[offsetof(V86GLRecordMultiDrawElementsDirect, type) == 4 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsDirect_primcount[offsetof(V86GLRecordMultiDrawElementsDirect, primcount) == 8 ? 1 : -1];
 typedef char V86GLRecordQueryErrorSize[sizeof(V86GLRecordQueryError) == 16 ? 1 : -1];
 typedef char V86GLRecordQueryError_status[offsetof(V86GLRecordQueryError, status) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryError_value[offsetof(V86GLRecordQueryError, value) == 4 ? 1 : -1];
@@ -1077,6 +1297,11 @@ typedef char V86GLRecordQueryUniform_value_count[offsetof(V86GLRecordQueryUnifor
 typedef char V86GLRecordQueryUniform_data_size[offsetof(V86GLRecordQueryUniform, data_size) == 20 ? 1 : -1];
 typedef char V86GLRecordQueryUniform_reserved0[offsetof(V86GLRecordQueryUniform, reserved0) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryUniform_reserved1[offsetof(V86GLRecordQueryUniform, reserved1) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatchSize[sizeof(V86GLRecordQueryObjectBatch) == 16 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatch_count[offsetof(V86GLRecordQueryObjectBatch, count) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatch_object_kind[offsetof(V86GLRecordQueryObjectBatch, object_kind) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatch_status[offsetof(V86GLRecordQueryObjectBatch, status) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatch_reserved[offsetof(V86GLRecordQueryObjectBatch, reserved) == 12 ? 1 : -1];
 typedef char V86GLRecordQueryStateSize[sizeof(V86GLRecordQueryState) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryState_pname[offsetof(V86GLRecordQueryState, pname) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryState_value_kind[offsetof(V86GLRecordQueryState, value_kind) == 4 ? 1 : -1];
@@ -1108,5 +1333,59 @@ typedef char V86GLRecordMakeCurrent_share_group[offsetof(V86GLRecordMakeCurrent,
 typedef char V86GLRecordMakeCurrent_format[offsetof(V86GLRecordMakeCurrent, format) == 28 ? 1 : -1];
 typedef char V86GLRecordDestroyContextSize[sizeof(V86GLRecordDestroyContext) == 4 ? 1 : -1];
 typedef char V86GLRecordDestroyContext_context_id[offsetof(V86GLRecordDestroyContext, context_id) == 0 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysMtSize[sizeof(V86GLRecordPackedDrawArraysMt) == 20 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysMt_mode[offsetof(V86GLRecordPackedDrawArraysMt, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysMt_count[offsetof(V86GLRecordPackedDrawArraysMt, count) == 4 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysMt_magic[offsetof(V86GLRecordPackedDrawArraysMt, magic) == 8 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysMt_tex_unit_count[offsetof(V86GLRecordPackedDrawArraysMt, tex_unit_count) == 12 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysMt_client_active_texture[offsetof(V86GLRecordPackedDrawArraysMt, client_active_texture) == 16 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2MtSize[sizeof(V86GLRecordPackedDrawArraysGl2Mt) == 24 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2Mt_mode[offsetof(V86GLRecordPackedDrawArraysGl2Mt, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2Mt_count[offsetof(V86GLRecordPackedDrawArraysGl2Mt, count) == 4 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2Mt_magic[offsetof(V86GLRecordPackedDrawArraysGl2Mt, magic) == 8 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2Mt_tex_unit_count[offsetof(V86GLRecordPackedDrawArraysGl2Mt, tex_unit_count) == 12 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2Mt_client_active_texture[offsetof(V86GLRecordPackedDrawArraysGl2Mt, client_active_texture) == 16 ? 1 : -1];
+typedef char V86GLRecordPackedDrawArraysGl2Mt_generic_attrib_count[offsetof(V86GLRecordPackedDrawArraysGl2Mt, generic_attrib_count) == 20 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMtSize[sizeof(V86GLRecordPackedDrawElementsMt) == 28 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_mode[offsetof(V86GLRecordPackedDrawElementsMt, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_count[offsetof(V86GLRecordPackedDrawElementsMt, count) == 4 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_type[offsetof(V86GLRecordPackedDrawElementsMt, type) == 8 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_index_data_size[offsetof(V86GLRecordPackedDrawElementsMt, index_data_size) == 12 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_magic[offsetof(V86GLRecordPackedDrawElementsMt, magic) == 16 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_tex_unit_count[offsetof(V86GLRecordPackedDrawElementsMt, tex_unit_count) == 20 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsMt_client_active_texture[offsetof(V86GLRecordPackedDrawElementsMt, client_active_texture) == 24 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2MtSize[sizeof(V86GLRecordPackedDrawElementsGl2Mt) == 32 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_mode[offsetof(V86GLRecordPackedDrawElementsGl2Mt, mode) == 0 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_count[offsetof(V86GLRecordPackedDrawElementsGl2Mt, count) == 4 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_type[offsetof(V86GLRecordPackedDrawElementsGl2Mt, type) == 8 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_index_data_size[offsetof(V86GLRecordPackedDrawElementsGl2Mt, index_data_size) == 12 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_magic[offsetof(V86GLRecordPackedDrawElementsGl2Mt, magic) == 16 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_tex_unit_count[offsetof(V86GLRecordPackedDrawElementsGl2Mt, tex_unit_count) == 20 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_client_active_texture[offsetof(V86GLRecordPackedDrawElementsGl2Mt, client_active_texture) == 24 ? 1 : -1];
+typedef char V86GLRecordPackedDrawElementsGl2Mt_generic_attrib_count[offsetof(V86GLRecordPackedDrawElementsGl2Mt, generic_attrib_count) == 28 ? 1 : -1];
+typedef char V86GLRecordClientArrayBlockSize[sizeof(V86GLRecordClientArrayBlock) == 20 ? 1 : -1];
+typedef char V86GLRecordClientArrayBlock_enabled[offsetof(V86GLRecordClientArrayBlock, enabled) == 0 ? 1 : -1];
+typedef char V86GLRecordClientArrayBlock_size[offsetof(V86GLRecordClientArrayBlock, size) == 4 ? 1 : -1];
+typedef char V86GLRecordClientArrayBlock_type[offsetof(V86GLRecordClientArrayBlock, type) == 8 ? 1 : -1];
+typedef char V86GLRecordClientArrayBlock_stride[offsetof(V86GLRecordClientArrayBlock, stride) == 12 ? 1 : -1];
+typedef char V86GLRecordClientArrayBlock_data_size[offsetof(V86GLRecordClientArrayBlock, data_size) == 16 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlockSize[sizeof(V86GLRecordGenericAttribBlock) == 28 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_index[offsetof(V86GLRecordGenericAttribBlock, index) == 0 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_normalized[offsetof(V86GLRecordGenericAttribBlock, normalized) == 4 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_enabled[offsetof(V86GLRecordGenericAttribBlock, enabled) == 8 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_size[offsetof(V86GLRecordGenericAttribBlock, size) == 12 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_type[offsetof(V86GLRecordGenericAttribBlock, type) == 16 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_stride[offsetof(V86GLRecordGenericAttribBlock, stride) == 20 ? 1 : -1];
+typedef char V86GLRecordGenericAttribBlock_data_size[offsetof(V86GLRecordGenericAttribBlock, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordMultiDrawArraysEntrySize[sizeof(V86GLRecordMultiDrawArraysEntry) == 8 ? 1 : -1];
+typedef char V86GLRecordMultiDrawArraysEntry_first[offsetof(V86GLRecordMultiDrawArraysEntry, first) == 0 ? 1 : -1];
+typedef char V86GLRecordMultiDrawArraysEntry_count[offsetof(V86GLRecordMultiDrawArraysEntry, count) == 4 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsEntrySize[sizeof(V86GLRecordMultiDrawElementsEntry) == 8 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsEntry_count[offsetof(V86GLRecordMultiDrawElementsEntry, count) == 0 ? 1 : -1];
+typedef char V86GLRecordMultiDrawElementsEntry_offset[offsetof(V86GLRecordMultiDrawElementsEntry, offset) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatchEntrySize[sizeof(V86GLRecordQueryObjectBatchEntry) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatchEntry_name[offsetof(V86GLRecordQueryObjectBatchEntry, name) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatchEntry_available[offsetof(V86GLRecordQueryObjectBatchEntry, available) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryObjectBatchEntry_result[offsetof(V86GLRecordQueryObjectBatchEntry, result) == 8 ? 1 : -1];
 
 #endif
