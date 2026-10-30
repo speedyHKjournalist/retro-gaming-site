@@ -52,16 +52,27 @@ async function run(code, check, configure) {
         execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-I", path.join(__dirname, "../openglproxy"), path.join(dir, "test.c"), "-o", path.join(dir, "test")]);
         for (const copied of [false, true]) {
             const shadow = new GLShadow(), { host } = createFakeHost(), gpu = new GLWebGPUExecutor(null, { host, strict: true }); await gpu.initialize();
-            gpu.options.writeGuestMemory = (offset, data, metadata) => metadata.guestBytes.set(data, offset);
+            gpu.options.writeGuestMemory = (offset, data, metadata) => metadata.guestBytes.set(data, offset + (metadata.originalOffset || 0));
             const initial = new GLStream().makeCurrent(1, 0, 0, 64, 64, 1, 1).bytes(); shadow.process(initial); gpu.submit(initial, {});
             if (configure) await configure(shadow, gpu);
+            const commands = new Map();
+            shadow.writeResponse = (target, bytes) => commands.get(target.batchId).set(bytes, target.offset);
+            const forward = (bytes, segments, metadata) => {
+                for (const segment of segments || [{ offset: 0, length: bytes.length }]) {
+                    const part = segment.bytes || bytes.subarray(segment.offset, segment.offset + segment.length);
+                    gpu.submit(copied ? part.slice() : part, { guestBytes: commands.get(metadata.batchId), originalOffset: (metadata.offset || 0) + (segment.bytes ? 0 : segment.offset),
+                        onVertexCapture: result => shadow.completeVertexCapture(result) });
+                }
+            };
+            shadow.onCPUResume = forward;
             const child = spawn(path.join(dir, "test")); let pending = Buffer.alloc(0), stderr = "", failure, count = 0;
             child.stderr.on("data", b => { stderr += b; });
             child.stdout.on("data", bytes => {
                 pending = Buffer.concat([pending, bytes]);
                 try { while (pending.length >= 4 && pending.length >= 4 + pending.readUInt32LE(0)) {
                     const length = pending.readUInt32LE(0), command = Uint8Array.from(pending.subarray(4, 4 + length)); pending = pending.subarray(4 + length); ++count;
-                    const segments = shadow.process(command); const answered = command.slice(), view = new DataView(command.buffer);
+                    commands.set(count, command); const metadata = { generation: 1, batchId: count, root: true, offset: 0 };
+                    const segments = shadow.process(command, metadata), blocked = !!shadow.cpuBarrier; const answered = command.slice(), view = new DataView(command.buffer);
                     const fn = view.getUint16(0, true), at = view.getUint16(2, true) === 0xFFFF ? 8 : 4;
                     const query = fn === P.GLFN.QUERY_OBJECT_BATCH ? "QUERY_OBJECT_BATCH" :
                         fn === P.GLFN.QUERY_TEXTURE_IMAGE ? "QUERY_TEXTURE_IMAGE" :
@@ -69,14 +80,9 @@ async function run(code, check, configure) {
                         fn === P.GLFN.QUERY_RENDER_MODE ? "QUERY_RENDER_MODE" :
                         fn === P.GLFN.QUERY_OBJECT_IV && view.getUint32(at + P.F.QUERY_OBJECT_IV.object_kind, true) === P.C.V86GL_OBJECT_KIND_QUERY ? "QUERY_OBJECT_IV" : null;
                     const cpuAnswered = !query || view.getUint32(at + P.F[query].status, true) !== P.C.V86GL_SYNC_QUERY_STATUS_PENDING;
-                    if (segments) {
-                        for (const segment of segments) {
-                            const part = segment.bytes || command.subarray(segment.offset, segment.offset + segment.length);
-                            gpu.submit(copied ? part.slice() : part, { guestBytes: command, onVertexCapture: result => shadow.completeVertexCapture(result) });
-                        }
-                    } else gpu.submit(copied ? command.slice() : command, { guestBytes: command, onVertexCapture: result => shadow.completeVertexCapture(result) });
-                    const finish = () => { if (cpuAnswered) assert.deepEqual(command, answered, "renderer changed CPU answers"); child.stdin.write(command); };
-                    if (query && view.getUint32(at + P.F[query].status, true) === P.C.V86GL_SYNC_QUERY_STATUS_PENDING)
+                    forward(command, segments, metadata);
+                    const finish = () => { if (cpuAnswered && !blocked) assert.deepEqual(command, answered, "renderer changed CPU answers"); child.stdin.write(command); };
+                    if (blocked || query && view.getUint32(at + P.F[query].status, true) === P.C.V86GL_SYNC_QUERY_STATUS_PENDING)
                         gpu.idle().then(finish).catch(error => { failure = error; child.kill(); });
                     else finish();
                 } } catch (error) { failure = error; child.kill(); }

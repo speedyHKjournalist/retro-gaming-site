@@ -345,9 +345,11 @@ enum {
     GLFN_QUERY_RENDER_MODE = 239,
     GLFN_NAME_COMMAND = 240,
     GLFN_RESOLVED_RASTER_STATE = 241,
-    GLFN_CAPTURE_VERTICES = 242
+    GLFN_CAPTURE_VERTICES = 242,
+    GLFN_CAPTURE_RASTER_VERTEX = 243,
+    GLFN_RESOLVED_RASTER_ALL = 244
 };
-#define V86GL_OPCODE_COUNT 242u
+#define V86GL_OPCODE_COUNT 244u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -980,6 +982,19 @@ typedef struct V86GLRecordCaptureVertices {
     uint32_t count;
     uint32_t total;
 } V86GLRecordCaptureVertices;
+typedef struct V86GLRecordCaptureRasterVertex {
+    uint32_t job;
+    uint32_t reserved;
+} V86GLRecordCaptureRasterVertex;
+typedef struct V86GLRecordResolvedRasterAll {
+    uint32_t valid;
+    float position[4];
+    float color[4];
+    float secondary[4];
+    float distance;
+    float fog;
+    float coords[32];
+} V86GLRecordResolvedRasterAll;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1595,6 +1610,17 @@ typedef char V86GLRecordCaptureVertices_job[offsetof(V86GLRecordCaptureVertices,
 typedef char V86GLRecordCaptureVertices_first[offsetof(V86GLRecordCaptureVertices, first) == 4 ? 1 : -1];
 typedef char V86GLRecordCaptureVertices_count[offsetof(V86GLRecordCaptureVertices, count) == 8 ? 1 : -1];
 typedef char V86GLRecordCaptureVertices_total[offsetof(V86GLRecordCaptureVertices, total) == 12 ? 1 : -1];
+typedef char V86GLRecordCaptureRasterVertexSize[sizeof(V86GLRecordCaptureRasterVertex) == 8 ? 1 : -1];
+typedef char V86GLRecordCaptureRasterVertex_job[offsetof(V86GLRecordCaptureRasterVertex, job) == 0 ? 1 : -1];
+typedef char V86GLRecordCaptureRasterVertex_reserved[offsetof(V86GLRecordCaptureRasterVertex, reserved) == 4 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAllSize[sizeof(V86GLRecordResolvedRasterAll) == 188 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_valid[offsetof(V86GLRecordResolvedRasterAll, valid) == 0 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_position[offsetof(V86GLRecordResolvedRasterAll, position) == 4 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_color[offsetof(V86GLRecordResolvedRasterAll, color) == 20 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_secondary[offsetof(V86GLRecordResolvedRasterAll, secondary) == 36 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_distance[offsetof(V86GLRecordResolvedRasterAll, distance) == 52 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_fog[offsetof(V86GLRecordResolvedRasterAll, fog) == 56 ? 1 : -1];
+typedef char V86GLRecordResolvedRasterAll_coords[offsetof(V86GLRecordResolvedRasterAll, coords) == 60 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];

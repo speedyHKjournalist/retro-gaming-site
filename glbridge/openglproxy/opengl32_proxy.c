@@ -19018,7 +19018,15 @@ DEFINE_RASTER_POS_VARIANT(s, GLshort)
  * WebGPU executor, which implements the same bypass on the browser side. */
 static void window_pos3f_compat(GLfloat x, GLfloat y, GLfloat z) {
     struct { float x, y, z; } payload;
-    raster_pos4f_compat(x, y, z, 1.0f);
+    g_current_raster_position[0] = x;
+    g_current_raster_position[1] = y;
+    g_current_raster_position[2] = z;
+    g_current_raster_position[3] = 1.0f;
+    CopyMemory(g_current_raster_color, g_current_color, sizeof(g_current_raster_color));
+    CopyMemory(g_current_raster_texcoord, g_current_texcoord, sizeof(g_current_raster_texcoord));
+    g_current_raster_index = g_current_index;
+    g_current_raster_distance = 0.0f;
+    g_current_raster_valid = GL_TRUE;
     payload.x = x;
     payload.y = y;
     payload.z = z;
