@@ -11100,7 +11100,6 @@ void APIENTRY glShaderSource(GLuint shader, GLsizei count,
     if (state->source) HeapFree(GetProcessHeap(), 0, state->source);
     state->source = source;
     state->source_length = (GLsizei)total;
-    state->compiled = GL_FALSE;
 
     payload = alloc_payload(8u + total);
     if (!payload) return;
@@ -11135,13 +11134,13 @@ void APIENTRY glLinkProgram(GLuint program) {
     GLint status;
     uint32_t payload = program;
     if (!state) { v86gl_set_error(GL_INVALID_VALUE); return; }
+    state->validated = GL_FALSE;
     emit_gl_call(GLFN_LINK_PROGRAM, &payload, sizeof(payload));
     if (emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program,
                              GL_LINK_STATUS, &status)) {
         state->linked = status ? GL_TRUE : GL_FALSE;
         if (state->linked) {
             state->has_executable = GL_TRUE;
-            state->validated = GL_FALSE;
             invalidate_program_locations(program);
         }
     } else {
