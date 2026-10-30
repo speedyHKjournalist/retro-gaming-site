@@ -46,6 +46,9 @@
 #define V86GL_SYNC_QUERY_STATUS_FAILED 2u
 /* state not migrated to the CPU shadow yet */
 #define V86GL_STATE_QUERY_UNSUPPORTED 3u
+#define V86GL_STIPPLE_SOURCE_PBO_BIT 1u
+/* capture-only setter query stored a deferred list error */
+#define V86GL_STIPPLE_CAPTURE_FAILURE_BIT 2u
 #define V86GL_STATE_INTEGER 1u
 #define V86GL_STATE_FLOAT 2u
 #define V86GL_STATE_DOUBLE 3u

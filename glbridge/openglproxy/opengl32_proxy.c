@@ -17743,7 +17743,10 @@ __declspec(dllexport)
 void APIENTRY glPolygonStipple(const GLubyte* mask) {
     uint32_t layout[12], header[4] = {0}, row;
     uint8_t rows[320], payload[16 + 160];
-    if (!query_polygon_stipple(1, mask, layout, rows) || layout[9] || !mask) return;
+    if (!query_polygon_stipple(2, mask, layout, rows)) return;
+    if (layout[9] & V86GL_STIPPLE_CAPTURE_FAILURE_BIT) return;
+    if (layout[9] & V86GL_STIPPLE_SOURCE_PBO_BIT) { emit_gl_call(GLFN_POLYGON_STIPPLE, rows, 128); return; }
+    if (!mask) return;
     header[0] = 32 * layout[6];
     CopyMemory(payload, header, sizeof(header));
     for (row = 0; row < 32; row++)

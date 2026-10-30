@@ -40,6 +40,7 @@ static void bind(uint32_t target,uint32_t name){uint32_t words[]={target,name};e
 static void buffer(uint32_t target,const uint8_t* bytes,uint32_t size) {
     uint32_t words[]={target,size,GL_STATIC_DRAW,size};uint8_t payload[144];memcpy(payload,words,16);memcpy(payload+16,bytes,size);emit_gl_call(GLFN_BUFFER_DATA,payload,16+size);
 }
+static uint32_t host_error(void){uint32_t request[4]={0};uint8_t* args;reserve_pci_record(GLFN_QUERY_ERROR,NULL,16,&args);memcpy(args,request,16);emit_pci_batch(0);assert(read_u32le(args)==1);return read_u32le(args+4);}
 int main(void) {
     uint8_t source[512],out[320],expected[128]={${expected.join(",")}};
     for(unsigned int i=0;i<512;i++)source[i]=(i*73)^0xA6;
@@ -55,6 +56,17 @@ int main(void) {
     bind(GL_PIXEL_UNPACK_BUFFER,7);buffer(GL_PIXEL_UNPACK_BUFFER,expected,128);glPolygonStipple(NULL);bind(GL_PIXEL_UNPACK_BUFFER,0);
     bind(GL_PIXEL_PACK_BUFFER,8);memset(cache,0xA5,sizeof(cache));buffer(GL_PIXEL_PACK_BUFFER,cache,128);pack_buffer=8;glGetPolygonStipple(NULL);
     assert(!error&&!memcmp(cache,expected,128));pack_buffer=0;bind(GL_PIXEL_PACK_BUFFER,0);
+    uint32_t list[]={1,77,GL_COMPILE};uint8_t ones[128];memset(ones,255,128);bind(GL_PIXEL_UNPACK_BUFFER,7);buffer(GL_PIXEL_UNPACK_BUFFER,ones,128);
+    emit_gl_call(GLFN_LIST_COMMAND,list,12);glPolygonStipple(NULL);memset(out,0xA5,sizeof(out));glGetPolygonStipple(out);assert(!memcmp(out,expected,128));
+    list[0]=2;emit_gl_call(GLFN_LIST_COMMAND,list,12);memset(ones,0,128);buffer(GL_PIXEL_UNPACK_BUFFER,ones,128);bind(GL_PIXEL_UNPACK_BUFFER,0);
+    list[0]=3;emit_gl_call(GLFN_LIST_COMMAND,list,12);glGetPolygonStipple(out);for(unsigned int i=0;i<128;i++)assert(out[i]==255);
+    store(GL_UNPACK_ALIGNMENT,8);store(GL_UNPACK_ROW_LENGTH,40);store(GL_UNPACK_SKIP_ROWS,1);store(GL_UNPACK_SKIP_PIXELS,5);store(GL_UNPACK_LSB_FIRST,1);
+    list[0]=1;list[1]=88;emit_gl_call(GLFN_LIST_COMMAND,list,12);glPolygonStipple(source);list[0]=2;emit_gl_call(GLFN_LIST_COMMAND,list,12);
+    store(GL_UNPACK_ALIGNMENT,4);store(GL_UNPACK_ROW_LENGTH,0);store(GL_UNPACK_SKIP_ROWS,0);store(GL_UNPACK_SKIP_PIXELS,0);store(GL_UNPACK_LSB_FIRST,0);
+    list[0]=3;emit_gl_call(GLFN_LIST_COMMAND,list,12);glGetPolygonStipple(out);assert(!error&&!memcmp(out,expected,128));
+    bind(GL_PIXEL_UNPACK_BUFFER,7);buffer(GL_PIXEL_UNPACK_BUFFER,ones,127);list[0]=1;list[1]=99;emit_gl_call(GLFN_LIST_COMMAND,list,12);glPolygonStipple(NULL);
+    assert(!error&&!host_error());list[0]=2;emit_gl_call(GLFN_LIST_COMMAND,list,12);bind(GL_PIXEL_UNPACK_BUFFER,0);list[0]=3;emit_gl_call(GLFN_LIST_COMMAND,list,12);
+    assert(host_error()==GL_INVALID_OPERATION);glGetPolygonStipple(out);assert(!error&&!memcmp(out,expected,128));
     uint32_t primitive=GL_TRIANGLES;emit_gl_call(GLFN_BEGIN,&primitive,4);memset(out,0xA5,sizeof(out));glGetPolygonStipple(out);emit_gl_call(GLFN_END,NULL,0);
     assert(error==GL_INVALID_OPERATION);for(unsigned int i=0;i<320;i++)assert(out[i]==0xA5);
     assert(maximum<=372);return 0;
@@ -63,5 +75,5 @@ int main(void) {
 run(code, (shadow, gpu) => {
     assert.deepEqual(Array.from(shadow.current.group.buffers.get(8).data), expected);
     assert.deepEqual(Array.from(gpu.current.polygonStipple), expected);
-}).then(() => console.log("gl_polygon_stipple_abi_test: actual C row capture, masked scatter, sparse packing and PBO NULL offsets passed in both modes"))
+}).then(() => console.log("gl_polygon_stipple_abi_test: actual C bounded rows, masked scatter, PBO offsets, list capture and deferred source errors passed in both modes"))
     .catch(error => { console.error(error); process.exitCode = 1; });
