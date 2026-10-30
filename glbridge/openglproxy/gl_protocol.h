@@ -313,9 +313,10 @@ enum {
     GLFN_EDGE_FLAG = 218,
     GLFN_QUERY_STATE = 219,
     GLFN_QUERY_PARAMETER = 220,
-    GLFN_PRIORITIZE_TEXTURES = 221
+    GLFN_PRIORITIZE_TEXTURES = 221,
+    GLFN_PROGRAM_LINK_FAILED = 222
 };
-#define V86GL_OPCODE_COUNT 221u
+#define V86GL_OPCODE_COUNT 222u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
