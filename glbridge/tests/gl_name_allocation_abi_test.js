@@ -49,6 +49,7 @@ int main(void) {
     for(unsigned int i=0;i<70000;i++)assert(many[i]==i+6); free(many);
     assert(largest_record<=4+65536*4 && generated_records==5);
     assert(g_next_texture_id==1 && g_next_buffer_id==1 && g_next_renderbuffer_id==1 && g_next_framebuffer_id==1);
+    uint32_t window[]={GL_FRAMEBUFFER_EXT,0}; emit_gl_call(GLFN_BIND_FRAMEBUFFER,window,sizeof(window));
     uint32_t mode=GL_POINTS; emit_gl_call(GLFN_BEGIN,&mode,4); glGenTextures(0,NULL);
     assert(error==GL_INVALID_OPERATION); error=0; emit_gl_call(GLFN_END,NULL,0); return 0;
 }
