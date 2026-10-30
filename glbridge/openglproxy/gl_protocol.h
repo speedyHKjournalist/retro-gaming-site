@@ -331,9 +331,10 @@ enum {
     GLFN_QUERY_NAMES = 228,
     GLFN_FRAMEBUFFER_TEXTURE_1D = 229,
     GLFN_FRAMEBUFFER_TEXTURE_2D = 230,
-    GLFN_FRAMEBUFFER_TEXTURE_3D = 231
+    GLFN_FRAMEBUFFER_TEXTURE_3D = 231,
+    GLFN_BIND_FRAMEBUFFER_EXT = 232
 };
-#define V86GL_OPCODE_COUNT 231u
+#define V86GL_OPCODE_COUNT 232u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {

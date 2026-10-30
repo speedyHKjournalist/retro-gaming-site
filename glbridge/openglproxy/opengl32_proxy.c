@@ -13233,7 +13233,7 @@ void APIENTRY glDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     glDeleteFramebuffersEXT(n, framebuffers);
 }
 
-void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) {
+static void bind_framebuffer(uint16_t opcode, GLenum target, GLuint framebuffer) {
     struct { uint32_t target, framebuffer; } payload;
 
     if (!valid_framebuffer_target(target)) {
@@ -13247,11 +13247,15 @@ void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) {
     set_framebuffer_binding_for_target(target, framebuffer);
     payload.target = (uint32_t)target;
     payload.framebuffer = framebuffer;
-    emit_gl_call(GLFN_BIND_FRAMEBUFFER, &payload, sizeof(payload));
+    emit_gl_call(opcode, &payload, sizeof(payload));
+}
+
+void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) {
+    bind_framebuffer(GLFN_BIND_FRAMEBUFFER_EXT, target, framebuffer);
 }
 
 void APIENTRY glBindFramebuffer(GLenum target, GLuint framebuffer) {
-    glBindFramebufferEXT(target, framebuffer);
+    bind_framebuffer(GLFN_BIND_FRAMEBUFFER, target, framebuffer);
 }
 
 GLboolean APIENTRY glIsFramebufferEXT(GLuint framebuffer) {
