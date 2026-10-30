@@ -328,9 +328,12 @@ enum {
     GLFN_QUERY_BUFFER_UNMAP = 225,
     GLFN_INDEX_POINTER_VBO = 226,
     GLFN_EDGE_FLAG_POINTER_VBO = 227,
-    GLFN_QUERY_NAMES = 228
+    GLFN_QUERY_NAMES = 228,
+    GLFN_FRAMEBUFFER_TEXTURE_1D = 229,
+    GLFN_FRAMEBUFFER_TEXTURE_2D = 230,
+    GLFN_FRAMEBUFFER_TEXTURE_3D = 231
 };
-#define V86GL_OPCODE_COUNT 228u
+#define V86GL_OPCODE_COUNT 231u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {

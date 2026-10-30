@@ -13331,12 +13331,9 @@ void APIENTRY glBlitFramebuffer(GLint srcX0, GLint srcY0,
                          dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
-static void framebuffer_texture_ext(GLenum target, GLenum attachment,
+static void framebuffer_texture_ext(uint16_t opcode, GLenum target, GLenum attachment,
                                     GLenum textarget, GLuint texture,
                                     GLint level, GLint zoffset) {
-    FramebufferAttachmentState* state;
-    TextureObjectState* texture_state;
-    GLenum binding_target;
     struct {
         uint32_t target;
         uint32_t attachment;
@@ -13346,60 +13343,19 @@ static void framebuffer_texture_ext(GLenum target, GLenum attachment,
         int32_t zoffset;
     } payload;
 
-    if (!valid_framebuffer_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (level < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    switch (textarget) {
-    case GL_TEXTURE_1D:
-    case GL_TEXTURE_2D:
-    case GL_TEXTURE_3D:
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
-        break;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    binding_target = texture_binding_target(textarget);
-    if (texture) {
-        texture_state = lookup_texture_state(texture);
-        if (!texture_state || !texture_state->target ||
-                texture_state->target != binding_target) {
-            v86gl_set_error(GL_INVALID_OPERATION);
-            return;
-        }
-    }
-    state = bound_framebuffer_attachment(target, attachment, TRUE);
-    if (!state) return;
-
-    state->object_type = texture ? GL_TEXTURE : 0;
-    state->object_name = texture;
-    state->texture_target = textarget;
-    state->texture_level = level;
-    state->texture_zoffset = zoffset;
-
     payload.target = (uint32_t)target;
     payload.attachment = (uint32_t)attachment;
     payload.textarget = (uint32_t)textarget;
     payload.texture = texture;
     payload.level = level;
     payload.zoffset = zoffset;
-    emit_gl_call(GLFN_FRAMEBUFFER_TEXTURE, &payload, sizeof(payload));
+    emit_gl_call(opcode, &payload, sizeof(payload));
 }
 
 void APIENTRY glFramebufferTexture1DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
                                         GLint level) {
-    framebuffer_texture_ext(target, attachment, textarget, texture, level, 0);
+    framebuffer_texture_ext(GLFN_FRAMEBUFFER_TEXTURE_1D, target, attachment, textarget, texture, level, 0);
 }
 
 void APIENTRY glFramebufferTexture1D(GLenum target, GLenum attachment,
@@ -13411,7 +13367,7 @@ void APIENTRY glFramebufferTexture1D(GLenum target, GLenum attachment,
 void APIENTRY glFramebufferTexture2DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
                                         GLint level) {
-    framebuffer_texture_ext(target, attachment, textarget, texture, level, 0);
+    framebuffer_texture_ext(GLFN_FRAMEBUFFER_TEXTURE_2D, target, attachment, textarget, texture, level, 0);
 }
 
 void APIENTRY glFramebufferTexture2D(GLenum target, GLenum attachment,
@@ -13423,8 +13379,7 @@ void APIENTRY glFramebufferTexture2D(GLenum target, GLenum attachment,
 void APIENTRY glFramebufferTexture3DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
                                         GLint level, GLint zoffset) {
-    if (zoffset < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    framebuffer_texture_ext(target, attachment, textarget, texture, level, zoffset);
+    framebuffer_texture_ext(GLFN_FRAMEBUFFER_TEXTURE_3D, target, attachment, textarget, texture, level, zoffset);
 }
 
 void APIENTRY glFramebufferTexture3D(GLenum target, GLenum attachment,
@@ -13436,27 +13391,12 @@ void APIENTRY glFramebufferTexture3D(GLenum target, GLenum attachment,
 void APIENTRY glFramebufferRenderbufferEXT(GLenum target, GLenum attachment,
                                            GLenum renderbuffertarget,
                                            GLuint renderbuffer) {
-    FramebufferAttachmentState* state;
     struct {
         uint32_t target;
         uint32_t attachment;
         uint32_t renderbuffertarget;
         uint32_t renderbuffer;
     } payload;
-
-    if (!valid_framebuffer_target(target) ||
-        !valid_renderbuffer_target(renderbuffertarget)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    state = bound_framebuffer_attachment(target, attachment, TRUE);
-    if (!state) return;
-
-    state->object_type = renderbuffer ? GL_RENDERBUFFER_EXT : 0;
-    state->object_name = renderbuffer;
-    state->texture_target = 0;
-    state->texture_level = 0;
-    state->texture_zoffset = 0;
 
     payload.target = (uint32_t)target;
     payload.attachment = (uint32_t)attachment;
