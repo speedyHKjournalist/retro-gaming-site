@@ -366,3 +366,12 @@ member has been current, namespace merging is explicitly refused; already
 shared contexts remain accepted. Nonzero wglCopyContext masks return
 ERROR_CALL_NOT_IMPLEMENTED instead of false success. The context-operations
 fixture covers these limits, format compatibility and unadvertised layer refusal.
+
+### Recovering transport failures
+
+A failed open/map can be attempted again. A failed submit keeps the process's
+mapping and previously accepted objects; the driver resets its queue and can
+register the same arena again. The failed batch is discarded, never replayed
+when acceptance is uncertain. The next API entry resends the current surface.
+There is no permanent disabled flag. Error messages use OutputDebugString only
+when tracing was explicitly requested; diagnostic builds retain file logging.

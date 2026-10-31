@@ -89,7 +89,7 @@ assert.ok(rawFlagReads <= 5,
 /* OutputDebugString raises a first-chance exception per line with no debugger
  * attached, so the now-default trace must not pay for it. */
 assert.match(proxy,
-    /if \(force \|\| g_trace_debug_string\) \{\s+lstrcatA\(message, "\\r\\n"\);\s+OutputDebugStringA\(message\);/,
+    /if \(g_trace_debug_string\) \{\s+lstrcatA\(message, "\\r\\n"\);\s+OutputDebugStringA\(message\);/,
     "the debug-string path must stay behind the environment variable");
 
 for (const marker of [

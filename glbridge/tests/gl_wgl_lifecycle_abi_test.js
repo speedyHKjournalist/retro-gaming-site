@@ -14,7 +14,7 @@ int main(void){thread_id=3;g_wgl_context_count=0;pthread_mutexattr_t attr;assert
  capture_guest_context_state(&g_default_guest_context_state);g_default_guest_context_state_valid=TRUE;
  assert(!wglCreateContext(NULL));assert(GetLastError()==ERROR_INVALID_HANDLE);glVertex4fv((const GLfloat*)(uintptr_t)1);assert(!glGetError());
  HGLRC a=wglCreateContext((HDC)(uintptr_t)99),b=wglCreateContext((HDC)(uintptr_t)100);assert(a&&b&&a!=b&&!wglGetCurrentContext());
- assert(wglMakeCurrent((HDC)(uintptr_t)99,a));glColor4f(1,0,0,1);assert(!wglMakeCurrent((HDC)(uintptr_t)99,(HGLRC)(uintptr_t)0xBAD));assert(GetLastError()==ERROR_INVALID_HANDLE);assert(!wglGetCurrentContext()&&!wglGetCurrentDC());
+ assert(wglMakeCurrent((HDC)(uintptr_t)99,a));g_have_last_surface=FALSE;g_window_dirty=0;glColor4f(1,0,0,1);assert(g_have_last_surface);assert(!wglMakeCurrent((HDC)(uintptr_t)99,(HGLRC)(uintptr_t)0xBAD));assert(GetLastError()==ERROR_INVALID_HANDLE);assert(!wglGetCurrentContext()&&!wglGetCurrentDC());
  assert(wglMakeCurrent((HDC)(uintptr_t)99,a));query_color(1);assert(!wglMakeCurrent(NULL,a));assert(!wglGetCurrentContext());
  assert(wglMakeCurrent((HDC)(uintptr_t)99,a));assert(wglMakeCurrent((HDC)(uintptr_t)0xBAD,NULL));assert(!wglGetCurrentContext());
  assert(wglMakeCurrent((HDC)(uintptr_t)99,a));tls_fail=1;assert(!wglMakeCurrent((HDC)(uintptr_t)100,b));assert(!wglGetCurrentContext());assert(wglMakeCurrent((HDC)(uintptr_t)99,a));query_color(1);

@@ -305,6 +305,9 @@ static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG
     if(reply->status)
     {
         DbgPrint(V86GL_LOG_PREFIX "virtio request=%lu failed status=%lu\n", opcode, reply->status);
+        if(reply->status == 2u) { t->registered = FALSE; return STATUS_DEVICE_NOT_READY; }
+        if(reply->status == 3u) return STATUS_DEVICE_NOT_READY;
+        if(reply->status == 1u) return STATUS_INVALID_PARAMETER;
         return STATUS_UNSUCCESSFUL;
     }
     if(opcode == VGL_REGISTER_ARENA) t->registered = TRUE;

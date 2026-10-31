@@ -959,7 +959,6 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 
 static HANDLE g_v86gl = INVALID_HANDLE_VALUE;
 static BOOL   g_v86gl_ready = FALSE;
-static BOOL   g_v86gl_failed = FALSE;
 static uint8_t* g_dma_buffer = NULL;
 static uint32_t g_dma_capacity = 0;
 static uint32_t g_dma_size = 0;
@@ -1206,7 +1205,7 @@ static void v86gl_logv(BOOL force, const char* format, va_list args) {
      * exception per line, which costs far more than the file write.  Now that
      * the diagnostic build traces by default, keep that path behind the
      * environment variable that used to gate all tracing. */
-    if (force || g_trace_debug_string) {
+    if (g_trace_debug_string) {
         lstrcatA(message, "\r\n");
         OutputDebugStringA(message);
     }
@@ -1929,6 +1928,7 @@ static void close_v86gl(void) {
     }
 
     g_v86gl_ready = FALSE;
+    g_have_last_surface = FALSE;
     g_dma_buffer = NULL;
     g_dma_capacity = 0;
     g_dma_size = 0;
@@ -1942,11 +1942,6 @@ static int open_v86gl(void) {
 
     if (g_v86gl_ready) {
         return 1;
-    }
-
-    if (g_v86gl_failed) {
-        v86gl_error("transport remains disabled after an earlier failure");
-        return 0;
     }
 
     v86gl_trace("open transport device %s", V86GL_DEVICE_DOS_NAME);
@@ -1964,7 +1959,7 @@ static int open_v86gl(void) {
         error = GetLastError();
         v86gl_error("CreateFile(%s) failed error=%lu", V86GL_DEVICE_DOS_NAME,
                     (unsigned long)error);
-        g_v86gl_failed = TRUE;
+        SetLastError(error);
         return 0;
     }
 
@@ -1987,7 +1982,7 @@ static int open_v86gl(void) {
                     (unsigned long)mapping.user_address,
                     (unsigned long)mapping.buffer_bytes);
         close_v86gl();
-        g_v86gl_failed = TRUE;
+        SetLastError(error);
         return 0;
     }
 
@@ -2079,15 +2074,18 @@ static int emit_pci_batch(BOOL force_present) {
                     (unsigned long)desc->command_bytes);
 #if V86GL_DIAG_ENABLED
         V86GL_DIAG("SUBMIT_FAILED frame=%lu winerr=%lu commands=%lu bytes=%lu "
-                   "-- the transport is gone; every later call is a no-op",
+                   "-- this batch failed; later calls may retry",
                    (unsigned long)desc->frame_id, (unsigned long)error,
                    (unsigned long)desc->command_count,
                    (unsigned long)desc->command_bytes);
         V86GL_DIAG_FLUSH();
 #endif
-        close_v86gl();
-        g_v86gl_failed = TRUE;
+        /* Keep this owner's mapping and CPU/GPU objects alive. The driver
+         * already resets a timed-out queue and re-registers the same arena.
+         * This batch failed; do not replay an ambiguously accepted command. */
+        g_have_last_surface=FALSE;
         reset_pci_stream();
+        SetLastError(error);
         return 0;
     }
 
@@ -3441,7 +3439,7 @@ static void emit_current_surface(HWND hwnd) {
                (long)payload.y, (unsigned long)payload.width,
                (unsigned long)payload.height);
 #endif
-    emit_pci_record(V86GL_CTRL_MAKE_CURRENT, &payload, sizeof(payload), TRUE);
+    if (!emit_pci_record(V86GL_CTRL_MAKE_CURRENT, &payload, sizeof(payload), TRUE)) g_have_last_surface=FALSE;
 }
 
 /*
@@ -4260,7 +4258,8 @@ static V86GLAPIGuard v86gl_enter_api(void) {
         if (target) {watch_current_window(target->current_hwnd);emit_current_surface(target->current_hwnd);}
         else if (had_context) emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
     }
-    if (InterlockedExchange(&g_window_dirty, 0) && target) {
+    BOOL window_changed=InterlockedExchange(&g_window_dirty,0)!=0;
+    if (target && (!g_have_last_surface || window_changed)) {
         emit_current_surface(target->current_hwnd);emit_window_state(target->current_hwnd, FALSE);
     }
     SetLastError(error);
