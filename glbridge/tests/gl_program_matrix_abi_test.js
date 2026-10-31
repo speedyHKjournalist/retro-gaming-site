@@ -14,10 +14,11 @@ typedef unsigned int GLenum,GLuint;typedef unsigned short GLushort;typedef int G
 #define ZeroMemory(p,n) memset(p,0,n)
 ${Object.entries(GL).filter(([, v]) => Number.isInteger(v) && v >= 0).map(([n, v]) => "#define GL_" + n + " 0x" + v.toString(16) + "u").join("\n")}
 ${transport}
-static GLenum g_matrix_mode=GL_MODELVIEW;
 ${body(source, "emit_query_typed", "static int ")}
 ${body(source, "emit_query_state", "static int ")}
-${["glMatrixMode", "glLoadIdentity", "glLoadMatrixd", "glMultMatrixd", "glTranslatef", "glRotatef", "glScalef", "glFrustum", "glOrtho", "glPushMatrix", "glPopMatrix"].map(name => body(source, name, "void APIENTRY ")).join("\n")}
+static uint32_t g_dma_size;
+${body(source,"emit_query_program_iv_arb","static int ")}
+${["glMatrixMode", "glLoadIdentity", "glLoadMatrixd", "glMultMatrixd", "glTranslatef", "glRotatef", "glScalef", "glFrustum", "glOrtho", "glPushMatrix", "glPopMatrix", "glBindProgramARB", "glGetProgramivARB"].map(name => body(source, name, "void APIENTRY ")).join("\n")}
 static void scalar(GLenum pname,GLint expected){GLint i=0;assert(emit_query_state(pname,V86GL_STATE_INTEGER,&i)==1&&i==expected);}
 int main(void){
     GLdouble m[16],out[16];for(int i=0;i<16;i++)m[i]=i+1;
@@ -31,6 +32,7 @@ int main(void){
     assert(emit_query_state(GL_CURRENT_MATRIX_ARB,V86GL_STATE_DOUBLE,out)==1&&out[5]==3);
     glLoadIdentity();glOrtho(-1,1,-1,1,1,3);assert(emit_query_state(GL_CURRENT_MATRIX_ARB,V86GL_STATE_DOUBLE,out)==1&&out[10]==-1&&out[14]==-2);
     glLoadIdentity();glFrustum(-1,1,-1,1,1,3);assert(emit_query_state(GL_CURRENT_MATRIX_ARB,V86GL_STATE_DOUBLE,out)==1&&out[10]==-2&&out[11]==-1&&out[14]==-3);
+    glBindProgramARB(GL_VERTEX_PROGRAM_ARB,71);GLint bound=-1;glGetProgramivARB(GL_VERTEX_PROGRAM_ARB,GL_PROGRAM_BINDING_ARB,&bound);assert(bound==71);
     glPopMatrix();scalar(GL_CURRENT_MATRIX_STACK_DEPTH_ARB,1);assert(!error);return 0;
 }
 `;

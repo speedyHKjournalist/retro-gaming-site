@@ -51,9 +51,9 @@ assert.equal(matrices.stateValue(GL.COLOR_MATRIX_SGI)[0][12], 2);
 matrices.process(new GLStream().call("POP_MATRIX").bytes());
 assert.equal(matrices.stateValue(GL.COLOR_MATRIX_SGI)[0][12], 0);
 assert.equal(matrices.stateValue(GL.COLOR_MATRIX_SGI)[0][5], 3);
-assert.match(proxy,
-    /pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI[\s\S]*g_post_color_matrix_scale/,
-    "GL_SGI_color_matrix post-transfer state must be retained in the proxy");
+require(hostPath("gl-webgpu/gl_shadow_misc.js"));
+matrices.process(new GLStream().call("PIXEL_TRANSFERF",GL.POST_COLOR_MATRIX_RED_SCALE_SGI,2.5).bytes());
+assert.equal(matrices.stateValue(GL.POST_COLOR_MATRIX_RED_SCALE_SGI)[0][0],2.5);
 assert.equal(gl21.includes("GL_ARB_imaging"), false,
     "do not claim the unimplemented full imaging subset");
 

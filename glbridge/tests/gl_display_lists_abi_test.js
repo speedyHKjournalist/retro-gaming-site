@@ -23,7 +23,7 @@ typedef unsigned char GLubyte,GLboolean;typedef signed char GLbyte;typedef short
 static int v86gl_trace_call_allowed(void){return 0;}
 ${Object.entries(GL).filter(([, v]) => Number.isInteger(v) && v >= 0).map(([n, v]) => "#define GL_" + n + " 0x" + v.toString(16) + "u").join("\n")}
 ${transport}
-static uint32_t g_dma_size,g_list_base;static GLfloat g_line_width=1;
+static uint32_t g_dma_size;
 static BOOL wait_for_host_status(const uint8_t* p,const char* name){(void)name;return read_u32le(p)==1;}
 ${body(source, "query_list", "static GLuint ")}
 ${body(source, "glGenLists", "GLuint APIENTRY ")}

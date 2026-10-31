@@ -15,8 +15,6 @@ typedef unsigned int GLenum,GLuint;typedef unsigned short GLushort;typedef int G
 #define CopyMemory memcpy
 #define ZeroMemory(p,n) memset(p,0,n)
 ${Object.entries(GL).filter(([, v]) => Number.isInteger(v) && v >= 0).map(([n, v]) => "#define GL_" + n + " 0x" + v.toString(16) + "u").join("\n")}
-static GLfloat g_current_raster_position[4],g_current_raster_color[4],g_current_raster_texcoord[4],g_current_color[4]={0.25,0.5,0.75,1},g_current_texcoord[4]={1,2,3,4},g_current_index,g_current_raster_index,g_current_raster_distance;
-static GLboolean g_current_raster_valid;
 ${transport}
 ${body(source, "raster_pos4f_compat", "static void ")}
 ${body(source, "window_pos3f_compat", "static void ")}

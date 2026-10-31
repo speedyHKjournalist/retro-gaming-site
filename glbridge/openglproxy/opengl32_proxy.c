@@ -1014,85 +1014,31 @@ static void force_release_window_contexts(HWND hwnd);
 static uint32_t g_frame_id = 1;
 
 
-
 /* Shaders and programs share one GL object namespace. */
 
 
-static GLuint g_current_vertex_program_arb = 0;
-static GLuint g_current_fragment_program_arb = 0;
-
-
-
-static GLuint g_current_samples_passed_query = 0;
-static GLuint g_current_program = 0;
 static GLuint g_array_buffer_binding = 0;
 static GLuint g_element_array_buffer_binding = 0;
 static GLuint g_pixel_pack_buffer_binding = 0;
 static GLuint g_pixel_unpack_buffer_binding = 0;
-static GLuint g_draw_framebuffer_binding = 0;
-static GLuint g_read_framebuffer_binding = 0;
-static GLuint g_renderbuffer_binding = 0;
-static GLuint g_list_base = 0;
-static BOOL g_have_viewport = FALSE;
-static GLint g_viewport[4] = { 0, 0, 0, 0 };
-static GLfloat g_clear_color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-static GLfloat g_clear_accum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-static GLfloat g_clear_index = 0.0f;
+
+
+
+
+
 static GLfloat g_current_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 static GLfloat g_current_index = 1.0f;
 static GLfloat g_current_texcoord[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 static GLfloat g_current_normal[3] = { 0.0f, 0.0f, 1.0f };
 static GLboolean g_current_edge_flag = GL_TRUE;
-static GLfloat g_current_raster_position[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-static GLfloat g_current_raster_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-static GLfloat g_current_raster_texcoord[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-static GLfloat g_current_raster_index = 1.0f;
-static GLfloat g_current_raster_distance = 0.0f;
-static GLboolean g_current_raster_valid = GL_TRUE;
-static GLenum g_matrix_mode = GL_MODELVIEW;
-static GLenum g_depth_func = GL_LESS;
-static GLdouble g_clear_depth = 1.0;
-static GLdouble g_depth_range[2] = { 0.0, 1.0 };
-static GLint g_clear_stencil = 0;
-static GLenum g_stencil_func = GL_ALWAYS;
-static GLint g_stencil_ref = 0;
-static GLuint g_stencil_value_mask = 0xFFFFFFFFu;
-static GLuint g_stencil_write_mask = 0xFFFFFFFFu;
-static GLenum g_stencil_fail = GL_KEEP;
-static GLenum g_stencil_zfail = GL_KEEP;
-static GLenum g_stencil_zpass = GL_KEEP;
-static GLenum g_shade_model = GL_SMOOTH;
-static GLenum g_cull_face_mode = GL_BACK;
-static GLenum g_front_face_mode = GL_CCW;
-static GLenum g_blend_src = GL_ONE;
-static GLenum g_blend_dst = GL_ZERO;
-static GLenum g_blend_src_alpha = GL_ONE;
-static GLenum g_blend_dst_alpha = GL_ZERO;
-static GLenum g_blend_equation_rgb = GL_FUNC_ADD;
-static GLenum g_blend_equation_alpha = GL_FUNC_ADD;
-static GLfloat g_blend_color[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-static GLfloat g_sample_coverage_value = 1.0f;
-static GLboolean g_sample_coverage_invert = GL_FALSE;
+
+
 static GLfloat g_current_fog_coord = 0.0f;
 /* GL_CURRENT_SECONDARY_COLOR_EXT is a four-component value; its alpha remains
  * one because the secondary-color API only supplies RGB. */
 static GLfloat g_current_secondary_color[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-static GLenum g_alpha_func = GL_ALWAYS;
-static GLfloat g_alpha_ref = 0.0f;
-static GLboolean g_depth_mask = GL_TRUE;
-static GLboolean g_color_mask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
-static GLint g_scissor_box[4] = { 0, 0, 0, 0 };
-static GLfloat g_point_size = 1.0f;
-static GLfloat g_line_width = 1.0f;
-static GLint g_line_stipple_factor = 1;
-static GLushort g_line_stipple_pattern = 0xFFFFu;
-static GLenum g_polygon_mode_front = GL_FILL;
-static GLenum g_polygon_mode_back = GL_FILL;
-static GLfloat g_polygon_offset_factor = 0.0f;
-static GLfloat g_polygon_offset_units = 0.0f;
-static GLenum g_color_material_face = GL_FRONT_AND_BACK;
-static GLenum g_color_material_param = GL_AMBIENT_AND_DIFFUSE;
-static GLenum g_active_texture = GL_TEXTURE0_ARB;
+
+
 static GLenum g_client_active_texture = GL_TEXTURE0_ARB;
 static GLint g_unpack_alignment = 4;
 static GLint g_unpack_row_length = 0;
@@ -1113,14 +1059,6 @@ static GLint g_pack_skip_images = 0;
 static GLenum g_render_mode = GL_RENDER;
 
 
-
-
-
-
-
-static GLuint g_name_stack[64];
-static GLint g_name_stack_depth = 0;
-static GLuint g_index_mask = 0xFFFFFFFFu;
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size);
 
 /* Client-memory failures join the ordered stream; the CPU owns the GL error flag. */
@@ -1387,25 +1325,6 @@ static int g_swap_interval = 0;
 #define V86GL_PROGRAM_ERROR_STRING_MAX 4096u
 
 
-
-typedef struct {
-    GLenum mode;
-    GLfloat object_plane[4];
-    GLfloat eye_plane[4];
-} TexGenState;
-
-typedef struct {
-    GLuint bound_1d;
-    GLuint bound_2d;
-    GLuint bound_3d;
-    GLuint bound_cube;
-    GLenum env_mode;
-    GLfloat env_color[4];
-    TexGenState texgen[4];
-} TextureUnitState;
-
-
-
 typedef struct {
     BOOL used;
     BOOL mapped;
@@ -1418,86 +1337,8 @@ typedef struct {
 } BufferObjectState;
 
 
-
-typedef struct {
-    GLenum cap;
-    BOOL enabled;
-} CapState;
-
-static TextureUnitState g_texture_units[V86GL_MAX_TEXTURE_UNITS];
-
 static BufferObjectState g_buffer_objects[V86GL_MAX_BUFFER_OBJECTS];
 
-
-
-
-
-static CapState g_cap_states[V86GL_MAX_CAP_STATES];
-
-typedef struct {
-    GLfloat ambient[4];
-    GLfloat diffuse[4];
-    GLfloat specular[4];
-    GLfloat position[4];
-    GLfloat spot_direction[3];
-    GLfloat spot_exponent;
-    GLfloat spot_cutoff;
-    GLfloat constant_attenuation;
-    GLfloat linear_attenuation;
-    GLfloat quadratic_attenuation;
-} LightState;
-
-typedef struct {
-    GLfloat ambient[4];
-    GLfloat diffuse[4];
-    GLfloat specular[4];
-    GLfloat emission[4];
-    GLfloat shininess;
-    GLfloat color_indexes[3];
-} MaterialState;
-
-typedef struct {
-    GLsizei size;
-    GLdouble* values;
-} PixelMapState;
-
-
-static BOOL g_query_state_initialized = FALSE;
-static GLfloat g_fog_color[4];
-static GLfloat g_fog_index = 0.0f;
-static GLfloat g_fog_density = 1.0f;
-static GLfloat g_fog_start = 0.0f;
-static GLfloat g_fog_end = 1.0f;
-static GLenum g_fog_mode = GL_EXP;
-static GLenum g_fog_coordinate_source = GL_FRAGMENT_DEPTH_EXT;
-static GLdouble g_clip_planes[6][4];
-static LightState g_lights[8];
-static MaterialState g_materials[2];
-static GLfloat g_light_model_ambient[4];
-static GLboolean g_light_model_local_viewer = GL_FALSE;
-static GLboolean g_light_model_two_side = GL_FALSE;
-static GLenum g_light_model_color_control = GL_SINGLE_COLOR;
-static PixelMapState g_pixel_maps[V86GL_MAX_PIXEL_MAPS];
-static GLubyte g_polygon_stipple[128];
-static GLint g_map_grid1_un = 1;
-static GLdouble g_map_grid1_u1 = 0.0;
-static GLdouble g_map_grid1_u2 = 1.0;
-static GLint g_map_grid2_un = 1;
-static GLint g_map_grid2_vn = 1;
-static GLdouble g_map_grid2_u1 = 0.0;
-static GLdouble g_map_grid2_u2 = 1.0;
-static GLdouble g_map_grid2_v1 = 0.0;
-static GLdouble g_map_grid2_v2 = 1.0;
-static GLfloat g_modelview_stack[32][16];
-static GLfloat g_projection_stack[2][16];
-static GLfloat g_texture_stack[2][16];
-static GLfloat g_color_matrix_stack[2][16];
-static GLint g_modelview_stack_depth = 0;
-static GLint g_projection_stack_depth = 0;
-static GLint g_texture_stack_depth = 0;
-static GLint g_color_matrix_stack_depth = 0;
-static GLfloat g_post_color_matrix_scale[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-static GLfloat g_post_color_matrix_bias[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 typedef struct {
     BOOL enabled;
@@ -1518,24 +1359,6 @@ typedef struct {
     uint32_t data_size;
     const uint8_t* data;
 } ClientArrayCopy;
-
-
-
-
-
-typedef struct {
-    BOOL used;
-    GLuint name;
-} ArbProgramObjectState;
-
-
-
-
-
-
-
-
-
 
 
 typedef struct {
@@ -1585,7 +1408,6 @@ static GenericAttribState g_generic_attribs[V86GL_MAX_VERTEX_ATTRIBS] = {
 };
 
 
-
 /* Cube 2 keeps many shader variants alive at once and binds all eight of its
  * conventional attributes on every program.  A fixed 512-entry attribute
  * table was therefore exhausted after only 64 programs; later
@@ -1594,66 +1416,13 @@ static GenericAttribState g_generic_attribs[V86GL_MAX_VERTEX_ATTRIBS] = {
  * the proxy's bookkeeping cannot change program linkage semantics. */
 
 
-
-
-
-
 static GLenum g_draw_buffers[V86GL_MAX_DRAW_BUFFERS] = { GL_BACK, GL_NONE, GL_NONE, GL_NONE };
-static GLenum g_stencil_back_func = GL_ALWAYS;
-static GLint g_stencil_back_ref = 0;
-static GLuint g_stencil_back_value_mask = 0xFFFFFFFFu;
-static GLuint g_stencil_back_write_mask = 0xFFFFFFFFu;
-static GLenum g_stencil_back_fail = GL_KEEP;
-static GLenum g_stencil_back_zfail = GL_KEEP;
-static GLenum g_stencil_back_zpass = GL_KEEP;
-static GLenum g_active_stencil_face_ext = GL_FRONT;
-static GLenum g_point_sprite_coord_origin = GL_UPPER_LEFT;
+
+
 static char g_program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
 
 #define V86GL_ATTRIB_STACK_DEPTH 16
-typedef struct {
-    GLbitfield mask;
-    GLfloat current_color[4], current_texcoord[4], current_normal[3];
-    GLfloat current_secondary_color[4], current_fog_coord;
-    GLfloat clear_color[4], clear_accum[4], clear_index;
-    GLfloat blend_color[4], sample_coverage_value;
-    GLdouble clear_depth, depth_range[2];
-    GLfloat point_size, line_width, polygon_offset_factor, polygon_offset_units;
-    GLint line_stipple_factor, viewport[4], scissor_box[4], clear_stencil;
-    GLushort line_stipple_pattern;
-    GLboolean current_edge_flag, depth_mask, color_mask[4], sample_coverage_invert;
-    GLenum depth_func, stencil_func, stencil_fail, stencil_zfail, stencil_zpass;
-    GLint stencil_ref, stencil_back_ref;
-    GLuint stencil_value_mask, stencil_write_mask;
-    GLuint stencil_back_value_mask, stencil_back_write_mask;
-    GLenum stencil_back_func, stencil_back_fail, stencil_back_zfail, stencil_back_zpass;
-    GLenum shade_model, cull_face_mode, front_face_mode;
-    GLenum blend_src, blend_dst, blend_src_alpha, blend_dst_alpha;
-    GLenum blend_equation_rgb, blend_equation_alpha, alpha_func;
-    GLfloat alpha_ref;
-    GLenum polygon_mode_front, polygon_mode_back;
-    GLenum color_material_face, color_material_param;
-    GLenum active_texture, matrix_mode;
-    GLuint list_base, index_mask;
-    BOOL have_viewport;
-    CapState cap_states[V86GL_MAX_CAP_STATES];
-    TextureUnitState texture_units[V86GL_MAX_TEXTURE_UNITS];
-    GLfloat fog_color[4], fog_index, fog_density, fog_start, fog_end;
-    GLenum fog_mode, fog_coordinate_source;
-    GLdouble clip_planes[6][4];
-    LightState lights[8];
-    MaterialState materials[2];
-    GLfloat light_model_ambient[4];
-    GLboolean light_model_local_viewer, light_model_two_side;
-    GLenum light_model_color_control;
-    GLfloat post_color_matrix_scale[4], post_color_matrix_bias[4];
-    GLubyte polygon_stipple[128];
-    GLint map_grid1_un, map_grid2_un, map_grid2_vn;
-    GLdouble map_grid1_u1, map_grid1_u2;
-    GLdouble map_grid2_u1, map_grid2_u2, map_grid2_v1, map_grid2_v2;
-    GLenum draw_buffers[V86GL_MAX_DRAW_BUFFERS];
-    GLenum point_sprite_coord_origin;
-} ServerAttribSnapshot;
+
 
 typedef struct {
     GLbitfield mask;
@@ -1670,191 +1439,11 @@ typedef struct {
     GenericAttribState generic_attribs[V86GL_MAX_VERTEX_ATTRIBS];
 } ClientAttribSnapshot;
 
-static ServerAttribSnapshot g_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
+
 static ClientAttribSnapshot g_client_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
-static GLint g_attrib_stack_depth = 0;
+
 static GLint g_client_attrib_stack_depth = 0;
 
-static void capture_server_attrib(ServerAttribSnapshot* s, GLbitfield mask) {
-    ZeroMemory(s, sizeof(*s));
-    s->mask = mask;
-    CopyMemory(s->current_color, g_current_color, sizeof(s->current_color));
-    CopyMemory(s->current_texcoord, g_current_texcoord, sizeof(s->current_texcoord));
-    CopyMemory(s->current_normal, g_current_normal, sizeof(s->current_normal));
-    CopyMemory(s->current_secondary_color, g_current_secondary_color,
-               sizeof(s->current_secondary_color));
-    s->current_fog_coord = g_current_fog_coord;
-    s->current_edge_flag = g_current_edge_flag;
-    CopyMemory(s->clear_color, g_clear_color, sizeof(s->clear_color));
-    CopyMemory(s->clear_accum, g_clear_accum, sizeof(s->clear_accum));
-    s->clear_index = g_clear_index;
-    CopyMemory(s->blend_color, g_blend_color, sizeof(s->blend_color));
-    s->clear_depth = g_clear_depth;
-    CopyMemory(s->depth_range, g_depth_range, sizeof(s->depth_range));
-    s->point_size = g_point_size;
-    s->line_width = g_line_width;
-    s->line_stipple_factor = g_line_stipple_factor;
-    s->line_stipple_pattern = g_line_stipple_pattern;
-    s->polygon_offset_factor = g_polygon_offset_factor;
-    s->polygon_offset_units = g_polygon_offset_units;
-    CopyMemory(s->viewport, g_viewport, sizeof(s->viewport));
-    CopyMemory(s->scissor_box, g_scissor_box, sizeof(s->scissor_box));
-    s->clear_stencil = g_clear_stencil;
-    s->depth_mask = g_depth_mask;
-    CopyMemory(s->color_mask, g_color_mask, sizeof(s->color_mask));
-    s->sample_coverage_value = g_sample_coverage_value;
-    s->sample_coverage_invert = g_sample_coverage_invert;
-    s->depth_func = g_depth_func;
-    s->stencil_func = g_stencil_func; s->stencil_ref = g_stencil_ref;
-    s->stencil_value_mask = g_stencil_value_mask;
-    s->stencil_write_mask = g_stencil_write_mask;
-    s->stencil_fail = g_stencil_fail; s->stencil_zfail = g_stencil_zfail;
-    s->stencil_zpass = g_stencil_zpass;
-    s->stencil_back_func = g_stencil_back_func;
-    s->stencil_back_ref = g_stencil_back_ref;
-    s->stencil_back_value_mask = g_stencil_back_value_mask;
-    s->stencil_back_write_mask = g_stencil_back_write_mask;
-    s->stencil_back_fail = g_stencil_back_fail;
-    s->stencil_back_zfail = g_stencil_back_zfail;
-    s->stencil_back_zpass = g_stencil_back_zpass;
-    s->shade_model = g_shade_model; s->cull_face_mode = g_cull_face_mode;
-    s->front_face_mode = g_front_face_mode;
-    s->blend_src = g_blend_src; s->blend_dst = g_blend_dst;
-    s->blend_src_alpha = g_blend_src_alpha; s->blend_dst_alpha = g_blend_dst_alpha;
-    s->blend_equation_rgb = g_blend_equation_rgb;
-    s->blend_equation_alpha = g_blend_equation_alpha;
-    s->alpha_func = g_alpha_func; s->alpha_ref = g_alpha_ref;
-    s->polygon_mode_front = g_polygon_mode_front;
-    s->polygon_mode_back = g_polygon_mode_back;
-    s->color_material_face = g_color_material_face;
-    s->color_material_param = g_color_material_param;
-    s->active_texture = g_active_texture; s->matrix_mode = g_matrix_mode;
-    s->list_base = g_list_base; s->index_mask = g_index_mask;
-    s->have_viewport = g_have_viewport;
-    CopyMemory(s->cap_states, g_cap_states, sizeof(s->cap_states));
-    CopyMemory(s->texture_units, g_texture_units, sizeof(s->texture_units));
-    CopyMemory(s->fog_color, g_fog_color, sizeof(s->fog_color));
-    s->fog_index = g_fog_index; s->fog_density = g_fog_density;
-    s->fog_start = g_fog_start; s->fog_end = g_fog_end;
-    s->fog_mode = g_fog_mode; s->fog_coordinate_source = g_fog_coordinate_source;
-    CopyMemory(s->clip_planes, g_clip_planes, sizeof(s->clip_planes));
-    CopyMemory(s->lights, g_lights, sizeof(s->lights));
-    CopyMemory(s->materials, g_materials, sizeof(s->materials));
-    CopyMemory(s->light_model_ambient, g_light_model_ambient,
-               sizeof(s->light_model_ambient));
-    s->light_model_local_viewer = g_light_model_local_viewer;
-    s->light_model_two_side = g_light_model_two_side;
-    s->light_model_color_control = g_light_model_color_control;
-    CopyMemory(s->post_color_matrix_scale, g_post_color_matrix_scale,
-               sizeof(s->post_color_matrix_scale));
-    CopyMemory(s->post_color_matrix_bias, g_post_color_matrix_bias,
-               sizeof(s->post_color_matrix_bias));
-    CopyMemory(s->polygon_stipple, g_polygon_stipple, sizeof(s->polygon_stipple));
-    s->map_grid1_un = g_map_grid1_un; s->map_grid1_u1 = g_map_grid1_u1;
-    s->map_grid1_u2 = g_map_grid1_u2; s->map_grid2_un = g_map_grid2_un;
-    s->map_grid2_vn = g_map_grid2_vn; s->map_grid2_u1 = g_map_grid2_u1;
-    s->map_grid2_u2 = g_map_grid2_u2; s->map_grid2_v1 = g_map_grid2_v1;
-    s->map_grid2_v2 = g_map_grid2_v2;
-    CopyMemory(s->draw_buffers, g_draw_buffers, sizeof(s->draw_buffers));
-    s->point_sprite_coord_origin = g_point_sprite_coord_origin;
-}
-
-static void restore_server_attrib(const ServerAttribSnapshot* s) {
-    GLbitfield m = s->mask;
-    if (m & GL_CURRENT_BIT) {
-        CopyMemory(g_current_color, s->current_color, sizeof(g_current_color));
-        CopyMemory(g_current_texcoord, s->current_texcoord, sizeof(g_current_texcoord));
-        CopyMemory(g_current_normal, s->current_normal, sizeof(g_current_normal));
-        CopyMemory(g_current_secondary_color, s->current_secondary_color,
-                   sizeof(g_current_secondary_color));
-        g_current_fog_coord = s->current_fog_coord;
-        g_current_edge_flag = s->current_edge_flag;
-    }
-    if (m & GL_POINT_BIT) { g_point_size = s->point_size;
-        g_point_sprite_coord_origin = s->point_sprite_coord_origin; }
-    if (m & GL_LINE_BIT) { g_line_width = s->line_width;
-        g_line_stipple_factor = s->line_stipple_factor;
-        g_line_stipple_pattern = s->line_stipple_pattern; }
-    if (m & GL_POLYGON_BIT) { g_cull_face_mode = s->cull_face_mode;
-        g_front_face_mode = s->front_face_mode;
-        g_polygon_mode_front = s->polygon_mode_front;
-        g_polygon_mode_back = s->polygon_mode_back;
-        g_polygon_offset_factor = s->polygon_offset_factor;
-        g_polygon_offset_units = s->polygon_offset_units; }
-    if (m & GL_POLYGON_STIPPLE_BIT)
-        CopyMemory(g_polygon_stipple, s->polygon_stipple, sizeof(g_polygon_stipple));
-    if (m & GL_LIGHTING_BIT) {
-        CopyMemory(g_lights, s->lights, sizeof(g_lights));
-        CopyMemory(g_materials, s->materials, sizeof(g_materials));
-        CopyMemory(g_light_model_ambient, s->light_model_ambient,
-                   sizeof(g_light_model_ambient));
-        g_light_model_local_viewer = s->light_model_local_viewer;
-        g_light_model_two_side = s->light_model_two_side;
-        g_light_model_color_control = s->light_model_color_control;
-        g_color_material_face = s->color_material_face;
-        g_color_material_param = s->color_material_param;
-        g_shade_model = s->shade_model;
-    }
-    if (m & GL_FOG_BIT) { CopyMemory(g_fog_color, s->fog_color, sizeof(g_fog_color));
-        g_fog_index = s->fog_index; g_fog_density = s->fog_density;
-        g_fog_start = s->fog_start; g_fog_end = s->fog_end;
-        g_fog_mode = s->fog_mode; g_fog_coordinate_source = s->fog_coordinate_source; }
-    if (m & GL_DEPTH_BUFFER_BIT) { g_clear_depth = s->clear_depth;
-        g_depth_func = s->depth_func; g_depth_mask = s->depth_mask; }
-    if (m & GL_ACCUM_BUFFER_BIT)
-        CopyMemory(g_clear_accum, s->clear_accum, sizeof(g_clear_accum));
-    if (m & GL_PIXEL_MODE_BIT) {
-        CopyMemory(g_post_color_matrix_scale, s->post_color_matrix_scale,
-                   sizeof(g_post_color_matrix_scale));
-        CopyMemory(g_post_color_matrix_bias, s->post_color_matrix_bias,
-                   sizeof(g_post_color_matrix_bias));
-    }
-    if (m & GL_STENCIL_BUFFER_BIT) { g_clear_stencil = s->clear_stencil;
-        g_stencil_func = s->stencil_func; g_stencil_ref = s->stencil_ref;
-        g_stencil_value_mask = s->stencil_value_mask;
-        g_stencil_write_mask = s->stencil_write_mask;
-        g_stencil_fail = s->stencil_fail; g_stencil_zfail = s->stencil_zfail;
-        g_stencil_zpass = s->stencil_zpass;
-        g_stencil_back_func = s->stencil_back_func;
-        g_stencil_back_ref = s->stencil_back_ref;
-        g_stencil_back_value_mask = s->stencil_back_value_mask;
-        g_stencil_back_write_mask = s->stencil_back_write_mask;
-        g_stencil_back_fail = s->stencil_back_fail;
-        g_stencil_back_zfail = s->stencil_back_zfail;
-        g_stencil_back_zpass = s->stencil_back_zpass; }
-    if (m & GL_VIEWPORT_BIT) { CopyMemory(g_viewport, s->viewport, sizeof(g_viewport));
-        CopyMemory(g_depth_range, s->depth_range, sizeof(g_depth_range));
-        g_have_viewport = s->have_viewport; }
-    if (m & GL_TRANSFORM_BIT) { g_matrix_mode = s->matrix_mode;
-        CopyMemory(g_clip_planes, s->clip_planes, sizeof(g_clip_planes)); }
-    if (m & GL_ENABLE_BIT)
-        CopyMemory(g_cap_states, s->cap_states, sizeof(g_cap_states));
-    if (m & GL_COLOR_BUFFER_BIT) {
-        CopyMemory(g_clear_color, s->clear_color, sizeof(g_clear_color));
-        g_clear_index = s->clear_index; CopyMemory(g_color_mask, s->color_mask,
-                                                   sizeof(g_color_mask));
-        g_blend_src = s->blend_src; g_blend_dst = s->blend_dst;
-        g_blend_src_alpha = s->blend_src_alpha; g_blend_dst_alpha = s->blend_dst_alpha;
-        g_blend_equation_rgb = s->blend_equation_rgb;
-        g_blend_equation_alpha = s->blend_equation_alpha;
-        CopyMemory(g_blend_color, s->blend_color, sizeof(g_blend_color));
-        g_alpha_func = s->alpha_func; g_alpha_ref = s->alpha_ref;
-        g_index_mask = s->index_mask;
-        CopyMemory(g_draw_buffers, s->draw_buffers, sizeof(g_draw_buffers));
-    }
-    if (m & GL_LIST_BIT) g_list_base = s->list_base;
-    if (m & GL_TEXTURE_BIT) { g_active_texture = s->active_texture;
-        CopyMemory(g_texture_units, s->texture_units, sizeof(g_texture_units)); }
-    if (m & GL_SCISSOR_BIT)
-        CopyMemory(g_scissor_box, s->scissor_box, sizeof(g_scissor_box));
-    if (m & GL_MULTISAMPLE_BIT_ARB) { g_sample_coverage_value = s->sample_coverage_value;
-        g_sample_coverage_invert = s->sample_coverage_invert; }
-    if (m & GL_EVAL_BIT) { g_map_grid1_un = s->map_grid1_un;
-        g_map_grid1_u1 = s->map_grid1_u1; g_map_grid1_u2 = s->map_grid1_u2;
-        g_map_grid2_un = s->map_grid2_un; g_map_grid2_vn = s->map_grid2_vn;
-        g_map_grid2_u1 = s->map_grid2_u1; g_map_grid2_u2 = s->map_grid2_u2;
-        g_map_grid2_v1 = s->map_grid2_v1; g_map_grid2_v2 = s->map_grid2_v2; }
-}
 
 static void capture_client_attrib(ClientAttribSnapshot* s, GLbitfield mask) {
     ZeroMemory(s, sizeof(*s)); s->mask = mask;
@@ -1903,116 +1492,17 @@ static void restore_client_attrib(const ClientAttribSnapshot* s) {
     }
 }
 
-static void init_query_state(void) {
-    uint32_t unit;
-    uint32_t light;
-    uint32_t coord;
-    uint32_t i;
 
-    if (g_query_state_initialized) {
-        return;
-    }
-
-    for (unit = 0; unit < V86GL_MAX_TEXTURE_UNITS; unit++) {
-        TextureUnitState* state = &g_texture_units[unit];
-        state->env_mode = GL_MODULATE;
-        for (coord = 0; coord < 4; coord++) {
-            TexGenState* texgen = &state->texgen[coord];
-            texgen->mode = GL_EYE_LINEAR;
-            texgen->object_plane[coord] = 1.0f;
-            texgen->eye_plane[coord] = 1.0f;
-        }
-    }
-
-    for (light = 0; light < 8; light++) {
-        LightState* state = &g_lights[light];
-        state->ambient[3] = 1.0f;
-        state->diffuse[3] = 1.0f;
-        state->specular[3] = 1.0f;
-        if (light == 0) {
-            state->diffuse[0] = 1.0f;
-            state->diffuse[1] = 1.0f;
-            state->diffuse[2] = 1.0f;
-            state->specular[0] = 1.0f;
-            state->specular[1] = 1.0f;
-            state->specular[2] = 1.0f;
-        }
-        state->position[2] = 1.0f;
-        state->spot_direction[2] = -1.0f;
-        state->spot_cutoff = 180.0f;
-        state->constant_attenuation = 1.0f;
-    }
-
-    for (i = 0; i < 2; i++) {
-        MaterialState* state = &g_materials[i];
-        state->ambient[0] = 0.2f;
-        state->ambient[1] = 0.2f;
-        state->ambient[2] = 0.2f;
-        state->ambient[3] = 1.0f;
-        state->diffuse[0] = 0.8f;
-        state->diffuse[1] = 0.8f;
-        state->diffuse[2] = 0.8f;
-        state->diffuse[3] = 1.0f;
-        state->specular[3] = 1.0f;
-        state->emission[3] = 1.0f;
-        state->color_indexes[1] = 1.0f;
-        state->color_indexes[2] = 1.0f;
-    }
-
-    g_light_model_ambient[0] = 0.2f;
-    g_light_model_ambient[1] = 0.2f;
-    g_light_model_ambient[2] = 0.2f;
-    g_light_model_ambient[3] = 1.0f;
-    FillMemory(g_polygon_stipple, sizeof(g_polygon_stipple), 0xFF);
-    for (i = 0; i < 16; i++) {
-        g_modelview_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
-        g_projection_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
-        g_texture_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
-        g_color_matrix_stack[0][i] = (i % 5) == 0 ? 1.0f : 0.0f;
-    }
-    for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++) {
-        g_generic_attribs[i].size = 4;
-        g_generic_attribs[i].type = GL_FLOAT;
-        g_generic_attribs[i].current[3] = 1.0f;
-    }
-    g_query_state_initialized = TRUE;
-}
-
-/*
- * The OpenGL state above predates the WGL implementation and is stored in
- * process globals.  That is fine while one HGLRC exists, but capability tools
- * such as glview create a tiny probe context, delete it, and then create the
- * real window context.  Without a per-context shadow, the probe's error flag,
- * matrices, array pointers and bindings leak into the real context even though
- * the WebGPU executor correctly created a fresh state object.
- *
- * Keep object namespaces process-wide for the existing sharing model, while
- * saving all context-local shadow state on unbind and restoring it on bind.
- */
+/* Per-context client formats, pointers and return storage needed for encoding.
+ * Rendering state, errors and objects are owned by the CPU. */
 typedef struct {
-    ServerAttribSnapshot server;
     ClientAttribSnapshot client;
-    GLfloat modelview_stack[32][16];
-    GLfloat projection_stack[2][16];
-    GLfloat texture_stack[2][16];
-    GLfloat color_matrix_stack[2][16];
-    GLint modelview_stack_depth, projection_stack_depth, texture_stack_depth;
-    GLint color_matrix_stack_depth;
-    ServerAttribSnapshot attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
     ClientAttribSnapshot client_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
-    GLint attrib_stack_depth, client_attrib_stack_depth;
-    GLuint current_program, current_vertex_program_arb;
-    GLuint current_fragment_program_arb, current_samples_passed_query;
-    GLuint draw_framebuffer_binding, read_framebuffer_binding;
-    GLuint renderbuffer_binding;
-    GLenum error, render_mode, active_stencil_face_ext;
-    GLfloat current_index;
-    GLfloat current_raster_position[4], current_raster_color[4];
-    GLfloat current_raster_texcoord[4], current_raster_index;
-    GLfloat current_raster_distance;
-    GLboolean current_raster_valid;
-    GLuint name_stack[64];
-    GLint name_stack_depth;
+    GLint client_attrib_stack_depth;
+    GLfloat current_color[4], current_texcoord[4], current_normal[3], current_secondary_color[4];
+    GLfloat current_fog_coord, current_index;
+    GLboolean current_edge_flag;
+    GLenum render_mode;
     char program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
 } GuestContextState;
 
@@ -2020,102 +1510,40 @@ static GuestContextState g_default_guest_context_state;
 static BOOL g_default_guest_context_state_valid = FALSE;
 
 static void capture_guest_context_state(GuestContextState* state) {
-    capture_server_attrib(&state->server, 0xFFFFFFFFu);
-    capture_client_attrib(&state->client,
-                          GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT);
-    CopyMemory(state->modelview_stack, g_modelview_stack,
-               sizeof(state->modelview_stack));
-    CopyMemory(state->projection_stack, g_projection_stack,
-               sizeof(state->projection_stack));
-    CopyMemory(state->texture_stack, g_texture_stack,
-               sizeof(state->texture_stack));
-    CopyMemory(state->color_matrix_stack, g_color_matrix_stack,
-               sizeof(state->color_matrix_stack));
-    state->modelview_stack_depth = g_modelview_stack_depth;
-    state->projection_stack_depth = g_projection_stack_depth;
-    state->texture_stack_depth = g_texture_stack_depth;
-    state->color_matrix_stack_depth = g_color_matrix_stack_depth;
-    CopyMemory(state->attrib_stack, g_attrib_stack, sizeof(state->attrib_stack));
-    CopyMemory(state->client_attrib_stack, g_client_attrib_stack,
-               sizeof(state->client_attrib_stack));
-    state->attrib_stack_depth = g_attrib_stack_depth;
-    state->client_attrib_stack_depth = g_client_attrib_stack_depth;
-    state->current_program = g_current_program;
-    state->current_vertex_program_arb = g_current_vertex_program_arb;
-    state->current_fragment_program_arb = g_current_fragment_program_arb;
-    state->current_samples_passed_query = g_current_samples_passed_query;
-    state->draw_framebuffer_binding = g_draw_framebuffer_binding;
-    state->read_framebuffer_binding = g_read_framebuffer_binding;
-    state->renderbuffer_binding = g_renderbuffer_binding;
-    state->render_mode = g_render_mode;
-    state->active_stencil_face_ext = g_active_stencil_face_ext;
-    state->current_index = g_current_index;
-    CopyMemory(state->current_raster_position, g_current_raster_position,
-               sizeof(state->current_raster_position));
-    CopyMemory(state->current_raster_color, g_current_raster_color,
-               sizeof(state->current_raster_color));
-    CopyMemory(state->current_raster_texcoord, g_current_raster_texcoord,
-               sizeof(state->current_raster_texcoord));
-    state->current_raster_index = g_current_raster_index;
-    state->current_raster_distance = g_current_raster_distance;
-    state->current_raster_valid = g_current_raster_valid;
-    CopyMemory(state->name_stack, g_name_stack, sizeof(state->name_stack));
-    state->name_stack_depth = g_name_stack_depth;
-    CopyMemory(state->program_error_string, g_program_error_string,
-               sizeof(state->program_error_string));
+    capture_client_attrib(&state->client, GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT);
+    CopyMemory(state->client_attrib_stack,g_client_attrib_stack,sizeof(state->client_attrib_stack));
+    state->client_attrib_stack_depth=g_client_attrib_stack_depth;
+    CopyMemory(state->current_color,g_current_color,sizeof(state->current_color));
+    CopyMemory(state->current_texcoord,g_current_texcoord,sizeof(state->current_texcoord));
+    CopyMemory(state->current_normal,g_current_normal,sizeof(state->current_normal));
+    CopyMemory(state->current_secondary_color,g_current_secondary_color,sizeof(state->current_secondary_color));
+    state->current_fog_coord=g_current_fog_coord;
+    state->current_index=g_current_index;
+    state->current_edge_flag=g_current_edge_flag;
+    state->render_mode=g_render_mode;
+    CopyMemory(state->program_error_string,g_program_error_string,sizeof(state->program_error_string));
 }
 
 static void restore_guest_context_state(const GuestContextState* state) {
-    restore_server_attrib(&state->server);
     restore_client_attrib(&state->client);
-    CopyMemory(g_modelview_stack, state->modelview_stack,
-               sizeof(state->modelview_stack));
-    CopyMemory(g_projection_stack, state->projection_stack,
-               sizeof(state->projection_stack));
-    CopyMemory(g_texture_stack, state->texture_stack,
-               sizeof(state->texture_stack));
-    CopyMemory(g_color_matrix_stack, state->color_matrix_stack,
-               sizeof(state->color_matrix_stack));
-    g_modelview_stack_depth = state->modelview_stack_depth;
-    g_projection_stack_depth = state->projection_stack_depth;
-    g_texture_stack_depth = state->texture_stack_depth;
-    g_color_matrix_stack_depth = state->color_matrix_stack_depth;
-    CopyMemory(g_attrib_stack, state->attrib_stack, sizeof(state->attrib_stack));
-    CopyMemory(g_client_attrib_stack, state->client_attrib_stack,
-               sizeof(state->client_attrib_stack));
-    g_attrib_stack_depth = state->attrib_stack_depth;
-    g_client_attrib_stack_depth = state->client_attrib_stack_depth;
-    g_current_program = state->current_program;
-    g_current_vertex_program_arb = state->current_vertex_program_arb;
-    g_current_fragment_program_arb = state->current_fragment_program_arb;
-    g_current_samples_passed_query = state->current_samples_passed_query;
-    g_draw_framebuffer_binding = state->draw_framebuffer_binding;
-    g_read_framebuffer_binding = state->read_framebuffer_binding;
-    g_renderbuffer_binding = state->renderbuffer_binding;
-    g_render_mode = state->render_mode;
-    g_active_stencil_face_ext = state->active_stencil_face_ext;
-    g_current_index = state->current_index;
-    CopyMemory(g_current_raster_position, state->current_raster_position,
-               sizeof(g_current_raster_position));
-    CopyMemory(g_current_raster_color, state->current_raster_color,
-               sizeof(g_current_raster_color));
-    CopyMemory(g_current_raster_texcoord, state->current_raster_texcoord,
-               sizeof(g_current_raster_texcoord));
-    g_current_raster_index = state->current_raster_index;
-    g_current_raster_distance = state->current_raster_distance;
-    g_current_raster_valid = state->current_raster_valid;
-    CopyMemory(g_name_stack, state->name_stack, sizeof(g_name_stack));
-    g_name_stack_depth = state->name_stack_depth;
-    CopyMemory(g_program_error_string, state->program_error_string,
-               sizeof(g_program_error_string));
+    CopyMemory(g_client_attrib_stack,state->client_attrib_stack,sizeof(g_client_attrib_stack));
+    g_client_attrib_stack_depth=state->client_attrib_stack_depth;
+    CopyMemory(g_current_color,state->current_color,sizeof(g_current_color));
+    CopyMemory(g_current_texcoord,state->current_texcoord,sizeof(g_current_texcoord));
+    CopyMemory(g_current_normal,state->current_normal,sizeof(g_current_normal));
+    CopyMemory(g_current_secondary_color,state->current_secondary_color,sizeof(g_current_secondary_color));
+    g_current_fog_coord=state->current_fog_coord;
+    g_current_index=state->current_index;
+    g_current_edge_flag=state->current_edge_flag;
+    g_render_mode=state->render_mode;
+    CopyMemory(g_program_error_string,state->program_error_string,sizeof(g_program_error_string));
 }
 
 static GuestContextState* ensure_guest_context_state(V86GLWGLContext* context) {
     GuestContextState* state;
     if (!context) return NULL;
     if (!g_default_guest_context_state_valid) {
-        init_query_state();
-        capture_guest_context_state(&g_default_guest_context_state);
+            capture_guest_context_state(&g_default_guest_context_state);
         g_default_guest_context_state_valid = TRUE;
     }
     state = (GuestContextState*)context->guest_state;
@@ -2142,14 +1570,6 @@ static BOOL load_guest_context_state(V86GLWGLContext* context) {
     return TRUE;
 }
 
-static GLint active_texture_index(void) {
-    if (g_active_texture < GL_TEXTURE0_ARB ||
-        g_active_texture >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
-        return 0;
-    }
-
-    return (GLint)(g_active_texture - GL_TEXTURE0_ARB);
-}
 
 static GLint client_active_texture_index(void) {
     if (g_client_active_texture < GL_TEXTURE0_ARB ||
@@ -2160,43 +1580,6 @@ static GLint client_active_texture_index(void) {
     return (GLint)(g_client_active_texture - GL_TEXTURE0_ARB);
 }
 
-static TextureUnitState* active_texture_unit_state(void) {
-    init_query_state();
-    return &g_texture_units[active_texture_index()];
-}
-
-
-
-static void set_cap_state(GLenum cap, BOOL enabled) {
-    uint32_t i;
-    uint32_t free_slot = V86GL_MAX_CAP_STATES;
-
-    for (i = 0; i < V86GL_MAX_CAP_STATES; i++) {
-        if (g_cap_states[i].cap == cap) {
-            g_cap_states[i].enabled = enabled;
-            return;
-        }
-
-        if (!g_cap_states[i].cap && free_slot == V86GL_MAX_CAP_STATES) {
-            free_slot = i;
-        }
-    }
-
-    if (free_slot < V86GL_MAX_CAP_STATES) {
-        g_cap_states[free_slot].cap = cap;
-        g_cap_states[free_slot].enabled = enabled;
-    }
-}
-
-
-
-
-
-
-
-
-
-
 
 /* Unlike find_texture_state(), this lookup never promotes a name returned by
  * glGenTextures() into a texture object by assigning its first target.  OpenGL
@@ -2204,52 +1587,12 @@ static void set_cap_state(GLenum cap, BOOL enabled) {
  * observe that distinction without changing it. */
 
 
-
-
-
-
 static uint32_t gl_string_length(const GLchar* text) {
     return text ? (uint32_t)lstrlenA(text) : 0u;
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 static void release_encoding_buffer_reads(void);
@@ -2296,15 +1639,6 @@ static void delete_buffer_state(GLuint name) {
     for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++)
         if (g_generic_attribs[i].buffer == name) g_generic_attribs[i].buffer = 0;
 }
-
-
-
-
-
-
-
-
-
 
 
 static BufferObjectState* bound_buffer_state(GLenum target) {
@@ -2393,44 +1727,6 @@ static GLvoid* pack_pixel_pointer(GLvoid* pixels, uint32_t bytes) {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static int fog_value_count(GLenum pname) {
     switch (pname) {
     case GL_FOG_COLOR:
@@ -2447,19 +1743,6 @@ static int fog_value_count(GLenum pname) {
     }
 }
 
-static int fog_scalar_valid(GLenum pname) {
-    switch (pname) {
-    case GL_FOG_INDEX:
-    case GL_FOG_DENSITY:
-    case GL_FOG_START:
-    case GL_FOG_END:
-    case GL_FOG_MODE:
-    case GL_FOG_COORDINATE_SOURCE_EXT:
-        return 1;
-    default:
-        return 0;
-    }
-}
 
 static int texenv_value_count(GLenum pname) {
     switch (pname) {
@@ -2492,14 +1775,10 @@ static int texgen_value_count(GLenum pname) {
     }
 }
 
-static int texgen_scalar_valid(GLenum pname) {
-    return pname == GL_TEXTURE_GEN_MODE;
-}
 
 static int clip_plane_valid(GLenum plane) {
     return plane >= GL_CLIP_PLANE0 && plane <= GL_CLIP_PLANE5;
 }
-
 
 
 static int material_face_valid(GLenum face) {
@@ -2523,9 +1802,6 @@ static int material_value_count(GLenum pname) {
     }
 }
 
-static int material_scalar_valid(GLenum pname) {
-    return pname == GL_SHININESS;
-}
 
 static int light_name_valid(GLenum light) {
     return light >= GL_LIGHT0 && light <= GL_LIGHT7;
@@ -2551,9 +1827,6 @@ static int light_value_count(GLenum pname) {
     }
 }
 
-static int light_scalar_valid(GLenum pname) {
-    return light_value_count(pname) == 1;
-}
 
 static int light_model_value_count(GLenum pname) {
     switch (pname) {
@@ -2568,9 +1841,6 @@ static int light_model_value_count(GLenum pname) {
     }
 }
 
-static int light_model_scalar_valid(GLenum pname) {
-    return light_model_value_count(pname) == 1;
-}
 
 static void close_v86gl(void) {
     DWORD returned = 0;
@@ -3222,7 +2492,6 @@ static int emit_check_framebuffer_status(GLenum target, GLenum* result) {
 }
 
 
-
 /* Return 0 only for a state family not migrated to the CPU yet. A failed
  * query sets the error and leaves the caller's output alone (-1). The wire
  * carries converted values as doubles, so vectors, booleans and GLint's
@@ -3306,7 +2575,6 @@ static int emit_query_parameter(unsigned int query_kind, GLenum target, GLenum p
                                 unsigned int kind, void* values) {
     return emit_query_parameter_count(query_kind, target, pname, kind, values, 16u);
 }
-
 
 
 static int emit_query_error(GLenum* value) {
@@ -4487,10 +3755,6 @@ static uint32_t gl_bitmap_span(GLsizei width, GLsizei height) {
 }
 
 
-
-
-
-
 static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
                                     GLint alignment, GLint row_length) {
     uint32_t pixel_bytes = gl_pixel_bytes(format, type);
@@ -4506,11 +3770,6 @@ static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
              ~((uint64_t)(uint32_t)(alignment > 0 ? alignment : 1) - 1u);
     return stride <= UINT32_MAX ? (uint32_t)stride : 0;
 }
-
-
-
-
-
 
 
 static BOOL is_proxy_texture_target(GLenum target) {
@@ -4538,26 +3797,9 @@ static BOOL emit_proxy_texture_image(uint16_t opcode, GLenum target, GLint level
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
 static int emit_read_pixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, uint32_t data_size,
                             GLvoid* pixels);
-
-
-
-
-
-
 
 
 typedef struct TextureSubImageCapture {
@@ -4568,13 +3810,6 @@ typedef struct TextureSubImageCapture {
     uint32_t data_size;
     uint8_t* data;
 } TextureSubImageCapture;
-
-
-
-
-
-
-
 
 
 static uint32_t gl_type_bytes(GLenum type) {
@@ -5982,41 +5217,19 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
 
 __declspec(dllexport)
 void APIENTRY glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
-    struct { int32_t x, y, width, height; } payload;
-    if (width < 0 || height < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    g_viewport[0] = x;
-    g_viewport[1] = y;
-    g_viewport[2] = width;
-    g_viewport[3] = height;
-    g_have_viewport = TRUE;
-    payload.x = x;
-    payload.y = y;
-    payload.width = width;
-    payload.height = height;
+    struct {int32_t x; int32_t y; int32_t width; int32_t height;} payload = {x, y, width, height};
     emit_gl_call(GLFN_VIEWPORT, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
-    struct { float r, g, b, a; } payload;
-    g_clear_color[0] = r;
-    g_clear_color[1] = g;
-    g_clear_color[2] = b;
-    g_clear_color[3] = a;
-    payload.r = r;
-    payload.g = g;
-    payload.b = b;
-    payload.a = a;
+    struct {float r; float g; float b; float a;} payload = {r, g, b, a};
     emit_gl_call(GLFN_CLEAR_COLOR, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glClear(GLbitfield mask) {
-    uint32_t payload = (uint32_t)mask;
+    struct {uint32_t mask;} payload = {mask};
     emit_gl_call(GLFN_CLEAR, &payload, sizeof(payload));
 }
 
@@ -6135,8 +5348,7 @@ void APIENTRY glFinish(void) {
 
 __declspec(dllexport)
 void APIENTRY glMatrixMode(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
-    g_matrix_mode = mode; /* diagnostic banner only; CPU owns validation */
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_MATRIX_MODE, &payload, sizeof(payload));
 }
 
@@ -6151,7 +5363,7 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) {
 
     if (v86gl_trace_call_allowed()) {
         v86gl_trace("glLoadMatrixf enter matrixMode=0x%04lx activeTexture=0x%04lx ptr=%08lx",
-                    (unsigned long)g_matrix_mode, (unsigned long)g_active_texture,
+                    0ul, 0ul,
                     (unsigned long)(uintptr_t)m);
     }
     if (!m) {
@@ -6278,53 +5490,31 @@ void APIENTRY glMultTransposeMatrixd(const GLdouble* matrix) {
 
 __declspec(dllexport)
 void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
-    struct { double left, right, bottom, top, zNear, zFar; } payload;
-    payload.left = left;
-    payload.right = right;
-    payload.bottom = bottom;
-    payload.top = top;
-    payload.zNear = zNear;
-    payload.zFar = zFar;
+    struct {double left; double right; double bottom; double top; double zNear; double zFar;} payload = {left, right, bottom, top, zNear, zFar};
     emit_gl_call(GLFN_FRUSTUM, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
-    struct { double left, right, bottom, top, zNear, zFar; } payload;
-    payload.left = left;
-    payload.right = right;
-    payload.bottom = bottom;
-    payload.top = top;
-    payload.zNear = zNear;
-    payload.zFar = zFar;
+    struct {double left; double right; double bottom; double top; double zNear; double zFar;} payload = {left, right, bottom, top, zNear, zFar};
     emit_gl_call(GLFN_ORTHO, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z) {
-    struct { float x, y, z; } payload;
-    payload.x = x;
-    payload.y = y;
-    payload.z = z;
+    struct {float x; float y; float z;} payload = {x, y, z};
     emit_gl_call(GLFN_TRANSLATEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
-    struct { float angle, x, y, z; } payload;
-    payload.angle = angle;
-    payload.x = x;
-    payload.y = y;
-    payload.z = z;
+    struct {float angle; float x; float y; float z;} payload = {angle, x, y, z};
     emit_gl_call(GLFN_ROTATEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glScalef(GLfloat x, GLfloat y, GLfloat z) {
-    struct { float x, y, z; } payload;
-    payload.x = x;
-    payload.y = y;
-    payload.z = z;
+    struct {float x; float y; float z;} payload = {x, y, z};
     emit_gl_call(GLFN_SCALEF, &payload, sizeof(payload));
 }
 
@@ -6340,46 +5530,37 @@ void APIENTRY glPopMatrix(void) {
 
 __declspec(dllexport)
 void APIENTRY glEnable(GLenum cap) {
-    uint32_t payload = (uint32_t)cap;
-    set_cap_state(cap, TRUE);
+    struct {uint32_t cap;} payload = {cap};
     emit_gl_call(GLFN_ENABLE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glDisable(GLenum cap) {
-    uint32_t payload = (uint32_t)cap;
-    set_cap_state(cap, FALSE);
+    struct {uint32_t cap;} payload = {cap};
     emit_gl_call(GLFN_DISABLE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glDepthFunc(GLenum func) {
-    uint32_t payload = (uint32_t)func;
-    g_depth_func = func;
+    struct {uint32_t func;} payload = {func};
     emit_gl_call(GLFN_DEPTH_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glClearDepth(GLdouble depth) {
-    double payload = depth;
-    g_clear_depth = depth;
+    struct {double depth;} payload = {depth};
     emit_gl_call(GLFN_CLEAR_DEPTH, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glDepthRange(GLdouble zNear, GLdouble zFar) {
-    struct { double zNear, zFar; } payload;
-    g_depth_range[0] = zNear;
-    g_depth_range[1] = zFar;
-    payload.zNear = zNear;
-    payload.zFar = zFar;
+    struct {double zNear; double zFar;} payload = {zNear, zFar};
     emit_gl_call(GLFN_DEPTH_RANGE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glClearStencil(GLint s) {
-    int32_t payload = s;
-    g_clear_stencil = s;
+    struct {int32_t s;} payload = {s};
     emit_gl_call(GLFN_CLEAR_STENCIL, &payload, sizeof(payload));
 }
 
@@ -6412,54 +5593,43 @@ static void emit_stencil_op_separate(GLenum face, GLenum sfail, GLenum dpfail, G
 
 __declspec(dllexport)
 void APIENTRY glStencilFunc(GLenum func, GLint ref, GLuint mask) {
-    struct { uint32_t func; int32_t ref; uint32_t mask; } payload;
-    payload.func = (uint32_t)func;
-    payload.ref = ref;
-    payload.mask = mask;
+    struct {uint32_t func; int32_t ref; uint32_t mask;} payload = {func, ref, mask};
     emit_gl_call(GLFN_STENCIL_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glStencilMask(GLuint mask) {
-    uint32_t payload = mask;
+    struct {uint32_t mask;} payload = {mask};
     emit_gl_call(GLFN_STENCIL_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) {
-    struct { uint32_t fail, zfail, zpass; } payload;
-    payload.fail = (uint32_t)fail;
-    payload.zfail = (uint32_t)zfail;
-    payload.zpass = (uint32_t)zpass;
+    struct {uint32_t fail; uint32_t zfail; uint32_t zpass;} payload = {fail, zfail, zpass};
     emit_gl_call(GLFN_STENCIL_OP, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glShadeModel(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
-    g_shade_model = mode;
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_SHADE_MODEL, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glCullFace(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
-    g_cull_face_mode = mode;
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_CULL_FACE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glFrontFace(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
-    g_front_face_mode = mode;
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_FRONT_FACE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glHint(GLenum target, GLenum mode) {
-    struct { uint32_t target, mode; } payload;
-    payload.target = (uint32_t)target;
-    payload.mode = (uint32_t)mode;
+    struct {uint32_t target; uint32_t mode;} payload = {target, mode};
     emit_gl_call(GLFN_HINT, &payload, sizeof(payload));
 }
 
@@ -6503,22 +5673,18 @@ void APIENTRY glPopClientAttrib(void) {
 
 __declspec(dllexport)
 void APIENTRY glDrawBuffer(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_DRAW_BUFFER, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glReadBuffer(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_READ_BUFFER, &payload, sizeof(payload));
 }
 
 void APIENTRY glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha) {
-    struct { uint32_t modeRGB, modeAlpha; } payload;
-    g_blend_equation_rgb = modeRGB;
-    g_blend_equation_alpha = modeAlpha;
-    payload.modeRGB = (uint32_t)modeRGB;
-    payload.modeAlpha = (uint32_t)modeAlpha;
+    struct {uint32_t modeRGB; uint32_t modeAlpha;} payload = {modeRGB, modeAlpha};
     emit_gl_call(GLFN_BLEND_EQUATION_SEPARATE, &payload, sizeof(payload));
 }
 
@@ -6562,7 +5728,7 @@ void APIENTRY glDrawBuffersATI(GLsizei n, const GLenum* bufs) {
 }
 
 void APIENTRY glActiveStencilFaceEXT(GLenum face) {
-    uint32_t payload = (uint32_t)face;
+    struct {uint32_t face;} payload = {face};
     emit_gl_call(GLFN_ACTIVE_STENCIL_FACE, &payload, sizeof(payload));
 }
 
@@ -6577,7 +5743,6 @@ void APIENTRY glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint 
 void APIENTRY glStencilMaskSeparate(GLenum face, GLuint mask) {
     emit_stencil_mask_separate(face, mask);
 }
-
 
 
 static BOOL valid_arb_program_target(GLenum target) {
@@ -6887,29 +6052,7 @@ void APIENTRY glGetProgramLocalParameterdvARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
-    if (!params) return;
-    if (!valid_arb_program_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        params[0] = 0;
-        return;
-    }
-    if (pname == GL_PROGRAM_BINDING_ARB) {
-        if (target == GL_VERTEX_PROGRAM_ARB) {
-            params[0] = (GLint)g_current_vertex_program_arb;
-            return;
-        }
-        if (target == GL_FRAGMENT_PROGRAM_ARB) {
-            params[0] = (GLint)g_current_fragment_program_arb;
-            return;
-        }
-        v86gl_set_error(GL_INVALID_ENUM);
-        params[0] = 0;
-        return;
-    }
-    if (!emit_query_program_iv_arb(target, pname, params)) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        params[0] = 0;
-    }
+    if (params) (void)emit_query_program_iv_arb(target, pname, params);
 }
 
 void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string) {
@@ -6928,7 +6071,6 @@ void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string)
         v86gl_set_error(GL_INVALID_OPERATION);
     }
 }
-
 
 
 GLuint APIENTRY glCreateProgram(void) {
@@ -7098,7 +6240,6 @@ GLint APIENTRY glGetAttribLocation(GLuint program, const GLchar* name) {
 }
 
 
-
 void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
     if (params) (void)emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params);
 }
@@ -7165,15 +6306,6 @@ void APIENTRY glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufSize,
 }
 
 
-
-
-
-
-
-
-
-
-
 static void emit_uniform_vector(GLint location, GLint components, GLsizei count,
                                 const void* value, uint32_t value_size,
                                 uint16_t fn) {
@@ -7231,7 +6363,6 @@ static void emit_uniform_matrix(GLint location, GLint dimension, GLsizei count,
     HeapFree(GetProcessHeap(), 0, payload);
 
 }
-
 
 
 static void emit_uniform_matrix_rect(GLint location, GLint columns, GLint rows,
@@ -7962,7 +7093,6 @@ void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) {
 }
 
 
-
 void APIENTRY glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
     GLint value;
     if (params && emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, id, pname, &value)) *params = (GLint)value;
@@ -8486,7 +7616,6 @@ void APIENTRY glRenderbufferStorage(GLenum target, GLenum internalformat,
 }
 
 
-
 void APIENTRY glGetRenderbufferParameterivEXT(GLenum target, GLenum pname,
                                               GLint* params) {
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_RENDERBUFFER, target, pname, V86GL_STATE_INTEGER, params);
@@ -8949,9 +8078,6 @@ typedef struct TightUnpackState {
 } TightUnpackState;
 
 
-
-
-
 __declspec(dllexport)
 void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                GLint x, GLint y, GLsizei width, GLsizei height,
@@ -9204,37 +8330,13 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
 
 __declspec(dllexport)
 void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) {
-    struct { uint32_t target, pname; int32_t param; } payload;
-    TextureUnitState* state;
-    if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB && target != 0x8500u) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (target == GL_TEXTURE_ENV && pname == GL_TEXTURE_ENV_MODE) {
-        state = active_texture_unit_state();
-        state->env_mode = (GLenum)param;
-    }
-    payload.target = (uint32_t)target;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
+    struct {uint32_t target; uint32_t pname; int32_t param;} payload = {target, pname, param};
     emit_gl_call(GLFN_TEX_ENVI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param) {
-    struct { uint32_t target, pname; float param; } payload;
-    TextureUnitState* state;
-    if (target != GL_TEXTURE_ENV && target != GL_POINT_SPRITE_ARB && target != 0x8500u) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (target == GL_TEXTURE_ENV && pname == GL_TEXTURE_ENV_MODE) {
-        state = active_texture_unit_state();
-        state->env_mode = (GLenum)param;
-    }
-    payload.target = (uint32_t)target;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
+    struct {uint32_t target; uint32_t pname; float param;} payload = {target, pname, param};
     emit_gl_call(GLFN_TEX_ENVF, &payload, sizeof(payload));
 }
 
@@ -9265,14 +8367,6 @@ void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-    }
-
-    if (pname == GL_TEXTURE_ENV_MODE) {
-        active_texture_unit_state()->env_mode = (GLenum)params[0];
-    } else if (pname == GL_TEXTURE_ENV_COLOR) {
-        for (i = 0; i < 4; i++) {
-            active_texture_unit_state()->env_color[i] = (GLfloat)params[i];
-        }
     }
 
     emit_gl_call(GLFN_TEX_ENVIV, &payload, sizeof(payload));
@@ -9307,13 +8401,6 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
-    if (pname == GL_TEXTURE_ENV_MODE) {
-        active_texture_unit_state()->env_mode = (GLenum)params[0];
-    } else if (pname == GL_TEXTURE_ENV_COLOR) {
-        CopyMemory(active_texture_unit_state()->env_color, params,
-                   sizeof(active_texture_unit_state()->env_color));
-    }
-
     emit_gl_call(GLFN_TEX_ENVFV, &payload, sizeof(payload));
 }
 
@@ -9338,31 +8425,13 @@ void APIENTRY glTexCoord2fv(const GLfloat* v) {
 
 __declspec(dllexport)
 void APIENTRY glTexGeni(GLenum coord, GLenum pname, GLint param) {
-    struct { uint32_t coord, pname; int32_t param; } payload;
-    if (!texgen_coord_valid(coord) || !texgen_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.coord = (uint32_t)coord;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)param;
+    struct {uint32_t coord; uint32_t pname; int32_t param;} payload = {coord, pname, param};
     emit_gl_call(GLFN_TEX_GENI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glTexGenf(GLenum coord, GLenum pname, GLfloat param) {
-    struct { uint32_t coord, pname; float param; } payload;
-    if (!texgen_coord_valid(coord) || !texgen_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.coord = (uint32_t)coord;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)param;
+    struct {uint32_t coord; uint32_t pname; float param;} payload = {coord, pname, param};
     emit_gl_call(GLFN_TEX_GENF, &payload, sizeof(payload));
 }
 
@@ -9400,14 +8469,6 @@ void APIENTRY glTexGeniv(GLenum coord, GLenum pname, const GLint* params) {
         payload.values[i] = params[i];
     }
 
-    if (pname == GL_TEXTURE_GEN_MODE) {
-        active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)params[0];
-    } else if (pname == GL_OBJECT_PLANE) {
-        for (i = 0; i < 4; i++) active_texture_unit_state()->texgen[coord - GL_S].object_plane[i] = (GLfloat)params[i];
-    } else {
-        for (i = 0; i < 4; i++) active_texture_unit_state()->texgen[coord - GL_S].eye_plane[i] = (GLfloat)params[i];
-    }
-
     emit_gl_call(GLFN_TEX_GENIV, &payload, sizeof(payload));
 }
 
@@ -9438,16 +8499,6 @@ void APIENTRY glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-    }
-
-    if (pname == GL_TEXTURE_GEN_MODE) {
-        active_texture_unit_state()->texgen[coord - GL_S].mode = (GLenum)params[0];
-    } else if (pname == GL_OBJECT_PLANE) {
-        CopyMemory(active_texture_unit_state()->texgen[coord - GL_S].object_plane, params,
-                   sizeof(active_texture_unit_state()->texgen[coord - GL_S].object_plane));
-    } else {
-        CopyMemory(active_texture_unit_state()->texgen[coord - GL_S].eye_plane, params,
-                   sizeof(active_texture_unit_state()->texgen[coord - GL_S].eye_plane));
     }
 
     emit_gl_call(GLFN_TEX_GENFV, &payload, sizeof(payload));
@@ -9490,37 +8541,18 @@ void APIENTRY glClipPlane(GLenum plane, const GLdouble* equation) {
 
     payload.plane = (uint32_t)plane;
     CopyMemory(payload.values, equation, sizeof(payload.values));
-    init_query_state();
-    CopyMemory(g_clip_planes[plane - GL_CLIP_PLANE0], equation, sizeof(payload.values));
     emit_gl_call(GLFN_CLIP_PLANE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glColorMaterial(GLenum face, GLenum mode) {
-    struct { uint32_t face, mode; } payload;
-    if (!material_face_valid(face)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    g_color_material_face = face;
-    g_color_material_param = mode;
-    payload.face = (uint32_t)face;
-    payload.mode = (uint32_t)mode;
+    struct {uint32_t face; uint32_t mode;} payload = {face, mode};
     emit_gl_call(GLFN_COLOR_MATERIAL, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glActiveTextureARB(GLenum texture) {
-    uint32_t payload = (uint32_t)texture;
-
-    if (texture < GL_TEXTURE0_ARB ||
-        texture >= GL_TEXTURE0_ARB + V86GL_MAX_TEXTURE_UNITS) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    g_active_texture = texture;
+    struct {uint32_t texture;} payload = {texture};
     emit_gl_call(GLFN_ACTIVE_TEXTURE, &payload, sizeof(payload));
 }
 
@@ -9699,47 +8731,13 @@ void APIENTRY glNormal3fv(const GLfloat* v) {
 
 __declspec(dllexport)
 void APIENTRY glFogf(GLenum pname, GLfloat param) {
-    struct { uint32_t pname; float param; } payload;
-    if (!fog_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    init_query_state();
-    switch (pname) {
-    case GL_FOG_INDEX: g_fog_index = param; break;
-    case GL_FOG_DENSITY: g_fog_density = param; break;
-    case GL_FOG_START: g_fog_start = param; break;
-    case GL_FOG_END: g_fog_end = param; break;
-    case GL_FOG_MODE: g_fog_mode = (GLenum)param; break;
-    case GL_FOG_COORDINATE_SOURCE_EXT: g_fog_coordinate_source = (GLenum)param; break;
-    default: break;
-    }
+    struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_FOGF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glFogi(GLenum pname, GLint param) {
-    struct { uint32_t pname; int32_t param; } payload;
-    if (!fog_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    init_query_state();
-    switch (pname) {
-    case GL_FOG_INDEX: g_fog_index = (GLfloat)param; break;
-    case GL_FOG_DENSITY: g_fog_density = (GLfloat)param; break;
-    case GL_FOG_START: g_fog_start = (GLfloat)param; break;
-    case GL_FOG_END: g_fog_end = (GLfloat)param; break;
-    case GL_FOG_MODE: g_fog_mode = (GLenum)param; break;
-    case GL_FOG_COORDINATE_SOURCE_EXT: g_fog_coordinate_source = (GLenum)param; break;
-    default: break;
-    }
+    struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_FOGI, &payload, sizeof(payload));
 }
 
@@ -9768,21 +8766,6 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-    }
-
-    init_query_state();
-    if (pname == GL_FOG_COLOR) {
-        CopyMemory(g_fog_color, params, sizeof(g_fog_color));
-    } else {
-        switch (pname) {
-        case GL_FOG_INDEX: g_fog_index = params[0]; break;
-        case GL_FOG_DENSITY: g_fog_density = params[0]; break;
-        case GL_FOG_START: g_fog_start = params[0]; break;
-        case GL_FOG_END: g_fog_end = params[0]; break;
-        case GL_FOG_MODE: g_fog_mode = (GLenum)params[0]; break;
-        case GL_FOG_COORDINATE_SOURCE_EXT: g_fog_coordinate_source = (GLenum)params[0]; break;
-        default: break;
-        }
     }
 
     emit_gl_call(GLFN_FOGFV, &payload, sizeof(payload));
@@ -10029,59 +9012,16 @@ void APIENTRY glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride,
     glSecondaryColorPointerEXT(size, type, stride, pointer);
 }
 
-static void cache_material_values(GLenum face, GLenum pname, const GLfloat* values) {
-    int first = face == GL_BACK ? 1 : 0;
-    int last = face == GL_FRONT_AND_BACK ? 1 : first;
-    int i;
-
-    init_query_state();
-    for (i = first; i <= last; i++) {
-        MaterialState* state = &g_materials[i];
-        switch (pname) {
-        case GL_AMBIENT: CopyMemory(state->ambient, values, sizeof(state->ambient)); break;
-        case GL_DIFFUSE: CopyMemory(state->diffuse, values, sizeof(state->diffuse)); break;
-        case GL_SPECULAR: CopyMemory(state->specular, values, sizeof(state->specular)); break;
-        case GL_EMISSION: CopyMemory(state->emission, values, sizeof(state->emission)); break;
-        case GL_AMBIENT_AND_DIFFUSE:
-            CopyMemory(state->ambient, values, sizeof(state->ambient));
-            CopyMemory(state->diffuse, values, sizeof(state->diffuse));
-            break;
-        case GL_SHININESS: state->shininess = values[0]; break;
-        case GL_COLOR_INDEXES: CopyMemory(state->color_indexes, values, sizeof(state->color_indexes)); break;
-        default: break;
-        }
-    }
-}
 
 __declspec(dllexport)
 void APIENTRY glMaterialf(GLenum face, GLenum pname, GLfloat param) {
-    struct { uint32_t face, pname; float param; } payload;
-    if (!material_face_valid(face) || !material_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.face = (uint32_t)face;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    cache_material_values(face, pname, &param);
+    struct {uint32_t face; uint32_t pname; float param;} payload = {face, pname, param};
     emit_gl_call(GLFN_MATERIALF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) {
-    struct { uint32_t face, pname; int32_t param; } payload;
-    GLfloat value;
-    if (!material_face_valid(face) || !material_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.face = (uint32_t)face;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    value = (GLfloat)param;
-    cache_material_values(face, pname, &value);
+    struct {uint32_t face; uint32_t pname; int32_t param;} payload = {face, pname, param};
     emit_gl_call(GLFN_MATERIALI, &payload, sizeof(payload));
 }
 
@@ -10114,7 +9054,6 @@ void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
-    cache_material_values(face, pname, params);
 
     emit_gl_call(GLFN_MATERIALFV, &payload, sizeof(payload));
 }
@@ -10129,7 +9068,6 @@ void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) {
     } payload;
     int count = material_value_count(pname);
     int i;
-    GLfloat values[4];
 
     if (!material_face_valid(face) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
@@ -10147,63 +9085,22 @@ void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-        values[i] = (GLfloat)params[i];
     }
 
-    cache_material_values(face, pname, values);
 
     emit_gl_call(GLFN_MATERIALIV, &payload, sizeof(payload));
 }
 
-static void cache_light_values(GLenum light, GLenum pname, const GLfloat* values) {
-    LightState* state;
-
-    init_query_state();
-    state = &g_lights[light - GL_LIGHT0];
-    switch (pname) {
-    case GL_AMBIENT: CopyMemory(state->ambient, values, sizeof(state->ambient)); break;
-    case GL_DIFFUSE: CopyMemory(state->diffuse, values, sizeof(state->diffuse)); break;
-    case GL_SPECULAR: CopyMemory(state->specular, values, sizeof(state->specular)); break;
-    case GL_POSITION: CopyMemory(state->position, values, sizeof(state->position)); break;
-    case GL_SPOT_DIRECTION: CopyMemory(state->spot_direction, values, sizeof(state->spot_direction)); break;
-    case GL_SPOT_EXPONENT: state->spot_exponent = values[0]; break;
-    case GL_SPOT_CUTOFF: state->spot_cutoff = values[0]; break;
-    case GL_CONSTANT_ATTENUATION: state->constant_attenuation = values[0]; break;
-    case GL_LINEAR_ATTENUATION: state->linear_attenuation = values[0]; break;
-    case GL_QUADRATIC_ATTENUATION: state->quadratic_attenuation = values[0]; break;
-    default: break;
-    }
-}
 
 __declspec(dllexport)
 void APIENTRY glLightf(GLenum light, GLenum pname, GLfloat param) {
-    struct { uint32_t light, pname; float param; } payload;
-    if (!light_name_valid(light) || !light_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.light = (uint32_t)light;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    cache_light_values(light, pname, &param);
+    struct {uint32_t light; uint32_t pname; float param;} payload = {light, pname, param};
     emit_gl_call(GLFN_LIGHTF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLighti(GLenum light, GLenum pname, GLint param) {
-    struct { uint32_t light, pname; int32_t param; } payload;
-    GLfloat value;
-    if (!light_name_valid(light) || !light_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.light = (uint32_t)light;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    value = (GLfloat)param;
-    cache_light_values(light, pname, &value);
+    struct {uint32_t light; uint32_t pname; int32_t param;} payload = {light, pname, param};
     emit_gl_call(GLFN_LIGHTI, &payload, sizeof(payload));
 }
 
@@ -10236,7 +9133,6 @@ void APIENTRY glLightfv(GLenum light, GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
-    cache_light_values(light, pname, params);
 
     emit_gl_call(GLFN_LIGHTFV, &payload, sizeof(payload));
 }
@@ -10251,7 +9147,6 @@ void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) {
     } payload;
     int count = light_value_count(pname);
     int i;
-    GLfloat values[4];
 
     if (!light_name_valid(light) || !count) {
         v86gl_set_error(GL_INVALID_ENUM);
@@ -10269,53 +9164,21 @@ void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-        values[i] = (GLfloat)params[i];
     }
 
-    cache_light_values(light, pname, values);
 
     emit_gl_call(GLFN_LIGHTIV, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLightModelf(GLenum pname, GLfloat param) {
-    struct { uint32_t pname; float param; } payload;
-    if (!light_model_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    init_query_state();
-    if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
-        g_light_model_local_viewer = param != 0.0f ? GL_TRUE : GL_FALSE;
-    } else if (pname == GL_LIGHT_MODEL_TWO_SIDE) {
-        g_light_model_two_side = param != 0.0f ? GL_TRUE : GL_FALSE;
-    } else {
-        g_light_model_color_control = (GLenum)param;
-    }
+    struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_LIGHT_MODELF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLightModeli(GLenum pname, GLint param) {
-    struct { uint32_t pname; int32_t param; } payload;
-    if (!light_model_scalar_valid(pname)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
-    init_query_state();
-    if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
-        g_light_model_local_viewer = param ? GL_TRUE : GL_FALSE;
-    } else if (pname == GL_LIGHT_MODEL_TWO_SIDE) {
-        g_light_model_two_side = param ? GL_TRUE : GL_FALSE;
-    } else {
-        g_light_model_color_control = (GLenum)param;
-    }
+    struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_LIGHT_MODELI, &payload, sizeof(payload));
 }
 
@@ -10346,17 +9209,6 @@ void APIENTRY glLightModelfv(GLenum pname, const GLfloat* params) {
         payload.values[i] = params[i];
     }
 
-    init_query_state();
-    if (pname == GL_LIGHT_MODEL_AMBIENT) {
-        CopyMemory(g_light_model_ambient, params, sizeof(g_light_model_ambient));
-    } else if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
-        g_light_model_local_viewer = params[0] != 0.0f ? GL_TRUE : GL_FALSE;
-    } else if (pname == GL_LIGHT_MODEL_TWO_SIDE) {
-        g_light_model_two_side = params[0] != 0.0f ? GL_TRUE : GL_FALSE;
-    } else {
-        g_light_model_color_control = (GLenum)params[0];
-    }
-
     emit_gl_call(GLFN_LIGHT_MODELFV, &payload, sizeof(payload));
 }
 
@@ -10369,7 +9221,6 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) {
     } payload;
     int count = light_model_value_count(pname);
     int i;
-    GLfloat values[4];
 
     if (!count) {
         v86gl_set_error(GL_INVALID_ENUM);
@@ -10386,18 +9237,6 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) {
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-        values[i] = (GLfloat)params[i];
-    }
-
-    init_query_state();
-    if (pname == GL_LIGHT_MODEL_AMBIENT) {
-        CopyMemory(g_light_model_ambient, values, sizeof(g_light_model_ambient));
-    } else if (pname == GL_LIGHT_MODEL_LOCAL_VIEWER) {
-        g_light_model_local_viewer = params[0] ? GL_TRUE : GL_FALSE;
-    } else if (pname == GL_LIGHT_MODEL_TWO_SIDE) {
-        g_light_model_two_side = params[0] ? GL_TRUE : GL_FALSE;
-    } else {
-        g_light_model_color_control = (GLenum)params[0];
     }
 
     emit_gl_call(GLFN_LIGHT_MODELIV, &payload, sizeof(payload));
@@ -10405,28 +9244,13 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) {
 
 __declspec(dllexport)
 void APIENTRY glBlendFunc(GLenum sfactor, GLenum dfactor) {
-    struct { uint32_t sfactor, dfactor; } payload;
-    g_blend_src = sfactor;
-    g_blend_dst = dfactor;
-    g_blend_src_alpha = sfactor;
-    g_blend_dst_alpha = dfactor;
-    payload.sfactor = (uint32_t)sfactor;
-    payload.dfactor = (uint32_t)dfactor;
+    struct {uint32_t sfactor; uint32_t dfactor;} payload = {sfactor, dfactor};
     emit_gl_call(GLFN_BLEND_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) {
-    struct { float red, green, blue, alpha; } payload;
-
-    g_blend_color[0] = red;
-    g_blend_color[1] = green;
-    g_blend_color[2] = blue;
-    g_blend_color[3] = alpha;
-    payload.red = red;
-    payload.green = green;
-    payload.blue = blue;
-    payload.alpha = alpha;
+    struct {float red; float green; float blue; float alpha;} payload = {red, green, blue, alpha};
     emit_gl_call(GLFN_BLEND_COLOR, &payload, sizeof(payload));
 }
 
@@ -10436,10 +9260,7 @@ void APIENTRY glBlendColorEXT(GLclampf red, GLclampf green, GLclampf blue, GLcla
 
 __declspec(dllexport)
 void APIENTRY glBlendEquation(GLenum mode) {
-    uint32_t payload = (uint32_t)mode;
-
-    g_blend_equation_rgb = mode;
-    g_blend_equation_alpha = mode;
+    struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_BLEND_EQUATION, &payload, sizeof(payload));
 }
 
@@ -10450,16 +9271,7 @@ void APIENTRY glBlendEquationEXT(GLenum mode) {
 __declspec(dllexport)
 void APIENTRY glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb,
                                   GLenum src_alpha, GLenum dst_alpha) {
-    struct { uint32_t src_rgb, dst_rgb, src_alpha, dst_alpha; } payload;
-
-    g_blend_src = src_rgb;
-    g_blend_dst = dst_rgb;
-    g_blend_src_alpha = src_alpha;
-    g_blend_dst_alpha = dst_alpha;
-    payload.src_rgb = (uint32_t)src_rgb;
-    payload.dst_rgb = (uint32_t)dst_rgb;
-    payload.src_alpha = (uint32_t)src_alpha;
-    payload.dst_alpha = (uint32_t)dst_alpha;
+    struct {uint32_t src_rgb; uint32_t dst_rgb; uint32_t src_alpha; uint32_t dst_alpha;} payload = {src_rgb, dst_rgb, src_alpha, dst_alpha};
     emit_gl_call(GLFN_BLEND_FUNC_SEPARATE, &payload, sizeof(payload));
 }
 
@@ -10469,11 +9281,7 @@ void APIENTRY glBlendFuncSeparateEXT(GLenum src_rgb, GLenum dst_rgb,
 }
 
 void APIENTRY glSampleCoverage(GLclampf value, GLboolean invert) {
-    struct { float value; uint32_t invert; } payload;
-    payload.value = value;
-    payload.invert = invert ? GL_TRUE : GL_FALSE;
-    g_sample_coverage_value = value;
-    g_sample_coverage_invert = invert ? GL_TRUE : GL_FALSE;
+    struct {float value; uint32_t invert;} payload = {value, invert};
     emit_gl_call(GLFN_SAMPLE_COVERAGE, &payload, sizeof(payload));
 }
 
@@ -10483,82 +9291,43 @@ void APIENTRY glSampleCoverageARB(GLclampf value, GLboolean invert) {
 
 __declspec(dllexport)
 void APIENTRY glAlphaFunc(GLenum func, GLclampf ref) {
-    struct { uint32_t func; float ref; } payload;
-    g_alpha_func = func;
-    g_alpha_ref = ref;
-    payload.func = (uint32_t)func;
-    payload.ref = ref;
+    struct {uint32_t func; float ref;} payload = {func, ref};
     emit_gl_call(GLFN_ALPHA_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glDepthMask(GLboolean flag) {
-    uint32_t payload = flag ? 1u : 0u;
-    g_depth_mask = flag ? GL_TRUE : GL_FALSE;
+    struct {uint32_t flag;} payload = {flag};
     emit_gl_call(GLFN_DEPTH_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {
-    struct { uint32_t red, green, blue, alpha; } payload;
-    g_color_mask[0] = red ? GL_TRUE : GL_FALSE;
-    g_color_mask[1] = green ? GL_TRUE : GL_FALSE;
-    g_color_mask[2] = blue ? GL_TRUE : GL_FALSE;
-    g_color_mask[3] = alpha ? GL_TRUE : GL_FALSE;
-    payload.red = red ? 1u : 0u;
-    payload.green = green ? 1u : 0u;
-    payload.blue = blue ? 1u : 0u;
-    payload.alpha = alpha ? 1u : 0u;
+    struct {uint32_t red; uint32_t green; uint32_t blue; uint32_t alpha;} payload = {red, green, blue, alpha};
     emit_gl_call(GLFN_COLOR_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
-    struct { int32_t x, y, width, height; } payload;
-    if (width < 0 || height < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    payload.x = x;
-    payload.y = y;
-    payload.width = width;
-    payload.height = height;
-    g_scissor_box[0] = x;
-    g_scissor_box[1] = y;
-    g_scissor_box[2] = width;
-    g_scissor_box[3] = height;
+    struct {int32_t x; int32_t y; int32_t width; int32_t height;} payload = {x, y, width, height};
     emit_gl_call(GLFN_SCISSOR, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLineWidth(GLfloat width) {
-    float payload = width;
-    g_line_width = width;
+    struct {float width;} payload = {width};
     emit_gl_call(GLFN_LINE_WIDTH, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPolygonMode(GLenum face, GLenum mode) {
-    struct { uint32_t face, mode; } payload;
-    if (face == GL_FRONT || face == GL_FRONT_AND_BACK) {
-        g_polygon_mode_front = mode;
-    }
-    if (face == GL_BACK || face == GL_FRONT_AND_BACK) {
-        g_polygon_mode_back = mode;
-    }
-    payload.face = (uint32_t)face;
-    payload.mode = (uint32_t)mode;
+    struct {uint32_t face; uint32_t mode;} payload = {face, mode};
     emit_gl_call(GLFN_POLYGON_MODE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPolygonOffset(GLfloat factor, GLfloat units) {
-    struct { float factor, units; } payload;
-    g_polygon_offset_factor = factor;
-    g_polygon_offset_units = units;
-    payload.factor = factor;
-    payload.units = units;
+    struct {float factor; float units;} payload = {factor, units};
     emit_gl_call(GLFN_POLYGON_OFFSET, &payload, sizeof(payload));
 }
 
@@ -11701,15 +10470,7 @@ void APIENTRY glScaled(GLdouble x, GLdouble y, GLdouble z) {
 
 __declspec(dllexport)
 void APIENTRY glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
-    struct { float red; float green; float blue; float alpha; } payload;
-    g_clear_accum[0] = red;
-    g_clear_accum[1] = green;
-    g_clear_accum[2] = blue;
-    g_clear_accum[3] = alpha;
-    payload.red = red;
-    payload.green = green;
-    payload.blue = blue;
-    payload.alpha = alpha;
+    struct {float red; float green; float blue; float alpha;} payload = {red, green, blue, alpha};
     emit_gl_call(GLFN_CLEAR_ACCUM, &payload, sizeof(payload));
 }
 
@@ -11981,21 +10742,12 @@ void APIENTRY glArrayElement(GLint i) {
 
 __declspec(dllexport)
 void APIENTRY glPointSize(GLfloat size) {
-    struct { float size; } payload;
-    if (size <= 0.0f) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    g_point_size = size;
-    payload.size = size;
+    struct {float size;} payload = {size};
     emit_gl_call(GLFN_POINT_SIZE, &payload, sizeof(payload));
 }
 
 void APIENTRY glPointParameterf(GLenum pname, GLfloat param) {
-    struct { uint32_t pname; float param; } payload;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
+    struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_POINT_PARAMETERF, &payload, sizeof(payload));
 }
 
@@ -12026,9 +10778,7 @@ void APIENTRY glPointParameterfvARB(GLenum pname, const GLfloat* params) {
 }
 
 void APIENTRY glPointParameteri(GLenum pname, GLint param) {
-    struct { uint32_t pname; int32_t param; } payload;
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
+    struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_POINT_PARAMETERI, &payload, sizeof(payload));
 }
 
@@ -12052,31 +10802,19 @@ void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) {
 
 __declspec(dllexport)
 void APIENTRY glLineStipple(GLint factor, GLushort pattern) {
-    struct { int32_t factor; uint32_t pattern; } payload;
-    if (factor < 1) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    g_line_stipple_factor = factor;
-    g_line_stipple_pattern = pattern;
-    payload.factor = factor;
-    payload.pattern = (uint32_t)pattern;
+    struct {int32_t factor; uint32_t pattern;} payload = {factor, pattern};
     emit_gl_call(GLFN_LINE_STIPPLE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLogicOp(GLenum opcode) {
-    struct { uint32_t opcode; } payload;
-    payload.opcode = (uint32_t)opcode;
+    struct {uint32_t opcode;} payload = {opcode};
     emit_gl_call(GLFN_LOGIC_OP, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glAccum(GLenum op, GLfloat value) {
-    struct { uint32_t op; float value; } payload;
-    payload.op = (uint32_t)op;
-    payload.value = value;
+    struct {uint32_t op; float value;} payload = {op, value};
     emit_gl_call(GLFN_ACCUM, &payload, sizeof(payload));
 }
 
@@ -12136,28 +10874,7 @@ void APIENTRY glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yor
 
 __declspec(dllexport)
 void APIENTRY glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type) {
-    struct {
-        int32_t x;
-        int32_t y;
-        int32_t width;
-        int32_t height;
-        uint32_t type;
-    } payload;
-
-    if (width < 0 || height < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (type != GL_COLOR && type != GL_DEPTH && type != GL_STENCIL) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.x = x;
-    payload.y = y;
-    payload.width = width;
-    payload.height = height;
-    payload.type = (uint32_t)type;
+    struct {int32_t x; int32_t y; int32_t width; int32_t height; uint32_t type;} payload = {x, y, width, height, type};
     emit_gl_call(GLFN_COPY_PIXELS, &payload, sizeof(payload));
 }
 
@@ -12211,41 +10928,19 @@ void APIENTRY glPixelStoref(GLenum pname, GLfloat param) {
 
 __declspec(dllexport)
 void APIENTRY glPixelTransferf(GLenum pname, GLfloat param) {
-    struct { uint32_t pname; float param; } payload;
-    if (pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI &&
-        pname <= GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI) {
-        g_post_color_matrix_scale[pname - GL_POST_COLOR_MATRIX_RED_SCALE_SGI] = param;
-    } else if (pname >= GL_POST_COLOR_MATRIX_RED_BIAS_SGI &&
-               pname <= GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI) {
-        g_post_color_matrix_bias[pname - GL_POST_COLOR_MATRIX_RED_BIAS_SGI] = param;
-    }
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
+    struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_PIXEL_TRANSFERF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPixelTransferi(GLenum pname, GLint param) {
-    struct { uint32_t pname; int32_t param; } payload;
-    if (pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI &&
-        pname <= GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI) {
-        g_post_color_matrix_scale[pname - GL_POST_COLOR_MATRIX_RED_SCALE_SGI] =
-            (GLfloat)param;
-    } else if (pname >= GL_POST_COLOR_MATRIX_RED_BIAS_SGI &&
-               pname <= GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI) {
-        g_post_color_matrix_bias[pname - GL_POST_COLOR_MATRIX_RED_BIAS_SGI] =
-            (GLfloat)param;
-    }
-    payload.pname = (uint32_t)pname;
-    payload.param = param;
+    struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_PIXEL_TRANSFERI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPixelZoom(GLfloat xfactor, GLfloat yfactor) {
-    struct { float xfactor; float yfactor; } payload;
-    payload.xfactor = xfactor;
-    payload.yfactor = yfactor;
+    struct {float xfactor; float yfactor;} payload = {xfactor, yfactor};
     emit_gl_call(GLFN_PIXEL_ZOOM, &payload, sizeof(payload));
 }
 
@@ -12268,46 +10963,6 @@ static const void* pixel_map_source(GLenum map, GLsizei mapsize, const void* val
     return unpack_pixel_pointer(values, (uint32_t)mapsize * stride);
 }
 
-static GLdouble pixel_map_color(GLdouble value) {
-    return value < 0.0 ? 0.0 : value > 1.0 ? 1.0 : value;
-}
-
-static int set_pixel_map(GLenum map, GLsizei mapsize, const GLdouble* values) {
-    PixelMapState* state;
-    GLdouble* copy = NULL;
-    int index = pixel_map_index(map);
-    GLsizei i;
-
-    if (index < 0) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return 0;
-    }
-    if (mapsize < 0 || (mapsize && !values)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-    if ((uint32_t)mapsize > UINT32_MAX / sizeof(*copy)) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return 0;
-    }
-    if (mapsize) {
-        copy = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*copy));
-        if (!copy) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return 0;
-        }
-        for (i = 0; i < mapsize; i++) {
-            copy[i] = values[i];
-        }
-    }
-    state = &g_pixel_maps[index];
-    if (state->values) {
-        HeapFree(GetProcessHeap(), 0, state->values);
-    }
-    state->values = copy;
-    state->size = mapsize;
-    return 1;
-}
 
 static void emit_pixel_map(uint16_t opcode, GLenum map, GLsizei mapsize,
                            const void* values, uint32_t value_size) {
@@ -12344,61 +10999,22 @@ static void emit_pixel_map(uint16_t opcode, GLenum map, GLsizei mapsize,
 __declspec(dllexport)
 void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
     release_encoding_buffer_reads();
-    GLdouble* converted;
-    GLsizei i;
-
     values = (const GLfloat*)pixel_map_source(map, mapsize, values, sizeof(GLfloat));
-    if (!values) return;
-    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
-    if (!converted) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return;
-    }
-    for (i = 0; i < mapsize; i++) converted[i] = map >= GL_PIXEL_MAP_I_TO_R ? (GLdouble)(GLfloat)pixel_map_color((GLdouble)values[i]) : (GLdouble)values[i];
-    if (set_pixel_map(map, mapsize, converted)) {
-        emit_pixel_map(GLFN_PIXEL_MAPFV, map, mapsize, values, sizeof(GLfloat));
-    }
-    HeapFree(GetProcessHeap(), 0, converted);
+    if (values) emit_pixel_map(GLFN_PIXEL_MAPFV, map, mapsize, values, sizeof(GLfloat));
 }
 
 __declspec(dllexport)
 void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
     release_encoding_buffer_reads();
-    GLdouble* converted;
-    GLsizei i;
-
     values = (const GLuint*)pixel_map_source(map, mapsize, values, sizeof(GLuint));
-    if (!values) return;
-    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
-    if (!converted) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return;
-    }
-    for (i = 0; i < mapsize; i++) converted[i] = map >= GL_PIXEL_MAP_I_TO_R ? (GLdouble)(GLfloat)pixel_map_color((GLdouble)values[i] / 4294967295.0) : (GLdouble)values[i];
-    if (set_pixel_map(map, mapsize, converted)) {
-        emit_pixel_map(GLFN_PIXEL_MAPUIV, map, mapsize, values, sizeof(GLuint));
-    }
-    HeapFree(GetProcessHeap(), 0, converted);
+    if (values) emit_pixel_map(GLFN_PIXEL_MAPUIV, map, mapsize, values, sizeof(GLuint));
 }
 
 __declspec(dllexport)
 void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values) {
     release_encoding_buffer_reads();
-    GLdouble* converted;
-    GLsizei i;
-
     values = (const GLushort*)pixel_map_source(map, mapsize, values, sizeof(GLushort));
-    if (!values) return;
-    converted = (GLdouble*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)mapsize * sizeof(*converted));
-    if (!converted) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return;
-    }
-    for (i = 0; i < mapsize; i++) converted[i] = map >= GL_PIXEL_MAP_I_TO_R ? (GLdouble)(GLfloat)pixel_map_color((GLdouble)values[i] / 65535.0) : (GLdouble)values[i];
-    if (set_pixel_map(map, mapsize, converted)) {
-        emit_pixel_map(GLFN_PIXEL_MAPUSV, map, mapsize, values, sizeof(GLushort));
-    }
-    HeapFree(GetProcessHeap(), 0, converted);
+    if (values) emit_pixel_map(GLFN_PIXEL_MAPUSV, map, mapsize, values, sizeof(GLushort));
 }
 
 /* The CPU returns the whole map, so a query need not depend on the
@@ -12616,7 +11232,6 @@ void APIENTRY glCallLists(GLsizei n, GLenum type, const GLvoid* lists) {
 __declspec(dllexport)
 void APIENTRY glListBase(GLuint base) {
     uint32_t request[3] = {4, base, 0};
-    g_list_base = base;
     emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
@@ -12775,9 +11390,6 @@ __declspec(dllexport)
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
     emit_texture_image_query(target, level, format, type, FALSE, pixels);
 }
-
-
-
 
 
 __declspec(dllexport)
@@ -13128,15 +11740,6 @@ void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* values) { query_eva
 
 static void raster_pos4f_compat(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
     struct { float x, y, z, w; } payload;
-    g_current_raster_position[0] = x;
-    g_current_raster_position[1] = y;
-    g_current_raster_position[2] = z;
-    g_current_raster_position[3] = w;
-    CopyMemory(g_current_raster_color, g_current_color, sizeof(g_current_raster_color));
-    CopyMemory(g_current_raster_texcoord, g_current_texcoord, sizeof(g_current_raster_texcoord));
-    g_current_raster_index = g_current_index;
-    g_current_raster_distance = 0.0f;
-    g_current_raster_valid = GL_TRUE;
     payload.x = x;
     payload.y = y;
     payload.z = z;
@@ -13159,20 +11762,9 @@ DEFINE_RASTER_POS_VARIANT(s, GLshort)
 
 #undef DEFINE_RASTER_POS_VARIANT
 
-/* glWindowPos bypasses model-view/projection clipping.  Keep the proxy's
- * observable raster state in sync and send one canonical float command to
- * WebGPU executor, which implements the same bypass on the browser side. */
+/* One canonical window-position command; the CPU owns the resulting state. */
 static void window_pos3f_compat(GLfloat x, GLfloat y, GLfloat z) {
     struct { float x, y, z; } payload;
-    g_current_raster_position[0] = x;
-    g_current_raster_position[1] = y;
-    g_current_raster_position[2] = z;
-    g_current_raster_position[3] = 1.0f;
-    CopyMemory(g_current_raster_color, g_current_color, sizeof(g_current_raster_color));
-    CopyMemory(g_current_raster_texcoord, g_current_texcoord, sizeof(g_current_raster_texcoord));
-    g_current_raster_index = g_current_index;
-    g_current_raster_distance = 0.0f;
-    g_current_raster_valid = GL_TRUE;
     payload.x = x;
     payload.y = y;
     payload.z = z;
