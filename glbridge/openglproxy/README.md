@@ -79,8 +79,10 @@ and performs no evaluator arithmetic. Opcode 250 carries CPU-generated
 evaluated vertices and cannot be supplied by the guest. The frozen maximum
 order is eight. `gl_evaluator_abi_test.js` runs actual C encoding/query helpers,
 including a maximum-size surface, while the v86 native-reference and GPU tests
-cover feedback and rendered lighting. Full GPU snapshot restoration remains
-in v86's phase C work.
+cover feedback and rendered lighting. The v86 host now saves GL object identity
+and live GPU contents directly, including texture mip/layer data, depth/stencil
+and individual MSAA samples. GL drawing history is retired from new checkpoints;
+the guest acceptance runs remain in the host plan's phases C/G.
 
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving
