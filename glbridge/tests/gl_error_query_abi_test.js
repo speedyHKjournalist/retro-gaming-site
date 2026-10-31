@@ -24,8 +24,8 @@ ${body(source, "emit_query_error", "static int ")}
 ${body(source, "glGetError", "GLenum APIENTRY ")}
 int main(void) {
     error=GL_INVALID_ENUM;
-    assert(glGetError()==GL_INVALID_ENUM && error==GL_INVALID_VALUE);
-    assert(glGetError()==GL_INVALID_VALUE && !error);
+    assert(glGetError()==GL_INVALID_ENUM && !error);
+    assert(glGetError()==GL_NO_ERROR && !error);
     assert(glGetError()==GL_NO_ERROR);
     float bad=0;emit_gl_call(GLFN_LINE_WIDTH,&bad,sizeof(bad));
     error=GL_INVALID_VALUE; /* The DLL saw the same CPU query failure. */
@@ -38,7 +38,7 @@ int main(void) {
 }
 `;
 run(code, (shadow, gpu) => {
-    assert.equal(shadow.current.error, 0); assert.equal(gpu.current.error, 0);
-}, (shadow, gpu) => { gpu.current.error = GL.INVALID_VALUE; })
-    .then(() => console.log("gl_error_query_abi_test: actual C GetError waits for fallback, drains duplicate CPU flags and preserves a different pending error in both modes (passed)"))
+    assert.equal(shadow.current.error, 0); assert.equal(gpu.current.error, GL.INVALID_OPERATION);
+}, (shadow, gpu) => { gpu.current.error = GL.INVALID_OPERATION; })
+    .then(() => console.log("gl_error_query_abi_test: actual C GetError consumes CPU errors and NO_ERROR before rendering, drains DLL duplicates and ignores renderer flags in both modes (passed)"))
     .catch(error => { console.error(error); process.exitCode = 1; });

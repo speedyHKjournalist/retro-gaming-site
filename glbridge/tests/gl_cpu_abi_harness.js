@@ -12,6 +12,7 @@ require(hostPath("gl-webgpu/gl_shadow_textures.js"));
 require(hostPath("gl-webgpu/gl_shadow_stipple.js"));
 require(hostPath("gl-webgpu/gl_shadow_lists.js"));
 require(hostPath("gl-webgpu/gl_shadow_stencil_ext.js"));
+require(hostPath("gl-webgpu/gl_shadow_render.js"));
 require(hostPath("gl-webgpu/gl_shadow_select.js"));
 require(hostPath("gl-webgpu/gl_shadow_evaluators.js"));
 require(hostPath("gl-webgpu/gl_shadow_fixed.js"));
