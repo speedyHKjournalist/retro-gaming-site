@@ -36,7 +36,7 @@ typedef int32_t GLintptrARB; typedef int32_t GLsizeiptrARB; typedef int32_t GLsi
 #define GetProcessHeap() 0
 #define HeapAlloc(h,f,n) malloc(n)
 #define HeapFree(h,f,p) free(p)
-${["FALSE", "TRUE", "INVALID_OPERATION", "INVALID_VALUE", "INVALID_ENUM", "OUT_OF_MEMORY", "ARRAY_BUFFER_ARB", "PIXEL_PACK_BUFFER", "RGBA", "UNSIGNED_BYTE", "READ_ONLY_ARB", "WRITE_ONLY_ARB", "READ_WRITE_ARB",
+${["FALSE", "TRUE", "INVALID_OPERATION", "INVALID_VALUE", "INVALID_ENUM", "OUT_OF_MEMORY", "ARRAY_BUFFER_ARB", "ELEMENT_ARRAY_BUFFER_ARB", "PIXEL_PACK_BUFFER", "PIXEL_UNPACK_BUFFER", "VERTEX_ARRAY", "RGBA", "UNSIGNED_BYTE", "READ_ONLY_ARB", "WRITE_ONLY_ARB", "READ_WRITE_ARB",
     "BUFFER_SIZE_ARB", "BUFFER_USAGE_ARB", "BUFFER_ACCESS_ARB", "BUFFER_MAPPED_ARB", "BUFFER_MAP_POINTER_ARB"]
     .map(p => "#define GL_" + p + " 0x" + (GL[p] ?? (p === "TRUE" ? 1 : 0)).toString(16)).join("\n")}
 static unsigned char wire[700000]; static uint32_t wire_size, header_size, error, updates;
@@ -82,6 +82,7 @@ ${names.map(n => body(n, (n === "glMapBufferARB" ? "GLvoid*" : n === "glUnmapBuf
 static uint8_t pattern(unsigned int i) { return (i*7+3)%251; }
 int main(void) {
     uint8_t* out=malloc(600000); assert(out); GLint value; GLvoid* pointer;
+    out[0]=77;glGetBufferSubDataARB(GL_VERTEX_ARRAY,0,1,out);assert(error==GL_INVALID_ENUM&&out[0]==77);error=0;
     memset(out,0xCC,600000); glGetBufferSubDataARB(GL_ARRAY_BUFFER_ARB,3,600000,out);
     for(unsigned int i=0;i<600000;i++)assert(out[i]==pattern(i+3)); assert(!error);
     memset(out,0xCC,600000); glGetBufferSubDataARB(GL_ARRAY_BUFFER_ARB,600031,2,out);

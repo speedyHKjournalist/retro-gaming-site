@@ -1959,8 +1959,6 @@ static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count
                              ClientArrayCopy* out);
 static int generic_attrib_copy(GLuint index, GLint first, GLsizei count,
                                GenericAttribCopy* out);
-static int max_draw_index(const GLvoid* indices, GLsizei count, GLenum type,
-                          uint32_t* max_index);
 
 static void reset_pci_stream(void) {
     g_dma_size = 0;
@@ -2945,6 +2943,7 @@ static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
 static int reserve_packed_draw_payload(uint16_t fn, uint32_t args_size,
                                        uint8_t** payload_out,
                                        BOOL* payload_is_dma_out) {
+    (void)fn;
     if (!payload_out || !payload_is_dma_out) {
         v86gl_set_error(GL_INVALID_VALUE);
         return 0;
@@ -3070,33 +3069,7 @@ static BOOL draw_elements_can_use_vbo_direct(void) {
     return g_element_array_buffer_binding && draw_arrays_can_use_vbo_direct();
 }
 
-static BOOL validate_vbo_direct_arrays(GLint first, GLsizei count) {
-    ClientArrayCopy fixed_copy;
-    GenericAttribCopy attrib_copy;
-    uint32_t i;
 
-    if (!client_array_copy(&g_vertex_array, first, count, &fixed_copy) ||
-        !client_array_copy(&g_color_array, first, count, &fixed_copy) ||
-        !client_array_copy(&g_normal_array, first, count, &fixed_copy) ||
-        !client_array_copy(&g_secondary_color_array, first, count, &fixed_copy) ||
-        !client_array_copy(&g_fog_coord_array, first, count, &fixed_copy)) {
-        return FALSE;
-    }
-
-    for (i = 0; i < V86GL_MAX_TEXTURE_UNITS; i++) {
-        if (!client_array_copy(&g_texcoord_arrays[i], first, count, &fixed_copy)) {
-            return FALSE;
-        }
-    }
-
-    for (i = 0; i < V86GL_MAX_VERTEX_ATTRIBS; i++) {
-        if (!generic_attrib_copy(i, first, count, &attrib_copy)) {
-            return FALSE;
-        }
-    }
-
-    return TRUE;
-}
 
 static void emit_draw_arrays_direct(GLenum mode, GLint first, GLsizei count) {
     struct {
@@ -3877,9 +3850,8 @@ static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count
     out->stride = state->stride;
     out->data_size = (uint32_t)span;
     if (state->buffer) {
-        out->data = client_buffer_data_at(state, state->pointer, (uint32_t)(offset + span));
+        out->data = client_buffer_data_at(state, (const GLvoid*)((uintptr_t)state->pointer + (uint32_t)offset), (uint32_t)span);
         if (!out->data) return 0;
-        out->data += (uint32_t)offset;
     } else {
         out->data = (const uint8_t*)state->pointer + (uint32_t)offset;
     }
@@ -3967,9 +3939,8 @@ static int generic_attrib_copy(GLuint index, GLint first, GLsizei count,
     out->stride = state->stride;
     out->data_size = (uint32_t)span;
     if (state->buffer) {
-        out->data = buffer_selected_data_at(GL_VERTEX_ATTRIB_ARRAY_POINTER, index, state->pointer, (uint32_t)(offset + span));
+        out->data = buffer_selected_data_at(GL_VERTEX_ATTRIB_ARRAY_POINTER, index, (const GLvoid*)((uintptr_t)state->pointer + (uint32_t)offset), (uint32_t)span);
         if (!out->data) return 0;
-        out->data += (uint32_t)offset;
     } else {
         out->data = (const uint8_t*)state->pointer + (uint32_t)offset;
     }
@@ -4087,52 +4058,27 @@ static void draw_array_elements(GLenum mode, GLint first, GLsizei count,
     glEnd();
 }
 
-static int max_draw_index(const GLvoid* indices, GLsizei count, GLenum type, uint32_t* max_index) {
-    GLsizei i;
-
-    *max_index = 0;
-    if (count <= 0) {
-        return 1;
+static int draw_index_bounds(const GLvoid* indices, GLsizei count, GLenum type, uint32_t* minimum, uint32_t* maximum) {
+    uint32_t width = (uint32_t)gl_index_bytes(type);
+    *minimum = UINT32_MAX;*maximum = 0;
+    if (!width) {v86gl_set_error(GL_INVALID_ENUM);return 0;}
+    if (!indices && count) {v86gl_set_error(GL_INVALID_OPERATION);return 0;}
+    for (GLsizei i = 0; i < count; i++) {
+        uint32_t value = 0;CopyMemory(&value, (const uint8_t*)indices + (uint32_t)i * width, width);
+        if (value < *minimum) *minimum = value;
+        if (value > *maximum) *maximum = value;
     }
-
-    if (!indices) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return 0;
-    }
-
-    switch (type) {
-    case GL_UNSIGNED_BYTE: {
-        const GLubyte* p = (const GLubyte*)indices;
-        for (i = 0; i < count; i++) {
-            if (p[i] > *max_index) {
-                *max_index = p[i];
-            }
-        }
-        return 1;
-    }
-    case GL_UNSIGNED_SHORT: {
-        const uint16_t* p = (const uint16_t*)indices;
-        for (i = 0; i < count; i++) {
-            if (p[i] > *max_index) {
-                *max_index = p[i];
-            }
-        }
-        return 1;
-    }
-    case GL_UNSIGNED_INT: {
-        const uint32_t* p = (const uint32_t*)indices;
-        for (i = 0; i < count; i++) {
-            if (p[i] > *max_index) {
-                *max_index = p[i];
-            }
-        }
-        return 1;
-    }
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        return 0;
+    if (!count) *minimum = 0;
+    return 1;
+}
+static void write_rebased_indices(uint8_t* destination, const uint8_t* source, GLsizei count, GLenum type, uint32_t minimum) {
+    uint32_t width = (uint32_t)gl_index_bytes(type);
+    for (GLsizei i = 0; i < count; i++) {
+        uint32_t value = 0;CopyMemory(&value, source + (uint32_t)i * width, width);value -= minimum;
+        CopyMemory(destination + (uint32_t)i * width, &value, width);
     }
 }
+
 
 static uint8_t* alloc_payload(uint32_t size) {
     uint8_t* payload = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, size ? size : 1);
@@ -6512,7 +6458,8 @@ void APIENTRY glGetUniformiv(GLuint program, GLint location, GLint* params) {
 }
 
 static GLfloat normalize_signed_value(double value, double max_positive) {
-    double out = value / max_positive;
+    /* GL 2.1 table 2.9; WebGPU SNORM uses a different zero mapping. */
+    double out = (2.0 * value + 1.0) / (2.0 * max_positive + 1.0);
     if (out < -1.0) out = -1.0;
     if (out > 1.0) out = 1.0;
     return (GLfloat)out;
@@ -7263,6 +7210,8 @@ static int emit_query_buffer_unmap(GLenum target, GLboolean* result) {
 __declspec(dllexport)
 void APIENTRY glGetBufferSubDataARB(GLenum target, GLintptrARB offset,
                                     GLsizeiptrARB size, GLvoid* data) {
+    if (target != GL_ARRAY_BUFFER_ARB && target != GL_ELEMENT_ARRAY_BUFFER_ARB &&
+        target != GL_PIXEL_PACK_BUFFER && target != GL_PIXEL_UNPACK_BUFFER) {v86gl_set_error(GL_INVALID_ENUM);return;}
     (void)emit_query_buffer_data(target, offset, size, data);
 }
 
@@ -9518,9 +9467,6 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     }
 
     if (draw_arrays_can_use_vbo_direct()) {
-        if (!validate_vbo_direct_arrays(first, count)) {
-            return;
-        }
         emit_draw_arrays_direct(mode, first, count);
         return;
     }
@@ -9636,7 +9582,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     GenericAttribCopy generic_arrays[V86GL_MAX_VERTEX_ATTRIBS];
     uint32_t array_block_count = 4u + V86GL_MAX_TEXTURE_UNITS + 1u;
     uint32_t generic_attrib_count;
-    uint32_t max_index;
+    uint32_t min_index, max_index;
     uint32_t array_count;
     uint32_t index_size;
     uint32_t index_data_size;
@@ -9700,22 +9646,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     }
 
     if (draw_elements_can_use_vbo_direct()) {
-        index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB, indices, index_data_size);
-        if (!index_data) {
-            return;
-        }
-        if (!max_draw_index(index_data, count, type, &max_index)) {
-            return;
-        }
-        if (max_index >= 0x7FFFFFFFu) {
-            v86gl_set_error(GL_INVALID_VALUE);
-            return;
-        }
-        if (!validate_vbo_direct_arrays(0, (GLsizei)(max_index + 1u))) {
-            return;
-        }
-        emit_draw_elements_direct(GLFN_DRAW_ELEMENTS_DIRECT, mode, 0, max_index,
-                                  count, type, indices);
+        emit_draw_elements_direct(GLFN_DRAW_ELEMENTS_DIRECT, mode, 0, 0, count, type, indices);
         return;
     }
 
@@ -9726,7 +9657,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         index_data = (const uint8_t*)indices;
     }
 
-    if (!max_draw_index(index_data, count, type, &max_index)) {
+    if (!draw_index_bounds(index_data, count, type, &min_index, &max_index)) {
         return;
     }
 
@@ -9735,23 +9666,23 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         return;
     }
 
-    array_count = max_index + 1u;
-    if (!client_array_copy(&g_vertex_array, 0, (GLsizei)array_count, &arrays[0]) ||
-        !client_array_copy(&g_color_array, 0, (GLsizei)array_count, &arrays[1]) ||
-        !client_array_copy(&g_normal_array, 0, (GLsizei)array_count, &arrays[2])) {
+    array_count = max_index - min_index + 1u;
+    if (!client_array_copy(&g_vertex_array, (GLint)min_index, (GLsizei)array_count, &arrays[0]) ||
+        !client_array_copy(&g_color_array, (GLint)min_index, (GLsizei)array_count, &arrays[1]) ||
+        !client_array_copy(&g_normal_array, (GLint)min_index, (GLsizei)array_count, &arrays[2])) {
         return;
     }
 
     for (i = 0; i < V86GL_MAX_TEXTURE_UNITS; i++) {
-        if (!client_array_copy(&g_texcoord_arrays[i], 0, (GLsizei)array_count, &arrays[3 + i])) {
+        if (!client_array_copy(&g_texcoord_arrays[i], (GLint)min_index, (GLsizei)array_count, &arrays[3 + i])) {
             return;
         }
     }
-    if (!client_array_copy(&g_secondary_color_array, 0, (GLsizei)array_count,
+    if (!client_array_copy(&g_secondary_color_array, (GLint)min_index, (GLsizei)array_count,
                            &arrays[3 + V86GL_MAX_TEXTURE_UNITS])) {
         return;
     }
-    if (!client_array_copy(&g_fog_coord_array, 0, (GLsizei)array_count,
+    if (!client_array_copy(&g_fog_coord_array, (GLint)min_index, (GLsizei)array_count,
                            &arrays[4 + V86GL_MAX_TEXTURE_UNITS])) {
         return;
     }
@@ -9762,7 +9693,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
             if (!g_generic_attribs[i].enabled) {
                 continue;
             }
-            if (!generic_attrib_copy(i, 0, (GLsizei)array_count, &generic_arrays[written])) {
+            if (!generic_attrib_copy(i, (GLint)min_index, (GLsizei)array_count, &generic_arrays[written])) {
                 return;
             }
             written++;
@@ -9830,7 +9761,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
         CopyMemory(payload, &header, sizeof(header));
         p = payload + sizeof(header);
     }
-    CopyMemory(p, index_data, index_data_size);
+    write_rebased_indices(p, index_data, count, type, min_index);
     p += index_data_size;
     for (i = 0; i < array_block_count; i++) {
         p = write_client_array_block(p, &arrays[i]);
@@ -9851,62 +9782,11 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 __declspec(dllexport)
 void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
                                   GLsizei count, GLenum type, const GLvoid* indices) {
-    release_encoding_buffer_reads();
-    uint32_t index_size;
-    uint32_t index_data_size;
-    const uint8_t* index_data;
-    uint32_t max_index;
-
-    if (count < 0 || start > end) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    if (count == 0) {
-        return;
-    }
-
-    index_size = (uint32_t)gl_index_bytes(type);
-    if (!index_size) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    if ((uint32_t)count > UINT32_MAX / index_size) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    index_data_size = (uint32_t)count * index_size;
-    if (draw_elements_can_use_vbo_direct()) {
-        index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB, indices, index_data_size);
-        if (!index_data) {
-            return;
-        }
-        if (!max_draw_index(index_data, count, type, &max_index)) {
-            return;
-        }
-        if (max_index >= 0x7FFFFFFFu) {
-            v86gl_set_error(GL_INVALID_VALUE);
-            return;
-        }
-        if (max_index > end) {
-            v86gl_set_error(GL_INVALID_VALUE);
-            return;
-        }
-        if (end >= 0x7FFFFFFFu) {
-            v86gl_set_error(GL_INVALID_VALUE);
-            return;
-        }
-        if (!validate_vbo_direct_arrays(0, (GLsizei)(end + 1u))) {
-            return;
-        }
-        emit_draw_elements_direct(GLFN_DRAW_RANGE_ELEMENTS_DIRECT, mode, start,
-                                  end, count, type, indices);
-        return;
-    }
-
-    glDrawElements(mode, count, type, indices);
+    if (count < 0 || start > end) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    if (!gl_index_bytes(type)) {v86gl_set_error(GL_INVALID_ENUM);return;}
+    if (draw_elements_can_use_vbo_direct() && !draw_needs_edge_flags(mode)) {
+        emit_draw_elements_direct(GLFN_DRAW_RANGE_ELEMENTS_DIRECT, mode, start, end, count, type, indices);
+    } else glDrawElements(mode, count, type, indices);
 }
 
 __declspec(dllexport)
@@ -9918,49 +9798,12 @@ void APIENTRY glDrawRangeElementsEXT(GLenum mode, GLuint start, GLuint end,
 void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
                                 const GLsizei* count, GLsizei primcount) {
     GLsizei i;
-
-    if (primcount < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (primcount && (!first || !count)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    if (primcount && draw_arrays_can_use_vbo_direct() && !draw_needs_edge_flags(mode)) {
-        GLint min_first = INT_MAX;
-        GLint max_end = 0;
-        for (i = 0; i < primcount; i++) {
-            if (first[i] < 0 || count[i] < 0) {
-                v86gl_set_error(GL_INVALID_VALUE);
-                return;
-            }
-            if (!count[i]) {
-                continue;
-            }
-            if (first[i] < min_first) {
-                min_first = first[i];
-            }
-            if (first[i] > INT_MAX - count[i]) {
-                v86gl_set_error(GL_INVALID_VALUE);
-                return;
-            }
-            if (first[i] + count[i] > max_end) {
-                max_end = first[i] + count[i];
-            }
-        }
-        if (min_first != INT_MAX &&
-            !validate_vbo_direct_arrays(min_first, max_end - min_first)) {
-            return;
-        }
+    if (primcount < 0 || (primcount && (!first || !count))) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    for (i = 0; i < primcount; i++)
+        if (first[i] < 0 || count[i] < 0 || first[i] > INT_MAX - count[i]) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    if (primcount && draw_arrays_can_use_vbo_direct() && !draw_needs_edge_flags(mode))
         (void)emit_multi_draw_arrays_direct(mode, first, count, primcount);
-        return;
-    }
-
-    for (i = 0; i < primcount; i++) {
-        glDrawArrays(mode, first[i], count[i]);
-    }
+    else for (i = 0; i < primcount; i++) glDrawArrays(mode, first[i], count[i]);
 }
 
 void APIENTRY glMultiDrawArraysEXT(GLenum mode, const GLint* first,
@@ -9972,63 +9815,12 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
                                   GLenum type, const GLvoid* const* indices,
                                   GLsizei primcount) {
     GLsizei i;
-
-    if (primcount < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (primcount && (!count || !indices)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    if (primcount && draw_elements_can_use_vbo_direct() && !draw_needs_edge_flags(mode)) {
-        uint32_t index_size = (uint32_t)gl_index_bytes(type);
-        uint32_t max_index_all = 0;
-        if (!index_size) {
-            v86gl_set_error(GL_INVALID_ENUM);
-            return;
-        }
-        for (i = 0; i < primcount; i++) {
-            uint32_t index_data_size;
-            const uint8_t* index_data;
-            uint32_t draw_max_index;
-
-            if (count[i] < 0) {
-                v86gl_set_error(GL_INVALID_VALUE);
-                return;
-            }
-            if ((uint32_t)count[i] > UINT32_MAX / index_size) {
-                v86gl_set_error(GL_INVALID_VALUE);
-                return;
-            }
-            index_data_size = (uint32_t)count[i] * index_size;
-            index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB,
-                                        indices[i], index_data_size);
-            if (!index_data) {
-                return;
-            }
-            if (!max_draw_index(index_data, count[i], type, &draw_max_index)) {
-                return;
-            }
-            if (draw_max_index > max_index_all) {
-                max_index_all = draw_max_index;
-            }
-        }
-        if (max_index_all >= 0x7FFFFFFFu) {
-            v86gl_set_error(GL_INVALID_VALUE);
-            return;
-        }
-        if (!validate_vbo_direct_arrays(0, (GLsizei)(max_index_all + 1u))) {
-            return;
-        }
+    if (primcount < 0 || (primcount && (!count || !indices))) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    if (!gl_index_bytes(type)) {v86gl_set_error(GL_INVALID_ENUM);return;}
+    for (i = 0; i < primcount; i++) if (count[i] < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    if (primcount && draw_elements_can_use_vbo_direct() && !draw_needs_edge_flags(mode))
         (void)emit_multi_draw_elements_direct(mode, count, type, indices, primcount);
-        return;
-    }
-
-    for (i = 0; i < primcount; i++) {
-        glDrawElements(mode, count[i], type, indices[i]);
-    }
+    else for (i = 0; i < primcount; i++) glDrawElements(mode, count[i], type, indices[i]);
 }
 
 void APIENTRY glMultiDrawElementsEXT(GLenum mode, const GLsizei* count,
@@ -10174,16 +9966,15 @@ void APIENTRY glUnlockArraysEXT(void) {
 }
 
 static GLfloat color_from_byte(GLbyte v) {
-    return v < 0 ? (GLfloat)v / 128.0f : (GLfloat)v / 127.0f;
+    return normalize_signed_value(v, 127.0);
 }
 
 static GLfloat color_from_short(GLshort v) {
-    return v < 0 ? (GLfloat)v / 32768.0f : (GLfloat)v / 32767.0f;
+    return normalize_signed_value(v, 32767.0);
 }
 
 static GLfloat color_from_int(GLint v) {
-    return v < 0 ? (GLfloat)((GLdouble)v / 2147483648.0) :
-                   (GLfloat)((GLdouble)v / 2147483647.0);
+    return normalize_signed_value(v, 2147483647.0);
 }
 
 static GLfloat color_from_ubyte(GLubyte v) {
@@ -10251,18 +10042,21 @@ void APIENTRY glColor3ubv(const GLubyte* v) {
     }
 }
 
-#define DEFINE_NORMAL_VARIANT(SUFFIX, TYPE) \
+static GLfloat normal_from_byte(GLbyte v) {return normalize_signed_value(v,127.0);}
+static GLfloat normal_from_short(GLshort v) {return normalize_signed_value(v,32767.0);}
+static GLfloat normal_from_int(GLint v) {return normalize_signed_value(v,2147483647.0);}
+#define DEFINE_NORMAL_VARIANT(SUFFIX, TYPE, CONVERT) \
 __declspec(dllexport) void APIENTRY glNormal3##SUFFIX(TYPE nx, TYPE ny, TYPE nz) { \
-    glNormal3f((GLfloat)nx, (GLfloat)ny, (GLfloat)nz); \
+    glNormal3f(CONVERT(nx), CONVERT(ny), CONVERT(nz)); \
 } \
 __declspec(dllexport) void APIENTRY glNormal3##SUFFIX##v(const TYPE* v) { \
     if (v) glNormal3##SUFFIX(v[0], v[1], v[2]); \
 }
 
-DEFINE_NORMAL_VARIANT(b, GLbyte)
-DEFINE_NORMAL_VARIANT(d, GLdouble)
-DEFINE_NORMAL_VARIANT(i, GLint)
-DEFINE_NORMAL_VARIANT(s, GLshort)
+DEFINE_NORMAL_VARIANT(b, GLbyte, normal_from_byte)
+DEFINE_NORMAL_VARIANT(d, GLdouble, color_from_double)
+DEFINE_NORMAL_VARIANT(i, GLint, normal_from_int)
+DEFINE_NORMAL_VARIANT(s, GLshort, normal_from_short)
 
 #undef DEFINE_NORMAL_VARIANT
 
@@ -10602,19 +10396,16 @@ void APIENTRY glEdgeFlagPointer(GLsizei stride, const GLvoid* pointer) {
 }
 
 static const uint8_t* client_array_element_ptr(const ClientArrayState* state, GLint index) {
-    uint32_t element_size;
-    uint32_t stride;
-
-    if (!state || !state->pointer || index < 0) {
-        return NULL;
-    }
-
+    uint32_t element_size, stride;
+    uint64_t offset;
+    if (!state || index < 0) return NULL;
     element_size = client_array_element_size(state->size, state->type);
-    if (!element_size) {
-        return NULL;
-    }
-
+    if (!element_size) return NULL;
     stride = state->stride > 0 ? (uint32_t)state->stride : element_size;
+    offset = (uint64_t)(uintptr_t)state->pointer + (uint64_t)(uint32_t)index * stride;
+    if (state->buffer && (offset > UINT32_MAX || element_size > UINT32_MAX - offset)) {v86gl_set_error(GL_INVALID_OPERATION);return NULL;}
+    if (state->buffer) return client_buffer_data_at(state, (const GLvoid*)(uintptr_t)offset, element_size);
+    if (!state->pointer) {v86gl_set_error(GL_INVALID_OPERATION);return NULL;}
     return (const uint8_t*)state->pointer + (uint32_t)index * stride;
 }
 
@@ -10672,7 +10463,15 @@ static GLfloat client_array_color_scalar(const uint8_t* p, GLenum type) {
     }
 }
 
-static void read_client_array_values(const ClientArrayState* state, GLint index,
+static GLfloat client_array_normalized_scalar(const uint8_t* p, GLenum type) {
+    switch (type) {
+    case GL_BYTE: return normalize_signed_value(*(const GLbyte*)p, 127.0);
+    case GL_SHORT: return normalize_signed_value(*(const GLshort*)p, 32767.0);
+    case GL_INT: return normalize_signed_value(*(const GLint*)p, 2147483647.0);
+    default: return client_array_color_scalar(p, type);
+    }
+}
+static BOOL read_client_array_values(const ClientArrayState* state, GLint index,
                                      GLfloat* values, const GLfloat* defaults,
                                      int max_values, int normalize_color) {
     const uint8_t* p = client_array_element_ptr(state, index);
@@ -10684,59 +10483,75 @@ static void read_client_array_values(const ClientArrayState* state, GLint index,
     }
 
     if (!p || !type_size || !state) {
-        return;
+        return FALSE;
     }
 
     for (i = 0; i < state->size && i < max_values; i++) {
-        values[i] = normalize_color ?
+        values[i] = normalize_color == 2 ? client_array_normalized_scalar(p + (uint32_t)i * type_size, state->type) : normalize_color ?
             client_array_color_scalar(p + (uint32_t)i * type_size, state->type) :
             client_array_scalar(p + (uint32_t)i * type_size, state->type);
     }
+    return TRUE;
 }
 
+static BOOL read_generic_array_values(GLuint index, GLint element, GLfloat values[4]) {
+    GenericAttribState* state = &g_generic_attribs[index];
+    uint32_t size = gl_type_bytes(state->type), width = size * (uint32_t)state->size;
+    uint64_t at = (uint64_t)(uintptr_t)state->pointer + (uint64_t)(uint32_t)element * (uint32_t)(state->stride ? state->stride : (GLsizei)width);
+    const uint8_t* data;
+    if (state->buffer) {
+        if (at > UINT32_MAX || width > UINT32_MAX - at) {v86gl_set_error(GL_INVALID_OPERATION);return FALSE;}
+        data = buffer_selected_data_at(GL_VERTEX_ATTRIB_ARRAY_POINTER,index,(const GLvoid*)(uintptr_t)at,width);
+    } else data = state->pointer ? (const uint8_t*)state->pointer + (uint32_t)element * (uint32_t)(state->stride ? state->stride : (GLsizei)width) : NULL;
+    if (!data || !size) return FALSE;
+    values[0]=values[1]=values[2]=0;values[3]=1;
+    for (GLint k=0;k<state->size;k++) values[k] = state->normalized ? client_array_normalized_scalar(data+k*size,state->type) : client_array_scalar(data+k*size,state->type);
+    return TRUE;
+}
 __declspec(dllexport)
 void APIENTRY glArrayElement(GLint i) {
-    release_encoding_buffer_reads();
-    static const GLfloat color_defaults[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    static const GLfloat texcoord_defaults[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-    static const GLfloat normal_defaults[3] = { 0.0f, 0.0f, 1.0f };
-    static const GLfloat vertex_defaults[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    static const GLfloat defaults[4]={0,0,0,1}, color_defaults[4]={1,1,1,1};
     GLfloat values[4];
     uint32_t unit;
-
-    if (i < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
+    release_encoding_buffer_reads();
+    if (i < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     if (g_color_array.enabled) {
-        read_client_array_values(&g_color_array, i, values, color_defaults, 4, TRUE);
-        glColor4f(values[0], values[1], values[2], values[3]);
+        if (!read_client_array_values(&g_color_array,i,values,color_defaults,4,1)) return;
+        glColor4f(values[0],values[1],values[2],values[3]);
     }
-
     if (g_normal_array.enabled) {
-        read_client_array_values(&g_normal_array, i, values, normal_defaults, 3, FALSE);
-        glNormal3f(values[0], values[1], values[2]);
+        if (!read_client_array_values(&g_normal_array,i,values,defaults,3,2)) return;
+        glNormal3f(values[0],values[1],values[2]);
     }
-
-    for (unit = 0; unit < V86GL_MAX_TEXTURE_UNITS; unit++) {
-        ClientArrayState* texcoord = &g_texcoord_arrays[unit];
-        if (texcoord->enabled) {
-            read_client_array_values(texcoord, i, values, texcoord_defaults, 4, FALSE);
-            emit_multi_tex_coord4f(GL_TEXTURE0_ARB + unit, values[0], values[1], values[2], values[3]);
-        }
+    if (g_secondary_color_array.enabled) {
+        if (!read_client_array_values(&g_secondary_color_array,i,values,defaults,3,1)) return;
+        glSecondaryColor3f(values[0],values[1],values[2]);
     }
-
+    if (g_fog_coord_array.enabled) {
+        if (!read_client_array_values(&g_fog_coord_array,i,values,defaults,1,0)) return;
+        glFogCoordf(values[0]);
+    }
+    if (g_index_array.enabled) {
+        if (!read_client_array_values(&g_index_array,i,values,defaults,1,0)) return;
+        glIndexf(values[0]);
+    }
+    for (unit=0;unit<V86GL_MAX_TEXTURE_UNITS;unit++) if (g_texcoord_arrays[unit].enabled) {
+        if (!read_client_array_values(&g_texcoord_arrays[unit],i,values,defaults,4,0)) return;
+        emit_multi_tex_coord4f(GL_TEXTURE0_ARB+unit,values[0],values[1],values[2],values[3]);
+    }
     if (g_edge_flag_array.enabled) {
-        const uint8_t* p = client_array_element_ptr(&g_edge_flag_array, i);
-        if (p) {
-            glEdgeFlag(*p ? GL_TRUE : GL_FALSE);
-        }
+        const uint8_t* p=client_array_element_ptr(&g_edge_flag_array,i);if (!p) return;glEdgeFlag(*p!=0);
     }
-
+    for (unit=1;unit<V86GL_MAX_VERTEX_ATTRIBS;unit++) if (g_generic_attribs[unit].enabled) {
+        if (!read_generic_array_values(unit,i,values)) return;
+        glVertexAttrib4f(unit,values[0],values[1],values[2],values[3]);
+    }
     if (g_vertex_array.enabled) {
-        read_client_array_values(&g_vertex_array, i, values, vertex_defaults, 4, FALSE);
-        glVertex3f(values[0], values[1], values[2]);
+        if (!read_client_array_values(&g_vertex_array,i,values,defaults,4,0)) return;
+        glVertex4f(values[0],values[1],values[2],values[3]);
+    } else if (g_generic_attribs[0].enabled) {
+        if (!read_generic_array_values(0,i,values)) return;
+        glVertexAttrib4f(0,values[0],values[1],values[2],values[3]);
     }
 }
 
