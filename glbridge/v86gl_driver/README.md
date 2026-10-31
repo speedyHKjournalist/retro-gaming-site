@@ -102,3 +102,7 @@ The log identifies this build as `virtio perf1`. Before replacing a driver, run
 does not update the service. Optimized-driver XP performance remains to be tested.
 
 See [the host/driver optimization report](../../../v86/docs/v86gl-virtio-perf.md).
+
+## 2026-10-31 cold-boot validation
+
+The current source cross-build passed a cold boot of the owner's XP image with the CPU in a worker: service start, the actual GL ABI/GLSL probe, and Cube 2's Complex map, with zero renderer refusals or host/GPU validation errors. The guest installation was in a memory overlay; this does not update the checked-in binaries or source disk images. Reproduce with the sibling v86 checkout's `tools/gl_guest_acceptance.mjs` and `tests/glbridge/GL_GUEST_ACCEPTANCE.md`. Final image deployment remains plan F6; the full game/save/performance matrix remains G.

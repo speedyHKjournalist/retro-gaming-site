@@ -1627,3 +1627,7 @@ indexed draw 的 fixture，所以 MT 头和索引的相对位置从来没被断�
 ### 2026-10-31：GL 能力字符串统一到 CPU（C3）
 
 `glGetString` 不再从 DLL 的两套扩展表返回答案。DLL 只发送 WineD3D 配置提示、保存各上下文的返回内存；CPU 返回字符串并校验错误。新的 MAKE_CURRENT 尾字段兼容旧记录，五种配置只过滤已支持能力，可选压缩/浮点扩展不再被旧 GL 1.5 表无条件声明。VMware/SVGA3D 标识保留，避免 WineD3D 的 NPOT 误判。字符串按上下文冻结并随快照恢复，旧存档保留原字符串。75 组主机 Node、47 组站点、17 页 GPU、831 个 DLL 导出及 6/6 新变异通过。C 的客体验收继续。
+
+### 2026-10-31：C 阶段退出检查通过
+
+新编译的 virtio 驱动及诊断 DLL 已在原始 XP 镜像冷启动后的内存覆盖中安装。实际 C 探针确认 VMware/SVGA3D、2.1 WebGPU 版本、GLSL 1.20 编译链接、绘制和无 GL 错误；随后 CPU worker 模式的 Cube 2 进入 Complex 地图，记录 1,027,247 次绘制、233 次链接，宿主/管线校验/拒绝均为 0。76 组主机 Node、47 组站点、17 页 GPU 回归通过。验收准备脚本在 v86 `tools/gl_guest_acceptance.mjs`，说明在 `tests/glbridge/GL_GUEST_ACCEPTANCE.md`。这次只修改客体内存中的磁盘覆盖；原始镜像里的旧 gl4es DLL 和旧驱动仍待 F6 部署。继续 D，游戏存档与性能在 G 验收。
