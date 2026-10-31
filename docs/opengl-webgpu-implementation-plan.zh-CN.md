@@ -1,5 +1,7 @@
 # OpenGL 1.x / 2.x → WebGPU 完整实施方案
 
+> **E0 退出（2026-10-31）**：v86 的两种隔离 glslang/SPIR-V 原型已实际比较。36 对 Cube 2 与 21 对 GLSL 1.20 里，版本补丁通过 2/57，typed IR 降级通过 52/57；真实 Tint 分别接受已生成的 38/38、108/109 模块。完整编译门槛未满足，按已确认计划保留 glslang 检查/反射与手写代码生成器，继续 E1 修复；未把未进入的像素和性能门槛标成通过。逐项证据见 v86 `tests/glbridge/experiments/desktop_spirv_20261031.json`。
+
 > **实施状态（2026-08-24）**：主机运行时已经切换为唯一的
 > OpenGL → WebGPU 路径；`libglwasm/`、`Gl4esRenderer`、WebGL canvas 与后端
 > 选择开关均已删除。217/217 个 guest 操作码都有 host handler，覆盖表没有 A 类
