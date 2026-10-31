@@ -55,6 +55,7 @@ static HANDLE OpenThread(DWORD access,BOOL inherit,DWORD id){(void)access;(void)
 static BOOL CloseHandle(HANDLE handle){(void)handle;return TRUE;}
 static DWORD WaitForSingleObject(HANDLE handle,DWORD time){(void)handle;(void)time;return WAIT_TIMEOUT;}
 static HWND WindowFromDC(HDC dc){return (HWND)dc;}
+static HWND dead_window;static BOOL IsWindow(HWND hwnd){return hwnd && hwnd!=dead_window;}
 static BOOL valid_wgl_dc(HDC dc,BOOL require,HWND* window,int* selected){(void)require;if(!dc){SetLastError(ERROR_INVALID_HANDLE);return FALSE;}if(window)*window=WindowFromDC(dc);if(selected)*selected=(uintptr_t)dc==200?3:1;return TRUE;}
 static LONG InterlockedExchange(volatile LONG* p,LONG value){return __sync_lock_test_and_set(p,value);}
 static LONG InterlockedCompareExchange(volatile LONG* p,LONG value,LONG expected){return __sync_val_compare_and_swap(p,expected,value);}
@@ -66,8 +67,8 @@ typedef struct {BOOL held;} V86GLAPIGuard;
 static V86GLAPIGuard v86gl_enter_api(void);static void v86gl_leave_api(V86GLAPIGuard* guard);static V86GLWGLContext* v86gl_current_context(void);
 ${guard}
 static volatile LONG g_window_dirty=1,g_destroyed_windows[64];static HWND g_current_hwnd;static BOOL g_have_last_surface,g_context_destroy_sent,g_renderer_lifecycle_started;
-static void hook_window(HWND hwnd){g_current_hwnd=hwnd;}
-static void restore_window_proc(void){g_current_hwnd=NULL;g_have_last_surface=FALSE;}
+static void watch_current_window(HWND hwnd){g_current_hwnd=hwnd;}
+static void unwatch_current_window(void){g_current_hwnd=NULL;g_have_last_surface=FALSE;}
 static void emit_window_state(HWND hwnd,BOOL flush){(void)hwnd;(void)flush;}
 static V86GLWGLContext* find_wgl_context(HGLRC handle);static void force_release_window_contexts(HWND hwnd);
 ${transport.slice(0, transport.indexOf("static int reserve_pci_record"))}
@@ -131,6 +132,7 @@ static uint32_t current_caps_profile(void){return 5;}
 static DWORD g_window_dispatch_thread_id;
 static LONG g_last_surface_x,g_last_surface_y;static uint32_t g_last_surface_width,g_last_surface_height,g_last_surface_context_id,g_last_surface_share_group,g_last_surface_format;
 ${body(source, "emit_current_surface", "static void ")}
+${body(source, "mark_window_change", "static void ")}
 ${body(source, "process_pending_window_changes", "static void ")}
 ${body(source, "v86gl_enter_api", "static V86GLAPIGuard ")}
 ${body(source, "v86gl_leave_api", "static void ")}

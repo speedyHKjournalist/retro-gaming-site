@@ -966,7 +966,6 @@ static uint32_t g_dma_size = 0;
 static uint32_t g_dma_command_count = 0;
 static HINSTANCE g_instance = NULL;
 static HWND   g_current_hwnd = NULL;
-static WNDPROC g_original_wndproc = NULL;
 static int32_t g_last_surface_x = 0;
 static int32_t g_last_surface_y = 0;
 static uint32_t g_last_surface_width = 0;
@@ -3605,16 +3604,12 @@ static void unwatch_window_state(void) {
     g_window_state_sent = FALSE;
 }
 
-static void restore_window_proc(void) {
-    if (g_current_hwnd && g_original_wndproc && IsWindow(g_current_hwnd)) {
-        SetWindowLongW(g_current_hwnd, GWL_WNDPROC, (LONG)(uintptr_t)g_original_wndproc);
-        RemovePropW(g_current_hwnd, L"V86GL.OriginalWndProc");
-    }
+/* No window-procedure replacement is needed: WinEvent reports and the idle
+ * dispatcher cover geometry, visibility and destruction. Leaving the application's
+ * Unicode/ANSI procedure chain untouched also makes cross-thread windows safe. */
+static void unwatch_current_window(void) {
     unwatch_window_state();
-
-    g_current_hwnd = NULL;
-    g_original_wndproc = NULL;
-    g_have_last_surface = FALSE;
+    g_current_hwnd=NULL;g_have_last_surface=FALSE;
 }
 
 static void emit_destroy_context_once(void) {
@@ -3632,29 +3627,12 @@ static void emit_destroy_context_once(void) {
     }
 }
 
-static LRESULT CALLBACK vgl_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    WNDPROC original = (WNDPROC)GetPropW(hwnd, L"V86GL.OriginalWndProc");
-    if (msg == WM_MOVE || msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW)
-        mark_window_change(hwnd, FALSE);
-    if (msg == WM_NCDESTROY) {
-        mark_window_change(hwnd, TRUE);RemovePropW(hwnd, L"V86GL.OriginalWndProc");
-    }
-    return original ? CallWindowProcW(original, hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
-}
-
 static void start_window_dispatcher(void);
-static void hook_window(HWND hwnd) {
-    WNDPROC original;
-    if (!hwnd || hwnd == g_current_hwnd) return;
-    restore_window_proc();
-    original = (WNDPROC)(uintptr_t)GetWindowLongW(hwnd, GWL_WNDPROC);
-    if (!original || !SetPropW(hwnd, L"V86GL.OriginalWndProc", (HANDLE)original)) return;
-    SetLastError(0);
-    original = (WNDPROC)(uintptr_t)SetWindowLongW(hwnd, GWL_WNDPROC, (LONG)(uintptr_t)vgl_window_proc);
-    if (!original) {RemovePropW(hwnd, L"V86GL.OriginalWndProc");return;}
-    SetPropW(hwnd, L"V86GL.OriginalWndProc", (HANDLE)original);
-    g_original_wndproc = original;g_current_hwnd = hwnd;watch_window_state();
-    mark_window_change(hwnd, FALSE);start_window_dispatcher();
+static void watch_current_window(HWND hwnd) {
+    if (!hwnd || hwnd==g_current_hwnd) return;
+    unwatch_current_window();
+    g_current_hwnd=hwnd;watch_window_state();
+    mark_window_change(hwnd,FALSE);start_window_dispatcher();
 }
 
 static uint32_t align_u32(uint32_t value, uint32_t alignment) {
@@ -4238,6 +4216,12 @@ static V86GLWGLContext* v86gl_current_context(void) {
 /* Called only under the API lock, never from a window callback. */
 static void process_pending_window_changes(void) {
     uint32_t i;
+    /* WinEvent delivery depends on the installing thread pumping messages.
+     * Poll every bound window as well, including contexts on other threads. */
+    for (i=0;i<V86GL_MAX_WGL_CONTEXTS;i++) {
+        HWND hwnd=g_wgl_contexts[i].used ? g_wgl_contexts[i].current_hwnd : NULL;
+        if (hwnd && !IsWindow(hwnd)) mark_window_change(hwnd,TRUE);
+    }
     for (i = 0; i < V86GL_DESTROY_QUEUE_SIZE; i++) {
         HWND hwnd = (HWND)(uintptr_t)(uint32_t)InterlockedExchange(&g_destroyed_windows[i], 0);
         BOOL loaded;
@@ -4252,7 +4236,7 @@ static void process_pending_window_changes(void) {
             restore_guest_context_state(&g_default_guest_context_state);
             emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
         }
-        if (g_current_hwnd == hwnd) restore_window_proc();
+        if (g_current_hwnd == hwnd) unwatch_current_window();
     }
 }
 
@@ -4273,7 +4257,7 @@ static V86GLAPIGuard v86gl_enter_api(void) {
         if (target) load_guest_context_state(target);
         else restore_guest_context_state(&g_default_guest_context_state);
         g_loaded_context = target;g_loaded_thread = thread;g_have_last_surface = FALSE;
-        if (target) {hook_window(target->current_hwnd);emit_current_surface(target->current_hwnd);}
+        if (target) {watch_current_window(target->current_hwnd);emit_current_surface(target->current_hwnd);}
         else if (had_context) emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
     }
     if (InterlockedExchange(&g_window_dirty, 0) && target) {
@@ -4356,7 +4340,7 @@ BOOL WINAPI DllMain
         if (g_renderer_lifecycle_started) {
             emit_destroy_context_once();
         }
-        restore_window_proc();
+        unwatch_current_window();
         emit_pci_batch(FALSE);
         free_gl2_state();
         close_v86gl();
@@ -4664,25 +4648,19 @@ int APIENTRY wglGetPixelFormat(HDC hdc) { V86GL_API_CALL();
 
 __declspec(dllexport)
 HGLRC APIENTRY wglCreateLayerContext(HDC hdc, int layer) { V86GL_API_CALL();
-    (void)layer;
+    if (layer) {SetLastError(ERROR_INVALID_PARAMETER);return NULL;}
     return wglCreateContext(hdc);
 }
 
 __declspec(dllexport)
 BOOL APIENTRY wglCopyContext(HGLRC src, HGLRC dst, UINT mask) { V86GL_API_CALL();
-    BOOL valid;
-
-    EnterCriticalSection(&g_wgl_context_lock);
-    reap_terminated_wgl_contexts();
-    valid = validate_wgl_context(src, NULL) &&
-            validate_wgl_context(dst, NULL);
-    LeaveCriticalSection(&g_wgl_context_lock);
-    if (!valid) {
-        return FALSE;
-    }
-    (void)mask;
-    SetLastError(ERROR_SUCCESS);
-    return TRUE;
+    V86GLWGLContext *source,*destination;
+    if (!validate_wgl_context(src,&source) || !validate_wgl_context(dst,&destination)) return FALSE;
+    if (destination->owner_thread) {SetLastError(ERROR_BUSY);return FALSE;}
+    if (source->pixel_format!=destination->pixel_format) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;}
+    /* No state has been copied. Never acknowledge a nonempty copy mask. */
+    if (mask) {SetLastError(ERROR_CALL_NOT_IMPLEMENTED);return FALSE;}
+    SetLastError(ERROR_SUCCESS);return TRUE;
 }
 
 __declspec(dllexport)
@@ -4719,7 +4697,7 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) { V86GL_API_CALL();
     emit_pci_record(V86GL_CTRL_DESTROY_CONTEXT, &context_id,
                     sizeof(context_id), TRUE);
     if (last_context) {
-        restore_window_proc();
+        unwatch_current_window();
         /* WineD3D's caps context and device context are consecutive users of
          * one process renderer. Clear transient query polling state without
          * asynchronously destroying the renderer between them. */
@@ -4761,7 +4739,7 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) { V86GL_API_CALL();
     if (!context->owner_handle) context->owner_handle = OpenThread(SYNCHRONIZE, FALSE, thread_id);
     context->current_dc = hdc;context->current_hwnd = hwnd;context->ever_current = TRUE;
     LeaveCriticalSection(&g_wgl_context_lock);
-    g_context_destroy_sent = FALSE;g_renderer_lifecycle_started = TRUE;hook_window(hwnd);emit_current_surface(hwnd);
+    g_context_destroy_sent = FALSE;g_renderer_lifecycle_started = TRUE;watch_current_window(hwnd);emit_current_surface(hwnd);
     SetLastError(ERROR_SUCCESS);return TRUE;
 }
 
@@ -4804,14 +4782,21 @@ BOOL APIENTRY wglShareLists(HGLRC a, HGLRC b) { V86GL_API_CALL();
         LeaveCriticalSection(&g_wgl_context_lock);
         return FALSE;
     }
-    if (second->ever_current) {
+    if (first->pixel_format!=second->pixel_format) {
+        SetLastError(ERROR_INVALID_PIXEL_FORMAT);LeaveCriticalSection(&g_wgl_context_lock);return FALSE;
+    }
+    if (first->share_group==second->share_group) {LeaveCriticalSection(&g_wgl_context_lock);return TRUE;}
+    /* Only groups never sent to the CPU can be reassigned without merging
+     * existing object namespaces. Fail explicitly once any member was used. */
+    uint32_t previous_group=second->share_group;
+    for (uint32_t i=0;i<V86GL_MAX_WGL_CONTEXTS;i++) if (g_wgl_contexts[i].used &&
+        g_wgl_contexts[i].share_group==previous_group && g_wgl_contexts[i].ever_current) {
         SetLastError(ERROR_BUSY);
         LeaveCriticalSection(&g_wgl_context_lock);
         return FALSE;
     }
-    /* Object names already live in the single browser-side share group. Keep
-     * the guest-visible grouping metadata for validation and future splitting. */
-    second->share_group = first->share_group;
+    for (uint32_t i=0;i<V86GL_MAX_WGL_CONTEXTS;i++) if (g_wgl_contexts[i].used &&
+        g_wgl_contexts[i].share_group==previous_group) g_wgl_contexts[i].share_group=first->share_group;
     LeaveCriticalSection(&g_wgl_context_lock);
     SetLastError(ERROR_SUCCESS);
     return TRUE;

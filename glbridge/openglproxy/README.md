@@ -330,7 +330,9 @@ Every exported GL/WGL entry takes a recursive call guard, including client
 input encoding and synchronous response reads. Win32 TLS selects the calling
 thread's context; switching threads saves and submits the old encoding state
 before loading the new one. Mapping return storage is scoped to the share group.
-Window callbacks only mark changes. A separate dispatcher uses the same guard
+WinEvent callbacks only mark changes; window procedures are never replaced,
+leaving application Unicode/ANSI subclass chains intact. Bound-window liveness is
+also polled, so destruction does not depend on a message pump. A separate dispatcher uses the same guard
 for idle visibility/occlusion updates, retains the DLL while contexts exist and
 exits after the final context is deleted. The host ABI fixtures separately
 exercise real entry bodies, TLS/locking, all 831 preprocessed exports, callbacks
@@ -358,3 +360,9 @@ browser compositor retains control of physical presentation. Expired arena,
 device-loss and timeout callbacks cannot present later. The real-GPU test covers
 two windows, no-current swaps and cold restore in both transports; XP/Cube 2 also
 passes with the matching guest and host protocol.
+
+WGL sharing migrates every member of an unused target group. Once any target
+member has been current, namespace merging is explicitly refused; already
+shared contexts remain accepted. Nonzero wglCopyContext masks return
+ERROR_CALL_NOT_IMPLEMENTED instead of false success. The context-operations
+fixture covers these limits, format compatibility and unadvertised layer refusal.

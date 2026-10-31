@@ -25,7 +25,8 @@ int main(void){thread_id=3;g_wgl_context_count=0;pthread_mutexattr_t attr;assert
  assert(!wglMakeCurrent((HDC)(uintptr_t)200,c)&&GetLastError()==ERROR_INVALID_PIXEL_FORMAT);assert(!wglGetCurrentContext());assert(wglMakeCurrent((HDC)(uintptr_t)101,c));
  assert(!wglMakeCurrent((HDC)(uintptr_t)100,b)&&GetLastError()==ERROR_BUSY);assert(!wglGetCurrentContext());
  pthread_mutex_lock(&turns);foreign_release=1;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&turns);assert(!pthread_join(holder,NULL));
- assert(wglDeleteContext(b));assert(wglMakeCurrent((HDC)(uintptr_t)101,c));assert(wglDeleteContext(c));assert(!g_wgl_context_count&&!wglGetCurrentContext());
+ assert(wglDeleteContext(b));assert(wglMakeCurrent((HDC)(uintptr_t)101,c));glColor4f(1,0,0,1);dead_window=(HWND)(uintptr_t)101;assert(!wglGetCurrentContext()&&!g_loaded_context);dead_window=NULL;
+ assert(wglMakeCurrent((HDC)(uintptr_t)101,c));query_color(1);assert(wglDeleteContext(c));assert(!g_wgl_context_count&&!wglGetCurrentContext());
  glVertex4fv((const GLfloat*)(uintptr_t)1);assert(!glGetError()&&!g_api_depth&&!g_dma_size);return 0;
 }`;
 run(code, (cpu, gpu) => { assert.equal(cpu.current, null);assert.equal(cpu.contexts.size, 0);assert.equal(gpu.contexts.size, 0); })
