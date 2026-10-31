@@ -1063,7 +1063,7 @@ typedef struct V86GLRecordResolvedProgramInterface {
     uint32_t link_generation;
     uint32_t entry_count;
     uint32_t data_size;
-    uint32_t reserved;
+    uint32_t initializer_count;
 } V86GLRecordResolvedProgramInterface;
 typedef struct V86GLRecordIndexState {
     uint32_t operation;
@@ -1748,7 +1748,7 @@ typedef char V86GLRecordResolvedProgramInterface_object_id[offsetof(V86GLRecordR
 typedef char V86GLRecordResolvedProgramInterface_link_generation[offsetof(V86GLRecordResolvedProgramInterface, link_generation) == 8 ? 1 : -1];
 typedef char V86GLRecordResolvedProgramInterface_entry_count[offsetof(V86GLRecordResolvedProgramInterface, entry_count) == 12 ? 1 : -1];
 typedef char V86GLRecordResolvedProgramInterface_data_size[offsetof(V86GLRecordResolvedProgramInterface, data_size) == 16 ? 1 : -1];
-typedef char V86GLRecordResolvedProgramInterface_reserved[offsetof(V86GLRecordResolvedProgramInterface, reserved) == 20 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_initializer_count[offsetof(V86GLRecordResolvedProgramInterface, initializer_count) == 20 ? 1 : -1];
 typedef char V86GLRecordIndexStateSize[sizeof(V86GLRecordIndexState) == 16 ? 1 : -1];
 typedef char V86GLRecordIndexState_operation[offsetof(V86GLRecordIndexState, operation) == 0 ? 1 : -1];
 typedef char V86GLRecordIndexState_mask[offsetof(V86GLRecordIndexState, mask) == 4 ? 1 : -1];
