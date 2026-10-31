@@ -97,6 +97,12 @@ stack depths/limits, the color-matrix limit, RGBA/stereo flags and the current
 ARB error position. The actual C query ABI suite checks these vectors, empty
 format lists and conversions; older saves retain the former DLL values.
 
+Index/ClearIndex/IndexMask now encode record 252 and keep no local authoritative
+values. The CPU owns current/clear index and the unsigned write mask, including
+lists, attribute groups and snapshots. Native and actual C ABI tests cover
+float precision and signed half rounding. The drawable remains RGBA; color
+index rendering is the host plan's documented D-14 deviation.
+
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving
 record sizes and inline response addresses; the page preserves their GL

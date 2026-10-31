@@ -16829,19 +16829,26 @@ void APIENTRY glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alp
     emit_gl_call(GLFN_CLEAR_ACCUM, &payload, sizeof(payload));
 }
 
+static void emit_index_state(unsigned int operation, GLuint mask, GLdouble value) {
+    V86GLRecordIndexState request;
+    ZeroMemory(&request, sizeof(request));
+    request.operation = operation; request.mask = mask; request.value = value;
+    emit_gl_call(GLFN_INDEX_STATE, &request, sizeof(request));
+}
+
 __declspec(dllexport)
 void APIENTRY glClearIndex(GLfloat c) {
-    g_clear_index = c;
+    emit_index_state(1, 0, (GLdouble)c);
 }
 
 __declspec(dllexport)
 void APIENTRY glIndexMask(GLuint mask) {
-    g_index_mask = mask;
+    emit_index_state(2, mask, 0);
 }
 
 __declspec(dllexport)
 void APIENTRY glIndexf(GLfloat c) {
-    g_current_index = c;
+    emit_index_state(0, 0, (GLdouble)c);
 }
 
 __declspec(dllexport)
@@ -16853,7 +16860,7 @@ void APIENTRY glIndexfv(const GLfloat* c) {
 
 __declspec(dllexport)
 void APIENTRY glIndexd(GLdouble c) {
-    glIndexf((GLfloat)c);
+    emit_index_state(0, 0, c);
 }
 
 __declspec(dllexport)
