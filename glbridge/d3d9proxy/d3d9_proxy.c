@@ -34,6 +34,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d9_protocol.h"
 #include "../window_region.h"
+#include "../upload_bands.h"
 
 #ifndef D3DSTREAMSOURCE_INDEXEDDATA
 #define D3DSTREAMSOURCE_INDEXEDDATA 0x40000000u
@@ -2490,14 +2491,12 @@ static BOOL emit_texture_update(D9Texture *texture, UINT level,
     capacity = batch_capacity();
     overhead = (uint32_t)(sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)
             + sizeof(update) + 8u /* D9WG_ALIGN8 slack */);
-    rows_per_band = capacity > overhead ? (capacity - overhead) / row_bytes : 0;
+    rows_per_band = v86wg_upload_band(capacity, overhead, row_bytes, row_count);
     if (!rows_per_band) {
         /* A single row does not fit; there is nothing left to split. */
         LeaveCriticalSection(&g_transport_lock);
         return FALSE;
     }
-    if (rows_per_band > row_count)
-        rows_per_band = row_count;
 
     result = TRUE;
     for (band_start = 0; band_start < row_count && result;
@@ -8931,7 +8930,7 @@ static HRESULT copy_surface_to_system_memory(D9Device *device,
         heartbeat = (volatile uint32_t *)(base + D9WG_HEARTBEAT_OFFSET);
         capacity = D9WG_RESPONSE_REGION_BYTES - D9WG_READBACK_REGION_OFFSET
                 - (UINT)sizeof(*response) - D9WG_HEARTBEAT_BYTES;
-        rows_per_chunk = destination_pitch ? capacity / destination_pitch : 0;
+        rows_per_chunk = v86wg_upload_band(capacity, 0, destination_pitch, source_rows);
         TRACE("READBACK BEGIN source=%08lX texture=%08lX dst_format=%08lX "
                 "src_format=%08lX %lux%lu rows=%lu pitch=%lu rows_per_chunk=%lu "
                 "capacity=%lu front=%lu",

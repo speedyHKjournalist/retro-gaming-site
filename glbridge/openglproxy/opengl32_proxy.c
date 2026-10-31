@@ -15,6 +15,7 @@
 #include "v86gl_ioctl.h"
 #include "gl_protocol.h"
 #include "../window_region.h"
+#include "../upload_bands.h"
 
 /*
  * File tracing is compiled only into opengl32-diagnostic.dll, and needs no
@@ -2910,12 +2911,29 @@ static int emit_query_program_string_arb(GLenum target, GLenum pname,
     return 1;
 }
 
+static uint32_t g_upload_token;
 static void emit_gl_large_call(uint16_t fn, const void* args, uint32_t args_size) {
+    uint32_t offset = 0, band, token;
+    uint8_t* payload;
+    V86GLRecordUploadChunk chunk;
     if (!args || !args_size) {
         return;
     }
-
-    emit_pci_record(fn, args, args_size, FALSE);
+    if (!open_v86gl()) {v86gl_set_error(GL_INVALID_OPERATION);return;}
+    band = v86wg_upload_band(g_dma_capacity, sizeof(V86GLDMADesc) + V86GL_HEARTBEAT_BYTES + 8u, 1u, args_size);
+    if (band == args_size) {emit_pci_record(fn, args, args_size, FALSE);return;}
+    if (args_size > V86GL_MAX_UPLOAD_BYTES || g_upload_token == UINT32_MAX) {v86gl_set_error(GL_OUT_OF_MEMORY);return;}
+    band = v86wg_upload_band(g_dma_capacity, sizeof(V86GLDMADesc) + V86GL_HEARTBEAT_BYTES + 8u + sizeof(chunk), 1u, args_size);
+    if (!band) {v86gl_set_error(GL_OUT_OF_MEMORY);return;}
+    token = ++g_upload_token;
+    while (offset < args_size) {
+        uint32_t length = args_size - offset;
+        if (length > band) length = band;
+        if (!reserve_pci_record(GLFN_UPLOAD_CHUNK, NULL, sizeof(chunk) + length, &payload)) return;
+        chunk.token = token;chunk.opcode = fn;chunk.total_size = args_size;chunk.offset = offset;chunk.data_size = length;
+        CopyMemory(payload, &chunk, sizeof(chunk));CopyMemory(payload + sizeof(chunk), (const uint8_t*)args + offset, length);
+        offset += length;
+    }
 }
 
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
@@ -2954,11 +2972,14 @@ static int reserve_packed_draw_payload(uint16_t fn, uint32_t args_size,
 
 #if V86GL_PACKED_DIRECT_DMA
     {
+        if (!open_v86gl()) {v86gl_set_error(GL_INVALID_OPERATION);return 0;}
+        if (args_size <= v86wg_upload_band(g_dma_capacity, sizeof(V86GLDMADesc) + V86GL_HEARTBEAT_BYTES + 8u, 1u, args_size)) {
         if (!reserve_pci_record(fn, NULL, args_size, payload_out)) {
             return 0;
         }
         *payload_is_dma_out = TRUE;
         return 1;
+        }
     }
 #endif
 

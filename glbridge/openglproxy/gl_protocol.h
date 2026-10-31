@@ -31,6 +31,8 @@
 #define V86GL_CAPS_PROFILE_GL21 5u
 /* a record size of this is followed by a u32 size */
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
+/* bounded CPU assembly of an upload larger than the arena */
+#define V86GL_MAX_UPLOAD_BYTES 0x10000000u
 #define V86GL_REJECTED_RECORD_BIT 0x8000u
 #define V86GL_REJECTED_RECORD_MASK 0xF800u
 #define V86GL_REJECTED_ERROR_SHIFT 8u
@@ -368,9 +370,10 @@ enum {
     GLFN_RESOLVED_PROGRAM_INTERFACE = 251,
     GLFN_INDEX_STATE = 252,
     GLFN_ACTIVE_STENCIL_FACE = 253,
-    GLFN_PROGRAM_LINK_VALIDATION = 254
+    GLFN_PROGRAM_LINK_VALIDATION = 254,
+    GLFN_UPLOAD_CHUNK = 255
 };
-#define V86GL_OPCODE_COUNT 254u
+#define V86GL_OPCODE_COUNT 255u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -1081,6 +1084,13 @@ typedef struct V86GLRecordProgramLinkValidation {
     uint32_t link_generation;
     uint32_t data_size;
 } V86GLRecordProgramLinkValidation;
+typedef struct V86GLRecordUploadChunk {
+    uint32_t token;
+    uint32_t opcode;
+    uint32_t total_size;
+    uint32_t offset;
+    uint32_t data_size;
+} V86GLRecordUploadChunk;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1771,6 +1781,12 @@ typedef char V86GLRecordProgramLinkValidation_program[offsetof(V86GLRecordProgra
 typedef char V86GLRecordProgramLinkValidation_object_id[offsetof(V86GLRecordProgramLinkValidation, object_id) == 12 ? 1 : -1];
 typedef char V86GLRecordProgramLinkValidation_link_generation[offsetof(V86GLRecordProgramLinkValidation, link_generation) == 16 ? 1 : -1];
 typedef char V86GLRecordProgramLinkValidation_data_size[offsetof(V86GLRecordProgramLinkValidation, data_size) == 20 ? 1 : -1];
+typedef char V86GLRecordUploadChunkSize[sizeof(V86GLRecordUploadChunk) == 20 ? 1 : -1];
+typedef char V86GLRecordUploadChunk_token[offsetof(V86GLRecordUploadChunk, token) == 0 ? 1 : -1];
+typedef char V86GLRecordUploadChunk_opcode[offsetof(V86GLRecordUploadChunk, opcode) == 4 ? 1 : -1];
+typedef char V86GLRecordUploadChunk_total_size[offsetof(V86GLRecordUploadChunk, total_size) == 8 ? 1 : -1];
+typedef char V86GLRecordUploadChunk_offset[offsetof(V86GLRecordUploadChunk, offset) == 12 ? 1 : -1];
+typedef char V86GLRecordUploadChunk_data_size[offsetof(V86GLRecordUploadChunk, data_size) == 16 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 36 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
