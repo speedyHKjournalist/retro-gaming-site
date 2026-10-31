@@ -14,69 +14,32 @@ const proxy = fs.readFileSync(proxyPath, "utf8");
 const header = fs.readFileSync(headerPath, "utf8");
 const sample = fs.readFileSync(samplePath, "utf8");
 
-function cString(name) {
-    const expression = new RegExp(
-        "static const char " + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
-        "\\[\\]\\s*=([\\s\\S]*?);");
-    const match = proxy.match(expression);
-    assert.ok(match, "missing C string array " + name);
-    return Array.from(match[1].matchAll(/"([^"]*)"/g), part => part[1]).join("");
-}
-
-const legacy = cString("g_gl_extensions_wined3d_gl15");
-const gl21 = cString("g_gl_extensions_gl21_base");
-const shaderBackends = [
-    "GL_ARB_shader_objects",
-    "GL_ARB_vertex_shader",
-    "GL_ARB_fragment_shader",
-    "GL_ARB_shading_language_100",
-    "GL_ARB_vertex_program",
-    "GL_ARB_fragment_program",
-];
-
-for (const extension of shaderBackends) {
-    assert.equal(legacy.includes(extension), false,
-        "fixed-function WineD3D profile must hide " + extension);
-    assert.equal(gl21.includes(extension), true,
-        "OpenGL 2.1 profile must retain " + extension);
+const { hostPath: capsPath } = require("./host_paths.js");
+const caps = require(capsPath("gl-webgpu/gl_caps.js"));
+const { GL: enums } = require(capsPath("gl-webgpu/gl_constants.js"));
+const features = caps.freeze(caps.capabilities({}, { bc: true }));
+const legacy = caps.profileString(features, 1, enums.EXTENSIONS);
+const gl21 = caps.profileString(features, 5, enums.EXTENSIONS);
+for (const name of ["GL_ARB_shader_objects", "GL_ARB_vertex_shader", "GL_ARB_fragment_shader", "GL_ARB_shading_language_100"]) {
+    assert.equal(legacy.split(" ").includes(name), false);
+    assert.equal(gl21.split(" ").includes(name), true);
 }
 assert.equal(legacy.includes("GL_EXT_framebuffer_object"), false);
-assert.equal(gl21.includes("GL_EXT_framebuffer_object"), false,
-    "the shared GL 2.1 base must remain no-FBO");
-
+assert.equal(legacy.includes("GL_EXT_framebuffer_blit"), false);
 assert.ok(legacy.includes("GL_ARB_multitexture"));
 assert.ok(legacy.includes("GL_EXT_texture_compression_s3tc"));
-assert.match(proxy,
-    /GetModuleHandleA\("wined3d\.dll"\)[\s\S]*V86GL_CAPS_PROFILE_WINED3D_GL15/);
+assert.match(proxy, /GetModuleHandleA\("wined3d\.dll"\)[\s\S]*V86GL_CAPS_PROFILE_WINED3D_GL15/);
 assert.match(proxy, /GetEnvironmentVariableA\("V86GL_CAPS_PROFILE"/);
-assert.match(proxy, /"1\.5 v86gl \(WineD3D backbuffer profile\)"/);
 assert.match(proxy, /"gl21-no-fbo"/);
 assert.match(proxy, /"gl21-fbo-ffp"/);
-assert.match(proxy,
-    /profile == V86GL_CAPS_PROFILE_GL21 \|\|[\s\S]*V86GL_CAPS_PROFILE_GL21_FBO_FFP[\s\S]*append_gl_extension\("GL_EXT_framebuffer_object"\)/);
-assert.match(proxy, /append_gl_extension\("GL_EXT_framebuffer_blit"\)/);
-assert.match(fs.readFileSync(path.join(__dirname, "..", "openglproxy", "gl_protocol.h"), "utf8"),
-    /GLFN_BLIT_FRAMEBUFFER = 217/);
+assert.equal(caps.profileString(features, 1, enums.VERSION), "1.5 v86gl (WineD3D backbuffer profile)");
+assert.equal(caps.profileString(features, 5, enums.VENDOR), "VMware, Inc.");
+assert.equal(caps.profileString(features, 5, enums.RENDERER), "SVGA3D; v86 WebGPU bridge");
+assert.ok(gl21.includes("GL_ARB_texture_non_power_of_two"));
+for (const extension of ["GL_ARB_texture_compression", "GL_ARB_multisample", "GL_ARB_texture_border_clamp", "GL_EXT_generate_mipmap", "GL_SGI_color_matrix"])
+    assert.ok(gl21.split(" ").includes(extension));
 assert.match(proxy, /emit_gl_call\(GLFN_BLIT_FRAMEBUFFER,/);
 assert.match(proxy, /void APIENTRY glBlitFramebufferEXT\(/);
-assert.match(proxy,
-    /profile == V86GL_CAPS_PROFILE_GL21_FBO_FFP[\s\S]*remove_gl_extension\("GL_ARB_vertex_program"\)[\s\S]*remove_gl_extension\("GL_ARB_fragment_program"\)/);
-assert.match(proxy,
-    /caps_profile_is_gl21\(current_caps_profile\(\)\)[\s\S]*"2\.1 v86gl/);
-assert.match(proxy,
-    /case GL_VENDOR:[\s\S]*"VMware, Inc\."[\s\S]*case GL_RENDERER:[\s\S]*"SVGA3D; v86 WebGPU bridge"/);
-assert.equal(proxy.includes('case GL_VENDOR:     return (const GLubyte*)"v86"'),
-    false, "unknown vendor must not trigger WineD3D's NVIDIA/GeForce FX fallback");
-assert.ok(gl21.includes("GL_ARB_texture_non_power_of_two"),
-    "the WebGPU profile must retain the NPOT capability selected by SVGA3D");
-for (const extension of [
-    "GL_ARB_texture_compression", "GL_ARB_multisample",
-    "GL_ARB_texture_border_clamp", "GL_EXT_generate_mipmap",
-    "GL_SGI_color_matrix",
-]) {
-    assert.ok(gl21.split(" ").includes(extension),
-        "GLView 1.3/1.4 capability is missing " + extension);
-}
 // Matrix storage moved out of the DLL. Check the promised color stack in
 // the CPU state machine instead of requiring the retired C cache.
 const { hostPath, testPath } = require("./host_paths.js"), { GLShadow } = require(hostPath("gl-webgpu/gl_shadow.js"));

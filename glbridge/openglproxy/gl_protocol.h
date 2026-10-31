@@ -22,6 +22,13 @@
 /* and the samples per pixel (0 or 1: one) in bits 8-15 */
 #define V86GL_FORMAT_SAMPLES_SHIFT 8u
 #define V86GL_FORMAT_SAMPLES_MASK 0xFF00u
+/* old guests retain the saved capability strings */
+#define V86GL_CAPS_PROFILE_UNRESOLVED 0u
+#define V86GL_CAPS_PROFILE_WINED3D_GL15 1u
+#define V86GL_CAPS_PROFILE_WINED3D_ARB 2u
+#define V86GL_CAPS_PROFILE_GL21_NO_FBO 3u
+#define V86GL_CAPS_PROFILE_GL21_FBO_FFP 4u
+#define V86GL_CAPS_PROFILE_GL21 5u
 /* a record size of this is followed by a u32 size */
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
 #define V86GL_REJECTED_RECORD_BIT 0x8000u
@@ -1072,6 +1079,7 @@ typedef struct V86GLRecordMakeCurrent {
     uint32_t context_id;
     uint32_t share_group;
     uint32_t format;
+    uint32_t caps_profile;
 } V86GLRecordMakeCurrent;
 typedef struct V86GLRecordDestroyContext {
     uint32_t context_id;
@@ -1745,7 +1753,7 @@ typedef char V86GLRecordIndexStateSize[sizeof(V86GLRecordIndexState) == 16 ? 1 :
 typedef char V86GLRecordIndexState_operation[offsetof(V86GLRecordIndexState, operation) == 0 ? 1 : -1];
 typedef char V86GLRecordIndexState_mask[offsetof(V86GLRecordIndexState, mask) == 4 ? 1 : -1];
 typedef char V86GLRecordIndexState_value[offsetof(V86GLRecordIndexState, value) == 8 ? 1 : -1];
-typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
+typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 36 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_y[offsetof(V86GLRecordMakeCurrent, y) == 8 ? 1 : -1];
@@ -1754,6 +1762,7 @@ typedef char V86GLRecordMakeCurrent_height[offsetof(V86GLRecordMakeCurrent, heig
 typedef char V86GLRecordMakeCurrent_context_id[offsetof(V86GLRecordMakeCurrent, context_id) == 20 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_share_group[offsetof(V86GLRecordMakeCurrent, share_group) == 24 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_format[offsetof(V86GLRecordMakeCurrent, format) == 28 ? 1 : -1];
+typedef char V86GLRecordMakeCurrent_caps_profile[offsetof(V86GLRecordMakeCurrent, caps_profile) == 32 ? 1 : -1];
 typedef char V86GLRecordDestroyContextSize[sizeof(V86GLRecordDestroyContext) == 4 ? 1 : -1];
 typedef char V86GLRecordDestroyContext_context_id[offsetof(V86GLRecordDestroyContext, context_id) == 0 ? 1 : -1];
 typedef char V86GLRecordPackedDrawArraysMtSize[sizeof(V86GLRecordPackedDrawArraysMt) == 20 ? 1 : -1];

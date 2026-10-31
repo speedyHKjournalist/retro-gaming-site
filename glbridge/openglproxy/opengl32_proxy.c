@@ -998,6 +998,8 @@ typedef struct {
     BOOL ever_current;
     uint32_t share_group;
     void* guest_state;
+    /* Return storage only: contents and validation come from the CPU. */
+    char gl_strings[6][4096];
 } V86GLWGLContext;
 static V86GLWGLContext g_wgl_contexts[V86GL_MAX_WGL_CONTEXTS];
 static uint32_t g_wgl_context_count = 0;
@@ -1288,14 +1290,7 @@ static BOOL v86gl_trace_call_allowed(void) {
     return TRUE;
 }
 
-typedef enum V86GLCapsProfile {
-    V86GL_CAPS_PROFILE_UNRESOLVED = 0,
-    V86GL_CAPS_PROFILE_WINED3D_GL15 = 1,
-    V86GL_CAPS_PROFILE_WINED3D_ARB = 2,
-    V86GL_CAPS_PROFILE_GL21_NO_FBO = 3,
-    V86GL_CAPS_PROFILE_GL21_FBO_FFP = 4,
-    V86GL_CAPS_PROFILE_GL21 = 5
-} V86GLCapsProfile;
+typedef uint32_t V86GLCapsProfile;
 
 static V86GLCapsProfile g_caps_profile = V86GL_CAPS_PROFILE_UNRESOLVED;
 
@@ -1362,144 +1357,6 @@ static V86GLCapsProfile current_caps_profile(void) {
     return g_caps_profile;
 }
 
-static BOOL caps_profile_is_gl21(V86GLCapsProfile profile) {
-    return profile == V86GL_CAPS_PROFILE_GL21_NO_FBO ||
-           profile == V86GL_CAPS_PROFILE_GL21_FBO_FFP ||
-           profile == V86GL_CAPS_PROFILE_GL21;
-}
-
-/*
- * This is the capability contract used by the historical D3D8 triangle
- * baseline (commit 78f0218): GL 1.5 fixed function, without GLSL, ARB program
- * backends, or framebuffer objects.  Hiding FBO is intentional; WineD3D then
- * changes its default ORM_FBO setting to ORM_BACKBUFFER.
- */
-static const char g_gl_extensions_wined3d_gl15[] =
-    "GL_ARB_multitexture "
-    "GL_ARB_texture_env_combine "
-    "GL_EXT_vertex_array "
-    "GL_EXT_packed_pixels "
-    "GL_EXT_rescale_normal "
-    "GL_EXT_secondary_color "
-    "GL_EXT_separate_specular_color "
-    "GL_EXT_texture_edge_clamp "
-    "GL_EXT_texture3D "
-    "GL_SGIS_texture_lod "
-    "GL_EXT_blend_color "
-    "GL_EXT_blend_subtract "
-    "GL_EXT_blend_minmax "
-    "GL_ARB_texture_cube_map "
-    "GL_ARB_multisample "
-    "GL_ARB_texture_compression "
-    "GL_SGI_color_matrix "
-    "GL_ARB_texture_env_dot3 "
-    "GL_ARB_draw_buffers "
-    "GL_ARB_texture_border_clamp "
-    "GL_ARB_transpose_matrix "
-    "GL_NV_blend_square "
-    "GL_ARB_shadow "
-    "GL_EXT_fog_coord "
-    "GL_EXT_multi_draw_arrays "
-    "GL_ARB_point_parameters "
-    "GL_EXT_blend_equation_separate "
-    "GL_EXT_blend_func_separate "
-    "GL_EXT_stencil_wrap "
-    "GL_EXT_stencil_two_side "
-    "GL_ARB_texture_env_crossbar "
-    "GL_ARB_texture_mirrored_repeat "
-    "GL_WIN_swap_hint "
-    "GL_ARB_point_sprite "
-    "GL_ARB_vertex_buffer_object "
-    "GL_ARB_pixel_buffer_object "
-    "GL_EXT_pixel_buffer_object "
-    "GL_ARB_occlusion_query "
-    "GL_ARB_depth_texture "
-    "GL_EXT_packed_depth_stencil "
-    "GL_EXT_texture_sRGB "
-    "GL_ARB_texture_float "
-    "GL_ARB_half_float_pixel "
-    "GL_EXT_texture_compression_s3tc "
-    "GL_EXT_shadow_funcs "
-    "GL_ARB_texture_non_power_of_two "
-    "GL_EXT_bgra "
-    "GL_EXT_compiled_vertex_array "
-    "GL_EXT_draw_range_elements "
-    "GL_EXT_texture_env_add "
-    "GL_EXT_texture_env_combine "
-    "GL_EXT_generate_mipmap "
-    "GL_SGIS_generate_mipmap "
-    "GL_EXT_texture_filter_anisotropic "
-    "GL_EXT_texture_lod_bias "
-    "GL_EXT_texture_object";
-
-/* These extensions are implemented by the proxy/WebGPU executor itself or are
- * guaranteed by WebGPU. Host-optional features are
- * appended to g_gl_extensions after a synchronous capability snapshot. */
-static const char g_gl_extensions_gl21_base[] =
-    "GL_ARB_multitexture "
-    "GL_ARB_texture_env_combine "
-    "GL_EXT_vertex_array "
-    "GL_EXT_packed_pixels "
-    "GL_EXT_rescale_normal "
-    "GL_EXT_secondary_color "
-    "GL_EXT_separate_specular_color "
-    "GL_EXT_texture_edge_clamp "
-    "GL_EXT_texture3D "
-    "GL_SGIS_texture_lod "
-    "GL_EXT_blend_color "
-    "GL_EXT_blend_subtract "
-    "GL_EXT_blend_minmax "
-    "GL_ARB_texture_cube_map "
-    "GL_ARB_multisample "
-    "GL_ARB_texture_compression "
-    "GL_ARB_texture_border_clamp "
-    "GL_SGI_color_matrix "
-    "GL_ARB_texture_env_dot3 "
-    "GL_ARB_draw_buffers "
-    "GL_ARB_transpose_matrix "
-    "GL_NV_blend_square "
-    "GL_ARB_shadow "
-    "GL_EXT_fog_coord "
-    "GL_EXT_multi_draw_arrays "
-    "GL_ARB_point_parameters "
-    "GL_EXT_blend_equation_separate "
-    "GL_EXT_blend_func_separate "
-    "GL_EXT_stencil_wrap "
-    "GL_EXT_stencil_two_side "
-    "GL_ARB_texture_env_crossbar "
-    "GL_ARB_texture_mirrored_repeat "
-    "GL_WIN_swap_hint "
-    "GL_ARB_point_sprite "
-    "GL_ARB_vertex_buffer_object "
-    "GL_ARB_pixel_buffer_object "
-    "GL_EXT_pixel_buffer_object "
-    "GL_ARB_occlusion_query "
-    "GL_ARB_shader_objects "
-    "GL_ARB_vertex_shader "
-    "GL_ARB_fragment_shader "
-    "GL_ARB_shading_language_100 "
-    /* Both native GLSL 1.20 and ARB assembly programs use synchronous object,
-     * reflection and error paths through the browser bridge. */
-    "GL_ARB_vertex_program "
-    "GL_ARB_fragment_program "
-    "GL_ARB_depth_texture "
-    "GL_EXT_packed_depth_stencil "
-    "GL_EXT_texture_sRGB "
-    "GL_EXT_texture_compression_s3tc "
-    "GL_EXT_shadow_funcs "
-    "GL_ARB_texture_non_power_of_two "
-    "GL_EXT_bgra "
-    "GL_EXT_compiled_vertex_array "
-    "GL_EXT_draw_range_elements "
-    "GL_EXT_texture_env_add "
-    "GL_EXT_texture_env_combine "
-    "GL_EXT_generate_mipmap "
-    "GL_SGIS_generate_mipmap "
-    "GL_EXT_texture_lod_bias "
-    "GL_EXT_texture_object";
-#define V86GL_GL_EXTENSIONS_MAX 4096
-static char g_gl_extensions[V86GL_GL_EXTENSIONS_MAX];
-static BOOL g_gl_extensions_profile_valid;
 static const char* g_wgl_extensions =
     "WGL_ARB_extensions_string "
     "WGL_EXT_extensions_string "
@@ -5363,6 +5220,7 @@ static void emit_current_surface(HWND hwnd) {
         (uint32_t)(current_context - g_wgl_contexts) + 1u : 0u;
     payload.share_group = current_context ? current_context->share_group : 0u;
     payload.format = window_format_flags(hwnd);
+    payload.caps_profile = current_caps_profile();
 
     if (!payload.width) {
         payload.width = 640;
@@ -5577,7 +5435,6 @@ static void emit_destroy_context_once(void) {
      * creates the device context from Direct3DCreate8/CreateDevice. Rebuilding
      * the asynchronous WASM module at that boundary loses synchronous queries
      * issued by the new context and also splits the proxy/host object state. */
-    g_gl_extensions_profile_valid = FALSE;
     if (g_context_destroy_sent) {
         return;
     }
@@ -8100,177 +7957,30 @@ const char* APIENTRY wglGetExtensionsStringEXT(void) {
     return g_wgl_extensions;
 }
 
-static void append_gl_extension(const char* extension) {
-    int current_length;
-    int extension_length;
-
-    if (!extension || !extension[0]) {
-        return;
-    }
-    current_length = lstrlenA(g_gl_extensions);
-    extension_length = lstrlenA(extension);
-    if (current_length + 1 + extension_length + 1 > V86GL_GL_EXTENSIONS_MAX) {
-        return;
-    }
-    g_gl_extensions[current_length++] = ' ';
-    CopyMemory(g_gl_extensions + current_length, extension,
-               (SIZE_T)extension_length + 1u);
-}
-
-static void remove_gl_extension(const char* extension) {
-    char* cursor = g_gl_extensions;
-    SIZE_T extension_length;
-
-    if (!extension || !extension[0]) {
-        return;
-    }
-    extension_length = (SIZE_T)lstrlenA(extension);
-
-    while (*cursor) {
-        char* token_start = cursor;
-        char* token_end = token_start;
-        SIZE_T token_length;
-        SIZE_T i;
-        BOOL matches = TRUE;
-
-        while (*token_end && *token_end != ' ') {
-            token_end++;
-        }
-        token_length = (SIZE_T)(token_end - token_start);
-        if (token_length == extension_length) {
-            for (i = 0; i < extension_length; i++) {
-                if (token_start[i] != extension[i]) {
-                    matches = FALSE;
-                    break;
-                }
-            }
-        } else {
-            matches = FALSE;
-        }
-        if (matches) {
-            char* remove_end = *token_end ? token_end + 1 : token_end;
-
-            if (!*token_end && token_start > g_gl_extensions) {
-                token_start--;
-            }
-            do {
-                *token_start++ = *remove_end;
-            } while (*remove_end++);
-            return;
-        }
-        cursor = *token_end ? token_end + 1 : token_end;
-    }
-}
-
-static const char* current_gl_extensions(void) {
-    V86GLCapsProfile profile = current_caps_profile();
-    const char* base = caps_profile_is_gl21(profile) ?
-        g_gl_extensions_gl21_base : g_gl_extensions_wined3d_gl15;
-    GLint host_caps = 0;
-    const GLint float_caps =
-        (GLint)(V86GL_HOST_CAP_WEBGL2 |
-                V86GL_HOST_CAP_COLOR_BUFFER_FLOAT |
-                V86GL_HOST_CAP_TEXTURE_FLOAT_LINEAR);
-
-    if (g_gl_extensions_profile_valid) {
-        return g_gl_extensions;
-    }
-
-    CopyMemory(g_gl_extensions, base, (SIZE_T)lstrlenA(base) + 1u);
-
-    if (profile == V86GL_CAPS_PROFILE_GL21 ||
-        profile == V86GL_CAPS_PROFILE_GL21_FBO_FFP) {
-        /* GL 2.1 does not include framebuffer objects in core. Advertise the
-         * extension only in the FBO profiles; gl21-no-fbo therefore selects
-         * WineD3D's backbuffer path without changing its GLSL backend. */
-        append_gl_extension("GL_EXT_framebuffer_object");
-        append_gl_extension("GL_EXT_framebuffer_blit");
-    }
-
-    if (profile == V86GL_CAPS_PROFILE_GL21_FBO_FFP) {
-        /* Keep GLSL/FBO/framebuffer-blit enabled while hiding the independent
-         * ARB assembly shader backend. */
-        remove_gl_extension("GL_ARB_vertex_program");
-        remove_gl_extension("GL_ARB_fragment_program");
-    }
-
-    if (profile == V86GL_CAPS_PROFILE_WINED3D_ARB) {
-        append_gl_extension("GL_ARB_vertex_program");
-        append_gl_extension("GL_ARB_fragment_program");
-        g_gl_extensions_profile_valid = TRUE;
-        return g_gl_extensions;
-    }
-
-    if (!caps_profile_is_gl21(profile)) {
-        g_gl_extensions_profile_valid = TRUE;
-        return g_gl_extensions;
-    }
-
-    if (!emit_query_integer(V86GL_QUERY_HOST_CAPABILITIES, &host_caps)) {
-        /* Renderer startup can briefly lag the guest.  Return the conservative
-         * bridge-guaranteed profile now and retry on the next GL_EXTENSIONS
-         * query instead of permanently caching guessed optional features. */
-        return g_gl_extensions;
-    }
-
-    if ((host_caps & float_caps) == float_caps) {
-        /* Cube 2 renders into and linearly filters its floating-point shadow
-         * targets. WebGPU texture allocation alone is therefore not enough:
-         * require both renderability and linear filtering. */
-        append_gl_extension("GL_ARB_texture_float");
-        append_gl_extension("GL_ARB_half_float_pixel");
-    }
-    if ((host_caps & (GLint)(V86GL_HOST_CAP_WEBGL2 |
-                             V86GL_HOST_CAP_ANISOTROPY)) ==
-        (GLint)(V86GL_HOST_CAP_WEBGL2 | V86GL_HOST_CAP_ANISOTROPY)) {
-        append_gl_extension("GL_EXT_texture_filter_anisotropic");
-    }
-    g_gl_extensions_profile_valid = TRUE;
-    return g_gl_extensions;
-}
-
 __declspec(dllexport)
 const GLubyte* APIENTRY glGetString(GLenum name) {
+    V86GLWGLContext* context = find_thread_current_context(GetCurrentThreadId());
+    static char no_context_string[4096];
+    char* result = no_context_string;
+    unsigned slot;
+
     if (v86gl_trace_call_allowed()) {
         v86gl_trace("glGetString name=0x%04lx", (unsigned long)name);
     }
 
+    /* Each pname has stable context-owned return storage. Query on every
+     * call, including cached names: Begin/End validation belongs to CPU. */
     switch (name) {
-    /*
-     * WineD3D 1.7.52 treats an unknown GL vendor as NVIDIA. With the GL 2.1 /
-     * shader-model-2 capability set it then selects a GeForce FX 5800 and
-     * applies its "Geforce 5 NP2 disable" quirk. That is incorrect for this
-     * WebGPU bridge, which has full NPOT support, and makes a 640x480 D3D8
-     * backbuffer fall through from GL_TEXTURE_2D to an unsupported rectangle
-     * texture and finally to a renderbuffer. Identify the adapter as the
-     * virtual SVGA3D family Wine already knows instead of impersonating
-     * physical hardware or returning an unknown vendor.
-     */
-    case GL_VENDOR:
-        return (const GLubyte*)"VMware, Inc.";
-    case GL_RENDERER:
-        return (const GLubyte*)"SVGA3D; v86 WebGPU bridge";
-    case GL_VERSION:
-        return caps_profile_is_gl21(current_caps_profile()) ?
-            (const GLubyte*)"2.1 v86gl (WebGPU)" :
-            (const GLubyte*)"1.5 v86gl (WineD3D backbuffer profile)";
-    case GL_SHADING_LANGUAGE_VERSION:
-        if (caps_profile_is_gl21(current_caps_profile())) {
-            return (const GLubyte*)"1.20 v86gl";
-        }
-        v86gl_set_error(GL_INVALID_ENUM);
-        return NULL;
-    case GL_EXTENSIONS:
-        return (const GLubyte*)current_gl_extensions();
-    case GL_PROGRAM_ERROR_STRING_ARB:
-        g_program_error_string[0] = '\0';
-        emit_query_gl_string(name, (GLsizei)sizeof(g_program_error_string),
-                             NULL, g_program_error_string);
-        return (const GLubyte*)g_program_error_string;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        return NULL;
+    case GL_VENDOR: slot = 0; break;
+    case GL_RENDERER: slot = 1; break;
+    case GL_VERSION: slot = 2; break;
+    case GL_SHADING_LANGUAGE_VERSION: slot = 3; break;
+    case GL_EXTENSIONS: slot = 4; break;
+    default: slot = 5; break;
     }
+    if (context) result = context->gl_strings[slot];
+    if (!emit_query_gl_string(name, 4096, NULL, result)) return NULL;
+    return (const GLubyte*)result;
 }
 
 __declspec(dllexport)
