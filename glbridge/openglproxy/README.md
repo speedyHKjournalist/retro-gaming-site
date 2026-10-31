@@ -91,6 +91,12 @@ its mappings do not depend on later guest queries. Guest-supplied interfaces
 and CPU link-failure records are rejected. The generated headers include this
 layout; the DLL does not encode these internal records.
 
+The CPU capability profile also freezes vector answers such as point/line
+ranges and compressed formats. Ordinary typed queries now cover attribute
+stack depths/limits, the color-matrix limit, RGBA/stereo flags and the current
+ARB error position. The actual C query ABI suite checks these vectors, empty
+format lists and conversions; older saves retain the former DLL values.
+
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving
 record sizes and inline response addresses; the page preserves their GL
