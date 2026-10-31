@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), { body, transport, run, GL } = require("./gl_cpu_abi_harness.js");
 const source = fs.readFileSync(process.env.V86GL_PROXY_SOURCE || path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
 function type(name) { const match = source.match(new RegExp("typedef struct \\{[^{}]*\\} " + name + ";"));assert.ok(match, name);return match[0]; }
-const guard = source.match(/^#define V86GL_API_CALL\(\).*$/m)[0];
+const guard = [...source.matchAll(/^#define V86GL_(?:API_CALL|GL_CALL_VOID|GL_CALL_VALUE)\(.*$/gm)].map(match => match[0]).join("\n");
 const code = `
 #define _DARWIN_C_SOURCE
 #include <assert.h>
@@ -115,8 +115,9 @@ ${body(source, "v86gl_current_context", "static V86GLWGLContext* ")}
 ${body(source, "clear_wgl_context_binding", "static void ")}
 ${body(source, "reap_terminated_wgl_contexts", "static void ")}
 ${body(source, "find_thread_current_context", "static V86GLWGLContext* ")}
-${body(source, "find_any_current_context", "static V86GLWGLContext* ")}
 ${body(source, "release_thread_current_context", "static BOOL ")}
+${body(source, "release_current_binding", "static void ")}
+${body(source, "fail_make_current", "static BOOL ")}
 ${body(source, "force_release_window_contexts", "static void ")}
 ${body(source, "can_bind_wgl_context", "static BOOL ")}
 ${body(source, "validate_wgl_context", "static BOOL ")}
@@ -143,6 +144,9 @@ ${body(source, "glBegin", "void APIENTRY ")}
 ${body(source, "glEnd", "void APIENTRY ")}
 ${body(source, "glColor4f", "void APIENTRY ")}
 ${body(source, "glVertex4f", "void APIENTRY ")}
+${body(source, "glVertex4fv", "void APIENTRY ")}
+static int emit_query_error(GLenum* result){(void)result;abort();return 0;}
+${body(source, "glGetError", "GLenum APIENTRY ")}
 static pthread_mutex_t turns=PTHREAD_MUTEX_INITIALIZER;static pthread_cond_t changed=PTHREAD_COND_INITIALIZER;static int ready,turn=1;
 static void query_color(int id){V86GL_API_CALL();V86GLRecordQueryState q={0};q.pname=GL_CURRENT_COLOR;q.value_kind=V86GL_STATE_DOUBLE;q.data_size=32;uint8_t* p;
  assert(reserve_pci_record(GLFN_QUERY_STATE,NULL,sizeof(q)+32,&p));memcpy(p,&q,sizeof(q));assert(emit_pci_batch(0));assert(read_u32le(p+offsetof(V86GLRecordQueryState,status))==1);double color[4];memcpy(color,p+sizeof(q),32);assert(color[0]==(id==1)&&color[1]==(id==2)&&color[2]==0&&color[3]==1);
@@ -153,19 +157,24 @@ static void* draw_thread(void* value){int id=(int)(uintptr_t)value;thread_id=(DW
  pthread_mutex_lock(&turns);ready++;pthread_cond_broadcast(&changed);while(ready<2)pthread_cond_wait(&changed,&turns);pthread_mutex_unlock(&turns);
  for(int i=0;i<64;i++){pthread_mutex_lock(&turns);while(turn!=id)pthread_cond_wait(&changed,&turns);vertex_step(id);turn=3-id;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&turns);}
  glEnd();query_color(id);
- // Failed TLS binding must leave the old context current and owned.
- tls_fail=1;assert(!wglMakeCurrent((HDC)(uintptr_t)99,(HGLRC)&g_wgl_contexts[id-1]));assert(wglGetCurrentContext()==(HGLRC)&g_wgl_contexts[id-1]);
- assert(wglMakeCurrent(NULL,NULL));assert(!wglGetCurrentContext()&&!wglGetCurrentDC());return NULL;
+ // Windows failure semantics release the caller's old binding.
+ tls_fail=1;assert(!wglMakeCurrent((HDC)(uintptr_t)99,(HGLRC)&g_wgl_contexts[id-1]));assert(!wglGetCurrentContext()&&!wglGetCurrentDC()&&!g_wgl_contexts[id-1].owner_thread);
+ glVertex4fv((const GLfloat*)(uintptr_t)1);assert(glGetError()==0);
+ assert(wglMakeCurrent((HDC)(uintptr_t)99,(HGLRC)&g_wgl_contexts[id-1]));query_color(id);
+ assert(wglMakeCurrent((HDC)(uintptr_t)0xBAD,NULL));assert(!wglGetCurrentContext()&&!wglGetCurrentDC());return NULL;
 }
+#ifndef GL_THREAD_FIXTURE_NO_MAIN
 int main(void){pthread_mutexattr_t attr;assert(!pthread_mutexattr_init(&attr));assert(!pthread_mutexattr_settype(&attr,PTHREAD_MUTEX_RECURSIVE));assert(!pthread_mutex_init(&g_api_lock.mutex,&attr));assert(!pthread_mutex_init(&g_wgl_context_lock.mutex,&attr));g_api_lock.api=1;
  capture_guest_context_state(&g_default_guest_context_state);g_default_guest_context_state_valid=TRUE;for(int i=0;i<2;i++){g_wgl_contexts[i].used=TRUE;g_wgl_contexts[i].share_group=(uint32_t)i+1;assert(ensure_guest_context_state(&g_wgl_contexts[i]));}
  pthread_t a,b;assert(!pthread_create(&a,NULL,draw_thread,(void*)(uintptr_t)1));assert(!pthread_create(&b,NULL,draw_thread,(void*)(uintptr_t)2));assert(!pthread_join(a,NULL));assert(!pthread_join(b,NULL));assert(!g_api_depth&&!g_dma_size&&g_wgl_context_count==2);
  int mappings=0;for(int i=0;i<4096;i++)if(g_buffer_objects[i].used)mappings++;assert(mappings==2);release_buffer_group(2);mappings=0;for(int i=0;i<4096;i++)if(g_buffer_objects[i].used)mappings++;assert(mappings==2);g_wgl_contexts[0].used=FALSE;release_buffer_group(1);assert(!g_buffer_objects[0].used||g_buffer_objects[0].share_group==2);mappings=0;for(int i=0;i<4096;i++)if(g_buffer_objects[i].used){assert(g_buffer_objects[i].share_group==2);mappings++;}assert(mappings==1);return 0;
-}`;
-run(code, (cpu, gpu) => {
+}
+#endif`;
+module.exports = { code };
+if (require.main === module) run(code, (cpu, gpu) => {
     assert.equal(gpu.threadVertices.length, 128);
     for (const vertex of gpu.threadVertices) { const first = vertex.position[0] === -1;assert.deepEqual(vertex.position, first ? [-1, 0, 0, 2] : [2, 0, 0, 4]);assert.deepEqual(vertex.color, first ? [1, 0, 0, 1] : [0, 1, 0, 1]); }
     assert.equal(cpu.current, null);assert.equal(gpu.current, null);for (const c of cpu.contexts.values()) assert.equal(c.error, 0);
 }, (cpu, gpu) => { gpu.threadVertices = [];const original = gpu.immediateVertex;gpu.immediateVertex = function(...position) { gpu.threadVertices.push({ position, color: [...this.current.current.color] });return original.apply(this, position); }; })
-    .then(() => console.log("PASS actual C thread guard: TLS contexts on one HDC, 128 forced open-primitive switches, nested calls, client workspace/map isolation, query replies and TLS failure rollback in both transports"))
+    .then(() => console.log("PASS actual C thread guard: TLS contexts on one HDC, 128 forced open-primitive switches, nested calls, client workspace/map isolation, query replies and Windows failed-bind release / no-context ignore in both transports"))
     .catch(error => { console.error(error);process.exitCode = 1; });

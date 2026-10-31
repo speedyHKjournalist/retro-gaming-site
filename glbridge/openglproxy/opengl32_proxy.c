@@ -1017,6 +1017,8 @@ static V86GLAPIGuard v86gl_enter_api(void);
 static void v86gl_leave_api(V86GLAPIGuard* guard);
 static V86GLWGLContext* v86gl_current_context(void);
 #define V86GL_API_CALL() V86GLAPIGuard v86gl_call_guard __attribute__((cleanup(v86gl_leave_api),unused)) = v86gl_enter_api()
+#define V86GL_GL_CALL_VOID() V86GL_API_CALL(); if (!g_loaded_context) return
+#define V86GL_GL_CALL_VALUE(value) V86GL_API_CALL(); if (!g_loaded_context) return (value)
 static HANDLE g_window_dispatch_thread;
 static DWORD g_window_dispatch_thread_id;
 static volatile LONG g_window_dirty = 1;
@@ -4461,30 +4463,22 @@ static V86GLWGLContext* find_thread_current_context(DWORD thread_id) {
     return NULL;
 }
 
-static V86GLWGLContext* find_any_current_context(void) {
-    uint32_t i;
-
-    for (i = 0; i < V86GL_MAX_WGL_CONTEXTS; i++) {
-        V86GLWGLContext* context = &g_wgl_contexts[i];
-        if (context->used && context->owner_thread) return context;
-    }
-    return NULL;
+static BOOL release_thread_current_context(DWORD thread_id, HWND* unused) {
+    V86GLWGLContext* context = find_thread_current_context(thread_id);
+    if (unused) *unused = NULL;
+    if (!context) return FALSE;
+    save_guest_context_state(context);clear_wgl_context_binding(context);return TRUE;
 }
 
-static BOOL release_thread_current_context(DWORD thread_id,
-                                           HWND* replacement_hwnd) {
-    V86GLWGLContext* current = find_thread_current_context(thread_id);
-    V86GLWGLContext* replacement;
+static void release_current_binding(void) {
+    BOOL released = release_thread_current_context(GetCurrentThreadId(), NULL);
+    g_loaded_context = NULL;g_have_last_surface = FALSE;
+    restore_guest_context_state(&g_default_guest_context_state);
+    if (released) emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
+}
 
-    if (replacement_hwnd) *replacement_hwnd = NULL;
-    if (!current) return FALSE;
-    save_guest_context_state(current);
-    clear_wgl_context_binding(current);
-    replacement = find_any_current_context();
-    if (replacement_hwnd && replacement) {
-        *replacement_hwnd = replacement->current_hwnd;
-    }
-    return TRUE;
+static BOOL fail_make_current(DWORD error) {
+    release_current_binding();SetLastError(error);return FALSE;
 }
 
 static void force_release_window_contexts(HWND hwnd) {
@@ -4813,11 +4807,12 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) { V86GL_API_CALL();
         LeaveCriticalSection(&g_wgl_context_lock);
         return FALSE;
     }
-    if (context->owner_thread) {
+    if (context->owner_thread && context->owner_thread != GetCurrentThreadId()) {
         SetLastError(ERROR_BUSY);
         LeaveCriticalSection(&g_wgl_context_lock);
         return FALSE;
     }
+    if (context == v86gl_current_context()) release_current_binding();
     context_id = (uint32_t)(context - g_wgl_contexts) + 1u;
     guest_state = context->guest_state;share_group = context->share_group;
     ZeroMemory(context, sizeof(*context));
@@ -4841,80 +4836,36 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) { V86GL_API_CALL();
 
 __declspec(dllexport)
 BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) { V86GL_API_CALL();
-    DWORD thread_id = GetCurrentThreadId();
-
+    DWORD thread_id = GetCurrentThreadId(), error;
     V86GLWGLContext* context;
     V86GLWGLContext* previous;
-    HWND replacement_hwnd = NULL;
     HWND hwnd;
-    BOOL released;
-
-    V86GL_DIAG("WGL wglMakeCurrent hdc=%08lx ctx=%08lx",
-               (unsigned long)(uintptr_t)hdc,
-               (unsigned long)(uintptr_t)ctx);
-
-    if (!hdc && !ctx) {
-        EnterCriticalSection(&g_wgl_context_lock);
-        reap_terminated_wgl_contexts();
-        released = release_thread_current_context(thread_id,
-                                                  &replacement_hwnd);
-        LeaveCriticalSection(&g_wgl_context_lock);
-        v86gl_trace("release current context");
-        /* Keep the window hook installed: an unbound context may be rebound
-         * on the same surface, and WM_NCDESTROY must still tear down the
-         * browser overlay if the guest exits while it is unbound. */
-        if (released) {
-            g_have_last_surface = FALSE;
-            g_loaded_context = NULL;restore_guest_context_state(&g_default_guest_context_state);
-            emit_pci_record(V86GL_CTRL_RELEASE_CURRENT, NULL, 0, TRUE);
-        }
-        SetLastError(ERROR_SUCCESS);
-        return TRUE;
+    if (!ctx) {release_current_binding();SetLastError(ERROR_SUCCESS);return TRUE;}
+    if (!hdc) return fail_make_current(ERROR_INVALID_HANDLE);
+    EnterCriticalSection(&g_wgl_context_lock);reap_terminated_wgl_contexts();
+    if (!validate_wgl_context(ctx, &context) || !can_bind_wgl_context(context, thread_id)) {
+        error = GetLastError();LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(error);
     }
-    if (!hdc || !ctx) {
-        SetLastError(ERROR_INVALID_HANDLE);
-        return FALSE;
-    }
-    EnterCriticalSection(&g_wgl_context_lock);
-    reap_terminated_wgl_contexts();
-    if (!validate_wgl_context(ctx, &context) ||
-        !can_bind_wgl_context(context, thread_id)) {
-        LeaveCriticalSection(&g_wgl_context_lock);
-        return FALSE;
-    }
-
     if (!ensure_guest_context_state(context)) {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);LeaveCriticalSection(&g_wgl_context_lock);return FALSE;
+        LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(ERROR_NOT_ENOUGH_MEMORY);
     }
     previous = find_thread_current_context(thread_id);
     if (previous != context && previous && !save_guest_context_state(previous)) {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);LeaveCriticalSection(&g_wgl_context_lock);return FALSE;
+        LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(ERROR_NOT_ENOUGH_MEMORY);
     }
     if (!TlsSetValue(g_context_tls, context)) {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);LeaveCriticalSection(&g_wgl_context_lock);return FALSE;
+        LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(ERROR_NOT_ENOUGH_MEMORY);
     }
     if (previous != context) {
         if (previous) clear_wgl_context_binding(previous);
-        (void)load_guest_context_state(context); /* storage was ensured above */
-        g_have_last_surface = FALSE;
+        (void)load_guest_context_state(context);g_have_last_surface = FALSE;
     }
-    g_loaded_context = context;g_loaded_thread = thread_id;
-    context->owner_thread = thread_id;
-    if (!context->owner_handle) {
-        context->owner_handle = OpenThread(SYNCHRONIZE, FALSE, thread_id);
-    }
-    context->current_dc = hdc;
-    hwnd = WindowFromDC(hdc);
-    context->current_hwnd = hwnd;
-    context->ever_current = TRUE;
+    g_loaded_context = context;g_loaded_thread = thread_id;context->owner_thread = thread_id;
+    if (!context->owner_handle) context->owner_handle = OpenThread(SYNCHRONIZE, FALSE, thread_id);
+    context->current_dc = hdc;hwnd = WindowFromDC(hdc);context->current_hwnd = hwnd;context->ever_current = TRUE;
     LeaveCriticalSection(&g_wgl_context_lock);
-
-    g_context_destroy_sent = FALSE;
-    g_renderer_lifecycle_started = TRUE;
-    hook_window(hwnd);
-    emit_current_surface(hwnd);
-    SetLastError(ERROR_SUCCESS);
-    return TRUE;
+    g_context_destroy_sent = FALSE;g_renderer_lifecycle_started = TRUE;hook_window(hwnd);emit_current_surface(hwnd);
+    SetLastError(ERROR_SUCCESS);return TRUE;
 }
 
 __declspec(dllexport)
@@ -5300,7 +5251,7 @@ void APIENTRY wglAddSwapHintRectWIN(int x, int y, int width, int height) { V86GL
 }
 
 /* GL_WIN_swap_hint names this as a GL entry point, rather than a WGL one. */
-void APIENTRY glAddSwapHintRectWIN(int x, int y, int width, int height) { V86GL_API_CALL();
+void APIENTRY glAddSwapHintRectWIN(int x, int y, int width, int height) { V86GL_GL_CALL_VOID();
     wglAddSwapHintRectWIN(x, y, width, height);
 }
 
@@ -5322,7 +5273,7 @@ const char* APIENTRY wglGetExtensionsStringEXT(void) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-const GLubyte* APIENTRY glGetString(GLenum name) { V86GL_API_CALL();
+const GLubyte* APIENTRY glGetString(GLenum name) { V86GL_GL_CALL_VALUE(0);
     V86GLWGLContext* context = find_thread_current_context(GetCurrentThreadId());
     static char no_context_string[4096];
     char* result = no_context_string;
@@ -5348,59 +5299,59 @@ const GLubyte* APIENTRY glGetString(GLenum name) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-GLenum APIENTRY glGetError(void) { V86GL_API_CALL();
+GLenum APIENTRY glGetError(void) { V86GL_GL_CALL_VALUE(0);
     GLenum error = GL_NO_ERROR;
     (void)emit_query_error(&error);
     return error;
 }
 
 __declspec(dllexport)
-void APIENTRY glGetIntegerv(GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetIntegerv(GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_state(pname, V86GL_STATE_INTEGER, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetFloatv(GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_state(pname, V86GL_STATE_FLOAT, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetDoublev(GLenum pname, GLdouble* params) { V86GL_API_CALL();
+void APIENTRY glGetDoublev(GLenum pname, GLdouble* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_state(pname, V86GL_STATE_DOUBLE, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetBooleanv(GLenum pname, GLboolean* params) { V86GL_API_CALL();
+void APIENTRY glGetBooleanv(GLenum pname, GLboolean* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_state(pname, V86GL_STATE_BOOLEAN, params);
 }
 
 __declspec(dllexport)
-GLboolean APIENTRY glIsEnabled(GLenum cap) { V86GL_API_CALL();
+GLboolean APIENTRY glIsEnabled(GLenum cap) { V86GL_GL_CALL_VALUE(0);
     GLboolean enabled = GL_FALSE;
     (void)emit_query_state(cap, V86GL_STATE_IS_ENABLED, &enabled);
     return enabled;
 }
 
 __declspec(dllexport)
-void APIENTRY glViewport(GLint x, GLint y, GLsizei width, GLsizei height) { V86GL_API_CALL();
+void APIENTRY glViewport(GLint x, GLint y, GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     struct {int32_t x; int32_t y; int32_t width; int32_t height;} payload = {x, y, width, height};
     emit_gl_call(GLFN_VIEWPORT, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { V86GL_API_CALL();
+void APIENTRY glClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { V86GL_GL_CALL_VOID();
     struct {float r; float g; float b; float a;} payload = {r, g, b, a};
     emit_gl_call(GLFN_CLEAR_COLOR, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glClear(GLbitfield mask) { V86GL_API_CALL();
+void APIENTRY glClear(GLbitfield mask) { V86GL_GL_CALL_VOID();
     struct {uint32_t mask;} payload = {mask};
     emit_gl_call(GLFN_CLEAR, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glBegin(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glBegin(GLenum mode) { V86GL_GL_CALL_VOID();
     uint32_t payload = (uint32_t)mode;
     if (v86gl_trace_call_allowed()) {
         v86gl_trace("glBegin mode=0x%04lx", (unsigned long)mode);
@@ -5410,13 +5361,13 @@ void APIENTRY glBegin(GLenum mode) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glEnd(void) { V86GL_API_CALL();
+void APIENTRY glEnd(void) { V86GL_GL_CALL_VOID();
 
     emit_gl_call(GLFN_END, NULL, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glColor3f(GLfloat r, GLfloat g, GLfloat b) { V86GL_API_CALL();
+void APIENTRY glColor3f(GLfloat r, GLfloat g, GLfloat b) { V86GL_GL_CALL_VOID();
     struct { float r, g, b, a; } payload;
     payload.r = r;
     payload.g = g;
@@ -5426,7 +5377,7 @@ void APIENTRY glColor3f(GLfloat r, GLfloat g, GLfloat b) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { V86GL_API_CALL();
+void APIENTRY glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { V86GL_GL_CALL_VOID();
     struct { float r, g, b, a; } payload;
     payload.r = r;
     payload.g = g;
@@ -5436,7 +5387,7 @@ void APIENTRY glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { V86GL_API_
 }
 
 __declspec(dllexport)
-void APIENTRY glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) { V86GL_API_CALL();
+void APIENTRY glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) { V86GL_GL_CALL_VOID();
     glColor4f((GLfloat)r / 255.0f,
               (GLfloat)g / 255.0f,
               (GLfloat)b / 255.0f,
@@ -5444,14 +5395,14 @@ void APIENTRY glColor4ub(GLubyte r, GLubyte g, GLubyte b, GLubyte a) { V86GL_API
 }
 
 __declspec(dllexport)
-void APIENTRY glColor4ubv(const GLubyte* v) { V86GL_API_CALL();
+void APIENTRY glColor4ubv(const GLubyte* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glColor4ub(v[0], v[1], v[2], v[3]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glVertex2f(GLfloat x, GLfloat y) { V86GL_API_CALL();
+void APIENTRY glVertex2f(GLfloat x, GLfloat y) { V86GL_GL_CALL_VOID();
     struct { float x, y, z; } payload;
 
     payload.x = x;
@@ -5461,7 +5412,7 @@ void APIENTRY glVertex2f(GLfloat x, GLfloat y) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glVertex3f(GLfloat x, GLfloat y, GLfloat z) { V86GL_API_CALL();
+void APIENTRY glVertex3f(GLfloat x, GLfloat y, GLfloat z) { V86GL_GL_CALL_VOID();
     struct { float x, y, z; } payload;
 
     payload.x = x;
@@ -5471,19 +5422,19 @@ void APIENTRY glVertex3f(GLfloat x, GLfloat y, GLfloat z) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glVertex3fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertex3fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glVertex3f(v[0], v[1], v[2]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glFlush(void) { V86GL_API_CALL();
+void APIENTRY glFlush(void) { V86GL_GL_CALL_VOID();
     emit_gl_call(GLFN_FLUSH, NULL, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glFinish(void) { V86GL_API_CALL();
+void APIENTRY glFinish(void) { V86GL_GL_CALL_VOID();
     uint8_t* args;
 
     /* glFinish is a guest-visible completion point, not just another queued
@@ -5505,18 +5456,18 @@ void APIENTRY glFinish(void) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glMatrixMode(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glMatrixMode(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_MATRIX_MODE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLoadIdentity(void) { V86GL_API_CALL();
+void APIENTRY glLoadIdentity(void) { V86GL_GL_CALL_VOID();
     emit_gl_call(GLFN_LOAD_IDENTITY, NULL, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glLoadMatrixf(const GLfloat* m) { V86GL_API_CALL();
+void APIENTRY glLoadMatrixf(const GLfloat* m) { V86GL_GL_CALL_VOID();
     float payload[16];
 
     if (v86gl_trace_call_allowed()) {
@@ -5537,7 +5488,7 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glLoadMatrixd(const GLdouble* m) { V86GL_API_CALL();
+void APIENTRY glLoadMatrixd(const GLdouble* m) { V86GL_GL_CALL_VOID();
     float payload[16];
     uint32_t i;
 
@@ -5555,7 +5506,7 @@ void APIENTRY glLoadMatrixd(const GLdouble* m) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glMultMatrixf(const GLfloat* m) { V86GL_API_CALL();
+void APIENTRY glMultMatrixf(const GLfloat* m) { V86GL_GL_CALL_VOID();
     float payload[16];
 
     if (!m) {
@@ -5568,7 +5519,7 @@ void APIENTRY glMultMatrixf(const GLfloat* m) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glMultMatrixd(const GLdouble* m) { V86GL_API_CALL();
+void APIENTRY glMultMatrixd(const GLdouble* m) { V86GL_GL_CALL_VOID();
     float payload[16];
     uint32_t i;
 
@@ -5596,14 +5547,14 @@ static void transpose_matrixf(GLfloat* destination, const GLfloat* source) {
     }
 }
 
-void APIENTRY glLoadTransposeMatrixfARB(const GLfloat* matrix) { V86GL_API_CALL();
+void APIENTRY glLoadTransposeMatrixfARB(const GLfloat* matrix) { V86GL_GL_CALL_VOID();
     GLfloat transposed[16];
     if (!matrix) { v86gl_set_error(GL_INVALID_VALUE); return; }
     transpose_matrixf(transposed, matrix);
     glLoadMatrixf(transposed);
 }
 
-void APIENTRY glLoadTransposeMatrixdARB(const GLdouble* matrix) { V86GL_API_CALL();
+void APIENTRY glLoadTransposeMatrixdARB(const GLdouble* matrix) { V86GL_GL_CALL_VOID();
     GLfloat source[16];
     GLfloat transposed[16];
     int i;
@@ -5613,14 +5564,14 @@ void APIENTRY glLoadTransposeMatrixdARB(const GLdouble* matrix) { V86GL_API_CALL
     glLoadMatrixf(transposed);
 }
 
-void APIENTRY glMultTransposeMatrixfARB(const GLfloat* matrix) { V86GL_API_CALL();
+void APIENTRY glMultTransposeMatrixfARB(const GLfloat* matrix) { V86GL_GL_CALL_VOID();
     GLfloat transposed[16];
     if (!matrix) { v86gl_set_error(GL_INVALID_VALUE); return; }
     transpose_matrixf(transposed, matrix);
     glMultMatrixf(transposed);
 }
 
-void APIENTRY glMultTransposeMatrixdARB(const GLdouble* matrix) { V86GL_API_CALL();
+void APIENTRY glMultTransposeMatrixdARB(const GLdouble* matrix) { V86GL_GL_CALL_VOID();
     GLfloat source[16];
     GLfloat transposed[16];
     int i;
@@ -5630,94 +5581,94 @@ void APIENTRY glMultTransposeMatrixdARB(const GLdouble* matrix) { V86GL_API_CALL
     glMultMatrixf(transposed);
 }
 
-void APIENTRY glLoadTransposeMatrixf(const GLfloat* matrix) { V86GL_API_CALL();
+void APIENTRY glLoadTransposeMatrixf(const GLfloat* matrix) { V86GL_GL_CALL_VOID();
     glLoadTransposeMatrixfARB(matrix);
 }
 
-void APIENTRY glLoadTransposeMatrixd(const GLdouble* matrix) { V86GL_API_CALL();
+void APIENTRY glLoadTransposeMatrixd(const GLdouble* matrix) { V86GL_GL_CALL_VOID();
     glLoadTransposeMatrixdARB(matrix);
 }
 
-void APIENTRY glMultTransposeMatrixf(const GLfloat* matrix) { V86GL_API_CALL();
+void APIENTRY glMultTransposeMatrixf(const GLfloat* matrix) { V86GL_GL_CALL_VOID();
     glMultTransposeMatrixfARB(matrix);
 }
 
-void APIENTRY glMultTransposeMatrixd(const GLdouble* matrix) { V86GL_API_CALL();
+void APIENTRY glMultTransposeMatrixd(const GLdouble* matrix) { V86GL_GL_CALL_VOID();
     glMultTransposeMatrixdARB(matrix);
 }
 
 __declspec(dllexport)
-void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) { V86GL_API_CALL();
+void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) { V86GL_GL_CALL_VOID();
     struct {double left; double right; double bottom; double top; double zNear; double zFar;} payload = {left, right, bottom, top, zNear, zFar};
     emit_gl_call(GLFN_FRUSTUM, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) { V86GL_API_CALL();
+void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) { V86GL_GL_CALL_VOID();
     struct {double left; double right; double bottom; double top; double zNear; double zFar;} payload = {left, right, bottom, top, zNear, zFar};
     emit_gl_call(GLFN_ORTHO, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z) { V86GL_API_CALL();
+void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z) { V86GL_GL_CALL_VOID();
     struct {float x; float y; float z;} payload = {x, y, z};
     emit_gl_call(GLFN_TRANSLATEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) { V86GL_API_CALL();
+void APIENTRY glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) { V86GL_GL_CALL_VOID();
     struct {float angle; float x; float y; float z;} payload = {angle, x, y, z};
     emit_gl_call(GLFN_ROTATEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glScalef(GLfloat x, GLfloat y, GLfloat z) { V86GL_API_CALL();
+void APIENTRY glScalef(GLfloat x, GLfloat y, GLfloat z) { V86GL_GL_CALL_VOID();
     struct {float x; float y; float z;} payload = {x, y, z};
     emit_gl_call(GLFN_SCALEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPushMatrix(void) { V86GL_API_CALL();
+void APIENTRY glPushMatrix(void) { V86GL_GL_CALL_VOID();
     emit_gl_call(GLFN_PUSH_MATRIX, NULL, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glPopMatrix(void) { V86GL_API_CALL();
+void APIENTRY glPopMatrix(void) { V86GL_GL_CALL_VOID();
     emit_gl_call(GLFN_POP_MATRIX, NULL, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glEnable(GLenum cap) { V86GL_API_CALL();
+void APIENTRY glEnable(GLenum cap) { V86GL_GL_CALL_VOID();
     struct {uint32_t cap;} payload = {cap};
     emit_gl_call(GLFN_ENABLE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glDisable(GLenum cap) { V86GL_API_CALL();
+void APIENTRY glDisable(GLenum cap) { V86GL_GL_CALL_VOID();
     struct {uint32_t cap;} payload = {cap};
     emit_gl_call(GLFN_DISABLE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glDepthFunc(GLenum func) { V86GL_API_CALL();
+void APIENTRY glDepthFunc(GLenum func) { V86GL_GL_CALL_VOID();
     struct {uint32_t func;} payload = {func};
     emit_gl_call(GLFN_DEPTH_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glClearDepth(GLdouble depth) { V86GL_API_CALL();
+void APIENTRY glClearDepth(GLdouble depth) { V86GL_GL_CALL_VOID();
     struct {double depth;} payload = {depth};
     emit_gl_call(GLFN_CLEAR_DEPTH, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glDepthRange(GLdouble zNear, GLdouble zFar) { V86GL_API_CALL();
+void APIENTRY glDepthRange(GLdouble zNear, GLdouble zFar) { V86GL_GL_CALL_VOID();
     struct {double zNear; double zFar;} payload = {zNear, zFar};
     emit_gl_call(GLFN_DEPTH_RANGE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glClearStencil(GLint s) { V86GL_API_CALL();
+void APIENTRY glClearStencil(GLint s) { V86GL_GL_CALL_VOID();
     struct {int32_t s;} payload = {s};
     emit_gl_call(GLFN_CLEAR_STENCIL, &payload, sizeof(payload));
 }
@@ -5750,60 +5701,60 @@ static void emit_stencil_op_separate(GLenum face, GLenum sfail, GLenum dpfail, G
 }
 
 __declspec(dllexport)
-void APIENTRY glStencilFunc(GLenum func, GLint ref, GLuint mask) { V86GL_API_CALL();
+void APIENTRY glStencilFunc(GLenum func, GLint ref, GLuint mask) { V86GL_GL_CALL_VOID();
     struct {uint32_t func; int32_t ref; uint32_t mask;} payload = {func, ref, mask};
     emit_gl_call(GLFN_STENCIL_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glStencilMask(GLuint mask) { V86GL_API_CALL();
+void APIENTRY glStencilMask(GLuint mask) { V86GL_GL_CALL_VOID();
     struct {uint32_t mask;} payload = {mask};
     emit_gl_call(GLFN_STENCIL_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) { V86GL_API_CALL();
+void APIENTRY glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) { V86GL_GL_CALL_VOID();
     struct {uint32_t fail; uint32_t zfail; uint32_t zpass;} payload = {fail, zfail, zpass};
     emit_gl_call(GLFN_STENCIL_OP, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glShadeModel(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glShadeModel(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_SHADE_MODEL, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glCullFace(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glCullFace(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_CULL_FACE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glFrontFace(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glFrontFace(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_FRONT_FACE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glHint(GLenum target, GLenum mode) { V86GL_API_CALL();
+void APIENTRY glHint(GLenum target, GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t target; uint32_t mode;} payload = {target, mode};
     emit_gl_call(GLFN_HINT, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPushAttrib(GLbitfield mask) { V86GL_API_CALL();
+void APIENTRY glPushAttrib(GLbitfield mask) { V86GL_GL_CALL_VOID();
     uint32_t payload = (uint32_t)mask;
     emit_gl_call(GLFN_PUSH_ATTRIB, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPopAttrib(void) { V86GL_API_CALL();
+void APIENTRY glPopAttrib(void) { V86GL_GL_CALL_VOID();
     emit_gl_call(GLFN_POP_ATTRIB, NULL, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glPushClientAttrib(GLbitfield mask) { V86GL_API_CALL();
+void APIENTRY glPushClientAttrib(GLbitfield mask) { V86GL_GL_CALL_VOID();
     uint32_t payload = (uint32_t)mask;
     if (g_client_attrib_stack_depth >= V86GL_ATTRIB_STACK_DEPTH) {
         v86gl_set_error(GL_STACK_OVERFLOW);
@@ -5814,7 +5765,7 @@ void APIENTRY glPushClientAttrib(GLbitfield mask) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glPopClientAttrib(void) { V86GL_API_CALL();
+void APIENTRY glPopClientAttrib(void) { V86GL_GL_CALL_VOID();
 
     if (g_client_attrib_stack_depth <= 0) {
         v86gl_set_error(GL_STACK_UNDERFLOW);
@@ -5825,27 +5776,27 @@ void APIENTRY glPopClientAttrib(void) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glDrawBuffer(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glDrawBuffer(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_DRAW_BUFFER, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glReadBuffer(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glReadBuffer(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_READ_BUFFER, &payload, sizeof(payload));
 }
 
-void APIENTRY glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha) { V86GL_API_CALL();
+void APIENTRY glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha) { V86GL_GL_CALL_VOID();
     struct {uint32_t modeRGB; uint32_t modeAlpha;} payload = {modeRGB, modeAlpha};
     emit_gl_call(GLFN_BLEND_EQUATION_SEPARATE, &payload, sizeof(payload));
 }
 
-void APIENTRY glBlendEquationSeparateEXT(GLenum modeRGB, GLenum modeAlpha) { V86GL_API_CALL();
+void APIENTRY glBlendEquationSeparateEXT(GLenum modeRGB, GLenum modeAlpha) { V86GL_GL_CALL_VOID();
     glBlendEquationSeparate(modeRGB, modeAlpha);
 }
 
-void APIENTRY glDrawBuffers(GLsizei n, const GLenum* bufs) { V86GL_API_CALL();
+void APIENTRY glDrawBuffers(GLsizei n, const GLenum* bufs) { V86GL_GL_CALL_VOID();
     uint32_t total_size;
     uint8_t* payload;
 
@@ -5867,28 +5818,28 @@ void APIENTRY glDrawBuffers(GLsizei n, const GLenum* bufs) { V86GL_API_CALL();
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
-void APIENTRY glDrawBuffersARB(GLsizei n, const GLenum* bufs) { V86GL_API_CALL();
+void APIENTRY glDrawBuffersARB(GLsizei n, const GLenum* bufs) { V86GL_GL_CALL_VOID();
     glDrawBuffers(n, bufs);
 }
 
-void APIENTRY glDrawBuffersATI(GLsizei n, const GLenum* bufs) { V86GL_API_CALL();
+void APIENTRY glDrawBuffersATI(GLsizei n, const GLenum* bufs) { V86GL_GL_CALL_VOID();
     glDrawBuffers(n, bufs);
 }
 
-void APIENTRY glActiveStencilFaceEXT(GLenum face) { V86GL_API_CALL();
+void APIENTRY glActiveStencilFaceEXT(GLenum face) { V86GL_GL_CALL_VOID();
     struct {uint32_t face;} payload = {face};
     emit_gl_call(GLFN_ACTIVE_STENCIL_FACE, &payload, sizeof(payload));
 }
 
-void APIENTRY glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) { V86GL_API_CALL();
+void APIENTRY glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) { V86GL_GL_CALL_VOID();
     emit_stencil_op_separate(face, sfail, dpfail, dppass);
 }
 
-void APIENTRY glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) { V86GL_API_CALL();
+void APIENTRY glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) { V86GL_GL_CALL_VOID();
     emit_stencil_func_separate(face, func, ref, mask);
 }
 
-void APIENTRY glStencilMaskSeparate(GLenum face, GLuint mask) { V86GL_API_CALL();
+void APIENTRY glStencilMaskSeparate(GLenum face, GLuint mask) { V86GL_GL_CALL_VOID();
     emit_stencil_mask_separate(face, mask);
 }
 
@@ -5995,7 +5946,7 @@ static void emit_arb_program_parameter_dv(uint32_t parameter_kind, GLenum target
 }
 
 void APIENTRY glProgramStringARB(GLenum target, GLenum format, GLsizei len,
-                                 const GLvoid* string) { V86GL_API_CALL();
+                                 const GLvoid* string) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t format;
@@ -6055,35 +6006,35 @@ void APIENTRY glProgramStringARB(GLenum target, GLenum format, GLsizei len,
 #endif
 }
 
-void APIENTRY glBindProgramARB(GLenum target, GLuint program) { V86GL_API_CALL();
+void APIENTRY glBindProgramARB(GLenum target, GLuint program) { V86GL_GL_CALL_VOID();
     uint32_t payload[2] = {target, program};
     emit_gl_call(GLFN_BIND_PROGRAM_ARB, payload, sizeof(payload));
 }
 
-void APIENTRY glDeleteProgramsARB(GLsizei n, const GLuint* programs) { V86GL_API_CALL();
+void APIENTRY glDeleteProgramsARB(GLsizei n, const GLuint* programs) { V86GL_GL_CALL_VOID();
     if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_PROGRAMS_ARB, n, programs);
 }
 
 static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuint* names);
 
-void APIENTRY glGenProgramsARB(GLsizei n, GLuint* programs) { V86GL_API_CALL();
+void APIENTRY glGenProgramsARB(GLsizei n, GLuint* programs) { V86GL_GL_CALL_VOID();
     (void)emit_query_names(V86GL_OBJECT_KIND_ARB_PROGRAM, GLFN_GEN_PROGRAMS_ARB, n, programs);
 }
 
-GLboolean APIENTRY glIsProgramARB(GLuint program) { V86GL_API_CALL();
+GLboolean APIENTRY glIsProgramARB(GLuint program) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_ARB_PROGRAM, program, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
 void APIENTRY glProgramEnvParameter4fvARB(GLenum target, GLuint index,
-                                          const GLfloat* params) { V86GL_API_CALL();
+                                          const GLfloat* params) { V86GL_GL_CALL_VOID();
     emit_arb_program_parameter_fv(V86GL_PROGRAM_PARAMETER_ENV, target, index, 1, params);
 }
 
 void APIENTRY glProgramEnvParameter4fARB(GLenum target, GLuint index,
-                                         GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_API_CALL();
+                                         GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_GL_CALL_VOID();
     GLfloat params[4];
     params[0] = x;
     params[1] = y;
@@ -6093,12 +6044,12 @@ void APIENTRY glProgramEnvParameter4fARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glProgramEnvParameter4dvARB(GLenum target, GLuint index,
-                                          const GLdouble* params) { V86GL_API_CALL();
+                                          const GLdouble* params) { V86GL_GL_CALL_VOID();
     emit_arb_program_parameter_dv(V86GL_PROGRAM_PARAMETER_ENV, target, index, params);
 }
 
 void APIENTRY glProgramEnvParameter4dARB(GLenum target, GLuint index,
-                                         GLdouble x, GLdouble y, GLdouble z, GLdouble w) { V86GL_API_CALL();
+                                         GLdouble x, GLdouble y, GLdouble z, GLdouble w) { V86GL_GL_CALL_VOID();
     GLdouble params[4];
     params[0] = x;
     params[1] = y;
@@ -6108,12 +6059,12 @@ void APIENTRY glProgramEnvParameter4dARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glProgramLocalParameter4fvARB(GLenum target, GLuint index,
-                                            const GLfloat* params) { V86GL_API_CALL();
+                                            const GLfloat* params) { V86GL_GL_CALL_VOID();
     emit_arb_program_parameter_fv(V86GL_PROGRAM_PARAMETER_LOCAL, target, index, 1, params);
 }
 
 void APIENTRY glProgramLocalParameter4fARB(GLenum target, GLuint index,
-                                           GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_API_CALL();
+                                           GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_GL_CALL_VOID();
     GLfloat params[4];
     params[0] = x;
     params[1] = y;
@@ -6123,12 +6074,12 @@ void APIENTRY glProgramLocalParameter4fARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glProgramLocalParameter4dvARB(GLenum target, GLuint index,
-                                            const GLdouble* params) { V86GL_API_CALL();
+                                            const GLdouble* params) { V86GL_GL_CALL_VOID();
     emit_arb_program_parameter_dv(V86GL_PROGRAM_PARAMETER_LOCAL, target, index, params);
 }
 
 void APIENTRY glProgramLocalParameter4dARB(GLenum target, GLuint index,
-                                           GLdouble x, GLdouble y, GLdouble z, GLdouble w) { V86GL_API_CALL();
+                                           GLdouble x, GLdouble y, GLdouble z, GLdouble w) { V86GL_GL_CALL_VOID();
     GLdouble params[4];
     params[0] = x;
     params[1] = y;
@@ -6138,17 +6089,17 @@ void APIENTRY glProgramLocalParameter4dARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glProgramEnvParameters4fvEXT(GLenum target, GLuint index,
-                                           GLsizei count, const GLfloat* params) { V86GL_API_CALL();
+                                           GLsizei count, const GLfloat* params) { V86GL_GL_CALL_VOID();
     emit_arb_program_parameter_fv(V86GL_PROGRAM_PARAMETER_ENV, target, index, count, params);
 }
 
 void APIENTRY glProgramLocalParameters4fvEXT(GLenum target, GLuint index,
-                                             GLsizei count, const GLfloat* params) { V86GL_API_CALL();
+                                             GLsizei count, const GLfloat* params) { V86GL_GL_CALL_VOID();
     emit_arb_program_parameter_fv(V86GL_PROGRAM_PARAMETER_LOCAL, target, index, count, params);
 }
 
 void APIENTRY glGetProgramEnvParameterfvARB(GLenum target, GLuint index,
-                                            GLfloat* params) { V86GL_API_CALL();
+                                            GLfloat* params) { V86GL_GL_CALL_VOID();
     if (!params) return;
     if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6161,7 +6112,7 @@ void APIENTRY glGetProgramEnvParameterfvARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glGetProgramEnvParameterdvARB(GLenum target, GLuint index,
-                                            GLdouble* params) { V86GL_API_CALL();
+                                            GLdouble* params) { V86GL_GL_CALL_VOID();
     if (!params) return;
     if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6174,7 +6125,7 @@ void APIENTRY glGetProgramEnvParameterdvARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glGetProgramLocalParameterfvARB(GLenum target, GLuint index,
-                                              GLfloat* params) { V86GL_API_CALL();
+                                              GLfloat* params) { V86GL_GL_CALL_VOID();
     if (!params) return;
     if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6187,7 +6138,7 @@ void APIENTRY glGetProgramLocalParameterfvARB(GLenum target, GLuint index,
 }
 
 void APIENTRY glGetProgramLocalParameterdvARB(GLenum target, GLuint index,
-                                              GLdouble* params) { V86GL_API_CALL();
+                                              GLdouble* params) { V86GL_GL_CALL_VOID();
     if (!params) return;
     if (!valid_arb_program_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
     if (index >= arb_program_parameter_limit(target)) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6199,11 +6150,11 @@ void APIENTRY glGetProgramLocalParameterdvARB(GLenum target, GLuint index,
     }
 }
 
-void APIENTRY glGetProgramivARB(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetProgramivARB(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_program_iv_arb(target, pname, params);
 }
 
-void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string) { V86GL_API_CALL();
+void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string) { V86GL_GL_CALL_VOID();
     GLint length = 0;
 
     if (!string) return;
@@ -6221,14 +6172,14 @@ void APIENTRY glGetProgramStringARB(GLenum target, GLenum pname, GLvoid* string)
 }
 
 
-GLuint APIENTRY glCreateProgram(void) { V86GL_API_CALL();
+GLuint APIENTRY glCreateProgram(void) { V86GL_GL_CALL_VALUE(0);
     GLuint name = 0;
     if (emit_query_names(V86GL_OBJECT_KIND_PROGRAM, 0, 1, &name) < 1) return 0;
     emit_gl_call(GLFN_CREATE_PROGRAM, &name, sizeof(name));
     return name;
 }
 
-GLuint APIENTRY glCreateShader(GLenum type) { V86GL_API_CALL();
+GLuint APIENTRY glCreateShader(GLenum type) { V86GL_GL_CALL_VALUE(0);
     GLuint name = 0;
     struct {uint32_t shader, type;} payload;
     if (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) {v86gl_set_error(GL_INVALID_ENUM);return 0;}
@@ -6238,40 +6189,40 @@ GLuint APIENTRY glCreateShader(GLenum type) { V86GL_API_CALL();
     return name;
 }
 
-void APIENTRY glDeleteProgram(GLuint program) { V86GL_API_CALL();
+void APIENTRY glDeleteProgram(GLuint program) { V86GL_GL_CALL_VOID();
     uint32_t payload = program;
     emit_gl_call(GLFN_DELETE_PROGRAM, &payload, sizeof(payload));
 }
 
-void APIENTRY glDeleteShader(GLuint shader) { V86GL_API_CALL();
+void APIENTRY glDeleteShader(GLuint shader) { V86GL_GL_CALL_VOID();
     uint32_t payload = shader;
     emit_gl_call(GLFN_DELETE_SHADER, &payload, sizeof(payload));
 }
 
-GLboolean APIENTRY glIsProgram(GLuint program) { V86GL_API_CALL();
+GLboolean APIENTRY glIsProgram(GLuint program) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_PROGRAM, program, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
-GLboolean APIENTRY glIsShader(GLuint shader) { V86GL_API_CALL();
+GLboolean APIENTRY glIsShader(GLuint shader) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_SHADER, shader, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
-void APIENTRY glAttachShader(GLuint program, GLuint shader) { V86GL_API_CALL();
+void APIENTRY glAttachShader(GLuint program, GLuint shader) { V86GL_GL_CALL_VOID();
     uint32_t payload[2] = {program, shader};
     emit_gl_call(GLFN_ATTACH_SHADER, payload, sizeof(payload));
 }
 
-void APIENTRY glDetachShader(GLuint program, GLuint shader) { V86GL_API_CALL();
+void APIENTRY glDetachShader(GLuint program, GLuint shader) { V86GL_GL_CALL_VOID();
     uint32_t payload[2] = {program, shader};
     emit_gl_call(GLFN_DETACH_SHADER, payload, sizeof(payload));
 }
 
 void APIENTRY glShaderSource(GLuint shader, GLsizei count,
-                             const GLchar* const* string, const GLint* length) { V86GL_API_CALL();
+                             const GLchar* const* string, const GLint* length) { V86GL_GL_CALL_VOID();
     uint64_t total64 = 0;
     uint32_t total;
     GLchar* source;
@@ -6321,7 +6272,7 @@ void APIENTRY glShaderSource(GLuint shader, GLsizei count,
     HeapFree(GetProcessHeap(), 0, source);
 }
 
-void APIENTRY glCompileShader(GLuint shader) { V86GL_API_CALL();
+void APIENTRY glCompileShader(GLuint shader) { V86GL_GL_CALL_VOID();
     uint32_t payload = shader;
     emit_gl_call(GLFN_COMPILE_SHADER, &payload, sizeof(payload));
 #if V86GL_DIAG_ENABLED
@@ -6331,7 +6282,7 @@ void APIENTRY glCompileShader(GLuint shader) { V86GL_API_CALL();
 #endif
 }
 
-void APIENTRY glLinkProgram(GLuint program) { V86GL_API_CALL();
+void APIENTRY glLinkProgram(GLuint program) { V86GL_GL_CALL_VOID();
     uint32_t payload = program;
     emit_gl_call(GLFN_LINK_PROGRAM, &payload, sizeof(payload));
 #if V86GL_DIAG_ENABLED
@@ -6341,17 +6292,17 @@ void APIENTRY glLinkProgram(GLuint program) { V86GL_API_CALL();
 #endif
 }
 
-void APIENTRY glValidateProgram(GLuint program) { V86GL_API_CALL();
+void APIENTRY glValidateProgram(GLuint program) { V86GL_GL_CALL_VOID();
     uint32_t payload = program;
     emit_gl_call(GLFN_VALIDATE_PROGRAM, &payload, sizeof(payload));
 }
 
-void APIENTRY glUseProgram(GLuint program) { V86GL_API_CALL();
+void APIENTRY glUseProgram(GLuint program) { V86GL_GL_CALL_VOID();
     uint32_t payload = program;
     emit_gl_call(GLFN_USE_PROGRAM, &payload, sizeof(payload));
 }
 
-void APIENTRY glBindAttribLocation(GLuint program, GLuint index, const GLchar* name) { V86GL_API_CALL();
+void APIENTRY glBindAttribLocation(GLuint program, GLuint index, const GLchar* name) { V86GL_GL_CALL_VOID();
     uint32_t name_len;
     uint32_t total_size;
     uint8_t* payload;
@@ -6373,14 +6324,14 @@ void APIENTRY glBindAttribLocation(GLuint program, GLuint index, const GLchar* n
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
-GLint APIENTRY glGetUniformLocation(GLuint program, const GLchar* name) { V86GL_API_CALL();
+GLint APIENTRY glGetUniformLocation(GLuint program, const GLchar* name) { V86GL_GL_CALL_VALUE(0);
     GLint result = -1;
     if (!name) {v86gl_set_error(GL_INVALID_VALUE);return -1;}
     (void)emit_query_location(V86GL_LOCATION_KIND_UNIFORM, program, -1, name, &result, NULL, NULL);
     return result;
 }
 
-GLint APIENTRY glGetAttribLocation(GLuint program, const GLchar* name) { V86GL_API_CALL();
+GLint APIENTRY glGetAttribLocation(GLuint program, const GLchar* name) { V86GL_GL_CALL_VALUE(0);
     GLint result = -1;
     if (!name) {v86gl_set_error(GL_INVALID_VALUE);return -1;}
     (void)emit_query_location(V86GL_LOCATION_KIND_ATTRIB, program, -1, name, &result, NULL, NULL);
@@ -6388,32 +6339,32 @@ GLint APIENTRY glGetAttribLocation(GLuint program, const GLchar* name) { V86GL_A
 }
 
 
-void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetProgramiv(GLuint program, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_object_iv(V86GL_OBJECT_KIND_PROGRAM, program, pname, params);
 }
 
-void APIENTRY glGetShaderiv(GLuint shader, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetShaderiv(GLuint shader, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_object_iv(V86GL_OBJECT_KIND_SHADER, shader, pname, params);
 }
 
 void APIENTRY glGetProgramInfoLog(GLuint program, GLsizei bufSize,
-                                  GLsizei* length, GLchar* infoLog) { V86GL_API_CALL();
+                                  GLsizei* length, GLchar* infoLog) { V86GL_GL_CALL_VOID();
     (void)emit_query_object_log(V86GL_OBJECT_KIND_PROGRAM, program, bufSize, length, infoLog);
 }
 
 void APIENTRY glGetShaderInfoLog(GLuint shader, GLsizei bufSize,
-                                 GLsizei* length, GLchar* infoLog) { V86GL_API_CALL();
+                                 GLsizei* length, GLchar* infoLog) { V86GL_GL_CALL_VOID();
     (void)emit_query_object_log(V86GL_OBJECT_KIND_SHADER, shader, bufSize, length, infoLog);
 }
 
 void APIENTRY glGetShaderSource(GLuint shader, GLsizei bufSize,
-                                GLsizei* length, GLchar* source) { V86GL_API_CALL();
+                                GLsizei* length, GLchar* source) { V86GL_GL_CALL_VOID();
     if (bufSize < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     (void)emit_query_object_log(V86GL_TEXT_SHADER_SOURCE, shader, bufSize, length, source);
 }
 
 void APIENTRY glGetAttachedShaders(GLuint program, GLsizei maxCount,
-                                   GLsizei* count, GLuint* shaders) { V86GL_API_CALL();
+                                   GLsizei* count, GLuint* shaders) { V86GL_GL_CALL_VOID();
     GLint available = 0;
     GLuint values[V86GL_MAX_TYPED_QUERY_VALUES];
     GLsizei copied = 0, total;
@@ -6433,7 +6384,7 @@ void APIENTRY glGetAttachedShaders(GLuint program, GLsizei maxCount,
 
 void APIENTRY glGetActiveUniform(GLuint program, GLuint index, GLsizei bufSize,
                                  GLsizei* length, GLint* size, GLenum* type,
-                                 GLchar* name) { V86GL_API_CALL();
+                                 GLchar* name) { V86GL_GL_CALL_VOID();
     if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (emit_query_active(V86GL_ACTIVE_KIND_UNIFORM, program, index, bufSize,
                           length, size, type, name)) {
@@ -6444,7 +6395,7 @@ void APIENTRY glGetActiveUniform(GLuint program, GLuint index, GLsizei bufSize,
 
 void APIENTRY glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufSize,
                                 GLsizei* length, GLint* size, GLenum* type,
-                                GLchar* name) { V86GL_API_CALL();
+                                GLchar* name) { V86GL_GL_CALL_VOID();
     if (bufSize < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (emit_query_active(V86GL_ACTIVE_KIND_ATTRIB, program, index, bufSize,
                           length, size, type, name)) {
@@ -6547,114 +6498,114 @@ static void emit_uniform_matrix_rect(GLint location, GLint columns, GLint rows,
 
 }
 
-void APIENTRY glUniform1f(GLint location, GLfloat v0) { V86GL_API_CALL();
+void APIENTRY glUniform1f(GLint location, GLfloat v0) { V86GL_GL_CALL_VOID();
     GLfloat values[1] = { v0 };
     emit_uniform_vector(location, 1, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform2f(GLint location, GLfloat v0, GLfloat v1) { V86GL_API_CALL();
+void APIENTRY glUniform2f(GLint location, GLfloat v0, GLfloat v1) { V86GL_GL_CALL_VOID();
     GLfloat values[2] = { v0, v1 };
     emit_uniform_vector(location, 2, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) { V86GL_API_CALL();
+void APIENTRY glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) { V86GL_GL_CALL_VOID();
     GLfloat values[3] = { v0, v1, v2 };
     emit_uniform_vector(location, 3, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) { V86GL_API_CALL();
+void APIENTRY glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) { V86GL_GL_CALL_VOID();
     GLfloat values[4] = { v0, v1, v2, v3 };
     emit_uniform_vector(location, 4, 1, values, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
 
-void APIENTRY glUniform1i(GLint location, GLint v0) { V86GL_API_CALL();
+void APIENTRY glUniform1i(GLint location, GLint v0) { V86GL_GL_CALL_VOID();
     GLint values[1] = { v0 };
     emit_uniform_vector(location, 1, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
-void APIENTRY glUniform2i(GLint location, GLint v0, GLint v1) { V86GL_API_CALL();
+void APIENTRY glUniform2i(GLint location, GLint v0, GLint v1) { V86GL_GL_CALL_VOID();
     GLint values[2] = { v0, v1 };
     emit_uniform_vector(location, 2, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
-void APIENTRY glUniform3i(GLint location, GLint v0, GLint v1, GLint v2) { V86GL_API_CALL();
+void APIENTRY glUniform3i(GLint location, GLint v0, GLint v1, GLint v2) { V86GL_GL_CALL_VOID();
     GLint values[3] = { v0, v1, v2 };
     emit_uniform_vector(location, 3, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
-void APIENTRY glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) { V86GL_API_CALL();
+void APIENTRY glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) { V86GL_GL_CALL_VOID();
     GLint values[4] = { v0, v1, v2, v3 };
     emit_uniform_vector(location, 4, 1, values, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 
-void APIENTRY glUniform1fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_API_CALL();
+void APIENTRY glUniform1fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 1, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform2fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_API_CALL();
+void APIENTRY glUniform2fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 2, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform3fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_API_CALL();
+void APIENTRY glUniform3fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 3, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform4fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_API_CALL();
+void APIENTRY glUniform4fv(GLint location, GLsizei count, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 4, count, value, sizeof(GLfloat), GLFN_UNIFORM_FV);
 }
-void APIENTRY glUniform1iv(GLint location, GLsizei count, const GLint* value) { V86GL_API_CALL();
+void APIENTRY glUniform1iv(GLint location, GLsizei count, const GLint* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 1, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
-void APIENTRY glUniform2iv(GLint location, GLsizei count, const GLint* value) { V86GL_API_CALL();
+void APIENTRY glUniform2iv(GLint location, GLsizei count, const GLint* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 2, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
-void APIENTRY glUniform3iv(GLint location, GLsizei count, const GLint* value) { V86GL_API_CALL();
+void APIENTRY glUniform3iv(GLint location, GLsizei count, const GLint* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 3, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
-void APIENTRY glUniform4iv(GLint location, GLsizei count, const GLint* value) { V86GL_API_CALL();
+void APIENTRY glUniform4iv(GLint location, GLsizei count, const GLint* value) { V86GL_GL_CALL_VOID();
     emit_uniform_vector(location, 4, count, value, sizeof(GLint), GLFN_UNIFORM_IV);
 }
 
 void APIENTRY glUniformMatrix2fv(GLint location, GLsizei count,
-                                 GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                 GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix(location, 2, count, transpose, value);
 }
 void APIENTRY glUniformMatrix3fv(GLint location, GLsizei count,
-                                 GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                 GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix(location, 3, count, transpose, value);
 }
 void APIENTRY glUniformMatrix4fv(GLint location, GLsizei count,
-                                 GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                 GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix(location, 4, count, transpose, value);
 }
 
 void APIENTRY glUniformMatrix2x3fv(GLint location, GLsizei count,
-                                   GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                   GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix_rect(location, 2, 3, count, transpose, value);
 }
 
 void APIENTRY glUniformMatrix3x2fv(GLint location, GLsizei count,
-                                   GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                   GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix_rect(location, 3, 2, count, transpose, value);
 }
 
 void APIENTRY glUniformMatrix2x4fv(GLint location, GLsizei count,
-                                   GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                   GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix_rect(location, 2, 4, count, transpose, value);
 }
 
 void APIENTRY glUniformMatrix4x2fv(GLint location, GLsizei count,
-                                   GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                   GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix_rect(location, 4, 2, count, transpose, value);
 }
 
 void APIENTRY glUniformMatrix3x4fv(GLint location, GLsizei count,
-                                   GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                   GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix_rect(location, 3, 4, count, transpose, value);
 }
 
 void APIENTRY glUniformMatrix4x3fv(GLint location, GLsizei count,
-                                   GLboolean transpose, const GLfloat* value) { V86GL_API_CALL();
+                                   GLboolean transpose, const GLfloat* value) { V86GL_GL_CALL_VOID();
     emit_uniform_matrix_rect(location, 4, 3, count, transpose, value);
 }
 
-void APIENTRY glGetUniformfv(GLuint program, GLint location, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetUniformfv(GLuint program, GLint location, GLfloat* params) { V86GL_GL_CALL_VOID();
     GLint total = 0;
     if (params) (void)emit_query_uniform(program, location, 1u, params, &total);
 }
 
-void APIENTRY glGetUniformiv(GLuint program, GLint location, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetUniformiv(GLuint program, GLint location, GLint* params) { V86GL_GL_CALL_VOID();
     GLint total = 0;
     if (params) (void)emit_query_uniform(program, location, 2u, params, &total);
 }
@@ -6682,130 +6633,130 @@ static void emit_vertex_attrib4f(GLuint index, GLfloat x, GLfloat y,
     emit_gl_call(GLFN_VERTEX_ATTRIB4F, &payload, sizeof(payload));
 }
 
-void APIENTRY glVertexAttrib1f(GLuint index, GLfloat x) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib1f(GLuint index, GLfloat x) { V86GL_GL_CALL_VOID();
     emit_vertex_attrib4f(index, x, 0.0f, 0.0f, 1.0f);
 }
-void APIENTRY glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y) { V86GL_GL_CALL_VOID();
     emit_vertex_attrib4f(index, x, y, 0.0f, 1.0f);
 }
-void APIENTRY glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) { V86GL_GL_CALL_VOID();
     emit_vertex_attrib4f(index, x, y, z, 1.0f);
 }
-void APIENTRY glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_GL_CALL_VOID();
     emit_vertex_attrib4f(index, x, y, z, w);
 }
-void APIENTRY glVertexAttrib1d(GLuint index, GLdouble x) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib1d(GLuint index, GLdouble x) { V86GL_GL_CALL_VOID();
     glVertexAttrib1f(index, (GLfloat)x);
 }
-void APIENTRY glVertexAttrib2d(GLuint index, GLdouble x, GLdouble y) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib2d(GLuint index, GLdouble x, GLdouble y) { V86GL_GL_CALL_VOID();
     glVertexAttrib2f(index, (GLfloat)x, (GLfloat)y);
 }
-void APIENTRY glVertexAttrib3d(GLuint index, GLdouble x, GLdouble y, GLdouble z) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib3d(GLuint index, GLdouble x, GLdouble y, GLdouble z) { V86GL_GL_CALL_VOID();
     glVertexAttrib3f(index, (GLfloat)x, (GLfloat)y, (GLfloat)z);
 }
-void APIENTRY glVertexAttrib4d(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4d(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) { V86GL_GL_CALL_VOID();
     glVertexAttrib4f(index, (GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w);
 }
-void APIENTRY glVertexAttrib1s(GLuint index, GLshort x) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib1s(GLuint index, GLshort x) { V86GL_GL_CALL_VOID();
     glVertexAttrib1f(index, (GLfloat)x);
 }
-void APIENTRY glVertexAttrib2s(GLuint index, GLshort x, GLshort y) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib2s(GLuint index, GLshort x, GLshort y) { V86GL_GL_CALL_VOID();
     glVertexAttrib2f(index, (GLfloat)x, (GLfloat)y);
 }
-void APIENTRY glVertexAttrib3s(GLuint index, GLshort x, GLshort y, GLshort z) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib3s(GLuint index, GLshort x, GLshort y, GLshort z) { V86GL_GL_CALL_VOID();
     glVertexAttrib3f(index, (GLfloat)x, (GLfloat)y, (GLfloat)z);
 }
-void APIENTRY glVertexAttrib4s(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4s(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) { V86GL_GL_CALL_VOID();
     glVertexAttrib4f(index, (GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w);
 }
 
-void APIENTRY glVertexAttrib1fv(GLuint index, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib1fv(GLuint index, const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib1f(index, v[0]);
 }
-void APIENTRY glVertexAttrib2fv(GLuint index, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib2fv(GLuint index, const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib2f(index, v[0], v[1]);
 }
-void APIENTRY glVertexAttrib3fv(GLuint index, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib3fv(GLuint index, const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib3f(index, v[0], v[1], v[2]);
 }
-void APIENTRY glVertexAttrib4fv(GLuint index, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4fv(GLuint index, const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4f(index, v[0], v[1], v[2], v[3]);
 }
-void APIENTRY glVertexAttrib1dv(GLuint index, const GLdouble* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib1dv(GLuint index, const GLdouble* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib1d(index, v[0]);
 }
-void APIENTRY glVertexAttrib2dv(GLuint index, const GLdouble* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib2dv(GLuint index, const GLdouble* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib2d(index, v[0], v[1]);
 }
-void APIENTRY glVertexAttrib3dv(GLuint index, const GLdouble* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib3dv(GLuint index, const GLdouble* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib3d(index, v[0], v[1], v[2]);
 }
-void APIENTRY glVertexAttrib4dv(GLuint index, const GLdouble* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4dv(GLuint index, const GLdouble* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4d(index, v[0], v[1], v[2], v[3]);
 }
-void APIENTRY glVertexAttrib1sv(GLuint index, const GLshort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib1sv(GLuint index, const GLshort* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib1s(index, v[0]);
 }
-void APIENTRY glVertexAttrib2sv(GLuint index, const GLshort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib2sv(GLuint index, const GLshort* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib2s(index, v[0], v[1]);
 }
-void APIENTRY glVertexAttrib3sv(GLuint index, const GLshort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib3sv(GLuint index, const GLshort* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib3s(index, v[0], v[1], v[2]);
 }
-void APIENTRY glVertexAttrib4sv(GLuint index, const GLshort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4sv(GLuint index, const GLshort* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4s(index, v[0], v[1], v[2], v[3]);
 }
 
-void APIENTRY glVertexAttrib4bv(GLuint index, const GLbyte* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4bv(GLuint index, const GLbyte* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4f(index, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
-void APIENTRY glVertexAttrib4iv(GLuint index, const GLint* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4iv(GLuint index, const GLint* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4f(index, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
-void APIENTRY glVertexAttrib4ubv(GLuint index, const GLubyte* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4ubv(GLuint index, const GLubyte* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4f(index, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
-void APIENTRY glVertexAttrib4uiv(GLuint index, const GLuint* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4uiv(GLuint index, const GLuint* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4f(index, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
-void APIENTRY glVertexAttrib4usv(GLuint index, const GLushort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4usv(GLuint index, const GLushort* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4f(index, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]);
 }
 
-void APIENTRY glVertexAttrib4Nub(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Nub(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) { V86GL_GL_CALL_VOID();
     emit_vertex_attrib4f(index, (GLfloat)x / 255.0f, (GLfloat)y / 255.0f,
                          (GLfloat)z / 255.0f, (GLfloat)w / 255.0f);
 }
-void APIENTRY glVertexAttrib4Nubv(GLuint index, const GLubyte* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Nubv(GLuint index, const GLubyte* v) { V86GL_GL_CALL_VOID();
     if (v) glVertexAttrib4Nub(index, v[0], v[1], v[2], v[3]);
 }
-void APIENTRY glVertexAttrib4Nbv(GLuint index, const GLbyte* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Nbv(GLuint index, const GLbyte* v) { V86GL_GL_CALL_VOID();
     if (v) emit_vertex_attrib4f(index,
         normalize_signed_value(v[0], 127.0), normalize_signed_value(v[1], 127.0),
         normalize_signed_value(v[2], 127.0), normalize_signed_value(v[3], 127.0));
 }
-void APIENTRY glVertexAttrib4Nsv(GLuint index, const GLshort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Nsv(GLuint index, const GLshort* v) { V86GL_GL_CALL_VOID();
     if (v) emit_vertex_attrib4f(index,
         normalize_signed_value(v[0], 32767.0), normalize_signed_value(v[1], 32767.0),
         normalize_signed_value(v[2], 32767.0), normalize_signed_value(v[3], 32767.0));
 }
-void APIENTRY glVertexAttrib4Niv(GLuint index, const GLint* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Niv(GLuint index, const GLint* v) { V86GL_GL_CALL_VOID();
     if (v) emit_vertex_attrib4f(index,
         normalize_signed_value(v[0], 2147483647.0), normalize_signed_value(v[1], 2147483647.0),
         normalize_signed_value(v[2], 2147483647.0), normalize_signed_value(v[3], 2147483647.0));
 }
-void APIENTRY glVertexAttrib4Nusv(GLuint index, const GLushort* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Nusv(GLuint index, const GLushort* v) { V86GL_GL_CALL_VOID();
     if (v) emit_vertex_attrib4f(index, (GLfloat)v[0] / 65535.0f, (GLfloat)v[1] / 65535.0f,
                                 (GLfloat)v[2] / 65535.0f, (GLfloat)v[3] / 65535.0f);
 }
-void APIENTRY glVertexAttrib4Nuiv(GLuint index, const GLuint* v) { V86GL_API_CALL();
+void APIENTRY glVertexAttrib4Nuiv(GLuint index, const GLuint* v) { V86GL_GL_CALL_VOID();
     if (v) emit_vertex_attrib4f(index, (GLfloat)((double)v[0] / 4294967295.0),
                                 (GLfloat)((double)v[1] / 4294967295.0),
                                 (GLfloat)((double)v[2] / 4294967295.0),
                                 (GLfloat)((double)v[3] / 4294967295.0));
 }
 
-void APIENTRY glEnableVertexAttribArray(GLuint index) { V86GL_API_CALL();
+void APIENTRY glEnableVertexAttribArray(GLuint index) { V86GL_GL_CALL_VOID();
     release_locked_client_arrays();
     uint32_t payload = index;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6813,7 +6764,7 @@ void APIENTRY glEnableVertexAttribArray(GLuint index) { V86GL_API_CALL();
     emit_gl_call(GLFN_ENABLE_VERTEX_ATTRIB_ARRAY, &payload, sizeof(payload));
 }
 
-void APIENTRY glDisableVertexAttribArray(GLuint index) { V86GL_API_CALL();
+void APIENTRY glDisableVertexAttribArray(GLuint index) { V86GL_GL_CALL_VOID();
     release_locked_client_arrays();
     uint32_t payload = index;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6823,7 +6774,7 @@ void APIENTRY glDisableVertexAttribArray(GLuint index) { V86GL_API_CALL();
 
 void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type,
                                     GLboolean normalized, GLsizei stride,
-                                    const GLvoid* pointer) { V86GL_API_CALL();
+                                    const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     GenericAttribState* state;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (size < 1 || size > 4 || stride < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -6838,19 +6789,19 @@ void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type,
     emit_vbo_attrib_pointer(index, size, type, normalized, stride, pointer);
 }
 
-void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_VERTEX_ATTRIB, index, pname, V86GL_STATE_FLOAT, params);
 }
 
-void APIENTRY glGetVertexAttribiv(GLuint index, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribiv(GLuint index, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_VERTEX_ATTRIB, index, pname, V86GL_STATE_INTEGER, params);
 }
 
-void APIENTRY glGetVertexAttribdv(GLuint index, GLenum pname, GLdouble* params) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribdv(GLuint index, GLenum pname, GLdouble* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_VERTEX_ATTRIB, index, pname, V86GL_STATE_DOUBLE, params);
 }
 
-void APIENTRY glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid** pointer) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid** pointer) { V86GL_GL_CALL_VOID();
     GLuint address = 0;
     if (pointer && emit_query_parameter_index_count(V86GL_PARAMETER_ARRAY_POINTER, GL_VERTEX_ATTRIB_ARRAY_POINTER, pname, index, V86GL_STATE_UNSIGNED_INT, &address, 1u) > 0)
         *pointer = (GLvoid*)(uintptr_t)address;
@@ -6871,49 +6822,49 @@ static GLenum arb_object_pname_to_core(GLenum pname) {
     }
 }
 
-GLhandleARB APIENTRY glCreateShaderObjectARB(GLenum shaderType) { V86GL_API_CALL();
+GLhandleARB APIENTRY glCreateShaderObjectARB(GLenum shaderType) { V86GL_GL_CALL_VALUE(0);
     return (GLhandleARB)glCreateShader(shaderType);
 }
 
-GLhandleARB APIENTRY glCreateProgramObjectARB(void) { V86GL_API_CALL();
+GLhandleARB APIENTRY glCreateProgramObjectARB(void) { V86GL_GL_CALL_VALUE(0);
     return (GLhandleARB)glCreateProgram();
 }
 
-void APIENTRY glDeleteObjectARB(GLhandleARB obj) { V86GL_API_CALL();
+void APIENTRY glDeleteObjectARB(GLhandleARB obj) { V86GL_GL_CALL_VOID();
     if (glIsShader((GLuint)obj)) glDeleteShader((GLuint)obj);
     else if (glIsProgram((GLuint)obj)) glDeleteProgram((GLuint)obj);
 }
 
-void APIENTRY glAttachObjectARB(GLhandleARB containerObj, GLhandleARB obj) { V86GL_API_CALL();
+void APIENTRY glAttachObjectARB(GLhandleARB containerObj, GLhandleARB obj) { V86GL_GL_CALL_VOID();
     glAttachShader((GLuint)containerObj, (GLuint)obj);
 }
 
-void APIENTRY glDetachObjectARB(GLhandleARB containerObj, GLhandleARB attachedObj) { V86GL_API_CALL();
+void APIENTRY glDetachObjectARB(GLhandleARB containerObj, GLhandleARB attachedObj) { V86GL_GL_CALL_VOID();
     glDetachShader((GLuint)containerObj, (GLuint)attachedObj);
 }
 
 void APIENTRY glShaderSourceARB(GLhandleARB shaderObj, GLsizei count,
-                                const GLcharARB** string, const GLint* length) { V86GL_API_CALL();
+                                const GLcharARB** string, const GLint* length) { V86GL_GL_CALL_VOID();
     glShaderSource((GLuint)shaderObj, count, (const GLchar* const*)string, length);
 }
 
-void APIENTRY glCompileShaderARB(GLhandleARB shaderObj) { V86GL_API_CALL();
+void APIENTRY glCompileShaderARB(GLhandleARB shaderObj) { V86GL_GL_CALL_VOID();
     glCompileShader((GLuint)shaderObj);
 }
 
-void APIENTRY glLinkProgramARB(GLhandleARB programObj) { V86GL_API_CALL();
+void APIENTRY glLinkProgramARB(GLhandleARB programObj) { V86GL_GL_CALL_VOID();
     glLinkProgram((GLuint)programObj);
 }
 
-void APIENTRY glUseProgramObjectARB(GLhandleARB programObj) { V86GL_API_CALL();
+void APIENTRY glUseProgramObjectARB(GLhandleARB programObj) { V86GL_GL_CALL_VOID();
     glUseProgram((GLuint)programObj);
 }
 
-void APIENTRY glValidateProgramARB(GLhandleARB programObj) { V86GL_API_CALL();
+void APIENTRY glValidateProgramARB(GLhandleARB programObj) { V86GL_GL_CALL_VOID();
     glValidateProgram((GLuint)programObj);
 }
 
-void APIENTRY glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     GLenum core_pname = arb_object_pname_to_core(pname);
 
     if (!params) return;
@@ -6933,7 +6884,7 @@ void APIENTRY glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* pa
     else v86gl_set_error(GL_INVALID_VALUE);
 }
 
-void APIENTRY glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     GLint value;
     if (!params) return;
     glGetObjectParameterivARB(obj, pname, &value);
@@ -6941,7 +6892,7 @@ void APIENTRY glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* 
 }
 
 void APIENTRY glGetInfoLogARB(GLhandleARB obj, GLsizei maxLength,
-                              GLsizei* length, GLcharARB* infoLog) { V86GL_API_CALL();
+                              GLsizei* length, GLcharARB* infoLog) { V86GL_GL_CALL_VOID();
     if (glIsShader((GLuint)obj)) {
         glGetShaderInfoLog((GLuint)obj, maxLength, length, (GLchar*)infoLog);
     } else if (glIsProgram((GLuint)obj)) {
@@ -6952,61 +6903,61 @@ void APIENTRY glGetInfoLogARB(GLhandleARB obj, GLsizei maxLength,
 }
 
 void APIENTRY glGetAttachedObjectsARB(GLhandleARB containerObj, GLsizei maxCount,
-                                      GLsizei* count, GLhandleARB* obj) { V86GL_API_CALL();
+                                      GLsizei* count, GLhandleARB* obj) { V86GL_GL_CALL_VOID();
     glGetAttachedShaders((GLuint)containerObj, maxCount, count, (GLuint*)obj);
 }
 
-GLhandleARB APIENTRY glGetHandleARB(GLenum pname) { V86GL_API_CALL();
+GLhandleARB APIENTRY glGetHandleARB(GLenum pname) { V86GL_GL_CALL_VALUE(0);
     GLint program = 0;
     if (pname != GL_PROGRAM_OBJECT_ARB) {v86gl_set_error(GL_INVALID_ENUM);return 0;}
     if (emit_query_state(GL_CURRENT_PROGRAM, V86GL_STATE_INTEGER, &program) < 1) return 0;
     return (GLhandleARB)program;
 }
 
-GLint APIENTRY glGetUniformLocationARB(GLhandleARB programObj, const GLcharARB* name) { V86GL_API_CALL();
+GLint APIENTRY glGetUniformLocationARB(GLhandleARB programObj, const GLcharARB* name) { V86GL_GL_CALL_VALUE(0);
     return glGetUniformLocation((GLuint)programObj, (const GLchar*)name);
 }
 
 void APIENTRY glGetActiveUniformARB(GLhandleARB programObj, GLuint index,
                                     GLsizei maxLength, GLsizei* length,
                                     GLint* size, GLenum* type,
-                                    GLcharARB* name) { V86GL_API_CALL();
+                                    GLcharARB* name) { V86GL_GL_CALL_VOID();
     glGetActiveUniform((GLuint)programObj, index, maxLength, length, size, type,
                        (GLchar*)name);
 }
 
-void APIENTRY glGetUniformfvARB(GLhandleARB programObj, GLint location, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetUniformfvARB(GLhandleARB programObj, GLint location, GLfloat* params) { V86GL_GL_CALL_VOID();
     glGetUniformfv((GLuint)programObj, location, params);
 }
 
-void APIENTRY glGetUniformivARB(GLhandleARB programObj, GLint location, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetUniformivARB(GLhandleARB programObj, GLint location, GLint* params) { V86GL_GL_CALL_VOID();
     glGetUniformiv((GLuint)programObj, location, params);
 }
 
 void APIENTRY glGetShaderSourceARB(GLhandleARB obj, GLsizei maxLength,
-                                   GLsizei* length, GLcharARB* source) { V86GL_API_CALL();
+                                   GLsizei* length, GLcharARB* source) { V86GL_GL_CALL_VOID();
     glGetShaderSource((GLuint)obj, maxLength, length, (GLchar*)source);
 }
 
 void APIENTRY glBindAttribLocationARB(GLhandleARB programObj, GLuint index,
-                                      const GLcharARB* name) { V86GL_API_CALL();
+                                      const GLcharARB* name) { V86GL_GL_CALL_VOID();
     glBindAttribLocation((GLuint)programObj, index, (const GLchar*)name);
 }
 
 void APIENTRY glGetActiveAttribARB(GLhandleARB programObj, GLuint index,
                                    GLsizei maxLength, GLsizei* length,
                                    GLint* size, GLenum* type,
-                                   GLcharARB* name) { V86GL_API_CALL();
+                                   GLcharARB* name) { V86GL_GL_CALL_VOID();
     glGetActiveAttrib((GLuint)programObj, index, maxLength, length, size, type,
                       (GLchar*)name);
 }
 
-GLint APIENTRY glGetAttribLocationARB(GLhandleARB programObj, const GLcharARB* name) { V86GL_API_CALL();
+GLint APIENTRY glGetAttribLocationARB(GLhandleARB programObj, const GLcharARB* name) { V86GL_GL_CALL_VALUE(0);
     return glGetAttribLocation((GLuint)programObj, (const GLchar*)name);
 }
 
 #define DEFINE_UNIFORM_ARB_ALIAS(SUFFIX, ARGS, CALLARGS) \
-void APIENTRY glUniform##SUFFIX##ARB ARGS { V86GL_API_CALL(); glUniform##SUFFIX CALLARGS; }
+void APIENTRY glUniform##SUFFIX##ARB ARGS { V86GL_GL_CALL_VOID(); glUniform##SUFFIX CALLARGS; }
 
 DEFINE_UNIFORM_ARB_ALIAS(1f, (GLint location, GLfloat v0), (location, v0))
 DEFINE_UNIFORM_ARB_ALIAS(2f, (GLint location, GLfloat v0, GLfloat v1), (location, v0, v1))
@@ -7031,7 +6982,7 @@ DEFINE_UNIFORM_ARB_ALIAS(Matrix4fv, (GLint location, GLsizei count, GLboolean tr
 #undef DEFINE_UNIFORM_ARB_ALIAS
 
 #define DEFINE_VERTEX_ATTRIB_ARB_ALIAS(SUFFIX, ARGS, CALLARGS) \
-void APIENTRY glVertexAttrib##SUFFIX##ARB ARGS { V86GL_API_CALL(); glVertexAttrib##SUFFIX CALLARGS; }
+void APIENTRY glVertexAttrib##SUFFIX##ARB ARGS { V86GL_GL_CALL_VOID(); glVertexAttrib##SUFFIX CALLARGS; }
 
 DEFINE_VERTEX_ATTRIB_ARB_ALIAS(1d, (GLuint index, GLdouble x), (index, x))
 DEFINE_VERTEX_ATTRIB_ARB_ALIAS(1dv, (GLuint index, const GLdouble* v), (index, v))
@@ -7072,33 +7023,33 @@ DEFINE_VERTEX_ATTRIB_ARB_ALIAS(4usv, (GLuint index, const GLushort* v), (index, 
 
 #undef DEFINE_VERTEX_ATTRIB_ARB_ALIAS
 
-void APIENTRY glEnableVertexAttribArrayARB(GLuint index) { V86GL_API_CALL();
+void APIENTRY glEnableVertexAttribArrayARB(GLuint index) { V86GL_GL_CALL_VOID();
     glEnableVertexAttribArray(index);
 }
 
-void APIENTRY glDisableVertexAttribArrayARB(GLuint index) { V86GL_API_CALL();
+void APIENTRY glDisableVertexAttribArrayARB(GLuint index) { V86GL_GL_CALL_VOID();
     glDisableVertexAttribArray(index);
 }
 
 void APIENTRY glVertexAttribPointerARB(GLuint index, GLint size, GLenum type,
                                        GLboolean normalized, GLsizei stride,
-                                       const GLvoid* pointer) { V86GL_API_CALL();
+                                       const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     glVertexAttribPointer(index, size, type, normalized, stride, pointer);
 }
 
-void APIENTRY glGetVertexAttribdvARB(GLuint index, GLenum pname, GLdouble* params) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribdvARB(GLuint index, GLenum pname, GLdouble* params) { V86GL_GL_CALL_VOID();
     glGetVertexAttribdv(index, pname, params);
 }
 
-void APIENTRY glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     glGetVertexAttribfv(index, pname, params);
 }
 
-void APIENTRY glGetVertexAttribivARB(GLuint index, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribivARB(GLuint index, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     glGetVertexAttribiv(index, pname, params);
 }
 
-void APIENTRY glGetVertexAttribPointervARB(GLuint index, GLenum pname, GLvoid** pointer) { V86GL_API_CALL();
+void APIENTRY glGetVertexAttribPointervARB(GLuint index, GLenum pname, GLvoid** pointer) { V86GL_GL_CALL_VOID();
     glGetVertexAttribPointerv(index, pname, pointer);
 }
 
@@ -7131,12 +7082,12 @@ static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuin
 }
 
 __declspec(dllexport)
-void APIENTRY glGenTextures(GLsizei n, GLuint* textures) { V86GL_API_CALL();
+void APIENTRY glGenTextures(GLsizei n, GLuint* textures) { V86GL_GL_CALL_VOID();
     (void)emit_query_names(V86GL_OBJECT_KIND_TEXTURE, GLFN_GEN_TEXTURES, n, textures);
 }
 
 __declspec(dllexport)
-void APIENTRY glDeleteTextures(GLsizei n, const GLuint* textures) { V86GL_API_CALL();
+void APIENTRY glDeleteTextures(GLsizei n, const GLuint* textures) { V86GL_GL_CALL_VOID();
     if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_TEXTURES, n, textures);
 }
@@ -7202,87 +7153,87 @@ static void emit_buffer_sub_data(GLenum target, GLintptrARB offset,
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
-void APIENTRY glGenBuffersARB(GLsizei n, GLuint* buffers) { V86GL_API_CALL();
+void APIENTRY glGenBuffersARB(GLsizei n, GLuint* buffers) { V86GL_GL_CALL_VOID();
     (void)emit_query_names(V86GL_OBJECT_KIND_BUFFER, GLFN_GEN_BUFFERS, n, buffers);
 }
 
-void APIENTRY glGenBuffers(GLsizei n, GLuint* buffers) { V86GL_API_CALL();
+void APIENTRY glGenBuffers(GLsizei n, GLuint* buffers) { V86GL_GL_CALL_VOID();
     glGenBuffersARB(n, buffers);
 }
 
-void APIENTRY glGenQueries(GLsizei n, GLuint* ids) { V86GL_API_CALL();
+void APIENTRY glGenQueries(GLsizei n, GLuint* ids) { V86GL_GL_CALL_VOID();
     (void)emit_query_names(V86GL_OBJECT_KIND_QUERY, GLFN_GEN_QUERIES, n, ids);
 }
 
-void APIENTRY glDeleteQueries(GLsizei n, const GLuint* ids) { V86GL_API_CALL();
+void APIENTRY glDeleteQueries(GLsizei n, const GLuint* ids) { V86GL_GL_CALL_VOID();
     if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_QUERIES, n, ids);
 }
 
-GLboolean APIENTRY glIsQuery(GLuint id) { V86GL_API_CALL();
+GLboolean APIENTRY glIsQuery(GLuint id) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_QUERY, id, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
-void APIENTRY glBeginQuery(GLenum target, GLuint id) { V86GL_API_CALL();
+void APIENTRY glBeginQuery(GLenum target, GLuint id) { V86GL_GL_CALL_VOID();
     uint32_t payload[2] = {target, id};
     emit_gl_call(GLFN_BEGIN_QUERY, payload, sizeof(payload));
 }
 
-void APIENTRY glEndQuery(GLenum target) { V86GL_API_CALL();
+void APIENTRY glEndQuery(GLenum target) { V86GL_GL_CALL_VOID();
     uint32_t payload = target;
     emit_gl_call(GLFN_END_QUERY, &payload, sizeof(payload));
 }
 
-void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_QUERY_TARGET, target, pname, V86GL_STATE_INTEGER, params);
 }
 
 
-void APIENTRY glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     GLint value;
     if (params && emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, id, pname, &value)) *params = (GLint)value;
 }
 
-void APIENTRY glGetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) { V86GL_API_CALL();
+void APIENTRY glGetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) { V86GL_GL_CALL_VOID();
     GLint value;
     if (params && emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, id, pname, &value)) *params = (GLuint)value;
 }
 
-void APIENTRY glGenQueriesARB(GLsizei n, GLuint* ids) { V86GL_API_CALL();
+void APIENTRY glGenQueriesARB(GLsizei n, GLuint* ids) { V86GL_GL_CALL_VOID();
     glGenQueries(n, ids);
 }
 
-void APIENTRY glDeleteQueriesARB(GLsizei n, const GLuint* ids) { V86GL_API_CALL();
+void APIENTRY glDeleteQueriesARB(GLsizei n, const GLuint* ids) { V86GL_GL_CALL_VOID();
     glDeleteQueries(n, ids);
 }
 
-GLboolean APIENTRY glIsQueryARB(GLuint id) { V86GL_API_CALL();
+GLboolean APIENTRY glIsQueryARB(GLuint id) { V86GL_GL_CALL_VALUE(0);
     return glIsQuery(id);
 }
 
-void APIENTRY glBeginQueryARB(GLenum target, GLuint id) { V86GL_API_CALL();
+void APIENTRY glBeginQueryARB(GLenum target, GLuint id) { V86GL_GL_CALL_VOID();
     glBeginQuery(target, id);
 }
 
-void APIENTRY glEndQueryARB(GLenum target) { V86GL_API_CALL();
+void APIENTRY glEndQueryARB(GLenum target) { V86GL_GL_CALL_VOID();
     glEndQuery(target);
 }
 
-void APIENTRY glGetQueryivARB(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetQueryivARB(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     glGetQueryiv(target, pname, params);
 }
 
-void APIENTRY glGetQueryObjectivARB(GLuint id, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetQueryObjectivARB(GLuint id, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     glGetQueryObjectiv(id, pname, params);
 }
 
-void APIENTRY glGetQueryObjectuivARB(GLuint id, GLenum pname, GLuint* params) { V86GL_API_CALL();
+void APIENTRY glGetQueryObjectuivARB(GLuint id, GLenum pname, GLuint* params) { V86GL_GL_CALL_VOID();
     glGetQueryObjectuiv(id, pname, params);
 }
 
-void APIENTRY glDeleteBuffersARB(GLsizei n, const GLuint* buffers) { V86GL_API_CALL();
+void APIENTRY glDeleteBuffersARB(GLsizei n, const GLuint* buffers) { V86GL_GL_CALL_VOID();
     GLsizei i;
     if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
     if (!buffers) return;
@@ -7292,11 +7243,11 @@ void APIENTRY glDeleteBuffersARB(GLsizei n, const GLuint* buffers) { V86GL_API_C
     }
 }
 
-void APIENTRY glDeleteBuffers(GLsizei n, const GLuint* buffers) { V86GL_API_CALL();
+void APIENTRY glDeleteBuffers(GLsizei n, const GLuint* buffers) { V86GL_GL_CALL_VOID();
     glDeleteBuffersARB(n, buffers);
 }
 
-void APIENTRY glBindBufferARB(GLenum target, GLuint buffer) { V86GL_API_CALL();
+void APIENTRY glBindBufferARB(GLenum target, GLuint buffer) { V86GL_GL_CALL_VOID();
     struct { uint32_t target, buffer; } payload;
     if (target != GL_ARRAY_BUFFER_ARB &&
         target != GL_ELEMENT_ARRAY_BUFFER_ARB &&
@@ -7314,28 +7265,28 @@ void APIENTRY glBindBufferARB(GLenum target, GLuint buffer) { V86GL_API_CALL();
     emit_gl_call(GLFN_BIND_BUFFER, &payload, sizeof(payload));
 }
 
-void APIENTRY glBindBuffer(GLenum target, GLuint buffer) { V86GL_API_CALL();
+void APIENTRY glBindBuffer(GLenum target, GLuint buffer) { V86GL_GL_CALL_VOID();
     glBindBufferARB(target, buffer);
 }
 
 void APIENTRY glBufferDataARB(GLenum target, GLsizeiptrARB size,
-                              const GLvoid* data, GLenum usage) { V86GL_API_CALL();
+                              const GLvoid* data, GLenum usage) { V86GL_GL_CALL_VOID();
     emit_buffer_data(target, size, data, usage);
 }
 
 void APIENTRY glBufferData(GLenum target, GLsizeiptrARB size,
-                           const GLvoid* data, GLenum usage) { V86GL_API_CALL();
+                           const GLvoid* data, GLenum usage) { V86GL_GL_CALL_VOID();
     glBufferDataARB(target, size, data, usage);
 }
 
 __declspec(dllexport)
 void APIENTRY glBufferSubDataARB(GLenum target, GLintptrARB offset,
-                                 GLsizeiptrARB size, const GLvoid* data) { V86GL_API_CALL();
+                                 GLsizeiptrARB size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_buffer_sub_data(target, offset, size, data);
 }
 
 void APIENTRY glBufferSubData(GLenum target, GLintptrARB offset,
-                              GLsizeiptrARB size, const GLvoid* data) { V86GL_API_CALL();
+                              GLsizeiptrARB size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     glBufferSubDataARB(target, offset, size, data);
 }
 
@@ -7409,28 +7360,28 @@ static int emit_query_buffer_unmap(GLenum target, GLboolean* result) {
 
 __declspec(dllexport)
 void APIENTRY glGetBufferSubDataARB(GLenum target, GLintptrARB offset,
-                                    GLsizeiptrARB size, GLvoid* data) { V86GL_API_CALL();
+                                    GLsizeiptrARB size, GLvoid* data) { V86GL_GL_CALL_VOID();
     if (target != GL_ARRAY_BUFFER_ARB && target != GL_ELEMENT_ARRAY_BUFFER_ARB &&
         target != GL_PIXEL_PACK_BUFFER && target != GL_PIXEL_UNPACK_BUFFER) {v86gl_set_error(GL_INVALID_ENUM);return;}
     (void)emit_query_buffer_data(target, offset, size, data);
 }
 
 void APIENTRY glGetBufferSubData(GLenum target, GLintptrARB offset,
-                                 GLsizeiptrARB size, GLvoid* data) { V86GL_API_CALL();
+                                 GLsizeiptrARB size, GLvoid* data) { V86GL_GL_CALL_VOID();
     glGetBufferSubDataARB(target, offset, size, data);
 }
 
-GLboolean APIENTRY glIsBufferARB(GLuint buffer) { V86GL_API_CALL();
+GLboolean APIENTRY glIsBufferARB(GLuint buffer) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_BUFFER, buffer, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
-GLboolean APIENTRY glIsBuffer(GLuint buffer) { V86GL_API_CALL();
+GLboolean APIENTRY glIsBuffer(GLuint buffer) { V86GL_GL_CALL_VALUE(0);
     return glIsBufferARB(buffer);
 }
 
-GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) { V86GL_API_CALL();
+GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) { V86GL_GL_CALL_VALUE(0);
     BufferObjectState* state;
     GLint cpu_size = 0, mapped = 0;
     int cpu = emit_query_parameter(V86GL_PARAMETER_BUFFER, target, GL_BUFFER_SIZE_ARB, V86GL_STATE_INTEGER, &cpu_size);
@@ -7456,11 +7407,11 @@ GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) { V86GL_API_CALL()
     return NULL;
 }
 
-GLvoid* APIENTRY glMapBuffer(GLenum target, GLenum access) { V86GL_API_CALL();
+GLvoid* APIENTRY glMapBuffer(GLenum target, GLenum access) { V86GL_GL_CALL_VALUE(0);
     return glMapBufferARB(target, access);
 }
 
-GLboolean APIENTRY glUnmapBufferARB(GLenum target) { V86GL_API_CALL();
+GLboolean APIENTRY glUnmapBufferARB(GLenum target) { V86GL_GL_CALL_VALUE(0);
     BufferObjectState* state = bound_buffer_state(target);
     GLboolean result = GL_FALSE;
     int cpu = emit_query_buffer_unmap(target, &result);
@@ -7474,25 +7425,25 @@ GLboolean APIENTRY glUnmapBufferARB(GLenum target) { V86GL_API_CALL();
     return result;
 }
 
-GLboolean APIENTRY glUnmapBuffer(GLenum target) { V86GL_API_CALL();
+GLboolean APIENTRY glUnmapBuffer(GLenum target) { V86GL_GL_CALL_VALUE(0);
     return glUnmapBufferARB(target);
 }
 
-void APIENTRY glGetBufferParameterivARB(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetBufferParameterivARB(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_BUFFER, target, pname, V86GL_STATE_INTEGER, params);
 }
 
-void APIENTRY glGetBufferParameteriv(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetBufferParameteriv(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     glGetBufferParameterivARB(target, pname, params);
 }
 
-void APIENTRY glGetBufferPointervARB(GLenum target, GLenum pname, GLvoid** params) { V86GL_API_CALL();
+void APIENTRY glGetBufferPointervARB(GLenum target, GLenum pname, GLvoid** params) { V86GL_GL_CALL_VOID();
     GLuint pointer = 0;
     if (params && emit_query_parameter(V86GL_PARAMETER_BUFFER_POINTER, target, pname, V86GL_STATE_UNSIGNED_INT, &pointer) > 0)
         *params = (GLvoid*)(uintptr_t)pointer;
 }
 
-void APIENTRY glGetBufferPointerv(GLenum target, GLenum pname, GLvoid** params) { V86GL_API_CALL();
+void APIENTRY glGetBufferPointerv(GLenum target, GLenum pname, GLvoid** params) { V86GL_GL_CALL_VOID();
     glGetBufferPointervARB(target, pname, params);
 }
 
@@ -7514,20 +7465,20 @@ static void emit_name_array_call(uint16_t fn, GLsizei n, const GLuint* names) {
     HeapFree(GetProcessHeap(), 0, payload);
 }
 
-void APIENTRY glGenFramebuffersEXT(GLsizei n, GLuint* framebuffers) { V86GL_API_CALL();
+void APIENTRY glGenFramebuffersEXT(GLsizei n, GLuint* framebuffers) { V86GL_GL_CALL_VOID();
     (void)emit_query_names(V86GL_OBJECT_KIND_FRAMEBUFFER, GLFN_GEN_FRAMEBUFFERS, n, framebuffers);
 }
 
-void APIENTRY glGenFramebuffers(GLsizei n, GLuint* framebuffers) { V86GL_API_CALL();
+void APIENTRY glGenFramebuffers(GLsizei n, GLuint* framebuffers) { V86GL_GL_CALL_VOID();
     glGenFramebuffersEXT(n, framebuffers);
 }
 
-void APIENTRY glDeleteFramebuffersEXT(GLsizei n, const GLuint* framebuffers) { V86GL_API_CALL();
+void APIENTRY glDeleteFramebuffersEXT(GLsizei n, const GLuint* framebuffers) { V86GL_GL_CALL_VOID();
     if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_FRAMEBUFFERS, n, framebuffers);
 }
 
-void APIENTRY glDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) { V86GL_API_CALL();
+void APIENTRY glDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) { V86GL_GL_CALL_VOID();
     glDeleteFramebuffersEXT(n, framebuffers);
 }
 
@@ -7536,31 +7487,31 @@ static void bind_framebuffer(uint16_t opcode, GLenum target, GLuint framebuffer)
     emit_gl_call(opcode, payload, sizeof(payload));
 }
 
-void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) { V86GL_API_CALL();
+void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) { V86GL_GL_CALL_VOID();
     bind_framebuffer(GLFN_BIND_FRAMEBUFFER_EXT, target, framebuffer);
 }
 
-void APIENTRY glBindFramebuffer(GLenum target, GLuint framebuffer) { V86GL_API_CALL();
+void APIENTRY glBindFramebuffer(GLenum target, GLuint framebuffer) { V86GL_GL_CALL_VOID();
     bind_framebuffer(GLFN_BIND_FRAMEBUFFER, target, framebuffer);
 }
 
-GLboolean APIENTRY glIsFramebufferEXT(GLuint framebuffer) { V86GL_API_CALL();
+GLboolean APIENTRY glIsFramebufferEXT(GLuint framebuffer) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_FRAMEBUFFER, framebuffer, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
-GLboolean APIENTRY glIsFramebuffer(GLuint framebuffer) { V86GL_API_CALL();
+GLboolean APIENTRY glIsFramebuffer(GLuint framebuffer) { V86GL_GL_CALL_VALUE(0);
     return glIsFramebufferEXT(framebuffer);
 }
 
-GLenum APIENTRY glCheckFramebufferStatusEXT(GLenum target) { V86GL_API_CALL();
+GLenum APIENTRY glCheckFramebufferStatusEXT(GLenum target) { V86GL_GL_CALL_VALUE(0);
     GLenum result = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
     (void)emit_check_framebuffer_status(target, &result);
     return result;
 }
 
-GLenum APIENTRY glCheckFramebufferStatus(GLenum target) { V86GL_API_CALL();
+GLenum APIENTRY glCheckFramebufferStatus(GLenum target) { V86GL_GL_CALL_VALUE(0);
     return glCheckFramebufferStatusEXT(target);
 }
 
@@ -7568,7 +7519,7 @@ void APIENTRY glBlitFramebufferEXT(GLint srcX0, GLint srcY0,
                                    GLint srcX1, GLint srcY1,
                                    GLint dstX0, GLint dstY0,
                                    GLint dstX1, GLint dstY1,
-                                   GLbitfield mask, GLenum filter) { V86GL_API_CALL();
+                                   GLbitfield mask, GLenum filter) { V86GL_GL_CALL_VOID();
     struct {
         int32_t src_x0, src_y0, src_x1, src_y1;
         int32_t dst_x0, dst_y0, dst_x1, dst_y1;
@@ -7608,7 +7559,7 @@ void APIENTRY glBlitFramebuffer(GLint srcX0, GLint srcY0,
                                 GLint srcX1, GLint srcY1,
                                 GLint dstX0, GLint dstY0,
                                 GLint dstX1, GLint dstY1,
-                                GLbitfield mask, GLenum filter) { V86GL_API_CALL();
+                                GLbitfield mask, GLenum filter) { V86GL_GL_CALL_VOID();
     glBlitFramebufferEXT(srcX0, srcY0, srcX1, srcY1,
                          dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
@@ -7636,43 +7587,43 @@ static void framebuffer_texture_ext(uint16_t opcode, GLenum target, GLenum attac
 
 void APIENTRY glFramebufferTexture1DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
-                                        GLint level) { V86GL_API_CALL();
+                                        GLint level) { V86GL_GL_CALL_VOID();
     framebuffer_texture_ext(GLFN_FRAMEBUFFER_TEXTURE_1D, target, attachment, textarget, texture, level, 0);
 }
 
 void APIENTRY glFramebufferTexture1D(GLenum target, GLenum attachment,
                                      GLenum textarget, GLuint texture,
-                                     GLint level) { V86GL_API_CALL();
+                                     GLint level) { V86GL_GL_CALL_VOID();
     glFramebufferTexture1DEXT(target, attachment, textarget, texture, level);
 }
 
 void APIENTRY glFramebufferTexture2DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
-                                        GLint level) { V86GL_API_CALL();
+                                        GLint level) { V86GL_GL_CALL_VOID();
     framebuffer_texture_ext(GLFN_FRAMEBUFFER_TEXTURE_2D, target, attachment, textarget, texture, level, 0);
 }
 
 void APIENTRY glFramebufferTexture2D(GLenum target, GLenum attachment,
                                      GLenum textarget, GLuint texture,
-                                     GLint level) { V86GL_API_CALL();
+                                     GLint level) { V86GL_GL_CALL_VOID();
     glFramebufferTexture2DEXT(target, attachment, textarget, texture, level);
 }
 
 void APIENTRY glFramebufferTexture3DEXT(GLenum target, GLenum attachment,
                                         GLenum textarget, GLuint texture,
-                                        GLint level, GLint zoffset) { V86GL_API_CALL();
+                                        GLint level, GLint zoffset) { V86GL_GL_CALL_VOID();
     framebuffer_texture_ext(GLFN_FRAMEBUFFER_TEXTURE_3D, target, attachment, textarget, texture, level, zoffset);
 }
 
 void APIENTRY glFramebufferTexture3D(GLenum target, GLenum attachment,
                                      GLenum textarget, GLuint texture,
-                                     GLint level, GLint zoffset) { V86GL_API_CALL();
+                                     GLint level, GLint zoffset) { V86GL_GL_CALL_VOID();
     glFramebufferTexture3DEXT(target, attachment, textarget, texture, level, zoffset);
 }
 
 void APIENTRY glFramebufferRenderbufferEXT(GLenum target, GLenum attachment,
                                            GLenum renderbuffertarget,
-                                           GLuint renderbuffer) { V86GL_API_CALL();
+                                           GLuint renderbuffer) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t attachment;
@@ -7689,62 +7640,62 @@ void APIENTRY glFramebufferRenderbufferEXT(GLenum target, GLenum attachment,
 
 void APIENTRY glFramebufferRenderbuffer(GLenum target, GLenum attachment,
                                         GLenum renderbuffertarget,
-                                        GLuint renderbuffer) { V86GL_API_CALL();
+                                        GLuint renderbuffer) { V86GL_GL_CALL_VOID();
     glFramebufferRenderbufferEXT(target, attachment, renderbuffertarget, renderbuffer);
 }
 
 void APIENTRY glGetFramebufferAttachmentParameterivEXT(GLenum target,
                                                        GLenum attachment,
                                                        GLenum pname,
-                                                       GLint* params) { V86GL_API_CALL();
+                                                       GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter_index_count(V86GL_PARAMETER_FRAMEBUFFER_ATTACHMENT, target, pname, attachment, V86GL_STATE_INTEGER, params, 16u);
 }
 
 void APIENTRY glGetFramebufferAttachmentParameteriv(GLenum target,
                                                     GLenum attachment,
                                                     GLenum pname,
-                                                    GLint* params) { V86GL_API_CALL();
+                                                    GLint* params) { V86GL_GL_CALL_VOID();
     glGetFramebufferAttachmentParameterivEXT(target, attachment, pname, params);
 }
 
-void APIENTRY glGenRenderbuffersEXT(GLsizei n, GLuint* renderbuffers) { V86GL_API_CALL();
+void APIENTRY glGenRenderbuffersEXT(GLsizei n, GLuint* renderbuffers) { V86GL_GL_CALL_VOID();
     (void)emit_query_names(V86GL_OBJECT_KIND_RENDERBUFFER, GLFN_GEN_RENDERBUFFERS, n, renderbuffers);
 }
 
-void APIENTRY glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) { V86GL_API_CALL();
+void APIENTRY glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) { V86GL_GL_CALL_VOID();
     glGenRenderbuffersEXT(n, renderbuffers);
 }
 
-void APIENTRY glDeleteRenderbuffersEXT(GLsizei n, const GLuint* renderbuffers) { V86GL_API_CALL();
+void APIENTRY glDeleteRenderbuffersEXT(GLsizei n, const GLuint* renderbuffers) { V86GL_GL_CALL_VOID();
     if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_RENDERBUFFERS, n, renderbuffers);
 }
 
-void APIENTRY glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers) { V86GL_API_CALL();
+void APIENTRY glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers) { V86GL_GL_CALL_VOID();
     glDeleteRenderbuffersEXT(n, renderbuffers);
 }
 
-void APIENTRY glBindRenderbufferEXT(GLenum target, GLuint renderbuffer) { V86GL_API_CALL();
+void APIENTRY glBindRenderbufferEXT(GLenum target, GLuint renderbuffer) { V86GL_GL_CALL_VOID();
     uint32_t payload[2] = {target, renderbuffer};
     emit_gl_call(GLFN_BIND_RENDERBUFFER, payload, sizeof(payload));
 }
 
-void APIENTRY glBindRenderbuffer(GLenum target, GLuint renderbuffer) { V86GL_API_CALL();
+void APIENTRY glBindRenderbuffer(GLenum target, GLuint renderbuffer) { V86GL_GL_CALL_VOID();
     glBindRenderbufferEXT(target, renderbuffer);
 }
 
-GLboolean APIENTRY glIsRenderbufferEXT(GLuint renderbuffer) { V86GL_API_CALL();
+GLboolean APIENTRY glIsRenderbufferEXT(GLuint renderbuffer) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_RENDERBUFFER, renderbuffer, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
-GLboolean APIENTRY glIsRenderbuffer(GLuint renderbuffer) { V86GL_API_CALL();
+GLboolean APIENTRY glIsRenderbuffer(GLuint renderbuffer) { V86GL_GL_CALL_VALUE(0);
     return glIsRenderbufferEXT(renderbuffer);
 }
 
 void APIENTRY glRenderbufferStorageEXT(GLenum target, GLenum internalformat,
-                                       GLsizei width, GLsizei height) { V86GL_API_CALL();
+                                       GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t internalformat;
@@ -7760,23 +7711,23 @@ void APIENTRY glRenderbufferStorageEXT(GLenum target, GLenum internalformat,
 }
 
 void APIENTRY glRenderbufferStorage(GLenum target, GLenum internalformat,
-                                    GLsizei width, GLsizei height) { V86GL_API_CALL();
+                                    GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     glRenderbufferStorageEXT(target, internalformat, width, height);
 }
 
 
 void APIENTRY glGetRenderbufferParameterivEXT(GLenum target, GLenum pname,
-                                              GLint* params) { V86GL_API_CALL();
+                                              GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_RENDERBUFFER, target, pname, V86GL_STATE_INTEGER, params);
 }
 
 void APIENTRY glGetRenderbufferParameteriv(GLenum target, GLenum pname,
-                                           GLint* params) { V86GL_API_CALL();
+                                           GLint* params) { V86GL_GL_CALL_VOID();
     glGetRenderbufferParameterivEXT(target, pname, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glBindTexture(GLenum target, GLuint texture) { V86GL_API_CALL();
+void APIENTRY glBindTexture(GLenum target, GLuint texture) { V86GL_GL_CALL_VOID();
     uint32_t payload[2] = {target, texture};
     emit_gl_call(GLFN_BIND_TEXTURE, payload, sizeof(payload));
 }
@@ -7784,7 +7735,7 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) { V86GL_API_CALL();
 __declspec(dllexport)
 void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLsizei height, GLint border,
-                           GLenum format, GLenum type, const GLvoid* pixels) { V86GL_API_CALL();
+                           GLenum format, GLenum type, const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     if (emit_proxy_texture_image(GLFN_TEX_IMAGE_2D, target, level, internalformat, width, height, 1, border, format, type)) return;
     V86GLRecordTexImage2d meta;
@@ -7917,7 +7868,7 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
 void APIENTRY glCompressedTexImage2DARB(GLenum target, GLint level,
                                         GLenum internalformat, GLsizei width,
                                         GLsizei height, GLint border,
-                                        GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                        GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_2D, target, level,
                               internalformat, width, height, 1, border,
                               image_size, data);
@@ -7926,7 +7877,7 @@ void APIENTRY glCompressedTexImage2DARB(GLenum target, GLint level,
 void APIENTRY glCompressedTexImage2D(GLenum target, GLint level,
                                      GLenum internalformat, GLsizei width,
                                      GLsizei height, GLint border,
-                                     GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                     GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     glCompressedTexImage2DARB(target, level, internalformat, width, height,
                               border, image_size, data);
 }
@@ -7934,7 +7885,7 @@ void APIENTRY glCompressedTexImage2D(GLenum target, GLint level,
 void APIENTRY glCompressedTexImage1DARB(GLenum target, GLint level,
                                         GLenum internalformat, GLsizei width,
                                         GLint border, GLsizei image_size,
-                                        const GLvoid* data) { V86GL_API_CALL();
+                                        const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_1D, target, level,
                               internalformat, width, 1, 1, border, image_size, data);
 }
@@ -7943,7 +7894,7 @@ void APIENTRY glCompressedTexImage3DARB(GLenum target, GLint level,
                                         GLenum internalformat, GLsizei width,
                                         GLsizei height, GLsizei depth,
                                         GLint border, GLsizei image_size,
-                                        const GLvoid* data) { V86GL_API_CALL();
+                                        const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_3D, target, level,
                               internalformat, width, height, depth, border,
                               image_size, data);
@@ -8000,28 +7951,28 @@ cancel:
 }
 
 void APIENTRY glGetCompressedTexImageARB(GLenum target, GLint level,
-                                         GLvoid* image) { V86GL_API_CALL();
+                                         GLvoid* image) { V86GL_GL_CALL_VOID();
     emit_texture_image_query(target, level, 0, 0, TRUE, image);
 }
 
 void APIENTRY glCompressedTexImage1D(GLenum target, GLint level,
                                      GLenum internalformat, GLsizei width,
                                      GLint border, GLsizei image_size,
-                                     const GLvoid* data) { V86GL_API_CALL();
+                                     const GLvoid* data) { V86GL_GL_CALL_VOID();
     glCompressedTexImage1DARB(target, level, internalformat, width, border, image_size, data);
 }
 
 void APIENTRY glCompressedTexImage3D(GLenum target, GLint level,
                                      GLenum internalformat, GLsizei width,
                                      GLsizei height, GLsizei depth, GLint border,
-                                     GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                     GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     glCompressedTexImage3DARB(target, level, internalformat, width, height, depth,
                               border, image_size, data);
 }
 
 void APIENTRY glCompressedTexSubImage1DARB(GLenum target, GLint level, GLint xoffset,
                                            GLsizei width, GLenum format,
-                                           GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                           GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_compressed_tex_sub_image(GLFN_COMPRESSED_TEX_SUB_IMAGE_1D, target, level,
                                   xoffset, 0, 0, width, 1, 1, format, image_size, data);
 }
@@ -8029,7 +7980,7 @@ void APIENTRY glCompressedTexSubImage1DARB(GLenum target, GLint level, GLint xof
 void APIENTRY glCompressedTexSubImage2DARB(GLenum target, GLint level, GLint xoffset,
                                            GLint yoffset, GLsizei width, GLsizei height,
                                            GLenum format, GLsizei image_size,
-                                           const GLvoid* data) { V86GL_API_CALL();
+                                           const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_compressed_tex_sub_image(GLFN_COMPRESSED_TEX_SUB_IMAGE_2D, target, level,
                                   xoffset, yoffset, 0, width, height, 1, format,
                                   image_size, data);
@@ -8038,7 +7989,7 @@ void APIENTRY glCompressedTexSubImage2DARB(GLenum target, GLint level, GLint xof
 void APIENTRY glCompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
                                            GLint yoffset, GLint zoffset, GLsizei width,
                                            GLsizei height, GLsizei depth, GLenum format,
-                                           GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                           GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     emit_compressed_tex_sub_image(GLFN_COMPRESSED_TEX_SUB_IMAGE_3D, target, level,
                                   xoffset, yoffset, zoffset, width, height, depth,
                                   format, image_size, data);
@@ -8046,14 +7997,14 @@ void APIENTRY glCompressedTexSubImage3DARB(GLenum target, GLint level, GLint xof
 
 void APIENTRY glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                                         GLsizei width, GLenum format,
-                                        GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                        GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     glCompressedTexSubImage1DARB(target, level, xoffset, width, format, image_size, data);
 }
 
 void APIENTRY glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset,
                                         GLint yoffset, GLsizei width, GLsizei height,
                                         GLenum format, GLsizei image_size,
-                                        const GLvoid* data) { V86GL_API_CALL();
+                                        const GLvoid* data) { V86GL_GL_CALL_VOID();
     glCompressedTexSubImage2DARB(target, level, xoffset, yoffset, width, height,
                                   format, image_size, data);
 }
@@ -8061,19 +8012,19 @@ void APIENTRY glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffse
 void APIENTRY glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset,
                                         GLint yoffset, GLint zoffset, GLsizei width,
                                         GLsizei height, GLsizei depth, GLenum format,
-                                        GLsizei image_size, const GLvoid* data) { V86GL_API_CALL();
+                                        GLsizei image_size, const GLvoid* data) { V86GL_GL_CALL_VOID();
     glCompressedTexSubImage3DARB(target, level, xoffset, yoffset, zoffset, width,
                                   height, depth, format, image_size, data);
 }
 
-void APIENTRY glGetCompressedTexImage(GLenum target, GLint level, GLvoid* image) { V86GL_API_CALL();
+void APIENTRY glGetCompressedTexImage(GLenum target, GLint level, GLvoid* image) { V86GL_GL_CALL_VOID();
     glGetCompressedTexImageARB(target, level, image);
 }
 
 void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
                               GLsizei width, GLsizei height, GLsizei depth,
                               GLint border, GLenum format, GLenum type,
-                              const GLvoid* pixels) { V86GL_API_CALL();
+                              const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     if (emit_proxy_texture_image(GLFN_TEX_IMAGE_3D, target, level, internalformat, width, height, depth, border, format, type)) return;
     V86GLRecordTexImage3d meta;
@@ -8118,7 +8069,7 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
 void APIENTRY glTexImage3D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLsizei height, GLsizei depth,
                            GLint border, GLenum format, GLenum type,
-                           const GLvoid* pixels) { V86GL_API_CALL();
+                           const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     glTexImage3DEXT(target, level, internalformat, width, height, depth,
                     border, format, type, pixels);
 }
@@ -8126,7 +8077,7 @@ void APIENTRY glTexImage3D(GLenum target, GLint level, GLint internalformat,
 void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
                                  GLint yoffset, GLint zoffset, GLsizei width,
                                  GLsizei height, GLsizei depth, GLenum format,
-                                 GLenum type, const GLvoid* pixels) { V86GL_API_CALL();
+                                 GLenum type, const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     V86GLRecordTexSubImage3d meta;
     uint32_t data_size = 0;
@@ -8169,7 +8120,7 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
 void APIENTRY glTexSubImage3D(GLenum target, GLint level, GLint xoffset,
                               GLint yoffset, GLint zoffset, GLsizei width,
                               GLsizei height, GLsizei depth, GLenum format,
-                              GLenum type, const GLvoid* pixels) { V86GL_API_CALL();
+                              GLenum type, const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     glTexSubImage3DEXT(target, level, xoffset, yoffset, zoffset, width, height,
                        depth, format, type, pixels);
 }
@@ -8177,7 +8128,7 @@ void APIENTRY glTexSubImage3D(GLenum target, GLint level, GLint xoffset,
 __declspec(dllexport)
 void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                               GLsizei width, GLsizei height,
-                              GLenum format, GLenum type, const GLvoid* pixels) { V86GL_API_CALL();
+                              GLenum format, GLenum type, const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     V86GLRecordTexSubImage2d meta;
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
@@ -8230,7 +8181,7 @@ typedef struct TightUnpackState {
 __declspec(dllexport)
 void APIENTRY glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                GLint x, GLint y, GLsizei width, GLsizei height,
-                               GLint border) { V86GL_API_CALL();
+                               GLint border) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         int32_t level;
@@ -8257,7 +8208,7 @@ __declspec(dllexport)
 void APIENTRY glCopyTexSubImage2D(GLenum target, GLint level,
                                   GLint xoffset, GLint yoffset,
                                   GLint x, GLint y,
-                                  GLsizei width, GLsizei height) { V86GL_API_CALL();
+                                  GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         int32_t level;
@@ -8284,7 +8235,7 @@ __declspec(dllexport)
 void APIENTRY glCopyTexSubImage3D(GLenum target, GLint level,
                                   GLint xoffset, GLint yoffset, GLint zoffset,
                                   GLint x, GLint y,
-                                  GLsizei width, GLsizei height) { V86GL_API_CALL();
+                                  GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         int32_t level;
@@ -8312,23 +8263,23 @@ void APIENTRY glCopyTexSubImage3D(GLenum target, GLint level,
 void APIENTRY glCopyTexSubImage3DEXT(GLenum target, GLint level,
                                      GLint xoffset, GLint yoffset, GLint zoffset,
                                      GLint x, GLint y,
-                                     GLsizei width, GLsizei height) { V86GL_API_CALL();
+                                     GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     glCopyTexSubImage3D(target, level, xoffset, yoffset, zoffset,
                         x, y, width, height);
 }
 
 __declspec(dllexport)
-void APIENTRY glGenerateMipmap(GLenum target) { V86GL_API_CALL();
+void APIENTRY glGenerateMipmap(GLenum target) { V86GL_GL_CALL_VOID();
     uint32_t payload = target;
     emit_gl_call(GLFN_GENERATE_MIPMAP, &payload, sizeof(payload));
 }
 
-void APIENTRY glGenerateMipmapEXT(GLenum target) { V86GL_API_CALL();
+void APIENTRY glGenerateMipmapEXT(GLenum target) { V86GL_GL_CALL_VOID();
     glGenerateMipmap(target);
 }
 
 __declspec(dllexport)
-void APIENTRY glTexParameteri(GLenum target, GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glTexParameteri(GLenum target, GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct { uint32_t target, pname; int32_t param; } payload;
     payload.target = (uint32_t)target;
     payload.pname = (uint32_t)pname;
@@ -8337,7 +8288,7 @@ void APIENTRY glTexParameteri(GLenum target, GLenum pname, GLint param) { V86GL_
 }
 
 __declspec(dllexport)
-void APIENTRY glTexParameterf(GLenum target, GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glTexParameterf(GLenum target, GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct { uint32_t target, pname; float param; } payload;
     payload.target = (uint32_t)target;
     payload.pname = (uint32_t)pname;
@@ -8346,7 +8297,7 @@ void APIENTRY glTexParameterf(GLenum target, GLenum pname, GLfloat param) { V86G
 }
 
 __declspec(dllexport)
-void APIENTRY glTexParameteriv(GLenum target, GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glTexParameteriv(GLenum target, GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t pname;
@@ -8373,7 +8324,7 @@ void APIENTRY glTexParameteriv(GLenum target, GLenum pname, const GLint* params)
 }
 
 __declspec(dllexport)
-void APIENTRY glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t pname;
@@ -8400,17 +8351,17 @@ void APIENTRY glTexParameterfv(GLenum target, GLenum pname, const GLfloat* param
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexParameteriv(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetTexParameteriv(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEXTURE, target, pname, V86GL_STATE_INTEGER, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetTexParameterfv(GLenum target, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEXTURE, target, pname, V86GL_STATE_FLOAT, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelStorei(GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glPixelStorei(GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct { uint32_t pname; int32_t param; } payload;
 
     switch (pname) {
@@ -8478,19 +8429,19 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glTexEnvi(GLenum target, GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t target; uint32_t pname; int32_t param;} payload = {target, pname, param};
     emit_gl_call(GLFN_TEX_ENVI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glTexEnvf(GLenum target, GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t target; uint32_t pname; float param;} payload = {target, pname, param};
     emit_gl_call(GLFN_TEX_ENVF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t pname;
@@ -8522,7 +8473,7 @@ void APIENTRY glTexEnviv(GLenum target, GLenum pname, const GLint* params) { V86
 }
 
 __declspec(dllexport)
-void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         uint32_t pname;
@@ -8554,7 +8505,7 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) { V
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord2f(GLfloat s, GLfloat t) { V86GL_API_CALL();
+void APIENTRY glTexCoord2f(GLfloat s, GLfloat t) { V86GL_GL_CALL_VOID();
     struct { float s, t; } payload;
     payload.s = s;
     payload.t = t;
@@ -8562,31 +8513,31 @@ void APIENTRY glTexCoord2f(GLfloat s, GLfloat t) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord2fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glTexCoord2fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glTexCoord2f(v[0], v[1]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glTexGeni(GLenum coord, GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glTexGeni(GLenum coord, GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t coord; uint32_t pname; int32_t param;} payload = {coord, pname, param};
     emit_gl_call(GLFN_TEX_GENI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glTexGenf(GLenum coord, GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glTexGenf(GLenum coord, GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t coord; uint32_t pname; float param;} payload = {coord, pname, param};
     emit_gl_call(GLFN_TEX_GENF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glTexGend(GLenum coord, GLenum pname, GLdouble param) { V86GL_API_CALL();
+void APIENTRY glTexGend(GLenum coord, GLenum pname, GLdouble param) { V86GL_GL_CALL_VOID();
     glTexGenf(coord, pname, (GLfloat)param);
 }
 
 __declspec(dllexport)
-void APIENTRY glTexGeniv(GLenum coord, GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glTexGeniv(GLenum coord, GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t coord;
         uint32_t pname;
@@ -8618,7 +8569,7 @@ void APIENTRY glTexGeniv(GLenum coord, GLenum pname, const GLint* params) { V86G
 }
 
 __declspec(dllexport)
-void APIENTRY glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t coord;
         uint32_t pname;
@@ -8650,7 +8601,7 @@ void APIENTRY glTexGenfv(GLenum coord, GLenum pname, const GLfloat* params) { V8
 }
 
 __declspec(dllexport)
-void APIENTRY glTexGendv(GLenum coord, GLenum pname, const GLdouble* params) { V86GL_API_CALL();
+void APIENTRY glTexGendv(GLenum coord, GLenum pname, const GLdouble* params) { V86GL_GL_CALL_VOID();
     GLfloat values[4];
     int count = texgen_value_count(pname);
     int i;
@@ -8668,7 +8619,7 @@ void APIENTRY glTexGendv(GLenum coord, GLenum pname, const GLdouble* params) { V
 }
 
 __declspec(dllexport)
-void APIENTRY glClipPlane(GLenum plane, const GLdouble* equation) { V86GL_API_CALL();
+void APIENTRY glClipPlane(GLenum plane, const GLdouble* equation) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t plane;
         double values[4];
@@ -8690,24 +8641,24 @@ void APIENTRY glClipPlane(GLenum plane, const GLdouble* equation) { V86GL_API_CA
 }
 
 __declspec(dllexport)
-void APIENTRY glColorMaterial(GLenum face, GLenum mode) { V86GL_API_CALL();
+void APIENTRY glColorMaterial(GLenum face, GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t face; uint32_t mode;} payload = {face, mode};
     emit_gl_call(GLFN_COLOR_MATERIAL, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glActiveTextureARB(GLenum texture) { V86GL_API_CALL();
+void APIENTRY glActiveTextureARB(GLenum texture) { V86GL_GL_CALL_VOID();
     struct {uint32_t texture;} payload = {texture};
     emit_gl_call(GLFN_ACTIVE_TEXTURE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glActiveTexture(GLenum texture) { V86GL_API_CALL();
+void APIENTRY glActiveTexture(GLenum texture) { V86GL_GL_CALL_VOID();
     glActiveTextureARB(texture);
 }
 
 __declspec(dllexport)
-void APIENTRY glClientActiveTextureARB(GLenum texture) { V86GL_API_CALL();
+void APIENTRY glClientActiveTextureARB(GLenum texture) { V86GL_GL_CALL_VOID();
     uint32_t payload = (uint32_t)texture;
 
     if (texture < GL_TEXTURE0_ARB ||
@@ -8721,7 +8672,7 @@ void APIENTRY glClientActiveTextureARB(GLenum texture) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glClientActiveTexture(GLenum texture) { V86GL_API_CALL();
+void APIENTRY glClientActiveTexture(GLenum texture) { V86GL_GL_CALL_VOID();
     glClientActiveTextureARB(texture);
 }
 
@@ -8752,30 +8703,30 @@ static void emit_multi_tex_coord4f(GLenum target, GLfloat s, GLfloat t, GLfloat 
 }
 
 #define DEFINE_MULTI_TEX_COORD_SCALAR(SUFFIX, TYPE) \
-__declspec(dllexport) void APIENTRY glMultiTexCoord1##SUFFIX##ARB(GLenum target, TYPE s) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord1##SUFFIX##ARB(GLenum target, TYPE s) { V86GL_GL_CALL_VOID(); \
     emit_multi_tex_coord4f(target, (GLfloat)s, 0.0f, 0.0f, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glMultiTexCoord2##SUFFIX##ARB(GLenum target, TYPE s, TYPE t) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord2##SUFFIX##ARB(GLenum target, TYPE s, TYPE t) { V86GL_GL_CALL_VOID(); \
     emit_multi_tex_coord4f(target, (GLfloat)s, (GLfloat)t, 0.0f, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glMultiTexCoord3##SUFFIX##ARB(GLenum target, TYPE s, TYPE t, TYPE r) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord3##SUFFIX##ARB(GLenum target, TYPE s, TYPE t, TYPE r) { V86GL_GL_CALL_VOID(); \
     emit_multi_tex_coord4f(target, (GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glMultiTexCoord4##SUFFIX##ARB(GLenum target, TYPE s, TYPE t, TYPE r, TYPE q) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord4##SUFFIX##ARB(GLenum target, TYPE s, TYPE t, TYPE r, TYPE q) { V86GL_GL_CALL_VOID(); \
     emit_multi_tex_coord4f(target, (GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q); \
 }
 
 #define DEFINE_MULTI_TEX_COORD_VECTOR(SUFFIX, TYPE) \
-__declspec(dllexport) void APIENTRY glMultiTexCoord1##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord1##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) emit_multi_tex_coord4f(target, (GLfloat)v[0], 0.0f, 0.0f, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glMultiTexCoord2##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord2##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) emit_multi_tex_coord4f(target, (GLfloat)v[0], (GLfloat)v[1], 0.0f, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glMultiTexCoord3##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord3##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) emit_multi_tex_coord4f(target, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glMultiTexCoord4##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glMultiTexCoord4##SUFFIX##vARB(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) emit_multi_tex_coord4f(target, (GLfloat)v[0], (GLfloat)v[1], (GLfloat)v[2], (GLfloat)v[3]); \
 }
 
@@ -8792,58 +8743,58 @@ DEFINE_MULTI_TEX_COORD_VECTOR(s, GLshort)
 #undef DEFINE_MULTI_TEX_COORD_VECTOR
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord1f(GLenum target, GLfloat s) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord1f(GLenum target, GLfloat s) { V86GL_GL_CALL_VOID();
     glMultiTexCoord1fARB(target, s);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t) { V86GL_GL_CALL_VOID();
     glMultiTexCoord2fARB(target, s, t);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord3f(GLenum target, GLfloat s, GLfloat t, GLfloat r) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord3f(GLenum target, GLfloat s, GLfloat t, GLfloat r) { V86GL_GL_CALL_VOID();
     glMultiTexCoord3fARB(target, s, t, r);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q) { V86GL_GL_CALL_VOID();
     glMultiTexCoord4fARB(target, s, t, r, q);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord1fv(GLenum target, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord1fv(GLenum target, const GLfloat* v) { V86GL_GL_CALL_VOID();
     glMultiTexCoord1fvARB(target, v);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord2fv(GLenum target, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord2fv(GLenum target, const GLfloat* v) { V86GL_GL_CALL_VOID();
     glMultiTexCoord2fvARB(target, v);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord3fv(GLenum target, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord3fv(GLenum target, const GLfloat* v) { V86GL_GL_CALL_VOID();
     glMultiTexCoord3fvARB(target, v);
 }
 
 __declspec(dllexport)
-void APIENTRY glMultiTexCoord4fv(GLenum target, const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glMultiTexCoord4fv(GLenum target, const GLfloat* v) { V86GL_GL_CALL_VOID();
     glMultiTexCoord4fvARB(target, v);
 }
 
 /* OpenGL 1.3 promoted every ARB_multitexture coordinate overload to core.
  * They all share the same packed float transport representation above. */
 #define DEFINE_CORE_MULTI_TEX_COORD_SCALAR(SUFFIX, TYPE) \
-void APIENTRY glMultiTexCoord1##SUFFIX(GLenum target, TYPE s) { V86GL_API_CALL(); glMultiTexCoord1##SUFFIX##ARB(target, s); } \
-void APIENTRY glMultiTexCoord2##SUFFIX(GLenum target, TYPE s, TYPE t) { V86GL_API_CALL(); glMultiTexCoord2##SUFFIX##ARB(target, s, t); } \
-void APIENTRY glMultiTexCoord3##SUFFIX(GLenum target, TYPE s, TYPE t, TYPE r) { V86GL_API_CALL(); glMultiTexCoord3##SUFFIX##ARB(target, s, t, r); } \
-void APIENTRY glMultiTexCoord4##SUFFIX(GLenum target, TYPE s, TYPE t, TYPE r, TYPE q) { V86GL_API_CALL(); glMultiTexCoord4##SUFFIX##ARB(target, s, t, r, q); }
+void APIENTRY glMultiTexCoord1##SUFFIX(GLenum target, TYPE s) { V86GL_GL_CALL_VOID(); glMultiTexCoord1##SUFFIX##ARB(target, s); } \
+void APIENTRY glMultiTexCoord2##SUFFIX(GLenum target, TYPE s, TYPE t) { V86GL_GL_CALL_VOID(); glMultiTexCoord2##SUFFIX##ARB(target, s, t); } \
+void APIENTRY glMultiTexCoord3##SUFFIX(GLenum target, TYPE s, TYPE t, TYPE r) { V86GL_GL_CALL_VOID(); glMultiTexCoord3##SUFFIX##ARB(target, s, t, r); } \
+void APIENTRY glMultiTexCoord4##SUFFIX(GLenum target, TYPE s, TYPE t, TYPE r, TYPE q) { V86GL_GL_CALL_VOID(); glMultiTexCoord4##SUFFIX##ARB(target, s, t, r, q); }
 
 #define DEFINE_CORE_MULTI_TEX_COORD_VECTOR(SUFFIX, TYPE) \
-void APIENTRY glMultiTexCoord1##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_API_CALL(); glMultiTexCoord1##SUFFIX##vARB(target, v); } \
-void APIENTRY glMultiTexCoord2##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_API_CALL(); glMultiTexCoord2##SUFFIX##vARB(target, v); } \
-void APIENTRY glMultiTexCoord3##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_API_CALL(); glMultiTexCoord3##SUFFIX##vARB(target, v); } \
-void APIENTRY glMultiTexCoord4##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_API_CALL(); glMultiTexCoord4##SUFFIX##vARB(target, v); }
+void APIENTRY glMultiTexCoord1##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); glMultiTexCoord1##SUFFIX##vARB(target, v); } \
+void APIENTRY glMultiTexCoord2##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); glMultiTexCoord2##SUFFIX##vARB(target, v); } \
+void APIENTRY glMultiTexCoord3##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); glMultiTexCoord3##SUFFIX##vARB(target, v); } \
+void APIENTRY glMultiTexCoord4##SUFFIX##v(GLenum target, const TYPE* v) { V86GL_GL_CALL_VOID(); glMultiTexCoord4##SUFFIX##vARB(target, v); }
 
 DEFINE_CORE_MULTI_TEX_COORD_SCALAR(d, GLdouble)
 DEFINE_CORE_MULTI_TEX_COORD_SCALAR(i, GLint)
@@ -8856,7 +8807,7 @@ DEFINE_CORE_MULTI_TEX_COORD_VECTOR(s, GLshort)
 #undef DEFINE_CORE_MULTI_TEX_COORD_VECTOR
 
 __declspec(dllexport)
-void APIENTRY glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) { V86GL_API_CALL();
+void APIENTRY glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) { V86GL_GL_CALL_VOID();
     struct { float nx, ny, nz; } payload;
     payload.nx = nx;
     payload.ny = ny;
@@ -8865,26 +8816,26 @@ void APIENTRY glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glNormal3fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glNormal3fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glNormal3f(v[0], v[1], v[2]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glFogf(GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glFogf(GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_FOGF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glFogi(GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glFogi(GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_FOGI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glFogfv(GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glFogfv(GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t pname;
         uint32_t count;
@@ -8913,43 +8864,43 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat* params) { V86GL_API_CALL();
     emit_gl_call(GLFN_FOGFV, &payload, sizeof(payload));
 }
 
-void APIENTRY glFogCoordf(GLfloat coord) { V86GL_API_CALL();
+void APIENTRY glFogCoordf(GLfloat coord) { V86GL_GL_CALL_VOID();
     float payload = coord;
     emit_gl_call(GLFN_FOG_COORDF, &payload, sizeof(payload));
 }
 
-void APIENTRY glFogCoordfEXT(GLfloat coord) { V86GL_API_CALL();
+void APIENTRY glFogCoordfEXT(GLfloat coord) { V86GL_GL_CALL_VOID();
     glFogCoordf(coord);
 }
 
-void APIENTRY glFogCoordd(GLdouble coord) { V86GL_API_CALL();
+void APIENTRY glFogCoordd(GLdouble coord) { V86GL_GL_CALL_VOID();
     glFogCoordf((GLfloat)coord);
 }
 
-void APIENTRY glFogCoorddEXT(GLdouble coord) { V86GL_API_CALL();
+void APIENTRY glFogCoorddEXT(GLdouble coord) { V86GL_GL_CALL_VOID();
     glFogCoordd(coord);
 }
 
-void APIENTRY glFogCoordfv(const GLfloat* coord) { V86GL_API_CALL();
+void APIENTRY glFogCoordfv(const GLfloat* coord) { V86GL_GL_CALL_VOID();
     if (coord) glFogCoordf(*coord);
 }
 
-void APIENTRY glFogCoordfvEXT(const GLfloat* coord) { V86GL_API_CALL();
+void APIENTRY glFogCoordfvEXT(const GLfloat* coord) { V86GL_GL_CALL_VOID();
     glFogCoordfv(coord);
 }
 
-void APIENTRY glFogCoorddv(const GLdouble* coord) { V86GL_API_CALL();
+void APIENTRY glFogCoorddv(const GLdouble* coord) { V86GL_GL_CALL_VOID();
     if (coord) glFogCoordd(*coord);
 }
 
-void APIENTRY glFogCoorddvEXT(const GLdouble* coord) { V86GL_API_CALL();
+void APIENTRY glFogCoorddvEXT(const GLdouble* coord) { V86GL_GL_CALL_VOID();
     glFogCoorddv(coord);
 }
 
 /* The 1.4 spelling is core; EXT is retained as a strict alias for older
  * applications.  The pointer is captured with the other guest client arrays
  * and copied into the DMA frame immediately before a draw. */
-void APIENTRY glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (stride < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -8966,11 +8917,11 @@ void APIENTRY glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid* point
     emit_vbo_pointer(GLFN_FOG_COORD_POINTER_VBO, 1, type, stride, pointer);
 }
 
-void APIENTRY glFogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glFogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     glFogCoordPointer(type, stride, pointer);
 }
 
-void APIENTRY glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue) { V86GL_GL_CALL_VOID();
     struct { float red, green, blue; } payload;
     payload.red = red;
     payload.green = green;
@@ -8978,19 +8929,19 @@ void APIENTRY glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue) { V86
     emit_gl_call(GLFN_SECONDARY_COLOR3F, &payload, sizeof(payload));
 }
 
-void APIENTRY glSecondaryColor3fEXT(GLfloat red, GLfloat green, GLfloat blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3fEXT(GLfloat red, GLfloat green, GLfloat blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3fv(const GLfloat* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3fv(const GLfloat* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3f(values[0], values[1], values[2]);
 }
 
-void APIENTRY glSecondaryColor3fvEXT(const GLfloat* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3fvEXT(const GLfloat* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3fv(values);
 }
 
-void APIENTRY glSecondaryColor3ubvEXT(const GLubyte* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3ubvEXT(const GLubyte* values) { V86GL_GL_CALL_VOID();
     if (values) {
         glSecondaryColor3f((GLfloat)values[0] / 255.0f,
                            (GLfloat)values[1] / 255.0f,
@@ -9007,72 +8958,72 @@ static GLfloat secondary_color_signed(GLint value, GLint max_positive) {
     return (GLfloat)value / (GLfloat)max_positive;
 }
 
-void APIENTRY glSecondaryColor3bEXT(GLbyte red, GLbyte green, GLbyte blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3bEXT(GLbyte red, GLbyte green, GLbyte blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f(secondary_color_signed(red, 127),
                       secondary_color_signed(green, 127),
                       secondary_color_signed(blue, 127));
 }
 
-void APIENTRY glSecondaryColor3bvEXT(const GLbyte* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3bvEXT(const GLbyte* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3bEXT(values[0], values[1], values[2]);
 }
 
-void APIENTRY glSecondaryColor3dEXT(GLdouble red, GLdouble green, GLdouble blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3dEXT(GLdouble red, GLdouble green, GLdouble blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f((GLfloat)red, (GLfloat)green, (GLfloat)blue);
 }
 
-void APIENTRY glSecondaryColor3dvEXT(const GLdouble* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3dvEXT(const GLdouble* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3dEXT(values[0], values[1], values[2]);
 }
 
-void APIENTRY glSecondaryColor3iEXT(GLint red, GLint green, GLint blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3iEXT(GLint red, GLint green, GLint blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f(secondary_color_signed(red, 2147483647),
                       secondary_color_signed(green, 2147483647),
                       secondary_color_signed(blue, 2147483647));
 }
 
-void APIENTRY glSecondaryColor3ivEXT(const GLint* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3ivEXT(const GLint* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3iEXT(values[0], values[1], values[2]);
 }
 
-void APIENTRY glSecondaryColor3sEXT(GLshort red, GLshort green, GLshort blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3sEXT(GLshort red, GLshort green, GLshort blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f(secondary_color_signed(red, 32767),
                       secondary_color_signed(green, 32767),
                       secondary_color_signed(blue, 32767));
 }
 
-void APIENTRY glSecondaryColor3svEXT(const GLshort* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3svEXT(const GLshort* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3sEXT(values[0], values[1], values[2]);
 }
 
-void APIENTRY glSecondaryColor3ubEXT(GLubyte red, GLubyte green, GLubyte blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3ubEXT(GLubyte red, GLubyte green, GLubyte blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f((GLfloat)red / 255.0f,
                       (GLfloat)green / 255.0f,
                       (GLfloat)blue / 255.0f);
 }
 
-void APIENTRY glSecondaryColor3uiEXT(GLuint red, GLuint green, GLuint blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3uiEXT(GLuint red, GLuint green, GLuint blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f((GLfloat)((GLdouble)red / 4294967295.0),
                       (GLfloat)((GLdouble)green / 4294967295.0),
                       (GLfloat)((GLdouble)blue / 4294967295.0));
 }
 
-void APIENTRY glSecondaryColor3uivEXT(const GLuint* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3uivEXT(const GLuint* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3uiEXT(values[0], values[1], values[2]);
 }
 
-void APIENTRY glSecondaryColor3usEXT(GLushort red, GLushort green, GLushort blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3usEXT(GLushort red, GLushort green, GLushort blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3f((GLfloat)red / 65535.0f,
                       (GLfloat)green / 65535.0f,
                       (GLfloat)blue / 65535.0f);
 }
 
-void APIENTRY glSecondaryColor3usvEXT(const GLushort* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3usvEXT(const GLushort* values) { V86GL_GL_CALL_VOID();
     if (values) glSecondaryColor3usEXT(values[0], values[1], values[2]);
 }
 
 void APIENTRY glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride,
-                                         const GLvoid* pointer) { V86GL_API_CALL();
+                                         const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (size != 3 || stride < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -9089,82 +9040,82 @@ void APIENTRY glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride
     emit_vbo_pointer(GLFN_SECONDARY_COLOR_POINTER_VBO, size, type, stride, pointer);
 }
 
-void APIENTRY glSecondaryColor3b(GLbyte red, GLbyte green, GLbyte blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3b(GLbyte red, GLbyte green, GLbyte blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3bEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3bv(const GLbyte* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3bv(const GLbyte* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3bvEXT(values);
 }
 
-void APIENTRY glSecondaryColor3d(GLdouble red, GLdouble green, GLdouble blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3d(GLdouble red, GLdouble green, GLdouble blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3dEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3dv(const GLdouble* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3dv(const GLdouble* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3dvEXT(values);
 }
 
-void APIENTRY glSecondaryColor3i(GLint red, GLint green, GLint blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3i(GLint red, GLint green, GLint blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3iEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3iv(const GLint* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3iv(const GLint* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3ivEXT(values);
 }
 
-void APIENTRY glSecondaryColor3s(GLshort red, GLshort green, GLshort blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3s(GLshort red, GLshort green, GLshort blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3sEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3sv(const GLshort* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3sv(const GLshort* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3svEXT(values);
 }
 
-void APIENTRY glSecondaryColor3ub(GLubyte red, GLubyte green, GLubyte blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3ub(GLubyte red, GLubyte green, GLubyte blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3ubEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3ubv(const GLubyte* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3ubv(const GLubyte* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3ubvEXT(values);
 }
 
-void APIENTRY glSecondaryColor3ui(GLuint red, GLuint green, GLuint blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3ui(GLuint red, GLuint green, GLuint blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3uiEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3uiv(const GLuint* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3uiv(const GLuint* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3uivEXT(values);
 }
 
-void APIENTRY glSecondaryColor3us(GLushort red, GLushort green, GLushort blue) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3us(GLushort red, GLushort green, GLushort blue) { V86GL_GL_CALL_VOID();
     glSecondaryColor3usEXT(red, green, blue);
 }
 
-void APIENTRY glSecondaryColor3usv(const GLushort* values) { V86GL_API_CALL();
+void APIENTRY glSecondaryColor3usv(const GLushort* values) { V86GL_GL_CALL_VOID();
     glSecondaryColor3usvEXT(values);
 }
 
 void APIENTRY glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride,
-                                      const GLvoid* pointer) { V86GL_API_CALL();
+                                      const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     glSecondaryColorPointerEXT(size, type, stride, pointer);
 }
 
 
 __declspec(dllexport)
-void APIENTRY glMaterialf(GLenum face, GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glMaterialf(GLenum face, GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t face; uint32_t pname; float param;} payload = {face, pname, param};
     emit_gl_call(GLFN_MATERIALF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glMateriali(GLenum face, GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t face; uint32_t pname; int32_t param;} payload = {face, pname, param};
     emit_gl_call(GLFN_MATERIALI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t face;
         uint32_t pname;
@@ -9197,7 +9148,7 @@ void APIENTRY glMaterialfv(GLenum face, GLenum pname, const GLfloat* params) { V
 }
 
 __declspec(dllexport)
-void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t face;
         uint32_t pname;
@@ -9231,19 +9182,19 @@ void APIENTRY glMaterialiv(GLenum face, GLenum pname, const GLint* params) { V86
 
 
 __declspec(dllexport)
-void APIENTRY glLightf(GLenum light, GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glLightf(GLenum light, GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t light; uint32_t pname; float param;} payload = {light, pname, param};
     emit_gl_call(GLFN_LIGHTF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLighti(GLenum light, GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glLighti(GLenum light, GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t light; uint32_t pname; int32_t param;} payload = {light, pname, param};
     emit_gl_call(GLFN_LIGHTI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLightfv(GLenum light, GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glLightfv(GLenum light, GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t light;
         uint32_t pname;
@@ -9276,7 +9227,7 @@ void APIENTRY glLightfv(GLenum light, GLenum pname, const GLfloat* params) { V86
 }
 
 __declspec(dllexport)
-void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t light;
         uint32_t pname;
@@ -9309,19 +9260,19 @@ void APIENTRY glLightiv(GLenum light, GLenum pname, const GLint* params) { V86GL
 }
 
 __declspec(dllexport)
-void APIENTRY glLightModelf(GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glLightModelf(GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_LIGHT_MODELF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLightModeli(GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glLightModeli(GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_LIGHT_MODELI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLightModelfv(GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glLightModelfv(GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t pname;
         uint32_t count;
@@ -9351,7 +9302,7 @@ void APIENTRY glLightModelfv(GLenum pname, const GLfloat* params) { V86GL_API_CA
 }
 
 __declspec(dllexport)
-void APIENTRY glLightModeliv(GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glLightModeliv(GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t pname;
         uint32_t count;
@@ -9381,97 +9332,97 @@ void APIENTRY glLightModeliv(GLenum pname, const GLint* params) { V86GL_API_CALL
 }
 
 __declspec(dllexport)
-void APIENTRY glBlendFunc(GLenum sfactor, GLenum dfactor) { V86GL_API_CALL();
+void APIENTRY glBlendFunc(GLenum sfactor, GLenum dfactor) { V86GL_GL_CALL_VOID();
     struct {uint32_t sfactor; uint32_t dfactor;} payload = {sfactor, dfactor};
     emit_gl_call(GLFN_BLEND_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) { V86GL_API_CALL();
+void APIENTRY glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) { V86GL_GL_CALL_VOID();
     struct {float red; float green; float blue; float alpha;} payload = {red, green, blue, alpha};
     emit_gl_call(GLFN_BLEND_COLOR, &payload, sizeof(payload));
 }
 
-void APIENTRY glBlendColorEXT(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) { V86GL_API_CALL();
+void APIENTRY glBlendColorEXT(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) { V86GL_GL_CALL_VOID();
     glBlendColor(red, green, blue, alpha);
 }
 
 __declspec(dllexport)
-void APIENTRY glBlendEquation(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glBlendEquation(GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t mode;} payload = {mode};
     emit_gl_call(GLFN_BLEND_EQUATION, &payload, sizeof(payload));
 }
 
-void APIENTRY glBlendEquationEXT(GLenum mode) { V86GL_API_CALL();
+void APIENTRY glBlendEquationEXT(GLenum mode) { V86GL_GL_CALL_VOID();
     glBlendEquation(mode);
 }
 
 __declspec(dllexport)
 void APIENTRY glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb,
-                                  GLenum src_alpha, GLenum dst_alpha) { V86GL_API_CALL();
+                                  GLenum src_alpha, GLenum dst_alpha) { V86GL_GL_CALL_VOID();
     struct {uint32_t src_rgb; uint32_t dst_rgb; uint32_t src_alpha; uint32_t dst_alpha;} payload = {src_rgb, dst_rgb, src_alpha, dst_alpha};
     emit_gl_call(GLFN_BLEND_FUNC_SEPARATE, &payload, sizeof(payload));
 }
 
 void APIENTRY glBlendFuncSeparateEXT(GLenum src_rgb, GLenum dst_rgb,
-                                     GLenum src_alpha, GLenum dst_alpha) { V86GL_API_CALL();
+                                     GLenum src_alpha, GLenum dst_alpha) { V86GL_GL_CALL_VOID();
     glBlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha);
 }
 
-void APIENTRY glSampleCoverage(GLclampf value, GLboolean invert) { V86GL_API_CALL();
+void APIENTRY glSampleCoverage(GLclampf value, GLboolean invert) { V86GL_GL_CALL_VOID();
     struct {float value; uint32_t invert;} payload = {value, invert};
     emit_gl_call(GLFN_SAMPLE_COVERAGE, &payload, sizeof(payload));
 }
 
-void APIENTRY glSampleCoverageARB(GLclampf value, GLboolean invert) { V86GL_API_CALL();
+void APIENTRY glSampleCoverageARB(GLclampf value, GLboolean invert) { V86GL_GL_CALL_VOID();
     glSampleCoverage(value, invert);
 }
 
 __declspec(dllexport)
-void APIENTRY glAlphaFunc(GLenum func, GLclampf ref) { V86GL_API_CALL();
+void APIENTRY glAlphaFunc(GLenum func, GLclampf ref) { V86GL_GL_CALL_VOID();
     struct {uint32_t func; float ref;} payload = {func, ref};
     emit_gl_call(GLFN_ALPHA_FUNC, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glDepthMask(GLboolean flag) { V86GL_API_CALL();
+void APIENTRY glDepthMask(GLboolean flag) { V86GL_GL_CALL_VOID();
     struct {uint32_t flag;} payload = {flag};
     emit_gl_call(GLFN_DEPTH_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) { V86GL_API_CALL();
+void APIENTRY glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) { V86GL_GL_CALL_VOID();
     struct {uint32_t red; uint32_t green; uint32_t blue; uint32_t alpha;} payload = {red, green, blue, alpha};
     emit_gl_call(GLFN_COLOR_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glScissor(GLint x, GLint y, GLsizei width, GLsizei height) { V86GL_API_CALL();
+void APIENTRY glScissor(GLint x, GLint y, GLsizei width, GLsizei height) { V86GL_GL_CALL_VOID();
     struct {int32_t x; int32_t y; int32_t width; int32_t height;} payload = {x, y, width, height};
     emit_gl_call(GLFN_SCISSOR, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLineWidth(GLfloat width) { V86GL_API_CALL();
+void APIENTRY glLineWidth(GLfloat width) { V86GL_GL_CALL_VOID();
     struct {float width;} payload = {width};
     emit_gl_call(GLFN_LINE_WIDTH, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPolygonMode(GLenum face, GLenum mode) { V86GL_API_CALL();
+void APIENTRY glPolygonMode(GLenum face, GLenum mode) { V86GL_GL_CALL_VOID();
     struct {uint32_t face; uint32_t mode;} payload = {face, mode};
     emit_gl_call(GLFN_POLYGON_MODE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPolygonOffset(GLfloat factor, GLfloat units) { V86GL_API_CALL();
+void APIENTRY glPolygonOffset(GLfloat factor, GLfloat units) { V86GL_GL_CALL_VOID();
     struct {float factor; float units;} payload = {factor, units};
     emit_gl_call(GLFN_POLYGON_OFFSET, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                           GLenum format, GLenum type, GLvoid* pixels) { V86GL_API_CALL();
+                           GLenum format, GLenum type, GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     uint32_t data_size;
     GLvoid* destination;
@@ -9505,17 +9456,17 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 }
 
 __declspec(dllexport)
-void APIENTRY glEnableClientState(GLenum array) { V86GL_API_CALL();
+void APIENTRY glEnableClientState(GLenum array) { V86GL_GL_CALL_VOID();
     (void)set_client_array_enabled(array, TRUE, TRUE);
 }
 
 __declspec(dllexport)
-void APIENTRY glDisableClientState(GLenum array) { V86GL_API_CALL();
+void APIENTRY glDisableClientState(GLenum array) { V86GL_GL_CALL_VOID();
     (void)set_client_array_enabled(array, FALSE, TRUE);
 }
 
 __declspec(dllexport)
-void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (size < 2 || size > 4) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -9540,7 +9491,7 @@ void APIENTRY glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLv
 }
 
 __declspec(dllexport)
-void APIENTRY glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (size < 3 || size > 4) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -9565,7 +9516,7 @@ void APIENTRY glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvo
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
 
     if (size < 1 || size > 4) {
@@ -9592,7 +9543,7 @@ void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const G
 }
 
 __declspec(dllexport)
-void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (stride < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -9612,7 +9563,7 @@ void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer
 }
 
 __declspec(dllexport)
-void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) { V86GL_API_CALL();
+void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     ClientArrayCopy arrays[4 + V86GL_MAX_TEXTURE_UNITS + 1];
     GenericAttribCopy generic_arrays[V86GL_MAX_VERTEX_ATTRIBS];
@@ -9765,7 +9716,7 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) { V86GL_API_
 }
 
 __declspec(dllexport)
-void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices) { V86GL_API_CALL();
+void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     ClientArrayCopy arrays[4 + V86GL_MAX_TEXTURE_UNITS + 1];
     GenericAttribCopy generic_arrays[V86GL_MAX_VERTEX_ATTRIBS];
@@ -9970,7 +9921,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 
 __declspec(dllexport)
 void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
-                                  GLsizei count, GLenum type, const GLvoid* indices) { V86GL_API_CALL();
+                                  GLsizei count, GLenum type, const GLvoid* indices) { V86GL_GL_CALL_VOID();
     if (count < 0 || start > end) {v86gl_set_error(GL_INVALID_VALUE);return;}
     if (!gl_index_bytes(type)) {v86gl_set_error(GL_INVALID_ENUM);return;}
     if (draw_elements_can_use_vbo_direct() && !draw_needs_edge_flags(mode)) {
@@ -9980,12 +9931,12 @@ void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
 
 __declspec(dllexport)
 void APIENTRY glDrawRangeElementsEXT(GLenum mode, GLuint start, GLuint end,
-                                     GLsizei count, GLenum type, const GLvoid* indices) { V86GL_API_CALL();
+                                     GLsizei count, GLenum type, const GLvoid* indices) { V86GL_GL_CALL_VOID();
     glDrawRangeElements(mode, start, end, count, type, indices);
 }
 
 void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
-                                const GLsizei* count, GLsizei primcount) { V86GL_API_CALL();
+                                const GLsizei* count, GLsizei primcount) { V86GL_GL_CALL_VOID();
     GLsizei i;
     if (primcount < 0 || (primcount && (!first || !count))) {v86gl_set_error(GL_INVALID_VALUE);return;}
     for (i = 0; i < primcount; i++)
@@ -9996,13 +9947,13 @@ void APIENTRY glMultiDrawArrays(GLenum mode, const GLint* first,
 }
 
 void APIENTRY glMultiDrawArraysEXT(GLenum mode, const GLint* first,
-                                   const GLsizei* count, GLsizei primcount) { V86GL_API_CALL();
+                                   const GLsizei* count, GLsizei primcount) { V86GL_GL_CALL_VOID();
     glMultiDrawArrays(mode, first, count, primcount);
 }
 
 void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
                                   GLenum type, const GLvoid* const* indices,
-                                  GLsizei primcount) { V86GL_API_CALL();
+                                  GLsizei primcount) { V86GL_GL_CALL_VOID();
     GLsizei i;
     if (primcount < 0 || (primcount && (!count || !indices))) {v86gl_set_error(GL_INVALID_VALUE);return;}
     if (!gl_index_bytes(type)) {v86gl_set_error(GL_INVALID_ENUM);return;}
@@ -10014,12 +9965,12 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
 
 void APIENTRY glMultiDrawElementsEXT(GLenum mode, const GLsizei* count,
                                      GLenum type, const GLvoid* const* indices,
-                                     GLsizei primcount) { V86GL_API_CALL();
+                                     GLsizei primcount) { V86GL_GL_CALL_VOID();
     glMultiDrawElements(mode, count, type, indices, primcount);
 }
 
 __declspec(dllexport)
-void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     const uint8_t* base = (const uint8_t*)pointer;
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
     GLsizei row_size = 0;
@@ -10155,12 +10106,12 @@ static BOOL query_array_lock(uint32_t operation, GLint first, GLsizei count) {
 }
 
 __declspec(dllexport)
-void APIENTRY glLockArraysEXT(GLint first, GLsizei count) { V86GL_API_CALL();
+void APIENTRY glLockArraysEXT(GLint first, GLsizei count) { V86GL_GL_CALL_VOID();
     (void)query_array_lock(0, first, count);
 }
 
 __declspec(dllexport)
-void APIENTRY glUnlockArraysEXT(void) { V86GL_API_CALL();
+void APIENTRY glUnlockArraysEXT(void) { V86GL_GL_CALL_VOID();
     (void)query_array_lock(1, 0, 0);
 }
 
@@ -10193,16 +10144,16 @@ static GLfloat color_from_double(GLdouble v) {
 }
 
 #define DEFINE_COLOR_VARIANT(SUFFIX, TYPE, CONVERT) \
-__declspec(dllexport) void APIENTRY glColor3##SUFFIX(TYPE r, TYPE g, TYPE b) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glColor3##SUFFIX(TYPE r, TYPE g, TYPE b) { V86GL_GL_CALL_VOID(); \
     glColor4f(CONVERT(r), CONVERT(g), CONVERT(b), 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glColor3##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glColor3##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glColor3##SUFFIX(v[0], v[1], v[2]); \
 } \
-__declspec(dllexport) void APIENTRY glColor4##SUFFIX(TYPE r, TYPE g, TYPE b, TYPE a) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glColor4##SUFFIX(TYPE r, TYPE g, TYPE b, TYPE a) { V86GL_GL_CALL_VOID(); \
     glColor4f(CONVERT(r), CONVERT(g), CONVERT(b), CONVERT(a)); \
 } \
-__declspec(dllexport) void APIENTRY glColor4##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glColor4##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glColor4##SUFFIX(v[0], v[1], v[2], v[3]); \
 }
 
@@ -10216,26 +10167,26 @@ DEFINE_COLOR_VARIANT(us, GLushort, color_from_ushort)
 #undef DEFINE_COLOR_VARIANT
 
 __declspec(dllexport)
-void APIENTRY glColor3fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glColor3fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glColor3f(v[0], v[1], v[2]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glColor4fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glColor4fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glColor4f(v[0], v[1], v[2], v[3]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glColor3ub(GLubyte r, GLubyte g, GLubyte b) { V86GL_API_CALL();
+void APIENTRY glColor3ub(GLubyte r, GLubyte g, GLubyte b) { V86GL_GL_CALL_VOID();
     glColor4f(color_from_ubyte(r), color_from_ubyte(g), color_from_ubyte(b), 1.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glColor3ubv(const GLubyte* v) { V86GL_API_CALL();
+void APIENTRY glColor3ubv(const GLubyte* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glColor3ub(v[0], v[1], v[2]);
     }
@@ -10245,10 +10196,10 @@ static GLfloat normal_from_byte(GLbyte v) {return normalize_signed_value(v,127.0
 static GLfloat normal_from_short(GLshort v) {return normalize_signed_value(v,32767.0);}
 static GLfloat normal_from_int(GLint v) {return normalize_signed_value(v,2147483647.0);}
 #define DEFINE_NORMAL_VARIANT(SUFFIX, TYPE, CONVERT) \
-__declspec(dllexport) void APIENTRY glNormal3##SUFFIX(TYPE nx, TYPE ny, TYPE nz) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glNormal3##SUFFIX(TYPE nx, TYPE ny, TYPE nz) { V86GL_GL_CALL_VOID(); \
     glNormal3f(CONVERT(nx), CONVERT(ny), CONVERT(nz)); \
 } \
-__declspec(dllexport) void APIENTRY glNormal3##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glNormal3##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glNormal3##SUFFIX(v[0], v[1], v[2]); \
 }
 
@@ -10269,28 +10220,28 @@ static void tex_coord4f_compat(GLfloat s, GLfloat t, GLfloat r, GLfloat q) {
 }
 
 #define DEFINE_TEX_COORD_VARIANT(SUFFIX, TYPE) \
-__declspec(dllexport) void APIENTRY glTexCoord1##SUFFIX(TYPE s) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord1##SUFFIX(TYPE s) { V86GL_GL_CALL_VOID(); \
     tex_coord4f_compat((GLfloat)s, 0.0f, 0.0f, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord1##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord1##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glTexCoord1##SUFFIX(v[0]); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord2##SUFFIX(TYPE s, TYPE t) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord2##SUFFIX(TYPE s, TYPE t) { V86GL_GL_CALL_VOID(); \
     tex_coord4f_compat((GLfloat)s, (GLfloat)t, 0.0f, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord2##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord2##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glTexCoord2##SUFFIX(v[0], v[1]); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord3##SUFFIX(TYPE s, TYPE t, TYPE r) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord3##SUFFIX(TYPE s, TYPE t, TYPE r) { V86GL_GL_CALL_VOID(); \
     tex_coord4f_compat((GLfloat)s, (GLfloat)t, (GLfloat)r, 1.0f); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord3##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord3##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glTexCoord3##SUFFIX(v[0], v[1], v[2]); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord4##SUFFIX(TYPE s, TYPE t, TYPE r, TYPE q) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord4##SUFFIX(TYPE s, TYPE t, TYPE r, TYPE q) { V86GL_GL_CALL_VOID(); \
     tex_coord4f_compat((GLfloat)s, (GLfloat)t, (GLfloat)r, (GLfloat)q); \
 } \
-__declspec(dllexport) void APIENTRY glTexCoord4##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glTexCoord4##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glTexCoord4##SUFFIX(v[0], v[1], v[2], v[3]); \
 }
 
@@ -10301,36 +10252,36 @@ DEFINE_TEX_COORD_VARIANT(s, GLshort)
 #undef DEFINE_TEX_COORD_VARIANT
 
 __declspec(dllexport)
-void APIENTRY glTexCoord1f(GLfloat s) { V86GL_API_CALL();
+void APIENTRY glTexCoord1f(GLfloat s) { V86GL_GL_CALL_VOID();
     tex_coord4f_compat(s, 0.0f, 0.0f, 1.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord1fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glTexCoord1fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glTexCoord1f(v[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord3f(GLfloat s, GLfloat t, GLfloat r) { V86GL_API_CALL();
+void APIENTRY glTexCoord3f(GLfloat s, GLfloat t, GLfloat r) { V86GL_GL_CALL_VOID();
     tex_coord4f_compat(s, t, r, 1.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord3fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glTexCoord3fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glTexCoord3f(v[0], v[1], v[2]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q) { V86GL_API_CALL();
+void APIENTRY glTexCoord4f(GLfloat s, GLfloat t, GLfloat r, GLfloat q) { V86GL_GL_CALL_VOID();
     tex_coord4f_compat(s, t, r, q);
 }
 
 __declspec(dllexport)
-void APIENTRY glTexCoord4fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glTexCoord4fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glTexCoord4f(v[0], v[1], v[2], v[3]);
     }
@@ -10339,22 +10290,22 @@ void APIENTRY glTexCoord4fv(const GLfloat* v) { V86GL_API_CALL();
 __declspec(dllexport) void APIENTRY glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 
 #define DEFINE_VERTEX_VARIANT(SUFFIX, TYPE) \
-__declspec(dllexport) void APIENTRY glVertex2##SUFFIX(TYPE x, TYPE y) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glVertex2##SUFFIX(TYPE x, TYPE y) { V86GL_GL_CALL_VOID(); \
     glVertex3f((GLfloat)x, (GLfloat)y, 0.0f); \
 } \
-__declspec(dllexport) void APIENTRY glVertex2##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glVertex2##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glVertex2##SUFFIX(v[0], v[1]); \
 } \
-__declspec(dllexport) void APIENTRY glVertex3##SUFFIX(TYPE x, TYPE y, TYPE z) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glVertex3##SUFFIX(TYPE x, TYPE y, TYPE z) { V86GL_GL_CALL_VOID(); \
     glVertex3f((GLfloat)x, (GLfloat)y, (GLfloat)z); \
 } \
-__declspec(dllexport) void APIENTRY glVertex3##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glVertex3##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glVertex3##SUFFIX(v[0], v[1], v[2]); \
 } \
-__declspec(dllexport) void APIENTRY glVertex4##SUFFIX(TYPE x, TYPE y, TYPE z, TYPE w) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glVertex4##SUFFIX(TYPE x, TYPE y, TYPE z, TYPE w) { V86GL_GL_CALL_VOID(); \
     glVertex4f((GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w); \
 } \
-__declspec(dllexport) void APIENTRY glVertex4##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); \
+__declspec(dllexport) void APIENTRY glVertex4##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); \
     if (v) glVertex4##SUFFIX(v[0], v[1], v[2], v[3]); \
 }
 
@@ -10365,14 +10316,14 @@ DEFINE_VERTEX_VARIANT(s, GLshort)
 #undef DEFINE_VERTEX_VARIANT
 
 __declspec(dllexport)
-void APIENTRY glVertex2fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertex2fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glVertex2f(v[0], v[1]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_API_CALL();
+void APIENTRY glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_GL_CALL_VOID();
     struct { float x, y, z, w; } payload;
 
     payload.x = x;
@@ -10383,14 +10334,14 @@ void APIENTRY glVertex4f(GLfloat x, GLfloat y, GLfloat z, GLfloat w) { V86GL_API
 }
 
 __declspec(dllexport)
-void APIENTRY glVertex4fv(const GLfloat* v) { V86GL_API_CALL();
+void APIENTRY glVertex4fv(const GLfloat* v) { V86GL_GL_CALL_VOID();
     if (v) {
         glVertex4f(v[0], v[1], v[2], v[3]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2) { V86GL_API_CALL();
+void APIENTRY glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2) { V86GL_GL_CALL_VOID();
     glBegin(GL_QUADS);
     glVertex2f(x1, y1);
     glVertex2f(x2, y1);
@@ -10400,65 +10351,65 @@ void APIENTRY glRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2) { V86GL_AP
 }
 
 __declspec(dllexport)
-void APIENTRY glRectfv(const GLfloat* v1, const GLfloat* v2) { V86GL_API_CALL();
+void APIENTRY glRectfv(const GLfloat* v1, const GLfloat* v2) { V86GL_GL_CALL_VOID();
     if (v1 && v2) {
         glRectf(v1[0], v1[1], v2[0], v2[1]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2) { V86GL_API_CALL();
+void APIENTRY glRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2) { V86GL_GL_CALL_VOID();
     glRectf((GLfloat)x1, (GLfloat)y1, (GLfloat)x2, (GLfloat)y2);
 }
 
 __declspec(dllexport)
-void APIENTRY glRectdv(const GLdouble* v1, const GLdouble* v2) { V86GL_API_CALL();
+void APIENTRY glRectdv(const GLdouble* v1, const GLdouble* v2) { V86GL_GL_CALL_VOID();
     if (v1 && v2) {
         glRectd(v1[0], v1[1], v2[0], v2[1]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glRecti(GLint x1, GLint y1, GLint x2, GLint y2) { V86GL_API_CALL();
+void APIENTRY glRecti(GLint x1, GLint y1, GLint x2, GLint y2) { V86GL_GL_CALL_VOID();
     glRectf((GLfloat)x1, (GLfloat)y1, (GLfloat)x2, (GLfloat)y2);
 }
 
 __declspec(dllexport)
-void APIENTRY glRectiv(const GLint* v1, const GLint* v2) { V86GL_API_CALL();
+void APIENTRY glRectiv(const GLint* v1, const GLint* v2) { V86GL_GL_CALL_VOID();
     if (v1 && v2) {
         glRecti(v1[0], v1[1], v2[0], v2[1]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) { V86GL_API_CALL();
+void APIENTRY glRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) { V86GL_GL_CALL_VOID();
     glRectf((GLfloat)x1, (GLfloat)y1, (GLfloat)x2, (GLfloat)y2);
 }
 
 __declspec(dllexport)
-void APIENTRY glRectsv(const GLshort* v1, const GLshort* v2) { V86GL_API_CALL();
+void APIENTRY glRectsv(const GLshort* v1, const GLshort* v2) { V86GL_GL_CALL_VOID();
     if (v1 && v2) {
         glRects(v1[0], v1[1], v2[0], v2[1]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glTranslated(GLdouble x, GLdouble y, GLdouble z) { V86GL_API_CALL();
+void APIENTRY glTranslated(GLdouble x, GLdouble y, GLdouble z) { V86GL_GL_CALL_VOID();
     glTranslatef((GLfloat)x, (GLfloat)y, (GLfloat)z);
 }
 
 __declspec(dllexport)
-void APIENTRY glRotated(GLdouble angle, GLdouble x, GLdouble y, GLdouble z) { V86GL_API_CALL();
+void APIENTRY glRotated(GLdouble angle, GLdouble x, GLdouble y, GLdouble z) { V86GL_GL_CALL_VOID();
     glRotatef((GLfloat)angle, (GLfloat)x, (GLfloat)y, (GLfloat)z);
 }
 
 __declspec(dllexport)
-void APIENTRY glScaled(GLdouble x, GLdouble y, GLdouble z) { V86GL_API_CALL();
+void APIENTRY glScaled(GLdouble x, GLdouble y, GLdouble z) { V86GL_GL_CALL_VOID();
     glScalef((GLfloat)x, (GLfloat)y, (GLfloat)z);
 }
 
 __declspec(dllexport)
-void APIENTRY glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) { V86GL_API_CALL();
+void APIENTRY glClearAccum(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) { V86GL_GL_CALL_VOID();
     struct {float red; float green; float blue; float alpha;} payload = {red, green, blue, alpha};
     emit_gl_call(GLFN_CLEAR_ACCUM, &payload, sizeof(payload));
 }
@@ -10471,91 +10422,91 @@ static void emit_index_state(unsigned int operation, GLuint mask, GLdouble value
 }
 
 __declspec(dllexport)
-void APIENTRY glClearIndex(GLfloat c) { V86GL_API_CALL();
+void APIENTRY glClearIndex(GLfloat c) { V86GL_GL_CALL_VOID();
     emit_index_state(1, 0, (GLdouble)c);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexMask(GLuint mask) { V86GL_API_CALL();
+void APIENTRY glIndexMask(GLuint mask) { V86GL_GL_CALL_VOID();
     emit_index_state(2, mask, 0);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexf(GLfloat c) { V86GL_API_CALL();
+void APIENTRY glIndexf(GLfloat c) { V86GL_GL_CALL_VOID();
     emit_index_state(0, 0, (GLdouble)c);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexfv(const GLfloat* c) { V86GL_API_CALL();
+void APIENTRY glIndexfv(const GLfloat* c) { V86GL_GL_CALL_VOID();
     if (c) {
         glIndexf(c[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexd(GLdouble c) { V86GL_API_CALL();
+void APIENTRY glIndexd(GLdouble c) { V86GL_GL_CALL_VOID();
     emit_index_state(0, 0, c);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexdv(const GLdouble* c) { V86GL_API_CALL();
+void APIENTRY glIndexdv(const GLdouble* c) { V86GL_GL_CALL_VOID();
     if (c) {
         glIndexd(c[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexi(GLint c) { V86GL_API_CALL();
+void APIENTRY glIndexi(GLint c) { V86GL_GL_CALL_VOID();
     glIndexf((GLfloat)c);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexiv(const GLint* c) { V86GL_API_CALL();
+void APIENTRY glIndexiv(const GLint* c) { V86GL_GL_CALL_VOID();
     if (c) {
         glIndexi(c[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexs(GLshort c) { V86GL_API_CALL();
+void APIENTRY glIndexs(GLshort c) { V86GL_GL_CALL_VOID();
     glIndexf((GLfloat)c);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexsv(const GLshort* c) { V86GL_API_CALL();
+void APIENTRY glIndexsv(const GLshort* c) { V86GL_GL_CALL_VOID();
     if (c) {
         glIndexs(c[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexub(GLubyte c) { V86GL_API_CALL();
+void APIENTRY glIndexub(GLubyte c) { V86GL_GL_CALL_VOID();
     glIndexf((GLfloat)c);
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexubv(const GLubyte* c) { V86GL_API_CALL();
+void APIENTRY glIndexubv(const GLubyte* c) { V86GL_GL_CALL_VOID();
     if (c) {
         glIndexub(c[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glEdgeFlag(GLboolean flag) { V86GL_API_CALL();
+void APIENTRY glEdgeFlag(GLboolean flag) { V86GL_GL_CALL_VOID();
     uint32_t payload = flag ? 1u : 0u;
     /* the host marks each vertex's boundary edges for glPolygonMode */
     emit_gl_call(GLFN_EDGE_FLAG, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glEdgeFlagv(const GLboolean* flag) { V86GL_API_CALL();
+void APIENTRY glEdgeFlagv(const GLboolean* flag) { V86GL_GL_CALL_VOID();
     if (flag) {
         glEdgeFlag(flag[0]);
     }
 }
 
 __declspec(dllexport)
-void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (stride < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -10575,7 +10526,7 @@ void APIENTRY glIndexPointer(GLenum type, GLsizei stride, const GLvoid* pointer)
 }
 
 __declspec(dllexport)
-void APIENTRY glEdgeFlagPointer(GLsizei stride, const GLvoid* pointer) { V86GL_API_CALL();
+void APIENTRY glEdgeFlagPointer(GLsizei stride, const GLvoid* pointer) { V86GL_GL_CALL_VOID();
     if (stride < 0) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
@@ -10703,7 +10654,7 @@ static BOOL read_generic_array_values(GLuint index, GLint element, GLfloat value
     return TRUE;
 }
 __declspec(dllexport)
-void APIENTRY glArrayElement(GLint i) { V86GL_API_CALL();
+void APIENTRY glArrayElement(GLint i) { V86GL_GL_CALL_VOID();
     static const GLfloat defaults[4]={0,0,0,1}, color_defaults[4]={1,1,1,1};
     GLfloat values[4];
     uint32_t unit;
@@ -10750,21 +10701,21 @@ void APIENTRY glArrayElement(GLint i) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glPointSize(GLfloat size) { V86GL_API_CALL();
+void APIENTRY glPointSize(GLfloat size) { V86GL_GL_CALL_VOID();
     struct {float size;} payload = {size};
     emit_gl_call(GLFN_POINT_SIZE, &payload, sizeof(payload));
 }
 
-void APIENTRY glPointParameterf(GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glPointParameterf(GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_POINT_PARAMETERF, &payload, sizeof(payload));
 }
 
-void APIENTRY glPointParameterfARB(GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glPointParameterfARB(GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     glPointParameterf(pname, param);
 }
 
-void APIENTRY glPointParameterfv(GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glPointParameterfv(GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     struct { uint32_t pname; float values[3]; } payload;
 
     if (!params) {
@@ -10782,16 +10733,16 @@ void APIENTRY glPointParameterfv(GLenum pname, const GLfloat* params) { V86GL_AP
     emit_gl_call(GLFN_POINT_PARAMETERFV, &payload, sizeof(payload));
 }
 
-void APIENTRY glPointParameterfvARB(GLenum pname, const GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glPointParameterfvARB(GLenum pname, const GLfloat* params) { V86GL_GL_CALL_VOID();
     glPointParameterfv(pname, params);
 }
 
-void APIENTRY glPointParameteri(GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glPointParameteri(GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_POINT_PARAMETERI, &payload, sizeof(payload));
 }
 
-void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     struct { uint32_t pname; int32_t values[3]; } payload;
 
     if (!params) {
@@ -10810,26 +10761,26 @@ void APIENTRY glPointParameteriv(GLenum pname, const GLint* params) { V86GL_API_
 }
 
 __declspec(dllexport)
-void APIENTRY glLineStipple(GLint factor, GLushort pattern) { V86GL_API_CALL();
+void APIENTRY glLineStipple(GLint factor, GLushort pattern) { V86GL_GL_CALL_VOID();
     struct {int32_t factor; uint32_t pattern;} payload = {factor, pattern};
     emit_gl_call(GLFN_LINE_STIPPLE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glLogicOp(GLenum opcode) { V86GL_API_CALL();
+void APIENTRY glLogicOp(GLenum opcode) { V86GL_GL_CALL_VOID();
     struct {uint32_t opcode;} payload = {opcode};
     emit_gl_call(GLFN_LOGIC_OP, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glAccum(GLenum op, GLfloat value) { V86GL_API_CALL();
+void APIENTRY glAccum(GLenum op, GLfloat value) { V86GL_GL_CALL_VOID();
     struct {uint32_t op; float value;} payload = {op, value};
     emit_gl_call(GLFN_ACCUM, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig,
-                       GLfloat xmove, GLfloat ymove, const GLubyte* bitmap) { V86GL_API_CALL();
+                       GLfloat xmove, GLfloat ymove, const GLubyte* bitmap) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     struct {
         int32_t width;
@@ -10882,13 +10833,13 @@ void APIENTRY glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yor
 }
 
 __declspec(dllexport)
-void APIENTRY glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type) { V86GL_API_CALL();
+void APIENTRY glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type) { V86GL_GL_CALL_VOID();
     struct {int32_t x; int32_t y; int32_t width; int32_t height; uint32_t type;} payload = {x, y, width, height, type};
     emit_gl_call(GLFN_COPY_PIXELS, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels) { V86GL_API_CALL();
+void APIENTRY glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     V86GLRecordDrawPixels meta;
     uint32_t data_size;
@@ -10931,24 +10882,24 @@ void APIENTRY glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum 
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelStoref(GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glPixelStoref(GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     glPixelStorei(pname, (GLint)param);
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelTransferf(GLenum pname, GLfloat param) { V86GL_API_CALL();
+void APIENTRY glPixelTransferf(GLenum pname, GLfloat param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; float param;} payload = {pname, param};
     emit_gl_call(GLFN_PIXEL_TRANSFERF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelTransferi(GLenum pname, GLint param) { V86GL_API_CALL();
+void APIENTRY glPixelTransferi(GLenum pname, GLint param) { V86GL_GL_CALL_VOID();
     struct {uint32_t pname; int32_t param;} payload = {pname, param};
     emit_gl_call(GLFN_PIXEL_TRANSFERI, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelZoom(GLfloat xfactor, GLfloat yfactor) { V86GL_API_CALL();
+void APIENTRY glPixelZoom(GLfloat xfactor, GLfloat yfactor) { V86GL_GL_CALL_VOID();
     struct {float xfactor; float yfactor;} payload = {xfactor, yfactor};
     emit_gl_call(GLFN_PIXEL_ZOOM, &payload, sizeof(payload));
 }
@@ -11006,21 +10957,21 @@ static void emit_pixel_map(uint16_t opcode, GLenum map, GLsizei mapsize,
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) { V86GL_API_CALL();
+void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     values = (const GLfloat*)pixel_map_source(map, mapsize, values, sizeof(GLfloat));
     if (values) emit_pixel_map(GLFN_PIXEL_MAPFV, map, mapsize, values, sizeof(GLfloat));
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) { V86GL_API_CALL();
+void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     values = (const GLuint*)pixel_map_source(map, mapsize, values, sizeof(GLuint));
     if (values) emit_pixel_map(GLFN_PIXEL_MAPUIV, map, mapsize, values, sizeof(GLuint));
 }
 
 __declspec(dllexport)
-void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values) { V86GL_API_CALL();
+void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     values = (const GLushort*)pixel_map_source(map, mapsize, values, sizeof(GLushort));
     if (values) emit_pixel_map(GLFN_PIXEL_MAPUSV, map, mapsize, values, sizeof(GLushort));
@@ -11049,17 +11000,17 @@ static int emit_query_pixel_map(GLenum map, unsigned int kind, void* values, uns
 }
 
 __declspec(dllexport)
-void APIENTRY glGetPixelMapfv(GLenum map, GLfloat* values) { V86GL_API_CALL();
+void APIENTRY glGetPixelMapfv(GLenum map, GLfloat* values) { V86GL_GL_CALL_VOID();
     (void)emit_query_pixel_map(map, V86GL_STATE_FLOAT, values, sizeof(GLfloat));
 }
 
 __declspec(dllexport)
-void APIENTRY glGetPixelMapuiv(GLenum map, GLuint* values) { V86GL_API_CALL();
+void APIENTRY glGetPixelMapuiv(GLenum map, GLuint* values) { V86GL_GL_CALL_VOID();
     (void)emit_query_pixel_map(map, V86GL_STATE_UNSIGNED_INT, values, sizeof(GLuint));
 }
 
 __declspec(dllexport)
-void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) { V86GL_API_CALL();
+void APIENTRY glGetPixelMapusv(GLenum map, GLushort* values) { V86GL_GL_CALL_VOID();
     (void)emit_query_pixel_map(map, V86GL_STATE_UNSIGNED_SHORT, values, sizeof(GLushort));
 }
 
@@ -11083,7 +11034,7 @@ static BOOL query_polygon_stipple(uint32_t mode, const GLvoid* pointer,
 }
 
 __declspec(dllexport)
-void APIENTRY glPolygonStipple(const GLubyte* mask) { V86GL_API_CALL();
+void APIENTRY glPolygonStipple(const GLubyte* mask) { V86GL_GL_CALL_VOID();
     uint32_t layout[12], header[4] = {0}, row;
     uint8_t rows[320], payload[16 + 160];
     if (!query_polygon_stipple(2, mask, layout, rows)) return;
@@ -11098,7 +11049,7 @@ void APIENTRY glPolygonStipple(const GLubyte* mask) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glGetPolygonStipple(GLubyte* mask) { V86GL_API_CALL();
+void APIENTRY glGetPolygonStipple(GLubyte* mask) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     uint32_t layout[12], row, byte, count;
     uint8_t rows[320], *destination;
@@ -11134,36 +11085,36 @@ static GLuint query_list(uint32_t operation, GLuint name, GLsizei range) {
 }
 
 __declspec(dllexport)
-GLuint APIENTRY glGenLists(GLsizei range) { V86GL_API_CALL();
+GLuint APIENTRY glGenLists(GLsizei range) { V86GL_GL_CALL_VALUE(0);
     return query_list(0, 0, range);
 }
 
 __declspec(dllexport)
-void APIENTRY glDeleteLists(GLuint list, GLsizei range) { V86GL_API_CALL();
+void APIENTRY glDeleteLists(GLuint list, GLsizei range) { V86GL_GL_CALL_VOID();
     (void)query_list(2, list, range);
 }
 
 __declspec(dllexport)
-GLboolean APIENTRY glIsList(GLuint list) { V86GL_API_CALL();
+GLboolean APIENTRY glIsList(GLuint list) { V86GL_GL_CALL_VALUE(0);
     return query_list(1, list, 0) ? GL_TRUE : GL_FALSE;
 }
 
 __declspec(dllexport)
-void APIENTRY glNewList(GLuint list, GLenum mode) { V86GL_API_CALL();
+void APIENTRY glNewList(GLuint list, GLenum mode) { V86GL_GL_CALL_VOID();
     uint32_t request[3] = {1, list, mode};
     if (v86gl_trace_call_allowed()) v86gl_trace("glNewList list=%lu mode=0x%04lx", (unsigned long)list, (unsigned long)mode);
     emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
 __declspec(dllexport)
-void APIENTRY glEndList(void) { V86GL_API_CALL();
+void APIENTRY glEndList(void) { V86GL_GL_CALL_VOID();
     uint32_t request[3] = {2, 0, 0};
     if (v86gl_trace_call_allowed()) v86gl_trace("glEndList");
     emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
 
 __declspec(dllexport)
-void APIENTRY glCallList(GLuint list) { V86GL_API_CALL();
+void APIENTRY glCallList(GLuint list) { V86GL_GL_CALL_VOID();
     uint32_t request[3] = {3, list, 0};
     if (v86gl_trace_call_allowed()) v86gl_trace("glCallList list=%lu", (unsigned long)list);
     emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
@@ -11222,7 +11173,7 @@ static int display_list_name_from_array(GLsizei index, GLenum type,
 }
 
 __declspec(dllexport)
-void APIENTRY glCallLists(GLsizei n, GLenum type, const GLvoid* lists) { V86GL_API_CALL();
+void APIENTRY glCallLists(GLsizei n, GLenum type, const GLvoid* lists) { V86GL_GL_CALL_VOID();
     uint32_t* payload;
     GLsizei i;
     if (n < 0 || (uint32_t)n > (UINT32_MAX - 8) / 4) { v86gl_set_error(GL_INVALID_VALUE); return; }
@@ -11239,7 +11190,7 @@ void APIENTRY glCallLists(GLsizei n, GLenum type, const GLvoid* lists) { V86GL_A
 }
 
 __declspec(dllexport)
-void APIENTRY glListBase(GLuint base) { V86GL_API_CALL();
+void APIENTRY glListBase(GLuint base) { V86GL_GL_CALL_VOID();
     uint32_t request[3] = {4, base, 0};
     emit_gl_call(GLFN_LIST_COMMAND, request, sizeof(request));
 }
@@ -11266,21 +11217,21 @@ static void emit_name_command(uint32_t operation, GLuint name, GLfloat value) {
 }
 
 __declspec(dllexport)
-void APIENTRY glSelectBuffer(GLsizei size, GLuint* buffer) { V86GL_API_CALL();
+void APIENTRY glSelectBuffer(GLsizei size, GLuint* buffer) { V86GL_GL_CALL_VOID();
     uint32_t request[11] = {0}; uint8_t* result;
     request[1] = (uint32_t)size; request[3] = (uint32_t)(uintptr_t)buffer;
     (void)query_render_mode(request, 0, &result);
 }
 
 __declspec(dllexport)
-void APIENTRY glFeedbackBuffer(GLsizei size, GLenum type, GLfloat* buffer) { V86GL_API_CALL();
+void APIENTRY glFeedbackBuffer(GLsizei size, GLenum type, GLfloat* buffer) { V86GL_GL_CALL_VOID();
     uint32_t request[11] = {0}; uint8_t* result;
     request[0] = 1; request[1] = (uint32_t)size; request[2] = type; request[3] = (uint32_t)(uintptr_t)buffer;
     (void)query_render_mode(request, 0, &result);
 }
 
 __declspec(dllexport)
-GLint APIENTRY glRenderMode(GLenum mode) { V86GL_API_CALL();
+GLint APIENTRY glRenderMode(GLenum mode) { V86GL_GL_CALL_VALUE(0);
     uint32_t request[11] = {0}, metadata[11], offset, count;
     uint8_t* result; uint8_t* destination;
     request[0] = 2; request[2] = mode;
@@ -11297,32 +11248,32 @@ GLint APIENTRY glRenderMode(GLenum mode) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glInitNames(void) { V86GL_API_CALL();
+void APIENTRY glInitNames(void) { V86GL_GL_CALL_VOID();
     emit_name_command(0, 0, 0.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glLoadName(GLuint name) { V86GL_API_CALL();
+void APIENTRY glLoadName(GLuint name) { V86GL_GL_CALL_VOID();
     emit_name_command(1, name, 0.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glPushName(GLuint name) { V86GL_API_CALL();
+void APIENTRY glPushName(GLuint name) { V86GL_GL_CALL_VOID();
     emit_name_command(2, name, 0.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glPopName(void) { V86GL_API_CALL();
+void APIENTRY glPopName(void) { V86GL_GL_CALL_VOID();
     emit_name_command(3, 0, 0.0f);
 }
 
 __declspec(dllexport)
-void APIENTRY glPassThrough(GLfloat token) { V86GL_API_CALL();
+void APIENTRY glPassThrough(GLfloat token) { V86GL_GL_CALL_VOID();
     emit_name_command(4, 0, token);
 }
 
 __declspec(dllexport)
-void APIENTRY glFogiv(GLenum pname, const GLint* params) { V86GL_API_CALL();
+void APIENTRY glFogiv(GLenum pname, const GLint* params) { V86GL_GL_CALL_VOID();
     GLfloat values[4];
     int count = fog_value_count(pname);
     int i;
@@ -11346,87 +11297,87 @@ void APIENTRY glFogiv(GLenum pname, const GLint* params) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-void APIENTRY glGetClipPlane(GLenum plane, GLdouble* equation) { V86GL_API_CALL();
+void APIENTRY glGetClipPlane(GLenum plane, GLdouble* equation) { V86GL_GL_CALL_VOID();
     if (equation) (void)emit_query_parameter(V86GL_PARAMETER_CLIP_PLANE, plane, 0, V86GL_STATE_DOUBLE, equation);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetLightfv(GLenum light, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetLightfv(GLenum light, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_LIGHT, light, pname, V86GL_STATE_FLOAT, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetLightiv(GLenum light, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetLightiv(GLenum light, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_LIGHT, light, pname, V86GL_STATE_INTEGER, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetMaterialfv(GLenum face, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetMaterialfv(GLenum face, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_MATERIAL, face, pname, V86GL_STATE_FLOAT, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetMaterialiv(GLenum face, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetMaterialiv(GLenum face, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_MATERIAL, face, pname, V86GL_STATE_INTEGER, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetTexEnvfv(GLenum target, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEX_ENV, target, pname, V86GL_STATE_FLOAT, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexEnviv(GLenum target, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetTexEnviv(GLenum target, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEX_ENV, target, pname, V86GL_STATE_INTEGER, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexGenfv(GLenum coord, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetTexGenfv(GLenum coord, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEX_GEN, coord, pname, V86GL_STATE_FLOAT, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexGeniv(GLenum coord, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetTexGeniv(GLenum coord, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEX_GEN, coord, pname, V86GL_STATE_INTEGER, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble* params) { V86GL_API_CALL();
+void APIENTRY glGetTexGendv(GLenum coord, GLenum pname, GLdouble* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_TEX_GEN, coord, pname, V86GL_STATE_DOUBLE, params);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) { V86GL_API_CALL();
+void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) { V86GL_GL_CALL_VOID();
     emit_texture_image_query(target, level, format, type, FALSE, pixels);
 }
 
 
 __declspec(dllexport)
-void APIENTRY glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat* params) { V86GL_API_CALL();
+void APIENTRY glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter_index_count(V86GL_PARAMETER_TEXTURE_LEVEL, target, pname, (GLuint)level, V86GL_STATE_FLOAT, params, 16u);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params) { V86GL_API_CALL();
+void APIENTRY glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params) { V86GL_GL_CALL_VOID();
     if (params) (void)emit_query_parameter_index_count(V86GL_PARAMETER_TEXTURE_LEVEL, target, pname, (GLuint)level, V86GL_STATE_INTEGER, params, 16u);
 }
 
 __declspec(dllexport)
-void APIENTRY glGetPointerv(GLenum pname, GLvoid** params) { V86GL_API_CALL();
+void APIENTRY glGetPointerv(GLenum pname, GLvoid** params) { V86GL_GL_CALL_VOID();
     GLuint address = 0;
     if (params && emit_query_parameter(V86GL_PARAMETER_ARRAY_POINTER, 0, pname, V86GL_STATE_UNSIGNED_INT, &address) > 0)
         *params = (GLvoid*)(uintptr_t)address;
 }
 
 __declspec(dllexport)
-GLboolean APIENTRY glIsTexture(GLuint texture) { V86GL_API_CALL();
+GLboolean APIENTRY glIsTexture(GLuint texture) { V86GL_GL_CALL_VALUE(0);
     GLboolean answer = GL_FALSE;
     (void)emit_query_parameter(V86GL_PARAMETER_IS_OBJECT, V86GL_OBJECT_KIND_TEXTURE, texture, V86GL_STATE_BOOLEAN, &answer);
     return answer;
 }
 
 __declspec(dllexport)
-GLboolean APIENTRY glAreTexturesResident(GLsizei n, const GLuint* textures, GLboolean* residences) { V86GL_API_CALL();
+GLboolean APIENTRY glAreTexturesResident(GLsizei n, const GLuint* textures, GLboolean* residences) { V86GL_GL_CALL_VALUE(0);
     GLsizei i;
     (void)textures;
     if (n < 0) {
@@ -11443,7 +11394,7 @@ GLboolean APIENTRY glAreTexturesResident(GLsizei n, const GLuint* textures, GLbo
 }
 
 __declspec(dllexport)
-void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLclampf* priorities) { V86GL_API_CALL();
+void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLclampf* priorities) { V86GL_GL_CALL_VOID();
     GLsizei i;
     uint32_t size;
     uint8_t* payload;
@@ -11473,7 +11424,7 @@ void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLcl
 __declspec(dllexport)
 void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLint border,
-                           GLenum format, GLenum type, const GLvoid* pixels) { V86GL_API_CALL();
+                           GLenum format, GLenum type, const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     if (emit_proxy_texture_image(GLFN_TEX_IMAGE_1D, target, level, internalformat, width, 1, 1, border, format, type)) return;
     V86GLRecordTexImage1d meta;
@@ -11521,7 +11472,7 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
 __declspec(dllexport)
 void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                               GLsizei width, GLenum format, GLenum type,
-                              const GLvoid* pixels) { V86GL_API_CALL();
+                              const GLvoid* pixels) { V86GL_GL_CALL_VOID();
     release_encoding_buffer_reads();
     V86GLRecordTexSubImage1d meta;
     uint32_t data_size;
@@ -11566,7 +11517,7 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
 
 __declspec(dllexport)
 void APIENTRY glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat,
-                               GLint x, GLint y, GLsizei width, GLint border) { V86GL_API_CALL();
+                               GLint x, GLint y, GLsizei width, GLint border) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         int32_t level;
@@ -11589,7 +11540,7 @@ void APIENTRY glCopyTexImage1D(GLenum target, GLint level, GLenum internalFormat
 
 __declspec(dllexport)
 void APIENTRY glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset,
-                                  GLint x, GLint y, GLsizei width) { V86GL_API_CALL();
+                                  GLint x, GLint y, GLsizei width) { V86GL_GL_CALL_VOID();
     struct {
         uint32_t target;
         int32_t level;
@@ -11663,21 +11614,21 @@ static void emit_evaluator_map(unsigned int dimensions, GLenum target,
 }
 
 __declspec(dllexport)
-void APIENTRY glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble* points) { V86GL_API_CALL();
+void APIENTRY glMap1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble* points) { V86GL_GL_CALL_VOID();
     emit_evaluator_map(1, target, u1, u2, stride, order, 0, 1, 0, 1, points, TRUE);
 }
 __declspec(dllexport)
-void APIENTRY glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat* points) { V86GL_API_CALL();
+void APIENTRY glMap1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat* points) { V86GL_GL_CALL_VOID();
     emit_evaluator_map(1, target, u1, u2, stride, order, 0, 1, 0, 1, points, FALSE);
 }
 __declspec(dllexport)
 void APIENTRY glMap2d(GLenum target, GLdouble u1, GLdouble u2, GLint ustride, GLint uorder,
-                      GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble* points) { V86GL_API_CALL();
+                      GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble* points) { V86GL_GL_CALL_VOID();
     emit_evaluator_map(2, target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points, TRUE);
 }
 __declspec(dllexport)
 void APIENTRY glMap2f(GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
-                      GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat* points) { V86GL_API_CALL();
+                      GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat* points) { V86GL_GL_CALL_VOID();
     emit_evaluator_map(2, target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points, FALSE);
 }
 
@@ -11689,13 +11640,13 @@ static void emit_evaluator_grid(unsigned int dimensions, GLint un, GLdouble u1, 
     emit_gl_call(GLFN_EVALUATOR_GRID, &request, sizeof(request));
 }
 __declspec(dllexport)
-void APIENTRY glMapGrid1d(GLint un, GLdouble u1, GLdouble u2) { V86GL_API_CALL(); emit_evaluator_grid(1, un, u1, u2, 1, 0, 1); }
+void APIENTRY glMapGrid1d(GLint un, GLdouble u1, GLdouble u2) { V86GL_GL_CALL_VOID(); emit_evaluator_grid(1, un, u1, u2, 1, 0, 1); }
 __declspec(dllexport)
-void APIENTRY glMapGrid1f(GLint un, GLfloat u1, GLfloat u2) { V86GL_API_CALL(); glMapGrid1d(un, u1, u2); }
+void APIENTRY glMapGrid1f(GLint un, GLfloat u1, GLfloat u2) { V86GL_GL_CALL_VOID(); glMapGrid1d(un, u1, u2); }
 __declspec(dllexport)
-void APIENTRY glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2) { V86GL_API_CALL(); emit_evaluator_grid(2, un, u1, u2, vn, v1, v2); }
+void APIENTRY glMapGrid2d(GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2) { V86GL_GL_CALL_VOID(); emit_evaluator_grid(2, un, u1, u2, vn, v1, v2); }
 __declspec(dllexport)
-void APIENTRY glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2) { V86GL_API_CALL(); glMapGrid2d(un, u1, u2, vn, v1, v2); }
+void APIENTRY glMapGrid2f(GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2) { V86GL_GL_CALL_VOID(); glMapGrid2d(un, u1, u2, vn, v1, v2); }
 
 static void emit_evaluator_coord(unsigned int dimensions, unsigned int operation, GLdouble u, GLdouble v) {
     V86GLRecordEvalCoord request;
@@ -11703,25 +11654,25 @@ static void emit_evaluator_coord(unsigned int dimensions, unsigned int operation
     emit_gl_call(GLFN_EVAL_COORD, &request, sizeof(request));
 }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1d(GLdouble u) { V86GL_API_CALL(); emit_evaluator_coord(1, 0, u, 0); }
+void APIENTRY glEvalCoord1d(GLdouble u) { V86GL_GL_CALL_VOID(); emit_evaluator_coord(1, 0, u, 0); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1dv(const GLdouble* u) { V86GL_API_CALL(); if (u) glEvalCoord1d(u[0]); }
+void APIENTRY glEvalCoord1dv(const GLdouble* u) { V86GL_GL_CALL_VOID(); if (u) glEvalCoord1d(u[0]); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1f(GLfloat u) { V86GL_API_CALL(); glEvalCoord1d(u); }
+void APIENTRY glEvalCoord1f(GLfloat u) { V86GL_GL_CALL_VOID(); glEvalCoord1d(u); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord1fv(const GLfloat* u) { V86GL_API_CALL(); if (u) glEvalCoord1f(u[0]); }
+void APIENTRY glEvalCoord1fv(const GLfloat* u) { V86GL_GL_CALL_VOID(); if (u) glEvalCoord1f(u[0]); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2d(GLdouble u, GLdouble v) { V86GL_API_CALL(); emit_evaluator_coord(2, 0, u, v); }
+void APIENTRY glEvalCoord2d(GLdouble u, GLdouble v) { V86GL_GL_CALL_VOID(); emit_evaluator_coord(2, 0, u, v); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2dv(const GLdouble* u) { V86GL_API_CALL(); if (u) glEvalCoord2d(u[0], u[1]); }
+void APIENTRY glEvalCoord2dv(const GLdouble* u) { V86GL_GL_CALL_VOID(); if (u) glEvalCoord2d(u[0], u[1]); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2f(GLfloat u, GLfloat v) { V86GL_API_CALL(); glEvalCoord2d(u, v); }
+void APIENTRY glEvalCoord2f(GLfloat u, GLfloat v) { V86GL_GL_CALL_VOID(); glEvalCoord2d(u, v); }
 __declspec(dllexport)
-void APIENTRY glEvalCoord2fv(const GLfloat* u) { V86GL_API_CALL(); if (u) glEvalCoord2f(u[0], u[1]); }
+void APIENTRY glEvalCoord2fv(const GLfloat* u) { V86GL_GL_CALL_VOID(); if (u) glEvalCoord2f(u[0], u[1]); }
 __declspec(dllexport)
-void APIENTRY glEvalPoint1(GLint i) { V86GL_API_CALL(); emit_evaluator_coord(1, 1, (GLdouble)i, 0); }
+void APIENTRY glEvalPoint1(GLint i) { V86GL_GL_CALL_VOID(); emit_evaluator_coord(1, 1, (GLdouble)i, 0); }
 __declspec(dllexport)
-void APIENTRY glEvalPoint2(GLint i, GLint j) { V86GL_API_CALL(); emit_evaluator_coord(2, 1, (GLdouble)i, (GLdouble)j); }
+void APIENTRY glEvalPoint2(GLint i, GLint j) { V86GL_GL_CALL_VOID(); emit_evaluator_coord(2, 1, (GLdouble)i, (GLdouble)j); }
 
 static void emit_evaluator_mesh(unsigned int dimensions, GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) {
     V86GLRecordEvalMesh request;
@@ -11730,9 +11681,9 @@ static void emit_evaluator_mesh(unsigned int dimensions, GLenum mode, GLint i1, 
     emit_gl_call(GLFN_EVAL_MESH, &request, sizeof(request));
 }
 __declspec(dllexport)
-void APIENTRY glEvalMesh1(GLenum mode, GLint i1, GLint i2) { V86GL_API_CALL(); emit_evaluator_mesh(1, mode, i1, i2, 0, 0); }
+void APIENTRY glEvalMesh1(GLenum mode, GLint i1, GLint i2) { V86GL_GL_CALL_VOID(); emit_evaluator_mesh(1, mode, i1, i2, 0, 0); }
 __declspec(dllexport)
-void APIENTRY glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) { V86GL_API_CALL(); emit_evaluator_mesh(2, mode, i1, i2, j1, j2); }
+void APIENTRY glEvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2) { V86GL_GL_CALL_VOID(); emit_evaluator_mesh(2, mode, i1, i2, j1, j2); }
 
 static void query_evaluator(GLenum target, GLenum query, unsigned int kind, void* values) {
     V86GLRecordQueryEvaluator request;
@@ -11741,11 +11692,11 @@ static void query_evaluator(GLenum target, GLenum query, unsigned int kind, void
     (void)emit_query_typed(GLFN_QUERY_EVALUATOR, &request, sizeof(request), kind, values);
 }
 __declspec(dllexport)
-void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* values) { V86GL_API_CALL(); query_evaluator(target, query, V86GL_STATE_DOUBLE, values); }
+void APIENTRY glGetMapdv(GLenum target, GLenum query, GLdouble* values) { V86GL_GL_CALL_VOID(); query_evaluator(target, query, V86GL_STATE_DOUBLE, values); }
 __declspec(dllexport)
-void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* values) { V86GL_API_CALL(); query_evaluator(target, query, V86GL_STATE_FLOAT, values); }
+void APIENTRY glGetMapfv(GLenum target, GLenum query, GLfloat* values) { V86GL_GL_CALL_VOID(); query_evaluator(target, query, V86GL_STATE_FLOAT, values); }
 __declspec(dllexport)
-void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* values) { V86GL_API_CALL(); query_evaluator(target, query, V86GL_STATE_INTEGER, values); }
+void APIENTRY glGetMapiv(GLenum target, GLenum query, GLint* values) { V86GL_GL_CALL_VOID(); query_evaluator(target, query, V86GL_STATE_INTEGER, values); }
 
 static void raster_pos4f_compat(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
     struct { float x, y, z, w; } payload;
@@ -11757,12 +11708,12 @@ static void raster_pos4f_compat(GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
 }
 
 #define DEFINE_RASTER_POS_VARIANT(SUFFIX, TYPE) \
-__declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX(TYPE x, TYPE y) { V86GL_API_CALL(); raster_pos4f_compat((GLfloat)x, (GLfloat)y, 0.0f, 1.0f); } \
-__declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); if (v) glRasterPos2##SUFFIX(v[0], v[1]); } \
-__declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { V86GL_API_CALL(); raster_pos4f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z, 1.0f); } \
-__declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); if (v) glRasterPos3##SUFFIX(v[0], v[1], v[2]); } \
-__declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX(TYPE x, TYPE y, TYPE z, TYPE w) { V86GL_API_CALL(); raster_pos4f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w); } \
-__declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); if (v) glRasterPos4##SUFFIX(v[0], v[1], v[2], v[3]); }
+__declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX(TYPE x, TYPE y) { V86GL_GL_CALL_VOID(); raster_pos4f_compat((GLfloat)x, (GLfloat)y, 0.0f, 1.0f); } \
+__declspec(dllexport) void APIENTRY glRasterPos2##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); if (v) glRasterPos2##SUFFIX(v[0], v[1]); } \
+__declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { V86GL_GL_CALL_VOID(); raster_pos4f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z, 1.0f); } \
+__declspec(dllexport) void APIENTRY glRasterPos3##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); if (v) glRasterPos3##SUFFIX(v[0], v[1], v[2]); } \
+__declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX(TYPE x, TYPE y, TYPE z, TYPE w) { V86GL_GL_CALL_VOID(); raster_pos4f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w); } \
+__declspec(dllexport) void APIENTRY glRasterPos4##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); if (v) glRasterPos4##SUFFIX(v[0], v[1], v[2], v[3]); }
 
 DEFINE_RASTER_POS_VARIANT(d, GLdouble)
 DEFINE_RASTER_POS_VARIANT(f, GLfloat)
@@ -11781,10 +11732,10 @@ static void window_pos3f_compat(GLfloat x, GLfloat y, GLfloat z) {
 }
 
 #define DEFINE_WINDOW_POS_VARIANT(SUFFIX, TYPE) \
-void APIENTRY glWindowPos2##SUFFIX(TYPE x, TYPE y) { V86GL_API_CALL(); window_pos3f_compat((GLfloat)x, (GLfloat)y, 0.0f); } \
-void APIENTRY glWindowPos2##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); if (v) glWindowPos2##SUFFIX(v[0], v[1]); } \
-void APIENTRY glWindowPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { V86GL_API_CALL(); window_pos3f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z); } \
-void APIENTRY glWindowPos3##SUFFIX##v(const TYPE* v) { V86GL_API_CALL(); if (v) glWindowPos3##SUFFIX(v[0], v[1], v[2]); }
+void APIENTRY glWindowPos2##SUFFIX(TYPE x, TYPE y) { V86GL_GL_CALL_VOID(); window_pos3f_compat((GLfloat)x, (GLfloat)y, 0.0f); } \
+void APIENTRY glWindowPos2##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); if (v) glWindowPos2##SUFFIX(v[0], v[1]); } \
+void APIENTRY glWindowPos3##SUFFIX(TYPE x, TYPE y, TYPE z) { V86GL_GL_CALL_VOID(); window_pos3f_compat((GLfloat)x, (GLfloat)y, (GLfloat)z); } \
+void APIENTRY glWindowPos3##SUFFIX##v(const TYPE* v) { V86GL_GL_CALL_VOID(); if (v) glWindowPos3##SUFFIX(v[0], v[1], v[2]); }
 
 DEFINE_WINDOW_POS_VARIANT(d, GLdouble)
 DEFINE_WINDOW_POS_VARIANT(f, GLfloat)

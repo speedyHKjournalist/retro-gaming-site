@@ -6,6 +6,7 @@ const exported_entries = [...fs.readFileSync(path.join(root, "opengl32.def"), "u
 assert.equal(exported_entries.length, 831);assert.equal(new Set(exported_entries).size, 831);
 for (const name of exported_entries) {
     assert.ok(definitions.has(name), name + " has a real ABI definition");
+    if (name.startsWith("gl")) assert.match(definitions.get(name), /if \(!g_loaded_context\) return(?: \(0\))?;/, name + " ignores calls without a current context before touching arguments");
     assert.match(definitions.get(name), /^\s*V86GLAPIGuard\s+v86gl_call_guard\s+__attribute__\(\(cleanup\(v86gl_leave_api\),unused\)\)\s*=\s*v86gl_enter_api\(\);/, name + " takes the recursive call guard before reading arguments or mutable state");
 }
 console.log("PASS all 831 preprocessed GL/WGL entry points, including generated aliases, acquire the call guard");

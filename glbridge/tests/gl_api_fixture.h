@@ -6,3 +6,10 @@
 #ifndef current_buffer_scope
 #define current_buffer_scope() 0u
 #endif
+
+#ifndef V86GL_GL_CALL_VOID
+#define V86GL_GL_CALL_VOID() V86GL_API_CALL()
+#endif
+#ifndef V86GL_GL_CALL_VALUE
+#define V86GL_GL_CALL_VALUE(value) V86GL_API_CALL()
+#endif
