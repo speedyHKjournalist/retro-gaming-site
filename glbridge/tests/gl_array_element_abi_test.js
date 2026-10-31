@@ -19,6 +19,7 @@ const code=`
 #include <string.h>
 #include <limits.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef uint32_t GLenum,GLuint;typedef int32_t GLint,GLsizei,GLintptrARB,GLsizeiptrARB;typedef int BOOL;typedef unsigned char GLboolean,GLubyte;typedef signed char GLbyte;typedef short GLshort;typedef unsigned short GLushort;typedef float GLfloat;typedef double GLdouble;typedef void GLvoid;
 #define APIENTRY
 #define FALSE 0

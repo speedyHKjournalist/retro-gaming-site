@@ -24,6 +24,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-draw-wire-"));
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef unsigned int GLenum, GLuint;
 typedef int GLint, GLsizei, BOOL;
 typedef void GLvoid;

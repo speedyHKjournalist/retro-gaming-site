@@ -24,6 +24,7 @@ const c = `
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef unsigned int GLenum; typedef int32_t GLint; typedef uint32_t GLuint; typedef uint16_t GLushort;
 typedef float GLfloat; typedef double GLdouble; typedef unsigned char GLboolean; typedef void GLvoid;
 typedef int32_t GLintptrARB; typedef int32_t GLsizeiptrARB; typedef int32_t GLsizei; typedef size_t SIZE_T; typedef int BOOL;

@@ -323,3 +323,15 @@ node glbridge/tests/v86_network_bridge_gl_route_test.js
 node glbridge/tests/gl_proxy_diagnostic_trace_test.js
 node glbridge/tests/gl_diagnostic_buffer_test.js
 ```
+
+### Thread and window ownership
+
+Every exported GL/WGL entry takes a recursive call guard, including client
+input encoding and synchronous response reads. Win32 TLS selects the calling
+thread's context; switching threads saves and submits the old encoding state
+before loading the new one. Mapping return storage is scoped to the share group.
+Window callbacks only mark changes. A separate dispatcher uses the same guard
+for idle visibility/occlusion updates, retains the DLL while contexts exist and
+exits after the final context is deleted. The host ABI fixtures separately
+exercise real entry bodies, TLS/locking, all 831 preprocessed exports, callbacks
+and dispatcher lifetime; their small-body shim is test-only.

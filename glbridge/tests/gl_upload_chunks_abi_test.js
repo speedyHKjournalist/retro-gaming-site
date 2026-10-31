@@ -12,6 +12,7 @@ const code = `
 #include <string.h>
 #include <limits.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 #include "../upload_bands.h"
 typedef uint32_t GLenum;typedef int BOOL;
 #define FALSE 0

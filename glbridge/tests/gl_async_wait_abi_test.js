@@ -14,6 +14,7 @@ const c = `
 #include <stdio.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef int BOOL;
 typedef uint32_t DWORD;
 #define TRUE 1

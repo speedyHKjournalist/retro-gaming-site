@@ -57,6 +57,7 @@ const c = `
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef unsigned int GLenum;
 typedef int32_t GLint;
 typedef uint32_t GLuint;

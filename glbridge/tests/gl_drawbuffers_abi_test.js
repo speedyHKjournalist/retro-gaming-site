@@ -14,6 +14,7 @@ try {
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 ${capacity}
 #define APIENTRY
 #define GL_NONE 0

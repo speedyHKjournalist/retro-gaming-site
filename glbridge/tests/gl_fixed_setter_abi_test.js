@@ -18,6 +18,7 @@ try {
 #include <sys/mman.h>
 #include <unistd.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 #define APIENTRY
 #define GL_INVALID_VALUE 0x501
 #define GL_INVALID_ENUM 0x500

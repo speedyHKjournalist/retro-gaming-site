@@ -9,6 +9,7 @@ const code = `
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef uint32_t GLenum,GLuint;typedef int BOOL;typedef float GLfloat;
 #define APIENTRY
 #define __declspec(x)

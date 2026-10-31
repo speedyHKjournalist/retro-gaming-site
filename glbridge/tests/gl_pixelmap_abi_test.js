@@ -15,6 +15,7 @@ const code = `
 #include <stddef.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 #define APIENTRY
 #define release_encoding_buffer_reads() ((void)0)
 #define GL_INVALID_ENUM 0x500

@@ -13,6 +13,7 @@ try {
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 #define APIENTRY
 #define GL_INVALID_VALUE 0x501
 #define GL_OUT_OF_MEMORY 0x505

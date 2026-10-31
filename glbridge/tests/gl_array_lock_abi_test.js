@@ -10,6 +10,7 @@ const code = `
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef uint32_t GLenum,GLuint,GLbitfield;typedef int32_t GLint,GLsizei;typedef int BOOL;typedef float GLfloat;typedef void GLvoid;
 #define APIENTRY
 #define FALSE 0

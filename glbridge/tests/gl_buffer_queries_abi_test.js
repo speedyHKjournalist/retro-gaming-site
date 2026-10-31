@@ -11,6 +11,7 @@ try {
 #include <stdint.h>
 #include <stddef.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 #define APIENTRY
 #define GL_TRUE 1
 #define GL_FALSE 0

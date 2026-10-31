@@ -10,6 +10,7 @@ const code = `
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+#include "../tests/gl_api_fixture.h"
 typedef unsigned int GLenum; typedef int GLint; typedef unsigned int GLuint; typedef int BOOL;
 typedef void GLvoid; typedef intptr_t GLintptrARB; typedef intptr_t GLsizeiptrARB;
 #define APIENTRY
