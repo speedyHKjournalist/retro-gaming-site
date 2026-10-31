@@ -1320,7 +1320,6 @@ static const char* g_wgl_extensions =
     "WGL_ARB_pixel_format "
     "WGL_ARB_multisample "
     "WGL_EXT_swap_control";
-static int g_swap_interval = 0;
 
 #define V86GL_MAX_TEXTURE_UNITS 8
 #define V86GL_MAX_TEXTURE_STATES 4096
@@ -3308,17 +3307,30 @@ static BOOL emit_multi_draw_elements_direct(GLenum mode, const GLsizei* count,
 
 static void emit_window_state(HWND hwnd, BOOL flush);
 
-static BOOL emit_frame(void) {
+static int window_swap_interval(HWND hwnd) {
+    uintptr_t stored = (uintptr_t)GetPropW(hwnd,L"V86GL.SwapInterval");
+    return stored ? (int)(stored-1u) : 1;
+}
+
+static BOOL emit_frame(HWND hwnd) {
     BOOL submitted;
 
     /* In the frame's batch, when it changed */
-    emit_window_state(g_current_hwnd, FALSE);
+    emit_window_state(hwnd, FALSE);
 
     v86gl_trace("present requested frame=%lu queuedCommands=%lu queuedBytes=%lu",
                 (unsigned long)g_frame_id,
                 (unsigned long)g_dma_command_count,
                 (unsigned long)g_dma_size);
-    submitted = emit_pci_batch(TRUE) ? TRUE : FALSE;
+    {
+        V86GLRecordSwapWindow request;
+        uint8_t* args;
+        request.hwnd=(uint32_t)(uintptr_t)hwnd;
+        request.interval=(uint32_t)window_swap_interval(hwnd);
+        request.status=V86GL_SYNC_QUERY_STATUS_PENDING;
+        submitted=reserve_pci_record(V86GL_CTRL_SWAP_WINDOW,&request,sizeof(request),&args) &&
+            emit_pci_batch(FALSE) && wait_for_host_status(args+8,"SwapBuffers");
+    }
 #if V86GL_DIAG_ENABLED
     {
         DWORD now = GetTickCount();
@@ -4806,35 +4818,28 @@ BOOL APIENTRY wglShareLists(HGLRC a, HGLRC b) { V86GL_API_CALL();
 }
 
 __declspec(dllexport)
-BOOL APIENTRY wglSwapLayerBuffers(HDC hdc, UINT planes) { V86GL_API_CALL();
-    BOOL submitted;
-    (void)hdc;
-    (void)planes;
-    v86gl_trace("wglSwapLayerBuffers");
-    submitted = emit_frame();
+BOOL APIENTRY wglSwapBuffers(HDC hdc) { V86GL_API_CALL();
+    HWND hwnd;int format;BOOL submitted;
+    if (!valid_wgl_dc(hdc,TRUE,&hwnd,&format)) return FALSE;
+    if (!g_pixel_formats[format-1].double_buffer) return TRUE;
+    v86gl_trace("wglSwapBuffers");
+    submitted=emit_frame(hwnd);
     SetLastError(submitted ? ERROR_SUCCESS : ERROR_GEN_FAILURE);
     return submitted;
 }
 
 __declspec(dllexport)
-BOOL APIENTRY wglSwapBuffers(HDC hdc) { V86GL_API_CALL();
-    BOOL submitted;
-    (void)hdc;
-    v86gl_trace("wglSwapBuffers");
-    submitted = emit_frame();
-    SetLastError(submitted ? ERROR_SUCCESS : ERROR_GEN_FAILURE);
-    return submitted;
+BOOL APIENTRY wglSwapLayerBuffers(HDC hdc, UINT planes) { V86GL_API_CALL();
+    if (planes!=WGL_SWAP_MAIN_PLANE) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+    return wglSwapBuffers(hdc);
 }
 
 __declspec(dllexport)
 DWORD APIENTRY wglSwapMultipleBuffers(UINT count, const WGLSWAP* swaps) { V86GL_API_CALL();
-    (void)swaps;
-    if (count && !emit_frame()) {
-        SetLastError(ERROR_GEN_FAILURE);
-        return 0;
-    }
-    SetLastError(ERROR_SUCCESS);
-    return count;
+    DWORD completed=0;
+    if (count>WGL_SWAPMULTIPLE_MAX || (count && !swaps)) {SetLastError(ERROR_INVALID_PARAMETER);return 0;}
+    for (UINT i=0;i<count;i++) if (wglSwapLayerBuffers(swaps[i].hdc,swaps[i].uiFlags)) completed++;
+    return completed;
 }
 
 __declspec(dllexport)
@@ -5116,13 +5121,18 @@ BOOL APIENTRY wglUseFontOutlinesW(HDC hdc, DWORD first, DWORD count, DWORD list_
 
 __declspec(dllexport)
 BOOL APIENTRY wglSwapIntervalEXT(int interval) { V86GL_API_CALL();
-    g_swap_interval = interval;
-    return TRUE;
+    V86GLWGLContext* context=v86gl_current_context();
+    if (interval<0) {SetLastError(ERROR_INVALID_DATA);return FALSE;}
+    if (!context || !context->current_hwnd) {SetLastError(ERROR_DC_NOT_FOUND);return FALSE;}
+    if (interval>(int)V86GL_MAX_SWAP_INTERVAL) interval=(int)V86GL_MAX_SWAP_INTERVAL;
+    return SetPropW(context->current_hwnd,L"V86GL.SwapInterval",(HANDLE)(uintptr_t)(interval+1));
 }
 
 __declspec(dllexport)
 int APIENTRY wglGetSwapIntervalEXT(void) { V86GL_API_CALL();
-    return g_swap_interval;
+    V86GLWGLContext* context=v86gl_current_context();
+    if (!context || !context->current_hwnd) {SetLastError(ERROR_DC_NOT_FOUND);return 0;}
+    return window_swap_interval(context->current_hwnd);
 }
 
 /* The browser canvas is always presented as one surface.  The hint has no

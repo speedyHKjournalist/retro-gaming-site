@@ -67,9 +67,12 @@ int main(void){
  int invalid_attrs[]={0x2014,0x7FFF},sentinels[]={-99,-99};assert(!wglGetPixelFormatAttribivARB(dc,1,0,2,invalid_attrs,sentinels)&&sentinels[0]==-99&&sentinels[1]==-99);
  assert(!wglGetPixelFormatAttribivARB(NULL,1,0,1,&color,&value)&&value==-99);assert(wglGetPixelFormatAttribivARB(dc,0,0,0,NULL,NULL));return 0;
 }`;
+module.exports = { code };
+if (require.main === module) {
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gl-wgl-formats-"));
 try {
     const file = path.join(directory, "test.c"), binary = path.join(directory, "test");fs.writeFileSync(file, code);
     execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-I", path.join(__dirname, "../openglproxy"), file, "-o", binary]);execFileSync(binary);
     console.log("PASS actual C WGL formats: window-scoped immutable format, memory/invalid DC refusal, RGB24+alpha8, single/MSAA, exact/minimum/float ARB matching, atomic queries and errors");
 } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}

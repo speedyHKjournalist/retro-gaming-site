@@ -11,6 +11,8 @@
 #define V86GL_CTRL_DESTROY_CONTEXT 0xFFF2u
 /* the drawing window as the guest's window manager sees it */
 #define V86GL_CTRL_WINDOW_STATE 0xFFF3u
+#define V86GL_CTRL_SWAP_WINDOW 0xFFF4u
+#define V86GL_MAX_SWAP_INTERVAL 4u
 /* its flags: D9WGWindowState's (d3d9proxy/d3d9_protocol.h) */
 #define V86GL_WINDOW_IS_WINDOW (1u << 0)
 #define V86GL_WINDOW_VISIBLE (1u << 1)
@@ -1124,6 +1126,11 @@ typedef struct V86GLRecordMakeCurrent {
 typedef struct V86GLRecordDestroyContext {
     uint32_t context_id;
 } V86GLRecordDestroyContext;
+typedef struct V86GLRecordSwapWindow {
+    uint32_t hwnd;
+    uint32_t interval;
+    uint32_t status;
+} V86GLRecordSwapWindow;
 typedef struct V86GLRecordPackedDrawArraysMt {
     uint32_t mode;
     int32_t count;
@@ -1831,6 +1838,10 @@ typedef char V86GLRecordMakeCurrent_format[offsetof(V86GLRecordMakeCurrent, form
 typedef char V86GLRecordMakeCurrent_caps_profile[offsetof(V86GLRecordMakeCurrent, caps_profile) == 32 ? 1 : -1];
 typedef char V86GLRecordDestroyContextSize[sizeof(V86GLRecordDestroyContext) == 4 ? 1 : -1];
 typedef char V86GLRecordDestroyContext_context_id[offsetof(V86GLRecordDestroyContext, context_id) == 0 ? 1 : -1];
+typedef char V86GLRecordSwapWindowSize[sizeof(V86GLRecordSwapWindow) == 12 ? 1 : -1];
+typedef char V86GLRecordSwapWindow_hwnd[offsetof(V86GLRecordSwapWindow, hwnd) == 0 ? 1 : -1];
+typedef char V86GLRecordSwapWindow_interval[offsetof(V86GLRecordSwapWindow, interval) == 4 ? 1 : -1];
+typedef char V86GLRecordSwapWindow_status[offsetof(V86GLRecordSwapWindow, status) == 8 ? 1 : -1];
 typedef char V86GLRecordPackedDrawArraysMtSize[sizeof(V86GLRecordPackedDrawArraysMt) == 20 ? 1 : -1];
 typedef char V86GLRecordPackedDrawArraysMt_mode[offsetof(V86GLRecordPackedDrawArraysMt, mode) == 0 ? 1 : -1];
 typedef char V86GLRecordPackedDrawArraysMt_count[offsetof(V86GLRecordPackedDrawArraysMt, count) == 4 ? 1 : -1];

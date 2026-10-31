@@ -346,3 +346,15 @@ unsupported and are never converted to a screen overlay. ARB selection handles
 integer and floating constraints, and queries validate all fields before writing.
 The actual-C format fixture and its 12 mutants cover these rules; an XP worker
 Cube 2 complex run also checks the current DLL and GLSL probe.
+
+### Window swaps
+
+SwapBuffers validates and presents the supplied DC, independently of the current
+rendering context. Single-buffer Swap is a no-op; Flush/Finish presents front
+writes. Swap interval is window state, defaults to 1 and clamps to 4. Negative
+values and calls without a current DC fail. The host replies after the requested
+refresh callbacks, bounding queued work; interval 0 removes that wait, while the
+browser compositor retains control of physical presentation. Expired arena,
+device-loss and timeout callbacks cannot present later. The real-GPU test covers
+two windows, no-current swaps and cold restore in both transports; XP/Cube 2 also
+passes with the matching guest and host protocol.
