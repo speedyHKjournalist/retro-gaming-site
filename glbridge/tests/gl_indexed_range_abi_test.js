@@ -64,7 +64,7 @@ ${["glDrawRangeElements","glMultiDrawArrays","glMultiDrawElements"].map(n=>body(
 int main(void){
  float* vertices=calloc(100003*4,sizeof(float));float* attributes=calloc(100003*4,sizeof(float));assert(vertices&&attributes);
  for(uint32_t i=0;i<100003;i++){vertices[4*i]=(float)i;vertices[4*i+3]=1;attributes[4*i]=(float)i*.5f;attributes[4*i+3]=1;}
- g_vertex_array=(ClientArrayState){TRUE,4,GL_FLOAT,0,vertices,0};g_generic_attribs[7]=(GenericAttribState){TRUE,4,GL_FLOAT,FALSE,0,attributes,0,{0}};
+ g_vertex_array=(ClientArrayState){TRUE,4,GL_FLOAT,0,vertices,0};g_generic_attribs[7]=(GenericAttribState){TRUE,4,GL_FLOAT,FALSE,0,attributes,0};
  GLubyte a[3]={8,7,9};uint16_t b[3]={50001,50000,50002};uint32_t c[3]={100001,100000,100002};
  glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_BYTE,a);glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,b);glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_INT,c);
  assert(!error);

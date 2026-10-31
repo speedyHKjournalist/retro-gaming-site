@@ -45,6 +45,7 @@ static void v86gl_set_error(uint32_t value) { last_error = value; }
 static BOOL open_v86gl(void) { return TRUE; }
 static int emit_pci_batch(BOOL present) { (void)present; ++flushes; g_dma_size = 0; return 1; }
 static void write_u32le(uint8_t* p, uint32_t v) { memcpy(p, &v, 4); }
+static void flush_immediate_vertices(void) {}
 ${allocator}
 ${wait}
 static void reset(unsigned int which, uint32_t start) {

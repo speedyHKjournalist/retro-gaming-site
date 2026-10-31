@@ -1027,17 +1027,12 @@ static GLuint g_pixel_unpack_buffer_binding = 0;
 
 
 
-static GLfloat g_current_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-static GLfloat g_current_index = 1.0f;
-static GLfloat g_current_texcoord[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-static GLfloat g_current_normal[3] = { 0.0f, 0.0f, 1.0f };
-static GLboolean g_current_edge_flag = GL_TRUE;
+/* Encoding state only; attribute values remain CPU-owned. */
+static BOOL g_immediate_active;
+static uint8_t g_immediate_bytes[V86GL_IMMEDIATE_BLOCK_BYTES];
+static uint32_t g_immediate_size, g_immediate_runs, g_immediate_run;
 
 
-static GLfloat g_current_fog_coord = 0.0f;
-/* GL_CURRENT_SECONDARY_COLOR_EXT is a four-component value; its alpha remains
- * one because the secondary-color API only supplies RGB. */
-static GLfloat g_current_secondary_color[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 
 static GLenum g_client_active_texture = GL_TEXTURE0_ARB;
@@ -1061,6 +1056,7 @@ static GLenum g_render_mode = GL_RENDER;
 
 
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size);
+static void flush_immediate_vertices(void);
 
 /* Client-memory failures join the ordered stream; the CPU owns the GL error flag. */
 static void v86gl_set_error(GLenum error) {
@@ -1370,7 +1366,6 @@ typedef struct {
     GLsizei stride;
     const GLvoid* pointer;
     GLuint buffer;
-    GLfloat current[4];
 } GenericAttribState;
 
 typedef struct {
@@ -1405,19 +1400,13 @@ static ClientArrayState g_edge_flag_array = { FALSE, 1, GL_UNSIGNED_BYTE, 0, NUL
 static ClientArrayState g_secondary_color_array = { FALSE, 3, GL_FLOAT, 0, NULL, 0 };
 static ClientArrayState g_fog_coord_array = { FALSE, 1, GL_FLOAT, 0, NULL, 0 };
 static GenericAttribState g_generic_attribs[V86GL_MAX_VERTEX_ATTRIBS] = {
-    { FALSE, 4, GL_FLOAT, GL_FALSE, 0, NULL, 0, { 0.0f, 0.0f, 0.0f, 1.0f } },
+    { FALSE, 4, GL_FLOAT, GL_FALSE, 0, NULL, 0 },
 };
 
 
-/* Cube 2 keeps many shader variants alive at once and binds all eight of its
- * conventional attributes on every program.  A fixed 512-entry attribute
- * table was therefore exhausted after only 64 programs; later
- * glBindAttribLocation calls (including vboneweight/vboneindex for MD5
- * weapons) were silently discarded.  Grow both location tables on demand so
- * the proxy's bookkeeping cannot change program linkage semantics. */
 
 
-static GLenum g_draw_buffers[V86GL_MAX_DRAW_BUFFERS] = { GL_BACK, GL_NONE, GL_NONE, GL_NONE };
+
 
 
 static char g_program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
@@ -1500,9 +1489,7 @@ typedef struct {
     ClientAttribSnapshot client;
     ClientAttribSnapshot client_attrib_stack[V86GL_ATTRIB_STACK_DEPTH];
     GLint client_attrib_stack_depth;
-    GLfloat current_color[4], current_texcoord[4], current_normal[3], current_secondary_color[4];
-    GLfloat current_fog_coord, current_index;
-    GLboolean current_edge_flag;
+    BOOL immediate_active;
     GLenum render_mode;
     char program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
 } GuestContextState;
@@ -1511,31 +1498,20 @@ static GuestContextState g_default_guest_context_state;
 static BOOL g_default_guest_context_state_valid = FALSE;
 
 static void capture_guest_context_state(GuestContextState* state) {
+    flush_immediate_vertices();
+    state->immediate_active = g_immediate_active;
     capture_client_attrib(&state->client, GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT);
     CopyMemory(state->client_attrib_stack,g_client_attrib_stack,sizeof(state->client_attrib_stack));
     state->client_attrib_stack_depth=g_client_attrib_stack_depth;
-    CopyMemory(state->current_color,g_current_color,sizeof(state->current_color));
-    CopyMemory(state->current_texcoord,g_current_texcoord,sizeof(state->current_texcoord));
-    CopyMemory(state->current_normal,g_current_normal,sizeof(state->current_normal));
-    CopyMemory(state->current_secondary_color,g_current_secondary_color,sizeof(state->current_secondary_color));
-    state->current_fog_coord=g_current_fog_coord;
-    state->current_index=g_current_index;
-    state->current_edge_flag=g_current_edge_flag;
     state->render_mode=g_render_mode;
     CopyMemory(state->program_error_string,g_program_error_string,sizeof(state->program_error_string));
 }
 
 static void restore_guest_context_state(const GuestContextState* state) {
+    g_immediate_active = state->immediate_active;
     restore_client_attrib(&state->client);
     CopyMemory(g_client_attrib_stack,state->client_attrib_stack,sizeof(g_client_attrib_stack));
     g_client_attrib_stack_depth=state->client_attrib_stack_depth;
-    CopyMemory(g_current_color,state->current_color,sizeof(g_current_color));
-    CopyMemory(g_current_texcoord,state->current_texcoord,sizeof(g_current_texcoord));
-    CopyMemory(g_current_normal,state->current_normal,sizeof(g_current_normal));
-    CopyMemory(g_current_secondary_color,state->current_secondary_color,sizeof(g_current_secondary_color));
-    g_current_fog_coord=state->current_fog_coord;
-    g_current_index=state->current_index;
-    g_current_edge_flag=state->current_edge_flag;
     g_render_mode=state->render_mode;
     CopyMemory(g_program_error_string,state->program_error_string,sizeof(g_program_error_string));
 }
@@ -2048,6 +2024,7 @@ static int reserve_pci_record(uint16_t fn, const void* args, uint32_t args_size,
     uint32_t command_capacity;
     uint8_t* p;
 
+    if (fn != GLFN_IMMEDIATE_VERTEX_BLOCK) flush_immediate_vertices();
     if (!open_v86gl()) {
         v86gl_set_error(GL_INVALID_OPERATION);
         v86gl_error("drop GL record fn=%u: transport is unavailable", (unsigned int)fn);
@@ -2126,6 +2103,50 @@ static int emit_pci_record(uint16_t fn, const void* args, uint32_t args_size, BO
     }
 
     return 1;
+}
+
+static void flush_immediate_vertices(void) {
+    uint32_t size = g_immediate_size;
+    if (!size) return;
+    write_u32le(g_immediate_bytes, g_immediate_runs);
+    write_u32le(g_immediate_bytes + 4, size - 8);
+    g_immediate_size = g_immediate_runs = g_immediate_run = 0;
+    emit_pci_record(GLFN_IMMEDIATE_VERTEX_BLOCK, g_immediate_bytes, size, FALSE);
+}
+
+static BOOL buffer_immediate_call(uint16_t fn, const void* args, uint32_t size) {
+    BOOL vertex = fn == GLFN_VERTEX3F || fn == GLFN_VERTEX4F;
+    uint32_t needed, count = g_immediate_size ? read_u32le(g_immediate_bytes + g_immediate_run + 4) : 0;
+    if (!g_immediate_active || !args) return FALSE;
+    if (!vertex) {
+        switch (fn) {
+        case GLFN_COLOR4F: case GLFN_NORMAL3F: case GLFN_TEX_COORD2F: case GLFN_TEX_COORD4F:
+        case GLFN_MULTI_TEX_COORD4F: case GLFN_SECONDARY_COLOR3F: case GLFN_FOG_COORDF: case GLFN_EDGE_FLAG: break;
+        case GLFN_VERTEX_ATTRIB4F: if (read_u32le(args) == 0) return FALSE;break;
+        case GLFN_INDEX_STATE: if (read_u32le(args) != 0) return FALSE;break;
+        default: return FALSE;
+        }
+    }
+    needed = vertex ? 16u : 4u + size;
+    if (!g_immediate_size || (!vertex && count)) needed += 8u;
+    if (!g_immediate_size) needed += 8u;
+    if (g_immediate_size + needed > sizeof(g_immediate_bytes)) flush_immediate_vertices();
+    if (!g_immediate_size) {g_immediate_size = 8u;g_immediate_runs = 0;count = 1;}
+    if (!g_immediate_runs || (!vertex && count)) {
+        g_immediate_run = g_immediate_size;g_immediate_size += 8u;g_immediate_runs++;
+        ZeroMemory(g_immediate_bytes + g_immediate_run, 8u);
+    }
+    if (vertex) {
+        float position[4] = {0,0,0,1};
+        CopyMemory(position, args, size);CopyMemory(g_immediate_bytes + g_immediate_size, position, 16u);g_immediate_size += 16u;
+        write_u32le(g_immediate_bytes + g_immediate_run + 4, read_u32le(g_immediate_bytes + g_immediate_run + 4) + 1u);
+    } else {
+        uint8_t* target = g_immediate_bytes + g_immediate_size;
+        target[0] = (uint8_t)fn;target[1] = (uint8_t)(fn >> 8);target[2] = (uint8_t)size;target[3] = (uint8_t)(size >> 8);
+        CopyMemory(target + 4, args, size);g_immediate_size += 4u + size;
+        write_u32le(g_immediate_bytes + g_immediate_run, read_u32le(g_immediate_bytes + g_immediate_run) + 4u + size);
+    }
+    return TRUE;
 }
 
 /*
@@ -2937,8 +2958,14 @@ static void emit_gl_large_call(uint16_t fn, const void* args, uint32_t args_size
 }
 
 static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size) {
-
-
+    if (fn == GLFN_BEGIN) {
+        flush_immediate_vertices();emit_pci_record(fn, args, args_size, FALSE);g_immediate_active = TRUE;return;
+    }
+    if (fn == GLFN_END) {
+        flush_immediate_vertices();g_immediate_active = FALSE;emit_pci_record(fn, args, args_size, FALSE);return;
+    }
+    if (buffer_immediate_call(fn, args, args_size)) return;
+    flush_immediate_vertices();
     if (args_size >= V86GL_EXTENDED_RECORD_SIZE) {
         emit_gl_large_call(fn, args, args_size);
         return;
@@ -5219,10 +5246,6 @@ void APIENTRY glEnd(void) {
 __declspec(dllexport)
 void APIENTRY glColor3f(GLfloat r, GLfloat g, GLfloat b) {
     struct { float r, g, b, a; } payload;
-    g_current_color[0] = r;
-    g_current_color[1] = g;
-    g_current_color[2] = b;
-    g_current_color[3] = 1.0f;
     payload.r = r;
     payload.g = g;
     payload.b = b;
@@ -5233,10 +5256,6 @@ void APIENTRY glColor3f(GLfloat r, GLfloat g, GLfloat b) {
 __declspec(dllexport)
 void APIENTRY glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
     struct { float r, g, b, a; } payload;
-    g_current_color[0] = r;
-    g_current_color[1] = g;
-    g_current_color[2] = b;
-    g_current_color[3] = a;
     payload.r = r;
     payload.g = g;
     payload.b = b;
@@ -5662,7 +5681,6 @@ void APIENTRY glBlendEquationSeparateEXT(GLenum modeRGB, GLenum modeAlpha) {
 void APIENTRY glDrawBuffers(GLsizei n, const GLenum* bufs) {
     uint32_t total_size;
     uint8_t* payload;
-    GLsizei i;
 
     if (n < 0 || n > V86GL_MAX_DRAW_BUFFERS) {
         v86gl_set_error(GL_INVALID_VALUE);
@@ -5671,10 +5689,6 @@ void APIENTRY glDrawBuffers(GLsizei n, const GLenum* bufs) {
     if (n && !bufs) {
         v86gl_set_error(GL_INVALID_VALUE);
         return;
-    }
-
-    for (i = 0; i < V86GL_MAX_DRAW_BUFFERS; i++) {
-        g_draw_buffers[i] = i < n ? bufs[i] : GL_NONE;
     }
 
     total_size = sizeof(uint32_t) + (uint32_t)n * sizeof(uint32_t);
@@ -6493,10 +6507,6 @@ static void emit_vertex_attrib4f(GLuint index, GLfloat x, GLfloat y,
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
-    g_generic_attribs[index].current[0] = x;
-    g_generic_attribs[index].current[1] = y;
-    g_generic_attribs[index].current[2] = z;
-    g_generic_attribs[index].current[3] = w;
     payload.index = index;
     payload.x = x;
     payload.y = y;
@@ -8377,10 +8387,6 @@ void APIENTRY glTexEnvfv(GLenum target, GLenum pname, const GLfloat* params) {
 __declspec(dllexport)
 void APIENTRY glTexCoord2f(GLfloat s, GLfloat t) {
     struct { float s, t; } payload;
-    g_current_texcoord[0] = s;
-    g_current_texcoord[1] = t;
-    g_current_texcoord[2] = 0.0f;
-    g_current_texcoord[3] = 1.0f;
     payload.s = s;
     payload.t = t;
     emit_gl_call(GLFN_TEX_COORD2F, &payload, sizeof(payload));
@@ -8683,9 +8689,6 @@ DEFINE_CORE_MULTI_TEX_COORD_VECTOR(s, GLshort)
 __declspec(dllexport)
 void APIENTRY glNormal3f(GLfloat nx, GLfloat ny, GLfloat nz) {
     struct { float nx, ny, nz; } payload;
-    g_current_normal[0] = nx;
-    g_current_normal[1] = ny;
-    g_current_normal[2] = nz;
     payload.nx = nx;
     payload.ny = ny;
     payload.nz = nz;
@@ -8743,7 +8746,6 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat* params) {
 
 void APIENTRY glFogCoordf(GLfloat coord) {
     float payload = coord;
-    g_current_fog_coord = coord;
     emit_gl_call(GLFN_FOG_COORDF, &payload, sizeof(payload));
 }
 
@@ -8801,9 +8803,6 @@ void APIENTRY glFogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid* po
 
 void APIENTRY glSecondaryColor3f(GLfloat red, GLfloat green, GLfloat blue) {
     struct { float red, green, blue; } payload;
-    g_current_secondary_color[0] = red;
-    g_current_secondary_color[1] = green;
-    g_current_secondary_color[2] = blue;
     payload.red = red;
     payload.green = green;
     payload.blue = blue;
@@ -10083,10 +10082,6 @@ DEFINE_NORMAL_VARIANT(s, GLshort, normal_from_short)
 
 static void tex_coord4f_compat(GLfloat s, GLfloat t, GLfloat r, GLfloat q) {
     struct { float s, t, r, q; } payload;
-    g_current_texcoord[0] = s;
-    g_current_texcoord[1] = t;
-    g_current_texcoord[2] = r;
-    g_current_texcoord[3] = q;
     payload.s = s;
     payload.t = t;
     payload.r = r;
@@ -10369,7 +10364,6 @@ void APIENTRY glIndexubv(const GLubyte* c) {
 __declspec(dllexport)
 void APIENTRY glEdgeFlag(GLboolean flag) {
     uint32_t payload = flag ? 1u : 0u;
-    g_current_edge_flag = flag ? GL_TRUE : GL_FALSE;
     /* the host marks each vertex's boundary edges for glPolygonMode */
     emit_gl_call(GLFN_EDGE_FLAG, &payload, sizeof(payload));
 }

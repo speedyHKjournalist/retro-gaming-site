@@ -33,12 +33,18 @@
 #define V86GL_EXTENDED_RECORD_SIZE 0xFFFFu
 /* bounded CPU assembly of an upload larger than the arena */
 #define V86GL_MAX_UPLOAD_BYTES 0x10000000u
+#define V86GL_IMMEDIATE_BLOCK_BYTES 0x10000u
 #define V86GL_REJECTED_RECORD_BIT 0x8000u
 #define V86GL_REJECTED_RECORD_MASK 0xF800u
 #define V86GL_REJECTED_ERROR_SHIFT 8u
 #define V86GL_REJECTED_ERROR_MASK 0x700u
 #define V86GL_REJECTED_ERROR_BASE 0x500u
 #define V86GL_REJECTED_OPCODE_MASK 255u
+#define V86GL_MAX_OPCODE 0x1FFu
+#define V86GL_REJECTED_EXTENDED_BIT 0x9000u
+#define V86GL_REJECTED_EXTENDED_MASK 0xF000u
+#define V86GL_REJECTED_EXTENDED_ERROR_SHIFT 9u
+#define V86GL_REJECTED_EXTENDED_ERROR_MASK 0xE00u
 #define V86GL_RESPONSE_REGION_BYTES 0x400000u
 /* reserved at the end of the arena, outside the GL command stream */
 #define V86GL_HEARTBEAT_BYTES 16u
@@ -371,9 +377,10 @@ enum {
     GLFN_INDEX_STATE = 252,
     GLFN_ACTIVE_STENCIL_FACE = 253,
     GLFN_PROGRAM_LINK_VALIDATION = 254,
-    GLFN_UPLOAD_CHUNK = 255
+    GLFN_UPLOAD_CHUNK = 255,
+    GLFN_IMMEDIATE_VERTEX_BLOCK = 256
 };
-#define V86GL_OPCODE_COUNT 255u
+#define V86GL_OPCODE_COUNT 256u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -1091,6 +1098,10 @@ typedef struct V86GLRecordUploadChunk {
     uint32_t offset;
     uint32_t data_size;
 } V86GLRecordUploadChunk;
+typedef struct V86GLRecordImmediateVertexBlock {
+    uint32_t run_count;
+    uint32_t data_size;
+} V86GLRecordImmediateVertexBlock;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1155,6 +1166,10 @@ typedef struct V86GLRecordGenericAttribBlock {
     int32_t stride;
     uint32_t data_size;
 } V86GLRecordGenericAttribBlock;
+typedef struct V86GLRecordImmediateVertexRun {
+    uint32_t attribute_bytes;
+    uint32_t vertex_count;
+} V86GLRecordImmediateVertexRun;
 typedef struct V86GLRecordMultiDrawArraysEntry {
     int32_t first;
     int32_t count;
@@ -1787,6 +1802,9 @@ typedef char V86GLRecordUploadChunk_opcode[offsetof(V86GLRecordUploadChunk, opco
 typedef char V86GLRecordUploadChunk_total_size[offsetof(V86GLRecordUploadChunk, total_size) == 8 ? 1 : -1];
 typedef char V86GLRecordUploadChunk_offset[offsetof(V86GLRecordUploadChunk, offset) == 12 ? 1 : -1];
 typedef char V86GLRecordUploadChunk_data_size[offsetof(V86GLRecordUploadChunk, data_size) == 16 ? 1 : -1];
+typedef char V86GLRecordImmediateVertexBlockSize[sizeof(V86GLRecordImmediateVertexBlock) == 8 ? 1 : -1];
+typedef char V86GLRecordImmediateVertexBlock_run_count[offsetof(V86GLRecordImmediateVertexBlock, run_count) == 0 ? 1 : -1];
+typedef char V86GLRecordImmediateVertexBlock_data_size[offsetof(V86GLRecordImmediateVertexBlock, data_size) == 4 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 36 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
@@ -1843,6 +1861,9 @@ typedef char V86GLRecordGenericAttribBlock_size[offsetof(V86GLRecordGenericAttri
 typedef char V86GLRecordGenericAttribBlock_type[offsetof(V86GLRecordGenericAttribBlock, type) == 16 ? 1 : -1];
 typedef char V86GLRecordGenericAttribBlock_stride[offsetof(V86GLRecordGenericAttribBlock, stride) == 20 ? 1 : -1];
 typedef char V86GLRecordGenericAttribBlock_data_size[offsetof(V86GLRecordGenericAttribBlock, data_size) == 24 ? 1 : -1];
+typedef char V86GLRecordImmediateVertexRunSize[sizeof(V86GLRecordImmediateVertexRun) == 8 ? 1 : -1];
+typedef char V86GLRecordImmediateVertexRun_attribute_bytes[offsetof(V86GLRecordImmediateVertexRun, attribute_bytes) == 0 ? 1 : -1];
+typedef char V86GLRecordImmediateVertexRun_vertex_count[offsetof(V86GLRecordImmediateVertexRun, vertex_count) == 4 ? 1 : -1];
 typedef char V86GLRecordMultiDrawArraysEntrySize[sizeof(V86GLRecordMultiDrawArraysEntry) == 8 ? 1 : -1];
 typedef char V86GLRecordMultiDrawArraysEntry_first[offsetof(V86GLRecordMultiDrawArraysEntry, first) == 0 ? 1 : -1];
 typedef char V86GLRecordMultiDrawArraysEntry_count[offsetof(V86GLRecordMultiDrawArraysEntry, count) == 4 ? 1 : -1];

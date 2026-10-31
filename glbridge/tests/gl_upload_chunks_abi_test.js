@@ -20,6 +20,7 @@ typedef uint32_t GLenum;typedef int BOOL;
 #define GL_INVALID_OPERATION ${GL.INVALID_OPERATION}
 #define GL_INVALID_VALUE ${GL.INVALID_VALUE}
 #define CopyMemory memcpy
+#define ZeroMemory(p,n) memset(p,0,n)
 #define HeapAlloc(h,f,n) malloc(n)
 #define HeapFree(h,f,p) free(p)
 #define GetProcessHeap() 0
@@ -33,6 +34,9 @@ static void write_u32le(uint8_t* p,uint32_t v){memcpy(p,&v,4);}
 static void v86gl_error(const char* text,...){(void)text;}
 static void v86gl_trace(const char* text,...){(void)text;}
 static int v86gl_trace_call_allowed(void){return 0;}
+static BOOL g_immediate_active;
+static uint8_t g_immediate_bytes[V86GL_IMMEDIATE_BLOCK_BYTES];static uint32_t g_immediate_size,g_immediate_runs,g_immediate_run;
+static void flush_immediate_vertices(void);
 static int fail_after=-1;
 static int emit_pci_batch(BOOL present){
  (void)present;if(!g_dma_size)return 1;
@@ -44,6 +48,8 @@ static int emit_pci_batch(BOOL present){
 }
 ${body(source, "reserve_pci_record", "static int ")}
 ${body(source, "emit_pci_record", "static int ")}
+${body(source, "flush_immediate_vertices", "static void ")}
+${body(source, "buffer_immediate_call", "static BOOL ")}
 ${body(source, "emit_gl_large_call", "static void ")}
 ${body(source, "emit_gl_call", "static void ")}
 ${body(source, "alloc_payload", "static uint8_t* ")}
