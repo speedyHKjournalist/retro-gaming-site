@@ -1,5 +1,10 @@
 # OpenGL guest proxy
 
+2026-10-31（plan A2/C6）：宿主增加 Mesa llvmpipe 第二参照（60 个像素场景、58 份
+状态/查询/着色器记录）。CPU 的绘制错误测试同时核对 Apple 与 Mesa，修正多次绘制
+中负 count 被直接跳过的行为。两种通道下的实际 C ABI 回归继续通过；原始驱动差异
+与再生说明位于 v86 的 `tests/glbridge/gl_conformance/README.md`。
+
 2026-10-31（plan C3/C6/C7）：`glGetError` 的错误值与 `GL_NO_ERROR` 均由 CPU 回答。
 实际 C ABI 验证 DLL 合并本地错误、消除重复错误，并确认页面的错误标志不会进入客体。
 绘制与像素输入、未知查询及畸形流也在 CPU 校验；异步像素和遮挡结果继续使用显式响应。
