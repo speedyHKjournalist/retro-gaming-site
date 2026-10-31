@@ -103,6 +103,11 @@ lists, attribute groups and snapshots. Native and actual C ABI tests cover
 float precision and signed half rounding. The drawable remains RGBA; color
 index rendering is the host plan's documented D-14 deviation.
 
+The CPU also answers the standard transpose-matrix queries, aliased point
+range, line granularity and drawable auxiliary/index/accumulation bit queries.
+The C query reader supports the full 16-component matrix without entering the
+DLL's legacy fallback; texture transpose queries follow the active unit.
+
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving
 record sizes and inline response addresses; the page preserves their GL
