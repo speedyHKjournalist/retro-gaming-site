@@ -1,5 +1,11 @@
 # OpenGL guest proxy
 
+2026-10-31（plan C3）：`glActiveStencilFaceEXT` 使用 opcode 253；普通模板 setter
+始终发送原始普通调用，Separate setter 始终发送核心 Separate 调用。活动面、错误、
+列表和三套模板状态由 CPU 管理。更新后的 DLL 必须与对应主机包一起部署，旧 DLL
+按本地 enable 位选择编码，无法表达 EXT 背面与核心背面的独立状态。18 个本机参照、
+实际 C ABI、实际 GPU 像素、存档与两种传输模式均已覆盖；F6 客体镜像部署仍待执行。
+
 `opengl32.dll` is the Windows XP guest half of the OpenGL 1.1–2.1 WebGPU
 path. It exports the system OpenGL/WGL ABI, encodes calls into the VGL2 record
 format, and submits batches through `v86gl.sys`.

@@ -357,9 +357,10 @@ enum {
     GLFN_QUERY_EVALUATOR = 249,
     GLFN_RESOLVED_EVAL_VERTEX = 250,
     GLFN_RESOLVED_PROGRAM_INTERFACE = 251,
-    GLFN_INDEX_STATE = 252
+    GLFN_INDEX_STATE = 252,
+    GLFN_ACTIVE_STENCIL_FACE = 253
 };
-#define V86GL_OPCODE_COUNT 252u
+#define V86GL_OPCODE_COUNT 253u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {

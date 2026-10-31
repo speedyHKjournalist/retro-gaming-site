@@ -9801,26 +9801,10 @@ void APIENTRY glClearStencil(GLint s) {
     emit_gl_call(GLFN_CLEAR_STENCIL, &payload, sizeof(payload));
 }
 
-static int valid_stencil_face(GLenum face) {
-    return face == GL_FRONT || face == GL_BACK || face == GL_FRONT_AND_BACK;
-}
 
-static void cache_stencil_func_separate(GLenum face, GLenum func, GLint ref, GLuint mask) {
-    if (face == GL_FRONT || face == GL_FRONT_AND_BACK) {
-        g_stencil_func = func;
-        g_stencil_ref = ref;
-        g_stencil_value_mask = mask;
-    }
-    if (face == GL_BACK || face == GL_FRONT_AND_BACK) {
-        g_stencil_back_func = func;
-        g_stencil_back_ref = ref;
-        g_stencil_back_value_mask = mask;
-    }
-}
 
 static void emit_stencil_func_separate(GLenum face, GLenum func, GLint ref, GLuint mask) {
     struct { uint32_t face, func; int32_t ref; uint32_t mask; } payload;
-    cache_stencil_func_separate(face, func, ref, mask);
     payload.face = (uint32_t)face;
     payload.func = (uint32_t)func;
     payload.ref = ref;
@@ -9828,39 +9812,17 @@ static void emit_stencil_func_separate(GLenum face, GLenum func, GLint ref, GLui
     emit_gl_call(GLFN_STENCIL_FUNC_SEPARATE, &payload, sizeof(payload));
 }
 
-static void cache_stencil_mask_separate(GLenum face, GLuint mask) {
-    if (face == GL_FRONT || face == GL_FRONT_AND_BACK) {
-        g_stencil_write_mask = mask;
-    }
-    if (face == GL_BACK || face == GL_FRONT_AND_BACK) {
-        g_stencil_back_write_mask = mask;
-    }
-}
 
 static void emit_stencil_mask_separate(GLenum face, GLuint mask) {
     struct { uint32_t face, mask; } payload;
-    cache_stencil_mask_separate(face, mask);
     payload.face = (uint32_t)face;
     payload.mask = mask;
     emit_gl_call(GLFN_STENCIL_MASK_SEPARATE, &payload, sizeof(payload));
 }
 
-static void cache_stencil_op_separate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) {
-    if (face == GL_FRONT || face == GL_FRONT_AND_BACK) {
-        g_stencil_fail = sfail;
-        g_stencil_zfail = dpfail;
-        g_stencil_zpass = dppass;
-    }
-    if (face == GL_BACK || face == GL_FRONT_AND_BACK) {
-        g_stencil_back_fail = sfail;
-        g_stencil_back_zfail = dpfail;
-        g_stencil_back_zpass = dppass;
-    }
-}
 
 static void emit_stencil_op_separate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) {
     struct { uint32_t face, sfail, dpfail, dppass; } payload;
-    cache_stencil_op_separate(face, sfail, dpfail, dppass);
     payload.face = (uint32_t)face;
     payload.sfail = (uint32_t)sfail;
     payload.dpfail = (uint32_t)dpfail;
@@ -9871,11 +9833,6 @@ static void emit_stencil_op_separate(GLenum face, GLenum sfail, GLenum dpfail, G
 __declspec(dllexport)
 void APIENTRY glStencilFunc(GLenum func, GLint ref, GLuint mask) {
     struct { uint32_t func; int32_t ref; uint32_t mask; } payload;
-    if (get_cap_state(GL_STENCIL_TEST_TWO_SIDE_EXT)) {
-        emit_stencil_func_separate(g_active_stencil_face_ext, func, ref, mask);
-        return;
-    }
-    cache_stencil_func_separate(GL_FRONT_AND_BACK, func, ref, mask);
     payload.func = (uint32_t)func;
     payload.ref = ref;
     payload.mask = mask;
@@ -9885,22 +9842,12 @@ void APIENTRY glStencilFunc(GLenum func, GLint ref, GLuint mask) {
 __declspec(dllexport)
 void APIENTRY glStencilMask(GLuint mask) {
     uint32_t payload = mask;
-    if (get_cap_state(GL_STENCIL_TEST_TWO_SIDE_EXT)) {
-        emit_stencil_mask_separate(g_active_stencil_face_ext, mask);
-        return;
-    }
-    cache_stencil_mask_separate(GL_FRONT_AND_BACK, mask);
     emit_gl_call(GLFN_STENCIL_MASK, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) {
     struct { uint32_t fail, zfail, zpass; } payload;
-    if (get_cap_state(GL_STENCIL_TEST_TWO_SIDE_EXT)) {
-        emit_stencil_op_separate(g_active_stencil_face_ext, fail, zfail, zpass);
-        return;
-    }
-    cache_stencil_op_separate(GL_FRONT_AND_BACK, fail, zfail, zpass);
     payload.fail = (uint32_t)fail;
     payload.zfail = (uint32_t)zfail;
     payload.zpass = (uint32_t)zpass;
@@ -10035,34 +9982,19 @@ void APIENTRY glDrawBuffersATI(GLsizei n, const GLenum* bufs) {
 }
 
 void APIENTRY glActiveStencilFaceEXT(GLenum face) {
-    if (face != GL_FRONT && face != GL_BACK) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    g_active_stencil_face_ext = face;
+    uint32_t payload = (uint32_t)face;
+    emit_gl_call(GLFN_ACTIVE_STENCIL_FACE, &payload, sizeof(payload));
 }
 
 void APIENTRY glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) {
-    if (!valid_stencil_face(face)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
     emit_stencil_op_separate(face, sfail, dpfail, dppass);
 }
 
 void APIENTRY glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) {
-    if (!valid_stencil_face(face)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
     emit_stencil_func_separate(face, func, ref, mask);
 }
 
 void APIENTRY glStencilMaskSeparate(GLenum face, GLuint mask) {
-    if (!valid_stencil_face(face)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
     emit_stencil_mask_separate(face, mask);
 }
 
