@@ -3,7 +3,7 @@
 #ifndef V86GL_OPCODE_NAMES_H
 #define V86GL_OPCODE_NAMES_H
 
-#define V86GL_OPCODE_NAME_COUNT 254u
+#define V86GL_OPCODE_NAME_COUNT 255u
 static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [0] = "UNKNOWN",
     [1] = "VIEWPORT",
@@ -259,6 +259,7 @@ static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [251] = "RESOLVED_PROGRAM_INTERFACE",
     [252] = "INDEX_STATE",
     [253] = "ACTIVE_STENCIL_FACE",
+    [254] = "PROGRAM_LINK_VALIDATION",
 };
 
 static const char *v86gl_opcode_name(unsigned int opcode)

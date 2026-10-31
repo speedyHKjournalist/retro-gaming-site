@@ -365,9 +365,10 @@ enum {
     GLFN_RESOLVED_EVAL_VERTEX = 250,
     GLFN_RESOLVED_PROGRAM_INTERFACE = 251,
     GLFN_INDEX_STATE = 252,
-    GLFN_ACTIVE_STENCIL_FACE = 253
+    GLFN_ACTIVE_STENCIL_FACE = 253,
+    GLFN_PROGRAM_LINK_VALIDATION = 254
 };
-#define V86GL_OPCODE_COUNT 253u
+#define V86GL_OPCODE_COUNT 254u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -1070,6 +1071,14 @@ typedef struct V86GLRecordIndexState {
     uint32_t mask;
     double value;
 } V86GLRecordIndexState;
+typedef struct V86GLRecordProgramLinkValidation {
+    uint32_t operation;
+    uint32_t job;
+    uint32_t program;
+    uint32_t object_id;
+    uint32_t link_generation;
+    uint32_t data_size;
+} V86GLRecordProgramLinkValidation;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1753,6 +1762,13 @@ typedef char V86GLRecordIndexStateSize[sizeof(V86GLRecordIndexState) == 16 ? 1 :
 typedef char V86GLRecordIndexState_operation[offsetof(V86GLRecordIndexState, operation) == 0 ? 1 : -1];
 typedef char V86GLRecordIndexState_mask[offsetof(V86GLRecordIndexState, mask) == 4 ? 1 : -1];
 typedef char V86GLRecordIndexState_value[offsetof(V86GLRecordIndexState, value) == 8 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidationSize[sizeof(V86GLRecordProgramLinkValidation) == 24 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidation_operation[offsetof(V86GLRecordProgramLinkValidation, operation) == 0 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidation_job[offsetof(V86GLRecordProgramLinkValidation, job) == 4 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidation_program[offsetof(V86GLRecordProgramLinkValidation, program) == 8 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidation_object_id[offsetof(V86GLRecordProgramLinkValidation, object_id) == 12 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidation_link_generation[offsetof(V86GLRecordProgramLinkValidation, link_generation) == 16 ? 1 : -1];
+typedef char V86GLRecordProgramLinkValidation_data_size[offsetof(V86GLRecordProgramLinkValidation, data_size) == 20 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 36 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
