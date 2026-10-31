@@ -203,6 +203,7 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z);
 #define GL_LINE_STIPPLE_PATTERN 0x0B25
 #define GL_LINE_STIPPLE_REPEAT 0x0B26
 #define GL_LIST_BASE          0x0B32
+#define GL_LIST_INDEX         0x0B33
 #define GL_POLYGON_MODE       0x0B40
 #define GL_CULL_FACE          0x0B44
 #define GL_CULL_FACE_MODE     0x0B45
@@ -1067,6 +1068,7 @@ static GLint g_unpack_skip_images = 0;
 void APIENTRY glPixelStorei(GLenum pname, GLint param);
 void APIENTRY glPushClientAttrib(GLbitfield mask);
 void APIENTRY glPopClientAttrib(void);
+void APIENTRY glBindBuffer(GLenum target,GLuint buffer);
 static GLint g_pack_alignment = 4;
 static GLint g_pack_row_length = 0;
 static GLint g_pack_skip_rows = 0;
@@ -4827,93 +4829,42 @@ DWORD APIENTRY wglSwapMultipleBuffers(UINT count, const WGLSWAP* swaps) { V86GL_
 }
 
 __declspec(dllexport)
-BOOL APIENTRY wglDescribeLayerPlane(HDC hdc, int format, int plane, UINT bytes,
-                                    LPLAYERPLANEDESCRIPTOR lpd) { V86GL_API_CALL();
-    (void)hdc;
-    (void)format;
-    (void)plane;
-    if (lpd && bytes >= sizeof(*lpd)) {
-        ZeroMemory(lpd, sizeof(*lpd));
-        lpd->nSize = sizeof(*lpd);
-        lpd->nVersion = 1;
-        lpd->dwFlags = LPD_SUPPORT_OPENGL | LPD_DOUBLEBUFFER;
-        lpd->iPixelType = PFD_TYPE_RGBA;
-        lpd->cColorBits = 32;
-        lpd->cDepthBits = 24;
-        lpd->cStencilBits = 8;
-    }
-    return TRUE;
+BOOL APIENTRY wglDescribeLayerPlane(HDC hdc,int format,int plane,UINT bytes,LPLAYERPLANEDESCRIPTOR lpd) { V86GL_API_CALL();
+    if (!valid_wgl_dc(hdc,FALSE,NULL,NULL)) return FALSE;
+    if (!pixel_format_valid(format)) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;}
+    if (plane || !lpd || bytes<sizeof(*lpd)) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+    ZeroMemory(lpd,sizeof(*lpd));lpd->nSize=sizeof(*lpd);lpd->nVersion=1;
+    lpd->dwFlags=LPD_SUPPORT_OPENGL|(g_pixel_formats[format-1].double_buffer?LPD_DOUBLEBUFFER:0);
+    lpd->iPixelType=PFD_TYPE_RGBA;lpd->cColorBits=24;lpd->cRedBits=lpd->cGreenBits=lpd->cBlueBits=lpd->cAlphaBits=8;
+    lpd->cGreenShift=8;lpd->cBlueShift=16;lpd->cAlphaShift=24;lpd->cDepthBits=24;lpd->cStencilBits=8;return TRUE;
 }
 
 __declspec(dllexport)
-int APIENTRY wglSetLayerPaletteEntries(HDC hdc, int layer, int start, int count,
-                                       const COLORREF* entries) { V86GL_API_CALL();
-    (void)hdc;
-    (void)layer;
-    (void)start;
-    (void)entries;
-    return count < 0 ? 0 : count;
+int APIENTRY wglSetLayerPaletteEntries(HDC hdc,int layer,int start,int count,const COLORREF* entries) { V86GL_API_CALL();
+    (void)layer;(void)start;(void)count;(void)entries;
+    if (!valid_wgl_dc(hdc,TRUE,NULL,NULL)) return 0;
+    SetLastError(ERROR_INVALID_PIXEL_FORMAT);return 0;
 }
 
 __declspec(dllexport)
-int APIENTRY wglGetLayerPaletteEntries(HDC hdc, int layer, int start, int count,
-                                       COLORREF* entries) { V86GL_API_CALL();
-    int i;
-    (void)hdc;
-    (void)layer;
-    (void)start;
-    if (entries && count > 0) {
-        for (i = 0; i < count; i++) {
-            entries[i] = RGB(0, 0, 0);
-        }
-    }
-    return count < 0 ? 0 : count;
+int APIENTRY wglGetLayerPaletteEntries(HDC hdc,int layer,int start,int count,COLORREF* entries) { V86GL_API_CALL();
+    (void)layer;(void)start;(void)count;(void)entries;
+    if (!valid_wgl_dc(hdc,TRUE,NULL,NULL)) return 0;
+    SetLastError(ERROR_INVALID_PIXEL_FORMAT);return 0;
 }
 
 __declspec(dllexport)
-BOOL APIENTRY wglRealizeLayerPalette(HDC hdc, int layer, BOOL realize) { V86GL_API_CALL();
-    (void)hdc;
-    (void)layer;
-    (void)realize;
-    return TRUE;
-}
-
-static void font_metrics_from_dc(HDC hdc, FLOAT* advance, FLOAT* height) {
-    TEXTMETRICA tm;
-
-    *advance = 8.0f;
-    *height = 12.0f;
-    ZeroMemory(&tm, sizeof(tm));
-    if (hdc && GetTextMetricsA(hdc, &tm)) {
-        if (tm.tmAveCharWidth > 0) {
-            *advance = (FLOAT)tm.tmAveCharWidth;
-        }
-        if (tm.tmHeight > 0) {
-            *height = (FLOAT)tm.tmHeight;
-        }
-    }
-}
-
-static void define_placeholder_bitmap_glyph(GLuint list, BOOL visible,
-                                            FLOAT advance) {
-    static const GLubyte glyph_bits[8] = {
-        0x7Eu, 0x42u, 0x5Au, 0x5Au, 0x5Au, 0x42u, 0x7Eu, 0x00u
-    };
-
-    glNewList(list, GL_COMPILE);
-    if (visible) {
-        glBitmap(8, 8, 0.0f, 0.0f, advance, 0.0f, glyph_bits);
-    } else {
-        glBitmap(0, 0, 0.0f, 0.0f, advance, 0.0f, NULL);
-    }
-    glEndList();
+BOOL APIENTRY wglRealizeLayerPalette(HDC hdc,int layer,BOOL realize) { V86GL_API_CALL();
+    (void)layer;(void)realize;
+    if (!valid_wgl_dc(hdc,TRUE,NULL,NULL)) return FALSE;
+    SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;
 }
 
 /*
  * Rasterise one glyph with GDI and compile it into a display list as a
  * glBitmap, which is what wglUseFontBitmaps is for. Returns FALSE when GDI
- * cannot produce an outline -- a raster (non-TrueType) font, or a codepoint
- * the face does not have -- and the caller falls back to the placeholder box.
+ * cannot produce a bitmap; the WGL caller reports failure instead of
+ * substituting made-up box geometry. ANSI and Unicode use their matching API.
  *
  * The two formats very nearly agree, which is why this is short. GGO_BITMAP
  * rows are MSB-first and padded to a DWORD, and so is what glBitmap reads at
@@ -4930,7 +4881,7 @@ static void define_placeholder_bitmap_glyph(GLuint list, BOOL visible,
  * descender (originY smaller than its height) gets a negative yorig and hangs
  * below the baseline, which is exactly right for 'g' and 'y'.
  */
-static BOOL define_gdi_bitmap_glyph(HDC hdc, UINT codepoint, GLuint list) {
+static BOOL define_gdi_bitmap_glyph(HDC hdc, UINT codepoint, GLuint list, BOOL unicode) {
     static const MAT2 identity = {
         { 0, 1 }, { 0, 0 }, { 0, 0 }, { 0, 1 }
     };
@@ -4941,13 +4892,28 @@ static BOOL define_gdi_bitmap_glyph(HDC hdc, UINT codepoint, GLuint list) {
     uint8_t* gdi_bits;
     uint8_t* gl_bits = NULL;
     BOOL ok = FALSE;
+    DWORD (WINAPI *outline)(HDC,UINT,UINT,LPGLYPHMETRICS,DWORD,LPVOID,const MAT2*)=unicode ? GetGlyphOutlineW : GetGlyphOutlineA;
 
     if (!hdc) {
         return FALSE;
     }
+    {
+        WORD index=0;DWORD found=GDI_ERROR;
+        if (unicode) {
+            WCHAR character=(WCHAR)codepoint;
+            if (codepoint>0xFFFFu) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+            found=GetGlyphIndicesW(hdc,&character,1,&index,GGI_MARK_NONEXISTING_GLYPHS);
+        } else if (codepoint<=0xFFu) {
+            char character=(char)codepoint;
+            found=GetGlyphIndicesA(hdc,&character,1,&index,GGI_MARK_NONEXISTING_GLYPHS);
+        }
+        if (found!=GDI_ERROR && index==0xFFFFu) {
+            glNewList(list,GL_COMPILE);glEndList();return TRUE;
+        }
+    }
 
     ZeroMemory(&metrics, sizeof(metrics));
-    size = GetGlyphOutlineA(hdc, codepoint, GGO_BITMAP, &metrics, 0, NULL,
+    size = outline(hdc, codepoint, GGO_BITMAP, &metrics, 0, NULL,
                             &identity);
     if (size == GDI_ERROR) {
         return FALSE;
@@ -4965,15 +4931,17 @@ static BOOL define_gdi_bitmap_glyph(HDC hdc, UINT codepoint, GLuint list) {
 
     gdi_bits = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
     if (!gdi_bits) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return FALSE;
     }
-    if (GetGlyphOutlineA(hdc, codepoint, GGO_BITMAP, &metrics, size, gdi_bits,
+    if (outline(hdc, codepoint, GGO_BITMAP, &metrics, size, gdi_bits,
                          &identity) != GDI_ERROR) {
         stride = ((metrics.gmBlackBoxX + 31u) / 32u) * 4u;
         if (stride && metrics.gmBlackBoxY <= size / stride) {
             gl_bits = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                           (SIZE_T)stride * metrics.gmBlackBoxY);
-        }
+            if (!gl_bits) SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        } else SetLastError(ERROR_INVALID_DATA);
         if (gl_bits) {
             for (row = 0; row < metrics.gmBlackBoxY; row++) {
                 CopyMemory(gl_bits + (SIZE_T)row * stride,
@@ -4997,86 +4965,36 @@ static BOOL define_gdi_bitmap_glyph(HDC hdc, UINT codepoint, GLuint list) {
     return ok;
 }
 
-static BOOL use_font_bitmaps_common(HDC hdc, DWORD first, DWORD count,
-                                    DWORD list_base) {
-    DWORD i;
-    FLOAT advance;
-    FLOAT height;
-
-    (void)height;
-    font_metrics_from_dc(hdc, &advance, &height);
-    /* glBitmap reads its rows through the unpack state in force when the list
-     * is compiled, so pin that state to what GDI actually produced instead of
-     * inheriting whatever the app last set. */
+static BOOL use_font_bitmaps_common(HDC hdc,DWORD first,DWORD count,DWORD list_base,BOOL unicode) {
+    GLint compiling=0;BOOL ok=TRUE;DWORD error=ERROR_GEN_FAILURE,type=hdc ? GetObjectType(hdc) : 0;
+    if (!v86gl_current_context()) {SetLastError(ERROR_DC_NOT_FOUND);return FALSE;}
+    if (type!=OBJ_DC && type!=OBJ_MEMDC) {SetLastError(ERROR_INVALID_HANDLE);return FALSE;}
+    if (count && (!list_base || first>UINT32_MAX-(count-1) || list_base>UINT32_MAX-(count-1))) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+    if (emit_query_state(GL_LIST_INDEX,V86GL_STATE_INTEGER,&compiling)<=0 || compiling) {SetLastError(ERROR_BUSY);return FALSE;}
+    if (g_client_attrib_stack_depth>=V86GL_ATTRIB_STACK_DEPTH) {SetLastError(ERROR_NOT_ENOUGH_MEMORY);return FALSE;}
     glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-    for (i = 0; i < count; i++) {
-        DWORD codepoint = first + i;
-        /* Real glyphs where GDI can give them, boxes only where it cannot --
-         * a raster font or a codepoint the face is missing. */
-        if (!define_gdi_bitmap_glyph(hdc, codepoint, list_base + i)) {
-            define_placeholder_bitmap_glyph(list_base + i,
-                                            codepoint > 0x20u ? TRUE : FALSE,
-                                            advance);
-        }
-    }
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,4);glPixelStorei(GL_UNPACK_LSB_FIRST,GL_FALSE);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,0);glPixelStorei(GL_UNPACK_SKIP_ROWS,0);glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
+    for (DWORD i=0;i<count;i++) if (!define_gdi_bitmap_glyph(hdc,first+i,list_base+i,unicode)) {error=GetLastError();ok=FALSE;break;}
     glPopClientAttrib();
-    return TRUE;
+    if (!ok) SetLastError(error ? error : ERROR_GEN_FAILURE);
+    return ok;
 }
 
 __declspec(dllexport)
 BOOL APIENTRY wglUseFontBitmapsA(HDC hdc, DWORD first, DWORD count, DWORD list_base) { V86GL_API_CALL();
-    return use_font_bitmaps_common(hdc, first, count, list_base);
+    return use_font_bitmaps_common(hdc, first, count, list_base, FALSE);
 }
 
 __declspec(dllexport)
 BOOL APIENTRY wglUseFontBitmapsW(HDC hdc, DWORD first, DWORD count, DWORD list_base) { V86GL_API_CALL();
-    return use_font_bitmaps_common(hdc, first, count, list_base);
+    return use_font_bitmaps_common(hdc, first, count, list_base, TRUE);
 }
 
-static void fill_glyph_metric(GLYPHMETRICSFLOAT* metric, FLOAT advance,
-                              FLOAT height) {
-    if (!metric) {
-        return;
-    }
-
-    metric->gmfBlackBoxX = advance > 1.0f ? advance : 1.0f;
-    metric->gmfBlackBoxY = height > 1.0f ? height : 1.0f;
-    metric->gmfptGlyphOrigin.x = 0.0f;
-    metric->gmfptGlyphOrigin.y = 0.0f;
-    metric->gmfCellIncX = advance;
-    metric->gmfCellIncY = 0.0f;
-}
-
-static BOOL use_font_outlines_common(HDC hdc, DWORD first, DWORD count,
-                                     DWORD list_base, FLOAT extrusion,
-                                     int format,
-                                     LPGLYPHMETRICSFLOAT metrics) {
-    DWORD i;
-    FLOAT advance;
-    FLOAT height;
-    GLenum primitive = format == WGL_FONT_POLYGONS ? GL_QUADS : GL_LINE_LOOP;
-
-    (void)first;
-    (void)extrusion;
-    font_metrics_from_dc(hdc, &advance, &height);
-    for (i = 0; i < count; i++) {
-        fill_glyph_metric(metrics ? &metrics[i] : NULL, advance, height);
-        glNewList(list_base + i, GL_COMPILE);
-        glBegin(primitive);
-        glVertex2f(0.0f, 0.0f);
-        glVertex2f(advance, 0.0f);
-        glVertex2f(advance, height);
-        glVertex2f(0.0f, height);
-        glEnd();
-        glTranslatef(advance, 0.0f, 0.0f);
-        glEndList();
-    }
-    return TRUE;
+static BOOL use_font_outlines_common(HDC hdc,DWORD first,DWORD count,DWORD list_base,FLOAT extrusion,int format,LPGLYPHMETRICSFLOAT metrics) {
+    (void)hdc;(void)first;(void)count;(void)list_base;(void)extrusion;(void)format;(void)metrics;
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);return FALSE;
 }
 
 __declspec(dllexport)
@@ -5085,6 +5003,7 @@ BOOL APIENTRY wglUseFontOutlinesA(HDC hdc, DWORD first, DWORD count, DWORD list_
                                   LPGLYPHMETRICSFLOAT metrics) { V86GL_API_CALL();
     (void)deviation;
     if (format != WGL_FONT_LINES && format != WGL_FONT_POLYGONS) {
+        SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
     return use_font_outlines_common(hdc, first, count, list_base, extrusion,
@@ -5097,6 +5016,7 @@ BOOL APIENTRY wglUseFontOutlinesW(HDC hdc, DWORD first, DWORD count, DWORD list_
                                   LPGLYPHMETRICSFLOAT metrics) { V86GL_API_CALL();
     (void)deviation;
     if (format != WGL_FONT_LINES && format != WGL_FONT_POLYGONS) {
+        SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
     return use_font_outlines_common(hdc, first, count, list_base, extrusion,
@@ -11256,20 +11176,21 @@ GLboolean APIENTRY glIsTexture(GLuint texture) { V86GL_GL_CALL_VALUE(0);
 }
 
 __declspec(dllexport)
-GLboolean APIENTRY glAreTexturesResident(GLsizei n, const GLuint* textures, GLboolean* residences) { V86GL_GL_CALL_VALUE(0);
-    GLsizei i;
-    (void)textures;
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return GL_FALSE;
+GLboolean APIENTRY glAreTexturesResident(GLsizei n,const GLuint* textures,GLboolean* residences) { V86GL_GL_CALL_VALUE(0);
+    GLboolean resident=GL_FALSE,all=GL_TRUE;GLboolean* values;
+    if (n<0 || (n && !textures)) {v86gl_set_error(GL_INVALID_VALUE);return GL_FALSE;}
+    /* Validate Begin/End even for an empty array, before reading client names. */
+    if (emit_query_parameter(V86GL_PARAMETER_TEXTURE_RESIDENCY,0,0,V86GL_STATE_BOOLEAN,&resident)<=0) return GL_FALSE;
+    if (!n) return GL_TRUE;
+    values=(GLboolean*)HeapAlloc(GetProcessHeap(),0,(SIZE_T)n);
+    if (!values) {v86gl_set_error(GL_OUT_OF_MEMORY);return GL_FALSE;}
+    for (GLsizei i=0;i<n;i++) {
+        if (emit_query_parameter(V86GL_PARAMETER_TEXTURE_RESIDENCY,textures[i],1,V86GL_STATE_BOOLEAN,&values[i])<=0) {HeapFree(GetProcessHeap(),0,values);return GL_FALSE;}
+        if (!values[i]) all=GL_FALSE;
     }
-
-    if (residences) {
-        for (i = 0; i < n; i++) {
-            residences[i] = GL_TRUE;
-        }
-    }
-    return GL_TRUE;
+    /* GL leaves residences untouched when the aggregate answer is TRUE. */
+    if (!all && residences) CopyMemory(residences,values,(SIZE_T)n);
+    HeapFree(GetProcessHeap(),0,values);return all;
 }
 
 __declspec(dllexport)

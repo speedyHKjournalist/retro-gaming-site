@@ -375,3 +375,16 @@ register the same arena again. The failed batch is discarded, never replayed
 when acceptance is uncertain. The next API entry resends the current surface.
 There is no permanent disabled flag. Error messages use OutputDebugString only
 when tracing was explicitly requested; diagnostic builds retain file logging.
+
+### Truthful query and font results
+
+Texture residency queries validate names on the CPU. This implementation keeps
+all live textures resident; aggregate true leaves the caller's array untouched.
+Invalid/deleted/zero names and Begin/End queries report GL errors. Bitmap fonts
+use matching ANSI/Unicode GDI calls, preserve unpack state and PBO binding, and
+compile actual glyph bits with their origins and both advances. Undefined glyphs
+create empty lists. GDI/allocation errors fail without placeholder geometry.
+Outline fonts remain explicitly unsupported. RGBA formats have no layer palette,
+so palette calls fail rather than returning fabricated entries or success.
+The XP probe compares a Unicode glyph against GDI pixels and checks application
+window chains before allowing Cube 2 to launch.
