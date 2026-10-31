@@ -1,5 +1,9 @@
 # OpenGL guest proxy
 
+2026-10-31（plan C3/C5）：矩阵调用只编码原始参数，不在 DLL 校验模式、维护栈或计算矩阵。
+CPU 提供 8 个 ARB 程序矩阵（每栈深度 2）以及当前矩阵/转置/深度查询；错误和列表
+执行时机由 CPU 管理。实际 C ABI、19 例本机矩阵参照和真实 GPU 的四种矩阵绑定已验证。
+
 2026-10-31（plan C3）：`glActiveStencilFaceEXT` 使用 opcode 253；普通模板 setter
 始终发送原始普通调用，Separate setter 始终发送核心 Separate 调用。活动面、错误、
 列表和三套模板状态由 CPU 管理。更新后的 DLL 必须与对应主机包一起部署，旧 DLL

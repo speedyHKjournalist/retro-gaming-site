@@ -77,9 +77,17 @@ for (const extension of [
     assert.ok(gl21.split(" ").includes(extension),
         "GLView 1.3/1.4 capability is missing " + extension);
 }
-assert.match(proxy,
-    /case GL_COLOR:[\s\S]*return g_color_matrix_stack\[g_color_matrix_stack_depth\]/,
-    "GL_SGI_color_matrix needs a real matrix stack");
+// Matrix storage moved out of the DLL. Check the promised color stack in
+// the CPU state machine instead of requiring the retired C cache.
+const { hostPath, testPath } = require("./host_paths.js"), { GLShadow } = require(hostPath("gl-webgpu/gl_shadow.js"));
+require(hostPath("gl-webgpu/gl_shadow_state.js"));
+const { GLStream, GL } = require(testPath("gl_stream_builder.js")), matrices = new GLShadow();
+matrices.process(new GLStream().makeCurrent(1, 0, 0, 16, 16, 1, 1).call("MATRIX_MODE", GL.COLOR)
+    .call("SCALEF", 2, 3, 4).call("PUSH_MATRIX").call("TRANSLATEF", 1, 2, 3).bytes());
+assert.equal(matrices.stateValue(GL.COLOR_MATRIX_SGI)[0][12], 2);
+matrices.process(new GLStream().call("POP_MATRIX").bytes());
+assert.equal(matrices.stateValue(GL.COLOR_MATRIX_SGI)[0][12], 0);
+assert.equal(matrices.stateValue(GL.COLOR_MATRIX_SGI)[0][5], 3);
 assert.match(proxy,
     /pname >= GL_POST_COLOR_MATRIX_RED_SCALE_SGI[\s\S]*g_post_color_matrix_scale/,
     "GL_SGI_color_matrix post-transfer state must be retained in the proxy");

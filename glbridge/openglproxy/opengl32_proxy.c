@@ -3594,39 +3594,6 @@ static void current_scissor_box(GLint* params) {
     current_viewport(params);
 }
 
-static void identity_matrix(GLfloat* params) {
-    uint32_t i;
-
-    for (i = 0; i < 16; i++) {
-        params[i] = (i % 5) == 0 ? 1.0f : 0.0f;
-    }
-}
-
-static GLfloat* current_matrix(GLint** depth, GLint* max_depth) {
-    init_query_state();
-    switch (g_matrix_mode) {
-    case GL_MODELVIEW:
-        if (depth) *depth = &g_modelview_stack_depth;
-        if (max_depth) *max_depth = 32;
-        return g_modelview_stack[g_modelview_stack_depth];
-    case GL_PROJECTION:
-        if (depth) *depth = &g_projection_stack_depth;
-        if (max_depth) *max_depth = 2;
-        return g_projection_stack[g_projection_stack_depth];
-    case GL_TEXTURE:
-        if (depth) *depth = &g_texture_stack_depth;
-        if (max_depth) *max_depth = 2;
-        return g_texture_stack[g_texture_stack_depth];
-    case GL_COLOR:
-        if (depth) *depth = &g_color_matrix_stack_depth;
-        if (max_depth) *max_depth = 2;
-        return g_color_matrix_stack[g_color_matrix_stack_depth];
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        return NULL;
-    }
-}
-
 static GLfloat* matrix_for_pname(GLenum pname) {
     init_query_state();
     switch (pname) {
@@ -3638,86 +3605,8 @@ static GLfloat* matrix_for_pname(GLenum pname) {
     }
 }
 
-static void multiply_current_matrix(const GLfloat* rhs) {
-    GLfloat result[16];
-    GLfloat* lhs = current_matrix(NULL, NULL);
-    int row;
-    int column;
-    int k;
 
-    if (!lhs) return;
-    for (column = 0; column < 4; column++) {
-        for (row = 0; row < 4; row++) {
-            GLfloat sum = 0.0f;
-            for (k = 0; k < 4; k++) sum += lhs[k * 4 + row] * rhs[column * 4 + k];
-            result[column * 4 + row] = sum;
-        }
-    }
-    CopyMemory(lhs, result, sizeof(result));
-}
 
-static GLfloat v86gl_sine_degrees(GLfloat degrees) {
-    GLfloat radians;
-    GLfloat square;
-    while (degrees > 180.0f) degrees -= 360.0f;
-    while (degrees < -180.0f) degrees += 360.0f;
-    radians = degrees * 0.01745329251994329577f;
-    if (radians > 1.5707963267948966f) radians = 3.141592653589793f - radians;
-    if (radians < -1.5707963267948966f) radians = -3.141592653589793f - radians;
-    square = radians * radians;
-    return radians * (1.0f - square * (1.0f / 6.0f - square * (1.0f / 120.0f - square / 5040.0f)));
-}
-
-static void matrix_translate(GLfloat x, GLfloat y, GLfloat z) {
-    GLfloat matrix[16];
-    identity_matrix(matrix);
-    matrix[12] = x; matrix[13] = y; matrix[14] = z;
-    multiply_current_matrix(matrix);
-}
-
-static void matrix_scale(GLfloat x, GLfloat y, GLfloat z) {
-    GLfloat matrix[16];
-    identity_matrix(matrix);
-    matrix[0] = x; matrix[5] = y; matrix[10] = z;
-    multiply_current_matrix(matrix);
-}
-
-static void matrix_rotate(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
-    GLfloat matrix[16];
-    GLfloat length_squared = x * x + y * y + z * z;
-    GLfloat length;
-    GLfloat inv_length;
-    GLfloat sine;
-    GLfloat cosine;
-    GLfloat one_minus_cosine;
-
-    if (length_squared == 0.0f) return;
-    /* Newton's method keeps the proxy self-contained: no MSVCRT/libm dependency. */
-    length = length_squared > 1.0f ? length_squared : 1.0f;
-    length = 0.5f * (length + length_squared / length);
-    length = 0.5f * (length + length_squared / length);
-    length = 0.5f * (length + length_squared / length);
-    length = 0.5f * (length + length_squared / length);
-    length = 0.5f * (length + length_squared / length);
-    length = 0.5f * (length + length_squared / length);
-    length = 0.5f * (length + length_squared / length);
-    inv_length = 1.0f / length;
-    x *= inv_length; y *= inv_length; z *= inv_length;
-    sine = v86gl_sine_degrees(angle);
-    cosine = v86gl_sine_degrees(angle + 90.0f);
-    one_minus_cosine = 1.0f - cosine;
-    identity_matrix(matrix);
-    matrix[0] = x * x * one_minus_cosine + cosine;
-    matrix[1] = y * x * one_minus_cosine + z * sine;
-    matrix[2] = x * z * one_minus_cosine - y * sine;
-    matrix[4] = x * y * one_minus_cosine - z * sine;
-    matrix[5] = y * y * one_minus_cosine + cosine;
-    matrix[6] = y * z * one_minus_cosine + x * sine;
-    matrix[8] = x * z * one_minus_cosine + y * sine;
-    matrix[9] = y * z * one_minus_cosine - x * sine;
-    matrix[10] = z * z * one_minus_cosine + cosine;
-    multiply_current_matrix(matrix);
-}
 
 static int fog_value_count(GLenum pname) {
     switch (pname) {
@@ -9491,20 +9380,12 @@ void APIENTRY glFinish(void) {
 __declspec(dllexport)
 void APIENTRY glMatrixMode(GLenum mode) {
     uint32_t payload = (uint32_t)mode;
-    if (mode != GL_MODELVIEW && mode != GL_PROJECTION && mode != GL_TEXTURE &&
-        mode != GL_COLOR) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    g_matrix_mode = mode;
+    g_matrix_mode = mode; /* diagnostic banner only; CPU owns validation */
     emit_gl_call(GLFN_MATRIX_MODE, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glLoadIdentity(void) {
-    GLfloat* matrix = current_matrix(NULL, NULL);
-    if (!matrix) return;
-    identity_matrix(matrix);
     emit_gl_call(GLFN_LOAD_IDENTITY, NULL, 0);
 }
 
@@ -9523,8 +9404,6 @@ void APIENTRY glLoadMatrixf(const GLfloat* m) {
     }
 
     CopyMemory(payload, m, sizeof(payload));
-    if (!current_matrix(NULL, NULL)) return;
-    CopyMemory(current_matrix(NULL, NULL), m, sizeof(payload));
     emit_gl_call(GLFN_LOAD_MATRIXF, payload, sizeof(payload));
     if (v86gl_trace_call_allowed()) {
         v86gl_trace("glLoadMatrixf leave queued=%lu", (unsigned long)g_dma_command_count);
@@ -9545,8 +9424,6 @@ void APIENTRY glLoadMatrixd(const GLdouble* m) {
         payload[i] = (GLfloat)m[i];
     }
 
-    if (!current_matrix(NULL, NULL)) return;
-    CopyMemory(current_matrix(NULL, NULL), payload, sizeof(payload));
 
     emit_gl_call(GLFN_LOAD_MATRIXF, payload, sizeof(payload));
 }
@@ -9561,8 +9438,6 @@ void APIENTRY glMultMatrixf(const GLfloat* m) {
     }
 
     CopyMemory(payload, m, sizeof(payload));
-    if (!current_matrix(NULL, NULL)) return;
-    multiply_current_matrix(payload);
     emit_gl_call(GLFN_MULT_MATRIXF, payload, sizeof(payload));
 }
 
@@ -9580,8 +9455,6 @@ void APIENTRY glMultMatrixd(const GLdouble* m) {
         payload[i] = (GLfloat)m[i];
     }
 
-    if (!current_matrix(NULL, NULL)) return;
-    multiply_current_matrix(payload);
 
     emit_gl_call(GLFN_MULT_MATRIXF, payload, sizeof(payload));
 }
@@ -9650,53 +9523,24 @@ void APIENTRY glMultTransposeMatrixd(const GLdouble* matrix) {
 __declspec(dllexport)
 void APIENTRY glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
     struct { double left, right, bottom, top, zNear, zFar; } payload;
-    GLfloat matrix[16];
-    if (left == right || bottom == top || zNear <= 0.0 || zFar <= 0.0 || zNear == zFar) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
     payload.left = left;
     payload.right = right;
     payload.bottom = bottom;
     payload.top = top;
     payload.zNear = zNear;
     payload.zFar = zFar;
-    ZeroMemory(matrix, sizeof(matrix));
-    matrix[0] = (GLfloat)(2.0 * zNear / (right - left));
-    matrix[5] = (GLfloat)(2.0 * zNear / (top - bottom));
-    matrix[8] = (GLfloat)((right + left) / (right - left));
-    matrix[9] = (GLfloat)((top + bottom) / (top - bottom));
-    matrix[10] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
-    matrix[11] = -1.0f;
-    matrix[14] = (GLfloat)(-(2.0 * zFar * zNear) / (zFar - zNear));
-    if (!current_matrix(NULL, NULL)) return;
-    multiply_current_matrix(matrix);
     emit_gl_call(GLFN_FRUSTUM, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar) {
     struct { double left, right, bottom, top, zNear, zFar; } payload;
-    GLfloat matrix[16];
-    if (left == right || bottom == top || zNear == zFar) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
     payload.left = left;
     payload.right = right;
     payload.bottom = bottom;
     payload.top = top;
     payload.zNear = zNear;
     payload.zFar = zFar;
-    identity_matrix(matrix);
-    matrix[0] = (GLfloat)(2.0 / (right - left));
-    matrix[5] = (GLfloat)(2.0 / (top - bottom));
-    matrix[10] = (GLfloat)(-2.0 / (zFar - zNear));
-    matrix[12] = (GLfloat)(-(right + left) / (right - left));
-    matrix[13] = (GLfloat)(-(top + bottom) / (top - bottom));
-    matrix[14] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
-    if (!current_matrix(NULL, NULL)) return;
-    multiply_current_matrix(matrix);
     emit_gl_call(GLFN_ORTHO, &payload, sizeof(payload));
 }
 
@@ -9706,8 +9550,6 @@ void APIENTRY glTranslatef(GLfloat x, GLfloat y, GLfloat z) {
     payload.x = x;
     payload.y = y;
     payload.z = z;
-    if (!current_matrix(NULL, NULL)) return;
-    matrix_translate(x, y, z);
     emit_gl_call(GLFN_TRANSLATEF, &payload, sizeof(payload));
 }
 
@@ -9718,8 +9560,6 @@ void APIENTRY glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
     payload.x = x;
     payload.y = y;
     payload.z = z;
-    if (!current_matrix(NULL, NULL)) return;
-    matrix_rotate(angle, x, y, z);
     emit_gl_call(GLFN_ROTATEF, &payload, sizeof(payload));
 }
 
@@ -9729,30 +9569,16 @@ void APIENTRY glScalef(GLfloat x, GLfloat y, GLfloat z) {
     payload.x = x;
     payload.y = y;
     payload.z = z;
-    if (!current_matrix(NULL, NULL)) return;
-    matrix_scale(x, y, z);
     emit_gl_call(GLFN_SCALEF, &payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glPushMatrix(void) {
-    GLfloat* matrix;
-    GLint* depth;
-    GLint max_depth;
-    matrix = current_matrix(&depth, &max_depth);
-    if (!matrix) return;
-    if (*depth + 1 >= max_depth) { v86gl_set_error(GL_INVALID_OPERATION); return; }
-    CopyMemory(matrix + 16, matrix, sizeof(GLfloat) * 16);
-    (*depth)++;
     emit_gl_call(GLFN_PUSH_MATRIX, NULL, 0);
 }
 
 __declspec(dllexport)
 void APIENTRY glPopMatrix(void) {
-    GLint* depth;
-    if (!current_matrix(&depth, NULL)) return;
-    if (*depth <= 0) { v86gl_set_error(GL_INVALID_OPERATION); return; }
-    (*depth)--;
     emit_gl_call(GLFN_POP_MATRIX, NULL, 0);
 }
 
@@ -9800,8 +9626,6 @@ void APIENTRY glClearStencil(GLint s) {
     g_clear_stencil = s;
     emit_gl_call(GLFN_CLEAR_STENCIL, &payload, sizeof(payload));
 }
-
-
 
 static void emit_stencil_func_separate(GLenum face, GLenum func, GLint ref, GLuint mask) {
     struct { uint32_t face, func; int32_t ref; uint32_t mask; } payload;
