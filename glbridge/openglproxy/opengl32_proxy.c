@@ -1414,6 +1414,43 @@ static char g_program_error_string[V86GL_PROGRAM_ERROR_STRING_MAX];
 #define V86GL_ATTRIB_STACK_DEPTH 16
 
 
+/* Optional client-byte cache for EXT_compiled_vertex_array. Buffer objects
+ * stay CPU/GPU-owned and never enter this cache. */
+static GLint g_array_lock_first;
+static GLsizei g_array_lock_count;
+typedef struct LockedClientRead {
+    struct LockedClientRead* next;
+    const GLvoid* pointer;
+    uint32_t stride, width, bytes;
+} LockedClientRead;
+static LockedClientRead* g_locked_client_reads;
+static uint32_t g_locked_client_bytes;
+#define V86GL_LOCK_CACHE_BYTES (16u * 1024u * 1024u)
+static void release_locked_client_arrays(void) {
+    while (g_locked_client_reads) {
+        LockedClientRead* next = g_locked_client_reads->next;
+        HeapFree(GetProcessHeap(), 0, g_locked_client_reads);g_locked_client_reads = next;
+    }
+    g_locked_client_bytes = 0;
+}
+static const uint8_t* locked_client_data(const GLvoid* pointer, uint32_t stride, uint32_t width, uint32_t offset, uint32_t bytes) {
+    const uint8_t* original = (const uint8_t*)pointer + offset;
+    uint64_t start = (uint64_t)(uint32_t)g_array_lock_first * stride;
+    uint64_t span = g_array_lock_count > 0 ? (uint64_t)((uint32_t)g_array_lock_count - 1u) * stride + width : 0;
+    LockedClientRead* entry;
+    if (!g_array_lock_count || !bytes || offset < start || (uint64_t)offset + bytes > start + span || span > V86GL_LOCK_CACHE_BYTES) return original;
+    for (entry = g_locked_client_reads; entry; entry = entry->next)
+        if (entry->pointer == pointer && entry->stride == stride && entry->width == width)
+            return (const uint8_t*)(entry + 1) + (uint32_t)(offset - start);
+    if (span > V86GL_LOCK_CACHE_BYTES - g_locked_client_bytes) return original;
+    entry = (LockedClientRead*)HeapAlloc(GetProcessHeap(), 0, sizeof(*entry) + (uint32_t)span);
+    if (!entry) return original; /* The extension permits declining a cache. */
+    entry->pointer = pointer;entry->stride = stride;entry->width = width;entry->bytes = (uint32_t)span;
+    CopyMemory(entry + 1, (const uint8_t*)pointer + (uint32_t)start, (uint32_t)span);
+    entry->next = g_locked_client_reads;g_locked_client_reads = entry;g_locked_client_bytes += (uint32_t)span;
+    return (const uint8_t*)(entry + 1) + (uint32_t)(offset - start);
+}
+
 typedef struct {
     GLbitfield mask;
     GLint unpack_alignment, unpack_row_length, unpack_skip_rows, unpack_skip_pixels;
@@ -1421,6 +1458,8 @@ typedef struct {
     GLint pack_alignment, pack_row_length, pack_skip_rows, pack_skip_pixels;
     GLint pack_image_height, pack_skip_images;
     GLenum client_active_texture;
+    GLint array_lock_first;
+    GLsizei array_lock_count;
     GLuint array_buffer_binding, element_array_buffer_binding;
     GLuint pixel_pack_buffer_binding, pixel_unpack_buffer_binding;
     ClientArrayState vertex_array, color_array, index_array, normal_array;
@@ -1444,6 +1483,7 @@ static void capture_client_attrib(ClientAttribSnapshot* s, GLbitfield mask) {
     s->pack_skip_rows = g_pack_skip_rows; s->pack_skip_pixels = g_pack_skip_pixels;
     s->pack_image_height = g_pack_image_height; s->pack_skip_images = g_pack_skip_images;
     s->client_active_texture = g_client_active_texture;
+    s->array_lock_first = g_array_lock_first;s->array_lock_count = g_array_lock_count;
     s->array_buffer_binding = g_array_buffer_binding;
     s->element_array_buffer_binding = g_element_array_buffer_binding;
     s->pixel_pack_buffer_binding = g_pixel_pack_buffer_binding;
@@ -1469,6 +1509,7 @@ static void restore_client_attrib(const ClientAttribSnapshot* s) {
         g_pixel_unpack_buffer_binding = s->pixel_unpack_buffer_binding;
     }
     if (s->mask & GL_CLIENT_VERTEX_ARRAY_BIT) {
+        release_locked_client_arrays();g_array_lock_first = s->array_lock_first;g_array_lock_count = s->array_lock_count;
         g_client_active_texture = s->client_active_texture;
         g_array_buffer_binding = s->array_buffer_binding;
         g_element_array_buffer_binding = s->element_array_buffer_binding;
@@ -1498,7 +1539,7 @@ static GuestContextState g_default_guest_context_state;
 static BOOL g_default_guest_context_state_valid = FALSE;
 
 static void capture_guest_context_state(GuestContextState* state) {
-    flush_immediate_vertices();
+    flush_immediate_vertices();release_locked_client_arrays();
     state->immediate_active = g_immediate_active;
     capture_client_attrib(&state->client, GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT);
     CopyMemory(state->client_attrib_stack,g_client_attrib_stack,sizeof(state->client_attrib_stack));
@@ -3047,6 +3088,7 @@ static BOOL valid_array_pointer_type(uint16_t fn, GLenum type) {
 
 static void emit_vbo_pointer(uint16_t fn, GLint size, GLenum type,
                              GLsizei stride, const GLvoid* pointer) {
+    release_locked_client_arrays();
     VBOPointerPayload payload;
 
     payload.size = size;
@@ -3059,6 +3101,7 @@ static void emit_vbo_pointer(uint16_t fn, GLint size, GLenum type,
 static void emit_vbo_attrib_pointer(GLuint index, GLint size, GLenum type,
                                     GLboolean normalized, GLsizei stride,
                                     const GLvoid* pointer) {
+    release_locked_client_arrays();
     VBOAttribPointerPayload payload;
 
     payload.index = index;
@@ -3901,7 +3944,7 @@ static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count
         out->data = client_buffer_data_at(state, (const GLvoid*)((uintptr_t)state->pointer + (uint32_t)offset), (uint32_t)span);
         if (!out->data) return 0;
     } else {
-        out->data = (const uint8_t*)state->pointer + (uint32_t)offset;
+        out->data = locked_client_data(state->pointer, stride, element_size, (uint32_t)offset, (uint32_t)span);
     }
     return 1;
 }
@@ -3990,7 +4033,7 @@ static int generic_attrib_copy(GLuint index, GLint first, GLsizei count,
         out->data = buffer_selected_data_at(GL_VERTEX_ATTRIB_ARRAY_POINTER, index, (const GLvoid*)((uintptr_t)state->pointer + (uint32_t)offset), (uint32_t)span);
         if (!out->data) return 0;
     } else {
-        out->data = (const uint8_t*)state->pointer + (uint32_t)offset;
+        out->data = locked_client_data(state->pointer, stride, element_size, (uint32_t)offset, (uint32_t)span);
     }
     return 1;
 }
@@ -4026,6 +4069,7 @@ static uint8_t* write_generic_attrib_block(uint8_t* p, const GenericAttribCopy* 
 }
 
 static int set_client_array_enabled(GLenum array, BOOL enabled, BOOL emit) {
+    release_locked_client_arrays();
     uint32_t payload = (uint32_t)array;
     ClientArrayState* texcoord = &g_texcoord_arrays[client_active_texture_index()];
 
@@ -4162,6 +4206,7 @@ BOOL WINAPI DllMain
     }
 
     if (reason == DLL_PROCESS_DETACH) {
+        release_locked_client_arrays();
         uint32_t i;
 
         v86gl_trace("unloading");
@@ -5633,11 +5678,6 @@ void APIENTRY glPopAttrib(void) {
 __declspec(dllexport)
 void APIENTRY glPushClientAttrib(GLbitfield mask) {
     uint32_t payload = (uint32_t)mask;
-    if (mask & ~(GL_CLIENT_PIXEL_STORE_BIT | GL_CLIENT_VERTEX_ARRAY_BIT)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
     if (g_client_attrib_stack_depth >= V86GL_ATTRIB_STACK_DEPTH) {
         v86gl_set_error(GL_STACK_OVERFLOW);
         return;
@@ -6639,6 +6679,7 @@ void APIENTRY glVertexAttrib4Nuiv(GLuint index, const GLuint* v) {
 }
 
 void APIENTRY glEnableVertexAttribArray(GLuint index) {
+    release_locked_client_arrays();
     uint32_t payload = index;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     g_generic_attribs[index].enabled = TRUE;
@@ -6646,6 +6687,7 @@ void APIENTRY glEnableVertexAttribArray(GLuint index) {
 }
 
 void APIENTRY glDisableVertexAttribArray(GLuint index) {
+    release_locked_client_arrays();
     uint32_t payload = index;
     if (index >= V86GL_MAX_VERTEX_ATTRIBS) { v86gl_set_error(GL_INVALID_VALUE); return; }
     g_generic_attribs[index].enabled = FALSE;
@@ -9973,16 +10015,26 @@ void APIENTRY glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid* p
     (void)set_client_array_enabled(GL_EDGE_FLAG_ARRAY, FALSE, TRUE);
 }
 
+static BOOL query_array_lock(uint32_t operation, GLint first, GLsizei count) {
+    V86GLRecordQueryArrayLock request = {operation, first, count, 0, 0};
+    uint8_t* args;
+    if (!reserve_pci_record(GLFN_QUERY_ARRAY_LOCK, NULL, sizeof(request), &args)) return FALSE;
+    CopyMemory(args, &request, sizeof(request));
+    if (!emit_pci_batch(FALSE) || read_u32le(args + offsetof(V86GLRecordQueryArrayLock,status)) != V86GL_SYNC_QUERY_STATUS_OK) return FALSE;
+    release_locked_client_arrays();
+    g_array_lock_first = (GLint)read_u32le(args + offsetof(V86GLRecordQueryArrayLock,first));
+    g_array_lock_count = (GLsizei)read_u32le(args + offsetof(V86GLRecordQueryArrayLock,count));
+    return TRUE;
+}
+
 __declspec(dllexport)
 void APIENTRY glLockArraysEXT(GLint first, GLsizei count) {
-    (void)first;
-    if (count < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-    }
+    (void)query_array_lock(0, first, count);
 }
 
 __declspec(dllexport)
 void APIENTRY glUnlockArraysEXT(void) {
+    (void)query_array_lock(1, 0, 0);
 }
 
 static GLfloat color_from_byte(GLbyte v) {
@@ -10421,7 +10473,7 @@ static const uint8_t* client_array_element_ptr(const ClientArrayState* state, GL
     if (state->buffer && (offset > UINT32_MAX || element_size > UINT32_MAX - offset)) {v86gl_set_error(GL_INVALID_OPERATION);return NULL;}
     if (state->buffer) return client_buffer_data_at(state, (const GLvoid*)(uintptr_t)offset, element_size);
     if (!state->pointer) {v86gl_set_error(GL_INVALID_OPERATION);return NULL;}
-    return (const uint8_t*)state->pointer + (uint32_t)index * stride;
+    return locked_client_data(state->pointer, stride, element_size, (uint32_t)index * stride, element_size);
 }
 
 static GLfloat client_array_scalar(const uint8_t* p, GLenum type) {
@@ -10517,7 +10569,7 @@ static BOOL read_generic_array_values(GLuint index, GLint element, GLfloat value
     if (state->buffer) {
         if (at > UINT32_MAX || width > UINT32_MAX - at) {v86gl_set_error(GL_INVALID_OPERATION);return FALSE;}
         data = buffer_selected_data_at(GL_VERTEX_ATTRIB_ARRAY_POINTER,index,(const GLvoid*)(uintptr_t)at,width);
-    } else data = state->pointer ? (const uint8_t*)state->pointer + (uint32_t)element * (uint32_t)(state->stride ? state->stride : (GLsizei)width) : NULL;
+    } else data = state->pointer ? locked_client_data(state->pointer, (uint32_t)(state->stride ? state->stride : (GLsizei)width), width, (uint32_t)element * (uint32_t)(state->stride ? state->stride : (GLsizei)width), width) : NULL;
     if (!data || !size) return FALSE;
     values[0]=values[1]=values[2]=0;values[3]=1;
     for (GLint k=0;k<state->size;k++) values[k] = state->normalized ? client_array_normalized_scalar(data+k*size,state->type) : client_array_scalar(data+k*size,state->type);

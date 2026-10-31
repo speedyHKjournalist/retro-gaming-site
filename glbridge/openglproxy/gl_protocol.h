@@ -378,9 +378,10 @@ enum {
     GLFN_ACTIVE_STENCIL_FACE = 253,
     GLFN_PROGRAM_LINK_VALIDATION = 254,
     GLFN_UPLOAD_CHUNK = 255,
-    GLFN_IMMEDIATE_VERTEX_BLOCK = 256
+    GLFN_IMMEDIATE_VERTEX_BLOCK = 256,
+    GLFN_QUERY_ARRAY_LOCK = 257
 };
-#define V86GL_OPCODE_COUNT 256u
+#define V86GL_OPCODE_COUNT 257u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -1102,6 +1103,13 @@ typedef struct V86GLRecordImmediateVertexBlock {
     uint32_t run_count;
     uint32_t data_size;
 } V86GLRecordImmediateVertexBlock;
+typedef struct V86GLRecordQueryArrayLock {
+    uint32_t operation;
+    int32_t first;
+    int32_t count;
+    uint32_t status;
+    uint32_t error;
+} V86GLRecordQueryArrayLock;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1805,6 +1813,12 @@ typedef char V86GLRecordUploadChunk_data_size[offsetof(V86GLRecordUploadChunk, d
 typedef char V86GLRecordImmediateVertexBlockSize[sizeof(V86GLRecordImmediateVertexBlock) == 8 ? 1 : -1];
 typedef char V86GLRecordImmediateVertexBlock_run_count[offsetof(V86GLRecordImmediateVertexBlock, run_count) == 0 ? 1 : -1];
 typedef char V86GLRecordImmediateVertexBlock_data_size[offsetof(V86GLRecordImmediateVertexBlock, data_size) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryArrayLockSize[sizeof(V86GLRecordQueryArrayLock) == 20 ? 1 : -1];
+typedef char V86GLRecordQueryArrayLock_operation[offsetof(V86GLRecordQueryArrayLock, operation) == 0 ? 1 : -1];
+typedef char V86GLRecordQueryArrayLock_first[offsetof(V86GLRecordQueryArrayLock, first) == 4 ? 1 : -1];
+typedef char V86GLRecordQueryArrayLock_count[offsetof(V86GLRecordQueryArrayLock, count) == 8 ? 1 : -1];
+typedef char V86GLRecordQueryArrayLock_status[offsetof(V86GLRecordQueryArrayLock, status) == 12 ? 1 : -1];
+typedef char V86GLRecordQueryArrayLock_error[offsetof(V86GLRecordQueryArrayLock, error) == 16 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 36 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
