@@ -335,3 +335,14 @@ for idle visibility/occlusion updates, retains the DLL while contexts exist and
 exits after the final context is deleted. The host ABI fixtures separately
 exercise real entry bodies, TLS/locking, all 831 preprocessed exports, callbacks
 and dispatcher lifetime; their small-body shim is test-only.
+
+### Window pixel formats
+
+Display windows expose RGB24 plus alpha8, depth24/stencil8, with double,
+4-sample double and single-buffer variants. The format is a window property:
+unset returns zero, repeating the same selection succeeds, changing it fails.
+Contexts require a selected compatible format. Bitmap/memory DCs are explicitly
+unsupported and are never converted to a screen overlay. ARB selection handles
+integer and floating constraints, and queries validate all fields before writing.
+The actual-C format fixture and its 12 mutants cover these rules; an XP worker
+Cube 2 complex run also checks the current DLL and GLSL probe.

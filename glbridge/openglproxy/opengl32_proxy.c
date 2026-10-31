@@ -975,6 +975,7 @@ static uint32_t g_last_surface_context_id = 0;
 static uint32_t g_last_surface_share_group = 0;
 static uint32_t g_last_surface_format = 0;
 static uint32_t window_format_flags(HWND hwnd);
+static BOOL valid_wgl_dc(HDC hdc, BOOL require_format, HWND* window, int* selected);
 static BOOL g_have_last_surface = FALSE;
 /* The last V86GL_CTRL_WINDOW_STATE sent (emit_window_state) */
 static BOOL g_window_state_sent = FALSE;
@@ -997,6 +998,7 @@ typedef struct {
     HDC current_dc;
     HWND current_hwnd;
     BOOL ever_current;
+    int pixel_format;
     uint32_t share_group;
     void* guest_state;
     /* Return storage only: contents and validation come from the CPU. */
@@ -4372,21 +4374,19 @@ BOOL WINAPI DllMain
 __declspec(dllexport)
 HGLRC APIENTRY wglCreateContext(HDC hdc) { V86GL_API_CALL();
     uint32_t i;
+    int format;
     HGLRC result = NULL;
 
     V86GL_DIAG("WGL wglCreateContext hdc=%08lx",
                (unsigned long)(uintptr_t)hdc);
 
-    if (!hdc) {
-        SetLastError(ERROR_INVALID_HANDLE);
-        return NULL;
-    }
+    if (!valid_wgl_dc(hdc, TRUE, NULL, &format)) return NULL;
     EnterCriticalSection(&g_wgl_context_lock);
     for (i = 0; i < V86GL_MAX_WGL_CONTEXTS; i++) {
         V86GLWGLContext* context = &g_wgl_contexts[i];
         if (context->used) continue;
         ZeroMemory(context, sizeof(*context));
-        context->used = TRUE;
+        context->used = TRUE;context->pixel_format = format;
         context->share_group = g_next_share_group++;
         if (!g_next_share_group) g_next_share_group = 1;
         if (!ensure_guest_context_state(context)) {
@@ -4505,267 +4505,149 @@ static BOOL can_bind_wgl_context(V86GLWGLContext* context, DWORD thread_id) {
     return TRUE;
 }
 
-/* The pixel formats the canvas offers: 1 double-buffered, 2 the same with 4
- * samples (WGL_ARB_multisample), 3 single-buffered. The host learns a
- * window's from V86GL_CTRL_MAKE_CURRENT's format. */
+/* Three displayable RGBA8 formats. No bitmap, palette, stereo or layer planes
+ * are advertised. Color bits exclude the separately reported alpha bits. */
 #define V86GL_PIXEL_FORMAT_COUNT 3
-static const struct {
-    BOOL double_buffer;
-    int samples;
-} g_pixel_formats[V86GL_PIXEL_FORMAT_COUNT] = {
-    { TRUE, 0 }, { TRUE, 4 }, { FALSE, 0 },
+static const struct { BOOL double_buffer;int samples; } g_pixel_formats[V86GL_PIXEL_FORMAT_COUNT] = {
+    {TRUE,0},{TRUE,4},{FALSE,0}
 };
-
-#define V86GL_MAX_FORMAT_WINDOWS 64
-static struct {
+static BOOL pixel_format_valid(int format) {return format >= 1 && format <= V86GL_PIXEL_FORMAT_COUNT;}
+static int window_pixel_format(HWND hwnd) {return hwnd ? (int)(uintptr_t)GetPropW(hwnd,L"V86GL.PixelFormat") : 0;}
+static BOOL valid_wgl_dc(HDC hdc, BOOL require_format, HWND* window, int* selected) {
+    DWORD type = hdc ? GetObjectType(hdc) : 0;
     HWND hwnd;
     int format;
-} g_window_formats[V86GL_MAX_FORMAT_WINDOWS];
-
-static BOOL pixel_format_valid(int format) {
-    return format >= 1 && format <= V86GL_PIXEL_FORMAT_COUNT;
+    if (type != OBJ_DC) {SetLastError(type == OBJ_MEMDC ? ERROR_INVALID_PIXEL_FORMAT : ERROR_INVALID_HANDLE);return FALSE;}
+    hwnd = WindowFromDC(hdc);
+    if (!hwnd || !IsWindow(hwnd)) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;}
+    format = window_pixel_format(hwnd);
+    if (require_format && !pixel_format_valid(format)) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;}
+    if (window) *window = hwnd;
+    if (selected) *selected = format;
+    return TRUE;
 }
-
-/* A window's format, as SetPixelFormat chose it; the first before that */
-static int window_pixel_format(HWND hwnd) {
-    int i;
-    for (i = 0; hwnd && i < V86GL_MAX_FORMAT_WINDOWS; i++) {
-        if (g_window_formats[i].hwnd == hwnd) {
-            return g_window_formats[i].format;
-        }
-    }
-    return 1;
-}
-
-static void set_window_pixel_format(HWND hwnd, int format) {
-    int i, free_slot = -1;
-    if (!hwnd) {
-        return;
-    }
-    for (i = 0; i < V86GL_MAX_FORMAT_WINDOWS; i++) {
-        if (g_window_formats[i].hwnd == hwnd) {
-            g_window_formats[i].format = format;
-            return;
-        }
-        if (free_slot < 0 && (!g_window_formats[i].hwnd || !IsWindow(g_window_formats[i].hwnd))) {
-            free_slot = i;
-        }
-    }
-    if (free_slot < 0) {
-        free_slot = 0;
-    }
-    g_window_formats[free_slot].hwnd = hwnd;
-    g_window_formats[free_slot].format = format;
-}
-
-/* The window's format as MAKE_CURRENT carries it (V86GL_FORMAT_*) */
 static uint32_t window_format_flags(HWND hwnd) {
     int format = window_pixel_format(hwnd);
-    return (g_pixel_formats[format - 1].double_buffer ? 0u : V86GL_FORMAT_SINGLE_BUFFER) |
-           ((uint32_t)g_pixel_formats[format - 1].samples << V86GL_FORMAT_SAMPLES_SHIFT);
+    if (!pixel_format_valid(format)) return 0;
+    return (g_pixel_formats[format-1].double_buffer ? 0u : V86GL_FORMAT_SINGLE_BUFFER) |
+        ((uint32_t)g_pixel_formats[format-1].samples << V86GL_FORMAT_SAMPLES_SHIFT);
 }
-
 static void fill_pixel_format(PIXELFORMATDESCRIPTOR* pfd, int format) {
-    if (!pfd) {
-        return;
-    }
-
-    ZeroMemory(pfd, sizeof(*pfd));
-    pfd->nSize = sizeof(*pfd);
-    pfd->nVersion = 1;
-    pfd->dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL |
-                   (g_pixel_formats[format - 1].double_buffer ? PFD_DOUBLEBUFFER : 0);
-    pfd->iPixelType = PFD_TYPE_RGBA;
-    pfd->cColorBits = 32;
-    pfd->cRedBits = 8;
-    pfd->cGreenBits = 8;
-    pfd->cBlueBits = 8;
-    pfd->cAlphaBits = 8;
-    pfd->cDepthBits = 24;
-    pfd->cStencilBits = 8;
-    pfd->iLayerType = PFD_MAIN_PLANE;
+    ZeroMemory(pfd,sizeof(*pfd));pfd->nSize=sizeof(*pfd);pfd->nVersion=1;
+    pfd->dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|(g_pixel_formats[format-1].double_buffer?PFD_DOUBLEBUFFER:0);
+    pfd->iPixelType=PFD_TYPE_RGBA;pfd->cColorBits=24;pfd->cRedBits=pfd->cGreenBits=pfd->cBlueBits=pfd->cAlphaBits=8;
+    pfd->cRedShift=0;pfd->cGreenShift=8;pfd->cBlueShift=16;pfd->cAlphaShift=24;
+    pfd->cDepthBits=24;pfd->cStencilBits=8;pfd->iLayerType=PFD_MAIN_PLANE;
 }
-
-__declspec(dllexport)
-int APIENTRY wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd) { V86GL_API_CALL();
-    (void)hdc;
-    /* single-buffered when asked for (GLUT_SINGLE); never multisampled */
-    if (ppfd && !(ppfd->dwFlags & (PFD_DOUBLEBUFFER | PFD_DOUBLEBUFFER_DONTCARE))) {
-        return 3;
+/* 1: ignored during choice, 2: boolean exact, 3: enum exact, 4: minimum. */
+static int pixel_attribute_kind(int attribute) {
+    switch (attribute) {
+    case 0x2000:case 0x200A:case 0x200C:case 0x200D:case 0x200E:
+    case 0x2016:case 0x2018:case 0x201A:case 0x201C:
+    case 0x2037:case 0x2038:case 0x2039:case 0x203A:case 0x203B:return 1;
+    case 0x2001:case 0x2002:case 0x2004:case 0x2005:case 0x2006:
+    case 0x200F:case 0x2010:case 0x2011:case 0x2012:case 0x2041:return 2;
+    case 0x2003:case 0x2007:case 0x2013:return 3;
+    case 0x2008:case 0x2009:case 0x2014:case 0x2015:case 0x2017:case 0x2019:case 0x201B:
+    case 0x201D:case 0x201E:case 0x201F:case 0x2020:case 0x2021:case 0x2022:case 0x2023:case 0x2024:case 0x2042:return 4;
+    default:return 0;
     }
-    return 1;
 }
-
-/* A single RGBA/double-buffer format backs the browser canvas.  This is a
- * deliberately narrow WGL_ARB_pixel_format implementation, but returning a
- * valid format keeps clients from calling a NULL extension pointer. */
-BOOL APIENTRY wglChoosePixelFormatARB(HDC hdc, const int* int_attribs,
-                                      const FLOAT* float_attribs,
-                                      UINT max_formats, int* formats,
-                                      UINT* format_count) { V86GL_API_CALL();
-    if (v86gl_trace_call_allowed()) {
-        v86gl_trace("wglChoosePixelFormatARB max=%lu attrs=%08lx floatAttrs=%08lx",
-                    (unsigned long)max_formats, (unsigned long)(uintptr_t)int_attribs,
-                    (unsigned long)(uintptr_t)float_attribs);
-    }
-    int want_double = -1, min_samples = 0, i;
-    UINT found = 0;
-    static const int by_preference[V86GL_PIXEL_FORMAT_COUNT] = { 1, 2, 3 };
-    (void)hdc;
-    (void)float_attribs;
-
-    if (!formats || !format_count) {
-        if (format_count) *format_count = 0;
-        return FALSE;
-    }
-    /* the attributes that tell the formats apart; the rest all match */
-    for (i = 0; int_attribs && int_attribs[i]; i += 2) {
-        switch (int_attribs[i]) {
-        case 0x2011: want_double = int_attribs[i + 1] ? 1 : 0; break; /* WGL_DOUBLE_BUFFER_ARB */
-        case 0x2041: if (int_attribs[i + 1] && !min_samples) min_samples = 1; break; /* WGL_SAMPLE_BUFFERS_ARB */
-        case 0x2042: if (int_attribs[i + 1] > min_samples) min_samples = int_attribs[i + 1]; break; /* WGL_SAMPLES_ARB */
-        default: break;
-        }
-    }
-    /* the best match first: no samples unless asked for */
-    for (i = 0; i < V86GL_PIXEL_FORMAT_COUNT && found < max_formats; i++) {
-        int format = by_preference[i];
-        int samples = g_pixel_formats[format - 1].samples;
-        if (want_double >= 0 && g_pixel_formats[format - 1].double_buffer != (BOOL)want_double) continue;
-        if (samples < min_samples) continue;
-        if (!min_samples && samples) continue;
-        formats[found++] = format;
-    }
-    *format_count = found;
-    return TRUE;
-}
-
 static int wgl_pixel_format_attribute_value(int format, int attribute) {
     switch (attribute) {
-    case 0x2000: return V86GL_PIXEL_FORMAT_COUNT; /* WGL_NUMBER_PIXEL_FORMATS_ARB */
-    case 0x2041: return g_pixel_formats[format - 1].samples ? 1 : 0; /* WGL_SAMPLE_BUFFERS_ARB */
-    case 0x2042: return g_pixel_formats[format - 1].samples;          /* WGL_SAMPLES_ARB */
-    case 0x2001: return TRUE;       /* WGL_DRAW_TO_WINDOW_ARB */
-    case 0x2002: return FALSE;      /* WGL_DRAW_TO_BITMAP_ARB */
-    case 0x2003: return 0x2027;     /* WGL_FULL_ACCELERATION_ARB */
-    case 0x200F: return FALSE;      /* WGL_SUPPORT_GDI_ARB */
-    case 0x2010: return TRUE;       /* WGL_SUPPORT_OPENGL_ARB */
-    case 0x2011: return g_pixel_formats[format - 1].double_buffer; /* WGL_DOUBLE_BUFFER_ARB */
-    case 0x2012: return FALSE;      /* WGL_STEREO_ARB */
-    case 0x2013: return 0x202B;     /* WGL_TYPE_RGBA_ARB */
-    case 0x2014: return 32;         /* WGL_COLOR_BITS_ARB */
-    case 0x2015:                   /* WGL_RED_BITS_ARB */
-    case 0x2017:                   /* WGL_GREEN_BITS_ARB */
-    case 0x2019:                   /* WGL_BLUE_BITS_ARB */
-    case 0x201B: return 8;          /* WGL_ALPHA_BITS_ARB */
-    case WGL_ACCUM_BITS_ARB: return 0;
-    case WGL_DEPTH_BITS_ARB: return 24;
-    case WGL_STENCIL_BITS_ARB: return 8;
-    default: return 0;
+    case 0x2000:return V86GL_PIXEL_FORMAT_COUNT;
+    case 0x2001:case 0x2010:case 0x200C:case 0x200D:case 0x200E:return TRUE;
+    case 0x2003:return 0x2027; /* full ICD acceleration */
+    case 0x2007:return 0x202A; /* swap contents undefined */
+    case 0x2011:return g_pixel_formats[format-1].double_buffer;
+    case 0x2013:return 0x202B; /* RGBA */
+    case 0x2014:case 0x2022:return 24;
+    case 0x2015:case 0x2017:case 0x2019:case 0x201B:case 0x2023:return 8;
+    case 0x2018:return 8;case 0x201A:return 16;case 0x201C:return 24;
+    case 0x2041:return g_pixel_formats[format-1].samples ? 1 : 0;
+    case 0x2042:return g_pixel_formats[format-1].samples;
+    default:return 0;
     }
 }
-
-BOOL APIENTRY wglGetPixelFormatAttribivARB(HDC hdc, int pixel_format,
-                                            int layer_plane, UINT count,
-                                            const int* attributes,
-                                            int* values) { V86GL_API_CALL();
+static BOOL pixel_attribute_matches(int format, int attribute, double requested) {
+    int kind=pixel_attribute_kind(attribute),value=wgl_pixel_format_attribute_value(format,attribute);
+    if (kind==1) return TRUE;
+    if (kind==2) return !!value == (requested != 0.0);
+    return kind==3 ? value==requested : value>=requested;
+}
+static BOOL pixel_attribute_ignores_layer(int attribute) {
+    return attribute>=0x2000 && attribute<=0x2009;
+}
+static BOOL pixel_query_valid(HDC hdc,int format,int layer,UINT count,const int* attributes,const void* values) {
     UINT i;
-    (void)hdc;
-    if (layer_plane != 0 || (count && (!attributes || !values))) {
-        return FALSE;
-    }
-
-    /* WGL_ARB_pixel_format explicitly allows pixel_format == 0 when the
-     * caller only asks for WGL_NUMBER_PIXEL_FORMATS_ARB. WineD3D 1.7.52 uses
-     * exactly that form to size its format table before querying format 1. */
-    if (pixel_format == 0) {
-        for (i = 0; i < count; i++) {
-            if (attributes[i] != 0x2000) { /* WGL_NUMBER_PIXEL_FORMATS_ARB */
-                return FALSE;
-            }
-            values[i] = V86GL_PIXEL_FORMAT_COUNT;
-        }
-        return TRUE;
-    }
-
-    if (!pixel_format_valid(pixel_format)) {
-        return FALSE;
-    }
-
-    for (i = 0; i < count; i++) {
-        values[i] = wgl_pixel_format_attribute_value(pixel_format, attributes[i]);
+    if (!valid_wgl_dc(hdc,FALSE,NULL,NULL)) return FALSE;
+    if (count && (!attributes || !values)) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+    for (i=0;i<count;i++) {
+        int attribute=attributes[i];
+        if (!pixel_attribute_kind(attribute)) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+        if (attribute==0x2000) continue; /* number ignores format and layer */
+        if (!pixel_format_valid(format)) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;}
+        if (layer && !pixel_attribute_ignores_layer(attribute)) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
     }
     return TRUE;
 }
-
-BOOL APIENTRY wglGetPixelFormatAttribfvARB(HDC hdc, int pixel_format,
-                                            int layer_plane, UINT count,
-                                            const int* attributes,
-                                            FLOAT* values) { V86GL_API_CALL();
-    UINT i;
-    if (layer_plane != 0 || (count && (!attributes || !values))) {
-        return FALSE;
-    }
-
-    if (pixel_format == 0) {
-        for (i = 0; i < count; i++) {
-            if (attributes[i] != 0x2000) { /* WGL_NUMBER_PIXEL_FORMATS_ARB */
-                return FALSE;
-            }
-            values[i] = (FLOAT)V86GL_PIXEL_FORMAT_COUNT;
-        }
-        return TRUE;
-    }
-
-    if (!pixel_format_valid(pixel_format)) {
-        return FALSE;
-    }
-
-    for (i = 0; i < count; i++) {
-        values[i] = (FLOAT)wgl_pixel_format_attribute_value(pixel_format, attributes[i]);
-    }
-    (void)hdc;
-    return TRUE;
-}
-
 __declspec(dllexport)
-BOOL APIENTRY wglSetPixelFormat(HDC hdc, int format, const PIXELFORMATDESCRIPTOR* ppfd) { V86GL_API_CALL();
-#if V86GL_DIAG_ENABLED
-    V86GL_DIAG("WGL wglSetPixelFormat hdc=%08lx format=%d ppfd=%08lx",
-               (unsigned long)(uintptr_t)hdc, format,
-               (unsigned long)(uintptr_t)ppfd);
-#endif
-    (void)ppfd;
-    if (!pixel_format_valid(format)) {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
+int APIENTRY wglChoosePixelFormat(HDC hdc,const PIXELFORMATDESCRIPTOR* pfd) { V86GL_API_CALL();
+    if (!valid_wgl_dc(hdc,FALSE,NULL,NULL)) return 0;
+    if (!pfd || pfd->nSize!=sizeof(*pfd) || pfd->nVersion!=1) {SetLastError(ERROR_INVALID_PARAMETER);return 0;}
+    if (pfd->iPixelType!=PFD_TYPE_RGBA || pfd->iLayerType!=PFD_MAIN_PLANE ||
+        (pfd->dwFlags&(PFD_DRAW_TO_BITMAP|PFD_SUPPORT_GDI)) ||
+        ((pfd->dwFlags&PFD_STEREO) && !(pfd->dwFlags&PFD_STEREO_DONTCARE))) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return 0;}
+    return !(pfd->dwFlags&PFD_DOUBLEBUFFER_DONTCARE) && !(pfd->dwFlags&PFD_DOUBLEBUFFER) ? 3 : 1;
+}
+BOOL APIENTRY wglChoosePixelFormatARB(HDC hdc,const int* integers,const FLOAT* floats,UINT max_formats,int* formats,UINT* count) { V86GL_API_CALL();
+    UINT found=0;int format,i;
+    static const int preferred[]={1,3,2};
+    if (!valid_wgl_dc(hdc,FALSE,NULL,NULL)) return FALSE;
+    if (!count || (max_formats && !formats)) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+    *count=0;
+    for (i=0;integers && integers[i];i+=2) if (!pixel_attribute_kind(integers[i])) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
+    for (i=0;floats && floats[i]!=0.0f;i+=2) {
+        double attribute=floats[i];
+        if (!(attribute>0 && attribute<=65535) || attribute!=(int)attribute || !pixel_attribute_kind((int)attribute)) {SetLastError(ERROR_INVALID_PARAMETER);return FALSE;}
     }
-    EnterCriticalSection(&g_wgl_context_lock);
-    set_window_pixel_format(WindowFromDC(hdc), format);
-    LeaveCriticalSection(&g_wgl_context_lock);
+    for (int candidate=0;candidate<V86GL_PIXEL_FORMAT_COUNT && found<max_formats;candidate++) {
+        BOOL match=TRUE;format=preferred[candidate];
+        for (i=0;integers && integers[i];i+=2) if (!pixel_attribute_matches(format,integers[i],integers[i+1])) match=FALSE;
+        for (i=0;floats && floats[i]!=0.0f;i+=2) if (!pixel_attribute_matches(format,(int)floats[i],floats[i+1])) match=FALSE;
+        if (match) formats[found++]=format;
+    }
+    *count=found;return TRUE;
+}
+BOOL APIENTRY wglGetPixelFormatAttribivARB(HDC hdc,int format,int layer,UINT count,const int* attributes,int* values) { V86GL_API_CALL();
+    UINT i;if (!pixel_query_valid(hdc,format,layer,count,attributes,values)) return FALSE;
+    for (i=0;i<count;i++) values[i]=wgl_pixel_format_attribute_value(format,attributes[i]);
     return TRUE;
 }
-
-__declspec(dllexport)
-int APIENTRY wglDescribePixelFormat(HDC hdc, int format, UINT bytes, PIXELFORMATDESCRIPTOR* ppfd) { V86GL_API_CALL();
-    (void)hdc;
-    if (ppfd && bytes >= sizeof(*ppfd)) {
-        if (!pixel_format_valid(format)) {
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return 0;
-        }
-        fill_pixel_format(ppfd, format);
-    }
-    return V86GL_PIXEL_FORMAT_COUNT;
+BOOL APIENTRY wglGetPixelFormatAttribfvARB(HDC hdc,int format,int layer,UINT count,const int* attributes,FLOAT* values) { V86GL_API_CALL();
+    UINT i;if (!pixel_query_valid(hdc,format,layer,count,attributes,values)) return FALSE;
+    for (i=0;i<count;i++) values[i]=(FLOAT)wgl_pixel_format_attribute_value(format,attributes[i]);
+    return TRUE;
 }
-
+__declspec(dllexport)
+BOOL APIENTRY wglSetPixelFormat(HDC hdc,int format,const PIXELFORMATDESCRIPTOR* pfd) { V86GL_API_CALL();
+    HWND hwnd;int previous;(void)pfd;
+    if (!valid_wgl_dc(hdc,FALSE,&hwnd,&previous)) return FALSE;
+    if (!pixel_format_valid(format) || (previous && previous!=format)) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return FALSE;}
+    if (previous==format) return TRUE;
+    return SetPropW(hwnd,L"V86GL.PixelFormat",(HANDLE)(uintptr_t)format);
+}
+__declspec(dllexport)
+int APIENTRY wglDescribePixelFormat(HDC hdc,int format,UINT bytes,PIXELFORMATDESCRIPTOR* pfd) { V86GL_API_CALL();
+    if (!valid_wgl_dc(hdc,FALSE,NULL,NULL)) return 0;
+    if (!pfd) return V86GL_PIXEL_FORMAT_COUNT;
+    if (bytes<sizeof(*pfd)) {SetLastError(ERROR_INVALID_PARAMETER);return 0;}
+    if (!pixel_format_valid(format)) {SetLastError(ERROR_INVALID_PIXEL_FORMAT);return 0;}
+    fill_pixel_format(pfd,format);return V86GL_PIXEL_FORMAT_COUNT;
+}
 __declspec(dllexport)
 int APIENTRY wglGetPixelFormat(HDC hdc) { V86GL_API_CALL();
-    int format;
-    EnterCriticalSection(&g_wgl_context_lock);
-    format = window_pixel_format(WindowFromDC(hdc));
-    LeaveCriticalSection(&g_wgl_context_lock);
-    return format;
+    int format;if (!valid_wgl_dc(hdc,FALSE,NULL,&format)) return 0;return format;
 }
 
 __declspec(dllexport)
@@ -4839,12 +4721,15 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) { V86GL_API_CALL();
     DWORD thread_id = GetCurrentThreadId(), error;
     V86GLWGLContext* context;
     V86GLWGLContext* previous;
-    HWND hwnd;
+    HWND hwnd;int format;
     if (!ctx) {release_current_binding();SetLastError(ERROR_SUCCESS);return TRUE;}
-    if (!hdc) return fail_make_current(ERROR_INVALID_HANDLE);
+    if (!valid_wgl_dc(hdc, TRUE, &hwnd, &format)) return fail_make_current(GetLastError());
     EnterCriticalSection(&g_wgl_context_lock);reap_terminated_wgl_contexts();
     if (!validate_wgl_context(ctx, &context) || !can_bind_wgl_context(context, thread_id)) {
         error = GetLastError();LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(error);
+    }
+    if (context->pixel_format != format) {
+        LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(ERROR_INVALID_PIXEL_FORMAT);
     }
     if (!ensure_guest_context_state(context)) {
         LeaveCriticalSection(&g_wgl_context_lock);return fail_make_current(ERROR_NOT_ENOUGH_MEMORY);
@@ -4862,7 +4747,7 @@ BOOL APIENTRY wglMakeCurrent(HDC hdc, HGLRC ctx) { V86GL_API_CALL();
     }
     g_loaded_context = context;g_loaded_thread = thread_id;context->owner_thread = thread_id;
     if (!context->owner_handle) context->owner_handle = OpenThread(SYNCHRONIZE, FALSE, thread_id);
-    context->current_dc = hdc;hwnd = WindowFromDC(hdc);context->current_hwnd = hwnd;context->ever_current = TRUE;
+    context->current_dc = hdc;context->current_hwnd = hwnd;context->ever_current = TRUE;
     LeaveCriticalSection(&g_wgl_context_lock);
     g_context_destroy_sent = FALSE;g_renderer_lifecycle_started = TRUE;hook_window(hwnd);emit_current_surface(hwnd);
     SetLastError(ERROR_SUCCESS);return TRUE;

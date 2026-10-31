@@ -20,6 +20,7 @@ typedef uint32_t GLenum,GLuint,GLbitfield,DWORD,UINT;typedef int32_t GLint,GLsiz
 #define FALSE 0
 #define TLS_OUT_OF_INDEXES UINT32_MAX
 #define ERROR_INVALID_HANDLE 6
+#define ERROR_INVALID_PIXEL_FORMAT 2000
 #define ERROR_NOT_ENOUGH_MEMORY 8
 #define ERROR_SUCCESS 0
 #define ERROR_BUSY 170
@@ -54,6 +55,7 @@ static HANDLE OpenThread(DWORD access,BOOL inherit,DWORD id){(void)access;(void)
 static BOOL CloseHandle(HANDLE handle){(void)handle;return TRUE;}
 static DWORD WaitForSingleObject(HANDLE handle,DWORD time){(void)handle;(void)time;return WAIT_TIMEOUT;}
 static HWND WindowFromDC(HDC dc){return (HWND)dc;}
+static BOOL valid_wgl_dc(HDC dc,BOOL require,HWND* window,int* selected){(void)require;if(!dc){SetLastError(ERROR_INVALID_HANDLE);return FALSE;}if(window)*window=WindowFromDC(dc);if(selected)*selected=(uintptr_t)dc==200?3:1;return TRUE;}
 static LONG InterlockedExchange(volatile LONG* p,LONG value){return __sync_lock_test_and_set(p,value);}
 static LONG InterlockedCompareExchange(volatile LONG* p,LONG value,LONG expected){return __sync_val_compare_and_swap(p,expected,value);}
 ${type("V86GLWGLContext")}
@@ -165,7 +167,7 @@ static void* draw_thread(void* value){int id=(int)(uintptr_t)value;thread_id=(DW
 }
 #ifndef GL_THREAD_FIXTURE_NO_MAIN
 int main(void){pthread_mutexattr_t attr;assert(!pthread_mutexattr_init(&attr));assert(!pthread_mutexattr_settype(&attr,PTHREAD_MUTEX_RECURSIVE));assert(!pthread_mutex_init(&g_api_lock.mutex,&attr));assert(!pthread_mutex_init(&g_wgl_context_lock.mutex,&attr));g_api_lock.api=1;
- capture_guest_context_state(&g_default_guest_context_state);g_default_guest_context_state_valid=TRUE;for(int i=0;i<2;i++){g_wgl_contexts[i].used=TRUE;g_wgl_contexts[i].share_group=(uint32_t)i+1;assert(ensure_guest_context_state(&g_wgl_contexts[i]));}
+ capture_guest_context_state(&g_default_guest_context_state);g_default_guest_context_state_valid=TRUE;for(int i=0;i<2;i++){g_wgl_contexts[i].used=TRUE;g_wgl_contexts[i].pixel_format=1;g_wgl_contexts[i].share_group=(uint32_t)i+1;assert(ensure_guest_context_state(&g_wgl_contexts[i]));}
  pthread_t a,b;assert(!pthread_create(&a,NULL,draw_thread,(void*)(uintptr_t)1));assert(!pthread_create(&b,NULL,draw_thread,(void*)(uintptr_t)2));assert(!pthread_join(a,NULL));assert(!pthread_join(b,NULL));assert(!g_api_depth&&!g_dma_size&&g_wgl_context_count==2);
  int mappings=0;for(int i=0;i<4096;i++)if(g_buffer_objects[i].used)mappings++;assert(mappings==2);release_buffer_group(2);mappings=0;for(int i=0;i<4096;i++)if(g_buffer_objects[i].used)mappings++;assert(mappings==2);g_wgl_contexts[0].used=FALSE;release_buffer_group(1);assert(!g_buffer_objects[0].used||g_buffer_objects[0].share_group==2);mappings=0;for(int i=0;i<4096;i++)if(g_buffer_objects[i].used){assert(g_buffer_objects[i].share_group==2);mappings++;}assert(mappings==1);return 0;
 }

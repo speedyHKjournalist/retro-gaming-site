@@ -22,6 +22,7 @@ int main(void){thread_id=3;g_wgl_context_count=0;pthread_mutexattr_t attr;assert
  HGLRC c=wglCreateContext((HDC)(uintptr_t)101);assert(c);foreign_context=b;pthread_t holder;assert(!pthread_create(&holder,NULL,hold_context,NULL));
  pthread_mutex_lock(&turns);while(!foreign_ready)pthread_cond_wait(&changed,&turns);pthread_mutex_unlock(&turns);
  assert(wglMakeCurrent((HDC)(uintptr_t)101,c));assert(!wglDeleteContext(b)&&GetLastError()==ERROR_BUSY);assert(wglGetCurrentContext()==c);
+ assert(!wglMakeCurrent((HDC)(uintptr_t)200,c)&&GetLastError()==ERROR_INVALID_PIXEL_FORMAT);assert(!wglGetCurrentContext());assert(wglMakeCurrent((HDC)(uintptr_t)101,c));
  assert(!wglMakeCurrent((HDC)(uintptr_t)100,b)&&GetLastError()==ERROR_BUSY);assert(!wglGetCurrentContext());
  pthread_mutex_lock(&turns);foreign_release=1;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&turns);assert(!pthread_join(holder,NULL));
  assert(wglDeleteContext(b));assert(wglMakeCurrent((HDC)(uintptr_t)101,c));assert(wglDeleteContext(c));assert(!g_wgl_context_count&&!wglGetCurrentContext());
