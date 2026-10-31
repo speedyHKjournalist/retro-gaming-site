@@ -29,6 +29,7 @@ function body(source, name, prefix) {
     return source.slice(at, end);
 }
 const transport = `
+#define release_encoding_buffer_reads() ((void)0)
 static unsigned char wire[700000]; static uint32_t wire_size, error;
 static void v86gl_set_error(GLenum value) { if(!error)error=value; }
 static uint32_t read_u32le(const uint8_t* p) { uint32_t v; memcpy(&v,p,4); return v; }

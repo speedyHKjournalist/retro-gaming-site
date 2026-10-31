@@ -31,6 +31,7 @@ typedef int GLint, GLsizei, BOOL;
 typedef void GLvoid;
 typedef size_t SIZE_T;
 #define APIENTRY
+#define release_encoding_buffer_reads() ((void)0)
 #define TRUE 1
 #define FALSE 0
 #define GL_INVALID_ENUM 0x500
@@ -67,6 +68,7 @@ int main(void) {
     glTexImage2D(GL_PROXY_TEXTURE_2D,0,0x8058,64,32,0,0x1908,0x1401,invalid);
     glTexImage3DEXT(GL_PROXY_TEXTURE_3D,0,0x881A,8,4,2,0,0x1908,0x1406,invalid);
     glTexImage2D(GL_PROXY_TEXTURE_CUBE_MAP,0,0x8051,8,8,0,0x1907,0x1401,invalid);
+    glTexImage2D(0x84F7u,0,0x8058,4,4,0,0x1908,0x1401,invalid);
     emit_compressed_tex_image(GLFN_COMPRESSED_TEX_IMAGE_2D,GL_PROXY_TEXTURE_2D,0,0x83F3,8,4,1,0,32,invalid);
     return 0;
 }
@@ -81,7 +83,7 @@ int main(void) {
         assert.equal(length, P.RECORDS[name].size, "a proxy must carry no pixel bytes");
         at += 4 + length; ++count;
     }
-    assert.equal(count, 5);
+    assert.equal(count, 6);
     const shadow = new GLShadow(); shadow.setCapabilities(caps.capabilities({}, {}));
     const initial = new GLStream().makeCurrent(1, 0, 0, 64, 64, 1, 1); shadow.process(initial.bytes());
     const { host, log } = createFakeHost(), executor = new GLWebGPUExecutor(null, { host, strict: true }); await executor.initialize();

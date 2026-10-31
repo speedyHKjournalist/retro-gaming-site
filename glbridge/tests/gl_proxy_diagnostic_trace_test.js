@@ -94,7 +94,7 @@ assert.match(proxy,
 
 for (const marker of [
     "PROCESS_ATTACH", "MODE", "FRAME id=", "GLERROR", "HISTOGRAM",
-    "SUBMIT_FAILED", "READBACK_TIMEOUT", "ARB_PROGRAM", "QUERY_BATCH",
+    "SUBMIT_FAILED", "READBACK_TIMEOUT", "ARB_PROGRAM",
     "SURFACE", "WGL",
 ]) {
     assert.ok(proxy.includes(marker),

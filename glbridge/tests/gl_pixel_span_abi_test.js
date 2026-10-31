@@ -17,7 +17,7 @@ function extract(name) {
     return source.slice(match.index, end);
 }
 const functions = ["align_u32", "gl_format_components", "gl_pixel_bytes", "gl_pixel_span_with_state", "gl_pixel_row_stride",
-    "gl_pixel_span_3d_with_state", "gl_bitmap_span", "gl_pixel_tight_span", "gl_pixel_tight_span_3d"].map(extract).join("\n");
+    "gl_pixel_span_3d_with_state", "gl_bitmap_span"].map(extract).join("\n");
 const values = { ...GL, BGR_EXT: GL.BGR, BGRA_EXT: GL.BGRA, DEPTH_STENCIL_EXT: GL.DEPTH_STENCIL };
 const enums = [...new Set(functions.match(/\bGL_[A-Z0-9_]+\b/g))];
 for (const name of enums) assert.ok(values[name.slice(3)] !== undefined, name);
@@ -43,12 +43,12 @@ int main(void) {
         gl_format_components(GL_COLOR_INDEX),gl_format_components(GL_STENCIL_INDEX),
         gl_pixel_span_with_state(1,2,GL_RGBA,GL_FLOAT,8,INT32_MAX,0,0),
         gl_pixel_span_3d_with_state(1,1,INT32_MAX,GL_RGBA,GL_UNSIGNED_BYTE,4,1024,0,0,INT32_MAX,INT32_MAX),
-        gl_pixel_tight_span(INT32_MAX,INT32_MAX,GL_RGBA,GL_FLOAT),
-        gl_pixel_tight_span_3d(INT32_MAX,INT32_MAX,INT32_MAX,GL_RGBA,GL_FLOAT),
+        gl_pixel_span_with_state(INT32_MAX,INT32_MAX,GL_RGBA,GL_FLOAT,1,0,0,0),
+        gl_pixel_span_3d_with_state(INT32_MAX,INT32_MAX,INT32_MAX,GL_RGBA,GL_FLOAT,1,0,0,0,0,0),
         gl_pixel_span_with_state(1,2,GL_RGBA,GL_UNSIGNED_BYTE,4,1<<30,0,0),
         gl_pixel_span_3d_with_state(1,1,(1<<20)+1,GL_RGBA,GL_UNSIGNED_BYTE,4,1<<20,0,0,1<<22,0),
-        gl_pixel_tight_span_3d(16385,268419073,262144,GL_RGBA,GL_FLOAT),
-        gl_pixel_tight_span_3d(2,3,4,GL_RGBA,GL_UNSIGNED_BYTE),
+        gl_pixel_span_3d_with_state(16385,268419073,262144,GL_RGBA,GL_FLOAT,1,0,0,0,0,0),
+        gl_pixel_span_3d_with_state(2,3,4,GL_RGBA,GL_UNSIGNED_BYTE,1,0,0,0,0,0),
     };
     assert(fwrite(spans,sizeof(spans),1,stdout)==1); return 0;
 }

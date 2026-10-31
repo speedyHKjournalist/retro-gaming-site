@@ -16,6 +16,7 @@ const code = `
 #include <string.h>
 #include "gl_protocol.h"
 #define APIENTRY
+#define release_encoding_buffer_reads() ((void)0)
 #define GL_INVALID_ENUM 0x500
 #define GL_INVALID_VALUE 0x501
 #define GL_INVALID_OPERATION 0x502
@@ -47,11 +48,8 @@ static union { GLdouble alignment; unsigned char bytes[4096]; } memory;
 static void v86gl_set_error(GLenum e) { error = e; }
 static const void* buffer_data_at(GLuint name, const void* offset, uint32_t bytes) {
     uintptr_t at = (uintptr_t)offset;
-    if (!name || at > sizeof(storage) || bytes > sizeof(storage)-at) { v86gl_set_error(GL_INVALID_OPERATION); return NULL; }
+    if (!name || buffer.mapped || at > sizeof(storage) || bytes > sizeof(storage)-at) { v86gl_set_error(GL_INVALID_OPERATION); return NULL; }
     return storage+at;
-}
-static BufferObjectState* bound_buffer_state(GLenum target) {
-    assert(target == GL_PIXEL_PACK_BUFFER || target == GL_PIXEL_UNPACK_BUFFER); return &buffer;
 }
 ${extract("static const GLvoid* unpack_pixel_pointer(")}
 ${extract("static GLvoid* pack_pixel_pointer(")}

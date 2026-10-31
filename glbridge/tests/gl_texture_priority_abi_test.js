@@ -22,7 +22,7 @@ typedef int GLsizei;
 typedef uint32_t GLuint;
 typedef float GLfloat;
 typedef float GLclampf;
-static struct { int used; GLuint name; GLfloat priority; } g_texture_states[3] = {{1,7,1},{1,9,1},{1,77,1}};
+
 static unsigned int error, emitted;
 static uint8_t captured[128];
 static void v86gl_set_error(unsigned int value) { error = value; }
@@ -42,7 +42,6 @@ int main(void) {
         memcpy(&name, captured + 4 + i * 8, 4); memcpy(&priority, captured + 8 + i * 8, 4);
         assert(name == names[i] && priority == values[i]);
     }
-    assert(g_texture_states[0].priority == 0 && g_texture_states[1].priority == .25f && g_texture_states[2].priority == 1);
     glPrioritizeTextures(0, NULL, NULL); assert(emitted == 2);
     glPrioritizeTextures(-1, names, values); assert(error == GL_INVALID_VALUE && emitted == 2);
     error = 0; glPrioritizeTextures(1, NULL, values); assert(error == GL_INVALID_VALUE && emitted == 2);
@@ -54,5 +53,5 @@ int main(void) {
     execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-I",
         path.join(__dirname, "../openglproxy"), path.join(dir, "test.c"), "-o", path.join(dir, "test")]);
     execFileSync(path.join(dir, "test"));
-    console.log("gl_texture_priority_abi_test: actual C function forwards name/float pairs, clamps cache values and validates empty, invalid and oversized requests (passed)");
+    console.log("gl_texture_priority_abi_test: actual C function forwards name/float pairs, validates empty, invalid and oversized requests (passed)");
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }

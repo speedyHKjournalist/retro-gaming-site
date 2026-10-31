@@ -11,12 +11,8 @@ const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
 const { GLStream, GL } = require(testPath("gl_stream_builder.js"));
 const P = require(hostPath("gl-webgpu/gl_protocol.js"));
 const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
-function body(name, prefix = "") {
-    const at = source.indexOf(prefix + name + "("); assert.ok(at >= 0, name);
-    let end = source.indexOf("{", at) + 1, depth = 1;
-    for (; depth; ++end) { if (source[end] === "{") ++depth; if (source[end] === "}") --depth; }
-    return source.slice(at, end);
-}
+function body(name, prefix = "") {return require("./gl_cpu_abi_harness.js").body(source,name,prefix);}
+
 const helperAt = source.indexOf("static int emit_query_typed("), helperEnd = source.indexOf("static int emit_query_error", helperAt);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-buffer-mapping-"));
 const names = ["glGetBufferSubDataARB", "glMapBufferARB", "glUnmapBufferARB", "glGetBufferParameterivARB", "glGetBufferPointervARB", "glReadPixels"];
@@ -34,6 +30,7 @@ typedef int32_t GLintptrARB; typedef int32_t GLsizeiptrARB; typedef int32_t GLsi
 #define APIENTRY
 #define FALSE 0
 #define TRUE 1
+#include <limits.h>
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
 #define GetProcessHeap() 0
@@ -60,7 +57,6 @@ typedef struct { uint32_t size; GLenum usage,access; BOOL mapped; uint8_t* data;
 static BufferObjectState local;
 static GLuint g_pixel_pack_buffer_binding=7;
 static BufferObjectState* bound_buffer_state(GLenum target) { assert(target==GL_ARRAY_BUFFER_ARB); return &local; }
-static BufferObjectState* find_buffer_state(GLuint name,BOOL create) { assert(name==7 && !create); return &local; }
 static void emit_buffer_sub_data(GLenum target, GLintptrARB offset, GLsizeiptrARB size, const GLvoid* data) {
     V86GLRecordBufferSubData request; uint8_t* args;
     memset(&request,0,sizeof(request)); request.target=target; request.offset=offset; request.size=size; request.data_size=size;
@@ -70,13 +66,18 @@ static void emit_buffer_sub_data(GLenum target, GLintptrARB offset, GLsizeiptrAR
 static uint32_t gl_read_pixel_span(GLsizei width,GLsizei height,GLenum format,GLenum type) {
     assert(width==1 && height==1 && format==GL_RGBA && type==GL_UNSIGNED_BYTE); return 4;
 }
+typedef struct EncodingBufferRead {struct EncodingBufferRead* next;} EncodingBufferRead;
+static EncodingBufferRead* g_encoding_buffer_reads;
+static int emit_query_buffer_data_for(GLenum target,GLuint buffer,GLintptrARB offset,GLsizeiptrARB size,GLvoid* data);
+${body("release_encoding_buffer_reads", "static void ")}
+${body("buffer_selected_data_at", "static const uint8_t* ")}
 ${body("buffer_data_at", "static const uint8_t* ")}
 ${body("pack_pixel_pointer", "static GLvoid* ")}
 static int emit_read_pixels(GLint x,GLint y,GLsizei width,GLsizei height,GLenum format,GLenum type,uint32_t size,GLvoid* destination) {
     (void)x;(void)y;(void)width;(void)height;(void)format;(void)type; assert(size==4);
     const uint8_t pixel[]={20,90,170,255}; memcpy(destination,pixel,4); return 1;
 }
-${["emit_query_buffer_data", "emit_query_buffer_map", "emit_query_buffer_unmap"].map(n => body(n, "static int ")).join("\n")}
+${["emit_query_buffer_data_for", "emit_query_buffer_data", "emit_query_buffer_map", "emit_query_buffer_unmap"].map(n => body(n, "static int ")).join("\n")}
 ${names.map(n => body(n, (n === "glMapBufferARB" ? "GLvoid*" : n === "glUnmapBufferARB" ? "GLboolean" : "void") + " APIENTRY ")).join("\n")}
 static uint8_t pattern(unsigned int i) { return (i*7+3)%251; }
 int main(void) {

@@ -1012,16 +1012,16 @@ static BOOL release_thread_current_context(DWORD thread_id,
                                            HWND* replacement_hwnd);
 static void force_release_window_contexts(HWND hwnd);
 static uint32_t g_frame_id = 1;
-static GLuint g_next_texture_id = 1;
-static GLuint g_next_buffer_id = 1;
-static GLuint g_next_query_id = 1;
+
+
+
 /* Shaders and programs share one GL object namespace. */
 
-static GLuint g_next_arb_program_id = 1;
+
 static GLuint g_current_vertex_program_arb = 0;
 static GLuint g_current_fragment_program_arb = 0;
-static GLuint g_next_framebuffer_id = 1;
-static GLuint g_next_renderbuffer_id = 1;
+
+
 
 static GLuint g_current_samples_passed_query = 0;
 static GLuint g_current_program = 0;
@@ -1386,19 +1386,7 @@ static int g_swap_interval = 0;
 #define V86GL_MAX_FRAMEBUFFER_ATTACHMENTS (V86GL_MAX_COLOR_ATTACHMENTS + 2)
 #define V86GL_PROGRAM_ERROR_STRING_MAX 4096u
 
-typedef struct {
-    BOOL defined;
-    BOOL compressed;
-    GLint internalformat;
-    GLsizei width;
-    GLsizei height;
-    GLsizei depth;
-    GLint border;
-    GLenum format;
-    GLenum type;
-    uint32_t data_size;
-    uint8_t* data;
-} TextureLevelState;
+
 
 typedef struct {
     GLenum mode;
@@ -1416,24 +1404,7 @@ typedef struct {
     TexGenState texgen[4];
 } TextureUnitState;
 
-typedef struct {
-    BOOL used;
-    GLuint name;
-    GLenum target;
-    GLint min_filter;
-    GLint mag_filter;
-    GLint wrap_s;
-    GLint wrap_t;
-    GLint base_level;
-    GLint max_level;
-    GLfloat min_lod;
-    GLfloat max_lod;
-    GLfloat priority;
-    GLfloat border_color[4];
-    TextureLevelState levels[V86GL_MAX_TEXTURE_LEVELS];
-    TextureLevelState* cube_levels;
-    GLint wrap_r;
-} TextureObjectState;
+
 
 typedef struct {
     BOOL used;
@@ -1446,17 +1417,7 @@ typedef struct {
     uint8_t* data;
 } BufferObjectState;
 
-typedef struct {
-    BOOL used;
-    BOOL active;
-    GLuint name;
-    uint32_t context_id;
-    GLenum target;
-    GLuint result;
-    GLboolean available;
-    uint32_t poll_frame;
-    uint32_t poll_skip;
-} QueryObjectState;
+
 
 typedef struct {
     GLenum cap;
@@ -1464,81 +1425,13 @@ typedef struct {
 } CapState;
 
 static TextureUnitState g_texture_units[V86GL_MAX_TEXTURE_UNITS];
-static TextureObjectState g_texture_states[V86GL_MAX_TEXTURE_STATES];
+
 static BufferObjectState g_buffer_objects[V86GL_MAX_BUFFER_OBJECTS];
-static QueryObjectState g_query_objects[V86GL_MAX_QUERY_OBJECTS];
-static TextureObjectState g_default_texture_1d = {
-    TRUE,
-    0,
-    GL_TEXTURE_1D,
-    GL_NEAREST_MIPMAP_LINEAR,
-    GL_LINEAR,
-    GL_REPEAT,
-    GL_REPEAT,
-    0,
-    1000,
-    -1000.0f,
-    1000.0f,
-    1.0f,
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } },
-    NULL,
-    GL_REPEAT
-};
-static TextureObjectState g_default_texture_2d = {
-    TRUE,
-    0,
-    GL_TEXTURE_2D,
-    GL_NEAREST_MIPMAP_LINEAR,
-    GL_LINEAR,
-    GL_REPEAT,
-    GL_REPEAT,
-    0,
-    1000,
-    -1000.0f,
-    1000.0f,
-    1.0f,
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } },
-    NULL,
-    GL_REPEAT
-};
-static TextureObjectState g_default_texture_3d = {
-    TRUE,
-    0,
-    GL_TEXTURE_3D,
-    GL_NEAREST_MIPMAP_LINEAR,
-    GL_LINEAR,
-    GL_REPEAT,
-    GL_REPEAT,
-    0,
-    1000,
-    -1000.0f,
-    1000.0f,
-    1.0f,
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } },
-    NULL,
-    GL_REPEAT
-};
-static TextureObjectState g_default_texture_cube = {
-    TRUE,
-    0,
-    GL_TEXTURE_CUBE_MAP,
-    GL_NEAREST_MIPMAP_LINEAR,
-    GL_LINEAR,
-    GL_REPEAT,
-    GL_REPEAT,
-    0,
-    1000,
-    -1000.0f,
-    1000.0f,
-    1.0f,
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { { 0 } },
-    NULL,
-    GL_REPEAT
-};
+
+
+
+
+
 static CapState g_cap_states[V86GL_MAX_CAP_STATES];
 
 typedef struct {
@@ -1639,28 +1532,11 @@ typedef struct {
 
 
 
-typedef struct {
-    GLenum attachment;
-    GLenum object_type;
-    GLuint object_name;
-    GLenum texture_target;
-    GLint texture_level;
-    GLint texture_zoffset;
-} FramebufferAttachmentState;
 
-typedef struct {
-    BOOL used;
-    GLuint name;
-    FramebufferAttachmentState attachments[V86GL_MAX_FRAMEBUFFER_ATTACHMENTS];
-} FramebufferObjectState;
 
-typedef struct {
-    BOOL used;
-    GLuint name;
-    GLenum internalformat;
-    GLsizei width;
-    GLsizei height;
-} RenderbufferObjectState;
+
+
+
 
 typedef struct {
     BOOL enabled;
@@ -1709,7 +1585,7 @@ static GenericAttribState g_generic_attribs[V86GL_MAX_VERTEX_ATTRIBS] = {
 };
 
 
-static ArbProgramObjectState g_arb_program_objects[V86GL_MAX_ARB_PROGRAM_OBJECTS];
+
 /* Cube 2 keeps many shader variants alive at once and binds all eight of its
  * conventional attributes on every program.  A fixed 512-entry attribute
  * table was therefore exhausted after only 64 programs; later
@@ -1720,8 +1596,8 @@ static ArbProgramObjectState g_arb_program_objects[V86GL_MAX_ARB_PROGRAM_OBJECTS
 
 
 
-static FramebufferObjectState g_framebuffer_objects[V86GL_MAX_FRAMEBUFFER_OBJECTS];
-static RenderbufferObjectState g_renderbuffer_objects[V86GL_MAX_RENDERBUFFER_OBJECTS];
+
+
 static GLenum g_draw_buffers[V86GL_MAX_DRAW_BUFFERS] = { GL_BACK, GL_NONE, GL_NONE, GL_NONE };
 static GLenum g_stencil_back_func = GL_ALWAYS;
 static GLint g_stencil_back_ref = 0;
@@ -2316,143 +2192,19 @@ static void set_cap_state(GLenum cap, BOOL enabled) {
 
 
 
-static TextureObjectState* texture_state_defaults(TextureObjectState* state, GLuint name, GLenum target) {
-    ZeroMemory(state, sizeof(*state));
-    state->used = TRUE;
-    state->name = name;
-    state->target = target;
-    state->min_filter = GL_NEAREST_MIPMAP_LINEAR;
-    state->mag_filter = GL_LINEAR;
-    state->wrap_s = GL_REPEAT;
-    state->wrap_t = GL_REPEAT;
-    state->wrap_r = GL_REPEAT;
-    state->base_level = 0;
-    state->max_level = 1000;
-    state->min_lod = -1000.0f;
-    state->max_lod = 1000.0f;
-    state->priority = 1.0f;
-    return state;
-}
 
-static void free_texture_levels(TextureObjectState* state) {
-    uint32_t level;
-    uint32_t cube_level;
 
-    if (!state) {
-        return;
-    }
 
-    for (level = 0; level < V86GL_MAX_TEXTURE_LEVELS; level++) {
-        if (state->levels[level].data) {
-            HeapFree(GetProcessHeap(), 0, state->levels[level].data);
-        }
-    }
 
-    if (state->cube_levels) {
-        for (cube_level = 0; cube_level < 6u * V86GL_MAX_TEXTURE_LEVELS; cube_level++) {
-            if (state->cube_levels[cube_level].data) {
-                HeapFree(GetProcessHeap(), 0, state->cube_levels[cube_level].data);
-            }
-        }
-        HeapFree(GetProcessHeap(), 0, state->cube_levels);
-        state->cube_levels = NULL;
-    }
-}
 
-static TextureObjectState* find_texture_state(GLuint name, GLenum target, BOOL create) {
-    uint32_t i;
-    TextureObjectState* free_state = NULL;
-
-    if (!name) {
-        if (target == GL_TEXTURE_1D) {
-            return &g_default_texture_1d;
-        }
-        if (target == GL_TEXTURE_2D) {
-            return &g_default_texture_2d;
-        }
-        if (target == GL_TEXTURE_3D) {
-            return &g_default_texture_3d;
-        }
-        return target == GL_TEXTURE_CUBE_MAP ? &g_default_texture_cube : NULL;
-    }
-
-    for (i = 0; i < V86GL_MAX_TEXTURE_STATES; i++) {
-        TextureObjectState* state = &g_texture_states[i];
-        if (state->used && state->name == name) {
-            if (state->target && state->target != target) {
-                v86gl_set_error(GL_INVALID_OPERATION);
-                return NULL;
-            }
-
-            if (!state->target) {
-                state->target = target;
-            }
-
-            return state;
-        }
-
-        if (!state->used && !free_state) {
-            free_state = state;
-        }
-    }
-
-    if (!create || !free_state) {
-        return NULL;
-    }
-
-    return texture_state_defaults(free_state, name, target);
-}
 
 /* Unlike find_texture_state(), this lookup never promotes a name returned by
  * glGenTextures() into a texture object by assigning its first target.  OpenGL
  * creates the object on first bind; FBO validation and glIsTexture() need to
  * observe that distinction without changing it. */
-static TextureObjectState* lookup_texture_state(GLuint name) {
-    uint32_t i;
 
-    if (!name) {
-        return NULL;
-    }
-    for (i = 0; i < V86GL_MAX_TEXTURE_STATES; i++) {
-        TextureObjectState* state = &g_texture_states[i];
-        if (state->used && state->name == name) {
-            return state;
-        }
-    }
-    return NULL;
-}
 
-static void delete_texture_state(GLuint name) {
-    uint32_t i;
-    uint32_t unit;
 
-    if (!name) {
-        return;
-    }
-
-    for (i = 0; i < V86GL_MAX_TEXTURE_STATES; i++) {
-        if (g_texture_states[i].used && g_texture_states[i].name == name) {
-            free_texture_levels(&g_texture_states[i]);
-            ZeroMemory(&g_texture_states[i], sizeof(g_texture_states[i]));
-            break;
-        }
-    }
-
-    for (unit = 0; unit < V86GL_MAX_TEXTURE_UNITS; unit++) {
-        if (g_texture_units[unit].bound_1d == name) {
-            g_texture_units[unit].bound_1d = 0;
-        }
-        if (g_texture_units[unit].bound_2d == name) {
-            g_texture_units[unit].bound_2d = 0;
-        }
-        if (g_texture_units[unit].bound_3d == name) {
-            g_texture_units[unit].bound_3d = 0;
-        }
-        if (g_texture_units[unit].bound_cube == name) {
-            g_texture_units[unit].bound_cube = 0;
-        }
-    }
-}
 
 
 
@@ -2466,43 +2218,11 @@ static uint32_t gl_string_length(const GLchar* text) {
 
 
 
-static ArbProgramObjectState* find_arb_program_state(GLuint name, BOOL create) {
-    uint32_t i;
-    ArbProgramObjectState* free_state = NULL;
 
-    if (!name) return NULL;
-    for (i = 0; i < V86GL_MAX_ARB_PROGRAM_OBJECTS; i++) {
-        ArbProgramObjectState* state = &g_arb_program_objects[i];
-        if (state->used && state->name == name) return state;
-        if (!state->used && !free_state) free_state = state;
-    }
 
-    if (!create || !free_state) return NULL;
-    ZeroMemory(free_state, sizeof(*free_state));
-    free_state->used = TRUE;
-    free_state->name = name;
-    return free_state;
-}
 
-static void delete_arb_program_state(GLuint name) {
-    ArbProgramObjectState* state = find_arb_program_state(name, FALSE);
-    if (state) {
-        ZeroMemory(state, sizeof(*state));
-    }
-}
 
-static GLuint next_arb_program_name(void) {
-    GLuint name;
 
-    do {
-        name = g_next_arb_program_id++;
-        if (!name) {
-            name = g_next_arb_program_id++;
-        }
-    } while (find_arb_program_state(name, FALSE));
-
-    return name;
-}
 
 
 
@@ -2532,19 +2252,9 @@ static void emit_gl_call(uint16_t fn, const void* args, uint32_t args_size);
 
 
 
+static void release_encoding_buffer_reads(void);
 static void free_gl2_state(void) {
-    ZeroMemory(g_arb_program_objects, sizeof(g_arb_program_objects));
-    ZeroMemory(g_framebuffer_objects, sizeof(g_framebuffer_objects));
-    ZeroMemory(g_renderbuffer_objects, sizeof(g_renderbuffer_objects));
-    g_next_arb_program_id = 1;
-    g_next_framebuffer_id = 1;
-    g_next_renderbuffer_id = 1;
-    g_current_program = 0;
-    g_current_vertex_program_arb = 0;
-    g_current_fragment_program_arb = 0;
-    g_draw_framebuffer_binding = 0;
-    g_read_framebuffer_binding = 0;
-    g_renderbuffer_binding = 0;
+    release_encoding_buffer_reads();
 }
 
 static BufferObjectState* find_buffer_state(GLuint name, BOOL create) {
@@ -2557,11 +2267,11 @@ static BufferObjectState* find_buffer_state(GLuint name, BOOL create) {
         if (state->used && state->name == name) return state;
         if (!state->used && !free_state) free_state = state;
     }
-    if (!create || !free_state) return NULL;
+    if (!create) return NULL;
+    if (!free_state) {v86gl_set_error(GL_OUT_OF_MEMORY);return NULL;}
     ZeroMemory(free_state, sizeof(*free_state));
     free_state->used = TRUE;
     free_state->name = name;
-    free_state->usage = GL_STATIC_DRAW_ARB;
     free_state->access = GL_READ_WRITE_ARB;
     return free_state;
 }
@@ -2571,9 +2281,10 @@ static void delete_buffer_state(GLuint name) {
     ClientArrayState* arrays[] = { &g_vertex_array, &g_color_array, &g_index_array,
         &g_normal_array, &g_edge_flag_array, &g_secondary_color_array, &g_fog_coord_array };
     BufferObjectState* state = find_buffer_state(name, FALSE);
-    if (!state) return;
-    if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
-    ZeroMemory(state, sizeof(*state));
+    if (state) {
+        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
+        ZeroMemory(state, sizeof(*state));
+    }
     if (g_array_buffer_binding == name) g_array_buffer_binding = 0;
     if (g_element_array_buffer_binding == name) g_element_array_buffer_binding = 0;
     if (g_pixel_pack_buffer_binding == name) g_pixel_pack_buffer_binding = 0;
@@ -2586,66 +2297,15 @@ static void delete_buffer_state(GLuint name) {
         if (g_generic_attribs[i].buffer == name) g_generic_attribs[i].buffer = 0;
 }
 
-static QueryObjectState* find_query_state(GLuint name, BOOL create) {
-    uint32_t i;
-    QueryObjectState* free_state = NULL;
 
-    if (!name) {
-        return NULL;
-    }
 
-    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
-        QueryObjectState* state = &g_query_objects[i];
-        if (state->used && state->name == name && state->context_id == g_last_surface_context_id) {
-            return state;
-        }
-        if (!state->used && !free_state) {
-            free_state = state;
-        }
-    }
 
-    if (!create || !free_state) {
-        return NULL;
-    }
 
-    ZeroMemory(free_state, sizeof(*free_state));
-    free_state->used = TRUE;
-    free_state->name = name;
-    free_state->context_id = g_last_surface_context_id;
-    free_state->available = GL_TRUE;
-    return free_state;
-}
 
-static void delete_query_state(GLuint name) {
-    QueryObjectState* state = find_query_state(name, FALSE);
-    if (!state) {
-        return;
-    }
-    if (g_current_samples_passed_query == name) {
-        g_current_samples_passed_query = 0;
-    }
-    ZeroMemory(state, sizeof(*state));
-}
 
-static void delete_query_context_state(uint32_t context_id) {
-    uint32_t i;
-    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++)
-        if (g_query_objects[i].used && g_query_objects[i].context_id == context_id)
-            ZeroMemory(&g_query_objects[i], sizeof(g_query_objects[i]));
-    if (g_last_surface_context_id == context_id) g_current_samples_passed_query = 0;
-}
 
-static void reset_query_object_state(void) {
-    ZeroMemory(g_query_objects, sizeof(g_query_objects));
-    g_current_samples_passed_query = 0;
-    g_next_query_id = 1;
-}
 
-static BOOL is_occlusion_query_target(GLenum target) {
-    return target == GL_SAMPLES_PASSED ||
-           target == GL_ANY_SAMPLES_PASSED ||
-           target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE;
-}
+
 
 static BufferObjectState* bound_buffer_state(GLenum target) {
     GLuint name;
@@ -2661,26 +2321,55 @@ static BufferObjectState* bound_buffer_state(GLenum target) {
         v86gl_set_error(GL_INVALID_OPERATION);
         return NULL;
     }
-    return find_buffer_state(name, FALSE);
+    return find_buffer_state(name, TRUE);
 }
 
-static const uint8_t* buffer_data_at(GLuint name, const GLvoid* offset, uint32_t bytes) {
-    BufferObjectState* state = find_buffer_state(name, FALSE);
-    uintptr_t value = (uintptr_t)offset;
-
-    if (!state || state->mapped || !state->data || value > state->size || bytes > state->size - value) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return NULL;
+/* Temporary client encoding reads, never a mirror of buffer storage.
+ * Each read comes from the CPU, without rebinding the VBO. Pointers remain
+ * stable while one packed draw gathers several arrays from the same object. */
+typedef struct EncodingBufferRead {struct EncodingBufferRead* next;} EncodingBufferRead;
+static EncodingBufferRead* g_encoding_buffer_reads;
+static int emit_query_buffer_data_for(GLenum target, GLuint buffer, GLintptrARB offset, GLsizeiptrARB size, GLvoid* data);
+static void release_encoding_buffer_reads(void) {
+    while (g_encoding_buffer_reads) {
+        EncodingBufferRead* read = g_encoding_buffer_reads;
+        g_encoding_buffer_reads = read->next;HeapFree(GetProcessHeap(), 0, read);
     }
-    return state->data + (uint32_t)value;
 }
+static const uint8_t* buffer_selected_data_at(GLenum target, GLuint selector, const GLvoid* offset, uint32_t bytes) {
+    uintptr_t value = (uintptr_t)offset;
+    EncodingBufferRead* read;
+    if (value > INT_MAX || bytes > INT_MAX || value + bytes > INT_MAX) {v86gl_set_error(GL_INVALID_OPERATION);return NULL;}
+    read = (EncodingBufferRead*)HeapAlloc(GetProcessHeap(), 0, sizeof(*read) + bytes);
+    if (!read) {v86gl_set_error(GL_OUT_OF_MEMORY);return NULL;}
+    read->next = g_encoding_buffer_reads;g_encoding_buffer_reads = read;
+    if (emit_query_buffer_data_for(target, selector, (GLintptrARB)value, (GLsizeiptrARB)bytes, read + 1) < 1) return NULL;
+    return (const uint8_t*)(read + 1);
+}
+static const uint8_t* buffer_data_at(GLuint target, const GLvoid* offset, uint32_t bytes) {
+    return buffer_selected_data_at(target, 0, offset, bytes);
+}
+static const uint8_t* client_buffer_data_at(const ClientArrayState* state, const GLvoid* offset, uint32_t bytes) {
+    GLenum target;
+    GLuint index = 0;
+    if (state == &g_vertex_array) target = GL_VERTEX_ARRAY;
+    else if (state == &g_color_array) target = GL_COLOR_ARRAY;
+    else if (state == &g_normal_array) target = GL_NORMAL_ARRAY;
+    else if (state == &g_index_array) target = GL_INDEX_ARRAY;
+    else if (state == &g_edge_flag_array) target = GL_EDGE_FLAG_ARRAY;
+    else if (state == &g_secondary_color_array) target = GL_SECONDARY_COLOR_ARRAY_EXT;
+    else if (state == &g_fog_coord_array) target = GL_FOG_COORDINATE_ARRAY_EXT;
+    else {target = GL_TEXTURE_COORD_ARRAY;index = (GLuint)(state - g_texcoord_arrays);}
+    return buffer_selected_data_at(target, index, offset, bytes);
+}
+
 
 static const GLvoid* unpack_pixel_pointer(const GLvoid* pixels, uint32_t bytes) {
     if (!bytes) {
         return pixels;
     }
     if (g_pixel_unpack_buffer_binding) {
-        return buffer_data_at(g_pixel_unpack_buffer_binding, pixels, bytes);
+        return buffer_data_at(GL_PIXEL_UNPACK_BUFFER, pixels, bytes);
     }
     if (!pixels) {
         v86gl_set_error(GL_INVALID_VALUE);
@@ -2694,7 +2383,7 @@ static GLvoid* pack_pixel_pointer(GLvoid* pixels, uint32_t bytes) {
         return pixels;
     }
     if (g_pixel_pack_buffer_binding) {
-        return (GLvoid*)buffer_data_at(g_pixel_pack_buffer_binding, pixels, bytes);
+        return (GLvoid*)buffer_data_at(GL_PIXEL_PACK_BUFFER, pixels, bytes);
     }
     if (!pixels) {
         v86gl_set_error(GL_INVALID_VALUE);
@@ -2703,310 +2392,35 @@ static GLvoid* pack_pixel_pointer(GLvoid* pixels, uint32_t bytes) {
     return pixels;
 }
 
-static FramebufferObjectState* find_framebuffer_state(GLuint name, BOOL create) {
-    uint32_t i;
-    FramebufferObjectState* free_state = NULL;
-
-    if (!name) {
-        return NULL;
-    }
-
-    for (i = 0; i < V86GL_MAX_FRAMEBUFFER_OBJECTS; i++) {
-        FramebufferObjectState* state = &g_framebuffer_objects[i];
-        if (state->used && state->name == name) {
-            return state;
-        }
-        if (!state->used && !free_state) {
-            free_state = state;
-        }
-    }
-
-    if (!create || !free_state) {
-        return NULL;
-    }
-
-    ZeroMemory(free_state, sizeof(*free_state));
-    free_state->used = TRUE;
-    free_state->name = name;
-    return free_state;
-}
-
-static RenderbufferObjectState* find_renderbuffer_state(GLuint name, BOOL create) {
-    uint32_t i;
-    RenderbufferObjectState* free_state = NULL;
-
-    if (!name) {
-        return NULL;
-    }
-
-    for (i = 0; i < V86GL_MAX_RENDERBUFFER_OBJECTS; i++) {
-        RenderbufferObjectState* state = &g_renderbuffer_objects[i];
-        if (state->used && state->name == name) {
-            return state;
-        }
-        if (!state->used && !free_state) {
-            free_state = state;
-        }
-    }
-
-    if (!create || !free_state) {
-        return NULL;
-    }
-
-    ZeroMemory(free_state, sizeof(*free_state));
-    free_state->used = TRUE;
-    free_state->name = name;
-    return free_state;
-}
-
-static void delete_framebuffer_state(GLuint name) {
-    FramebufferObjectState* state = find_framebuffer_state(name, FALSE);
-    if (!state) {
-        return;
-    }
-    ZeroMemory(state, sizeof(*state));
-    if (g_draw_framebuffer_binding == name) g_draw_framebuffer_binding = 0;
-    if (g_read_framebuffer_binding == name) g_read_framebuffer_binding = 0;
-}
-
-static void delete_renderbuffer_state(GLuint name) {
-    RenderbufferObjectState* state = find_renderbuffer_state(name, FALSE);
-    uint32_t i;
-
-    if (!state) {
-        return;
-    }
-    ZeroMemory(state, sizeof(*state));
-    if (g_renderbuffer_binding == name) {
-        g_renderbuffer_binding = 0;
-    }
-    for (i = 0; i < V86GL_MAX_FRAMEBUFFER_OBJECTS; i++) {
-        FramebufferObjectState* fb = &g_framebuffer_objects[i];
-        uint32_t j;
-        if (!fb->used) {
-            continue;
-        }
-        for (j = 0; j < V86GL_MAX_FRAMEBUFFER_ATTACHMENTS; j++) {
-            FramebufferAttachmentState* attachment = &fb->attachments[j];
-            if (attachment->object_type == GL_RENDERBUFFER_EXT &&
-                attachment->object_name == name) {
-                ZeroMemory(attachment, sizeof(*attachment));
-            }
-        }
-    }
-}
-
-static BOOL valid_framebuffer_target(GLenum target) {
-    return target == GL_FRAMEBUFFER_EXT ||
-           target == GL_READ_FRAMEBUFFER_EXT ||
-           target == GL_DRAW_FRAMEBUFFER_EXT;
-}
-
-static BOOL valid_renderbuffer_target(GLenum target) {
-    return target == GL_RENDERBUFFER_EXT;
-}
 
 
 
 
 
-static GLuint framebuffer_binding_for_target(GLenum target) {
-    return target == GL_READ_FRAMEBUFFER_EXT ?
-        g_read_framebuffer_binding : g_draw_framebuffer_binding;
-}
-
-static void set_framebuffer_binding_for_target(GLenum target, GLuint framebuffer) {
-    if (target == GL_FRAMEBUFFER_EXT) {
-        g_draw_framebuffer_binding = framebuffer;
-        g_read_framebuffer_binding = framebuffer;
-    } else if (target == GL_READ_FRAMEBUFFER_EXT) {
-        g_read_framebuffer_binding = framebuffer;
-    } else {
-        g_draw_framebuffer_binding = framebuffer;
-    }
-}
 
 
 
-static GLenum texture_binding_target(GLenum target);
 
-static GLenum cached_framebuffer_status(GLenum target) {
-    FramebufferObjectState* framebuffer;
-    GLuint binding = framebuffer_binding_for_target(target);
-    uint32_t i;
-    BOOL has_attachment = FALSE;
 
-    if (!binding) {
-        return GL_FRAMEBUFFER_COMPLETE_EXT;
-    }
 
-    framebuffer = find_framebuffer_state(binding, FALSE);
-    if (!framebuffer) {
-        return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT;
-    }
 
-    for (i = 0; i < V86GL_MAX_FRAMEBUFFER_ATTACHMENTS; i++) {
-        FramebufferAttachmentState* attachment = &framebuffer->attachments[i];
-        if (!attachment->object_type) {
-            continue;
-        }
-        has_attachment = TRUE;
-        if (attachment->object_type == GL_TEXTURE) {
-            TextureObjectState* texture =
-                lookup_texture_state(attachment->object_name);
-            GLenum binding_target =
-                texture_binding_target(attachment->texture_target);
-            if (!texture || !texture->target ||
-                    texture->target != binding_target) {
-                return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT;
-            }
-        }
-        if (attachment->object_type == GL_RENDERBUFFER_EXT &&
-            !find_renderbuffer_state(attachment->object_name, FALSE)) {
-            return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT;
-        }
-    }
 
-    return has_attachment ? GL_FRAMEBUFFER_COMPLETE_EXT :
-        GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT;
-}
 
-static GLenum texture_binding_target(GLenum target) {
-    switch (target) {
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
-        return GL_TEXTURE_CUBE_MAP;
-    default:
-        return target;
-    }
-}
 
-static TextureObjectState* bound_texture_state(GLenum target, BOOL create) {
-    TextureUnitState* unit = active_texture_unit_state();
 
-    target = texture_binding_target(target);
 
-    if (target == GL_TEXTURE_1D) {
-        return find_texture_state(unit->bound_1d, target, create);
-    }
 
-    if (target == GL_TEXTURE_2D) {
-        return find_texture_state(unit->bound_2d, target, create);
-    }
 
-    if (target == GL_TEXTURE_3D) {
-        return find_texture_state(unit->bound_3d, target, create);
-    }
 
-    if (target == GL_TEXTURE_CUBE_MAP) {
-        return find_texture_state(unit->bound_cube, target, create);
-    }
 
-    v86gl_set_error(GL_INVALID_ENUM);
-    return NULL;
-}
 
-static void update_texture_parameter_i(GLenum target, GLenum pname, GLint param) {
-    TextureObjectState* state = bound_texture_state(target, TRUE);
 
-    if (!state) {
-        return;
-    }
 
-    switch (pname) {
-    case GL_TEXTURE_MIN_FILTER:
-        state->min_filter = param;
-        break;
-    case GL_TEXTURE_MAG_FILTER:
-        state->mag_filter = param;
-        break;
-    case GL_TEXTURE_WRAP_S:
-        state->wrap_s = param;
-        break;
-    case GL_TEXTURE_WRAP_T:
-        state->wrap_t = param;
-        break;
-    case GL_TEXTURE_WRAP_R:
-        state->wrap_r = param;
-        break;
-    case GL_TEXTURE_BASE_LEVEL:
-        state->base_level = param;
-        break;
-    case GL_TEXTURE_MAX_LEVEL:
-        state->max_level = param;
-        break;
-    case GL_TEXTURE_MIN_LOD:
-        state->min_lod = (GLfloat)param;
-        break;
-    case GL_TEXTURE_MAX_LOD:
-        state->max_lod = (GLfloat)param;
-        break;
-    case GL_TEXTURE_PRIORITY:
-        state->priority = (GLfloat)param;
-        break;
-    case GL_TEXTURE_BORDER_COLOR:
-        state->border_color[0] = (GLfloat)param;
-        state->border_color[1] = (GLfloat)param;
-        state->border_color[2] = (GLfloat)param;
-        state->border_color[3] = (GLfloat)param;
-        break;
-    default:
-        break;
-    }
-}
 
-static void update_texture_parameter_f(GLenum target, GLenum pname, GLfloat param) {
-    TextureObjectState* state = bound_texture_state(target, TRUE);
 
-    if (!state) {
-        return;
-    }
 
-    switch (pname) {
-    case GL_TEXTURE_MIN_FILTER:
-        state->min_filter = (GLint)param;
-        break;
-    case GL_TEXTURE_MAG_FILTER:
-        state->mag_filter = (GLint)param;
-        break;
-    case GL_TEXTURE_WRAP_S:
-        state->wrap_s = (GLint)param;
-        break;
-    case GL_TEXTURE_WRAP_T:
-        state->wrap_t = (GLint)param;
-        break;
-    case GL_TEXTURE_WRAP_R:
-        state->wrap_r = (GLint)param;
-        break;
-    case GL_TEXTURE_BASE_LEVEL:
-        state->base_level = (GLint)param;
-        break;
-    case GL_TEXTURE_MAX_LEVEL:
-        state->max_level = (GLint)param;
-        break;
-    case GL_TEXTURE_MIN_LOD:
-        state->min_lod = param;
-        break;
-    case GL_TEXTURE_MAX_LOD:
-        state->max_lod = param;
-        break;
-    case GL_TEXTURE_PRIORITY:
-        state->priority = param;
-        break;
-    case GL_TEXTURE_BORDER_COLOR:
-        state->border_color[0] = param;
-        state->border_color[1] = param;
-        state->border_color[2] = param;
-        state->border_color[3] = param;
-        break;
-    default:
-        break;
-    }
-}
+
+
 
 
 
@@ -3625,97 +3039,7 @@ static int emit_query_object_iv(uint32_t object_kind, GLuint name, GLenum pname,
  * previous pool at the start of a frame.  Sending one synchronous PCI request
  * per object dominates the actual WebGPU query work, so refresh every pending
  * object in one request and cache the results in the guest proxy. */
-static int emit_query_object_batch(void) {
-    const uint32_t header_size = sizeof(V86GLRecordQueryObjectBatch);
-    const uint32_t entry_size = sizeof(V86GLRecordQueryObjectBatchEntry);
-    uint32_t count = 0;
-    uint32_t args_size;
-    uint32_t i;
-    uint32_t entry_index = 0;
-    uint8_t* args;
-#if V86GL_DIAG_ENABLED
-    uint32_t ready_count = 0;
-    uint32_t zero_count = 0;
-    uint32_t visible_count = 0;
-#endif
 
-    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
-        QueryObjectState* state = &g_query_objects[i];
-        if (state->used && state->context_id == g_last_surface_context_id && state->target && !state->active &&
-            !state->available && state->poll_frame != g_frame_id) {
-            count++;
-        }
-    }
-    if (!count) {
-        return 1;
-    }
-    if (count > (UINT32_MAX - header_size) / entry_size) {
-        return 0;
-    }
-    if (g_dma_size && !emit_pci_batch(FALSE)) {
-        return 0;
-    }
-
-    args_size = header_size + count * entry_size;
-    if (!reserve_pci_record(GLFN_QUERY_OBJECT_BATCH, NULL, args_size, &args)) {
-        return 0;
-    }
-    write_u32le(args, count);
-    write_u32le(args + 4, V86GL_OBJECT_KIND_QUERY);
-    write_u32le(args + 8, V86GL_SYNC_QUERY_STATUS_PENDING);
-    write_u32le(args + 12, 0);
-
-    for (i = 0; i < V86GL_MAX_QUERY_OBJECTS; i++) {
-        QueryObjectState* state = &g_query_objects[i];
-        uint8_t* entry;
-        if (!state->used || state->context_id != g_last_surface_context_id || !state->target || state->active ||
-            state->available || state->poll_frame == g_frame_id) {
-            continue;
-        }
-        entry = args + header_size + entry_index * entry_size;
-        write_u32le(entry, state->name);
-        write_u32le(entry + 4, GL_FALSE);
-        /* An unavailable WebGPU query is conservatively visible if a blocking
-         * desktop GL result is requested before the GPU has completed it. */
-        write_u32le(entry + 8, V86GL_QUERY_VISIBLE_SAMPLES);
-        entry_index++;
-    }
-
-    /* the renderer writes the results into this record (in the CPU worker
-     * mode, after the request returned) */
-    if (!emit_pci_batch(FALSE) ||
-        !wait_for_host_status(args + 8, "query batch")) {
-        return 0;
-    }
-
-    for (i = 0; i < count; i++) {
-        const uint8_t* entry = args + header_size + i * entry_size;
-        QueryObjectState* state = find_query_state(read_u32le(entry), FALSE);
-        if (!state) {
-            continue;
-        }
-        state->poll_frame = g_frame_id;
-        state->poll_skip = 8;
-        if (read_u32le(entry + 4)) {
-#if V86GL_DIAG_ENABLED
-            ready_count++;
-            if (read_u32le(entry + 8)) visible_count++;
-            else zero_count++;
-#endif
-            state->available = GL_TRUE;
-            state->result = read_u32le(entry + 8);
-            state->poll_skip = 0;
-        }
-    }
-#if V86GL_DIAG_ENABLED
-    V86GL_DIAG("QUERY_BATCH frame=%lu count=%lu ready=%lu zero=%lu visible=%lu pending=%lu",
-               (unsigned long)g_frame_id, (unsigned long)count,
-               (unsigned long)ready_count, (unsigned long)zero_count,
-               (unsigned long)visible_count,
-               (unsigned long)(count - ready_count));
-#endif
-    return 1;
-}
 
 static int emit_query_object_log(uint32_t object_kind, GLuint name, GLsizei bufSize,
                                  GLsizei* length, GLchar* infoLog) {
@@ -5162,37 +4486,10 @@ static uint32_t gl_bitmap_span(GLsizei width, GLsizei height) {
     return (uint32_t)total;
 }
 
-static TextureObjectState* bound_texture_state(GLenum target, BOOL create);
 
-static uint32_t gl_pixel_tight_span(GLsizei width, GLsizei height, GLenum format, GLenum type) {
-    uint64_t total;
-    uint32_t pixel_bytes = gl_pixel_bytes(format, type);
 
-    if (width < 0 || height < 0 || !pixel_bytes) {
-        return 0;
-    }
-    total = (uint64_t)(uint32_t)width * (uint32_t)height;
-    if (total > UINT32_MAX / pixel_bytes) return 0;
-    total *= pixel_bytes;
-    return total <= UINT32_MAX ? (uint32_t)total : 0;
-}
 
-static uint32_t gl_pixel_tight_span_3d(GLsizei width, GLsizei height, GLsizei depth,
-                                       GLenum format, GLenum type) {
-    uint64_t total;
-    uint32_t pixel_bytes = gl_pixel_bytes(format, type);
 
-    if (width < 0 || height < 0 || depth < 0 || !pixel_bytes) {
-        return 0;
-    }
-
-    total = (uint64_t)(uint32_t)width * (uint32_t)height;
-    if (total > UINT32_MAX / pixel_bytes) return 0;
-    total *= pixel_bytes;
-    if (depth && total > UINT32_MAX / (uint32_t)depth) return 0;
-    total *= (uint32_t)depth;
-    return total <= UINT32_MAX ? (uint32_t)total : 0;
-}
 
 static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
                                     GLint alignment, GLint row_length) {
@@ -5210,67 +4507,15 @@ static uint32_t gl_pixel_row_stride(GLsizei width, GLenum format, GLenum type,
     return stride <= UINT32_MAX ? (uint32_t)stride : 0;
 }
 
-static uint32_t gl_pixel_image_stride(GLsizei width, GLsizei height,
-                                      GLenum format, GLenum type,
-                                      GLint alignment, GLint row_length,
-                                      GLint image_height) {
-    uint32_t row_stride = gl_pixel_row_stride(width, format, type, alignment, row_length);
-    uint32_t image_rows = image_height > 0 ? (uint32_t)image_height : (uint32_t)height;
-    uint64_t image_stride = (uint64_t)row_stride * image_rows;
 
-    return row_stride && image_stride <= UINT32_MAX ? (uint32_t)image_stride : 0;
-}
 
-static TextureLevelState* texture_level_state(GLenum target, GLint level, BOOL create) {
-    TextureObjectState* texture;
-    GLint face = -1;
 
-    if (level < 0 || level >= V86GL_MAX_TEXTURE_LEVELS) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return NULL;
-    }
-    switch (target) {
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_X: face = 0; break;
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_X: face = 1; break;
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_Y: face = 2; break;
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y: face = 3; break;
-    case GL_TEXTURE_CUBE_MAP_POSITIVE_Z: face = 4; break;
-    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z: face = 5; break;
-    default: break;
-    }
 
-    texture = bound_texture_state(target, create);
-    if (!texture) {
-        return NULL;
-    }
-    if (face < 0) {
-        return &texture->levels[level];
-    }
-    if (!texture->cube_levels) {
-        if (!create) {
-            return NULL;
-        }
-        texture->cube_levels = (TextureLevelState*)HeapAlloc(
-            GetProcessHeap(), HEAP_ZERO_MEMORY,
-            6u * V86GL_MAX_TEXTURE_LEVELS * sizeof(*texture->cube_levels));
-        if (!texture->cube_levels) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return NULL;
-        }
-    }
-    return &texture->cube_levels[(uint32_t)face * V86GL_MAX_TEXTURE_LEVELS + (uint32_t)level];
-}
 
-static void clear_texture_level(TextureLevelState* state) {
-    if (state->data) {
-        HeapFree(GetProcessHeap(), 0, state->data);
-    }
-    ZeroMemory(state, sizeof(*state));
-}
 
 static BOOL is_proxy_texture_target(GLenum target) {
     return target == GL_PROXY_TEXTURE_1D || target == GL_PROXY_TEXTURE_2D ||
-           target == GL_PROXY_TEXTURE_3D || target == GL_PROXY_TEXTURE_CUBE_MAP;
+           target == GL_PROXY_TEXTURE_3D || target == GL_PROXY_TEXTURE_CUBE_MAP || target == 0x84F7u;
 }
 
 /* Probes contain metadata only. In particular, neither a client pointer nor
@@ -5292,407 +4537,17 @@ static BOOL emit_proxy_texture_image(uint16_t opcode, GLenum target, GLint level
     return TRUE;
 }
 
-static int cache_texture_image(GLenum target, GLint level, GLint internalformat,
-                               GLsizei width, GLsizei height, GLint border,
-                               GLenum format, GLenum type, const GLvoid* pixels) {
-    TextureLevelState* state;
-    uint32_t pixel_bytes;
-    uint32_t tight_size;
-    uint32_t source_span;
-    uint32_t source_stride;
-    uint32_t source_offset;
-    uint32_t row_bytes;
-    GLsizei row;
 
-    if (width < 0 || height < 0 || border < 0 || border > 1) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-    pixel_bytes = gl_pixel_bytes(format, type);
-    tight_size = gl_pixel_tight_span(width, height, format, type);
-    if (!pixel_bytes || (width > 0 && height > 0 && !tight_size)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return 0;
-    }
-    state = texture_level_state(target, level, TRUE);
-    if (!state) return 0;
 
-    clear_texture_level(state);
-    state->defined = TRUE;
-    state->compressed = FALSE;
-    state->internalformat = internalformat;
-    state->width = width;
-    state->height = height;
-    state->depth = 1;
-    state->border = border;
-    state->format = format;
-    state->type = type;
-    state->data_size = tight_size;
-    if (!pixels || !tight_size) return 1;
 
-    source_span = gl_pixel_span(width, height, format, type);
-    source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
-    source_offset = (uint32_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
-                    (uint32_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
-    row_bytes = (uint32_t)width * pixel_bytes;
-    if (!source_span || !source_stride || source_offset > source_span ||
-        source_span - source_offset < row_bytes) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        clear_texture_level(state);
-        return 0;
-    }
 
-    state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
-    if (!state->data) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        clear_texture_level(state);
-        return 0;
-    }
-    for (row = 0; row < height; row++) {
-        CopyMemory(state->data + (uint32_t)row * row_bytes,
-                   (const uint8_t*)pixels + source_offset + (uint32_t)row * source_stride,
-                   row_bytes);
-    }
-    return 1;
-}
 
-static int cache_texture_image_3d(GLenum target, GLint level, GLint internalformat,
-                                  GLsizei width, GLsizei height, GLsizei depth,
-                                  GLint border, GLenum format, GLenum type,
-                                  const GLvoid* pixels) {
-    TextureLevelState* state;
-    uint32_t pixel_bytes;
-    uint32_t tight_size;
-    uint32_t source_span;
-    uint32_t source_stride;
-    uint32_t source_image_stride;
-    uint32_t source_offset;
-    uint32_t row_bytes;
-    uint64_t source_offset_64;
-    uint64_t source_needed;
-    GLsizei z;
-    GLsizei row;
 
-    if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-    pixel_bytes = gl_pixel_bytes(format, type);
-    tight_size = gl_pixel_tight_span_3d(width, height, depth, format, type);
-    if (!pixel_bytes || (width > 0 && height > 0 && depth > 0 && !tight_size)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return 0;
-    }
-    state = texture_level_state(target, level, TRUE);
-    if (!state) return 0;
 
-    clear_texture_level(state);
-    state->defined = TRUE;
-    state->compressed = FALSE;
-    state->internalformat = internalformat;
-    state->width = width;
-    state->height = height;
-    state->depth = depth;
-    state->border = border;
-    state->format = format;
-    state->type = type;
-    state->data_size = tight_size;
-    if (!pixels || !tight_size) return 1;
 
-    source_span = gl_pixel_span_3d(width, height, depth, format, type);
-    source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
-    source_image_stride = gl_pixel_image_stride(width, height, format, type,
-                                                g_unpack_alignment, g_unpack_row_length,
-                                                g_unpack_image_height);
-    source_offset_64 = (uint64_t)(g_unpack_skip_images > 0 ? g_unpack_skip_images : 0) *
-                       source_image_stride +
-                       (uint64_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
-                       (uint64_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
-    row_bytes = (uint32_t)width * pixel_bytes;
-    source_needed = (uint64_t)((uint32_t)depth - 1u) * source_image_stride +
-                    (uint64_t)((uint32_t)height - 1u) * source_stride + row_bytes;
-    if (!source_span || !source_stride || !source_image_stride ||
-        source_offset_64 > UINT32_MAX || source_offset_64 > source_span ||
-        source_needed > source_span - source_offset_64) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        clear_texture_level(state);
-        return 0;
-    }
-    source_offset = (uint32_t)source_offset_64;
 
-    state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, tight_size);
-    if (!state->data) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        clear_texture_level(state);
-        return 0;
-    }
-    for (z = 0; z < depth; z++) {
-        for (row = 0; row < height; row++) {
-            uint32_t dest_row = (uint32_t)z * (uint32_t)height + (uint32_t)row;
-            CopyMemory(state->data + dest_row * row_bytes,
-                       (const uint8_t*)pixels + source_offset +
-                       (uint32_t)z * source_image_stride + (uint32_t)row * source_stride,
-                       row_bytes);
-        }
-    }
-    return 1;
-}
 
-static uint32_t s3tc_block_bytes(GLenum format);
 
-static int cache_compressed_texture_image(GLenum target, GLint level,
-                                          GLenum internalformat, GLsizei width,
-                                          GLsizei height, GLsizei depth,
-                                          GLint border, GLsizei image_size,
-                                          const GLvoid* data) {
-    TextureLevelState* state;
-    uint32_t block_bytes;
-    uint64_t expected_size;
-
-    if (width < 0 || height < 0 || depth < 0 || border < 0 || border > 1 ||
-        image_size < 0 || (image_size && !data)) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-
-    block_bytes = s3tc_block_bytes(internalformat);
-    expected_size = (uint64_t)(((uint32_t)width + 3u) / 4u) *
-                    (((uint32_t)height + 3u) / 4u) * (uint32_t)depth * block_bytes;
-    if (block_bytes && expected_size != (uint32_t)image_size) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-
-    state = texture_level_state(target, level, TRUE);
-    if (!state) return 0;
-    clear_texture_level(state);
-    state->defined = TRUE;
-    state->compressed = TRUE;
-    state->internalformat = (GLint)internalformat;
-    state->width = width;
-    state->height = height;
-    state->depth = depth;
-    state->border = border;
-    state->format = internalformat;
-    state->type = 0;
-    state->data_size = (uint32_t)image_size;
-    if (!image_size) return 1;
-
-    state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)image_size);
-    if (!state->data) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        clear_texture_level(state);
-        return 0;
-    }
-    CopyMemory(state->data, data, (SIZE_T)image_size);
-    return 1;
-}
-
-static uint32_t s3tc_block_bytes(GLenum format) {
-    switch (format) {
-    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
-    case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
-    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
-    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
-        return 8;
-    case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
-    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
-    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
-        return 16;
-    default:
-        return 0;
-    }
-}
-
-static int cache_compressed_texture_sub_image(TextureLevelState* state,
-                                              GLint xoffset, GLint yoffset, GLint zoffset,
-                                              GLsizei width, GLsizei height, GLsizei depth,
-                                              GLenum format, GLsizei image_size,
-                                              const GLvoid* data) {
-    uint32_t block_bytes = s3tc_block_bytes(format);
-    uint32_t dest_blocks_x;
-    uint32_t dest_blocks_y;
-    uint32_t source_blocks_x;
-    uint32_t source_blocks_y;
-    uint64_t expected_source_size;
-    uint64_t expected_dest_size;
-    uint32_t z;
-    uint32_t row;
-
-    if (!block_bytes) {
-        return 0;
-    }
-    if (state->internalformat != (GLint)format ||
-        (xoffset & 3) || (yoffset & 3) ||
-        ((width & 3) && xoffset + width != state->width) ||
-        ((height & 3) && yoffset + height != state->height)) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return -1;
-    }
-
-    dest_blocks_x = ((uint32_t)state->width + 3u) / 4u;
-    dest_blocks_y = ((uint32_t)state->height + 3u) / 4u;
-    source_blocks_x = ((uint32_t)width + 3u) / 4u;
-    source_blocks_y = ((uint32_t)height + 3u) / 4u;
-    expected_source_size = (uint64_t)source_blocks_x * source_blocks_y *
-                           (uint32_t)depth * block_bytes;
-    expected_dest_size = (uint64_t)dest_blocks_x * dest_blocks_y *
-                         (uint32_t)state->depth * block_bytes;
-    if (expected_source_size != (uint32_t)image_size ||
-        expected_dest_size != state->data_size ||
-        (image_size && (!data || !state->data))) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return -1;
-    }
-
-    for (z = 0; z < (uint32_t)depth; z++) {
-        for (row = 0; row < source_blocks_y; row++) {
-            uint64_t dest_block =
-                ((uint64_t)((uint32_t)zoffset + z) * dest_blocks_y +
-                 (uint32_t)yoffset / 4u + row) * dest_blocks_x +
-                (uint32_t)xoffset / 4u;
-            uint64_t source_block = ((uint64_t)z * source_blocks_y + row) * source_blocks_x;
-            CopyMemory(state->data + dest_block * block_bytes,
-                       (const uint8_t*)data + source_block * block_bytes,
-                       source_blocks_x * block_bytes);
-        }
-    }
-    return 1;
-}
-
-static int cache_texture_sub_image(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                   GLsizei width, GLsizei height, GLenum format, GLenum type,
-                                   const GLvoid* pixels) {
-    TextureLevelState* state;
-    uint32_t pixel_bytes;
-    uint32_t source_span;
-    uint32_t source_stride;
-    uint32_t source_offset;
-    uint32_t row_bytes;
-    GLsizei row;
-
-    if (xoffset < 0 || yoffset < 0 || width < 0 || height < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-    state = texture_level_state(target, level, FALSE);
-    if (!state || !state->defined || xoffset > state->width - width || yoffset > state->height - height) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return 0;
-    }
-    if (state->format != format || state->type != type) {
-        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
-        state->data = NULL;
-        return 1;
-    }
-    if (!pixels || !width || !height) {
-        return 1;
-    }
-    pixel_bytes = gl_pixel_bytes(format, type);
-    source_span = gl_pixel_span(width, height, format, type);
-    source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
-    source_offset = (uint32_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
-                    (uint32_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
-    row_bytes = (uint32_t)width * pixel_bytes;
-    if (!pixel_bytes || !source_span || !source_stride || source_offset > source_span ||
-        source_span - source_offset < row_bytes) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return 0;
-    }
-    if (!state->data) {
-        state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, state->data_size);
-        if (!state->data && state->data_size) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return 0;
-        }
-    }
-    for (row = 0; row < height; row++) {
-        CopyMemory(state->data + ((uint32_t)(yoffset + row) * state->width + xoffset) * pixel_bytes,
-                   (const uint8_t*)pixels + source_offset + (uint32_t)row * source_stride,
-                   row_bytes);
-    }
-    return 1;
-}
-
-static int cache_texture_sub_image_3d(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                      GLint zoffset, GLsizei width, GLsizei height,
-                                      GLsizei depth, GLenum format, GLenum type,
-                                      const GLvoid* pixels) {
-    TextureLevelState* state;
-    uint32_t pixel_bytes;
-    uint32_t source_span;
-    uint32_t source_stride;
-    uint32_t source_image_stride;
-    uint32_t source_offset;
-    uint32_t row_bytes;
-    uint64_t source_offset_64;
-    uint64_t source_needed;
-    GLsizei z;
-    GLsizei row;
-
-    if (xoffset < 0 || yoffset < 0 || zoffset < 0 ||
-        width < 0 || height < 0 || depth < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return 0;
-    }
-    state = texture_level_state(target, level, FALSE);
-    if (!state || !state->defined ||
-        width > state->width || height > state->height || depth > state->depth ||
-        xoffset > state->width - width ||
-        yoffset > state->height - height ||
-        zoffset > state->depth - depth) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return 0;
-    }
-    if (state->format != format || state->type != type) {
-        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
-        state->data = NULL;
-        return 1;
-    }
-    if (!pixels || !width || !height || !depth) {
-        return 1;
-    }
-    pixel_bytes = gl_pixel_bytes(format, type);
-    source_span = gl_pixel_span_3d(width, height, depth, format, type);
-    source_stride = gl_pixel_row_stride(width, format, type, g_unpack_alignment, g_unpack_row_length);
-    source_image_stride = gl_pixel_image_stride(width, height, format, type,
-                                                g_unpack_alignment, g_unpack_row_length,
-                                                g_unpack_image_height);
-    source_offset_64 = (uint64_t)(g_unpack_skip_images > 0 ? g_unpack_skip_images : 0) *
-                       source_image_stride +
-                       (uint64_t)(g_unpack_skip_rows > 0 ? g_unpack_skip_rows : 0) * source_stride +
-                       (uint64_t)(g_unpack_skip_pixels > 0 ? g_unpack_skip_pixels : 0) * pixel_bytes;
-    row_bytes = (uint32_t)width * pixel_bytes;
-    source_needed = (uint64_t)((uint32_t)depth - 1u) * source_image_stride +
-                    (uint64_t)((uint32_t)height - 1u) * source_stride + row_bytes;
-    if (!pixel_bytes || !source_span || !source_stride || !source_image_stride ||
-        source_offset_64 > UINT32_MAX || source_offset_64 > source_span ||
-        source_needed > source_span - source_offset_64) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return 0;
-    }
-    source_offset = (uint32_t)source_offset_64;
-    if (!state->data) {
-        state->data = (uint8_t*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, state->data_size);
-        if (!state->data && state->data_size) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return 0;
-        }
-    }
-    for (z = 0; z < depth; z++) {
-        for (row = 0; row < height; row++) {
-            uint32_t dest_row = (uint32_t)(zoffset + z) * (uint32_t)state->height +
-                                (uint32_t)(yoffset + row);
-            CopyMemory(state->data + (dest_row * (uint32_t)state->width +
-                                      (uint32_t)xoffset) * pixel_bytes,
-                       (const uint8_t*)pixels + source_offset +
-                       (uint32_t)z * source_image_stride + (uint32_t)row * source_stride,
-                       row_bytes);
-        }
-    }
-    return 1;
-}
 
 static int emit_read_pixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, uint32_t data_size,
@@ -5787,7 +4642,7 @@ static int client_array_copy(ClientArrayState* state, GLint first, GLsizei count
     out->stride = state->stride;
     out->data_size = (uint32_t)span;
     if (state->buffer) {
-        out->data = buffer_data_at(state->buffer, state->pointer, (uint32_t)(offset + span));
+        out->data = client_buffer_data_at(state, state->pointer, (uint32_t)(offset + span));
         if (!out->data) return 0;
         out->data += (uint32_t)offset;
     } else {
@@ -5877,7 +4732,7 @@ static int generic_attrib_copy(GLuint index, GLint first, GLsizei count,
     out->stride = state->stride;
     out->data_size = (uint32_t)span;
     if (state->buffer) {
-        out->data = buffer_data_at(state->buffer, state->pointer, (uint32_t)(offset + span));
+        out->data = buffer_selected_data_at(GL_VERTEX_ATTRIB_ARRAY_POINTER, index, state->pointer, (uint32_t)(offset + span));
         if (!out->data) return 0;
         out->data += (uint32_t)offset;
     } else {
@@ -6559,7 +5414,6 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
         return FALSE;
     }
     context_id = (uint32_t)(context - g_wgl_contexts) + 1u;
-    delete_query_context_state(context_id);
     guest_state = context->guest_state;
     ZeroMemory(context, sizeof(*context));
     if (g_wgl_context_count) g_wgl_context_count--;
@@ -6574,7 +5428,6 @@ BOOL APIENTRY wglDeleteContext(HGLRC ctx) {
         /* WineD3D's caps context and device context are consecutive users of
          * one process renderer. Clear transient query polling state without
          * asynchronously destroying the renderer between them. */
-        reset_query_object_state();
     }
     SetLastError(ERROR_SUCCESS);
     return TRUE;
@@ -7725,23 +6578,7 @@ void APIENTRY glStencilMaskSeparate(GLenum face, GLuint mask) {
     emit_stencil_mask_separate(face, mask);
 }
 
-static void emit_arb_program_name_array(uint16_t fn, GLsizei n, const GLuint* names) {
-    uint32_t total_size;
-    uint8_t* payload;
 
-    if (n <= 0 || !names) {
-        return;
-    }
-    total_size = sizeof(uint32_t) + (uint32_t)n * sizeof(uint32_t);
-    payload = alloc_payload(total_size);
-    if (!payload) {
-        return;
-    }
-    *(uint32_t*)payload = (uint32_t)n;
-    CopyMemory(payload + sizeof(uint32_t), names, (uint32_t)n * sizeof(uint32_t));
-    emit_gl_call(fn, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
-}
 
 static BOOL valid_arb_program_target(GLenum target) {
     return target == GL_VERTEX_PROGRAM_ARB || target == GL_FRAGMENT_PROGRAM_ARB;
@@ -7906,92 +6743,19 @@ void APIENTRY glProgramStringARB(GLenum target, GLenum format, GLsizei len,
 }
 
 void APIENTRY glBindProgramARB(GLenum target, GLuint program) {
-    struct { uint32_t target, program; } payload;
-
-    if (!valid_arb_program_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    if (program) {
-        if (!find_arb_program_state(program, TRUE)) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return;
-        }
-        if (program >= g_next_arb_program_id) {
-            g_next_arb_program_id = program + 1u;
-            if (!g_next_arb_program_id) {
-                g_next_arb_program_id = 1;
-            }
-        }
-    }
-
-    if (target == GL_VERTEX_PROGRAM_ARB) {
-        g_current_vertex_program_arb = program;
-    } else if (target == GL_FRAGMENT_PROGRAM_ARB) {
-        g_current_fragment_program_arb = program;
-    }
-
-    payload.target = (uint32_t)target;
-    payload.program = program;
-    emit_gl_call(GLFN_BIND_PROGRAM_ARB, &payload, sizeof(payload));
+    uint32_t payload[2] = {target, program};
+    emit_gl_call(GLFN_BIND_PROGRAM_ARB, payload, sizeof(payload));
 }
 
 void APIENTRY glDeleteProgramsARB(GLsizei n, const GLuint* programs) {
-    GLsizei i;
-
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!n) {
-        return;
-    }
-    if (!programs) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    for (i = 0; i < n; i++) {
-        if (programs[i] == g_current_vertex_program_arb) {
-            g_current_vertex_program_arb = 0;
-        }
-        if (programs[i] == g_current_fragment_program_arb) {
-            g_current_fragment_program_arb = 0;
-        }
-        delete_arb_program_state(programs[i]);
-    }
-    emit_arb_program_name_array(GLFN_DELETE_PROGRAMS_ARB, n, programs);
+    if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    emit_name_array_call(GLFN_DELETE_PROGRAMS_ARB, n, programs);
 }
 
 static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuint* names);
 
 void APIENTRY glGenProgramsARB(GLsizei n, GLuint* programs) {
-    GLsizei i;
-
-    if (emit_query_names(V86GL_OBJECT_KIND_ARB_PROGRAM, GLFN_GEN_PROGRAMS_ARB, n, programs)) return;
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!n) {
-        return;
-    }
-    if (!programs) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    for (i = 0; i < n; i++) {
-        GLuint name = next_arb_program_name();
-        if (!find_arb_program_state(name, TRUE)) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            programs[i] = 0;
-            return;
-        }
-        programs[i] = name;
-    }
-    emit_arb_program_name_array(GLFN_GEN_PROGRAMS_ARB, n, programs);
+    (void)emit_query_names(V86GL_OBJECT_KIND_ARB_PROGRAM, GLFN_GEN_PROGRAMS_ARB, n, programs);
 }
 
 GLboolean APIENTRY glIsProgramARB(GLuint program) {
@@ -9090,72 +7854,13 @@ static int emit_query_names(uint32_t kind, uint16_t opcode, GLsizei count, GLuin
 
 __declspec(dllexport)
 void APIENTRY glGenTextures(GLsizei n, GLuint* textures) {
-    uint32_t total_size;
-    uint8_t* payload;
-    GLint i;
-
-    if (emit_query_names(V86GL_OBJECT_KIND_TEXTURE, GLFN_GEN_TEXTURES, n, textures)) return;
-
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    if (!textures || n == 0) {
-        return;
-    }
-
-    total_size = sizeof(uint32_t) + (uint32_t)n * sizeof(uint32_t);
-    payload = alloc_payload(total_size);
-    if (!payload) {
-        return;
-    }
-
-    *(uint32_t*)payload = (uint32_t)n;
-    for (i = 0; i < n; i++) {
-        GLuint name = g_next_texture_id++;
-        if (!name) {
-            name = g_next_texture_id++;
-        }
-        textures[i] = name;
-        ((uint32_t*)(payload + sizeof(uint32_t)))[i] = name;
-        (void)find_texture_state(name, 0, TRUE);
-    }
-
-    emit_gl_call(GLFN_GEN_TEXTURES, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
+    (void)emit_query_names(V86GL_OBJECT_KIND_TEXTURE, GLFN_GEN_TEXTURES, n, textures);
 }
 
 __declspec(dllexport)
 void APIENTRY glDeleteTextures(GLsizei n, const GLuint* textures) {
-    uint32_t total_size;
-    uint8_t* payload;
-
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-
-    if (!textures || n == 0) {
-        return;
-    }
-
-    total_size = sizeof(uint32_t) + (uint32_t)n * sizeof(uint32_t);
-    payload = alloc_payload(total_size);
-    if (!payload) {
-        return;
-    }
-
-    *(uint32_t*)payload = (uint32_t)n;
-    CopyMemory(payload + sizeof(uint32_t), textures, (uint32_t)n * sizeof(uint32_t));
-    {
-        GLsizei i;
-        for (i = 0; i < n; i++) {
-            delete_texture_state(textures[i]);
-        }
-    }
-    emit_gl_call(GLFN_DELETE_TEXTURES, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
+    if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    emit_name_array_call(GLFN_DELETE_TEXTURES, n, textures);
 }
 
 static void emit_buffer_data(GLenum target, GLsizeiptrARB size,
@@ -9220,18 +7925,7 @@ static void emit_buffer_sub_data(GLenum target, GLintptrARB offset,
 }
 
 void APIENTRY glGenBuffersARB(GLsizei n, GLuint* buffers) {
-    GLsizei i;
-    if (emit_query_names(V86GL_OBJECT_KIND_BUFFER, GLFN_GEN_BUFFERS, n, buffers)) return;
-    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!buffers) return;
-    for (i = 0; i < n; i++) {
-        GLuint name = g_next_buffer_id++;
-        if (!name) name = g_next_buffer_id++;
-        buffers[i] = name;
-    }
-    if (n > 0) {
-        emit_name_array_call(GLFN_GEN_BUFFERS, n, buffers);
-    }
+    (void)emit_query_names(V86GL_OBJECT_KIND_BUFFER, GLFN_GEN_BUFFERS, n, buffers);
 }
 
 void APIENTRY glGenBuffers(GLsizei n, GLuint* buffers) {
@@ -9239,77 +7933,12 @@ void APIENTRY glGenBuffers(GLsizei n, GLuint* buffers) {
 }
 
 void APIENTRY glGenQueries(GLsizei n, GLuint* ids) {
-    GLsizei i;
-    uint32_t total_size;
-    uint8_t* payload;
-
-    if (emit_query_names(V86GL_OBJECT_KIND_QUERY, GLFN_GEN_QUERIES, n, ids)) return;
-
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!ids || n == 0) {
-        return;
-    }
-
-    total_size = sizeof(uint32_t) + (uint32_t)n * sizeof(uint32_t);
-    payload = alloc_payload(total_size);
-    if (!payload) {
-        return;
-    }
-    *(uint32_t*)payload = (uint32_t)n;
-
-    for (i = 0; i < n; i++) {
-        QueryObjectState* state;
-        GLuint name = g_next_query_id++;
-        if (!name) {
-            name = g_next_query_id++;
-        }
-        state = find_query_state(name, TRUE);
-        if (!state) {
-            ids[i] = 0;
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            HeapFree(GetProcessHeap(), 0, payload);
-            return;
-        }
-        ids[i] = name;
-        ((uint32_t*)(payload + sizeof(uint32_t)))[i] = name;
-    }
-
-    emit_gl_call(GLFN_GEN_QUERIES, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
+    (void)emit_query_names(V86GL_OBJECT_KIND_QUERY, GLFN_GEN_QUERIES, n, ids);
 }
 
 void APIENTRY glDeleteQueries(GLsizei n, const GLuint* ids) {
-    GLsizei i;
-    uint32_t total_size;
-    uint8_t* payload;
-
-    if (g_current_samples_passed_query) { v86gl_set_error(GL_INVALID_OPERATION); return; }
-
-    if (n < 0) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (!ids || n == 0) {
-        return;
-    }
-
-    total_size = sizeof(uint32_t) + (uint32_t)n * sizeof(uint32_t);
-    payload = alloc_payload(total_size);
-    if (!payload) {
-        return;
-    }
-    *(uint32_t*)payload = (uint32_t)n;
-    CopyMemory(payload + sizeof(uint32_t), ids, (uint32_t)n * sizeof(uint32_t));
-
-    for (i = 0; i < n; i++) {
-        delete_query_state(ids[i]);
-    }
-
-    emit_gl_call(GLFN_DELETE_QUERIES, payload, total_size);
-    HeapFree(GetProcessHeap(), 0, payload);
+    if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
+    emit_name_array_call(GLFN_DELETE_QUERIES, n, ids);
 }
 
 GLboolean APIENTRY glIsQuery(GLuint id) {
@@ -9319,208 +7948,29 @@ GLboolean APIENTRY glIsQuery(GLuint id) {
 }
 
 void APIENTRY glBeginQuery(GLenum target, GLuint id) {
-    QueryObjectState* state;
-    uint32_t args[2];
-
-    if (!is_occlusion_query_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (!id || g_current_samples_passed_query) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    state = find_query_state(id, TRUE);
-    if (!state) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-    if (state->target && state->target != target) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    state->target = target;
-    state->active = TRUE;
-    state->available = GL_FALSE;
-    state->result = 0;
-    state->poll_frame = 0;
-    state->poll_skip = 0;
-    g_current_samples_passed_query = id;
-
-    args[0] = (uint32_t)target;
-    args[1] = id;
-    emit_gl_call(GLFN_BEGIN_QUERY, args, sizeof(args));
+    uint32_t payload[2] = {target, id};
+    emit_gl_call(GLFN_BEGIN_QUERY, payload, sizeof(payload));
 }
 
 void APIENTRY glEndQuery(GLenum target) {
-    QueryObjectState* state;
-    uint32_t arg;
-
-    if (!is_occlusion_query_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (!g_current_samples_passed_query) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    state = find_query_state(g_current_samples_passed_query, FALSE);
-    if (!state || !state->active || state->target != target) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    state->active = FALSE;
-    state->available = GL_FALSE;
-    state->result = 0;
-    state->poll_frame = 0;
-    state->poll_skip = 0;
-    g_current_samples_passed_query = 0;
-
-    arg = (uint32_t)target;
-    emit_gl_call(GLFN_END_QUERY, &arg, sizeof(arg));
+    uint32_t payload = target;
+    emit_gl_call(GLFN_END_QUERY, &payload, sizeof(payload));
 }
 
 void APIENTRY glGetQueryiv(GLenum target, GLenum pname, GLint* params) {
     if (params) (void)emit_query_parameter(V86GL_PARAMETER_QUERY_TARGET, target, pname, V86GL_STATE_INTEGER, params);
 }
 
-static BOOL query_object_value(QueryObjectState* state, GLenum pname, GLuint* value) {
-    GLint remote_value;
 
-    if (!state || !value) {
-        return FALSE;
-    }
-
-    if (pname != GL_QUERY_RESULT && pname != GL_QUERY_RESULT_AVAILABLE) {
-        return FALSE;
-    }
-
-    if (!state->available) {
-        BOOL should_poll = state->poll_frame != g_frame_id;
-
-        /* A legal busy-wait loop may ask AVAILABLE repeatedly without a swap.
-         * Reuse a negative answer briefly, then retry the host in batches.
-         * WebGPU still needs the browser event loop to advance GPU work, so
-         * callers should prefer RESULT (handled conservatively below). */
-        if (!should_poll && pname == GL_QUERY_RESULT_AVAILABLE) {
-            if (state->poll_skip) {
-                state->poll_skip--;
-            } else {
-                state->poll_frame = 0;
-                should_poll = TRUE;
-            }
-        }
-
-        if (should_poll && !emit_query_object_batch()) {
-            /* Keep the original single-object path as a transport fallback. */
-            if (emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, state->name,
-                                     pname, &remote_value)) {
-                *value = (GLuint)remote_value;
-                if (pname == GL_QUERY_RESULT) {
-                    state->result = (GLuint)remote_value;
-                    state->available = GL_TRUE;
-                } else if (remote_value) {
-                    GLint result_value = (GLint)V86GL_QUERY_VISIBLE_SAMPLES;
-                    if (emit_query_object_iv(V86GL_OBJECT_KIND_QUERY,
-                                             state->name, GL_QUERY_RESULT,
-                                             &result_value)) {
-                        state->result = (GLuint)result_value;
-                        state->available = GL_TRUE;
-                    }
-                }
-                return TRUE;
-            }
-        }
-    }
-
-    if (pname == GL_QUERY_RESULT) {
-        if (!state->available) {
-            /* Desktop GL's RESULT blocks until the GPU has answered, and the
-             * host can only answer after a mapAsync completes, which needs the
-             * browser event loop. Sleep(1) between polls hands the slice back
-             * so that happens promptly, instead of re-polling a host that
-             * cannot have changed its answer yet. poll_frame is cleared each
-             * time because emit_query_object_batch skips an object already
-             * polled this frame, and the whole wait happens inside one. */
-            DWORD start = GetTickCount();
-            while (!state->available &&
-                   GetTickCount() - start < V86GL_QUERY_RESULT_WAIT_MS) {
-                Sleep(1);
-                state->poll_frame = 0;
-                state->poll_skip = 0;
-                if (!emit_query_object_batch()) {
-                    break;
-                }
-            }
-        }
-        if (!state->available) {
-            /* The GPU still has not answered. Report the object visible rather
-             * than culling geometry that may well be on screen: a frame with
-             * one occluder drawn needlessly is a far cheaper error than a
-             * frame missing something it should have shown. */
-            state->result = state->target == GL_SAMPLES_PASSED ? V86GL_QUERY_VISIBLE_SAMPLES : 1u;
-            state->available = GL_TRUE;
-            state->poll_skip = 0;
-        }
-        *value = state->result;
-    } else {
-        *value = state->available ? GL_TRUE : GL_FALSE;
-    }
-    return TRUE;
-}
 
 void APIENTRY glGetQueryObjectiv(GLuint id, GLenum pname, GLint* params) {
-    QueryObjectState* state = find_query_state(id, FALSE);
-    GLuint value;
-
-    if (!params) {
-        return;
-    }
-    if (!state || state->active) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    switch (pname) {
-    case GL_QUERY_RESULT:
-    case GL_QUERY_RESULT_AVAILABLE:
-        if (query_object_value(state, pname, &value)) {
-            params[0] = (GLint)value;
-        }
-        break;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        break;
-    }
+    GLint value;
+    if (params && emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, id, pname, &value)) *params = (GLint)value;
 }
 
 void APIENTRY glGetQueryObjectuiv(GLuint id, GLenum pname, GLuint* params) {
-    QueryObjectState* state = find_query_state(id, FALSE);
-    GLuint value;
-
-    if (!params) {
-        return;
-    }
-    if (!state || state->active) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-
-    switch (pname) {
-    case GL_QUERY_RESULT:
-    case GL_QUERY_RESULT_AVAILABLE:
-        if (query_object_value(state, pname, &value)) {
-            params[0] = value;
-        }
-        break;
-    default:
-        v86gl_set_error(GL_INVALID_ENUM);
-        break;
-    }
+    GLint value;
+    if (params && emit_query_object_iv(V86GL_OBJECT_KIND_QUERY, id, pname, &value)) *params = (GLuint)value;
 }
 
 void APIENTRY glGenQueriesARB(GLsizei n, GLuint* ids) {
@@ -9570,7 +8020,6 @@ void APIENTRY glDeleteBuffers(GLsizei n, const GLuint* buffers) {
 }
 
 void APIENTRY glBindBufferARB(GLenum target, GLuint buffer) {
-    BufferObjectState* state;
     struct { uint32_t target, buffer; } payload;
     if (target != GL_ARRAY_BUFFER_ARB &&
         target != GL_ELEMENT_ARRAY_BUFFER_ARB &&
@@ -9579,9 +8028,6 @@ void APIENTRY glBindBufferARB(GLenum target, GLuint buffer) {
         v86gl_set_error(GL_INVALID_ENUM);
         return;
     }
-    state = buffer ? find_buffer_state(buffer, TRUE) : NULL;
-    if (buffer && !state) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-    if (state) state->target = target;
     if (target == GL_ARRAY_BUFFER_ARB) g_array_buffer_binding = buffer;
     else if (target == GL_ELEMENT_ARRAY_BUFFER_ARB) g_element_array_buffer_binding = buffer;
     else if (target == GL_PIXEL_PACK_BUFFER) g_pixel_pack_buffer_binding = buffer;
@@ -9597,23 +8043,6 @@ void APIENTRY glBindBuffer(GLenum target, GLuint buffer) {
 
 void APIENTRY glBufferDataARB(GLenum target, GLsizeiptrARB size,
                               const GLvoid* data, GLenum usage) {
-    BufferObjectState* state = bound_buffer_state(target);
-    uint8_t* copy = NULL;
-    if (!state) return;
-    if (size < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (size) {
-        copy = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)size);
-        if (!copy) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-        if (data) CopyMemory(copy, data, (SIZE_T)size);
-        else ZeroMemory(copy, (SIZE_T)size);
-    }
-    if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
-    state->data = copy;
-    state->size = (uint32_t)size;
-    state->usage = usage;
-    state->target = target;
-    state->mapped = FALSE;
-    state->access = GL_READ_WRITE_ARB;
     emit_buffer_data(target, size, data, usage);
 }
 
@@ -9625,19 +8054,6 @@ void APIENTRY glBufferData(GLenum target, GLsizeiptrARB size,
 __declspec(dllexport)
 void APIENTRY glBufferSubDataARB(GLenum target, GLintptrARB offset,
                                  GLsizeiptrARB size, const GLvoid* data) {
-    BufferObjectState* state = bound_buffer_state(target);
-    if (!state) return;
-    if (offset < 0 || size < 0 || (size && !data) ||
-        (uint32_t)offset > state->size || (uint32_t)size > state->size - (uint32_t)offset) {
-        v86gl_set_error(GL_INVALID_VALUE);
-        return;
-    }
-    if (state->mapped) {
-        emit_buffer_sub_data(target, offset, size, data);
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-    if (size) CopyMemory(state->data + offset, data, (SIZE_T)size);
     emit_buffer_sub_data(target, offset, size, data);
 }
 
@@ -9648,7 +8064,7 @@ void APIENTRY glBufferSubData(GLenum target, GLintptrARB offset,
 
 /* The full remaining range travels with each bounded read. The CPU checks
  * the entire interval before the first destination byte can be changed. */
-static int emit_query_buffer_data(GLenum target, GLintptrARB offset, GLsizeiptrARB size, GLvoid* data) {
+static int emit_query_buffer_data_for(GLenum target, GLuint buffer, GLintptrARB offset, GLsizeiptrARB size, GLvoid* data) {
     uint32_t copied = 0;
     int32_t remaining = size;
     if (size > 0 && !data) { v86gl_set_error(GL_INVALID_VALUE); return -1; }
@@ -9659,7 +8075,7 @@ static int emit_query_buffer_data(GLenum target, GLintptrARB offset, GLsizeiptrA
         uint32_t status, error;
         if (chunk > 256u * 1024u) chunk = 256u * 1024u;
         ZeroMemory(&request, sizeof(request));
-        request.target = target; request.offset = offset + copied;
+        request.target = target; request.buffer = buffer; request.offset = offset + copied;
         request.size = size < 0 ? size : (int32_t)chunk; request.range_size = remaining; request.data_size = chunk;
         if (!reserve_pci_record(GLFN_QUERY_BUFFER_DATA, NULL, sizeof(request) + chunk, &args)) return -1;
         CopyMemory(args, &request, sizeof(request));
@@ -9675,6 +8091,10 @@ static int emit_query_buffer_data(GLenum target, GLintptrARB offset, GLsizeiptrA
     } while (remaining > 0);
     return 1;
 }
+static int emit_query_buffer_data(GLenum target, GLintptrARB offset, GLsizeiptrARB size, GLvoid* data) {
+    return emit_query_buffer_data_for(target, 0, offset, size, data);
+}
+
 
 static int emit_query_buffer_map(GLenum target, GLenum access, GLvoid* pointer) {
     V86GLRecordQueryBufferMap request;
@@ -9735,7 +8155,7 @@ GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) {
     BufferObjectState* state;
     GLint cpu_size = 0, mapped = 0;
     int cpu = emit_query_parameter(V86GL_PARAMETER_BUFFER, target, GL_BUFFER_SIZE_ARB, V86GL_STATE_INTEGER, &cpu_size);
-    if (cpu < 0) return NULL;
+    if (cpu < 1) return NULL;
     state = bound_buffer_state(target);
     if (!state) return NULL;
     if (cpu > 0) {
@@ -9754,13 +8174,7 @@ GLvoid* APIENTRY glMapBufferARB(GLenum target, GLenum access) {
         state->mapped = TRUE; state->access = access;
         return state->data;
     }
-    if (access != GL_READ_ONLY_ARB && access != GL_WRITE_ONLY_ARB && access != GL_READ_WRITE_ARB) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return NULL;
-    }
-    state->mapped = TRUE;
-    state->access = access;
-    return state->data;
+    return NULL;
 }
 
 GLvoid* APIENTRY glMapBuffer(GLenum target, GLenum access) {
@@ -9771,14 +8185,14 @@ GLboolean APIENTRY glUnmapBufferARB(GLenum target) {
     BufferObjectState* state = bound_buffer_state(target);
     GLboolean result = GL_FALSE;
     int cpu = emit_query_buffer_unmap(target, &result);
-    if (cpu < 0) return GL_FALSE;
+    if (cpu < 1) return GL_FALSE;
     if (!state) return GL_FALSE;
     state->mapped = FALSE;
     if (state->data && state->size &&
         (state->access == GL_WRITE_ONLY_ARB || state->access == GL_READ_WRITE_ARB)) {
         emit_buffer_sub_data(target, 0, (GLsizeiptrARB)state->size, state->data);
     }
-    return cpu > 0 ? result : GL_TRUE;
+    return result;
 }
 
 GLboolean APIENTRY glUnmapBuffer(GLenum target) {
@@ -9822,22 +8236,7 @@ static void emit_name_array_call(uint16_t fn, GLsizei n, const GLuint* names) {
 }
 
 void APIENTRY glGenFramebuffersEXT(GLsizei n, GLuint* framebuffers) {
-    GLsizei i;
-
-    if (emit_query_names(V86GL_OBJECT_KIND_FRAMEBUFFER, GLFN_GEN_FRAMEBUFFERS, n, framebuffers)) return;
-
-    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!framebuffers || !n) return;
-    for (i = 0; i < n; i++) {
-        GLuint name = g_next_framebuffer_id++;
-        if (!name) name = g_next_framebuffer_id++;
-        framebuffers[i] = name;
-        if (!find_framebuffer_state(name, TRUE)) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return;
-        }
-    }
-    emit_name_array_call(GLFN_GEN_FRAMEBUFFERS, n, framebuffers);
+    (void)emit_query_names(V86GL_OBJECT_KIND_FRAMEBUFFER, GLFN_GEN_FRAMEBUFFERS, n, framebuffers);
 }
 
 void APIENTRY glGenFramebuffers(GLsizei n, GLuint* framebuffers) {
@@ -9845,13 +8244,7 @@ void APIENTRY glGenFramebuffers(GLsizei n, GLuint* framebuffers) {
 }
 
 void APIENTRY glDeleteFramebuffersEXT(GLsizei n, const GLuint* framebuffers) {
-    GLsizei i;
-
-    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!framebuffers || !n) return;
-    for (i = 0; i < n; i++) {
-        delete_framebuffer_state(framebuffers[i]);
-    }
+    if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_FRAMEBUFFERS, n, framebuffers);
 }
 
@@ -9860,20 +8253,8 @@ void APIENTRY glDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
 }
 
 static void bind_framebuffer(uint16_t opcode, GLenum target, GLuint framebuffer) {
-    struct { uint32_t target, framebuffer; } payload;
-
-    if (!valid_framebuffer_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (framebuffer && !find_framebuffer_state(framebuffer, TRUE)) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return;
-    }
-    set_framebuffer_binding_for_target(target, framebuffer);
-    payload.target = (uint32_t)target;
-    payload.framebuffer = framebuffer;
-    emit_gl_call(opcode, &payload, sizeof(payload));
+    uint32_t payload[2] = {target, framebuffer};
+    emit_gl_call(opcode, payload, sizeof(payload));
 }
 
 void APIENTRY glBindFramebufferEXT(GLenum target, GLuint framebuffer) {
@@ -9895,16 +8276,8 @@ GLboolean APIENTRY glIsFramebuffer(GLuint framebuffer) {
 }
 
 GLenum APIENTRY glCheckFramebufferStatusEXT(GLenum target) {
-    GLenum result;
-
-    if (!valid_framebuffer_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return GL_FRAMEBUFFER_UNSUPPORTED_EXT;
-    }
-    result = cached_framebuffer_status(target);
-    if (emit_check_framebuffer_status(target, &result)) {
-        return result;
-    }
+    GLenum result = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+    (void)emit_check_framebuffer_status(target, &result);
     return result;
 }
 
@@ -10056,22 +8429,7 @@ void APIENTRY glGetFramebufferAttachmentParameteriv(GLenum target,
 }
 
 void APIENTRY glGenRenderbuffersEXT(GLsizei n, GLuint* renderbuffers) {
-    GLsizei i;
-
-    if (emit_query_names(V86GL_OBJECT_KIND_RENDERBUFFER, GLFN_GEN_RENDERBUFFERS, n, renderbuffers)) return;
-
-    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!renderbuffers || !n) return;
-    for (i = 0; i < n; i++) {
-        GLuint name = g_next_renderbuffer_id++;
-        if (!name) name = g_next_renderbuffer_id++;
-        renderbuffers[i] = name;
-        if (!find_renderbuffer_state(name, TRUE)) {
-            v86gl_set_error(GL_OUT_OF_MEMORY);
-            return;
-        }
-    }
-    emit_name_array_call(GLFN_GEN_RENDERBUFFERS, n, renderbuffers);
+    (void)emit_query_names(V86GL_OBJECT_KIND_RENDERBUFFER, GLFN_GEN_RENDERBUFFERS, n, renderbuffers);
 }
 
 void APIENTRY glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {
@@ -10079,13 +8437,7 @@ void APIENTRY glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {
 }
 
 void APIENTRY glDeleteRenderbuffersEXT(GLsizei n, const GLuint* renderbuffers) {
-    GLsizei i;
-
-    if (n < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!renderbuffers || !n) return;
-    for (i = 0; i < n; i++) {
-        delete_renderbuffer_state(renderbuffers[i]);
-    }
+    if (n < 0) {v86gl_set_error(GL_INVALID_VALUE);return;}
     emit_name_array_call(GLFN_DELETE_RENDERBUFFERS, n, renderbuffers);
 }
 
@@ -10094,20 +8446,8 @@ void APIENTRY glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers) {
 }
 
 void APIENTRY glBindRenderbufferEXT(GLenum target, GLuint renderbuffer) {
-    struct { uint32_t target, renderbuffer; } payload;
-
-    if (!valid_renderbuffer_target(target)) {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (renderbuffer && !find_renderbuffer_state(renderbuffer, TRUE)) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return;
-    }
-    g_renderbuffer_binding = renderbuffer;
-    payload.target = (uint32_t)target;
-    payload.renderbuffer = renderbuffer;
-    emit_gl_call(GLFN_BIND_RENDERBUFFER, &payload, sizeof(payload));
+    uint32_t payload[2] = {target, renderbuffer};
+    emit_gl_call(GLFN_BIND_RENDERBUFFER, payload, sizeof(payload));
 }
 
 void APIENTRY glBindRenderbuffer(GLenum target, GLuint renderbuffer) {
@@ -10126,29 +8466,18 @@ GLboolean APIENTRY glIsRenderbuffer(GLuint renderbuffer) {
 
 void APIENTRY glRenderbufferStorageEXT(GLenum target, GLenum internalformat,
                                        GLsizei width, GLsizei height) {
-    RenderbufferObjectState* state;
     struct {
         uint32_t target;
         uint32_t internalformat;
         int32_t width;
         int32_t height;
     } payload;
-
-    if (!valid_renderbuffer_target(target)) { v86gl_set_error(GL_INVALID_ENUM); return; }
-    if (width < 0 || height < 0) { v86gl_set_error(GL_INVALID_VALUE); return; }
-    if (!g_renderbuffer_binding) { v86gl_set_error(GL_INVALID_OPERATION); return; }
-    state = find_renderbuffer_state(g_renderbuffer_binding, TRUE);
-    if (!state) { v86gl_set_error(GL_OUT_OF_MEMORY); return; }
-
-    state->internalformat = internalformat;
-    state->width = width;
-    state->height = height;
-
     payload.target = (uint32_t)target;
     payload.internalformat = (uint32_t)internalformat;
     payload.width = width;
     payload.height = height;
     emit_gl_call(GLFN_RENDERBUFFER_STORAGE, &payload, sizeof(payload));
+
 }
 
 void APIENTRY glRenderbufferStorage(GLenum target, GLenum internalformat,
@@ -10170,37 +8499,15 @@ void APIENTRY glGetRenderbufferParameteriv(GLenum target, GLenum pname,
 
 __declspec(dllexport)
 void APIENTRY glBindTexture(GLenum target, GLuint texture) {
-    struct { uint32_t target, texture; } payload;
-    if (target == GL_TEXTURE_1D || target == GL_TEXTURE_2D ||
-        target == GL_TEXTURE_3D || target == GL_TEXTURE_CUBE_MAP) {
-        TextureObjectState* state = find_texture_state(texture, target, TRUE);
-        if (!state) {
-            return;
-        }
-
-        if (target == GL_TEXTURE_1D) {
-            active_texture_unit_state()->bound_1d = texture;
-        } else if (target == GL_TEXTURE_2D) {
-            active_texture_unit_state()->bound_2d = texture;
-        } else if (target == GL_TEXTURE_3D) {
-            active_texture_unit_state()->bound_3d = texture;
-        } else {
-            active_texture_unit_state()->bound_cube = texture;
-        }
-    } else {
-        v86gl_set_error(GL_INVALID_ENUM);
-        return;
-    }
-
-    payload.target = (uint32_t)target;
-    payload.texture = (uint32_t)texture;
-    emit_gl_call(GLFN_BIND_TEXTURE, &payload, sizeof(payload));
+    uint32_t payload[2] = {target, texture};
+    emit_gl_call(GLFN_BIND_TEXTURE, payload, sizeof(payload));
 }
 
 __declspec(dllexport)
 void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLsizei height, GLint border,
                            GLenum format, GLenum type, const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     if (emit_proxy_texture_image(GLFN_TEX_IMAGE_2D, target, level, internalformat, width, height, 1, border, format, type)) return;
     V86GLRecordTexImage2d meta;
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
@@ -10216,8 +8523,6 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internalformat,
     pixel_data = unpack_pixel_pointer(pixels, data_size);
     if (data_size && !pixel_data) return;
 
-    if (!cache_texture_image(target, level, internalformat, width, height, border,
-                             format, type, pixel_data)) return;
 
     payload = alloc_payload(total_size);
     if (!payload) {
@@ -10246,6 +8551,7 @@ static void emit_compressed_tex_image(uint16_t opcode, GLenum target, GLint leve
                                       GLenum internalformat, GLsizei width,
                                       GLsizei height, GLsizei depth, GLint border,
                                       GLsizei image_size, const GLvoid* data) {
+    release_encoding_buffer_reads();
     struct {
         uint32_t target;
         int32_t level;
@@ -10271,8 +8577,6 @@ static void emit_compressed_tex_image(uint16_t opcode, GLenum target, GLint leve
     }
     pixel_data = unpack_pixel_pointer(data, (uint32_t)image_size);
     if (image_size && !pixel_data) return;
-    if (!cache_compressed_texture_image(target, level, internalformat, width, height,
-                                        depth, border, image_size, pixel_data)) return;
     if ((uint32_t)image_size > UINT32_MAX - sizeof(meta)) {
         v86gl_set_error(GL_OUT_OF_MEMORY);
         return;
@@ -10300,9 +8604,8 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
                                           GLsizei width, GLsizei height, GLsizei depth,
                                           GLenum format, GLsizei image_size,
                                           const GLvoid* data) {
+    release_encoding_buffer_reads();
     V86GLRecordCompressedTexSubImage2d meta;
-    TextureLevelState* state;
-    int cache_result;
     uint32_t total_size;
     uint8_t* payload;
     const GLvoid* pixel_data;
@@ -10314,48 +8617,6 @@ static void emit_compressed_tex_sub_image(uint16_t opcode, GLenum target, GLint 
     }
     pixel_data = unpack_pixel_pointer(data, (uint32_t)image_size);
     if (image_size && !pixel_data) return;
-    state = texture_level_state(target, level, FALSE);
-    if (!state || !state->defined || !state->compressed ||
-        xoffset > state->width - width || yoffset > state->height - height ||
-        zoffset > state->depth - depth) {
-        v86gl_set_error(GL_INVALID_OPERATION);
-        return;
-    }
-    if ((uint32_t)image_size > UINT32_MAX - sizeof(meta)) {
-        v86gl_set_error(GL_OUT_OF_MEMORY);
-        return;
-    }
-
-    cache_result = cache_compressed_texture_sub_image(
-        state, xoffset, yoffset, zoffset, width, height, depth,
-        format, image_size, pixel_data);
-    if (cache_result < 0) {
-        return;
-    }
-
-    /* S3TC block updates preserve the complete cached image.  For other
-     * compressed formats retain the old whole-image fallback. */
-    if (!cache_result && xoffset == 0 && yoffset == 0 && zoffset == 0 &&
-        width == state->width && height == state->height && depth == state->depth) {
-        uint8_t* replacement = NULL;
-        if (image_size) {
-            replacement = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)image_size);
-            if (!replacement) {
-                v86gl_set_error(GL_OUT_OF_MEMORY);
-                return;
-            }
-            CopyMemory(replacement, pixel_data, (SIZE_T)image_size);
-        }
-        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
-        state->data = replacement;
-        state->data_size = (uint32_t)image_size;
-        state->format = format;
-    } else if (!cache_result) {
-        if (state->data) HeapFree(GetProcessHeap(), 0, state->data);
-        state->data = NULL;
-        state->data_size = 0;
-    }
-
     total_size = sizeof(meta) + (uint32_t)image_size;
     payload = alloc_payload(total_size);
     if (!payload) return;
@@ -10412,6 +8673,7 @@ void APIENTRY glCompressedTexImage3DARB(GLenum target, GLint level,
 
 static void emit_texture_image_query(GLenum target, GLint level, GLenum format,
                                       GLenum type, BOOL compressed, GLvoid* pixels) {
+    release_encoding_buffer_reads();
     uint32_t request[17] = {0};
     uint32_t span, ticket, context_id, offset, count;
     uint8_t* args;
@@ -10534,6 +8796,7 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
                               GLsizei width, GLsizei height, GLsizei depth,
                               GLint border, GLenum format, GLenum type,
                               const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     if (emit_proxy_texture_image(GLFN_TEX_IMAGE_3D, target, level, internalformat, width, height, depth, border, format, type)) return;
     V86GLRecordTexImage3d meta;
     uint32_t data_size = 0;
@@ -10546,7 +8809,6 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
-    if (!bound_texture_state(target, TRUE)) return;
     if (has_pixels && width && height && depth) {
         data_size = gl_pixel_span_3d(width, height, depth, format, type);
         if (!data_size) {
@@ -10556,8 +8818,6 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLint internalformat,
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
     if (data_size && !pixel_data) return;
-    if (!cache_texture_image_3d(target, level, internalformat, width, height, depth,
-                                border, format, type, pixel_data)) return;
     total_size = sizeof(meta) + data_size;
     payload = alloc_payload(total_size);
     if (!payload) return;
@@ -10589,6 +8849,7 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
                                  GLint yoffset, GLint zoffset, GLsizei width,
                                  GLsizei height, GLsizei depth, GLenum format,
                                  GLenum type, const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     V86GLRecordTexSubImage3d meta;
     uint32_t data_size = 0;
     uint8_t* payload;
@@ -10599,7 +8860,6 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
         v86gl_set_error(GL_INVALID_VALUE);
         return;
     }
-    if (!bound_texture_state(target, FALSE)) return;
     if (width && height && depth) {
         data_size = gl_pixel_span_3d(width, height, depth, format, type);
         if (!data_size) {
@@ -10609,9 +8869,6 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset,
     }
     pixel_data = unpack_pixel_pointer(pixels, data_size);
     if (data_size && !pixel_data) return;
-    if (!cache_texture_sub_image_3d(target, level, xoffset, yoffset, zoffset,
-                                    width, height, depth, format, type,
-                                    pixel_data)) return;
     payload = alloc_payload(sizeof(meta) + data_size);
     if (!payload) return;
     meta.target = (uint32_t)target;
@@ -10643,6 +8900,7 @@ __declspec(dllexport)
 void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                               GLsizei width, GLsizei height,
                               GLenum format, GLenum type, const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     V86GLRecordTexSubImage2d meta;
     BOOL has_pixels = pixels || g_pixel_unpack_buffer_binding;
     uint32_t data_size = has_pixels ? gl_pixel_span(width, height, format, type) : 0;
@@ -10657,8 +8915,6 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
     pixel_data = unpack_pixel_pointer(pixels, data_size);
     if (data_size && !pixel_data) return;
 
-    if (!cache_texture_sub_image(target, level, xoffset, yoffset, width, height,
-                                 format, type, pixel_data)) return;
 
     payload = alloc_payload(total_size);
     if (!payload) {
@@ -10788,13 +9044,7 @@ void APIENTRY glCopyTexSubImage3DEXT(GLenum target, GLint level,
 
 __declspec(dllexport)
 void APIENTRY glGenerateMipmap(GLenum target) {
-    uint32_t payload = (uint32_t)target;
-    TextureObjectState* state = bound_texture_state(target, FALSE);
-
-    if (!state) {
-        return;
-    }
-
+    uint32_t payload = target;
     emit_gl_call(GLFN_GENERATE_MIPMAP, &payload, sizeof(payload));
 }
 
@@ -10805,7 +9055,6 @@ void APIENTRY glGenerateMipmapEXT(GLenum target) {
 __declspec(dllexport)
 void APIENTRY glTexParameteri(GLenum target, GLenum pname, GLint param) {
     struct { uint32_t target, pname; int32_t param; } payload;
-    update_texture_parameter_i(target, pname, param);
     payload.target = (uint32_t)target;
     payload.pname = (uint32_t)pname;
     payload.param = param;
@@ -10815,7 +9064,6 @@ void APIENTRY glTexParameteri(GLenum target, GLenum pname, GLint param) {
 __declspec(dllexport)
 void APIENTRY glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
     struct { uint32_t target, pname; float param; } payload;
-    update_texture_parameter_f(target, pname, param);
     payload.target = (uint32_t)target;
     payload.pname = (uint32_t)pname;
     payload.param = param;
@@ -10846,18 +9094,6 @@ void APIENTRY glTexParameteriv(GLenum target, GLenum pname, const GLint* params)
         payload.values[i] = params[i];
     }
 
-    if (pname == GL_TEXTURE_BORDER_COLOR) {
-        TextureObjectState* state = bound_texture_state(target, TRUE);
-        if (!state) {
-            return;
-        }
-        for (i = 0; i < 4; i++) {
-            state->border_color[i] = (GLfloat)params[i];
-        }
-    } else {
-        update_texture_parameter_i(target, pname, params[0]);
-    }
-
     emit_gl_call(GLFN_TEX_PARAMETERIV, &payload, sizeof(payload));
 }
 
@@ -10883,16 +9119,6 @@ void APIENTRY glTexParameterfv(GLenum target, GLenum pname, const GLfloat* param
     payload.count = (uint32_t)count;
     for (i = 0; i < count; i++) {
         payload.values[i] = params[i];
-    }
-
-    if (pname == GL_TEXTURE_BORDER_COLOR) {
-        TextureObjectState* state = bound_texture_state(target, TRUE);
-        if (!state) {
-            return;
-        }
-        CopyMemory(state->border_color, params, sizeof(state->border_color));
-    } else {
-        update_texture_parameter_f(target, pname, params[0]);
     }
 
     emit_gl_call(GLFN_TEX_PARAMETERFV, &payload, sizeof(payload));
@@ -12339,6 +10565,7 @@ void APIENTRY glPolygonOffset(GLfloat factor, GLfloat units) {
 __declspec(dllexport)
 void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                            GLenum format, GLenum type, GLvoid* pixels) {
+    release_encoding_buffer_reads();
     uint32_t data_size;
     GLvoid* destination;
 
@@ -12479,6 +10706,7 @@ void APIENTRY glNormalPointer(GLenum type, GLsizei stride, const GLvoid* pointer
 
 __declspec(dllexport)
 void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+    release_encoding_buffer_reads();
     ClientArrayCopy arrays[4 + V86GL_MAX_TEXTURE_UNITS + 1];
     GenericAttribCopy generic_arrays[V86GL_MAX_VERTEX_ATTRIBS];
     uint32_t array_block_count = 4u + V86GL_MAX_TEXTURE_UNITS + 1u;
@@ -12634,6 +10862,7 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
 __declspec(dllexport)
 void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices) {
+    release_encoding_buffer_reads();
     ClientArrayCopy arrays[4 + V86GL_MAX_TEXTURE_UNITS + 1];
     GenericAttribCopy generic_arrays[V86GL_MAX_VERTEX_ATTRIBS];
     uint32_t array_block_count = 4u + V86GL_MAX_TEXTURE_UNITS + 1u;
@@ -12691,7 +10920,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 
     if (draw_needs_edge_flags(mode)) {
         index_data = g_element_array_buffer_binding ?
-            buffer_data_at(g_element_array_buffer_binding, indices, index_data_size) :
+            buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB, indices, index_data_size) :
             (const uint8_t*)indices;
         if (!index_data) {
             v86gl_set_error(GL_INVALID_OPERATION);
@@ -12702,7 +10931,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     }
 
     if (draw_elements_can_use_vbo_direct()) {
-        index_data = buffer_data_at(g_element_array_buffer_binding, indices, index_data_size);
+        index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB, indices, index_data_size);
         if (!index_data) {
             return;
         }
@@ -12722,7 +10951,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
     }
 
     if (g_element_array_buffer_binding) {
-        index_data = buffer_data_at(g_element_array_buffer_binding, indices, index_data_size);
+        index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB, indices, index_data_size);
         if (!index_data) return;
     } else {
         index_data = (const uint8_t*)indices;
@@ -12853,6 +11082,7 @@ void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvo
 __declspec(dllexport)
 void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
                                   GLsizei count, GLenum type, const GLvoid* indices) {
+    release_encoding_buffer_reads();
     uint32_t index_size;
     uint32_t index_data_size;
     const uint8_t* index_data;
@@ -12880,7 +11110,7 @@ void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
 
     index_data_size = (uint32_t)count * index_size;
     if (draw_elements_can_use_vbo_direct()) {
-        index_data = buffer_data_at(g_element_array_buffer_binding, indices, index_data_size);
+        index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB, indices, index_data_size);
         if (!index_data) {
             return;
         }
@@ -13004,7 +11234,7 @@ void APIENTRY glMultiDrawElements(GLenum mode, const GLsizei* count,
                 return;
             }
             index_data_size = (uint32_t)count[i] * index_size;
-            index_data = buffer_data_at(g_element_array_buffer_binding,
+            index_data = buffer_data_at(GL_ELEMENT_ARRAY_BUFFER_ARB,
                                         indices[i], index_data_size);
             if (!index_data) {
                 return;
@@ -13705,6 +11935,7 @@ static void read_client_array_values(const ClientArrayState* state, GLint index,
 
 __declspec(dllexport)
 void APIENTRY glArrayElement(GLint i) {
+    release_encoding_buffer_reads();
     static const GLfloat color_defaults[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     static const GLfloat texcoord_defaults[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     static const GLfloat normal_defaults[3] = { 0.0f, 0.0f, 1.0f };
@@ -13852,6 +12083,7 @@ void APIENTRY glAccum(GLenum op, GLfloat value) {
 __declspec(dllexport)
 void APIENTRY glBitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig,
                        GLfloat xmove, GLfloat ymove, const GLubyte* bitmap) {
+    release_encoding_buffer_reads();
     struct {
         int32_t width;
         int32_t height;
@@ -13931,6 +12163,7 @@ void APIENTRY glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
 
 __declspec(dllexport)
 void APIENTRY glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     V86GLRecordDrawPixels meta;
     uint32_t data_size;
     uint32_t total_size;
@@ -14030,8 +12263,7 @@ static const void* pixel_map_source(GLenum map, GLsizei mapsize, const void* val
         v86gl_set_error(GL_INVALID_VALUE); return NULL;
     }
     if (g_pixel_unpack_buffer_binding) {
-        BufferObjectState* buffer = bound_buffer_state(GL_PIXEL_UNPACK_BUFFER);
-        if (!buffer || buffer->mapped || (uintptr_t)values % stride) { v86gl_set_error(GL_INVALID_OPERATION); return NULL; }
+        if ((uintptr_t)values % stride) { v86gl_set_error(GL_INVALID_OPERATION); return NULL; }
     }
     return unpack_pixel_pointer(values, (uint32_t)mapsize * stride);
 }
@@ -14111,6 +12343,7 @@ static void emit_pixel_map(uint16_t opcode, GLenum map, GLsizei mapsize,
 
 __declspec(dllexport)
 void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
+    release_encoding_buffer_reads();
     GLdouble* converted;
     GLsizei i;
 
@@ -14130,6 +12363,7 @@ void APIENTRY glPixelMapfv(GLenum map, GLsizei mapsize, const GLfloat* values) {
 
 __declspec(dllexport)
 void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
+    release_encoding_buffer_reads();
     GLdouble* converted;
     GLsizei i;
 
@@ -14149,6 +12383,7 @@ void APIENTRY glPixelMapuiv(GLenum map, GLsizei mapsize, const GLuint* values) {
 
 __declspec(dllexport)
 void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values) {
+    release_encoding_buffer_reads();
     GLdouble* converted;
     GLsizei i;
 
@@ -14169,13 +12404,13 @@ void APIENTRY glPixelMapusv(GLenum map, GLsizei mapsize, const GLushort* values)
 /* The CPU returns the whole map, so a query need not depend on the
  * guest's old cached table size. PBO destinations use the exact CPU size. */
 static int emit_query_pixel_map(GLenum map, unsigned int kind, void* values, unsigned int item_bytes) {
+    release_encoding_buffer_reads();
     GLint count = 0;
     int result;
     void* destination = values;
     if (pixel_map_index(map) < 0) { v86gl_set_error(GL_INVALID_ENUM); return -1; }
     if (g_pixel_pack_buffer_binding) {
-        BufferObjectState* buffer = bound_buffer_state(GL_PIXEL_PACK_BUFFER);
-        if (!buffer || buffer->mapped || (uintptr_t)values % item_bytes) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
+        if ((uintptr_t)values % item_bytes) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
         result = emit_query_state(GL_PIXEL_MAP_I_TO_I_SIZE + (map - GL_PIXEL_MAP_I_TO_I), V86GL_STATE_INTEGER, &count);
         if (result <= 0) return result;
         if (count < 1 || count > (GLint)V86GL_MAX_TYPED_QUERY_VALUES) { v86gl_set_error(GL_INVALID_OPERATION); return -1; }
@@ -14239,6 +12474,7 @@ void APIENTRY glPolygonStipple(const GLubyte* mask) {
 
 __declspec(dllexport)
 void APIENTRY glGetPolygonStipple(GLubyte* mask) {
+    release_encoding_buffer_reads();
     uint32_t layout[12], row, byte, count;
     uint8_t rows[320], *destination;
     if (!query_polygon_stipple(0, mask, layout, rows)) return;
@@ -14588,7 +12824,6 @@ GLboolean APIENTRY glAreTexturesResident(GLsizei n, const GLuint* textures, GLbo
 __declspec(dllexport)
 void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLclampf* priorities) {
     GLsizei i;
-    uint32_t j;
     uint32_t size;
     uint8_t* payload;
     if (n < 0) {
@@ -14609,12 +12844,6 @@ void APIENTRY glPrioritizeTextures(GLsizei n, const GLuint* textures, const GLcl
     for (i = 0; i < n; i++) {
         ((uint32_t*)(payload + 4u + (uint32_t)i * 8u))[0] = textures[i];
         CopyMemory(payload + 8u + (uint32_t)i * 8u, &priorities[i], sizeof(GLfloat));
-        for (j = 0; j < V86GL_MAX_TEXTURE_STATES; j++) {
-            if (g_texture_states[j].used && g_texture_states[j].name == textures[i]) {
-                g_texture_states[j].priority = priorities[i] < 0 ? 0 : priorities[i] > 1 ? 1 : priorities[i];
-                break;
-            }
-        }
     }
     emit_gl_call(GLFN_PRIORITIZE_TEXTURES, payload, size);
     HeapFree(GetProcessHeap(), 0, payload);
@@ -14624,6 +12853,7 @@ __declspec(dllexport)
 void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
                            GLsizei width, GLint border,
                            GLenum format, GLenum type, const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     if (emit_proxy_texture_image(GLFN_TEX_IMAGE_1D, target, level, internalformat, width, 1, 1, border, format, type)) return;
     V86GLRecordTexImage1d meta;
     uint32_t data_size;
@@ -14645,8 +12875,6 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internalformat,
     pixel_data = unpack_pixel_pointer(pixels, data_size);
     if (data_size && !pixel_data) return;
 
-    if (!cache_texture_image(target, level, internalformat, width, 1, border,
-                             format, type, pixel_data)) return;
 
     total_size = sizeof(meta) + data_size;
     payload = alloc_payload(total_size);
@@ -14673,6 +12901,7 @@ __declspec(dllexport)
 void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
                               GLsizei width, GLenum format, GLenum type,
                               const GLvoid* pixels) {
+    release_encoding_buffer_reads();
     V86GLRecordTexSubImage1d meta;
     uint32_t data_size;
     uint32_t total_size;
@@ -14693,8 +12922,6 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset,
     pixel_data = unpack_pixel_pointer(pixels, data_size);
     if (data_size && !pixel_data) return;
 
-    if (!cache_texture_sub_image(target, level, xoffset, 0, width, 1,
-                                 format, type, pixel_data)) return;
 
     total_size = sizeof(meta) + data_size;
     payload = alloc_payload(total_size);

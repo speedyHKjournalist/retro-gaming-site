@@ -882,7 +882,7 @@ typedef struct V86GLRecordQueryBufferData {
     uint32_t status;
     uint32_t data_size;
     uint32_t error;
-    uint32_t reserved;
+    uint32_t buffer;
 } V86GLRecordQueryBufferData;
 typedef struct V86GLRecordQueryBufferMap {
     uint32_t target;
@@ -1599,7 +1599,7 @@ typedef char V86GLRecordQueryBufferData_range_size[offsetof(V86GLRecordQueryBuff
 typedef char V86GLRecordQueryBufferData_status[offsetof(V86GLRecordQueryBufferData, status) == 16 ? 1 : -1];
 typedef char V86GLRecordQueryBufferData_data_size[offsetof(V86GLRecordQueryBufferData, data_size) == 20 ? 1 : -1];
 typedef char V86GLRecordQueryBufferData_error[offsetof(V86GLRecordQueryBufferData, error) == 24 ? 1 : -1];
-typedef char V86GLRecordQueryBufferData_reserved[offsetof(V86GLRecordQueryBufferData, reserved) == 28 ? 1 : -1];
+typedef char V86GLRecordQueryBufferData_buffer[offsetof(V86GLRecordQueryBufferData, buffer) == 28 ? 1 : -1];
 typedef char V86GLRecordQueryBufferMapSize[sizeof(V86GLRecordQueryBufferMap) == 24 ? 1 : -1];
 typedef char V86GLRecordQueryBufferMap_target[offsetof(V86GLRecordQueryBufferMap, target) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryBufferMap_access[offsetof(V86GLRecordQueryBufferMap, access) == 4 ? 1 : -1];
