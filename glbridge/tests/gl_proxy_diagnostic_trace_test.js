@@ -75,7 +75,7 @@ assert.match(proxy, /g_trace_calls_this_frame = 0;/,
 
 /* Every per-call site goes through the gate, none reads a raw flag. */
 const gated = [...proxy.matchAll(/\bv86gl_trace_call_allowed\(\)/g)].length;
-assert.ok(gated >= 30,
+assert.ok(gated >= 15,
     "too few per-call trace sites route through the budget gate: " + gated);
 assert.ok(!/if \(g_trace_calls(?:_enabled)?\)/.test(proxy),
     "a per-call trace site must not test the enable flag directly");

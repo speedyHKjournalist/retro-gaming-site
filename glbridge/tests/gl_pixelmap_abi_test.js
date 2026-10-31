@@ -37,7 +37,7 @@ typedef intptr_t GLintptrARB;
 typedef intptr_t GLsizeiptrARB;
 typedef struct { int mapped; } BufferObjectState;
 typedef struct { GLsizei size; GLdouble* values; } PixelMapState;
-static PixelMapState g_pixel_maps[10];
+
 static GLuint g_pixel_pack_buffer_binding, g_pixel_unpack_buffer_binding;
 static unsigned int error, writes, last_bytes, last_offset;
 static int supported = 1, fail;
@@ -100,9 +100,8 @@ int main(void) {
     buffer.mapped=1; glGetPixelMapfv(0xC76,NULL); assert(writes==3); buffer.mapped=0;
     g_pixel_pack_buffer_binding=0; fail=1; GLfloat out[4]; memset(out,0xA5,sizeof(out)); glGetPixelMapfv(0xC76,out);
     for(unsigned int i=0; i<sizeof(out); ++i) assert(((unsigned char*)out)[i] == 0xA5);
-    fail=0; supported=0; GLdouble saved[]={0,.5,1,1}; g_pixel_maps[6].size=4; g_pixel_maps[6].values=saved;
-    GLuint u[4]; GLushort us[4]; glGetPixelMapuiv(0xC76,u); glGetPixelMapusv(0xC76,us);
-    assert(u[1] == 2147483647u && u[2] == 0xFFFFFFFFu && us[1] == 32768 && us[2] == 65535);
+    fail=0; supported=0; GLuint u[4]; memset(u,0xA5,sizeof(u)); glGetPixelMapuiv(0xC76,u);
+    for (unsigned int i=0;i<sizeof(u);++i) assert(((unsigned char*)u)[i]==0xA5);
     return 0;
 }
 `;

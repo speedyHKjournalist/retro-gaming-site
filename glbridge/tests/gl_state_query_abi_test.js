@@ -23,7 +23,7 @@ const { createFakeHost } = require(testPath("gl_fake_gpu.js"));
 const { GLStream, GL } = require(testPath("gl_stream_builder.js"));
 const P = require(hostPath("gl-webgpu/gl_protocol.js"));
 const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
-const start = source.indexOf("static int emit_query_typed("), end = source.indexOf("static GLint query_limit_or_default", start);
+const start = source.indexOf("static int emit_query_typed("), end = source.indexOf("static int emit_query_error", start);
 assert.ok(start >= 0 && end > start);
 const helper = source.slice(start, end);
 const fbStart = source.indexOf("void APIENTRY glGetFramebufferAttachmentParameterivEXT("),
@@ -109,26 +109,10 @@ static int emit_pci_batch(BOOL present) {
     return 1;
 }
 ${helper}
-typedef struct { GLenum object_type, object_name, texture_target; GLint texture_level, texture_zoffset; } FramebufferAttachmentState;
-static int valid_framebuffer_target(GLenum target) { (void)target; return 1; }
-static FramebufferAttachmentState* bound_framebuffer_attachment(GLenum target, GLenum attachment, int create) {
-    (void)target; (void)attachment; (void)create; return NULL;
-}
 ${source.slice(fbStart, fbEnd)}
-typedef struct { GLenum internalformat; GLint width, height; } RenderbufferObjectState;
-static GLuint g_renderbuffer_binding = 1;
-static int valid_renderbuffer_target(GLenum target) { (void)target; return 1; }
-static RenderbufferObjectState* find_renderbuffer_state(GLuint name, int create) { (void)name; (void)create; return NULL; }
-static GLint renderbuffer_component_bits(GLenum format, GLenum pname) { (void)format; (void)pname; return 0; }
 ${source.slice(rbStart, rbEnd)}
-typedef struct { GLint min_filter, mag_filter, wrap_s, wrap_t, wrap_r, base_level, max_level;
-    GLfloat min_lod, max_lod, priority, border_color[4]; } TextureObjectState;
-static TextureObjectState* bound_texture_state(GLenum target, int create) { (void)target; (void)create; return NULL; }
 ${functionBody("glGetTexParameteriv")}
 ${functionBody("glGetTexParameterfv")}
-static int get_texture_level_parameter(GLenum target, GLint level, GLenum pname, GLint* value) {
-    (void)target; (void)level; (void)pname; (void)value; assert(0); return 0;
-}
 ${functionBody("glGetTexLevelParameteriv")}
 ${functionBody("glGetTexLevelParameterfv")}
 int main(int argc, char** argv) {

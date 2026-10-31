@@ -17,7 +17,7 @@ function body(name, prefix = "") {
     for (; depth; ++end) { if (source[end] === "{") ++depth; if (source[end] === "}") --depth; }
     return source.slice(at, end);
 }
-const helperAt = source.indexOf("static int emit_query_typed("), helperEnd = source.indexOf("static GLint query_limit_or_default", helperAt);
+const helperAt = source.indexOf("static int emit_query_typed("), helperEnd = source.indexOf("static int emit_query_error", helperAt);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-buffer-mapping-"));
 const names = ["glGetBufferSubDataARB", "glMapBufferARB", "glUnmapBufferARB", "glGetBufferParameterivARB", "glGetBufferPointervARB", "glReadPixels"];
 const c = `

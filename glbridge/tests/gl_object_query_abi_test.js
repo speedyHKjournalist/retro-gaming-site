@@ -23,14 +23,6 @@ try {
 #define GL_TRUE 1
 typedef uint32_t GLuint;
 typedef unsigned char GLboolean;
-typedef struct { int target; } TextureObjectState;
-typedef struct { int used; } ProgramObjectState;
-typedef struct { int used; } ShaderObjectState;
-typedef struct { int target; } QueryObjectState;
-static TextureObjectState texture = {1};
-static ProgramObjectState program;
-static ShaderObjectState shader;
-static QueryObjectState query = {1};
 static unsigned int expected_kind, expected_name, asked;
 static int query_result;
 static GLboolean query_value;
@@ -38,14 +30,6 @@ static int emit_query_parameter(unsigned int family, unsigned int kind, unsigned
     assert(family == V86GL_PARAMETER_IS_OBJECT && kind == expected_kind && name == expected_name && type == V86GL_STATE_BOOLEAN);
     ++asked; if (query_result > 0) *(GLboolean*)out = query_value; return query_result;
 }
-static ProgramObjectState* find_program_state(GLuint n, int create) { (void)n; (void)create; return &program; }
-static ShaderObjectState* find_shader_state(GLuint n, int create, int type) { (void)n; (void)create; (void)type; return &shader; }
-static void* find_framebuffer_state(GLuint n, int create) { (void)n; (void)create; return &program; }
-static void* find_renderbuffer_state(GLuint n, int create) { (void)n; (void)create; return &program; }
-static TextureObjectState* lookup_texture_state(GLuint n) { (void)n; return &texture; }
-static void* find_buffer_state(GLuint n, int create) { (void)n; (void)create; return &program; }
-static QueryObjectState* find_query_state(GLuint n, int create) { (void)n; (void)create; return &query; }
-static void* find_arb_program_state(GLuint n, int create) { (void)n; (void)create; return &program; }
 ${names.map(body).join("\n")}
 int main(void) {
     GLboolean (*getters[])(GLuint) = {glIsShader, glIsProgram, glIsTexture, glIsRenderbufferEXT, glIsFramebufferEXT, glIsBufferARB, glIsQuery, glIsProgramARB};
@@ -56,7 +40,7 @@ int main(void) {
         query_result = 1; query_value = 0; assert(getters[i](7) == 0);
         query_value = 1; assert(getters[i](7) == 1);
         query_result = -1; assert(getters[i](7) == 0); /* failed answers must not fall back */
-        query_result = 0; assert(getters[i](7) == 1); /* older unsupported hosts only */
+        query_result = 0; assert(getters[i](7) == 0); /* no local fallback on missing answers */
         expected_name = 0; query_result = 1; query_value = 0; assert(getters[i](0) == 0);
     }
     assert(asked == 40); return 0;

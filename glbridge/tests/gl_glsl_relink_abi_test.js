@@ -1,84 +1,49 @@
-#!/usr/bin/env node
 "use strict";
-const assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path");
-const { execFileSync } = require("node:child_process");
-const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
-const begin = source.indexOf("void APIENTRY glShaderSource("), end = source.indexOf("void APIENTRY glUseProgram(", begin);
-assert.ok(begin >= 0 && end > begin);
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-glsl-relink-"));
-try {
-    const code = `
+const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path");
+const {body,transport,run,GL}=require("./gl_cpu_abi_harness.js");
+const {hostPath}=require("./host_paths.js"),{Glslang}=require(hostPath("gl-webgpu/gl_glslang.js"));
+const source=fs.readFileSync(path.join(__dirname,"../openglproxy/opengl32_proxy.c"),"utf8");
+const code=`
 #include <assert.h>
 #include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "gl_protocol.h"
+typedef unsigned int GLenum,GLuint;typedef int GLint,GLsizei,BOOL;typedef double GLdouble;typedef float GLfloat;typedef unsigned char GLboolean;typedef unsigned short GLushort;typedef char GLchar;typedef size_t SIZE_T;
 #define APIENTRY
 #define FALSE 0
-#define GL_FALSE 0
-#define GL_TRUE 1
-#define GL_INVALID_VALUE 0x501
-#define GL_OUT_OF_MEMORY 0x505
-#define GL_COMPILE_STATUS 0x8B81
-#define GL_LINK_STATUS 0x8B82
-#define GL_VALIDATE_STATUS 0x8B83
-#define V86GL_DIAG_ENABLED 0
 #define CopyMemory memcpy
-typedef uint32_t GLuint;
-typedef int GLint;
-typedef int GLsizei;
-typedef char GLchar;
-typedef size_t SIZE_T;
-typedef struct { GLchar* source; GLsizei source_length; int compiled; } ShaderObjectState;
-typedef struct { int linked, has_executable, validated; } ProgramObjectState;
-static ShaderObjectState shader;
-static ProgramObjectState program;
-static unsigned int error, invalidated, emitted;
-static GLint query_status;
-static ShaderObjectState* find_shader_state(GLuint name, int create, int type) {
-    (void)create; (void)type; return name == 1 ? &shader : NULL;
-}
-static ProgramObjectState* find_program_state(GLuint name, int create) {
-    (void)create; return name == 5 ? &program : NULL;
-}
-static void v86gl_set_error(unsigned int value) { error = value; }
-static unsigned int gl_string_length(const char* text) { return (unsigned int)strlen(text); }
-static void* GetProcessHeap(void) { return NULL; }
-static void* HeapAlloc(void* heap, int flags, size_t size) { (void)heap; (void)flags; return malloc(size); }
-static void HeapFree(void* heap, int flags, void* data) { (void)heap; (void)flags; free(data); }
-static uint8_t* alloc_payload(uint32_t size) { return malloc(size); }
-static void emit_gl_call(uint16_t opcode, const void* payload, uint32_t size) {
-    assert(payload && size >= 4);
-    assert(opcode == GLFN_SHADER_SOURCE || opcode == GLFN_COMPILE_SHADER || opcode == GLFN_LINK_PROGRAM || opcode == GLFN_VALIDATE_PROGRAM);
-    ++emitted;
-}
-static int emit_query_object_iv(uint32_t kind, GLuint name, uint32_t pname, GLint* status) {
-    (void)name; (void)pname; assert(kind == V86GL_OBJECT_KIND_SHADER || kind == V86GL_OBJECT_KIND_PROGRAM);
-    *status = query_status; return 1;
-}
-static void invalidate_program_locations(GLuint name) { assert(name == 5); ++invalidated; }
-${source.slice(begin, end)}
-int main(void) {
-    const char* text = "bad source";
-    shader.compiled = GL_TRUE;
-    glShaderSource(1, 1, &text, NULL);
-    assert(shader.compiled && shader.source_length == 10 && !strcmp(shader.source, text));
-    query_status = 0; glCompileShader(1); assert(!shader.compiled);
-    program.linked = program.has_executable = program.validated = GL_TRUE;
-    glLinkProgram(5);
-    assert(!program.linked && program.has_executable && !program.validated && !invalidated);
-    query_status = 1; glLinkProgram(5);
-    assert(program.linked && program.has_executable && !program.validated && invalidated == 1);
-    glValidateProgram(5); assert(program.validated);
-    query_status = 0; glLinkProgram(5);
-    assert(!program.linked && !program.validated && program.has_executable && invalidated == 1);
-    assert(!error && emitted == 6);
-    free(shader.source); return 0;
-}
-`;
-    fs.writeFileSync(path.join(dir, "test.c"), code);
-    execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-I",
-        path.join(__dirname, "../openglproxy"), path.join(dir, "test.c"), "-o", path.join(dir, "test")]);
-    execFileSync(path.join(dir, "test"));
-    console.log("gl_glsl_relink_abi_test: actual C source/compile/link functions retain compiled code and invalidate locations only after successful relinks (passed)");
-} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+#define ZeroMemory(p,n) memset(p,0,n)
+${Object.entries(GL).filter(([,v])=>Number.isInteger(v)&&v>=0).map(([n,v])=>"#define GL_"+n+" 0x"+v.toString(16)+"u").join("\n")}
+${transport}
+static void* GetProcessHeap(void){return NULL;}
+static void* HeapAlloc(void* heap,int flags,size_t size){(void)heap;(void)flags;return malloc(size);}
+static void HeapFree(void* heap,int flags,void* pointer){(void)heap;(void)flags;free(pointer);}
+static uint8_t* alloc_payload(uint32_t size){return malloc(size);}
+static uint32_t gl_string_length(const GLchar* text){return (uint32_t)strlen(text);}
+static uint32_t g_dma_size;
+static BOOL wait_for_host_status(const uint8_t* status,const char* what){(void)what;return read_u32le(status)==1;}
+${body(source,"emit_query_object_iv","static int ")}
+${body(source,"emit_query_object_log","static int ")}
+${["emit_query_typed","emit_query_parameter_index_count"].map(n=>body(source,n,"static int ")).join("\n")}
+${["glShaderSource","glCompileShader","glLinkProgram","glUseProgram","glValidateProgram","glGetProgramiv","glGetShaderiv","glGetShaderSource","glGetAttachedShaders"].map(n=>body(source,n,"void APIENTRY ")).join("\n")}
+int main(void){
+ const char* vertex="void main(){gl_Position=gl_Vertex;}";const char* fragment="uniform float value;void main(){gl_FragColor=vec4(value);}";GLint status=-1;
+ uint32_t create[2]={2,GL_VERTEX_SHADER};emit_gl_call(GLFN_CREATE_SHADER,create,8);create[0]=3;create[1]=GL_FRAGMENT_SHADER;emit_gl_call(GLFN_CREATE_SHADER,create,8);
+ uint32_t program=1;emit_gl_call(GLFN_CREATE_PROGRAM,&program,4);uint32_t pair[2]={1,2};emit_gl_call(GLFN_ATTACH_SHADER,pair,8);pair[1]=3;emit_gl_call(GLFN_ATTACH_SHADER,pair,8);
+ glShaderSource(2,1,&vertex,NULL);glShaderSource(3,1,&fragment,NULL);glCompileShader(2);glCompileShader(3);glLinkProgram(1);
+ glGetProgramiv(1,GL_LINK_STATUS,&status);assert(status==1);glUseProgram(1);
+ const char* invalid="void main(){unknown;}";glShaderSource(3,1,&invalid,NULL);glCompileShader(3);glLinkProgram(1);
+ glGetProgramiv(1,GL_LINK_STATUS,&status);assert(status==0);glGetShaderiv(3,GL_COMPILE_STATUS,&status);assert(status==0);
+ glShaderSource(3,1,&fragment,NULL);glCompileShader(3);glLinkProgram(1);glGetProgramiv(1,GL_LINK_STATUS,&status);assert(status==1);
+ char text[256];GLsizei length=-1;glGetShaderSource(3,sizeof(text),&length,text);assert(length==(GLsizei)strlen(fragment)&&!strcmp(text,fragment));
+ for(uint32_t i=4;i<304;i++){create[0]=i;create[1]=GL_VERTEX_SHADER;emit_gl_call(GLFN_CREATE_SHADER,create,8);pair[0]=1;pair[1]=i;emit_gl_call(GLFN_ATTACH_SHADER,pair,8);}
+ GLuint attached[305];memset(attached,0xA5,sizeof(attached));GLsizei count=-1;glGetAttachedShaders(1,305,&count,attached);assert(count==302&&attached[0]==2&&attached[301]==303&&attached[302]==0xA5A5A5A5u);
+ const char nul_source[]={'a',0,'b'};const char* nul=nul_source;GLint size=3;glShaderSource(2,1,&nul,&size);glGetShaderSource(2,sizeof(text),&length,text);assert(length==3&&!memcmp(text,nul_source,3)&&!text[3]);
+ return 0;
+}`;
+run(code,(cpu,gpu)=>{assert.equal(cpu.current.group.programs.get(1).linked.ok,true);assert.equal(gpu.current.shareGroup.programs.get(1).linked,true);},(cpu,gpu)=>{cpu.setCapabilities(gpu.capabilities());cpu.setGlslang(new Glslang(fs.readFileSync(path.join(__dirname,"../../../v86/bios/glslang.wasm"))));})
+ .then(()=>console.log("PASS actual C GLSL compiler/link commands and CPU status across failed relink and recovery in both transports"))
+ .catch(error=>{console.error(error);process.exitCode=1;});

@@ -4,7 +4,7 @@ const { body, transport, run, GL } = require("./gl_cpu_abi_harness.js");
 const { testPath } = require("./host_paths.js");
 const native = require(testPath("gl_conformance/client_arrays_reference.json")).cases;
 const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
-const typed = source.slice(source.indexOf("static int emit_query_typed("), source.indexOf("static GLint query_limit_or_default"));
+const typed = source.slice(source.indexOf("static int emit_query_typed("), source.indexOf("static int emit_query_error"));
 const names = ["glVertexPointer", "glNormalPointer", "glColorPointer", "glIndexPointer", "glEdgeFlagPointer", "glTexCoordPointer", "glSecondaryColorPointerEXT", "glFogCoordPointer",
     "glVertexAttribPointer", "glEnableVertexAttribArray", "glDisableVertexAttribArray", "glVertexAttrib4f", "glGetVertexAttribfv", "glGetVertexAttribiv", "glGetVertexAttribdv", "glGetVertexAttribPointerv", "glGetPointerv", "glInterleavedArrays"];
 const code = `
@@ -30,7 +30,7 @@ typedef struct { GLint size; GLenum type; GLsizei stride; const GLvoid* pointer;
 typedef ClientArrayState GenericAttribState;
 static ClientArrayState g_vertex_array,g_normal_array,g_color_array,g_index_array,g_edge_flag_array,g_secondary_color_array,g_fog_coord_array,g_texcoord_arrays[8];
 static GenericAttribState g_generic_attribs[16]; static GLuint g_array_buffer_binding, client_unit;
-static GLvoid* g_feedback_buffer; static GLvoid* g_selection_buffer;
+
 static unsigned int client_active_texture_index(void) { return client_unit; }
 typedef V86GLRecordVertexPointerVbo VBOPointerPayload;
 typedef V86GLRecordVertexAttribPointerVbo VBOAttribPointerPayload;

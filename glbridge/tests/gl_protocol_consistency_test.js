@@ -130,7 +130,6 @@ const GUEST_LAYOUTS = [
     ["emit_query_active", "QUERY_ACTIVE"],
     ["emit_query_location", "QUERY_LOCATION"],
     ["emit_query_uniform", "QUERY_UNIFORM"],
-    ["emit_query_integer", "QUERY_INTEGER"],
     ["emit_query_error", "QUERY_ERROR"],
     ["emit_query_gl_string", "QUERY_GL_STRING"],
     ["emit_check_framebuffer_status", "CHECK_FRAMEBUFFER_STATUS"],

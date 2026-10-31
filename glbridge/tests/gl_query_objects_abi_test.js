@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path");
 const { body, transport, run, GL } = require("./gl_cpu_abi_harness.js");
 const source = fs.readFileSync(path.join(__dirname, "../openglproxy/opengl32_proxy.c"), "utf8");
-const typed = source.slice(source.indexOf("static int emit_query_typed("), source.indexOf("static GLint query_limit_or_default"));
+const typed = source.slice(source.indexOf("static int emit_query_typed("), source.indexOf("static int emit_query_error"));
 const code = `
 #include <assert.h>
 #include <stdint.h>
