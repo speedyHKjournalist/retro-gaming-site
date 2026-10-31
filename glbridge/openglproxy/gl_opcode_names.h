@@ -3,7 +3,7 @@
 #ifndef V86GL_OPCODE_NAMES_H
 #define V86GL_OPCODE_NAMES_H
 
-#define V86GL_OPCODE_NAME_COUNT 251u
+#define V86GL_OPCODE_NAME_COUNT 252u
 static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [0] = "UNKNOWN",
     [1] = "VIEWPORT",
@@ -256,6 +256,7 @@ static const char *const g_v86gl_opcode_names[V86GL_OPCODE_NAME_COUNT] = {
     [248] = "EVAL_MESH",
     [249] = "QUERY_EVALUATOR",
     [250] = "RESOLVED_EVAL_VERTEX",
+    [251] = "RESOLVED_PROGRAM_INTERFACE",
 };
 
 static const char *v86gl_opcode_name(unsigned int opcode)

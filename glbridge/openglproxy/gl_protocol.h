@@ -355,9 +355,10 @@ enum {
     GLFN_EVAL_COORD = 247,
     GLFN_EVAL_MESH = 248,
     GLFN_QUERY_EVALUATOR = 249,
-    GLFN_RESOLVED_EVAL_VERTEX = 250
+    GLFN_RESOLVED_EVAL_VERTEX = 250,
+    GLFN_RESOLVED_PROGRAM_INTERFACE = 251
 };
-#define V86GL_OPCODE_COUNT 250u
+#define V86GL_OPCODE_COUNT 251u
 
 /* The fixed header of each hand-written record; its data follows it */
 typedef struct V86GLRecordGenTextures {
@@ -1047,6 +1048,14 @@ typedef struct V86GLRecordResolvedEvalVertex {
     float normal[4];
     float texcoord[4];
 } V86GLRecordResolvedEvalVertex;
+typedef struct V86GLRecordResolvedProgramInterface {
+    uint32_t program;
+    uint32_t object_id;
+    uint32_t link_generation;
+    uint32_t entry_count;
+    uint32_t data_size;
+    uint32_t reserved;
+} V86GLRecordResolvedProgramInterface;
 typedef struct V86GLRecordMakeCurrent {
     uint32_t hwnd;
     int32_t x;
@@ -1123,6 +1132,13 @@ typedef struct V86GLRecordQueryObjectBatchEntry {
     uint32_t available;
     uint32_t result;
 } V86GLRecordQueryObjectBatchEntry;
+typedef struct V86GLRecordProgramInterfaceEntry {
+    uint32_t location_kind;
+    int32_t location;
+    uint32_t value_type;
+    int32_t value_count;
+    uint32_t name_length;
+} V86GLRecordProgramInterfaceEntry;
 
 /* The layout gl_protocol.js describes: every header's size and every field's offset */
 typedef char V86GLRecordGenTexturesSize[sizeof(V86GLRecordGenTextures) == 4 ? 1 : -1];
@@ -1711,6 +1727,13 @@ typedef char V86GLRecordResolvedEvalVertex_position[offsetof(V86GLRecordResolved
 typedef char V86GLRecordResolvedEvalVertex_color[offsetof(V86GLRecordResolvedEvalVertex, color) == 16 ? 1 : -1];
 typedef char V86GLRecordResolvedEvalVertex_normal[offsetof(V86GLRecordResolvedEvalVertex, normal) == 32 ? 1 : -1];
 typedef char V86GLRecordResolvedEvalVertex_texcoord[offsetof(V86GLRecordResolvedEvalVertex, texcoord) == 48 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterfaceSize[sizeof(V86GLRecordResolvedProgramInterface) == 24 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_program[offsetof(V86GLRecordResolvedProgramInterface, program) == 0 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_object_id[offsetof(V86GLRecordResolvedProgramInterface, object_id) == 4 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_link_generation[offsetof(V86GLRecordResolvedProgramInterface, link_generation) == 8 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_entry_count[offsetof(V86GLRecordResolvedProgramInterface, entry_count) == 12 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_data_size[offsetof(V86GLRecordResolvedProgramInterface, data_size) == 16 ? 1 : -1];
+typedef char V86GLRecordResolvedProgramInterface_reserved[offsetof(V86GLRecordResolvedProgramInterface, reserved) == 20 ? 1 : -1];
 typedef char V86GLRecordMakeCurrentSize[sizeof(V86GLRecordMakeCurrent) == 32 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_hwnd[offsetof(V86GLRecordMakeCurrent, hwnd) == 0 ? 1 : -1];
 typedef char V86GLRecordMakeCurrent_x[offsetof(V86GLRecordMakeCurrent, x) == 4 ? 1 : -1];
@@ -1776,5 +1799,11 @@ typedef char V86GLRecordQueryObjectBatchEntrySize[sizeof(V86GLRecordQueryObjectB
 typedef char V86GLRecordQueryObjectBatchEntry_name[offsetof(V86GLRecordQueryObjectBatchEntry, name) == 0 ? 1 : -1];
 typedef char V86GLRecordQueryObjectBatchEntry_available[offsetof(V86GLRecordQueryObjectBatchEntry, available) == 4 ? 1 : -1];
 typedef char V86GLRecordQueryObjectBatchEntry_result[offsetof(V86GLRecordQueryObjectBatchEntry, result) == 8 ? 1 : -1];
+typedef char V86GLRecordProgramInterfaceEntrySize[sizeof(V86GLRecordProgramInterfaceEntry) == 20 ? 1 : -1];
+typedef char V86GLRecordProgramInterfaceEntry_location_kind[offsetof(V86GLRecordProgramInterfaceEntry, location_kind) == 0 ? 1 : -1];
+typedef char V86GLRecordProgramInterfaceEntry_location[offsetof(V86GLRecordProgramInterfaceEntry, location) == 4 ? 1 : -1];
+typedef char V86GLRecordProgramInterfaceEntry_value_type[offsetof(V86GLRecordProgramInterfaceEntry, value_type) == 8 ? 1 : -1];
+typedef char V86GLRecordProgramInterfaceEntry_value_count[offsetof(V86GLRecordProgramInterfaceEntry, value_count) == 12 ? 1 : -1];
+typedef char V86GLRecordProgramInterfaceEntry_name_length[offsetof(V86GLRecordProgramInterfaceEntry, name_length) == 16 ? 1 : -1];
 
 #endif

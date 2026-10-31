@@ -84,6 +84,13 @@ and live GPU contents directly, including texture mip/layer data, depth/stencil
 and individual MSAA samples. GL drawing history is retired from new checkpoints;
 the guest acceptance runs remain in the host plan's phases C/G.
 
+Internal opcode 251 carries the CPU-resolved program identity, installed link
+generation and complete attribute/uniform interface after a successful link.
+The renderer adopts every location immediately, including array elements, so
+its mappings do not depend on later guest queries. Guest-supplied interfaces
+and CPU link-failure records are rejected. The generated headers include this
+layout; the DLL does not encode these internal records.
+
 The CPU now validates the migrated raster/pixel/matrix commands before
 changing state. Rejected calls are tagged in the opcode only, preserving
 record sizes and inline response addresses; the page preserves their GL
