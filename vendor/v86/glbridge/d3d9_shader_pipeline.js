@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
+globalThis.V86GL_BUILD_REVISION = "6a5eb14d73549ecd56fe";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -458,6 +458,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // compile option for the same reason the LOD bias does: it changes
             // the WGSL, so it belongs in the shader variant key.
             this.samplerMirrorOnce = this.options.samplerMirrorOnce || null;
+            // D3DRS_SHADEMODE's D3DSHADE_FLAT: the two colour varyings take
+            // the provoking vertex's value, with shaders as without them (as
+            // wined3d's flatshading). A vertex output and the fragment input
+            // at one location must agree, so the caller passes the same flag
+            // to both stages, as the fixed-function ones get it, and keys the
+            // variant on it.
+            this.flatShading = !!this.options.flatShading;
             this.writtenVaryings = new Set();
             this.usesAddress = false;
             this.usesLoopCounter = false;
@@ -482,6 +489,9 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             this.matrixRows = [];
             this.psColorInputs = new Set();    // ps v# registers touched
             this.colorOutputs = new Set();
+            // per destination component, the predicate a predicated
+            // instruction's store() is gated by
+            this.predicateGate = null;
             this.controlDepth = 0;             // >0 => inside if/loop
             this.nonUniformDepth = 0;          // >0 => implicit-LOD sampling illegal
             this.nonUniformFrames = [];        // open non-uniform regions
@@ -492,6 +502,17 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
 
         emit(text) {
             this.lines.push(" ".repeat(this.indent) + text);
+        }
+
+        // One varying of the inter-stage struct, the same in both stages:
+        // with flat shading the colour slots are flat (texture coordinates
+        // and fog keep interpolating, as in D3D9)
+        varyingDeclaration(slot) {
+            const flat = this.flatShading &&
+                (slot === VARYING_COLOR0 || slot === VARYING_COLOR1);
+            return "    @location(" + slot + ")" +
+                (flat ? " @interpolate(flat)" : "") +
+                " varying" + slot + ": vec4<f32>,";
         }
 
         fresh(prefix) {
@@ -701,7 +722,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return "o_depthv";
             case REG_PREDICATE:
                 this.usesPredicate = true;
-                return "p0f";
+                return "p0";
             default:
                 throw new Error("unsupported destination register type " + dest.type);
             }
@@ -729,14 +750,17 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     value = "clamp(" + value + ", vec4<f32>(0.0), vec4<f32>(1.0))";
             }
             this.emit("let " + name + " = " + value + ";");
-            if (dest.writeMask === 0xf) {
+            const gate = this.predicateGate;
+            if (dest.writeMask === 0xf && !gate) {
                 this.emit(target + " = " + name + ";");
                 return;
             }
             for (let i = 0; i < 4; ++i) {
                 if (!(dest.writeMask & (1 << i))) continue;
                 const component = WRITEMASK_NAMES[i];
-                this.emit(target + "." + component + " = " + name + "." + component + ";");
+                this.emit(target + "." + component + " = " + (gate
+                    ? "select(" + target + "." + component + ", " + name + "." + component + ", " + gate[i] + ")"
+                    : name + "." + component) + ";");
             }
         }
 
@@ -880,11 +904,27 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             const dest = instruction.dest;
             const sources = instruction.sources;
 
+            if (instruction.predicated && instruction.predicate && dest &&
+                    opcode !== OP.TEXKILL) {
+                // `(p0) mov r0, r1` -- predication gates each destination
+                // component by its own predicate component (the predicate's
+                // swizzle picks which), so the instruction runs and store()
+                // keeps the old value where the gate is false
+                this.usesPredicate = true;
+                const predicate = instruction.predicate;
+                const not = predicate.modifier === SRCMOD_NOT ? "!" : "";
+                this.predicateGate = [0, 1, 2, 3].map(i =>
+                    not + "p0." + SWIZZLE_CHARS[(predicate.swizzle >> (i * 2)) & 0x3]);
+                try {
+                    this.instruction(Object.assign({}, instruction, { predicated: false }));
+                } finally {
+                    this.predicateGate = null;
+                }
+                return;
+            }
             if (instruction.predicated && instruction.predicate) {
-                // `(p0.x) mov r0, r1` -- run the instruction, then keep the
-                // old value where the predicate is false. Doing it as a
-                // guarded block is simpler and matches the semantics for
-                // every opcode, including texture reads.
+                // texkill (whose operand is not written) runs under the
+                // predicate's first component
                 this.usesPredicate = true;
                 const predicate = instruction.predicate;
                 const component = SWIZZLE_CHARS[predicate.swizzle & 0x3];
@@ -1812,6 +1852,11 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
 
             out.push("// translated from " + kind + " shader model " +
                 this.major + "." + this.minor);
+            // D3D leaves a derivative in non-uniform control flow undefined,
+            // and SM3 shaders sample inside data-dependent branches and loops
+            // all the time; Tint rejects those modules unless this is off
+            // (naga does not check it at all)
+            out.push("diagnostic(off, derivative_uniformity);");
             out.push("struct D9Constants {");
             out.push("    f: array<vec4<f32>, " + floatCount + ">,");
             out.push("    i: array<vec4<i32>, " + intCount + ">,");
@@ -1883,7 +1928,6 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             if (this.usesLoopCounter) out.push("var<private> aL: i32 = 0;");
             if (this.usesPredicate) {
                 out.push("var<private> p0: vec4<bool> = vec4<bool>(false);");
-                out.push("var<private> p0f: vec4<bool> = vec4<bool>(false);");
             }
 
             if (kind === "vertex") {
@@ -1974,7 +2018,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             out.push("struct D9VertexOutput {");
             out.push("    @builtin(position) position: vec4<f32>,");
             for (let slot = 0; slot < VARYING_COUNT; ++slot)
-                out.push("    @location(" + slot + ") varying" + slot + ": vec4<f32>,");
+                out.push(this.varyingDeclaration(slot));
             const clipPlaneCount = this.options.clipPlaneCount || 0;
             for (let group = 0; group < Math.ceil(clipPlaneCount / 4); ++group)
                 out.push("    @location(" + (VARYING_COUNT + group) +
@@ -2101,7 +2145,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             out.push("struct D9PixelInput {");
             out.push("    @builtin(position) position: vec4<f32>,");
             for (let slot = 0; slot < VARYING_COUNT; ++slot)
-                out.push("    @location(" + slot + ") varying" + slot + ": vec4<f32>,");
+                out.push(this.varyingDeclaration(slot));
             const clipPlaneCount = this.options.clipPlaneCount || 0;
             for (let group = 0; group < Math.ceil(clipPlaneCount / 4); ++group)
                 out.push("    @location(" + (VARYING_COUNT + group) +

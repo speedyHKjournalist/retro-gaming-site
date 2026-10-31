@@ -43,7 +43,7 @@ build_dll() {
     # not a bug.
     "$compiler" -shared -std=gnu99 -Os -s -nostdlib "$@" \
         -Wall -Wextra -Wno-cast-function-type -Werror \
-        -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at \
+        -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at -Wl,--no-insert-timestamp \
         -o "$output" \
         "$script_dir/opengl32_proxy.c" "$script_dir/opengl32.def" \
         -luser32 -lgdi32 -lkernel32

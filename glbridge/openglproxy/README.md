@@ -388,3 +388,12 @@ Outline fonts remain explicitly unsupported. RGBA formats have no layer palette,
 so palette calls fail rather than returning fabricated entries or success.
 The XP probe compares a Unicode glyph against GDI pixels and checks application
 window chains before allowing Cube 2 to launch.
+
+### F6 installed images
+
+`../deployments/opengl-webgpu-F6.json` records the exact source, shipping and
+installed-image hashes plus original-image backup names. XP, Cube 2 and Warcraft
+III local images contain the current driver/proxy. The XP system OpenGL files
+are protected and remain unchanged. The old and new Cube DLLs are both 145408
+bytes: use hashes and the XP GL_VERSION/probe result, never file size alone.
+Local branch assets and images are prepared; no remote publication is implied.
