@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "6a5eb14d73549ecd56fe";
+globalThis.V86GL_BUILD_REVISION = "8523858ab36865e264c6";
 // The OpenGL protocol, once (docs/opengl-webgpu-plan.md C1): the VGL2 records
 // openglproxy's opengl32.dll writes and gl_executor.js reads -- every opcode,
 // the control records, the flat argument lists, the fixed headers of the
@@ -623,7 +623,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5eb14d73549ecd56fe";
 // openglproxy/opengl32_proxy.c's #defines; the wire opcodes and control
 // records come from gl_protocol.js.
 //
-// See docs/opengl-webgpu-implementation-plan.zh-CN.md section 6.1.
+// See docs/opengl-webgpu-plan.md C1.
 
 (function(global) {
     "use strict";
@@ -8054,7 +8054,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5eb14d73549ecd56fe";
 // 16-float copy. A WGSL mat3x3 in the uniform address space pads each column
 // to 16 bytes, hence 12 floats for gl_NormalMatrix.
 //
-// See docs/opengl-webgpu-implementation-plan.zh-CN.md sections 4.12 and 8.2.
+// See docs/glbridge.md (CPU ownership and snapshot resources).
 
 (function(global) {
     "use strict";
@@ -8645,7 +8645,7 @@ fn gl_point_position(clip:vec4<f32>,size:f32,corner:vec2<f32>,viewport:vec4<f32>
 // exist, in which slots, packed how -- is only decidable once both stages are
 // known. That split matches GL's own semantics exactly.
 //
-// See docs/opengl-webgpu-implementation-plan.zh-CN.md chapter 8.
+// See docs/opengl-webgpu-plan.md E1/E3.
 
 (function(global) {
     "use strict";
@@ -14355,7 +14355,7 @@ fn gl_point_position(clip:vec4<f32>,size:f32,corner:vec2<f32>,viewport:vec4<f32>
 // built-ins use, so an ARB program and a fixed-function draw see one set of
 // matrices rather than two that can drift.
 //
-// See docs/opengl-webgpu-implementation-plan.zh-CN.md chapter 9.
+// See docs/opengl-webgpu-plan.md E2.
 
 (function(global) {
     "use strict";
