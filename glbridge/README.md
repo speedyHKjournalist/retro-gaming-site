@@ -2,7 +2,8 @@
 
 The host JavaScript implementations now live in the sibling v86 repository,
 under `src/browser/glbridge/`. DLL/SYS sources, binaries, guest samples and
-protocol/ABI tests remain here. The renderer protocol is unchanged. The transport now uses custom virtio and
+protocol/ABI tests remain here. Host and guest use matching headers generated
+from the core's protocol schema. The transport uses custom virtio and
 requires the updated driver; see [driver build and deployment](v86gl_driver/README.md).
 
 After changing v86 or its graphics runtime, build and refresh the site:
@@ -25,6 +26,16 @@ Host tests now run with `make -C ../v86 test-glbridge`. Guest tests remain
 `node glbridge/tests/<name>_test.js`; cross-repository tests default to the
 sibling v86 checkout or use the `V86_ROOT` environment variable. Use matched
 v86/Guest commits when publishing a release.
+
+The OpenGL C–G migration and application acceptance are complete on `refactor`.
+The [acceptance record](../../v86/docs/opengl-webgpu-acceptance.md) covers five
+programs in both CPU modes, exact full-VM cold restore, continued frames,
+process switching and paired F6/candidate measurements. It records the two
+GLView shader-resource corrections, the separate Tremulous flare-map fixture
+and the non-repeatable first worker timing difference. Guest/image hashes
+remain in the [F6 deployment manifest](deployments/opengl-webgpu-F6.json);
+the final host/matrix versions are in the [G manifest](deployments/opengl-webgpu-G.json).
+These are local branch assets and local installed images.
 
 The page runs the CPU in v86's worker (`cpu_worker: true`), selects the display
 hardware with `graphics_adapter: "bochs_vga"`, turns the proxy on with
