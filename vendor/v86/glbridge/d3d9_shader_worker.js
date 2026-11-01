@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "3ff511520f2d880e9f70";
+globalThis.V86GL_BUILD_REVISION = "52bcf2c6e309bca7e8ab";
 // M6 shader-bytecode translation worker. GPUShaderModule creation remains on
 // the executor thread (WebGPU objects are device-owned), while parsing and
 // WGSL generation happen here so a large effect set does not block input or
