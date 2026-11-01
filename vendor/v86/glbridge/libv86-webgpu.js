@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "26ad13c413cf4e98789a";
+globalThis.V86GL_BUILD_REVISION = "081f4cdbe432d69ff6b7";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -4895,7 +4895,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             cursor: { texture: null, view: null, width: 0, height: 0,
                 hotspotX: 0, hotspotY: 0, x: 0, y: 0, visible: false,
                 pipeline: null, sampler: null, uniform: null },
-            lastDraws: { fixed: null, programmable: null },
+            lastDraws: null,
             uploads: null,
             uniformRingChunks: [],
             uniformStaging: [],
@@ -6434,47 +6434,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 // Only level 0 is the app's on an autogen texture, so only level 0
                 // can invalidate what the driver generated from it.
                 this.markTextureSubresourceWritten(resource, level, z);
-                // Retain a CPU copy of small top-level images. This is the one
-                // piece of evidence that separates "the texture data we uploaded
-                // is wrong" from "the data is right but we sample it wrong", and
-                // guessing between those two has already cost several rounds.
-                // Bounded to sprite-sized textures so it cannot grow without
-                // limit -- cursors and UI glyphs are exactly this size.
-                // 64x64 was too small a net: a game's cursor and UI glyphs
-                // usually live in a larger atlas, so the one texture worth looking
-                // at was the one never captured. 256x256 covers those at a bounded
-                // total cost (previewBudget below).
-                if (!compressed && (resource.gpuFormat === "rgba8unorm" || resource.gpuFormat === "bgra8unorm") &&
-                        resource.textureType !== "3d" && depth === 1 &&
-                        level === 0 && z === 0 && width <= 256 &&
-                        height <= 256 && x === 0 && y === 0) {
-                    const previewBytes = width * height * 4;
-                    if (!resource.preview) {
-                        if (this.previewBudget === undefined)
-                            this.previewBudget = 16 * 1024 * 1024;
-                        if (this.previewBudget >= previewBytes) {
-                            this.previewBudget -= previewBytes;
-                            resource.preview = {
-                                width, height, rgba: payload.slice()
-                            };
-                        } else {
-                            // The preview is diagnostics only. Returning here used
-                            // to drop the real queue.writeTexture below once War3
-                            // had loaded 16 MiB of menu atlases. Textures first
-                            // touched in battle (fog/minimap/command icons/software
-                            // cursor) consequently stayed black or transparent.
-                            ++this.stats.texturePreviewsSkipped;
-                        }
-                    } else {
-                        resource.preview = { width, height, rgba: payload.slice() };
-                    }
-                    if (resource.preview && resource.gpuFormat === "bgra8unorm") {
-                        const rgba = resource.preview.rgba;
-                        for (let at = 0; at < rgba.length; at += 4) {
-                            const b = rgba[at];rgba[at] = rgba[at + 2];rgba[at + 2] = b;
-                        }
-                    }
-                }
+                if (this.diagnosticsEnabled)
+                    this.captureTexturePreview(resource, payload, { compressed, width, height, depth, level, x, y, z });
                 // rowsPerImage counts *block* rows for a block-compressed format,
                 // not pixel rows -- BCn blocks are 4x4, so a DXT upload that
                 // passes the pixel height describes an image four times taller
@@ -9640,7 +9601,11 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                         .map(sampler => sampler.index + ":" + sampler.type + ":" +
                             sampler.bindingType).join(",");
                 let pipeline = this.pipelineCache.get(key);
-                if (pipeline) { ++this.stats.pipelineHits; return pipeline; }
+                if (pipeline) {
+                    if (this.diagnosticsEnabled && !pipeline._d9wgDiagnostic)
+                        this.capturePipelineDiagnostic(pipeline, program, topology, stripIndexFormat, pipelineState);
+                    ++this.stats.pipelineHits;return pipeline;
+                }
 
                 // Binding 0 is the vertex stage's constant buffer (or the
                 // fixed-function transform block, which occupies the same slot),
@@ -9798,28 +9763,8 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                 });
                 pipeline._bindGroupLayout = bindGroupLayout;
                 pipeline._d9wgId = this.objectId(pipeline);
-                // Keep structured diagnostic data beside the cached object. The
-                // old dumpPipelineStates() attempted to recover it by splitting
-                // the cache key on "|", but fixed-function fragment keys use the
-                // same character between texture stages, shifting every field and
-                // producing a null/misattributed state exactly when multi-texture
-                // debugging mattered most.
-                pipeline._d9wgDiagnostic = {
-                    vertex: program.vertexKey,
-                    fragment: program.fragmentKey,
-                    topology,
-                    stripIndexFormat: stripIndexFormat || null,
-                    vertexBuffers: program.vertexBuffers.map(layout => ({
-                        stream: layout.stream,
-                        arrayStride: layout.arrayStride,
-                        stepMode: layout.stepMode || "vertex",
-                        attributes: layout.attributes.map(attribute =>
-                            ({ ...attribute })),
-                    })),
-                    samplers: program.samplerIndices.slice(),
-                    state: JSON.parse(JSON.stringify(pipelineState)),
-                };
-                pipeline._d9wgDrawCount = 0;
+                if (this.diagnosticsEnabled)
+                    this.capturePipelineDiagnostic(pipeline, program, topology, stripIndexFormat, pipelineState);
                 ++this.stats.pipelineCreations;
                 this.pipelineCache.set(key, pipeline);
                 return pipeline;
@@ -10038,17 +9983,9 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                 const attachmentCount = Math.max(1, Math.min(4,
                     (targets.colors && targets.colors.length) || 1));
                 ++this.mrtAttachmentDraws[attachmentCount];
-                pipeline._d9wgDrawCount = (pipeline._d9wgDrawCount || 0) + 1;
-                const drawPath = (state.vertexShaderHandle ||
-                    state.pixelShaderHandle) ? "programmable" : "fixed";
-                // References are retained, not expanded, on the hot draw path.
-                // blackScreenReport() serialises the two most recent paths only
-                // when explicitly requested, avoiding per-draw diagnostic copies
-                // during a real benchmark run.
-                this.lastDraws[drawPath] = {
-                    which, state, elements, geometry, program, pipelineState,
-                    targets, pipeline,
-                };
+                if (this.diagnosticsEnabled) this.captureDrawDiagnostic({
+                    which, state, elements, geometry, program, pipelineState, targets, pipeline,
+                });
                 frame.record({
                     kind: "draw", pipeline, bindGroup: binding.group,
                     dynamicOffsets: binding.dynamicOffsets, targets,
@@ -11590,6 +11527,12 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
         } catch (error) { return null; }
     })();
 
+    const DEFAULT_DIAGNOSTICS_URL = DEFAULT_SHADER_WORKER_URL &&
+        new URL("d9wg_diagnostics.js" + new URL(DEFAULT_SHADER_WORKER_URL).search,
+            DEFAULT_SHADER_WORKER_URL).href;
+    const DIAGNOSTIC_REPORTS = ["dumpSmallTextures","dumpShaders","dumpPipelineStates","blackScreenReport"];
+    let diagnosticsLoad = null;
+
     const D9WG_MIN_PAYLOAD = wire.MIN_PAYLOAD;
     const D9WG_DMA_BYTES = 16 * 1024 * 1024;
     const D9WG_RESPONSE_REGION_BYTES = D9WG.C.D9WG_RESPONSE_REGION_BYTES;
@@ -12626,68 +12569,21 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.hostErrors = [];
             // Why the last failed batch failed (diagnostics; nothing reads it)
             this.lastBatchFailure = null;
-            // Console-togglable diagnostics, e.g.
-            //   v86gl.d3d9Executor.debug.forceClearColor = {r:1,g:0,b:1,a:1}
-            // These exist to split "the canvas is not on screen" from "the
-            // canvas is on screen but the drawn content is black", which the
-            // stats alone cannot distinguish.
+            // Flags remain cheap and directly console-togglable. Heavy capture
+            // and report code is loaded only by enableDiagnostics().
             this.debug = {
-                forceClearColor: null,  // {r,g,b,a} overrides every Clear
-                disableCull: false,     // force cullMode "none"
-                disableDepthTest: false,// force depthCompare "always"
-                shaderMode: null,       // "solid"|"color"|"texture"|"uv"
-                // Replaces *both* fixed-function and translated pixel shaders
-                // with an opaque green output. It also disables blend, alpha,
-                // depth/stencil rejection and forces RGBA writes, leaving only
-                // vertex fetch/transform, viewport and scissor able to hide a
-                // draw. This is the definitive geometry-vs-shading probe.
-                forceSolidAllDraws: false,
-                // Clamps every sampler to the top mip level. If a texture
-                // looks wrong because levels below 0 were never uploaded,
-                // this makes it correct immediately -- which is the cheapest
-                // way to confirm or rule out that cause.
-                forceMipLevel0: false,
-                // Suspicious-but-valid D3D9 state is counted in getStats()
-                // unconditionally. Detailed per-state console warnings are
-                // opt-in: real games deliberately reuse declarations and
-                // fixed-function state in ways that trip these heuristics,
-                // so they are debugging evidence rather than runtime errors.
-                warnOnSuspiciousDraws: false,
-                // Paints magenta over any fixed-function draw whose cascade
-                // samples a stage with no live texture -- the draws that get
-                // the 1x1 white fallback. A counter says how many there are;
-                // this says *which*, which is the question a flat silhouette
-                // actually poses: is the model I am looking at one of them?
-                // Everything else keeps rendering normally, so the answer is
-                // one screenshot rather than a bisection.
-                highlightMissingTexture: false,
-                // The same question for the other cause of a flat model:
-                // paints cyan over any draw whose stage reads a coordinate
-                // set its declaration does not carry. Magenta and cyan
-                // together answer "which of the two is this model" in one
-                // screenshot, which is the whole difficulty -- both render as
-                // one flat colour and neither fails.
-                highlightMissingCoordSet: false,
-                // Drops every draw that has a translated shader bound on
-                // either stage. shaderMode only rewrites the fixed-function
-                // pixel cascade, so a model rendered through the programmable
-                // path looks *identical* under every debug mode -- which reads
-                // as "the debug mode did nothing" rather than as "you are
-                // looking at the wrong pipeline". Making those draws vanish
-                // answers which path a model is on in one screenshot.
-                skipProgrammableDraws: false,
-                // Routes fixed-function texture stage n to varying TEXCOORD n
-                // (D3D9's rule when a vertex shader is bound) instead of to
-                // the varying D3DTSS_TEXCOORDINDEX names. See coordStagePlan
-                // for why the two disagree and which one D3D9 documents.
+                forceClearColor: null, disableCull: false, disableDepthTest: false,
+                shaderMode: null, forceSolidAllDraws: false, forceMipLevel0: false,
+                warnOnSuspiciousDraws: false, highlightMissingTexture: false,
+                highlightMissingCoordSet: false, skipProgrammableDraws: false,
                 texcoordFromStageIndex: true,
             };
-            this.debug.dumpSmallTextures = o => this.dumpSmallTextures(o);
-            this.debug.dumpShaders = o => this.dumpShaders(o);
+            for (const name of DIAGNOSTIC_REPORTS)
+                this.debug[name] = (...args) => this[name](...args);
             this.debug.clearShaderCache = () => this.clearShaderCache();
-            this.debug.dumpPipelineStates = () => this.dumpPipelineStates();
-            this.debug.blackScreenReport = () => this.blackScreenReport();
-            this.lastDraws = { fixed: null, programmable: null };
+            this.diagnosticsEnabled = false;
+            this.diagnosticsPromise = null;
+            this.lastDraws = null;
             this.stats = {
                 batches: 0, commands: 0, presents: 0, queueSubmits: 0,
                 drawCalls: 0, indexedDrawCalls: 0, upDrawCalls: 0,
@@ -12818,6 +12714,46 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 pipelineCreations: 0, bindGroupCreations: 0,
                 queueSubmits: 0, renderPasses: 0,
             };
+            if (this.options.diagnostics && typeof require === "function")
+                this.installDiagnostics(require("./d9wg_diagnostics.js"));
+        }
+
+        installDiagnostics(factory) {
+            if (!this.diagnosticsEnabled) factory.install(this, {
+                TEXTURE_FORMAT_NAMES, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER,
+                D3DRS_SCISSORTESTENABLE, intersectRects,
+            });
+            return this.debug;
+        }
+
+        enableDiagnostics() {
+            if (this.diagnosticsEnabled) return Promise.resolve(this.debug);
+            if (this.diagnosticsPromise) return this.diagnosticsPromise;
+            if (typeof require === "function") {
+                return Promise.resolve(this.installDiagnostics(require("./d9wg_diagnostics.js")));
+            }
+            if (!diagnosticsLoad) {
+                diagnosticsLoad = new Promise((resolve, reject) => {
+                    if (global.D9WGDiagnostics) { resolve(global.D9WGDiagnostics); return; }
+                    if (typeof document === "undefined") {
+                        reject(new Error("D3D diagnostics require a document or CommonJS loader"));return;
+                    }
+                    const script = document.createElement("script");
+                    const url = this.options.diagnosticsUrl || DEFAULT_DIAGNOSTICS_URL;
+                    if (!url) { reject(new Error("D3D diagnostics URL is unavailable"));return; }
+                    script.src = url;
+                    script.onload = () => {
+                        script.remove();
+                        if (global.D9WGDiagnostics) resolve(global.D9WGDiagnostics);
+                        else reject(new Error("D3D diagnostics script did not register its module"));
+                    };
+                    script.onerror = () => { script.remove();reject(new Error("Could not load D3D diagnostics")); };
+                    document.head.appendChild(script);
+                }).catch(error => { diagnosticsLoad = null;throw error; });
+            }
+            this.diagnosticsPromise = diagnosticsLoad.then(factory => this.installDiagnostics(factory))
+                .catch(error => { this.diagnosticsPromise = null;throw error; });
+            return this.diagnosticsPromise;
         }
 
         initialize() {
@@ -12902,6 +12838,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.gpuErrors = resolveGPUHost().GPUErrorLog.forDevice(this.device);
                 if (this.options.strict) this.gpuErrors.strict = true;
                 this.watchForDeviceLoss();
+                if (this.options.diagnostics) await this.enableDiagnostics();
                 return this;
             })().catch(error => {
                 this.failed = error;
@@ -13248,6 +13185,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
             this.sessionKey = key;
             stateFactory.activateSession(this, state);
+            if (this.diagnosticsEnabled && !this.lastDraws)
+                this.lastDraws = { fixed: null, programmable: null };
             if (previousKey !== null) {
                 ++this.stats.sessionChanges;
                 if (this.stats.sessionChanges === 1)
@@ -13445,7 +13384,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.activeOcclusion = null;
             this.presentingDevice = null;
             this.windowState = null;
-            this.lastDraws = { fixed: null, programmable: null };
+            if (this.diagnosticsEnabled) this.lastDraws = { fixed: null, programmable: null };
         }
 
         onSessionEnd(bytes, view, offset, length) {
@@ -14040,7 +13979,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
         }
 
-
         // A guest polling GetData waits for an answer to every query it
         // ended; when the ops that would have produced one are dropped, the
         // answer is FAILED
@@ -14132,72 +14070,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // Records and submits one frame's ops (finishFrame's body)
         replayFrame(frame, present, frameValid) { return this.frameReplayer.replayFrame(frame, present, frameValid); }
 
-        // v86gl.d3d9Executor.debug.dumpSmallTextures() -> data: URLs that can
-        // be opened straight from the console. Only uncompressed top-level
-        // images up to 64x64 are retained (see onUpdateTexture).
-        dumpSmallTextures(options) {
-            const settings = options || {};
-            const out = [];
-            for (const [handle, resource] of this.resources) {
-                if (!resource.preview) continue;
-                if (settings.handle !== undefined && handle !== settings.handle)
-                    continue;
-                const { width, height, rgba } = resource.preview;
-                let url = null;
-                let error = null;
-                try {
-                    // A plain <canvas>, not OffscreenCanvas: only the former
-                    // has toDataURL. OffscreenCanvas offers convertToBlob,
-                    // which is async and cannot be returned from here -- that
-                    // mismatch is why the first version of this helper
-                    // reported url: null for every texture.
-                    if (typeof document === "undefined")
-                        throw new Error("no document to render into");
-                    const canvas = document.createElement("canvas");
-                    canvas.width = width;
-                    canvas.height = height;
-                    const context = canvas.getContext("2d");
-                    const image = context.createImageData(width, height);
-                    image.data.set(rgba.subarray(0, width * height * 4));
-                    context.putImageData(image, 0, 0);
-                    url = canvas.toDataURL();
-                } catch (failure) {
-                    error = failure && failure.message ? failure.message
-                        : String(failure);
-                }
-                const entry = { handle, format: resource.format,
-                    formatName: TEXTURE_FORMAT_NAMES[resource.format] ||
-                        ("0x" + (resource.format >>> 0).toString(16)),
-                    size: width + "x" + height,
-                    declaredLevels: resource.levelCount,
-                    uploadedLevels: resource.uploadedLevels
-                        ? [...resource.uploadedLevels].sort((a, b) => a - b) : null,
-                    url, error };
-                out.push(entry);
-                // Rendering them inline is the point of the helper: a data URL
-                // in a console row is unreadable, an actual picture answers
-                // "is the texture data wrong?" at a glance.
-                if (settings.log !== false && url) {
-                    const scale = Math.max(1, Math.round(64 / Math.max(width, height)));
-                    console.log("%c ", "font-size:0;padding:" +
-                        (height * scale / 2) + "px " + (width * scale / 2) +
-                        "px;background:url(" + url +
-                        ") no-repeat center/contain;image-rendering:pixelated",
-                        handle, entry.formatName, entry.size);
-                }
-            }
-            return out;
-        }
-
-        // Every distinct pipeline state actually in use, with the raw D3D9
-        // render-state values behind it. Reading the real mix beats guessing
-        // which blend/depth/cull combination a scene is built from.
-        // Prints every translated shader the session has created: its
-        // reflection (which declaration semantics it reads, which varyings it
-        // writes) and, optionally, the generated WGSL. Reading the shader is
-        // the only way to settle questions the pipeline cannot answer -- a
-        // varying that is written but written with a constant looks exactly
-        // like one that is routed correctly, from the outside.
         // Drops every translated shader, in memory and in storage, so the next
         // draw retranslates from the guest's bytecode. The revision guard in
         // D3D9ShaderCache makes this unnecessary going forward, but a cache
@@ -14219,230 +14091,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 }
             }
             return "shader cache cleared -- reload to retranslate";
-        }
-
-        dumpShaders(options) {
-            options = options || {};
-            const rows = [];
-            for (const [handle, resource] of this.resources) {
-                if (resource.kind !== RESOURCE_VERTEX_SHADER &&
-                        resource.kind !== RESOURCE_PIXEL_SHADER) continue;
-                const kind = resource.kind === RESOURCE_VERTEX_SHADER
-                    ? "vertex" : "pixel";
-                const translated = resource.translated;
-                const reflection = translated && translated.reflection;
-                rows.push({
-                    handle, kind,
-                    hash: [resource.hashHigh, resource.hashLow]
-                        .map(value => (value >>> 0).toString(16)
-                            .padStart(8, "0")).join(""),
-                    ok: !!(translated && translated.ok),
-                    error: translated && translated.error,
-                    version: reflection ? reflection.version.major + "." +
-                        reflection.version.minor : null,
-                    // usage*16+usageIndex is how programFor matches a
-                    // declaration element to a shader input, so print the
-                    // semantics rather than the raw register numbers.
-                    inputs: reflection ? reflection.inputs.map(input =>
-                        "v" + input.register + "=usage" + input.usage +
-                        "[" + input.usageIndex + "]") : null,
-                    writtenVaryings: reflection ? reflection.writtenVaryings : null,
-                    samplers: reflection
-                        ? reflection.samplers.map(s => s.index) : null,
-                    warnings: reflection ? reflection.warnings : null,
-                });
-            }
-            if (options.log !== false) {
-                for (const row of rows) console.log("[d3d9-shader]", row);
-            }
-            if (options.wgsl) {
-                for (const [handle, resource] of this.resources) {
-                    if (resource.kind !== RESOURCE_VERTEX_SHADER &&
-                            resource.kind !== RESOURCE_PIXEL_SHADER) continue;
-                    if (options.handle && handle !== options.handle) continue;
-                    if (!resource.translated || !resource.translated.ok) continue;
-                    console.log("[d3d9-shader] handle " + handle + " WGSL:\n" +
-                        resource.translated.wgsl);
-                }
-            }
-            return rows;
-        }
-
-        dumpPipelineStates() {
-            const out = [];
-            for (const [key, pipeline] of this.pipelineCache) {
-                const diagnostic = pipeline._d9wgDiagnostic;
-                if (diagnostic) {
-                    out.push({
-                        ...diagnostic,
-                        vertexBuffers: diagnostic.vertexBuffers.map(layout => ({
-                            ...layout,
-                            attributes: layout.attributes.map(attribute =>
-                                ({ ...attribute })),
-                        })),
-                        samplers: diagnostic.samplers.slice(),
-                        state: JSON.parse(JSON.stringify(diagnostic.state)),
-                        draws: pipeline._d9wgDrawCount || 0,
-                    });
-                    continue;
-                }
-                // Compatibility for a pipeline created before structured
-                // diagnostics existed. Do not try to split the key: a
-                // fixed-function fragment signature legitimately contains
-                // "|", so its fields cannot be recovered unambiguously.
-                out.push({ key, state: null,
-                    draws: pipeline._d9wgDrawCount || 0 });
-            }
-            return out;
-        }
-
-        textureDiagnostic(handle) {
-            const resource = handle ? this.resources.get(handle) : null;
-            if (!resource) return { handle: handle || 0, live: false };
-            return {
-                handle, live: true, kind: resource.kind,
-                type: resource.textureType || "2d",
-                format: resource.format,
-                formatName: TEXTURE_FORMAT_NAMES[resource.format] || null,
-                gpuFormat: resource.gpuFormat || null,
-                width: resource.width, height: resource.height,
-                depth: resource.depth || 1,
-                levels: resource.levelCount,
-                uploadedLevels: resource.uploadedLevels
-                    ? [...resource.uploadedLevels].sort((a, b) => a - b) : null,
-                shadowLevels: [],
-            };
-        }
-
-        drawDiagnostic(reference, path) {
-            if (!reference) return null;
-            const { which, state, elements, geometry, program, pipelineState,
-                targets, pipeline } = reference;
-            const viewport = { ...state.viewport };
-            const scissorEnabled =
-                (state.renderStates.get(D3DRS_SCISSORTESTENABLE) || 0) !== 0 &&
-                !!state.scissorRect;
-            const scissor = scissorEnabled ? { ...state.scissorRect } : null;
-            const clip = intersectRects(viewport, scissor,
-                targets.width, targets.height);
-            const streams = [];
-            for (const [index, binding] of geometry.streams) {
-                const resource = binding.resource || null;
-                const shadow = resource && resource.shadow;
-                const start = Math.max(0, binding.offset || 0);
-                const preview = shadow
-                    ? shadow.subarray(start,
-                        Math.min(shadow.length, start + 64)) : null;
-                streams.push({ index, stride: binding.stride || 0,
-                    offset: binding.offset || 0,
-                    frequency: binding.frequency === undefined
-                        ? 1 : binding.frequency,
-                    resourceBytes: resource ? resource.byteCount : null,
-                    shadowBytes: shadow ? shadow.length : null,
-                    availableVertices: shadow && binding.stride
-                        ? Math.max(0, Math.floor((shadow.length - start) /
-                            binding.stride)) : null,
-                    firstBytes: preview ? [...preview].map(value =>
-                        value.toString(16).padStart(2, "0")).join("") : null,
-                });
-            }
-            let index = null;
-            if (geometry.indexInfo) {
-                const info = geometry.indexInfo;
-                const resource = geometry.indexResource ||
-                    this.resources.get(state.indexBufferHandle);
-                const shadow = resource && resource.shadow;
-                const bytesPerIndex = info.format === "uint32" ? 4 : 2;
-                const scanCount = Math.min(info.count || 0, 4096);
-                const samples = [];
-                let minimum = Infinity, maximum = -Infinity, scanned = 0;
-                if (shadow) {
-                    const view = new DataView(shadow.buffer,
-                        shadow.byteOffset, shadow.byteLength);
-                    for (let item = 0; item < scanCount; ++item) {
-                        const byteOffset = (info.offset || 0) +
-                            ((info.firstIndex || 0) + item) * bytesPerIndex;
-                        if (byteOffset + bytesPerIndex > shadow.length) break;
-                        const value = bytesPerIndex === 4
-                            ? view.getUint32(byteOffset, true)
-                            : view.getUint16(byteOffset, true);
-                        ++scanned;
-                        if (samples.length < 24) samples.push(value);
-                        minimum = Math.min(minimum, value);
-                        maximum = Math.max(maximum, value);
-                    }
-                }
-                index = { format: info.format, count: info.count,
-                    firstIndex: info.firstIndex, baseVertex: info.baseVertex,
-                    bufferOffset: info.offset || 0,
-                    resourceBytes: resource ? resource.byteCount : null,
-                    scanned,
-                    minimum: Number.isFinite(minimum) ? minimum : null,
-                    maximum: Number.isFinite(maximum) ? maximum : null,
-                    samples };
-            }
-            const textureHandles = [...new Set(program.samplerIndices.map(
-                sampler => state.textures.get(sampler) || 0))];
-            return {
-                path, which,
-                shaders: { vertex: state.vertexShaderHandle || 0,
-                    pixel: state.pixelShaderHandle || 0 },
-                program: { vertex: program.vertexKey,
-                    fragment: program.fragmentKey,
-                    fixedPosition: program.fixedFunctionSignature
-                        ? program.fixedFunctionSignature.positionType : null,
-                    fixedTexCoordSets: program.fixedFunctionSignature
-                        ? program.fixedFunctionSignature.texCoordSets.slice() : null,
-                    samplers: program.samplerIndices.slice() },
-                viewport, scissor, effectiveClip: clip,
-                target: { width: targets.width, height: targets.height,
-                    formats: targets.formats.slice(),
-                    hasDepth: targets.hasDepth },
-                pipelineState: JSON.parse(JSON.stringify(pipelineState)),
-                pipelineDraws: pipeline._d9wgDrawCount || 0,
-                elements: elements.map(element => ({ ...element })),
-                streams, index,
-                textures: textureHandles.map(handle =>
-                    this.textureDiagnostic(handle)),
-            };
-        }
-
-        blackScreenReport() {
-            const device = this.presentingDevice ||
-                this.devices.values().next().value || null;
-            const report = {
-                stats: this.getStats(),
-                debug: {
-                    forceSolidAllDraws: !!this.debug.forceSolidAllDraws,
-                    shaderMode: this.debug.shaderMode,
-                    skipProgrammableDraws:
-                        !!this.debug.skipProgrammableDraws,
-                    disableCull: !!this.debug.disableCull,
-                    disableDepthTest: !!this.debug.disableDepthTest,
-                },
-                device: device ? {
-                    handle: device.handle,
-                    viewport: { ...device.viewport },
-                    scissorRect: device.scissorRect
-                        ? { ...device.scissorRect } : null,
-                    shaders: { vertex: device.vertexShaderHandle || 0,
-                        pixel: device.pixelShaderHandle || 0 },
-                    renderStates: Object.fromEntries(device.renderStates),
-                    streams: Array.from(device.streams,
-                        ([index, stream]) => ({ index, ...stream })),
-                    indexBufferHandle: device.indexBufferHandle,
-                } : null,
-                pipelines: this.dumpPipelineStates(),
-                draws: {
-                    fixed: this.drawDiagnostic(this.lastDraws.fixed, "fixed"),
-                    programmable: this.drawDiagnostic(
-                        this.lastDraws.programmable, "programmable"),
-                },
-                shaders: this.dumpShaders({ log: false }),
-                guestReports: (this.guestReports || []).slice(),
-            };
-            console.log("[d3d9-webgpu] black-screen report", report);
-            return report;
         }
 
         getStats() {
@@ -16517,7 +16165,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     };
                 });
                 const missingTexture = textureBindings.some(binding => !binding.live);
-                const diagnostic = {
+                const diagnostic = this.debug.warnOnSuspiciousDraws ? {
                     pixelPath: psResource ? "programmable" : "fixed-function",
                     pixelShader: psResource
                         ? [psResource.hashHigh, psResource.hashLow]
@@ -16537,7 +16185,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     materialAmbient: state.material
                         ? state.material.ambient.slice() : null,
                     globalAmbient: (rs.get(D3DRS_AMBIENT) || 0) >>> 0,
-                };
+                } : null;
                 if (!samplerIndices.length) {
                     ++this.stats.zeroNormalDrawsWithoutTexture;
                     if (state.material && this.debug.warnOnSuspiciousDraws) {
@@ -17504,7 +17152,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return { group, dynamicOffsets };
         }
 
-
         // Every draw path below can bail out for several different reasons,
         // and silently dropping them looks identical to "the app never drew"
         // from the outside -- exactly the blind spot that hid a stalled
@@ -17910,7 +17557,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             ++this.stats.upDrawCalls;
         }
 
-
         // (0,1,2), (0,2,3), (0,3,4)... -- the triangle list a fan of
         // `vertexCount` vertices expands to.
 // D3DRS_FILLMODE for a triangle topology. Returns a replacement geometry, or
@@ -18162,6 +17808,12 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
     });
     for (const [name, value] of Object.entries(surfaceMethods))
         Object.defineProperty(D3D9WebGPUExecutor.prototype, name, { value, writable: true, configurable: true });
+
+    for (const name of DIAGNOSTIC_REPORTS)
+        Object.defineProperty(D3D9WebGPUExecutor.prototype, name, {
+            configurable: true, writable: true,
+            value(...args) { return this.enableDiagnostics().then(() => this[name](...args)); },
+        });
 
     D3D9WebGPUExecutor.prototype["performanceTimingVersion"] = 1;
     global.D3D9WebGPUExecutor = D3D9WebGPUExecutor;
