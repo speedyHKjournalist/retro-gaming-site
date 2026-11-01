@@ -28,6 +28,8 @@ void d9wg_lighting_geometry(D9WGTNLLighting *state, const void *world_view);
 void d9wg_lighting_normal(const D9WGTNLLighting *state, const float *normal, float *eye_normal);
 void d9wg_lighting_vertex(const D9WGTNLLighting *state, const void *world_view, const float *position,
         const void *normal, const void *color0, const void *color1, uint32_t *diffuse, uint32_t *specular);
+void d9wg_lighting_vertex_view(const D9WGTNLLighting *state, const float *eye_position,
+        const float *eye_normal, const void *color0, const void *color1, uint32_t *diffuse, uint32_t *specular);
 int d9wg_lighting_add(D9WGTNLLighting *state, const D9WGSetLight *light, const void *view_matrix);
 void d9wg_lighting_color(uint32_t argb, float *rgba);
 void d9wg_lighting_shade(const D9WGTNLLighting *state, const float *eye_position,

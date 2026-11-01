@@ -2,11 +2,13 @@
 #include "d9wg_fvf.h"
 #include "d9wg_math.h"
 #include "d9wg_tnl_math.h"
+#include "d9wg_blend.h"
 
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
 {
     const uint8_t *bytes = render_states;
     state->texture_mask = 0;
+    state->blend = 0;
     /* The public D3D7/8/9 render-state indices and DWORD storage agree. Fog
      * generation follows FOGVERTEXMODE; FOGENABLE controls later blending. */
     __builtin_memcpy(&state->fog_mode, bytes + 140u*4u, 4u);
@@ -67,6 +69,8 @@ float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position)
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout)
 {
     layout->position = layout->normal = layout->diffuse = layout->specular = layout->psize = -1;
+    layout->blend_weight = layout->blend_indices = -1;
+    layout->blend_weight_floats = layout->blend_weight_type = layout->blend_indices_type = 0;
     layout->position_transformed = layout->position_floats = layout->stride = layout->texcoord_count = layout->has_blend = 0;
     for (unsigned i = 0; i < 8; ++i) { layout->texcoord[i] = -1;layout->texcoord_floats[i] = 0; }
     if (!elements || !count) return 0;
@@ -101,7 +105,16 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
             layout->texcoord[e->usage_index] = e->offset;layout->texcoord_floats[e->usage_index] = floats;
             if (e->usage_index + 1u > layout->texcoord_count) layout->texcoord_count = e->usage_index + 1u;
             break;
-        case 1: case 2: layout->has_blend = 1;break;
+        case 1:
+            layout->has_blend = 1;
+            if (e->usage_index) break;
+            if (layout->blend_weight >= 0) return 0;
+            layout->blend_weight = e->offset;layout->blend_weight_floats = floats;layout->blend_weight_type = e->type;break;
+        case 2:
+            layout->has_blend = 1;
+            if (e->usage_index) break;
+            if (layout->blend_indices >= 0) return 0;
+            layout->blend_indices = e->offset;layout->blend_indices_type = e->type;break;
         default: break;
         }
     }
@@ -145,12 +158,24 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
     if (!source || !output || s->position_transformed || !d->position_transformed ||
             !d9wg_process_range(source_length, source_base, source_stride, s->stride, source_start, count, &first) ||
             !d9wg_process_range(output_length, 0, d->stride, d->stride, output_start, count, &destination)) return 0;
+    D9WGVertexBlend *blend = vertex_state ? vertex_state->blend : 0;
+    if (blend) {
+        if (!d9wg_blend_layout(blend, s)) return 0;
+        for (uint32_t vertex = 0; vertex < count; ++vertex) {
+            uint32_t indices[4];
+            if (!d9wg_blend_indices(blend, s, (const uint8_t *)source + first + vertex*source_stride, indices)) return 0;
+        }
+    }
     for (uint32_t vertex = 0; vertex < count; ++vertex) {
         const uint8_t *in = (const uint8_t *)source + first + vertex*source_stride;
         uint8_t *out = (uint8_t *)output + destination + vertex*d->stride;
         float position[4] = {0,0,0,1}, clip[4], screen[4], rhw;
+        float blended_eye[4], blended_normal[3];
         for (unsigned i = 0; i < s->position_floats; ++i) position[i] = read_float(in + s->position + i*4u);
-        d9wg_transform_vector4(world_view_projection, position, clip);
+        if (blend) {
+            d9wg_blend_vertex(blend, s, in, position, blended_eye, clip, blended_normal);
+            if (lighting->flags.normalize_normals) d9wg_tnl_normalize3(blended_normal, 0.0f);
+        } else d9wg_transform_vector4(world_view_projection, position, clip);
         rhw = clip[3] != 0.0f ? 1.0f / clip[3] : 1.0f;
         screen[0] = (clip[0]*rhw*0.5f + 0.5f)*viewport->width + viewport->x;
         screen[1] = (0.5f - clip[1]*rhw*0.5f)*viewport->height + viewport->y;
@@ -160,7 +185,10 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
          * computes diffuse/specular even when passthrough copying is disabled. */
         if ((copy_data || lighting->flags.lighting) && (d->diffuse >= 0 || d->specular >= 0)) {
             uint32_t diffuse, specular;
-            d9wg_lighting_vertex(lighting, world_view, position,
+            if (blend) d9wg_lighting_vertex_view(lighting, blended_eye, blended_normal,
+                    s->diffuse >= 0 ? in + s->diffuse : 0,
+                    s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
+            else d9wg_lighting_vertex(lighting, world_view, position,
                     s->normal >= 0 ? in + s->normal : 0,
                     s->diffuse >= 0 ? in + s->diffuse : 0,
                     s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
@@ -169,7 +197,8 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         }
         if (vertex_state && vertex_state->fog_mode && d->specular >= 0) {
             float eye[4];uint32_t specular;
-            d9wg_transform_vector4(world_view, position, eye);
+            if (blend) for (unsigned i = 0; i < 4; ++i) eye[i] = blended_eye[i];
+            else d9wg_transform_vector4(world_view, position, eye);
             __builtin_memcpy(&specular, out + d->specular, 4u);
             specular = (specular & 0x00ffffffu) |
                     (uint32_t)(d9wg_vertex_fog(vertex_state, eye)*255.0f + 0.5f) << 24;
@@ -191,10 +220,15 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     coordinate[component] = read_float(in + s->texcoord[source_set] + component*4u);
             } else {
                 float eye[4], normal[3] = {0,0,0}, eye_normal[3];
-                d9wg_transform_vector4(world_view, position, eye);
-                if (s->normal >= 0) for (unsigned component = 0; component < 3; ++component)
-                    normal[component] = read_float(in + s->normal + component*4u);
-                d9wg_lighting_normal(lighting, normal, eye_normal);
+                if (blend) {
+                    for (unsigned component = 0; component < 4; ++component) eye[component] = blended_eye[component];
+                    for (unsigned component = 0; component < 3; ++component) eye_normal[component] = blended_normal[component];
+                } else {
+                    d9wg_transform_vector4(world_view, position, eye);
+                    if (s->normal >= 0) for (unsigned component = 0; component < 3; ++component)
+                        normal[component] = read_float(in + s->normal + component*4u);
+                    d9wg_lighting_normal(lighting, normal, eye_normal);
+                }
                 for (unsigned component = 0; component < 3; ++component)
                     coordinate[component] = generated == 1 ? eye_normal[component] : eye[component];
                 if (generated >= 3) {

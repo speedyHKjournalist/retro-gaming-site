@@ -24,6 +24,7 @@
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT8
 #include "../runtime/d9wg_lighting_bridge.h"
 #include "../runtime/d9wg_vertex.h"
+#include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
@@ -6382,7 +6383,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
      * pipeline instead would silently produce different geometry. */
     if (device->vertex_shader & 1u)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (!decode_fvf_layout(device->vertex_shader, &source_layout)
+    if (!d9wg_process_fvf(D9WG_FVF_D3D8, device->vertex_shader, &source_layout)
             || !decode_fvf_layout(destination->fvf, &destination_layout))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* D3D8 requires the destination to be pre-transformed, and refuses to
@@ -6396,9 +6397,6 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
                 source_layout.stride, source_start_index, vertex_count, &validated_offset) ||
             !d9wg_process_range(destination->length, 0, destination_layout.stride,
                 destination_layout.stride, destination_index, vertex_count, &validated_offset))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->render_states[D3DRS_VERTEXBLEND] ||
-            device->render_states[D3DRS_INDEXEDVERTEXBLENDENABLE])
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     multiply_matrix(&device->transforms[D8WG_TRANSFORM_WORLD_SLOT],
@@ -6420,11 +6418,17 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
             (float)device->viewport.Width, (float)device->viewport.Height,
             device->viewport.MinZ, device->viewport.MaxZ };
-    if (!d9wg_process_vertices(&source_layout, source->shadow, source->length, 0,
+    uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
+            &device->transforms[D8WG_TRANSFORM_WORLD_SLOT], 256, 0,
+            &device->transforms[D8WG_TRANSFORM_VIEW_SLOT], &device->transforms[D8WG_TRANSFORM_PROJECTION_SLOT]);
+    if (blend_error) return D8WG_TRACE_ERROR(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+    BOOL processed = d9wg_process_vertices(&source_layout, source->shadow, source->length, 0,
             device->streams[0].stride, source_start_index, &destination_layout,
             destination->shadow, destination->length, destination_index, vertex_count,
             &world_view, &world_view_projection, &viewport, &light_state,
-            !(flags & D9WG_PV_DONOTCOPYDATA), &vertex_state)) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+            !(flags & D9WG_PV_DONOTCOPYDATA), &vertex_state);
+    d9wg_vertex_windows_blend_free(&vertex_state);
+    if (!processed) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     /* The transformed vertices live in the destination's guest shadow; the
      * host needs them too, since the app will draw straight from the buffer. */

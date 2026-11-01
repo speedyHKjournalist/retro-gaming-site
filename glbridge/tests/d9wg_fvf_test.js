@@ -3,6 +3,7 @@ const assert = require("node:assert/strict"), fs = require("node:fs"), path = re
 const { spawnSync } = require("node:child_process"), { createHash } = require("node:crypto");
 const root = path.resolve(__dirname, ".."), fixture = fs.readFileSync(path.join(__dirname, "fixtures/d9wg_fvf_baseline.json"));
 const baseline = JSON.parse(fixture), directory = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-fvf-"));
+const wine = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/d9wg_fvf_wine_reference.json"), "utf8"));
 const frozen = (api, names) => baseline[api].join("\n").replace(new RegExp(names.join("|"), "g"), name => "old" + api + "_" + name);
 function actual(file, name) {
     const source = fs.readFileSync(path.join(root, file), "utf8"), start = source.indexOf("static BOOL " + name + "(");
@@ -94,7 +95,20 @@ ${actual("d3d9proxy/d3d9_proxy.c", "fvf_to_declaration")}
 ${actual("d3d8proxy/d3d8_proxy.c", "fvf_to_elements")}
 typedef D9WGFVFLayout D3D7FVFLayout;
 ${actual("ddrawproxy/d3d7_proxy.inc", "d3d7_decode_fvf")}
-static unsigned compared[3],accepted[3];
+static unsigned compared[3],accepted[3],corrected;
+/* Known native declaration facts from pinned Wine's Windows conformance
+ * table override only these erroneous legacy type tags. Frozen functions
+ * and their SHA remain unchanged for all other mechanics. */
+static void native_d3d9_types(uint32_t fvf,D9WGVertexElement *elements,unsigned count) {
+    uint32_t position=fvf&0x400eu;int changed=0;
+    for(unsigned i=0;i<count;i++) {
+        uint32_t type=elements[i].type;
+        if(elements[i].usage==1 && position==8u && (fvf&0x8000u))type=4;
+        if(elements[i].usage==2)type=(fvf&0x1000u)||(position==8u&&(fvf&0x8000u)) ? 5u : (fvf&0x8000u) ? 4u : 0u;
+        changed|=elements[i].type!=type;elements[i].type=(uint8_t)type;
+    }
+    corrected+=(unsigned)changed;
+}
 static void compare(uint32_t fvf) {
     for(unsigned api=7;api<=9;api++) {
         D9WGVertexElement old[32],now[32];UINT old_count=0,now_count=0;int a,b;
@@ -103,6 +117,7 @@ static void compare(uint32_t fvf) {
         if(api==9) { a=oldd3d9_fvf_to_declaration(fvf,old,&old_count);b=fvf_to_declaration(fvf,now,&now_count); }
         else if(api==8) { a=oldd3d8_fvf_to_elements(fvf,old,32,&old_count);b=fvf_to_elements(fvf,now,32,&now_count); }
         else { a=oldd3d7_d3d7_decode_fvf(fvf,&old_layout,old,&old_count);b=d3d7_decode_fvf(fvf,&layout,now,&now_count); }
+        if(api==9 && a)native_d3d9_types(fvf,old,old_count);
         if(a!=b || (a && (old_count!=now_count || memcmp(old,now,old_count*sizeof(*old)) ||
                 (api==7 && (sizeof(old_layout)!=sizeof(layout) || memcmp(&old_layout,&layout,sizeof(layout))))))) {
             fprintf(stderr,"FVF mismatch API %u token %08x old/new %d/%d elements %u/%u\\n",api,fvf,a,b,old_count,now_count);assert(0);
@@ -117,6 +132,7 @@ int main(void) {
         for(unsigned i=0;i<4;i++)compare(bits|high[i]);
         for(unsigned i=0;i<3;i++)compare((bits<<16u)|low[i]);
     }
+    ${wine.cases.map(c => `{const D9WGVertexElement expected[]={${c.elements.map(e => "{"+[e.stream,e.offset,e.type,e.method,e.usage,e.usage_index].join(",")+"}").join(",")}};D9WGVertexElement actual[32];UINT count=0;assert(fvf_to_declaration(${c.fvf}u,actual,&count)&&count==${c.elements.length}&&!memcmp(actual,expected,sizeof(expected)));}`).join("\n")}
     uint32_t seed=0x31586a29u;
     for(unsigned i=0;i<100000;i++) { seed=seed*1664525u+1013904223u;compare(seed); }
     D9WGVertexElement e[32];D9WGFVFLayout layout;uint32_t n=0;
@@ -133,7 +149,7 @@ int main(void) {
     assert(!d9wg_fvf_decode(9,2,e,32,NULL,&layout));
     assert(!d9wg_fvf_decode(6,2,e,32,&n,&layout));
     printf("PASS actual three FVF frontends: %u frozen C comparisons; accepted D3D7/8/9=%u/%u/%u; API-specific layouts and bounded output passed\\n",
-        compared[0]+compared[1]+compared[2],accepted[0],accepted[1],accepted[2]);return 0;
+        compared[0]+compared[1]+compared[2],accepted[0],accepted[1],accepted[2]);printf("Native D3D9 declarations: ${wine.cases.length} Wine cases; corrected legacy type tags for %u input patterns\\n",corrected);return 0;
 }
 `);
     const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-I", root,

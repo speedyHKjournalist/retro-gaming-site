@@ -34,6 +34,7 @@
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT9
 #include "../runtime/d9wg_lighting_bridge.h"
 #include "../runtime/d9wg_vertex.h"
+#include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
@@ -8943,7 +8944,7 @@ static HRESULT WINAPI device_get_current_texture_palette(
  * it the same way.
  *
  * The shared C kernel handles the supported fixed-function layouts. Bound
- * vertex shaders, active vertex blending, packed inputs and multiple source
+ * vertex shaders, unsupported packed inputs and multiple source
  * streams still require further software-pipeline work and are refused.
  */
 #define D9_PV_MAX_TEXCOORDS 8
@@ -9179,9 +9180,6 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
             !d9wg_process_range(destination->length, 0, destination_layout.stride,
                 destination_layout.stride, dst_index, count, &validated_offset))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device->render_states[D3DRS_VERTEXBLEND] ||
-            device->render_states[D3DRS_INDEXEDVERTEXBLENDENABLE])
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
     d9_multiply_matrix((const D3DMATRIX *)device->transforms[D3DTS_WORLD],
             (const D3DMATRIX *)device->transforms[D3DTS_VIEW], &world_view);
@@ -9213,10 +9211,17 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
             if (!snapshot) return TRACE_REFUSE(E_OUTOFMEMORY);
             CopyMemory(snapshot, source->shadow, source->length);input = snapshot;
         }
+        uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
+                device->transforms[D3DTS_WORLD], 256, 0, device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION]);
+        if (blend_error) {
+            if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+            return TRACE_REFUSE(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+        }
         BOOL processed = d9wg_process_vertices(&source_layout, input, source->length,
                 device->streams[0].offset, source_stride, src_start,
                 &destination_layout, destination->shadow, destination->length, dst_index, count,
                 &world_view, &world_view_projection, &viewport, &light_state, copy_data, &vertex_state);
+        d9wg_vertex_windows_blend_free(&vertex_state);
         if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
         if (!processed) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }

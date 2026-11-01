@@ -9,7 +9,10 @@ typedef struct D9WGProcessLayout {
     int32_t texcoord[8];
     uint32_t texcoord_floats[8];
     uint32_t has_blend;
+    int32_t blend_weight, blend_indices;
+    uint32_t blend_weight_floats, blend_weight_type, blend_indices_type;
 } D9WGProcessLayout;
+typedef struct D9WGVertexBlend D9WGVertexBlend;
 typedef struct D9WGProcessViewport {
     float x, y, width, height, min_z, max_z;
 } D9WGProcessViewport;
@@ -21,6 +24,7 @@ typedef struct D9WGVertexState {
         uint32_t coordinate_index, flags;
         float matrix[16];
     } texture[8];
+    D9WGVertexBlend *blend;
 } D9WGVertexState;
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states);
 int d9wg_vertex_texture_state(D9WGVertexState *state, uint32_t stage,

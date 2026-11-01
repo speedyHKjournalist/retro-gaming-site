@@ -39,8 +39,16 @@ int d9wg_fvf_decode(uint32_t api, uint32_t fvf, D9WGVertexElement *elements,
         uint32_t weights = betas - (indexed ? 1u : 0u);
         if (layout) { layout->has_position = 1;layout->position_bytes = 12u + betas * 4u; }
         PUSH(FLOAT3, POSITION, 0);offset += 12u;
-        if (weights) { PUSH(FLOAT1 + weights - 1u, BLENDWEIGHT, 0);offset += weights * 4u; }
-        if (indexed) { PUSH(api == 9 && (fvf & 0x8000u) ? COLOUR : UBYTE4, BLENDINDICES, 0);offset += 4u; }
+        uint32_t colour_weights = api == 9 && position == 8u && (fvf & 0x8000u);
+        /* Native D3D9 has a special XYZB2/LASTBETA_D3DCOLOR layout: packed
+         * colour weights followed by UBYTE4 indices. Bare XYZB5 uses FLOAT1
+         * for its implicit index element. D3D8's legacy profile stays explicit. */
+        if (weights) { PUSH(colour_weights ? COLOUR : FLOAT1 + weights - 1u, BLENDWEIGHT, 0);offset += weights * 4u; }
+        if (indexed) {
+            uint32_t index_type = UBYTE4;
+            if (api == 9) index_type = (fvf & 0x1000u) || colour_weights ? UBYTE4 : (fvf & 0x8000u) ? COLOUR : FLOAT1;
+            PUSH(index_type, BLENDINDICES, 0);offset += 4u;
+        }
     } else if (api == 7) return 0;
     /* D3D8/9 programmable declarations may carry attributes without position. */
     if (fvf & 0x10u) {

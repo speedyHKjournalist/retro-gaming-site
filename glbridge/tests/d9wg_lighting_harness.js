@@ -35,10 +35,10 @@ function buildFixture(options = {}) {
             }`).join("\n")}
             printf("]");
             {
-                struct {float position[3],normal[3];uint32_t color0,color1;float texture[2][4];} source[3];
+                struct {float position[3],normal[3];uint32_t color0,color1;float texture[2][4],weights[4];uint32_t indices;} source[3];
                 struct VertexOutput {float position[4];uint32_t color0,color1;};
                 union { uint32_t words[114];uint8_t bytes[456]; } destination;
-                D9WGVertexElement elements[]={{0,0,2,0,0,0},${value.hasNormal ? "{0,12,2,0,3,0}," : ""}${value.colorMask & 1 ? "{0,24,4,0,10,0}," : ""}${value.colorMask & 2 ? "{0,28,4,0,10,1}," : ""}${value.texture ? value.texture.dimensions.map((dim,i) => dim ? "{0,"+(32+i*16)+","+(dim-1)+",0,5,"+i+"}," : "").join("") : ""}};
+                D9WGVertexElement elements[]={{0,0,2,0,0,0},${value.hasNormal ? "{0,12,2,0,3,0}," : ""}${value.colorMask & 1 ? "{0,24,4,0,10,0}," : ""}${value.colorMask & 2 ? "{0,28,4,0,10,1}," : ""}${value.texture ? value.texture.dimensions.map((dim,i) => dim ? "{0,"+(32+i*16)+","+(dim-1)+",0,5,"+i+"}," : "").join("") : ""}${value.blend && value.blend.mode !== 256 ? "{0,64,"+(value.blend.weightType === undefined ? value.blend.mode-1 : value.blend.weightType)+",0,1,0}," : ""}${value.blend && value.blend.indexed ? "{0,80,"+value.blend.indexType+",0,2,0}," : ""}};
                 D9WGProcessLayout input_layout,output_layout;
                 const float positions[3][3]= {${value.positions.map(vector).join(",")}};
                 for(unsigned v=0;v<3;v++) {
@@ -46,6 +46,11 @@ function buildFixture(options = {}) {
                     source[v].color0=d9wg_pack_color(color0);source[v].color1=d9wg_pack_color(color1);
                     const float texture[2][4]=${value.texture ? "{"+value.texture.coordinates.map(vector).join(",")+"}" : "{{0},{0}}"};
                     for(unsigned t=0;t<2;t++)for(unsigned c=0;c<4;c++)source[v].texture[t][c]=texture[t][c];
+                    const float weights[3][4]=${value.blend ? "{"+value.blend.weights.map(vector).join(",")+"}" : "{{0},{0},{0}}"};
+                    const uint32_t indices[3]=${value.blend ? "{"+value.blend.indices.map(a => (value.blend.indexType === 4 ? ((a[3]<<24)|(a[0]<<16)|(a[1]<<8)|a[2])>>>0 : ((a[3]<<24)|(a[2]<<16)|(a[1]<<8)|a[0])>>>0)+"u").join(",")+"}" : "{0,0,0}"};
+                    for(unsigned c=0;c<4;c++){source[v].weights[c]=weights[v][c];}source[v].indices=indices[v];
+                    ${value.blend && value.blend.indexFloats ? `const float index_float[3]=${vector(value.blend.indexFloats)};__builtin_memcpy(&source[v].indices,&index_float[v],4);` : ""}
+                    ${value.blend && value.blend.weightColors ? `const uint32_t weight_color[3]={${value.blend.weightColors.map(a => (value.blend.weightType === 4 ? ((a[3]<<24)|(a[0]<<16)|(a[1]<<8)|a[2])>>>0 : ((a[3]<<24)|(a[2]<<16)|(a[1]<<8)|a[0])>>>0)+"u").join(",")}};__builtin_memcpy(&source[v].weights[0],&weight_color[v],4);` : ""}
                 }
                 D9WGProcessViewport viewport={0,0,64,64,0,1};
                 D9WGVertexState vertex_state={${value.fog ? [".fog_mode="+value.fog.mode,".range_fog="+value.fog.range,".fog_start="+scalar(value.fog.start),".fog_end="+scalar(value.fog.end),".fog_density="+scalar(value.fog.density)].join(",") : "0"}};
@@ -55,6 +60,13 @@ function buildFixture(options = {}) {
                 ${value.texture ? `for(unsigned v=0;v<3;v++)for(unsigned t=0;t<8;t++) {float one=1;__builtin_memcpy(destination.bytes+v*output_layout.stride+24+t*16+12,&one,4);}` : ""}
                 ${value.texture ? `const float texture_matrix[16]=${vector(value.texture.matrix)};
                 if(!d9wg_vertex_texture_state(&vertex_state,0,${value.texture.index}u,${value.texture.flags}u,texture_matrix))return 4;` : ""}
+                ${value.blend ? `float (*worlds)[16]=malloc(256u*64u);uint32_t blend_bytes=d9wg_blend_bytes(${value.blend.mode}u,${value.blend.indexed}u,256);
+                D9WGVertexBlend *blend=malloc(blend_bytes);if(!worlds || !blend)return 5;
+                for(unsigned m=0;m<256;m++)for(unsigned c=0;c<16;c++)worlds[m][c]=(c%5)==0 ? 1.0f : 0.0f;
+                ${value.blend.worlds.map((world,i) => `const float world${i}[16]=${vector(world.matrix)};for(unsigned c=0;c<16;c++)worlds[${world.index}][c]=world${i}[c];`).join("\n")}
+                const float projection[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+                if(!d9wg_blend_init(blend,blend_bytes,${value.blend.mode}u,${value.blend.indexed}u,worlds,256,0,view,projection))return 6;
+                vertex_state.blend=blend;` : ""}
                 if(
                         !d9wg_process_vertices(&input_layout,source,sizeof(source),0,sizeof(source[0]),0,
                             &output_layout,destination.bytes,sizeof(destination),0,3,world_view,world_view,&viewport,&state,1,&vertex_state)) return 3;
@@ -75,6 +87,7 @@ function buildFixture(options = {}) {
                     for(unsigned t=0;t<8;t++) {float c[4];for(unsigned k=0;k<4;k++)__builtin_memcpy(&c[k],destination.bytes+v*output_layout.stride+24+t*16+k*4,4);
                         printf("%s[%.9g,%.9g,%.9g,%.9g]",t ? "," : "",c[0],c[1],c[2],c[3]);}
                     printf("]");}printf("]");` : ""}
+                ${value.blend ? "free(blend);free(worlds);" : ""}
             }
             ${value.reference ? `{
                 const float eye[3]=${vector(value.reference.position)};float diffuse[4],specular[4];
@@ -86,12 +99,14 @@ function buildFixture(options = {}) {
         }
 `).join("\n");
         fs.writeFileSync(c, `#include <stdio.h>
+#include <stdlib.h>
+#include "runtime/d9wg_blend.h"
 #include "runtime/d9wg_lighting.h"
 #include "runtime/d9wg_math.h"
 #include "runtime/d9wg_vertex.h"
 int main(void){printf("[");${cases}printf("]\\n");return 0;}
 `);
-        const sources = ["runtime/d9wg_lighting.c", "runtime/d9wg_tnl_math.c", "runtime/d9wg_math.c", "runtime/d9wg_vertex.c", "runtime/d9wg_fvf.c"];
+        const sources = ["runtime/d9wg_lighting.c", "runtime/d9wg_tnl_math.c", "runtime/d9wg_math.c", "runtime/d9wg_vertex.c", "runtime/d9wg_fvf.c", "runtime/d9wg_blend.c"];
         const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-ffp-contract=off", "-Wall", "-Wextra", "-Werror", "-I", root,
             c, ...sources.map(p => path.join(root, p)), "-o", binary], { encoding: "utf8" });
         assert.equal(built.status, 0, built.stderr.slice(0, 4000) || String(built.error));

@@ -2705,7 +2705,7 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     if (!(vertex_op & D3DVOP_TRANSFORM) || !count || !source || destination->locked ||
             !d9wg_process_fvf(D9WG_FVF_D3D7, source_fvf, &source_layout) ||
             !d9wg_process_fvf(D9WG_FVF_D3D7, destination->desc.dwFVF, &destination_layout) ||
-            source_layout.has_blend || source_layout.position_transformed ||
+            source_layout.position_transformed ||
             !destination_layout.position_transformed)
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
@@ -2724,11 +2724,17 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
             device->viewport.dvMinZ, device->viewport.dvMaxZ };
     /* The public/strided entry points already validate the source allocation. */
     uint64_t source_length = ((uint64_t)source_index + count)*source_stride;
-    if (source_length > 0xffffffffu || !d9wg_process_vertices(&source_layout,
+    if (source_length > 0xffffffffu) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
+            &device->transforms[D3DTRANSFORMSTATE_WORLD], 4, 2,
+            &device->transforms[D3DTRANSFORMSTATE_VIEW], &device->transforms[D3DTRANSFORMSTATE_PROJECTION]);
+    if (blend_error) return DDWG_TRACE_ERROR(blend_error == 2 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
+    BOOL processed = d9wg_process_vertices(&source_layout,
             source, (uint32_t)source_length, 0, source_stride, source_index, &destination_layout,
             destination->shadow, destination->byte_count, destination_index, count,
-            &world_view, &world_view_projection, &viewport, &light_state, !(flags & D3DPV_DONOTCOPYDATA), &vertex_state))
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+            &world_view, &world_view_projection, &viewport, &light_state, !(flags & D3DPV_DONOTCOPYDATA), &vertex_state);
+    d9wg_vertex_windows_blend_free(&vertex_state);
+    if (!processed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return d3d7_upload_vertex_range(destination,
             destination_index * destination->stride, count * destination->stride)
             ? D3D_OK : D3DERR_VERTEXBUFFERUNLOCKFAILED;

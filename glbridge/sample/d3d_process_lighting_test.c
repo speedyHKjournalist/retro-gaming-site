@@ -68,6 +68,7 @@ typedef D3DLIGHT7 Light;
 #define D3DRS_FOGEND D3DRENDERSTATE_FOGEND
 #define D3DRS_FOGDENSITY D3DRENDERSTATE_FOGDENSITY
 #define D3DRS_RANGEFOGENABLE D3DRENDERSTATE_RANGEFOGENABLE
+#define D3DRS_VERTEXBLEND D3DRENDERSTATE_VERTEXBLEND
 #endif
 typedef struct Input { float x,y,z,nx,ny,nz; DWORD diffuse,specular; float tex[4]; } Input;
 typedef struct Output { float x,y,z,rhw; DWORD diffuse,specular; float tex[4]; } Output;
@@ -149,6 +150,85 @@ static void light(Light *value)
 {
     check(SUCCEEDED(CALL(SetLight)(device,light_index,value)),"SetLight");
     check(SUCCEEDED(CALL(LightEnable)(device,light_index,TRUE)),"LightEnable");
+}
+static void blend_world(UINT index,float scale,float translate)
+{
+    D3DMATRIX matrix;identity(&matrix);matrix._11=scale;matrix._41=translate;
+#if D9WG_TNL_API == 7
+    D3DTRANSFORMSTATETYPE slot=index ? D3DTRANSFORMSTATE_WORLD1+index-1 : D3DTRANSFORMSTATE_WORLD;
+#else
+    D3DTRANSFORMSTATETYPE slot=D3DTS_WORLDMATRIX(index);
+#endif
+    check(SUCCEEDED(CALL(SetTransform)(device,slot,&matrix)),"blend world matrix");
+}
+static Output blend_process(Buffer *buffer,DWORD fvf,UINT stride)
+{
+    Output result;
+#if D9WG_TNL_API == 9
+    check(SUCCEEDED(CALL(SetStreamSource)(device,0,buffer,0,stride)),"blend source stream");
+    check(SUCCEEDED(CALL(SetFVF)(device,fvf)),"blend source FVF");
+    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,NULL,0)),"blend ProcessVertices");
+#elif D9WG_TNL_API == 8
+    check(SUCCEEDED(CALL(SetStreamSource)(device,0,buffer,stride)),"blend source stream");
+    check(SUCCEEDED(CALL(SetVertexShader)(device,fvf)),"blend source FVF");
+    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,0)),"blend ProcessVertices");
+#else
+    (void)fvf;(void)stride;
+    check(SUCCEEDED(BUF(ProcessVertices)(destination,D3DVOP_TRANSFORM|D3DVOP_LIGHT,0,1,buffer,0,device,0)),"blend ProcessVertices");
+#endif
+    result=*(Output *)lock_buffer(destination);check(SUCCEEDED(BUF(Unlock)(destination)),"read blend output");return result;
+}
+static void blend_checks(void)
+{
+    struct {float p[3],weights[3],normal[3];DWORD diffuse,specular;float tex[4];} input={
+        {.05f,0,.5f},{.25f,.25f,.25f},{1,0,0},0xffffffffu,0x59000000u,{.25f,.75f,.6f,.2f}};
+    DWORD attributes=D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_SPECULAR|D3DFVF_TEX2;
+    DWORD fvf=D3DFVF_XYZB3|attributes;Buffer *buffer;Output output;Material material;Light value;
+    ZeroMemory(&material,sizeof(material));material.Diffuse.r=.4f;material.Diffuse.g=.2f;material.Diffuse.b=.6f;material.Diffuse.a=.75f;
+    check(SUCCEEDED(CALL(SetMaterial)(device,&material)),"blend material");
+    ZeroMemory(&value,sizeof(value));value.Type=D3DLIGHT_DIRECTIONAL;value.Direction.x=-1;value.Diffuse.r=value.Diffuse.g=value.Diffuse.b=1;light(&value);
+    state(D3DRS_LIGHTING,TRUE);state(D3DRS_COLORVERTEX,FALSE);state(D3DRS_SPECULARENABLE,FALSE);state(D3DRS_NORMALIZENORMALS,FALSE);
+    state(D3DRS_AMBIENT,0);state(D3DRS_DIFFUSEMATERIALSOURCE,D3DMCS_MATERIAL);state(D3DRS_FOGVERTEXMODE,D3DFOG_NONE);texture_state(0,0);
+    blend_world(0,2,.1f);blend_world(1,4,.2f);blend_world(2,8,.3f);blend_world(3,16,.4f);
+    create_buffer(fvf,sizeof(input),&buffer);CopyMemory(lock_buffer(buffer),&input,sizeof(input));check(SUCCEEDED(BUF(Unlock)(buffer)),"blend source upload");
+    state(D3DRS_VERTEXBLEND,1);output=blend_process(buffer,fvf,sizeof(input));check(near_value(output.x,43.2f),"two matrices viewport");color(output.diffuse,0xbf201030u,"two inverse normal matrices");
+    state(D3DRS_VERTEXBLEND,2);output=blend_process(buffer,fvf,sizeof(input));check(near_value(output.x,48),"three matrices viewport");color(output.diffuse,0xbf1a0d26u,"three inverse normal matrices");
+    input.weights[0]=input.weights[1]=.125f;CopyMemory(lock_buffer(buffer),&input,sizeof(input));check(SUCCEEDED(BUF(Unlock)(buffer)),"four bone source upload");
+    state(D3DRS_VERTEXBLEND,3);output=blend_process(buffer,fvf,sizeof(input));check(near_value(output.x,59.2f),"four matrices viewport");color(output.diffuse,0xbf100818u,"four inverse normal matrices");
+    state(D3DRS_NORMALIZENORMALS,TRUE);output=blend_process(buffer,fvf,sizeof(input));color(output.diffuse,0xbf663399u,"normalize blended normal once");BUF(Release)(buffer);
+#if D9WG_TNL_API >= 8
+    struct {float p[3],weight;DWORD indices;float normal[3];DWORD diffuse,specular;float tex[4];} indexed={
+        {.05f,0,.5f},.25f,0x00000201u,{1,0,0},0xffffffffu,0x59000000u,{.25f,.75f,.6f,.2f}};
+    fvf=D3DFVF_XYZB2|D3DFVF_LASTBETA_UBYTE4|attributes;
+    create_buffer(fvf,sizeof(indexed),&buffer);CopyMemory(lock_buffer(buffer),&indexed,sizeof(indexed));check(SUCCEEDED(BUF(Unlock)(buffer)),"indexed source upload");
+    state(D3DRS_VERTEXBLEND,1);state(D3DRS_INDEXEDVERTEXBLENDENABLE,TRUE);state(D3DRS_NORMALIZENORMALS,FALSE);
+    output=blend_process(buffer,fvf,sizeof(indexed));check(near_value(output.x,52),"UBYTE4 matrix indices");color(output.diffuse,0xbf100818u,"indexed inverse normal matrices");BUF(Release)(buffer);
+#if D9WG_TNL_API == 9
+    struct {float p[3],weights[2];DWORD indices;float normal[3];DWORD diffuse,specular;float tex[4];} color_indices={
+        {.05f,0,.5f},{.25f,0},0x00010203u,{1,0,0},0xffffffffu,0x59000000u,{.25f,.75f,.6f,.2f}};
+    fvf=D3DFVF_XYZB3|D3DFVF_LASTBETA_D3DCOLOR|attributes;
+    create_buffer(fvf,sizeof(color_indices),&buffer);CopyMemory(lock_buffer(buffer),&color_indices,sizeof(color_indices));check(SUCCEEDED(BUF(Unlock)(buffer)),"D3DCOLOR source upload");
+    output=blend_process(buffer,fvf,sizeof(color_indices));check(near_value(output.x,52),"D3DCOLOR matrix index order");color(output.diffuse,0xbf100818u,"D3DCOLOR weighted normal");BUF(Release)(buffer);
+    struct {float p[3],weights[4],index;float normal[3];DWORD diffuse,specular;float tex[4];} float_index={
+        {.05f,0,.5f},{.25f,.25f,.25f,0},2,{1,0,0},0xffffffffu,0x59000000u,{.25f,.75f,.6f,.2f}};
+    fvf=D3DFVF_XYZB5|attributes;state(D3DRS_VERTEXBLEND,3);
+    create_buffer(fvf,sizeof(float_index),&buffer);CopyMemory(lock_buffer(buffer),&float_index,sizeof(float_index));check(SUCCEEDED(BUF(Unlock)(buffer)),"FLOAT1 index source upload");
+    output=blend_process(buffer,fvf,sizeof(float_index));check(near_value(output.x,44),"native XYZB5 FLOAT1 index expansion");color(output.diffuse,0xbf231235u,"FLOAT1 index blended normal");BUF(Release)(buffer);
+    state(D3DRS_VERTEXBLEND,1);
+    struct {float p[3];DWORD weight_color,indices;float normal[3];DWORD diffuse,specular;float tex[4];} packed_weights={
+        {.05f,0,.5f},0x00800000u,0x00000201u,{1,0,0},0xffffffffu,0x59000000u,{.25f,.75f,.6f,.2f}};
+    fvf=D3DFVF_XYZB2|D3DFVF_LASTBETA_D3DCOLOR|attributes;
+    create_buffer(fvf,sizeof(packed_weights),&buffer);CopyMemory(lock_buffer(buffer),&packed_weights,sizeof(packed_weights));check(SUCCEEDED(BUF(Unlock)(buffer)),"packed weight source upload");
+    output=blend_process(buffer,fvf,sizeof(packed_weights));check(near_value(output.x,54.4f-9.6f*(128.0f/255.0f)),"native XYZB2 color-weight layout");color(output.diffuse,0xbf130a1du,"packed RGBA weighted normal");BUF(Release)(buffer);
+#endif
+    struct {float p[3];DWORD indices;float normal[3];DWORD diffuse,specular;float tex[4];} single={
+        {.05f,0,.5f},255,{1,0,0},0xffffffffu,0x59000000u,{.25f,.75f,.6f,.2f}};
+    blend_world(255,1,.2f);fvf=D3DFVF_XYZB1|D3DFVF_LASTBETA_UBYTE4|attributes;
+    create_buffer(fvf,sizeof(single),&buffer);CopyMemory(lock_buffer(buffer),&single,sizeof(single));check(SUCCEEDED(BUF(Unlock)(buffer)),"single indexed source upload");
+    state(D3DRS_VERTEXBLEND,256);output=blend_process(buffer,fvf,sizeof(single));check(near_value(output.x,40),"palette entry255 with 0WEIGHTS");color(output.diffuse,0xbf663399u,"single indexed normal");BUF(Release)(buffer);
+    state(D3DRS_INDEXEDVERTEXBLENDENABLE,FALSE);
+#endif
+    state(D3DRS_VERTEXBLEND,0);report("PASS shared vertex blend checks");
 }
 void WINAPI WinMainCRTStartup(void)
 {
@@ -278,6 +358,7 @@ void WINAPI WinMainCRTStartup(void)
     texture_state(0x40000,0);output=process(&input);check(output.tex[0]==.5f && output.tex[1]==.5f && output.tex[2]==23 && output.tex[3]==29,"sphere map degenerate axis");
 #endif
     texture_state(7,0);output=process(&input);check(output.tex[0]==17 && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"missing source texture set preserved");
+    blend_checks();
     report("PASS shared texture coordinate checks");
     report("PASS shared vertex fog checks");
     report("PASS shared vertex copy, bounds and layout checks");
