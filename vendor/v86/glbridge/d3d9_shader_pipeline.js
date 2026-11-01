@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "52bcf2c6e309bca7e8ab";
+globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -1899,6 +1899,7 @@ globalThis.V86GL_BUILD_REVISION = "52bcf2c6e309bca7e8ab";
                 out.push("    fog_color: vec4<f32>,");
                 out.push("    fog_params: vec4<f32>,");
             }
+            if (kind === "pixel" && this.options.alphaTestUniform) out.push("    alpha_test: vec4<u32>,");
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
                 ") var<uniform> d9c: D9Constants;");
@@ -2282,6 +2283,7 @@ globalThis.V86GL_BUILD_REVISION = "52bcf2c6e309bca7e8ab";
             const bumpLuminanceOffset = bumpStageCount
                 ? trailingOffset + bumpStageCount * 16 : -1;
             const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
+            const alphaTestOffset = this.kind === "pixel" && this.options.alphaTestUniform ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
@@ -2310,8 +2312,8 @@ globalThis.V86GL_BUILD_REVISION = "52bcf2c6e309bca7e8ab";
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0),
-                fogOffset,
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0),
+                fogOffset, alphaTestOffset,
                 bumpStageCount,
                 bumpOffset,
                 bumpLuminanceOffset,

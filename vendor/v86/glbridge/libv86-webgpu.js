@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "52bcf2c6e309bca7e8ab";
+globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -2377,6 +2377,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 out.push("    fog_color: vec4<f32>,");
                 out.push("    fog_params: vec4<f32>,");
             }
+            if (kind === "pixel" && this.options.alphaTestUniform) out.push("    alpha_test: vec4<u32>,");
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
                 ") var<uniform> d9c: D9Constants;");
@@ -2760,6 +2761,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             const bumpLuminanceOffset = bumpStageCount
                 ? trailingOffset + bumpStageCount * 16 : -1;
             const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
+            const alphaTestOffset = this.kind === "pixel" && this.options.alphaTestUniform ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
@@ -2788,8 +2790,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0),
-                fogOffset,
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0),
+                fogOffset, alphaTestOffset,
                 bumpStageCount,
                 bumpOffset,
                 bumpLuminanceOffset,
@@ -8150,9 +8152,9 @@ ${body.join("\n")}
         const FF_LOCATION_BLENDINDICES = 14;
 
         // D3D9's alpha test has no fixed-function equivalent in WebGPU: it has to
-        // become a `discard` in the fragment shader, which means the comparison
-        // and the reference value are baked into the shader and therefore into
-        // the pipeline key. Returns "" when no test is needed.
+        // become a `discard` in the fragment shader. The comparison function
+        // is compiled while ALPHAREF is supplied through a uniform. Samples
+        // are quantized to UNORM8 before comparison. Returns "" for ALWAYS.
         //
         // This matters far beyond a subtle shading difference. UI atlases and
         // billboarded foliage lean on alpha test to cut fully transparent texels;
@@ -8161,9 +8163,9 @@ ${body.join("\n")}
         //
         // D3DCMPFUNC values are 1..8; the expression below is the *discard*
         // condition, i.e. the negation of "the fragment passes".
-        function alphaTestDiscard(alphaTest, alphaExpression) {
+        function alphaTestDiscard(alphaTest, alphaExpression, referenceExpression) {
             if (!alphaTest || !alphaTest.enabled) return "";
-            const reference = (alphaTest.reference & 255) + "u";
+            const reference = referenceExpression || (alphaTest.reference & 255) + "u";
             const alpha = "u32(clamp(" + alphaExpression + ", 0.0, 1.0) * 255.0 + 0.5)";
             const condition = {
                 1: "true", // NEVER
@@ -8372,6 +8374,8 @@ ${body.join("\n")}
         // The pixel block: only what the texture cascade and the fog blend read.
         function fixedPixelUniformLayout(signature) {
             const fields = [];
+            if (signature.alphaTest && signature.alphaTest.enabled)
+                fields.push({ name: "alpha_test", type: "vec4<u32>", bytes: 16 });
             if (signature.fogMode)
                 fields.push({ name: "fog_color", type: "vec4<f32>", bytes: 16 });
             if (signature.tableFog)
@@ -9294,7 +9298,7 @@ fn d9_ps_main(stage_in: D9PixelInput) -> @location(0) vec4<f32> {
 ${clipDiscard}
 ${samples.join("\n")}
 ${cascadeBody}    var result = ${value};
-${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a")}${fogBody}    return result;
+${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alpha_test.x")}${fogBody}    return result;
 }
 `;
         }
@@ -15695,7 +15699,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             drawOptions = drawOptions || {};
             const alphaTest = pipelineState.alphaTest;
             const alphaTestKey = alphaTest.enabled
-                ? "_a" + alphaTest.func + "_" + alphaTest.reference : "";
+                ? "_a" + alphaTest.func : "";
             const rs = state.renderStates;
             const clipMask = (rs.get(D3DRS_CLIPPLANEENABLE) || 0) & 0x3f;
             const clipPlaneCount = clipMask
@@ -15866,7 +15870,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     if (!variant) {
                         variant = shaderPipeline.compileShader(psResource.tokens, {
                             alphaTestDiscard: alphaTestDiscard(alphaTest,
-                                "result.color0.a"),
+                                "result.color0.a", "d9c.alpha_test.x"),
+                            alphaTestUniform: alphaTest.enabled,
                             clipPlaneCount,
                             depthSamplers,
                             depthFetchSamplers,
@@ -15960,7 +15965,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 pixelSignature = {
                     stages: cascade.stages,
                     usesTextureFactor: cascade.usesTextureFactor,
-                    fogMode, tableFog, alphaTest, clipPlaneCount,
+                    fogMode, tableFog, alphaTest: { enabled: alphaTest.enabled, func: alphaTest.func }, clipPlaneCount,
                     // D3D9 adds the specular colour after the cascade whenever
                     // D3DRS_SPECULARENABLE is set, whether it came from lighting
                     // or straight off the vertex.
@@ -16802,7 +16807,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     ? ((argb >>> 24) & 0xff) / 255 : alpha;
             };
             for (const entry of layout.entries) {
-                if (entry.name === "fog_color") {
+                if (entry.name === "alpha_test") {
+                    new Uint32Array(backing, byteOffset + entry.offset, 4)[0] = (state.renderStates.get(D3DRS_ALPHAREF) || 0) & 255;
+                } else if (entry.name === "fog_color") {
                     const params = layout.byName.get("fog_params");
                     this.writeFogUniforms(state, floats, entry.offset / 4, params ? params.offset / 4 : -1);
                 } else if (entry.name === "fog_params") {
@@ -16898,6 +16905,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     values.set((mask & (1 << plane))
                         ? state.clipPlanes[plane] : [0, 0, 0, 1],
                         base + plane * 4);
+            }
+            if (reflection.alphaTestOffset >= 0 && state) {
+                new Uint32Array(backing, byteOffset + reflection.alphaTestOffset, 4)[0] = (state.renderStates.get(D3DRS_ALPHAREF) || 0) & 255;
             }
             if (reflection.fogOffset >= 0 && state) {
                 const floats = new Float32Array(backing, byteOffset);
