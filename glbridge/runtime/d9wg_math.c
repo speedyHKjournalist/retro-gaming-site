@@ -1,0 +1,65 @@
+#include "d9wg_math.h"
+
+/* The legacy D3D7 SDK spells a matrix as sixteen individual float members;
+ * newer SDKs also expose m[4][4]. Constant-size builtin copies access both
+ * layouts without float-array aliasing assumptions or a C runtime call. */
+static float matrix_value(const void *matrix, uint32_t row, uint32_t column)
+{
+    float value;
+    __builtin_memcpy(&value, (const uint8_t *)matrix + (row * 4u + column) * sizeof(value), sizeof(value));
+    return value;
+}
+
+float d9wg_sqrt_positive(float value)
+{
+    union { float number; uint32_t bits; } estimate;
+    float guess;
+    uint32_t iteration;
+    if (!(value > 0.0f)) return 0.0f;
+    estimate.number = value;
+    estimate.bits = 0x1fbd1df5u + (estimate.bits >> 1);
+    guess = estimate.number;
+    for (iteration = 0; iteration < 4u; ++iteration)
+        guess = 0.5f * (guess + value / guess);
+    return guess;
+}
+
+void d9wg_transform_vector4(const void *matrix, const float *input, float *output)
+{
+    uint32_t column;
+    for (column = 0; column < 4u; ++column) {
+        output[column] = input[0] * matrix_value(matrix, 0, column)
+                + input[1] * matrix_value(matrix, 1, column)
+                + input[2] * matrix_value(matrix, 2, column)
+                + input[3] * matrix_value(matrix, 3, column);
+    }
+}
+
+void d9wg_multiply_matrix(const void *left, const void *right, void *output)
+{
+    uint32_t row, column;
+    for (row = 0; row < 4u; ++row) {
+        for (column = 0; column < 4u; ++column) {
+            float value = matrix_value(left, row, 0) * matrix_value(right, 0, column)
+                    + matrix_value(left, row, 1) * matrix_value(right, 1, column)
+                    + matrix_value(left, row, 2) * matrix_value(right, 2, column)
+                    + matrix_value(left, row, 3) * matrix_value(right, 3, column);
+            __builtin_memcpy((uint8_t *)output + (row * 4u + column) * sizeof(value), &value, sizeof(value));
+        }
+    }
+}
+
+static float saturate(float value)
+{
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+uint32_t d9wg_pack_color(const float *rgba)
+{
+    return ((uint32_t)(saturate(rgba[3]) * 255.0f + 0.5f) << 24)
+            | ((uint32_t)(saturate(rgba[0]) * 255.0f + 0.5f) << 16)
+            | ((uint32_t)(saturate(rgba[1]) * 255.0f + 0.5f) << 8)
+            | (uint32_t)(saturate(rgba[2]) * 255.0f + 0.5f);
+}

@@ -1,0 +1,25 @@
+{
+  "revision": "120176e",
+  "groups": {
+    "d3d9": {
+      "d9_sqrt": "static float d9_sqrt(float value)\n{\n    union { float number; uint32_t bits; } convert;\n    float guess;\n    UINT iteration;\n\n    if (!(value > 0.0f)) return 0.0f;\n    convert.number = value;\n    convert.bits = 0x1fbd1df5u + (convert.bits >> 1);\n    guess = convert.number;\n    for (iteration = 0; iteration < 4u; ++iteration)\n        guess = 0.5f * (guess + value / guess);\n    return guess;\n}",
+      "d9_transform_vector4": "static void d9_transform_vector4(const D3DMATRIX *matrix, const float *in,\n        float *out)\n{\n    UINT row;\n    for (row = 0; row < 4; ++row) {\n        out[row] = in[0] * matrix->m[0][row] + in[1] * matrix->m[1][row]\n                + in[2] * matrix->m[2][row] + in[3] * matrix->m[3][row];\n    }\n}",
+      "d9_multiply_matrix": "static void d9_multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,\n        D3DMATRIX *out)\n{\n    UINT row;\n    UINT column;\n    for (row = 0; row < 4; ++row) {\n        for (column = 0; column < 4; ++column) {\n            out->m[row][column] =\n                    left->m[row][0] * right->m[0][column]\n                    + left->m[row][1] * right->m[1][column]\n                    + left->m[row][2] * right->m[2][column]\n                    + left->m[row][3] * right->m[3][column];\n        }\n    }\n}",
+      "d9_saturate": "static float d9_saturate(float value)\n{\n    if (value < 0.0f) return 0.0f;\n    if (value > 1.0f) return 1.0f;\n    return value;\n}",
+      "d9_pack_color": "static D3DCOLOR d9_pack_color(const float *rgba)\n{\n    return ((DWORD)(d9_saturate(rgba[3]) * 255.0f + 0.5f) << 24)\n            | ((DWORD)(d9_saturate(rgba[0]) * 255.0f + 0.5f) << 16)\n            | ((DWORD)(d9_saturate(rgba[1]) * 255.0f + 0.5f) << 8)\n            | (DWORD)(d9_saturate(rgba[2]) * 255.0f + 0.5f);\n}"
+    },
+    "d3d8": {
+      "float_sqrt": "static float float_sqrt(float value)\n{\n    union { float number; uint32_t bits; } convert;\n    float guess;\n    UINT iteration;\n\n    if (!(value > 0.0f)) return 0.0f;\n    convert.number = value;\n    convert.bits = 0x1fbd1df5u + (convert.bits >> 1);\n    guess = convert.number;\n    for (iteration = 0; iteration < 4u; ++iteration)\n        guess = 0.5f * (guess + value / guess);\n    return guess;\n}",
+      "transform_vector4": "static void transform_vector4(const D3DMATRIX *matrix, const float *in,\n        float *out)\n{\n    UINT row;\n    for (row = 0; row < 4; ++row) {\n        out[row] = in[0] * matrix->m[0][row] + in[1] * matrix->m[1][row]\n                + in[2] * matrix->m[2][row] + in[3] * matrix->m[3][row];\n    }\n}",
+      "multiply_matrix": "static void multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,\n        D3DMATRIX *out)\n{\n    UINT row;\n    UINT column;\n    for (row = 0; row < 4; ++row) {\n        for (column = 0; column < 4; ++column) {\n            out->m[row][column] =\n                    left->m[row][0] * right->m[0][column]\n                    + left->m[row][1] * right->m[1][column]\n                    + left->m[row][2] * right->m[2][column]\n                    + left->m[row][3] * right->m[3][column];\n        }\n    }\n}",
+      "saturate_float": "static float saturate_float(float value)\n{\n    if (value < 0.0f) return 0.0f;\n    if (value > 1.0f) return 1.0f;\n    return value;\n}",
+      "pack_color": "static D3DCOLOR pack_color(const float *rgba)\n{\n    return ((DWORD)(saturate_float(rgba[3]) * 255.0f + 0.5f) << 24)\n            | ((DWORD)(saturate_float(rgba[0]) * 255.0f + 0.5f) << 16)\n            | ((DWORD)(saturate_float(rgba[1]) * 255.0f + 0.5f) << 8)\n            | (DWORD)(saturate_float(rgba[2]) * 255.0f + 0.5f);\n}"
+    },
+    "d3d7": {
+      "d3d7_sqrt": "static float d3d7_sqrt(float value)\n{\n    union { float value; uint32_t bits; } estimate;\n    UINT iteration;\n    if (!(value > 0.0f)) return 0.0f;\n    estimate.value = value;\n    estimate.bits = 0x1fbd1df5u + (estimate.bits >> 1);\n    for (iteration = 0; iteration < 4u; ++iteration)\n        estimate.value = 0.5f * (estimate.value + value / estimate.value);\n    return estimate.value;\n}",
+      "d3d7_transform_vector": "static void d3d7_transform_vector(const D3DMATRIX *matrix,\n        const float *input, float *output)\n{\n    UINT column;\n    for (column = 0; column < 4u; ++column) {\n        output[column] = input[0] * (&matrix->_11)[column] +\n                input[1] * (&matrix->_21)[column] +\n                input[2] * (&matrix->_31)[column] +\n                input[3] * (&matrix->_41)[column];\n    }\n}",
+      "d3d7_saturate": "static float d3d7_saturate(float value)\n{\n    if (value < 0.0f) return 0.0f;\n    if (value > 1.0f) return 1.0f;\n    return value;\n}",
+      "d3d7_pack_color": "static DWORD d3d7_pack_color(const float *rgba)\n{\n    return ((DWORD)(d3d7_saturate(rgba[3]) * 255.0f + 0.5f) << 24) |\n            ((DWORD)(d3d7_saturate(rgba[0]) * 255.0f + 0.5f) << 16) |\n            ((DWORD)(d3d7_saturate(rgba[1]) * 255.0f + 0.5f) << 8) |\n            (DWORD)(d3d7_saturate(rgba[2]) * 255.0f + 0.5f);\n}"
+    }
+  }
+}

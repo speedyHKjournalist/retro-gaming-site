@@ -2673,41 +2673,20 @@ static HRESULT WINAPI d3d7_vb_Unlock(IDirect3DVertexBuffer7 *iface)
 
 static float d3d7_sqrt(float value)
 {
-    union { float value; uint32_t bits; } estimate;
-    UINT iteration;
-    if (!(value > 0.0f)) return 0.0f;
-    estimate.value = value;
-    estimate.bits = 0x1fbd1df5u + (estimate.bits >> 1);
-    for (iteration = 0; iteration < 4u; ++iteration)
-        estimate.value = 0.5f * (estimate.value + value / estimate.value);
-    return estimate.value;
+    return d9wg_sqrt_positive(value);
 }
 
 static void d3d7_transform_vector(const D3DMATRIX *matrix,
         const float *input, float *output)
 {
-    UINT column;
-    for (column = 0; column < 4u; ++column) {
-        output[column] = input[0] * (&matrix->_11)[column] +
-                input[1] * (&matrix->_21)[column] +
-                input[2] * (&matrix->_31)[column] +
-                input[3] * (&matrix->_41)[column];
-    }
+    d9wg_transform_vector4(matrix, input, output);
 }
 
-static float d3d7_saturate(float value)
-{
-    if (value < 0.0f) return 0.0f;
-    if (value > 1.0f) return 1.0f;
-    return value;
-}
+
 
 static DWORD d3d7_pack_color(const float *rgba)
 {
-    return ((DWORD)(d3d7_saturate(rgba[3]) * 255.0f + 0.5f) << 24) |
-            ((DWORD)(d3d7_saturate(rgba[0]) * 255.0f + 0.5f) << 16) |
-            ((DWORD)(d3d7_saturate(rgba[1]) * 255.0f + 0.5f) << 8) |
-            (DWORD)(d3d7_saturate(rgba[2]) * 255.0f + 0.5f);
+    return d9wg_pack_color(rgba);
 }
 
 static void d3d7_light_vertex(D3D7Device *device, const float *eye_position,

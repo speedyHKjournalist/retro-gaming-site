@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_fvf.h"
+#include "../runtime/d9wg_math.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
@@ -8967,17 +8968,7 @@ typedef struct D9ProcessLayout {
  * light distances actually take. */
 static float d9_sqrt(float value)
 {
-    union { float number; uint32_t bits; } convert;
-    float guess;
-    UINT iteration;
-
-    if (!(value > 0.0f)) return 0.0f;
-    convert.number = value;
-    convert.bits = 0x1fbd1df5u + (convert.bits >> 1);
-    guess = convert.number;
-    for (iteration = 0; iteration < 4u; ++iteration)
-        guess = 0.5f * (guess + value / guess);
-    return guess;
+    return d9wg_sqrt_positive(value);
 }
 
 /* D3D matrices are row-major and its vectors are row vectors, so this is
@@ -8986,42 +8977,20 @@ static float d9_sqrt(float value)
 static void d9_transform_vector4(const D3DMATRIX *matrix, const float *in,
         float *out)
 {
-    UINT row;
-    for (row = 0; row < 4; ++row) {
-        out[row] = in[0] * matrix->m[0][row] + in[1] * matrix->m[1][row]
-                + in[2] * matrix->m[2][row] + in[3] * matrix->m[3][row];
-    }
+    d9wg_transform_vector4(matrix, in, out);
 }
 
 static void d9_multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,
         D3DMATRIX *out)
 {
-    UINT row;
-    UINT column;
-    for (row = 0; row < 4; ++row) {
-        for (column = 0; column < 4; ++column) {
-            out->m[row][column] =
-                    left->m[row][0] * right->m[0][column]
-                    + left->m[row][1] * right->m[1][column]
-                    + left->m[row][2] * right->m[2][column]
-                    + left->m[row][3] * right->m[3][column];
-        }
-    }
+    d9wg_multiply_matrix(left, right, out);
 }
 
-static float d9_saturate(float value)
-{
-    if (value < 0.0f) return 0.0f;
-    if (value > 1.0f) return 1.0f;
-    return value;
-}
+
 
 static D3DCOLOR d9_pack_color(const float *rgba)
 {
-    return ((DWORD)(d9_saturate(rgba[3]) * 255.0f + 0.5f) << 24)
-            | ((DWORD)(d9_saturate(rgba[0]) * 255.0f + 0.5f) << 16)
-            | ((DWORD)(d9_saturate(rgba[1]) * 255.0f + 0.5f) << 8)
-            | (DWORD)(d9_saturate(rgba[2]) * 255.0f + 0.5f);
+    return d9wg_pack_color(rgba);
 }
 
 static UINT d9_decl_type_bytes(BYTE type)
