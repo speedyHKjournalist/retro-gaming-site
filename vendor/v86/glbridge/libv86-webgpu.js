@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
+globalThis.V86GL_BUILD_REVISION = "dff918e7597ce77ad91b";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -932,17 +932,15 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // comparison one, and no reference value at all.
             this.requestedDepthFetchSamplers = new Set(
                 (this.options.depthFetchSamplers || []).map(index => index | 0));
-            // D3DSAMP_MIPMAPLODBIAS per sampler, already quantised by the
-            // caller. WebGPU samplers have no bias field, so it can only be
-            // applied at the sample call; it arrives as a compile option rather
-            // than a uniform because that keeps it out of the per-draw uniform
-            // writer, and the caller folds it into the shader variant key.
+            // Standalone translations may supply literal sampler bias values.
+            // The executor uses samplerLodBiasUniform so changing a float value
+            // only updates per-draw constants, preserving the compiled module.
             this.samplerLodBias = this.options.samplerLodBias || null;
             // D3DTADDRESS_MIRRORONCE per sampler, as the axis letters that use
             // it ("xy", "x", ...). The host sampler is already clamp-to-edge
             // for such an axis, so mirroring about zero is all that is left,
             // and abs() on the coordinate is exactly that. It arrives as a
-            // compile option for the same reason the LOD bias does: it changes
+            // compile option because it changes
             // the WGSL, so it belongs in the shader variant key.
             this.samplerMirrorOnce = this.options.samplerMirrorOnce || null;
             // D3DRS_SHADEMODE's D3DSHADE_FLAT: the two colour varyings take
@@ -2079,16 +2077,17 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     ? this.degradedSample(texture, sampler, coord)
                     : "textureSampleBias(" + texture + ", " + sampler + ", " +
                         coord + ", " + options.bias + ")";
-            const stateBias = this.samplerLodBias
-                ? this.samplerLodBias[index] : 0;
+            const uniformBias = this.options.samplerLodBiasUniform && this.kind === "pixel"
+                ? "d9c.sampler_lod_bias[" + Math.floor(index / 4) + "][" + (index & 3) + "]" : "";
+            const stateBias = this.samplerLodBias ? this.samplerLodBias[index] : 0;
             if (this.nonUniformDepth > 0)
                 return this.degradedSample(texture, sampler, coord);
             // A sampler-state bias applies to the ordinary implicit-derivative
             // sample only. D3D9 ignores it for the explicit-LOD and gradient
             // forms above, and a vertex fetch has no mip chain to bias.
-            if (stateBias && this.kind !== "vertex")
+            if ((uniformBias || stateBias) && this.kind !== "vertex")
                 return "textureSampleBias(" + texture + ", " + sampler + ", " +
-                    coord + ", " + floatLiteral(stateBias) + ")";
+                    coord + ", " + (uniformBias || floatLiteral(stateBias)) + ")";
             // Vertex shaders have no implicit derivatives. D3D9 permits VTF
             // only in vs_3_0 and its ordinary texld form selects mip zero;
             // texldl above still uses the explicit LOD carried in coord.w.
@@ -2378,6 +2377,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 out.push("    fog_params: vec4<f32>,");
             }
             if (kind === "pixel" && this.options.alphaTestUniform) out.push("    alpha_test: vec4<u32>,");
+            if (kind === "pixel" && this.options.samplerLodBiasUniform) {
+                const vectors = Math.max(1, Math.ceil((Math.max(...this.samplers.keys()) + 1) / 4));
+                out.push("    sampler_lod_bias: array<vec4<f32>, " + vectors + ">,");
+            }
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
                 ") var<uniform> d9c: D9Constants;");
@@ -2762,6 +2765,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 ? trailingOffset + bumpStageCount * 16 : -1;
             const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
             const alphaTestOffset = this.kind === "pixel" && this.options.alphaTestUniform ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) : -1;
+            const samplerBiasVectors = this.kind === "pixel" && this.options.samplerLodBiasUniform
+                ? Math.max(1, Math.ceil((Math.max(...this.samplers.keys()) + 1) / 4)) : 0;
+            const samplerLodBiasOffset = samplerBiasVectors ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0) : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
@@ -2790,7 +2796,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0),
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0) + samplerBiasVectors * 16,
+                samplerLodBiasOffset, samplerBiasCount: samplerBiasVectors * 4,
                 fogOffset, alphaTestOffset,
                 bumpStageCount,
                 bumpOffset,
@@ -8376,6 +8383,11 @@ ${body.join("\n")}
             const fields = [];
             if (signature.alphaTest && signature.alphaTest.enabled)
                 fields.push({ name: "alpha_test", type: "vec4<u32>", bytes: 16 });
+            if (signature.lodBiasUniforms) {
+                const count = Math.max(...signature.stages.filter(stage => stage.samplesTexture).map(stage => stage.index)) + 1;
+                const vectors = Math.ceil(count / 4);
+                fields.push({ name: "sampler_lod_bias", type: "array<vec4<f32>, " + vectors + ">", bytes: vectors * 16, samplerBiasCount: vectors * 4 });
+            }
             if (signature.fogMode)
                 fields.push({ name: "fog_color", type: "vec4<f32>", bytes: 16 });
             if (signature.tableFog)
@@ -9083,12 +9095,12 @@ ${coordBody}${fogBody}${clipBody}${pointBody}    return result;
                             ? "abs((" + coordExpression + ")." + axis + ")"
                             : "(" + coordExpression + ")." + axis)).join(", ") + ")";
                 }
-                const rawSample = stage.lodBias
-                    ? "textureSampleBias(d9_tex" + stage.index + ", d9_smp" +
-                        stage.index + ", " + coordExpression + ", " +
-                        stage.lodBias.toFixed(6) + ")"
-                    : "textureSample(d9_tex" + stage.index +
-                        ", d9_smp" + stage.index + ", " + coordExpression + ")";
+                const rawSample = signature.lodBiasUniforms
+                    ? "textureSampleBias(d9_tex" + stage.index + ", d9_smp" + stage.index + ", " + coordExpression +
+                        ", uniforms.sampler_lod_bias[" + Math.floor(stage.index / 4) + "][" + (stage.index & 3) + "])"
+                    : stage.lodBias
+                    ? "textureSampleBias(d9_tex" + stage.index + ", d9_smp" + stage.index + ", " + coordExpression + ", " + stage.lodBias.toFixed(6) + ")"
+                    : "textureSample(d9_tex" + stage.index + ", d9_smp" + stage.index + ", " + coordExpression + ")";
                 const sampled = shaderPipeline.sampleSwizzleExpression(rawSample, stage.sampleSwizzle);
                 const borderAxes = stage.textureType === "cube" ? [] :
                     (stage.textureType === "3d"
@@ -10612,26 +10624,13 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
         return FLOAT_BITS_F32[0];
     }
 
-    // D3DSAMP_MIPMAPLODBIAS, also float bits in a DWORD.
-    //
-    // WebGPU samplers have no LOD bias at all, so the only place to apply one
-    // is the sample call -- textureSampleBias -- which means the value lands in
-    // the shader rather than in the sampler. Baking it as a literal (rather
-    // than reading it from a uniform) keeps it out of the per-draw uniform
-    // writers on both the fixed-function and translated paths, at the price of
-    // one pipeline variant per distinct bias.
-    //
-    // Quantising to 1/16 of a mip level is what bounds that price: a title that
-    // animates the bias continuously would otherwise mint a pipeline per frame,
-    // and 1/16 is far finer than the difference is visible at. The range clamp
-    // matches D3D9's own, which no hardware exceeded.
-    const LOD_BIAS_STEPS = 16;
+    // Mipmap bias is a per-draw float uniform, clamped to the supported
+    // sampling range. It no longer needs quantization to bound shader variants.
     const LOD_BIAS_LIMIT = 16;
     function lodBiasFor(dword) {
         const bias = floatFromDWORD(dword);
         if (!Number.isFinite(bias) || bias === 0) return 0;
-        return Math.round(Math.max(-LOD_BIAS_LIMIT,
-            Math.min(LOD_BIAS_LIMIT, bias)) * LOD_BIAS_STEPS) / LOD_BIAS_STEPS;
+        return Math.max(-LOD_BIAS_LIMIT, Math.min(LOD_BIAS_LIMIT, bias));
     }
 
     // The pixel rect a draw may touch: the D3D9 viewport (which clips, unlike
@@ -14860,8 +14859,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     addressV: samplerState(index, D3DSAMP_ADDRESSV, 1),
                     addressW: samplerState(index, D3DSAMP_ADDRESSW, 1),
                     borderColor: samplerState(index, D3DSAMP_BORDERCOLOR, 0),
-                    lodBias: lodBiasFor(samplerState(index,
-                        D3DSAMP_MIPMAPLODBIAS, 0)),
                 };
                 // Which arguments a stage reads decides what has to be declared
                 // and uploaded for it. Getting this wrong in either direction is
@@ -15822,31 +15819,21 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                         (depthFetchSamplers.length
                             ? "_r" + depthFetchSamplers.join(".") : "")
                     : "";
-                // D3DSAMP_MIPMAPLODBIAS is sampler state, but WebGPU has no
-                // sampler field for it, so it can only be applied at the sample
-                // call -- which puts it in the WGSL and therefore in the variant
-                // key. Only the samplers this shader actually declares are
-                // considered, so an unrelated stage's stale bias cannot mint a
-                // variant.
+                // The sampler set determines one bias uniform layout; values
+                // are uploaded per draw and never enter the shader key.
                 const samplerSwizzles = {};
                 let swizzleKey = "";
-                const samplerLodBias = {};
-                let lodBiasKey = "";
+                const samplerLodBiasUniform = psResource.translated.reflection.samplers.length > 0;
+                const lodBiasKey = samplerLodBiasUniform ? "_lod_uniform" : "";
                 // D3DTADDRESS_MIRRORONCE is finished in the shader too: the
                 // sampler clamps, and abs() on the coordinate supplies the
-                // mirror. Same variant-key treatment as the bias.
+                // mirror. Address modes remain part of the variant key.
                 const samplerMirrorOnce = {};
                 let mirrorOnceKey = "";
                 for (const sampler of psResource.translated.reflection.samplers) {
                     const texture = this.resources.get(state.textures.get(sampler.index));
                     const swizzle = texture && samplingSwizzle(texture.format);
                     if (swizzle) { samplerSwizzles[sampler.index] = swizzle;swizzleKey += "_w" + sampler.index + ":" + swizzle; }
-                    const bias = lodBiasFor(state.samplerStates.get(
-                        sampler.index * 64 + D3DSAMP_MIPMAPLODBIAS) || 0);
-                    if (bias) {
-                        samplerLodBias[sampler.index] = bias;
-                        lodBiasKey += "_b" + sampler.index + ":" + bias;
-                    }
                     const axes = [
                         [D3DSAMP_ADDRESSU, "x"], [D3DSAMP_ADDRESSV, "y"],
                         [D3DSAMP_ADDRESSW, "z"],
@@ -15875,7 +15862,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                             clipPlaneCount,
                             depthSamplers,
                             depthFetchSamplers,
-                            samplerLodBias, samplerSwizzles,
+                            samplerLodBiasUniform, samplerSwizzles,
                             samplerMirrorOnce,
                             legacySamplerTypes,
                             flatShading, fogBlend,
@@ -15965,6 +15952,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 pixelSignature = {
                     stages: cascade.stages,
                     usesTextureFactor: cascade.usesTextureFactor,
+                    lodBiasUniforms: cascade.stages.some(stage => stage.samplesTexture),
                     fogMode, tableFog, alphaTest: { enabled: alphaTest.enabled, func: alphaTest.func }, clipPlaneCount,
                     // D3D9 adds the specular colour after the cascade whenever
                     // D3DRS_SPECULARENABLE is set, whether it came from lighting
@@ -16778,6 +16766,11 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
         }
 
+        writeSamplerLodBias(state, floats, offset, count) {
+            for (let index = 0; index < count; index++)
+                floats[offset + index] = lodBiasFor(state.samplerStates.get(index * 64 + D3DSAMP_MIPMAPLODBIAS) || 0);
+        }
+
         writeFogUniforms(state, floats, color, params) {
             const argb = state.renderStates.get(D3DRS_FOGCOLOR) || 0;
             floats[color] = ((argb >>> 16) & 255) / 255;
@@ -16807,7 +16800,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     ? ((argb >>> 24) & 0xff) / 255 : alpha;
             };
             for (const entry of layout.entries) {
-                if (entry.name === "alpha_test") {
+                if (entry.name === "sampler_lod_bias") {
+                    this.writeSamplerLodBias(state, floats, entry.offset / 4, entry.samplerBiasCount);
+                } else if (entry.name === "alpha_test") {
                     new Uint32Array(backing, byteOffset + entry.offset, 4)[0] = (state.renderStates.get(D3DRS_ALPHAREF) || 0) & 255;
                 } else if (entry.name === "fog_color") {
                     const params = layout.byName.get("fog_params");
@@ -16905,6 +16900,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     values.set((mask & (1 << plane))
                         ? state.clipPlanes[plane] : [0, 0, 0, 1],
                         base + plane * 4);
+            }
+            if (reflection.samplerLodBiasOffset >= 0 && state) {
+                this.writeSamplerLodBias(state, new Float32Array(backing, byteOffset), reflection.samplerLodBiasOffset / 4, reflection.samplerBiasCount);
             }
             if (reflection.alphaTestOffset >= 0 && state) {
                 new Uint32Array(backing, byteOffset + reflection.alphaTestOffset, 4)[0] = (state.renderStates.get(D3DRS_ALPHAREF) || 0) & 255;

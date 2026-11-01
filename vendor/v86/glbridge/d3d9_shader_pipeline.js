@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
+globalThis.V86GL_BUILD_REVISION = "dff918e7597ce77ad91b";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -454,17 +454,15 @@ globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
             // comparison one, and no reference value at all.
             this.requestedDepthFetchSamplers = new Set(
                 (this.options.depthFetchSamplers || []).map(index => index | 0));
-            // D3DSAMP_MIPMAPLODBIAS per sampler, already quantised by the
-            // caller. WebGPU samplers have no bias field, so it can only be
-            // applied at the sample call; it arrives as a compile option rather
-            // than a uniform because that keeps it out of the per-draw uniform
-            // writer, and the caller folds it into the shader variant key.
+            // Standalone translations may supply literal sampler bias values.
+            // The executor uses samplerLodBiasUniform so changing a float value
+            // only updates per-draw constants, preserving the compiled module.
             this.samplerLodBias = this.options.samplerLodBias || null;
             // D3DTADDRESS_MIRRORONCE per sampler, as the axis letters that use
             // it ("xy", "x", ...). The host sampler is already clamp-to-edge
             // for such an axis, so mirroring about zero is all that is left,
             // and abs() on the coordinate is exactly that. It arrives as a
-            // compile option for the same reason the LOD bias does: it changes
+            // compile option because it changes
             // the WGSL, so it belongs in the shader variant key.
             this.samplerMirrorOnce = this.options.samplerMirrorOnce || null;
             // D3DRS_SHADEMODE's D3DSHADE_FLAT: the two colour varyings take
@@ -1601,16 +1599,17 @@ globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
                     ? this.degradedSample(texture, sampler, coord)
                     : "textureSampleBias(" + texture + ", " + sampler + ", " +
                         coord + ", " + options.bias + ")";
-            const stateBias = this.samplerLodBias
-                ? this.samplerLodBias[index] : 0;
+            const uniformBias = this.options.samplerLodBiasUniform && this.kind === "pixel"
+                ? "d9c.sampler_lod_bias[" + Math.floor(index / 4) + "][" + (index & 3) + "]" : "";
+            const stateBias = this.samplerLodBias ? this.samplerLodBias[index] : 0;
             if (this.nonUniformDepth > 0)
                 return this.degradedSample(texture, sampler, coord);
             // A sampler-state bias applies to the ordinary implicit-derivative
             // sample only. D3D9 ignores it for the explicit-LOD and gradient
             // forms above, and a vertex fetch has no mip chain to bias.
-            if (stateBias && this.kind !== "vertex")
+            if ((uniformBias || stateBias) && this.kind !== "vertex")
                 return "textureSampleBias(" + texture + ", " + sampler + ", " +
-                    coord + ", " + floatLiteral(stateBias) + ")";
+                    coord + ", " + (uniformBias || floatLiteral(stateBias)) + ")";
             // Vertex shaders have no implicit derivatives. D3D9 permits VTF
             // only in vs_3_0 and its ordinary texld form selects mip zero;
             // texldl above still uses the explicit LOD carried in coord.w.
@@ -1900,6 +1899,10 @@ globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
                 out.push("    fog_params: vec4<f32>,");
             }
             if (kind === "pixel" && this.options.alphaTestUniform) out.push("    alpha_test: vec4<u32>,");
+            if (kind === "pixel" && this.options.samplerLodBiasUniform) {
+                const vectors = Math.max(1, Math.ceil((Math.max(...this.samplers.keys()) + 1) / 4));
+                out.push("    sampler_lod_bias: array<vec4<f32>, " + vectors + ">,");
+            }
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
                 ") var<uniform> d9c: D9Constants;");
@@ -2284,6 +2287,9 @@ globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
                 ? trailingOffset + bumpStageCount * 16 : -1;
             const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
             const alphaTestOffset = this.kind === "pixel" && this.options.alphaTestUniform ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) : -1;
+            const samplerBiasVectors = this.kind === "pixel" && this.options.samplerLodBiasUniform
+                ? Math.max(1, Math.ceil((Math.max(...this.samplers.keys()) + 1) / 4)) : 0;
+            const samplerLodBiasOffset = samplerBiasVectors ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0) : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
@@ -2312,7 +2318,8 @@ globalThis.V86GL_BUILD_REVISION = "738a0ae664a53d644c86";
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0),
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0) + samplerBiasVectors * 16,
+                samplerLodBiasOffset, samplerBiasCount: samplerBiasVectors * 4,
                 fogOffset, alphaTestOffset,
                 bumpStageCount,
                 bumpOffset,
