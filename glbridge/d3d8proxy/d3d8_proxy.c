@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_fvf.h"
+#include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
 #include "../openglproxy/v86gl_ioctl.h"
@@ -2751,6 +2752,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
             sizeof(*device));
     if (!device)
         return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    d9wg_fpu_setup((behavior & D3DCREATE_FPU_PRESERVE) != 0);
     device->iface.lpVtbl = &g_device_vtbl;
     device->refcount = 1;
     device->parent = d3d;

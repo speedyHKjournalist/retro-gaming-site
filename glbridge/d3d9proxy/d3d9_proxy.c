@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_fvf.h"
+#include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
 #ifdef D9WG_DIAGNOSTIC_TRACE
@@ -4119,6 +4120,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
         TRACE("FAIL CreateDevice allocation -> %08lX", (DWORD)E_OUTOFMEMORY);
         return E_OUTOFMEMORY;
     }
+    d9wg_fpu_setup((behavior & D3DCREATE_FPU_PRESERVE) != 0);
     device->iface.lpVtbl = &g_device_vtbl;
     device->implicit_swap_chain.iface.lpVtbl = &g_swap_chain_vtbl;
     device->implicit_swap_chain.device = device;
