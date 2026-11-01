@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "cca565279ff8d9998d67";
+globalThis.V86GL_BUILD_REVISION = "de4f6973b6863625750c";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -51292,9 +51292,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 // unchanged. See docs/glbridge.md.
 //
 // Channel messages, device -> host:
-//   batch      { id, generation, frameId, flags, commandCount, descAddr,
+//   batch      { id, generation, ownerToken?, frameId, flags, commandCount, descAddr,
 //                descLen, batchAddr, responseBase, submitCount, bytes }
-//   released   {}                             the process that mapped the arena
+//   released   { ownerToken }                 the process that mapped the arena
 //                                             let it go (it exited or was killed)
 // host -> device:
 //   write      { generation, offset, bytes, inlineId? }  readback into the arena
@@ -51320,13 +51320,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     const MAGIC = 0x324C4756;
     // v86gl_pci.js's snapshots (state[92] before virtio_devices)
     const LEGACY_STATE_MAGIC = 0x56514731;
-    const STATE_VERSION = 3;
+    const STATE_VERSION = 4;
     const ARENA_BYTES = 16 * 1024 * 1024;
     const RESPONSE_AREA_BYTES = 4 * 1024 * 1024;
     const HEADER_BYTES = 32;
     const REQUEST_BYTES = 24;
     const RESPONSE_BYTES = 16;
     const F_SHARED_ARENA = 0;
+    const F_D3D_OWNER_ARENAS = 1;
     const F_VERSION_1 = 32;
     const REGISTER_ARENA = 1;
     const SUBMIT = 2;
@@ -51355,12 +51356,19 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
         let arenaAddress = 0;
         let arenaBytes = 0;
         let arenaGeneration = 0;
+        let nextGeneration = 0;
+        const ownerArenas = new Map();
+        const writeArenas = new Map();
+        // A queue reset revokes physical mappings, but the process and its GPU
+        // resources remain live until an explicit owner release.
+        const logicalOwners = new Set();
         let lastFrameId = 0;
         let lastBytes = 0;
         let submitCount = 0;
         let hostAvailable = false;
         let initializing = false;
         let nextBatch = 0;
+        let legacyBatch = 0;
         const inflight = new Map();
         let inflightBytes = 0;
         let processing = false;
@@ -51368,7 +51376,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
         let heldRequest = null;
 
         if (shadow) shadow.writeResponse = (target, bytes, statusOffset) => {
-            if (target.generation !== arenaGeneration || target.batchId !== nextBatch || !arenaBytes) return;
+            if (target.generation !== arenaGeneration || target.batchId !== legacyBatch || !arenaBytes) return;
             const offset = HEADER_BYTES + target.offset;
             if (offset < HEADER_BYTES || offset + bytes.length > arenaBytes) return;
             dev.write_memory(bytes.subarray(0, statusOffset), arenaAddress + offset);
@@ -51399,9 +51407,27 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
         }
 
         function releaseArena() {
-            ++arenaGeneration;
+            arenaGeneration = ++nextGeneration;
             arenaAddress = 0;
             arenaBytes = 0;
+        }
+
+        function releasePhysicalArenas() {
+            releaseArena();
+            ownerArenas.clear();
+            writeArenas.clear();
+        }
+
+        function overlaps(address, bytes, exceptOwner) {
+            if (exceptOwner !== 0 && arenaBytes && address < arenaAddress + arenaBytes && arenaAddress < address + bytes)
+                return true;
+            for (const [owner, arena] of ownerArenas)
+                if (owner !== exceptOwner && address < arena.address + arena.bytes && arena.address < address + bytes) return true;
+            return false;
+        }
+
+        function validArena(address, bytes) {
+            return Number.isSafeInteger(address) && address > 0 && bytes === ARENA_BYTES && dev.is_ram(address, bytes);
         }
 
         function forgetInflight() {
@@ -51424,14 +51450,16 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                     // A readback lands in the arena of the batch that asked for it
                     const offset = message.offset;
                     const bytes = message.bytes;
-                    if (message.generation !== arenaGeneration || !arenaBytes) return;
+                    const arena = writeArenas.get(message.generation) ||
+                        (message.generation === arenaGeneration && arenaBytes ? { address: arenaAddress, bytes: arenaBytes } : null);
+                    if (!arena) return;
                     // A timed-out GL inline response must not overwrite the
                     // next command stream, even when its page-side callback
                     // ran before that newer batch reached the page.
-                    if (message.inlineId !== undefined && message.inlineId !== nextBatch) return;
-                    if (!Number.isInteger(offset) || offset < 0 || offset + bytes.length > arenaBytes)
+                    if (message.inlineId !== undefined && (message.generation !== arenaGeneration || message.inlineId !== legacyBatch)) return;
+                    if (!Number.isInteger(offset) || offset < 0 || offset + bytes.length > arena.bytes)
                         throw new RangeError("v86gl write outside registered arena");
-                    dev.write_memory(bytes, arenaAddress + offset);
+                    dev.write_memory(bytes, arena.address + offset);
                     break;
                 }
                 case "done": {
@@ -51456,6 +51484,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                     if (shadow && !shadow.capabilities) shadow.setCapabilities(message.value);
                     break;
                 case "machine_reset":
+                    releasePhysicalArenas();
+                    logicalOwners.clear();
                     if (shadow) shadow.reset();
                     completeHeld(INVALID);
                     break;
@@ -51536,35 +51566,52 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             const high = view.getUint32(8, true);
             const length = view.getUint32(12, true);
             const flags = view.getUint32(16, true);
-            if (view.getUint32(20, true)) return INVALID;
+            const ownerToken = view.getUint32(20, true);
+            if (ownerToken && !dev.is_feature_negotiated(F_D3D_OWNER_ARENAS)) return INVALID;
             if (op === REGISTER_ARENA) {
-                // A 64-bit guest-physical address: RAM anywhere on the 36-bit bus
-                const arena = address + high * 0x100000000;
-                if (arenaBytes || flags || length !== ARENA_BYTES || !arena || !dev.is_ram(arena, length))
-                    return INVALID;
-                ++arenaGeneration;
-                arenaAddress = arena;
-                arenaBytes = length;
+                // A 64-bit guest-physical address: RAM anywhere on the 36-bit bus.
+                const address64 = address + high * 0x100000000;
+                if (flags || !validArena(address64, length) || overlaps(address64, length, ownerToken)) return INVALID;
+                if (ownerToken) {
+                    const old = ownerArenas.get(ownerToken);
+                    // The driver registers before each D3D submit, including
+                    // after a queue reset. Repeating it must retain write leases.
+                    if (old) return old.address === address64 && old.bytes === length ? OK : INVALID;
+                    const arena = { address: address64, bytes: length, generation: ++nextGeneration };
+                    ownerArenas.set(ownerToken, arena);
+                    writeArenas.set(arena.generation, arena);
+                } else {
+                    if (arenaBytes) return INVALID;
+                    arenaGeneration = ++nextGeneration;
+                    arenaAddress = address64;
+                    arenaBytes = length;
+                }
+                logicalOwners.add(ownerToken);
                 return OK;
             }
             if (address || high) return INVALID;
             if (op === UNREGISTER_ARENA) {
                 if (length || flags) return INVALID;
-                // v86gl.sys unmaps when its owner closes the device, which the
-                // kernel does for a killed process too: every session it
-                // submitted is over (review S1-10, GL S1-4)
-                if (arenaBytes) channel.post({ type: "released" });
-                releaseArena();
-                if (shadow) shadow.reset();
+                if (logicalOwners.delete(ownerToken)) channel.post({ type: "released", ownerToken });
+                if (ownerToken) {
+                    const arena = ownerArenas.get(ownerToken);
+                    if (arena) writeArenas.delete(arena.generation);
+                    ownerArenas.delete(ownerToken);
+                } else {
+                    releaseArena();
+                    if (shadow) shadow.reset();
+                }
                 return OK;
             }
             if (op !== SUBMIT || (flags & ~1)) return INVALID;
-            if (!arenaBytes) return NO_ARENA;
-            if (length < HEADER_BYTES || length > arenaBytes) return INVALID;
+            const arena = ownerToken ? ownerArenas.get(ownerToken) :
+                arenaBytes ? { address: arenaAddress, bytes: arenaBytes, generation: arenaGeneration } : null;
+            if (!arena) return NO_ARENA;
+            if (length < HEADER_BYTES || length > arena.bytes) return INVALID;
 
             // A view of guest RAM while the batch has one contiguous backing
             // (checked per submission: the physical map may have changed)
-            const raw = dev.read_memory(arenaAddress, length);
+            const raw = dev.read_memory(arena.address, length);
             const header = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
             const commandBytes = header.getUint32(20, true);
             // VGL2 reserved words belong to the graphics protocol, not to the
@@ -51573,14 +51620,20 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             if (header.getUint32(0, true) !== MAGIC || header.getUint32(4, true) !== 1 ||
                     commandBytes !== length - HEADER_BYTES || (header.getUint32(8, true) & ~1))
                 return INVALID;
+            // Positive tokens are dedicated to the common DirectX runtime;
+            // legacy OpenGL remains on owner zero with its synchronous shadow.
+            if (ownerToken && (length < HEADER_BYTES + 8 || header.getUint32(16, true) !== 1 ||
+                    header.getUint16(HEADER_BYTES, true) !== 0xffe1 || header.getUint16(HEADER_BYTES + 2, true) !== 0xffff ||
+                    header.getUint32(HEADER_BYTES + 4, true) !== commandBytes - 8)) return INVALID;
             if (!hostAvailable) return NO_RENDERER;
             const id = ++nextBatch;
+            if (!ownerToken) legacyBatch = id;
             const frameId = header.getUint32(12, true);
 
             // A GL batch's answers, written into the guest's memory before
             // it is copied (a D3D batch is one envelope record, 0xFFE1)
             let segments;
-            if (shadow && !(length >= HEADER_BYTES + 4 && (header.getUint16(HEADER_BYTES, true) & 0xFFF0) === 0xFFE0 &&
+            if (!ownerToken && shadow && !(length >= HEADER_BYTES + 4 && (header.getUint16(HEADER_BYTES, true) & 0xFFF0) === 0xFFE0 &&
                     header.getUint16(HEADER_BYTES + 2, true) === 0xFFFF))
                 segments = shadow.process(raw.subarray(HEADER_BYTES), { generation: arenaGeneration, batchId: id, root: true, offset: 0,
                     frameId, flags: header.getUint32(8, true) | flags, commandCount: header.getUint32(16, true), submitCount: submitCount + 1 });
@@ -51592,14 +51645,15 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             channel.post({
                 type: "batch",
                 id,
-                generation: arenaGeneration,
+                generation: arena.generation,
+                ...(ownerToken ? { ownerToken } : {}),
                 frameId,
-                flags: shadow?.cpuBarrier ? 0 : header.getUint32(8, true) | flags,
+                flags: !ownerToken && shadow?.cpuBarrier ? 0 : header.getUint32(8, true) | flags,
                 commandCount: header.getUint32(16, true),
-                descAddr: arenaAddress,
+                descAddr: arena.address,
                 descLen: length,
-                batchAddr: arenaAddress + HEADER_BYTES,
-                responseBase: arenaBytes - RESPONSE_AREA_BYTES - HEADER_BYTES,
+                batchAddr: arena.address + HEADER_BYTES,
+                responseBase: arena.bytes - RESPONSE_AREA_BYTES - HEADER_BYTES,
                 submitCount: submitCount + 1,
                 bytes,
                 ...(segments ? { segments } : {}),
@@ -51621,7 +51675,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             // Provisional, unallocated local ID. NOT the standard virtio-gpu ID.
             device_id: 0x107F,
             subsystem_device_id: 0x5686,
-            features: [F_SHARED_ARENA],
+            features: [F_SHARED_ARENA, F_D3D_OWNER_ARENAS],
             queues: [{ size: 8 }],
             config: [
                 { bytes: 4, name: "magic", read: () => MAGIC },
@@ -51649,7 +51703,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             reset() {
                 heldRequest = null;
                 shadow?.cancelCPU();
-                releaseArena();
+                releasePhysicalArenas();
                 lastFrameId = lastBytes = submitCount = 0;
                 forgetInflight();
                 // (not the shadow's contexts: this is also the driver's queue
@@ -51660,20 +51714,46 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                 if (heldRequest || shadow?.cpuBarrier)
                     throw new Error("GL snapshot requires completed CPU state dependencies");
                 return [STATE_VERSION, arenaAddress, arenaBytes, lastFrameId, lastBytes, submitCount,
-                    shadow ? JSON.stringify(shadow.getState()) : ""];
+                    shadow ? JSON.stringify(shadow.getState()) : "",
+                    Array.from(ownerArenas, ([owner, arena]) => [owner, arena.address, arena.bytes]),
+                    Array.from(logicalOwners)];
             },
             set_state(state) {
-                // version 2 has no shadow state: the renderer sends its capabilities again
-                if (!Array.isArray(state) || state[0] !== STATE_VERSION && state[0] !== 2)
+                // Versions 2/3 contain only the legacy arena.
+                if (!Array.isArray(state) || ![2, 3, STATE_VERSION].includes(state[0]))
                     throw new Error("Unsupported virtio-v86gl state in snapshot");
-                heldRequest = null;
                 const [, address, bytes, frameId, last, count, shadowState] = state;
+                const savedArenas = state[0] === STATE_VERSION ? state[7] : [];
+                const savedOwners = state[0] === STATE_VERSION ? state[8] : bytes ? [0] : [];
+                if (!Array.isArray(savedArenas) || !Array.isArray(savedOwners) ||
+                        savedOwners.some(owner => !Number.isInteger(owner) || owner < 0 || owner > 0xffffffff) ||
+                        new Set(savedOwners).size !== savedOwners.length)
+                    throw new Error("Invalid virtio-v86gl owners in snapshot");
+                const checked = new Map(), ranges = [];
+                if (bytes) {
+                    if (!validArena(address, bytes) || !savedOwners.includes(0))
+                        throw new Error("Invalid virtio-v86gl arena in snapshot");
+                    ranges.push([address, bytes]);
+                }
+                for (const entry of savedArenas) {
+                    if (!Array.isArray(entry) || entry.length !== 3) throw new Error("Invalid virtio-v86gl owner arena");
+                    const [owner, address, bytes] = entry;
+                    if (!Number.isInteger(owner) || owner <= 0 || owner > 0xffffffff || checked.has(owner) ||
+                            !savedOwners.includes(owner) || !validArena(address, bytes) ||
+                            ranges.some(([start, size]) => address < start + size && start < address + bytes))
+                        throw new Error("Invalid virtio-v86gl owner arena");
+                    ranges.push([address, bytes]);checked.set(owner, { address, bytes });
+                }
                 if (shadow) shadow.setState(shadowState ? JSON.parse(shadowState) : null);
-                if (bytes && (bytes !== ARENA_BYTES || !dev.is_ram(address, bytes)))
-                    throw new Error("Invalid virtio-v86gl arena in snapshot");
-                releaseArena();
-                arenaAddress = address;
+                heldRequest = null;
+                releasePhysicalArenas();
+                logicalOwners.clear();for (const owner of savedOwners) logicalOwners.add(owner);
+                arenaAddress = bytes ? address : 0;
                 arenaBytes = bytes;
+                for (const [owner, arena] of checked) {
+                    arena.generation = ++nextGeneration;
+                    ownerArenas.set(owner, arena);writeArenas.set(arena.generation, arena);
+                }
                 lastFrameId = frameId;
                 lastBytes = last;
                 submitCount = count;
