@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "9341833c88a4a8e6a411";
+globalThis.V86GL_BUILD_REVISION = "cca565279ff8d9998d67";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -10900,6 +10900,7 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                     width: view.getUint32(offset + D9WG.F.CreateSwapChain.width, true),
                     height: view.getUint32(offset + D9WG.F.CreateSwapChain.height, true),
                     swapChain: handle,
+                    deviceHandle: state.handle,
                     sessionKey: state.surface ? state.surface.sessionKey : null,
                     visible: true,
                 };
@@ -12590,6 +12591,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.sessionKey = null;
             // the sessions submitted since the arena's owner last released it
             this.ownerSessions = new Set();
+            this.ownerSessionScopes = new Map();
+            this.batchOwnerToken = 0;
             this.frame = null;             // { ops, transientBuffers, serial }
             this.frameSerial = 0;
             this.frameReplayer = new FrameReplayer(this);
@@ -13030,6 +13033,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.releaseActiveSession("state-restore");
             }
             this.sessionStates.clear();
+            this.ownerSessions.clear();this.ownerSessionScopes.clear();
             this.sessionKey = null;
             this.pipelineCache.clear();
             this.bindGroupCache.clear();
@@ -13052,9 +13056,19 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 if (error instanceof D9WGStreamError) ++this.stats.malformedBatches;
                 throw error;
             }
-            const { view, end, commandCount, sessionKey } = packet;
+            const { view, end, commandCount } = packet;
+            const ownerToken = metadata.ownerToken === undefined ? 0 : metadata.ownerToken;
+            if (!Number.isInteger(ownerToken) || ownerToken < 0 || ownerToken > 0xffffffff) {
+                ++this.stats.malformedBatches;
+                throw new D9WGStreamError("D9WG transport owner token is invalid");
+            }
+            this.batchOwnerToken = ownerToken;
+            const sessionKey = this.ownerSessionKey(packet.sessionKey, ownerToken);
             this.switchSession(sessionKey);
             this.ownerSessions.add(sessionKey);
+            let scope = this.ownerSessionScopes.get(ownerToken);
+            if (!scope) this.ownerSessionScopes.set(ownerToken, scope = new Set());
+            scope.add(sessionKey);
             ++this.stats.batches;
 
             this.checkStream(view, end, commandCount);
@@ -13354,8 +13368,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // "...576c00" -- the same session, printed exact then rounded) and
             // let two distinct sessions round together into one key, which
             // would keep a dead process's handles alive against a live one.
-            const sessionKey = sessionHigh.toString(16).padStart(8, "0") +
-                sessionLow.toString(16).padStart(8, "0");
+            const sessionKey = this.ownerSessionKey(sessionHigh.toString(16).padStart(8, "0") +
+                sessionLow.toString(16).padStart(8, "0"), this.batchOwnerToken);
             // HELLO duplicates the batch-header id as a corruption check. The
             // header selected the context before command decoding; changing it
             // here would let one malformed command redirect the rest of its
@@ -13425,8 +13439,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         onSessionEnd(bytes, view, offset, length) {
             const sessionLow = view.getUint32(offset + D9WG.F.SessionEnd.session_id_low, true);
             const sessionHigh = view.getUint32(offset + D9WG.F.SessionEnd.session_id_high, true);
-            const sessionKey = sessionHigh.toString(16).padStart(8, "0") +
-                sessionLow.toString(16).padStart(8, "0");
+            const sessionKey = this.ownerSessionKey(sessionHigh.toString(16).padStart(8, "0") +
+                sessionLow.toString(16).padStart(8, "0"), this.batchOwnerToken);
             if (this.sessionKey !== sessionKey) {
                 ++this.stats.malformedBatches;
                 throw new D9WGStreamError(
@@ -13445,8 +13459,17 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // The process that owned the DMA arena is gone (it unmapped it, or the
         // kernel closed the device for it when it was killed): its sessions
         // end as SESSION_END would have ended them (review S1-10)
-        endOwnerSessions() {
-            for (const key of this.ownerSessions) {
+        ownerSessionKey(sessionKey, ownerToken) {
+            return ownerToken ? "owner" + ownerToken.toString(16) + "/" + sessionKey : sessionKey;
+        }
+
+        endOwnerSessions(ownerToken) {
+            const sessions = ownerToken === undefined ? this.ownerSessions : this.ownerSessionScopes.get(ownerToken);
+            if (!sessions) return;
+            const original = this.sessionKey;
+            const restore = original && !sessions.has(original);
+            for (const key of sessions) {
+                this.ownerSessions.delete(key);
                 if (!this.sessionStates.has(key) && this.sessionKey !== key) continue;
                 this.switchSession(key);
                 this.releaseActiveSession("owner-released");
@@ -13454,7 +13477,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.sessionKey = null;
                 ++this.stats.sessionsEnded;
             }
-            this.ownerSessions.clear();
+            if (ownerToken === undefined) this.ownerSessionScopes.clear();
+            else this.ownerSessionScopes.delete(ownerToken);
+            if (restore && this.sessionStates.has(original)) this.switchSession(original);
         }
 
         onCreateDevice(bytes, view, offset, length) {
@@ -13649,6 +13674,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // possible and all that is needed.
             this.discardFrame();
             this.sessionStates.clear();
+            this.ownerSessions.clear();this.ownerSessionScopes.clear();
             this.devices = new Map();
             this.resources = new Map();
             this.palettes = new Map();
@@ -49748,6 +49774,9 @@ struct Params { value : vec4<f32>, }
         }
         append(record, bytes = record.bytes) {
             if (this.destroyed) throw new Error("Graphics journal has been destroyed");
+            const ownerToken = record.ownerToken === undefined ? 0 : record.ownerToken;
+            if (!Number.isInteger(ownerToken) || ownerToken < 0 || ownerToken > 0xffffffff || record.barrier && ownerToken)
+                throw new Error("Invalid graphics owner token");
             const size = ENTRY + bytes.length;
             if (size > MAX_PAGE_BYTES)
                 throw new Error("Graphics batch exceeds the supported page size");
@@ -49766,7 +49795,7 @@ struct Params { value : vec4<f32>, }
             view.setUint32(offset + 16, record.commandCount >>> 0, true);
             view.setUint32(offset + 20, record.responseBase >>> 0, true);
             view.setUint32(offset + 24, record.barrier ? 1 : 0, true);
-            view.setUint32(offset + 28, 0, true);
+            view.setUint32(offset + 28, ownerToken, true);
             this.buffer.set(bytes, offset + ENTRY);
             this.partBytes += size;
             this.rawBytes += size;
@@ -49819,7 +49848,7 @@ struct Params { value : vec4<f32>, }
             const size = HEADER + legacy.length + this.pages.reduce((n, page) => n + PAGE_HEADER + page.bytes, 0);
             if (size > 0x7fffffff) throw new Error("Compressed graphics state exceeds the emulator's 2 GiB state format");
             const bytes = new Uint8Array(size), view = new DataView(bytes.buffer);
-            view.setUint32(0, MAGIC, true); view.setUint16(4, 3, true);
+            view.setUint32(0, MAGIC, true); view.setUint16(4, 4, true);
             view.setUint16(6, HEADER, true); view.setUint32(8, size, true);
             view.setUint32(12, legacy.length, true); view.setUint32(16, this.pages.length, true);
             bytes.set(legacy, HEADER);
@@ -49835,7 +49864,8 @@ struct Params { value : vec4<f32>, }
         }
         static parse(bytes) {
             const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-            if (bytes.length < HEADER || view.getUint32(0, true) !== MAGIC || view.getUint16(4, true) !== 3 ||
+            if (bytes.length < HEADER || view.getUint32(0, true) !== MAGIC ||
+                    (view.getUint16(4, true) !== 3 && view.getUint16(4, true) !== 4) ||
                     view.getUint16(6, true) !== HEADER || view.getUint32(8, true) !== bytes.length)
                 throw new Error("Invalid compressed graphics checkpoint header");
             const legacyBytes = view.getUint32(12, true);
@@ -49853,7 +49883,7 @@ struct Params { value : vec4<f32>, }
                 offset += PAGE_HEADER + size;
             }
             if (offset !== bytes.length) throw new Error("Invalid graphics checkpoint trailing data");
-            return { version: 3, legacy, pages };
+            return { version: view.getUint16(4, true), legacy, pages };
         }
         static async *records(parsed) {
             for (const page of parsed.pages) {
@@ -49868,9 +49898,11 @@ struct Params { value : vec4<f32>, }
                 for (let i = 0; i < page.count; ++i) {
                     if (offset + ENTRY > bytes.length) throw new Error("Invalid graphics batch header");
                     const size = view.getUint32(offset, true), kind = view.getUint32(offset + 24, true);
-                    if (size > bytes.length - offset - ENTRY || kind > 1 || (kind === 1 && size) || view.getUint32(offset + 28, true))
+                    const ownerToken = view.getUint32(offset + 28, true);
+                    if (size > bytes.length - offset - ENTRY || kind > 1 || (kind === 1 && size) ||
+                            ownerToken && (parsed.version < 4 || kind === 1))
                         throw new Error("Invalid graphics batch");
-                    yield { flags: view.getUint32(offset + 4, true), frameId: view.getUint32(offset + 8, true),
+                    yield { ...(ownerToken ? { ownerToken } : {}), flags: view.getUint32(offset + 4, true), frameId: view.getUint32(offset + 8, true),
                         submitCount: view.getUint32(offset + 12, true), commandCount: view.getUint32(offset + 16, true),
                         responseBase: view.getUint32(offset + 20, true), barrier: kind === 1,
                         bytes: bytes.subarray(offset + ENTRY, offset + ENTRY + size) };
@@ -49951,11 +49983,15 @@ struct Params { value : vec4<f32>, }
         return asBytes(value).slice();
     }
 
-    function ownerReleasedRecord() {
-        const bytes = new Uint8Array(8);
-        bytes[0] = CTRL_OWNER_RELEASED & 0xff;
-        bytes[1] = CTRL_OWNER_RELEASED >> 8;
-        bytes[2] = bytes[3] = 0xff;
+    function ownerReleasedRecord(ownerToken) {
+        const scoped = ownerToken !== undefined;
+        if (scoped && (!Number.isInteger(ownerToken) || ownerToken < 0 || ownerToken > 0xffffffff))
+            throw new Error("invalid graphics owner token");
+        const bytes = new Uint8Array(scoped ? 12 : 8);
+        const view = new DataView(bytes.buffer);
+        view.setUint16(0, CTRL_OWNER_RELEASED, true);
+        view.setUint16(2, EXTENDED_RECORD_SIZE, true);
+        if (scoped) { view.setUint32(4, 4, true);view.setUint32(8, ownerToken, true); }
         return bytes;
     }
 
@@ -50166,12 +50202,12 @@ struct Params { value : vec4<f32>, }
                 const layer = this.compositor.createLayer("d3d9 swap chain " + surface.swapChain);
                 layer.canvas.width = Math.max(1, surface.width || 1);
                 layer.canvas.height = Math.max(1, surface.height || 1);
-                this.d3d9SwapChainCanvases.set(surface.swapChain, layer.canvas);
+                this.d3d9SwapChainCanvases.set(this.d3d9SwapChainKey(surface), layer.canvas);
                 return layer.canvas;
             };
             const userSwapChainSurface = opts.onSwapChainSurface;
             opts.onSwapChainSurface = (surface, reason) => {
-                if (reason === "destroy") this.removeD3D9SwapChain(surface.swapChain);
+                if (reason === "destroy") this.removeD3D9SwapChain(surface);
                 else this.placeD3D9SwapChain(surface);
                 if (typeof userSwapChainSurface === "function")
                     userSwapChainSurface(surface, reason);
@@ -50199,9 +50235,18 @@ struct Params { value : vec4<f32>, }
 
         executePCIBatch(event, bytes) {
             if (this.isEnvelope(bytes, CTRL_OWNER_RELEASED)) {
-                for (const executor of [this.glExecutor, this.d3d9Executor])
-                    if (executor) executor.endOwnerSessions();
-                return;
+                const size = u32(bytes, 4);
+                if ((size !== 0 && size !== 4) || bytes.length !== 8 + size)
+                    throw new Error("invalid graphics owner release");
+                const ownerToken = size ? u32(bytes, 8) : undefined;
+                if (!ownerToken && this.glExecutor) this.glExecutor.endOwnerSessions();
+                const executor = this.d3d9Executor;
+                if (!executor) return;
+                // submit() is asynchronous even with a ready local device.
+                // Queue retirement on the same chain so accepted batches can
+                // never recreate a session after its owner was released.
+                executor.work = Promise.resolve(executor.work).then(() => executor.endOwnerSessions(ownerToken));
+                return executor.work;
             }
             if (this.isEnvelope(bytes, CTRL_D3D9_BATCH))
                 return this.pushD3D9PCIBatch(event, bytes);
@@ -50220,6 +50265,7 @@ struct Params { value : vec4<f32>, }
             }
             this.glExecutor.submit(bytes, {
                 ...(event.replay ? { replay: true } : {}),
+                ...(event.ownerToken ? { ownerToken: event.ownerToken } : {}),
                 pciFrameId: event.frameId >>> 0,
                 submitCount: event.submitCount >>> 0,
                 descriptorCommandCount: event.commandCount >>> 0,
@@ -50270,6 +50316,7 @@ struct Params { value : vec4<f32>, }
             };
             return this.d3d9Executor.submit(bytes.subarray(8), {
                 ...(event.replay ? { replay: true } : {}),
+                ...(event.ownerToken ? { ownerToken: event.ownerToken } : {}),
                 pciFrameId: event.frameId >>> 0,
                 submitCount: event.submitCount >>> 0,
                 descriptorCommandCount: event.commandCount >>> 0,
@@ -50320,7 +50367,7 @@ struct Params { value : vec4<f32>, }
                 throw new Error("graphics checkpoint is truncated");
             const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
             const version = view.getUint16(4, true);
-            if (version === 3) {
+            if (version === 3 || version === 4) {
                 const parsed = GraphicsJournal.parse(bytes);
                 if (parsed.legacy.length && (parsed.legacy.length < CHECKPOINT_HEADER_BYTES ||
                         new DataView(parsed.legacy.buffer).getUint16(4, true) !== 1))
@@ -50486,7 +50533,7 @@ struct Params { value : vec4<f32>, }
                         this.glJournalBytes = legacy.gl.byteLength;
                     }
                 }
-                const records = parsed.version === 3 ? GraphicsJournal.records(parsed) : parsed.records;
+                const records = parsed.pages ? GraphicsJournal.records(parsed) : parsed.records;
                 for await (const record of records) {
                     if (record.barrier) await this.waitForIdle(true);
                     else {
@@ -50668,9 +50715,16 @@ struct Params { value : vec4<f32>, }
             }
         }
 
+        d3d9SwapChainKey(surface) {
+            return surface.sessionKey || surface.deviceHandle
+                ? JSON.stringify([surface.sessionKey || "", surface.deviceHandle || 0, surface.swapChain])
+                : surface.swapChain;
+        }
+
         placeD3D9SwapChain(surface) {
-            this.d3d9SwapChainSurfaces.set(surface.swapChain, surface);
-            const canvas = this.d3d9SwapChainCanvases.get(surface.swapChain);
+            const key = this.d3d9SwapChainKey(surface);
+            this.d3d9SwapChainSurfaces.set(key, surface);
+            const canvas = this.d3d9SwapChainCanvases.get(key);
             if (!canvas) return;
             // Placed by its own surface alone: the primary window's size,
             // clip and desktop-primary flag are not this window's
@@ -50680,7 +50734,8 @@ struct Params { value : vec4<f32>, }
             this.d3d9Surface = saved;
         }
 
-        removeD3D9SwapChain(handle) {
+        removeD3D9SwapChain(surface) {
+            const handle = typeof surface === "object" ? this.d3d9SwapChainKey(surface) : surface;
             const canvas = this.d3d9SwapChainCanvases.get(handle);
             if (!canvas) return;
             this.d3d9SwapChainCanvases.delete(handle);
@@ -51884,9 +51939,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 
         // The arena's owner is gone: a journaled pseudo-batch ends every
         // session it submitted, behind its last batch
-        const onReleased = () => {
+        const onReleased = message => {
             const batchEpoch = epoch;
-            const event = { bytes: global.V86GLNetworkBridge.ownerReleasedRecord(), released: true,
+            const event = { bytes: global.V86GLNetworkBridge.ownerReleasedRecord(message.ownerToken), released: true,
                 writeGuestMemory() {}, isMemoryValid: () => false };
             if (!channel.remote) {
                 bridge.pushPCIBatch(event);
@@ -51904,6 +51959,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             const generation = message.generation;
             const event = {
                 frameId: message.frameId,
+                ...(message.ownerToken ? { ownerToken: message.ownerToken } : {}),
                 flags: message.flags,
                 commandCount: message.commandCount,
                 bytes: message.bytes,
@@ -52023,7 +52079,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                 });
                 channel.listen(message => {
                     if (message.type === "batch") onBatch(message);
-                    else if (message.type === "released") onReleased();
+                    else if (message.type === "released") onReleased(message);
                 });
                 channel.post({ type: "initializing", value: true });
                 return Promise.all([bridge.ready.then(sendCapabilities), sendGlslang()])
