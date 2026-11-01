@@ -12,9 +12,8 @@
  * planes, state blocks, asynchronous GPU queries, and GPU render-target
  * readback through the response tail of the shared DMA arena.
  *
- * Legacy entry points which do not map to the advertised drawing profile are
- * still rejected explicitly: ProcessVertices, additional swap chains,
- * palettized textures, higher-order patches, and Surface::GetDC/ReleaseDC.
+ * Software ProcessVertices uses the shared fixed-function vertex kernel.
+ * Programmable vertex processing is still refused explicitly.
  *
  * The discipline throughout: an entry point either does what D3D9 says or
  * fails, and GetDeviceCaps only claims what is actually implemented. Where an
@@ -34,6 +33,7 @@
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL9
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT9
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
@@ -8942,28 +8942,13 @@ static HRESULT WINAPI device_get_current_texture_palette(
  * from the D3D8 path's implementation, which has the same problem and solved
  * it the same way.
  *
- * Two deliberate limits, both named rather than silent:
- *
- *   - A bound vertex shader means programmable processing, and running the
- *     fixed-function pipeline instead would silently produce different
- *     geometry. Refused.
- *   - Lighting computes the ambient and diffuse terms. D3DRS_SPECULARENABLE's
- *     highlight is not computed; a destination asking for SPECULAR gets the
- *     source's specular copied through, which is what the D3D8 path does.
+ * The shared C kernel handles the supported fixed-function layouts. Bound
+ * vertex shaders, active vertex blending, packed inputs and multiple source
+ * streams still require further software-pipeline work and are refused.
  */
 #define D9_PV_MAX_TEXCOORDS 8
 
-typedef struct D9ProcessLayout {
-    int position;
-    BOOL position_transformed;
-    int normal;
-    int diffuse;
-    int specular;
-    int psize;
-    int texcoord[D9_PV_MAX_TEXCOORDS];
-    UINT texcoord_floats[D9_PV_MAX_TEXCOORDS];
-    UINT stride;
-} D9ProcessLayout;
+typedef D9WGProcessLayout D9ProcessLayout;
 
 /* This DLL links no C runtime (see build.sh), so libm's sqrtf is unavailable.
  * Newton-Raphson from the classic bit-level estimate converges to float
@@ -8979,11 +8964,7 @@ static float d9_sqrt(float value)
     return d9wg_sqrt_positive(value);
 }
 
-static void d9_transform_vector4(const D3DMATRIX *matrix, const float *in,
-        float *out)
-{
-    d9wg_transform_vector4(matrix, in, out);
-}
+
 
 static void d9_multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,
         D3DMATRIX *out)
@@ -9042,85 +9023,11 @@ static BOOL d9_decl_type_float_count(BYTE type, UINT *floats)
 static BOOL d9_build_process_layout(const D9WGVertexElement *elements,
         UINT count, D9ProcessLayout *layout)
 {
-    UINT index;
-
-    ZeroMemory(layout, sizeof(*layout));
-    layout->position = -1;
-    layout->normal = -1;
-    layout->diffuse = -1;
-    layout->specular = -1;
-    layout->psize = -1;
-    for (index = 0; index < D9_PV_MAX_TEXCOORDS; ++index)
-        layout->texcoord[index] = -1;
-
-    for (index = 0; index < count; ++index) {
-        const D9WGVertexElement *e = &elements[index];
-        UINT bytes = d9_decl_type_bytes(e->type);
-        UINT end;
-        UINT floats;
-
-        /* Only stream 0 participates. A declaration spreading its attributes
-         * over several streams is legal D3D9 and this path cannot serve it
-         * without also tracking every stream's stride and base -- refusing is
-         * the honest answer rather than reading stream 0 at the wrong offset. */
-        if (e->stream != 0)
-            return FALSE;
-        if (!bytes || e->method != D3DDECLMETHOD_DEFAULT)
-            return FALSE;
-        end = (UINT)e->offset + bytes;
-        if (end > layout->stride) layout->stride = end;
-
-        switch (e->usage) {
-        case D3DDECLUSAGE_POSITION:
-            if (e->usage_index) break;
-            if (!d9_decl_type_float_count(e->type, &floats) || floats < 3)
-                return FALSE;
-            layout->position = (int)e->offset;
-            layout->position_transformed = FALSE;
-            break;
-        case D3DDECLUSAGE_POSITIONT:
-            if (e->usage_index) break;
-            if (e->type != D3DDECLTYPE_FLOAT4)
-                return FALSE;
-            layout->position = (int)e->offset;
-            layout->position_transformed = TRUE;
-            break;
-        case D3DDECLUSAGE_NORMAL:
-            if (e->usage_index) break;
-            if (!d9_decl_type_float_count(e->type, &floats) || floats < 3)
-                return FALSE;
-            layout->normal = (int)e->offset;
-            break;
-        case D3DDECLUSAGE_COLOR:
-            if (e->type != D3DDECLTYPE_D3DCOLOR)
-                return FALSE;
-            if (e->usage_index == 0) layout->diffuse = (int)e->offset;
-            else if (e->usage_index == 1) layout->specular = (int)e->offset;
-            break;
-        case D3DDECLUSAGE_PSIZE:
-            if (e->usage_index || e->type != D3DDECLTYPE_FLOAT1)
-                return FALSE;
-            layout->psize = (int)e->offset;
-            break;
-        case D3DDECLUSAGE_TEXCOORD:
-            if (e->usage_index >= D9_PV_MAX_TEXCOORDS)
-                return FALSE;
-            if (!d9_decl_type_float_count(e->type, &floats))
-                return FALSE;
-            layout->texcoord[e->usage_index] = (int)e->offset;
-            layout->texcoord_floats[e->usage_index] = floats;
-            break;
-        default:
-            /* BLENDWEIGHT/BLENDINDICES and the rest are simply not carried
-             * through; their bytes still count toward the stride above. */
-            break;
-        }
-    }
-    return layout->position >= 0;
+    return d9wg_process_layout(elements, count, layout);
 }
 
 /*
- * The fixed-function ambient and diffuse terms D3D9 specifies, in view space,
+ * The fixed-function lighting D3D9 specifies, in view space,
  * over the lights the guest has shadowed. Directional, point and spot lights
  * all reach here; the spot cone uses the same rho/theta/phi falloff the host's
  * generated vertex stage uses, so the two paths agree on the same scene.
@@ -9183,7 +9090,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
     D3DMATRIX world_view_projection;
     BOOL lighting;
     BOOL copy_data;
-    UINT vertex;
+    uint32_t validated_offset;
     UINT source_stride;
 
     TRACE_MARK_ENTER("Device.ProcessVertices");
@@ -9267,18 +9174,14 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    {
-        UINT source_needed;
-        UINT destination_needed;
-        if (!multiply_u32(src_start + count, source_stride, &source_needed)
-                || !multiply_u32(dst_index + count, destination_layout.stride,
-                        &destination_needed)
-                || source_needed > source->length
-                || destination_needed > destination->length) {
-            TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-            return D3DERR_INVALIDCALL;
-        }
-    }
+    if (!d9wg_process_range(source->length, device->streams[0].offset,
+                source_stride, source_layout.stride, src_start, count, &validated_offset) ||
+            !d9wg_process_range(destination->length, 0, destination_layout.stride,
+                destination_layout.stride, dst_index, count, &validated_offset))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (device->render_states[D3DRS_VERTEXBLEND] ||
+            device->render_states[D3DRS_INDEXEDVERTEXBLENDENABLE])
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
     d9_multiply_matrix((const D3DMATRIX *)device->transforms[D3DTS_WORLD],
             (const D3DMATRIX *)device->transforms[D3DTS_VIEW], &world_view);
@@ -9290,67 +9193,27 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
-    /* D3DPV_DONOTCOPYDATA says the caller only wants the transform; everything
-     * but position keeps whatever the destination already held. */
+    /* Transformed channels are always written; this flag only suppresses
+     * passthrough data. */
     copy_data = (flags & D3DPV_DONOTCOPYDATA) == 0;
 
-    for (vertex = 0; vertex < count; ++vertex) {
-        const BYTE *in = source->shadow
-                + (src_start + vertex) * source_stride;
-        BYTE *out = destination->shadow
-                + (dst_index + vertex) * destination_layout.stride;
-        float position[4];
-        float clip[4];
-        float rhw;
-        UINT index;
-
-        position[0] = ((const float *)(in + source_layout.position))[0];
-        position[1] = ((const float *)(in + source_layout.position))[1];
-        position[2] = ((const float *)(in + source_layout.position))[2];
-        position[3] = 1.0f;
-        d9_transform_vector4(&world_view_projection, position, clip);
-        rhw = (clip[3] > 1e-6f || clip[3] < -1e-6f) ? 1.0f / clip[3] : 1.0f;
-        /* Clip space -> the viewport's pixel rectangle, which is what makes
-         * the result drawable as XYZRHW. */
-        ((float *)(out + destination_layout.position))[0] =
-                (clip[0] * rhw * 0.5f + 0.5f) * (float)device->viewport.Width
-                + (float)device->viewport.X;
-        ((float *)(out + destination_layout.position))[1] =
-                (0.5f - clip[1] * rhw * 0.5f) * (float)device->viewport.Height
-                + (float)device->viewport.Y;
-        ((float *)(out + destination_layout.position))[2] =
-                device->viewport.MinZ + clip[2] * rhw
-                * (device->viewport.MaxZ - device->viewport.MinZ);
-        ((float *)(out + destination_layout.position))[3] = rhw;
-        if (!copy_data)
-            continue;
-
-        if (destination_layout.diffuse >= 0 || destination_layout.specular >= 0) {
-            uint32_t diffuse, specular;
-            d9wg_lighting_vertex(&light_state, &world_view, position,
-                    source_layout.normal >= 0 ? in + source_layout.normal : NULL,
-                    source_layout.diffuse >= 0 ? in + source_layout.diffuse : NULL,
-                    source_layout.specular >= 0 ? in + source_layout.specular : NULL,
-                    &diffuse, &specular);
-            if (destination_layout.diffuse >= 0) __builtin_memcpy(out + destination_layout.diffuse, &diffuse, 4u);
-            if (destination_layout.specular >= 0) __builtin_memcpy(out + destination_layout.specular, &specular, 4u);
+    {
+        D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
+                (float)device->viewport.Width, (float)device->viewport.Height,
+                device->viewport.MinZ, device->viewport.MaxZ };
+        const BYTE *input = source->shadow;
+        BYTE *snapshot = NULL;
+        if (source == destination) {
+            snapshot = HeapAlloc(GetProcessHeap(), 0, source->length);
+            if (!snapshot) return TRACE_REFUSE(E_OUTOFMEMORY);
+            CopyMemory(snapshot, source->shadow, source->length);input = snapshot;
         }
-        for (index = 0; index < D9_PV_MAX_TEXCOORDS; ++index) {
-            UINT floats = destination_layout.texcoord_floats[index];
-            UINT component;
-            if (destination_layout.texcoord[index] < 0) continue;
-            for (component = 0; component < floats; ++component) {
-                float value = 0.0f;
-                if (source_layout.texcoord[index] >= 0
-                        && component < source_layout.texcoord_floats[index]) {
-                    value = ((const float *)(in
-                            + source_layout.texcoord[index]))[component];
-                }
-                ((float *)(out
-                        + destination_layout.texcoord[index]))[component] =
-                        value;
-            }
-        }
+        BOOL processed = d9wg_process_vertices(&source_layout, input, source->length,
+                device->streams[0].offset, source_stride, src_start,
+                &destination_layout, destination->shadow, destination->length, dst_index, count,
+                &world_view, &world_view_projection, &viewport, &light_state, copy_data);
+        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        if (!processed) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
 
     /* The transformed vertices live in the destination's guest shadow; the

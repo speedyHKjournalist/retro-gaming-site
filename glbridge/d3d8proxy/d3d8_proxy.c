@@ -23,6 +23,7 @@
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL8
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT8
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
@@ -6308,11 +6309,7 @@ static HRESULT WINAPI device_get_current_palette(IDirect3DDevice8 *iface,
  */
 
 
-static void transform_vector4(const D3DMATRIX *matrix, const float *in,
-        float *out)
-{
-    d9wg_transform_vector4(matrix, in, out);
-}
+
 
 static void multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,
         D3DMATRIX *out)
@@ -6325,74 +6322,14 @@ static void multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,
  * subset ProcessVertices can consume or produce is decoded; anything else makes
  * the caller refuse rather than mis-stride the buffer.
  */
-typedef struct D8FVFLayout {
-    int position;      /* XYZ or XYZRHW */
-    BOOL pretransformed;
-    int normal;
-    int diffuse;
-    int specular;
-    int texcoord[8];
-    UINT texcoord_size[8];
-    UINT texcoord_count;
-    UINT stride;
-} D8FVFLayout;
-
+typedef D9WGProcessLayout D8FVFLayout;
 static BOOL decode_fvf_layout(DWORD fvf, D8FVFLayout *layout)
 {
-    static const UINT texcoord_floats[4] = { 2u, 3u, 4u, 1u };
     DWORD position = fvf & D3DFVF_POSITION_MASK;
-    UINT offset = 0;
-    UINT index;
-
-    ZeroMemory(layout, sizeof(*layout));
-    layout->position = -1;
-    layout->normal = -1;
-    layout->diffuse = -1;
-    layout->specular = -1;
-    for (index = 0; index < 8u; ++index)
-        layout->texcoord[index] = -1;
-
-    if (position == D3DFVF_XYZ) {
-        layout->position = (int)offset;
-        offset += 12;
-    } else if (position == D3DFVF_XYZRHW) {
-        layout->position = (int)offset;
-        layout->pretransformed = TRUE;
-        offset += 16;
-    } else {
-        /* Blended positions need the vertex-blend pipeline, which this
-         * software path does not implement. */
-        return FALSE;
-    }
-    if (fvf & D3DFVF_NORMAL) {
-        if (layout->pretransformed) return FALSE;
-        layout->normal = (int)offset;
-        offset += 12;
-    }
-    if (fvf & D3DFVF_PSIZE) offset += 4;
-    if (fvf & D3DFVF_DIFFUSE) {
-        layout->diffuse = (int)offset;
-        offset += 4;
-    }
-    if (fvf & D3DFVF_SPECULAR) {
-        layout->specular = (int)offset;
-        offset += 4;
-    }
-    layout->texcoord_count = (fvf & D3DFVF_TEXCOUNT_MASK)
-            >> D3DFVF_TEXCOUNT_SHIFT;
-    if (layout->texcoord_count > 8u) return FALSE;
-    for (index = 0; index < layout->texcoord_count; ++index) {
-        UINT floats = texcoord_floats[(fvf >> (16u + index * 2u)) & 0x3u];
-        layout->texcoord[index] = (int)offset;
-        layout->texcoord_size[index] = floats;
-        offset += floats * 4u;
-    }
-    layout->stride = offset;
-    return TRUE;
+    if (position != D3DFVF_XYZ && position != D3DFVF_XYZRHW) return FALSE;
+    if (position == D3DFVF_XYZRHW && (fvf & D3DFVF_NORMAL)) return FALSE;
+    return d9wg_process_fvf(D9WG_FVF_D3D8, fvf, layout);
 }
-
-
-
 
 
 /*
@@ -6430,9 +6367,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     D3DMATRIX world_view;
     D3DMATRIX world_view_projection;
     BOOL lighting;
-    UINT vertex;
+    uint32_t validated_offset;
 
-    (void)flags;
     if (!destination_iface
             || destination_iface->lpVtbl != &g_vb_vtbl)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -6451,22 +6387,19 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* D3D8 requires the destination to be pre-transformed, and refuses to
      * transform something that already is. */
-    if (source_layout.pretransformed || !destination_layout.pretransformed)
+    if (source_layout.position_transformed || !destination_layout.position_transformed)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!device->streams[0].stride
             || device->streams[0].stride < source_layout.stride)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    {
-        UINT source_needed;
-        UINT destination_needed;
-        if (!multiply_u32(source_start_index + vertex_count,
-                    device->streams[0].stride, &source_needed)
-                || !multiply_u32(destination_index + vertex_count,
-                    destination_layout.stride, &destination_needed)
-                || source_needed > source->length
-                || destination_needed > destination->length)
-            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    }
+    if (!d9wg_process_range(source->length, 0, device->streams[0].stride,
+                source_layout.stride, source_start_index, vertex_count, &validated_offset) ||
+            !d9wg_process_range(destination->length, 0, destination_layout.stride,
+                destination_layout.stride, destination_index, vertex_count, &validated_offset))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (device->render_states[D3DRS_VERTEXBLEND] ||
+            device->render_states[D3DRS_INDEXEDVERTEXBLENDENABLE])
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     multiply_matrix(&device->transforms[D8WG_TRANSFORM_WORLD_SLOT],
             &device->transforms[D8WG_TRANSFORM_VIEW_SLOT], &world_view);
@@ -6479,63 +6412,14 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
 
-    for (vertex = 0; vertex < vertex_count; ++vertex) {
-        const BYTE *in = source->shadow
-                + (source_start_index + vertex) * device->streams[0].stride;
-        BYTE *out = destination->shadow
-                + (destination_index + vertex) * destination_layout.stride;
-        float position[4];
-        float clip[4];
-        float rhw;
-        UINT index;
-
-        position[0] = ((const float *)(in + source_layout.position))[0];
-        position[1] = ((const float *)(in + source_layout.position))[1];
-        position[2] = ((const float *)(in + source_layout.position))[2];
-        position[3] = 1.0f;
-        transform_vector4(&world_view_projection, position, clip);
-        rhw = (clip[3] > 1e-6f || clip[3] < -1e-6f) ? 1.0f / clip[3] : 1.0f;
-        /* Clip space -> the viewport's pixel rectangle, which is what makes
-         * the result drawable as XYZRHW. */
-        ((float *)(out + destination_layout.position))[0] =
-                (clip[0] * rhw * 0.5f + 0.5f) * (float)device->viewport.Width
-                + (float)device->viewport.X;
-        ((float *)(out + destination_layout.position))[1] =
-                (0.5f - clip[1] * rhw * 0.5f) * (float)device->viewport.Height
-                + (float)device->viewport.Y;
-        ((float *)(out + destination_layout.position))[2] =
-                device->viewport.MinZ + clip[2] * rhw
-                * (device->viewport.MaxZ - device->viewport.MinZ);
-        ((float *)(out + destination_layout.position))[3] = rhw;
-
-        if (destination_layout.diffuse >= 0 || destination_layout.specular >= 0) {
-            uint32_t diffuse, specular;
-            d9wg_lighting_vertex(&light_state, &world_view, position,
-                    source_layout.normal >= 0 ? in + source_layout.normal : NULL,
-                    source_layout.diffuse >= 0 ? in + source_layout.diffuse : NULL,
-                    source_layout.specular >= 0 ? in + source_layout.specular : NULL,
-                    &diffuse, &specular);
-            if (destination_layout.diffuse >= 0) __builtin_memcpy(out + destination_layout.diffuse, &diffuse, 4u);
-            if (destination_layout.specular >= 0) __builtin_memcpy(out + destination_layout.specular, &specular, 4u);
-        }
-        for (index = 0; index < destination_layout.texcoord_count; ++index) {
-            UINT floats = destination_layout.texcoord_size[index];
-            UINT component;
-            if (destination_layout.texcoord[index] < 0) continue;
-            for (component = 0; component < floats; ++component) {
-                float value = 0.0f;
-                if (index < source_layout.texcoord_count
-                        && source_layout.texcoord[index] >= 0
-                        && component < source_layout.texcoord_size[index]) {
-                    value = ((const float *)(in
-                            + source_layout.texcoord[index]))[component];
-                }
-                ((float *)(out
-                        + destination_layout.texcoord[index]))[component] =
-                        value;
-            }
-        }
-    }
+    D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
+            (float)device->viewport.Width, (float)device->viewport.Height,
+            device->viewport.MinZ, device->viewport.MaxZ };
+    if (!d9wg_process_vertices(&source_layout, source->shadow, source->length, 0,
+            device->streams[0].stride, source_start_index, &destination_layout,
+            destination->shadow, destination->length, destination_index, vertex_count,
+            &world_view, &world_view_projection, &viewport, &light_state,
+            !(flags & D9WG_PV_DONOTCOPYDATA))) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     /* The transformed vertices live in the destination's guest shadow; the
      * host needs them too, since the app will draw straight from the buffer. */
@@ -6941,7 +6825,7 @@ static void blend_vertices(const D8FVFLayout *layout, const BYTE *a,
                 ((const float *)(a + layout->position))[component] * inverse
                 + ((const float *)(b + layout->position))[component] * weight;
     }
-    if (layout->pretransformed) {
+    if (layout->position_transformed) {
         ((float *)(out + layout->position))[3] =
                 ((const float *)(a + layout->position))[3] * inverse
                 + ((const float *)(b + layout->position))[3] * weight;
@@ -6974,7 +6858,7 @@ static void blend_vertices(const D8FVFLayout *layout, const BYTE *a,
     }
     for (index = 0; index < layout->texcoord_count; ++index) {
         if (layout->texcoord[index] < 0) continue;
-        for (component = 0; component < layout->texcoord_size[index];
+        for (component = 0; component < layout->texcoord_floats[index];
                 ++component) {
             ((float *)(out + layout->texcoord[index]))[component] =
                     ((const float *)(a + layout->texcoord[index]))[component]

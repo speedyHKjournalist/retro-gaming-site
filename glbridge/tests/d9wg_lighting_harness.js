@@ -34,6 +34,30 @@ function buildFixture() {
                     eye[0],eye[1],eye[2],diffuse[0],diffuse[1],diffuse[2],diffuse[3],specular[0],specular[1],specular[2],specular[3]);
             }`).join("\n")}
             printf("]");
+            {
+                struct {float position[3],normal[3];uint32_t color0,color1;} source[3];
+                struct {float position[4];uint32_t color0,color1;} destination[3];
+                D9WGVertexElement elements[]={{0,0,2,0,0,0},${value.hasNormal ? "{0,12,2,0,3,0}," : ""}${value.colorMask & 1 ? "{0,24,4,0,10,0}," : ""}${value.colorMask & 2 ? "{0,28,4,0,10,1}," : ""}};
+                D9WGProcessLayout input_layout,output_layout;
+                const float positions[3][3]= {${value.positions.map(vector).join(",")}};
+                for(unsigned v=0;v<3;v++) {
+                    for(unsigned i=0;i<3;i++) {source[v].position[i]=positions[v][i];source[v].normal[i]=normal[i];}
+                    source[v].color0=d9wg_pack_color(color0);source[v].color1=d9wg_pack_color(color1);
+                }
+                D9WGProcessViewport viewport={0,0,64,64,0,1};
+                if(!d9wg_process_layout(elements,sizeof(elements)/sizeof(elements[0]),&input_layout) ||
+                        !d9wg_process_fvf(9,0xc4u,&output_layout) ||
+                        !d9wg_process_vertices(&input_layout,source,sizeof(source),0,sizeof(source[0]),0,
+                            &output_layout,destination,sizeof(destination),0,3,world_view,world_view,&viewport,&state,1)) return 3;
+                printf(",\\"processed\\":[");
+                for(unsigned v=0;v<3;v++) {
+                    float d[4],s[4];d9wg_lighting_color(destination[v].color0,d);d9wg_lighting_color(destination[v].color1,s);
+                    printf("%s{\\"position\\":[%.9g,%.9g,%.9g,%.9g],\\"diffuse\\":[%.9g,%.9g,%.9g,%.9g],\\"specular\\":[%.9g,%.9g,%.9g,%.9g]}",v ? "," : "",
+                        destination[v].position[0],destination[v].position[1],destination[v].position[2],destination[v].position[3],
+                        d[0],d[1],d[2],d[3],s[0],s[1],s[2],s[3]);
+                }
+                printf("]");
+            }
             ${value.reference ? `{
                 const float eye[3]=${vector(value.reference.position)};float diffuse[4],specular[4];
                 d9wg_lighting_shade(&state,eye,eye_normal,color0,color1,${value.colorMask}u,diffuse,specular);
@@ -46,9 +70,10 @@ function buildFixture() {
         fs.writeFileSync(c, `#include <stdio.h>
 #include "runtime/d9wg_lighting.h"
 #include "runtime/d9wg_math.h"
+#include "runtime/d9wg_vertex.h"
 int main(void){printf("[");${cases}printf("]\\n");return 0;}
 `);
-        const sources = ["runtime/d9wg_lighting.c", "runtime/d9wg_tnl_math.c", "runtime/d9wg_math.c"];
+        const sources = ["runtime/d9wg_lighting.c", "runtime/d9wg_tnl_math.c", "runtime/d9wg_math.c", "runtime/d9wg_vertex.c", "runtime/d9wg_fvf.c"];
         const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-ffp-contract=off", "-Wall", "-Wextra", "-Werror", "-I", root,
             c, ...sources.map(p => path.join(root, p)), "-o", binary], { encoding: "utf8" });
         assert.equal(built.status, 0, built.stderr.slice(0, 4000) || String(built.error));

@@ -2697,81 +2697,36 @@ static BOOL d3d7_upload_vertex_range(D3D7VertexBuffer *buffer,
 static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
         DWORD vertex_op, DWORD destination_index, DWORD count,
         const BYTE *source, DWORD source_fvf, UINT source_stride,
-        DWORD source_index, D3D7Device *device)
+        DWORD source_index, D3D7Device *device, DWORD flags)
 {
-    D3D7FVFLayout source_layout, destination_layout;
-    D9WGVertexElement source_elements[D3D7_MAX_VERTEX_ELEMENTS];
-    D9WGVertexElement destination_elements[D3D7_MAX_VERTEX_ELEMENTS];
-    UINT source_element_count = 0, destination_element_count = 0;
+    D9WGProcessLayout source_layout, destination_layout;
     D3DMATRIX world_view, world_view_projection;
-    UINT vertex;
-    if (!(vertex_op & D3DVOP_TRANSFORM) || !count || !source ||
-            !d3d7_decode_fvf(source_fvf, &source_layout, source_elements,
-                    &source_element_count) ||
-            !d3d7_decode_fvf(destination->desc.dwFVF, &destination_layout,
-                    destination_elements, &destination_element_count) ||
-            source_layout.position_bytes != 12u ||
-            destination_layout.position_bytes != 16u ||
-            source_stride < source_layout.stride || destination->locked ||
-            destination_index > destination->desc.dwNumVertices ||
-            count > destination->desc.dwNumVertices - destination_index)
+    D9WGTNLLighting light_state;
+    if (!(vertex_op & D3DVOP_TRANSFORM) || !count || !source || destination->locked ||
+            !d9wg_process_fvf(D9WG_FVF_D3D7, source_fvf, &source_layout) ||
+            !d9wg_process_fvf(D9WG_FVF_D3D7, destination->desc.dwFVF, &destination_layout) ||
+            source_layout.has_blend || source_layout.position_transformed ||
+            !destination_layout.position_transformed)
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
-            &device->transforms[D3DTRANSFORMSTATE_PROJECTION],
-            &world_view_projection);
-    D9WGTNLLighting light_state;
+            &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &world_view_projection);
     if (!d3d7_prepare_lighting(device, &world_view, (vertex_op & D3DVOP_LIGHT) != 0, &light_state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    for (vertex = 0; vertex < count; ++vertex) {
-        const BYTE *input = source +
-                (source_index + vertex) * source_stride;
-        BYTE *output = destination->shadow +
-                (destination_index + vertex) * destination->stride;
-        float position[4], clip[4], rhw;
-        UINT stage;
-        position[0] = ((const float *)(input + source_layout.position_offset))[0];
-        position[1] = ((const float *)(input + source_layout.position_offset))[1];
-        position[2] = ((const float *)(input + source_layout.position_offset))[2];
-        position[3] = 1.0f;
-        d3d7_transform_vector(&world_view_projection, position, clip);
-        rhw = (clip[3] > 1.0e-6f || clip[3] < -1.0e-6f)
-                ? 1.0f / clip[3] : 1.0f;
-        ((float *)(output + destination_layout.position_offset))[0] =
-                (clip[0] * rhw * 0.5f + 0.5f) * device->viewport.dwWidth +
-                device->viewport.dwX;
-        ((float *)(output + destination_layout.position_offset))[1] =
-                (0.5f - clip[1] * rhw * 0.5f) * device->viewport.dwHeight +
-                device->viewport.dwY;
-        ((float *)(output + destination_layout.position_offset))[2] =
-                device->viewport.dvMinZ + clip[2] * rhw *
-                (device->viewport.dvMaxZ - device->viewport.dvMinZ);
-        ((float *)(output + destination_layout.position_offset))[3] = rhw;
-        if (destination_layout.has_diffuse || destination_layout.has_specular) {
-            uint32_t diffuse, specular;
-            d9wg_lighting_vertex(&light_state, &world_view, position,
-                    source_layout.has_normal ? input + source_layout.normal_offset : NULL,
-                    source_layout.has_diffuse ? input + source_layout.diffuse_offset : NULL,
-                    source_layout.has_specular ? input + source_layout.specular_offset : NULL,
-                    &diffuse, &specular);
-            if (destination_layout.has_diffuse) __builtin_memcpy(output + destination_layout.diffuse_offset, &diffuse, 4u);
-            if (destination_layout.has_specular) __builtin_memcpy(output + destination_layout.specular_offset, &specular, 4u);
-        }
-        for (stage = 0; stage < destination_layout.texcoord_count; ++stage) {
-            UINT bytes = destination_layout.texcoord_bytes[stage];
-            if (stage < source_layout.texcoord_count &&
-                    source_layout.texcoord_bytes[stage] < bytes)
-                bytes = source_layout.texcoord_bytes[stage];
-            if (stage < source_layout.texcoord_count)
-                CopyMemory(output + destination_layout.texcoord_offset[stage],
-                        input + source_layout.texcoord_offset[stage], bytes);
-        }
-    }
+    D9WGProcessViewport viewport = { (float)device->viewport.dwX, (float)device->viewport.dwY,
+            (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
+            device->viewport.dvMinZ, device->viewport.dvMaxZ };
+    /* The public/strided entry points already validate the source allocation. */
+    uint64_t source_length = ((uint64_t)source_index + count)*source_stride;
+    if (source_length > 0xffffffffu || !d9wg_process_vertices(&source_layout,
+            source, (uint32_t)source_length, 0, source_stride, source_index, &destination_layout,
+            destination->shadow, destination->byte_count, destination_index, count,
+            &world_view, &world_view_projection, &viewport, &light_state, !(flags & D3DPV_DONOTCOPYDATA)))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return d3d7_upload_vertex_range(destination,
-            destination_index * destination->stride,
-            count * destination->stride) ? D3D_OK :
-            D3DERR_VERTEXBUFFERUNLOCKFAILED;
+            destination_index * destination->stride, count * destination->stride)
+            ? D3D_OK : D3DERR_VERTEXBUFFERUNLOCKFAILED;
 }
 
 static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
@@ -2782,7 +2737,6 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
     D3D7VertexBuffer *destination = d3d7_vb_from_iface(iface);
     D3D7VertexBuffer *source;
     D3D7Device *d3d_device;
-    (void)flags;
     if (!source_iface || source_iface->lpVtbl != &g_d3d7_vb_vtbl ||
             !device || device->lpVtbl != &g_d3d7_device_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -2795,7 +2749,7 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return d3d7_process_vertex_bytes(destination, vertex_op,
             destination_index, count, source->shadow, source->desc.dwFVF,
-            source->stride, source_index, d3d_device);
+            source->stride, source_index, d3d_device, flags);
 }
 
 static HRESULT WINAPI d3d7_vb_GetVertexBufferDesc(
@@ -2832,7 +2786,6 @@ static HRESULT WINAPI d3d7_vb_ProcessVerticesStrided(
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
     UINT element_count = 0;
     HRESULT result;
-    (void)flags;
     if (!device || device->lpVtbl != &g_d3d7_device_vtbl ||
             d3d7_device_from_iface(device)->owner != destination->owner ||
             !d3d7_decode_fvf(fvf, &layout, elements, &element_count))
@@ -2843,7 +2796,7 @@ static HRESULT WINAPI d3d7_vb_ProcessVerticesStrided(
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     result = d3d7_process_vertex_bytes(destination, vertex_op,
             destination_index, count, packed, fvf, layout.stride, 0,
-            d3d_device);
+            d3d_device, flags);
     heap_free(packed);
     return DDWG_TRACE_ERROR(result);
 }

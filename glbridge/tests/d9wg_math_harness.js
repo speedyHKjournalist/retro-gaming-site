@@ -35,7 +35,7 @@ typedef union D3DMATRIX {
         const oldNames = Object.keys(baseline.groups[api]);
         code += Object.values(baseline.groups[api]).join("\n").replace(new RegExp(oldNames.join("|"), "g"), name => "old_" + api + "_" + name) + "\n";
         const candidate = fs.readFileSync(path.join(root, files[api]), "utf8");
-        const aliases = { d9_pack_color: "d9wg_pack_color", pack_color: "d9wg_pack_color", d3d7_pack_color: "d9wg_pack_color",
+        const aliases = { d9_transform_vector4: "d9wg_transform_vector4", transform_vector4: "d9wg_transform_vector4", d9_pack_color: "d9wg_pack_color", pack_color: "d9wg_pack_color", d3d7_pack_color: "d9wg_pack_color",
             d9_sqrt: "d9wg_sqrt_positive", float_sqrt: "d9wg_sqrt_positive", d3d7_sqrt: "d9wg_sqrt_positive" };
         code += names[api].map(name => {
             const actual = body(candidate, name);if (actual) return actual;

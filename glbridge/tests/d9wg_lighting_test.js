@@ -11,5 +11,9 @@ for (let i = 0; i < current.cases.length; i++) {
         for (let component = 0; component < current.cases[i].vertices[vertex][key].length; component++)
             assert.ok(Math.abs(saved.cases[i].vertices[vertex][key][component] - current.cases[i].vertices[vertex][key][component]) <= 2e-6,
                 current.cases[i].name + " stale CPU differential fixture " + key);
+    for (let vertex = 0; vertex < 3; vertex++) for (const key of ["position", "diffuse", "specular"])
+        for (let component = 0; component < current.cases[i].processed[vertex][key].length; component++)
+            assert.ok(Math.abs(saved.cases[i].processed[vertex][key][component] - current.cases[i].processed[vertex][key][component]) <= 2e-6,
+                current.cases[i].name + " stale processed-vertex fixture " + key);
 }
 console.log("PASS shared C lighting: " + current.cases.length + " scenes, independent equation probes and CPU differential fixture");

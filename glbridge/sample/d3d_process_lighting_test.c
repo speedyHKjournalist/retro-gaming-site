@@ -62,8 +62,8 @@ typedef D3DLIGHT7 Light;
 #define D3DRS_AMBIENTMATERIALSOURCE D3DRENDERSTATE_AMBIENTMATERIALSOURCE
 #define D3DRS_EMISSIVEMATERIALSOURCE D3DRENDERSTATE_EMISSIVEMATERIALSOURCE
 #endif
-typedef struct Input { float x,y,z,nx,ny,nz; DWORD diffuse,specular; } Input;
-typedef struct Output { float x,y,z,rhw; DWORD diffuse,specular; } Output;
+typedef struct Input { float x,y,z,nx,ny,nz; DWORD diffuse,specular; float tex[2]; } Input;
+typedef struct Output { float x,y,z,rhw; DWORD diffuse,specular; float tex[4]; } Output;
 static HANDLE log_file;
 static Factory *factory;
 static Device *device;
@@ -113,19 +113,22 @@ static void color(DWORD actual,DWORD expected,const char *label)
         if (delta < -1 || delta > 1) { char text[160];wsprintfA(text,"color actual=%08lx expected=%08lx",actual,expected);report(text);check(FALSE,label); }
     }
 }
-static Output process(const Input *input)
+static Output process_flags(const Input *input,DWORD flags)
 {
     Output result;
+    Output initial={0,0,0,0,0x10203040u,0x50607080u,{17,19,23,29}};
+    *(Output *)lock_buffer(destination)=initial;check(SUCCEEDED(BUF(Unlock)(destination)),"prepare output");
     *(Input *)lock_buffer(source)=*input;check(SUCCEEDED(BUF(Unlock)(source)),"unlock input");
 #if D9WG_TNL_API == 9
-    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,NULL,0)),"ProcessVertices");
+    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,NULL,flags)),"ProcessVertices");
 #elif D9WG_TNL_API == 8
-    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,0)),"ProcessVertices");
+    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,flags)),"ProcessVertices");
 #else
-    check(SUCCEEDED(BUF(ProcessVertices)(destination,D3DVOP_TRANSFORM|D3DVOP_LIGHT,0,1,source,0,device,0)),"ProcessVertices");
+    check(SUCCEEDED(BUF(ProcessVertices)(destination,D3DVOP_TRANSFORM|D3DVOP_LIGHT,0,1,source,0,device,flags)),"ProcessVertices");
 #endif
     result=*(Output *)lock_buffer(destination);check(SUCCEEDED(BUF(Unlock)(destination)),"unlock output");return result;
 }
+static Output process(const Input *input) { return process_flags(input,0); }
 static void light(Light *value)
 {
     check(SUCCEEDED(CALL(SetLight)(device,light_index,value)),"SetLight");
@@ -135,8 +138,8 @@ void WINAPI WinMainCRTStartup(void)
 {
     char path[MAX_PATH],dll[MAX_PATH],text[100];UINT at;HMODULE module;HWND window;
     Material material;Light value;D3DMATRIX matrix;Output output;
-    Input input={0,0,.5f,0,0,-1,0xcc336699u,0x596633ccu};
-    const DWORD input_fvf=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_SPECULAR;
+    Input input={0,0,.5f,0,0,-1,0xcc336699u,0x596633ccu,{.25f,.75f}};
+    const DWORD input_fvf=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_SPECULAR|D3DFVF_TEX1;
     GetModuleFileNameA(NULL,path,sizeof(path));at=(UINT)lstrlenA(path);while(at&&path[at-1]!='\\')--at;
     path[at]=0;lstrcpyA(dll,path);wsprintfA(text,"TNL%u.TXT",D9WG_TNL_API);lstrcatA(path,text);
     log_file=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
@@ -165,7 +168,7 @@ void WINAPI WinMainCRTStartup(void)
     ZeroMemory(&pp,sizeof(pp));pp.BackBufferWidth=pp.BackBufferHeight=64;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferCount=1;pp.hDeviceWindow=window;pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;
     check(SUCCEEDED(FACT(CreateDevice)(factory,0,D3DDEVTYPE_HAL,window,D3DCREATE_SOFTWARE_VERTEXPROCESSING,&pp,&device)),"device");
 #endif
-    create_buffer(input_fvf,sizeof(Input),&source);create_buffer(D3DFVF_XYZRHW|D3DFVF_DIFFUSE|D3DFVF_SPECULAR,sizeof(Output),&destination);
+    create_buffer(input_fvf,sizeof(Input),&source);create_buffer(D3DFVF_XYZRHW|D3DFVF_DIFFUSE|D3DFVF_SPECULAR|D3DFVF_TEX1|D3DFVF_TEXCOORDSIZE4(0),sizeof(Output),&destination);
 #if D9WG_TNL_API == 9
     check(SUCCEEDED(CALL(SetStreamSource)(device,0,source,0,sizeof(Input))),"source stream");check(SUCCEEDED(CALL(SetFVF)(device,input_fvf)),"source FVF");
 #elif D9WG_TNL_API == 8
@@ -191,6 +194,48 @@ void WINAPI WinMainCRTStartup(void)
 #if D9WG_TNL_API == 7
     input.nz=-1;identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"restore world");value.Ambient.r=value.Ambient.g=value.Ambient.b=0;value.Type=D3DLIGHT_PARALLELPOINT;value.Position.x=value.Position.y=0;value.Position.z=-2;value.Range=0;light(&value);material.Emissive.r=0;check(SUCCEEDED(CALL(SetMaterial)(device,&material)),"parallel material");output=process(&input);color(output.diffuse,0xbf663399u,"parallel point ignores range");
 #endif
+    input.nz=-1;input.nx=input.ny=0;value.Type=D3DLIGHT_DIRECTIONAL;value.Direction.x=value.Direction.y=0;value.Direction.z=1;value.Ambient.r=value.Ambient.g=value.Ambient.b=0;light(&value);
+    material.Emissive.r=0;check(SUCCEEDED(CALL(SetMaterial)(device,&material)),"copy flag material");
+    identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"restore world for copy flags");
+    output=process_flags(&input,1);color(output.diffuse,0xbf663399u,"DONOTCOPYDATA still computes lighting");
+    check(output.tex[0]==17 && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"DONOTCOPYDATA preserves texcoords");
+    state(D3DRS_LIGHTING,FALSE);
+#if D9WG_TNL_API == 7
+    /* D3D7's D3DVOP_LIGHT, rather than render state, selects the operation.
+     * Use an explicit transform-only call for the passthrough flag checks. */
+    *(Input *)lock_buffer(source)=input;check(SUCCEEDED(BUF(Unlock)(source)),"restore source");
+    Output initial={0,0,0,0,0x10203040u,0x50607080u,{17,19,23,29}};
+    *(Output *)lock_buffer(destination)=initial;check(SUCCEEDED(BUF(Unlock)(destination)),"restore output");
+    check(SUCCEEDED(BUF(ProcessVertices)(destination,D3DVOP_TRANSFORM,0,1,source,0,device,1)),"D3D7 transform only DONOTCOPYDATA");
+    output=*(Output *)lock_buffer(destination);check(SUCCEEDED(BUF(Unlock)(destination)),"read preserved output");
+#else
+    output=process_flags(&input,1);
+#endif
+    check(output.diffuse==0x10203040u && output.specular==0x50607080u,"unaffected colors preserved");
+    check(output.tex[0]==17 && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"unaffected texture values preserved");
+    output=process(&input);check(output.tex[0]==.25f && output.tex[1]==.75f && output.tex[2]==23 && output.tex[3]==29,"extra texture components preserved");
+#if D9WG_TNL_API == 9
+    Buffer *offset_source;void *bytes;create_buffer(input_fvf,sizeof(Input)+4,&offset_source);
+    bytes=lock_buffer(offset_source);CopyMemory((BYTE *)bytes+4,&input,sizeof(input));check(SUCCEEDED(BUF(Unlock)(offset_source)),"offset source upload");
+    check(SUCCEEDED(CALL(SetStreamSource)(device,0,offset_source,4,sizeof(Input))),"source offset");
+    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,destination,NULL,0)),"ProcessVertices with source offset");
+    output=*(Output *)lock_buffer(destination);check(SUCCEEDED(BUF(Unlock)(destination)),"read offset output");color(output.diffuse,input.diffuse,"offset source color");
+    check(output.tex[0]==.25f && output.tex[1]==.75f,"offset source texcoords");
+    check(SUCCEEDED(CALL(SetStreamSource)(device,0,source,0,sizeof(Input))),"restore source stream");BUF(Release)(offset_source);
+    check(FAILED(CALL(ProcessVertices)(device,0xffffffffu,0,2,destination,NULL,0)),"overflow source rejected");
+    check(FAILED(CALL(ProcessVertices)(device,0,0xffffffffu,2,destination,NULL,0)),"overflow destination rejected");
+    D3DVERTEXELEMENT9 decl_elements[]={{0,0,D3DDECLTYPE_FLOAT4,0,D3DDECLUSAGE_POSITIONT,0},
+        {0,16,D3DDECLTYPE_D3DCOLOR,0,D3DDECLUSAGE_COLOR,0},{0,20,D3DDECLTYPE_D3DCOLOR,0,D3DDECLUSAGE_COLOR,1},
+        {0,24,D3DDECLTYPE_FLOAT4,0,D3DDECLUSAGE_TEXCOORD,0},D3DDECL_END()};
+    IDirect3DVertexDeclaration9 *decl;check(SUCCEEDED(CALL(CreateVertexDeclaration)(device,decl_elements,&decl)),"alias output declaration");
+    check(SUCCEEDED(CALL(ProcessVertices)(device,0,0,1,source,decl,0)),"aliased source/destination");
+    output=*(Output *)lock_buffer(source);check(SUCCEEDED(BUF(Unlock)(source)),"read aliased output");color(output.diffuse,input.diffuse,"alias snapshot color");
+    check(output.tex[0]==.25f && output.tex[1]==.75f,"alias snapshot texture");IDirect3DVertexDeclaration9_Release(decl);
+#elif D9WG_TNL_API == 8
+    check(FAILED(CALL(ProcessVertices)(device,0xffffffffu,0,2,destination,0)),"overflow source rejected");
+    check(FAILED(CALL(ProcessVertices)(device,0,0xffffffffu,2,destination,0)),"overflow destination rejected");
+#endif
+    report("PASS shared vertex copy, bounds and layout checks");
     report("PASS all real XP ProcessVertices lighting checks");BUF(Release)(source);BUF(Release)(destination);CALL(Release)(device);FACT(Release)(factory);
 #if D9WG_TNL_API == 7
     IDirectDrawSurface7_Release(target);IDirectDraw7_Release(ddraw);
