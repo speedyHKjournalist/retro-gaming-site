@@ -284,28 +284,16 @@ static __inline unsigned ddraw_format_is_palettised(unsigned format)
  */
 static __inline unsigned ddraw_expand_channel(unsigned value, unsigned bits)
 {
-    unsigned max;
+    unsigned expanded, width;
     if (bits == 0u) return 0u;
     if (bits >= 8u) return (value >> (bits - 8u)) & 0xFFu;
-    max = (1u << bits) - 1u;
-    value &= max;
-    /*
-     * Truncated scaling, not the high-bit replication DirectDraw drivers used.
-     *
-     * The rule itself is a choice; agreeing with the host is not. The executor
-     * expands a 16-bit texture on upload as `(v * 255 / max) | 0`
-     * (expandRowToGPU in ../d3d9-webgpu/d3d9_executor.js), and a colour key is
-     * compared against those expanded texels. Replication and truncated
-     * scaling differ by one for values like 24/31 -- 198 against 197 -- so a
-     * key expanded by the other rule misses on exactly those colours, and a
-     * sprite keyed on one of them blits as a solid rectangle.
-     *
-     * The executor's rule is the incumbent: every D3D8 and D3D9 16-bit texture
-     * already goes through it, so this side is the one that moves.
-     * ../tests/ddraw_channel_expansion_test.js compiles this function and
-     * compares it against the executor's, value by value, for every width.
-     */
-    return (value * 255u) / max;
+    value &= (1u << bits) - 1u;
+    /* Match native D3D bit replication and the host's actual upload rule.
+     * The compiled channel sweep checks every value against d9wg_formats.js. */
+    expanded = value;
+    width = bits;
+    while (width < 8u) { expanded = (expanded << bits) | value; width += bits; }
+    return expanded >> (width - 8u);
 }
 
 /*

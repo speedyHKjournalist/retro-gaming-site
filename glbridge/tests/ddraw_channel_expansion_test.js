@@ -64,18 +64,15 @@ assert.equal(build.status, 0,
 const run = spawnSync(binary, [], { encoding: "utf8" });
 assert.equal(run.status, 0, "the expansion probe did not run");
 
-// The executor's own rule, quoted from expandRowToGPU in d3d9_executor.js:
-//     r = ((value >>> 11) & 0x1f) * 255 / 31;  ...  dest[at] = r | 0;
-// i.e. scale into 0..255 and truncate. Kept as an expression here rather than
-// a table so a change on that side shows up as a diff in this line.
-const hostExpand = (value, max) => (value * 255 / max) | 0;
+// Exercise the real host helper, rather than copying an old source formula.
+const { expandUNorm8: hostExpand } = require(require("./host_paths.js").hostPath("d3d9-webgpu/d9wg_formats.js"));
 
 let checked = 0;
 const mismatches = [];
 for (const line of run.stdout.trim().split("\n")) {
     const [bits, value, guest] = line.trim().split(/\s+/).map(Number);
     const max = (1 << bits) - 1;
-    const host = bits >= 8 ? value : hostExpand(value, max);
+    const host = bits >= 8 ? value : hostExpand(value, bits);
     ++checked;
     if (guest !== host)
         mismatches.push({ bits, value, guest, host });
@@ -95,8 +92,8 @@ if (mismatches.length) {
 // most sprite sheets actually use.
 for (const bits of [1, 4, 5, 6, 8]) {
     const max = (1 << bits) - 1;
-    assert.equal(hostExpand(0, max), 0, bits + "-bit zero must stay zero");
-    assert.equal(hostExpand(max, max), 255, bits + "-bit max must reach 255");
+    assert.equal(hostExpand(0, bits), 0, bits + "-bit zero must stay zero");
+    assert.equal(hostExpand(max, bits), 255, bits + "-bit max must reach 255");
 }
 
 assert.ok(checked >= 500, "the sweep should cover every value of every width");

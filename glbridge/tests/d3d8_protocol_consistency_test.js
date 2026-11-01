@@ -28,6 +28,7 @@ const guest = read("d3d8proxy/d3d8_proxy.c");
 const bridge = read("d3d8proxy/d3d8_protocol.h");
 const protocol = read("d3d9proxy/d3d9_protocol.h");
 const executor = read("d3d9-webgpu/d3d9_executor.js");
+const formats = require(require("./host_paths.js").hostPath("d3d9-webgpu/d9wg_formats.js"));
 
 // ---- the guest no longer owns a protocol of its own ----------------------
 
@@ -244,13 +245,9 @@ for (const name of [...D3D8_TEXTURE_FORMATS, ...D3D8_PROBED_AS_TEXTURES]) {
         "CheckDeviceFormat refuses it and CreateTexture cannot make one");
 }
 
-const gpuFormats = executor.match(
-    /function formatToGPU\(format\)[\s\S]*?\n    \}/);
-assert.ok(gpuFormats, "the D3D9 executor must map D3D formats to WebGPU ones");
 for (const name of [...D3D8_TEXTURE_FORMATS, ...D3D8_PROBED_AS_TEXTURES]) {
-    assert.ok(gpuFormats[0].includes("D3DFMT_" + name + ":"),
-        "the D3D8 guest forwards D3DFMT_" + name + " but the host has no " +
-        "WebGPU format for it, so every upload of one is discarded");
+    assert.ok(formats.formatToGPU(formats["D3DFMT_" + name]),
+        "the D3D8 guest forwards " + name + " but the host cannot store it");
 }
 
 const depthFormats = cFunction(guest, "supported_depth_stencil_format");
@@ -267,14 +264,13 @@ for (const name of D3D8_DELIBERATELY_ABSENT) {
 // A render target must be a format the host can both render to and pack back
 // for a lockable target, or GetRenderTargetData/CopyRects returns garbage.
 const renderTargets = cFunction(guest, "supported_render_target_format");
-const readbackPack = executor.match(
-    /function packGPUReadbackRow\([\s\S]*?\n    \}/);
-assert.ok(readbackPack, "the D3D9 executor must pack readback rows");
-for (const name of [...renderTargets.matchAll(/D3DFMT_(\w+)/g)]
-        .map(match => match[1])) {
-    assert.ok(readbackPack[0].includes("D3DFMT_" + name + ":"),
-        "D3DFMT_" + name + " is offered as a render target but the host " +
-        "cannot pack it back, so locking one throws instead of reading");
+for (const name of [...renderTargets.matchAll(/D3DFMT_(\w+)/g)].map(match => match[1])) {
+    const format = formats["D3DFMT_" + name];
+    assert.ok(formats.isRenderableGPUFormat(formats.formatToGPU(format)), name + " must be renderable");
+    const bytes = formats.d3dBytesPerTexel(format);
+    assert.ok(bytes, name + " needs a guest readback layout");
+    assert.doesNotThrow(() => formats.packGPUReadbackRow(format, formats.formatToGPU(format),
+        new Uint8Array(16), 0, 1, new Uint8Array(bytes), 0), name + " must pack a real readback row");
 }
 
 // D3D8 SetRenderTarget accepts a depth surface at least as large as the colour
