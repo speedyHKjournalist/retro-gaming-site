@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "017490988930d2e252be";
+globalThis.V86GL_BUILD_REVISION = "fb445497baa3807c1523";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -4755,6 +4755,11 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // What the guest asked for at CreateDevice/Reset, and therefore
             // the real size of the swap-chain colour attachment and of the
             // auto depth target created beside it.
+            backBufferTexture: null,
+            backBufferView: null,
+            backBufferSrgbView: null,
+            backBufferTextureWidth: 0,
+            backBufferTextureHeight: 0,
             backBufferWidth: 0,
             backBufferHeight: 0,
             multisampleType: D3DMULTISAMPLE_NONE,
@@ -8834,14 +8839,23 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 }
                 state.swapChains.clear();
             }
+            this.retireDeviceBackBuffer(state);
             this.retireGPUObject(state.depthTexture);
             this.retireGPUObject(state.backBufferMsaaTexture);
             this.retireGPUObject(state.gammaRampTexture);
             this.retirePaletteCachesForDevice(state.handle);
         }
 
+        retireDeviceBackBuffer(state) {
+            if (this.backBufferTexture === state.backBufferTexture) this.retireActiveSessionBackBuffer();
+            this.retireGPUObject(state.backBufferTexture);
+            state.backBufferTexture = state.backBufferView = state.backBufferSrgbView = null;
+            state.backBufferTextureWidth = state.backBufferTextureHeight = 0;
+        }
+
+        // Compatibility/diagnostic aliases of the most recently selected
+        // device. The device itself owns the texture and retires it.
         retireActiveSessionBackBuffer() {
-            this.retireGPUObject(this.backBufferTexture);
             this.backBufferTexture = null;
             this.backBufferView = null;
             this.backBufferSrgbView = null;
@@ -8927,13 +8941,16 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const enableAutoDepth = view.getUint32(offset + D9WG.F.CreateDevice.enable_auto_depth_stencil, true);
             const multisampleType = view.getUint32(offset + D9WG.F.CreateDevice.multisample_type, true);
             const multisampleQuality = view.getUint32(offset + D9WG.F.CreateDevice.multisample_quality, true);
-            // A frame left un-presented by a previous device -- typically a
-            // process that exited mid-frame -- must not bleed into this one.
-            // Its recorded ops reference that device's depth target and
-            // back-buffer size, which WebGPU rejects as soon as the sizes
-            // differ ("depth stencil attachment size does not match ...").
-            this.discardFrame();
-            const state = this.deviceState(handle);
+            // A new device cannot discard pending work from another device
+            // in the same session. Reusing a handle first submits the old work
+            // so its captured views remain valid until the queue completes.
+            const previous = this.devices.get(handle);
+            if (previous) {
+                this.finishFrame(false);
+                this.retireDeviceState(previous, "replace");
+            }
+            const state = this.createDeviceState(handle);
+            this.devices.set(handle, state);
             state.viewport = { x: 0, y: 0, width, height, minZ: 0, maxZ: 1 };
             state.surface = { hwnd, x, y, width, height, visible: true,
                 noSurface: false, sessionKey: this.sessionKey };
@@ -8956,20 +8973,13 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const enableAutoDepth = view.getUint32(offset + D9WG.F.ResetDevice.enable_auto_depth_stencil, true);
             const multisampleType = view.getUint32(offset + D9WG.F.ResetDevice.multisample_type, true);
             const multisampleQuality = view.getUint32(offset + D9WG.F.ResetDevice.multisample_quality, true);
+            this.finishFrame(false);
             const oldState = this.devices.get(oldHandle);
             if (oldState) {
                 this.retireGPUObject(oldState.depthTexture);
                 this.retireGPUObject(oldState.backBufferMsaaTexture);
+                this.retireDeviceBackBuffer(oldState);
             }
-            // A D3D9 Reset leaves the back buffer's contents undefined, so the
-            // owned texture is dropped rather than carried across; the next
-            // frame recreates it, zero-filled, at whatever size Reset asked for.
-            this.retireGPUObject(this.backBufferTexture);
-            this.backBufferTexture = null;
-            this.backBufferView = null;
-            this.backBufferSrgbView = null;
-            this.backBufferTextureWidth = 0;
-            this.backBufferTextureHeight = 0;
             this.devices.delete(oldHandle);
             // The session's resources and palettes survive the Reset under
             // their handles (the guest no longer creates them again); what
@@ -9030,17 +9040,17 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
          * something to read). Owning it makes the retained image and the render
          * target the same object, leaving one copy at Present.
          */
-        ensureBackBufferTexture(width, height) {
+        ensureBackBufferTexture(width, height, state) {
             width = Math.max(1, width >>> 0);
             height = Math.max(1, height >>> 0);
-            if (this.backBufferTexture &&
-                    this.backBufferTextureWidth === width &&
-                    this.backBufferTextureHeight === height)
-                return this.backBufferTexture;
+            if (state.backBufferTexture &&
+                    state.backBufferTextureWidth === width &&
+                    state.backBufferTextureHeight === height)
+                return this.selectDeviceBackBuffer(state);
             // A resize discards the contents, which is what D3D9 does too: the
             // back buffer is undefined across a Reset that changes its size.
-            this.retireGPUObject(this.backBufferTexture);
-            this.backBufferTexture = this.device.createTexture({
+            this.retireGPUObject(state.backBufferTexture);
+            state.backBufferTexture = this.device.createTexture({
                 label: "D3D9 back buffer",
                 size: { width, height, depthOrArrayLayers: 1 },
                 format: this.format,
@@ -9054,15 +9064,28 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 usage: TEXTURE_USAGE_RENDER_ATTACHMENT | TEXTURE_USAGE_COPY_SRC |
                     TEXTURE_USAGE_COPY_DST | TEXTURE_USAGE_TEXTURE_BINDING,
             });
-            this.backBufferView = this.backBufferTexture.createView();
-            this.backBufferSrgbView = this.swapchainSrgbFormat
-                ? this.backBufferTexture.createView(
+            state.backBufferView = state.backBufferTexture.createView();
+            state.backBufferSrgbView = this.swapchainSrgbFormat
+                ? state.backBufferTexture.createView(
                     { format: this.swapchainSrgbFormat })
-                : this.backBufferView;
-            this.backBufferTextureWidth = width;
-            this.backBufferTextureHeight = height;
+                : state.backBufferView;
+            state.backBufferTextureWidth = width;
+            state.backBufferTextureHeight = height;
             ++this.stats.backBufferAllocations;
-            return this.backBufferTexture;
+            return this.selectDeviceBackBuffer(state);
+        }
+
+        selectDeviceBackBuffer(state) {
+            this.backBufferTexture = state.backBufferTexture;
+            this.backBufferView = state.backBufferView;
+            this.backBufferSrgbView = state.backBufferSrgbView;
+            this.backBufferTextureWidth = state.backBufferTextureWidth;
+            this.backBufferTextureHeight = state.backBufferTextureHeight;
+            return state.backBufferTexture;
+        }
+
+        deviceBackBuffer(state) {
+            return this.ensureBackBufferTexture(this.backBufferWidthOf(state), this.backBufferHeightOf(state), state);
         }
 
         backBufferWidthOf(state) {
@@ -9541,15 +9564,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 let sourceTexture = resource && resource.gpuTexture
                     ? resource.gpuTexture : null;
                 if (!textureHandle)
-                    sourceTexture = this.backBufferTexture ||
-                        this.lastSwapTexture || this.context.getCurrentTexture();
+                    sourceTexture = state && this.deviceBackBuffer(state);
                 const gpuFormat = resource ? resource.gpuFormat : this.format;
                 if (!sourceTexture || !gpuFormat)
                     throw new Error("readback source is unavailable");
                 const sourceWidth = resource
-                    ? Math.max(1, resource.width >> level) : width;
+                    ? Math.max(1, resource.width >> level) : state.backBufferTextureWidth;
                 const sourceHeight = resource
-                    ? Math.max(1, resource.height >> level) : height;
+                    ? Math.max(1, resource.height >> level) : state.backBufferTextureHeight;
                 if (width !== sourceWidth || height !== sourceHeight)
                     throw new Error("readback dimensions do not match source");
 
@@ -9888,7 +9910,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 ? this.backBufferHeightOf(backState)
                 : (this.backBufferTextureHeight || this.canvas.height || 1);
             const backTexture = this.ensureBackBufferTexture(
-                backWidth, backHeight);
+                backWidth, backHeight, backState);
             const swapView = this.backBufferView;
             const swapSrgbView = this.backBufferSrgbView;
             // GetRenderTargetData on the implicit back buffer reads the
@@ -9999,25 +10021,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 }
                 return created;
             };
-            // The back buffer and the auto depth-stencil must agree on size
-            // or WebGPU rejects the whole command buffer -- and with it
-            // every later frame, not just this one.
-            // A blit op carries its own attachment views rather than a
-            // target set, so it is not part of this check.
-            const backBufferOps = frame.ops.filter(op => op.targets &&
-                op.targets.colors.some(color => color && color.swapchain));
-            const mismatched = backBufferOps.find(op => op.targets.depthView &&
-                (op.targets.width !== backWidth ||
-                 op.targets.height !== backHeight));
-            if (mismatched) {
-                this.warnOnce("depth-size-mismatch",
-                    "dropping a frame whose depth target " +
-                    mismatched.targets.width + "x" + mismatched.targets.height +
-                    " does not match the back buffer " +
-                    backWidth + "x" + backHeight);
-                this.failDroppedQueries(frame.ops);
-                frame.ops.length = 0;
-            }
             for (const op of frame.ops) {
                 if (op.writes) op.writes.msaaStale = true;
                 if (op.kind === "query-begin") {
@@ -12269,7 +12272,9 @@ fn d9_ps_main(stage_in: D9GammaOutput) -> @location(0) vec4<f32> {
                         // with MSAA the pass renders into the device's
                         // multisampled back buffer and resolves into the
                         // owned one (finishFrame's swapView)
-                        colors.push({ view: null, format,
+                        this.deviceBackBuffer(state);
+                        colors.push({ view: wantsSRGB ? state.backBufferSrgbView : state.backBufferView, format,
+                            linearView: state.backBufferView,
                             swapchain: true,
                             sampleCount: state.sampleCount || 1,
                             msaaView: format === this.format ? state.backBufferMsaaView
@@ -12277,7 +12282,7 @@ fn d9_ps_main(stage_in: D9GammaOutput) -> @location(0) vec4<f32> {
                             msaaOwner: state.backBufferMsaaView ? state : null });
                         width = this.backBufferWidthOf(state);
                         height = this.backBufferHeightOf(state);
-                        key += "bb" + (format === this.format ? "" : "s") + ";";
+                        key += "bb" + this.objectId(state.backBufferTexture) + (format === this.format ? "" : "s") + ";";
                     }
                     continue;
                 }
@@ -12597,10 +12602,10 @@ fn d9_ps_main(stage_in: D9GammaOutput) -> @location(0) vec4<f32> {
                 kind: "blit",
                 writes: this.msaaOwnerOf(destination, state),
                 sourceView: source
-                    ? this.blitSourceView(source, sourceLevel, sourceFace) : null,
+                    ? this.blitSourceView(source, sourceLevel, sourceFace) : (this.deviceBackBuffer(state), state.backBufferView),
                 destinationView: destination
                     ? this.targetViewFor(destination, destinationLevel, false,
-                        destinationFace) : null,
+                        destinationFace) : (this.deviceBackBuffer(state), state.backBufferView),
                 destinationFormat,
                 sourceFormat: source ? (source.gpuFormat ||
                     formatToGPU(source.format)) : this.format,
@@ -12839,9 +12844,7 @@ fn d9_ps_main(stage_in: D9BlitOutput) -> @location(0) vec4<f32> {
         // multisampled target renders into its multisampled texture and
         // resolves, at the end of every pass, into the texture D3D reads
         colorAttachmentFor(color, swapView, swapSrgbView) {
-            const resolved = color.swapchain
-                ? (color.format === this.swapchainSrgbFormat ? swapSrgbView : swapView)
-                : color.view;
+            const resolved = color.view || (color.format === this.swapchainSrgbFormat ? swapSrgbView : swapView);
             return color.msaaView ? { view: color.msaaView, resolveTarget: resolved } : { view: resolved };
         }
 
@@ -12872,7 +12875,7 @@ fn d9_ps_main(stage_in: D9BlitOutput) -> @location(0) vec4<f32> {
                 ++this.stats.msaaUnresolves;
                 pass.setPipeline(entry.pipeline);
                 pass.setBindGroup(0, this.device.createBindGroup({ layout: entry.layout, entries: [
-                    { binding: 0, resource: swapchain ? swapView : this.targetViewFor(color.resource, 0, false, 0) }] }));
+                    { binding: 0, resource: swapchain ? (color.linearView || swapView) : this.targetViewFor(color.resource, 0, false, 0) }] }));
                 pass.draw(3);
                 pass.end();
             }
@@ -17783,7 +17786,7 @@ ${body.join("\n")}
                 ? this.targetViewFor(destination, destinationLevel, false,
                     Math.min(destinationFace,
                         (destination.layerCount || 1) - 1))
-                : null;
+                : (this.deviceBackBuffer(state), state.backBufferView);
 
             if (flags & DDBLT_COLOR_FILL) {
                 noteWindowedScreenWrite();
@@ -17807,7 +17810,7 @@ ${body.join("\n")}
                     fillIndex: destinationIndexed ? (fillColor & 0xff) : 0,
                     destinationColorKey,
                     destinationTexture: destination
-                        ? destination.gpuTexture : null,
+                        ? destination.gpuTexture : this.deviceBackBuffer(state),
                     destinationLevel,
                     destinationFace,
                     destinationSize: [destinationWidth, destinationHeight],
@@ -17930,8 +17933,8 @@ ${body.join("\n")}
                 destinationKind: destinationIndexed ? "index" : "float",
                 sourceView: source
                     ? this.blitSourceView(source, sourceLevel, sourceFace)
-                    : null,
-                sourceTexture: source ? source.gpuTexture : null,
+                    : (this.deviceBackBuffer(state), state.backBufferView),
+                sourceTexture: source ? source.gpuTexture : this.deviceBackBuffer(state),
                 sourceLevel,
                 sourceFace,
                 sourceSnapshot: selfBlt,
@@ -17945,7 +17948,7 @@ ${body.join("\n")}
                 colorKey: colorKey || null,
                 destinationColorKey,
                 destinationTexture: destination
-                    ? destination.gpuTexture : null,
+                    ? destination.gpuTexture : this.deviceBackBuffer(state),
                 destinationLevel,
                 destinationFace,
                 destinationSize: [destinationWidth, destinationHeight],
@@ -18031,8 +18034,8 @@ ${body.join("\n")}
                     // A mode switch invalidates the old primary contents.  Do
                     // not let recorded ops or a retained texture with the old
                     // dimensions survive into the first Present of this mode.
-                    this.discardFrame();
-                    this.retireActiveSessionBackBuffer();
+                    this.finishFrame(false);
+                    this.retireDeviceBackBuffer(state);
                     state.backBufferWidth = width;
                     state.backBufferHeight = height;
                     if ((state.sampleCount || 1) > 1) {

@@ -1,0 +1,38 @@
+{
+  "stage": "D3D review 3B2",
+  "hostCommit": "c8d4789c922cb4c71df1a11d2c43f4475f2dda19",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "fb445497baa3807c1523",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "be6eb22aea80b2731174e91749258c81f593869a208b5ce24a647ac0f0483572",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "a5a2667ae9cd099433157d4a31d10f41031ba3551f93022d2f4a7f5426487895",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "6ada2df1dfe6bbee7ed76d53fb925daaf7bfc03db867f62875b1acd4bba1e233",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "ae1fd236e2821c8e0654fe584536759596f96679a5f43412eab652a560db423d",
+    "vendor/v86/glbridge/v86gl-device.js": "db8668f7086286612dd60f00d22baed548fa99a142b7c9bc1d4ebfd29ce5e8c6",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641"
+  },
+  "validation": {
+    "coreSuites": 122,
+    "privateCorpusStrict": true,
+    "guestAbiSuites": 72,
+    "siteIntegrationTests": 2,
+    "swiftshaderCases": 133,
+    "knownPixelFailures": 19,
+    "warcraft3FrozenReplay": "PASS",
+    "pendingSessionUniformPixels": 8192,
+    "pendingDeviceUniformPixels": 8192,
+    "fullCheckpoint": "PASS"
+  },
+  "limitations": [
+    "GTA SA diagnostic startup remains stalled; not accepted as gameplay.",
+    "Wine guest device/visual suites and the full review game matrix remain pending.",
+    "No remote CI run or image writeback performed.",
+    "Explicit device creation enforcement remains 3B3."
+  ]
+}
