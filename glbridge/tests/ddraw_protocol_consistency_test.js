@@ -473,7 +473,7 @@ check("a closed transport is retried, recorded, and never fails CreateSurface",
     assert.doesNotMatch(guestSource, /g_transport_failed/,
         "a transport failure must not latch the DLL off permanently");
     assert.match(guestSource,
-        /GetTickCount\(\) - g_transport_retry_tick < DDWG_TRANSPORT_RETRY_MS/,
+        /d9wg_retry_ready\(GetTickCount\(\), g_transport_retry_tick, g_transport_retry_armed\)/,
         "a failed open must be retried after a backoff");
     assert.match(guestSource,
         /\+\+g_transport_generation;/,

@@ -17,6 +17,7 @@
 #include <initguid.h>
 #include <d3d8.h>
 #include <stdint.h>
+#include "../runtime/d9wg_runtime.h"
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
 #include "../window_region.h"
@@ -445,7 +446,7 @@ static uint32_t g_session_id_high;
 /* A transport failure is never permanent (review S1-3; d3d9_proxy.c's
  * open_transport_locked says why): opening is retried, a refused batch is
  * dropped and the mapping kept */
-#define D8_TRANSPORT_RETRY_MS 1000u
+#define D8_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
 static DWORD g_transport_retry_tick;
 static BOOL g_transport_retry_armed;
 static DWORD g_batches_dropped;
@@ -657,8 +658,7 @@ static BOOL open_transport_locked(void)
 
     if (g_dma_buffer)
         return TRUE;
-    if (g_transport_retry_armed &&
-            GetTickCount() - g_transport_retry_tick < D8_TRANSPORT_RETRY_MS)
+    if (!d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed))
         return FALSE;
     g_transport_retry_armed = TRUE;
     g_transport_retry_tick = GetTickCount();
@@ -843,29 +843,35 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
     return result;
 }
 
+static int emit_buffer_chunk_locked(void *context, uint32_t destination_offset,
+        const uint8_t *data, uint32_t byte_count, uint32_t lock_flags)
+{
+    D9WGUpdateBuffer update;
+    uint8_t *payload, *blob;
+    if (!reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
+            byte_count, NULL, &payload, &blob))
+        return FALSE;
+    ZeroMemory(&update, sizeof(update));
+    update.resource_handle = *(const uint32_t *)context;
+    update.destination_offset = destination_offset;
+    update.byte_count = byte_count;
+    update.data_offset = (uint32_t)(blob - batch_base());
+    update.lock_flags = lock_flags;
+    CopyMemory(payload, &update, sizeof(update));
+    if (byte_count) CopyMemory(blob, data, byte_count);
+    return TRUE;
+}
+
 static BOOL emit_buffer_update(uint32_t handle, uint32_t destination_offset,
         const void *data, uint32_t byte_count, uint32_t lock_flags)
 {
-    D9WGUpdateBuffer update;
-    D9WGCommandHeader *command;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-
-    ZeroMemory(&update, sizeof(update));
+    BOOL result = FALSE;
     EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_BUFFER,
-            sizeof(update), byte_count, &command, &payload, &blob);
-    if (result) {
-        update.resource_handle = handle;
-        update.destination_offset = destination_offset;
-        update.byte_count = byte_count;
-        update.data_offset = (uint32_t)((uint8_t *)blob - batch_base());
-        update.lock_flags = lock_flags;
-        CopyMemory(payload, &update, sizeof(update));
-        if (byte_count)
-            CopyMemory(blob, data, byte_count);
-        (void)command;
+    if (open_transport_locked()) {
+        uint32_t limit = d9wg_buffer_upload_limit(batch_capacity(),
+                sizeof(D9WGBatchHeader), sizeof(D9WGCommandHeader), sizeof(D9WGUpdateBuffer));
+        result = d9wg_upload_buffer(&handle, destination_offset, data, byte_count,
+                lock_flags, D3DLOCK_DISCARD, limit, emit_buffer_chunk_locked);
     }
     LeaveCriticalSection(&g_transport_lock);
     return result;

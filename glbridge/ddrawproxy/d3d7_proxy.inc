@@ -2763,26 +2763,11 @@ static HRESULT WINAPI d3d7_vb_Lock(IDirect3DVertexBuffer7 *iface,
 static HRESULT WINAPI d3d7_vb_Unlock(IDirect3DVertexBuffer7 *iface)
 {
     D3D7VertexBuffer *buffer = d3d7_vb_from_iface(iface);
-    D9WGUpdateBuffer update;
-    uint8_t *payload;
-    uint8_t *blob;
     BOOL result = TRUE;
     if (!buffer->locked) return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERUNLOCKFAILED);
-    if (!(buffer->lock_flags & DDLOCK_READONLY)) {
-        ZeroMemory(&update, sizeof(update));
-        EnterCriticalSection(&g_transport_lock);
-        result = reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-                buffer->byte_count, &payload, &blob);
-        if (result) {
-            update.resource_handle = buffer->handle;
-            update.byte_count = buffer->byte_count;
-            update.data_offset = (uint32_t)(blob - batch_base());
-            update.lock_flags = buffer->lock_flags;
-            CopyMemory(payload, &update, sizeof(update));
-            CopyMemory(blob, buffer->shadow, buffer->byte_count);
-        }
-        LeaveCriticalSection(&g_transport_lock);
-    }
+    if (!(buffer->lock_flags & DDLOCK_READONLY))
+        result = emit_buffer_update(buffer->handle, 0, buffer->shadow,
+                buffer->byte_count, buffer->lock_flags);
     buffer->locked = FALSE;
     buffer->lock_flags = 0;
     return DDWG_TRACE_ERROR(result ? D3D_OK
@@ -2915,24 +2900,8 @@ static void d3d7_light_vertex(D3D7Device *device, const float *eye_position,
 static BOOL d3d7_upload_vertex_range(D3D7VertexBuffer *buffer,
         UINT offset, UINT byte_count)
 {
-    D9WGUpdateBuffer update;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-    ZeroMemory(&update, sizeof(update));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-            byte_count, &payload, &blob);
-    if (result) {
-        update.resource_handle = buffer->handle;
-        update.destination_offset = offset;
-        update.byte_count = byte_count;
-        update.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &update, sizeof(update));
-        CopyMemory(blob, buffer->shadow + offset, byte_count);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+    return emit_buffer_update(buffer->handle, offset, buffer->shadow + offset,
+            byte_count, 0);
 }
 
 static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,

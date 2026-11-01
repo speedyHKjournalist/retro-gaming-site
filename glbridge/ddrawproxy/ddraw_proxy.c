@@ -1,8 +1,7 @@
 /*
  * App-local DirectDraw / Direct3D 1-7 frontend for Windows XP guests in v86.
  *
- * Independent from d3d8.dll and d3d9.dll as a deployment -- a game directory
- * holds exactly one proxy -- but not as an implementation: this DLL emits the
+ * This DLL may coexist with other DirectX frontends and emits the
  * same D9WG command stream on the same V86GL_CTRL_D3D9_BATCH transport, and
  * ../d3d9-webgpu/d3d9_executor.js (plus its ddraw_ops.js mixin) executes it.
  * ddraw_protocol.h is the translation layer and enumerates every place the
@@ -35,6 +34,7 @@
 #include <ddraw.h>
 #include <d3d.h>
 #include <stdint.h>
+#include "../runtime/d9wg_runtime.h"
 #include <stddef.h>
 #include <stdarg.h>
 #include "../openglproxy/v86gl_ioctl.h"
@@ -109,7 +109,7 @@ static uint32_t g_session_id_high;
  * becomes available. Every successful open bumps a generation, and the device,
  * the palettes and the surface storage are recreated lazily against it.
  */
-#define DDWG_TRANSPORT_RETRY_MS 750u
+#define DDWG_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
 #define DDWG_LOG_FILE_MAX_LINES 4096u
 
 static DWORD g_transport_retry_tick;    /* GetTickCount at the last failure */
@@ -381,8 +381,7 @@ static BOOL open_transport_locked(void)
 
     if (g_dma_buffer)
         return TRUE;
-    if (g_transport_retry_armed &&
-            GetTickCount() - g_transport_retry_tick < DDWG_TRANSPORT_RETRY_MS)
+    if (!d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed))
         return FALSE;
 
     DDWG_TRACE_CHECKPOINT("TRANSPORT OPEN_BEGIN device=\\\\.\\v86gl");
@@ -4587,6 +4586,40 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
 /* Direct3D 7 is kept in a separate include so the already-large DirectDraw
  * implementation remains navigable. It deliberately shares the private
  * object and transport helpers above rather than defining a second backend. */
+static int emit_buffer_chunk_locked(void *context, uint32_t destination_offset,
+        const uint8_t *data, uint32_t byte_count, uint32_t lock_flags)
+{
+    D9WGUpdateBuffer update;
+    uint8_t *payload, *blob;
+    if (!reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
+            byte_count, &payload, &blob))
+        return FALSE;
+    ZeroMemory(&update, sizeof(update));
+    update.resource_handle = *(const uint32_t *)context;
+    update.destination_offset = destination_offset;
+    update.byte_count = byte_count;
+    update.data_offset = (uint32_t)(blob - batch_base());
+    update.lock_flags = lock_flags;
+    CopyMemory(payload, &update, sizeof(update));
+    if (byte_count) CopyMemory(blob, data, byte_count);
+    return TRUE;
+}
+
+static BOOL emit_buffer_update(uint32_t handle, uint32_t destination_offset,
+        const void *data, uint32_t byte_count, uint32_t lock_flags)
+{
+    BOOL result = FALSE;
+    EnterCriticalSection(&g_transport_lock);
+    if (open_transport_locked()) {
+        uint32_t limit = d9wg_buffer_upload_limit(batch_capacity(),
+                sizeof(D9WGBatchHeader), sizeof(D9WGCommandHeader), sizeof(D9WGUpdateBuffer));
+        result = d9wg_upload_buffer(&handle, destination_offset, data, byte_count,
+                lock_flags, DDLOCK_DISCARDCONTENTS, limit, emit_buffer_chunk_locked);
+    }
+    LeaveCriticalSection(&g_transport_lock);
+    return result;
+}
+
 #include "d3d7_proxy.inc"
 #include "d3d_legacy_proxy.inc"
 

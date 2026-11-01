@@ -33,6 +33,11 @@ if [ $# -gt 1 ]; then
     exit 2
 fi
 
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/d9wg-link.XXXXXX")
+trap 'rm -rf "$runtime_dir"' EXIT HUP INT TERM
+runtime_archive="$runtime_dir/libd9wg_runtime.a"
+CC="$compiler" sh "$script_dir/../runtime/build.sh" "$runtime_archive"
+
 # The guest has no C runtime to resolve such an import against.
 check_imports() {
     imports=$("$objdump" -p "$1" | sed -n 's/^[[:space:]]*DLL Name: //p')
@@ -53,7 +58,7 @@ build_dll() {
         -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at \
         -o "$output" \
         "$script_dir/d3d8_proxy.c" "$script_dir/d3d8.def" \
-        -luser32 -lgdi32 -lkernel32
+        "$runtime_archive" -luser32 -lgdi32 -lkernel32
     check_imports "$output"
 }
 
