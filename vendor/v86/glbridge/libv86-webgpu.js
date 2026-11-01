@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "6b5e2b385c039a89dae2";
+globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -8156,15 +8156,16 @@ ${body.join("\n")}
         // condition, i.e. the negation of "the fragment passes".
         function alphaTestDiscard(alphaTest, alphaExpression) {
             if (!alphaTest || !alphaTest.enabled) return "";
-            const reference = (alphaTest.reference / 255).toFixed(6);
+            const reference = (alphaTest.reference & 255) + "u";
+            const alpha = "u32(clamp(" + alphaExpression + ", 0.0, 1.0) * 255.0 + 0.5)";
             const condition = {
-                1: "true",                                        // NEVER
-                2: "!(" + alphaExpression + " < " + reference + ")",   // LESS
-                3: "!(" + alphaExpression + " == " + reference + ")",  // EQUAL
-                4: "!(" + alphaExpression + " <= " + reference + ")",  // LESSEQUAL
-                5: "!(" + alphaExpression + " > " + reference + ")",   // GREATER
-                6: "!(" + alphaExpression + " != " + reference + ")",  // NOTEQUAL
-                7: "!(" + alphaExpression + " >= " + reference + ")",  // GREATEREQUAL
+                1: "true", // NEVER
+                2: "!(" + alpha + " < " + reference + ")",
+                3: "!(" + alpha + " == " + reference + ")",
+                4: "!(" + alpha + " <= " + reference + ")",
+                5: "!(" + alpha + " > " + reference + ")",
+                6: "!(" + alpha + " != " + reference + ")",
+                7: "!(" + alpha + " >= " + reference + ")",
             }[alphaTest.func];
             if (!condition) return ""; // ALWAYS (8) and anything unknown: no test
             return "    if (" + condition + ") { discard; }\n";
@@ -8255,8 +8256,7 @@ ${body.join("\n")}
                     throw new Error("fixed-function uniform field " + field.name +
                         " is not 16-byte aligned; WGSL uniform layout would " +
                         "silently disagree with the writer");
-                entries.push({ name: field.name, type: field.type,
-                    bytes: field.bytes, offset, source: field.source });
+                entries.push({ ...field, offset });
                 offset += field.bytes;
             }
             return { entries, byteLength: Math.max(16, offset),
@@ -8411,6 +8411,23 @@ ${body.join("\n")}
         // Only the operations fill_caps() lists in TextureOpCaps appear here.
         // Returning null makes the caller count the draw and fall back to
         // SELECTARG1 rather than inventing an approximation.
+        function textureOpArguments(op) {
+            if (op === D3DTOP_DISABLE) return [];
+            if (op === D3DTOP_SELECTARG1) return [1];
+            if (op === D3DTOP_SELECTARG2 || op === D3DTOP_BUMPENVMAP || op === D3DTOP_BUMPENVMAPLUMINANCE) return [2];
+            return op === D3DTOP_MULTIPLYADD || op === D3DTOP_LERP ? [0, 1, 2] : [1, 2];
+        }
+        function textureOpReadsTexture(op, args) {
+            return op === D3DTOP_BLENDTEXTUREALPHA || op === D3DTOP_BLENDTEXTUREALPHAPM ||
+                op === D3DTOP_BUMPENVMAP || op === D3DTOP_BUMPENVMAPLUMINANCE ||
+                textureOpArguments(op).some(index => (args[index] & D3DTA_SELECTMASK) === D3DTA_TEXTURE);
+        }
+        function normalizeTextureOperation(op, args, hasTexture) {
+            if (!hasTexture && textureOpReadsTexture(op, args)) return { op: D3DTOP_SELECTARG1, args: [D3DTA_CURRENT, D3DTA_CURRENT, D3DTA_CURRENT] };
+            const used = textureOpArguments(op);
+            return { op, args: args.map((value, index) => used.includes(index) ? value : D3DTA_CURRENT) };
+        }
+
         function textureOpExpression(op, type, args, blend) {
             const one = type === "vec3<f32>" ? "vec3<f32>(1.0)" : "1.0";
             const half = type === "vec3<f32>" ? "vec3<f32>(0.5)" : "0.5";
@@ -8621,7 +8638,8 @@ ${body.join("\n")}
                 ? `    let viewport = uniforms.viewport;
     let ndc_x = ((${position}.x - viewport.z) / viewport.x) * 2.0 - 1.0;
     let ndc_y = 1.0 - ((${position}.y - viewport.w) / viewport.y) * 2.0;
-    result.position = vec4<f32>(ndc_x, ndc_y, ${position}.z, 1.0);`
+    let clip_w = 1.0 / select(${position}.w, 1.0, ${position}.w == 0.0);
+    result.position = vec4<f32>(ndc_x, ndc_y, ${position}.z, 1.0) * clip_w;`
                 : "    result.position = uniforms." +
                     (blend ? "view_projection" : "world_view_projection") +
                     " * " + blendedPosition + ";")
@@ -8677,8 +8695,8 @@ ${body.join("\n")}
                 // colours is tinted by them rather than by the material alone.
                 const sourceExpression = (source, materialField) => {
                     if (!lighting.colorVertex) return "uniforms." + materialField;
-                    if (source === D3DMCS_COLOR1) return "vertex_diffuse";
-                    if (source === D3DMCS_COLOR2) return "vertex_specular";
+                    if (source === D3DMCS_COLOR1 && signature.hasColor) return "vertex_diffuse";
+                    if (source === D3DMCS_COLOR2 && signature.hasColor1) return "vertex_specular";
                     return "uniforms." + materialField;
                 };
                 colorBody +=
@@ -8781,7 +8799,10 @@ ${body.join("\n")}
                 : signature.fogRange ? "length(position_view.xyz)" : "abs(position_view.z)";
             const fogFactor = fixedFogFactorExpression(signature.fogMode,
                 "fog_distance");
-            const fogBody = fogFactor
+            const fogBody = signature.fogMode && (signature.positionType === "screen" || signature.fogMode === "factor")
+                ? "    result.varying" + shaderPipeline.VARYING_FOG + " = vec4<f32>(" +
+                    (signature.hasColor1 ? "clamp(vertex_specular.a, 0.0, 1.0)" : "1.0") + ", 0.0, 0.0, 0.0);\n"
+                : fogFactor
                 ? "    let fog_distance = " + fogDistance + ";\n" +
                   "    result.varying" + shaderPipeline.VARYING_FOG +
                   " = vec4<f32>(" + fogFactor + ", 0.0, 0.0, 0.0);\n"
@@ -9185,7 +9206,8 @@ ${coordBody}${fogBody}${clipBody}${pointBody}    return result;
                 alphaArgs.alpha1 = alpha(stage.colorArg1);
                 const colorExpression = textureOpExpression(stage.colorOp,
                     "vec3<f32>", colorArgs, blendAlpha[stage.colorOp] || "0.0");
-                const alphaExpression = stage.alphaOp === D3DTOP_DISABLE ? null
+                const alphaExpression = stage.colorOp === D3DTOP_DOTPRODUCT3 ? "stage_rgb.x"
+                    : stage.alphaOp === D3DTOP_DISABLE ? null
                     : textureOpExpression(stage.alphaOp, "f32", alphaArgs,
                         blendAlpha[stage.alphaOp] || "0.0");
                 const destination = stage.resultArg === D3DTA_TEMP ? "temp" : "current";
@@ -9235,8 +9257,8 @@ ${coordBody}${fogBody}${clipBody}${pointBody}    return result;
                     : "clamp(stage_in.varying" + shaderPipeline.VARYING_FOG +
                       ".x, 0.0, 1.0)";
                 const tableDistance = signature.tableFog && tableFactor
-                    ? "    let fog_distance = 1.0 / " +
-                      "max(abs(stage_in.position.w), 1e-6);\n"
+                    ? "    let fog_distance = select(1.0 / max(abs(stage_in.position.w), 1e-6), " +
+                        "stage_in.position.z, uniforms.fog_params.w != 0.0);\n"
                     : "";
                 fogBody = tableDistance +
                     "    result = vec4<f32>(mix(uniforms.fog_color.rgb, result.rgb,\n" +
@@ -9281,7 +9303,7 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a")}${fogBody}   
         function signatureKey(stage, signature, debugMode) {
             return "ff" + stage + ":" + JSON.stringify([signature, debugMode || ""]);
         }
-        return { signatureKey, VARYING_COUNT, VARYING_COLOR0, D3DSHADE_FLAT, D3DSHADE_GOURAUD, varyingDeclaration, VARYING_TEXCOORD0, FF_LOCATION_POSITION, FF_LOCATION_COLOR0, FF_LOCATION_COLOR1, FF_LOCATION_NORMAL, FF_LOCATION_TEXCOORD0, FF_LOCATION_PSIZE, FF_LOCATION_BLENDWEIGHT, FF_LOCATION_BLENDINDICES, alphaTestDiscard, fixedFunctionLocationFor, vertexInputDeclaration, declTypeInputScalar, uniformBlockLayout, uniformBlockStruct, HALF_PIXEL_OFFSET_BODY, fixedVertexUniformLayout, fixedPixelUniformLayout, fixedFogFactorExpression, textureOpExpression, buildFixedFunctionVertexShader, buildFixedFunctionPixelShader };
+        return { normalizeTextureOperation, textureOpArguments, textureOpReadsTexture, signatureKey, VARYING_COUNT, VARYING_COLOR0, D3DSHADE_FLAT, D3DSHADE_GOURAUD, varyingDeclaration, VARYING_TEXCOORD0, FF_LOCATION_POSITION, FF_LOCATION_COLOR0, FF_LOCATION_COLOR1, FF_LOCATION_NORMAL, FF_LOCATION_TEXCOORD0, FF_LOCATION_PSIZE, FF_LOCATION_BLENDWEIGHT, FF_LOCATION_BLENDINDICES, alphaTestDiscard, fixedFunctionLocationFor, vertexInputDeclaration, declTypeInputScalar, uniformBlockLayout, uniformBlockStruct, HALF_PIXEL_OFFSET_BODY, fixedVertexUniformLayout, fixedPixelUniformLayout, fixedFogFactorExpression, textureOpExpression, buildFixedFunctionVertexShader, buildFixedFunctionPixelShader };
     }
     const api = { createGenerator };
     global.D9WGFFP = api;
@@ -10210,11 +10232,9 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a")}${fogBody}   
             : [0, 0, 1];
     }
 
-    // What D3D9 lights with when the app never called SetMaterial. Not all
-    // zeroes: a zero diffuse would render the mesh black, which looks like a
-    // bug in the lighting rather than like missing state.
+    // Retail D3D9 initializes every material component to zero.
     const DEFAULT_MATERIAL = {
-        diffuse: [1, 1, 1, 1], ambient: [1, 1, 1, 1],
+        diffuse: [0, 0, 0, 0], ambient: [0, 0, 0, 0],
         specular: [0, 0, 0, 0], emissive: [0, 0, 0, 0], power: 0,
     };
 
@@ -14340,13 +14360,24 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // unconditionally would declare textures and upload constants a
                 // stage never touches -- and, worse, would leave the app's stale
                 // arg0 deciding what gets bound.
-                const readsArg0 = op =>
-                    op === D3DTOP_MULTIPLYADD || op === D3DTOP_LERP;
-                const argumentsUsed = [stage.colorArg1, stage.colorArg2];
-                if (stage.alphaOp !== D3DTOP_DISABLE)
-                    argumentsUsed.push(stage.alphaArg1, stage.alphaArg2);
-                if (readsArg0(stage.colorOp)) argumentsUsed.push(stage.colorArg0);
-                if (readsArg0(stage.alphaOp)) argumentsUsed.push(stage.alphaArg0);
+                const texture = this.resources.get(state.textures.get(index));
+                const usable = texture && !texture.isDepth;
+                for (const channel of ["color", "alpha"]) {
+                    const normalized = ffp.normalizeTextureOperation(stage[channel + "Op"],
+                        [0, 1, 2].map(argument => stage[channel + "Arg" + argument]), !!usable);
+                    stage[channel + "Op"] = normalized.op;
+                    normalized.args.forEach((argument, i) => { stage[channel + "Arg" + i] = argument; });
+                }
+                // DOT3 writes all four channels; a stale alpha operation and
+                // its arguments neither sample a texture nor affect the key.
+                if (stage.colorOp === D3DTOP_DOTPRODUCT3) {
+                    stage.alphaOp = D3DTOP_DISABLE;
+                    stage.alphaArg0 = stage.alphaArg1 = stage.alphaArg2 = D3DTA_CURRENT;
+                }
+                const argumentsUsed = [
+                    ...ffp.textureOpArguments(stage.colorOp).map(i => stage["colorArg" + i]),
+                    ...ffp.textureOpArguments(stage.alphaOp).map(i => stage["alphaArg" + i]),
+                ];
                 const opsUsed = [stage.colorOp];
                 if (stage.alphaOp !== D3DTOP_DISABLE) opsUsed.push(stage.alphaOp);
                 // Support is per *channel*, not per operation: the
@@ -14375,14 +14406,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                         opsUsed.includes(D3DTOP_BLENDTEXTUREALPHAPM);
                 if (opsUsed.includes(D3DTOP_BLENDFACTORALPHA))
                     usesTextureFactor = true;
+                stage.samplesTexture ||= ffp.textureOpReadsTexture(stage.colorOp, []) ||
+                    ffp.textureOpReadsTexture(stage.alphaOp, []);
                 if (stage.samplesTexture) {
-                    const texture = this.resources.get(state.textures.get(index));
                     // A depth texture counts as nothing bound here. The fixed
                     // function cascade has no comparison reference to offer, so
                     // it takes the white fallback and viewForStage() reports
                     // why -- rather than reaching a float layout entry with a
                     // depth view, which is invalid rather than merely wrong.
-                    const usable = texture && !texture.isDepth;
                     stage.textureType = usable ? (texture.textureType || "2d") : "2d";
                     stage.hasTextureBound = !!usable;
                     stage.sampleSwizzle = usable ? samplingSwizzle(texture.format) : "";
@@ -15476,18 +15507,15 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 return { error: "declaration has no POSITION/POSITIONT element " +
                     "and no vertex shader is bound" };
 
-            // Table fog (D3DRS_FOGTABLEMODE) takes precedence over vertex fog
-            // when both are set, which is what D3D9 does. Screen-space XYZRHW
-            // geometry is excluded: it has no eye-space depth to fog against.
+            // Table fog wins over vertex fog. Transformed vertices supply
+            // their vertex factor in specular alpha, irrespective of the mode.
             let fogMode = 0;
             let tableFog = false;
-            if ((rs.get(D3DRS_FOGENABLE) || 0) !== 0 &&
-                    (!fixedVertexSignature ||
-                     fixedVertexSignature.positionType !== "screen")) {
+            if ((rs.get(D3DRS_FOGENABLE) || 0) !== 0) {
                 const table = rs.get(D3DRS_FOGTABLEMODE) || D3DFOG_NONE;
                 tableFog = table !== D3DFOG_NONE;
-                fogMode = tableFog ? table
-                    : (rs.get(D3DRS_FOGVERTEXMODE) || D3DFOG_NONE);
+                fogMode = tableFog ? table : fixedVertexSignature && fixedVertexSignature.positionType === "screen"
+                    ? "factor" : (rs.get(D3DRS_FOGVERTEXMODE) || "factor");
             }
 
             // ---- pixel stage ----
@@ -16733,6 +16761,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     floats[base] = asFloat(D3DRS_FOGSTART, 0);
                     floats[base + 1] = asFloat(D3DRS_FOGEND, 1);
                     floats[base + 2] = asFloat(D3DRS_FOGDENSITY, 1);
+                    const projection = state.transforms.get(D3DTS_PROJECTION) || IDENTITY4x4;
+                    floats[base + 3] = projection[3] === 0 && projection[7] === 0 && projection[11] === 0 && projection[15] === 1 ? 1 : 0;
                 } else if (entry.name === "texture_factor") {
                     writeColor(entry.offset / 4,
                         state.renderStates.get(D3DRS_TEXTUREFACTOR) === undefined
