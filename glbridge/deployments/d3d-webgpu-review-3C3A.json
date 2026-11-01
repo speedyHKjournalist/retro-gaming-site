@@ -1,0 +1,48 @@
+{
+  "stage": "D3D review 3C3A",
+  "hostCommit": "2e3185c83b424d7a1f95618eacd4ffccc89bbf1c",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "e973b79d51ab0c893696",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "28bcef85a1c82a2cdde0b70b96fceb299ddeefe188bc9eedc18cb9c4c5422c90",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "57fc9653101aa400d4328cb6ff98e554b8a5614791f9b6200e494d61a22f30f9",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "926844ab4acd90e64bc346ba0939615d39fb45ebfc6a6be09380457324da2ecd",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "8f1d513a7a29ea612bd5d1f8903a10dc9eecb3a79d668250d84dd7710c80a11a",
+    "vendor/v86/glbridge/v86gl-device.js": "da1d0a3f9989ad2389db0faac635831a20c7ae9e15dfc2f39734470b0c4d3bbc",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641",
+    "glbridge/ddrawproxy/ddraw_protocol.h": "baa645ca14ed5e52d3c4dc5df0a6737a036f723e7a81379caaa5a8eb43e5c8ba",
+    "glbridge/ddrawproxy/ddraw.dll": "8e8f30d9beb6812a4eba2abd21ce786f1204358d56cd5de659ac7f9064b7e809",
+    "glbridge/ddrawproxy/ddraw-diagnostic.dll": "02c0cb893fcee1a03a60a5d56e87c3f3ee1235e29d21e61b946eb4004a5e5472"
+  },
+  "validation": {
+    "coreSuites": 124,
+    "privateCorpusStrict": true,
+    "guestAbiSuites": 72,
+    "siteIntegrationTests": 2,
+    "swiftshaderCases": 150,
+    "normativePixels": 138,
+    "knownPixelFailures": 12,
+    "compiledGuestChannelInputs": 510,
+    "fullCheckpoint": "PASS",
+    "warcraft3FrozenReplay": "EXPECTED_DIFFERENCE_FROM_NARROW_UNORM_REPAIR",
+    "warcraft3LegacyUnormCounterfactual": "146 differing bytes; 49 stable pixel mismatches",
+    "nativeHalfFloatBits": "PASS",
+    "pixelAndVertexFormatSamplers": "PASS",
+    "pendingUniformAndUploadIsolationPixels": 32768,
+    "svgaWorker": "PASS",
+    "d3dMutationsKilled": 12,
+    "warcraft3AllLegacyUploadCounterfactual": "PASS unchanged frozen policy"
+  },
+  "limitations": [
+    "Original game golden/policy preserved. Narrow UNORM repair and ordered resource upload changes produce explained differences; native correctness of all changed game pixels remains pending visual acceptance.",
+    "Legacy indexed DirectDraw sampling shadows and immediate palette writes remain review 3C3B.",
+    "Wine guest tests, multi-owner driver and full game acceptance remain pending.",
+    "No remote CI run or disk image writeback performed."
+  ]
+}

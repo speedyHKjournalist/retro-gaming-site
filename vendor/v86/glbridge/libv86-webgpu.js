@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "f285613f1df69e38e4d3";
+globalThis.V86GL_BUILD_REVISION = "e973b79d51ab0c893696";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -4877,6 +4877,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 hotspotX: 0, hotspotY: 0, x: 0, y: 0, visible: false,
                 pipeline: null, sampler: null, uniform: null },
             lastDraws: { fixed: null, programmable: null },
+            uploads: null,
             uniformRingChunks: [],
             uniformStaging: [],
             uniformRingIndex: 0,
@@ -4890,7 +4891,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         "devices", "resources", "frame", "activeOcclusion", "presentingDevice", "lastSwapTexture",
         "backBufferTexture", "backBufferView", "backBufferSrgbView", "backBufferTextureWidth",
         "backBufferTextureHeight", "palettes", "ddPaletteBuffers", "ddPaletteSerials", "windowState",
-        "cursor", "lastDraws", "uniformRingChunks", "uniformStaging", "uniformRingIndex", "uniformRingCursor",
+        "cursor", "lastDraws", "uploads", "uniformRingChunks", "uniformStaging", "uniformRingIndex", "uniformRingCursor",
     ]);
     function captureSession(state, executor) {
         for (const field of SESSION_FIELDS) state[field] = executor[field];
@@ -5767,6 +5768,92 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 })(typeof globalThis !== "undefined" ? globalThis : this);
 
 ;
+// Session-owned upload storage. Only staging buffers are written through the
+// queue; destination copies are replayed between draws in guest command order.
+(function(global) {
+    "use strict";
+    const align = (n, a) => Math.ceil(n / a) * a;
+    class D9WGUploads {
+        constructor(device, retire, stats) {
+            this.device = device;
+            this.retire = retire;
+            this.stats = stats;
+            this.chunks = [];
+            this.reset();
+        }
+        reset() {
+            this.index = 0;
+            this.cursor = 0;
+            this.bytesUsed = 0;
+            for (const chunk of this.chunks) chunk.used = 0;
+        }
+        reserve(bytes) {
+            const size = align(bytes, 4);
+            let offset = align(this.cursor, 256), chunk = this.chunks[this.index];
+            if (chunk && offset + size > chunk.data.length && this.cursor) {
+                ++this.index;offset = 0;chunk = this.chunks[this.index];
+            }
+            if (!chunk || size > chunk.data.length) {
+                if (chunk) this.retire(chunk.buffer);
+                const capacity = Math.max(4 << 20, align(size, 256));
+                chunk = { buffer: this.device.createBuffer({ label: "D3D9 ordered upload staging",
+                    size: capacity, usage: 0x4 | 0x8 }), data: new Uint8Array(capacity), used: 0 };
+                this.chunks[this.index] = chunk;
+                this.stats.uploadChunksAllocated = (this.stats.uploadChunksAllocated || 0) + 1;
+            }
+            this.cursor = offset + size;
+            chunk.used = Math.max(chunk.used, this.cursor);
+            this.bytesUsed += size;
+            return { buffer: chunk.buffer, offset, data: chunk.data.subarray(offset, offset + size) };
+        }
+        buffer(destination, destinationOffset, source) {
+            const allocation = this.reserve(source.byteLength);
+            allocation.data.set(source);
+            return { kind: "buffer-upload", source: allocation.buffer, sourceOffset: allocation.offset,
+                destination, destinationOffset, size: allocation.data.length };
+        }
+        texture(destination, source, layout, size) {
+            const pitch = align(layout.bytesPerRow, 256), rows = layout.rowsPerImage;
+            const allocation = this.reserve(pitch * rows * size.depthOrArrayLayers);
+            allocation.data.fill(0);
+            for (let slice = 0; slice < size.depthOrArrayLayers; ++slice) {
+                for (let row = 0; row < rows; ++row) {
+                    const at = (slice * rows + row) * layout.bytesPerRow;
+                    allocation.data.set(source.subarray(at, at + layout.bytesPerRow), (slice * rows + row) * pitch);
+                }
+            }
+            return { kind: "texture-upload", source: { buffer: allocation.buffer, offset: allocation.offset,
+                bytesPerRow: pitch, rowsPerImage: rows }, destination, size };
+        }
+        flush() {
+            for (const chunk of this.chunks) {
+                if (!chunk.used) continue;
+                this.device.queue.writeBuffer(chunk.buffer, 0, chunk.data, 0, align(chunk.used, 4));
+                this.stats.uploadStagingUploads = (this.stats.uploadStagingUploads || 0) + 1;
+            }
+        }
+        replay(encoder, op) {
+            if (op.kind === "buffer-upload") {
+                encoder.copyBufferToBuffer(op.source, op.sourceOffset, op.destination, op.destinationOffset, op.size);
+                return true;
+            }
+            if (op.kind === "texture-upload") {
+                encoder.copyBufferToTexture(op.source, op.destination, op.size);
+                return true;
+            }
+            return false;
+        }
+        release() {
+            for (const chunk of this.chunks) this.retire(chunk.buffer);
+            this.chunks = [];
+            this.reset();
+        }
+    }
+    global.D9WGUploads = D9WGUploads;
+    if (typeof module !== "undefined" && module.exports) module.exports = D9WGUploads;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+
+;
 // D9WG high-level Direct3D 9 command executor -- M1 skeleton.
 //
 // The guest DLL (glbridge/d3d9proxy/d3d9_proxy.c) keeps COM objects, shadow
@@ -5836,6 +5923,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         isRenderableGPUFormat, isFloat32GPUFormat, isBlendableGPUFormat, formatToGPU, d3dBytesPerTexel,
         packGPUReadbackRow, expandRowToGPU, samplingSwizzle
     } = formats;
+    const Uploads = global.D9WGUploads ||
+        (typeof require === "function" ? require("./d9wg_uploads.js") : null);
+    if (!Uploads) throw new Error("d3d9_executor.js requires d9wg_uploads.js to be loaded first");
     const stateFactory = global.D9WGState ||
         (typeof require === "function" ? require("./d9wg_state.js") : null);
     if (!stateFactory) throw new Error("d3d9_executor.js requires d9wg_state.js to be loaded first");
@@ -8017,6 +8107,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.options.readbackTimeoutMs || 4000);
             this.heartbeat = 0;
             this.heartbeatBuffer = new Uint8Array(4);
+            this.uploads = null;
             this.uniformRingChunks = [];
             // A CPU-side mirror of each chunk. Constants are written here and
             // the whole used prefix goes up in one writeBuffer per submit --
@@ -8196,10 +8287,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // A frame with no ops remains useful diagnostic evidence that
                 // Present itself did not produce new GPU work.
                 framesWithoutColorClear: 0, framesWithNoOps: 0,
-                // Dynamic buffers renamed because a draw already recorded in
-                // the same frame reads their previous contents (see
-                // applyBufferUpdate). Zero means the deferred-draw path never
-                // had a write-after-record hazard to begin with.
+                // Legacy rename counters stay zero for diagnostics consumers.
+                uploadChunksAllocated: 0, uploadStagingUploads: 0,
                 bufferRenames: 0, textureUpdateHazards: 0,
                 textureRenames: 0, textureFullCopyRenameBytes: 0,
                 bufferFullCopyRenames: 0, bufferNoOverwriteWrites: 0,
@@ -8365,7 +8454,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     new Uint8Array([255, 255, 255, 255]),
                     { bytesPerRow: 4, rowsPerImage: 1 },
                     { width: 1, height: 1, depthOrArrayLayers: 1 });
-                this.uniformRingChunks = [];
+                this.uploads = null;
+            this.uniformRingChunks = [];
                 this.uniformStaging = [];
                 this.uniformRingIndex = 0;
                 this.uniformRingCursor = 0;
@@ -8654,6 +8744,25 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return handler.call(this, bytes, view, offset, length, metadata);
         }
 
+        uploadFrame(bytes) {
+            if (this.frame && this.uploads && this.uploads.bytesUsed + bytes > (64 << 20)) this.finishFrame(false);
+            const frame = this.ensureFrame();
+            if (!this.uploads) this.uploads = new Uploads(this.device, object => this.retireGPUObject(object), this.stats);
+            return frame;
+        }
+
+        stageBufferUpload(buffer, offset, source) {
+            const frame = this.uploadFrame(source.byteLength);
+            frame.ops.push(this.uploads.buffer(buffer, offset, source));
+        }
+
+        stageTextureUpload(destination, source, layout, size, resource) {
+            const frame = this.uploadFrame(source.byteLength);
+            const op = this.uploads.texture(destination, source, layout, size);
+            op.writes = resource && resource.msaaTexture ? resource : null;
+            frame.ops.push(op);
+        }
+
         // ---- device/resource state ----
 
         deviceState(handle) {
@@ -8926,6 +9035,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.ddPaletteSerials.clear();
             this.palettes.clear();
             this.retireActiveSessionBackBuffer();
+            if (this.uploads) this.uploads.release();
+            this.uploads = null;
             for (const buffer of this.uniformRingChunks) this.retireGPUObject(buffer);
             this.uniformRingChunks = [];
             this.uniformStaging = [];
@@ -9326,6 +9437,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.backBufferSrgbView = null;
             this.backBufferTextureWidth = 0;
             this.backBufferTextureHeight = 0;
+            this.uploads = null;
             this.uniformRingChunks = [];
             this.uniformStaging = [];
             this.uniformRingIndex = 0;
@@ -9726,6 +9838,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // how many separate PCI submits contributed to the frame.
         ensureFrame() {
             if (this.frame) return this.frame;
+            if (this.uploads) this.uploads.reset();
             // `serial` identifies this frame for the write-after-record check in
             // applyBufferUpdate(); it must be unique per frame, never reused.
             // Chunks are retained, only the write position rewinds: WebGPU
@@ -9928,6 +10041,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
 
         // Records and submits one frame's ops (finishFrame's body)
         replayFrame(frame, present, frameValid) {
+            if (this.uploads) this.uploads.flush();
             const encoder = this.device.createCommandEncoder();
             const carriedOcclusion = this.activeOcclusion || null;
             this.activeOcclusion = null;
@@ -9960,8 +10074,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const backHeight = backState
                 ? this.backBufferHeightOf(backState)
                 : (this.backBufferTextureHeight || this.canvas.height || 1);
-            const backTexture = this.ensureBackBufferTexture(
-                backWidth, backHeight, backState);
+            const backTexture = backState ? this.ensureBackBufferTexture(
+                backWidth, backHeight, backState) : null;
             const swapView = this.backBufferView;
             const swapSrgbView = this.backBufferSrgbView;
             // GetRenderTargetData on the implicit back buffer reads the
@@ -10073,6 +10187,11 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 return created;
             };
             for (const op of frame.ops) {
+                if (op.kind === "buffer-upload" || op.kind === "texture-upload") {
+                    closePass();
+                    if (op.writes) op.writes.msaaStale = true;
+                    this.uploads.replay(encoder, op);continue;
+                }
                 if (op.writes) op.writes.msaaStale = true;
                 if (op.kind === "query-begin") {
                     if (op.query.type === D3DQUERYTYPE_OCCLUSION) {
@@ -10980,7 +11099,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
 
         applyBufferUpdate(resource, destinationOffset, bytes, sourceOffset,
                 byteCount, lockFlags) {
-            lockFlags = lockFlags || 0;
+            void lockFlags; // allocation hints do not change the order of destination copies
             const shadow = resource.shadow;
             if (destinationOffset >= shadow.length) return;
             if (destinationOffset + byteCount > shadow.length)
@@ -10989,88 +11108,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const source = new Uint8Array(bytes.buffer, bytes.byteOffset + sourceOffset, byteCount);
             shadow.set(source, destinationOffset);
 
-            // Renaming (below) is what keeps deferred draws honest.
-            //
-            // Draws are not encoded when they arrive: they are recorded and
-            // replayed at Present, because a swapchain texture is only valid
-            // inside the task that acquired it (see ensureFrame). Buffer
-            // writes, by contrast, take effect in queue order -- so every
-            // writeBuffer issued during a frame lands *before* that frame's
-            // single submit, and therefore before every draw in it.
-            //
-            // For the single most common dynamic-geometry idiom that is
-            // catastrophic:
-            //
-            //     Lock(DISCARD); write batch A; DrawPrimitive
-            //     Lock(DISCARD); write batch B; DrawPrimitive
-            //     Present
-            //
-            // Both draws end up reading batch B. The first renders real
-            // indices against the wrong vertices, which on screen is stray
-            // geometry stretching across the frame, different every frame,
-            // while static/managed resources look perfect.
-            //
-            // A real D3D9 driver answers this by *renaming*: DISCARD means
-            // "I no longer care about the old contents", and the driver hands
-            // back fresh storage while in-flight commands keep the old
-            // allocation. Do the same here -- but only when this buffer has
-            // actually been read by a draw already recorded in this frame, so
-            // the ordinary "upload once, draw many" path allocates nothing.
-            //
-            // The lock flags decide *which* answer is needed, and getting this
-            // distinction right is what keeps the cost sane. War3 renamed ~277
-            // times per frame when every mid-frame write was treated the same:
-            //
-            //   NOOVERWRITE  the application has promised it is only writing
-            //                bytes no issued draw reads -- that is precisely
-            //                the guarantee this hazard needs, and it is how a
-            //                game appends batch after batch into one buffer.
-            //                Write in place; renaming here is pure waste.
-            //   DISCARD      the old contents are dead, so the replacement
-            //                only needs the bytes being written now. The rest
-            //                is garbage the application has promised not to
-            //                read, so there is nothing to copy forward.
-            //   neither      a plain lock keeps the old contents readable, so
-            //                the replacement has to carry the whole shadow.
-            //                Rare, and the only case that costs a full upload.
-            const D3DLOCK_NOOVERWRITE = 0x1000;
-            const D3DLOCK_DISCARD = 0x2000;
-            if (this.frame && resource.frameReferenced === this.frame.serial &&
-                    !(lockFlags & D3DLOCK_NOOVERWRITE)) {
-                const replacement = this.device.createBuffer({
-                    label: "D3D9 renamed buffer",
-                    size: resource.gpuBuffer.size,
-                    usage: resource.kind === RESOURCE_BUFFER_INDEX
-                        ? BUFFER_USAGE_INDEX | BUFFER_USAGE_COPY_DST
-                        : BUFFER_USAGE_VERTEX | BUFFER_USAGE_COPY_DST,
-                });
-                if (lockFlags & D3DLOCK_DISCARD) {
-                    const start = destinationOffset & ~3;
-                    const end = Math.min(shadow.length,
-                        alignUp(destinationOffset + byteCount, 4));
-                    if (end > start)
-                        this.device.queue.writeBuffer(replacement, start,
-                            shadow.buffer, shadow.byteOffset + start, end - start);
-                } else {
-                    this.device.queue.writeBuffer(replacement, 0, shadow.buffer,
-                        shadow.byteOffset, shadow.length);
-                    ++this.stats.bufferFullCopyRenames;
-                }
-                this.retireGPUObject(resource.gpuBuffer);
-                resource.gpuBuffer = replacement;
-                resource.frameReferenced = 0;
-                ++this.stats.bufferRenames;
-                return;
-            }
-            if (this.frame && resource.frameReferenced === this.frame.serial)
-                ++this.stats.bufferNoOverwriteWrites;
-
             const alignedStart = destinationOffset & ~3;
-            const alignedEnd = Math.min(shadow.length,
-                alignUp(destinationOffset + byteCount, 4));
-            if (alignedEnd <= alignedStart) return;
-            this.device.queue.writeBuffer(resource.gpuBuffer, alignedStart,
-                shadow.buffer, shadow.byteOffset + alignedStart, alignedEnd - alignedStart);
+            const alignedEnd = Math.min(shadow.length, alignUp(destinationOffset + byteCount, 4));
+            if (alignedEnd > alignedStart)
+                this.stageBufferUpload(resource.gpuBuffer, alignedStart, shadow.subarray(alignedStart, alignedEnd));
         }
 
         // WebGPU requires writeBuffer's size (and destination offset) to be a
@@ -11413,56 +11454,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
         }
 
-        renameTextureForUpdate(resource) {
-            if (!resource.textureDescriptor ||
-                    (resource.usage & (D3DUSAGE_RENDERTARGET |
-                        D3DUSAGE_DEPTHSTENCIL)) !== 0)
-                return false;
-            let replacement;
-            try {
-                replacement = this.device.createTexture({
-                    ...resource.textureDescriptor,
-                    label: "D3D9 renamed texture",
-                });
-            } catch (error) {
-                this.warnOnce("texture-rename-failed",
-                    "a texture updated after an earlier draw could not be " +
-                    "renamed; that earlier draw may see the newer pixels", {
-                        format: resource.format,
-                        size: resource.width + "x" + resource.height,
-                        message: error && error.message,
-                    });
-                return false;
-            }
-            if (resource.textureShadows) {
-                for (const shadow of resource.textureShadows.values()) {
-                    this.device.queue.writeTexture({ texture: replacement,
-                        mipLevel: shadow.level,
-                        origin: { x: 0, y: 0, z: shadow.layer } }, shadow.data,
-                        { bytesPerRow: shadow.bytesPerRow,
-                            rowsPerImage: shadow.rowsPerImage },
-                        { width: blockAlignedCopyExtent(shadow.width,
-                                shadow.compressed),
-                            height: blockAlignedCopyExtent(shadow.height,
-                                shadow.compressed),
-                            depthOrArrayLayers: shadow.depth || 1 });
-                    this.stats.textureFullCopyRenameBytes += shadow.data.length;
-                }
-            }
-            const oldTexture = resource.gpuTexture;
-            resource.gpuTexture = replacement;
-            resource.view = replacement.createView({ dimension:
-                resource.textureType === "cube" ? "cube"
-                    : resource.textureType === "3d" ? "3d" : "2d" });
-            resource.srgbView = null;
-            resource.blitViews = null;
-            resource.targetViews = null;
-            resource.frameReferenced = 0;
-            this.retireGPUObject(oldTexture);
-            ++this.stats.textureRenames;
-            return true;
-        }
-
         onUpdateTexture(bytes, view, offset) {
             const handle = view.getUint32(offset + D9WG.F.UpdateTexture.resource_handle, true);
             const level = view.getUint32(offset + D9WG.F.UpdateTexture.level, true);
@@ -11484,13 +11475,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             if (!resource || !resource.gpuTexture) return;
             const source = new Uint8Array(bytes.buffer, bytes.byteOffset + dataOffset, dataBytes);
             const compressed = isCompressedFormat(resource.format);
-            // Bind groups are built eagerly and retain the old view. Renaming
-            // here therefore preserves pixels for draws already recorded in
-            // this frame while later draws bind the replacement texture.
-            if (this.frame && resource.frameReferenced === this.frame.serial) {
-                ++this.stats.textureUpdateHazards;
-                this.renameTextureForUpdate(resource);
-            }
             let payload = source;
             let bytesPerRow = rowPitch;
             if (resource.ddIndexed) {
@@ -11515,7 +11499,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // Keep the primary r8uint texture current for indexed-to-
                 // indexed DirectDraw blits.  The RGBA sampling companion is
                 // derived lazily from the same shadow by ddIndexedSampleViewFor.
-                this.device.queue.writeTexture(
+                this.stageTextureUpload(
                     { texture: resource.gpuTexture, mipLevel: level,
                         origin: { x, y, z } }, packed,
                     { bytesPerRow: width, rowsPerImage: height },
@@ -11551,9 +11535,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 payload = expanded;
                 bytesPerRow = width * gpuBpp;
             }
-            this.updateTextureShadow(resource, level, z, x, y, width, height,
-                payload, bytesPerRow, compressed, depth,
-                bytesPerRow * (compressed ? Math.ceil(height / 4) : height));
             ++this.stats.textureUploads;
             this.stats.textureBytesUploaded += payload.length;
             // Only level 0 is the app's on an autogen texture, so only level 0
@@ -11604,13 +11585,13 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // not pixel rows -- BCn blocks are 4x4, so a DXT upload that
             // passes the pixel height describes an image four times taller
             // than the data actually is.
-            this.device.queue.writeTexture(
+            this.stageTextureUpload(
                 { texture: resource.gpuTexture, mipLevel: level, origin: { x, y, z } },
                 payload,
                 { bytesPerRow, rowsPerImage: compressed ? Math.ceil(height / 4) : height },
                 { width: blockAlignedCopyExtent(width, compressed),
                     height: blockAlignedCopyExtent(height, compressed),
-                    depthOrArrayLayers: depth });
+                    depthOrArrayLayers: depth }, resource);
         }
 
         // ---- render targets, cube textures and blits (M3/M4) ----
@@ -11832,16 +11813,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 }
             }
             const bytesPerRow = width * gpuBpp;
-            // A repaint rewrites pixels a bind group recorded earlier in this
-            // frame may still be reading, so it takes the same rename hazard
-            // path an ordinary mid-frame update does.
-            if (this.frame && resource.frameReferenced === this.frame.serial) {
-                ++this.stats.textureUpdateHazards;
-                this.renameTextureForUpdate(resource);
-            }
-            this.updateTextureShadow(resource, level, z, x, y, width, height,
-                expanded, bytesPerRow, false, depth, bytesPerRow * height);
-            this.device.queue.writeTexture(
+            this.stageTextureUpload(
                 { texture: resource.gpuTexture, mipLevel: level,
                     origin: { x, y, z } },
                 expanded, { bytesPerRow, rowsPerImage: height },
