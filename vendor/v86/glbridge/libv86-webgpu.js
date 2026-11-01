@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "cea10466db157bfc0ed8";
+globalThis.V86GL_BUILD_REVISION = "6a92839acfa896bc8bdc";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -5681,6 +5681,22 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         }
     }
 
+    // DirectDraw COLORFILL carries the surface's packed native pixel. Reuse
+    // upload conversion so channel defaults and narrow UNORM replication agree.
+    function nativeFillRGBA(format, value) {
+        const source = new Uint8Array(4);
+        new DataView(source.buffer).setUint32(0, value, true);
+        const converted = new Uint8Array(gpuBytesPerTexel(format));
+        expandRowToGPU(format, source, 0, 1, converted, 0);
+        if (formatToGPU(format) === "bgra8unorm")
+            return [converted[2] / 255, converted[1] / 255, converted[0] / 255, converted[3] / 255];
+        if (isHalfFloatExpansionFormat(format)) {
+            const words = new DataView(converted.buffer);
+            return [0, 2, 4, 6].map(offset => halfBitsToFloat(words.getUint16(offset, true)));
+        }
+        return Array.from(converted.subarray(0, 4), channel => channel / 255);
+    }
+
     const api = {
         D3DFMT_R8G8B8,
         D3DFMT_A8R8G8B8,
@@ -5761,7 +5777,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         expandPairedRowToGPU,
         expandRowToGPU,
         expandUNorm8,
-        samplingSwizzle
+        samplingSwizzle,
+        nativeFillRGBA
     };
     global.D9WGFormats = api;
     if (typeof module !== "undefined" && module.exports) module.exports = api;
@@ -5868,15 +5885,111 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             DEPTH_FORMAT, formatToGPU, isRenderableGPUFormat, srgbSiblingOf, TEXTURE_USAGE_RENDER_ATTACHMENT,
             TEXTURE_USAGE_TEXTURE_BINDING, TEXTURE_USAGE_COPY_DST, TEXTURE_USAGE_COPY_SRC, isCompressedFormat, RESOURCE_TEXTURE_2D,
             gpuBytesPerTexel, expandRowToGPU, blockAlignedCopyExtent, RESOURCE_TEXTURE_CUBE, RESOURCE_TEXTURE_VOLUME,
-            RESOURCE_VERTEX_DECLARATION, D9WGStreamError, shaderPipeline, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER
+            RESOURCE_VERTEX_DECLARATION, D9WGStreamError, shaderPipeline, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER, BUFFER_USAGE_UNIFORM, PALETTE_ENTRIES, PALETTE_BYTES
         } = dependencies;
         return {
+            // The GPU copy of the palette a surface samples through, or null when
+            // the guest has not sent one yet.
+            ddPaletteBufferFor(resource, encoder) {
+                const index = resource.ddPaletteIndex;
+                if (index === undefined) return null;
+                const key = (resource.deviceHandle || 0) + ":" + index;
+                const rgba = this.palettes && this.palettes.get(key);
+                if (!rgba) return null;
+                if (!this.ddPaletteBuffers) this.ddPaletteBuffers = new Map();
+                let entry = this.ddPaletteBuffers.get(key);
+                if (!entry) {
+                    entry = {
+                        buffer: this.device.createBuffer({
+                            label: "DirectDraw palette " + key,
+                            size: PALETTE_BYTES,
+                            usage: BUFFER_USAGE_UNIFORM | BUFFER_USAGE_COPY_DST,
+                        }),
+                        serial: -1,
+                    };
+                    this.ddPaletteBuffers.set(key, entry);
+                }
+                const serial = (this.ddPaletteSerials &&
+                    this.ddPaletteSerials.get(key)) || 0;
+                if (entry.serial !== serial) {
+                    const floats = new Float32Array(PALETTE_ENTRIES * 4);
+                    for (let i = 0; i < PALETTE_ENTRIES; ++i) {
+                        floats[i * 4] = rgba[i * 4] / 255;
+                        floats[i * 4 + 1] = rgba[i * 4 + 1] / 255;
+                        floats[i * 4 + 2] = rgba[i * 4 + 2] / 255;
+                        floats[i * 4 + 3] = rgba[i * 4 + 3] / 255;
+                    }
+                    const bytes = new Uint8Array(floats.buffer);
+                    if (encoder) this.encodeBufferUpload(encoder, entry.buffer, bytes);
+                    else this.stageBufferUpload(entry.buffer, 0, bytes);
+                    entry.serial = serial;
+                    this.stats.ddPaletteUploads =
+                        (this.stats.ddPaletteUploads || 0) + 1;
+                }
+                return entry.buffer;
+            },
+
+            // DirectDraw keeps P8 surfaces as r8uint so blits and readback preserve
+            // the application's indices.  Fixed-function D3D sampling, however,
+            // needs filterable colours. Build a companion RGBA texture from the
+            // GPU index image and the palette attached to this *surface* (not the
+            // device-global D3D9 palette). A keyed companion sets alpha to zero by
+            // comparing the original index, so duplicate palette colours cannot
+            // make an unrelated texel transparent.
+            ddIndexedSampleViewFor(resource, colorKey) {
+                if (!resource || !resource.ddIndexed) return null;
+                const paletteIndex = resource.ddPaletteIndex;
+                const paletteKey = paletteIndex === undefined ? null
+                    : (resource.deviceHandle || 0) + ":" + paletteIndex;
+                const paletteSerial = paletteKey && this.ddPaletteSerials
+                    ? (this.ddPaletteSerials.get(paletteKey) || 0) : 0;
+                const keyLow = colorKey ? colorKey.low & 0xff : -1;
+                const keyHigh = colorKey ? colorKey.high & 0xff : -1;
+                const variant = colorKey ? "keyed" : "plain";
+                const serial = [resource.ddContentSerial || 0, paletteKey || "-",
+                    paletteSerial, keyLow, keyHigh].join(":");
+                if (!resource.ddSampleViews) resource.ddSampleViews = new Map();
+                const old = resource.ddSampleViews.get(variant);
+                if (old && old.serial === serial) return old.view;
+
+                const layers = resource.layerCount || 1;
+                const texture = old ? old.texture : this.device.createTexture({
+                    label: "DirectDraw indexed D3D sample view",
+                    size: { width: resource.width, height: resource.height, depthOrArrayLayers: layers },
+                    format: "rgba8unorm", mipLevelCount: Math.max(1, resource.levelCount || 1),
+                    usage: TEXTURE_USAGE_RENDER_ATTACHMENT | TEXTURE_USAGE_TEXTURE_BINDING,
+                });
+                const entry = old || { texture, view: texture.createView({
+                    dimension: resource.textureType === "cube" ? "cube" : "2d",
+                }) };
+                entry.serial = serial;
+                resource.ddSampleViews.set(variant, entry);
+                const paletteBuffer = this.ddPaletteBufferFor(resource);
+                const frame = this.ensureFrame();
+                for (let level = 0; level < Math.max(1, resource.levelCount || 1); ++level) {
+                    const width = Math.max(1, resource.width >> level), height = Math.max(1, resource.height >> level);
+                    for (let layer = 0; layer < layers; ++layer) {
+                        frame.ops.push({ kind: "ddblit", sourceKind: "index", destinationKind: "float",
+                            sourceView: this.blitSourceView(resource, level, layer),
+                            destinationView: texture.createView({ dimension: "2d", baseMipLevel: level, mipLevelCount: 1,
+                                baseArrayLayer: layer, arrayLayerCount: 1 }),
+                            destinationFormat: "rgba8unorm", sourceRect: [0, 0, 1, 1], sourceSize: [width, height],
+                            viewport: [0, 0, width, height], paletteBuffer, filterPoint: true,
+                            colorKey: colorKey || null, keyToAlpha: !!colorKey });
+                    }
+                }
+                resource.frameReferenced = frame.serial;
+                this.stats.ddIndexedSampleResolves =
+                    (this.stats.ddIndexedSampleResolves || 0) + 1;
+                return entry.view;
+            },
+
             retireResourceState(resource) {
                 if (!resource) return;
                 this.retireGPUObject(resource.gpuBuffer);
                 this.retireGPUObject(resource.gpuTexture);
                 this.retireGPUObject(resource.msaaTexture);
-                // Installed by ddraw_ops.js on palettised sample resources. A
+                // Palettised sample resources have companion textures. A
                 // SESSION_END bypasses per-resource opcodes, so its companion
                 // textures have to participate in the process-wide teardown too.
                 if (resource.ddSampleViews) {
@@ -13943,7 +14056,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 return;
             const rgba = [((color >>> 16) & 0xff) / 255,
                 ((color >>> 8) & 0xff) / 255, (color & 0xff) / 255,
-                ((color >>> 24) & 0xff) / 255];
+                resource.format === formats.D3DFMT_X8R8G8B8 || resource.format === formats.D3DFMT_X1R5G5B5 ||
+                    resource.format === formats.D3DFMT_X4R4G4B4 || resource.format === formats.D3DFMT_X8B8G8R8 ||
+                    resource.format === formats.D3DFMT_R5G6B5 || resource.format === formats.D3DFMT_R8G8B8
+                    ? 1 : ((color >>> 24) & 0xff) / 255];
             const isFull = clippedLeft === 0 && clippedTop === 0 &&
                 clippedRight === fullWidth && clippedBottom === fullHeight;
             const frame = this.ensureFrame();
@@ -17829,7 +17945,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         DEPTH_FORMAT, formatToGPU, isRenderableGPUFormat, srgbSiblingOf, TEXTURE_USAGE_RENDER_ATTACHMENT,
         TEXTURE_USAGE_TEXTURE_BINDING, TEXTURE_USAGE_COPY_DST, TEXTURE_USAGE_COPY_SRC, isCompressedFormat, RESOURCE_TEXTURE_2D,
         gpuBytesPerTexel, expandRowToGPU, blockAlignedCopyExtent, RESOURCE_TEXTURE_CUBE, RESOURCE_TEXTURE_VOLUME,
-        RESOURCE_VERTEX_DECLARATION, D9WGStreamError, shaderPipeline, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER
+        RESOURCE_VERTEX_DECLARATION, D9WGStreamError, shaderPipeline, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER,
+        BUFFER_USAGE_UNIFORM, PALETTE_ENTRIES: surfaceFactory.PALETTE_ENTRIES, PALETTE_BYTES: surfaceFactory.PALETTE_BYTES
     });
     for (const [name, value] of Object.entries(resourceMethods))
         Object.defineProperty(D3D9WebGPUExecutor.prototype, name, { value, writable: true, configurable: true });
@@ -17893,6 +18010,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         (typeof require === "function" ? require("./d9wg_surface_ops.js") : null);
     if (!surfaceFactory) throw new Error("ddraw_ops.js requires d9wg_surface_ops.js");
     const { ddBlitShaderSource, clipRects, clipDestination } = surfaceFactory;
+    const formats = global.D9WGFormats ||
+        (typeof require === "function" ? require("./d9wg_formats.js") : null);
 
     const D9WG = global.D9WGProtocol ||
         (typeof require === "function" ? require("./d9wg_protocol.js") : null);
@@ -17928,17 +18047,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
     const DDSCL_EXCLUSIVE = 1 << 1;
     const DDSCL_FULLSCREEN = 1 << 2;
 
-    const BUFFER_USAGE_UNIFORM = 0x40;
-    const BUFFER_USAGE_COPY_DST = 0x8;
-    const TEXTURE_USAGE_COPY_SRC = 0x01;
-    const TEXTURE_USAGE_COPY_DST = 0x02;
-    const TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
-    const TEXTURE_USAGE_RENDER_ATTACHMENT = 0x10;
-    const SHADER_STAGE_VERTEX = 0x1;
-    const SHADER_STAGE_FRAGMENT = 0x2;
-
-    const PALETTE_ENTRIES = 256;
-    const PALETTE_BYTES = PALETTE_ENTRIES * 16; // array<vec4<f32>, 256>
 
     const ddrawOps = {
         // ---- 0x500 DD_BLT ----------------------------------------------
@@ -18094,15 +18202,12 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     destinationView, destinationFormat,
                     sourceRect: [0, 0, 1, 1],
                     viewport: clipped.viewport,
-                    // A DirectDraw fill colour is in the destination surface's
-                    // own format. The guest converts an RGB destination's fill
-                    // to D3DCOLOR; an indexed one carries the raw index.
-                    fill: destinationIndexed ? null : [
-                        ((fillColor >>> 16) & 0xff) / 255,
-                        ((fillColor >>> 8) & 0xff) / 255,
-                        (fillColor & 0xff) / 255,
-                        ((fillColor >>> 24) & 0xff) / 255,
-                    ],
+                    // DDBLTFX.dwFillColor is a native destination pixel, not
+                    // D3DCOLOR. An implicit primary inherits the display mode.
+                    fill: destinationIndexed ? null : formats.nativeFillRGBA(
+                        destination ? destination.format :
+                            state.ddDisplayMode && state.ddDisplayMode.bitsPerPixel === 16 ? 23 : 22,
+                        fillColor),
                     fillIndex: destinationIndexed ? (fillColor & 0xff) : 0,
                     destinationColorKey,
                     destinationTexture: destination
@@ -18426,109 +18531,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.warnOnce("ddraw-" + key, message, details || {});
         },
 
-        // The GPU copy of the palette a surface samples through, or null when
-        // the guest has not sent one yet.
-        ddPaletteBufferFor(resource, encoder) {
-            const index = resource.ddPaletteIndex;
-            if (index === undefined) return null;
-            const key = (resource.deviceHandle || 0) + ":" + index;
-            const rgba = this.palettes && this.palettes.get(key);
-            if (!rgba) return null;
-            if (!this.ddPaletteBuffers) this.ddPaletteBuffers = new Map();
-            let entry = this.ddPaletteBuffers.get(key);
-            if (!entry) {
-                entry = {
-                    buffer: this.device.createBuffer({
-                        label: "DirectDraw palette " + key,
-                        size: PALETTE_BYTES,
-                        usage: BUFFER_USAGE_UNIFORM | BUFFER_USAGE_COPY_DST,
-                    }),
-                    serial: -1,
-                };
-                this.ddPaletteBuffers.set(key, entry);
-            }
-            const serial = (this.ddPaletteSerials &&
-                this.ddPaletteSerials.get(key)) || 0;
-            if (entry.serial !== serial) {
-                const floats = new Float32Array(PALETTE_ENTRIES * 4);
-                for (let i = 0; i < PALETTE_ENTRIES; ++i) {
-                    floats[i * 4] = rgba[i * 4] / 255;
-                    floats[i * 4 + 1] = rgba[i * 4 + 1] / 255;
-                    floats[i * 4 + 2] = rgba[i * 4 + 2] / 255;
-                    floats[i * 4 + 3] = rgba[i * 4 + 3] / 255;
-                }
-                const bytes = new Uint8Array(floats.buffer);
-                if (encoder) this.encodeBufferUpload(encoder, entry.buffer, bytes);
-                else this.stageBufferUpload(entry.buffer, 0, bytes);
-                entry.serial = serial;
-                this.stats.ddPaletteUploads =
-                    (this.stats.ddPaletteUploads || 0) + 1;
-            }
-            return entry.buffer;
-        },
-
-        // DirectDraw keeps P8 surfaces as r8uint so blits and readback preserve
-        // the application's indices.  Fixed-function D3D sampling, however,
-        // needs filterable colours. Build a companion RGBA texture from the
-        // GPU index image and the palette attached to this *surface* (not the
-        // device-global D3D9 palette). A keyed companion sets alpha to zero by
-        // comparing the original index, so duplicate palette colours cannot
-        // make an unrelated texel transparent.
-        ddIndexedSampleViewFor(resource, colorKey) {
-            if (!resource || !resource.ddIndexed) return null;
-            const paletteIndex = resource.ddPaletteIndex;
-            const paletteKey = paletteIndex === undefined ? null
-                : (resource.deviceHandle || 0) + ":" + paletteIndex;
-            const paletteSerial = paletteKey && this.ddPaletteSerials
-                ? (this.ddPaletteSerials.get(paletteKey) || 0) : 0;
-            const keyLow = colorKey ? colorKey.low & 0xff : -1;
-            const keyHigh = colorKey ? colorKey.high & 0xff : -1;
-            const variant = colorKey ? "keyed" : "plain";
-            const serial = [resource.ddContentSerial || 0, paletteKey || "-",
-                paletteSerial, keyLow, keyHigh].join(":");
-            if (!resource.ddSampleViews) resource.ddSampleViews = new Map();
-            const old = resource.ddSampleViews.get(variant);
-            if (old && old.serial === serial) return old.view;
-
-            const layers = resource.layerCount || 1;
-            const texture = old ? old.texture : this.device.createTexture({
-                label: "DirectDraw indexed D3D sample view",
-                size: { width: resource.width, height: resource.height, depthOrArrayLayers: layers },
-                format: "rgba8unorm", mipLevelCount: Math.max(1, resource.levelCount || 1),
-                usage: TEXTURE_USAGE_RENDER_ATTACHMENT | TEXTURE_USAGE_TEXTURE_BINDING,
-            });
-            const entry = old || { texture, view: texture.createView({
-                dimension: resource.textureType === "cube" ? "cube" : "2d",
-            }) };
-            entry.serial = serial;
-            resource.ddSampleViews.set(variant, entry);
-            const paletteBuffer = this.ddPaletteBufferFor(resource);
-            const frame = this.ensureFrame();
-            for (let level = 0; level < Math.max(1, resource.levelCount || 1); ++level) {
-                const width = Math.max(1, resource.width >> level), height = Math.max(1, resource.height >> level);
-                for (let layer = 0; layer < layers; ++layer) {
-                    frame.ops.push({ kind: "ddblit", sourceKind: "index", destinationKind: "float",
-                        sourceView: this.blitSourceView(resource, level, layer),
-                        destinationView: texture.createView({ dimension: "2d", baseMipLevel: level, mipLevelCount: 1,
-                            baseArrayLayer: layer, arrayLayerCount: 1 }),
-                        destinationFormat: "rgba8unorm", sourceRect: [0, 0, 1, 1], sourceSize: [width, height],
-                        viewport: [0, 0, width, height], paletteBuffer, filterPoint: true,
-                        colorKey: colorKey || null, keyToAlpha: !!colorKey });
-                }
-            }
-            resource.frameReferenced = frame.serial;
-            this.stats.ddIndexedSampleResolves =
-                (this.stats.ddIndexedSampleResolves || 0) + 1;
-            return entry.view;
-        },
 
     };
-
-    // A destination rectangle is clipped to the surface; the source rectangle
-    // follows it proportionally, which is what makes a sprite that runs off the
-    // edge of the screen show its left half rather than its whole self squeezed
-    // into the space that was left.
-
 
     function installDDrawOps(ExecutorClass) {
         if (!ExecutorClass || ExecutorClass._ddrawOpsInstalled) return;
