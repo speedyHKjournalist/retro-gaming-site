@@ -6411,6 +6411,9 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     D9WGVertexState vertex_state;
     d9wg_vertex_state_init(&vertex_state, device->render_states);
+    if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
+            sizeof(device->texture_stage_states[0]), &device->transforms[D8WG_TRANSFORM_TEXTURE_SLOT]))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
 

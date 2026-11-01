@@ -6,6 +6,7 @@
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
 {
     const uint8_t *bytes = render_states;
+    state->texture_mask = 0;
     /* The public D3D7/8/9 render-state indices and DWORD storage agree. Fog
      * generation follows FOGVERTEXMODE; FOGENABLE controls later blending. */
     __builtin_memcpy(&state->fog_mode, bytes + 140u*4u, 4u);
@@ -13,6 +14,32 @@ void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
     __builtin_memcpy(&state->fog_start, bytes + 36u*4u, 4u);
     __builtin_memcpy(&state->fog_end, bytes + 37u*4u, 4u);
     __builtin_memcpy(&state->fog_density, bytes + 38u*4u, 4u);
+}
+int d9wg_vertex_texture_state(D9WGVertexState *state, uint32_t stage,
+        uint32_t coordinate_index, uint32_t flags, const void *matrix)
+{
+    if (stage >= 8 || (coordinate_index & 0xffffu) >= 8 ||
+            (coordinate_index >> 16) > 4 || (flags & 0xffu) > 4) return 0;
+    state->texture_mask |= 1u << stage;
+    state->texture[stage].coordinate_index = coordinate_index;
+    state->texture[stage].flags = flags;
+    for (unsigned i = 0; i < 16; ++i)
+        __builtin_memcpy(&state->texture[stage].matrix[i], (const uint8_t *)matrix + i*4u, 4u);
+    return 1;
+}
+int d9wg_vertex_textures_init(D9WGVertexState *state, const void *stage_states,
+        uint32_t stage_bytes, const void *texture_matrices)
+{
+    if (stage_bytes < 25u*4u) return 0;
+    for (unsigned i = 0; i < 8; ++i) {
+        uint32_t coordinate_index, flags;
+        const uint8_t *stage = (const uint8_t *)stage_states + i*stage_bytes;
+        __builtin_memcpy(&coordinate_index, stage + 11u*4u, 4u);
+        __builtin_memcpy(&flags, stage + 24u*4u, 4u);
+        if (!d9wg_vertex_texture_state(state, i, coordinate_index, flags,
+                (const uint8_t *)texture_matrices + i*64u)) return 0;
+    }
+    return 1;
 }
 float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position)
 {
@@ -148,13 +175,56 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     (uint32_t)(d9wg_vertex_fog(vertex_state, eye)*255.0f + 0.5f) << 24;
             __builtin_memcpy(out + d->specular, &specular, 4u);
         }
-        if (!copy_data) continue;
-        if (s->normal >= 0 && d->normal >= 0) copy_bytes(out + d->normal, in + s->normal, 12u);
-        if (s->psize >= 0 && d->psize >= 0) copy_bytes(out + d->psize, in + s->psize, 4u);
+        if (copy_data && s->normal >= 0 && d->normal >= 0) copy_bytes(out + d->normal, in + s->normal, 12u);
+        if (copy_data && s->psize >= 0 && d->psize >= 0) copy_bytes(out + d->psize, in + s->psize, 4u);
         for (unsigned i = 0; i < 8; ++i) {
-            uint32_t floats = s->texcoord_floats[i] < d->texcoord_floats[i] ? s->texcoord_floats[i] : d->texcoord_floats[i];
-            if (s->texcoord[i] >= 0 && d->texcoord[i] >= 0)
-                copy_bytes(out + d->texcoord[i], in + s->texcoord[i], floats*4u);
+            uint32_t configured = vertex_state && (vertex_state->texture_mask & (1u << i));
+            uint32_t index = configured ? vertex_state->texture[i].coordinate_index : i;
+            uint32_t flags = configured ? vertex_state->texture[i].flags : 0;
+            uint32_t generated = index >> 16, transformed = flags & 0xffu, source_set = index & 0xffffu;
+            uint32_t floats = generated ? generated == 4 ? 2u : 3u : s->texcoord_floats[source_set];
+            float coordinate[4] = {0,0,0,1}, converted[4];
+            if (d->texcoord[i] < 0 || !floats || (!generated && s->texcoord[source_set] < 0)) continue;
+            if (!copy_data && !generated && !transformed) continue;
+            if (!generated) {
+                for (unsigned component = 0; component < floats; ++component)
+                    coordinate[component] = read_float(in + s->texcoord[source_set] + component*4u);
+            } else {
+                float eye[4], normal[3] = {0,0,0}, eye_normal[3];
+                d9wg_transform_vector4(world_view, position, eye);
+                if (s->normal >= 0) for (unsigned component = 0; component < 3; ++component)
+                    normal[component] = read_float(in + s->normal + component*4u);
+                d9wg_lighting_normal(lighting, normal, eye_normal);
+                for (unsigned component = 0; component < 3; ++component)
+                    coordinate[component] = generated == 1 ? eye_normal[component] : eye[component];
+                if (generated >= 3) {
+                    float dot;
+                    d9wg_tnl_normalize3(coordinate, 0.0f);d9wg_tnl_normalize3(eye_normal, 0.0f);
+                    dot = coordinate[0]*eye_normal[0] + coordinate[1]*eye_normal[1] + coordinate[2]*eye_normal[2];
+                    for (unsigned component = 0; component < 3; ++component)
+                        coordinate[component] -= 2.0f*dot*eye_normal[component];
+                    if (generated == 4) {
+                        float z = coordinate[2] + 1.0f;
+                        float divisor = 2.0f*d9wg_tnl_sqrt(coordinate[0]*coordinate[0] + coordinate[1]*coordinate[1] + z*z);
+                        if (divisor < 1e-6f) divisor = 1e-6f;
+                        coordinate[0] = coordinate[0] / divisor + .5f;coordinate[1] = coordinate[1] / divisor + .5f;
+                    }
+                }
+            }
+            if (transformed) {
+                if (floats < 4) {
+                    coordinate[floats] = 1.0f;
+                    for (unsigned component = floats + 1u; component < 4; ++component) coordinate[component] = 0.0f;
+                }
+                d9wg_transform_vector4(vertex_state->texture[i].matrix, coordinate, converted);
+                for (unsigned component = 0; component < 4; ++component) coordinate[component] = converted[component];
+                floats = transformed;
+            }
+            uint32_t written = floats < d->texcoord_floats[i] ? floats : d->texcoord_floats[i];
+            /* PROJECTED is consumed by the rasterizer, after interpolation;
+             * ProcessVertices stores the undivided coordinate including q. */
+            for (unsigned component = 0; component < written; ++component)
+                write_float(out + d->texcoord[i] + component*4u, coordinate[component]);
         }
     }
     return 1;

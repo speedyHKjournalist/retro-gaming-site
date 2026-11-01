@@ -2716,6 +2716,9 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     D9WGVertexState vertex_state;
     d9wg_vertex_state_init(&vertex_state, device->render_states);
+    if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
+            sizeof(device->texture_stage_states[0]), &device->transforms[D3DTRANSFORMSTATE_TEXTURE0]))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     D9WGProcessViewport viewport = { (float)device->viewport.dwX, (float)device->viewport.dwY,
             (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
             device->viewport.dvMinZ, device->viewport.dvMaxZ };

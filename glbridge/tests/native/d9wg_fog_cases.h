@@ -5,7 +5,7 @@ static int fog_near(float value, float wanted)
 { float delta=value-wanted;return delta<=2e-6f && delta>=-2e-6f; }
 static int fog_cases(unsigned iterations)
 {
-    D9WGVertexState state={3,0,2,10,.25f};float position[3]={0,0,6};
+    D9WGVertexState state={.fog_mode=3,.fog_start=2,.fog_end=10,.fog_density=.25f};float position[3]={0,0,6};
     FCHECK(fog_near(d9wg_vertex_fog(&state,position),.5f));
     position[2]=-6;FCHECK(fog_near(d9wg_vertex_fog(&state,position),.5f));
     position[2]=1;FCHECK(d9wg_vertex_fog(&state,position)==1);

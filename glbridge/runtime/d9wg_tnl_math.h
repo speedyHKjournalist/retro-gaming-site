@@ -5,4 +5,5 @@
 float d9wg_tnl_sqrt(float value);
 float d9wg_tnl_pow(float base, float power);
 float d9wg_tnl_cos_half(float angle);
+void d9wg_tnl_normalize3(float *vector, float fallback_z);
 #endif

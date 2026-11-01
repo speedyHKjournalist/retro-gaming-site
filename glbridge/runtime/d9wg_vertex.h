@@ -16,8 +16,17 @@ typedef struct D9WGProcessViewport {
 typedef struct D9WGVertexState {
     uint32_t fog_mode, range_fog;
     float fog_start, fog_end, fog_density;
+    uint32_t texture_mask;
+    struct {
+        uint32_t coordinate_index, flags;
+        float matrix[16];
+    } texture[8];
 } D9WGVertexState;
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states);
+int d9wg_vertex_texture_state(D9WGVertexState *state, uint32_t stage,
+        uint32_t coordinate_index, uint32_t flags, const void *matrix);
+int d9wg_vertex_textures_init(D9WGVertexState *state, const void *stage_states,
+        uint32_t stage_bytes, const void *texture_matrices);
 float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position);
 
 /* A canonical, SDK-independent subset for fixed-function software processing.

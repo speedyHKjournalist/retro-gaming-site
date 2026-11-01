@@ -9193,6 +9193,9 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     D9WGVertexState vertex_state;
     d9wg_vertex_state_init(&vertex_state, device->render_states);
+    if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
+            sizeof(device->texture_stage_states[0]), device->transforms[D3DTS_TEXTURE0]))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
     /* Transformed channels are always written; this flag only suppresses

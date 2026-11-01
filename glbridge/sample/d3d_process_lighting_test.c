@@ -51,6 +51,7 @@ typedef D3DLIGHT7 Light;
 #define Theta dvTheta
 #define Phi dvPhi
 #define D3DTS_WORLD D3DTRANSFORMSTATE_WORLD
+#define D3DTS_TEXTURE0 D3DTRANSFORMSTATE_TEXTURE0
 #define D3DRS_LIGHTING D3DRENDERSTATE_LIGHTING
 #define D3DRS_COLORVERTEX D3DRENDERSTATE_COLORVERTEX
 #define D3DRS_SPECULARENABLE D3DRENDERSTATE_SPECULARENABLE
@@ -68,7 +69,7 @@ typedef D3DLIGHT7 Light;
 #define D3DRS_FOGDENSITY D3DRENDERSTATE_FOGDENSITY
 #define D3DRS_RANGEFOGENABLE D3DRENDERSTATE_RANGEFOGENABLE
 #endif
-typedef struct Input { float x,y,z,nx,ny,nz; DWORD diffuse,specular; float tex[2]; } Input;
+typedef struct Input { float x,y,z,nx,ny,nz; DWORD diffuse,specular; float tex[4]; } Input;
 typedef struct Output { float x,y,z,rhw; DWORD diffuse,specular; float tex[4]; } Output;
 static HANDLE log_file;
 static Factory *factory;
@@ -88,6 +89,13 @@ static void state(DWORD name,DWORD value)
 { check(SUCCEEDED(CALL(SetRenderState)(device,name,value)),"SetRenderState"); }
 static void float_state(DWORD name,float value)
 { DWORD bits;CopyMemory(&bits,&value,4);state(name,bits); }
+static void texture_state(DWORD index,DWORD flags)
+{
+    check(SUCCEEDED(CALL(SetTextureStageState)(device,0,D3DTSS_TEXCOORDINDEX,index)),"texture coordinate index");
+    check(SUCCEEDED(CALL(SetTextureStageState)(device,0,D3DTSS_TEXTURETRANSFORMFLAGS,flags)),"texture transform flags");
+}
+static BOOL near_value(float got,float expected)
+{ float delta=got-expected;return delta<.0002f && delta>-.0002f; }
 static void identity(D3DMATRIX *matrix)
 {
     ZeroMemory(matrix,sizeof(*matrix));matrix->_11=matrix->_22=matrix->_33=matrix->_44=1;
@@ -146,8 +154,8 @@ void WINAPI WinMainCRTStartup(void)
 {
     char path[MAX_PATH],dll[MAX_PATH],text[100];UINT at;HMODULE module;HWND window;
     Material material;Light value;D3DMATRIX matrix;Output output;
-    Input input={0,0,.5f,0,0,-1,0xcc336699u,0x596633ccu,{.25f,.75f}};
-    const DWORD input_fvf=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_SPECULAR|D3DFVF_TEX1;
+    Input input={0,0,.5f,0,0,-1,0xcc336699u,0x596633ccu,{.25f,.75f,.6f,.2f}};
+    const DWORD input_fvf=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_SPECULAR|D3DFVF_TEX2;
     GetModuleFileNameA(NULL,path,sizeof(path));at=(UINT)lstrlenA(path);while(at&&path[at-1]!='\\')--at;
     path[at]=0;lstrcpyA(dll,path);wsprintfA(text,"TNL%u.TXT",D9WG_TNL_API);lstrcatA(path,text);
     log_file=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
@@ -252,6 +260,25 @@ void WINAPI WinMainCRTStartup(void)
     output=process(&input);check((output.specular>>24)==128,"range fog uses camera distance");
     float_state(D3DRS_FOGSTART,10);float_state(D3DRS_FOGEND,0);output=process(&input);check((output.specular>>24)==128,"reversed linear fog bounds");
     state(D3DRS_FOGVERTEXMODE,D3DFOG_NONE);output=process(&input);check((output.specular>>24)==0x59,"fog none retains source alpha");
+    texture_state(1,0);output=process(&input);check(output.tex[0]==.6f && output.tex[1]==.2f,"source texture set routing");
+    identity(&matrix);matrix._11=2;matrix._22=.5f;matrix._31=.25f;matrix._32=.125f;matrix._33=2;
+    check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_TEXTURE0,&matrix)),"texture matrix");
+    texture_state(0,2);output=process_flags(&input,1);check(output.tex[0]==.75f && output.tex[1]==.5f && output.tex[2]==23 && output.tex[3]==29,"texture transform with DONOTCOPYDATA");
+    texture_state(0,1);output=process(&input);check(output.tex[0]==.75f && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"COUNT1 transforms one component");
+    texture_state(0,259);output=process(&input);check(output.tex[0]==.75f && output.tex[1]==.5f && output.tex[2]==2 && output.tex[3]==29,"projected coordinate keeps undivided q");
+    input.x=.2f;input.y=.3f;input.z=.4f;texture_state(0x20000,0);output=process_flags(&input,1);
+    check(near_value(output.tex[0],.2f) && near_value(output.tex[1],.3f) && near_value(output.tex[2],.4f) && output.tex[3]==29,"camera position coordinates");
+    input.nx=.6f;input.ny=.8f;input.nz=0;identity(&matrix);matrix._11=2;matrix._33=.5f;check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"texture normal world");
+    state(D3DRS_NORMALIZENORMALS,FALSE);texture_state(0x10000,0);output=process(&input);check(near_value(output.tex[0],.3f) && near_value(output.tex[1],.8f),"inverse transpose texture normal");
+    state(D3DRS_NORMALIZENORMALS,TRUE);output=process_flags(&input,1);check(near_value(output.tex[0],.35112344f) && near_value(output.tex[1],.93632918f),"normalized texture normal");
+    identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"restore texture normal world");
+    input.x=input.y=0;input.z=1;input.nx=input.ny=0;input.nz=-1;texture_state(0x30000,0);output=process(&input);
+    check(output.tex[0]==0 && output.tex[1]==0 && output.tex[2]==-1 && output.tex[3]==29,"camera reflection vector");
+#if D9WG_TNL_API == 9
+    texture_state(0x40000,0);output=process(&input);check(output.tex[0]==.5f && output.tex[1]==.5f && output.tex[2]==23 && output.tex[3]==29,"sphere map degenerate axis");
+#endif
+    texture_state(7,0);output=process(&input);check(output.tex[0]==17 && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"missing source texture set preserved");
+    report("PASS shared texture coordinate checks");
     report("PASS shared vertex fog checks");
     report("PASS shared vertex copy, bounds and layout checks");
     report("PASS all real XP ProcessVertices lighting checks");BUF(Release)(source);BUF(Release)(destination);CALL(Release)(device);FACT(Release)(factory);

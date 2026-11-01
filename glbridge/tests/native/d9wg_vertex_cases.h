@@ -67,7 +67,7 @@ static int vertex_cases(unsigned iterations)
             identity,transform,&viewport,&lighting,0,0));
     VCHECK(vread(out+20)==0xbf800000u && vread(out+24)==0x59000000u);
     VCHECK(vread(out+16)==0xa5a5a5a5u && vread(out+28)==0xa5a5a5a5u);
-    D9WGVertexState fog={3,0,0,.2f,1};lighting.flags.lighting=0;
+    D9WGVertexState fog={.fog_mode=3,.fog_end=.2f,.fog_density=1};lighting.flags.lighting=0;
     vword(out+24,0x12345678u);
     VCHECK(d9wg_process_vertices(&source,input,108,3,61,1,&destination,output,512,1,1,
             identity,transform,&viewport,&lighting,0,&fog));

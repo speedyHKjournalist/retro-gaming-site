@@ -8,8 +8,8 @@ const material = value => "{" + ["diffuse", "ambient", "specular", "emissive"].m
 const light = value => "{" + ["index", "type"].map(key => "." + key + "=" + value[key] + "u").concat(
     ["diffuse", "specular", "ambient", "position", "direction", "attenuation"].map(key => "." + key + "=" + vector(value[key])),
     ["range", "falloff", "theta", "phi"].map(key => "." + key + "=" + scalar(value[key]))).join(",") + "}";
-function buildFixture() {
-    const data = fs.readFileSync(testPath("fixtures/d3d_software_lighting_cases.json")), input = JSON.parse(data);
+function buildFixture(options = {}) {
+    const data = fs.readFileSync(testPath(options.caseFile || "fixtures/d3d_software_lighting_cases.json")), input = JSON.parse(data);
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-lighting-"));
     try {
         const c = path.join(directory, "lighting.c"), binary = path.join(directory, "lighting");
@@ -35,29 +35,46 @@ function buildFixture() {
             }`).join("\n")}
             printf("]");
             {
-                struct {float position[3],normal[3];uint32_t color0,color1;} source[3];
-                struct {float position[4];uint32_t color0,color1;} destination[3];
-                D9WGVertexElement elements[]={{0,0,2,0,0,0},${value.hasNormal ? "{0,12,2,0,3,0}," : ""}${value.colorMask & 1 ? "{0,24,4,0,10,0}," : ""}${value.colorMask & 2 ? "{0,28,4,0,10,1}," : ""}};
+                struct {float position[3],normal[3];uint32_t color0,color1;float texture[2][4];} source[3];
+                struct VertexOutput {float position[4];uint32_t color0,color1;};
+                union { uint32_t words[114];uint8_t bytes[456]; } destination;
+                D9WGVertexElement elements[]={{0,0,2,0,0,0},${value.hasNormal ? "{0,12,2,0,3,0}," : ""}${value.colorMask & 1 ? "{0,24,4,0,10,0}," : ""}${value.colorMask & 2 ? "{0,28,4,0,10,1}," : ""}${value.texture ? value.texture.dimensions.map((dim,i) => dim ? "{0,"+(32+i*16)+","+(dim-1)+",0,5,"+i+"}," : "").join("") : ""}};
                 D9WGProcessLayout input_layout,output_layout;
                 const float positions[3][3]= {${value.positions.map(vector).join(",")}};
                 for(unsigned v=0;v<3;v++) {
                     for(unsigned i=0;i<3;i++) {source[v].position[i]=positions[v][i];source[v].normal[i]=normal[i];}
                     source[v].color0=d9wg_pack_color(color0);source[v].color1=d9wg_pack_color(color1);
+                    const float texture[2][4]=${value.texture ? "{"+value.texture.coordinates.map(vector).join(",")+"}" : "{{0},{0}}"};
+                    for(unsigned t=0;t<2;t++)for(unsigned c=0;c<4;c++)source[v].texture[t][c]=texture[t][c];
                 }
                 D9WGProcessViewport viewport={0,0,64,64,0,1};
-                D9WGVertexState vertex_state={${value.fog ? [value.fog.mode,value.fog.range,scalar(value.fog.start),scalar(value.fog.end),scalar(value.fog.density)].join(",") : "0"}};
+                D9WGVertexState vertex_state={${value.fog ? [".fog_mode="+value.fog.mode,".range_fog="+value.fog.range,".fog_start="+scalar(value.fog.start),".fog_end="+scalar(value.fog.end),".fog_density="+scalar(value.fog.density)].join(",") : "0"}};
                 if(!d9wg_process_layout(elements,sizeof(elements)/sizeof(elements[0]),&input_layout) ||
-                        !d9wg_process_fvf(9,0xc4u,&output_layout) ||
+                        !d9wg_process_fvf(9,${value.texture ? "0xaaaa08c4u" : "0xc4u"},&output_layout)) return 3;
+                for(unsigned word=0;word<114;word++)destination.words[word]=0;
+                ${value.texture ? `for(unsigned v=0;v<3;v++)for(unsigned t=0;t<8;t++) {float one=1;__builtin_memcpy(destination.bytes+v*output_layout.stride+24+t*16+12,&one,4);}` : ""}
+                ${value.texture ? `const float texture_matrix[16]=${vector(value.texture.matrix)};
+                if(!d9wg_vertex_texture_state(&vertex_state,0,${value.texture.index}u,${value.texture.flags}u,texture_matrix))return 4;` : ""}
+                if(
                         !d9wg_process_vertices(&input_layout,source,sizeof(source),0,sizeof(source[0]),0,
-                            &output_layout,destination,sizeof(destination),0,3,world_view,world_view,&viewport,&state,1,&vertex_state)) return 3;
+                            &output_layout,destination.bytes,sizeof(destination),0,3,world_view,world_view,&viewport,&state,1,&vertex_state)) return 3;
                 printf(",\\"processed\\":[");
                 for(unsigned v=0;v<3;v++) {
-                    float d[4],s[4];d9wg_lighting_color(destination[v].color0,d);d9wg_lighting_color(destination[v].color1,s);
+                    const uint8_t *result=destination.bytes+v*output_layout.stride;
+                    float result_position[4],d[4],s[4];uint32_t c0,c1;
+                    for(unsigned k=0;k<4;k++)__builtin_memcpy(&result_position[k],result+k*4u,4u);
+                    __builtin_memcpy(&c0,result+16,4);__builtin_memcpy(&c1,result+20,4);
+                    d9wg_lighting_color(c0,d);d9wg_lighting_color(c1,s);
                     printf("%s{\\"position\\":[%.9g,%.9g,%.9g,%.9g],\\"diffuse\\":[%.9g,%.9g,%.9g,%.9g],\\"specular\\":[%.9g,%.9g,%.9g,%.9g]}",v ? "," : "",
-                        destination[v].position[0],destination[v].position[1],destination[v].position[2],destination[v].position[3],
+                        result_position[0],result_position[1],result_position[2],result_position[3],
                         d[0],d[1],d[2],d[3],s[0],s[1],s[2],s[3]);
                 }
                 printf("]");
+                ${value.texture ? `printf(",\\"textureCoordinates\\":[");
+                for(unsigned v=0;v<3;v++) {printf("%s[",v ? "," : "");
+                    for(unsigned t=0;t<8;t++) {float c[4];for(unsigned k=0;k<4;k++)__builtin_memcpy(&c[k],destination.bytes+v*output_layout.stride+24+t*16+k*4,4);
+                        printf("%s[%.9g,%.9g,%.9g,%.9g]",t ? "," : "",c[0],c[1],c[2],c[3]);}
+                    printf("]");}printf("]");` : ""}
             }
             ${value.reference ? `{
                 const float eye[3]=${vector(value.reference.position)};float diffuse[4],specular[4];

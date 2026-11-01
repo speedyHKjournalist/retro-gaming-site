@@ -9,18 +9,7 @@ static float clamp01(float value)
     return value;
 }
 static float maxf(float a, float b) { return a > b ? a : b; }
-static float absf(float a) { return a < 0.0f ? -a : a; }
 static float dot3(const float *a, const float *b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
-static void normalized(float *vector, float fallback_z)
-{
-    float scale = maxf(absf(vector[0]), maxf(absf(vector[1]), absf(vector[2])));
-    if (scale > 0.0f) {
-        float length;
-        for (unsigned i = 0; i < 3; ++i) vector[i] /= scale;
-        length = d9wg_tnl_sqrt(dot3(vector, vector));
-        for (unsigned i = 0; i < 3; ++i) vector[i] /= length;
-    } else { vector[0] = vector[1] = 0.0f;vector[2] = fallback_z; }
-}
 
 void d9wg_lighting_color(uint32_t argb, float *rgba)
 {
@@ -57,8 +46,8 @@ int d9wg_lighting_add(D9WGTNLLighting *state, const D9WGSetLight *light, const v
     for (unsigned i = 0; i < 3; ++i) prepared->position[i] = transformed[i];
     d9wg_transform_vector4(view_matrix, direction, transformed);
     for (unsigned i = 0; i < 3; ++i) prepared->direction[i] = transformed[i];
-    normalized(prepared->direction, 1.0f);
-    if (light->type == 4) normalized(prepared->position, 1.0f); // D3D7 parallel point.
+    d9wg_tnl_normalize3(prepared->direction, 1.0f);
+    if (light->type == 4) d9wg_tnl_normalize3(prepared->position, 1.0f); // D3D7 parallel point.
     prepared->range = light->range;prepared->falloff = light->falloff;
     prepared->cos_theta = d9wg_tnl_cos_half(light->theta);prepared->cos_phi = d9wg_tnl_cos_half(light->phi);
     return 1;
@@ -90,7 +79,7 @@ void d9wg_lighting_shade(const D9WGTNLLighting *state, const float *eye_position
     mat_specular = material_source(state, state->flags.specular_source, state->material.specular, color0, color1, color_mask);
     mat_emissive = material_source(state, state->flags.emissive_source, state->material.emissive, color0, color1, color_mask);
     for (unsigned i = 0; i < 3; ++i) { ambient[i] = state->ambient[i];eye[i] = -eye_position[i]; }
-    if (state->flags.local_viewer) normalized(eye, -1.0f);
+    if (state->flags.local_viewer) d9wg_tnl_normalize3(eye, -1.0f);
     else { eye[0] = eye[1] = 0.0f;eye[2] = -1.0f; }
     for (uint32_t index = 0; index < state->light_count; ++index) {
         const D9WGTNLPreparedLight *light = &state->lights[index];
@@ -148,7 +137,7 @@ void d9wg_lighting_normal(const D9WGTNLLighting *state, const float *normal, flo
     float input[4] = {0,0,0,0}, output[4];
     if (normal) for (unsigned i = 0; i < 3; ++i) input[i] = normal[i];
     d9wg_transform_vector4(state->normal_matrix, input, output);
-    if (state->flags.normalize_normals) normalized(output, 0.0f);
+    if (state->flags.normalize_normals) d9wg_tnl_normalize3(output, 0.0f);
     for (unsigned i = 0; i < 3; ++i) eye_normal[i] = output[i];
 }
 void d9wg_lighting_vertex(const D9WGTNLLighting *state, const void *world_view, const float *position,

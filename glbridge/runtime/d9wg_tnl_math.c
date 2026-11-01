@@ -1,6 +1,21 @@
 #include "d9wg_tnl_math.h"
 #include <stdint.h>
 
+void d9wg_tnl_normalize3(float *vector, float fallback_z)
+{
+    float scale = 0.0f;
+    for (unsigned i = 0; i < 3; ++i) {
+        float magnitude = vector[i] < 0.0f ? -vector[i] : vector[i];
+        if (magnitude > scale) scale = magnitude;
+    }
+    if (scale > 0.0f) {
+        float length;
+        for (unsigned i = 0; i < 3; ++i) vector[i] /= scale;
+        length = d9wg_tnl_sqrt(vector[0]*vector[0] + vector[1]*vector[1] + vector[2]*vector[2]);
+        for (unsigned i = 0; i < 3; ++i) vector[i] /= length;
+    } else { vector[0] = vector[1] = 0.0f;vector[2] = fallback_z; }
+}
+
 float d9wg_tnl_sqrt(float value)
 {
     if (!(value > 0.0f)) return 0.0f;
