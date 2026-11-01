@@ -9191,6 +9191,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
     D9WGTNLLighting light_state;
     if (!d9_prepare_lighting(device, &world_view, &light_state))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    D9WGVertexState vertex_state;
+    d9wg_vertex_state_init(&vertex_state, device->render_states);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
     /* Transformed channels are always written; this flag only suppresses
@@ -9211,7 +9213,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         BOOL processed = d9wg_process_vertices(&source_layout, input, source->length,
                 device->streams[0].offset, source_stride, src_start,
                 &destination_layout, destination->shadow, destination->length, dst_index, count,
-                &world_view, &world_view_projection, &viewport, &light_state, copy_data);
+                &world_view, &world_view_projection, &viewport, &light_state, copy_data, &vertex_state);
         if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
         if (!processed) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }

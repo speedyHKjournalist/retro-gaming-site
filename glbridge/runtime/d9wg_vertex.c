@@ -1,6 +1,41 @@
 #include "d9wg_vertex.h"
 #include "d9wg_fvf.h"
 #include "d9wg_math.h"
+#include "d9wg_tnl_math.h"
+
+void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
+{
+    const uint8_t *bytes = render_states;
+    /* The public D3D7/8/9 render-state indices and DWORD storage agree. Fog
+     * generation follows FOGVERTEXMODE; FOGENABLE controls later blending. */
+    __builtin_memcpy(&state->fog_mode, bytes + 140u*4u, 4u);
+    __builtin_memcpy(&state->range_fog, bytes + 48u*4u, 4u);
+    __builtin_memcpy(&state->fog_start, bytes + 36u*4u, 4u);
+    __builtin_memcpy(&state->fog_end, bytes + 37u*4u, 4u);
+    __builtin_memcpy(&state->fog_density, bytes + 38u*4u, 4u);
+}
+float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position)
+{
+    float distance = eye_position[2] < 0.0f ? -eye_position[2] : eye_position[2];
+    float factor;
+    if (!state->fog_mode || state->fog_mode > 3) return 1.0f;
+    if (state->range_fog) distance = d9wg_tnl_sqrt(eye_position[0]*eye_position[0] +
+            eye_position[1]*eye_position[1] + eye_position[2]*eye_position[2]);
+    if (state->fog_mode == 3) {
+        float denominator = state->fog_end - state->fog_start;
+        factor = denominator != 0.0f ? (state->fog_end - distance) / denominator :
+                distance < state->fog_end ? 1.0f : 0.0f;
+    } else {
+        float exponent = state->fog_density*distance;
+        if (state->fog_mode == 2) exponent *= exponent;
+        /* Only a clamped [0,1] factor is observable. The existing CRT-free
+         * power primitive computes exp(-x) with a float e^-1 base. */
+        factor = exponent > 0.0f ? d9wg_tnl_pow(0.36787944117144233f, exponent) : 1.0f;
+    }
+    if (factor < 0.0f) return 0.0f;
+    if (factor > 1.0f) return 1.0f;
+    return factor;
+}
 
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout)
 {
@@ -77,7 +112,7 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         const D9WGProcessLayout *d, void *output, uint32_t output_length,
         uint32_t output_start, uint32_t count, const void *world_view,
         const void *world_view_projection, const D9WGProcessViewport *viewport,
-        const D9WGTNLLighting *lighting, uint32_t copy_data)
+        const D9WGTNLLighting *lighting, uint32_t copy_data, const D9WGVertexState *vertex_state)
 {
     uint32_t first, destination;
     if (!source || !output || s->position_transformed || !d->position_transformed ||
@@ -104,6 +139,14 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
             if (d->diffuse >= 0) __builtin_memcpy(out + d->diffuse, &diffuse, 4u);
             if (d->specular >= 0) __builtin_memcpy(out + d->specular, &specular, 4u);
+        }
+        if (vertex_state && vertex_state->fog_mode && d->specular >= 0) {
+            float eye[4];uint32_t specular;
+            d9wg_transform_vector4(world_view, position, eye);
+            __builtin_memcpy(&specular, out + d->specular, 4u);
+            specular = (specular & 0x00ffffffu) |
+                    (uint32_t)(d9wg_vertex_fog(vertex_state, eye)*255.0f + 0.5f) << 24;
+            __builtin_memcpy(out + d->specular, &specular, 4u);
         }
         if (!copy_data) continue;
         if (s->normal >= 0 && d->normal >= 0) copy_bytes(out + d->normal, in + s->normal, 12u);

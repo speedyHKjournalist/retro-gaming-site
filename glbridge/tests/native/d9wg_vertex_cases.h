@@ -49,7 +49,7 @@ static int vertex_cases(unsigned iterations)
     D9WGSetMaterial material={0};D9WGTNLLightingFlags flags={0};D9WGTNLLighting lighting;
     d9wg_lighting_init(&lighting,&material,0,&flags);d9wg_lighting_geometry(&lighting,identity);
     VCHECK(d9wg_process_vertices(&source,input,108,3,61,1,&destination,output,512,1,1,
-            identity,transform,&viewport,&lighting,1));
+            identity,transform,&viewport,&lighting,1,0));
     uint8_t *out=output+48;
     VCHECK(vnear(vfread(out),73.25f) && vnear(vfread(out+4),74) && vnear(vfread(out+8),.47f) && vfread(out+12)==.5f);
     VCHECK(vfread(out+16)==7.5f && vread(out+20)==0xcc336699u && vread(out+24)==0x596633ccu);
@@ -59,24 +59,29 @@ static int vertex_cases(unsigned iterations)
     for(unsigned i=96;i<512;++i)VCHECK(output[i]==0xa5);
     for(unsigned i=0;i<512;++i)output[i]=0xa5;
     VCHECK(d9wg_process_vertices(&source,input,108,3,61,1,&destination,output,512,1,1,
-            identity,transform,&viewport,&lighting,0));
+            identity,transform,&viewport,&lighting,0,0));
     for(unsigned i=16;i<48;++i)VCHECK(out[i]==0xa5);
     flags.lighting=1;material.emissive[0]=.5f;material.diffuse[3]=.75f;
     d9wg_lighting_init(&lighting,&material,0,&flags);d9wg_lighting_geometry(&lighting,identity);
     VCHECK(d9wg_process_vertices(&source,input,108,3,61,1,&destination,output,512,1,1,
-            identity,transform,&viewport,&lighting,0));
+            identity,transform,&viewport,&lighting,0,0));
     VCHECK(vread(out+20)==0xbf800000u && vread(out+24)==0x59000000u);
     VCHECK(vread(out+16)==0xa5a5a5a5u && vread(out+28)==0xa5a5a5a5u);
+    D9WGVertexState fog={3,0,0,.2f,1};lighting.flags.lighting=0;
+    vword(out+24,0x12345678u);
+    VCHECK(d9wg_process_vertices(&source,input,108,3,61,1,&destination,output,512,1,1,
+            identity,transform,&viewport,&lighting,0,&fog));
+    VCHECK(vread(out+24)==0x80345678u && vread(out+20)==0xbf800000u && vread(out+28)==0xa5a5a5a5u);
     for(unsigned i=0;i<512;++i)output[i]=0xa5;
     VCHECK(!d9wg_process_vertices(&source,input,107,3,61,1,&destination,output,512,1,1,
-            identity,transform,&viewport,&lighting,1));
+            identity,transform,&viewport,&lighting,1,0));
     for(unsigned i=0;i<512;++i)VCHECK(output[i]==0xa5);
     D9WGVertexElement elements[]={{0,0,3,0,0,0}};
     VCHECK(d9wg_process_layout(elements,1,&source) && source.position_floats==4);
     VCHECK(d9wg_process_fvf(9,4,&destination));
     float xyzw[4]={1e-8f,0,0,1e-8f};
     VCHECK(d9wg_process_vertices(&source,xyzw,16,0,16,0,&destination,output,16,0,1,
-            identity,identity,&viewport,&lighting,1));
+            identity,identity,&viewport,&lighting,1,0));
     VCHECK(vnear(vfread(output),107) && vfread(output+12)==100000000.0f);
     elements[0].stream=1;VCHECK(!d9wg_process_layout(elements,1,&source));
     elements[0].stream=0;elements[0].method=1;VCHECK(!d9wg_process_layout(elements,1,&source));

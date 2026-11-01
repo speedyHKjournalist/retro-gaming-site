@@ -2714,6 +2714,8 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &world_view_projection);
     if (!d3d7_prepare_lighting(device, &world_view, (vertex_op & D3DVOP_LIGHT) != 0, &light_state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    D9WGVertexState vertex_state;
+    d9wg_vertex_state_init(&vertex_state, device->render_states);
     D9WGProcessViewport viewport = { (float)device->viewport.dwX, (float)device->viewport.dwY,
             (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
             device->viewport.dvMinZ, device->viewport.dvMaxZ };
@@ -2722,7 +2724,7 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     if (source_length > 0xffffffffu || !d9wg_process_vertices(&source_layout,
             source, (uint32_t)source_length, 0, source_stride, source_index, &destination_layout,
             destination->shadow, destination->byte_count, destination_index, count,
-            &world_view, &world_view_projection, &viewport, &light_state, !(flags & D3DPV_DONOTCOPYDATA)))
+            &world_view, &world_view_projection, &viewport, &light_state, !(flags & D3DPV_DONOTCOPYDATA), &vertex_state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return d3d7_upload_vertex_range(destination,
             destination_index * destination->stride, count * destination->stride)

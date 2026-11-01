@@ -61,6 +61,12 @@ typedef D3DLIGHT7 Light;
 #define D3DRS_SPECULARMATERIALSOURCE D3DRENDERSTATE_SPECULARMATERIALSOURCE
 #define D3DRS_AMBIENTMATERIALSOURCE D3DRENDERSTATE_AMBIENTMATERIALSOURCE
 #define D3DRS_EMISSIVEMATERIALSOURCE D3DRENDERSTATE_EMISSIVEMATERIALSOURCE
+#define D3DRS_FOGENABLE D3DRENDERSTATE_FOGENABLE
+#define D3DRS_FOGVERTEXMODE D3DRENDERSTATE_FOGVERTEXMODE
+#define D3DRS_FOGSTART D3DRENDERSTATE_FOGSTART
+#define D3DRS_FOGEND D3DRENDERSTATE_FOGEND
+#define D3DRS_FOGDENSITY D3DRENDERSTATE_FOGDENSITY
+#define D3DRS_RANGEFOGENABLE D3DRENDERSTATE_RANGEFOGENABLE
 #endif
 typedef struct Input { float x,y,z,nx,ny,nz; DWORD diffuse,specular; float tex[2]; } Input;
 typedef struct Output { float x,y,z,rhw; DWORD diffuse,specular; float tex[4]; } Output;
@@ -80,6 +86,8 @@ static void check(BOOL condition,const char *label)
 }
 static void state(DWORD name,DWORD value)
 { check(SUCCEEDED(CALL(SetRenderState)(device,name,value)),"SetRenderState"); }
+static void float_state(DWORD name,float value)
+{ DWORD bits;CopyMemory(&bits,&value,4);state(name,bits); }
 static void identity(D3DMATRIX *matrix)
 {
     ZeroMemory(matrix,sizeof(*matrix));matrix->_11=matrix->_22=matrix->_33=matrix->_44=1;
@@ -235,6 +243,16 @@ void WINAPI WinMainCRTStartup(void)
     check(FAILED(CALL(ProcessVertices)(device,0xffffffffu,0,2,destination,0)),"overflow source rejected");
     check(FAILED(CALL(ProcessVertices)(device,0,0xffffffffu,2,destination,0)),"overflow destination rejected");
 #endif
+    input.x=input.y=0;input.z=.5f;state(D3DRS_LIGHTING,TRUE);state(D3DRS_FOGENABLE,TRUE);
+    state(D3DRS_RANGEFOGENABLE,FALSE);float_state(D3DRS_FOGSTART,0);float_state(D3DRS_FOGEND,1);float_state(D3DRS_FOGDENSITY,1);
+    state(D3DRS_FOGVERTEXMODE,D3DFOG_LINEAR);output=process_flags(&input,1);check((output.specular>>24)==128,"linear fog is generated with DONOTCOPYDATA");
+    state(D3DRS_FOGVERTEXMODE,D3DFOG_EXP);output=process(&input);check((output.specular>>24)==155,"exponential fog factor");
+    state(D3DRS_FOGVERTEXMODE,D3DFOG_EXP2);output=process(&input);check((output.specular>>24)==199,"exponential squared fog factor");
+    input.x=3;input.y=4;input.z=0;state(D3DRS_RANGEFOGENABLE,TRUE);state(D3DRS_FOGVERTEXMODE,D3DFOG_LINEAR);float_state(D3DRS_FOGEND,10);
+    output=process(&input);check((output.specular>>24)==128,"range fog uses camera distance");
+    float_state(D3DRS_FOGSTART,10);float_state(D3DRS_FOGEND,0);output=process(&input);check((output.specular>>24)==128,"reversed linear fog bounds");
+    state(D3DRS_FOGVERTEXMODE,D3DFOG_NONE);output=process(&input);check((output.specular>>24)==0x59,"fog none retains source alpha");
+    report("PASS shared vertex fog checks");
     report("PASS shared vertex copy, bounds and layout checks");
     report("PASS all real XP ProcessVertices lighting checks");BUF(Release)(source);BUF(Release)(destination);CALL(Release)(device);FACT(Release)(factory);
 #if D9WG_TNL_API == 7

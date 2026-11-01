@@ -13,6 +13,12 @@ typedef struct D9WGProcessLayout {
 typedef struct D9WGProcessViewport {
     float x, y, width, height, min_z, max_z;
 } D9WGProcessViewport;
+typedef struct D9WGVertexState {
+    uint32_t fog_mode, range_fog;
+    float fog_start, fog_end, fog_density;
+} D9WGVertexState;
+void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states);
+float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position);
 
 /* A canonical, SDK-independent subset for fixed-function software processing.
  * Packed programmable attributes and multiple streams remain explicit failures. */
@@ -30,5 +36,5 @@ int d9wg_process_vertices(const D9WGProcessLayout *source_layout,
         const D9WGProcessLayout *output_layout, void *output, uint32_t output_length,
         uint32_t output_start, uint32_t count, const void *world_view,
         const void *world_view_projection, const D9WGProcessViewport *viewport,
-        const D9WGTNLLighting *lighting, uint32_t copy_data);
+        const D9WGTNLLighting *lighting, uint32_t copy_data, const D9WGVertexState *vertex_state);
 #endif

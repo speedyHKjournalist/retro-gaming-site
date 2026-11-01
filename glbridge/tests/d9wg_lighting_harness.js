@@ -45,10 +45,11 @@ function buildFixture() {
                     source[v].color0=d9wg_pack_color(color0);source[v].color1=d9wg_pack_color(color1);
                 }
                 D9WGProcessViewport viewport={0,0,64,64,0,1};
+                D9WGVertexState vertex_state={${value.fog ? [value.fog.mode,value.fog.range,scalar(value.fog.start),scalar(value.fog.end),scalar(value.fog.density)].join(",") : "0"}};
                 if(!d9wg_process_layout(elements,sizeof(elements)/sizeof(elements[0]),&input_layout) ||
                         !d9wg_process_fvf(9,0xc4u,&output_layout) ||
                         !d9wg_process_vertices(&input_layout,source,sizeof(source),0,sizeof(source[0]),0,
-                            &output_layout,destination,sizeof(destination),0,3,world_view,world_view,&viewport,&state,1)) return 3;
+                            &output_layout,destination,sizeof(destination),0,3,world_view,world_view,&viewport,&state,1,&vertex_state)) return 3;
                 printf(",\\"processed\\":[");
                 for(unsigned v=0;v<3;v++) {
                     float d[4],s[4];d9wg_lighting_color(destination[v].color0,d);d9wg_lighting_color(destination[v].color1,s);

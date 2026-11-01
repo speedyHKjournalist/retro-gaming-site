@@ -6409,6 +6409,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     D9WGTNLLighting light_state;
     if (!prepare_lighting(device, &world_view, &light_state))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D9WGVertexState vertex_state;
+    d9wg_vertex_state_init(&vertex_state, device->render_states);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
 
@@ -6419,7 +6421,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
             device->streams[0].stride, source_start_index, &destination_layout,
             destination->shadow, destination->length, destination_index, vertex_count,
             &world_view, &world_view_projection, &viewport, &light_state,
-            !(flags & D9WG_PV_DONOTCOPYDATA))) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+            !(flags & D9WG_PV_DONOTCOPYDATA), &vertex_state)) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     /* The transformed vertices live in the destination's guest shadow; the
      * host needs them too, since the app will draw straight from the buffer. */
