@@ -3,7 +3,7 @@
  *
  * COM objects remain frontend-owned. D3D8 and DirectDraw emit this same
  * D9WG protocol and host executor. Pure retry/upload mechanics are shared
- * by d9wg_runtime; process-wide transport ownership is a subsequent step.
+ * by d9wg_runtime, together with process-wide DMA, query and handle state.
  *
  * Current scope: device/resource lifecycle, vertex declarations and FVF,
  * vertex/index buffers, 2D/cube/volume textures, integer and floating-point
@@ -29,6 +29,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_process_aliases.h"
 #ifdef D9WG_DIAGNOSTIC_TRACE
 #include <stdarg.h>
 #endif
@@ -1471,8 +1472,6 @@ static void dump_shader_bytecode(const DWORD *code, UINT token_count,
     CloseHandle(file);
 }
 
-static uint32_t g_next_handle = D9_HANDLE_GENERATION_ONE;
-
 static uint32_t allocate_handle(void)
 {
     uint32_t handle = (uint32_t)InterlockedIncrement((LONG *)&g_next_handle);
@@ -1488,7 +1487,6 @@ static uint32_t allocate_handle(void)
  * so this is what guarantees a shader handle can never alias a buffer,
  * texture or declaration handle allocated by allocate_handle().
  */
-static uint32_t g_next_shader_handle = D9WG_SHADER_HANDLE_BASE;
 
 static uint32_t allocate_shader_handle(void)
 {
@@ -1497,15 +1495,6 @@ static uint32_t allocate_shader_handle(void)
 
 /* ---- VGL2 transport / D9WG batch buffer ---- */
 
-static HANDLE g_transport = INVALID_HANDLE_VALUE;
-static uint8_t *g_dma_buffer;
-static uint32_t g_dma_capacity;
-static uint32_t g_batch_bytes;
-static uint32_t g_command_count;
-static uint32_t g_frame_id = 1;
-static uint32_t g_sequence = 1;
-static uint32_t g_session_id_low;
-static uint32_t g_session_id_high;
 /*
  * A transport failure is never permanent (review S1-3): the renderer may not
  * be up yet, may be behind, or the page may have been reloaded. Opening is
@@ -1514,14 +1503,7 @@ static uint32_t g_session_id_high;
  * the arena is released -- is kept.
  */
 #define D9_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
-static DWORD g_transport_retry_tick;
-static BOOL g_transport_retry_armed;
-static DWORD g_batches_dropped;
 static BOOL g_hello_emitted;
-static CRITICAL_SECTION g_transport_lock;
-static CRITICAL_SECTION g_readback_lock;
-static volatile LONG g_query_slots[D9WG_QUERY_SLOT_COUNT];
-static volatile LONG g_response_request_id;
 
 static uint8_t *batch_base(void)
 {
@@ -1649,6 +1631,7 @@ static BOOL open_transport_locked(void)
         return FALSE;
     }
     g_transport_retry_armed = FALSE;
+    ++g_transport_generation;
     ZeroMemory(response_region(), D9WG_RESPONSE_REGION_BYTES);
     reset_batch_locked();
     return TRUE;
@@ -1882,8 +1865,6 @@ static void host_log(uint32_t severity, const char *format, ...)
     reserve_command_locked(op, size, extra, NULL, payload, blob)
 #define D9WG_DISCARD_FLAG D3DLOCK_DISCARD
 #include "../runtime/d9wg_upload_bridge.h"
-
-
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -3095,26 +3076,6 @@ static void emit_hello_once(void)
      * use the same channel for later refusals and failures. */
     HOSTLOG_INFO("proxy build %s loaded; refusals and failures will be "
             "reported here", D9_PROXY_BUILD);
-}
-
-static void initialize_session_id(HINSTANCE instance)
-{
-    FILETIME time;
-    LARGE_INTEGER counter;
-    DWORD process_id = GetCurrentProcessId();
-    DWORD thread_id = GetCurrentThreadId();
-
-    GetSystemTimeAsFileTime(&time);
-    if (!QueryPerformanceCounter(&counter)) {
-        counter.LowPart = GetTickCount();
-        counter.HighPart = process_id ^ thread_id;
-    }
-    g_session_id_low = time.dwLowDateTime ^ counter.LowPart ^ process_id
-            ^ (uint32_t)(uintptr_t)instance;
-    g_session_id_high = time.dwHighDateTime ^ counter.HighPart
-            ^ GetTickCount() ^ (thread_id * 0x9E3779B9u);
-    if (!g_session_id_low && !g_session_id_high)
-        g_session_id_high = 0xD9A80001u;
 }
 
 static void fill_display_mode(D3DDISPLAYMODE *mode, UINT width, UINT height,
@@ -15054,8 +15015,13 @@ DWORD WINAPI D3DPERF_GetStatus(void)
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
+    if (reason == DLL_PROCESS_DETACH && (reserved || !g_process))
+        return TRUE; /* OS handle cleanup ends a terminating process owner. */
+
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
+        g_process = d9wg_process_attach();
+        if (!g_process) return FALSE;
         DisableThreadLibraryCalls(instance);
         g_module_instance = instance;
 #ifdef D9WG_DIAGNOSTIC_TRACE
@@ -15072,9 +15038,6 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         trace_memory_state("process_attach");
         TRACE_FLUSH();
 #endif
-        initialize_session_id(instance);
-        InitializeCriticalSection(&g_transport_lock);
-        InitializeCriticalSection(&g_readback_lock);
     } else if (reason == DLL_PROCESS_DETACH) {
         TRACE("PROCESS_DETACH reserved=%08lX pending_commands=%lu",
                 (DWORD)(uintptr_t)reserved, g_command_count);
@@ -15088,7 +15051,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         /* The host releases whatever this process left alive -- devices,
          * resources, its last frame -- instead of keeping them until the page
          * reloads (review S1-10; v86gl.sys's unmap covers a killed process) */
-        if (g_hello_emitted && g_dma_buffer) {
+        if (g_process->references == 1 && g_dma_buffer) {
             D9WGSessionEnd end;
             uint8_t *destination;
             end.session_id_low = g_session_id_low;
@@ -15099,10 +15062,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         }
         if (g_command_count)
             submit_batch_locked(FALSE);
-        close_transport_locked();
+        if (g_process->references == 1) close_transport_locked();
         LeaveCriticalSection(&g_transport_lock);
-        DeleteCriticalSection(&g_transport_lock);
-        DeleteCriticalSection(&g_readback_lock);
+        d9wg_process_release(g_process);
+        g_process = NULL;
 #ifdef D9WG_DIAGNOSTIC_TRACE
         trace_remove_message_hooks();
         if (g_trace_veh) {

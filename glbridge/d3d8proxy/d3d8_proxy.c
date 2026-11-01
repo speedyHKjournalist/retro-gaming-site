@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_process_aliases.h"
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
 #include "../window_region.h"
@@ -433,25 +434,11 @@ struct D8SwapChain {
     D3DPRESENT_PARAMETERS present;
 };
 
-static HANDLE g_transport = INVALID_HANDLE_VALUE;
-static uint8_t *g_dma_buffer;
-static uint32_t g_dma_capacity;
-static uint32_t g_batch_bytes;
-static uint32_t g_command_count;
-static uint32_t g_frame_id = 1;
-static uint32_t g_sequence = 1;
-static uint32_t g_next_handle = D8WG_HANDLE_GENERATION_ONE;
-static uint32_t g_session_id_low;
-static uint32_t g_session_id_high;
 /* A transport failure is never permanent (review S1-3; d3d9_proxy.c's
  * open_transport_locked says why): opening is retried, a refused batch is
  * dropped and the mapping kept */
 #define D8_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
-static DWORD g_transport_retry_tick;
-static BOOL g_transport_retry_armed;
-static DWORD g_batches_dropped;
 static BOOL g_hello_emitted;
-static CRITICAL_SECTION g_transport_lock;
 
 static IDirect3D8Vtbl g_d3d_vtbl;
 static IDirect3DDevice8Vtbl g_device_vtbl;
@@ -580,7 +567,6 @@ static uint32_t allocate_handle(void)
  * buffer/texture counter (see D9WG_SHADER_HANDLE_BASE) and always carry bit 0
  * set, matching the real D3D8 convention that distinguishes a genuine shader
  * handle from a raw FVF token passed to SetVertexShader. */
-static uint32_t g_next_shader_handle = D9WG_SHADER_HANDLE_BASE;
 
 static uint32_t allocate_shader_handle(void)
 {
@@ -705,6 +691,7 @@ static BOOL open_transport_locked(void)
     }
 
     g_transport_retry_armed = FALSE;
+    ++g_transport_generation;
     g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
     g_dma_capacity = mapping.buffer_bytes;
     reset_batch_locked();
@@ -847,8 +834,6 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
     reserve_command_locked(op, size, extra, NULL, payload, blob)
 #define D9WG_DISCARD_FLAG D3DLOCK_DISCARD
 #include "../runtime/d9wg_upload_bridge.h"
-
-
 
 /* ---- Stage 6: D3D8 shader model 1.x bytecode validation ---- */
 
@@ -2217,26 +2202,6 @@ static void emit_hello_once(void)
     hello.session_id_low = g_session_id_low;
     hello.session_id_high = g_session_id_high;
     emit_command(D9WG_OP_HELLO, &hello, sizeof(hello));
-}
-
-static void initialize_session_id(HINSTANCE instance)
-{
-    FILETIME time;
-    LARGE_INTEGER counter;
-    DWORD process_id = GetCurrentProcessId();
-    DWORD thread_id = GetCurrentThreadId();
-
-    GetSystemTimeAsFileTime(&time);
-    if (!QueryPerformanceCounter(&counter)) {
-        counter.LowPart = GetTickCount();
-        counter.HighPart = process_id ^ thread_id;
-    }
-    g_session_id_low = time.dwLowDateTime ^ counter.LowPart ^ process_id
-            ^ (uint32_t)(uintptr_t)instance;
-    g_session_id_high = time.dwHighDateTime ^ counter.HighPart
-            ^ GetTickCount() ^ (thread_id * 0x9E3779B9u);
-    if (!g_session_id_low && !g_session_id_high)
-        g_session_id_high = 0xD8A80001u;
 }
 
 static void fill_display_mode(D3DDISPLAYMODE *mode, UINT width, UINT height,
@@ -7749,7 +7714,6 @@ static IDirect3DIndexBuffer8Vtbl g_ib_vtbl = {
     .GetDesc = ib_get_desc
 };
 
-
 /* ------------------------------------------------------------------ *
  * Cube textures
  * ------------------------------------------------------------------ */
@@ -8317,7 +8281,6 @@ static HRESULT WINAPI volume_unlock_box(IDirect3DVolume8 *iface)
     return volume_unlock_level(volume->texture, volume->level);
 }
 
-
 static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice8 *iface,
         UINT edge_length, UINT levels, DWORD usage, D3DFORMAT format,
         D3DPOOL pool, IDirect3DCubeTexture8 **texture_out)
@@ -8496,7 +8459,6 @@ static IDirect3DTexture8Vtbl g_texture_vtbl = {
     .AddDirtyRect = texture_add_dirty_rect
 };
 
-
 static IDirect3DCubeTexture8Vtbl g_cube_texture_vtbl = {
     .QueryInterface = cube_query_interface,
     .AddRef = cube_add_ref,
@@ -8659,15 +8621,18 @@ void WINAPI DebugSetMute(void)
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
+    if (reason == DLL_PROCESS_DETACH && (reserved || !g_process))
+        return TRUE; /* OS handle cleanup ends a terminating process owner. */
+
 #ifdef D8WG_DIAGNOSTIC_TRACE
     DWORD pending_commands;
 #else
     (void)reserved;
 #endif
     if (reason == DLL_PROCESS_ATTACH) {
+        g_process = d9wg_process_attach();
+        if (!g_process) return FALSE;
         DisableThreadLibraryCalls(instance);
-        initialize_session_id(instance);
-        InitializeCriticalSection(&g_transport_lock);
 #ifdef D8WG_DIAGNOSTIC_TRACE
         v86wg_diagnostic_process_attach(instance);
 #endif
@@ -8677,7 +8642,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 #endif
         EnterCriticalSection(&g_transport_lock);
         /* the host releases what this process left alive (review S1-10) */
-        if (g_hello_emitted && g_dma_buffer) {
+        if (g_process->references == 1 && g_dma_buffer) {
             D9WGSessionEnd end;
             uint8_t *destination;
             end.session_id_low = g_session_id_low;
@@ -8688,9 +8653,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         }
         if (g_command_count)
             submit_batch_locked(FALSE);
-        close_transport_locked();
+        if (g_process->references == 1) close_transport_locked();
         LeaveCriticalSection(&g_transport_lock);
-        DeleteCriticalSection(&g_transport_lock);
+        d9wg_process_release(g_process);
+        g_process = NULL;
 #ifdef D8WG_DIAGNOSTIC_TRACE
         v86wg_diagnostic_process_detach(reserved, pending_commands);
 #endif

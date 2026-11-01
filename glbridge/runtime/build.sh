@@ -9,4 +9,6 @@ object_dir=$(mktemp -d "${TMPDIR:-/tmp}/d9wg-runtime.XXXXXX")
 trap 'rm -rf "$object_dir"' EXIT HUP INT TERM
 "$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
     -c "$script_dir/d9wg_runtime.c" -o "$object_dir/d9wg_runtime.o"
-"$archiver" rcs "$output" "$object_dir/d9wg_runtime.o"
+"$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+    -c "$script_dir/d9wg_process.c" -o "$object_dir/d9wg_process.o"
+"$archiver" rcs "$output" "$object_dir/d9wg_runtime.o" "$object_dir/d9wg_process.o"

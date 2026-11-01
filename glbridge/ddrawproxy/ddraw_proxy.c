@@ -35,6 +35,7 @@
 #include <d3d.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_process_aliases.h"
 #include <stddef.h>
 #include <stdarg.h>
 #include "../openglproxy/v86gl_ioctl.h"
@@ -91,16 +92,6 @@
 #define DDWG_MAX_SURFACES 4096u
 #define DDWG_MAX_OVERLAYS 64u
 
-static HANDLE g_transport = INVALID_HANDLE_VALUE;
-static uint8_t *g_dma_buffer;
-static uint32_t g_dma_capacity;
-static uint32_t g_batch_bytes;
-static uint32_t g_command_count;
-static uint32_t g_frame_id = 1;
-static uint32_t g_sequence = 1;
-static uint32_t g_next_handle = DDWG_HANDLE_GENERATION_ONE;
-static uint32_t g_session_id_low;
-static uint32_t g_session_id_high;
 /*
  * The transport is retried, not latched off. v86gl.sys is a demand-start
  * service: an application that reaches DirectDraw before "sc start v86gl" has
@@ -112,15 +103,11 @@ static uint32_t g_session_id_high;
 #define DDWG_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
 #define DDWG_LOG_FILE_MAX_LINES 4096u
 
-static DWORD g_transport_retry_tick;    /* GetTickCount at the last failure */
-static BOOL g_transport_retry_armed;
-static uint32_t g_transport_generation; /* incremented on every open */
 static uint32_t g_hello_generation;
 static HINSTANCE g_instance;
 static char g_log_path[MAX_PATH];
 static BOOL g_log_path_resolved;
 static UINT g_log_lines;
-static CRITICAL_SECTION g_transport_lock;
 static CRITICAL_SECTION g_object_lock;
 
 #ifdef DDWG_DIAGNOSTIC_TRACE
@@ -268,33 +255,13 @@ static uint32_t allocate_handle(void)
     return handle;
 }
 
-static void initialize_session_id(HINSTANCE instance)
-{
-    FILETIME time;
-    LARGE_INTEGER counter;
-    DWORD process_id = GetCurrentProcessId();
-    DWORD thread_id = GetCurrentThreadId();
-
-    GetSystemTimeAsFileTime(&time);
-    if (!QueryPerformanceCounter(&counter)) {
-        counter.LowPart = GetTickCount();
-        counter.HighPart = process_id ^ thread_id;
-    }
-    g_session_id_low = time.dwLowDateTime ^ counter.LowPart ^ process_id
-            ^ (uint32_t)(uintptr_t)instance;
-    g_session_id_high = time.dwHighDateTime ^ counter.HighPart
-            ^ GetTickCount() ^ (thread_id * 0x9E3779B9u);
-    if (!g_session_id_low && !g_session_id_high)
-        g_session_id_high = 0xDDA70001u;
-}
-
 /* ------------------------------------------------------------------ *
  * Transport
  * ------------------------------------------------------------------ *
  *
- * Structurally identical to ../d3d8proxy and ../d3d9proxy: the three DLLs
- * compile separately and are deployed separately, so they each carry their own
- * copy rather than sharing a header that would tie their lifecycles together.
+ * Frontend-local framing helpers currently address the same ref-counted
+ * process transport. The common runtime owns its memory, locks and namespace;
+ * final framing consolidation follows the process-owner lifecycle change.
  */
 
 static uint8_t *batch_base(void)
@@ -494,7 +461,10 @@ static BOOL submit_batch_locked(BOOL present)
         char reason[D9WG_LOG_MAX_TEXT];
         wsprintfA(reason, "D9WG batch submit failed (Win32 error %lu)",
                 GetLastError());
-        close_transport_locked();
+        /* Refusal/timeout has ambiguous acceptance. Keep the process
+         * mapping and other frontends' live resources; drop, never replay. */
+        ++g_batches_dropped;
+        reset_batch_locked();
         transport_failed_locked(reason);
         return FALSE;
     }
@@ -1060,10 +1030,9 @@ static void emit_session_end(void)
 {
     D9WGSessionEnd end;
 
-    /* Do not open the transport just to announce a process that never sent a
-     * D9WG command. Once HELLO has been queued at least once, SESSION_END is
-     * the process-wide safety net for objects left live at DLL unload. */
-    if (!g_hello_generation)
+    /* Do not open an unused transport. The last frontend ends the shared
+     * process session, even when a different frontend emitted its HELLO. */
+    if (!g_dma_buffer)
         return;
     ZeroMemory(&end, sizeof(end));
     end.session_id_low = g_session_id_low;
@@ -1750,9 +1719,6 @@ static BOOL emit_present_and_flush(DDrawObject *object)
  * behind keeps this waiting, and only a host that has stopped answering trips
  * the cap.
  */
-
-static CRITICAL_SECTION g_readback_lock;
-static LONG g_next_request_id = 1;
 
 static BOOL surface_readback(DDSurface *surface)
 {
@@ -4566,7 +4532,6 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
  * implementation remains navigable. It deliberately shares the private
  * object and transport helpers above rather than defining a second backend. */
 
-
 #include "d3d7_proxy.inc"
 #include "d3d_legacy_proxy.inc"
 
@@ -5722,18 +5687,20 @@ void WINAPI SetAppCompatData(DWORD type, DWORD value)
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
+    if (reason == DLL_PROCESS_DETACH && (reserved || !g_process))
+        return TRUE; /* OS handle cleanup ends a terminating process owner. */
+
 #ifdef DDWG_DIAGNOSTIC_TRACE
     DWORD pending_commands;
 #else
     (void)reserved;
 #endif
     if (reason == DLL_PROCESS_ATTACH) {
+        g_process = d9wg_process_attach();
+        if (!g_process) return FALSE;
         g_instance = instance;
         DisableThreadLibraryCalls(instance);
-        initialize_session_id(instance);
-        InitializeCriticalSection(&g_transport_lock);
         InitializeCriticalSection(&g_object_lock);
-        InitializeCriticalSection(&g_readback_lock);
 #ifdef DDWG_DIAGNOSTIC_TRACE
         v86wg_diagnostic_process_attach(instance);
 #endif
@@ -5745,15 +5712,15 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         /* Hide every live primary before closing the process session. */
         for (object = g_objects; object; object = object->next)
             emit_window_state_not_showing(object);
-        emit_session_end();
+        if (g_process->references == 1) emit_session_end();
         EnterCriticalSection(&g_transport_lock);
         if (g_command_count)
             submit_batch_locked(FALSE);
-        close_transport_locked();
+        if (g_process->references == 1) close_transport_locked();
         LeaveCriticalSection(&g_transport_lock);
-        DeleteCriticalSection(&g_readback_lock);
+        d9wg_process_release(g_process);
+        g_process = NULL;
         DeleteCriticalSection(&g_object_lock);
-        DeleteCriticalSection(&g_transport_lock);
 #ifdef DDWG_DIAGNOSTIC_TRACE
         v86wg_diagnostic_process_detach(reserved, pending_commands);
 #endif
