@@ -35,6 +35,7 @@
 #include <d3d.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
 #include <stddef.h>
 #include <stdarg.h>
@@ -80,7 +81,6 @@
 
 /* The VGL2 record header the batch rides inside: function code, 0xFFFF marker,
  * and the extended payload size. Identical to the D3D8/D3D9 proxies. */
-#define DDWG_VGL2_RECORD_HEADER_BYTES 8u
 
 /* Handles start high enough that a stale handle from a previous process shows
  * up as an unknown handle on the host rather than colliding with a live one. */
@@ -100,7 +100,6 @@
  * becomes available. Every successful open bumps a generation, and the device,
  * the palettes and the surface storage are recreated lazily against it.
  */
-#define DDWG_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
 #define DDWG_LOG_FILE_MAX_LINES 4096u
 
 static uint32_t g_hello_generation;
@@ -266,7 +265,7 @@ static uint32_t allocate_handle(void)
 
 static uint8_t *batch_base(void)
 {
-    return g_dma_buffer + sizeof(V86GLDMADesc) + DDWG_VGL2_RECORD_HEADER_BYTES;
+    return d9wg_transport_batch(g_process);
 }
 
 static uint8_t *response_region(void)
@@ -276,54 +275,15 @@ static uint8_t *response_region(void)
 
 static uint32_t batch_capacity(void)
 {
-    /* The last D9WG_RESPONSE_REGION_BYTES of the mapping belong to the host:
-     * readback pixels and its liveness heartbeat live there, so a batch that
-     * ran into them would be overwritten mid-flight. */
-    if (g_dma_capacity <= D9WG_RESPONSE_REGION_BYTES + sizeof(V86GLDMADesc)
-            + DDWG_VGL2_RECORD_HEADER_BYTES)
-        return 0;
-    return g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc)
-            - DDWG_VGL2_RECORD_HEADER_BYTES - D9WG_RESPONSE_REGION_BYTES;
-}
-
-static void reset_batch_locked(void)
-{
-    D9WGBatchHeader *header;
-
-    g_batch_bytes = sizeof(D9WGBatchHeader);
-    g_command_count = 0;
-    if (!g_dma_buffer || batch_capacity() < sizeof(D9WGBatchHeader))
-        return;
-
-    header = (D9WGBatchHeader *)batch_base();
-    ZeroMemory(header, sizeof(*header));
-    header->magic = D9WG_MAGIC;
-    header->version_major = D9WG_VERSION_MAJOR;
-    header->version_minor = D9WG_VERSION_MINOR;
-    header->frame_id = g_frame_id;
-    header->session_id_low = g_session_id_low;
-    header->session_id_high = g_session_id_high;
+    return d9wg_transport_capacity(g_process);
 }
 
 static void close_transport_locked(void)
 {
-    DWORD returned = 0;
-
-    if (g_transport != INVALID_HANDLE_VALUE) {
-        if (g_dma_buffer) {
-            DeviceIoControl(g_transport, V86GL_IOCTL_UNMAP_BUFFER,
-                    NULL, 0, NULL, 0, &returned, NULL);
-        }
-        CloseHandle(g_transport);
-    }
-    g_transport = INVALID_HANDLE_VALUE;
-    g_dma_buffer = NULL;
-    g_dma_capacity = 0;
-    g_batch_bytes = 0;
-    g_command_count = 0;
+    d9wg_transport_close(g_process);
 }
 
-/* Backs the transport off for DDWG_TRANSPORT_RETRY_MS and writes the reason
+/* Backs the transport off for D9WG_RUNTIME_RETRY_MS and writes the reason
  * down once per distinct reason, so a command per frame does not become an
  * open attempt per frame or a log line per frame. */
 static void transport_failed_locked(const char *reason)
@@ -341,177 +301,48 @@ static void transport_failed_locked(const char *reason)
 
 static BOOL open_transport_locked(void)
 {
-    V86GLMapBuffer mapping;
-    char reason[D9WG_LOG_MAX_TEXT];
-    DWORD returned = 0;
-    DWORD error;
-
-    if (g_dma_buffer)
-        return TRUE;
-    if (!d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed))
-        return FALSE;
-
-    DDWG_TRACE_CHECKPOINT("TRANSPORT OPEN_BEGIN device=\\\\.\\v86gl");
-    g_transport = CreateFileA(V86GL_DEVICE_DOS_NAME,
-            GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL, NULL);
-    if (g_transport == INVALID_HANDLE_VALUE) {
-        error = GetLastError();
-        wsprintfA(reason, "could not open \\\\.\\v86gl (Win32 error %lu); the "
-                "v86gl kernel service is not started, so no DirectDraw surface "
-                "can reach the browser", error);
+    uint32_t stage;
+    BOOL attempt = !g_dma_buffer && d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed);
+    BOOL result = d9wg_transport_open_report(g_process, &stage);
+    if (!result && attempt) {
+        char reason[D9WG_LOG_MAX_TEXT];
+        if (stage == D9WG_OPEN_FAILED)
+            wsprintfA(reason, "could not open \\\\.\\v86gl (Win32 error %lu)", GetLastError());
+        else
+            wsprintfA(reason, "could not map \\\\.\\v86gl (Win32 error %lu)", GetLastError());
         transport_failed_locked(reason);
-        return FALSE;
+    } else if (result && attempt) {
+        DDWG_TRACE_CHECKPOINT("TRANSPORT OPEN_OK address=%08lX capacity=%lu generation=%lu", (DWORD)(uintptr_t)g_dma_buffer, g_dma_capacity, g_transport_generation);
     }
-
-    ZeroMemory(&mapping, sizeof(mapping));
-    if (!DeviceIoControl(g_transport, V86GL_IOCTL_MAP_BUFFER,
-            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)) {
-        error = GetLastError();
-        wsprintfA(reason, "v86gl MAP_BUFFER failed (Win32 error %lu); error 170 "
-                "means another process still owns the single 16 MiB DMA "
-                "mapping", error);
-        close_transport_locked();
-        transport_failed_locked(reason);
-        return FALSE;
-    }
-    if (returned != sizeof(mapping) || !mapping.user_address
-            || mapping.buffer_bytes < sizeof(V86GLDMADesc)
-                    + DDWG_VGL2_RECORD_HEADER_BYTES
-                    + sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)
-                    + D9WG_RESPONSE_REGION_BYTES) {
-        wsprintfA(reason, "v86gl MAP_BUFFER returned an unusable mapping "
-                "(bytes=%lu returned=%lu)", mapping.buffer_bytes, returned);
-        close_transport_locked();
-        transport_failed_locked(reason);
-        return FALSE;
-    }
-
-    g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
-    g_dma_capacity = mapping.buffer_bytes;
-    g_transport_retry_armed = FALSE;
-    /*
-     * Everything the host knows about belonged to the previous generation.
-     * Bumping it here is what makes ensure_device, the palettes and
-     * ensure_surface_storage recreate themselves on their next use instead of
-     * addressing handles the host has never seen.
-     */
-    ++g_transport_generation;
-    reset_batch_locked();
-    DDWG_TRACE_CHECKPOINT("TRANSPORT OPEN_OK handle=%08lX dma=%08lX "
-            "capacity=%lu generation=%lu", (DWORD)(uintptr_t)g_transport,
-            (DWORD)(uintptr_t)g_dma_buffer, g_dma_capacity,
-            g_transport_generation);
-    return TRUE;
+    return result;
 }
 
 static BOOL submit_batch_locked(BOOL present)
 {
-    V86GLDMADesc *descriptor;
-    D9WGBatchHeader *batch;
-    V86GLSubmit submit;
-    uint8_t *outer;
-    uint32_t outer_bytes;
-    DWORD returned = 0;
-
-    if (!open_transport_locked())
-        return FALSE;
-    if (g_command_count == 0)
-        return TRUE;
-
-    DDWG_TRACE_CHECKPOINT("BATCH SUBMIT_BEGIN frame=%lu present=%lu "
-            "commands=%lu bytes=%lu generation=%lu", g_frame_id,
-            present ? 1u : 0u, g_command_count, g_batch_bytes,
-            g_transport_generation);
-
-    batch = (D9WGBatchHeader *)batch_base();
-    batch->frame_id = g_frame_id;
-    batch->flags = present ? D9WG_BATCH_FLAG_PRESENT : 0;
-    batch->command_count = g_command_count;
-    batch->command_bytes = g_batch_bytes - (uint32_t)sizeof(*batch);
-    batch->session_id_low = g_session_id_low;
-    batch->session_id_high = g_session_id_high;
-
-    outer = g_dma_buffer + sizeof(V86GLDMADesc);
-    outer[0] = (uint8_t)(V86GL_CTRL_D3D9_BATCH & 0xFFu);
-    outer[1] = (uint8_t)(V86GL_CTRL_D3D9_BATCH >> 8);
-    outer[2] = 0xFF;
-    outer[3] = 0xFF;
-    outer[4] = (uint8_t)(g_batch_bytes & 0xFFu);
-    outer[5] = (uint8_t)((g_batch_bytes >> 8) & 0xFFu);
-    outer[6] = (uint8_t)((g_batch_bytes >> 16) & 0xFFu);
-    outer[7] = (uint8_t)((g_batch_bytes >> 24) & 0xFFu);
-
-    outer_bytes = DDWG_VGL2_RECORD_HEADER_BYTES + g_batch_bytes;
-    descriptor = (V86GLDMADesc *)g_dma_buffer;
-    descriptor->magic = V86GL_MAGIC;
-    descriptor->version = V86GL_VERSION;
-    /* Present is an inner command; the GL bridge must not swap on its own. */
-    descriptor->flags = 0;
-    descriptor->frame_id = g_frame_id;
-    descriptor->command_count = 1;
-    descriptor->command_bytes = outer_bytes;
-    descriptor->reserved0 = D9WG_MAGIC;
-    descriptor->reserved1 = 0;
-
-    submit.descriptor_bytes = (uint32_t)sizeof(*descriptor) + outer_bytes;
-    submit.flags = 0;
-    if (!DeviceIoControl(g_transport, V86GL_IOCTL_SUBMIT,
-            &submit, sizeof(submit), NULL, 0, &returned, NULL)) {
+    BOOL result;
+#ifdef DDWG_DIAGNOSTIC_TRACE
+    DWORD frame = g_frame_id;
+#endif
+    if (!open_transport_locked()) return FALSE;
+    DDWG_TRACE_CHECKPOINT("BATCH SUBMIT_BEGIN frame=%lu present=%lu commands=%lu bytes=%lu generation=%lu",
+            g_frame_id, (DWORD)present, g_command_count, g_batch_bytes, g_transport_generation);
+    result = d9wg_transport_submit(g_process, present);
+    if (!result) {
         char reason[D9WG_LOG_MAX_TEXT];
-        wsprintfA(reason, "D9WG batch submit failed (Win32 error %lu)",
-                GetLastError());
-        /* Refusal/timeout has ambiguous acceptance. Keep the process
-         * mapping and other frontends' live resources; drop, never replay. */
-        ++g_batches_dropped;
-        reset_batch_locked();
+        wsprintfA(reason, "D9WG batch submit failed (Win32 error %lu)", GetLastError());
         transport_failed_locked(reason);
-        return FALSE;
+    } else {
+        DDWG_TRACE_CHECKPOINT("BATCH SUBMIT_OK frame=%lu present=%lu", frame, (DWORD)present);
     }
-
-    DDWG_TRACE_CHECKPOINT("BATCH SUBMIT_OK frame=%lu present=%lu "
-            "commands=%lu descriptor_bytes=%lu returned=%lu", g_frame_id,
-            present ? 1u : 0u, g_command_count,
-            submit.descriptor_bytes, returned);
-    if (present)
-        ++g_frame_id;
-    reset_batch_locked();
-    return TRUE;
+    return result;
 }
 
 static BOOL reserve_command_locked(uint16_t opcode, uint32_t payload_bytes,
         uint32_t extra_bytes, uint8_t **payload_out, uint8_t **extra_out)
 {
-    uint32_t raw_size;
-    uint32_t record_size;
-    D9WGCommandHeader *command;
-
-    if (!open_transport_locked())
-        return FALSE;
-    if (payload_bytes > 0xFFFFFFFFu - sizeof(*command) - extra_bytes)
-        return FALSE;
-    raw_size = (uint32_t)sizeof(*command) + payload_bytes + extra_bytes;
-    record_size = D9WG_ALIGN8(raw_size);
-    if (batch_capacity() < sizeof(D9WGBatchHeader))
-        return FALSE;
-    if (record_size > batch_capacity() - sizeof(D9WGBatchHeader))
-        return FALSE;
-    if (g_batch_bytes + record_size > batch_capacity()
-            && !submit_batch_locked(FALSE))
-        return FALSE;
-
-    command = (D9WGCommandHeader *)(batch_base() + g_batch_bytes);
-    ZeroMemory(command, record_size);
-    command->opcode = opcode;
-    command->size = record_size;
-    command->sequence = g_sequence++;
-    if (payload_out)
-        *payload_out = (uint8_t *)(command + 1);
-    if (extra_out)
-        *extra_out = (uint8_t *)(command + 1) + payload_bytes;
-    g_batch_bytes += record_size;
-    ++g_command_count;
-    return TRUE;
+    if (!open_transport_locked()) return FALSE;
+    return d9wg_transport_reserve(g_process, opcode, payload_bytes, extra_bytes,
+            NULL, payload_out, extra_out, submit_batch_locked);
 }
 
 static BOOL emit_command(uint16_t opcode, const void *payload,

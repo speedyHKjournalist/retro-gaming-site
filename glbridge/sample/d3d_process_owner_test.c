@@ -71,7 +71,7 @@ static void run_order(BOOL draw_first)
     object_eight = create_eight(220);check(object_eight != NULL, "D3D8 factory");
     check(SUCCEEDED(create_draw(NULL, &object_draw, NULL)) && object_draw != NULL, "DirectDraw factory");
     transport = state->transport;
-    check(state->dma_buffer && transport != INVALID_HANDLE_VALUE && GetHandleInformation(transport, &flags), "one live transport");
+    check(state->transport_generation == 1 && state->dma_buffer && transport != INVALID_HANDLE_VALUE && GetHandleInformation(transport, &flags), "one live transport");
     if (draw_first) {
         release_object(object_draw);check(FreeLibrary(draw), "unload creator DirectDraw");
     } else {

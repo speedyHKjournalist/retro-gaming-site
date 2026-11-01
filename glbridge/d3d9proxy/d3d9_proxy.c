@@ -29,6 +29,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
 #ifdef D9WG_DIAGNOSTIC_TRACE
 #include <stdarg.h>
@@ -803,7 +804,6 @@ static void trace_close(void)
 #define D9_ADAPTER_GEFORCEFX_5200 3
 
 #define D9_ADAPTER_IDENTITY D9_ADAPTER_NATIVE
-#define D9_VGL2_RECORD_HEADER_BYTES 8u
 #define D9_HANDLE_GENERATION_ONE (1u << 20)
 
 typedef struct D9Direct3D D9Direct3D;
@@ -1498,32 +1498,25 @@ static uint32_t allocate_shader_handle(void)
 /*
  * A transport failure is never permanent (review S1-3): the renderer may not
  * be up yet, may be behind, or the page may have been reloaded. Opening is
- * retried after D9_TRANSPORT_RETRY_MS; a batch the host refuses is dropped
+ * retried after D9WG_RUNTIME_RETRY_MS; a batch the host refuses is dropped
  * and counted, and the mapping -- with it the host's session, which ends when
  * the arena is released -- is kept.
  */
-#define D9_TRANSPORT_RETRY_MS D9WG_RUNTIME_RETRY_MS
 static BOOL g_hello_emitted;
 
 static uint8_t *batch_base(void)
 {
-    return g_dma_buffer + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES;
+    return d9wg_transport_batch(g_process);
 }
 
 static uint32_t batch_capacity(void)
 {
-    if (g_dma_capacity <= D9WG_RESPONSE_REGION_BYTES
-            + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES)
-        return 0;
-    return g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc)
-            - D9_VGL2_RECORD_HEADER_BYTES - D9WG_RESPONSE_REGION_BYTES;
+    return d9wg_transport_capacity(g_process);
 }
 
 static uint8_t *response_region(void)
 {
-    if (!g_dma_buffer || g_dma_capacity < D9WG_RESPONSE_REGION_BYTES)
-        return NULL;
-    return g_dma_buffer + g_dma_capacity - D9WG_RESPONSE_REGION_BYTES;
+    return d9wg_transport_response(g_process);
 }
 
 static LONG next_response_request_id(void)
@@ -1549,153 +1542,30 @@ static void free_query_slot(UINT index)
         InterlockedExchange((LONG *)&g_query_slots[index], 0);
 }
 
-static void reset_batch_locked(void)
-{
-    D9WGBatchHeader *header;
-
-    g_batch_bytes = sizeof(D9WGBatchHeader);
-    g_command_count = 0;
-    if (!g_dma_buffer || batch_capacity() < sizeof(D9WGBatchHeader))
-        return;
-
-    header = (D9WGBatchHeader *)batch_base();
-    ZeroMemory(header, sizeof(*header));
-    header->magic = D9WG_MAGIC;
-    header->version_major = D9WG_VERSION_MAJOR;
-    header->version_minor = D9WG_VERSION_MINOR;
-    header->frame_id = g_frame_id;
-    header->session_id_low = g_session_id_low;
-    header->session_id_high = g_session_id_high;
-}
-
 static void close_transport_locked(void)
 {
-    DWORD returned = 0;
-
-    if (g_transport != INVALID_HANDLE_VALUE) {
-        if (g_dma_buffer) {
-            DeviceIoControl(g_transport, V86GL_IOCTL_UNMAP_BUFFER,
-                    NULL, 0, NULL, 0, &returned, NULL);
-        }
-        CloseHandle(g_transport);
-    }
-    g_transport = INVALID_HANDLE_VALUE;
-    g_dma_buffer = NULL;
-    g_dma_capacity = 0;
-    g_batch_bytes = 0;
-    g_command_count = 0;
+    d9wg_transport_close(g_process);
 }
 
 static BOOL open_transport_locked(void)
 {
-    V86GLMapBuffer mapping;
-    DWORD returned = 0;
-
-    if (g_dma_buffer)
-        return TRUE;
-    if (!d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed))
-        return FALSE;
-    g_transport_retry_armed = TRUE;
-    g_transport_retry_tick = GetTickCount();
-
-    g_transport = CreateFileA(V86GL_DEVICE_DOS_NAME,
-            GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL, NULL);
-    if (g_transport == INVALID_HANDLE_VALUE) {
-        TRACE("TRANSPORT open failed error=%lu; retrying in %lums",
-                GetLastError(), (DWORD)D9_TRANSPORT_RETRY_MS);
-        return FALSE;
+    BOOL attempt = !g_dma_buffer && d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed);
+    BOOL result = d9wg_transport_open(g_process);
+    if (!result && attempt) {
+        TRACE("TRANSPORT open/map failed error=%lu; retrying in %lums", GetLastError(), (DWORD)D9WG_RUNTIME_RETRY_MS);
     }
-
-    ZeroMemory(&mapping, sizeof(mapping));
-    if (!DeviceIoControl(g_transport, V86GL_IOCTL_MAP_BUFFER,
-            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)
-            || returned != sizeof(mapping)
-            || !mapping.user_address
-            || mapping.buffer_bytes < sizeof(V86GLDMADesc)
-                    + D9_VGL2_RECORD_HEADER_BYTES
-                    + sizeof(D9WGBatchHeader)
-                    + sizeof(D9WGCommandHeader)) {
-        TRACE("TRANSPORT map failed error=%lu (170: another process owns the "
-                "arena); retrying in %lums", GetLastError(), (DWORD)D9_TRANSPORT_RETRY_MS);
-        close_transport_locked();
-        return FALSE;
-    }
-
-    g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
-    g_dma_capacity = mapping.buffer_bytes;
-    if (g_dma_capacity <= D9WG_RESPONSE_REGION_BYTES
-            + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES
-            + sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)) {
-        close_transport_locked();
-        return FALSE;
-    }
-    g_transport_retry_armed = FALSE;
-    ++g_transport_generation;
-    ZeroMemory(response_region(), D9WG_RESPONSE_REGION_BYTES);
-    reset_batch_locked();
-    return TRUE;
+    return result;
 }
 
 static BOOL submit_batch_locked(BOOL present)
 {
-    V86GLDMADesc *descriptor;
-    D9WGBatchHeader *batch;
-    V86GLSubmit submit;
-    uint8_t *outer;
-    uint32_t outer_bytes;
-    DWORD returned = 0;
-
-    if (!open_transport_locked())
-        return FALSE;
-    if (g_command_count == 0)
-        return TRUE;
-
-    batch = (D9WGBatchHeader *)batch_base();
-    batch->frame_id = g_frame_id;
-    batch->flags = present ? D9WG_BATCH_FLAG_PRESENT : 0;
-    batch->command_count = g_command_count;
-    batch->command_bytes = g_batch_bytes - sizeof(*batch);
-    batch->session_id_low = g_session_id_low;
-    batch->session_id_high = g_session_id_high;
-
-    outer = g_dma_buffer + sizeof(V86GLDMADesc);
-    outer[0] = (uint8_t)(V86GL_CTRL_D3D9_BATCH & 0xFFu);
-    outer[1] = (uint8_t)(V86GL_CTRL_D3D9_BATCH >> 8);
-    outer[2] = 0xFF;
-    outer[3] = 0xFF;
-    outer[4] = (uint8_t)(g_batch_bytes & 0xFFu);
-    outer[5] = (uint8_t)((g_batch_bytes >> 8) & 0xFFu);
-    outer[6] = (uint8_t)((g_batch_bytes >> 16) & 0xFFu);
-    outer[7] = (uint8_t)((g_batch_bytes >> 24) & 0xFFu);
-
-    outer_bytes = D9_VGL2_RECORD_HEADER_BYTES + g_batch_bytes;
-    descriptor = (V86GLDMADesc *)g_dma_buffer;
-    descriptor->magic = V86GL_MAGIC;
-    descriptor->version = V86GL_VERSION;
-    descriptor->flags = 0;
-    descriptor->frame_id = g_frame_id;
-    descriptor->command_count = 1;
-    descriptor->command_bytes = outer_bytes;
-    descriptor->reserved0 = D9WG_MAGIC;
-    descriptor->reserved1 = 0;
-
-    submit.descriptor_bytes = (uint32_t)sizeof(*descriptor) + outer_bytes;
-    submit.flags = 0;
-    if (!DeviceIoControl(g_transport, V86GL_IOCTL_SUBMIT,
-            &submit, sizeof(submit), NULL, 0, &returned, NULL)) {
-        /* No renderer yet, or the host timed out: this batch is lost, the
-         * stream goes on */
-        ++g_batches_dropped;
-        TRACE("SUBMIT failed error=%lu; %lu commands dropped (%lu batches so far)",
-                GetLastError(), g_command_count, g_batches_dropped);
-        reset_batch_locked();
-        return TRUE;
+    BOOL result;
+    if (!open_transport_locked()) return FALSE;
+    result = d9wg_transport_submit(g_process, present);
+    if (!result) {
+        TRACE("SUBMIT failed error=%lu; batch dropped (total=%lu)", GetLastError(), g_batches_dropped);
     }
-
-    if (present)
-        ++g_frame_id;
-    reset_batch_locked();
+    /* A dropped batch must not stop later commands in the D3D stream. */
     return TRUE;
 }
 
@@ -1703,50 +1573,9 @@ static BOOL reserve_command_locked(uint16_t opcode, uint32_t payload_bytes,
         uint32_t extra_bytes, D9WGCommandHeader **command_out,
         uint8_t **payload_out, uint8_t **extra_out)
 {
-    uint32_t raw_size;
-    uint32_t record_size;
-    D9WGCommandHeader *command;
-
-    if (!open_transport_locked())
-        return FALSE;
-    if (payload_bytes > 0xFFFFFFFFu - sizeof(*command) - extra_bytes)
-        return FALSE;
-    raw_size = (uint32_t)sizeof(*command) + payload_bytes + extra_bytes;
-    record_size = D9WG_ALIGN8(raw_size);
-    if (record_size > batch_capacity() - sizeof(D9WGBatchHeader))
-        return FALSE;
-    if (g_batch_bytes + record_size > batch_capacity()
-            && !submit_batch_locked(FALSE))
-        return FALSE;
-
-    command = (D9WGCommandHeader *)(batch_base() + g_batch_bytes);
-    ZeroMemory(command, record_size);
-    command->opcode = opcode;
-    command->size = record_size;
-    command->sequence = g_sequence++;
-    if (command_out)
-        *command_out = command;
-    if (payload_out)
-        *payload_out = (uint8_t *)(command + 1);
-    if (extra_out)
-        *extra_out = (uint8_t *)(command + 1) + payload_bytes;
-    g_batch_bytes += record_size;
-    ++g_command_count;
-    /*
-     * This is the single chokepoint every host-bound call passes through, so
-     *
-     *     TRACE("CMD opcode=%04lX seq=%lu bytes=%lu pending=%lu",
-     *             (DWORD)opcode, (DWORD)command->sequence, record_size,
-     *             g_command_count);
-     *
-     * here covers in one line the ~100 device methods that have no trace of
-     * their own -- SetRenderState, SetTextureStageState, SetTransform and the
-     * rest -- which is what identified where GTA San Andreas stopped during
-     * startup. It is not compiled in because it is one WriteFile per command:
-     * invaluable up to the first frame, unusable once a title is drawing.
-     * Opcodes are numeric; d3d9_protocol.h decodes them.
-     */
-    return TRUE;
+    if (!open_transport_locked()) return FALSE;
+    return d9wg_transport_reserve(g_process, opcode, payload_bytes, extra_bytes,
+            command_out, payload_out, extra_out, submit_batch_locked);
 }
 
 static BOOL emit_command(uint16_t opcode, const void *payload,

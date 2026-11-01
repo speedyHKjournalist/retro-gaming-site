@@ -24,7 +24,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const read = relative => fs.readFileSync(/^(gl-webgpu|d3d8-webgpu|d3d9-webgpu)\//.test(relative) ? require("./host_paths.js").hostPath(relative) : path.join(root, relative), "utf8");
 
-const guest = read("d3d8proxy/d3d8_proxy.c") + "\n" + read("runtime/d9wg_upload_bridge.h");
+const guest = read("d3d8proxy/d3d8_proxy.c") + "\n" + read("runtime/d9wg_upload_bridge.h") + "\n" + read("runtime/d9wg_transport.c");
 const bridge = read("d3d8proxy/d3d8_protocol.h");
 const protocol = read("d3d9proxy/d3d9_protocol.h");
 const executor = read("d3d9-webgpu/d3d9_executor.js");

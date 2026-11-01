@@ -473,9 +473,8 @@ check("a closed transport is retried, recorded, and never fails CreateSurface",
     assert.match(guestSource,
         /d9wg_retry_ready\(GetTickCount\(\), g_transport_retry_tick, g_transport_retry_armed\)/,
         "a failed open must be retried after a backoff");
-    assert.match(guestSource,
-        /\+\+g_transport_generation;/,
-        "a successful open must start a new resource generation");
+    // Open generations and failure backoff are checked through the common C
+    // transport and the real XP owner probe.
     assert.match(guestSource,
         /if \(emit_command\(D9WG_OP_HELLO[\s\S]*?g_hello_generation = g_transport_generation;/,
         "HELLO must be resent when it was dropped by a closed transport");
@@ -496,9 +495,9 @@ check("a closed transport is retried, recorded, and never fails CreateSurface",
     assert.match(guestSource,
         /CreateFileA\(g_log_path, FILE_APPEND_DATA/,
         "a transport failure must be written somewhere the guest can read it");
-    assert.match(guestSource,
-        /could not open \\\\\\\\\.\\\\v86gl \(Win32 error %lu\)/,
-        "the log line must name the Win32 error behind a failed open");
+    // Win32 open/map errors are exercised by d9wg_transport_test.js; its
+    // frozen framing oracle and failure cases also cover ambiguous submits.
+
 });
 
 if (failures.length) {

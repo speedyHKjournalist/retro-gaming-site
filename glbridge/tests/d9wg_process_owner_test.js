@@ -9,35 +9,7 @@ function definition(source, signature) {
     return source.slice(start, at);
 }
 try {
-    fs.writeFileSync(path.join(directory, "windows.h"), `
-#ifndef TEST_WINDOWS_H
-#define TEST_WINDOWS_H
-#include <stdint.h>
-#include <stddef.h>
-typedef uint32_t DWORD,UINT;typedef int32_t LONG;typedef int BOOL;
-typedef void *HANDLE,*HINSTANCE,*LPVOID;
-typedef struct {LONG held;} CRITICAL_SECTION;
-typedef struct {DWORD dwLowDateTime,dwHighDateTime;} FILETIME;
-typedef union {struct {DWORD LowPart;LONG HighPart;};int64_t QuadPart;} LARGE_INTEGER;
-#define TRUE 1
-#define FALSE 0
-#define WINAPI
-#define DLL_PROCESS_ATTACH 1
-#define DLL_PROCESS_DETACH 0
-#define INVALID_HANDLE_VALUE ((HANDLE)(intptr_t)-1)
-#define PAGE_READWRITE 4
-#define FILE_MAP_ALL_ACCESS 15
-DWORD GetCurrentProcessId(void);DWORD GetTickCount(void);
-void GetSystemTimeAsFileTime(FILETIME*);BOOL QueryPerformanceCounter(LARGE_INTEGER*);
-HANDLE CreateFileMappingA(HANDLE,void*,DWORD,DWORD,DWORD,const char*);
-void *MapViewOfFile(HANDLE,DWORD,DWORD,DWORD,size_t);
-BOOL UnmapViewOfFile(const void*);BOOL CloseHandle(HANDLE);
-LONG InterlockedIncrement(volatile LONG*);LONG InterlockedDecrement(volatile LONG*);
-void InitializeCriticalSection(CRITICAL_SECTION*);void DeleteCriticalSection(CRITICAL_SECTION*);
-void EnterCriticalSection(CRITICAL_SECTION*);void LeaveCriticalSection(CRITICAL_SECTION*);
-BOOL DisableThreadLibraryCalls(HINSTANCE);
-#endif
-`);
+    fs.copyFileSync(path.join(__dirname, "native/windows.h"), path.join(directory, "windows.h"));
     const modules = [];
     for (const api of ["d3d9", "d3d8", "ddraw"]) {
         const source = fs.readFileSync(path.join(root, api + "proxy/" + api + "_proxy.c"), "utf8");
@@ -103,7 +75,7 @@ HANDLE CreateFileMappingA(HANDLE file,void *security,DWORD protection,DWORD high
  (void)security;assert(file==INVALID_HANDLE_VALUE&&protection==PAGE_READWRITE&&!high);
  if(fail_open){fail_open=0;return NULL;}
  for(unsigned i=0;i<16;i++)if(maps[i]&&!strcmp(maps[i]->name,name)){maps[i]->handles++;return maps[i];}
- Mapping *mapping=calloc(1,sizeof(*mapping));assert(mapping);char temporary[]="/private/tmp/d9wg-process-test.XXXXXX";
+ Mapping *mapping=calloc(1,sizeof(*mapping));assert(mapping);char temporary[]=${JSON.stringify(path.join(directory, "mapping.XXXXXX"))};
  mapping->fd=mkstemp(temporary);assert(mapping->fd>=0);unlink(temporary);assert(!ftruncate(mapping->fd,bytes));
  strcpy(mapping->name,name);mapping->bytes=bytes;mapping->handles=1;
  for(unsigned i=0;i<16;i++)if(!maps[i]){maps[i]=mapping;mappings_created++;return mapping;}abort();
@@ -150,7 +122,7 @@ int main(void){
  puts("PASS actual C DLL entries: one process owner, canonical mapping survives creator unload, shared cursor/namespace/session, last-owner cleanup, failed attach and termination paths");return 0;
 }
 `);
-    const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c99", "-D_DARWIN_C_SOURCE", "-Wall", "-Wextra", "-Werror", "-I", directory, "-I", root,
+    const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c99", "-D_DARWIN_C_SOURCE", "-D_POSIX_C_SOURCE=200809L", "-Wall", "-Wextra", "-Werror", "-I", directory, "-I", root,
         ...modules, input, path.join(root, "runtime/d9wg_process.c"), "-o", binary], { encoding: "utf8" });
     assert.equal(built.status, 0, built.stderr || String(built.error));
     const run = spawnSync(binary, [], { encoding: "utf8" });assert.equal(run.status, 0, run.stderr || String(run.error));process.stdout.write(run.stdout);
