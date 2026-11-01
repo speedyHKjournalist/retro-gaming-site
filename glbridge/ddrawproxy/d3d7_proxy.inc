@@ -18,21 +18,7 @@
 typedef struct D3D7VertexBuffer D3D7VertexBuffer;
 typedef struct D3D7StateBlock D3D7StateBlock;
 
-typedef struct D3D7FVFLayout {
-    UINT stride;
-    UINT position_offset;
-    UINT position_bytes;
-    UINT normal_offset;
-    UINT diffuse_offset;
-    UINT specular_offset;
-    UINT texcoord_offset[8];
-    UINT texcoord_bytes[8];
-    UINT texcoord_count;
-    BOOL has_position;
-    BOOL has_normal;
-    BOOL has_diffuse;
-    BOOL has_specular;
-} D3D7FVFLayout;
+typedef D9WGFVFLayout D3D7FVFLayout;
 
 struct D3D7StateBlock {
     D3D7StateBlock *next;
@@ -189,97 +175,8 @@ static BOOL d3d7_primitive_counts(D3DPRIMITIVETYPE type, UINT element_count,
 static BOOL d3d7_decode_fvf(DWORD fvf, D3D7FVFLayout *layout,
         D9WGVertexElement *elements, UINT *element_count)
 {
-    static const BYTE tex_types[4] = {
-        D3D9DECLTYPE_FLOAT2, D3D9DECLTYPE_FLOAT3,
-        D3D9DECLTYPE_FLOAT4, D3D9DECLTYPE_FLOAT1
-    };
-    static const UINT tex_bytes[4] = { 8u, 12u, 16u, 4u };
-    DWORD position = fvf & DDWG_FVF_POSITION_MASK_D3D7;
-    UINT offset = 0;
-    UINT count = 0;
-    UINT index;
-
-    ZeroMemory(layout, sizeof(*layout));
-    if (fvf & DDWG_FVF_RESERVED0) return FALSE;
-
-#define D3D7_PUSH_ELEMENT(kind, use, use_index) do { \
-    if (!elements || count >= D3D7_MAX_VERTEX_ELEMENTS || offset > 0xffffu) \
-        return FALSE; \
-    elements[count].stream = 0; \
-    elements[count].offset = (uint16_t)offset; \
-    elements[count].type = (uint8_t)(kind); \
-    elements[count].method = D3D9DECLMETHOD_DEFAULT; \
-    elements[count].usage = (uint8_t)(use); \
-    elements[count].usage_index = (uint8_t)(use_index); \
-    ++count; \
-} while (0)
-
-    layout->position_offset = offset;
-    if (position == DDWG_FVF_XYZ) {
-        layout->has_position = TRUE;
-        layout->position_bytes = 12u;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_POSITION, 0);
-        offset += 12u;
-    } else if (position == DDWG_FVF_XYZRHW) {
-        layout->has_position = TRUE;
-        layout->position_bytes = 16u;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT4, D3D9DECLUSAGE_POSITIONT, 0);
-        offset += 16u;
-    /* The advertised four-matrix vertex-blend limit covers XYZB1..XYZB4.
-     * D3D7's XYZB5 is five float weights (not D3D8's indexed LASTBETA form),
-     * so accepting it as blend indices would corrupt the following fields. */
-    } else if (position >= DDWG_FVF_XYZB1 && position <= DDWG_FVF_XYZB4) {
-        UINT blend_dwords = 1u + ((position - DDWG_FVF_XYZB1) >> 1);
-        UINT weight_count = blend_dwords;
-        layout->has_position = TRUE;
-        layout->position_bytes = 12u + blend_dwords * 4u;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_POSITION, 0);
-        offset += 12u;
-        if (weight_count) {
-            D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT1 + weight_count - 1u,
-                    D3D9DECLUSAGE_BLENDWEIGHT, 0);
-            offset += weight_count * 4u;
-        }
-    } else {
-        return FALSE;
-    }
-    if (fvf & DDWG_FVF_NORMAL) {
-        layout->has_normal = TRUE;
-        layout->normal_offset = offset;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_NORMAL, 0);
-        offset += 12u;
-    }
-    /* D3DFVF_RESERVED1 is a real reserved DWORD in D3DLVERTEX. It must stay
-     * in the stride even though it is deliberately absent from the host FVF. */
-    if (fvf & DDWG_FVF_RESERVED1_D3D7) offset += 4u;
-    if (fvf & DDWG_FVF_DIFFUSE) {
-        layout->has_diffuse = TRUE;
-        layout->diffuse_offset = offset;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_D3DCOLOR, D3D9DECLUSAGE_COLOR, 0);
-        offset += 4u;
-    }
-    if (fvf & DDWG_FVF_SPECULAR) {
-        layout->has_specular = TRUE;
-        layout->specular_offset = offset;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_D3DCOLOR, D3D9DECLUSAGE_COLOR, 1);
-        offset += 4u;
-    }
-    layout->texcoord_count = (fvf & DDWG_FVF_TEXCOUNT_MASK)
-            >> DDWG_FVF_TEXCOUNT_SHIFT;
-    if (layout->texcoord_count > 8u) return FALSE;
-    for (index = 0; index < layout->texcoord_count; ++index) {
-        UINT size_code = (fvf >> (16u + index * 2u)) & 3u;
-        layout->texcoord_offset[index] = offset;
-        layout->texcoord_bytes[index] = tex_bytes[size_code];
-        D3D7_PUSH_ELEMENT(tex_types[size_code], D3D9DECLUSAGE_TEXCOORD,
-                index);
-        offset += tex_bytes[size_code];
-    }
-#undef D3D7_PUSH_ELEMENT
-
-    layout->stride = offset;
-    *element_count = count;
-    return count != 0 && offset != 0;
+    return d9wg_fvf_decode(D9WG_FVF_D3D7, fvf, elements,
+            D3D7_MAX_VERTEX_ELEMENTS, element_count, layout);
 }
 
 /*

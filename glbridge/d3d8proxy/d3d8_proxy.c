@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
 #include "../openglproxy/v86gl_ioctl.h"
@@ -1082,127 +1083,11 @@ static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
     return TRUE;
 }
 
-/* Whether a D3D8 position field is one of the D3DFVF_XYZBn blended forms. */
-static BOOL fvf_position_is_blended(DWORD fvf)
-{
-    DWORD position = fvf & D3DFVF_POSITION_MASK;
-    return position >= D3DFVF_XYZB1 && position <= D3DFVF_XYZB5;
-}
-
-/*
- * Whether the last DWORD of a D3DFVF_XYZBn block holds matrix indices rather
- * than another weight. D3DFVF_LASTBETA_UBYTE4 says so outright; XYZB5 says so
- * implicitly, because five float weights have no D3DDECLTYPE to be declared as
- * and the runtime has always read that last DWORD as indices. Getting this
- * wrong shifts the offset of every element that follows.
- */
-static BOOL fvf_has_blend_indices(DWORD fvf)
-{
-    if (fvf & D3DFVF_LASTBETA_UBYTE4)
-        return TRUE;
-    return (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZB5;
-}
-
-/*
- * Expands an FVF code into the D3DVERTEXELEMENT9 array the host works in.
- *
- * The host deliberately has no FVF decoder: a vertex layout reaches it in
- * exactly one shape no matter whether the app described it with an FVF, a
- * D3D8 vertex shader declaration, or (on the D3D9 path) a real vertex
- * declaration. This is the FVF spelling of that one shape.
- */
 static BOOL fvf_to_elements(DWORD fvf, D9WGVertexElement *elements,
         UINT max_elements, UINT *element_count)
 {
-    static const uint8_t texcoord_type[4] = {
-        (uint8_t)D3D9DECLTYPE_FLOAT2, (uint8_t)D3D9DECLTYPE_FLOAT3,
-        (uint8_t)D3D9DECLTYPE_FLOAT4, (uint8_t)D3D9DECLTYPE_FLOAT1
-    };
-    static const UINT texcoord_bytes[4] = { 8u, 12u, 16u, 4u };
-    UINT count = 0;
-    UINT offset = 0;
-    UINT tex_count;
-    UINT i;
-
-    if (fvf & D3DFVF_RESERVED0)
-        return FALSE;
-
-#define D8_PUSH_ELEMENT(element_type, element_usage, element_usage_index) \
-    do { \
-        if (count >= max_elements || offset > 0xFFFFu) return FALSE; \
-        elements[count].stream = 0; \
-        elements[count].offset = (uint16_t)offset; \
-        elements[count].type = (uint8_t)(element_type); \
-        elements[count].method = (uint8_t)D3D9DECLMETHOD_DEFAULT; \
-        elements[count].usage = (uint8_t)(element_usage); \
-        elements[count].usage_index = (uint8_t)(element_usage_index); \
-        ++count; \
-    } while (0)
-
-    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZ) {
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_POSITION, 0);
-        offset += 12;
-    } else if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT4, D3D9DECLUSAGE_POSITIONT, 0);
-        offset += 16;
-    } else if (fvf_position_is_blended(fvf)) {
-        DWORD blend_dwords = 1u + (((fvf & D3DFVF_POSITION_MASK)
-                - D3DFVF_XYZB1) >> 1);
-        BOOL has_indices = fvf_has_blend_indices(fvf);
-        DWORD weight_count = blend_dwords - (has_indices ? 1u : 0u);
-
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_POSITION, 0);
-        offset += 12;
-        if (weight_count) {
-            /* FLOAT1..FLOAT4 are D3DDECLTYPE 0..3, so the weight count maps
-             * straight onto the enum. It cannot exceed 4: XYZB5 always spends
-             * its last DWORD on indices (see fvf_has_blend_indices). */
-            D8_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT1 + (weight_count - 1u),
-                    D3D9DECLUSAGE_BLENDWEIGHT, 0);
-            offset += weight_count * 4u;
-        }
-        if (has_indices) {
-            D8_PUSH_ELEMENT(D3D9DECLTYPE_UBYTE4, D3D9DECLUSAGE_BLENDINDICES, 0);
-            offset += 4;
-        }
-    }
-    /* No position bits at all is legal and deliberately not an error: a vertex
-     * shader may take its position from somewhere other than the stream. Only
-     * an FVF describing no attribute whatsoever is refused, below. */
-    if (fvf & D3DFVF_NORMAL) {
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_NORMAL, 0);
-        offset += 12;
-    }
-    if (fvf & D3DFVF_PSIZE) {
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT1, D3D9DECLUSAGE_PSIZE, 0);
-        offset += 4;
-    }
-    if (fvf & D3DFVF_DIFFUSE) {
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_D3DCOLOR, D3D9DECLUSAGE_COLOR, 0);
-        offset += 4;
-    }
-    if (fvf & D3DFVF_SPECULAR) {
-        D8_PUSH_ELEMENT(D3D9DECLTYPE_D3DCOLOR, D3D9DECLUSAGE_COLOR, 1);
-        offset += 4;
-    }
-    tex_count = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
-    if (tex_count > 8)
-        return FALSE;
-    for (i = 0; i < tex_count; ++i) {
-        /* The two bits per set in the FVF's high half are
-         * D3DFVF_TEXTUREFORMAT2/3/4/1 in that order -- the encoding is not the
-         * component count, which is why these are tables rather than
-         * arithmetic. */
-        DWORD size_bits = (fvf >> (16u + i * 2u)) & 0x3u;
-        D8_PUSH_ELEMENT(texcoord_type[size_bits], D3D9DECLUSAGE_TEXCOORD, i);
-        offset += texcoord_bytes[size_bits];
-    }
-#undef D8_PUSH_ELEMENT
-
-    if (!count)
-        return FALSE;
-    *element_count = count;
-    return TRUE;
+    return d9wg_fvf_decode(D9WG_FVF_D3D8, fvf, elements, max_elements,
+            element_count, NULL);
 }
 
 /*
