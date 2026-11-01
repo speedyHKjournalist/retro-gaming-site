@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "081f4cdbe432d69ff6b7";
+globalThis.V86GL_BUILD_REVISION = "e3dd8f5fbf98ded721f9";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -12406,6 +12406,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         };
     }
 
+    const PROGRAM_DRAW_COUNTERS = [
+        "drawsWithTexture", "drawsWithFallbackTexture", "drawsWithUnsupportedTextureOp",
+        "drawsWithCompactVertexInputs", "drawsWithMissingCoordSet", "drawsWithUnappliedVertexBlend",
+        "drawsWithUnwrittenCoordVarying", "zeroNormalDrawsWithoutTexture", "zeroNormalDrawsWithMissingTexture",
+        "zeroNormalDrawsWithUnboundTexture", "zeroNormalDrawsWithUnknownTexture", "zeroNormalDrawsWithLiveTexture",
+        "drawsWithDefaultedInputs", "drawsWithZeroNormalLighting", "blendedDraws",
+    ];
+
     const DEVICE_STATE_CONSTANTS = { D3DMULTISAMPLE_NONE, D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_WORLD, IDENTITY4x4,
         MAX_VS_CONST_F, MAX_PS_CONST_F, MAX_CONST_I, MAX_CONST_B };
 
@@ -12511,6 +12519,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
              * only ever miss a reuse, never claim a stale one.
              */
             this.commandSerial = 1;
+            this.programSerial = 1;
+            this.uniformSerial = 1;
+            this.recordingOpcode = 0;
             this.objectIds = new WeakMap();
             this.nextObjectId = 1;
             // Bytecode hash -> {ok, wgsl, reflection}. Survives device loss:
@@ -12588,6 +12599,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 batches: 0, commands: 0, presents: 0, queueSubmits: 0,
                 drawCalls: 0, indexedDrawCalls: 0, upDrawCalls: 0,
                 pipelineCreations: 0, pipelineHits: 0, pipelinesRejected: 0,
+                programBuilds: 0, programCacheHits: 0,
                 bindGroupCreations: 0, bindGroupHits: 0,
                 bindGroupCacheEvictions: 0, framesRejected: 0,
                 uniformSlotReuses: 0, uniformRingOverflows: 0,
@@ -13003,6 +13015,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.bindGroupCache.clear();
             this.moduleCache.clear();
             this.fixedModuleCache.clear();
+            ++this.programSerial;
+            ++this.uniformSerial;
             this.samplerCache.clear();
         }
 
@@ -13044,6 +13058,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // is not one bad command but a disagreement about the byte
                 // layout, and continuing past it would be executing garbage.
                 try {
+                    this.recordingOpcode = opcode;
                     const pending = this.dispatchCommand(opcode, bytes, view,
                         payloadOffset, payloadBytes, metadata);
                     if (pending && typeof pending.then === "function") {
@@ -13063,14 +13078,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     this.warnOnce("command-failed-" + opcode + "-" + message,
                         "a command threw and was skipped; the rest of the " +
                         "batch still executes", { opcode, message, error });
-                }
+                } finally { this.recordingOpcode = 0; }
                 // Any command other than a draw may have moved something the
                 // constant block is built from. Draws are excluded because they
                 // are the thing being deduplicated; opcodes 0x300..0x303 are the
                 // four draw entry points.
                 if (opcode < OP_DRAW_PRIMITIVE ||
                         opcode > OP_DRAW_INDEXED_PRIMITIVE_UP)
-                    ++this.commandSerial;
+                    this.advanceDrawState(opcode, view, payloadOffset);
                 offset += size;
                 ++this.stats.commands;
                 // Mid-batch, because one PCI batch can carry a whole 16 MiB
@@ -13623,6 +13638,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.bindGroupCache.clear();
             this.moduleCache.clear();
             this.fixedModuleCache.clear();
+            ++this.programSerial;
+            ++this.uniformSerial;
             this.samplerCache.clear();
             this.cursor = { ...this.cursor, texture: null, view: null,
                 pipeline: null, sampler: null, uniform: null,
@@ -14079,6 +14096,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.shaderCache = new shaderPipeline.D3D9ShaderCache();
             this.moduleCache.clear();
             this.fixedModuleCache.clear();
+            ++this.programSerial;
+            ++this.uniformSerial;
             this.shaderCacheDirty = false;
             const storage = this.shaderCacheStorage;
             if (storage && typeof storage.save === "function") {
@@ -15634,7 +15653,81 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // Resolves the two stages into GPUShaderModules plus everything the
         // pipeline and bind group need. Returns {error} instead of throwing
         // for anything the caller should turn into a counted skipped draw.
+        // Program reuse is confined to serialized wire draws. Direct callers
+        // may mutate a state object without sending a command and retain the
+        // uncached builder contract. Unknown commands invalidate conservatively.
+        advanceDrawState(opcode, view, offset) {
+            ++this.commandSerial;
+            let programDirty = true, uniformsDirty = true;
+            if (opcode === OP_SET_RENDER_STATE) {
+                const id = view.getUint32(offset + D9WG.F.SetRenderState.state, true);
+                if (id === D3DRS_CULLMODE || id === D3DRS_STENCILREF ||
+                        id === D3DRS_BLENDFACTOR || id === D3DRS_ALPHAREF ||
+                        id === D3DRS_TEXTUREFACTOR) programDirty = false;
+                if (id === D3DRS_CULLMODE || id === D3DRS_STENCILREF ||
+                        id === D3DRS_BLENDFACTOR) uniformsDirty = false;
+                else if (id === D3DRS_TEXTUREFACTOR) {
+                    const state = this.devices.get(view.getUint32(offset + D9WG.F.SetRenderState.device_handle, true));
+                    const cached = state && state.lastProgram;
+                    if (cached && cached.serial === this.programSerial &&
+                            !(cached.program.pixelSignature && cached.program.pixelSignature.usesTextureFactor))
+                        uniformsDirty = false;
+                }
+            }
+            if (programDirty) ++this.programSerial;
+            if (uniformsDirty) ++this.uniformSerial;
+        }
+
         programFor(state, elements, pipelineState, drawOptions) {
+            const wireDraw = this.recordingOpcode >= OP_DRAW_PRIMITIVE &&
+                this.recordingOpcode <= OP_DRAW_INDEXED_PRIMITIVE_UP;
+            if (!wireDraw || this.options.cachePrograms === false) {
+                ++this.stats.programBuilds;
+                return this.buildProgramFor(state, elements, pipelineState, drawOptions);
+            }
+            const pointExpansion = !!(drawOptions && drawOptions.pointExpansion);
+            const pointSprite = !!(drawOptions && drawOptions.pointSprite);
+            const stream0 = state.streams.get(0);
+            const stride = stream0 ? stream0.stride : 0;
+            const frequency = stream0 ? stream0.frequency : undefined;
+            const alphaMode = pipelineState.alphaTest.enabled ? pipelineState.alphaTest.func : 0;
+            const debug = this.debug, cached = state.lastProgram;
+            if (cached && cached.serial === this.programSerial &&
+                    cached.elements === elements && cached.stride === stride && cached.frequency === frequency &&
+                    cached.pointExpansion === pointExpansion && cached.pointSprite === pointSprite &&
+                    cached.alphaMode === alphaMode && cached.shaderMode === debug.shaderMode &&
+                    cached.forceSolidAllDraws === debug.forceSolidAllDraws &&
+                    cached.skipProgrammableDraws === debug.skipProgrammableDraws &&
+                    cached.highlightMissingTexture === debug.highlightMissingTexture &&
+                    cached.highlightMissingCoordSet === debug.highlightMissingCoordSet &&
+                    cached.warnOnSuspiciousDraws === debug.warnOnSuspiciousDraws &&
+                    cached.texcoordFromStageIndex === debug.texcoordFromStageIndex &&
+                    !cached.program.vertexModule._d9wgBroken && !cached.program.fragmentModule._d9wgBroken) {
+                ++this.stats.programCacheHits;
+                for (const [name, count] of cached.program.drawCounters) this.stats[name] += count;
+                return cached.program;
+            }
+            ++this.stats.programBuilds;
+            const before = PROGRAM_DRAW_COUNTERS.map(name => this.stats[name]);
+            const program = this.buildProgramFor(state, elements, pipelineState, drawOptions);
+            if (program.error) { state.lastProgram = null;return program; }
+            program.drawCounters = PROGRAM_DRAW_COUNTERS.flatMap((name, index) => {
+                const delta = this.stats[name] - before[index];
+                return delta ? [[name, delta]] : [];
+            });
+            state.lastProgram = {
+                serial: this.programSerial, elements, stride, frequency, alphaMode, pointExpansion, pointSprite, program,
+                shaderMode: debug.shaderMode, forceSolidAllDraws: debug.forceSolidAllDraws,
+                skipProgrammableDraws: debug.skipProgrammableDraws,
+                highlightMissingTexture: debug.highlightMissingTexture,
+                highlightMissingCoordSet: debug.highlightMissingCoordSet,
+                warnOnSuspiciousDraws: debug.warnOnSuspiciousDraws,
+                texcoordFromStageIndex: debug.texcoordFromStageIndex,
+            };
+            return program;
+        }
+
+        buildProgramFor(state, elements, pipelineState, drawOptions) {
             drawOptions = drawOptions || {};
             const alphaTest = pipelineState.alphaTest;
             const alphaTestKey = alphaTest.enabled
@@ -16463,7 +16556,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
          * register files separate.
          *
          * A run of draws with no state change between them shares one slot, and
-         * that is decided by commandSerial rather than by hashing the assembled
+         * that is decided by uniformSerial rather than by hashing the assembled
          * bytes. The frame serial is part of the test because a flush rewinds
          * the ring: a slot from an already-submitted segment has had its bytes
          * handed back out to a later draw.
@@ -16478,11 +16571,11 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
              * The serial covers device state. Every input the block is built
              * from -- constant registers, `def` defaults, viewport, clip planes,
              * transforms, lights, material, texture stage state -- moves only
-             * through a command, and any non-draw command bumps the serial.
+             * through a command. Pipeline-only states and an unused texture
+             * factor do not invalidate these bytes; all other commands do.
              *
-             * The module keys cover the program. programFor() rebuilds its
-             * return object per draw, so the object cannot be compared by
-             * identity, but vertexKey/fragmentKey are the keys its WGSL modules
+             * The module keys cover the program, including uncached/direct
+             * builder calls. vertexKey/fragmentKey are the keys its WGSL modules
              * are cached under: equal keys mean the same generated shader, hence
              * the same uniform layout and, for fixed function, the same
              * signature the values are read through. That is what makes point
@@ -16494,7 +16587,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
              * back out to a later draw.
              */
             const cached = state.lastConstants;
-            if (cached && cached.serial === this.commandSerial &&
+            if (cached && cached.serial === this.uniformSerial &&
                     cached.frameSerial === frame.serial &&
                     cached.vertexKey === program.vertexKey &&
                     cached.fragmentKey === program.fragmentKey) {
@@ -16539,7 +16632,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const constants = { buffer: slot.buffer, dynamicOffset: slot.offset,
                 vertexBytes, pixelOffset, pixelBytes,
                 transient: slot.transient };
-            state.lastConstants = { serial: this.commandSerial,
+            state.lastConstants = { serial: this.uniformSerial,
                 frameSerial: frame.serial, vertexKey: program.vertexKey,
                 fragmentKey: program.fragmentKey, slot: constants };
             return constants;
