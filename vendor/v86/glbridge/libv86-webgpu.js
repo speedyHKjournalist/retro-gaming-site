@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "e973b79d51ab0c893696";
+globalThis.V86GL_BUILD_REVISION = "add5b110de1479123c37";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -5785,7 +5785,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             this.index = 0;
             this.cursor = 0;
             this.bytesUsed = 0;
-            for (const chunk of this.chunks) chunk.used = 0;
+            for (const chunk of this.chunks) { chunk.used = 0;chunk.uploaded = 0; }
         }
         reserve(bytes) {
             const size = align(bytes, 4);
@@ -5797,7 +5797,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 if (chunk) this.retire(chunk.buffer);
                 const capacity = Math.max(4 << 20, align(size, 256));
                 chunk = { buffer: this.device.createBuffer({ label: "D3D9 ordered upload staging",
-                    size: capacity, usage: 0x4 | 0x8 }), data: new Uint8Array(capacity), used: 0 };
+                    size: capacity, usage: 0x4 | 0x8 }), data: new Uint8Array(capacity), used: 0, uploaded: 0 };
                 this.chunks[this.index] = chunk;
                 this.stats.uploadChunksAllocated = (this.stats.uploadChunksAllocated || 0) + 1;
             }
@@ -5827,8 +5827,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         }
         flush() {
             for (const chunk of this.chunks) {
-                if (!chunk.used) continue;
-                this.device.queue.writeBuffer(chunk.buffer, 0, chunk.data, 0, align(chunk.used, 4));
+                if (chunk.used <= chunk.uploaded) continue;
+                const end = align(chunk.used, 4), start = chunk.uploaded;
+                this.device.queue.writeBuffer(chunk.buffer, start, chunk.data, start, end - start);
+                chunk.uploaded = end;
                 this.stats.uploadStagingUploads = (this.stats.uploadStagingUploads || 0) + 1;
             }
         }
@@ -8745,7 +8747,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         }
 
         uploadFrame(bytes) {
-            if (this.frame && this.uploads && this.uploads.bytesUsed + bytes > (64 << 20)) this.finishFrame(false);
+            if (!this.recordingBindings && this.frame && this.uploads && this.uploads.bytesUsed + bytes > (this.options.uploadBudgetBytes || (64 << 20))) this.finishFrame(false);
             const frame = this.ensureFrame();
             if (!this.uploads) this.uploads = new Uploads(this.device, object => this.retireGPUObject(object), this.stats);
             return frame;
@@ -8754,6 +8756,16 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         stageBufferUpload(buffer, offset, source) {
             const frame = this.uploadFrame(source.byteLength);
             frame.ops.push(this.uploads.buffer(buffer, offset, source));
+        }
+
+        // Present-time utilities may discover a palette after the recorded
+        // ops were replayed. Append only fresh staging bytes, then encode its
+        // copy directly into the same encoder before the utility pass.
+        encodeBufferUpload(encoder, buffer, source) {
+            if (!this.uploads) this.uploads = new Uploads(this.device, object => this.retireGPUObject(object), this.stats);
+            const op = this.uploads.buffer(buffer, 0, source);
+            this.uploads.flush();
+            this.uploads.replay(encoder, op);
         }
 
         stageTextureUpload(destination, source, layout, size, resource) {
@@ -10812,32 +10824,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         textureDiagnostic(handle) {
             const resource = handle ? this.resources.get(handle) : null;
             if (!resource) return { handle: handle || 0, live: false };
-            const byteSummary = data => {
-                const step = Math.max(1, Math.ceil(data.length / 65536));
-                let sampled = 0, nonZero = 0, minimum = 255, maximum = 0;
-                let hash = 2166136261 >>> 0;
-                for (let index = 0; index < data.length; index += step) {
-                    const value = data[index];
-                    ++sampled;
-                    if (value) ++nonZero;
-                    minimum = Math.min(minimum, value);
-                    maximum = Math.max(maximum, value);
-                    hash = Math.imul(hash ^ value, 16777619) >>> 0;
-                }
-                return { bytes: data.length, sampled, nonZero,
-                    minimum: sampled ? minimum : null,
-                    maximum: sampled ? maximum : null,
-                    hash: "0x" + hash.toString(16).padStart(8, "0") };
-            };
-            const shadowLevels = [];
-            if (resource.textureShadows) {
-                for (const [level, shadow] of resource.textureShadows) {
-                    shadowLevels.push({ level, width: shadow.width,
-                        height: shadow.height, depth: shadow.depth,
-                        compressed: !!shadow.compressed,
-                        data: byteSummary(shadow.data) });
-                }
-            }
             return {
                 handle, live: true, kind: resource.kind,
                 type: resource.textureType || "2d",
@@ -10849,7 +10835,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 levels: resource.levelCount,
                 uploadedLevels: resource.uploadedLevels
                     ? [...resource.uploadedLevels].sort((a, b) => a - b) : null,
-                shadowLevels,
+                shadowLevels: [],
             };
         }
 
@@ -11392,68 +11378,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return resource.depthReadsRaw ? "depth-fetch" : "depth-compare";
         }
 
-        textureShadowFor(resource, level, layer, compressed) {
-            if (!resource.textureShadows) resource.textureShadows = new Map();
-            const key = level + ":" + (resource.textureType === "3d" ? 0 : layer);
-            let shadow = resource.textureShadows.get(key);
-            if (shadow) return shadow;
-            const width = Math.max(1, resource.width >> level);
-            const height = Math.max(1, resource.height >> level);
-            const depth = resource.textureType === "3d"
-                ? Math.max(1, resource.depth >> level) : 1;
-            let bytesPerRow;
-            let rowsPerImage;
-            if (compressed) {
-                const blockBytes = compressedBlockBytes(resource.format);
-                bytesPerRow = Math.ceil(width / 4) * blockBytes;
-                rowsPerImage = Math.ceil(height / 4);
-            } else {
-                bytesPerRow = width * resource.gpuBytesPerTexel;
-                rowsPerImage = height;
-            }
-            shadow = { level, layer: resource.textureType === "3d" ? 0 : layer,
-                width, height, depth, bytesPerRow, rowsPerImage,
-                compressed, data: new Uint8Array(bytesPerRow * rowsPerImage * depth) };
-            resource.textureShadows.set(key, shadow);
-            return shadow;
-        }
-
-        updateTextureShadow(resource, level, layer, x, y, width, height,
-                payload, sourceBytesPerRow, compressed, depth = 1,
-                sourceSlicePitch = 0) {
-            const shadow = this.textureShadowFor(resource, level, layer,
-                compressed);
-            const blockBytes = compressed
-                ? compressedBlockBytes(resource.format)
-                : resource.gpuBytesPerTexel;
-            const destinationX = compressed ? Math.floor(x / 4) : x;
-            const destinationY = compressed ? Math.floor(y / 4) : y;
-            const rowBytes = compressed
-                ? Math.ceil(width / 4) * blockBytes
-                : width * resource.gpuBytesPerTexel;
-            const rowCount = compressed ? Math.ceil(height / 4) : height;
-            const sourceSlice = sourceSlicePitch || sourceBytesPerRow * rowCount;
-            for (let slice = 0; slice < depth; ++slice) {
-                for (let row = 0; row < rowCount; ++row) {
-                    const destinationOffset = resource.textureType === "3d"
-                        ? (layer + slice) * shadow.bytesPerRow *
-                            shadow.rowsPerImage +
-                            (destinationY + row) * shadow.bytesPerRow +
-                            destinationX * blockBytes
-                        : (destinationY + row) * shadow.bytesPerRow +
-                            destinationX * blockBytes;
-                    const sourceOffset = slice * sourceSlice +
-                        row * sourceBytesPerRow;
-                    const available = Math.max(0,
-                        Math.min(rowBytes, shadow.data.length - destinationOffset,
-                            payload.length - sourceOffset));
-                    if (available)
-                        shadow.data.set(payload.subarray(sourceOffset,
-                            sourceOffset + available), destinationOffset);
-                }
-            }
-        }
-
         onUpdateTexture(bytes, view, offset) {
             const handle = view.getUint32(offset + D9WG.F.UpdateTexture.resource_handle, true);
             const level = view.getUint32(offset + D9WG.F.UpdateTexture.level, true);
@@ -11490,15 +11414,12 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                             slice * width * height + row * width);
                     }
                 }
-                this.updateTextureShadow(resource, level, z, x, y, width,
-                    height, packed, width, false, depth, width * height);
                 ++this.stats.textureUploads;
                 this.stats.textureBytesUploaded += packed.length;
-                resource.ddContentSerial = (resource.ddContentSerial || 0) + 1;
                 this.markTextureSubresourceWritten(resource, level, z);
                 // Keep the primary r8uint texture current for indexed-to-
                 // indexed DirectDraw blits.  The RGBA sampling companion is
-                // derived lazily from the same shadow by ddIndexedSampleViewFor.
+                // resolved lazily from the GPU indices by ddIndexedSampleViewFor.
                 this.stageTextureUpload(
                     { texture: resource.gpuTexture, mipLevel: level,
                         origin: { x, y, z } }, packed,
@@ -11836,6 +11757,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // but semantically it is the set of initialized levels/faces.
         markTextureSubresourceWritten(resource, level, layer = 0) {
             if (!resource) return;
+            if (resource.ddIndexed) resource.ddContentSerial = (resource.ddContentSerial || 0) + 1;
             if (resource.uploadedLevels) {
                 if (resource.textureType === "3d") {
                     resource.uploadedLevels.add(level);
@@ -16692,7 +16614,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
             // to create the frame misses exactly those textures.
             const frame = this.ensureFrame();
             const constants = this.constantBufferFor(state, program);
-            const binding = this.bindGroupFor(state, pipeline, program, constants);
+            let binding;
+            this.recordingBindings = true;
+            try { binding = this.bindGroupFor(state, pipeline, program, constants); }
+            finally { this.recordingBindings = false; }
             if (binding.group._d9wgRejected) {
                 this.noteDroppedDraw(which, state,
                     ["WebGPU rejected the bind group: " + binding.group._d9wgRejected]);
@@ -17644,11 +17569,16 @@ fn d9dd_vs_main(@builtin(vertex_index) index: u32) -> D9DDBlitOutput {
         floor(stage_in.uv * blit.source_size.xy), vec2<f32>(0.0, 0.0),
         max(blit.source_size.xy - vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 0.0))));
     let index = textureLoad(d9dd_source, texel, 0).r;`);
-            if (variant.colorKey)
+            if (variant.colorKey && !variant.keyToAlpha)
                 body.push(`    if (index >= blit.key_low.x && index <= blit.key_high.x) {
         discard;
     }`);
-            if (indexedDestination)
+            if (variant.keyToAlpha) {
+                body.push(variant.paletteResolve ? "    let color = d9dd_palette.entries[index];"
+                    : "    let color = vec4<f32>(vec3<f32>(f32(index) / 255.0), 1.0);");
+                body.push("    let keyed = index <= blit.key_high.x && blit.key_low.x <= index;\n" +
+                    "    return vec4<f32>(color.rgb, select(color.a, 0.0, keyed));");
+            } else if (indexedDestination)
                 body.push("    return vec4<u32>(index, 0u, 0u, 0u);");
             else if (variant.paletteResolve)
                 body.push("    return d9dd_palette.entries[index];");
@@ -17665,7 +17595,7 @@ fn d9dd_vs_main(@builtin(vertex_index) index: u32) -> D9DDBlitOutput {
             if (variant.colorKey)
                 // Quantised back to the 8-bit-per-channel domain the key lives
                 // in. Both ends of the key were widened from the surface
-                // format by the same truncating 255/max scale in the guest
+                // format by the same bit replication in the guest
                 // (ddraw_expand_channel), and the upload widened the texels the
                 // same way, so this comparison is exact rather than nearly so.
                 body.push(`    let quantised = vec3<u32>(round(color.rgb * 255.0));
@@ -18220,7 +18150,7 @@ ${body.join("\n")}
                         !destinationColorKey)
                     continue;
                 let paletteBuffer = null;
-                if (sourceIndexed) paletteBuffer = this.ddPaletteBufferFor(source);
+                if (sourceIndexed) paletteBuffer = this.ddPaletteBufferFor(source, encoder);
                 const src = clipped.source;
                 const sourceU = src.left / sourceWidth;
                 const sourceV = src.top / sourceHeight;
@@ -18270,7 +18200,7 @@ ${body.join("\n")}
 
         // The GPU copy of the palette a surface samples through, or null when
         // the guest has not sent one yet.
-        ddPaletteBufferFor(resource) {
+        ddPaletteBufferFor(resource, encoder) {
             const index = resource.ddPaletteIndex;
             if (index === undefined) return null;
             const key = (resource.deviceHandle || 0) + ":" + index;
@@ -18299,7 +18229,9 @@ ${body.join("\n")}
                     floats[i * 4 + 2] = rgba[i * 4 + 2] / 255;
                     floats[i * 4 + 3] = rgba[i * 4 + 3] / 255;
                 }
-                this.device.queue.writeBuffer(entry.buffer, 0, floats);
+                const bytes = new Uint8Array(floats.buffer);
+                if (encoder) this.encodeBufferUpload(encoder, entry.buffer, bytes);
+                else this.stageBufferUpload(entry.buffer, 0, bytes);
                 entry.serial = serial;
                 this.stats.ddPaletteUploads =
                     (this.stats.ddPaletteUploads || 0) + 1;
@@ -18310,7 +18242,7 @@ ${body.join("\n")}
         // DirectDraw keeps P8 surfaces as r8uint so blits and readback preserve
         // the application's indices.  Fixed-function D3D sampling, however,
         // needs filterable colours. Build a companion RGBA texture from the
-        // CPU index shadows and the palette attached to this *surface* (not the
+        // GPU index image and the palette attached to this *surface* (not the
         // device-global D3D9 palette). A keyed companion sets alpha to zero by
         // comparing the original index, so duplicate palette colours cannot
         // make an unrelated texel transparent.
@@ -18319,8 +18251,6 @@ ${body.join("\n")}
             const paletteIndex = resource.ddPaletteIndex;
             const paletteKey = paletteIndex === undefined ? null
                 : (resource.deviceHandle || 0) + ":" + paletteIndex;
-            const palette = paletteKey && this.palettes
-                ? this.palettes.get(paletteKey) : null;
             const paletteSerial = paletteKey && this.ddPaletteSerials
                 ? (this.ddPaletteSerials.get(paletteKey) || 0) : 0;
             const keyLow = colorKey ? colorKey.low & 0xff : -1;
@@ -18333,46 +18263,32 @@ ${body.join("\n")}
             if (old && old.serial === serial) return old.view;
 
             const layers = resource.layerCount || 1;
-            const texture = this.device.createTexture({
+            const texture = old ? old.texture : this.device.createTexture({
                 label: "DirectDraw indexed D3D sample view",
-                size: { width: resource.width, height: resource.height,
-                    depthOrArrayLayers: layers },
-                format: "rgba8unorm",
-                mipLevelCount: Math.max(1, resource.levelCount || 1),
-                usage: TEXTURE_USAGE_COPY_DST | TEXTURE_USAGE_TEXTURE_BINDING,
+                size: { width: resource.width, height: resource.height, depthOrArrayLayers: layers },
+                format: "rgba8unorm", mipLevelCount: Math.max(1, resource.levelCount || 1),
+                usage: TEXTURE_USAGE_RENDER_ATTACHMENT | TEXTURE_USAGE_TEXTURE_BINDING,
             });
-            for (const shadow of resource.textureShadows
-                    ? resource.textureShadows.values() : []) {
-                const rgba = new Uint8Array(shadow.width * shadow.height * 4);
-                for (let pixel = 0; pixel < shadow.width * shadow.height;
-                        ++pixel) {
-                    const index = shadow.data[pixel];
-                    const at = pixel * 4;
-                    if (palette) {
-                        rgba[at] = palette[index * 4];
-                        rgba[at + 1] = palette[index * 4 + 1];
-                        rgba[at + 2] = palette[index * 4 + 2];
-                        rgba[at + 3] = palette[index * 4 + 3];
-                    } else {
-                        rgba[at] = rgba[at + 1] = rgba[at + 2] = index;
-                        rgba[at + 3] = 0xff;
-                    }
-                    if (colorKey && index >= keyLow && index <= keyHigh)
-                        rgba[at + 3] = 0;
-                }
-                this.device.queue.writeTexture({ texture,
-                    mipLevel: shadow.level,
-                    origin: { x: 0, y: 0, z: shadow.layer || 0 } }, rgba,
-                    { bytesPerRow: shadow.width * 4,
-                        rowsPerImage: shadow.height },
-                    { width: shadow.width, height: shadow.height,
-                        depthOrArrayLayers: 1 });
-            }
-            const entry = { texture, serial, view: texture.createView({
+            const entry = old || { texture, view: texture.createView({
                 dimension: resource.textureType === "cube" ? "cube" : "2d",
             }) };
+            entry.serial = serial;
             resource.ddSampleViews.set(variant, entry);
-            if (old) this.retireGPUObject(old.texture);
+            const paletteBuffer = this.ddPaletteBufferFor(resource);
+            const frame = this.ensureFrame();
+            for (let level = 0; level < Math.max(1, resource.levelCount || 1); ++level) {
+                const width = Math.max(1, resource.width >> level), height = Math.max(1, resource.height >> level);
+                for (let layer = 0; layer < layers; ++layer) {
+                    frame.ops.push({ kind: "ddblit", sourceKind: "index", destinationKind: "float",
+                        sourceView: this.blitSourceView(resource, level, layer),
+                        destinationView: texture.createView({ dimension: "2d", baseMipLevel: level, mipLevelCount: 1,
+                            baseArrayLayer: layer, arrayLayerCount: 1 }),
+                        destinationFormat: "rgba8unorm", sourceRect: [0, 0, 1, 1], sourceSize: [width, height],
+                        viewport: [0, 0, width, height], paletteBuffer, filterPoint: true,
+                        colorKey: colorKey || null, keyToAlpha: !!colorKey });
+                }
+            }
+            resource.frameReferenced = frame.serial;
             this.stats.ddIndexedSampleResolves =
                 (this.stats.ddIndexedSampleResolves || 0) + 1;
             return entry.view;
@@ -18380,7 +18296,7 @@ ${body.join("\n")}
 
         ddBlitPipelineFor(variant) {
             const key = [variant.destinationFormat, variant.sourceKind,
-                variant.destinationKind, variant.colorKey ? "key" : "-",
+                variant.destinationKind, variant.colorKey ? "key" : "-", variant.keyToAlpha ? "alpha" : "-",
                 variant.destinationKey ? "dest-key" : "-",
                 variant.paletteResolve ? "pal" : "-",
                 variant.filterPoint ? "point" : "linear"].join("|");
@@ -18451,7 +18367,7 @@ ${body.join("\n")}
                     ? op.destinationKind : "float",
                 destinationFormat: op.destinationView
                     ? op.destinationFormat : this.format,
-                colorKey: !!op.colorKey,
+                colorKey: !!op.colorKey, keyToAlpha: !!op.keyToAlpha,
                 destinationKey: !!op.destinationColorKey,
                 paletteResolve: !!op.paletteBuffer,
                 filterPoint: !!op.filterPoint,
