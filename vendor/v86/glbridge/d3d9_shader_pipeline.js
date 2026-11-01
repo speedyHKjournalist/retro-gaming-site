@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "e3dd8f5fbf98ded721f9";
+globalThis.V86GL_BUILD_REVISION = "9341833c88a4a8e6a411";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
