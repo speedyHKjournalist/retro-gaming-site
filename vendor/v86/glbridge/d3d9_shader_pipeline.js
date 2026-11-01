@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
+globalThis.V86GL_BUILD_REVISION = "3ff511520f2d880e9f70";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -1895,6 +1895,10 @@ globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
                 out.push("    bump: array<vec4<f32>, " + count + ">,");
                 out.push("    bump_lum: array<vec4<f32>, " + count + ">,");
             }
+            if (kind === "pixel" && this.options.fogBlend) {
+                out.push("    fog_color: vec4<f32>,");
+                out.push("    fog_params: vec4<f32>,");
+            }
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
                 ") var<uniform> d9c: D9Constants;");
@@ -2210,6 +2214,7 @@ globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
             // bytecode (see alphaTest in compileShader's options).
             if (this.options.alphaTestDiscard)
                 out.push(this.options.alphaTestDiscard.replace(/\n$/, ""));
+            if (this.options.fogBlend) out.push(this.options.fogBlend.replace(/\n$/, ""));
             if (this.usesDepthOutput)
                 out.push("    result.depth = o_depthv.x;");
             out.push("    return result;");
@@ -2276,6 +2281,7 @@ globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
             const bumpOffset = bumpStageCount ? trailingOffset : -1;
             const bumpLuminanceOffset = bumpStageCount
                 ? trailingOffset + bumpStageCount * 16 : -1;
+            const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
@@ -2304,7 +2310,8 @@ globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32,
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0),
+                fogOffset,
                 bumpStageCount,
                 bumpOffset,
                 bumpLuminanceOffset,

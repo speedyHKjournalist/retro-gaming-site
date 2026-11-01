@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "b1ff7db2ef58bbd8fe9c";
+globalThis.V86GL_BUILD_REVISION = "3ff511520f2d880e9f70";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -2373,6 +2373,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 out.push("    bump: array<vec4<f32>, " + count + ">,");
                 out.push("    bump_lum: array<vec4<f32>, " + count + ">,");
             }
+            if (kind === "pixel" && this.options.fogBlend) {
+                out.push("    fog_color: vec4<f32>,");
+                out.push("    fog_params: vec4<f32>,");
+            }
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
                 ") var<uniform> d9c: D9Constants;");
@@ -2688,6 +2692,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // bytecode (see alphaTest in compileShader's options).
             if (this.options.alphaTestDiscard)
                 out.push(this.options.alphaTestDiscard.replace(/\n$/, ""));
+            if (this.options.fogBlend) out.push(this.options.fogBlend.replace(/\n$/, ""));
             if (this.usesDepthOutput)
                 out.push("    result.depth = o_depthv.x;");
             out.push("    return result;");
@@ -2754,6 +2759,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             const bumpOffset = bumpStageCount ? trailingOffset : -1;
             const bumpLuminanceOffset = bumpStageCount
                 ? trailingOffset + bumpStageCount * 16 : -1;
+            const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
@@ -2782,7 +2788,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32,
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0),
+                fogOffset,
                 bumpStageCount,
                 bumpOffset,
                 bumpLuminanceOffset,
@@ -8330,7 +8337,7 @@ ${body.join("\n")}
             if (signature.fogMode)
                 fields.push({ name: "fog_params", type: "vec4<f32>", bytes: 16 });
             for (const stage of signature.coordStages) {
-                if (stage.transformCount)
+                if (stage.transformCount > 1 && signature.positionType !== "screen")
                     fields.push({ name: "texture_transform" + stage.index,
                         type: "mat4x4<f32>", bytes: 64, source: stage.index });
             }
@@ -8411,6 +8418,20 @@ ${body.join("\n")}
         // Only the operations fill_caps() lists in TextureOpCaps appear here.
         // Returning null makes the caller count the draw and fall back to
         // SELECTARG1 rather than inventing an approximation.
+        // Shared post-shader fog for the FFP cascade and ps_1_x/ps_2_x.
+        function fogBlendSource(signature, uniforms, target) {
+            if (!signature.fogMode) return "";
+            const tableFactor = fixedFogFactorExpression(signature.fogMode, "fog_distance");
+            const factor = signature.tableFog && tableFactor
+                ? tableFactor.replaceAll("uniforms.", uniforms + ".")
+                : "clamp(stage_in.varying" + shaderPipeline.VARYING_FOG + ".x, 0.0, 1.0)";
+            const distance = signature.tableFog && tableFactor
+                ? "    let fog_distance = select(1.0 / max(abs(stage_in.position.w), 1e-6), " +
+                    "stage_in.position.z, " + uniforms + ".fog_params.w != 0.0);\n" : "";
+            return distance + "    " + target + " = vec4<f32>(mix(" + uniforms + ".fog_color.rgb, " + target + ".rgb,\n" +
+                "        " + factor + "), " + target + ".a);\n";
+        }
+
         function textureOpArguments(op) {
             if (op === D3DTOP_DISABLE) return [];
             if (op === D3DTOP_SELECTARG1) return [1];
@@ -8859,20 +8880,17 @@ ${body.join("\n")}
                     break;
                 }
                 let expression = raw;
-                if (stage.transformCount) {
-                    // The coordinate enters the matrix as a *row* vector padded
-                    // with ones, which is why a scrolling animation puts its offset
-                    // in row 3 (_31/_32) for the two-component form. The matrix is
-                    // uploaded untransposed for the same reason the WVP is: D3D's
-                    // row-major bytes read back as the transpose in WGSL, and that
-                    // transpose is exactly the column-vector form of D3D's
-                    // row-vector multiply.
+                if (stage.transformCount > 1 && signature.positionType !== "screen") {
+                    // Pad by input dimension: (u,1,0,0), (u,v,1,0),
+                    // (u,v,w,1), or the original four components. COUNT only
+                    // selects the output elements; generated coordinates keep Z.
+                    // D3D's row-major upload is the column-vector transpose.
                     const padded = {
-                        1: "vec4<f32>(" + raw + ".x, 1.0, 1.0, 1.0)",
-                        2: "vec4<f32>(" + raw + ".xy, 1.0, 1.0)",
+                        1: "vec4<f32>(" + raw + ".x, 1.0, 0.0, 0.0)",
+                        2: "vec4<f32>(" + raw + ".xy, 1.0, 0.0)",
                         3: "vec4<f32>(" + raw + ".xyz, 1.0)",
                         4: raw,
-                    }[stage.transformCount] || raw;
+                    }[stage.inputDimensions || 4] || raw;
                     expression = "(uniforms.texture_transform" + stage.index +
                         " * " + padded + ")";
                 }
@@ -9244,26 +9262,7 @@ ${coordBody}${fogBody}${clipBody}${pointBody}    return result;
                 ? "    result = vec4<f32>(clamp(result.rgb + " + specular +
                   ".rgb, vec3<f32>(0.0), vec3<f32>(1.0)), result.a);\n"
                 : "";
-            let fogBody = "";
-            if (signature.fogMode) {
-                // Table fog is pixel fog. The device advertises WFOG (and not
-                // ZFOG), while fragment position.w is reciprocal clip-space W in
-                // WGSL, so recover W here and evaluate the D3D fog equation per
-                // fragment. Vertex fog alone consumes the interpolated oFog value.
-                const tableFactor = fixedFogFactorExpression(signature.fogMode,
-                    "fog_distance");
-                const factor = signature.tableFog && tableFactor
-                    ? tableFactor
-                    : "clamp(stage_in.varying" + shaderPipeline.VARYING_FOG +
-                      ".x, 0.0, 1.0)";
-                const tableDistance = signature.tableFog && tableFactor
-                    ? "    let fog_distance = select(1.0 / max(abs(stage_in.position.w), 1e-6), " +
-                        "stage_in.position.z, uniforms.fog_params.w != 0.0);\n"
-                    : "";
-                fogBody = tableDistance +
-                    "    result = vec4<f32>(mix(uniforms.fog_color.rgb, result.rgb,\n" +
-                    "        " + factor + "), result.a);\n";
-            }
+            const fogBody = fogBlendSource(signature, "uniforms", "result");
             const varyings = [];
             for (let slot = 0; slot < VARYING_COUNT; ++slot)
                 varyings.push(varyingDeclaration(slot, signature.flatShading));
@@ -9303,7 +9302,7 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a")}${fogBody}   
         function signatureKey(stage, signature, debugMode) {
             return "ff" + stage + ":" + JSON.stringify([signature, debugMode || ""]);
         }
-        return { normalizeTextureOperation, textureOpArguments, textureOpReadsTexture, signatureKey, VARYING_COUNT, VARYING_COLOR0, D3DSHADE_FLAT, D3DSHADE_GOURAUD, varyingDeclaration, VARYING_TEXCOORD0, FF_LOCATION_POSITION, FF_LOCATION_COLOR0, FF_LOCATION_COLOR1, FF_LOCATION_NORMAL, FF_LOCATION_TEXCOORD0, FF_LOCATION_PSIZE, FF_LOCATION_BLENDWEIGHT, FF_LOCATION_BLENDINDICES, alphaTestDiscard, fixedFunctionLocationFor, vertexInputDeclaration, declTypeInputScalar, uniformBlockLayout, uniformBlockStruct, HALF_PIXEL_OFFSET_BODY, fixedVertexUniformLayout, fixedPixelUniformLayout, fixedFogFactorExpression, textureOpExpression, buildFixedFunctionVertexShader, buildFixedFunctionPixelShader };
+        return { fogBlendSource, normalizeTextureOperation, textureOpArguments, textureOpReadsTexture, signatureKey, VARYING_COUNT, VARYING_COLOR0, D3DSHADE_FLAT, D3DSHADE_GOURAUD, varyingDeclaration, VARYING_TEXCOORD0, FF_LOCATION_POSITION, FF_LOCATION_COLOR0, FF_LOCATION_COLOR1, FF_LOCATION_NORMAL, FF_LOCATION_TEXCOORD0, FF_LOCATION_PSIZE, FF_LOCATION_BLENDWEIGHT, FF_LOCATION_BLENDINDICES, alphaTestDiscard, fixedFunctionLocationFor, vertexInputDeclaration, declTypeInputScalar, uniformBlockLayout, uniformBlockStruct, HALF_PIXEL_OFFSET_BODY, fixedVertexUniformLayout, fixedPixelUniformLayout, fixedFogFactorExpression, textureOpExpression, buildFixedFunctionVertexShader, buildFixedFunctionPixelShader };
     }
     const api = { createGenerator };
     global.D9WGFFP = api;
@@ -14149,7 +14148,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             let hasPointSize = false;
             let blendWeightType = -1;
             let blendIndicesType = -1;
-            const texCoordSets = [];
+            const texCoordSets = [], texCoordDimensions = {};
             for (const element of elements) {
                 if (element.usage === DECLUSAGE_BLENDWEIGHT &&
                         element.usageIndex === 0)
@@ -14176,8 +14175,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     hasPointSize = true;
                 else if (element.usage === DECLUSAGE_TEXCOORD &&
                         element.usageIndex < MAX_TEXCOORD_SETS &&
-                        !texCoordSets.includes(element.usageIndex))
+                        !texCoordSets.includes(element.usageIndex)) {
                     texCoordSets.push(element.usageIndex);
+                    texCoordDimensions[element.usageIndex] = [1, 2, 3, 4, 4, 4, 2, 4, 4, 2, 4, 2, 4, 3, 3, 2, 4][element.type] || 4;
+                }
             }
             if (!positionType) return null;
             texCoordSets.sort((a, b) => a - b);
@@ -14187,7 +14188,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // whether they are read at all is a render-state question that
             // vertexBlendPlan() answers once the state is in hand.
             return { positionType, hasColor, colorIsBGRA, hasColor1,
-                color1IsBGRA, hasNormal, hasPointSize, texCoordSets,
+                color1IsBGRA, hasNormal, hasPointSize, texCoordSets, texCoordDimensions,
                 blendWeightType, blendIndicesType,
                 hasTexCoord: texCoordSets.length > 0 };
         }
@@ -15518,6 +15519,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     ? "factor" : (rs.get(D3DRS_FOGVERTEXMODE) || "factor");
             }
 
+            // ps_3_0 owns fog; the legacy post-shader blend is only ps<3.
+            if (psResource && psResource.translated.ok && psResource.translated.reflection.version.major >= 3) { fogMode = 0;tableFog = false; }
+
             // ---- pixel stage ----
             //
             // Resolved before the vertex stage because how many texture
@@ -15610,12 +15614,14 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                         mirrorOnceKey += "_m" + sampler.index + ":" + axes;
                     }
                 }
-                const pixelVariantKey = alphaTestKey + clipKey + depthKey +
+                const fogBlend = ffp.fogBlendSource({ fogMode, tableFog }, "d9c", "result.color0");
+                const fogKey = fogBlend ? "_fog" + fogMode + (tableFog ? "t" : "v") : "";
+                const pixelVariantKey = fogKey + alphaTestKey + clipKey + depthKey +
                     lodBiasKey + mirrorOnceKey + legacySamplerKey + swizzleKey +
                     (flatShading ? "_flat" : "");
                 if (alphaTest.enabled || clipPlaneCount || depthSamplers.length
                         || lodBiasKey || mirrorOnceKey || legacySamplerKey || swizzleKey ||
-                        flatShading) {
+                        flatShading || fogBlend) {
                     variant = psResource.variants.get(pixelVariantKey);
                     if (!variant) {
                         variant = shaderPipeline.compileShader(psResource.tokens, {
@@ -15627,7 +15633,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                             samplerLodBias, samplerSwizzles,
                             samplerMirrorOnce,
                             legacySamplerTypes,
-                            flatShading,
+                            flatShading, fogBlend,
                         });
                         psResource.variants.set(pixelVariantKey, variant);
                         if (variant.ok) ++this.stats.shaderVariantsTranslated;
@@ -15653,13 +15659,6 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 samplerIndices = pixelReflection.samplers.map(s => s.index);
                 for (const sampler of pixelReflection.samplers)
                     samplerDimensions[sampler.index] = sampler.type;
-                if (fogMode) {
-                    ++this.stats.drawsWithUnappliedFog;
-                    this.warnOnce("fog-programmable",
-                        "fog is enabled on a draw with a translated pixel " +
-                        "shader; the fixed-function fog blend is not applied " +
-                        "there, so the fragment keeps its untinted colour");
-                }
                 // D3D9 hands a pixel shader the coordinates of texture stage n
                 // in its texcoord n, so the vertex stage still has to run
                 // generation/transform for every stage the shader reads.
@@ -15831,7 +15830,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 signature.normalizeNormals =
                     (rs.get(D3DRS_NORMALIZENORMALS) || 0) !== 0;
                 signature.lighting = this.lightingSignature(state, signature);
-                signature.coordStages = this.coordStagePlan(state, coordStageCount);
+                signature.coordStages = this.coordStagePlan(state, coordStageCount, signature);
                 /*
                  * buildFixedFunctionVertexShader() feeds a stage
                  * vec4(0,0,0,1) when texCoordSets does not carry the set
@@ -16153,7 +16152,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         // matrix transforms it. D3D9 runs this half of fixed-function T&L
         // whether or not a pixel shader is bound, which is why it is not folded
         // into textureCascadeSignature().
-        coordStagePlan(state, stageCount) {
+        coordStagePlan(state, stageCount, signature) {
             const stageState = (stage, id, fallback) => {
                 const value = state.textureStageStates.get(stage * 64 + id);
                 return value === undefined ? fallback : value;
@@ -16168,6 +16167,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 stages.push({ index,
                     texCoordIndex: coordIndex & 0xFFFF,
                     tciMode: coordIndex & D3DTSS_TCI_MASK,
+                    inputDimensions: !signature ? 4 : signature.positionType === "screen" || !(coordIndex & D3DTSS_TCI_MASK)
+                        ? signature.texCoordDimensions[coordIndex & 0xFFFF] || 4
+                        : (coordIndex & D3DTSS_TCI_MASK) === D3DTSS_TCI_SPHEREMAP ? 2 : 3,
                     transformCount: flags & 0xFF,
                     projected: (flags & D3DTTFF_PROJECTED) !== 0 });
             }
@@ -16541,7 +16543,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             if (program.pixelReflection) {
                 this.writeConstantRegisters(backing, pixelOffset,
                     program.pixelReflection, state.psConstF, state.psConstI,
-                    state.psConstB);
+                    state.psConstB, state);
             } else if (pixelBytes) {
                 this.writeFixedPixelUniforms(state, program, backing, pixelOffset);
             }
@@ -16646,7 +16648,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 floats[base + 2] = asFloat(D3DRS_FOGDENSITY, 1);
             }
             for (const stage of signature.coordStages) {
-                if (!stage.transformCount) continue;
+                if (!layout.byName.has("texture_transform" + stage.index)) continue;
                 floats.set(state.transforms.get(D3DTS_TEXTURE0 + stage.index) ||
                     IDENTITY4x4, at("texture_transform" + stage.index));
             }
@@ -16730,6 +16732,21 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
         }
 
+        writeFogUniforms(state, floats, color, params) {
+            const argb = state.renderStates.get(D3DRS_FOGCOLOR) || 0;
+            floats[color] = ((argb >>> 16) & 255) / 255;
+            floats[color + 1] = ((argb >>> 8) & 255) / 255;
+            floats[color + 2] = (argb & 255) / 255;
+            floats[color + 3] = 1;
+            if (params < 0) return;
+            const value = (id, fallback) => state.renderStates.has(id) ? floatFromDWORD(state.renderStates.get(id)) : fallback;
+            floats[params] = value(D3DRS_FOGSTART, 0);
+            floats[params + 1] = value(D3DRS_FOGEND, 1);
+            floats[params + 2] = value(D3DRS_FOGDENSITY, 1);
+            const projection = state.transforms.get(D3DTS_PROJECTION) || IDENTITY4x4;
+            floats[params + 3] = projection[3] === 0 && projection[7] === 0 && projection[11] === 0 && projection[15] === 1 ? 1 : 0;
+        }
+
         // Fills the fixed-function pixel block: only the fog inputs, texture
         // factor and per-stage constants the cascade actually reads.
         writeFixedPixelUniforms(state, program, backing, byteOffset) {
@@ -16745,24 +16762,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             };
             for (const entry of layout.entries) {
                 if (entry.name === "fog_color") {
-                    // D3DRS_FOGCOLOR's alpha byte is defined as unused.
-                    writeColor(entry.offset / 4,
-                        state.renderStates.get(D3DRS_FOGCOLOR) || 0, 1);
+                    const params = layout.byName.get("fog_params");
+                    this.writeFogUniforms(state, floats, entry.offset / 4, params ? params.offset / 4 : -1);
                 } else if (entry.name === "fog_params") {
-                    // Table fog evaluates the equation per fragment, so its
-                    // start/end/density values belong to the pixel block.
-                    const asFloat = (id, fallback) => {
-                        const raw = state.renderStates.get(id);
-                        if (raw === undefined) return fallback;
-                        FLOAT_BITS_U32[0] = raw >>> 0;
-                        return FLOAT_BITS_F32[0];
-                    };
-                    const base = entry.offset / 4;
-                    floats[base] = asFloat(D3DRS_FOGSTART, 0);
-                    floats[base + 1] = asFloat(D3DRS_FOGEND, 1);
-                    floats[base + 2] = asFloat(D3DRS_FOGDENSITY, 1);
-                    const projection = state.transforms.get(D3DTS_PROJECTION) || IDENTITY4x4;
-                    floats[base + 3] = projection[3] === 0 && projection[7] === 0 && projection[11] === 0 && projection[15] === 1 ? 1 : 0;
+                    // Written together with fog_color above.
                 } else if (entry.name === "texture_factor") {
                     writeColor(entry.offset / 4,
                         state.renderStates.get(D3DRS_TEXTUREFACTOR) === undefined
@@ -16854,6 +16857,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     values.set((mask & (1 << plane))
                         ? state.clipPlanes[plane] : [0, 0, 0, 1],
                         base + plane * 4);
+            }
+            if (reflection.fogOffset >= 0 && state) {
+                const floats = new Float32Array(backing, byteOffset);
+                this.writeFogUniforms(state, floats, reflection.fogOffset / 4, reflection.fogOffset / 4 + 4);
             }
             if (reflection.bumpStageCount && state) {
                 // ps_1_x texbem/texbeml read the D3DTSS_BUMPENVMAT* matrix of
