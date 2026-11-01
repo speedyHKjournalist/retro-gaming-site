@@ -377,6 +377,12 @@ typedef struct D9WGClear {
     uint32_t stencil;
     uint32_t rect_count;
 } D9WGClear;
+typedef struct D9WGRect {
+    int32_t left;
+    int32_t top;
+    int32_t right;
+    int32_t bottom;
+} D9WGRect; /* 16 bytes; inline Clear rectangle */
 
 typedef struct D9WGDeviceOnly {
     uint32_t device_handle;
@@ -1222,6 +1228,11 @@ typedef char D9WGAssertClear_color[offsetof(D9WGClear, color) == 8 ? 1 : -1];
 typedef char D9WGAssertClear_depth[offsetof(D9WGClear, depth) == 12 ? 1 : -1];
 typedef char D9WGAssertClear_stencil[offsetof(D9WGClear, stencil) == 16 ? 1 : -1];
 typedef char D9WGAssertClear_rect_count[offsetof(D9WGClear, rect_count) == 20 ? 1 : -1];
+typedef char D9WGAssertRectSize[sizeof(D9WGRect) == 16 ? 1 : -1];
+typedef char D9WGAssertRect_left[offsetof(D9WGRect, left) == 0 ? 1 : -1];
+typedef char D9WGAssertRect_top[offsetof(D9WGRect, top) == 4 ? 1 : -1];
+typedef char D9WGAssertRect_right[offsetof(D9WGRect, right) == 8 ? 1 : -1];
+typedef char D9WGAssertRect_bottom[offsetof(D9WGRect, bottom) == 12 ? 1 : -1];
 typedef char D9WGAssertDeviceOnlySize[sizeof(D9WGDeviceOnly) == 8 ? 1 : -1];
 typedef char D9WGAssertDeviceOnly_device_handle[offsetof(D9WGDeviceOnly, device_handle) == 0 ? 1 : -1];
 typedef char D9WGAssertDeviceOnly_reserved[offsetof(D9WGDeviceOnly, reserved) == 4 ? 1 : -1];

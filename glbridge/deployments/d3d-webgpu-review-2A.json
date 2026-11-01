@@ -1,0 +1,36 @@
+{
+  "stage": "D3D review 2A",
+  "hostCommit": "bb97f5952fa70a6463ecf56a43da0fe2cbcae61d",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "05cdab879d36d9beb7b9",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "ce26fe8eec09fcf0ccece97ea7b273667feb706484b5d61ee0fe871b863178c8",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "3f6c28387e25b0e76659301b249df1d2545aca6c4a976a719f73ace3dc87dc6d",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "fe4189dac39ed2987cce020c663e1acbcb0c8116b63a27facd7b4198511f6119",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "95808f8beacdc8070c8f13707fda451b9f6ebec818a07c544d0fc908eb72e451",
+    "vendor/v86/glbridge/v86gl-device.js": "7a3cdbc7227849f144b3261fc4c4bba7d03c7f4f701b73173f95f23ce851c9cc",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641"
+  },
+  "validation": {
+    "guestAbiSuites": 72,
+    "svgaWireBatchesExact": 19,
+    "pixelInputPacketsExact": 133,
+    "swiftshaderCases": 133,
+    "normativePixelPasses": 114,
+    "knownPixelFailures": 19,
+    "privateShaderNagaPasses": 12,
+    "d3dMutationsKilled": 12,
+    "warcraft3FrozenReplay": "PASS"
+  },
+  "limitations": [
+    "GTA SA diagnostic startup remains stalled; not accepted as gameplay.",
+    "Wine guest device/visual suites and the full review game matrix remain pending.",
+    "No remote CI run or image writeback performed."
+  ]
+}
