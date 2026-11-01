@@ -7,6 +7,8 @@
 float d9wg_sqrt_positive(float value);
 void d9wg_transform_vector4(const void *matrix, const float *input, float *output);
 void d9wg_multiply_matrix(const void *left, const void *right, void *output);
+/* Inverse transpose of the upper 3x3, with identity for singular matrices. */
+void d9wg_normal_matrix(const void *matrix, float *output);
 /* Existing finite-color conversion: clamp each channel and round to nearest. */
 uint32_t d9wg_pack_color(const float *rgba);
 #endif

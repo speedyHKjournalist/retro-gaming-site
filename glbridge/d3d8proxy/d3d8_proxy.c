@@ -20,6 +20,9 @@
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
+#define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL8
+#define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT8
+#include "../runtime/d9wg_lighting_bridge.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
@@ -6303,10 +6306,7 @@ static HRESULT WINAPI device_get_current_palette(IDirect3DDevice8 *iface,
  * precision well within four iterations for the magnitudes vertex normals and
  * light distances actually take.
  */
-static float float_sqrt(float value)
-{
-    return d9wg_sqrt_positive(value);
-}
+
 
 static void transform_vector4(const D3DMATRIX *matrix, const float *in,
         float *out)
@@ -6393,93 +6393,29 @@ static BOOL decode_fvf_layout(DWORD fvf, D8FVFLayout *layout)
 
 
 
-static D3DCOLOR pack_color(const float *rgba)
-{
-    return d9wg_pack_color(rgba);
-}
+
 
 /*
  * The fixed-function lighting D3D8 specifies, in view space, over the lights
  * the guest has shadowed. Directional, point and spot are all handled; the
  * result is the diffuse colour ProcessVertices writes.
  */
-static void light_vertex(D8Device *device, const float *eye_position,
-        const float *eye_normal, float *out_rgba)
+static BOOL prepare_lighting(D8Device *device, const D3DMATRIX *world_view,
+        D9WGTNLLighting *state)
 {
-    const D3DMATERIAL8 *material = &device->material;
-    DWORD ambient_state = device->render_states[D3DRS_AMBIENT];
-    float ambient[3];
     UINT index;
-
-    ambient[0] = ((ambient_state >> 16) & 0xffu) / 255.0f;
-    ambient[1] = ((ambient_state >> 8) & 0xffu) / 255.0f;
-    ambient[2] = (ambient_state & 0xffu) / 255.0f;
-
-    out_rgba[0] = material->Emissive.r + material->Ambient.r * ambient[0];
-    out_rgba[1] = material->Emissive.g + material->Ambient.g * ambient[1];
-    out_rgba[2] = material->Emissive.b + material->Ambient.b * ambient[2];
-    out_rgba[3] = material->Diffuse.a;
-
+    d9wg_lighting_sdk_prepare(state, &device->material, device->render_states, world_view);
+    if (!state->flags.lighting) return TRUE;
     for (index = 0; index < D8WG_MAX_LIGHTS; ++index) {
-        const D3DLIGHT8 *light;
-        float to_light[3];
-        float attenuation = 1.0f;
-        float n_dot_l;
-        float length;
-
-        if (!device->light_set[index] || !device->light_enabled[index])
-            continue;
-        light = &device->lights[index];
-        if (light->Type == D3DLIGHT_DIRECTIONAL) {
-            float view_direction[4];
-            float direction[4];
-            direction[0] = light->Direction.x;
-            direction[1] = light->Direction.y;
-            direction[2] = light->Direction.z;
-            direction[3] = 0.0f;
-            transform_vector4(&device->transforms[D8WG_TRANSFORM_VIEW_SLOT],
-                    direction, view_direction);
-            length = float_sqrt(view_direction[0] * view_direction[0]
-                    + view_direction[1] * view_direction[1]
-                    + view_direction[2] * view_direction[2]);
-            if (length < 1e-6f) continue;
-            to_light[0] = -view_direction[0] / length;
-            to_light[1] = -view_direction[1] / length;
-            to_light[2] = -view_direction[2] / length;
-        } else {
-            float view_position[4];
-            float position[4];
-            position[0] = light->Position.x;
-            position[1] = light->Position.y;
-            position[2] = light->Position.z;
-            position[3] = 1.0f;
-            transform_vector4(&device->transforms[D8WG_TRANSFORM_VIEW_SLOT],
-                    position, view_position);
-            to_light[0] = view_position[0] - eye_position[0];
-            to_light[1] = view_position[1] - eye_position[1];
-            to_light[2] = view_position[2] - eye_position[2];
-            length = float_sqrt(to_light[0] * to_light[0]
-                    + to_light[1] * to_light[1] + to_light[2] * to_light[2]);
-            if (length > light->Range) continue;
-            if (length < 1e-6f) length = 1e-6f;
-            to_light[0] /= length;
-            to_light[1] /= length;
-            to_light[2] /= length;
-            attenuation = light->Attenuation0
-                    + light->Attenuation1 * length
-                    + light->Attenuation2 * length * length;
-            attenuation = attenuation < 1e-6f ? 1.0f : 1.0f / attenuation;
-        }
-        n_dot_l = eye_normal[0] * to_light[0] + eye_normal[1] * to_light[1]
-                + eye_normal[2] * to_light[2];
-        if (n_dot_l < 0.0f) n_dot_l = 0.0f;
-        out_rgba[0] += attenuation * (material->Ambient.r * light->Ambient.r
-                + material->Diffuse.r * light->Diffuse.r * n_dot_l);
-        out_rgba[1] += attenuation * (material->Ambient.g * light->Ambient.g
-                + material->Diffuse.g * light->Diffuse.g * n_dot_l);
-        out_rgba[2] += attenuation * (material->Ambient.b * light->Ambient.b
-                + material->Diffuse.b * light->Diffuse.b * n_dot_l);
+        if (device->light_set[index] && device->light_enabled[index] &&
+                !d9wg_lighting_sdk_add(state, index, &device->lights[index], (const void *)&device->transforms[D8WG_TRANSFORM_VIEW_SLOT])) return FALSE;
     }
+    {
+        D8LightState *entry;
+        for (entry = device->extra_lights; entry; entry = entry->next)
+            if (entry->set && entry->enabled && !d9wg_lighting_sdk_add(state, entry->index, &entry->light, (const void *)&device->transforms[D8WG_TRANSFORM_VIEW_SLOT])) return FALSE;
+    }
+    return TRUE;
 }
 
 static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
@@ -6537,8 +6473,11 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     multiply_matrix(&world_view,
             &device->transforms[D8WG_TRANSFORM_PROJECTION_SLOT],
             &world_view_projection);
-    lighting = device->render_states[D3DRS_LIGHTING]
-            && source_layout.normal >= 0;
+    D9WGTNLLighting light_state;
+    if (!prepare_lighting(device, &world_view, &light_state))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    lighting = light_state.flags.lighting != 0;
+    (void)lighting;
 
     for (vertex = 0; vertex < vertex_count; ++vertex) {
         const BYTE *in = source->shadow
@@ -6569,41 +6508,15 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
                 * (device->viewport.MaxZ - device->viewport.MinZ);
         ((float *)(out + destination_layout.position))[3] = rhw;
 
-        if (destination_layout.diffuse >= 0) {
-            if (lighting) {
-                float eye_position[4];
-                float normal[4];
-                float eye_normal[4];
-                float length;
-                float lit[4];
-                transform_vector4(&world_view, position, eye_position);
-                normal[0] = ((const float *)(in + source_layout.normal))[0];
-                normal[1] = ((const float *)(in + source_layout.normal))[1];
-                normal[2] = ((const float *)(in + source_layout.normal))[2];
-                normal[3] = 0.0f;
-                transform_vector4(&world_view, normal, eye_normal);
-                length = float_sqrt(eye_normal[0] * eye_normal[0]
-                        + eye_normal[1] * eye_normal[1]
-                        + eye_normal[2] * eye_normal[2]);
-                if (length > 1e-6f) {
-                    eye_normal[0] /= length;
-                    eye_normal[1] /= length;
-                    eye_normal[2] /= length;
-                }
-                light_vertex(device, eye_position, eye_normal, lit);
-                *(D3DCOLOR *)(out + destination_layout.diffuse) =
-                        pack_color(lit);
-            } else if (source_layout.diffuse >= 0) {
-                *(D3DCOLOR *)(out + destination_layout.diffuse) =
-                        *(const D3DCOLOR *)(in + source_layout.diffuse);
-            } else {
-                *(D3DCOLOR *)(out + destination_layout.diffuse) = 0xffffffffu;
-            }
-        }
-        if (destination_layout.specular >= 0) {
-            *(D3DCOLOR *)(out + destination_layout.specular) =
-                    source_layout.specular >= 0
-                    ? *(const D3DCOLOR *)(in + source_layout.specular) : 0;
+        if (destination_layout.diffuse >= 0 || destination_layout.specular >= 0) {
+            uint32_t diffuse, specular;
+            d9wg_lighting_vertex(&light_state, &world_view, position,
+                    source_layout.normal >= 0 ? in + source_layout.normal : NULL,
+                    source_layout.diffuse >= 0 ? in + source_layout.diffuse : NULL,
+                    source_layout.specular >= 0 ? in + source_layout.specular : NULL,
+                    &diffuse, &specular);
+            if (destination_layout.diffuse >= 0) __builtin_memcpy(out + destination_layout.diffuse, &diffuse, 4u);
+            if (destination_layout.specular >= 0) __builtin_memcpy(out + destination_layout.specular, &specular, 4u);
         }
         for (index = 0; index < destination_layout.texcoord_count; ++index) {
             UINT floats = destination_layout.texcoord_size[index];

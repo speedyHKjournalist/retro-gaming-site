@@ -1,0 +1,4 @@
+{
+  "revision": "3a9fc40",
+  "function": "static void d3d7_multiply_matrix(const D3DMATRIX *left,\n        const D3DMATRIX *right, D3DMATRIX *out)\n{\n    D3DMATRIX result;\n    UINT row, column;\n    for (row = 0; row < 4u; ++row) {\n        for (column = 0; column < 4u; ++column) {\n            (&result._11)[row * 4u + column] =\n                    (&left->_11)[row * 4u + 0u] *\n                        (&right->_11)[0u * 4u + column] +\n                    (&left->_11)[row * 4u + 1u] *\n                        (&right->_11)[1u * 4u + column] +\n                    (&left->_11)[row * 4u + 2u] *\n                        (&right->_11)[2u * 4u + column] +\n                    (&left->_11)[row * 4u + 3u] *\n                        (&right->_11)[3u * 4u + column];\n        }\n    }\n    *out = result;\n}"
+}

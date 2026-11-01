@@ -4,16 +4,19 @@ const { createHash } = require("node:crypto");
 const root = path.resolve(__dirname, ".."), data = fs.readFileSync(path.join(__dirname, "fixtures/d9wg_math_baseline.json"));
 assert.equal(createHash("sha256").update(data).digest("hex"), "387f4f0c2570f00a5cac1409519d2b85084c2b79cef70450d0c3cfa7e70e5607");
 const baseline = JSON.parse(data);
+const extra = fs.readFileSync(path.join(__dirname, "fixtures/d9wg_d3d7_multiply_baseline.json"));
+assert.equal(createHash("sha256").update(extra).digest("hex"), "c409cee9eb93eb3b5316559cb20e184ba72d47f242a50c8067acad10b7db6432");
+baseline.groups.d3d7.d3d7_multiply_matrix = JSON.parse(extra).function;
 function body(source, name) {
     const match = new RegExp("static (?:float|void|D3DCOLOR|DWORD) " + name + "\\([^;]*?\\)\\s*\\{", "s").exec(source);
-    assert.ok(match, name);let end = source.indexOf("{", match.index) + 1, depth = 1;
+    if (!match) return null;let end = source.indexOf("{", match.index) + 1, depth = 1;
     for (; depth; end++) depth += (source[end] === "{") - (source[end] === "}");
     return source.slice(match.index, end);
 }
 const files = { d3d9: "d3d9proxy/d3d9_proxy.c", d3d8: "d3d8proxy/d3d8_proxy.c", d3d7: "ddrawproxy/d3d7_proxy.inc" };
 const names = { d3d9: ["d9_sqrt", "d9_transform_vector4", "d9_multiply_matrix", "d9_pack_color"],
     d3d8: ["float_sqrt", "transform_vector4", "multiply_matrix", "pack_color"],
-    d3d7: ["d3d7_sqrt", "d3d7_transform_vector", "d3d7_pack_color"] };
+    d3d7: ["d3d7_sqrt", "d3d7_transform_vector", "d3d7_pack_color", "d3d7_multiply_matrix"] };
 function source() {
     let code = `
 #include <stdint.h>
@@ -32,7 +35,12 @@ typedef union D3DMATRIX {
         const oldNames = Object.keys(baseline.groups[api]);
         code += Object.values(baseline.groups[api]).join("\n").replace(new RegExp(oldNames.join("|"), "g"), name => "old_" + api + "_" + name) + "\n";
         const candidate = fs.readFileSync(path.join(root, files[api]), "utf8");
-        code += names[api].map(name => body(candidate, name)).join("\n") + "\n";
+        const aliases = { d9_pack_color: "d9wg_pack_color", pack_color: "d9wg_pack_color", d3d7_pack_color: "d9wg_pack_color",
+            d9_sqrt: "d9wg_sqrt_positive", float_sqrt: "d9wg_sqrt_positive", d3d7_sqrt: "d9wg_sqrt_positive" };
+        code += names[api].map(name => {
+            const actual = body(candidate, name);if (actual) return actual;
+            assert.ok(aliases[name], name);return "#define " + name + " " + aliases[name];
+        }).join("\n") + "\n";
     }
     code += `
 static uint32_t math_seed;
@@ -60,6 +68,7 @@ static int math_cases(unsigned iterations) {
                 old_root=old_d3d7_d3d7_sqrt(value.number);now_root=d3d7_sqrt(value.number);
                 old_color=old_d3d7_d3d7_pack_color(rgba);now_color=d3d7_pack_color(rgba);
                 old_d3d7_d3d7_transform_vector(&left,input,old_vector);d3d7_transform_vector(&left,input,now_vector);
+                old_d3d7_d3d7_multiply_matrix(&left,&right,&old_matrix);d3d7_multiply_matrix(&left,&right,&now_matrix);
             } else if(api==8) {
                 old_root=old_d3d8_float_sqrt(value.number);now_root=float_sqrt(value.number);
                 old_color=old_d3d8_pack_color(rgba);now_color=pack_color(rgba);
@@ -74,7 +83,7 @@ static int math_cases(unsigned iterations) {
             MATH_CHECK(math_same(old_root,now_root));MATH_CHECK(old_color==now_color);math_comparisons+=2;
             for(unsigned row=0;row<4;row++)MATH_CHECK(math_same(old_vector[row],now_vector[row]));
             math_comparisons++;
-            if(api!=7) {
+            {
                 for(unsigned row=0;row<4;row++)for(unsigned column=0;column<4;column++)
                     MATH_CHECK(math_same(old_matrix.m[row][column],now_matrix.m[row][column]));
                 math_comparisons++;

@@ -16,7 +16,11 @@ trap 'rm -rf "$object_dir"' EXIT HUP INT TERM
 "$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
     -c "$script_dir/d9wg_math.c" -o "$object_dir/d9wg_math.o"
 "$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+    -c "$script_dir/d9wg_tnl_math.c" -o "$object_dir/d9wg_tnl_math.o"
+"$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+    -c "$script_dir/d9wg_lighting.c" -o "$object_dir/d9wg_lighting.o"
+"$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
     -c "$script_dir/d9wg_process.c" -o "$object_dir/d9wg_process.o"
 "$compiler" -std=gnu99 -Os -Wall -Wextra -Werror \
     -c "$script_dir/d9wg_transport.c" -o "$object_dir/d9wg_transport.o"
-"$archiver" rcs "$output" "$object_dir/d9wg_runtime.o" "$object_dir/d9wg_fvf.o" "$object_dir/d9wg_fpu.o" "$object_dir/d9wg_math.o" "$object_dir/d9wg_process.o" "$object_dir/d9wg_transport.o"
+"$archiver" rcs "$output" "$object_dir/d9wg_runtime.o" "$object_dir/d9wg_fvf.o" "$object_dir/d9wg_fpu.o" "$object_dir/d9wg_math.o" "$object_dir/d9wg_tnl_math.o" "$object_dir/d9wg_lighting.o" "$object_dir/d9wg_process.o" "$object_dir/d9wg_transport.o"

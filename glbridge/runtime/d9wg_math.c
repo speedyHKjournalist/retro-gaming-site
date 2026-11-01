@@ -49,6 +49,24 @@ void d9wg_multiply_matrix(const void *left, const void *right, void *output)
     }
 }
 
+void d9wg_normal_matrix(const void *matrix, float *output)
+{
+    double a = matrix_value(matrix, 0, 0), b = matrix_value(matrix, 0, 1), c = matrix_value(matrix, 0, 2);
+    double d = matrix_value(matrix, 1, 0), e = matrix_value(matrix, 1, 1), f = matrix_value(matrix, 1, 2);
+    double g = matrix_value(matrix, 2, 0), h = matrix_value(matrix, 2, 1), i = matrix_value(matrix, 2, 2);
+    double c00 = e*i - f*h, c01 = f*g - d*i, c02 = d*h - e*g;
+    double determinant = a*c00 + b*c01 + c*c02;
+    for (unsigned index = 0; index < 16; ++index) output[index] = 0.0f;
+    output[15] = 1.0f;
+    if (!determinant || !__builtin_isfinite(determinant)) {
+        output[0] = output[5] = output[10] = 1.0f;return;
+    }
+    double scale = 1.0 / determinant;
+    output[0] = (float)(c00*scale);output[1] = (float)(c01*scale);output[2] = (float)(c02*scale);
+    output[4] = (float)((c*h-b*i)*scale);output[5] = (float)((a*i-c*g)*scale);output[6] = (float)((b*g-a*h)*scale);
+    output[8] = (float)((b*f-c*e)*scale);output[9] = (float)((c*d-a*f)*scale);output[10] = (float)((a*e-b*d)*scale);
+}
+
 static float saturate(float value)
 {
     if (value < 0.0f) return 0.0f;

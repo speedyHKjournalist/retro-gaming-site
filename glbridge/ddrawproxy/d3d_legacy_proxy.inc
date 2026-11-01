@@ -866,6 +866,12 @@ static HRESULT WINAPI d3d_viewport_LightElements(IDirect3DViewport3 *iface,
             data->dwInSize < sizeof(D3DLIGHTINGELEMENT) ||
             data->dwOutSize < sizeof(D3DTLVERTEX))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    D3DMATRIX world_view;
+    D9WGTNLLighting light_state;
+    d3d7_multiply_matrix(&viewport->device->transforms[D3DTRANSFORMSTATE_WORLD],
+            &viewport->device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
+    if (!d3d7_prepare_lighting(viewport->device, &world_view, TRUE, &light_state))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (index = 0; index < count; ++index) {
         D3DLIGHTINGELEMENT *input = (D3DLIGHTINGELEMENT *)((BYTE *)data->lpIn +
                 index * data->dwInSize);
@@ -873,11 +879,11 @@ static HRESULT WINAPI d3d_viewport_LightElements(IDirect3DViewport3 *iface,
                 index * data->dwOutSize);
         float position[4] = { input->dvPosition.x, input->dvPosition.y,
                 input->dvPosition.z, 1.0f };
-        float color[4];
-        d3d7_light_vertex(viewport->device, position,
-                &input->dvNormal.x, color);
-        output->color = d3d7_pack_color(color);
-        output->specular = 0;
+        float color[4], specular[4];
+        d9wg_lighting_shade(&light_state, position, &input->dvNormal.x,
+                NULL, NULL, 0, color, specular);
+        output->color = d9wg_pack_color(color);
+        output->specular = d9wg_pack_color(specular);
     }
     return D3D_OK;
 }
@@ -2832,6 +2838,7 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
 {
     D3D7Device *device = buffer->device;
     D3DMATRIX world_view, transform;
+    D9WGTNLLighting light_state;
     DWORD index;
     DWORD operation = process->dwFlags & D3DPROCESSVERTICES_OPMASK;
     if ((DWORD)process->wStart > buffer->data.dwVertexCount ||
@@ -2857,14 +2864,15 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &transform);
+    if (!d3d7_prepare_lighting(device, &world_view, TRUE, &light_state))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (index = 0; index < process->dwCount; ++index) {
         const D3DVERTEX *source = (const D3DVERTEX *)(buffer->memory +
                 buffer->data.dwVertexOffset) + process->wStart + index;
         D3DTLVERTEX *destination = buffer->processed + process->wDest + index;
         float position[4] = { source->x, source->y, source->z, 1.0f };
-        float eye_position[4], clip[4];
+        float clip[4];
         float reciprocal_w;
-        d3d7_transform_vector(&world_view, position, eye_position);
         d3d7_transform_vector(&transform, position, clip);
         reciprocal_w = clip[3] != 0.0f ? 1.0f / clip[3] : 0.0f;
         destination->sx = device->viewport.dwX +
@@ -2882,17 +2890,10 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
         destination->specular = 0;
         if (operation == D3DPROCESSVERTICES_TRANSFORMLIGHT &&
                 !(process->dwFlags & D3DPROCESSVERTICES_NOCOLOR)) {
-            float normal_source[4] = { source->nx, source->ny, source->nz, 0.0f };
-            float normal[4], color[4];
-            float length;
-            d3d7_transform_vector(&world_view, normal_source, normal);
-            length = d3d7_sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
-                    normal[2] * normal[2]);
-            if (length > 0.0f) {
-                normal[0] /= length; normal[1] /= length; normal[2] /= length;
-            }
-            d3d7_light_vertex(device, eye_position, normal, color);
-            destination->color = d3d7_pack_color(color);
+            uint32_t diffuse, specular;
+            d9wg_lighting_vertex(&light_state, &world_view, position,
+                    &source->nx, NULL, NULL, &diffuse, &specular);
+            destination->color = diffuse;destination->specular = specular;
         } else if (!(process->dwFlags & D3DPROCESSVERTICES_NOCOLOR)) {
             destination->color = 0xffffffffu;
         }
