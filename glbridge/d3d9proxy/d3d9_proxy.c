@@ -1878,39 +1878,12 @@ static void host_log(uint32_t severity, const char *format, ...)
 #define HOSTLOG_FAILED(...) \
     host_log(D9WG_LOG_SEVERITY_FAILED, __VA_ARGS__)
 
-static int emit_buffer_chunk_locked(void *context, uint32_t destination_offset,
-        const uint8_t *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    D9WGUpdateBuffer update;
-    uint8_t *payload, *blob;
-    if (!reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-            byte_count, NULL, &payload, &blob))
-        return FALSE;
-    ZeroMemory(&update, sizeof(update));
-    update.resource_handle = *(const uint32_t *)context;
-    update.destination_offset = destination_offset;
-    update.byte_count = byte_count;
-    update.data_offset = (uint32_t)(blob - batch_base());
-    update.lock_flags = lock_flags;
-    CopyMemory(payload, &update, sizeof(update));
-    if (byte_count) CopyMemory(blob, data, byte_count);
-    return TRUE;
-}
+#define D9WG_RESERVE_UPLOAD(op, size, extra, payload, blob) \
+    reserve_command_locked(op, size, extra, NULL, payload, blob)
+#define D9WG_DISCARD_FLAG D3DLOCK_DISCARD
+#include "../runtime/d9wg_upload_bridge.h"
 
-static BOOL emit_buffer_update(uint32_t handle, uint32_t destination_offset,
-        const void *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    BOOL result = FALSE;
-    EnterCriticalSection(&g_transport_lock);
-    if (open_transport_locked()) {
-        uint32_t limit = d9wg_buffer_upload_limit(batch_capacity(),
-                sizeof(D9WGBatchHeader), sizeof(D9WGCommandHeader), sizeof(D9WGUpdateBuffer));
-        result = d9wg_upload_buffer(&handle, destination_offset, data, byte_count,
-                lock_flags, D3DLOCK_DISCARD, limit, emit_buffer_chunk_locked);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
-}
+
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -2441,115 +2414,32 @@ static UINT full_mip_level_count(UINT width, UINT height)
     return levels;
 }
 
-static BOOL emit_texture_update(D9Texture *texture, UINT level,
-        const RECT *rect)
+static BOOL emit_level_update(uint32_t handle, D3DFORMAT format,
+        const D9TextureLevel *level_data, UINT level, UINT z, const RECT *rect)
 {
-    D9TextureLevel *level_data = &texture->levels[level];
-    D9WGUpdateTexture update;
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    UINT block_x;
-    UINT block_y;
-    UINT row_bytes;
-    UINT row_count;
-    UINT data_bytes;
-    UINT row;
-    UINT band_start;
-    UINT rows_per_band;
-    uint32_t capacity;
-    uint32_t overhead;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-
-    if (!texture_format_layout(texture->format, &block_width, &block_height,
-            &block_bytes))
+    D9WGTextureRows rows;
+    UINT block_width, block_height, block_bytes;
+    if (!texture_format_layout(format, &block_width, &block_height, &block_bytes))
         return FALSE;
-    block_x = (UINT)rect->left / block_width;
-    block_y = (UINT)rect->top / block_height;
-    if (!multiply_u32(((UINT)(rect->right - rect->left)
-            + block_width - 1u) / block_width, block_bytes, &row_bytes))
+    ZeroMemory(&rows, sizeof(rows));
+    rows.resource_handle = handle;rows.level = level;rows.z = z;
+    rows.x = (UINT)rect->left;rows.y = (UINT)rect->top;
+    rows.width = (UINT)(rect->right - rect->left);
+    rows.height = (UINT)(rect->bottom - rect->top);
+    rows.block_height = block_height;
+    rows.row_count = (rows.height + block_height - 1u) / block_height;
+    if (!multiply_u32((rows.width + block_width - 1u) / block_width,
+            block_bytes, &rows.row_bytes))
         return FALSE;
-    row_count = ((UINT)(rect->bottom - rect->top)
-            + block_height - 1u) / block_height;
-    /* Only an overflow guard now that the upload is banded: no single record
-     * carries the whole rectangle, but the total still has to be addressable. */
-    if (!multiply_u32(row_bytes, row_count, &data_bytes))
-        return FALSE;
-    (void)data_bytes;
+    rows.source_pitch = level_data->row_pitch;
+    rows.source = level_data->shadow + ((UINT)rect->top / block_height) * level_data->row_pitch
+            + ((UINT)rect->left / block_width) * block_bytes;
+    return emit_texture_rows(&rows);
+}
 
-    /*
-     * One record has to fit in the DMA arena whole, and a single mip level can
-     * be larger than the arena is: 2048x2048 A8R8G8B8 is exactly 16 MiB, which
-     * is the arena's entire size before its own headers are counted. That is an
-     * ordinary texture -- the caps advertise 8192x8192 -- so the upload is sent
-     * as bands of whole rows rather than refused. Refusing it was silent in the
-     * only way that matters: UnlockRect returned a failure the app ignored, the
-     * level was never uploaded, and the first symptom was the host warning that
-     * a bound texture samples levels nobody ever filled.
-     *
-     * Bands need nothing from the wire format -- UPDATE_TEXTURE already names a
-     * sub-rectangle -- and the transport lock is held across all of them so no
-     * other thread can interleave commands into the middle of one upload.
-     */
-    if (!row_bytes)
-        return FALSE;
-    EnterCriticalSection(&g_transport_lock);
-    capacity = batch_capacity();
-    overhead = (uint32_t)(sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)
-            + sizeof(update) + 8u /* D9WG_ALIGN8 slack */);
-    rows_per_band = v86wg_upload_band(capacity, overhead, row_bytes, row_count);
-    if (!rows_per_band) {
-        /* A single row does not fit; there is nothing left to split. */
-        LeaveCriticalSection(&g_transport_lock);
-        return FALSE;
-    }
-
-    result = TRUE;
-    for (band_start = 0; band_start < row_count && result;
-            band_start += rows_per_band) {
-        UINT band_rows = row_count - band_start;
-        LONG band_top;
-        LONG band_bottom;
-
-        if (band_rows > rows_per_band)
-            band_rows = rows_per_band;
-        /* Texel coordinates, so a block format's band spans block_height rows
-         * of blocks; the final band stops at the rect rather than past it. */
-        band_top = rect->top + (LONG)(band_start * block_height);
-        band_bottom = band_top + (LONG)(band_rows * block_height);
-        if (band_bottom > rect->bottom)
-            band_bottom = rect->bottom;
-
-        ZeroMemory(&update, sizeof(update));
-        update.resource_handle = texture->handle;
-        update.level = level;
-        update.x = (uint32_t)rect->left;
-        update.y = (uint32_t)band_top;
-        update.z = 0;
-        update.width = (uint32_t)(rect->right - rect->left);
-        update.height = (uint32_t)(band_bottom - band_top);
-        update.depth = 1;
-        update.row_pitch = row_bytes;
-        update.slice_pitch = 0;
-        update.data_bytes = row_bytes * band_rows;
-
-        result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE,
-                sizeof(update), update.data_bytes, NULL, &payload, &blob);
-        if (result) {
-            update.data_offset = (uint32_t)(blob - batch_base());
-            CopyMemory(payload, &update, sizeof(update));
-            for (row = 0; row < band_rows; ++row) {
-                CopyMemory(blob + row * row_bytes,
-                        level_data->shadow
-                        + (block_y + band_start + row) * level_data->row_pitch
-                        + block_x * block_bytes, row_bytes);
-            }
-        }
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+static BOOL emit_texture_update(D9Texture *texture, UINT level, const RECT *rect)
+{
+    return emit_level_update(texture->handle, texture->format, &texture->levels[level], level, 0, rect);
 }
 
 static BOOL primitive_element_count(D3DPRIMITIVETYPE type,
@@ -8154,54 +8044,15 @@ static BOOL emit_volume_texture_update(D9VolumeTexture *texture, UINT level,
         const D3DBOX *box)
 {
     D9TextureLevel *level_data = &texture->levels[level];
-    D9WGUpdateTexture update;
-    UINT block_width, block_height, block_bytes;
-    UINT block_x, block_y, row_bytes, row_count, slice_bytes, data_bytes;
-    UINT slice, row;
-    uint8_t *payload, *blob;
-    BOOL result;
-
-    if (!texture_format_layout(texture->format, &block_width, &block_height,
-            &block_bytes)
-            || !multiply_u32(((box->Right - box->Left) + block_width - 1u)
-                    / block_width, block_bytes, &row_bytes))
-        return FALSE;
-    block_x = box->Left / block_width;
-    block_y = box->Top / block_height;
-    row_count = ((box->Bottom - box->Top) + block_height - 1u)
-            / block_height;
-    if (!multiply_u32(row_bytes, row_count, &slice_bytes)
-            || !multiply_u32(slice_bytes, box->Back - box->Front,
-                    &data_bytes))
-        return FALSE;
-    ZeroMemory(&update, sizeof(update));
-    update.resource_handle = texture->handle;
-    update.level = level;
-    update.x = box->Left;
-    update.y = box->Top;
-    update.z = box->Front;
-    update.width = box->Right - box->Left;
-    update.height = box->Bottom - box->Top;
-    update.depth = box->Back - box->Front;
-    update.row_pitch = row_bytes;
-    update.slice_pitch = slice_bytes;
-    update.data_bytes = data_bytes;
+    D9TextureLevel slice = *level_data;
+    RECT rect;
+    UINT z;
+    BOOL result = TRUE;
+    SetRect(&rect, (INT)box->Left, (INT)box->Top, (INT)box->Right, (INT)box->Bottom);
     EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE, sizeof(update),
-            data_bytes, NULL, &payload, &blob);
-    if (result) {
-        update.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &update, sizeof(update));
-        for (slice = 0; slice < update.depth; ++slice) {
-            for (row = 0; row < row_count; ++row) {
-                CopyMemory(blob + slice * slice_bytes + row * row_bytes,
-                        level_data->shadow
-                            + (box->Front + slice) * level_data->slice_pitch
-                            + (block_y + row) * level_data->row_pitch
-                            + block_x * block_bytes,
-                        row_bytes);
-            }
-        }
+    for (z = box->Front; z < box->Back && result; ++z) {
+        slice.shadow = level_data->shadow + z * level_data->slice_pitch;
+        result = emit_level_update(texture->handle, texture->format, &slice, level, z, &rect);
     }
     LeaveCriticalSection(&g_transport_lock);
     return result;
@@ -11958,56 +11809,8 @@ static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture)
 static BOOL emit_cube_texture_update(D9CubeTexture *texture, UINT face,
         UINT level, const RECT *rect)
 {
-    D9TextureLevel *level_data = &texture->levels[face * texture->level_count + level];
-    D9WGUpdateTexture command;
-    UINT block_width, block_height, block_bytes;
-    UINT block_x, block_y, block_columns, block_rows;
-    uint8_t *payload;
-    uint8_t *blob;
-    uint32_t data_bytes;
-    BOOL result;
-
-    if (!texture_format_layout(texture->format, &block_width, &block_height,
-            &block_bytes))
-        return FALSE;
-    block_x = (UINT)rect->left / block_width;
-    block_y = (UINT)rect->top / block_height;
-    block_columns = ((UINT)rect->right - (UINT)rect->left + block_width - 1)
-            / block_width;
-    block_rows = ((UINT)rect->bottom - (UINT)rect->top + block_height - 1)
-            / block_height;
-    if (!block_columns || !block_rows)
-        return TRUE;
-    data_bytes = block_rows * block_columns * block_bytes;
-
-    ZeroMemory(&command, sizeof(command));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE, sizeof(command),
-            data_bytes, NULL, &payload, &blob);
-    if (result) {
-        UINT row;
-        command.resource_handle = texture->handle;
-        command.level = level;
-        command.x = (UINT)rect->left;
-        command.y = (UINT)rect->top;
-        command.z = face;
-        command.width = (UINT)rect->right - (UINT)rect->left;
-        command.height = (UINT)rect->bottom - (UINT)rect->top;
-        command.depth = 1;
-        command.row_pitch = block_columns * block_bytes;
-        command.slice_pitch = 0;
-        command.data_bytes = data_bytes;
-        command.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &command, sizeof(command));
-        for (row = 0; row < block_rows; ++row) {
-            CopyMemory(blob + row * block_columns * block_bytes,
-                    level_data->shadow + (block_y + row) * level_data->row_pitch
-                        + block_x * block_bytes,
-                    block_columns * block_bytes);
-        }
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+    return emit_level_update(texture->handle, texture->format,
+            &texture->levels[face * texture->level_count + level], level, face, rect);
 }
 
 static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,

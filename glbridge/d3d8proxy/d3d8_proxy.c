@@ -843,39 +843,12 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
     return result;
 }
 
-static int emit_buffer_chunk_locked(void *context, uint32_t destination_offset,
-        const uint8_t *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    D9WGUpdateBuffer update;
-    uint8_t *payload, *blob;
-    if (!reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-            byte_count, NULL, &payload, &blob))
-        return FALSE;
-    ZeroMemory(&update, sizeof(update));
-    update.resource_handle = *(const uint32_t *)context;
-    update.destination_offset = destination_offset;
-    update.byte_count = byte_count;
-    update.data_offset = (uint32_t)(blob - batch_base());
-    update.lock_flags = lock_flags;
-    CopyMemory(payload, &update, sizeof(update));
-    if (byte_count) CopyMemory(blob, data, byte_count);
-    return TRUE;
-}
+#define D9WG_RESERVE_UPLOAD(op, size, extra, payload, blob) \
+    reserve_command_locked(op, size, extra, NULL, payload, blob)
+#define D9WG_DISCARD_FLAG D3DLOCK_DISCARD
+#include "../runtime/d9wg_upload_bridge.h"
 
-static BOOL emit_buffer_update(uint32_t handle, uint32_t destination_offset,
-        const void *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    BOOL result = FALSE;
-    EnterCriticalSection(&g_transport_lock);
-    if (open_transport_locked()) {
-        uint32_t limit = d9wg_buffer_upload_limit(batch_capacity(),
-                sizeof(D9WGBatchHeader), sizeof(D9WGCommandHeader), sizeof(D9WGUpdateBuffer));
-        result = d9wg_upload_buffer(&handle, destination_offset, data, byte_count,
-                lock_flags, D3DLOCK_DISCARD, limit, emit_buffer_chunk_locked);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
-}
+
 
 /* ---- Stage 6: D3D8 shader model 1.x bytecode validation ---- */
 
@@ -1816,65 +1789,26 @@ static void write_surface_color(BYTE *destination, D3DFORMAT format,
  * drifting apart.
  */
 static BOOL emit_level_update(uint32_t handle, D3DFORMAT format,
-        const D8TextureLevel *level_data, UINT level, UINT z,
-        const RECT *rect)
+        const D8TextureLevel *level_data, UINT level, UINT z, const RECT *rect)
 {
-    D9WGUpdateTexture update;
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    UINT block_x;
-    UINT block_y;
-    UINT row_bytes;
-    UINT row_count;
-    UINT data_bytes;
-    UINT row;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-
-    if (!texture_format_layout(format, &block_width, &block_height,
-            &block_bytes))
+    D9WGTextureRows rows;
+    UINT block_width, block_height, block_bytes;
+    if (!texture_format_layout(format, &block_width, &block_height, &block_bytes))
         return FALSE;
-    block_x = (UINT)rect->left / block_width;
-    block_y = (UINT)rect->top / block_height;
-    if (!multiply_u32(((UINT)(rect->right - rect->left)
-            + block_width - 1u) / block_width, block_bytes, &row_bytes))
+    ZeroMemory(&rows, sizeof(rows));
+    rows.resource_handle = handle;rows.level = level;rows.z = z;
+    rows.x = (UINT)rect->left;rows.y = (UINT)rect->top;
+    rows.width = (UINT)(rect->right - rect->left);
+    rows.height = (UINT)(rect->bottom - rect->top);
+    rows.block_height = block_height;
+    rows.row_count = (rows.height + block_height - 1u) / block_height;
+    if (!multiply_u32((rows.width + block_width - 1u) / block_width,
+            block_bytes, &rows.row_bytes))
         return FALSE;
-    row_count = ((UINT)(rect->bottom - rect->top)
-            + block_height - 1u) / block_height;
-    if (!multiply_u32(row_bytes, row_count, &data_bytes))
-        return FALSE;
-
-    ZeroMemory(&update, sizeof(update));
-    update.resource_handle = handle;
-    update.level = level;
-    update.x = (uint32_t)rect->left;
-    update.y = (uint32_t)rect->top;
-    update.z = z;
-    update.width = (uint32_t)(rect->right - rect->left);
-    update.height = (uint32_t)(rect->bottom - rect->top);
-    /* One slice per upload: a cube face and a volume slice are each a single
-     * 2D plane, and depth 0 would name an empty region. */
-    update.depth = 1;
-    update.row_pitch = row_bytes;
-    update.data_bytes = data_bytes;
-
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE,
-            sizeof(update), data_bytes, NULL, &payload, &blob);
-    if (result) {
-        update.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &update, sizeof(update));
-        for (row = 0; row < row_count; ++row) {
-            CopyMemory(blob + row * row_bytes,
-                    level_data->shadow
-                    + (block_y + row) * level_data->row_pitch
-                    + block_x * block_bytes, row_bytes);
-        }
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+    rows.source_pitch = level_data->row_pitch;
+    rows.source = level_data->shadow + ((UINT)rect->top / block_height) * level_data->row_pitch
+            + ((UINT)rect->left / block_width) * block_bytes;
+    return emit_texture_rows(&rows);
 }
 
 static BOOL emit_texture_update(D8Texture *texture, UINT level,
@@ -8057,17 +7991,15 @@ static BOOL emit_volume_level_update(D8VolumeTexture *texture, UINT level,
     D8TextureLevel *level_data = &texture->levels[level];
     D8TextureLevel slice = *level_data;
     UINT index;
-
-    slice.depth = 1;
-    slice.byte_count = level_data->slice_pitch;
-    for (index = 0; index < slice_count; ++index) {
-        slice.shadow = level_data->shadow
-                + (first_slice + index) * level_data->slice_pitch;
-        if (!emit_level_update(texture->handle, texture->format, &slice,
-                level, first_slice + index, rect))
-            return FALSE;
+    BOOL result = TRUE;
+    EnterCriticalSection(&g_transport_lock);
+    for (index = 0; index < slice_count && result; ++index) {
+        slice.shadow = level_data->shadow + (first_slice + index) * level_data->slice_pitch;
+        result = emit_level_update(texture->handle, texture->format, &slice,
+                level, first_slice + index, rect);
     }
-    return TRUE;
+    LeaveCriticalSection(&g_transport_lock);
+    return result;
 }
 
 static HRESULT volume_lock_level(D8VolumeTexture *texture, UINT level,

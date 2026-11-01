@@ -19,7 +19,10 @@ try {
         if (process.env.D9WG_UPLOAD_BASELINE && api === "ddraw") continue;
         const callback = source.includes("static int emit_buffer_chunk_locked(")
             ? definition(source, "static int emit_buffer_chunk_locked(") : "";
-        const bridge = definition(source, "static BOOL emit_buffer_update(");
+        const shared = source.includes("d9wg_upload_bridge.h");
+        const bridge = shared ? "#define D9WG_RESERVE_UPLOAD(op,size,extra,payload,blob) reserve_command_locked(op,size,extra," +
+            (api === "ddraw" ? "" : "NULL,") + "payload,blob)\n#define D9WG_DISCARD_FLAG 0x2000u\n#include \"runtime/d9wg_upload_bridge.h\""
+            : definition(source, "static BOOL emit_buffer_update(");
         const code = `
 #include <assert.h>
 #include <stdio.h>
@@ -79,6 +82,7 @@ static int probe(void *context,uint32_t offset,const uint8_t *data,uint32_t byte
 }
 int main(void){
  (void)open_transport_locked;(void)batch_capacity;
+ ${shared ? "(void)emit_texture_rows;" : ""}
  assert(d9wg_retry_ready(0,0,0));assert(!d9wg_retry_ready(999,0,1));assert(d9wg_retry_ready(1000,0,1));
  assert(!d9wg_retry_ready(743,0xffffff00u,1));assert(d9wg_retry_ready(744,0xffffff00u,1));
  assert(!d9wg_buffer_upload_limit(16,32,16,24));

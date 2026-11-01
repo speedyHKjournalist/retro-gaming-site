@@ -1298,16 +1298,18 @@ static BOOL emit_surface_create(DDSurface *surface)
 
 /* Uploads one rectangle of a surface's shadow. The rectangle is what Lock was
  * given, so a game that locks a scanline pays for a scanline. */
+#define D9WG_RESERVE_UPLOAD(op, size, extra, payload, blob) \
+    reserve_command_locked(op, size, extra,  payload, blob)
+#define D9WG_DISCARD_FLAG DDLOCK_DISCARDCONTENTS
+#include "../runtime/d9wg_upload_bridge.h"
+
 static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
 {
-    D9WGUpdateTexture update;
-    uint8_t *payload;
-    uint8_t *blob;
+    D9WGTextureRows upload;
     BOOL result;
     UINT left = 0, top = 0, right = surface->width, bottom = surface->height;
     UINT row_bytes;
     UINT rows;
-    UINT row;
     UINT source_x;
     UINT source_y;
     UINT block_bytes = format_compressed_block_bytes(surface->format);
@@ -1356,39 +1358,16 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
             surface->handle, surface->mip_level, surface->cube_face,
             left, top, right, bottom, row_bytes, row_bytes * rows);
 
-    ZeroMemory(&update, sizeof(update));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE, sizeof(update),
-            row_bytes * rows, &payload, &blob);
-    if (result) {
-        update.resource_handle = surface->handle;
-        update.level = surface->mip_level;
-        update.x = left;
-        update.y = top;
-        update.z = surface->cube_face;
-        update.width = right - left;
-        /* Width/height stay in logical texels on the wire. The host converts
-         * them to whole 4x4 WebGPU copy extents for BC formats; sending the
-         * number of block rows here would upload only the first half of an
-         * 8x8 DXT image. row_pitch/slice_pitch remain byte/block based. */
-        update.height = bottom - top;
-        update.depth = 1;
-        update.row_pitch = row_bytes;
-        update.slice_pitch = row_bytes * rows;
-        update.data_bytes = row_bytes * rows;
-        update.data_offset = (uint32_t)((uint8_t *)blob - batch_base());
-        CopyMemory(payload, &update, sizeof(update));
-        for (row = 0; row < rows; ++row) {
-            CopyMemory(blob + row * row_bytes,
-                    surface->shadow + (source_y + row) * surface->pitch
-                        + source_x,
-                    row_bytes);
-        }
-        if (left == 0 && top == 0 && right >= surface->width &&
-                bottom >= surface->height)
-            surface->upload_pending = FALSE;
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    ZeroMemory(&upload, sizeof(upload));
+    upload.resource_handle = surface->handle;upload.level = surface->mip_level;
+    upload.x = left;upload.y = top;upload.z = surface->cube_face;
+    upload.width = right - left;upload.height = bottom - top;
+    upload.block_height = block_bytes ? 4u : 1u;
+    upload.row_bytes = row_bytes;upload.row_count = rows;upload.source_pitch = surface->pitch;
+    upload.source = surface->shadow + source_y * surface->pitch + source_x;
+    result = emit_texture_rows(&upload);
+    if (result && left == 0 && top == 0 && right >= surface->width && bottom >= surface->height)
+        surface->upload_pending = FALSE;
     DDWG_TRACE_CHECKPOINT("SURFACE UPLOAD_END handle=%lu result=%lu "
             "pending=%lu", surface->handle, result ? 1u : 0u,
             surface->upload_pending ? 1u : 0u);
@@ -4586,39 +4565,7 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
 /* Direct3D 7 is kept in a separate include so the already-large DirectDraw
  * implementation remains navigable. It deliberately shares the private
  * object and transport helpers above rather than defining a second backend. */
-static int emit_buffer_chunk_locked(void *context, uint32_t destination_offset,
-        const uint8_t *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    D9WGUpdateBuffer update;
-    uint8_t *payload, *blob;
-    if (!reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-            byte_count, &payload, &blob))
-        return FALSE;
-    ZeroMemory(&update, sizeof(update));
-    update.resource_handle = *(const uint32_t *)context;
-    update.destination_offset = destination_offset;
-    update.byte_count = byte_count;
-    update.data_offset = (uint32_t)(blob - batch_base());
-    update.lock_flags = lock_flags;
-    CopyMemory(payload, &update, sizeof(update));
-    if (byte_count) CopyMemory(blob, data, byte_count);
-    return TRUE;
-}
 
-static BOOL emit_buffer_update(uint32_t handle, uint32_t destination_offset,
-        const void *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    BOOL result = FALSE;
-    EnterCriticalSection(&g_transport_lock);
-    if (open_transport_locked()) {
-        uint32_t limit = d9wg_buffer_upload_limit(batch_capacity(),
-                sizeof(D9WGBatchHeader), sizeof(D9WGCommandHeader), sizeof(D9WGUpdateBuffer));
-        result = d9wg_upload_buffer(&handle, destination_offset, data, byte_count,
-                lock_flags, DDLOCK_DISCARDCONTENTS, limit, emit_buffer_chunk_locked);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
-}
 
 #include "d3d7_proxy.inc"
 #include "d3d_legacy_proxy.inc"

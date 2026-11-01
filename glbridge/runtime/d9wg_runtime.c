@@ -38,3 +38,38 @@ int d9wg_upload_buffer(void *context, uint32_t destination_offset,
     }
     return 1;
 }
+
+int d9wg_upload_texture_rows(const D9WGTextureRows *texture,
+        uint32_t blob_limit, D9WGEmitTextureBand emit, void *context)
+{
+    uint32_t first = 0, rows_per_band, span;
+    if (!texture || !emit) return 0;
+    if (!texture->width || !texture->height) return 1;
+    if (!texture->source || !texture->row_bytes || !texture->row_count ||
+            !texture->block_height || texture->source_pitch < texture->row_bytes ||
+            texture->row_count > UINT32_MAX / texture->row_bytes ||
+            texture->row_count > UINT32_MAX / texture->block_height ||
+            texture->row_count - 1u > (UINT32_MAX - texture->row_bytes) / texture->source_pitch ||
+            texture->x > UINT32_MAX - texture->width || texture->y > UINT32_MAX - texture->height)
+        return 0;
+    span = texture->row_count * texture->block_height;
+    if (texture->height > span || texture->height <= span - texture->block_height)
+        return 0;
+    rows_per_band = blob_limit / texture->row_bytes;
+    if (!rows_per_band) return 0;
+    while (first < texture->row_count) {
+        D9WGTextureBand band;
+        uint32_t top = first * texture->block_height;
+        band.texture = texture;
+        band.first_row = first;
+        band.row_count = texture->row_count - first;
+        if (band.row_count > rows_per_band) band.row_count = rows_per_band;
+        band.y = texture->y + top;
+        band.height = band.row_count * texture->block_height;
+        if (band.height > texture->height - top) band.height = texture->height - top;
+        band.byte_count = band.row_count * texture->row_bytes;
+        if (!emit(context, &band)) return 0;
+        first += band.row_count;
+    }
+    return 1;
+}

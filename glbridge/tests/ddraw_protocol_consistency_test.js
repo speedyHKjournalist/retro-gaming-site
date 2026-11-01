@@ -378,8 +378,8 @@ check("the guest rides the D3D9 batch function code, not one of its own",
 
 check("mip and cube subresources keep their level and face on every wire path",
         () => {
-    assert.match(guestSource, /update\.level\s*=\s*surface->mip_level/);
-    assert.match(guestSource, /update\.z\s*=\s*surface->cube_face/);
+    // Upload level/face and logical BC edge heights are exercised through
+    // the actual C emitter in d9wg_runtime_texture_test.js.
     assert.match(guestSource, /command\.level\s*=\s*surface->mip_level/);
     assert.match(guestSource, /command\.face\s*=\s*surface->cube_face/);
     assert.match(guestSource,
@@ -388,8 +388,6 @@ check("mip and cube subresources keep their level and face on every wire path",
     assert.match(guestSource,
         /emit_command\(storage->create_opcode, &storage->create,\s*storage->create_bytes\)/,
         "the recorded create is what reaches the wire");
-    assert.match(guestSource, /update\.height\s*=\s*bottom\s*-\s*top/,
-        "a DXT upload carries logical texel height, not its block-row count");
 
     const readbackStart = executorSource.indexOf("async onReadbackSurface(");
     assert.ok(readbackStart >= 0, "the host has no readback handler");

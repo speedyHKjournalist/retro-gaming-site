@@ -22,4 +22,22 @@ int d9wg_upload_buffer(void *context, uint32_t destination_offset,
         const void *data, uint32_t byte_count, uint32_t flags,
         uint32_t discard_mask, uint32_t chunk_limit, D9WGEmitBufferChunk emit);
 
+typedef struct D9WGTextureRows {
+    uint32_t resource_handle, level, x, y, z, width, height;
+    uint32_t block_height, row_bytes, row_count, source_pitch;
+    const uint8_t *source;
+} D9WGTextureRows;
+
+typedef struct D9WGTextureBand {
+    const D9WGTextureRows *texture;
+    uint32_t first_row, row_count, y, height, byte_count;
+} D9WGTextureBand;
+
+typedef int (*D9WGEmitTextureBand)(void *context, const D9WGTextureBand *band);
+
+/* Rows are complete format blocks; destinations remain logical texels.
+ * One invocation describes a 2D plane (texture, cube face or volume slice). */
+int d9wg_upload_texture_rows(const D9WGTextureRows *texture,
+        uint32_t blob_limit, D9WGEmitTextureBand emit, void *context);
+
 #endif
