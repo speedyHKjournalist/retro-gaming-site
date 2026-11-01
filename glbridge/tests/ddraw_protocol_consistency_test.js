@@ -297,11 +297,13 @@ check("the indexed-storage usage bit is the same number everywhere", () => {
         "the guest never marks a palettised surface as indexed");
 });
 
-check("the protocol minor version is 7 in the header, guest and executor",
+check("the generated header and framing parser agree on the protocol minor range",
         () => {
-    assert.match(headerConstant(protocolHeader, "D9WG_VERSION_MINOR"), /^7u$/);
-    assert.equal(D9WG.VERSION_MINOR, 7);
-    assert.match(executorSource, /const D9WG_VERSION_MINOR = D9WG\.C\.D9WG_VERSION_MINOR;/);
+    const wire = require(require("./host_paths.js").hostPath("d3d9-webgpu/d9wg_wire.js"));
+    assert.equal(Number(headerConstant(protocolHeader, "D9WG_VERSION_MINOR").replace(/u$/, "")), D9WG.VERSION_MINOR);
+    for (let minor = D9WG.MIN_MINOR; minor <= D9WG.VERSION_MINOR; minor++)
+        assert.doesNotThrow(() => wire.readHeader(D9WG.encodeBatch([], { version_minor: minor })));
+    assert.throws(() => wire.readHeader(D9WG.encodeBatch([], { version_minor: D9WG.VERSION_MINOR + 1 })), wire.D9WGStreamError);
     // The guest gets its version from the header it includes, so the check
     // there is that it includes it rather than restating it.
     assert.ok(guestSource.includes("d3d9_protocol.h") ||

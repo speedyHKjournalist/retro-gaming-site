@@ -1,0 +1,36 @@
+{
+  "stage": "D3D review 3A",
+  "hostCommit": "8f3be5bd17e27e36e60082997190490d3710b65d",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "07c8009386d3da396e6e",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "9a5d44731402e4c00b1208d764890796905e46d3c3f95d9ea0484d371313432c",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "be7ff85cba6507a3ffc805b9b5bd369615d2de633c71826054a3019d4c02b169",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "2f846d613476ddf9085973334ad2e247b83d868c98b4b514c5cfe527b9efe065",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "8ad61c8a8c29b2ac98b34c367b4d29135de685750a9acf24ce34638323bff43e",
+    "vendor/v86/glbridge/v86gl-device.js": "5ec1a95c13cc651390114a31d9f93083e8ee8de1d5ef83e0dc0382493ca4f896",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641"
+  },
+  "validation": {
+    "coreSuites": 120,
+    "privateCorpusStrict": true,
+    "guestAbiSuites": 72,
+    "siteIntegrationTests": 2,
+    "swiftshaderCases": 133,
+    "knownPixelFailures": 19,
+    "workerAndFullCheckpoint": "PASS",
+    "warcraft3FrozenReplay": "PASS",
+    "d3dMutationsKilled": 12
+  },
+  "limitations": [
+    "GTA SA diagnostic startup remains stalled; not accepted as gameplay.",
+    "Wine guest device/visual suites and the full review game matrix remain pending.",
+    "No remote CI run or image writeback performed."
+  ]
+}
