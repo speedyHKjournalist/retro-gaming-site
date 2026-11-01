@@ -37,3 +37,8 @@ HANDLE CreateFileA(const char*,DWORD,DWORD,void*,DWORD,DWORD,HANDLE);
 BOOL DeviceIoControl(HANDLE,DWORD,const void*,DWORD,void*,DWORD,DWORD*,void*);
 DWORD GetLastError(void);void SetLastError(DWORD);
 #endif
+
+#ifndef ERROR_INVALID_FUNCTION
+#define ERROR_INVALID_FUNCTION 1u
+#define ERROR_NOT_SUPPORTED 50u
+#endif

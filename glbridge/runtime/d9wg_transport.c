@@ -73,8 +73,11 @@ BOOL d9wg_transport_open_report(D9WGProcess *process, uint32_t *stage)
         return FALSE;
     }
     ZeroMemory(&mapping, sizeof(mapping));
-    if (!DeviceIoControl(process->transport, V86GL_IOCTL_MAP_BUFFER, NULL, 0,
-            &mapping, sizeof(mapping), &returned, NULL)) {
+    if (!DeviceIoControl(process->transport, V86GL_IOCTL_MAP_D3D_BUFFER, NULL, 0,
+            &mapping, sizeof(mapping), &returned, NULL) &&
+            !((GetLastError() == ERROR_INVALID_FUNCTION || GetLastError() == ERROR_NOT_SUPPORTED) &&
+              DeviceIoControl(process->transport, V86GL_IOCTL_MAP_BUFFER, NULL, 0,
+                  &mapping, sizeof(mapping), &returned, NULL))) {
         error = GetLastError();d9wg_transport_close(process);SetLastError(error);
         if (stage) *stage = D9WG_MAP_FAILED;
         return FALSE;

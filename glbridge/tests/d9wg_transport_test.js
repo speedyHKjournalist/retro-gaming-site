@@ -25,6 +25,7 @@ static D9WGProcess states[2];
 typedef struct {uint8_t *bytes;uint32_t length;} Packet;
 static Packet packets[2][128];static unsigned counts[2],opens,closes,unmaps;
 static DWORD last_error,tick=100;static int fail_open,fail_map,fail_submit,accepted_failure;
+static DWORD direct_map_error=ERROR_INVALID_FUNCTION;static unsigned direct_maps,legacy_maps;
 #define TRACE(...) ((void)0)
 #define D8WG_TRACE(...) ((void)0)
 #define DDWG_TRACE_CHECKPOINT(...) ((void)0)
@@ -40,7 +41,8 @@ HANDLE CreateFileA(const char *name,DWORD access,DWORD share,void *security,DWOR
 BOOL CloseHandle(HANDLE handle){assert(handle==(HANDLE)2||handle==(HANDLE)3);closes++;return TRUE;}
 BOOL DeviceIoControl(HANDLE handle,DWORD op,const void *input,DWORD input_size,void *output,DWORD output_size,DWORD *returned,void *overlapped){
  (void)overlapped;*returned=0;
- if(op==V86GL_IOCTL_MAP_BUFFER){assert(handle==(HANDLE)3);if(fail_map){fail_map=0;last_error=8;return FALSE;}assert(output_size==sizeof(V86GLMapBuffer));memset(output,0,output_size);*returned=output_size;return TRUE;}
+ if(op==V86GL_IOCTL_MAP_D3D_BUFFER){direct_maps++;if(direct_map_error){last_error=direct_map_error;return FALSE;}memset(output,0,output_size);*returned=output_size;return TRUE;}
+ if(op==V86GL_IOCTL_MAP_BUFFER){legacy_maps++;assert(handle==(HANDLE)3);if(fail_map){fail_map=0;last_error=8;return FALSE;}assert(output_size==sizeof(V86GLMapBuffer));memset(output,0,output_size);*returned=output_size;return TRUE;}
  if(op==V86GL_IOCTL_UNMAP_BUFFER){assert(handle==(HANDLE)2);unmaps++;return TRUE;}
  assert(op==V86GL_IOCTL_SUBMIT&&input_size==sizeof(V86GLSubmit));unsigned index=(unsigned)(uintptr_t)handle-1u;assert(index<2);
  if(fail_submit&&!accepted_failure){fail_submit=0;last_error=121;return FALSE;}
@@ -95,6 +97,15 @@ int main(void){
  tick+=1000;fail_map=1;assert(!d9wg_transport_open_report(&fresh,&stage)&&GetLastError()==8&&opens==2&&stage==D9WG_MAP_FAILED);
  tick+=1000;assert(!d9wg_transport_open_report(&fresh,&stage)&&GetLastError()==ERROR_INVALID_DATA&&opens==3&&stage==D9WG_MAP_FAILED);
  d9wg_transport_close(&states[1]);assert(unmaps==1&&closes==3&&!states[1].dma_buffer&&states[1].transport==INVALID_HANDLE_VALUE);
+ // Only unsupported new IOCTLs may fall back; BUSY/OOM must remain visible.
+ for(unsigned i=0;i<4;i++){
+  DWORD errors[]={ERROR_NOT_SUPPORTED,170u,8u,0u};direct_map_error=errors[i];
+  D9WGProcess next={0};next.transport=INVALID_HANDLE_VALUE;tick+=1000;
+  unsigned old_legacy=legacy_maps,old_direct=direct_maps;
+  assert(!d9wg_transport_open_report(&next,&stage)&&stage==D9WG_MAP_FAILED);
+  assert(direct_maps==old_direct+1&&legacy_maps==old_legacy+(i==0));
+  assert(GetLastError()==(i==0||i==3?ERROR_INVALID_DATA:errors[i]));
+ }
  printf("PASS ${api} frozen C framing: %u byte-identical batches; overflow, retry, mapping retention and ambiguous acceptance pass\\n",counts[0]);
  for(unsigned k=0;k<2;k++)for(unsigned i=0;i<counts[k];i++)free(packets[k][i].bytes);return 0;
 }

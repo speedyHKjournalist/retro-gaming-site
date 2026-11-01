@@ -29,7 +29,7 @@ typedef struct VGL_REQUEST {
     ULONG address_high;
     ULONG length;
     ULONG flags;
-    ULONG reserved;
+    ULONG owner;
 } VGL_REQUEST;
 typedef struct VGL_REPLY {
     ULONG status;
@@ -54,6 +54,7 @@ typedef struct VGL_TRANSPORT {
     USHORT used;
     BOOLEAN initialized;
     BOOLEAN registered;
+    BOOLEAN owner_arenas;
 } VGL_TRANSPORT;
 
 static ULONG vgl_read32(USHORT port, ULONG offset)
@@ -183,6 +184,7 @@ static NTSTATUS vgl_transport_init(VGL_TRANSPORT *t)
 {
     PHYSICAL_ADDRESS low, high, boundary, physical;
     NTSTATUS status = vgl_discover(t);
+    ULONG features;
     VGL_VIRTQ_DESC *descriptors;
     if(!NT_SUCCESS(status)) return status;
     vgl_write8(t->common, 20, 0);
@@ -190,11 +192,13 @@ static NTSTATUS vgl_transport_init(VGL_TRANSPORT *t)
     if(vgl_read8(t->common, 20) != 0) goto failed;
     vgl_write8(t->common, 20, 3); /* ACKNOWLEDGE | DRIVER */
     vgl_write32(t->common, 0, 0);
-    if(!(vgl_read32(t->common, 4) & 1)) goto failed;
+    features = vgl_read32(t->common, 4);
+    if(!(features & 1)) goto failed;
+    t->owner_arenas = !!(features & 2u);
     vgl_write32(t->common, 0, 1);
     if(!(vgl_read32(t->common, 4) & 1)) goto failed;
     vgl_write32(t->common, 8, 0);
-    vgl_write32(t->common, 12, 1); /* custom SHARED_ARENA */
+    vgl_write32(t->common, 12, features & 3u); /* SHARED_ARENA | optional D3D_OWNER_ARENAS */
     vgl_write32(t->common, 8, 1);
     vgl_write32(t->common, 12, 1); /* VIRTIO_F_VERSION_1 */
     vgl_write8(t->common, 20, 11); /* FEATURES_OK */
@@ -276,7 +280,7 @@ static NTSTATUS vgl_transport_reset(VGL_TRANSPORT *t)
     return vgl_transport_init(t);
 }
 
-static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG length, ULONG flags)
+static NTSTATUS vgl_request_owner(VGL_TRANSPORT *t, ULONG owner, ULONG opcode, ULONG address, ULONG length, ULONG flags)
 {
     VGL_REQUEST *request;
     volatile VGL_REPLY *reply;
@@ -288,7 +292,7 @@ static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG
     avail = (volatile USHORT *)((PUCHAR)t->queue_memory + VGL_AVAIL_OFFSET);
     RtlZeroMemory(request, sizeof(*request));
     request->opcode = opcode; request->address_low = address;
-    request->length = length; request->flags = flags;
+    request->length = length; request->flags = flags; request->owner = owner;
     reply->status = 0xFFFFFFFFu;
     avail[2 + (t->available & (VGL_QUEUE_SIZE - 1))] = 0;
     KeMemoryBarrier();
@@ -305,13 +309,17 @@ static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG
     if(reply->status)
     {
         DbgPrint(V86GL_LOG_PREFIX "virtio request=%lu failed status=%lu\n", opcode, reply->status);
-        if(reply->status == 2u) { t->registered = FALSE; return STATUS_DEVICE_NOT_READY; }
+        if(reply->status == 2u) { if(!owner) t->registered = FALSE; return STATUS_DEVICE_NOT_READY; }
         if(reply->status == 3u) return STATUS_DEVICE_NOT_READY;
         if(reply->status == 1u) return STATUS_INVALID_PARAMETER;
         return STATUS_UNSUCCESSFUL;
     }
-    if(opcode == VGL_REGISTER_ARENA) t->registered = TRUE;
-    if(opcode == VGL_UNREGISTER_ARENA) t->registered = FALSE;
+    if(!owner && opcode == VGL_REGISTER_ARENA) t->registered = TRUE;
+    if(!owner && opcode == VGL_UNREGISTER_ARENA) t->registered = FALSE;
     return STATUS_SUCCESS;
+}
+static NTSTATUS vgl_request(VGL_TRANSPORT *t, ULONG opcode, ULONG address, ULONG length, ULONG flags)
+{
+    return vgl_request_owner(t, 0, opcode, address, length, flags);
 }
 #endif

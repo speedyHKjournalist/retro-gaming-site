@@ -43,10 +43,14 @@ static NTSTATUS vgl_transport_init(VGL_TRANSPORT* t){inits++;t->initialized=TRUE
 static NTSTATUS vgl_transport_reset(VGL_TRANSPORT* t){resets++;t->initialized=TRUE;t->registered=FALSE;return STATUS_SUCCESS;}
 static void vgl_write16(USHORT port,ULONG offset,USHORT value){assert(!port&&!offset&&!value);((VGL_REPLY*)(queue+VGL_REPLY_OFFSET))->status=reply_status;}
 static NTSTATUS vgl_wait(VGL_TRANSPORT* t){(void)t;return wait_status;}
+${body(driver, "vgl_request_owner", "static NTSTATUS ")}
 ${body(driver, "vgl_request", "static NTSTATUS ")}
 int main(void){
  log_test(TRUE,"test %d",42);assert(file_lines==1&&!debug_lines);log_test(FALSE,"test %d",42);assert(file_lines==1&&!debug_lines);g_trace_enabled=TRUE;log_test(FALSE,"test %d",42);assert(file_lines==2&&!debug_lines);g_trace_debug_string=TRUE;log_test(FALSE,"test %d",42);assert(file_lines==3&&debug_lines==1);
  VGL_TRANSPORT t={0};t.queue_memory=queue;assert(vgl_request(&t,1,4096,65536,0)==STATUS_SUCCESS&&t.registered&&inits==1);reply_status=1;assert(vgl_request(&t,2,0,36,0)==STATUS_INVALID_PARAMETER);reply_status=2;assert(vgl_request(&t,2,0,36,0)==STATUS_DEVICE_NOT_READY&&!t.registered);reply_status=3;assert(vgl_request(&t,2,0,36,0)==STATUS_DEVICE_NOT_READY);reply_status=7;assert(vgl_request(&t,2,0,36,0)==STATUS_UNSUCCESSFUL);
+ reply_status=0;t.registered=FALSE;assert(vgl_request_owner(&t,17,1,8192,65536,0)==STATUS_SUCCESS&&!t.registered);
+ assert(((VGL_REQUEST*)(queue+VGL_REQUEST_OFFSET))->owner==17);t.registered=TRUE;reply_status=2;
+ assert(vgl_request_owner(&t,17,2,0,36,0)==STATUS_DEVICE_NOT_READY&&t.registered);
  reply_status=0;assert(vgl_request(&t,1,4096,65536,0)==STATUS_SUCCESS&&t.registered);wait_status=STATUS_IO_TIMEOUT;assert(vgl_request(&t,2,0,36,0)==STATUS_IO_TIMEOUT&&resets==1&&!t.registered);wait_status=0;assert(vgl_request(&t,1,4096,65536,0)==STATUS_SUCCESS&&t.registered);assert(vgl_request(&t,3,0,0,0)==STATUS_SUCCESS&&!t.registered);return 0;
 }`;
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gl-transport-diagnostics-"));

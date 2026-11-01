@@ -9,6 +9,7 @@ typedef HRESULT (WINAPI *CreateDDraw)(void *, void **, void *);
 typedef ULONG (WINAPI *ReleaseObject)(void *);
 static HANDLE log_file;
 static char directory[MAX_PATH];
+static void (*owner_ready_hook)(D9WGProcess *);
 
 static void report(const char *text)
 {
@@ -72,6 +73,7 @@ static void run_order(BOOL draw_first)
     check(SUCCEEDED(create_draw(NULL, &object_draw, NULL)) && object_draw != NULL, "DirectDraw factory");
     transport = state->transport;
     check(state->transport_generation == 1 && state->dma_buffer && transport != INVALID_HANDLE_VALUE && GetHandleInformation(transport, &flags), "one live transport");
+    if (owner_ready_hook) owner_ready_hook(state);
     if (draw_first) {
         release_object(object_draw);check(FreeLibrary(draw), "unload creator DirectDraw");
     } else {
