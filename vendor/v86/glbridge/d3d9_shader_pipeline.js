@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "0e7abe82a5a0bb1e93a6";
+globalThis.V86GL_BUILD_REVISION = "f285613f1df69e38e4d3";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -413,6 +413,15 @@ globalThis.V86GL_BUILD_REVISION = "0e7abe82a5a0bb1e93a6";
         if (Number.isInteger(value) && Math.abs(value) < 1e9)
             return value.toFixed(1);
         return String(value);
+    }
+
+    function sampleSwizzleExpression(expression, swizzle) {
+        if (!swizzle) return expression;
+        if (swizzle === "r111") return "vec4<f32>((" + expression + ").r, 1.0, 1.0, 1.0)";
+        if (swizzle === "rg11") return "vec4<f32>((" + expression + ").rg, 1.0, 1.0)";
+        if (swizzle === "rrrr") return "vec4<f32>((" + expression + ").r)";
+        if (swizzle === "gr11") return "vec4<f32>((" + expression + ").gr, 1.0, 1.0)";
+        throw new Error("Unsupported D3D texture sample swizzle " + swizzle);
     }
 
     class Translator {
@@ -1567,6 +1576,11 @@ globalThis.V86GL_BUILD_REVISION = "0e7abe82a5a0bb1e93a6";
         }
 
         sampleExpression(index, coordinate, options) {
+            const raw = this.rawSampleExpression(index, coordinate, options);
+            return sampleSwizzleExpression(raw, this.options.samplerSwizzles && this.options.samplerSwizzles[index]);
+        }
+
+        rawSampleExpression(index, coordinate, options) {
             const texture = "d9_tex" + index;
             const sampler = "d9_smp" + index;
             const coord = this.mirrorOnceCoord(index, coordinate.coord);
@@ -2480,7 +2494,7 @@ globalThis.V86GL_BUILD_REVISION = "0e7abe82a5a0bb1e93a6";
     }
 
     const api = {
-        compileShader, parseShader, hashTokens, D3D9ShaderCache,
+        compileShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression,
         TRANSLATOR_REVISION,
         VARYING_COLOR0, VARYING_COLOR1, VARYING_TEXCOORD0, VARYING_FOG,
         VARYING_COUNT, varyingForSemantic,

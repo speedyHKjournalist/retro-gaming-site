@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "0e7abe82a5a0bb1e93a6";
+globalThis.V86GL_BUILD_REVISION = "f285613f1df69e38e4d3";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -891,6 +891,15 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         if (Number.isInteger(value) && Math.abs(value) < 1e9)
             return value.toFixed(1);
         return String(value);
+    }
+
+    function sampleSwizzleExpression(expression, swizzle) {
+        if (!swizzle) return expression;
+        if (swizzle === "r111") return "vec4<f32>((" + expression + ").r, 1.0, 1.0, 1.0)";
+        if (swizzle === "rg11") return "vec4<f32>((" + expression + ").rg, 1.0, 1.0)";
+        if (swizzle === "rrrr") return "vec4<f32>((" + expression + ").r)";
+        if (swizzle === "gr11") return "vec4<f32>((" + expression + ").gr, 1.0, 1.0)";
+        throw new Error("Unsupported D3D texture sample swizzle " + swizzle);
     }
 
     class Translator {
@@ -2045,6 +2054,11 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         }
 
         sampleExpression(index, coordinate, options) {
+            const raw = this.rawSampleExpression(index, coordinate, options);
+            return sampleSwizzleExpression(raw, this.options.samplerSwizzles && this.options.samplerSwizzles[index]);
+        }
+
+        rawSampleExpression(index, coordinate, options) {
             const texture = "d9_tex" + index;
             const sampler = "d9_smp" + index;
             const coord = this.mirrorOnceCoord(index, coordinate.coord);
@@ -2958,7 +2972,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     }
 
     const api = {
-        compileShader, parseShader, hashTokens, D3D9ShaderCache,
+        compileShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression,
         TRANSLATOR_REVISION,
         VARYING_COLOR0, VARYING_COLOR1, VARYING_TEXCOORD0, VARYING_FOG,
         VARYING_COUNT, varyingForSemantic,
@@ -4996,13 +5010,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             format === D3DFMT_L16 || format === D3DFMT_CxV8U8 ||
             format === D3DFMT_A2B10G10R10 || format === D3DFMT_G16R16 ||
             format === D3DFMT_A2R10G10B10 ||
-            format === D3DFMT_A16B16G16R16 || format === D3DFMT_R16F ||
-            format === D3DFMT_G16R16F ||
-            format === D3DFMT_A16B16G16R16F;
+            format === D3DFMT_A16B16G16R16;
     }
 
     function gpuBytesPerTexel(format) {
-        if (isHalfFloatExpansionFormat(format)) return 8;
+        if (format === D3DFMT_R16F) return 2;
+        if (format === D3DFMT_G16R16F) return 4;
+        if (format === D3DFMT_A16B16G16R16F || isHalfFloatExpansionFormat(format)) return 8;
         if (format === D3DFMT_G32R32F) return 8;
         if (format === D3DFMT_A32B32G32R32F) return 16;
         return 4;
@@ -5021,6 +5035,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 
     function isRenderableGPUFormat(format) {
         return format === "rgba8unorm" || format === "bgra8unorm" || format === "rgba16float" ||
+            format === "r16float" || format === "rg16float" ||
             format === "r32float" || format === "rg32float" ||
             format === "rgba32float" ||
             // The NULL FOURCC target's stand-in. It is renderable by
@@ -5082,8 +5097,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         [D3DFMT_A2R10G10B10]: "rgba16float",
         [D3DFMT_A16B16G16R16]: "rgba16float",
         [D3DFMT_Q16W16V16U16]: "rgba16float",
-        [D3DFMT_R16F]: "rgba16float",
-        [D3DFMT_G16R16F]: "rgba16float",
+        [D3DFMT_R16F]: "r16float",
+        [D3DFMT_G16R16F]: "rg16float",
         [D3DFMT_A16B16G16R16F]: "rgba16float",
         [D3DFMT_R32F]: "r32float",
         [D3DFMT_G32R32F]: "rg32float",
@@ -5098,6 +5113,14 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         [D3DFMT_NULL]: "r8unorm"
     });
     function formatToGPU(format) { return GPU_STORAGE[format] || null; }
+
+    function samplingSwizzle(format) {
+        if (format === D3DFMT_R16F || format === D3DFMT_R32F) return "r111";
+        if (format === D3DFMT_G16R16F || format === D3DFMT_G32R32F) return "rg11";
+        if (format === D3DFMT_ATI1N) return "rrrr";
+        if (format === D3DFMT_ATI2N) return "gr11";
+        return "";
+    }
 
     const HALF_BITS_BUFFER = new ArrayBuffer(4);
 
@@ -5186,11 +5209,17 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 
     function packGPUReadbackRow(format, gpuFormat, source, sourceOffset,
             width, destination, destinationOffset) {
+        if ((format === D3DFMT_R16F || format === D3DFMT_G16R16F || format === D3DFMT_A16B16G16R16F)
+                && gpuFormat === formatToGPU(format)) {
+            const bytes = width * d3dBytesPerTexel(format);
+            destination.set(source.subarray(sourceOffset, sourceOffset + bytes), destinationOffset);
+            return;
+        }
         const sourceView = new DataView(source.buffer,
             source.byteOffset, source.byteLength);
         const destinationView = new DataView(destination.buffer,
             destination.byteOffset, destination.byteLength);
-        const sourceBpp = gpuFormat === "rgba16float" ? 8
+        const sourceBpp = gpuFormat === "r16float" ? 2 : gpuFormat === "rgba16float" ? 8
             : gpuFormat === "rg32float" ? 8
             : gpuFormat === "rgba32float" ? 16 : 4;
         const destinationBpp = d3dBytesPerTexel(format);
@@ -5202,16 +5231,20 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             const sourceAt = sourceOffset + x * sourceBpp;
             const destinationAt = destinationOffset + x * destinationBpp;
             let r, g, b, a;
-            if (gpuFormat === "rgba16float") {
+            if (gpuFormat === "r16float" || gpuFormat === "rg16float") {
+                r = halfBitsToFloat(sourceView.getUint16(sourceAt, true));
+                g = gpuFormat === "rg16float" ? halfBitsToFloat(sourceView.getUint16(sourceAt + 2, true)) : 1;
+                b = a = 1;
+            } else if (gpuFormat === "rgba16float") {
                 r = halfBitsToFloat(sourceView.getUint16(sourceAt, true));
                 g = halfBitsToFloat(sourceView.getUint16(sourceAt + 2, true));
                 b = halfBitsToFloat(sourceView.getUint16(sourceAt + 4, true));
                 a = halfBitsToFloat(sourceView.getUint16(sourceAt + 6, true));
             } else if (gpuFormat === "r32float") {
-                r = sourceView.getFloat32(sourceAt, true); g = b = 0; a = 1;
+                r = sourceView.getFloat32(sourceAt, true); g = b = a = 1;
             } else if (gpuFormat === "rg32float") {
                 r = sourceView.getFloat32(sourceAt, true);
-                g = sourceView.getFloat32(sourceAt + 4, true); b = 0; a = 1;
+                g = sourceView.getFloat32(sourceAt + 4, true); b = a = 1;
             } else if (gpuFormat === "rgba32float") {
                 r = sourceView.getFloat32(sourceAt, true);
                 g = sourceView.getFloat32(sourceAt + 4, true);
@@ -5372,7 +5405,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     const UNORM3 = Uint8Array.from({ length: 8 }, (_, v) => expandUNorm8(v, 3));
     function expandRowToGPU(format, source, sourceOffset, count, dest,
             destOffset, palette) {
-        if (format === D3DFMT_A8R8G8B8 || format === D3DFMT_R32F || format === D3DFMT_G32R32F ||
+        if (format === D3DFMT_A8R8G8B8 || format === D3DFMT_R16F || format === D3DFMT_G16R16F ||
+                format === D3DFMT_A16B16G16R16F || format === D3DFMT_R32F || format === D3DFMT_G32R32F ||
                 format === D3DFMT_A32B32G32R32F) {
             const bytes = count * gpuBytesPerTexel(format);
             dest.set(source.subarray(sourceOffset, sourceOffset + bytes), destOffset);
@@ -5423,30 +5457,6 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                         (source[at + 1] << 8)) / 65535;
                     u = v = w = luminance;
                     q = 1;
-                } else if (format === D3DFMT_R16F) {
-                    const at = sourceOffset + i * 2;
-                    const out = destOffset + i * 8;
-                    dest[out] = source[at];
-                    dest[out + 1] = source[at + 1];
-                    writeHalf(dest, out + 2, 0);
-                    writeHalf(dest, out + 4, 0);
-                    writeHalf(dest, out + 6, 1);
-                    continue;
-                } else if (format === D3DFMT_G16R16F) {
-                    const at = sourceOffset + i * 4;
-                    const out = destOffset + i * 8;
-                    dest[out] = source[at];
-                    dest[out + 1] = source[at + 1];
-                    dest[out + 2] = source[at + 2];
-                    dest[out + 3] = source[at + 3];
-                    writeHalf(dest, out + 4, 0);
-                    writeHalf(dest, out + 6, 1);
-                    continue;
-                } else if (format === D3DFMT_A16B16G16R16F) {
-                    const at = sourceOffset + i * 8;
-                    const out = destOffset + i * 8;
-                    dest.set(source.subarray(at, at + 8), out);
-                    continue;
                 } else if (format === D3DFMT_G16R16 ||
                         format === D3DFMT_A16B16G16R16) {
                     const at = sourceOffset + i *
@@ -5749,7 +5759,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         yuvToRGB,
         expandPairedRowToGPU,
         expandRowToGPU,
-        expandUNorm8
+        expandUNorm8,
+        samplingSwizzle
     };
     global.D9WGFormats = api;
     if (typeof module !== "undefined" && module.exports) module.exports = api;
@@ -5823,7 +5834,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         D3DFMT_A8R8G8B8, D3DFMT_INDEX32, srgbSiblingOf, isCompressedFormat, compressedBlockBytes,
         blockAlignedCopyExtent, isFourCCDepthFormat, isPalettizedFormat, gpuBytesPerTexel, fullMipLevelCount,
         isRenderableGPUFormat, isFloat32GPUFormat, isBlendableGPUFormat, formatToGPU, d3dBytesPerTexel,
-        packGPUReadbackRow, expandRowToGPU
+        packGPUReadbackRow, expandRowToGPU, samplingSwizzle
     } = formats;
     const stateFactory = global.D9WGState ||
         (typeof require === "function" ? require("./d9wg_state.js") : null);
@@ -7621,12 +7632,13 @@ ${coordBody}${fogBody}${clipBody}${pointBody}    return result;
                         ? "abs((" + coordExpression + ")." + axis + ")"
                         : "(" + coordExpression + ")." + axis)).join(", ") + ")";
             }
-            const sampled = stage.lodBias
+            const rawSample = stage.lodBias
                 ? "textureSampleBias(d9_tex" + stage.index + ", d9_smp" +
                     stage.index + ", " + coordExpression + ", " +
                     stage.lodBias.toFixed(6) + ")"
                 : "textureSample(d9_tex" + stage.index +
                     ", d9_smp" + stage.index + ", " + coordExpression + ")";
+            const sampled = shaderPipeline.sampleSwizzleExpression(rawSample, stage.sampleSwizzle);
             const borderAxes = stage.textureType === "cube" ? [] :
                 (stage.textureType === "3d"
                     ? [[stage.addressU, "x"], [stage.addressV, "y"],
@@ -13538,6 +13550,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     const usable = texture && !texture.isDepth;
                     stage.textureType = usable ? (texture.textureType || "2d") : "2d";
                     stage.hasTextureBound = !!usable;
+                    stage.sampleSwizzle = usable ? samplingSwizzle(texture.format) : "";
                     // DirectDraw stores four independent key kinds. Texture
                     // rendering uses SRCBLT (kind 0), the same source-domain
                     // key used by a keyed blit.  Keep the widened integer
@@ -14908,6 +14921,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                 // key. Only the samplers this shader actually declares are
                 // considered, so an unrelated stage's stale bias cannot mint a
                 // variant.
+                const samplerSwizzles = {};
+                let swizzleKey = "";
                 const samplerLodBias = {};
                 let lodBiasKey = "";
                 // D3DTADDRESS_MIRRORONCE is finished in the shader too: the
@@ -14916,6 +14931,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                 const samplerMirrorOnce = {};
                 let mirrorOnceKey = "";
                 for (const sampler of psResource.translated.reflection.samplers) {
+                    const texture = this.resources.get(state.textures.get(sampler.index));
+                    const swizzle = texture && samplingSwizzle(texture.format);
+                    if (swizzle) { samplerSwizzles[sampler.index] = swizzle;swizzleKey += "_w" + sampler.index + ":" + swizzle; }
                     const bias = lodBiasFor(state.samplerStates.get(
                         sampler.index * 64 + D3DSAMP_MIPMAPLODBIAS) || 0);
                     if (bias) {
@@ -14934,10 +14952,10 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                     }
                 }
                 const pixelVariantKey = alphaTestKey + clipKey + depthKey +
-                    lodBiasKey + mirrorOnceKey + legacySamplerKey +
+                    lodBiasKey + mirrorOnceKey + legacySamplerKey + swizzleKey +
                     (flatShading ? "_flat" : "");
                 if (alphaTest.enabled || clipPlaneCount || depthSamplers.length
-                        || lodBiasKey || mirrorOnceKey || legacySamplerKey ||
+                        || lodBiasKey || mirrorOnceKey || legacySamplerKey || swizzleKey ||
                         flatShading) {
                     variant = psResource.variants.get(pixelVariantKey);
                     if (!variant) {
@@ -14947,7 +14965,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                             clipPlaneCount,
                             depthSamplers,
                             depthFetchSamplers,
-                            samplerLodBias,
+                            samplerLodBias, samplerSwizzles,
                             samplerMirrorOnce,
                             legacySamplerTypes,
                             flatShading,
@@ -15055,7 +15073,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                     [stage.index, stage.colorOp, stage.colorArg0, stage.colorArg1,
                      stage.colorArg2, stage.alphaOp, stage.alphaArg0,
                      stage.alphaArg1, stage.alphaArg2, stage.resultArg,
-                     stage.samplesTexture ? stage.textureType : "-",
+                     stage.samplesTexture ? stage.textureType : "-", stage.sampleSwizzle || "",
                      stage.coordVarying, stage.projected ? "p" + stage.transformCount : "",
                      stage.samplesTexture
                          ? [stage.addressU, stage.addressV, stage.addressW,
@@ -15123,17 +15141,24 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
                     .join(",");
                 const pointKey = drawOptions.pointExpansion
                     ? "|p:" + (drawOptions.pointSprite ? "s" : "q") : "";
+                const vertexSwizzles = {};
+                let vertexSwizzleKey = "";
+                for (const sampler of vsResource.translated.reflection.samplers) {
+                    const texture = this.resources.get(state.textures.get(D3DVERTEXTEXTURESAMPLER0 + sampler.index));
+                    const swizzle = texture && samplingSwizzle(texture.format);
+                    if (swizzle) { vertexSwizzles[sampler.index] = swizzle;vertexSwizzleKey += "|w" + sampler.index + ":" + swizzle; }
+                }
                 const variantKey = "b:" + bgra.join(",") + "|c:" +
-                    conversionKey + pointKey + clipKey +
+                    conversionKey + pointKey + clipKey + vertexSwizzleKey +
                     (flatShading ? "|flat" : "");
                 const needsVariant = bgra.length || conversionKey.length ||
                     !!drawOptions.pointExpansion || !!clipPlaneCount ||
-                    flatShading;
+                    !!vertexSwizzleKey || flatShading;
                 let variant = vsResource.variants.get(variantKey);
                 if (!variant) {
                     variant = needsVariant
                         ? shaderPipeline.compileShader(vsResource.tokens,
-                            { bgraInputLocations: bgra, inputConversions,
+                            { bgraInputLocations: bgra, inputConversions, samplerSwizzles: vertexSwizzles,
                               pointExpansion: !!drawOptions.pointExpansion,
                               pointSprite: !!drawOptions.pointSprite,
                               clipPlaneCount, flatShading })
