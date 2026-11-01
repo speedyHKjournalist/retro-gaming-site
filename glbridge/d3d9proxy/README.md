@@ -712,6 +712,13 @@ Depth samplers are excluded from that path: WGSL has no
 
 ### Deviations from D3D9
 
+The paired v86 suite now checks 48 advertised sampling formats and 25 advertised
+texture operations using guest READBACK pixels (`d3d9_feature_cases.js`).
+`glbridge/tests/d3d_pixel_coverage_test.js` rejects additions to those capability
+sets without a matching pixel fixture. The host review's stage 1C records the
+remaining known pixel failures; coverage does not mean those defects are fixed,
+nor does it certify every render-target/depth/QUERY capability.
+
 What WebGPU cannot express, done as near as it allows. Each has a case in
 v86's `tests/glbridge/d3d9_conformance.js` showing what it does.
 
