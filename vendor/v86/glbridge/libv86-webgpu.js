@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "07c8009386d3da396e6e";
+globalThis.V86GL_BUILD_REVISION = "017490988930d2e252be";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -4735,6 +4735,156 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 })(typeof globalThis !== "undefined" ? globalThis : this);
 
 ;
+// Guest device/session state, independent of WebGPU allocation and wire decoding.
+// Immutable identity matrices and register limits are supplied by the executor;
+// mutable maps, registers, frames and uniform storage belong to one owner.
+(function(global) {
+    "use strict";
+    function createDeviceState(handle, constants) {
+        const { D3DMULTISAMPLE_NONE, D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_WORLD, IDENTITY4x4,
+            MAX_VS_CONST_F, MAX_PS_CONST_F, MAX_CONST_I, MAX_CONST_B } = constants;
+        return {
+            handle,
+            // Where the guest's window is on the guest desktop, resent on
+            // every Present so the page can place the overlay canvas.
+            // Deliberately NOT the back buffer's size: emit_present_and_flush
+            // fills width/height from GetClientRect, and a windowed game's
+            // client area is smaller than the back buffer it hosts.
+            surface: { hwnd: 0, x: 0, y: 0, width: 0, height: 0,
+                visible: true, noSurface: false, sessionKey: null },
+            // What the guest asked for at CreateDevice/Reset, and therefore
+            // the real size of the swap-chain colour attachment and of the
+            // auto depth target created beside it.
+            backBufferWidth: 0,
+            backBufferHeight: 0,
+            multisampleType: D3DMULTISAMPLE_NONE,
+            multisampleQuality: 0,
+            sampleCount: 1,
+            // WebGPU swap-chain textures are always single-sampled.  A
+            // multisampled D3D back buffer therefore renders into this
+            // private attachment and resolves into getCurrentTexture() at
+            // the end of every render pass.
+            backBufferMsaaTexture: null,
+            backBufferMsaaView: null,
+            backBufferMsaaSrgbView: null,
+            viewport: { x: 0, y: 0, width: 1, height: 1,
+                minZ: 0, maxZ: 1 },
+            transforms: new Map([
+                [D3DTS_VIEW, IDENTITY4x4], [D3DTS_PROJECTION, IDENTITY4x4],
+                [D3DTS_WORLD, IDENTITY4x4],
+            ]),
+            // Highest n the guest has ever passed as D3DTS_WORLDMATRIX(n).
+            // Indexed vertex blending sizes its palette from this rather
+            // than from the 256 D3D9 allows, so an app using eight bones
+            // uploads eight matrices per draw and not 256.
+            maxWorldMatrixIndex: 0,
+            renderStates: new Map(),
+            // Auto depth-stencil surface, created on CREATE_DEVICE/RESET
+            // when the guest asked for one. hasDepth drives both the
+            // render pass attachment and whether pipelines declare a
+            // depthStencil block.
+            hasDepth: false,
+            depthTexture: null,
+            // CreateAdditionalSwapChain results, keyed by chain handle.
+            // The implicit chain is not in here: it is the canvas.
+            swapChains: new Map(),
+            depthView: null,
+            samplerStates: new Map(), // sampler*64+state -> value, read by samplerFor()
+            textureStageStates: new Map(),
+            vertexShaderHandle: 0,
+            pixelShaderHandle: 0,
+            // The D3D9 constant register file. Device state, not shader
+            // state: it survives SetVertexShader and Reset, so it lives
+            // here and is packed into a uniform buffer per draw by
+            // constantBufferFor(). Kept as flat typed arrays because the
+            // packing step is a straight subarray copy.
+            vsConstF: new Float32Array(MAX_VS_CONST_F * 4),
+            vsConstI: new Int32Array(MAX_CONST_I * 4),
+            vsConstB: new Uint32Array(MAX_CONST_B),
+            psConstF: new Float32Array(MAX_PS_CONST_F * 4),
+            psConstI: new Int32Array(MAX_CONST_I * 4),
+            psConstB: new Uint32Array(MAX_CONST_B),
+            material: null,          // explicit material; defaults are resolved by FFP
+            lights: new Map(),       // light index -> D3DLIGHT9-shaped object
+            lightEnabled: new Map(), // light index -> bool
+            // frequency is the raw SetStreamSourceFreq value. D3D9 starts
+            // every stream at 1; an absent entry is treated identically.
+            streams: new Map(),      // stream -> { handle, stride, offset, frequency }
+            indexBufferHandle: 0,
+            vertexDeclarationHandle: 0, // also used for the SET_FVF synthesized layout
+            fvfLayout: null,         // set by SET_FVF, cleared by SET_VERTEX_DECLARATION
+            textures: new Map(),     // stage -> resource handle
+            // Explicitly bound colour targets. A slot holding 0 (and slot 0
+            // by default) means the swap chain's back buffer, which is the
+            // only target whose view cannot be taken until Present.
+            renderTargets: [0, 0, 0, 0],
+            renderTargetLevels: [0, 0, 0, 0],
+            // Which cube face each slot names; 0 for a 2D target.
+            renderTargetFaces: [0, 0, 0, 0],
+            // D3DFMT_P8/A8P8 sample through this palette; null until
+            // SetCurrentTexturePalette names one.
+            currentPalette: null,
+            // 0 = the device's auto depth-stencil; depthUnbound is
+            // SetDepthStencilSurface(NULL), which is not the same thing --
+            // it turns depth testing off for the draws that follow.
+            depthTargetHandle: 0,
+            depthTargetLevel: 0,
+            depthUnbound: false,
+            scissorRect: null,
+            clipPlanes: Array.from({ length: 6 }, () => [0, 0, 0, 1]),
+            inScene: false,
+        };
+    }
+
+    function createSessionState(key) {
+        return {
+            key,
+            devices: new Map(),
+            resources: new Map(),
+            frame: null,
+            activeOcclusion: null,
+            presentingDevice: null,
+            lastSwapTexture: null,
+            backBufferTexture: null,
+            backBufferView: null,
+            backBufferSrgbView: null,
+            backBufferTextureWidth: 0,
+            backBufferTextureHeight: 0,
+            palettes: new Map(),
+            ddPaletteBuffers: new Map(),
+            ddPaletteSerials: new Map(),
+            windowState: null,
+            cursor: { texture: null, view: null, width: 0, height: 0,
+                hotspotX: 0, hotspotY: 0, x: 0, y: 0, visible: false,
+                pipeline: null, sampler: null, uniform: null },
+            lastDraws: { fixed: null, programmable: null },
+            uniformRingChunks: [],
+            uniformStaging: [],
+            uniformRingIndex: 0,
+            uniformRingCursor: 0,
+            featureBits: 0,
+        };
+    }
+
+
+    const SESSION_FIELDS = Object.freeze([
+        "devices", "resources", "frame", "activeOcclusion", "presentingDevice", "lastSwapTexture",
+        "backBufferTexture", "backBufferView", "backBufferSrgbView", "backBufferTextureWidth",
+        "backBufferTextureHeight", "palettes", "ddPaletteBuffers", "ddPaletteSerials", "windowState",
+        "cursor", "lastDraws", "uniformRingChunks", "uniformStaging", "uniformRingIndex", "uniformRingCursor",
+    ]);
+    function captureSession(state, executor) {
+        for (const field of SESSION_FIELDS) state[field] = executor[field];
+    }
+    function activateSession(executor, state) {
+        for (const field of SESSION_FIELDS) executor[field] = state[field];
+    }
+    const api = { createDeviceState, createSessionState, captureSession, activateSession, SESSION_FIELDS };
+    global.D9WGState = api;
+    if (typeof module !== "undefined" && module.exports) module.exports = api;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+
+;
 // D9WG high-level Direct3D 9 command executor -- M1 skeleton.
 //
 // The guest DLL (glbridge/d3d9proxy/d3d9_proxy.c) keeps COM objects, shadow
@@ -4795,6 +4945,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         (typeof require === "function" ? require("./d9wg_wire.js") : null);
     if (!wire) throw new Error("d3d9_executor.js requires d9wg_wire.js to be loaded first");
     const { D9WGStreamError } = wire;
+    const stateFactory = global.D9WGState ||
+        (typeof require === "function" ? require("./d9wg_state.js") : null);
+    if (!stateFactory) throw new Error("d3d9_executor.js requires d9wg_state.js to be loaded first");
     if (!shaderPipeline)
         throw new Error("d3d9_executor.js requires d3d9_shader_pipeline.js to " +
             "be loaded first");
@@ -7728,6 +7881,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         };
     }
 
+    const DEVICE_STATE_CONSTANTS = { D3DMULTISAMPLE_NONE, D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_WORLD, IDENTITY4x4,
+        MAX_VS_CONST_F, MAX_PS_CONST_F, MAX_CONST_I, MAX_CONST_B };
+
     class D3D9WebGPUExecutor {
         constructor(canvas, options) {
             if (!canvas) throw new Error("D3D9 WebGPU canvas is required");
@@ -8456,146 +8612,18 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         }
 
         createDeviceState(handle) {
-            return {
-                handle,
-                // Where the guest's window is on the guest desktop, resent on
-                // every Present so the page can place the overlay canvas.
-                // Deliberately NOT the back buffer's size: emit_present_and_flush
-                // fills width/height from GetClientRect, and a windowed game's
-                // client area is smaller than the back buffer it hosts.
-                surface: { hwnd: 0, x: 0, y: 0, width: 0, height: 0,
-                    visible: true, noSurface: false, sessionKey: null },
-                // What the guest asked for at CreateDevice/Reset, and therefore
-                // the real size of the swap-chain colour attachment and of the
-                // auto depth target created beside it.
-                backBufferWidth: 0,
-                backBufferHeight: 0,
-                multisampleType: D3DMULTISAMPLE_NONE,
-                multisampleQuality: 0,
-                sampleCount: 1,
-                // WebGPU swap-chain textures are always single-sampled.  A
-                // multisampled D3D back buffer therefore renders into this
-                // private attachment and resolves into getCurrentTexture() at
-                // the end of every render pass.
-                backBufferMsaaTexture: null,
-                backBufferMsaaView: null,
-                backBufferMsaaSrgbView: null,
-                viewport: { x: 0, y: 0, width: 1, height: 1,
-                    minZ: 0, maxZ: 1 },
-                transforms: new Map([
-                    [D3DTS_VIEW, IDENTITY4x4], [D3DTS_PROJECTION, IDENTITY4x4],
-                    [D3DTS_WORLD, IDENTITY4x4],
-                ]),
-                // Highest n the guest has ever passed as D3DTS_WORLDMATRIX(n).
-                // Indexed vertex blending sizes its palette from this rather
-                // than from the 256 D3D9 allows, so an app using eight bones
-                // uploads eight matrices per draw and not 256.
-                maxWorldMatrixIndex: 0,
-                renderStates: new Map(),
-                // Auto depth-stencil surface, created on CREATE_DEVICE/RESET
-                // when the guest asked for one. hasDepth drives both the
-                // render pass attachment and whether pipelines declare a
-                // depthStencil block.
-                hasDepth: false,
-                depthTexture: null,
-                // CreateAdditionalSwapChain results, keyed by chain handle.
-                // The implicit chain is not in here: it is the canvas.
-                swapChains: new Map(),
-                depthView: null,
-                samplerStates: new Map(), // sampler*64+state -> value, read by samplerFor()
-                textureStageStates: new Map(),
-                vertexShaderHandle: 0,
-                pixelShaderHandle: 0,
-                // The D3D9 constant register file. Device state, not shader
-                // state: it survives SetVertexShader and Reset, so it lives
-                // here and is packed into a uniform buffer per draw by
-                // constantBufferFor(). Kept as flat typed arrays because the
-                // packing step is a straight subarray copy.
-                vsConstF: new Float32Array(MAX_VS_CONST_F * 4),
-                vsConstI: new Int32Array(MAX_CONST_I * 4),
-                vsConstB: new Uint32Array(MAX_CONST_B),
-                psConstF: new Float32Array(MAX_PS_CONST_F * 4),
-                psConstI: new Int32Array(MAX_CONST_I * 4),
-                psConstB: new Uint32Array(MAX_CONST_B),
-                material: null,          // set by SET_MATERIAL; not yet consumed (M2/M3 lighting)
-                lights: new Map(),       // light index -> D3DLIGHT9-shaped object; not yet consumed
-                lightEnabled: new Map(), // light index -> bool
-                // frequency is the raw SetStreamSourceFreq value. D3D9 starts
-                // every stream at 1; an absent entry is treated identically.
-                streams: new Map(),      // stream -> { handle, stride, offset, frequency }
-                indexBufferHandle: 0,
-                vertexDeclarationHandle: 0, // also used for the SET_FVF synthesized layout
-                fvfLayout: null,         // set by SET_FVF, cleared by SET_VERTEX_DECLARATION
-                textures: new Map(),     // stage -> resource handle
-                // Explicitly bound colour targets. A slot holding 0 (and slot 0
-                // by default) means the swap chain's back buffer, which is the
-                // only target whose view cannot be taken until Present.
-                renderTargets: [0, 0, 0, 0],
-                renderTargetLevels: [0, 0, 0, 0],
-                // Which cube face each slot names; 0 for a 2D target.
-                renderTargetFaces: [0, 0, 0, 0],
-                // D3DFMT_P8/A8P8 sample through this palette; null until
-                // SetCurrentTexturePalette names one.
-                currentPalette: null,
-                // 0 = the device's auto depth-stencil; depthUnbound is
-                // SetDepthStencilSurface(NULL), which is not the same thing --
-                // it turns depth testing off for the draws that follow.
-                depthTargetHandle: 0,
-                depthTargetLevel: 0,
-                depthUnbound: false,
-                scissorRect: null,
-                clipPlanes: Array.from({ length: 6 }, () => [0, 0, 0, 1]),
-                inScene: false,
-            };
+            return stateFactory.createDeviceState(handle, DEVICE_STATE_CONSTANTS);
         }
 
         createSessionState(key) {
-            return {
-                key,
-                devices: new Map(),
-                resources: new Map(),
-                frame: null,
-                activeOcclusion: null,
-                presentingDevice: null,
-                lastSwapTexture: null,
-                backBufferTexture: null,
-                backBufferView: null,
-                backBufferSrgbView: null,
-                backBufferTextureWidth: 0,
-                backBufferTextureHeight: 0,
-                palettes: new Map(),
-                ddPaletteBuffers: new Map(),
-                ddPaletteSerials: new Map(),
-                windowState: null,
-                cursor: { texture: null, view: null, width: 0, height: 0,
-                    hotspotX: 0, hotspotY: 0, x: 0, y: 0, visible: false,
-                    pipeline: null, sampler: null, uniform: null },
-                lastDraws: { fixed: null, programmable: null },
-                featureBits: 0,
-            };
+            return stateFactory.createSessionState(key);
         }
 
         saveActiveSessionState() {
             if (this.sessionKey === null) return;
             const state = this.sessionStates.get(this.sessionKey);
             if (!state) return;
-            state.devices = this.devices;
-            state.resources = this.resources;
-            state.frame = this.frame;
-            state.activeOcclusion = this.activeOcclusion || null;
-            state.presentingDevice = this.presentingDevice || null;
-            state.lastSwapTexture = this.lastSwapTexture || null;
-            state.backBufferTexture = this.backBufferTexture || null;
-            state.backBufferView = this.backBufferView || null;
-            state.backBufferSrgbView = this.backBufferSrgbView || null;
-            state.backBufferTextureWidth = this.backBufferTextureWidth || 0;
-            state.backBufferTextureHeight = this.backBufferTextureHeight || 0;
-            state.palettes = this.palettes;
-            state.ddPaletteBuffers = this.ddPaletteBuffers;
-            state.ddPaletteSerials = this.ddPaletteSerials;
-            state.windowState = this.windowState || null;
-            state.cursor = this.cursor;
-            state.lastDraws = this.lastDraws;
+            stateFactory.captureSession(state, this);
         }
 
         switchSession(key) {
@@ -8608,23 +8636,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.sessionStates.set(key, state);
             }
             this.sessionKey = key;
-            this.devices = state.devices;
-            this.resources = state.resources;
-            this.frame = state.frame;
-            this.activeOcclusion = state.activeOcclusion;
-            this.presentingDevice = state.presentingDevice;
-            this.lastSwapTexture = state.lastSwapTexture;
-            this.backBufferTexture = state.backBufferTexture;
-            this.backBufferView = state.backBufferView;
-            this.backBufferSrgbView = state.backBufferSrgbView;
-            this.backBufferTextureWidth = state.backBufferTextureWidth;
-            this.backBufferTextureHeight = state.backBufferTextureHeight;
-            this.palettes = state.palettes;
-            this.ddPaletteBuffers = state.ddPaletteBuffers;
-            this.ddPaletteSerials = state.ddPaletteSerials;
-            this.windowState = state.windowState;
-            this.cursor = state.cursor;
-            this.lastDraws = state.lastDraws;
+            stateFactory.activateSession(this, state);
             if (previousKey !== null) {
                 ++this.stats.sessionChanges;
                 if (this.stats.sessionChanges === 1)
@@ -8639,7 +8651,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                         !previous.resources.size && !previous.frame &&
                         !previous.activeOcclusion && !previous.cursor.texture &&
                         !previous.backBufferTexture &&
-                        !previous.ddPaletteBuffers.size)
+                        !previous.ddPaletteBuffers.size && !previous.uniformRingChunks.length)
                     this.sessionStates.delete(previousKey);
             }
         }
@@ -8854,6 +8866,11 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             this.ddPaletteSerials.clear();
             this.palettes.clear();
             this.retireActiveSessionBackBuffer();
+            for (const buffer of this.uniformRingChunks) this.retireGPUObject(buffer);
+            this.uniformRingChunks = [];
+            this.uniformStaging = [];
+            this.uniformRingIndex = 0;
+            this.uniformRingCursor = 0;
             this.retireGPUObject(this.cursor && this.cursor.texture);
             this.retireGPUObject(this.cursor && this.cursor.uniform);
             this.cursor = { texture: null, view: null, width: 0, height: 0,

@@ -1,0 +1,38 @@
+{
+  "stage": "D3D review 3B1",
+  "hostCommit": "eba2409ba8b3d19d0ed8fb423875ce6a7ec600cb",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "017490988930d2e252be",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "be3c4209bed43acffbd853c732b1df27f28e63d93012fed2b15a46246b1fb112",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "4738162ee1f807c37487a312bc21984555724d67575392ae45a4fd3af22ce37e",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "c40fac1ce7b8c474d229eba62c08885878615071d50149954c448ac7c01d4f5f",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "2cd4475424e4639418b2d25b325b8b2755a7ab1a7dfbe251ba36563c2c9262d6",
+    "vendor/v86/glbridge/v86gl-device.js": "4c6c6f84b0d85afded5bad05f1821f30de55369473f31fffcce9eff0eac480c7",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641"
+  },
+  "validation": {
+    "coreSuites": 121,
+    "privateCorpusStrict": true,
+    "guestAbiSuites": 72,
+    "siteIntegrationTests": 2,
+    "swiftshaderCases": 133,
+    "knownPixelFailures": 19,
+    "workerAndFullCheckpoint": "PASS",
+    "warcraft3FrozenReplay": "PASS",
+    "d3dMutationsKilled": 12,
+    "pendingSessionUniformPixels": 8192
+  },
+  "limitations": [
+    "GTA SA diagnostic startup remains stalled; not accepted as gameplay.",
+    "Wine guest device/visual suites and the full review game matrix remain pending.",
+    "No remote CI run or image writeback performed.",
+    "Explicit device creation and per-device back buffers remain review 3B2."
+  ]
+}
