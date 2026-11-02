@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "c3ca1373a9dc431a030d";
+globalThis.V86GL_BUILD_REVISION = "d765137eda37adc53ad7";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -5176,6 +5176,75 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     const D3DFMT_INDEX16 = 101;
     const D3DFMT_INDEX32 = 102;
 
+    // Native SDK storage geometry; apis bits preserve the frontend layout
+    // entry points (7=bit0, 8=bit1, 9=bit2), independently of GPU capability.
+    // [format, block width, block height, bytes/block, apis, legacy depth].
+    const FORMAT_LAYOUT_ROWS = Object.freeze([
+        Object.freeze([D3DFMT_R8G8B8, 1, 1, 3, 7, 0]),
+        Object.freeze([D3DFMT_A8R8G8B8, 1, 1, 4, 7, 0]),
+        Object.freeze([D3DFMT_X8R8G8B8, 1, 1, 4, 7, 0]),
+        Object.freeze([D3DFMT_R5G6B5, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_X1R5G5B5, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_A1R5G5B5, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_A4R4G4B4, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_R3G3B2, 1, 1, 1, 7, 0]),
+        Object.freeze([D3DFMT_A8, 1, 1, 1, 7, 0]),
+        Object.freeze([D3DFMT_A8R3G3B2, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_X4R4G4B4, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_A2B10G10R10, 1, 1, 4, 6, 0]),
+        Object.freeze([D3DFMT_A8B8G8R8, 1, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_X8B8G8R8, 1, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_G16R16, 1, 1, 4, 6, 0]),
+        Object.freeze([D3DFMT_A2R10G10B10, 1, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_A16B16G16R16, 1, 1, 8, 4, 0]),
+        Object.freeze([D3DFMT_A8P8, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_P8, 1, 1, 1, 7, 0]),
+        Object.freeze([D3DFMT_L8, 1, 1, 1, 7, 0]),
+        Object.freeze([D3DFMT_A8L8, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_A4L4, 1, 1, 1, 6, 0]),
+        Object.freeze([D3DFMT_V8U8, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_L6V5U5, 1, 1, 2, 7, 0]),
+        Object.freeze([D3DFMT_X8L8V8U8, 1, 1, 4, 7, 0]),
+        Object.freeze([D3DFMT_Q8W8V8U8, 1, 1, 4, 6, 0]),
+        Object.freeze([D3DFMT_V16U16, 1, 1, 4, 6, 0]),
+        Object.freeze([D3DFMT_W11V11U10, 1, 1, 4, 2, 0]),
+        Object.freeze([D3DFMT_A2W10V10U10, 1, 1, 4, 6, 0]),
+        Object.freeze([70, 1, 1, 2, 0, 1]),
+        Object.freeze([71, 1, 1, 4, 1, 1]),
+        Object.freeze([73, 1, 1, 2, 1, 1]),
+        Object.freeze([75, 1, 1, 4, 1, 1]),
+        Object.freeze([77, 1, 1, 4, 1, 1]),
+        Object.freeze([79, 1, 1, 4, 1, 1]),
+        Object.freeze([80, 1, 1, 2, 1, 1]),
+        Object.freeze([D3DFMT_L16, 1, 1, 2, 4, 0]),
+        Object.freeze([D3DFMT_INDEX16, 1, 1, 2, 2, 0]),
+        Object.freeze([D3DFMT_INDEX32, 1, 1, 4, 2, 0]),
+        Object.freeze([D3DFMT_Q16W16V16U16, 1, 1, 8, 4, 0]),
+        Object.freeze([D3DFMT_R16F, 1, 1, 2, 4, 0]),
+        Object.freeze([D3DFMT_G16R16F, 1, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_A16B16G16R16F, 1, 1, 8, 4, 0]),
+        Object.freeze([D3DFMT_R32F, 1, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_G32R32F, 1, 1, 8, 4, 0]),
+        Object.freeze([D3DFMT_A32B32G32R32F, 1, 1, 16, 4, 0]),
+        Object.freeze([D3DFMT_CxV8U8, 1, 1, 2, 4, 0]),
+        Object.freeze([D3DFMT_ATI1N, 4, 4, 8, 4, 0]),
+        Object.freeze([D3DFMT_DXT1, 4, 4, 8, 7, 0]),
+        Object.freeze([D3DFMT_ATI2N, 4, 4, 16, 4, 0]),
+        Object.freeze([D3DFMT_DXT2, 4, 4, 16, 7, 0]),
+        Object.freeze([D3DFMT_YUY2, 2, 1, 4, 6, 0]),
+        Object.freeze([D3DFMT_DXT3, 4, 4, 16, 7, 0]),
+        Object.freeze([D3DFMT_DXT4, 4, 4, 16, 7, 0]),
+        Object.freeze([D3DFMT_DXT5, 4, 4, 16, 7, 0]),
+        Object.freeze([D3DFMT_G8R8_G8B8, 2, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_R8G8_B8G8, 2, 1, 4, 4, 0]),
+        Object.freeze([D3DFMT_UYVY, 2, 1, 4, 6, 0]),
+    ]);
+    const FORMAT_LAYOUTS = new Map(FORMAT_LAYOUT_ROWS.map(row => [row[0], row]));
+    function formatLayout(format, api) {
+        const row = FORMAT_LAYOUTS.get(format);
+        return row && (api === undefined || (api >= 7 && api <= 9 && (row[4] & (1 << (api - 7))))) ? row : null;
+    }
+
     function srgbSiblingOf(gpuFormat) {
         return {
             "bgra8unorm": "bgra8unorm-srgb",
@@ -5187,14 +5256,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     }
 
     function isCompressedFormat(format) {
-        return format === D3DFMT_DXT1 || format === D3DFMT_DXT2 ||
-            format === D3DFMT_DXT3 || format === D3DFMT_DXT4 ||
-            format === D3DFMT_DXT5 ||
-            format === D3DFMT_ATI1N || format === D3DFMT_ATI2N;
+        const row = formatLayout(format);
+        return !!row && row[2] === 4;
     }
 
     function compressedBlockBytes(format) {
-        return (format === D3DFMT_DXT1 || format === D3DFMT_ATI1N) ? 8 : 16;
+        const row = formatLayout(format);
+        return row && row[2] === 4 ? row[3] : 0;
     }
 
     function blockAlignedCopyExtent(size, compressed) {
@@ -5965,6 +6033,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         D3DFMT_DXT5,
         D3DFMT_INDEX16,
         D3DFMT_INDEX32,
+        FORMAT_LAYOUT_ROWS,
+        formatLayout,
         srgbSiblingOf,
         isCompressedFormat,
         compressedBlockBytes,

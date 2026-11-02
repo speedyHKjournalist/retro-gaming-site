@@ -228,3 +228,8 @@ D3D7 fresh material and all six clip planes use the shared generated zero
 object defaults. The original Microsoft system RGB device was measured twice,
 including recreation after nonzero changes; the proxy matches all 82 words and
 HRESULTs. D3D8 has its own SDK material default and is not used as a D3D7 oracle.
+
+Pixel/block sizes and legacy depth classification now use the shared generated
+`../runtime/d9wg_format_layouts.h` table. This preserves the DirectDraw layout
+range; API8/9 use their own masks in that same table. Layout availability is
+separate from actual backend filtering/blending capabilities.

@@ -28,6 +28,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
@@ -1770,119 +1771,14 @@ static BOOL multiply_u32(UINT left, UINT right, UINT *result)
 static BOOL texture_format_layout(D3DFORMAT format, UINT *block_width,
         UINT *block_height, UINT *block_bytes)
 {
-    *block_width = 1;
-    *block_height = 1;
-    switch (format) {
-    case D3DFMT_R8G8B8:
-        *block_bytes = 3;
-        return TRUE;
-    case D3DFMT_A8R8G8B8:
-    case D3DFMT_X8R8G8B8:
-    case D3DFMT_A8B8G8R8:
-    case D3DFMT_X8B8G8R8:
-    case D3DFMT_X8L8V8U8:
-    case D3DFMT_Q8W8V8U8:
-    case D3DFMT_V16U16:
-    case D3DFMT_A2W10V10U10:
-    case D3DFMT_A2B10G10R10:
-    case D3DFMT_G16R16:
-    case D3DFMT_A2R10G10B10:
-    case D3DFMT_G16R16F:
-    case D3DFMT_R32F:
-        *block_bytes = 4;
-        return TRUE;
-    case D3DFMT_A16B16G16R16:
-    case D3DFMT_A16B16G16R16F:
-    case D3DFMT_G32R32F:
-        *block_bytes = 8;
-        return TRUE;
-    case D3DFMT_A32B32G32R32F:
-        *block_bytes = 16;
-        return TRUE;
-    case D3DFMT_R5G6B5:
-    case D3DFMT_X1R5G5B5:
-    case D3DFMT_A1R5G5B5:
-    case D3DFMT_A4R4G4B4:
-    case D3DFMT_A8R3G3B2:
-    case D3DFMT_X4R4G4B4:
-    case D3DFMT_A8L8:
-    case D3DFMT_V8U8:
-    case D3DFMT_L6V5U5:
-    case D3DFMT_CxV8U8:
-    case D3DFMT_L16:
-    case D3DFMT_R16F:
-        *block_bytes = 2;
-        return TRUE;
-    case D3DFMT_R3G3B2:
-    case D3DFMT_L8:
-    case D3DFMT_A8:
-    case D3DFMT_A4L4:
-    case D3DFMT_P8:
-        *block_bytes = 1;
-        return TRUE;
-    case D3DFMT_A8P8:
-        *block_bytes = 2;
-        return TRUE;
-    case D3DFMT_Q16W16V16U16:
-        *block_bytes = 8;
-        return TRUE;
-    /* Two texels share one 32-bit block, so the block is 2x1 rather than the
-     * 4x4 a BCn block is -- the same mechanism, a different shape. D3D9
-     * requires an even width for these, which a 2-wide block enforces. */
-    case D3DFMT_UYVY:
-    case D3DFMT_YUY2:
-    case D3DFMT_R8G8_B8G8:
-    case D3DFMT_G8R8_G8B8:
-        *block_width = 2;
-        *block_bytes = 4;
-        return TRUE;
-    case D3DFMT_DXT1:
-        *block_width = 4;
-        *block_height = 4;
-        *block_bytes = 8;
-        return TRUE;
-    case D3DFMT_DXT2:
-    case D3DFMT_DXT3:
-    case D3DFMT_DXT4:
-    case D3DFMT_DXT5:
-        *block_width = 4;
-        *block_height = 4;
-        *block_bytes = 16;
-        return TRUE;
-    default:
-        /* Outside the switch because a FOURCC is not a D3DFORMAT enumerator.
-         * ATI1N is one BC4 block (8 bytes) and ATI2N two of them (16). */
-        if (format == D9FMT_ATI1N) {
-            *block_width = 4;
-            *block_height = 4;
-            *block_bytes = 8;
-            return TRUE;
-        }
-        if (format == D9FMT_ATI2N) {
-            *block_width = 4;
-            *block_height = 4;
-            *block_bytes = 16;
-            return TRUE;
-        }
-        return FALSE;
-    }
+    return d9wg_format_layout(9, (uint32_t)format, block_width, block_height, block_bytes);
 }
 
 static BOOL texture_level_layout(D3DFORMAT format, UINT width, UINT height,
         UINT *row_pitch, UINT *row_count, UINT *byte_count)
 {
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    UINT columns;
-
-    if (!texture_format_layout(format, &block_width, &block_height,
-            &block_bytes))
-        return FALSE;
-    columns = (width + block_width - 1u) / block_width;
-    *row_count = (height + block_height - 1u) / block_height;
-    return multiply_u32(columns, block_bytes, row_pitch)
-            && multiply_u32(*row_pitch, *row_count, byte_count);
+    return d9wg_texture_level_layout(9, (uint32_t)format, width, height,
+            row_pitch, row_count, byte_count);
 }
 
 static BOOL supported_texture_format(D3DFORMAT format)

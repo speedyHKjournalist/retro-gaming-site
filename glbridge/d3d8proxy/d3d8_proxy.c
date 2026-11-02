@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
@@ -1374,83 +1375,14 @@ static void shader_assign(D8Shader **target, D8Shader *shader)
 static BOOL texture_format_layout(D3DFORMAT format, UINT *block_width,
         UINT *block_height, UINT *block_bytes)
 {
-    *block_width = 1;
-    *block_height = 1;
-    switch ((DWORD)format) {
-    case D3DFMT_A8R8G8B8:
-    case D3DFMT_X8R8G8B8:
-    case D3DFMT_A2B10G10R10:
-    case D3DFMT_G16R16:
-    case D3DFMT_X8L8V8U8:  /* signed bump + luminance */
-    case D3DFMT_Q8W8V8U8:  /* signed bump, four channels */
-    case D3DFMT_V16U16:
-    case D3DFMT_W11V11U10: /* signed 10/11/11, packed in one DWORD */
-    case D3DFMT_A2W10V10U10:
-    case D3DFMT_INDEX32:    /* probed as a texture by legacy caps scanners */
-        *block_bytes = 4;
-        return TRUE;
-    case D3DFMT_R8G8B8:
-        *block_bytes = 3;
-        return TRUE;
-    case D3DFMT_R5G6B5:
-    case D3DFMT_X1R5G5B5:
-    case D3DFMT_A1R5G5B5:
-    case D3DFMT_A4R4G4B4:
-    case D3DFMT_X4R4G4B4:
-    case D3DFMT_A8R3G3B2:
-    case D3DFMT_A8L8:
-    case D3DFMT_A8P8:
-    case D3DFMT_V8U8:      /* the classic EMBM bump map */
-    case D3DFMT_L6V5U5:
-    case D3DFMT_INDEX16:    /* probed as a texture by legacy caps scanners */
-        *block_bytes = 2;
-        return TRUE;
-    case D3DFMT_L8:
-    case D3DFMT_A8:
-    case D3DFMT_P8:
-    case D3DFMT_R3G3B2:
-    case D3DFMT_A4L4:
-        *block_bytes = 1;
-        return TRUE;
-    case D3DFMT_DXT1:
-        *block_width = 4;
-        *block_height = 4;
-        *block_bytes = 8;
-        return TRUE;
-    case D3DFMT_DXT2:
-    case D3DFMT_DXT3:
-    case D3DFMT_DXT4:
-    case D3DFMT_DXT5:
-        *block_width = 4;
-        *block_height = 4;
-        *block_bytes = 16;
-        return TRUE;
-    case D3DFMT_UYVY:
-    case D3DFMT_YUY2:
-        /* 4:2:2 video: two horizontal texels share one 32-bit YUV block. */
-        *block_width = 2;
-        *block_bytes = 4;
-        return TRUE;
-    default:
-        return FALSE;
-    }
+    return d9wg_format_layout(8, (uint32_t)format, block_width, block_height, block_bytes);
 }
 
 static BOOL texture_level_layout(D3DFORMAT format, UINT width, UINT height,
         UINT *row_pitch, UINT *row_count, UINT *byte_count)
 {
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    UINT columns;
-
-    if (!texture_format_layout(format, &block_width, &block_height,
-            &block_bytes))
-        return FALSE;
-    columns = (width + block_width - 1u) / block_width;
-    *row_count = (height + block_height - 1u) / block_height;
-    return multiply_u32(columns, block_bytes, row_pitch)
-            && multiply_u32(*row_pitch, *row_count, byte_count);
+    return d9wg_texture_level_layout(8, (uint32_t)format, width, height,
+            row_pitch, row_count, byte_count);
 }
 
 /*

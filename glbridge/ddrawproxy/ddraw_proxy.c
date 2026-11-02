@@ -35,6 +35,7 @@
 #include <d3d.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
@@ -705,37 +706,16 @@ static DDClipper *clipper_from_iface(IDirectDrawClipper *iface)
 
 static UINT format_bytes_per_pixel(unsigned format)
 {
-    switch (format) {
-    case DDWG_FMT_P8: case DDWG_FMT_A8: case DDWG_FMT_L8:
-    case DDWG_FMT_R3G3B2:
-        return 1u;
-    case DDWG_FMT_R5G6B5: case DDWG_FMT_X1R5G5B5: case DDWG_FMT_A1R5G5B5:
-    case DDWG_FMT_A4R4G4B4: case DDWG_FMT_X4R4G4B4: case DDWG_FMT_A8R3G3B2:
-    case DDWG_FMT_A8P8: case DDWG_FMT_A8L8: case DDWG_FMT_D16:
-    case DDWG_FMT_D15S1: case DDWG_FMT_V8U8: case DDWG_FMT_L6V5U5:
-        return 2u;
-    case DDWG_FMT_R8G8B8:
-        return 3u;
-    case DDWG_FMT_A8R8G8B8: case DDWG_FMT_X8R8G8B8: case DDWG_FMT_D32:
-    case DDWG_FMT_D24S8: case DDWG_FMT_D24X8: case DDWG_FMT_D24X4S4:
-    case DDWG_FMT_X8L8V8U8:
-        return 4u;
-    default:
-        return 0u;
-    }
+    const D9WGFormatLayout *layout = d9wg_find_format(format);
+    return layout && (layout->apis & 1u) && layout->block_width == 1u
+            && layout->block_height == 1u ? layout->block_bytes : 0u;
 }
 
 static UINT format_compressed_block_bytes(unsigned format)
 {
-    switch (format) {
-    case DDWG_FMT_DXT1:
-        return 8u;
-    case DDWG_FMT_DXT2: case DDWG_FMT_DXT3:
-    case DDWG_FMT_DXT4: case DDWG_FMT_DXT5:
-        return 16u;
-    default:
-        return 0u;
-    }
+    const D9WGFormatLayout *layout = d9wg_find_format(format);
+    return layout && (layout->apis & 1u) && layout->block_height == 4u
+            ? layout->block_bytes : 0u;
 }
 
 static BOOL format_is_compressed(unsigned format)
@@ -745,14 +725,8 @@ static BOOL format_is_compressed(unsigned format)
 
 static BOOL format_is_depth(unsigned format)
 {
-    switch (format) {
-    case DDWG_FMT_D16: case DDWG_FMT_D15S1: case DDWG_FMT_D24S8:
-    case DDWG_FMT_D24X8: case DDWG_FMT_D24X4S4: case DDWG_FMT_D32:
-    case DDWG_FMT_D16_LOCKABLE:
-        return TRUE;
-    default:
-        return FALSE;
-    }
+    const D9WGFormatLayout *layout = d9wg_find_format(format);
+    return layout && layout->depth;
 }
 
 static void describe_pixel_format(const DDPIXELFORMAT *source,

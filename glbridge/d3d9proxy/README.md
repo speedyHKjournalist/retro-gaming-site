@@ -24,6 +24,9 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
 - `IDirect3D9`/`IDirect3DDevice9` COM lifecycle, adapter enumeration, caps
   (`VertexShaderVersion`/`PixelShaderVersion` report `(3,0)` by default; the
   `ffp` and `sm2` diagnostic profiles remain selectable), and `CreateDevice`;
+- texture block geometry and checked mip row/byte calculations generated from
+  the host format table in `../runtime/d9wg_format_layouts.h`; frontend layout
+  ranges stay version-specific and do not imply GPU capability support;
 - version-specific material and zero clip-plane defaults generated from the
   shared host table: D3D8 diffuse RGB is white with zero alpha; D3D9 material
   is entirely zero. Reset clears material, planes, and low/sparse light state;

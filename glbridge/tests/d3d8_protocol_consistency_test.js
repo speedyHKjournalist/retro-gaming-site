@@ -234,10 +234,11 @@ for (const name of ["device_create_vertex_shader", "device_create_pixel_shader"]
         name + " never hashes the bytecode it uploads");
 
 const textureLayout = cFunction(guest, "texture_format_layout");
+assert.match(textureLayout, /d9wg_format_layout\(8,/,
+    "D3D8 storage layout must use the shared generated table");
 for (const name of [...D3D8_TEXTURE_FORMATS, ...D3D8_PROBED_AS_TEXTURES]) {
-    assert.ok(textureLayout.includes("D3DFMT_" + name + ":"),
-        "D3DFMT_" + name + " has no block layout in the D3D8 guest, so " +
-        "CheckDeviceFormat refuses it and CreateTexture cannot make one");
+    assert.ok(formats.formatLayout(formats["D3DFMT_" + name], 8),
+        "D3DFMT_" + name + " has no shared D3D8 storage layout");
 }
 
 for (const name of [...D3D8_TEXTURE_FORMATS, ...D3D8_PROBED_AS_TEXTURES]) {
