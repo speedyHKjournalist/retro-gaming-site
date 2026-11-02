@@ -1,3 +1,6 @@
+#ifdef D9WG_VERTEX_COLOR_CASES
+#include "d3d9_vertex_color_cases.h"
+#endif
 /* D3D9 public COM typed-input processing, with independent literal values. */
 static void vertex_format_cases(void)
 {
@@ -77,5 +80,8 @@ static void vertex_format_cases(void)
     IDirect3DVertexDeclaration9_Release(declaration);
     BUF(Release)(source);
     BUF(Release)(destination);
+#ifdef D9WG_VERTEX_COLOR_CASES
+    vertex_color_cases();
+#endif
     report("PASS real XP typed input: half positions, DEC3N normals, normalized coordinates, half size, stream/destination offsets, retained components, copy flags, clip status and atomic refusals");
 }

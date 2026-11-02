@@ -140,29 +140,55 @@ void d9wg_lighting_normal(const D9WGTNLLighting *state, const float *normal, flo
     if (state->flags.normalize_normals) d9wg_tnl_normalize3(output, 0.0f);
     for (unsigned i = 0; i < 3; ++i) eye_normal[i] = output[i];
 }
+void d9wg_lighting_vertex_view_float(const D9WGTNLLighting *state, const float *eye_position,
+        const float *eye_normal, const float *color0, const float *color1, uint32_t *diffuse, uint32_t *specular)
+{
+    const float default0[4] = {1,1,1,1}, default1[4] = {0,0,0,0};
+    float out_diffuse[4], out_specular[4];
+    d9wg_lighting_shade(state, eye_position, eye_normal,
+            color0 ? color0 : default0, color1 ? color1 : default1,
+            (color0 ? 1u : 0u) | (color1 ? 2u : 0u), out_diffuse, out_specular);
+    /* Fog-alpha generation is separate. Preserve the source specular alpha
+     * through lighting without first quantizing a floating point declaration. */
+    out_specular[3] = color1 ? color1[3] : 0.0f;
+    *diffuse = d9wg_pack_color(out_diffuse);*specular = d9wg_pack_color(out_specular);
+}
 void d9wg_lighting_vertex_view(const D9WGTNLLighting *state, const float *eye_position,
         const float *eye_normal, const void *color0, const void *color1, uint32_t *diffuse, uint32_t *specular)
 {
-    uint32_t source0 = 0xffffffffu, source1 = 0, mask = 0;
-    float rgba0[4], rgba1[4], out_diffuse[4], out_specular[4];
-    if (color0) { __builtin_memcpy(&source0, color0, sizeof(source0));mask |= 1u; }
-    if (color1) { __builtin_memcpy(&source1, color1, sizeof(source1));mask |= 2u; }
+    uint32_t source0 = 0xffffffffu, source1 = 0;
+    float rgba0[4], rgba1[4];
+    if (color0) __builtin_memcpy(&source0, color0, sizeof(source0));
+    if (color1) __builtin_memcpy(&source1, color1, sizeof(source1));
     if (!state->flags.lighting) { *diffuse = source0;*specular = source1;return; }
     d9wg_lighting_color(source0, rgba0);d9wg_lighting_color(source1, rgba1);
-    d9wg_lighting_shade(state, eye_position, eye_normal, rgba0, rgba1, mask, out_diffuse, out_specular);
-    *diffuse = d9wg_pack_color(out_diffuse);
-    // Fog-alpha generation is a separate vertex-processing step.
-    *specular = (d9wg_pack_color(out_specular) & 0x00ffffffu) | (source1 & 0xff000000u);
+    d9wg_lighting_vertex_view_float(state, eye_position, eye_normal,
+            color0 ? rgba0 : 0, color1 ? rgba1 : 0, diffuse, specular);
 }
-void d9wg_lighting_vertex(const D9WGTNLLighting *state, const void *world_view, const float *position,
-        const void *normal, const void *color0, const void *color1, uint32_t *diffuse, uint32_t *specular)
+static void lighting_vertex_geometry(const D9WGTNLLighting *state, const void *world_view,
+        const float *position, const void *normal, float *eye_position, float *eye_normal)
 {
-    float eye_position[4] = {0,0,0,0}, eye_normal[3] = {0,0,0}, source_normal[3] = {0,0,0};
+    float source_normal[3] = {0,0,0};
+    for (unsigned i = 0; i < 4; ++i) eye_position[i] = 0;
+    for (unsigned i = 0; i < 3; ++i) eye_normal[i] = 0;
     if (state->flags.lighting) {
         if (normal) for (unsigned i = 0; i < 3; ++i)
             __builtin_memcpy(&source_normal[i], (const uint8_t *)normal + i*sizeof(float), sizeof(float));
         d9wg_transform_vector4(world_view, position, eye_position);
         d9wg_lighting_normal(state, normal ? source_normal : 0, eye_normal);
     }
+}
+void d9wg_lighting_vertex(const D9WGTNLLighting *state, const void *world_view, const float *position,
+        const void *normal, const void *color0, const void *color1, uint32_t *diffuse, uint32_t *specular)
+{
+    float eye_position[4], eye_normal[3];
+    lighting_vertex_geometry(state, world_view, position, normal, eye_position, eye_normal);
     d9wg_lighting_vertex_view(state, eye_position, eye_normal, color0, color1, diffuse, specular);
+}
+void d9wg_lighting_vertex_float(const D9WGTNLLighting *state, const void *world_view, const float *position,
+        const void *normal, const float *color0, const float *color1, uint32_t *diffuse, uint32_t *specular)
+{
+    float eye_position[4], eye_normal[3];
+    lighting_vertex_geometry(state, world_view, position, normal, eye_position, eye_normal);
+    d9wg_lighting_vertex_view_float(state, eye_position, eye_normal, color0, color1, diffuse, specular);
 }

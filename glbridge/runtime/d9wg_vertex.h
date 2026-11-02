@@ -10,6 +10,7 @@ typedef struct D9WGProcessLayout {
     uint32_t position_transformed, position_floats, stride, texcoord_count;
     uint32_t legacy_xyz_output, legacy_output, write_extent;
     uint32_t position_type, normal_type, psize_type, texcoord_type[8];
+    uint32_t diffuse_type, specular_type;
     int32_t texcoord[8];
     uint32_t texcoord_floats[8];
     uint32_t has_blend;
@@ -22,7 +23,9 @@ static __inline int d9wg_process_canonical_output(const D9WGProcessLayout *layou
 {
     if (!layout || (layout->position_type != 3 && !layout->legacy_xyz_output) ||
             (layout->normal >= 0 && layout->normal_type != 2 && layout->normal_type != 3) ||
-            (layout->psize >= 0 && layout->psize_type != 0)) return 0;
+            (layout->psize >= 0 && layout->psize_type != 0) ||
+            (layout->diffuse >= 0 && layout->diffuse_type != 4) ||
+            (layout->specular >= 0 && layout->specular_type != 4)) return 0;
     for (unsigned i = 0; i < 8; ++i)
         if (layout->texcoord[i] >= 0 && layout->texcoord_type[i] > 3) return 0;
     return 1;
@@ -52,7 +55,7 @@ int d9wg_vertex_textures_init(D9WGVertexState *state, const void *stage_states,
 float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position);
 
 /* SDK-independent fixed-function source geometry, including packed attributes.
- * Float colors, packed output and multiple streams remain explicit failures. */
+ * Packed output and multiple streams remain explicit failures. */
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout);
 int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout);
 /* D3D7 RGB writes compact XYZRHW / color / float2 texture output using

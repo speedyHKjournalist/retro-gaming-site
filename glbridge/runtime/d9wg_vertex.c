@@ -105,9 +105,8 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
             if (e->usage_index || layout->psize >= 0) return 0;
             layout->psize = e->offset;layout->psize_type = e->type;break;
         case 10: /* COLOR */
-            if (e->type != 4) return 0;
-            if (e->usage_index == 0) { if (layout->diffuse >= 0) return 0;layout->diffuse = e->offset; }
-            if (e->usage_index == 1) { if (layout->specular >= 0) return 0;layout->specular = e->offset; }
+            if (e->usage_index == 0) { if (layout->diffuse >= 0) return 0;layout->diffuse = e->offset;layout->diffuse_type = e->type; }
+            if (e->usage_index == 1) { if (layout->specular >= 0) return 0;layout->specular = e->offset;layout->specular_type = e->type; }
             break;
         case 5: /* TEXCOORD */
             if (e->usage_index >= 8 || !floats || layout->texcoord[e->usage_index] >= 0) return 0;
@@ -230,7 +229,18 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
          * computes diffuse/specular even when passthrough copying is disabled. */
         if ((copy_data || lighting->flags.lighting) && (d->diffuse >= 0 || d->specular >= 0)) {
             uint32_t diffuse, specular;
-            if (blend) d9wg_lighting_vertex_view(lighting, blended_eye, blended_normal,
+            if ((s->diffuse >= 0 && s->diffuse_type != 4) ||
+                    (s->specular >= 0 && s->specular_type != 4)) {
+                float color0[4], color1[4], normal[4] = {0};
+                if (s->diffuse >= 0) d9wg_decl_read(s->diffuse_type, in + s->diffuse, color0);
+                if (s->specular >= 0) d9wg_decl_read(s->specular_type, in + s->specular, color1);
+                if (s->normal >= 0) d9wg_decl_read(s->normal_type, in + s->normal, normal);
+                if (blend) d9wg_lighting_vertex_view_float(lighting, blended_eye, blended_normal,
+                        s->diffuse >= 0 ? color0 : 0, s->specular >= 0 ? color1 : 0, &diffuse, &specular);
+                else d9wg_lighting_vertex_float(lighting, world_view, position,
+                        s->normal >= 0 ? normal : 0,
+                        s->diffuse >= 0 ? color0 : 0, s->specular >= 0 ? color1 : 0, &diffuse, &specular);
+            } else if (blend) d9wg_lighting_vertex_view(lighting, blended_eye, blended_normal,
                     s->diffuse >= 0 ? in + s->diffuse : 0,
                     s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
             else {
@@ -251,7 +261,7 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             else d9wg_transform_vector4(world_view, position, eye);
             __builtin_memcpy(&specular, out + d->specular, 4u);
             specular = (specular & 0x00ffffffu) |
-                    (uint32_t)(d9wg_vertex_fog(vertex_state, eye)*255.0f + 0.5f) << 24;
+                    d9wg_color_byte(d9wg_vertex_fog(vertex_state, eye)) << 24;
             __builtin_memcpy(out + d->specular, &specular, 4u);
         }
         if (copy_data && s->normal >= 0 && d->normal >= 0) {

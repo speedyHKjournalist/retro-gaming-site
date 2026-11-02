@@ -47,7 +47,7 @@ static int clip_draw_cases(void)
     layout.position = 0;
     layout.position_transformed = 1;
     layout.position_floats = 4;layout.position_type = 3;
-    layout.diffuse = 16;
+    layout.diffuse = 16;layout.diffuse_type = 4;
     layout.stride = 20;
     layout.normal = layout.psize = layout.specular = -1;
     for (unsigned i = 0; i < 8; i++)

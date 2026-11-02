@@ -67,17 +67,17 @@ void d9wg_normal_matrix(const void *matrix, float *output)
     output[8] = (float)((b*f-c*e)*scale);output[9] = (float)((c*d-a*f)*scale);output[10] = (float)((a*e-b*d)*scale);
 }
 
-static float saturate(float value)
+uint32_t d9wg_color_byte(float value)
 {
-    if (value < 0.0f) return 0.0f;
-    if (value > 1.0f) return 1.0f;
-    return value;
+    /* Define nonfinite color packing before the integer conversion. Native
+     * GPU NaN rendering is not portable; the CPU must still avoid C UB. */
+    if (!(value > 0.0f)) return 0;
+    if (value >= 1.0f) return 255;
+    return (uint32_t)(value * 255.0f + 0.5f);
 }
 
 uint32_t d9wg_pack_color(const float *rgba)
 {
-    return ((uint32_t)(saturate(rgba[3]) * 255.0f + 0.5f) << 24)
-            | ((uint32_t)(saturate(rgba[0]) * 255.0f + 0.5f) << 16)
-            | ((uint32_t)(saturate(rgba[1]) * 255.0f + 0.5f) << 8)
-            | (uint32_t)(saturate(rgba[2]) * 255.0f + 0.5f);
+    return d9wg_color_byte(rgba[3]) << 24 | d9wg_color_byte(rgba[0]) << 16
+            | d9wg_color_byte(rgba[1]) << 8 | d9wg_color_byte(rgba[2]);
 }
