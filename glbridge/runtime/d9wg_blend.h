@@ -6,7 +6,8 @@ typedef struct D9WGVertexBlendMatrix {
     float world_view[16], world_view_projection[16], normal[16];
 } D9WGVertexBlendMatrix;
 struct D9WGVertexBlend {
-    uint32_t matrix_count, indexed, palette_count, world_count, world_gap;
+    uint32_t matrix_count, indexed, palette_count, world_count, world_gap, tween;
+    float tween_factor;
     const uint8_t *worlds;
     float view[16], projection[16];
     D9WGVertexBlendMatrix matrix[];

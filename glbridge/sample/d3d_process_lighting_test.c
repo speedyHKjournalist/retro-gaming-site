@@ -237,6 +237,7 @@ static void blend_checks(void)
 #if D9WG_TNL_API == 9
 #include "d3d9_record_scalar_cases.h"
 #include "d3d9_record_object_cases.h"
+#include "d3d9_tween_cases.h"
 #endif
 #endif
 #if D9WG_TNL_API == 8
@@ -391,6 +392,9 @@ void WINAPI WinMainCRTStartup(void)
 #endif
     texture_state(7,0);output=process(&input);check(output.tex[0]==17 && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"missing source texture set preserved");
     blend_checks();
+#if D9WG_TNL_API == 9
+    d3d9_tween_checks();
+#endif
     report("PASS shared texture coordinate checks");
     report("PASS shared vertex fog checks");
     report("PASS shared vertex copy, bounds and layout checks");

@@ -79,6 +79,8 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
 {
     layout->legacy_xyz_output = layout->legacy_output = 0;
     layout->position = layout->normal = layout->diffuse = layout->specular = layout->psize = -1;
+    layout->position2 = layout->normal2 = -1;
+    layout->position2_type = layout->normal2_type = 0;
     layout->blend_weight = layout->blend_indices = -1;
     layout->blend_weight_floats = layout->blend_weight_type = layout->blend_indices_type = 0;
     layout->position_transformed = layout->position_floats = layout->stride = layout->texcoord_count = layout->has_blend = 0;
@@ -93,11 +95,19 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
         if (end > layout->stride) layout->stride = end;
         switch (e->usage) {
         case 0: case 9: /* POSITION / POSITIONT */
+            if (e->usage == 0 && e->usage_index == 1) {
+                if (layout->position2 >= 0) return 0;
+                layout->position2 = e->offset;layout->position2_type = e->type;break;
+            }
             if (e->usage_index) break;
             if (layout->position >= 0 || (e->usage == 9 && e->type != 3)) return 0;
             layout->position = e->offset;layout->position_floats = floats;layout->position_type = e->type;
             layout->position_transformed = e->usage == 9;break;
         case 3: /* NORMAL */
+            if (e->usage_index == 1) {
+                if (layout->normal2 >= 0) return 0;
+                layout->normal2 = e->offset;layout->normal2_type = e->type;break;
+            }
             if (e->usage_index) break;
             if (layout->normal >= 0) return 0;
             layout->normal = e->offset;layout->normal_type = e->type;break;

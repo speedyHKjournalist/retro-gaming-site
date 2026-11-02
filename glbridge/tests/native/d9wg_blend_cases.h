@@ -77,7 +77,7 @@ static int blend_cases(unsigned iterations)
     d9wg_blend_vertex(blend,&layout,input,position,eye,clip,normal);
     BCHECK(eye[0]==8 && normal[0]==.34375f);
     blend_float(input+28,-1);BCHECK(!d9wg_blend_indices(blend,&layout,input,indices));
-    BCHECK(!d9wg_blend_bytes(0,0,256) && !d9wg_blend_bytes(255,0,256));
+    BCHECK(!d9wg_blend_bytes(0,0,256) && !d9wg_blend_bytes(254,0,256) && d9wg_blend_bytes(255,0,256));
     BCHECK(!d9wg_blend_init(blend,1,1,0,world,256,0,identity,identity));
     BCHECK(d9wg_process_fvf(9,2,&layout) && !d9wg_blend_layout(blend,&layout));
     /* D3D7 has VIEW/PROJECTION between its first and second world matrices. */

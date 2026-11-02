@@ -7,6 +7,8 @@
 
 typedef struct D9WGProcessLayout {
     int32_t position, normal, diffuse, specular, psize;
+    int32_t position2, normal2;
+    uint32_t position2_type, normal2_type;
     uint32_t position_transformed, position_floats, stride, texcoord_count;
     uint32_t legacy_xyz_output, legacy_output, write_extent;
     uint32_t position_type, normal_type, psize_type, texcoord_type[8];

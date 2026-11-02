@@ -22,6 +22,8 @@ static __inline uint32_t d9wg_vertex_windows_blend(D9WGVertexState *state, const
     if (!d9wg_blend_init(state->blend, bytes, mode, indexed, worlds, world_count, world_gap, view, projection)) {
         HeapFree(GetProcessHeap(), 0, state->blend);state->blend = NULL;return 1;
     }
+    if (mode == 255) __builtin_memcpy(&state->blend->tween_factor,
+            (const uint8_t *)render_states + 170u*4u, 4u);
     return 0;
 }
 static __inline void d9wg_vertex_windows_blend_free(D9WGVertexState *state)
