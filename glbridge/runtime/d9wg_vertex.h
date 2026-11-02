@@ -1,6 +1,7 @@
 #ifndef D9WG_VERTEX_H
 #define D9WG_VERTEX_H
 #include "d9wg_lighting.h"
+#include "d9wg_clip.h"
 #define D9WG_PV_DONOTCOPYDATA 1u
 
 typedef struct D9WGProcessLayout {
@@ -13,9 +14,6 @@ typedef struct D9WGProcessLayout {
     uint32_t blend_weight_floats, blend_weight_type, blend_indices_type;
 } D9WGProcessLayout;
 typedef struct D9WGVertexBlend D9WGVertexBlend;
-typedef struct D9WGProcessViewport {
-    float x, y, width, height, min_z, max_z;
-} D9WGProcessViewport;
 typedef struct D9WGVertexState {
     uint32_t fog_mode, range_fog;
     float fog_start, fog_end, fog_density;

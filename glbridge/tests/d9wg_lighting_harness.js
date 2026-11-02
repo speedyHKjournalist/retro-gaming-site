@@ -106,7 +106,7 @@ function buildFixture(options = {}) {
 #include "runtime/d9wg_vertex.h"
 int main(void){printf("[");${cases}printf("]\\n");return 0;}
 `);
-        const sources = ["runtime/d9wg_lighting.c", "runtime/d9wg_tnl_math.c", "runtime/d9wg_math.c", "runtime/d9wg_vertex.c", "runtime/d9wg_fvf.c", "runtime/d9wg_blend.c"];
+        const sources = ["runtime/d9wg_lighting.c", "runtime/d9wg_tnl_math.c", "runtime/d9wg_math.c", "runtime/d9wg_vertex.c", "runtime/d9wg_fvf.c", "runtime/d9wg_blend.c", "runtime/d9wg_clip.c"];
         const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-ffp-contract=off", "-Wall", "-Wextra", "-Werror", "-I", root,
             c, ...sources.map(p => path.join(root, p)), "-o", binary], { encoding: "utf8" });
         assert.equal(built.status, 0, built.stderr.slice(0, 4000) || String(built.error));

@@ -169,17 +169,14 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
     for (uint32_t vertex = 0; vertex < count; ++vertex) {
         const uint8_t *in = (const uint8_t *)source + first + vertex*source_stride;
         uint8_t *out = (uint8_t *)output + destination + vertex*d->stride;
-        float position[4] = {0,0,0,1}, clip[4], screen[4], rhw;
+        float position[4] = {0,0,0,1}, clip[4], screen[4];
         float blended_eye[4], blended_normal[3];
         for (unsigned i = 0; i < s->position_floats; ++i) position[i] = read_float(in + s->position + i*4u);
         if (blend) {
             d9wg_blend_vertex(blend, s, in, position, blended_eye, clip, blended_normal);
             if (lighting->flags.normalize_normals) d9wg_tnl_normalize3(blended_normal, 0.0f);
         } else d9wg_transform_vector4(world_view_projection, position, clip);
-        rhw = clip[3] != 0.0f ? 1.0f / clip[3] : 1.0f;
-        screen[0] = (clip[0]*rhw*0.5f + 0.5f)*viewport->width + viewport->x;
-        screen[1] = (0.5f - clip[1]*rhw*0.5f)*viewport->height + viewport->y;
-        screen[2] = viewport->min_z + clip[2]*rhw*(viewport->max_z - viewport->min_z);screen[3] = rhw;
+        d9wg_clip_project(clip, viewport, screen);
         for (unsigned i = 0; i < 4; ++i) write_float(out + d->position + i*4u, screen[i]);
         /* DONOTCOPYDATA preserves only unaffected attributes. Lighting still
          * computes diffuse/specular even when passthrough copying is disabled. */
