@@ -6596,6 +6596,7 @@ static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
     if (!buffer->clips.head) return d9_clip_stream_draw(device, primitive_type, &submitted);
     if (!d9_current_source_layout(device, &layout)) return d9_clip_stream_draw(device, primitive_type, &submitted);
     if (!layout.position_transformed) return 0;
+    if (!d9wg_process_canonical_output(&layout)) return d9_clip_stream_draw(device, primitive_type, &submitted);
     if (!device->streams[0].stride) return d9_clip_stream_draw(device, primitive_type, &submitted);
     if (device->streams[0].frequency != 1) return -1;
     D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
@@ -9319,7 +9320,8 @@ fail:
  * bound, and the original host declaration is restored even after failure. */
 typedef struct D9StreamClipEmit {
     D9Device *device;
-    const D9WGProcessStreamLayout *layout;
+    const D9WGVertexElement *elements;
+    uint32_t count;
     BOOL remapped;
 } D9StreamClipEmit;
 static BOOL d9_emit_clip_layout(D9Device *device, DWORD fvf,
@@ -9341,7 +9343,7 @@ static int d9_clip_stream_emit(void *context, uint32_t primitive_type,
 {
     D9StreamClipEmit *state = context;
     if (!state->remapped) {
-        if (!d9_emit_clip_layout(state->device, 0, state->layout->elements, state->layout->count, TRUE)) return 0;
+        if (!d9_emit_clip_layout(state->device, 0, state->elements, state->count, TRUE)) return 0;
         state->remapped = TRUE;
     }
     return d9_clip_emit(state->device, primitive_type, vertices, count, stride);
@@ -9387,16 +9389,19 @@ static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const 
     D9ProcessInput *input;
     HRESULT error = d9_process_input(device, NULL, (UINT)start, count, &input);
     if (FAILED(error)) return error == E_OUTOFMEMORY ? -3 : -1;
-    if (!d9wg_process_canonical_output(&input->layout.vertex)) {
+    D9WGVertexElement output_elements[D3DMAXDECLLENGTH];D9WGProcessLayout output_layout;
+    if (!d9wg_clip_stream_output(&input->layout, output_elements, &output_layout)) {
         d9_process_input_free(input);return -1;
     }
     D9WGClipDrawSource source = *draw;
     d9wg_clip_draw_streams_init(&source, &input->layout, input->streams);
+    source.output_layout = &output_layout;
+    if (source.stride < output_layout.stride) source.stride = output_layout.stride;
     source.clips = &buffer->clips;source.primitive_type = primitive_type;
     source.flat_shading = device->render_states[D3DRS_SHADEMODE] == D3DSHADE_FLAT;
     source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
             (float)device->viewport.Width, (float)device->viewport.Height, device->viewport.MinZ, device->viewport.MaxZ };
-    D9StreamClipEmit state = { device, &input->layout, FALSE };
+    D9StreamClipEmit state = { device, output_elements, input->layout.count, FALSE };
     int result = d9wg_vertex_windows_clip_draw_planes(&source, d9_clip_stream_emit, d9_clip_stream_mask,
             device->render_states[D3DRS_CLIPPLANEENABLE], &state);
     if (state.remapped) {

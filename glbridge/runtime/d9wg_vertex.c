@@ -457,10 +457,27 @@ static int stream_clip_gather(const D9WGClipDrawSource *source, uint32_t vertex,
 {
     return d9wg_process_stream_gather(source->stream_layout, source->streams, vertex, output);
 }
+int d9wg_clip_stream_output(const D9WGProcessStreamLayout *source,
+        D9WGVertexElement *elements, D9WGProcessLayout *output)
+{
+    if (!source || !elements || !output || !source->count || source->count > D9WG_VERTEX_MAX_ELEMENTS ||
+            !source->vertex.position_transformed) return 0;
+    for (uint32_t i = 0; i < source->count; ++i) {
+        D9WGVertexElement *element = elements + i;*element = source->elements[i];
+        element->stream = 0;element->offset = (uint16_t)(i*16u);
+        if (element->usage == 3 && !element->usage_index) element->type = 2;
+        if (element->usage == 4 && !element->usage_index) element->type = 0;
+        if (element->usage == 10 && element->usage_index < 2 && element->type != 4) element->type = 3;
+        if (element->usage == 5) element->type = (uint8_t)(d9wg_decl_components(element->type) - 1u);
+    }
+    /* DWORD colours retain their historical quantized clipping path. Every
+     * other colour remains float4 until the host's final pixel conversion. */
+    return d9wg_process_layout(elements, source->count, output);
+}
 void d9wg_clip_draw_streams_init(D9WGClipDrawSource *source,
         const D9WGProcessStreamLayout *layout, const D9WGVertexStream *streams)
 {
-    source->vertices = 0;source->layout = &layout->vertex;source->stride = layout->vertex.stride;
+    source->vertices = 0;source->layout = &layout->vertex;source->output_layout = 0;source->stride = layout->vertex.stride;
     source->stream_layout = layout;source->streams = streams;
     source->stream_offset = stream_clip_offset;source->stream_gather = stream_clip_gather;
 }
@@ -523,7 +540,7 @@ int d9wg_vertex_stream_clip_codes(const D9WGProcessStreamLayout *layout,
     source.vertices = vertex;source.length = source.stride = layout->vertex.stride;
     source.base = source.first_vertex = source.min_vertex = 0;
     source.count = source.vertex_count = 1;source.indices = 0;source.base_vertex = 0;
-    source.layout = &layout->vertex;source.stream_layout = 0;source.streams = 0;
+    source.layout = &layout->vertex;source.output_layout = 0;source.stream_layout = 0;source.streams = 0;
     source.stream_offset = 0;source.stream_gather = 0;
     D9WGClipStatus result = *status;
     /* Native software draws classify the whole declared range, including

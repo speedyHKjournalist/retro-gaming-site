@@ -12,6 +12,8 @@ typedef struct D9WGClipDrawSource {
     uint32_t count, index_bytes, index_stride, primitive_type, flat_shading, status_screen;
     int32_t base_vertex;
     const D9WGProcessLayout *layout;
+    /* Optional expanded wire layout; input byte locations stay in layout. */
+    const D9WGProcessLayout *output_layout;
     D9WGProcessViewport viewport;
     /* Optional virtual input: offsets identify vertex indices, and attributes
      * are gathered into stream_layout->vertex. Output remains one stream. */

@@ -91,6 +91,8 @@ int d9wg_process_range(uint32_t length, uint32_t base, uint32_t stride,
 struct D9WGClipDrawSource;
 int d9wg_vertex_clip_codes(const struct D9WGClipDrawSource *source,
         const void *world_view_projection, const D9WGVertexState *state, D9WGClipStatus *status);
+int d9wg_clip_stream_output(const D9WGProcessStreamLayout *source,
+        D9WGVertexElement *elements, D9WGProcessLayout *output);
 void d9wg_clip_draw_streams_init(struct D9WGClipDrawSource *source,
         const D9WGProcessStreamLayout *layout, const D9WGVertexStream *streams);
 int d9wg_vertex_stream_clip_codes(const D9WGProcessStreamLayout *layout,

@@ -113,7 +113,7 @@ static __attribute__((noinline)) void vertex_stream_draw_cases(void)
     OK(CALL(CreateVertexDeclaration)(device, screen_elements, &screen_decl));
     OK(CALL(SetVertexDeclaration)(device, screen_decl));
     OK(CALL(SetStreamSource)(device, 3, processed, 0, 16));
-    check(FAILED(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 0, 2)), "processed multi-stream screen records require a remapping clip emitter");
+    OK(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 0, 2));
     OK(BUF(Lock)(processed, 0, 32, &mapped, 0));
     for (unsigned i = 0; i < 2; ++i) {
         float screen[4] = { 32.0f + i * 32, 32, .5f, 1 };
