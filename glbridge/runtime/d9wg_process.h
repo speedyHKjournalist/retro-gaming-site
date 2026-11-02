@@ -20,6 +20,8 @@ typedef struct D9WGProcess {
     uint32_t transport_generation;
     DWORD retry_tick, batches_dropped;
     BOOL retry_armed;
+    DWORD caps_retry_tick;
+    BOOL caps_retry_armed;
     volatile LONG query_slots[D9WG_QUERY_SLOT_COUNT];
     volatile LONG response_request_id;
 } D9WGProcess;

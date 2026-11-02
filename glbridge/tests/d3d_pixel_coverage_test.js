@@ -5,6 +5,7 @@ const assert = require("node:assert/strict"), fs = require("node:fs"), path = re
 const { hostPath, testPath } = require("./host_paths.js");
 require(hostPath("d3d9-webgpu/d3d9_shader_pipeline.js"));
 require(hostPath("d3d9-webgpu/d9wg_protocol.js"));
+require(hostPath("d3d9-webgpu/d9wg_formats.js"));
 require(testPath("d3d9_conformance.js"));require(testPath("d3d9_feature_cases.js"));
 const suite = globalThis.D3D9Conformance, source = fs.readFileSync(path.join(__dirname, "../d3d9proxy/d3d9_proxy.c"), "utf8");
 const predicate = source.match(/static BOOL supported_texture_format\(D3DFORMAT format\)\s*\{([\s\S]*?)\n\}/)[1];
@@ -20,7 +21,7 @@ const unique = new Set();
 for (const [i, c] of suite.CASES.entries()) {
     assert(!unique.has(c.name), "duplicate case " + c.name);unique.add(c.name);
     assert(c.probes.length && c.probes.every(p => p.expect || p.someRedBetween), "missing oracle " + c.name);
-    const { bytes } = suite.caseBatch(i, c), view = new DataView(bytes.buffer);
+    const { bytes } = suite.caseBatch(i, c, {hostFeatures: 15}), view = new DataView(bytes.buffer);
     assert.equal(view.getUint32(20, true) + 32, bytes.length);
     for (let at = 32; at < bytes.length;) {
         const op = view.getUint16(at, true), size = view.getUint32(at + 4, true);

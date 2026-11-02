@@ -18,6 +18,7 @@ typedef union {struct {DWORD LowPart;LONG HighPart;};int64_t QuadPart;} LARGE_IN
 #define PAGE_READWRITE 4
 #define FILE_MAP_ALL_ACCESS 15
 DWORD GetCurrentProcessId(void);DWORD GetTickCount(void);
+void Sleep(DWORD milliseconds);
 void GetSystemTimeAsFileTime(FILETIME*);BOOL QueryPerformanceCounter(LARGE_INTEGER*);
 HANDLE CreateFileMappingA(HANDLE,void*,DWORD,DWORD,DWORD,const char*);
 void *MapViewOfFile(HANDLE,DWORD,DWORD,DWORD,size_t);

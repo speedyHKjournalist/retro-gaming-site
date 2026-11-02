@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_format_layouts.h"
+#include "../runtime/d9wg_format_queries.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
@@ -3756,10 +3757,25 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
         const DWORD creation_usage = usage
                 & ~(query_bits | D3DUSAGE_AUTOGENMIPMAP
                     | D3DUSAGE_SOFTWAREPROCESSING);
+        BOOL renderable = supported_render_target_format(format);
         if (!(usage & unimplemented)
                 && texture_create_supported(resource_type, creation_usage,
-                        format, D3DPOOL_DEFAULT))
-            ok = TRUE;
+                        format, D3DPOOL_DEFAULT)
+                && d9wg_format_query_supported(resource_type, usage, format,
+                        D9WG_HOST_FEATURE_MASK, shader_model_version(), renderable)) {
+            uint32_t host_features = 0;
+            uint32_t info = d9wg_format_query_info(format);
+            if ((info & 32u) || ((info & 4u)
+                    && (usage & (D3DUSAGE_QUERY_FILTER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING)))) {
+                uint32_t guest_features = shader_model_version() >= 2 ? D9WG_FEATURE_SHADER_MODEL_2 : 0;
+                if (shader_model_version() >= 3) guest_features |= D9WG_FEATURE_SHADER_MODEL_3;
+                EnterCriticalSection(&g_transport_lock);
+                host_features = d9wg_transport_host_features(g_process, guest_features, submit_batch_locked);
+                LeaveCriticalSection(&g_transport_lock);
+            }
+            ok = d9wg_format_query_supported(resource_type, usage, format,
+                    host_features, shader_model_version(), renderable);
+        }
     }
     result = ok ? D3D_OK : D3DERR_NOTAVAILABLE;
     TRACE("%s CheckDeviceFormat adapter=%lu type=%lu adapter_fmt=%08lX "

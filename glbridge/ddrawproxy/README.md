@@ -233,3 +233,7 @@ Pixel/block sizes and legacy depth classification now use the shared generated
 `../runtime/d9wg_format_layouts.h` table. This preserves the DirectDraw layout
 range; API8/9 use their own masks in that same table. Layout availability is
 separate from actual backend filtering/blending capabilities.
+
+The shared process runtime now includes bounded host-capability discovery.
+Deploy D3D8, D3D9 and DirectDraw DLLs from the same build together; mixed
+process-layout versions are rejected before accessing shared resource state.

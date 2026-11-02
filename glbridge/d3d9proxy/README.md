@@ -27,6 +27,14 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
 - texture block geometry and checked mip row/byte calculations generated from
   the host format table in `../runtime/d9wg_format_layouts.h`; frontend layout
   ranges stay version-specific and do not imply GPU capability support;
+- public format queries generated from the host format table: FP32 filtering
+  and blending require their actual enabled device features, and native BC
+  storage is required even for plain DXT/ATI format availability. Optional
+  discovery uses an owner-scoped HELLO reply, a bounded one-second wait and
+  rate-limited retry; missing replies conservatively grant no optional bits.
+  Compound query flags must all pass. Vertex texture queries are limited to
+  pixel-verified 2D VS3 color formats; programmable CPU texture processing,
+  cube/volume vertex textures and raw-depth filtering stay unadvertised;
 - version-specific material and zero clip-plane defaults generated from the
   shared host table: D3D8 diffuse RGB is white with zero alpha; D3D9 material
   is entirely zero. Reset clears material, planes, and low/sparse light state;
@@ -861,10 +869,11 @@ imports a symbol this DLL does not export fails to *load*, so
 `Direct3DCreate9` is never even reached, and the failure surfaces as a
 generic "unable to initialize DirectX."
 
-Install the resulting DLL beside the target executable. Use a separate game
-deployment profile from `d3d8.dll` and the custom `opengl32.dll` proxy: all
-three frontends share one mapped DMA arena and a game directory may load
-only one of them (see plan section 4.6/20).
+Install the resulting DLL beside the target executable. D3D9, D3D8 and
+DirectDraw share the versioned process runtime and must be deployed together
+from the same build; mixed process-layout versions fail safely. Their owner
+and resource namespace is shared within one process and isolated from other
+processes. OpenGL remains a separate deployment profile.
 
 Host-side executor: `../d3d9-webgpu/d3d9_executor.js`, which requires
 `../d3d9-webgpu/d3d9_shader_pipeline.js` to be loaded first (it resolves the

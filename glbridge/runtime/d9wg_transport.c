@@ -1,5 +1,6 @@
 #include "d9wg_transport.h"
 #include "d9wg_runtime.h"
+#include "d9wg_host_caps.h"
 #include "../openglproxy/v86gl_ioctl.h"
 
 #define D9WG_OUTER_HEADER 8u
@@ -48,6 +49,33 @@ void d9wg_transport_close(D9WGProcess *process)
     process->transport = INVALID_HANDLE_VALUE;
     process->dma_buffer = NULL;process->dma_capacity = 0;
     process->batch_bytes = process->command_count = 0;
+    process->caps_retry_armed = FALSE;
+}
+
+uint32_t d9wg_transport_host_features(D9WGProcess *process, uint32_t guest_features,
+        BOOL (*flush)(BOOL))
+{
+    uint32_t bits = 0;
+    DWORD now;
+    uint8_t *payload;
+    if (!process || !flush) return 0;
+    if (d9wg_host_caps_read(d9wg_transport_response(process), &bits)) return bits;
+    now = GetTickCount();
+    if (!d9wg_retry_ready(now, process->caps_retry_tick, process->caps_retry_armed)) return 0;
+    process->caps_retry_tick = now;process->caps_retry_armed = TRUE;
+    if (!d9wg_transport_open(process)) return 0;
+    D9WGHello hello = {32u, guest_features, process->session_id_low, process->session_id_high};
+    if (!d9wg_transport_reserve(process, D9WG_OP_HELLO, sizeof(hello), 0,
+            NULL, &payload, NULL, flush)) return 0;
+    __builtin_memcpy(payload, &hello, sizeof(hello));
+    if (!flush(FALSE)) return 0;
+    DWORD start = GetTickCount();
+    do {
+        if (d9wg_host_caps_read(d9wg_transport_response(process), &bits)) return bits;
+        Sleep(1);
+    } while ((DWORD)(GetTickCount() - start) < D9WG_HOST_CAPS_WAIT_MS);
+    process->caps_retry_tick = GetTickCount();
+    return 0;
 }
 
 BOOL d9wg_transport_open(D9WGProcess *process)

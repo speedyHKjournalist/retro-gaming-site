@@ -19,6 +19,8 @@ const binary = path.join(directory, "probe");
 fs.writeFileSync(input, `
 #include <assert.h>
 #include <stdint.h>
+#include "${path.resolve(__dirname, "../runtime/d9wg_format_queries.h")}"
+#include "${path.resolve(__dirname, "../d3d9proxy/d3d9_protocol.h")}"
 typedef int BOOL;
 typedef void IDirect3D9;
 typedef uint32_t UINT, DWORD, D3DDEVTYPE, D3DFORMAT, D3DRESOURCETYPE;
@@ -45,6 +47,13 @@ typedef int32_t HRESULT;
 #define D3DUSAGE_QUERY_WRAPANDMIP 0x200000u
 #define D9FOURCC_NO_PCF 0x4643502Du
 static unsigned infos, warnings;
+static void *g_process;static int g_transport_lock;
+static void EnterCriticalSection(int *lock){++*lock;}static void LeaveCriticalSection(int *lock){--*lock;}
+static BOOL submit_batch_locked(BOOL present){(void)present;return TRUE;}
+static UINT shader_model_version(void){return 3;}
+static BOOL supported_render_target_format(D3DFORMAT format){return format==21;}
+static uint32_t d9wg_transport_host_features(void *process,uint32_t features,BOOL (*flush)(BOOL)){(void)process;(void)features;(void)flush;return 0;}
+
 #define TRACE(...) ((void)0)
 #define HOSTLOG_INFO(...) (++infos)
 #define HOSTLOG_REFUSED(...) (++warnings)

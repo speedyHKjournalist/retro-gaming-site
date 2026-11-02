@@ -347,3 +347,7 @@ node glbridge/tests/d3d9_shader_corpus_test.js
 The XP acceptance tests of stages 3 to 6 (`build.sh --tests [dir]`, which
 puts the shipping `d3d8.dll` beside them) still build against the D3D8 API
 surface and remain the way to exercise the DLL in the guest.
+
+The shared process runtime now includes bounded host-capability discovery.
+Deploy D3D8, D3D9 and DirectDraw DLLs from the same build together; mixed
+process-layout versions are rejected before accessing shared resource state.

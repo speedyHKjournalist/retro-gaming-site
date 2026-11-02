@@ -34,6 +34,7 @@ static DWORD direct_map_error=ERROR_INVALID_FUNCTION;static unsigned direct_maps
 #define DDWG_VGL2_RECORD_HEADER_BYTES 8u
 DWORD GetLastError(void){return last_error;}void SetLastError(DWORD value){last_error=value;}
 DWORD GetTickCount(void){return tick;}
+void Sleep(DWORD milliseconds){tick+=milliseconds;}
 HANDLE CreateFileA(const char *name,DWORD access,DWORD share,void *security,DWORD mode,DWORD attrs,HANDLE template){
  (void)name;(void)access;(void)share;(void)security;(void)mode;(void)attrs;(void)template;opens++;
  if(fail_open){fail_open=0;last_error=2;return INVALID_HANDLE_VALUE;}return (HANDLE)3;
