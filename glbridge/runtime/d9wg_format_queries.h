@@ -13,57 +13,57 @@
 static __inline uint32_t d9wg_format_query_info(uint32_t format)
 {
     switch (format) {
-    case 20u: return 3u;
-    case 21u: return 3u;
-    case 22u: return 3u;
-    case 23u: return 3u;
-    case 24u: return 3u;
-    case 25u: return 3u;
-    case 26u: return 3u;
-    case 27u: return 3u;
-    case 28u: return 3u;
-    case 29u: return 3u;
-    case 30u: return 3u;
-    case 31u: return 1u;
-    case 32u: return 3u;
-    case 33u: return 3u;
-    case 34u: return 1u;
-    case 35u: return 1u;
-    case 36u: return 1u;
-    case 40u: return 3u;
-    case 41u: return 3u;
-    case 50u: return 3u;
-    case 51u: return 3u;
-    case 52u: return 3u;
+    case 20u: return 67u;
+    case 21u: return 67u;
+    case 22u: return 67u;
+    case 23u: return 67u;
+    case 24u: return 67u;
+    case 25u: return 67u;
+    case 26u: return 67u;
+    case 27u: return 67u;
+    case 28u: return 67u;
+    case 29u: return 67u;
+    case 30u: return 67u;
+    case 31u: return 65u;
+    case 32u: return 67u;
+    case 33u: return 67u;
+    case 34u: return 65u;
+    case 35u: return 65u;
+    case 36u: return 65u;
+    case 40u: return 67u;
+    case 41u: return 67u;
+    case 50u: return 67u;
+    case 51u: return 67u;
+    case 52u: return 67u;
     case 60u: return 1u;
-    case 61u: return 1u;
-    case 62u: return 1u;
+    case 61u: return 65u;
+    case 62u: return 65u;
     case 63u: return 1u;
-    case 64u: return 1u;
-    case 65u: return 1u;
-    case 67u: return 1u;
-    case 81u: return 1u;
-    case 101u: return 3u;
-    case 102u: return 3u;
-    case 110u: return 1u;
-    case 111u: return 1u;
-    case 112u: return 1u;
-    case 113u: return 1u;
-    case 114u: return 5u;
-    case 115u: return 5u;
-    case 116u: return 5u;
-    case 117u: return 1u;
+    case 64u: return 65u;
+    case 65u: return 65u;
+    case 67u: return 65u;
+    case 81u: return 65u;
+    case 101u: return 67u;
+    case 102u: return 67u;
+    case 110u: return 65u;
+    case 111u: return 65u;
+    case 112u: return 65u;
+    case 113u: return 65u;
+    case 114u: return 69u;
+    case 115u: return 69u;
+    case 116u: return 69u;
+    case 117u: return 65u;
     case 826889281u: return 33u;
     case 827611204u: return 35u;
     case 843666497u: return 33u;
     case 844388420u: return 35u;
-    case 844715353u: return 3u;
+    case 844715353u: return 67u;
     case 861165636u: return 35u;
     case 877942852u: return 35u;
     case 894720068u: return 35u;
-    case 1111970375u: return 3u;
-    case 1195525970u: return 3u;
-    case 1498831189u: return 3u;
+    case 1111970375u: return 67u;
+    case 1195525970u: return 67u;
+    case 1498831189u: return 67u;
     case 70u: return 25u;
     case 71u: return 25u;
     case 73u: return 25u;
@@ -95,5 +95,21 @@ static __inline int d9wg_format_query_supported(uint32_t type, uint32_t usage, u
     if ((query & D9WG_FORMAT_QUERY_VERTEXTEXTURE) && (type != 3u || shader_model < 3u || (info & 8u))) return 0;
     if ((query & D9WG_FORMAT_QUERY_WRAPANDMIP) && (!texture || (info & 8u))) return 0;
     return 1;
+}
+static __inline int d9wg_autogen_mips_supported(uint32_t type, uint32_t format)
+{
+    return (type == 3u || type == 5u) && (d9wg_format_query_info(format) & 64u);
+}
+static __inline int d9wg_autogen_creation_valid(uint32_t levels, uint32_t usage, uint32_t pool)
+{
+    return !(usage & 0x400u) || (levels <= 1u && pool <= 1u && !(usage & 0x200u));
+}
+static __inline int d9wg_autogen_filter_supported(uint32_t format, uint32_t filter, uint32_t host_features)
+{
+    return filter == 1u || ((filter == 2u || filter == 3u) && (!(d9wg_format_query_info(format) & 4u) || (host_features & 1u)));
+}
+static __inline uint32_t d9wg_autogen_default_filter(uint32_t format, uint32_t host_features)
+{
+    return (d9wg_format_query_info(format) & 4u) && !(host_features & 1u) ? 1u : 2u;
 }
 #endif

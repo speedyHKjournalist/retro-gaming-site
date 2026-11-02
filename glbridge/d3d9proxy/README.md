@@ -513,13 +513,13 @@ asks (*can this resource exist?*), and `CheckDeviceFormat` layers the stricter
 "do we implement this behaviour?" test on top. The query is therefore never
 weaker than the create, and the create never refuses something D3D9 would build.
 
-Usage bits that describe what a resource is *for* rather than whether it can
-exist -- `D3DUSAGE_AUTOGENMIPMAP`, `_DMAP`, `_NPATCHES`, `_SOFTWAREPROCESSING`
--- are on the query side of that line. `AUTOGENMIPMAP` in particular is handled
-the way D3D9 handles it: it is stripped, levels are clamped to one (nothing
-would fill a chain nobody generates, and sampling unwritten mips is worse than
-having none), and the create returns `D3DOK_NOAUTOGEN` -- a success code -- with
-a usable texture.
+Query-only bits are checked separately from resource creation. For a valid
+2D/cube `D3DUSAGE_AUTOGENMIPMAP` request, `CheckDeviceFormat` returns
+`D3D_OK` when its physical storage can generate levels and
+`D3DOK_NOAUTOGEN` otherwise. Creation returns `D3D_OK` with one accessible
+level in either case and preserves the original usage in the description.
+Autogen requires DEFAULT/MANAGED memory, at most one explicit level, and no
+DYNAMIC flag. Volume autogen is invalid.
 
 `glbridge/sample/d3d9_cube_texture_test.c` asserts the invariant directly: for
 every format the query blesses, the matching create must succeed.
@@ -656,29 +656,40 @@ driver-specifically inside the browser.
 
 ### Automatic mipmap generation
 
-`D3DUSAGE_AUTOGENMIPMAP` hands the driver everything below level 0 and asks it
-to keep the chain current. It used to be stripped, with `D3DOK_NOAUTOGEN`
-reported back -- honest, and it left 3DMark06 building its own downsample chain
-and one `CheckDeviceFormat said no` line on every run.
+The generated format table controls both the public query and host allocation.
+The 39 current color formats backed by renderable storage can generate levels;
+BC, SNORM, NULL and depth storage receive the documented single-level fallback.
+This is separate from ordinary format availability: BC still requires its
+actual enabled device feature.
 
-The shape D3D9 describes is unusual enough to be worth stating: such a texture
-reports `GetLevelCount() == 1` and hands out no surface below the top, because
-the sublevels are not the app's. So the guest keeps one visible level and the
-host allocates the full chain behind it -- one visible level is the documented
-contract, not a simplification.
+A valid autogen 2D/cube texture exposes only level 0. The host privately
+allocates the full chain and regenerates it before sampling whenever level 0
+changes, including GPU attachment, copy and ColorFill writes. `GenerateMipSubLevels`
+can force generation explicitly. Unsupported storage keeps one physical level
+and never enters the generation passes.
 
-The trigger lives on the host, because the host is the side that can see when
-the top level actually changed: an upload landed on level 0, or a render pass
-had level 0 as its attachment. Regeneration is queued at the point the texture
-is next *sampled*, which is what orders it correctly -- after whatever wrote
-level 0, before the draw that reads below it -- and skipped entirely when
-nothing dirtied the chain, so a static texture is not rebuilt every frame.
-`GenerateMipSubLevels` arrives as its own opcode for the explicit case. Each
-level is a blit from the one above through the existing blit pipeline, which is
-the linear box downsample `D3DTEXF_LINEAR` describes.
+The default generation filter is LINEAR, or POINT for FP32 storage without
+enabled `float32-filterable`. POINT, LINEAR and ANISOTROPIC setters honor the
+format's real filtering support; NONE and unsupported filters fail without
+changing state. A setter dirties the chain without immediately generating it.
+Each recorded generation captures its filter, so a later setter cannot change
+an earlier draw. Anisotropic generation uses a real anisotropic sampler.
+Normal textures report NONE, reject the setter, and ignore explicit generation.
+Managed resources retain their selected filter across Reset.
 
-Volume textures are the exception, and only because D3D9 does not support
-automatic generation for those either; they still report `D3DOK_NOAUTOGEN`.
+Protocol 1.8 adds optional filter/deferred-generation fields to `GenerateMips`.
+An older eight-byte payload still generates immediately with the current
+filter. Other command layouts remain compatible.
+
+The SDK probe `../sample/d3d9_autogen_test.c` tests all 48 advertised color
+formats, 2D/cube resource shape, invalid levels/pools/dynamic/volume requests,
+filter queries and Reset under explicitly simulated enabled-feature masks.
+Separate real GPU cases verify downsampling for all eight storage formats,
+six cube faces, generated mip tails, feature-off defaults, filter ordering,
+GPU writes and unsupported-storage fallback. These checks follow Microsoft's
+[autogen contract](https://learn.microsoft.com/en-us/windows/win32/direct3d9/automatic-generation-of-mipmaps)
+and the frozen Wine SDK expectations, without claiming a native Microsoft
+D3D9 HAL measurement.
 
 ### Offscreen plain surfaces are GPU surfaces
 

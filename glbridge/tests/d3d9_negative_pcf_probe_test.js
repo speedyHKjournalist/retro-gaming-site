@@ -30,13 +30,16 @@ typedef int32_t HRESULT;
 #define FALSE 0
 #define SUCCEEDED(hr) ((hr) >= 0)
 #define D3D_OK ((HRESULT)0)
+#define D3DOK_NOAUTOGEN ((HRESULT)0x0876086f)
 #define D3DERR_NOTAVAILABLE ((HRESULT)0x8876086A)
 #define D3DDEVTYPE_HAL 1
 #define D3DRTYPE_TEXTURE 3
 #define D3DRTYPE_VOLUMETEXTURE 4
+#define D3DRTYPE_CUBETEXTURE 5
 #define D3DPOOL_DEFAULT 0
 #define D3DUSAGE_SOFTWAREPROCESSING 0x10u
 #define D3DUSAGE_AUTOGENMIPMAP 0x400u
+#define D3DUSAGE_DYNAMIC 0x200u
 #define D3DUSAGE_DMAP 0x4000u
 #define D3DUSAGE_QUERY_LEGACYBUMPMAP 0x8000u
 #define D3DUSAGE_QUERY_SRGBREAD 0x10000u
@@ -63,6 +66,7 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
         D3DFORMAT format, DWORD pool) {
     return type == D3DRTYPE_TEXTURE && usage == 2 && format == 71 && pool == 0;
 }
+${source.match(/static uint32_t runtime_host_features\(void\)[\s\S]*?\n}/)[0]}
 ${source.slice(start, end)}
 int main(void) {
     HRESULT hr = d3d_check_device_format(0, 0, D3DDEVTYPE_HAL, 22, 0, 3, D9FOURCC_NO_PCF);

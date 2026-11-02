@@ -11,7 +11,8 @@
  * does not share opcode numbering, resource handle namespace, or payload
  * shapes with the D3D8 path, even though both ride the same VGL2 DMA
  * transport (v86gl.sys, 16 MiB ring, PCI BAR) via a different outer record
- * type. A guest process loads either d3d8.dll or d3d9.dll, never both.
+ * type. Current D3D frontends share the process runtime and owner.
+ * Version 1.8 adds optional mip filter/deferred-generation fields.
  *
  * Version 1.7 adds the DirectDraw group (0x500) for ../ddrawproxy/ddraw.dll.
  * It is additive only -- no existing structure changes -- so d3d8.dll and
@@ -27,7 +28,7 @@
 
 #define D9WG_MAGIC 0x47573944u /* "D9WG" */
 #define D9WG_VERSION_MAJOR 1u
-#define D9WG_VERSION_MINOR 7u
+#define D9WG_VERSION_MINOR 8u
 
 /* The last four MiB of v86gl.sys's mapped DMA allocation are never used for
  * command batches.  The browser writes asynchronous query/readback results
@@ -664,6 +665,8 @@ typedef struct D9WGSetCurrentTexturePalette {
 typedef struct D9WGGenerateMips {
     uint32_t device_handle;
     uint32_t resource_handle;
+    uint32_t filter_type; /* 1.8: 0 keeps the current filter; 1 POINT, 2 LINEAR, 3 ANISOTROPIC */
+    uint32_t defer_generation; /* 1.8: 1 dirties the chain without generating yet; 0 generates now */
 } D9WGGenerateMips;
 
 typedef struct D9WGSetTextureLOD {
@@ -1422,9 +1425,11 @@ typedef char D9WGAssertSetPalette_data_offset[offsetof(D9WGSetPalette, data_offs
 typedef char D9WGAssertSetCurrentTexturePaletteSize[sizeof(D9WGSetCurrentTexturePalette) == 8 ? 1 : -1];
 typedef char D9WGAssertSetCurrentTexturePalette_device_handle[offsetof(D9WGSetCurrentTexturePalette, device_handle) == 0 ? 1 : -1];
 typedef char D9WGAssertSetCurrentTexturePalette_palette_index[offsetof(D9WGSetCurrentTexturePalette, palette_index) == 4 ? 1 : -1];
-typedef char D9WGAssertGenerateMipsSize[sizeof(D9WGGenerateMips) == 8 ? 1 : -1];
+typedef char D9WGAssertGenerateMipsSize[sizeof(D9WGGenerateMips) == 16 ? 1 : -1];
 typedef char D9WGAssertGenerateMips_device_handle[offsetof(D9WGGenerateMips, device_handle) == 0 ? 1 : -1];
 typedef char D9WGAssertGenerateMips_resource_handle[offsetof(D9WGGenerateMips, resource_handle) == 4 ? 1 : -1];
+typedef char D9WGAssertGenerateMips_filter_type[offsetof(D9WGGenerateMips, filter_type) == 8 ? 1 : -1];
+typedef char D9WGAssertGenerateMips_defer_generation[offsetof(D9WGGenerateMips, defer_generation) == 12 ? 1 : -1];
 typedef char D9WGAssertSetTextureLODSize[sizeof(D9WGSetTextureLOD) == 16 ? 1 : -1];
 typedef char D9WGAssertSetTextureLOD_device_handle[offsetof(D9WGSetTextureLOD, device_handle) == 0 ? 1 : -1];
 typedef char D9WGAssertSetTextureLOD_resource_handle[offsetof(D9WGSetTextureLOD, resource_handle) == 4 ? 1 : -1];

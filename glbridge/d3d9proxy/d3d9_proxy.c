@@ -1903,7 +1903,8 @@ static BOOL supported_depth_stencil_format(D3DFORMAT format)
 }
 
 static BOOL supported_volume_texture_format(D3DFORMAT format);
-static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle);
+static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
+        D3DTEXTUREFILTERTYPE filter, BOOL defer_generation);
 /* N-patch tessellation, defined with the other higher-order primitive code far
  * below but reached from the draw path above it. Returns D3DERR_INVALIDCALL for
  * a draw it cannot tessellate, which the callers treat as "draw it flat"
@@ -2392,7 +2393,9 @@ static BOOL emit_texture_create(D9Device *device, D9Texture *texture)
     command.pool = texture->pool;
     command.multisample_type = texture->multisample;
     command.multisample_quality = texture->multisample_quality;
-    return emit_command(D9WG_OP_CREATE_TEXTURE_2D, &command, sizeof(command));
+    if (!emit_command(D9WG_OP_CREATE_TEXTURE_2D, &command, sizeof(command))) return FALSE;
+    return !(texture->usage & D3DUSAGE_AUTOGENMIPMAP)
+        || emit_generate_mips(device, texture->handle, texture->autogen_filter, TRUE);
 }
 
 static BOOL emit_vertex_declaration_create(D9Device *device, uint32_t handle,
@@ -2735,6 +2738,16 @@ static UINT shader_model_version(void)
     length = GetEnvironmentVariableA("D9WG_SHADER_MODEL", value, sizeof(value));
     cached = (length == 1 && value[0] == '0') ? 0 : 3;
     return (UINT)cached;
+}
+
+static uint32_t runtime_host_features(void)
+{
+    uint32_t guest_features = shader_model_version() >= 2 ? D9WG_FEATURE_SHADER_MODEL_2 : 0;
+    if (shader_model_version() >= 3) guest_features |= D9WG_FEATURE_SHADER_MODEL_3;
+    EnterCriticalSection(&g_transport_lock);
+    uint32_t features = d9wg_transport_host_features(g_process, guest_features, submit_batch_locked);
+    LeaveCriticalSection(&g_transport_lock);
+    return features;
 }
 
 static BOOL env_flag_enabled(const char *name)
@@ -3726,8 +3739,9 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
          * Create*, so they are answered here and masked off before the shared
          * creation predicate sees the usage. D3DUSAGE_AUTOGENMIPMAP is masked
          * for the same reason from the other direction: the create paths
-         * accept it and report D3DOK_NOAUTOGEN, so it cannot make an otherwise
-         * valid format unavailable. */
+         * accept a valid 2D/cube request even if generation is unavailable.
+         * Only the query returns D3DOK_NOAUTOGEN; creation returns D3D_OK
+         * with a single accessible level in either case. */
         const DWORD query_bits = D3DUSAGE_QUERY_LEGACYBUMPMAP
                 | D3DUSAGE_QUERY_SRGBREAD | D3DUSAGE_QUERY_FILTER
                 | D3DUSAGE_QUERY_SRGBWRITE
@@ -3752,8 +3766,8 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
          * ordinary vertex buffer. */
         const DWORD unimplemented = D3DUSAGE_QUERY_LEGACYBUMPMAP
                 | D3DUSAGE_DMAP
-                | ((resource_type == D3DRTYPE_VOLUMETEXTURE)
-                    ? D3DUSAGE_AUTOGENMIPMAP : 0u);
+                | (((resource_type != D3DRTYPE_TEXTURE && resource_type != D3DRTYPE_CUBETEXTURE)
+                        || (usage & D3DUSAGE_DYNAMIC)) ? D3DUSAGE_AUTOGENMIPMAP : 0u);
         const DWORD creation_usage = usage
                 & ~(query_bits | D3DUSAGE_AUTOGENMIPMAP
                     | D3DUSAGE_SOFTWAREPROCESSING);
@@ -3767,17 +3781,16 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
             uint32_t info = d9wg_format_query_info(format);
             if ((info & 32u) || ((info & 4u)
                     && (usage & (D3DUSAGE_QUERY_FILTER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING)))) {
-                uint32_t guest_features = shader_model_version() >= 2 ? D9WG_FEATURE_SHADER_MODEL_2 : 0;
-                if (shader_model_version() >= 3) guest_features |= D9WG_FEATURE_SHADER_MODEL_3;
-                EnterCriticalSection(&g_transport_lock);
-                host_features = d9wg_transport_host_features(g_process, guest_features, submit_batch_locked);
-                LeaveCriticalSection(&g_transport_lock);
+                host_features = runtime_host_features();
             }
             ok = d9wg_format_query_supported(resource_type, usage, format,
                     host_features, shader_model_version(), renderable);
         }
     }
     result = ok ? D3D_OK : D3DERR_NOTAVAILABLE;
+    if (ok && (usage & D3DUSAGE_AUTOGENMIPMAP)
+            && !d9wg_autogen_mips_supported(resource_type, format))
+        result = D3DOK_NOAUTOGEN;
     TRACE("%s CheckDeviceFormat adapter=%lu type=%lu adapter_fmt=%08lX "
             "usage=%08lX resource_type=%lu format=%08lX -> %08lX",
             SUCCEEDED(result) ? "OK" : "FAIL", adapter, (DWORD)type,
@@ -6268,6 +6281,8 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
      * capability predicate, which answers which resources can exist and has no
      * opinion on how their mips get filled.
      */
+    if (!d9wg_autogen_creation_valid(levels, usage, pool))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (usage & D3DUSAGE_AUTOGENMIPMAP)
         levels = 1;
     if (!width || !height || width > 8192 || height > 8192
@@ -6304,6 +6319,9 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
                 levels, (DWORD)E_OUTOFMEMORY);
         return TRACE_REFUSE(E_OUTOFMEMORY);
     }
+    if (usage & D3DUSAGE_AUTOGENMIPMAP)
+        texture->autogen_filter = (D3DTEXTUREFILTERTYPE)d9wg_autogen_default_filter(format,
+                (d9wg_format_query_info(format) & 4u) ? runtime_host_features() : 0);
     texture->iface.lpVtbl = &g_texture_vtbl;
     texture->refcount = 1;
     texture->device = device;
@@ -7788,14 +7806,9 @@ static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice9 *iface,
     if (!out)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *out = NULL;
-    /* D3D9 does not support automatic mip generation for volume textures at
-     * all, so the flag is a request no driver honours: report D3DOK_NOAUTOGEN
-     * and build the texture, which is what the runtime itself does. */
-    if (usage & D3DUSAGE_AUTOGENMIPMAP) {
-        usage &= ~(DWORD)D3DUSAGE_AUTOGENMIPMAP;
-        levels = 1;
-        success = D3DOK_NOAUTOGEN;
-    }
+    /* Unlike the 2D/cube NOAUTOGEN fallback, volume autogen is invalid. */
+    if (usage & D3DUSAGE_AUTOGENMIPMAP)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!width || !height || !depth || width > 2048 || height > 2048
             || depth > 2048
             || !texture_create_supported(D3DRTYPE_VOLUMETEXTURE, usage, format,
@@ -7980,7 +7993,7 @@ static HRESULT WINAPI volume_texture_set_auto_gen_filter_type(
 { (void)iface; (void)type; return TRACE_REFUSE(D3DERR_INVALIDCALL); }
 static D3DTEXTUREFILTERTYPE WINAPI volume_texture_get_auto_gen_filter_type(
         IDirect3DVolumeTexture9 *iface)
-{ (void)iface; return D3DTEXF_LINEAR; }
+{ (void)iface; return D3DTEXF_NONE; }
 static void WINAPI volume_texture_generate_mip_sublevels(
         IDirect3DVolumeTexture9 *iface)
 { (void)iface; }
@@ -11461,7 +11474,9 @@ static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture)
     command.usage = texture->usage;
     command.pool = texture->pool;
     command.reserved = 0;
-    return emit_command(D9WG_OP_CREATE_TEXTURE_CUBE, &command, sizeof(command));
+    if (!emit_command(D9WG_OP_CREATE_TEXTURE_CUBE, &command, sizeof(command))) return FALSE;
+    return !(texture->usage & D3DUSAGE_AUTOGENMIPMAP)
+        || emit_generate_mips(device, texture->handle, texture->autogen_filter, TRUE);
 }
 
 /* Shares the 2D upload path's payload shape; only the resource handle and the
@@ -11503,6 +11518,8 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
     }
     *texture_out = NULL;
     /* See device_create_texture: one visible level, a full chain behind it. */
+    if (!d9wg_autogen_creation_valid(levels, usage, pool))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (usage & D3DUSAGE_AUTOGENMIPMAP)
         levels = 1;
     if (!edge || edge > 8192
@@ -11536,6 +11553,9 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
         HeapFree(GetProcessHeap(), 0, texture);
         return TRACE_REFUSE(E_OUTOFMEMORY);
     }
+    if (usage & D3DUSAGE_AUTOGENMIPMAP)
+        texture->autogen_filter = (D3DTEXTUREFILTERTYPE)d9wg_autogen_default_filter(format,
+                (d9wg_format_query_info(format) & 4u) ? runtime_host_features() : 0);
     texture->iface.lpVtbl = &g_cube_vtbl;
     texture->refcount = 1;
     texture->device = device;
@@ -11694,9 +11714,11 @@ static HRESULT WINAPI cube_set_auto_gen_filter_type(
     D9CubeTexture *texture = cube_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (type != D3DTEXF_POINT && type != D3DTEXF_LINEAR
-            && type != D3DTEXF_NONE)
+    if (!d9wg_autogen_filter_supported(texture->format, type,
+                (d9wg_format_query_info(texture->format) & 4u) ? runtime_host_features() : 0))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!emit_generate_mips(texture->device, texture->handle, type, TRUE))
+        return D3DERR_DRIVERINTERNALERROR;
     texture->autogen_filter = type;
     return D3D_OK;
 }
@@ -11713,7 +11735,7 @@ static void WINAPI cube_generate_mip_sublevels(IDirect3DCubeTexture9 *iface)
     D9CubeTexture *texture = cube_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
         return;
-    emit_generate_mips(texture->device, texture->handle);
+    emit_generate_mips(texture->device, texture->handle, texture->autogen_filter, FALSE);
 }
 
 static HRESULT WINAPI cube_get_level_desc(IDirect3DCubeTexture9 *iface,
@@ -13001,14 +13023,16 @@ static DWORD WINAPI texture_get_lod(IDirect3DTexture9 *iface)
 static DWORD WINAPI texture_get_level_count(IDirect3DTexture9 *iface)
 { return texture_from_iface(iface)->level_count; }
 
-/* Auto mipmap generation is not implemented in M1 (CreateTexture already
- * rejects D3DUSAGE_AUTOGENMIPMAP); these three exist only to keep the vtable
- * complete for titles that probe the capability defensively. */
-static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle)
+/* One command carries both filter changes and explicit generation. Old
+ * eight-byte commands retain their immediate-generation semantics. */
+static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
+        D3DTEXTUREFILTERTYPE filter, BOOL defer_generation)
 {
     D9WGGenerateMips command;
     command.device_handle = device->handle;
     command.resource_handle = resource_handle;
+    command.filter_type = filter;
+    command.defer_generation = defer_generation ? 1u : 0u;
     return emit_command(D9WG_OP_GENERATE_MIPS, &command, sizeof(command));
 }
 
@@ -13023,26 +13047,19 @@ static BOOL emit_texture_lod(D9Device *device, uint32_t resource_handle,
     return emit_command(D9WG_OP_SET_TEXTURE_LOD, &command, sizeof(command));
 }
 
-/*
- * D3D9 exposes the filter used for automatic mip generation, and defaults it to
- * D3DTEXF_LINEAR. Reporting D3DTEXF_NONE was consistent while nothing generated
- * anything; now that the chain is real, the getter has to describe what the
- * host actually does -- a linear box downsample per level.
- *
- * The setter accepts the filters that describe that and refuses the ones it
- * would have to silently substitute for. D3D9's own contract here is that an
- * unsupported filter returns D3DERR_INVALIDCALL, so refusing is the documented
- * answer rather than an approximation.
- */
+/* Filtering follows the enabled per-format device support. Setters dirty
+ * without immediately generating; creation and Reset replay the stored filter. */
 static HRESULT WINAPI texture_set_auto_gen_filter_type(
         IDirect3DTexture9 *iface, D3DTEXTUREFILTERTYPE filter)
 {
     D9Texture *texture = texture_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (filter != D3DTEXF_POINT && filter != D3DTEXF_LINEAR
-            && filter != D3DTEXF_NONE)
+    if (!d9wg_autogen_filter_supported(texture->format, filter,
+                (d9wg_format_query_info(texture->format) & 4u) ? runtime_host_features() : 0))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!emit_generate_mips(texture->device, texture->handle, filter, TRUE))
+        return D3DERR_DRIVERINTERNALERROR;
     texture->autogen_filter = filter;
     return D3D_OK;
 }
@@ -13061,7 +13078,7 @@ static void WINAPI texture_generate_mip_sublevels(IDirect3DTexture9 *iface)
     D9Texture *texture = texture_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
         return;
-    emit_generate_mips(texture->device, texture->handle);
+    emit_generate_mips(texture->device, texture->handle, texture->autogen_filter, FALSE);
 }
 
 static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture9 *iface,
