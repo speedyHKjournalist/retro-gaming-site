@@ -40,4 +40,12 @@ static __inline void d9wg_light_default(D9WG_LIGHTING_SDK_LIGHT *light)
         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x3f800000u,0,0,0,0,0,0,0};
     __builtin_memcpy(light, words, sizeof(words));
 }
+/* Native D3D7 and Wine's Windows-tested D3D8/9 queries return bit 7 for
+ * enabled lights. Failed queries leave the caller's output untouched. */
+static __inline int d9wg_light_query_enable(int known, int enabled, BOOL *output)
+{
+    if (!known || !output) return 0;
+    *output = enabled ? 0x80 : 0;
+    return 1;
+}
 #endif

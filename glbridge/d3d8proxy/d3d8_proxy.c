@@ -5965,14 +5965,14 @@ static HRESULT WINAPI device_get_light_enable(IDirect3DDevice8 *iface,
         DWORD index, WINBOOL *enable)
 {
     D8Device *device = device_from_iface(iface);
-    D8LightState *entry;
-    if (!enable) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (index < D8WG_MAX_LIGHTS) {
-        *enable = device->light_enabled[index];
-    } else {
-        entry = find_extra_light(device->extra_lights, index);
-        *enable = entry ? entry->enabled : FALSE;
+    BOOL known, enabled;
+    if (index < D8WG_MAX_LIGHTS) {known = device->light_set[index];enabled = device->light_enabled[index];}
+    else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        known = entry && entry->set;enabled = entry ? entry->enabled : FALSE;
     }
+    if (!d9wg_light_query_enable(known, enabled, enable))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return D3D_OK;
 }
 static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice8 *iface,

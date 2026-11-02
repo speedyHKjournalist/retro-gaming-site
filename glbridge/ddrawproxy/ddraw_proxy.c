@@ -41,6 +41,7 @@
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT7
 #define D9WG_LIGHTING_LEGACY7 1
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_light_state.h"
 #include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_transport.h"

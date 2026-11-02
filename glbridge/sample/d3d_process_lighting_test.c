@@ -230,6 +230,7 @@ static void blend_checks(void)
 #endif
     state(D3DRS_VERTEXBLEND,0);report("PASS shared vertex blend checks");
 }
+#include "d3d_light_enable_query_cases.h"
 #if D9WG_TNL_API != 7
 #include "d3d_light_state_cases.h"
 #include "d3d_state_scope_cases.h"
@@ -276,6 +277,7 @@ void WINAPI WinMainCRTStartup(void)
     ZeroMemory(&pp,sizeof(pp));pp.BackBufferWidth=pp.BackBufferHeight=64;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferCount=1;pp.hDeviceWindow=window;pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;
     check(SUCCEEDED(FACT(CreateDevice)(factory,0,D3DDEVTYPE_HAL,window,D3DCREATE_SOFTWARE_VERTEXPROCESSING,&pp,&device)),"device");
 #endif
+    light_enable_query_checks();
 #if D9WG_TNL_API != 7
     light_state_checks();
 #endif

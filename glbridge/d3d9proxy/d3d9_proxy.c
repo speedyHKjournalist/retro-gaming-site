@@ -9018,13 +9018,19 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice9 *iface, DWORD index, 
     D9WGLightEnable command = {device->handle, index, !!enable, 0};
     return emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
-static HRESULT WINAPI device_get_light_enable(IDirect3DDevice9 *iface, DWORD index, WINBOOL *enable)
+static HRESULT WINAPI device_get_light_enable(IDirect3DDevice9 *iface,
+        DWORD index, WINBOOL *enable)
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetLightEnable");
     D9Device *device = device_from_iface(iface);
-    if (!enable) return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (index < D9_MAX_LIGHTS) *enable = device->light_enabled[index];
-    else {D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);*enable = entry ? entry->enabled : FALSE;}
+    BOOL known, enabled;
+    if (index < D9_MAX_LIGHTS) {known = device->light_set[index];enabled = device->light_enabled[index];}
+    else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        known = entry && entry->set;enabled = entry ? entry->enabled : FALSE;
+    }
+    if (!d9wg_light_query_enable(known, enabled, enable))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     return D3D_OK;
 }
 static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,

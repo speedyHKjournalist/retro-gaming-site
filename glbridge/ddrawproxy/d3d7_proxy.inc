@@ -2623,9 +2623,10 @@ static HRESULT WINAPI d3d7_device_GetLightEnable(IDirect3DDevice7 *iface,
         DWORD index, WINBOOL *enable)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    if (!enable || index >= D3D7_MAX_LIGHTS || !device->light_set[index])
+    BOOL known = index < D3D7_MAX_LIGHTS && device->light_set[index];
+    BOOL enabled = known ? device->light_enabled[index] : FALSE;
+    if (!d9wg_light_query_enable(known, enabled, enable))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *enable = device->light_enabled[index];
     return D3D_OK;
 }
 
