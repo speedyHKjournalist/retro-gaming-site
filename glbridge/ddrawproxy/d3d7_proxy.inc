@@ -67,6 +67,8 @@ struct D3D7Device {
     D3DMATERIAL7 material;
     D3DMATRIX transforms[D3D7_MAX_TRANSFORMS];
     DWORD render_states[D3D7_MAX_RENDER_STATES];
+    DWORD rejected_render_values[D3D7_MAX_RENDER_STATES];
+    BYTE rejected_render_set[D3D7_MAX_RENDER_STATES];
     DWORD texture_stage_states[D3D7_MAX_TEXTURE_STAGES]
             [D3D7_MAX_TEXTURE_STAGE_STATES];
     DDSurface *textures[D3D7_MAX_TEXTURE_STAGES];
@@ -1024,25 +1026,31 @@ static void d3d7_device_init_state(D3D7Device *device)
     device->legacy_stats.dwSize = sizeof(device->legacy_stats);
 }
 
+/* Native D3D7 RGB measurements: 61 predefined states, four shared by
+ * PIXEL/VERTEX, plus two queryable states omitted even by ALL. The legacy
+ * interfaces use the broader DX2/3 state namespace below. */
 static BOOL d3d7_render_state_is_vertex(DWORD state)
 {
     switch (state) {
-    case D3DRENDERSTATE_CULLMODE:
-    case D3DRENDERSTATE_SPECULARENABLE:
-    case D3DRENDERSTATE_FOGENABLE:
-    case D3DRENDERSTATE_SHADEMODE:
-    case D3DRENDERSTATE_FOGVERTEXMODE:
-    case D3DRENDERSTATE_LIGHTING:
-    case D3DRENDERSTATE_AMBIENT:
-    case D3DRENDERSTATE_COLORVERTEX:
-    case D3DRENDERSTATE_LOCALVIEWER:
-    case D3DRENDERSTATE_NORMALIZENORMALS:
-    case D3DRENDERSTATE_DIFFUSEMATERIALSOURCE:
-    case D3DRENDERSTATE_SPECULARMATERIALSOURCE:
-    case D3DRENDERSTATE_AMBIENTMATERIALSOURCE:
-    case D3DRENDERSTATE_EMISSIVEMATERIALSOURCE:
-    case D3DRENDERSTATE_VERTEXBLEND:
-    case D3DRENDERSTATE_CLIPPLANEENABLE:
+    case 9: case 22: case 28: case 29: case 34: case 35: case 36:
+    case 37: case 38: case 48: case 136: case 137: case 138: case 139:
+    case 140: case 141: case 142: case 143: case 145: case 146:
+    case 147: case 148: case 151: case 152:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static BOOL d3d7_render_state_is_pixel(DWORD state)
+{
+    switch (state) {
+    case 2: case 4: case 7: case 8: case 9: case 10: case 14: case 15:
+    case 16: case 19: case 20: case 23: case 24: case 25: case 26:
+    case 27: case 33: case 36: case 37: case 38: case 40: case 41:
+    case 47: case 52: case 53: case 54: case 55: case 56: case 57:
+    case 58: case 59: case 60: case 128: case 129: case 130: case 131:
+    case 132: case 133: case 134: case 135: case 144:
         return TRUE;
     default:
         return FALSE;
@@ -1050,6 +1058,12 @@ static BOOL d3d7_render_state_is_vertex(DWORD state)
 }
 
 static BOOL d3d7_render_state_valid(DWORD state)
+{
+    return d3d7_render_state_is_pixel(state) ||
+            d3d7_render_state_is_vertex(state) || state == 30u || state == 50u;
+}
+
+static BOOL d3d_legacy_render_state_valid(DWORD state)
 {
     return (state >= 1u && state <= 41u) ||
             (state >= 43u && state <= 60u) ||
@@ -1077,9 +1091,8 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
     UINT state, stage;
     if (type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE) {
         for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
-            if (d3d7_render_state_valid(state) &&
-                    (type == D3DSBT_ALL ||
-                     !d3d7_render_state_is_vertex(state) || state == D3DRENDERSTATE_SHADEMODE))
+            if (d3d7_render_state_is_pixel(state) ||
+                    (type == D3DSBT_ALL && d3d7_render_state_is_vertex(state)))
                 block->render_mask[state] = 1;
         }
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
@@ -1091,9 +1104,8 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
     }
     if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {
         for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
-            if (d3d7_render_state_valid(state) &&
-                    (type == D3DSBT_ALL ||
-                     d3d7_render_state_is_vertex(state)))
+            if (d3d7_render_state_is_vertex(state) ||
+                    (type == D3DSBT_ALL && d3d7_render_state_is_pixel(state)))
                 block->render_mask[state] = 1;
         }
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
@@ -1858,12 +1870,12 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
     }
 }
 
-static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
+static HRESULT WINAPI d3d7_set_render_state(IDirect3DDevice7 *iface,
         D3DRENDERSTATETYPE state, DWORD value)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     DWORD previous;
-    if (!d3d7_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!d3d_legacy_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     if (state == D3DRENDERSTATE_TEXTUREHANDLE && value)
         return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
@@ -1943,6 +1955,24 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
         device->texture_stage_states[0][D3DTSS_ADDRESSV] = value;
     }
     return D3D_OK;
+}
+
+static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
+        D3DRENDERSTATETYPE state, DWORD value)
+{
+    if (!d3d7_render_state_valid(state)) {
+        D3D7Device *device = d3d7_device_from_iface(iface);
+        /* The retail runtime caches a rejected legacy value outside Begin.
+         * Repeating it succeeds without changing queryable/device state;
+         * recording neither consults nor updates that redundant-call cache. */
+        if (!device->recording_state_block && d3d_legacy_render_state_valid(state)) {
+            if (device->rejected_render_set[state] && device->rejected_render_values[state] == value) return D3D_OK;
+            device->rejected_render_set[state] = TRUE;
+            device->rejected_render_values[state] = value;
+        }
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
+    return d3d7_set_render_state(iface, state, value);
 }
 
 static HRESULT WINAPI d3d7_device_GetRenderState(IDirect3DDevice7 *iface,
@@ -2538,7 +2568,7 @@ static BOOL d3d7_sync_initial_state(D3D7Device *device)
     for (index = 0; index < sizeof(render_states) / sizeof(render_states[0]);
             ++index) {
         DWORD state = render_states[index];
-        if (FAILED(d3d7_device_SetRenderState(iface,
+        if (FAILED(d3d7_set_render_state(iface,
                 (D3DRENDERSTATETYPE)state, device->render_states[state])))
             return FALSE;
     }

@@ -1788,8 +1788,10 @@ static DDSurface *d3d_legacy_find_texture(DDrawObject *owner,
 static HRESULT WINAPI d3d3_device_GetRenderState(IDirect3DDevice3 *iface,
         D3DRENDERSTATETYPE state, DWORD *value)
 {
-    return d3d7_device_GetRenderState((IDirect3DDevice7 *)
-            d3d3_device_from_iface(iface), state, value);
+    D3D7Device *device = d3d3_device_from_iface(iface);
+    if (!value || !d3d_legacy_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    *value = device->render_states[state];
+    return D3D_OK;
 }
 
 static HRESULT WINAPI d3d3_device_SetRenderState(IDirect3DDevice3 *iface,
@@ -1807,7 +1809,7 @@ static HRESULT WINAPI d3d3_device_SetRenderState(IDirect3DDevice3 *iface,
             device->render_states[D3DRENDERSTATE_TEXTUREHANDLE] = value;
         return DDWG_TRACE_ERROR(result);
     }
-    return d3d7_device_SetRenderState((IDirect3DDevice7 *)device, state,
+    return d3d7_set_render_state((IDirect3DDevice7 *)device, state,
             value);
 }
 
@@ -1858,25 +1860,25 @@ static HRESULT WINAPI d3d3_device_SetLightState(IDirect3DDevice3 *iface,
         return d3d7_device_SetMaterial((IDirect3DDevice7 *)device, &material7);
     }
     case D3DLIGHTSTATE_AMBIENT:
-        return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+        return d3d7_set_render_state((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_AMBIENT, value);
     case D3DLIGHTSTATE_COLORMODEL:
         return DDWG_TRACE_ERROR(value == D3DCOLOR_RGB
                 ? D3D_OK : DDERR_UNSUPPORTED);
     case D3DLIGHTSTATE_FOGMODE:
-        return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+        return d3d7_set_render_state((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_FOGVERTEXMODE, value);
     case D3DLIGHTSTATE_FOGSTART:
-        return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+        return d3d7_set_render_state((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_FOGSTART, value);
     case D3DLIGHTSTATE_FOGEND:
-        return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+        return d3d7_set_render_state((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_FOGEND, value);
     case D3DLIGHTSTATE_FOGDENSITY:
-        return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+        return d3d7_set_render_state((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_FOGDENSITY, value);
     case D3DLIGHTSTATE_COLORVERTEX:
-        return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+        return d3d7_set_render_state((IDirect3DDevice7 *)device,
                 D3DRENDERSTATE_COLORVERTEX, value);
     default: return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
@@ -2309,8 +2311,8 @@ static HRESULT WINAPI d3d2_device_End(IDirect3DDevice2 *iface, DWORD flags)
 static HRESULT WINAPI d3d2_device_GetRenderState(IDirect3DDevice2 *iface,
         D3DRENDERSTATETYPE state, DWORD *value)
 {
-    return d3d7_device_GetRenderState((IDirect3DDevice7 *)
-            d3d2_device_from_iface(iface), state, value);
+    D3D7Device *device = d3d2_device_from_iface(iface);
+    return d3d3_device_GetRenderState((IDirect3DDevice3 *)&device->device3_vtbl, state, value);
 }
 
 static HRESULT WINAPI d3d2_device_SetRenderState(IDirect3DDevice2 *iface,
