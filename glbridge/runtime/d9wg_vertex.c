@@ -382,3 +382,90 @@ int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,
     }
     *status = result;return 1;
 }
+
+int d9wg_process_stream_layout(const D9WGVertexElement *elements, uint32_t count,
+        D9WGProcessStreamLayout *layout)
+{
+    if (!layout || !elements || !count || count > D9WG_VERTEX_MAX_ELEMENTS) return 0;
+    D9WGVertexElement normalized[D9WG_VERTEX_MAX_ELEMENTS];
+    layout->count = layout->stream_mask = 0;
+    for (unsigned i = 0; i < D9WG_VERTEX_MAX_STREAMS; ++i) layout->extent[i] = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const D9WGVertexElement *element = elements + i;
+        uint32_t bytes = d9wg_decl_bytes(element->type);
+        if (element->stream >= D9WG_VERTEX_MAX_STREAMS || element->method || !bytes) return 0;
+        layout->elements[i] = *element;
+        normalized[i] = *element;normalized[i].stream = 0;normalized[i].offset = (uint16_t)(i*16u);
+        uint32_t extent = (uint32_t)element->offset + bytes;
+        if (layout->extent[element->stream] < extent) layout->extent[element->stream] = extent;
+        layout->stream_mask |= 1u << element->stream;
+    }
+    if (!d9wg_process_layout(normalized, count, &layout->vertex)) return 0;
+    layout->count = count;return 1;
+}
+int d9wg_process_stream_range(uint32_t length, uint32_t base, uint32_t stride,
+        uint32_t extent, uint32_t start, uint32_t count, uint32_t *first)
+{
+    if (stride) return d9wg_process_range(length, base, stride, extent, start, count, first);
+    /* A zero stride reuses the same attributes for every vertex. Do not add
+     * the source index to the base or require one copy of the data per vertex. */
+    if (!count || !extent || base > length || extent > length - base) return 0;
+    *first = base;return 1;
+}
+int d9wg_process_stream_validate(const D9WGProcessStreamLayout *layout,
+        const D9WGVertexStream *streams, uint32_t start, uint32_t count, uint32_t *first)
+{
+    if (!layout || !streams || !first || !layout->count || layout->count > D9WG_VERTEX_MAX_ELEMENTS ||
+            !layout->stream_mask || layout->vertex.stride > D9WG_VERTEX_GATHER_BYTES) return 0;
+    for (uint32_t stream = 0; stream < D9WG_VERTEX_MAX_STREAMS; ++stream) {
+        if (!(layout->stream_mask & (1u << stream))) continue;
+        const D9WGVertexStream *input = streams + stream;
+        if (!input->vertices || !d9wg_process_stream_range(input->length, input->base, input->stride,
+                layout->extent[stream], start, count, first + stream)) return 0;
+    }
+    return 1;
+}
+static void gather_stream_vertex(const D9WGProcessStreamLayout *layout,
+        const D9WGVertexStream *streams, const uint32_t *first, uint32_t vertex, uint8_t *output)
+{
+    for (uint32_t i = 0; i < layout->count; ++i) {
+        const D9WGVertexElement *element = layout->elements + i;
+        const D9WGVertexStream *stream = streams + element->stream;
+        uint32_t at = first[element->stream] + vertex*stream->stride + element->offset;
+        copy_bytes(output + i*16u, stream->vertices + at, d9wg_decl_bytes(element->type));
+    }
+}
+int d9wg_process_vertices_streams(const D9WGProcessStreamLayout *layout,
+        const D9WGVertexStream *streams, uint32_t source_start,
+        const D9WGProcessLayout *destination, void *output, uint32_t output_length,
+        uint32_t output_start, uint32_t count, const void *world_view,
+        const void *world_view_projection, const D9WGProcessViewport *viewport,
+        const D9WGTNLLighting *lighting, uint32_t copy_data, const D9WGVertexState *vertex_state)
+{
+    uint32_t first[D9WG_VERTEX_MAX_STREAMS], output_first;
+    if (!output || !d9wg_process_canonical_output(destination) || !layout || layout->vertex.position_transformed ||
+            !d9wg_process_stream_validate(layout, streams, source_start, count, first) ||
+            !d9wg_process_range(output_length, 0, destination->stride, destination->stride,
+                    output_start, count, &output_first)) return 0;
+    uint8_t vertex[D9WG_VERTEX_GATHER_BYTES];
+    D9WGVertexBlend *blend = vertex_state ? vertex_state->blend : 0;
+    if (blend) {
+        if (!d9wg_blend_layout(blend, &layout->vertex)) return 0;
+        /* A late invalid palette index must not leave earlier output vertices
+         * modified. All stream ranges and all indices precede the first write. */
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t indices[4];gather_stream_vertex(layout, streams, first, i, vertex);
+            if (!d9wg_blend_indices(blend, &layout->vertex, vertex, indices)) return 0;
+        }
+    }
+    D9WGVertexState state;
+    if (vertex_state) copy_bytes(&state, vertex_state, sizeof(state));
+    for (uint32_t i = 0; i < count; ++i) {
+        gather_stream_vertex(layout, streams, first, i, vertex);
+        if (vertex_state && vertex_state->clip_vertices) state.clip_vertices = vertex_state->clip_vertices + i;
+        if (!d9wg_process_vertices(&layout->vertex, vertex, layout->vertex.stride, 0, layout->vertex.stride, 0,
+                destination, output, output_length, output_start + i, 1, world_view, world_view_projection,
+                viewport, lighting, copy_data, vertex_state ? &state : 0)) return 0;
+    }
+    return 1;
+}

@@ -9146,12 +9146,7 @@ static UINT d9_decl_type_bytes(BYTE type)
     }
 }
 
-/*
- * The subset of D3DDECLTYPE this software path reads and writes directly.
- * Everything else -- the packed and half-float formats -- is rejected rather
- * than approximated, because a silently mis-decoded position is geometry that
- * is wrong rather than missing.
- */
+/* Float output widths used by generated primitive declarations. */
 static BOOL d9_decl_type_float_count(BYTE type, UINT *floats)
 {
     switch (type) {
@@ -9190,9 +9185,8 @@ static BOOL d9_prepare_lighting(D9Device *device, const D3DMATRIX *world_view,
 
 /* The source layout is the declaration currently bound, whether it arrived as
  * a real IDirect3DVertexDeclaration9 or as an FVF. */
-static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
+static BOOL d9_current_source_elements(D9Device *device, D9WGVertexElement *elements, UINT *element_count)
 {
-    D9WGVertexElement elements[D3DMAXDECLLENGTH];
     UINT count = 0;
 
     if (device->vertex_declaration) {
@@ -9216,7 +9210,65 @@ static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
     } else {
         return FALSE;
     }
-    return d9_build_process_layout(elements, count, layout);
+    *element_count = count;return TRUE;
+}
+static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
+    return d9_current_source_elements(device, elements, &count) &&
+            d9_build_process_layout(elements, count, layout);
+}
+
+typedef struct D9ProcessInput {
+    D9WGProcessStreamLayout layout;
+    D9WGVertexStream streams[D9_MAX_STREAMS];
+    D9ProcessLayout fast_layout;
+    BOOL gather;
+    BYTE *snapshot;
+} D9ProcessInput;
+static void d9_process_input_free(D9ProcessInput *input)
+{
+    if (input->snapshot) HeapFree(GetProcessHeap(), 0, input->snapshot);
+    HeapFree(GetProcessHeap(), 0, input);
+}
+static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
+        UINT start, UINT count, D9ProcessInput **result)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
+    uint32_t first[D9_MAX_STREAMS];
+    *result = NULL;
+    if (!d9_current_source_elements(device, elements, &element_count)) return D3DERR_INVALIDCALL;
+    D9ProcessInput *input = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*input));
+    if (!input) return E_OUTOFMEMORY;
+    HRESULT error = D3DERR_INVALIDCALL;
+    if (!d9wg_process_stream_layout(elements, element_count, &input->layout) ||
+            input->layout.vertex.position_transformed) goto fail;
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
+        if (!(input->layout.stream_mask & (1u << i))) continue;
+        D9VertexBuffer *buffer = device->streams[i].buffer;
+        if (!buffer || buffer->device != device || buffer->locked || device->streams[i].frequency != 1u) goto fail;
+        input->streams[i].vertices = buffer->shadow;
+        input->streams[i].length = buffer->length;
+        input->streams[i].base = device->streams[i].offset;
+        input->streams[i].stride = device->streams[i].stride;
+    }
+    if (!d9wg_process_stream_validate(&input->layout, input->streams, start, count, first)) goto fail;
+    input->gather = input->layout.stream_mask != 1u || !input->streams[0].stride;
+    if (!input->gather && !d9_build_process_layout(elements, element_count, &input->fast_layout)) goto fail;
+    /* Every alias observes the same pre-call bytes, including a constant
+     * stream inside the destination. One snapshot covers all alias bindings. */
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
+        if (!(input->layout.stream_mask & (1u << i)) || device->streams[i].buffer != destination) continue;
+        if (!input->snapshot) {
+            input->snapshot = HeapAlloc(GetProcessHeap(), 0, destination->length);
+            if (!input->snapshot) { error = E_OUTOFMEMORY;goto fail; }
+            CopyMemory(input->snapshot, destination->shadow, destination->length);
+        }
+        input->streams[i].vertices = input->snapshot;
+    }
+    *result = input;return D3D_OK;
+fail:
+    d9_process_input_free(input);return error;
 }
 
 static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
@@ -9226,15 +9278,12 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
 {
     D9Device *device = device_from_iface(iface);
     D9VertexBuffer *destination;
-    D9VertexBuffer *source;
-    D9ProcessLayout source_layout;
     D9ProcessLayout destination_layout;
     D3DMATRIX world_view;
     D3DMATRIX world_view_projection;
     BOOL lighting;
     BOOL copy_data;
     uint32_t validated_offset;
-    UINT source_stride;
 
     TRACE_MARK_ENTER("Device.ProcessVertices");
     if (!dst || dst->lpVtbl != &g_vb_vtbl) {
@@ -9242,10 +9291,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     destination = vb_from_iface(dst);
-    source = device->streams[0].buffer;
-    source_stride = device->streams[0].stride;
-    if (destination->device != device || !source || destination->locked
-            || source->locked || !count) {
+    if (destination->device != device || destination->locked || !count) {
         TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
@@ -9253,13 +9299,6 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         HOSTLOG_REFUSED("ProcessVertices refused: a vertex shader is bound, "
                 "and running the fixed-function pipeline in its place would "
                 "silently produce different geometry");
-        TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
-    if (!d9_current_source_layout(device, &source_layout)) {
-        HOSTLOG_REFUSED("ProcessVertices refused: the source declaration uses "
-                "a stream, element type or method this software vertex path "
-                "does not read");
         TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
@@ -9305,20 +9344,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
     }
     /* D3D9 refuses to transform geometry that already is, and requires the
      * result to be pre-transformed. */
-    if (source_layout.position_transformed
-            || !destination_layout.position_transformed) {
-        HOSTLOG_REFUSED("ProcessVertices refused: the source must be "
-                "untransformed (POSITION) and the destination pre-transformed "
-                "(POSITIONT)");
-        TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
-    if (!source_stride || source_stride < source_layout.stride) {
-        TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
-    if (!d9wg_process_range(source->length, device->streams[0].offset,
-                source_stride, source_layout.stride, src_start, count, &validated_offset) ||
+    if (!destination_layout.position_transformed ||
+            !d9wg_process_canonical_output(&destination_layout) ||
             !d9wg_process_range(destination->length, 0, destination_layout.stride,
                 destination_layout.stride, dst_index, count, &validated_offset))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -9348,17 +9375,13 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
                 (float)device->viewport.Width, (float)device->viewport.Height,
                 device->viewport.MinZ, device->viewport.MaxZ };
-        const BYTE *input = source->shadow;
-        BYTE *snapshot = NULL;
-        if (source == destination) {
-            snapshot = HeapAlloc(GetProcessHeap(), 0, source->length);
-            if (!snapshot) return TRACE_REFUSE(E_OUTOFMEMORY);
-            CopyMemory(snapshot, source->shadow, source->length);input = snapshot;
-        }
+        D9ProcessInput *input;
+        HRESULT input_error = d9_process_input(device, destination, src_start, count, &input);
+        if (FAILED(input_error)) return TRACE_REFUSE(input_error);
         uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
                 device->transforms[D3DTS_WORLD], 256, 0, device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION]);
         if (blend_error) {
-            if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+            d9_process_input_free(input);
             return TRACE_REFUSE(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
         }
         D3DCAPS9 caps;fill_caps(&caps);
@@ -9368,15 +9391,21 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
                 validated_offset + destination_layout.position, destination_layout.stride, count, &viewport, guard, &clip_batch);
         if (clip_error) {
             d9wg_vertex_windows_blend_free(&vertex_state);
-            if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+            d9_process_input_free(input);
             return TRACE_REFUSE(clip_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
         }
-        BOOL processed = d9wg_process_vertices(&source_layout, input, source->length,
-                device->streams[0].offset, source_stride, src_start,
+        BOOL processed;
+        if (input->gather) processed = d9wg_process_vertices_streams(&input->layout,
+                input->streams, src_start, &destination_layout, destination->shadow,
+                destination->length, dst_index, count, &world_view, &world_view_projection,
+                &viewport, &light_state, copy_data, &vertex_state);
+        else processed = d9wg_process_vertices(&input->fast_layout,
+                input->streams[0].vertices, input->streams[0].length,
+                input->streams[0].base, input->streams[0].stride, src_start,
                 &destination_layout, destination->shadow, destination->length, dst_index, count,
                 &world_view, &world_view_projection, &viewport, &light_state, copy_data, &vertex_state);
         d9wg_vertex_windows_blend_free(&vertex_state);
-        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        d9_process_input_free(input);
         if (!processed) {
             if (clip_batch) HeapFree(GetProcessHeap(), 0, clip_batch);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);

@@ -30,6 +30,26 @@ static __inline int d9wg_process_canonical_output(const D9WGProcessLayout *layou
         if (layout->texcoord[i] >= 0 && layout->texcoord_type[i] > 3) return 0;
     return 1;
 }
+#define D9WG_VERTEX_MAX_STREAMS 16u
+#define D9WG_VERTEX_MAX_ELEMENTS 64u
+#define D9WG_VERTEX_GATHER_BYTES (D9WG_VERTEX_MAX_ELEMENTS*16u)
+typedef struct D9WGVertexStream {
+    const uint8_t *vertices;
+    uint32_t length, base, stride;
+} D9WGVertexStream;
+typedef struct D9WGProcessStreamLayout {
+    D9WGProcessLayout vertex;
+    uint32_t count, stream_mask, extent[D9WG_VERTEX_MAX_STREAMS];
+    D9WGVertexElement elements[D9WG_VERTEX_MAX_ELEMENTS];
+} D9WGProcessStreamLayout;
+/* Preserve each raw declaration type while gathering attributes from their
+ * own streams into bounded 16-byte slots for the existing vertex kernel. */
+int d9wg_process_stream_layout(const D9WGVertexElement *elements, uint32_t count,
+        D9WGProcessStreamLayout *layout);
+int d9wg_process_stream_range(uint32_t length, uint32_t base, uint32_t stride,
+        uint32_t extent, uint32_t start, uint32_t count, uint32_t *first);
+int d9wg_process_stream_validate(const D9WGProcessStreamLayout *layout,
+        const D9WGVertexStream *streams, uint32_t start, uint32_t count, uint32_t *first);
 typedef struct D9WGVertexBlend D9WGVertexBlend;
 typedef struct D9WGVertexState {
     uint32_t fog_mode, range_fog;
@@ -55,7 +75,7 @@ int d9wg_vertex_textures_init(D9WGVertexState *state, const void *stage_states,
 float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position);
 
 /* SDK-independent fixed-function source geometry, including packed attributes.
- * Packed output and multiple streams remain explicit failures. */
+ * Packed output remains an explicit failure; use the stream layout for multiple streams. */
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout);
 int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout);
 /* D3D7 RGB writes compact XYZRHW / color / float2 texture output using
@@ -74,6 +94,12 @@ int d9wg_vertex_clip_codes(const struct D9WGClipDrawSource *source,
 int d9wg_process_vertices(const D9WGProcessLayout *source_layout,
         const void *source, uint32_t source_length, uint32_t source_base,
         uint32_t source_stride, uint32_t source_start,
+        const D9WGProcessLayout *output_layout, void *output, uint32_t output_length,
+        uint32_t output_start, uint32_t count, const void *world_view,
+        const void *world_view_projection, const D9WGProcessViewport *viewport,
+        const D9WGTNLLighting *lighting, uint32_t copy_data, const D9WGVertexState *vertex_state);
+int d9wg_process_vertices_streams(const D9WGProcessStreamLayout *source_layout,
+        const D9WGVertexStream *streams, uint32_t source_start,
         const D9WGProcessLayout *output_layout, void *output, uint32_t output_length,
         uint32_t output_start, uint32_t count, const void *world_view,
         const void *world_view_projection, const D9WGProcessViewport *viewport,
