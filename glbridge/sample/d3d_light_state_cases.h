@@ -41,7 +41,7 @@ static void light_state_checks(void)
     report("PASS sparse light defaults and vertex/pixel captures");
 #if D9WG_TNL_API != 7
     check(SUCCEEDED(CALL(BeginStateBlock)(device)),"record sparse light begin");check(SUCCEEDED(CALL(SetLight)(device,37,&other)),"record sparse light");check(SUCCEEDED(CALL(LightEnable)(device,37,FALSE)),"record sparse enable");
-#if D9WG_TNL_API == 8
+#if D9WG_TNL_API == 8 || D9WG_TNL_API == 9
     light_check_value(37,&custom,TRUE);
 #endif
     check(SUCCEEDED(CALL(EndStateBlock)(device,&block)),"record sparse light end");light_check_value(37,&custom,TRUE);light_block_apply(block);light_check_value(37,&other,FALSE);light_block_release(block);

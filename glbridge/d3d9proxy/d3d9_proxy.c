@@ -870,6 +870,70 @@ typedef struct D9StreamBinding {
     DWORD frequency; /* 1, INDEXEDDATA|count, or INSTANCEDATA|step rate */
 } D9StreamBinding;
 
+#define D9_STATE_BLOCK_TRANSFORMS D9WG_STATE_BLOCK_TRANSFORMS
+
+struct D9StateBlock {
+    IDirect3DStateBlock9 iface;
+    LONG refcount;
+    D9Device *device;
+
+    BOOL has_render_state[D9_MAX_RENDER_STATES];
+    DWORD render_states[D9_MAX_RENDER_STATES];
+    BOOL has_texture_stage_state[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
+    DWORD texture_stage_states[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
+    BOOL has_sampler_state[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
+    DWORD sampler_states[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
+    BOOL has_transform[D9_STATE_BLOCK_TRANSFORMS];
+    float transforms[D9_STATE_BLOCK_TRANSFORMS][16];
+    BOOL has_texture[D9_MAX_TEXTURE_BINDINGS];
+    D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
+    D9CubeTexture *cube_textures[D9_MAX_TEXTURE_BINDINGS];
+    D9VolumeTexture *volume_textures[D9_MAX_TEXTURE_BINDINGS];
+    BOOL has_palette;
+    UINT current_palette;
+    BOOL has_material;
+    D3DMATERIAL9 material;
+    BOOL has_clip_plane[D9_MAX_CLIP_PLANES];
+    float clip_planes[D9_MAX_CLIP_PLANES][4];
+    BOOL has_npatch_mode;
+    float npatch_segments;
+    BOOL has_light[D9_MAX_LIGHTS];
+    D3DLIGHT9 lights[D9_MAX_LIGHTS];
+    BOOL has_light_enable[D9_MAX_LIGHTS];
+    BOOL light_enabled[D9_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
+    BOOL light_allocation_failed;
+    BOOL has_viewport;
+    D3DVIEWPORT9 viewport;
+    BOOL has_scissor;
+    RECT scissor_rect;
+    BOOL has_vertex_shader;
+    D9Shader *vertex_shader;
+    BOOL has_pixel_shader;
+    D9Shader *pixel_shader;
+    BOOL has_vs_const_f[D9_MAX_VS_CONST_F];
+    float vs_const_f[D9_MAX_VS_CONST_F][4];
+    BOOL has_ps_const_f[D9_MAX_PS_CONST_F];
+    float ps_const_f[D9_MAX_PS_CONST_F][4];
+    BOOL has_vs_const_i[D9_MAX_CONST_I];
+    int vs_const_i[D9_MAX_CONST_I][4];
+    BOOL has_ps_const_i[D9_MAX_CONST_I];
+    int ps_const_i[D9_MAX_CONST_I][4];
+    BOOL has_vs_const_b[D9_MAX_CONST_B];
+    BOOL vs_const_b[D9_MAX_CONST_B];
+    BOOL has_ps_const_b[D9_MAX_CONST_B];
+    BOOL ps_const_b[D9_MAX_CONST_B];
+    BOOL has_vertex_format;
+    DWORD fvf;
+    D9VertexDeclaration *vertex_declaration;
+    BOOL has_stream[D9_MAX_STREAMS];
+    BOOL has_stream_frequency[D9_MAX_STREAMS];
+    D9StreamBinding streams[D9_MAX_STREAMS];
+    BOOL has_indices;
+    D9IndexBuffer *index_buffer;
+    struct D9StateBlock *next_device_resource;
+};
+
 struct D9Direct3D {
     IDirect3D9 iface;
     LONG refcount;
@@ -956,12 +1020,8 @@ struct D9Device {
     D9Shader *shaders;
     D9StateBlock *state_blocks;
     D9Query *queries;
-    /* Non-NULL between BeginStateBlock and EndStateBlock: `recording` is the
-     * pre-Begin snapshot used to restore live device state, while
-     * `recording_result` receives an explicit mask entry for every Set* call.
-     * Keeping the call mask is essential: setting a state to its current value
-     * is still part of a D3D9 state block. */
-    D9StateBlock *recording;
+    /* The unfinished block owns recorded values/references; live state stays
+     * unchanged until Apply. Even same-value calls retain their masks. */
     D9StateBlock *recording_result;
     /* Explicitly bound targets. A NULL slot 0 means the implicit back buffer,
      * which is what a device renders to until the app says otherwise. */
@@ -1269,23 +1329,15 @@ static BOOL state_block_record_texture_stage_state(D9Device *device, UINT stage,
 static BOOL state_block_record_sampler_state(D9Device *device, UINT sampler, UINT state, DWORD value);
 static const float *state_block_transform_source(D9Device *device, UINT state);
 static BOOL state_block_record_transform(D9Device *device, UINT state, const D3DMATRIX *matrix);
-static void state_block_record_texture(D9Device *device, UINT stage);
 static BOOL state_block_record_palette(D9Device *device, UINT index);
 static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material);
 static BOOL state_block_record_clip_plane(D9Device *device, UINT index, const float *plane);
 static BOOL state_block_record_npatch_mode(D9Device *device, float segments);
 static BOOL state_block_record_stream_frequency(D9Device *device, UINT stream, DWORD divider);
-static BOOL state_block_record_light(D9Device *device, UINT index);
-static BOOL state_block_record_light_enable(D9Device *device, UINT index);
 static BOOL state_block_record_viewport(D9Device *device, const D3DVIEWPORT9 *viewport);
 static BOOL state_block_record_scissor(D9Device *device, const RECT *rect);
-static void state_block_record_vertex_shader(D9Device *device);
-static void state_block_record_pixel_shader(D9Device *device);
 static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
         BOOL is_float, BOOL is_bool, UINT start, UINT count, const void *data);
-static void state_block_record_vertex_format(D9Device *device);
-static void state_block_record_stream(D9Device *device, UINT stream);
-static void state_block_record_indices(D9Device *device);
 
 static IDirect3D9Vtbl g_d3d_vtbl;
 static IDirect3DDevice9Vtbl g_device_vtbl;
@@ -3248,7 +3300,7 @@ static BOOL device_has_reset_blockers(D9Device *device)
     }
     /* An open state-block recording spans the Reset, and the block it would
      * produce describes resources the Reset is about to invalidate. */
-    if (device->recording)
+    if (device->recording_result)
         return TRUE;
     return FALSE;
 }
@@ -3346,6 +3398,9 @@ static void device_release_owned_references(D9Device *device)
             device->handle,
             InterlockedCompareExchange(&device->refcount, 0, 0),
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
+    D9StateBlock *recording = device->recording_result;
+    device->recording_result = NULL;
+    if (recording) IDirect3DStateBlock9_Release(&recording->iface);
     device_clear_bindings(device);
     TRACE("LEAVE Device.ReleaseOwnedReferences device=%08lX refs=%ld child_refs=%ld",
             device->handle,
@@ -5978,7 +6033,18 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
-    state_block_record_texture(device, slot);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (texture) IDirect3DTexture9_AddRef(&texture->iface);
+        if (cube) IDirect3DCubeTexture9_AddRef(&cube->iface);
+        if (volume) IDirect3DVolumeTexture9_AddRef(&volume->iface);
+        if (block->textures[slot]) IDirect3DTexture9_Release(&block->textures[slot]->iface);
+        if (block->cube_textures[slot]) IDirect3DCubeTexture9_Release(&block->cube_textures[slot]->iface);
+        if (block->volume_textures[slot]) IDirect3DVolumeTexture9_Release(&block->volume_textures[slot]->iface);
+        block->has_texture[slot] = TRUE;block->textures[slot] = texture;
+        block->cube_textures[slot] = cube;block->volume_textures[slot] = volume;
+        return D3D_OK;
+    }
     if (device->textures[slot] == texture && device->cube_bindings[slot] == cube
             && device->volume_bindings[slot] == volume)
         return D3D_OK;
@@ -6478,7 +6544,14 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (buffer && offset >= buffer->length)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_stream(device, stream);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (buffer) IDirect3DVertexBuffer9_AddRef(buffer_iface);
+        if (block->streams[stream].buffer) IDirect3DVertexBuffer9_Release(&block->streams[stream].buffer->iface);
+        block->has_stream[stream] = TRUE;block->streams[stream].buffer = buffer;
+        block->streams[stream].offset = offset;block->streams[stream].stride = stride;
+        return D3D_OK;
+    }
     if (device->streams[stream].buffer == buffer
             && device->streams[stream].stride == stride
             && device->streams[stream].offset == offset)
@@ -6527,7 +6600,12 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice9 *iface,
     if (buffer && (buffer_iface->lpVtbl != &g_ib_vtbl
             || buffer->device != device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_indices(device);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (buffer) IDirect3DIndexBuffer9_AddRef(buffer_iface);
+        if (block->index_buffer) IDirect3DIndexBuffer9_Release(&block->index_buffer->iface);
+        block->has_indices = TRUE;block->index_buffer = buffer;return D3D_OK;
+    }
     if (device->index_buffer == buffer)
         return D3D_OK;
     if (buffer)
@@ -6981,7 +7059,12 @@ static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
 
     if (decl && (decl_iface->lpVtbl != &g_decl_vtbl || decl->device != device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_vertex_format(device);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (decl) IDirect3DVertexDeclaration9_AddRef(decl_iface);
+        if (block->vertex_declaration) IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
+        block->has_vertex_format = TRUE;block->vertex_declaration = decl;block->fvf = 0;return D3D_OK;
+    }
     if (decl)
         IDirect3DVertexDeclaration9_AddRef(decl_iface);
     if (device->vertex_declaration)
@@ -7026,7 +7109,11 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
                 fvf);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    state_block_record_vertex_format(device);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (block->vertex_declaration) IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
+        block->has_vertex_format = TRUE;block->vertex_declaration = NULL;block->fvf = fvf;return D3D_OK;
+    }
     if (device->vertex_declaration) {
         IDirect3DVertexDeclaration9_Release(
                 &device->vertex_declaration->iface);
@@ -7210,7 +7297,12 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice9 *iface,
     if (shader && (shader_iface->lpVtbl != &g_vertex_shader_vtbl
             || shader->device != device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_vertex_shader(device);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (shader) IDirect3DVertexShader9_AddRef(shader_iface);
+        if (block->vertex_shader) IDirect3DVertexShader9_Release(&block->vertex_shader->iface.vertex);
+        block->has_vertex_shader = TRUE;block->vertex_shader = shader;return D3D_OK;
+    }
     if (shader)
         IDirect3DVertexShader9_AddRef(shader_iface);
     if (device->vertex_shader)
@@ -7242,7 +7334,12 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice9 *iface,
     if (shader && (shader_iface->lpVtbl != &g_pixel_shader_vtbl
             || shader->device != device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_pixel_shader(device);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (shader) IDirect3DPixelShader9_AddRef(shader_iface);
+        if (block->pixel_shader) IDirect3DPixelShader9_Release(&block->pixel_shader->iface.pixel);
+        block->has_pixel_shader = TRUE;block->pixel_shader = shader;return D3D_OK;
+    }
     if (shader)
         IDirect3DPixelShader9_AddRef(shader_iface);
     if (device->pixel_shader)
@@ -8854,9 +8951,18 @@ static HRESULT WINAPI device_set_light(IDirect3DDevice9 *iface, DWORD index, con
     D9Device *device = device_from_iface(iface);D9WGLightState *entry = NULL;
     if (!light || light->Type < D3DLIGHT_POINT || light->Type > D3DLIGHT_DIRECTIONAL)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (index < D9_MAX_LIGHTS) {block->has_light[index] = TRUE;block->lights[index] = *light;}
+        else {
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
+            entry->light_mask = TRUE;entry->light = *light;entry->set = TRUE;
+        }
+        return D3D_OK;
+    }
     if (index >= D9_MAX_LIGHTS && !(entry = d9wg_light_get(&device->extra_lights, index, TRUE)))
         return TRACE_REFUSE(E_OUTOFMEMORY);
-    if (!state_block_record_light(device, index)) return TRACE_REFUSE(E_OUTOFMEMORY);
     if (entry) {entry->light = *light;entry->set = TRUE;}
     else {device->lights[index] = *light;device->light_set[index] = TRUE;}
     return d9_emit_light(device, index, light) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
@@ -8880,13 +8986,30 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice9 *iface, DWORD index, 
 {
     D9Device *device = device_from_iface(iface);D9WGLightState *entry = NULL;
     D3DLIGHT9 *light;BOOL *set, *enabled;
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (index < D9_MAX_LIGHTS) {
+            if (!block->has_light[index] && !device->light_set[index]) {
+                d9wg_light_default(&block->lights[index]);block->has_light[index] = TRUE;
+            }
+            block->has_light_enable[index] = TRUE;block->light_enabled[index] = !!enable;
+        } else {
+            D9WGLightState *current = d9wg_light_find(device->extra_lights, index);
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
+            if (!entry->light_mask && (!current || !current->set)) {
+                d9wg_light_default(&entry->light);entry->light_mask = TRUE;entry->set = TRUE;
+            }
+            entry->enable_mask = TRUE;entry->enabled = !!enable;
+        }
+        return D3D_OK;
+    }
     if (index < D9_MAX_LIGHTS) {light = device->lights + index;set = device->light_set + index;enabled = device->light_enabled + index;}
     else {
         entry = d9wg_light_get(&device->extra_lights, index, TRUE);
         if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
         light = &entry->light;set = &entry->set;enabled = &entry->enabled;
     }
-    if (!state_block_record_light_enable(device, index)) return TRACE_REFUSE(E_OUTOFMEMORY);
     if (!*set) {
         d9wg_light_default(light);*set = TRUE;
         if (!d9_emit_light(device, index, light)) return D3DERR_DRIVERINTERNALERROR;
@@ -11882,80 +12005,15 @@ static IDirect3DCubeTexture9Vtbl g_cube_vtbl = {
  * second, parallel path that could disagree with the first about what a given
  * state does.
  *
- * BeginStateBlock/EndStateBlock keeps both a pre-Begin snapshot and a separate
- * call mask. Every implemented Set* entry marks the latter before its normal
- * redundant-state suppression, so setting an existing value and setting then
- * reverting are recorded exactly as D3D9 requires. Setters run while recording
- * and End restores the snapshot; drawing during recording is invalid in D3D9,
- * so no draw can observe the temporary live values.
+ * Begin/End retains only explicitly recorded values and object references.
+ * Setters validate first, then store into that block before any live mutation
+ * or command emission. End publishes it without capturing or restoring state.
  */
 
 /* Predefined render/texture/sampler classes are shared with D3D8 in
  * d9wg_state_block_scope.h. Explicit recorded masks remain frontend-owned. */
 /* ALL and explicit recordings preserve every SDK world matrix. */
-#define D9_STATE_BLOCK_TRANSFORMS D9WG_STATE_BLOCK_TRANSFORMS
 
-struct D9StateBlock {
-    IDirect3DStateBlock9 iface;
-    LONG refcount;
-    D9Device *device;
-
-    BOOL has_render_state[D9_MAX_RENDER_STATES];
-    DWORD render_states[D9_MAX_RENDER_STATES];
-    BOOL has_texture_stage_state[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
-    DWORD texture_stage_states[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
-    BOOL has_sampler_state[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
-    DWORD sampler_states[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
-    BOOL has_transform[D9_STATE_BLOCK_TRANSFORMS];
-    float transforms[D9_STATE_BLOCK_TRANSFORMS][16];
-    BOOL has_texture[D9_MAX_TEXTURE_BINDINGS];
-    D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
-    D9CubeTexture *cube_textures[D9_MAX_TEXTURE_BINDINGS];
-    D9VolumeTexture *volume_textures[D9_MAX_TEXTURE_BINDINGS];
-    BOOL has_palette;
-    UINT current_palette;
-    BOOL has_material;
-    D3DMATERIAL9 material;
-    BOOL has_clip_plane[D9_MAX_CLIP_PLANES];
-    float clip_planes[D9_MAX_CLIP_PLANES][4];
-    BOOL has_npatch_mode;
-    float npatch_segments;
-    BOOL has_light[D9_MAX_LIGHTS];
-    D3DLIGHT9 lights[D9_MAX_LIGHTS];
-    BOOL has_light_enable[D9_MAX_LIGHTS];
-    BOOL light_enabled[D9_MAX_LIGHTS];
-    D9WGLightState *extra_lights;
-    BOOL light_allocation_failed;
-    BOOL has_viewport;
-    D3DVIEWPORT9 viewport;
-    BOOL has_scissor;
-    RECT scissor_rect;
-    BOOL has_vertex_shader;
-    D9Shader *vertex_shader;
-    BOOL has_pixel_shader;
-    D9Shader *pixel_shader;
-    BOOL has_vs_const_f[D9_MAX_VS_CONST_F];
-    float vs_const_f[D9_MAX_VS_CONST_F][4];
-    BOOL has_ps_const_f[D9_MAX_PS_CONST_F];
-    float ps_const_f[D9_MAX_PS_CONST_F][4];
-    BOOL has_vs_const_i[D9_MAX_CONST_I];
-    int vs_const_i[D9_MAX_CONST_I][4];
-    BOOL has_ps_const_i[D9_MAX_CONST_I];
-    int ps_const_i[D9_MAX_CONST_I][4];
-    BOOL has_vs_const_b[D9_MAX_CONST_B];
-    BOOL vs_const_b[D9_MAX_CONST_B];
-    BOOL has_ps_const_b[D9_MAX_CONST_B];
-    BOOL ps_const_b[D9_MAX_CONST_B];
-    BOOL has_vertex_format;
-    DWORD fvf;
-    D9VertexDeclaration *vertex_declaration;
-    BOOL has_stream[D9_MAX_STREAMS];
-    BOOL has_stream_frequency[D9_MAX_STREAMS];
-    D9StreamBinding streams[D9_MAX_STREAMS];
-    BOOL has_indices;
-    D9IndexBuffer *index_buffer;
-    struct D9StateBlock *next_device_resource;
-};
 
 static IDirect3DStateBlock9Vtbl g_state_block_vtbl;
 
@@ -12014,11 +12072,7 @@ static const float *state_block_transform_source(D9Device *device, UINT state)
     return device->transforms[state];
 }
 
-static void state_block_record_texture(D9Device *device, UINT stage)
-{
-    if (device->recording_result && stage < D9_MAX_TEXTURE_BINDINGS)
-        device->recording_result->has_texture[stage] = TRUE;
-}
+
 
 static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material)
 {
@@ -12050,28 +12104,8 @@ static BOOL state_block_record_stream_frequency(D9Device *device, UINT stream, D
     return TRUE;
 }
 
-static BOOL state_block_record_light(D9Device *device, UINT index)
-{
-    if (!device->recording_result) return TRUE;
-    if (index < D9_MAX_LIGHTS) device->recording_result->has_light[index] = TRUE;
-    else {
-        D9WGLightState *entry = d9wg_light_get(&device->recording_result->extra_lights, index, TRUE);
-        if (!entry) return FALSE;
-        entry->light_mask = TRUE;
-    }
-    return TRUE;
-}
-static BOOL state_block_record_light_enable(D9Device *device, UINT index)
-{
-    if (!device->recording_result) return TRUE;
-    if (index < D9_MAX_LIGHTS) device->recording_result->has_light_enable[index] = TRUE;
-    else {
-        D9WGLightState *entry = d9wg_light_get(&device->recording_result->extra_lights, index, TRUE);
-        if (!entry) return FALSE;
-        entry->enable_mask = TRUE;
-    }
-    return TRUE;
-}
+
+
 static BOOL state_block_record_viewport(D9Device *device, const D3DVIEWPORT9 *viewport)
 {
     D9StateBlock *block = device->recording_result;
@@ -12088,17 +12122,9 @@ static BOOL state_block_record_scissor(D9Device *device, const RECT *rect)
     return TRUE;
 }
 
-static void state_block_record_vertex_shader(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_vertex_shader = TRUE;
-}
 
-static void state_block_record_pixel_shader(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_pixel_shader = TRUE;
-}
+
+
 
 static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
         BOOL is_float, BOOL is_bool, UINT start, UINT count, const void *data)
@@ -12122,23 +12148,11 @@ static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
     return TRUE;
 }
 
-static void state_block_record_vertex_format(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_vertex_format = TRUE;
-}
 
-static void state_block_record_stream(D9Device *device, UINT stream)
-{
-    if (device->recording_result && stream < D9_MAX_STREAMS)
-        device->recording_result->has_stream[stream] = TRUE;
-}
 
-static void state_block_record_indices(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_indices = TRUE;
-}
+
+
+
 
 /* D3D9 state blocks keep every captured COM object alive.  Without these
  * references an engine may release the texture/shader it used to build a UI
@@ -12185,19 +12199,18 @@ static void state_block_capture(struct D9StateBlock *block)
 {
     D9Device *device = block->device;
     UINT index, stage, slot;
-    BOOL finishing = block == device->recording_result;
 
     if (block->has_palette) block->current_palette = device->current_palette;
     state_block_release_references(block);
 
     for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
-        if (!finishing && block->has_render_state[index])
+        if (block->has_render_state[index])
             block->render_states[index] = device->render_states[index];
     }
     for (stage = 0; stage < D9_MAX_TEXTURE_BINDINGS; ++stage) {
         if (stage < D9_MAX_TEXTURE_STAGES) {
             for (index = 0; index < D9_MAX_TEXTURE_STAGE_STATES; ++index) {
-                if (!finishing && block->has_texture_stage_state[stage][index])
+                if (block->has_texture_stage_state[stage][index])
                     block->texture_stage_states[stage][index] =
                             device->texture_stage_states[stage][index];
             }
@@ -12217,21 +12230,21 @@ static void state_block_capture(struct D9StateBlock *block)
     }
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
         for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index) {
-            if (!finishing && block->has_sampler_state[slot][index])
+            if (block->has_sampler_state[slot][index])
                 block->sampler_states[slot][index] =
                         device->sampler_states[slot][index];
         }
     }
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
-        if (!finishing && block->has_transform[index])
+        if (block->has_transform[index])
             CopyMemory(block->transforms[index],
                     device->transforms[d9wg_state_block_transform_state(index)],
                     sizeof(block->transforms[index]));
     }
-    if (!finishing && block->has_material) block->material = device->material;
+    if (block->has_material) block->material = device->material;
     for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
-        if (!finishing && block->has_clip_plane[index]) CopyMemory(block->clip_planes[index], device->clip_planes[index], 16);
-    if (!finishing && block->has_npatch_mode) block->npatch_segments = device->npatch_segments;
+        if (block->has_clip_plane[index]) CopyMemory(block->clip_planes[index], device->clip_planes[index], 16);
+    if (block->has_npatch_mode) block->npatch_segments = device->npatch_segments;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index]) block->lights[index] = device->lights[index];
         if (block->has_light_enable[index])
@@ -12242,8 +12255,8 @@ static void state_block_capture(struct D9StateBlock *block)
         if (entry->light_mask && current && current->set) {entry->light = current->light;entry->set = TRUE;}
         if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
     }
-    if (!finishing && block->has_viewport) block->viewport = device->viewport;
-    if (!finishing && block->has_scissor) block->scissor_rect = device->scissor_rect;
+    if (block->has_viewport) block->viewport = device->viewport;
+    if (block->has_scissor) block->scissor_rect = device->scissor_rect;
     if (block->has_vertex_shader) {
         block->vertex_shader = device->vertex_shader;
         if (block->vertex_shader)
@@ -12255,23 +12268,23 @@ static void state_block_capture(struct D9StateBlock *block)
             IDirect3DPixelShader9_AddRef(&block->pixel_shader->iface.pixel);
     }
     for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
-        if (!finishing && block->has_vs_const_f[index])
+        if (block->has_vs_const_f[index])
             CopyMemory(block->vs_const_f[index], device->vs_const_f[index], 16);
     }
     for (index = 0; index < D9_MAX_PS_CONST_F; ++index) {
-        if (!finishing && block->has_ps_const_f[index])
+        if (block->has_ps_const_f[index])
             CopyMemory(block->ps_const_f[index], device->ps_const_f[index], 16);
     }
     for (index = 0; index < D9_MAX_CONST_I; ++index) {
-        if (!finishing && block->has_vs_const_i[index])
+        if (block->has_vs_const_i[index])
             CopyMemory(block->vs_const_i[index], device->vs_const_i[index], 16);
-        if (!finishing && block->has_ps_const_i[index])
+        if (block->has_ps_const_i[index])
             CopyMemory(block->ps_const_i[index], device->ps_const_i[index], 16);
     }
     for (index = 0; index < D9_MAX_CONST_B; ++index) {
-        if (!finishing && block->has_vs_const_b[index])
+        if (block->has_vs_const_b[index])
             block->vs_const_b[index] = device->vs_const_b[index];
-        if (!finishing && block->has_ps_const_b[index])
+        if (block->has_ps_const_b[index])
             block->ps_const_b[index] = device->ps_const_b[index];
     }
     if (block->has_vertex_format) {
@@ -12283,16 +12296,14 @@ static void state_block_capture(struct D9StateBlock *block)
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
-            DWORD frequency = block->streams[index].frequency;
             block->streams[index] = device->streams[index];
-            if (finishing && block->has_stream_frequency[index]) block->streams[index].frequency = frequency;
             if (block->streams[index].buffer)
                 IDirect3DVertexBuffer9_AddRef(
                         &block->streams[index].buffer->iface);
         }
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index)
-        if (!finishing && block->has_stream_frequency[index]) block->streams[index].frequency = device->streams[index].frequency;
+        if (block->has_stream_frequency[index]) block->streams[index].frequency = device->streams[index].frequency;
     if (block->has_indices) {
         block->index_buffer = device->index_buffer;
         if (block->index_buffer)
@@ -12592,7 +12603,7 @@ static HRESULT WINAPI state_block_capture_method(IDirect3DStateBlock9 *iface)
 static HRESULT WINAPI state_block_apply_method(IDirect3DStateBlock9 *iface)
 {
     struct D9StateBlock *block = state_block_from_iface(iface);
-    if (block->device->recording)
+    if (block->device->recording_result)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     return state_block_apply(block);
 }
@@ -12615,7 +12626,7 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
     if (!block_out)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *block_out = NULL;
-    if (device->recording)
+    if (device->recording_result)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (type != D3DSBT_ALL && type != D3DSBT_PIXELSTATE
             && type != D3DSBT_VERTEXSTATE)
@@ -12635,26 +12646,10 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
 static HRESULT WINAPI device_begin_state_block(IDirect3DDevice9 *iface)
 {
     D9Device *device = device_from_iface(iface);
-    struct D9StateBlock *baseline;
-    struct D9StateBlock *result;
-
-    if (device->recording)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    baseline = state_block_alloc(device);
-    if (!baseline)
-        return TRACE_REFUSE(E_OUTOFMEMORY);
-    result = state_block_alloc(device);
-    if (!result) {
-        IDirect3DStateBlock9_Release(&baseline->iface);
-        return TRACE_REFUSE(E_OUTOFMEMORY);
-    }
-    state_block_mark_all(baseline);
-    if (baseline->light_allocation_failed) {
-        IDirect3DStateBlock9_Release(&baseline->iface);IDirect3DStateBlock9_Release(&result->iface);return TRACE_REFUSE(E_OUTOFMEMORY);
-    }
-    state_block_capture(baseline);
-    device->recording = baseline;
-    device->recording_result = result;
+    if (device->recording_result) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    D9StateBlock *block = state_block_alloc(device);
+    if (!block) return TRACE_REFUSE(E_OUTOFMEMORY);
+    device->recording_result = block;
     return D3D_OK;
 }
 
@@ -12662,32 +12657,9 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice9 *iface,
         IDirect3DStateBlock9 **block_out)
 {
     D9Device *device = device_from_iface(iface);
-    struct D9StateBlock *baseline = device->recording;
-    struct D9StateBlock *block = device->recording_result;
-
-    if (!baseline || !block)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!block_out) {
-        device->recording = NULL;
-        device->recording_result = NULL;
-        state_block_apply(baseline);
-        IDirect3DStateBlock9_Release(&block->iface);
-        IDirect3DStateBlock9_Release(&baseline->iface);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    *block_out = NULL;
-    /* Capture only the explicitly touched mask. This preserves same-value and
-     * write-then-revert calls which a final-value diff necessarily loses. */
-    /* Palette selection is deferred already; preserve its recorded value
-     * while the older state paths still capture their temporary live values. */
-    UINT recorded_palette = block->current_palette;
-    state_block_capture(block);
-    if (block->has_palette) block->current_palette = recorded_palette;
-    device->recording = NULL;
+    D9StateBlock *block = device->recording_result;
+    if (!block || !block_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     device->recording_result = NULL;
-    /* Put the device back the way the app left it before Begin. */
-    state_block_apply(baseline);
-    IDirect3DStateBlock9_Release(&baseline->iface);
     *block_out = &block->iface;
     return D3D_OK;
 }

@@ -235,6 +235,7 @@ static void blend_checks(void)
 #include "d3d_state_scope_cases.h"
 #if D9WG_TNL_API == 9
 #include "d3d9_record_scalar_cases.h"
+#include "d3d9_record_object_cases.h"
 #endif
 #endif
 #if D9WG_TNL_API == 8
@@ -298,6 +299,7 @@ void WINAPI WinMainCRTStartup(void)
     shared_state_scope_checks();
 #if D9WG_TNL_API == 9
     d3d9_scalar_record_checks();
+    d3d9_object_record_checks();
 #endif
 #endif
     identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"identity world");
@@ -392,7 +394,15 @@ void WINAPI WinMainCRTStartup(void)
     report("PASS shared texture coordinate checks");
     report("PASS shared vertex fog checks");
     report("PASS shared vertex copy, bounds and layout checks");
-    report("PASS all real XP ProcessVertices lighting checks");BUF(Release)(source);BUF(Release)(destination);CALL(Release)(device);FACT(Release)(factory);
+    report("PASS all real XP ProcessVertices lighting checks");BUF(Release)(source);BUF(Release)(destination);
+#if D9WG_TNL_API == 9
+    Buffer *held;UINT held_offset,held_stride;check(SUCCEEDED(CALL(GetStreamSource)(device,0,&held,&held_offset,&held_stride)),"abandon query bound VB");
+    check(SUCCEEDED(CALL(BeginStateBlock)(device))&&SUCCEEDED(CALL(SetStreamSource)(device,0,held,held_offset,held_stride)),"abandon recording with retained VB");if(held)BUF(Release)(held);
+    check(CALL(Release)(device)==0,"abandoned recording releases device and references");report("PASS D3D9 abandoned recording cleanup");
+#else
+    CALL(Release)(device);
+#endif
+    FACT(Release)(factory);
 #if D9WG_TNL_API == 7
     IDirectDrawSurface7_Release(target);IDirectDraw7_Release(ddraw);
 #endif
