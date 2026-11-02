@@ -23,6 +23,7 @@
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL8
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT8
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_palette_state.h"
 #include "../runtime/d9wg_light_state.h"
 #define D9WG_STATE_BLOCK_API 8
 #include "../runtime/d9wg_state_block_scope.h"
@@ -79,7 +80,7 @@
 #define D8WG_MAX_CLIP_PLANES 6u
 /* D3D8 does not bound the palette index; this is the table the guest keeps
  * shadowed for GetPaletteEntries, and matches what the host allocates. */
-#define D8WG_MAX_PALETTES 256u
+#define D8WG_MAX_PALETTES D9WG_PALETTE_COUNT
 
 typedef struct D8Direct3D D8Direct3D;
 typedef struct D8Device D8Device;
@@ -160,6 +161,8 @@ typedef struct D8StateSnapshot {
     BOOL indices_mask;
     BOOL vertex_shader_mask;
     BOOL pixel_shader_mask;
+    BOOL palette_mask;
+    UINT current_palette;
     DWORD render_states[D8WG_MAX_RENDER_STATES];
     DWORD texture_stage_states[D8WG_MAX_TEXTURE_STAGES]
                                       [D8WG_MAX_TEXTURE_STAGE_STATES];
@@ -235,8 +238,7 @@ struct D8Device {
     /* Palettes are device state in both APIs: the same P8 texture changes
      * appearance when the app swaps the current palette without re-uploading
      * a byte, so the table and the selection both have to reach the host. */
-    PALETTEENTRY palettes[D8WG_MAX_PALETTES][256];
-    BOOL palette_set[D8WG_MAX_PALETTES];
+    D9WGPaletteStore palettes;
     UINT current_palette;
     BOOL has_last_surface;
     /* Whether the last report said other windows cover all of the window */
@@ -375,6 +377,7 @@ struct D8Volume {
 };
 
 static void free_extra_lights(D8LightState **list);
+static HRESULT WINAPI device_set_current_palette(IDirect3DDevice8 *iface, UINT index);
 
 /*
  * D3D8 vertex/pixel shaders are not COM objects: CreateVertexShader and
@@ -2496,6 +2499,7 @@ static void device_init_states(D8Device *device)
 {
     UINT stage;
     UINT transform;
+    device->current_palette = 0;
     d9wg_clip_status_init(&device->clip_status);device->clip_status_valid = TRUE;
     ZeroMemory(device->render_states, sizeof(device->render_states));
     ZeroMemory(device->texture_stage_states,
@@ -2837,6 +2841,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     command.multisample_quality = 0;
     if (!emit_command(D9WG_OP_CREATE_DEVICE, &command, sizeof(command))) {
         IDirect3D8_Release(iface);
+        d9wg_palette_free(&device->palettes);
         HeapFree(GetProcessHeap(), 0, device->front_shadow);
         HeapFree(GetProcessHeap(), 0, device);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
@@ -6015,6 +6020,7 @@ static void state_block_set_scope(D8StateBlock *block, D3DSTATEBLOCKTYPE type)
         FillMemory(state->transform_mask, sizeof(state->transform_mask), 1);
         FillMemory(state->clip_plane_mask, sizeof(state->clip_plane_mask), 1);
         state->viewport_mask = state->material_mask = state->indices_mask = TRUE;
+        state->palette_mask = TRUE;
     }
 }
 
@@ -6048,6 +6054,7 @@ static BOOL state_block_capture(D8Device *device, D8StateBlock *block)
     UINT index;
     UINT stage;
 
+    if (state->palette_mask) state->current_palette = device->current_palette;
     for (index = 0; index < D8WG_MAX_RENDER_STATES; ++index) {
         if (state->render_mask[index])
             state->render_states[index] = device->render_states[index];
@@ -6179,6 +6186,8 @@ static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
     UINT index;
     UINT stage;
 #define APPLY_STATE(call) do { hr = (call); if (FAILED(hr)) return D8WG_TRACE_ERROR(hr); } while (0)
+    if (state->palette_mask)
+        APPLY_STATE(device_set_current_palette(&device->iface, state->current_palette));
     for (index = 0; index < D8WG_MAX_RENDER_STATES; ++index) {
         if (state->render_mask[index])
             APPLY_STATE(device_set_render_state(&device->iface,
@@ -6366,34 +6375,28 @@ static HRESULT WINAPI device_set_palette(IDirect3DDevice8 *iface, UINT index,
 {
     D8Device *device = device_from_iface(iface);
     D9WGSetPalette command;
-    DWORD colors[256];
+    const uint32_t *colors;
     uint8_t *payload;
     uint8_t *blob;
-    UINT entry;
     BOOL result;
 
     if (!entries || index >= D8WG_MAX_PALETTES)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    CopyMemory(device->palettes[index], entries, sizeof(device->palettes[index]));
-    device->palette_set[index] = TRUE;
-    for (entry = 0; entry < 256u; ++entry) {
-        colors[entry] = ((DWORD)entries[entry].peFlags << 24)
-                | ((DWORD)entries[entry].peRed << 16)
-                | ((DWORD)entries[entry].peGreen << 8)
-                | (DWORD)entries[entry].peBlue;
-    }
+    if (!d9wg_palette_set(&device->palettes, index, entries))
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    colors = d9wg_palette_find(&device->palettes, index);
 
     ZeroMemory(&command, sizeof(command));
     EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_SET_PALETTE, sizeof(command),
-            sizeof(colors), NULL, &payload, &blob);
+            256u * 4u, NULL, &payload, &blob);
     if (result) {
         command.device_handle = device->handle;
         command.palette_index = index;
         command.entry_count = 256;
         command.data_offset = (uint32_t)(blob - batch_base());
         CopyMemory(payload, &command, sizeof(command));
-        CopyMemory(blob, colors, sizeof(colors));
+        CopyMemory(blob, colors, 256u * 4u);
     }
     LeaveCriticalSection(&g_transport_lock);
     return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
@@ -6404,9 +6407,9 @@ static HRESULT WINAPI device_get_palette(IDirect3DDevice8 *iface, UINT index,
 {
     D8Device *device = device_from_iface(iface);
 
-    if (!entries || index >= D8WG_MAX_PALETTES || !device->palette_set[index])
+    if (!entries || index >= D8WG_MAX_PALETTES)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    CopyMemory(entries, device->palettes[index], sizeof(device->palettes[index]));
+    d9wg_palette_get(&device->palettes, index, entries);
     return D3D_OK;
 }
 
@@ -6416,8 +6419,13 @@ static HRESULT WINAPI device_set_current_palette(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D9WGSetCurrentTexturePalette command;
 
-    if (index >= D8WG_MAX_PALETTES || !device->palette_set[index])
+    if (index >= D8WG_MAX_PALETTES)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (device->recording_state_block) {
+        device->recording_state_block->state.palette_mask = TRUE;
+        device->recording_state_block->state.current_palette = index;
+        return D3D_OK;
+    }
     device->current_palette = index;
     command.device_handle = device->handle;
     command.palette_index = index;

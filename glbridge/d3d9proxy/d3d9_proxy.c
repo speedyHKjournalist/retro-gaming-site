@@ -33,6 +33,7 @@
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL9
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT9
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_palette_state.h"
 #include "../runtime/d9wg_light_state.h"
 #define D9WG_STATE_BLOCK_API 9
 #include "../runtime/d9wg_state_block_scope.h"
@@ -690,7 +691,7 @@ static void trace_close(void)
 #define D9_MAX_RENDER_STATES 256u
 #define D9_MAX_TEXTURE_STAGES 8u
 #define D9_MAX_TEXTURE_BINDINGS 20u /* 16 pixel + 4 vs_3_0 vertex samplers */
-#define D9_MAX_PALETTES 16u
+#define D9_MAX_PALETTES D9WG_PALETTE_COUNT
 
 /*
  * ATI's depth-as-texture FOURCCs, absent from d3d9types.h because they were
@@ -1028,18 +1029,8 @@ struct D9Device {
     float ps_const_f[D9_MAX_PS_CONST_F][4];
     int ps_const_i[D9_MAX_CONST_I][4];
     BOOL ps_const_b[D9_MAX_CONST_B];
-    /*
-     * Texture palettes, held here for the same reason as the constant
-     * registers: D3D9 lets an app read its palette back, and a palette is
-     * device state that outlives any one texture. The count is a local limit
-     * rather than a D3D9 one -- the API takes an arbitrary UINT index -- but a
-     * palettized title uses a handful, and a sparse map would cost more than
-     * the table it replaced.
-     */
-    DWORD palettes[D9_MAX_PALETTES][256];
-    BOOL palette_valid[D9_MAX_PALETTES];
+    D9WGPaletteStore palettes;
     UINT current_palette;
-    BOOL current_palette_set;
     uint32_t reset_epoch;
 };
 
@@ -1280,6 +1271,7 @@ static void state_block_record_sampler_state(D9Device *device,
         UINT sampler, UINT state);
 static void state_block_record_transform(D9Device *device, UINT state);
 static void state_block_record_texture(D9Device *device, UINT stage);
+static BOOL state_block_record_palette(D9Device *device, UINT index);
 static void state_block_record_material(D9Device *device);
 static void state_block_record_clip_plane(D9Device *device, UINT index);
 static void state_block_record_npatch_mode(D9Device *device);
@@ -3423,6 +3415,7 @@ static void device_init_states(D9Device *device)
 {
     UINT slot;
     UINT stage;
+    device->current_palette = 0;
 
     /*
      * These arrays are not merely Get*State backing stores: every Set*State
@@ -4272,6 +4265,7 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
     if (!refs) {
         D9WGDestroyResource destroy;
         d9wg_light_free(&device->extra_lights);
+        d9wg_palette_free(&device->palettes);
         TRACE("Device.Release destroy object=%08lX handle=%08lX pending=%lu",
                 (DWORD)(uintptr_t)iface, device->handle, g_command_count);
         unwatch_window_state(device);
@@ -8998,18 +8992,11 @@ static HRESULT WINAPI device_set_palette_entries(IDirect3DDevice9 *iface,
     uint8_t *payload;
     uint8_t *blob;
     BOOL sent = FALSE;
-    UINT entry;
 
     if (!entries || index >= D9_MAX_PALETTES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    for (entry = 0; entry < 256u; ++entry) {
-        device->palettes[index][entry] =
-                ((DWORD)entries[entry].peFlags << 24)
-                | ((DWORD)entries[entry].peRed << 16)
-                | ((DWORD)entries[entry].peGreen << 8)
-                | (DWORD)entries[entry].peBlue;
-    }
-    device->palette_valid[index] = TRUE;
+    if (!d9wg_palette_set(&device->palettes, index, entries))
+        return TRACE_REFUSE(E_OUTOFMEMORY);
 
     ZeroMemory(&command, sizeof(command));
     EnterCriticalSection(&g_transport_lock);
@@ -9020,7 +9007,7 @@ static HRESULT WINAPI device_set_palette_entries(IDirect3DDevice9 *iface,
         command.entry_count = 256u;
         command.data_offset = (uint32_t)(blob - batch_base());
         CopyMemory(payload, &command, sizeof(command));
-        CopyMemory(blob, device->palettes[index], 256u * 4u);
+        CopyMemory(blob, d9wg_palette_find(&device->palettes, index), 256u * 4u);
         sent = TRUE;
     }
     LeaveCriticalSection(&g_transport_lock);
@@ -9032,17 +9019,10 @@ static HRESULT WINAPI device_get_palette_entries(IDirect3DDevice9 *iface,
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetPaletteEntries");
     D9Device *device = device_from_iface(iface);
-    UINT entry;
 
-    if (!entries || index >= D9_MAX_PALETTES || !device->palette_valid[index])
+    if (!entries || index >= D9_MAX_PALETTES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    for (entry = 0; entry < 256u; ++entry) {
-        const DWORD value = device->palettes[index][entry];
-        entries[entry].peRed = (BYTE)((value >> 16) & 0xFF);
-        entries[entry].peGreen = (BYTE)((value >> 8) & 0xFF);
-        entries[entry].peBlue = (BYTE)(value & 0xFF);
-        entries[entry].peFlags = (BYTE)((value >> 24) & 0xFF);
-    }
+    d9wg_palette_get(&device->palettes, index, entries);
     return D3D_OK;
 }
 
@@ -9052,14 +9032,11 @@ static HRESULT WINAPI device_set_current_texture_palette(
     D9Device *device = device_from_iface(iface);
     D9WGSetCurrentTexturePalette command;
 
-    /* D3D9 requires the palette to have been filled first: selecting an unset
-     * one would sample colours the app never chose. */
-    if (index >= D9_MAX_PALETTES || !device->palette_valid[index])
+    if (index >= D9_MAX_PALETTES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device->current_palette_set && device->current_palette == index)
-        return D3D_OK;
+    if (state_block_record_palette(device, index)) return D3D_OK;
+    if (device->current_palette == index) return D3D_OK;
     device->current_palette = index;
-    device->current_palette_set = TRUE;
     command.device_handle = device->handle;
     command.palette_index = index;
     return emit_command(D9WG_OP_SET_CURRENT_TEXTURE_PALETTE, &command,
@@ -9071,7 +9048,7 @@ static HRESULT WINAPI device_get_current_texture_palette(
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetCurrentTexturePalette");
     D9Device *device = device_from_iface(iface);
-    if (!index || !device->current_palette_set)
+    if (!index)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *index = device->current_palette;
     return D3D_OK;
@@ -11931,6 +11908,8 @@ struct D9StateBlock {
     D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
     D9CubeTexture *cube_textures[D9_MAX_TEXTURE_BINDINGS];
     D9VolumeTexture *volume_textures[D9_MAX_TEXTURE_BINDINGS];
+    BOOL has_palette;
+    UINT current_palette;
     BOOL has_material;
     D3DMATERIAL9 material;
     BOOL has_clip_plane[D9_MAX_CLIP_PLANES];
@@ -11979,6 +11958,14 @@ static IDirect3DStateBlock9Vtbl g_state_block_vtbl;
 static struct D9StateBlock *state_block_from_iface(IDirect3DStateBlock9 *iface)
 {
     return (struct D9StateBlock *)iface;
+}
+
+static BOOL state_block_record_palette(D9Device *device, UINT index)
+{
+    if (!device->recording_result) return FALSE;
+    device->recording_result->has_palette = TRUE;
+    device->recording_result->current_palette = index;
+    return TRUE;
 }
 
 static void state_block_record_render_state(D9Device *device, UINT state)
@@ -12160,6 +12147,7 @@ static void state_block_capture(struct D9StateBlock *block)
     D9Device *device = block->device;
     UINT index, stage, slot;
 
+    if (block->has_palette) block->current_palette = device->current_palette;
     state_block_release_references(block);
 
     for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
@@ -12349,6 +12337,7 @@ static void state_block_mark_all(struct D9StateBlock *block)
         block->has_texture[stage] = TRUE;
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index)
         block->has_transform[index] = TRUE;
+    block->has_palette = TRUE;
     block->has_material = TRUE;
     FillMemory(block->has_clip_plane, sizeof(block->has_clip_plane), 1);
     block->has_viewport = TRUE;
@@ -12381,6 +12370,10 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
     IDirect3DDevice9 *iface = &device->iface;
     UINT index, stage, slot;
 
+    if (block->has_palette) {
+        HRESULT hr = device_set_current_texture_palette(iface, block->current_palette);
+        if (FAILED(hr)) return hr;
+    }
     for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
         if (block->has_render_state[index])
             IDirect3DDevice9_SetRenderState(iface, (D3DRENDERSTATETYPE)index,
@@ -12643,7 +12636,11 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice9 *iface,
     *block_out = NULL;
     /* Capture only the explicitly touched mask. This preserves same-value and
      * write-then-revert calls which a final-value diff necessarily loses. */
+    /* Palette selection is deferred already; preserve its recorded value
+     * while the older state paths still capture their temporary live values. */
+    UINT recorded_palette = block->current_palette;
     state_block_capture(block);
+    if (block->has_palette) block->current_palette = recorded_palette;
     device->recording = NULL;
     device->recording_result = NULL;
     /* Put the device back the way the app left it before Begin. */

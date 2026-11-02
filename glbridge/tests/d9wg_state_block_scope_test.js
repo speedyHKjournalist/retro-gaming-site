@@ -15,7 +15,7 @@ try{for(const api of [8,9]){
 #define D8WG_MAX_VS_CONSTANTS 96u
 #define D8WG_MAX_PS_CONSTANTS 8u
 #define D8WG_MAX_CLIP_PLANES 6u
-typedef struct D8StateSnapshot {BYTE render_mask[256],texture_stage_mask[8][32],texture_mask[8],stream_mask[16],transform_mask[266],light_mask[8],light_enable_mask[8],vs_constant_mask[96],ps_constant_mask[8],clip_plane_mask[6];BOOL all_lights_scope,viewport_mask,material_mask,indices_mask,vertex_shader_mask,pixel_shader_mask;} D8StateSnapshot;
+typedef struct D8StateSnapshot {BYTE render_mask[256],texture_stage_mask[8][32],texture_mask[8],stream_mask[16],transform_mask[266],light_mask[8],light_enable_mask[8],vs_constant_mask[96],ps_constant_mask[8],clip_plane_mask[6];BOOL palette_mask,all_lights_scope,viewport_mask,material_mask,indices_mask,vertex_shader_mask,pixel_shader_mask;} D8StateSnapshot;
 typedef struct D8StateBlock {D8StateSnapshot state;} D8StateBlock;
 ${extract(source,'state_block_set_scope')}
 `:`
@@ -45,7 +45,7 @@ typedef struct Light {uint32_t words[26];} Light;
 #include "${path.join(root,'runtime/d9wg_light_state.h')}"
 typedef struct D9StateBlock D9StateBlock;
 typedef struct D9Device {BOOL light_set[8];D9WGLightState *extra_lights;D9StateBlock *recording_result;} D9Device;
-struct D9StateBlock {D9Device *device;BOOL has_render_state[256],has_texture_stage_state[8][33],has_sampler_state[20][14],has_texture[20],has_transform[266],has_material,has_clip_plane[6],has_npatch_mode,has_light[8],has_light_enable[8],has_vertex_shader,has_vertex_format,has_pixel_shader,has_vs_const_f[256],has_vs_const_i[16],has_vs_const_b[16],has_ps_const_f[224],has_ps_const_i[16],has_ps_const_b[16],has_viewport,has_scissor,has_stream[16],has_stream_frequency[16],has_indices,light_allocation_failed;D9WGLightState *extra_lights;};
+struct D9StateBlock {D9Device *device;BOOL has_render_state[256],has_texture_stage_state[8][33],has_sampler_state[20][14],has_texture[20],has_transform[266],has_palette,has_material,has_clip_plane[6],has_npatch_mode,has_light[8],has_light_enable[8],has_vertex_shader,has_vertex_format,has_pixel_shader,has_vs_const_f[256],has_vs_const_i[16],has_vs_const_b[16],has_ps_const_f[224],has_ps_const_i[16],has_ps_const_b[16],has_viewport,has_scissor,has_stream[16],has_stream_frequency[16],has_indices,light_allocation_failed;D9WGLightState *extra_lights;};
 static BOOL device_light_is_set(D9Device *device,UINT index){return index<8&&device->light_set[index];}
 ${oldArrays}
 ${['state_block_record_transform','state_block_mark_pixel_states','state_block_mark_vertex_states','state_block_mark_all'].map(n=>extract(source,n)).join('\n')}
@@ -55,6 +55,7 @@ ${['state_block_record_transform','state_block_mark_pixel_states','state_block_m
  for(unsigned i=0;i<256;++i)CHECK(!!s->render_mask[i]==(type==1?1:expected[type-2][i]));
  for(unsigned stage=0;stage<8;++stage){CHECK(!!s->texture_mask[stage]==(type==1));for(unsigned i=0;i<32;++i)CHECK(!!s->texture_stage_mask[stage][i]==tss_expected(type,i));}
  for(unsigned i=0;i<16;++i)CHECK(!!s->stream_mask[i]==(type==1));for(unsigned i=0;i<266;++i)CHECK(!!s->transform_mask[i]==(type==1));
+ CHECK(!!s->palette_mask==(type==1));
  CHECK(!!s->viewport_mask==(type==1)&&!!s->material_mask==(type==1)&&!!s->indices_mask==(type==1));
  CHECK(!!s->vertex_shader_mask==(type!=2)&&!!s->pixel_shader_mask==(type!=3));
  for(unsigned i=0;i<96;++i)CHECK(!!s->vs_constant_mask[i]==(type!=2));for(unsigned i=0;i<8;++i)CHECK(!!s->ps_constant_mask[i]==(type!=3));
@@ -67,6 +68,7 @@ ${['state_block_record_transform','state_block_mark_pixel_states','state_block_m
  for(unsigned stage=0;stage<8;++stage)for(unsigned i=0;i<33;++i)CHECK(!!block.has_texture_stage_state[stage][i]==tss_expected(type,i));
  for(unsigned i=0;i<20;++i){CHECK(!!block.has_texture[i]==(type==1));for(unsigned state=0;state<14;++state)CHECK(!!block.has_sampler_state[i][state]==(state&&state<=13&&(type==1||(state==13?type==3:type==2))));}
  for(unsigned i=0;i<266;++i)CHECK(!!block.has_transform[i]==(type==1));
+ CHECK(!!block.has_palette==(type==1));
  CHECK(!!block.has_material==(type==1)&&!!block.has_viewport==(type==1)&&!!block.has_scissor==(type==1)&&!!block.has_indices==(type==1));
  for(unsigned i=0;i<6;++i)CHECK(!!block.has_clip_plane[i]==(type==1));
  CHECK(!!block.has_npatch_mode==(type!=2));for(unsigned i=0;i<16;++i)CHECK(!!block.has_stream[i]==(type==1)&&!!block.has_stream_frequency[i]==(type!=2));
