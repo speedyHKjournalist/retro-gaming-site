@@ -469,3 +469,39 @@ int d9wg_process_vertices_streams(const D9WGProcessStreamLayout *layout,
     }
     return 1;
 }
+
+int d9wg_vertex_stream_clip_codes(const D9WGProcessStreamLayout *layout,
+        const D9WGVertexStream *streams, const D9WGClipDrawSource *draw,
+        const void *world_view_projection, const D9WGVertexState *state, D9WGClipStatus *status)
+{
+    if (!layout || !draw || !state || !status || !draw->count ||
+            (draw->indices && ((draw->index_stride != 2 && draw->index_stride != 4) ||
+                    draw->count > draw->index_bytes/draw->index_stride))) return 0;
+    if (layout->vertex.position_transformed && !draw->status_screen) return 1;
+    uint32_t begin = draw->indices ? draw->min_vertex : 0;
+    uint32_t end = draw->indices ? draw->vertex_count : draw->count;
+    if (begin >= end) return 0;
+    int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
+    if (start < 0 || start > 0xffffffffu) return 0;
+    for (uint32_t i = 0; draw->indices && i < draw->count; ++i) {
+        uint32_t index = d9wg_clip_read_index(draw, i);
+        if (index < begin || index >= end) return 0;
+    }
+    uint32_t first[D9WG_VERTEX_MAX_STREAMS];
+    if (!d9wg_process_stream_validate(layout, streams, (uint32_t)start, end - begin, first)) return 0;
+    uint8_t vertex[D9WG_VERTEX_GATHER_BYTES];
+    D9WGClipDrawSource source = *draw;
+    source.vertices = vertex;source.length = source.stride = layout->vertex.stride;
+    source.base = source.first_vertex = source.min_vertex = 0;
+    source.count = source.vertex_count = 1;source.indices = 0;source.base_vertex = 0;
+    source.layout = &layout->vertex;
+    D9WGClipStatus result = *status;
+    /* Native software draws classify the whole declared range, including
+     * vertices not referenced by the indices. Keep the result private until
+     * every vertex (including any late palette index) has succeeded. */
+    for (uint32_t i = 0; i < end - begin; ++i) {
+        gather_stream_vertex(layout, streams, first, i, vertex);
+        if (!d9wg_vertex_clip_codes(&source, world_view_projection, state, &result)) return 0;
+    }
+    *status = result;return 1;
+}

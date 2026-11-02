@@ -28,7 +28,8 @@ static __inline void d9wg_vertex_windows_blend_free(D9WGVertexState *state)
 {
     if (state->blend) { HeapFree(GetProcessHeap(), 0, state->blend);state->blend = NULL; }
 }
-static __inline uint32_t d9wg_vertex_windows_clip_status(const D9WGClipDrawSource *source,
+static __inline uint32_t d9wg_vertex_windows_clip_status_inputs(const D9WGClipDrawSource *source,
+        const D9WGProcessStreamLayout *stream_layout, const D9WGVertexStream *streams,
         const void *render_states, const void *worlds, uint32_t world_count, uint32_t world_gap,
         const void *view, const void *projection, const void *planes, D9WGClipStatus *status)
 {
@@ -40,14 +41,23 @@ static __inline uint32_t d9wg_vertex_windows_clip_status(const D9WGClipDrawSourc
     D9WGVertexState state;d9wg_vertex_state_init(&state, render_states);
     d9wg_vertex_clip_planes_init(&state, mask, planes, worlds);
     if (source->layout->position_transformed)
-        return d9wg_vertex_clip_codes(source, projection, &state, status) ? 0 : 1;
+        return (stream_layout ? d9wg_vertex_stream_clip_codes(stream_layout, streams, source, projection, &state, status) :
+                d9wg_vertex_clip_codes(source, projection, &state, status)) ? 0 : 1;
     uint32_t error = d9wg_vertex_windows_blend(&state, render_states, worlds, world_count, world_gap, view, projection);
     if (error) return error;
     float world_view[16], world_view_projection[16];
     d9wg_multiply_matrix(worlds, view, world_view);
     d9wg_multiply_matrix(world_view, projection, world_view_projection);
-    int valid = d9wg_vertex_clip_codes(source, world_view_projection, &state, status);
+    int valid = stream_layout ? d9wg_vertex_stream_clip_codes(stream_layout, streams, source, world_view_projection, &state, status) :
+            d9wg_vertex_clip_codes(source, world_view_projection, &state, status);
     d9wg_vertex_windows_blend_free(&state);return valid ? 0 : 1;
+}
+static __inline uint32_t d9wg_vertex_windows_clip_status(const D9WGClipDrawSource *source,
+        const void *render_states, const void *worlds, uint32_t world_count, uint32_t world_gap,
+        const void *view, const void *projection, const void *planes, D9WGClipStatus *status)
+{
+    return d9wg_vertex_windows_clip_status_inputs(source, NULL, NULL, render_states,
+            worlds, world_count, world_gap, view, projection, planes, status);
 }
 static __inline void d9wg_vertex_windows_clip_release(void *context, void *allocation)
 { (void)context;HeapFree(GetProcessHeap(), 0, allocation); }

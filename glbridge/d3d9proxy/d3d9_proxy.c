@@ -6556,6 +6556,12 @@ static BOOL device_has_vertex_format(D9Device *device)
 }
 
 static BOOL d9_current_source_layout(D9Device *device, D9WGProcessLayout *layout);
+static int d9_current_source_position_transformed(D9Device *device);
+static BOOL d9_multistream_clip_records(D9Device *device, const D9WGClipDrawSource *draw);
+static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex);
+static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *source,
+        D9WGClipStatus *next, BOOL *valid);
+
 
 static int d9_clip_emit(void *context, uint32_t primitive_type,
         const void *vertices, uint32_t count, uint32_t stride)
@@ -6579,11 +6585,17 @@ static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
         uint32_t index_bytes, uint32_t index_stride, int32_t base_vertex,
         uint32_t min_vertex, uint32_t vertex_limit)
 {
+    D9WGClipDrawSource submitted;ZeroMemory(&submitted, sizeof(submitted));
+    submitted.first_vertex = first;submitted.count = count;submitted.indices = indices;
+    submitted.index_stride = index_stride;submitted.base_vertex = base_vertex;
+    submitted.min_vertex = min_vertex;submitted.vertex_count = vertex_limit;
     D9VertexBuffer *buffer = device->streams[0].buffer;
+    if (!buffer) return d9_multistream_clip_records(device, &submitted) ? -1 : 0;
     D9WGProcessLayout layout;
     d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
-    if (!buffer->clips.head) return 0;
-    if (!d9_current_source_layout(device, &layout)) return -1;
+    if (!buffer->clips.head) return d9_multistream_clip_records(device, &submitted) ? -1 : 0;
+    if (!d9_current_source_layout(device, &layout))
+        return d9_current_source_position_transformed(device) == 0 ? 0 : -1;
     if (!layout.position_transformed) return 0;
     if (device->streams[0].frequency != 1) return -1;
     D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
@@ -6614,6 +6626,8 @@ static HRESULT d9_prepare_clip_status(D9Device *device, const D9WGClipDrawSource
     if (!d9_software_vertex_processing(device)) return D3D_OK;
     D9WGProcessLayout layout;
     BOOL supported_layout = d9_current_source_layout(device, &layout);
+    if (bound_stream && (!supported_layout || !device->streams[0].stride))
+        return d9_prepare_stream_clip_status(device, input, next, valid);
     BOOL pretransformed = supported_layout && layout.position_transformed;
     if ((!pretransformed && device->vertex_shader) || !supported_layout ||
             (!pretransformed && bound_stream && device->streams[0].frequency != 1)) {
@@ -6638,17 +6652,14 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9WGDrawPrimitive command;
     UINT vertex_count = 0;
-    UINT available_vertices;
 
-    if (!device->streams[0].buffer || !device->streams[0].stride
-            || device->streams[0].buffer->locked
-            || !device_has_vertex_format(device) || !primitive_count
+    if (!device_has_vertex_format(device) || !primitive_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count)) {
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
-    if (device->npatch_segments > 1.0f) {
+    if (device->npatch_segments > 1.0f && device->streams[0].buffer && device->streams[0].stride) {
         HRESULT tessellated = d9_draw_npatch(iface, device, primitive_type,
                 primitive_count, NULL, 0, start_vertex);
         if (SUCCEEDED(tessellated))
@@ -6657,17 +6668,12 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
          * vertices for 16-bit indices. Fall through and draw it flat, which is
          * what the mesh looked like before N-patches were switched on. */
     }
-    /* Vertices addressable by this draw start after the stream's
-     * OffsetInBytes, not at the start of the buffer. */
-    available_vertices = (device->streams[0].buffer->length
-            - device->streams[0].offset) / device->streams[0].stride;
-    if (start_vertex > available_vertices
-            || vertex_count > available_vertices - start_vertex) {
-        TRACE_FRAME_REJECT();
-        return D3DERR_INVALIDCALL;
-    }
+    HRESULT range_result = d9_bound_draw_range(device, start_vertex, vertex_count, 0);
+    if (FAILED(range_result)) return TRACE_REFUSE(range_result);
     D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
-    status_source.vertices = device->streams[0].buffer->shadow;status_source.length = device->streams[0].buffer->length;
+    if (device->streams[0].buffer) {
+        status_source.vertices = device->streams[0].buffer->shadow;status_source.length = device->streams[0].buffer->length;
+    }
     status_source.base = device->streams[0].offset;status_source.stride = device->streams[0].stride;
     status_source.first_vertex = start_vertex;status_source.count = status_source.vertex_count = vertex_count;
     D9WGClipStatus next_status;BOOL next_status_valid;
@@ -6704,10 +6710,8 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     UINT index_count = 0;
     UINT index_size;
     UINT available_indices;
-    UINT available_vertices;
 
-    if (!device->streams[0].buffer || !device->streams[0].stride
-            || device->streams[0].buffer->locked || !device->index_buffer
+    if (!device->index_buffer
             || device->index_buffer->locked || !device_has_vertex_format(device)
             || !primitive_count || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
@@ -6722,7 +6726,8 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
-    if (device->npatch_segments > 1.0f && base_vertex_index >= 0) {
+    if (device->npatch_segments > 1.0f && base_vertex_index >= 0 &&
+            device->streams[0].buffer && device->streams[0].stride) {
         HRESULT tessellated = d9_draw_npatch(iface, device, primitive_type,
                 primitive_count,
                 device->index_buffer->shadow + start_index * index_size,
@@ -6732,18 +6737,14 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         /* See the note in device_draw_primitive: falling through draws the
          * mesh flat rather than dropping it. */
     }
-    /* Vertices addressable by this draw start after the stream's
-     * OffsetInBytes, not at the start of the buffer. */
-    available_vertices = (device->streams[0].buffer->length
-            - device->streams[0].offset) / device->streams[0].stride;
-    if (min_vertex_index > available_vertices
-            || vertex_count > available_vertices - min_vertex_index) {
-        TRACE_FRAME_REJECT();
-        return D3DERR_INVALIDCALL;
-    }
+    if (min_vertex_index > 0xffffffffu - vertex_count) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    HRESULT range_result = d9_bound_draw_range(device, min_vertex_index, vertex_count, base_vertex_index);
+    if (FAILED(range_result)) return TRACE_REFUSE(range_result);
 
     D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
-    status_source.vertices = device->streams[0].buffer->shadow;status_source.length = device->streams[0].buffer->length;
+    if (device->streams[0].buffer) {
+        status_source.vertices = device->streams[0].buffer->shadow;status_source.length = device->streams[0].buffer->length;
+    }
     status_source.base = device->streams[0].offset;status_source.stride = device->streams[0].stride;
     status_source.indices = device->index_buffer->shadow + start_index*index_size;
     status_source.index_bytes = index_count*index_size;status_source.index_stride = index_size;
@@ -9219,6 +9220,80 @@ static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
             d9_build_process_layout(elements, count, layout);
 }
 
+/* Processed POSITIONT records address the original position buffer. A
+ * multi-stream clip emitter must gather attributes and remap those records;
+ * until that path exists, never feed stored clip coordinates to the GPU as
+ * ordinary screen positions. Raw POSITIONT declarations have no such records. */
+static BOOL d9_multistream_clip_records(D9Device *device, const D9WGClipDrawSource *draw)
+{
+    if (!device->vertex_declaration) return FALSE;
+    D9VertexDeclaration *declaration = device->vertex_declaration;
+    for (UINT i = 0; i < declaration->element_count; ++i) {
+        const D3DVERTEXELEMENT9 *element = declaration->elements + i;
+        if (element->Usage != D3DDECLUSAGE_POSITIONT || element->UsageIndex) continue;
+        if (element->Stream >= D9_MAX_STREAMS) return FALSE;
+        D9VertexBuffer *buffer = device->streams[element->Stream].buffer;
+        if (!buffer) return FALSE;
+        d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+        if (!buffer->clips.head) return FALSE;
+        for (uint32_t vertex = 0; vertex < draw->count; ++vertex) {
+            uint32_t index = d9wg_clip_read_index(draw, vertex);
+            int64_t source = (int64_t)draw->first_vertex + draw->base_vertex + index;
+            if (index < draw->min_vertex || index >= draw->vertex_count || source < 0 ||
+                    (source > 0xffffffffu && device->streams[element->Stream].stride)) return TRUE;
+            uint64_t at = device->streams[element->Stream].offset + (uint64_t)source*device->streams[element->Stream].stride + element->Offset;
+            if (at > buffer->length || buffer->length - at < 16u) return TRUE;
+            const D9WGProcessViewport *viewport;
+            if (d9wg_clip_buffer_lookup(&buffer->clips, (uint32_t)at, buffer->shadow + (uint32_t)at, &viewport)) return TRUE;
+        }
+        d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+        return FALSE;
+    }
+    return FALSE;
+}
+
+static int d9_current_source_position_transformed(D9Device *device)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
+    D9WGProcessStreamLayout layout;
+    if (!d9_current_source_elements(device, elements, &count) ||
+            !d9wg_process_stream_layout(elements, count, &layout)) return -1;
+    return layout.vertex.position_transformed != 0;
+}
+static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
+    uint32_t extent[D9_MAX_STREAMS] = {0};
+    if (!count || !d9_current_source_elements(device, elements, &element_count)) return D3DERR_INVALIDCALL;
+    int64_t start = (int64_t)first + base_vertex;
+    if (start < 0 || start > 0xffffffffu) return D3DERR_INVALIDCALL;
+    for (UINT i = 0; i < element_count; ++i) {
+        const D9WGVertexElement *element = elements + i;
+        uint32_t bytes = d9wg_decl_bytes(element->type);
+        if (element->stream >= D9_MAX_STREAMS || !bytes) return D3DERR_INVALIDCALL;
+        uint32_t end = element->offset + bytes;
+        if (extent[element->stream] < end) extent[element->stream] = end;
+    }
+    uint32_t frequency = device->streams[0].frequency;
+    uint32_t instances = frequency & D3DSTREAMSOURCE_INDEXEDDATA ? frequency & D9_STREAMSOURCE_FREQUENCY_MASK : 1u;
+    if (!instances) return D3DERR_INVALIDCALL;
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
+        if (!extent[i]) continue;
+        D9VertexBuffer *buffer = device->streams[i].buffer;
+        if (!buffer || buffer->device != device || buffer->locked) return D3DERR_INVALIDCALL;
+        uint32_t vertex = (uint32_t)start, vertices = count, at;
+        frequency = device->streams[i].frequency;
+        if (frequency & D3DSTREAMSOURCE_INSTANCEDATA) {
+            uint32_t divisor = frequency & D9_STREAMSOURCE_FREQUENCY_MASK;
+            if (!divisor) return D3DERR_INVALIDCALL;
+            vertex = 0;vertices = (instances - 1u)/divisor + 1u;
+        }
+        if (!d9wg_process_stream_range(buffer->length, device->streams[i].offset,
+                device->streams[i].stride, extent[i], vertex, vertices, &at)) return D3DERR_INVALIDCALL;
+    }
+    return D3D_OK;
+}
+
 typedef struct D9ProcessInput {
     D9WGProcessStreamLayout layout;
     D9WGVertexStream streams[D9_MAX_STREAMS];
@@ -9242,7 +9317,7 @@ static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
     if (!input) return E_OUTOFMEMORY;
     HRESULT error = D3DERR_INVALIDCALL;
     if (!d9wg_process_stream_layout(elements, element_count, &input->layout) ||
-            input->layout.vertex.position_transformed) goto fail;
+            (destination && input->layout.vertex.position_transformed)) goto fail;
     for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
         if (!(input->layout.stream_mask & (1u << i))) continue;
         D9VertexBuffer *buffer = device->streams[i].buffer;
@@ -9269,6 +9344,31 @@ static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
     *result = input;return D3D_OK;
 fail:
     d9_process_input_free(input);return error;
+}
+
+static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *draw,
+        D9WGClipStatus *next, BOOL *valid)
+{
+    int transformed = d9_current_source_position_transformed(device);
+    if (transformed == 1) return D3D_OK;
+    if (!device->render_states[D3DRS_CLIPPING]) {
+        next->clip_union = next->clip_intersection = 0;*valid = TRUE;return D3D_OK;
+    }
+    if (transformed < 0 || device->vertex_shader) { *valid = FALSE;return D3D_OK; }
+    uint32_t begin = draw->indices ? draw->min_vertex : 0;
+    uint32_t count = draw->indices ? draw->vertex_count - begin : draw->count;
+    int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
+    if (start < 0 || start > 0xffffffffu) return D3DERR_INVALIDCALL;
+    D9ProcessInput *input;
+    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, &input);
+    if (error == D3DERR_INVALIDCALL) { *valid = FALSE;return D3D_OK; }
+    if (FAILED(error)) return error;
+    D9WGClipDrawSource source = *draw;source.layout = &input->layout.vertex;
+    uint32_t result = d9wg_vertex_windows_clip_status_inputs(&source, &input->layout, input->streams,
+            device->render_states, device->transforms[D3DTS_WORLD], 256, 0,
+            device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION], device->clip_planes, next);
+    d9_process_input_free(input);
+    return result == 2 ? E_OUTOFMEMORY : result ? D3DERR_INVALIDCALL : D3D_OK;
 }
 
 static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
