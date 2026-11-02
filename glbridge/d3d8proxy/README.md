@@ -135,7 +135,8 @@ compares the two tables by running both, register by register.
   Every input aliasing the output uses the same pre-call snapshot. Ordinary
   declaration draws validate every referenced stream and share Tween/user-plane
   ClipStatus; UP declarations are limited to stream zero. The Tween capability
-  flag awaits actual guest pixel replay acceptance;
+  flag is advertised after paired raw/CPU guest pixel replay acceptance on
+  SwiftShader and Metal;
 - **4x multisampling** on the device, additional swap chains, render targets
   and depth surfaces;
 - vertex shader 1.0-1.1 and pixel shader 1.0-1.4: declaration parsing and

@@ -2151,7 +2151,7 @@ static void fill_caps(D3DCAPS8 *caps)
     caps->VertexProcessingCaps = D3DVTXPCAPS_TEXGEN
             | D3DVTXPCAPS_MATERIALSOURCE7
             | D3DVTXPCAPS_DIRECTIONALLIGHTS
-            | D3DVTXPCAPS_POSITIONALLIGHTS | D3DVTXPCAPS_LOCALVIEWER;
+            | D3DVTXPCAPS_POSITIONALLIGHTS | D3DVTXPCAPS_LOCALVIEWER | D3DVTXPCAPS_TWEENING;
     /* Implemented through interpolated distances plus fragment discard,
      * because core WGSL has no user clip-distance builtin. */
     caps->MaxUserClipPlanes = D8WG_MAX_CLIP_PLANES;
@@ -2160,10 +2160,9 @@ static void fill_caps(D3DCAPS8 *caps)
      * D3DTS_WORLDMATRIX(0..3) in its generated vertex stage, and indexed
      * blending can name any of the 256 world matrices.
      *
-     * D3DVTXPCAPS_TWEENING is deliberately not set alongside it: tweening
-     * interpolates two vertex streams by D3DRS_TWEENFACTOR rather than
-     * blending matrices, and nothing implements that. It merely shares the
-     * D3DVERTEXBLENDFLAGS enum.
+     * Tweening instead interpolates POSITION1/NORMAL1 by TWEENFACTOR before
+     * the ordinary world transform; guest CPU processing and the shared GPU
+     * fixed-function pipeline both implement this separate mode.
      */
     caps->MaxVertexBlendMatrices = 4;
     caps->MaxVertexBlendMatrixIndex = 255;

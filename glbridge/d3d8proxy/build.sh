@@ -102,6 +102,7 @@ case $mode in
             transform_depth \
             raster_stencil \
             lighting \
+            tween_draw \
             fog \
             textured_cube \
             stateblock \
