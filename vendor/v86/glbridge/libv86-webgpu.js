@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "46b300fb4065049393df";
+globalThis.V86GL_BUILD_REVISION = "3e84336e0707ddf60aa8";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -2494,27 +2494,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 .filter(entry => entry[1])
                 .sort((a, b) => a[0] - b[0]);
             const conversions = this.options.inputConversions || {};
-            const conversionKinds = new Set(Object.values(conversions));
-            if (conversionKinds.has("udec3")) {
-                out.push("fn d9_unpack_udec3(value: u32) -> vec4<f32> {");
-                out.push("    return vec4<f32>(f32(value & 0x3ffu), " +
-                    "f32((value >> 10u) & 0x3ffu), " +
-                    "f32((value >> 20u) & 0x3ffu), 1.0);");
-                out.push("}");
-                out.push("");
-            }
-            if (conversionKinds.has("dec3n")) {
-                out.push("fn d9_snorm10(value: u32) -> f32 {");
-                out.push("    let signed_value = i32(value << 22u) >> 22;");
-                out.push("    return max(f32(signed_value) / 511.0, -1.0);");
-                out.push("}");
-                out.push("fn d9_unpack_dec3n(value: u32) -> vec4<f32> {");
-                out.push("    return vec4<f32>(d9_snorm10(value & 0x3ffu), " +
-                    "d9_snorm10((value >> 10u) & 0x3ffu), " +
-                    "d9_snorm10((value >> 20u) & 0x3ffu), 1.0);");
-                out.push("}");
-                out.push("");
-            }
+            const inputHelpers = vertexInputHelpers(Object.values(conversions));
+            if (inputHelpers) out.push(inputHelpers);
             out.push("struct D9VertexOutput {");
             out.push("    @builtin(position) position: vec4<f32>,");
             for (let slot = 0; slot < VARYING_COUNT; ++slot)
@@ -2525,10 +2506,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     ") clip" + group + ": vec4<f32>,");
             out.push("};");
             out.push("");
-            const inputType = location => ({
-                ubyte4: "vec4<u32>", short2: "vec2<i32>",
-                short4: "vec4<i32>", udec3: "u32", dec3n: "u32",
-            })[conversions[location]] || "vec4<f32>";
+            const inputType = location => vertexInputType(conversions[location]);
             const parameters = inputs.map(entry =>
                 "@location(" + entry[0] + ") in" + entry[0] + ": " +
                     inputType(entry[0]));
@@ -2548,18 +2526,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // WebGPU exposes integer vertex formats as integer WGSL values,
             // while D3D9 always presents them to v# as a float4.
             const bgra = new Set(this.options.bgraInputLocations || []);
-            const inputValue = location => {
-                const name = "in" + location;
-                switch (conversions[location]) {
-                case "ubyte4":
-                case "short4": return "vec4<f32>(" + name + ")";
-                case "short2":
-                    return "vec4<f32>(vec2<f32>(" + name + "), 0.0, 1.0)";
-                case "udec3": return "d9_unpack_udec3(" + name + ")";
-                case "dec3n": return "d9_unpack_dec3n(" + name + ")";
-                default: return name + (bgra.has(location) ? ".bgra" : "");
-                }
-            };
+            const inputValue = location => vertexInputValue("in" + location,
+                conversions[location], bgra.has(location));
             for (const entry of inputs)
                 out.push("    vin" + entry[0] + " = " +
                     inputValue(entry[0]) + ";");
@@ -2820,6 +2788,59 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     // module cannot handle comes back as {ok:false, error}, because the
     // caller's contract (plan 4.2) is to mark the handle unusable and skip
     // draws that bind it -- not to fail the whole command batch.
+
+    function vertexInputHelpers(conversions) {
+        const out = [];
+        const conversionKinds = new Set(conversions);
+        if (conversionKinds.has("udec3")) {
+            out.push("fn d9_unpack_udec3(value: u32) -> vec4<f32> {");
+            out.push("    return vec4<f32>(f32(value & 0x3ffu), " +
+                "f32((value >> 10u) & 0x3ffu), " +
+                "f32((value >> 20u) & 0x3ffu), 1.0);");
+            out.push("}");
+            out.push("");
+        }
+        if (conversionKinds.has("dec3n")) {
+            out.push("fn d9_snorm10(value: u32) -> f32 {");
+            out.push("    let signed_value = i32(value << 22u) >> 22;");
+            out.push("    return max(f32(signed_value) / 511.0, -1.0);");
+            out.push("}");
+            out.push("fn d9_unpack_dec3n(value: u32) -> vec4<f32> {");
+            out.push("    return vec4<f32>(d9_snorm10(value & 0x3ffu), " +
+                "d9_snorm10((value >> 10u) & 0x3ffu), " +
+                "d9_snorm10((value >> 20u) & 0x3ffu), 1.0);");
+            out.push("}");
+            out.push("");
+        }
+        return out.join("\n");
+    }
+    function vertexInputConversion(type) {
+        switch (type) {
+        case 4: return "color";
+        case 5: return "ubyte4";
+        case 6: return "short2";
+        case 7: return "short4";
+        case 13: return "udec3";
+        case 14: return "dec3n";
+        default: return "";
+        }
+    }
+    function vertexInputType(conversion) {
+        return {ubyte4: "vec4<u32>", short2: "vec2<i32>", short4: "vec4<i32>",
+            udec3: "u32", dec3n: "u32"}[conversion] || "vec4<f32>";
+    }
+    function vertexInputValue(name, conversion, bgra) {
+        switch (conversion) {
+        case "ubyte4":
+        case "short4": return "vec4<f32>(" + name + ")";
+        case "short2": return "vec4<f32>(vec2<f32>(" + name + "), 0.0, 1.0)";
+        case "udec3": return "d9_unpack_udec3(" + name + ")";
+        case "dec3n": return "d9_unpack_dec3n(" + name + ")";
+        case "color": return name + ".bgra";
+        default: return name + (bgra ? ".bgra" : "");
+        }
+    }
+
     function compileShader(tokens, options) {
         try {
             const parsed = parseShader(tokens);
@@ -2989,6 +3010,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 
     const api = {
         compileShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression,
+        vertexInputConversion, vertexInputType, vertexInputValue, vertexInputHelpers,
         TRANSLATOR_REVISION,
         VARYING_COLOR0, VARYING_COLOR1, VARYING_TEXCOORD0, VARYING_FOG,
         VARYING_COUNT, varyingForSemantic,
@@ -8187,10 +8209,9 @@ ${body.join("\n")}
         // (_, 0, 0, 1), which is exactly D3D9's rule for a FLOAT3 POSITION or a
         // FLOAT2 texcoord. One declared type per location also keeps a shader
         // module independent of which declaration is bound with it.
-        // The one exception is an integer vertex format: WebGPU requires the WGSL
-        // input's base type to match the format's, so a UBYTE4 BLENDINDICES has to
-        // be declared vec4<u32>. `scalar` names that base type; it defaults to the
-        // f32 every other fixed-function attribute uses.
+        // Raw palette indices retain their integer base type. Other integer
+        // and packed inputs use the shared programmable-entry conversion below;
+        // the fixed-function body then consumes canonical float4 values.
         function vertexInputDeclaration(location, scalar) {
             return "@location(" + location + ") in" + location +
                 ": vec4<" + (scalar || "f32") + ">";
@@ -8515,15 +8536,26 @@ ${body.join("\n")}
             const lighting = signature.lighting;
             const position = "in" + FF_LOCATION_POSITION;
 
-            const parameters = [vertexInputDeclaration(FF_LOCATION_POSITION)];
+            const conversions = signature.inputConversions || {}, inputLines = [];
+            const parameter = location => {
+                const conversion = conversions[location];
+                if (!conversion) return vertexInputDeclaration(location);
+                const name = "d9_raw_in" + location;
+                inputLines.push("    let in" + location + " = " +
+                    shaderPipeline.vertexInputValue(name, conversion) + ";");
+                return "@location(" + location + ") " + name + ": " +
+                    shaderPipeline.vertexInputType(conversion);
+            };
+            const inputHelpers = shaderPipeline.vertexInputHelpers(Object.values(conversions));
+            const parameters = [parameter(FF_LOCATION_POSITION)];
             if (signature.hasColor)
-                parameters.push(vertexInputDeclaration(FF_LOCATION_COLOR0));
+                parameters.push(parameter(FF_LOCATION_COLOR0));
             if (signature.hasColor1)
-                parameters.push(vertexInputDeclaration(FF_LOCATION_COLOR1));
+                parameters.push(parameter(FF_LOCATION_COLOR1));
             if (signature.hasNormal)
-                parameters.push(vertexInputDeclaration(FF_LOCATION_NORMAL));
+                parameters.push(parameter(FF_LOCATION_NORMAL));
             if (signature.hasPointSize)
-                parameters.push(vertexInputDeclaration(FF_LOCATION_PSIZE));
+                parameters.push(parameter(FF_LOCATION_PSIZE));
             const blend = signature.vertexBlend;
             if (blend && blend.weightCount)
                 parameters.push(vertexInputDeclaration(FF_LOCATION_BLENDWEIGHT));
@@ -8531,7 +8563,7 @@ ${body.join("\n")}
                 parameters.push(vertexInputDeclaration(FF_LOCATION_BLENDINDICES,
                     blend.indexScalar));
             for (const set of signature.texCoordSets)
-                parameters.push(vertexInputDeclaration(FF_LOCATION_TEXCOORD0 + set));
+                parameters.push(parameter(FF_LOCATION_TEXCOORD0 + set));
             if (signature.pointExpansion)
                 parameters.push("@builtin(vertex_index) d9_vertex_index: u32");
 
@@ -8947,7 +8979,7 @@ fn func_sphere_map(r: vec3<f32>) -> vec4<f32> {
 
             return `${lightStruct}${uniformBlockStruct("D9FixedUniforms", layout)}
 @group(0) @binding(0) var<uniform> uniforms: D9FixedUniforms;
-${sphereMapHelper}
+${sphereMapHelper}${inputHelpers ? "\n" + inputHelpers : ""}
 
 struct D9VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -8957,7 +8989,7 @@ ${clipVaryings.join("\n")}
 
 @vertex
 fn d9_vs_main(${parameters.join(", ")}) -> D9VertexOutput {
-    var result: D9VertexOutput;
+${inputLines.length ? inputLines.join("\n") + "\n" : ""}    var result: D9VertexOutput;
 ${positionBody}
 ${varyings.map((_, slot) =>
             "    result.varying" + slot + " = vec4<f32>(0.0);").join("\n")}
@@ -14879,7 +14911,17 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             let blendWeightType = -1;
             let blendIndicesType = -1;
             const texCoordSets = [], texCoordDimensions = {};
+            let inputConversions = null;
             for (const element of elements) {
+                const location = fixedFunctionLocationFor(element);
+                const conversion = shaderPipeline.vertexInputConversion(element.type);
+                // COLOR keeps its existing per-color swizzle. Blend inputs have
+                // their own palette/index rules and are not mapped without a plan.
+                if (location >= 0 && conversion &&
+                        !(conversion === "color" && element.usage === DECLUSAGE_COLOR)) {
+                    if (!inputConversions) inputConversions = {};
+                    inputConversions[location] = conversion;
+                }
                 if (element.usage === DECLUSAGE_BLENDWEIGHT &&
                         element.usageIndex === 0)
                     blendWeightType = element.type;
@@ -14920,6 +14962,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return { positionType, hasColor, colorIsBGRA, hasColor1,
                 color1IsBGRA, hasNormal, hasPointSize, texCoordSets, texCoordDimensions,
                 blendWeightType, blendIndicesType,
+                ...(inputConversions ? { inputConversions } : null),
                 hasTexCoord: texCoordSets.length > 0 };
         }
 
@@ -16088,10 +16131,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     if (location !== undefined && element.type === DECLTYPE_D3DCOLOR)
                         bgra.push(location);
                     if (location === undefined) continue;
-                    const conversion = {
-                        5: "ubyte4", 6: "short2", 7: "short4",
-                        13: "udec3", 14: "dec3n",
-                    }[element.type];
+                    const conversion = element.type === DECLTYPE_D3DCOLOR ? "" :
+                        shaderPipeline.vertexInputConversion(element.type);
                     if (conversion) inputConversions[location] = conversion;
                 }
                 bgra.sort((a, b) => a - b);
