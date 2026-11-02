@@ -72,7 +72,7 @@ struct D3D7Device {
     BOOL light_set[D3D7_MAX_LIGHTS];
     BOOL light_enabled[D3D7_MAX_LIGHTS];
     float clip_planes[D3D7_MAX_CLIP_PLANES][4];
-    D3DCLIPSTATUS clip_status;
+    D9WGClipLegacyStatus clip_status;
     D3D7StateBlock *state_blocks;
     D3D7StateBlock *recording_state_block;
     DWORD next_state_block_handle;
@@ -469,6 +469,33 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     return result;
 }
 
+static BOOL d3d7_draw_clip_status(D3D7Device *device, DWORD fvf,
+        const void *vertices, uint32_t vertex_count, const WORD *indices, uint32_t index_count,
+        BOOL screen, D9WGClipLegacyStatus *status)
+{
+    D9WGProcessLayout layout;
+    if (!d9wg_process_fvf(D9WG_FVF_D3D7, fvf, &layout)) return FALSE;
+    if (layout.position_transformed && (!screen || !device->render_states[D3DRENDERSTATE_CLIPPING])) return TRUE;
+    if (!device->render_states[D3DRENDERSTATE_CLIPPING]) {
+        status->status &= 0xff000000u;return TRUE;
+    }
+    if (vertex_count > 0xffffffffu/layout.stride || index_count > 0x7fffffffu) return FALSE;
+    D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
+    source.vertices = vertices;source.length = vertex_count*layout.stride;source.stride = layout.stride;
+    source.layout = &layout;source.vertex_count = vertex_count;source.count = indices ? index_count : vertex_count;
+    source.indices = (const uint8_t *)indices;source.index_stride = 2;source.index_bytes = index_count*2u;
+    source.status_screen = screen;
+    source.viewport = (D9WGProcessViewport){(float)device->viewport.dwX,(float)device->viewport.dwY,
+            (float)device->viewport.dwWidth,(float)device->viewport.dwHeight,device->viewport.dvMinZ,device->viewport.dvMaxZ};
+    D9WGClipStatus combined = {status->status & 0xfffu, status->status >> 12 & 0xfffu};
+    BOOL result = d9wg_vertex_windows_clip_status(&source, device->render_states,
+            &device->transforms[D3DTRANSFORMSTATE_WORLD], 4, 2,
+            &device->transforms[D3DTRANSFORMSTATE_VIEW], &device->transforms[D3DTRANSFORMSTATE_PROJECTION],
+            device->clip_planes, &combined) == 0;
+    if (result) status->status = (status->status & 0xff000000u) | combined.clip_union | (combined.clip_intersection << 12);
+    return result;
+}
+
 static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, const void *vertices,
         DWORD vertex_count)
@@ -491,6 +518,8 @@ static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
     command.primitive_count = primitive_count;
     command.stride = stride;
     command.vertex_count = vertex_count;
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, fvf, vertices, vertex_count, NULL, 0, TRUE, &next_status)) return FALSE;
     EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_DRAW_PRIMITIVE_UP,
             sizeof(command), command.vertex_bytes, &payload, &blob);
@@ -500,6 +529,7 @@ static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
         CopyMemory(blob, vertices, command.vertex_bytes);
     }
     LeaveCriticalSection(&g_transport_lock);
+    if (result) device->clip_status = next_status;
     if (result && device->render_target)
         device->render_target->memory->gpu_dirty = TRUE;
     return result;
@@ -535,6 +565,8 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
     command.index_format = 101u; /* D3DFMT_INDEX16 */
     command.stride = stride;
     command.index_count = index_count;
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, fvf, vertices, vertex_count, indices, index_count, TRUE, &next_status)) return FALSE;
     EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_DRAW_INDEXED_PRIMITIVE_UP,
             sizeof(command), extra_bytes, &payload, &blob);
@@ -547,6 +579,7 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
         CopyMemory(blob + command.index_bytes, vertices, command.vertex_bytes);
     }
     LeaveCriticalSection(&g_transport_lock);
+    if (result) device->clip_status = next_status;
     if (result && device->render_target)
         device->render_target->memory->gpu_dirty = TRUE;
     return result;
@@ -919,6 +952,7 @@ static HRESULT WINAPI d3d7_EnumDevices(IDirect3D7 *iface,
 
 static void d3d7_device_init_state(D3D7Device *device)
 {
+    d9wg_clip_legacy_init(&device->clip_status);
     UINT index, stage;
     for (index = 0; index < D3D7_MAX_TRANSFORMS; ++index)
         d3d7_identity_matrix(&device->transforms[index]);
@@ -1903,15 +1937,15 @@ static HRESULT WINAPI d3d7_device_SetClipStatus(IDirect3DDevice7 *iface,
         D3DCLIPSTATUS *status)
 {
     if (!status) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d7_device_from_iface(iface)->clip_status = *status;
-    return D3D_OK;
+    return DDWG_TRACE_ERROR(d9wg_clip_legacy_set(&d3d7_device_from_iface(iface)->clip_status, status)
+            ? D3D_OK : DDERR_INVALIDPARAMS);
 }
 
 static HRESULT WINAPI d3d7_device_GetClipStatus(IDirect3DDevice7 *iface,
         D3DCLIPSTATUS *status)
 {
     if (!status) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *status = d3d7_device_from_iface(iface)->clip_status;
+    d9wg_clip_legacy_get(&d3d7_device_from_iface(iface)->clip_status, status);
     return D3D_OK;
 }
 
@@ -2063,17 +2097,24 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
             !d3d7_primitive_counts(primitive_type, vertex_count,
                     &primitive_count))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, buffer->desc.dwFVF,
+            buffer->shadow + start_vertex*buffer->stride, vertex_count, NULL, 0, FALSE, &next_status))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     BOOL clipped;HRESULT clip_result = d3d7_clip_vb_draw(device, buffer,
             primitive_type, start_vertex, vertex_count, NULL, 0, &clipped);
     if (clipped) {
-        if (SUCCEEDED(clip_result)) device->render_target->memory->gpu_dirty = TRUE;
+        if (SUCCEEDED(clip_result)) {
+            device->render_target->memory->gpu_dirty = TRUE;device->clip_status = next_status;
+        }
         return DDWG_TRACE_ERROR(clip_result);
     }
-    if (d3d7_fvf_uses_wrap(device, buffer->desc.dwFVF))
-        return d3d7_emit_draw_up(device, primitive_type,
-                buffer->desc.dwFVF,
-                buffer->shadow + start_vertex * buffer->stride, vertex_count)
-                ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    if (d3d7_fvf_uses_wrap(device, buffer->desc.dwFVF)) {
+        BOOL emitted = d3d7_emit_draw_up(device, primitive_type, buffer->desc.dwFVF,
+                buffer->shadow + start_vertex*buffer->stride, vertex_count);
+        if (emitted) device->clip_status = next_status;
+        return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    }
     if (!d3d7_emit_fvf(device, buffer->desc.dwFVF, NULL))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     ZeroMemory(&stream, sizeof(stream));
@@ -2088,6 +2129,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     draw.primitive_count = primitive_count;
     if (!emit_command(D9WG_OP_DRAW_PRIMITIVE, &draw, sizeof(draw)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    device->clip_status = next_status;
     device->render_target->memory->gpu_dirty = TRUE;
     return D3D_OK;
 }
@@ -2099,24 +2141,35 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     D3D7VertexBuffer *buffer;
+    UINT primitive_count;
     (void)flags;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl || !indices)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d7_vb_from_iface(buffer_iface);
     if (buffer->owner != device->owner || buffer->locked ||
             start_vertex > buffer->desc.dwNumVertices ||
-            vertex_count > buffer->desc.dwNumVertices - start_vertex)
+            vertex_count > buffer->desc.dwNumVertices - start_vertex ||
+            !d3d7_primitive_counts(primitive_type, index_count, &primitive_count))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    (void)primitive_count;
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, buffer->desc.dwFVF,
+            buffer->shadow + start_vertex*buffer->stride, vertex_count, indices, index_count, FALSE, &next_status))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     BOOL clipped;HRESULT clip_result = d3d7_clip_vb_draw(device, buffer,
             primitive_type, start_vertex, vertex_count, indices, index_count, &clipped);
     if (clipped) {
-        if (SUCCEEDED(clip_result)) device->render_target->memory->gpu_dirty = TRUE;
+        if (SUCCEEDED(clip_result)) {
+            device->render_target->memory->gpu_dirty = TRUE;device->clip_status = next_status;
+        }
         return DDWG_TRACE_ERROR(clip_result);
     }
-    return d3d7_emit_draw_indexed_up(device, primitive_type,
+    BOOL emitted = d3d7_emit_draw_indexed_up(device, primitive_type,
             buffer->desc.dwFVF, buffer->shadow + start_vertex * buffer->stride,
             vertex_count, indices, index_count)
-            ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+;
+    if (emitted) device->clip_status = next_status;
+    return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
 static HRESULT WINAPI d3d7_device_ComputeSphereVisibility(
@@ -2817,6 +2870,9 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
         if (clip_batch) d9wg_vertex_windows_clip_release(NULL, clip_batch);
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
+    d9wg_clip_legacy_processed(&device->clip_status, clip_batch,
+            destination->shadow + destination_offset + destination_layout.position,
+            destination->stride, count, (vertex_op & D3DVOP_EXTENTS) != 0, &viewport);
     d9wg_clip_buffer_commit(&destination->clips, clip_batch, destination_offset,
             count * destination->stride, d9wg_vertex_windows_clip_release, NULL);
     return d3d7_upload_vertex_range(destination,

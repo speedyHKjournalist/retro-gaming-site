@@ -45,6 +45,9 @@ int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout);
  * final source vertex needs only its actual attributes, not trailing padding. */
 int d9wg_process_range(uint32_t length, uint32_t base, uint32_t stride,
         uint32_t extent, uint32_t start, uint32_t count, uint32_t *first);
+struct D9WGClipDrawSource;
+int d9wg_vertex_clip_codes(const struct D9WGClipDrawSource *source,
+        const void *world_view_projection, const D9WGVertexState *state, D9WGClipStatus *status);
 /* Source/destination storage must not overlap. All ranges are checked before
  * the first output write. The frontend snapshots an aliased source buffer. */
 int d9wg_process_vertices(const D9WGProcessLayout *source_layout,

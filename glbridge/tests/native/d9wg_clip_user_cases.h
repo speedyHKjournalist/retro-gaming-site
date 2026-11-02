@@ -4,6 +4,7 @@
 #include "../../runtime/d9wg_clip.h"
 #include "../../runtime/d9wg_math.h"
 #include "../../runtime/d9wg_vertex.h"
+#include "../../runtime/d9wg_clip_draw.h"
 #ifdef _WIN32
 #include <windows.h>
 #define USER_ALLOC(bytes) HeapAlloc(GetProcessHeap(), 0, bytes)
@@ -114,6 +115,15 @@ static int clip_user_cases(uint32_t cases)
     USER_CHECK(d9wg_process_vertices(&source, &vertex, sizeof(vertex), 0, sizeof(vertex), 0, &destination, result, sizeof(result), 0, 1, wv, wvp, &vp, &lighting, 1, &state));
     USER_CHECK(record.user_mask == 1 && record.user_distance[0] == -.5f && record.code == 64 && record.projected);
     USER_CHECK(record.clip[0] == .25f && record.clip[2] == 0 && result[0] == .625f && result[3] == 1);
+    D9WGClipDrawSource draw = { 0 };
+    draw.vertices = (const uint8_t *)&vertex;draw.length = sizeof(vertex);draw.stride = sizeof(vertex);
+    draw.count = draw.vertex_count = 1;draw.layout = &source;
+    D9WGClipStatus code_status;d9wg_clip_status_init(&code_status);
+    USER_CHECK(d9wg_vertex_clip_codes(&draw, wvp, &state, &code_status));
+    USER_CHECK(code_status.clip_union == 64 && code_status.clip_intersection == 64);
+    vertex.indices[1] = 255;
+    USER_CHECK(!d9wg_vertex_clip_codes(&draw, wvp, &state, &code_status));
+    USER_CHECK(code_status.clip_union == 64 && code_status.clip_intersection == 64);
     USER_FREE(blend);
     return 0;
 }

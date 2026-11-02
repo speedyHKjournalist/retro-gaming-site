@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "d9wg_blend.h"
 #include "d9wg_clip_draw.h"
+#include "d9wg_math.h"
 
 /* Windows allocation stays outside the native-testable math kernel. Return
  * 0 for ready/disabled, 1 for invalid state, 2 for allocation failure. */
@@ -26,6 +27,27 @@ static __inline uint32_t d9wg_vertex_windows_blend(D9WGVertexState *state, const
 static __inline void d9wg_vertex_windows_blend_free(D9WGVertexState *state)
 {
     if (state->blend) { HeapFree(GetProcessHeap(), 0, state->blend);state->blend = NULL; }
+}
+static __inline uint32_t d9wg_vertex_windows_clip_status(const D9WGClipDrawSource *source,
+        const void *render_states, const void *worlds, uint32_t world_count, uint32_t world_gap,
+        const void *view, const void *projection, const void *planes, D9WGClipStatus *status)
+{
+    uint32_t clipping, mask;
+    __builtin_memcpy(&clipping, (const uint8_t *)render_states + 136u*4u, 4);
+    if (source->layout->position_transformed && (!source->status_screen || !clipping)) return 0;
+    if (!clipping) { status->clip_union = status->clip_intersection = 0;return 0; }
+    __builtin_memcpy(&mask, (const uint8_t *)render_states + 152u*4u, 4);
+    D9WGVertexState state;d9wg_vertex_state_init(&state, render_states);
+    d9wg_vertex_clip_planes_init(&state, mask, planes, worlds);
+    if (source->layout->position_transformed)
+        return d9wg_vertex_clip_codes(source, projection, &state, status) ? 0 : 1;
+    uint32_t error = d9wg_vertex_windows_blend(&state, render_states, worlds, world_count, world_gap, view, projection);
+    if (error) return error;
+    float world_view[16], world_view_projection[16];
+    d9wg_multiply_matrix(worlds, view, world_view);
+    d9wg_multiply_matrix(world_view, projection, world_view_projection);
+    int valid = d9wg_vertex_clip_codes(source, world_view_projection, &state, status);
+    d9wg_vertex_windows_blend_free(&state);return valid ? 0 : 1;
 }
 static __inline void d9wg_vertex_windows_clip_release(void *context, void *allocation)
 { (void)context;HeapFree(GetProcessHeap(), 0, allocation); }

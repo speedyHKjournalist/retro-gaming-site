@@ -4,22 +4,6 @@ static float clip_read_float(const void *p)
 { float value;__builtin_memcpy(&value,p,4);return value; }
 static void clip_write_float(void *p,float value)
 { __builtin_memcpy(p,&value,4); }
-static uint32_t clip_read_index(const D9WGClipDrawSource *s,uint32_t i)
-{
-    uint32_t index=0;
-    if(s->indices)__builtin_memcpy(&index,s->indices+(uint64_t)i*s->index_stride,s->index_stride);
-    else index=i;
-    return index;
-}
-static int clip_vertex_offset(const D9WGClipDrawSource *s,uint32_t i,uint32_t *offset)
-{
-    uint32_t index=clip_read_index(s,i);
-    int64_t vertex=(int64_t)s->first_vertex+s->base_vertex+index;
-    if(index<s->min_vertex || index>=s->vertex_count || vertex<0)return 0;
-    uint64_t at=(uint64_t)s->base+(uint64_t)vertex*s->stride;
-    if(at>s->length || s->layout->stride>s->length-at)return 0;
-    *offset=(uint32_t)at;return 1;
-}
 static void clip_color(const uint8_t *source,int32_t offset,float *out,uint32_t fallback)
 {
     uint32_t color=fallback;if(offset>=0)__builtin_memcpy(&color,source+offset,4);
@@ -50,11 +34,8 @@ static void clip_load_point(const D9WGClipDrawSource *s,uint32_t offset,D9WGClip
                 2*(processed_vp->y-s->viewport.y)/s->viewport.height);
         out[4]=processed_vp->min_z*out[3]+out[2]*(processed_vp->max_z-processed_vp->min_z);
     }else{
-        float rhw=clip_read_float(data+layout->position+12);
-        out[3]=rhw!=0?1/rhw:1;
-        out[0]=((clip_read_float(data+layout->position)-s->viewport.x)*2/s->viewport.width-1)*out[3];
-        out[1]=(1-(clip_read_float(data+layout->position+4)-s->viewport.y)*2/s->viewport.height)*out[3];
-        out[2]=out[4]=clip_read_float(data+layout->position+8)*out[3];
+        float screen[4];for(unsigned i=0;i<4;++i)screen[i]=clip_read_float(data+layout->position+i*4u);
+        d9wg_clip_unproject(screen,&s->viewport,out);out[4]=out[2];
     }
     clip_color(data,layout->diffuse,out+5,0xffffffffu);
     clip_color(data,layout->specular,out+9,0);
@@ -95,7 +76,7 @@ int d9wg_clip_draw(const D9WGClipDrawSource *s,D9WGClipWork *work,
     if(capacity<21)return -1;
     unsigned live=0,user_mask=0;
     for(uint32_t i=0;i<s->count;++i){
-        uint32_t at;if(!clip_vertex_offset(s,i,&at))return -1;
+        uint32_t at;if(!d9wg_clip_vertex_offset(s,i,&at))return -1;
         const D9WGProcessViewport *vp=0;
         const D9WGClipVertex *record=d9wg_clip_buffer_lookup(s->clips,at+s->layout->position,
                 s->vertices+at+s->layout->position,&vp);
@@ -110,7 +91,7 @@ int d9wg_clip_draw(const D9WGClipDrawSource *s,D9WGClipWork *work,
         else if(s->primitive_type==4)for(unsigned i=0;i<3;++i)indices[i]=triangle*3u+i;
         else if(s->primitive_type==5){indices[0]=triangle+(triangle&1u);indices[1]=triangle+1u-(triangle&1u);indices[2]=triangle+2u;}
         else{indices[0]=0;indices[1]=triangle+1;indices[2]=triangle+2;}
-        for(unsigned i=0;i<inputs;++i){uint32_t at;if(!clip_vertex_offset(s,indices[i],&at))return -1;clip_load_point(s,at,&input[i]);}
+        for(unsigned i=0;i<inputs;++i){uint32_t at;if(!d9wg_clip_vertex_offset(s,indices[i],&at))return -1;clip_load_point(s,at,&input[i]);}
         if(s->flat_shading)for(unsigned i=1;i<inputs;++i)for(unsigned c=5;c<13;++c)input[i].data[c]=input[0].data[c];
         if(inputs==1){
             polygon=input;count=!d9wg_clip_outcode(input[0].data) && input[0].data[3]>0?1u:0u;

@@ -8,16 +8,22 @@ const mutations = [
     ["position writes keep stale processing records", "clip", "if (actual != expected) break;", "if (actual != expected && 0) break;", "buffer"],
     ["empty record batches never released", "clip", "if (!old->live)", "if (old->live == 0xffffffffu)", "buffer"],
     ["mapped depth lost before division", "clip_draw", "out[4]=processed_vp->min_z*out[3]+out[2]*(processed_vp->max_z-processed_vp->min_z);", "out[4]=out[2];", "draw"],
-    ["index at range end accepted", "clip_draw", "index>=s->vertex_count", "index>s->vertex_count", "draw"],
-    ["indices below MinVertexIndex accepted", "clip_draw", "index<s->min_vertex || ", "", "draw"],
+    ["index at range end accepted", "clip_draw_header", "index >= s->vertex_count", "index > s->vertex_count", "draw"],
+    ["indices below MinVertexIndex accepted", "clip_draw_header", "index < s->min_vertex || ", "", "draw"],
     ["flat colour changes at clipped edges", "clip_draw", "if(s->flat_shading)", "if(s->flat_shading && 0)", "draw"],
     ["emission failure silently accepted", "clip_draw", "    if(queued && !emit(context,emitted_type,staging,queued,s->stride))return -2;\n    return 1;", "    if(queued)emit(context,emitted_type,staging,queued,s->stride);\n    return 1;", "draw"],
 ];
 try {
     for (const [label, source, before, after, detector] of mutations) {
-        const original = fs.readFileSync(path.join(__dirname, "../runtime/d9wg_" + source + ".c"), "utf8");
+        const isHeader = source === "clip_draw_header";
+        const original = fs.readFileSync(path.join(__dirname, "../runtime/d9wg_" + (isHeader ? "clip_draw.h" : source + ".c")), "utf8");
         assert.equal(original.split(before).length, 2, "unique C mutation: " + label);
-        const target = path.join(directory, source + ".c");fs.writeFileSync(target, original.replace(before, after));
+        const caseDirectory = fs.mkdtempSync(path.join(directory, "case-"));
+        const target = path.join(caseDirectory, isHeader ? "clip_draw.c" : source + ".c");
+        if (isHeader) {
+            fs.writeFileSync(path.join(caseDirectory, "d9wg_clip_draw.h"), original.replace(before, after));
+            fs.copyFileSync(path.join(__dirname, "../runtime/d9wg_clip_draw.c"), target);
+        } else fs.writeFileSync(target, original.replace(before, after));
         const result = spawnSync(process.execPath, [path.join(__dirname, "d9wg_clip_" + detector + "_test.js")],
             { encoding: "utf8", env: { ...process.env, [source === "clip" ? "D9WG_CLIP_SOURCE" : "D9WG_CLIP_DRAW_SOURCE"]: target } });
         assert.notEqual(result.status, 0, "survived: " + label);

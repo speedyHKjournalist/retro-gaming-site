@@ -23,6 +23,14 @@ void d9wg_clip_project(const float *clip, const D9WGProcessViewport *viewport,
     screen[2] = viewport->min_z + clip[2]*rhw*(viewport->max_z - viewport->min_z);
     screen[3] = rhw;
 }
+void d9wg_clip_unproject(const float *screen, const D9WGProcessViewport *viewport, float *clip)
+{
+    clip[3] = screen[3] != 0 ? 1/screen[3] : 1;
+    clip[0] = ((screen[0] - viewport->x)*2/viewport->width - 1)*clip[3];
+    clip[1] = (1 - (screen[1] - viewport->y)*2/viewport->height)*clip[3];
+    /* Screen Z is already a depth-buffer value, independent of MinZ/MaxZ. */
+    clip[2] = screen[2]*clip[3];
+}
 void d9wg_clip_vertex(const float *clip, const D9WGProcessViewport *viewport,
         const float *guard_band, uint32_t clipping, D9WGClipVertex *vertex)
 {
@@ -244,5 +252,60 @@ void d9wg_clip_buffer_free(D9WGClipBuffer *buffer, D9WGClipRelease release, void
 {
     while (buffer->head) {
         D9WGClipBatch *batch = buffer->head;buffer->head = batch->next;release(context, batch);
+    }
+}
+
+void d9wg_clip_status_init(D9WGClipStatus *status)
+{ status->clip_union = 0;status->clip_intersection = 0xffffffffu; }
+void d9wg_clip_status_merge(D9WGClipStatus *status, uint32_t clip_union, uint32_t clip_intersection)
+{ status->clip_union |= clip_union;status->clip_intersection &= clip_intersection; }
+void d9wg_clip_status_processed(D9WGClipStatus *status, const D9WGClipBatch *batch)
+{
+    if (!batch) { status->clip_union = status->clip_intersection = 0;return; }
+    for (uint32_t i = 0; i < batch->count; ++i)
+        d9wg_clip_status_merge(status, batch->vertex[i].code, batch->vertex[i].code);
+}
+void d9wg_clip_legacy_init(D9WGClipLegacyStatus *status)
+{
+    status->flags = 2;status->status = 0x01fff000u;
+    status->min_x = status->min_y = 2048;status->max_x = status->max_y = 0;
+    status->min_z = status->max_z = 0;
+}
+int d9wg_clip_legacy_set(D9WGClipLegacyStatus *status, const void *input)
+{
+    D9WGClipLegacyStatus value;__builtin_memcpy(&value, input, sizeof(value));
+    if (value.flags & ~3u) return 0;
+    if (value.flags & 1u) status->status = value.status;
+    if (value.flags & 2u) {
+        status->min_x = value.min_x;status->max_x = value.max_x;
+        status->min_y = value.min_y;status->max_y = value.max_y;
+    }
+    return 1;
+}
+void d9wg_clip_legacy_get(const D9WGClipLegacyStatus *status, void *output)
+{ __builtin_memcpy(output, status, 24); }
+void d9wg_clip_legacy_processed(D9WGClipLegacyStatus *status, const D9WGClipBatch *batch,
+        const void *positions, uint32_t stride, uint32_t count, uint32_t extents,
+        const D9WGProcessViewport *viewport)
+{
+    if (batch) {
+        D9WGClipStatus combined = { status->status & 0xfffu, status->status >> 12 & 0xfffu };
+        d9wg_clip_status_processed(&combined, batch);
+        status->status = (status->status & 0xff000000u) | combined.clip_union | (combined.clip_intersection << 12);
+    }
+    if (extents) {
+        for (uint32_t i = 0; i < count; ++i) {
+            float screen[2];
+            if (batch) { screen[0] = batch->vertex[i].screen[0];screen[1] = batch->vertex[i].screen[1]; }
+            else __builtin_memcpy(screen, (const uint8_t *)positions + (uint64_t)i*stride, 8);
+            if (screen[0] - 1 < status->min_x) status->min_x = screen[0] - 1;
+            if (screen[0] + 1 > status->max_x) status->max_x = screen[0] + 1;
+            if (screen[1] - 1 < status->min_y) status->min_y = screen[1] - 1;
+            if (screen[1] + 1 > status->max_y) status->max_y = screen[1] + 1;
+        }
+        if (status->min_x < viewport->x) status->min_x = viewport->x;
+        if (status->min_y < viewport->y) status->min_y = viewport->y;
+        if (status->max_x > viewport->x + viewport->width) status->max_x = viewport->x + viewport->width;
+        if (status->max_y > viewport->y + viewport->height) status->max_y = viewport->y + viewport->height;
     }
 }

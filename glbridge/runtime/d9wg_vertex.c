@@ -3,6 +3,7 @@
 #include "d9wg_math.h"
 #include "d9wg_tnl_math.h"
 #include "d9wg_blend.h"
+#include "d9wg_clip_draw.h"
 
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
 {
@@ -277,4 +278,59 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         }
     }
     return 1;
+}
+
+int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,
+        const void *world_view_projection, const D9WGVertexState *state, D9WGClipStatus *status)
+{
+    if (!s || !s->vertices || !s->layout || !state || !status || !s->count ||
+            !s->stride || s->layout->stride > s->stride ||
+            s->layout->position < 0 || s->layout->position_floats < 3 || s->layout->position_floats > 4 ||
+            (uint32_t)s->layout->position > s->layout->stride ||
+            s->layout->position_floats*4u > s->layout->stride - (uint32_t)s->layout->position ||
+            (s->indices && ((s->index_stride != 2 && s->index_stride != 4) || s->count > s->index_bytes/s->index_stride))) return 0;
+    if (s->layout->position_transformed && !s->status_screen) return 1;
+    if (s->layout->position_transformed && (!s->viewport.width || !s->viewport.height)) return 0;
+    D9WGVertexBlend *blend = s->layout->position_transformed ? 0 : state->blend;
+    if (blend && !d9wg_blend_layout(blend, s->layout)) return 0;
+    /* Validate the submitted indices, then process the entire declared vertex
+     * range. Native software vertex processing includes unreferenced vertices
+     * in ClipStatus, not just vertices selected by the index list. */
+    for (uint32_t i = 0; i < s->count; ++i) {
+        uint32_t at;if (!d9wg_clip_vertex_offset(s, i, &at)) return 0;
+    }
+    D9WGClipDrawSource range = *s;range.indices = 0;
+    uint32_t begin = s->indices ? s->min_vertex : 0;
+    uint32_t end = s->indices ? s->vertex_count : s->count;
+    if (begin >= end) return 0;
+    uint32_t at;
+    if (!d9wg_clip_vertex_offset(&range, begin, &at) || !d9wg_clip_vertex_offset(&range, end - 1u, &at)) return 0;
+    if (blend) for (uint32_t i = begin; i < end; ++i) {
+        uint32_t indices[4];if (!d9wg_clip_vertex_offset(&range, i, &at) ||
+                !d9wg_blend_indices(blend, s->layout, s->vertices + at, indices)) return 0;
+    }
+    D9WGClipStatus result = *status;
+    for (uint32_t i = begin; i < end; ++i) {
+        uint32_t offset;if (!d9wg_clip_vertex_offset(&range, i, &offset)) return 0;
+        const uint8_t *input = s->vertices + offset;
+        float position[4] = {0,0,0,1}, clip[4], world[4];
+        for (unsigned c = 0; c < s->layout->position_floats; ++c)
+            position[c] = read_float(input + s->layout->position + c*4u);
+        if (s->layout->position_transformed) d9wg_clip_unproject(position, &s->viewport, clip);
+        else if (blend) {
+            float eye[4], normal[3];
+            d9wg_blend_vertex_world(blend, s->layout, input, position, eye, clip, normal,
+                    state->clip_plane_mask ? world : 0);
+        } else {
+            d9wg_transform_vector4(world_view_projection, position, clip);
+            if (state->clip_plane_mask) d9wg_transform_vector4(state->clip_world, position, world);
+        }
+        D9WGClipVertex record;record.code = d9wg_clip_outcode(clip);
+        if (state->clip_plane_mask && !s->layout->position_transformed) {
+            for (unsigned c = 0; c < 4; ++c) record.clip[c] = clip[c];
+            d9wg_clip_user_vertex(&record, world, &state->clip_planes[0][0], state->clip_plane_mask);
+        }
+        d9wg_clip_status_merge(&result, record.code, record.code);
+    }
+    *status = result;return 1;
 }

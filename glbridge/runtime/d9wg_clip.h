@@ -11,12 +11,23 @@ typedef struct D9WGClipVertex {
     uint32_t user_mask;
     float user_distance[6];
 } D9WGClipVertex;
+typedef struct D9WGClipStatus { uint32_t clip_union, clip_intersection; } D9WGClipStatus;
+typedef struct D9WGClipLegacyStatus {
+    uint32_t flags, status;
+    float min_x, max_x, min_y, max_y, min_z, max_z;
+} D9WGClipLegacyStatus;
+void d9wg_clip_status_init(D9WGClipStatus *status);
+void d9wg_clip_status_merge(D9WGClipStatus *status, uint32_t clip_union, uint32_t clip_intersection);
+void d9wg_clip_legacy_init(D9WGClipLegacyStatus *status);
+int d9wg_clip_legacy_set(D9WGClipLegacyStatus *status, const void *input);
+void d9wg_clip_legacy_get(const D9WGClipLegacyStatus *status, void *output);
 
 /* Public D3DCS bits, with z in [0,w]. Guard bands affect storage, not the
  * viewing-frustum outcode. Boundaries belong to the visible half space. */
 uint32_t d9wg_clip_outcode(const float *clip);
 void d9wg_clip_project(const float *clip, const D9WGProcessViewport *viewport,
         float *screen);
+void d9wg_clip_unproject(const float *screen, const D9WGProcessViewport *viewport, float *clip);
 /* guard_band is left, top, right, bottom in screen pixels. D3D7's CLIP
  * operation selects this behavior independently of its CLIPPING state.
  * Keep both positions: stored projection coordinates are public VB data;
@@ -58,6 +69,10 @@ typedef struct D9WGClipBatch {
     D9WGClipVertex vertex[];
 } D9WGClipBatch;
 typedef struct D9WGClipBuffer { D9WGClipBatch *head; } D9WGClipBuffer;
+void d9wg_clip_status_processed(D9WGClipStatus *status, const D9WGClipBatch *batch);
+void d9wg_clip_legacy_processed(D9WGClipLegacyStatus *status, const D9WGClipBatch *batch,
+        const void *positions, uint32_t stride, uint32_t count, uint32_t extents,
+        const D9WGProcessViewport *viewport);
 typedef void (*D9WGClipRelease)(void *context, void *allocation);
 uint32_t d9wg_clip_batch_bytes(uint32_t count);
 int d9wg_clip_batch_init(D9WGClipBatch *batch, uint32_t bytes, uint32_t first,
