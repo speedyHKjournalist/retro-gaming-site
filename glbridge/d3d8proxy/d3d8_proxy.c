@@ -3224,8 +3224,10 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice8 *iface,
                 target_width, target_height);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
-    if (device->recording_state_block)
-        device->recording_state_block->state.viewport_mask = TRUE;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        recorded->viewport_mask = TRUE;recorded->viewport = *viewport;return D3D_OK;
+    }
     if (device->viewport.X == viewport->X
             && device->viewport.Y == viewport->Y
             && device->viewport.Width == viewport->Width
@@ -3344,8 +3346,10 @@ static HRESULT WINAPI device_set_render_state(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     if ((UINT)state >= D8WG_MAX_RENDER_STATES)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.render_mask[state] = 1;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        recorded->render_mask[state] = 1;recorded->render_states[state] = value;return D3D_OK;
+    }
     if (device->render_states[state] == value)
         return D3D_OK;
     device->render_states[state] = value;
@@ -3369,9 +3373,10 @@ static HRESULT WINAPI device_set_texture_stage_state(IDirect3DDevice8 *iface,
     if (stage >= D8WG_MAX_TEXTURE_STAGES
             || (UINT)state >= D8WG_MAX_TEXTURE_STAGE_STATES)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.texture_stage_mask[stage][state]
-                = 1;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        recorded->texture_stage_mask[stage][state] = 1;recorded->texture_stage_states[stage][state] = value;return D3D_OK;
+    }
     if (device->texture_stage_states[stage][state] == value)
         return D3D_OK;
     device->texture_stage_states[stage][state] = value;
@@ -3497,8 +3502,12 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice8 *iface,
     if (buffer && (buffer_iface->lpVtbl != &g_vb_vtbl
             || buffer->device != device))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.stream_mask[stream] = 1;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        if (buffer) IDirect3DVertexBuffer8_AddRef(buffer_iface);
+        if (recorded->streams[stream].buffer) IDirect3DVertexBuffer8_Release(&recorded->streams[stream].buffer->iface);
+        recorded->streams[stream] = (D8StreamBinding){buffer, stride};recorded->stream_mask[stream] = 1;return D3D_OK;
+    }
     if (device->streams[stream].buffer == buffer
             && device->streams[stream].stride == stride)
         return D3D_OK;
@@ -3546,8 +3555,12 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice8 *iface,
             || (buffer && (buffer_iface->lpVtbl != &g_ib_vtbl
                 || buffer->device != device)))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.indices_mask = TRUE;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        if (buffer) IDirect3DIndexBuffer8_AddRef(buffer_iface);
+        if (recorded->index_buffer) IDirect3DIndexBuffer8_Release(&recorded->index_buffer->iface);
+        recorded->indices_mask = TRUE;recorded->index_buffer = buffer;recorded->base_vertex_index = base_vertex_index;return D3D_OK;
+    }
     if (device->index_buffer == buffer
             && device->base_vertex_index == base_vertex_index)
         return D3D_OK;
@@ -3617,8 +3630,10 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice8 *iface,
     if (handle & 1u) {
         if (!find_shader(device->vertex_shaders, handle))
             return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-        if (device->recording_state_block)
+        if (device->recording_state_block) {
             device->recording_state_block->state.vertex_shader_mask = TRUE;
+            device->recording_state_block->state.vertex_shader = handle;return D3D_OK;
+        }
         if (device->vertex_shader == handle)
             return D3D_OK;
         device->vertex_shader = handle;
@@ -3627,8 +3642,10 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice8 *iface,
                 ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
     }
     {
-        if (device->recording_state_block)
+        if (device->recording_state_block) {
             device->recording_state_block->state.vertex_shader_mask = TRUE;
+            device->recording_state_block->state.vertex_shader = handle;return D3D_OK;
+        }
         if (device->vertex_shader == handle)
             return D3D_OK;
         device->vertex_shader = handle;
@@ -4959,8 +4976,12 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice8 *iface,
     if (stage >= D8WG_MAX_TEXTURE_STAGES
             || !resolve_base_texture(device, texture_iface, &handle))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.texture_mask[stage] = 1;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        if (texture_iface) IDirect3DBaseTexture8_AddRef(texture_iface);
+        if (recorded->textures[stage]) IDirect3DBaseTexture8_Release(recorded->textures[stage]);
+        recorded->texture_mask[stage] = 1;recorded->textures[stage] = texture_iface;return D3D_OK;
+    }
     if (device->textures[stage] == texture_iface)
         return D3D_OK;
     if (texture_iface)
@@ -5700,8 +5721,10 @@ static HRESULT WINAPI device_set_transform(IDirect3DDevice8 *iface,
     UINT slot;
     if (!matrix || !transform_slot(state, &slot))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.transform_mask[slot] = 1;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        recorded->transform_mask[slot] = 1;recorded->transforms[slot] = *matrix;return D3D_OK;
+    }
     if (matrix_equal(&device->transforms[slot], matrix))
         return D3D_OK;
     device->transforms[slot] = *matrix;
@@ -5726,8 +5749,11 @@ static HRESULT WINAPI device_multiply_transform(IDirect3DDevice8 *iface,
     UINT slot;
     if (!matrix || !transform_slot(state, &slot))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
-        device->recording_state_block->state.transform_mask[slot] = 1;
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        matrix_multiply(&product, recorded->transform_mask[slot] ? &recorded->transforms[slot] : &device->transforms[slot], matrix);
+        recorded->transform_mask[slot] = 1;recorded->transforms[slot] = product;return D3D_OK;
+    }
     matrix_multiply(&product, &device->transforms[slot], matrix);
     if (matrix_equal(&device->transforms[slot], &product))
         return D3D_OK;
@@ -5751,8 +5777,10 @@ static HRESULT WINAPI device_set_material(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D9WGSetMaterial command;
     if (!material) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
+    if (device->recording_state_block) {
         device->recording_state_block->state.material_mask = TRUE;
+        device->recording_state_block->state.material = *material;return D3D_OK;
+    }
     if (bytes_equal(&device->material, material, sizeof(*material)))
         return D3D_OK;
     device->material = *material;
@@ -5810,14 +5838,21 @@ static HRESULT WINAPI device_set_light(IDirect3DDevice8 *iface, DWORD index,
 {
     D8Device *device = device_from_iface(iface);
     D8LightState *entry;
-    D8LightState *recorded = NULL;
 
     if (!light || light->Type < D3DLIGHT_POINT
             || light->Type > D3DLIGHT_DIRECTIONAL)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        if (index < D8WG_MAX_LIGHTS) {recorded->light_mask[index] = 1;recorded->lights[index] = *light;recorded->light_set[index] = TRUE;}
+        else {
+            entry = get_extra_light(&recorded->extra_lights, index, TRUE);
+            if (!entry) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+            entry->light_mask = entry->set = TRUE;entry->light = *light;
+        }
+        return D3D_OK;
+    }
     if (index < D8WG_MAX_LIGHTS) {
-        if (device->recording_state_block)
-            device->recording_state_block->state.light_mask[index] = 1;
         if (device->light_set[index]
                 && bytes_equal(&device->lights[index], light, sizeof(*light)))
             return D3D_OK;
@@ -5827,14 +5862,6 @@ static HRESULT WINAPI device_set_light(IDirect3DDevice8 *iface, DWORD index,
         entry = get_extra_light(&device->extra_lights, index, TRUE);
         if (!entry)
             return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-        if (device->recording_state_block) {
-            recorded = get_extra_light(
-                    &device->recording_state_block->state.extra_lights,
-                    index, TRUE);
-            if (!recorded)
-                return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-            recorded->light_mask = TRUE;
-        }
         if (entry->set && bytes_equal(&entry->light, light, sizeof(*light)))
             return D3D_OK;
         entry->light = *light;
@@ -5869,18 +5896,33 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     D8LightState *entry = NULL;
-    D8LightState *recorded = NULL;
     D3DLIGHT8 *light;
     BOOL *set;
     BOOL *enabled;
     D9WGLightEnable command;
 
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        if (index < D8WG_MAX_LIGHTS) {
+            if (!recorded->light_set[index] && !device->light_set[index]) {
+                initialize_default_light(recorded->lights + index);recorded->light_set[index] = TRUE;recorded->light_mask[index] = TRUE;
+            }
+            recorded->light_enable_mask[index] = TRUE;recorded->light_enabled[index] = !!enable;
+        } else {
+            D8LightState *current = find_extra_light(device->extra_lights, index);
+            entry = get_extra_light(&recorded->extra_lights, index, TRUE);
+            if (!entry) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+            if (!entry->set && (!current || !current->set)) {
+                initialize_default_light(&entry->light);entry->set = entry->light_mask = TRUE;
+            }
+            entry->enable_mask = TRUE;entry->enabled = !!enable;
+        }
+        return D3D_OK;
+    }
     if (index < D8WG_MAX_LIGHTS) {
         light = &device->lights[index];
         set = &device->light_set[index];
         enabled = &device->light_enabled[index];
-        if (device->recording_state_block)
-            device->recording_state_block->state.light_enable_mask[index] = 1;
     } else {
         entry = get_extra_light(&device->extra_lights, index, TRUE);
         if (!entry)
@@ -5888,14 +5930,6 @@ static HRESULT WINAPI device_light_enable(IDirect3DDevice8 *iface,
         light = &entry->light;
         set = &entry->set;
         enabled = &entry->enabled;
-        if (device->recording_state_block) {
-            recorded = get_extra_light(
-                    &device->recording_state_block->state.extra_lights,
-                    index, TRUE);
-            if (!recorded)
-                return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-            recorded->enable_mask = TRUE;
-        }
     }
     /* Direct3D creates a default directional light when LightEnable names an
      * index that SetLight has never assigned. This applies even when the call
@@ -6232,7 +6266,8 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice8 *iface,
     if (!token || !block)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block->token = device_allocate_state_block_token(device);
-    state_block_capture(device, block);
+    /* Setters already wrote the final recorded values without changing live
+     * device state or emitting commands. Capturing here would erase them. */
     block->next = device->state_blocks;
     device->state_blocks = block;
     device->recording_state_block = NULL;
@@ -6836,8 +6871,10 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
     if (shader && (!(shader & 1u)
             || !find_shader(device->pixel_shaders, shader)))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block)
+    if (device->recording_state_block) {
         device->recording_state_block->state.pixel_shader_mask = TRUE;
+        device->recording_state_block->state.pixel_shader = shader;return D3D_OK;
+    }
     if (device->pixel_shader == shader)
         return D3D_OK;
     device->pixel_shader = shader;
