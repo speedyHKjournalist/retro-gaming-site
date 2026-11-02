@@ -63,3 +63,46 @@ static void d3d8_record_state_checks(void)
     check(SUCCEEDED(CALL(GetRenderState)(device,D3DRS_LIGHTING,&value))&&value==old_state,"same-value writes remain in recording");check(SUCCEEDED(CALL(DeleteStateBlock)(device,block)),"same-value recording delete");
     report("PASS D3D8 deferred recording: live queries, render/stage/viewport/material/transform/shaders, exact VB/IB/texture references, ordered local multiplication, same-value masks and explicit Apply");
 }
+static void record_register_expect(BOOL pixel,DWORD reg,const float *expected)
+{
+    float got[4];HRESULT hr=pixel?CALL(GetPixelShaderConstant)(device,reg,got,1):CALL(GetVertexShaderConstant)(device,reg,got,1);
+    check(SUCCEEDED(hr),"read recorded register");for(unsigned c=0;c<4;++c)check(got[c]==expected[c],"recorded register value");
+}
+static void record_plane_expect(DWORD index,const float *expected)
+{
+    float got[4];check(SUCCEEDED(CALL(GetClipPlane)(device,index,got)),"read recorded plane");for(unsigned c=0;c<4;++c)check(got[c]==expected[c],"recorded plane value");
+}
+static void d3d8_record_constant_checks(void)
+{
+    const float a[2][4]={{.125f,.25f,.5f,.75f},{-.125f,-.25f,-.5f,1}},b[2][4]={{.375f,.625f,.875f,1},{-.375f,-.625f,-.875f,0}};
+    const float plane_a[4]={1,0,0,.25f},plane_b[4]={1,-2,.5f,3};float old_vs[2][4],old_ps[2][4],old_plane[4];DWORD baseline,block,scope;
+    check(SUCCEEDED(CALL(GetVertexShaderConstant)(device,94,old_vs,2)),"original vertex register tail");check(SUCCEEDED(CALL(GetPixelShaderConstant)(device,6,old_ps,2)),"original pixel register tail");check(SUCCEEDED(CALL(GetClipPlane)(device,5,old_plane)),"original plane tail");
+    check(SUCCEEDED(CALL(CreateStateBlock)(device,D3DSBT_ALL,&baseline)),"constant ALL baseline");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,94,a,2)),"initial vertex registers");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,6,a,2)),"initial pixel registers");check(SUCCEEDED(CALL(SetClipPlane)(device,5,plane_a)),"initial plane");
+    recording_barrier();check(SUCCEEDED(CALL(BeginStateBlock)(device)),"constant recording begin");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,94,b,2)),"record vertex tail");check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,95,a,1)),"overlap vertex tail");
+    check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,6,b,2)),"record pixel tail");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,7,a,1)),"overlap pixel tail");check(SUCCEEDED(CALL(SetClipPlane)(device,5,plane_b)),"record plane tail");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,0xffffffffu,NULL,0)),"zero vertex write");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,0xffffffffu,NULL,0)),"zero pixel write");
+    check(FAILED(CALL(SetVertexShaderConstant)(device,95,a,2)),"overflow vertex write refused");check(FAILED(CALL(SetPixelShaderConstant)(device,7,a,2)),"overflow pixel write refused");check(FAILED(CALL(SetClipPlane)(device,6,plane_b)),"overflow plane refused");
+    record_register_expect(FALSE,94,a[0]);record_register_expect(FALSE,95,a[1]);record_register_expect(TRUE,6,a[0]);record_register_expect(TRUE,7,a[1]);record_plane_expect(5,plane_a);
+    check(SUCCEEDED(CALL(EndStateBlock)(device,&block)),"constant recording end");recording_barrier();
+    record_register_expect(FALSE,94,a[0]);record_register_expect(TRUE,6,a[0]);record_plane_expect(5,plane_a);
+    check(SUCCEEDED(CALL(ApplyStateBlock)(device,block)),"constant recording apply");recording_barrier();
+    record_register_expect(FALSE,94,b[0]);record_register_expect(FALSE,95,a[0]);record_register_expect(TRUE,6,b[0]);record_register_expect(TRUE,7,a[0]);record_plane_expect(5,plane_b);
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,94,a,1)),"capture vertex change");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,6,a,1)),"capture pixel change");check(SUCCEEDED(CALL(SetClipPlane)(device,5,plane_a)),"capture plane change");
+    check(SUCCEEDED(CALL(CaptureStateBlock)(device,block)),"capture recorded masks");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,94,b,1)),"mutate captured vertex");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,6,b,1)),"mutate captured pixel");check(SUCCEEDED(CALL(SetClipPlane)(device,5,plane_b)),"mutate captured plane");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,20,b,1)),"unrecorded vertex register");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,2,b,1)),"unrecorded pixel register");check(SUCCEEDED(CALL(SetClipPlane)(device,4,plane_b)),"unrecorded plane");
+    check(SUCCEEDED(CALL(ApplyStateBlock)(device,block)),"apply recaptured masks");
+    record_register_expect(FALSE,94,a[0]);record_register_expect(TRUE,6,a[0]);record_plane_expect(5,plane_a);record_register_expect(FALSE,20,b[0]);record_register_expect(TRUE,2,b[0]);record_plane_expect(4,plane_b);
+    check(SUCCEEDED(CALL(DeleteStateBlock)(device,block)),"delete constant recording");
+    check(SUCCEEDED(CALL(CreateStateBlock)(device,D3DSBT_VERTEXSTATE,&scope)),"vertex constant scope");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,94,b,1)),"vertex scope mutate VS");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,6,b,1)),"vertex scope mutate PS");check(SUCCEEDED(CALL(SetClipPlane)(device,5,plane_b)),"vertex scope mutate plane");
+    check(SUCCEEDED(CALL(ApplyStateBlock)(device,scope)),"apply vertex constant scope");record_register_expect(FALSE,94,a[0]);record_register_expect(TRUE,6,b[0]);record_plane_expect(5,plane_a);check(SUCCEEDED(CALL(DeleteStateBlock)(device,scope)),"delete vertex scope");
+    check(SUCCEEDED(CALL(CreateStateBlock)(device,D3DSBT_PIXELSTATE,&scope)),"pixel constant scope");
+    check(SUCCEEDED(CALL(SetVertexShaderConstant)(device,94,b,1)),"pixel scope mutate VS");check(SUCCEEDED(CALL(SetPixelShaderConstant)(device,6,a,1)),"pixel scope mutate PS");check(SUCCEEDED(CALL(SetClipPlane)(device,5,plane_b)),"pixel scope mutate plane");
+    check(SUCCEEDED(CALL(ApplyStateBlock)(device,scope)),"apply pixel constant scope");record_register_expect(FALSE,94,b[0]);record_register_expect(TRUE,6,b[0]);record_plane_expect(5,plane_b);check(SUCCEEDED(CALL(DeleteStateBlock)(device,scope)),"delete pixel scope");
+    check(SUCCEEDED(CALL(ApplyStateBlock)(device,baseline)),"restore all register banks");check(SUCCEEDED(CALL(DeleteStateBlock)(device,baseline)),"delete register baseline");
+    record_register_expect(FALSE,94,old_vs[0]);record_register_expect(FALSE,95,old_vs[1]);record_register_expect(TRUE,6,old_ps[0]);record_register_expect(TRUE,7,old_ps[1]);record_plane_expect(5,old_plane);
+    report("PASS D3D8 constant and plane recording: live queries, tail/overlap/zero/overflow writes, capture masks, VS/PS/ALL scopes and explicit Apply");
+}

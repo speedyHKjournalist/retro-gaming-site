@@ -286,6 +286,7 @@ void WINAPI WinMainCRTStartup(void)
 #endif
 #if D9WG_TNL_API == 8
     d3d8_record_state_checks();
+    d3d8_record_constant_checks();
 #endif
     identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"identity world");
     state(D3DRS_LIGHTING,TRUE);state(D3DRS_COLORVERTEX,TRUE);state(D3DRS_SPECULARENABLE,FALSE);state(D3DRS_LOCALVIEWER,FALSE);state(D3DRS_NORMALIZENORMALS,FALSE);state(D3DRS_AMBIENT,0);

@@ -175,6 +175,10 @@ typedef struct D8StateSnapshot {
     BOOL light_enabled[D8WG_MAX_LIGHTS];
     D8LightState *extra_lights;
     BOOL all_lights_scope;
+    BYTE vs_constant_mask[D8WG_MAX_VS_CONSTANTS], ps_constant_mask[D8WG_MAX_PS_CONSTANTS];
+    BYTE clip_plane_mask[D8WG_MAX_CLIP_PLANES];
+    float vs_constants[D8WG_MAX_VS_CONSTANTS][4], ps_constants[D8WG_MAX_PS_CONSTANTS][4];
+    float clip_planes[D8WG_MAX_CLIP_PLANES][4];
 } D8StateSnapshot;
 
 struct D8StateBlock {
@@ -455,6 +459,8 @@ static IDirect3DVolume8Vtbl g_volume_vtbl;
 static IDirect3DSwapChain8Vtbl g_swapchain_vtbl;
 
 static void state_block_release_references(D8StateBlock *block);
+static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
+static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
 static BOOL emit_device_state_after_reset(D8Device *device);
 static BOOL device_has_reset_blockers(D8Device *device);
 static void device_clear_bindings(D8Device *device);
@@ -5973,6 +5979,11 @@ static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice8 *iface,
 
     if (!plane || index >= D8WG_MAX_CLIP_PLANES)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        CopyMemory(recorded->clip_planes[index], plane, sizeof(recorded->clip_planes[index]));
+        recorded->clip_plane_mask[index] = TRUE;return D3D_OK;
+    }
     CopyMemory(device->clip_planes[index], plane,
             sizeof(device->clip_planes[index]));
     command.device_handle = device->handle;
@@ -6004,6 +6015,7 @@ static void state_block_set_scope(D8StateBlock *block,
                 sizeof(state->texture_stage_mask), 1);
         FillMemory(state->texture_mask, sizeof(state->texture_mask), 1);
         state->pixel_shader_mask = TRUE;
+        FillMemory(state->ps_constant_mask, sizeof(state->ps_constant_mask), 1);
     }
     if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {
         /* D3D8 has render states in both predefined state-block classes. */
@@ -6018,6 +6030,8 @@ static void state_block_set_scope(D8StateBlock *block,
         state->material_mask = TRUE;
         state->indices_mask = TRUE;
         state->vertex_shader_mask = TRUE;
+        FillMemory(state->vs_constant_mask, sizeof(state->vs_constant_mask), 1);
+        FillMemory(state->clip_plane_mask, sizeof(state->clip_plane_mask), 1);
     }
 }
 
@@ -6095,6 +6109,12 @@ static void state_block_capture(D8Device *device, D8StateBlock *block)
         state->vertex_shader = device->vertex_shader;
     if (state->pixel_shader_mask)
         state->pixel_shader = device->pixel_shader;
+    for (index = 0; index < D8WG_MAX_VS_CONSTANTS; ++index)
+        if (state->vs_constant_mask[index]) CopyMemory(state->vs_constants[index], device->vs_constants[index], 16);
+    for (index = 0; index < D8WG_MAX_PS_CONSTANTS; ++index)
+        if (state->ps_constant_mask[index]) CopyMemory(state->ps_constants[index], device->ps_constants[index], 16);
+    for (index = 0; index < D8WG_MAX_CLIP_PLANES; ++index)
+        if (state->clip_plane_mask[index]) CopyMemory(state->clip_planes[index], device->clip_planes[index], 16);
     if (state->viewport_mask)
         state->viewport = device->viewport;
     if (state->material_mask)
@@ -6241,6 +6261,12 @@ static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
     if (state->pixel_shader_mask)
         APPLY_STATE(device_set_pixel_shader(&device->iface,
                 state->pixel_shader));
+    for (index = 0; index < D8WG_MAX_VS_CONSTANTS; ++index)
+        if (state->vs_constant_mask[index]) APPLY_STATE(device_set_vs_constant(&device->iface, index, state->vs_constants[index], 1));
+    for (index = 0; index < D8WG_MAX_PS_CONSTANTS; ++index)
+        if (state->ps_constant_mask[index]) APPLY_STATE(device_set_ps_constant(&device->iface, index, state->ps_constants[index], 1));
+    for (index = 0; index < D8WG_MAX_CLIP_PLANES; ++index)
+        if (state->clip_plane_mask[index]) APPLY_STATE(device_set_clip_plane(&device->iface, index, state->clip_planes[index]));
 #undef APPLY_STATE
     return D3D_OK;
 }
@@ -6740,6 +6766,11 @@ static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface,
     if (!count) return D3D_OK;  /* see device_set_ps_constant */
     if (!data || (uint64_t)reg + count > D8WG_MAX_VS_CONSTANTS)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        CopyMemory(recorded->vs_constants[reg], data, count * 16u);
+        FillMemory(recorded->vs_constant_mask + reg, count, 1);return D3D_OK;
+    }
     CopyMemory(device->vs_constants[reg], data, count * 16u);
     return emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
             device, reg, (const float *)data, count)
@@ -6927,6 +6958,11 @@ static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface,
                 "limit=%u", reg, count, (DWORD)(uintptr_t)data,
                 D8WG_MAX_PS_CONSTANTS);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
+    if (device->recording_state_block) {
+        D8StateSnapshot *recorded = &device->recording_state_block->state;
+        CopyMemory(recorded->ps_constants[reg], data, count * 16u);
+        FillMemory(recorded->ps_constant_mask + reg, count, 1);return D3D_OK;
     }
     CopyMemory(device->ps_constants[reg], data, count * 16u);
     return emit_set_shader_constant(D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
