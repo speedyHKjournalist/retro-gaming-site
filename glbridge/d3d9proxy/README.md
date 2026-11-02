@@ -24,6 +24,10 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
 - `IDirect3D9`/`IDirect3DDevice9` COM lifecycle, adapter enumeration, caps
   (`VertexShaderVersion`/`PixelShaderVersion` report `(3,0)` by default; the
   `ffp` and `sm2` diagnostic profiles remain selectable), and `CreateDevice`;
+- version-specific material and zero clip-plane defaults generated from the
+  shared host table: D3D8 diffuse RGB is white with zero alpha; D3D9 material
+  is entirely zero. Reset clears material, planes, and low/sparse light state;
+  API8 material differences are sent after creation and Reset;
 - texture-stage and sampler defaults generated from the same host table,
   including all pixel/vertex sampler slots, stage-dependent routing and
   D3D8's legacy sampling-state mapping; first DIFFUSE=0 operand changes

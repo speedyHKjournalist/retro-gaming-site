@@ -93,4 +93,28 @@ static __inline uint32_t d9wg_texture_default(uint32_t api, uint32_t stage, uint
     default: return 0u;
     }
 }
+static __inline uint32_t d9wg_material_default_word(uint32_t api, uint32_t index)
+{
+    switch (api) {
+    case 8u:
+        switch (index) {
+        case 0u: return 0x3F800000u;
+        case 1u: return 0x3F800000u;
+        case 2u: return 0x3F800000u;
+        default: return 0u;
+        }
+    default: return 0u;
+    }
+}
+static __inline void d9wg_object_defaults(uint32_t api, void *material, void *planes, uint32_t plane_count)
+{
+    for (uint32_t i = 0; i < 17u; ++i) {
+        uint32_t word = d9wg_material_default_word(api, i);
+        __builtin_memcpy((uint8_t *)material + i*4u, &word, 4u);
+    }
+    for (uint32_t i = 0; i < plane_count*4u; ++i) {
+        const uint32_t zero = 0;
+        __builtin_memcpy((uint8_t *)planes + i*4u, &zero, 4u);
+    }
+}
 #endif

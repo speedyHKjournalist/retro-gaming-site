@@ -966,9 +966,7 @@ static void d3d7_device_init_state(D3D7Device *device)
     device->viewport.dwHeight = device->render_target->height;
     device->viewport.dvMinZ = 0.0f;
     device->viewport.dvMaxZ = 1.0f;
-    device->material.diffuse.r = device->material.diffuse.g =
-            device->material.diffuse.b = device->material.diffuse.a = 1.0f;
-    device->material.ambient = device->material.diffuse;
+    d9wg_object_defaults(7, &device->material, device->clip_planes, D3D7_MAX_CLIP_PLANES);
     device->render_states[D3DRENDERSTATE_ANTIALIAS] = D3DANTIALIAS_NONE;
     device->render_states[D3DRENDERSTATE_TEXTUREADDRESS] = D3DTADDRESS_WRAP;
     device->render_states[D3DRENDERSTATE_TEXTUREPERSPECTIVE] = TRUE;

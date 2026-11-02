@@ -2533,10 +2533,7 @@ static void device_init_states(D8Device *device)
     for (UINT state = 0; state < sizeof(device->render_states)/sizeof(device->render_states[0]); ++state)
         device->render_states[state] = d9wg_render_default(8, state,
                 device->present.EnableAutoDepthStencil, point_max_bits);
-    ZeroMemory(&device->material, sizeof(device->material));
-    device->material.Diffuse.r = device->material.Diffuse.g =
-            device->material.Diffuse.b = device->material.Diffuse.a = 1.0f;
-    device->material.Ambient = device->material.Diffuse;
+    d9wg_object_defaults(8, &device->material, device->clip_planes, D8WG_MAX_CLIP_PLANES);
     free_extra_lights(&device->extra_lights);
     ZeroMemory(device->lights, sizeof(device->lights));
     ZeroMemory(device->light_set, sizeof(device->light_set));
@@ -2709,7 +2706,8 @@ static void device_release_owned_references(D8Device *device)
  */
 static BOOL emit_device_state_after_reset(D8Device *device)
 {
-    if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states))
+    if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states)
+            || !emit_object_default_patches(device->handle, &device->material))
         return FALSE;
 
     /* Host-side constant registers live under the old device_handle and
@@ -2841,7 +2839,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
         HeapFree(GetProcessHeap(), 0, device);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
-    if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states)) {
+    if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states)
+            || !emit_object_default_patches(device->handle, &device->material)) {
         IDirect3DDevice8_Release(&device->iface);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }

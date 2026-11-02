@@ -137,6 +137,10 @@ compares the two tables by running both, register by register.
   ClipStatus; UP declarations are limited to stream zero. The Tween capability
   flag is advertised after paired raw/CPU guest pixel replay acceptance on
   SwiftShader and Metal;
+- version-specific material and zero clip-plane defaults generated from the
+  shared host table: D3D8 diffuse RGB is white with zero alpha; D3D9 material
+  is entirely zero. Reset clears material, planes, and low/sparse light state;
+  API8 material differences are sent after creation and Reset;
 - texture-stage and sampler defaults generated from the same host table,
   including all pixel/vertex sampler slots, stage-dependent routing and
   D3D8's legacy sampling-state mapping; first DIFFUSE=0 operand changes

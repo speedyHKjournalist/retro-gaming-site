@@ -1,9 +1,10 @@
 #ifndef D9WG_STATE_DEFAULTS_BRIDGE_H
 #define D9WG_STATE_DEFAULTS_BRIDGE_H
 #include "d9wg_state_defaults.h"
-/* The wire starts with D3D9 defaults. Emit only the two defaults which can
- * differ by API or reported point capability, after CreateDevice and Reset. */
-static BOOL emit_render_default_patches(uint32_t device, uint32_t api,
+/* The wire starts with D3D9 defaults. Patch render defaults which differ by
+ * API or reported point capability, after CreateDevice and Reset. Material
+ * differences use the same rule below (D3D8 white RGB, transparent alpha). */
+static __inline BOOL emit_render_default_patches(uint32_t device, uint32_t api,
         uint32_t auto_depth, const void *render_states)
 {
     const uint32_t states[] = {155u, 166u};
@@ -18,4 +19,17 @@ static BOOL emit_render_default_patches(uint32_t device, uint32_t api,
     }
     return TRUE;
 }
+static __inline BOOL emit_object_default_patches(uint32_t device, const void *material)
+{
+    BOOL different = FALSE;
+    for (unsigned i = 0; i < 17u; ++i) {
+        uint32_t word;__builtin_memcpy(&word, (const uint8_t *)material + i*4u, 4u);
+        if (word != d9wg_material_default_word(9, i)) different = TRUE;
+    }
+    if (!different) return TRUE;
+    D9WGSetMaterial command;command.device_handle = device;
+    __builtin_memcpy(command.diffuse, material, 17u*4u);
+    return emit_command(D9WG_OP_SET_MATERIAL, &command, sizeof(command));
+}
+
 #endif

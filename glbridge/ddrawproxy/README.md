@@ -223,3 +223,8 @@ driver.
 See `../../docs/ddraw-d3d7-webgpu-architecture.md` and
 `../../docs/ddraw-d3d7-webgpu-implementation-plan.zh-CN.md` for the milestone
 schedule and the protocol increment.
+
+D3D7 fresh material and all six clip planes use the shared generated zero
+object defaults. The original Microsoft system RGB device was measured twice,
+including recreation after nonzero changes; the proxy matches all 82 words and
+HRESULTs. D3D8 has its own SDK material default and is not used as a D3D7 oracle.

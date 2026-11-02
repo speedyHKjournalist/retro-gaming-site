@@ -8,6 +8,8 @@
 typedef IDirect3D8 Factory;
 typedef IDirect3DDevice8 Device;
 typedef D3DCAPS8 Caps;
+typedef D3DMATERIAL8 Material;
+typedef D3DLIGHT8 Light;
 typedef DWORD Block;
 #define CALL(n) IDirect3DDevice8_##n
 #define FACT(n) IDirect3D8_##n
@@ -16,6 +18,8 @@ typedef DWORD Block;
 typedef IDirect3D9 Factory;
 typedef IDirect3DDevice9 Device;
 typedef D3DCAPS9 Caps;
+typedef D3DMATERIAL9 Material;
+typedef D3DLIGHT9 Light;
 typedef IDirect3DStateBlock9* Block;
 #define CALL(n) IDirect3DDevice9_##n
 #define FACT(n) IDirect3D9_##n
@@ -23,7 +27,7 @@ typedef IDirect3DStateBlock9* Block;
 #include "d3d_render_default_reference.h"
 static HANDLE logfile;
 static Device* device;
-static unsigned queries, texture_queries;
+static unsigned queries, texture_queries, object_words, light_queries;
 static void report(const char* s)
 {
     DWORD n;
@@ -39,6 +43,56 @@ static void check(BOOL yes, const char* s)
     }
 }
 #define OK(x) check(SUCCEEDED(x), "FAIL " #x)
+static const DWORD light_indices[] = { 0, 7, 8, 0xffffffffu };
+static void verify_objects(void)
+{
+    Material material;
+    OK(CALL(GetMaterial)(device, &material));
+    for (UINT i = 0; i < 17; ++i) {
+        DWORD word;
+        CopyMemory(&word, (const BYTE*)&material + i * 4, 4);
+        check(word == material_default_reference[i], "FAIL material default word");
+        ++object_words;
+    }
+    for (UINT index = 0; index < 6; ++index) {
+        float plane[4];
+        OK(CALL(GetClipPlane)(device, index, plane));
+        for (UINT i = 0; i < 4; ++i) {
+            DWORD word;
+            CopyMemory(&word, plane + i, 4);
+            check(word == 0, "FAIL clip-plane default word");
+            ++object_words;
+        }
+    }
+}
+static void verify_no_lights(void)
+{
+    for (UINT i = 0; i < sizeof(light_indices) / sizeof(light_indices[0]); ++i) {
+        Light light;
+        FillMemory(&light, sizeof(light), 0xcc);
+        check(CALL(GetLight)(device, light_indices[i], &light) == D3DERR_INVALIDCALL, "FAIL fresh/reset light definition");
+        for (UINT word = 0; word < sizeof(light) / 4; ++word) {
+            DWORD value;
+            CopyMemory(&value, (const BYTE*)&light + word * 4, 4);
+            check(value == 0xccccccccu, "FAIL refused light output changed");
+        }
+        BOOL enabled = 0x12345678;
+        check(CALL(GetLightEnable)(device, light_indices[i], &enabled) == D3DERR_INVALIDCALL && enabled == 0x12345678, "FAIL fresh/reset light enable");
+        light_queries += 2;
+    }
+}
+static void change_lights(void)
+{
+    Light light;
+    ZeroMemory(&light, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = 0.5f;
+    light.Direction.z = 1;
+    for (UINT i = 0; i < sizeof(light_indices) / sizeof(light_indices[0]); ++i) {
+        OK(CALL(SetLight)(device, light_indices[i], &light));
+        OK(CALL(LightEnable)(device, light_indices[i], TRUE));
+    }
+}
 static void verify_textures(void)
 {
     for (UINT stage = 0; stage < 8; ++stage) {
@@ -65,6 +119,8 @@ static void verify_textures(void)
 }
 static void verify(BOOL depth)
 {
+    verify_objects();
+    verify_no_lights();
     verify_textures();
     Caps caps;
     OK(CALL(GetDeviceCaps)(device, &caps));
@@ -87,6 +143,15 @@ static void verify(BOOL depth)
 }
 static void change(void)
 {
+    Material material;
+    float values[17];
+    for (UINT i = 0; i < 17; ++i)
+        values[i] = 0.25f;
+    CopyMemory(&material, values, sizeof(material));
+    OK(CALL(SetMaterial)(device, &material));
+    const float plane[4] = { 1, 0.5f, -0.25f, 0.75f };
+    for (UINT i = 0; i < 6; ++i)
+        OK(CALL(SetClipPlane)(device, i, plane));
     OK(CALL(SetTextureStageState)(device, 1, D3DTSS_COLORARG0, D3DTA_DIFFUSE));
     OK(CALL(SetTextureStageState)(device, 1, D3DTSS_ALPHAARG0, D3DTA_DIFFUSE));
 #if D9WG_DEFAULTS_API == 8
@@ -152,10 +217,12 @@ void WINAPI WinMainCRTStartup(void)
 #endif
     verify(FALSE);
     change();
+    change_lights();
     pp.EnableAutoDepthStencil = TRUE;
     OK(CALL(Reset)(device, &pp));
     verify(TRUE);
     change();
+    change_lights();
     pp.EnableAutoDepthStencil = FALSE;
     OK(CALL(Reset)(device, &pp));
     verify(FALSE);
@@ -163,8 +230,8 @@ void WINAPI WinMainCRTStartup(void)
     FACT(Release)(factory);
     FreeLibrary(module);
     DestroyWindow(window);
-    char message[160];
-    wsprintfA(message, "PASS D3D%u render defaults: %u exact queries, fresh/ALL/reset, conditional depth, reported point maximum and SDK version differences; texture=%u", D9WG_DEFAULTS_API, queries, texture_queries);
+    char message[240];
+    wsprintfA(message, "PASS D3D%u render defaults: %u exact queries, fresh/ALL/reset, conditional depth, reported point maximum and SDK version differences; texture=%u; objectWords=%u; lightQueries=%u", D9WG_DEFAULTS_API, queries, texture_queries, object_words, light_queries);
     report(message);
     CloseHandle(logfile);
     ExitProcess(0);
