@@ -161,6 +161,9 @@ static void bindings(Buffer *expected, Indices *expected_indices) {
 #ifdef D9WG_CLIP_STATUS_ONLY
 #include "d3d_clip_status_cases.h"
 #endif
+#ifdef D9WG_VERTEX_FORMAT_ONLY
+#include "d3d9_vertex_format_cases.h"
+#endif
 void WINAPI WinMainCRTStartup(void) {
   char directory[MAX_PATH], path[MAX_PATH], text[160];
   GetModuleFileNameA(NULL, directory, sizeof(directory));
@@ -201,6 +204,10 @@ void WINAPI WinMainCRTStartup(void) {
   pp.AutoDepthStencilFormat = D3DFMT_D16;
   OK(FACT(CreateDevice)(factory, 0, D3DDEVTYPE_HAL, window,
                         D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device));
+#ifdef D9WG_VERTEX_FORMAT_ONLY
+  vertex_format_cases();CALL(Release)(device);FACT(Release)(factory);DestroyWindow(window);
+  CloseHandle(logfile);ExitProcess(0);
+#endif
 #ifdef D9WG_CLIP_STATUS_ONLY
   clip_status_cases();CALL(Release)(device);FACT(Release)(factory);DestroyWindow(window);
   CloseHandle(logfile);ExitProcess(0);

@@ -84,27 +84,26 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
     layout->position_transformed = layout->position_floats = layout->stride = layout->texcoord_count = layout->has_blend = 0;
     for (unsigned i = 0; i < 8; ++i) { layout->texcoord[i] = -1;layout->texcoord_floats[i] = 0; }
     if (!elements || !count) return 0;
-    static const uint8_t type_bytes[17] = {4,8,12,16,4,4,4,8,4,4,8,4,8,4,4,4,8};
     for (uint32_t i = 0; i < count; ++i) {
         const D9WGVertexElement *e = &elements[i];
-        uint32_t floats = e->type <= 3 ? e->type + 1u : 0u;
-        uint32_t bytes = e->type < 17u ? type_bytes[e->type] : 0u;
+        uint32_t floats = d9wg_decl_components(e->type);
+        uint32_t bytes = d9wg_decl_bytes(e->type);
         uint32_t end = e->offset + bytes;
         if (e->stream || e->method || !bytes) return 0;
         if (end > layout->stride) layout->stride = end;
         switch (e->usage) {
         case 0: case 9: /* POSITION / POSITIONT */
             if (e->usage_index) break;
-            if (layout->position >= 0 || floats < 3 || (e->usage == 9 && floats != 4)) return 0;
-            layout->position = e->offset;layout->position_floats = floats;
+            if (layout->position >= 0 || (e->usage == 9 && e->type != 3)) return 0;
+            layout->position = e->offset;layout->position_floats = floats;layout->position_type = e->type;
             layout->position_transformed = e->usage == 9;break;
         case 3: /* NORMAL */
             if (e->usage_index) break;
-            if (floats < 3 || layout->normal >= 0) return 0;
-            layout->normal = e->offset;break;
+            if (layout->normal >= 0) return 0;
+            layout->normal = e->offset;layout->normal_type = e->type;break;
         case 4: /* PSIZE */
-            if (e->usage_index || floats != 1 || layout->psize >= 0) return 0;
-            layout->psize = e->offset;break;
+            if (e->usage_index || layout->psize >= 0) return 0;
+            layout->psize = e->offset;layout->psize_type = e->type;break;
         case 10: /* COLOR */
             if (e->type != 4) return 0;
             if (e->usage_index == 0) { if (layout->diffuse >= 0) return 0;layout->diffuse = e->offset; }
@@ -113,6 +112,7 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
         case 5: /* TEXCOORD */
             if (e->usage_index >= 8 || !floats || layout->texcoord[e->usage_index] >= 0) return 0;
             layout->texcoord[e->usage_index] = e->offset;layout->texcoord_floats[e->usage_index] = floats;
+            layout->texcoord_type[e->usage_index] = e->type;
             if (e->usage_index + 1u > layout->texcoord_count) layout->texcoord_count = e->usage_index + 1u;
             break;
         case 1:
@@ -174,8 +174,6 @@ int d9wg_process_range(uint32_t length, uint32_t base, uint32_t stride,
     if (extent > available || count - 1u > (available - extent) / stride) return 0;
     return 1;
 }
-static float read_float(const void *input)
-{ float value;__builtin_memcpy(&value, input, sizeof(value));return value; }
 static void write_output_word(void *output, uint32_t length, uint64_t offset, const void *word)
 {
     if (offset <= length && length - offset >= 4)
@@ -192,7 +190,7 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         const D9WGTNLLighting *lighting, uint32_t copy_data, const D9WGVertexState *vertex_state)
 {
     uint32_t first, destination;
-    if (!source || !output || s->position_transformed || (!d->position_transformed && !d->legacy_xyz_output) ||
+    if (!source || !output || !d9wg_process_canonical_output(d) || s->position_transformed || (!d->position_transformed && !d->legacy_xyz_output) ||
             !d9wg_process_range(source_length, source_base, source_stride, s->stride, source_start, count, &first) ||
             !d9wg_process_range(output_length, 0, d->stride, d->stride, output_start, count, &destination)) return 0;
     D9WGVertexBlend *blend = vertex_state ? vertex_state->blend : 0;
@@ -209,7 +207,7 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         float position[4] = {0,0,0,1}, clip[4], screen[4];
         float blended_eye[4], blended_normal[3], world_position[4];
         uint32_t user_planes = vertex_state && vertex_state->clip_vertices ? vertex_state->clip_plane_mask : 0;
-        for (unsigned i = 0; i < s->position_floats; ++i) position[i] = read_float(in + s->position + i*4u);
+        d9wg_decl_read(s->position_type, in + s->position, position);
         if (blend) {
             d9wg_blend_vertex_world(blend, s, in, position, blended_eye, clip, blended_normal,
                     user_planes ? world_position : 0);
@@ -235,10 +233,14 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             if (blend) d9wg_lighting_vertex_view(lighting, blended_eye, blended_normal,
                     s->diffuse >= 0 ? in + s->diffuse : 0,
                     s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
-            else d9wg_lighting_vertex(lighting, world_view, position,
-                    s->normal >= 0 ? in + s->normal : 0,
-                    s->diffuse >= 0 ? in + s->diffuse : 0,
-                    s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
+            else {
+                float normal[4] = {0};
+                if (s->normal >= 0) d9wg_decl_read(s->normal_type, in + s->normal, normal);
+                d9wg_lighting_vertex(lighting, world_view, position,
+                        s->normal >= 0 ? normal : 0,
+                        s->diffuse >= 0 ? in + s->diffuse : 0,
+                        s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
+            }
             if (d->diffuse >= 0) write_output_word(output, output_length, output_base + d->diffuse, &diffuse);
             if (d->specular >= 0) write_output_word(output, output_length, output_base + d->specular, &specular);
         }
@@ -252,8 +254,12 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     (uint32_t)(d9wg_vertex_fog(vertex_state, eye)*255.0f + 0.5f) << 24;
             __builtin_memcpy(out + d->specular, &specular, 4u);
         }
-        if (copy_data && s->normal >= 0 && d->normal >= 0) copy_bytes(out + d->normal, in + s->normal, 12u);
-        if (copy_data && s->psize >= 0 && d->psize >= 0) copy_bytes(out + d->psize, in + s->psize, 4u);
+        if (copy_data && s->normal >= 0 && d->normal >= 0) {
+            float normal[4];d9wg_decl_read(s->normal_type, in + s->normal, normal);copy_bytes(out + d->normal, normal, 12u);
+        }
+        if (copy_data && s->psize >= 0 && d->psize >= 0) {
+            float size[4];d9wg_decl_read(s->psize_type, in + s->psize, size);copy_bytes(out + d->psize, size, 4u);
+        }
         for (unsigned i = 0; i < 8; ++i) {
             uint32_t configured = vertex_state && (vertex_state->texture_mask & (1u << i));
             uint32_t index = configured ? vertex_state->texture[i].coordinate_index : i;
@@ -264,8 +270,7 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             if (d->texcoord[i] < 0 || !floats || (!generated && s->texcoord[source_set] < 0)) continue;
             if (!copy_data && !generated && !transformed) continue;
             if (!generated) {
-                for (unsigned component = 0; component < floats; ++component)
-                    coordinate[component] = read_float(in + s->texcoord[source_set] + component*4u);
+                d9wg_decl_read(s->texcoord_type[source_set], in + s->texcoord[source_set], coordinate);
             } else {
                 float eye[4], normal[3] = {0,0,0}, eye_normal[3];
                 if (blend) {
@@ -273,8 +278,10 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     for (unsigned component = 0; component < 3; ++component) eye_normal[component] = blended_normal[component];
                 } else {
                     d9wg_transform_vector4(world_view, position, eye);
-                    if (s->normal >= 0) for (unsigned component = 0; component < 3; ++component)
-                        normal[component] = read_float(in + s->normal + component*4u);
+                    if (s->normal >= 0) {
+                        float decoded[4];d9wg_decl_read(s->normal_type, in + s->normal, decoded);
+                        for (unsigned component = 0; component < 3; ++component) normal[component] = decoded[component];
+                    }
                     d9wg_lighting_normal(lighting, normal, eye_normal);
                 }
                 for (unsigned component = 0; component < 3; ++component)
@@ -317,9 +324,9 @@ int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,
 {
     if (!s || !s->vertices || !s->layout || !state || !status || !s->count ||
             !s->stride || s->layout->stride > s->stride ||
-            s->layout->position < 0 || s->layout->position_floats < 3 || s->layout->position_floats > 4 ||
+            s->layout->position < 0 || !d9wg_decl_bytes(s->layout->position_type) || s->layout->position_floats > 4 ||
             (uint32_t)s->layout->position > s->layout->stride ||
-            s->layout->position_floats*4u > s->layout->stride - (uint32_t)s->layout->position ||
+            d9wg_decl_bytes(s->layout->position_type) > s->layout->stride - (uint32_t)s->layout->position ||
             (s->indices && ((s->index_stride != 2 && s->index_stride != 4) || s->count > s->index_bytes/s->index_stride))) return 0;
     if (s->layout->position_transformed && !s->status_screen) return 1;
     if (s->layout->position_transformed && (!s->viewport.width || !s->viewport.height)) return 0;
@@ -346,8 +353,7 @@ int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,
         uint32_t offset;if (!d9wg_clip_vertex_offset(&range, i, &offset)) return 0;
         const uint8_t *input = s->vertices + offset;
         float position[4] = {0,0,0,1}, clip[4], world[4];
-        for (unsigned c = 0; c < s->layout->position_floats; ++c)
-            position[c] = read_float(input + s->layout->position + c*4u);
+        d9wg_decl_read(s->layout->position_type, input + s->layout->position, position);
         if (s->layout->position_transformed) d9wg_clip_unproject(position, &s->viewport, clip);
         else if (blend) {
             float eye[4], normal[3];

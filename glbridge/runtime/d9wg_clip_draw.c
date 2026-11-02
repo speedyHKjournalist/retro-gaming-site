@@ -62,7 +62,7 @@ int d9wg_clip_draw(const D9WGClipDrawSource *s,D9WGClipWork *work,
         void *staging,uint32_t staging_bytes,D9WGClipEmit emit,void *context)
 {
     if(!s || !s->clips || !s->clips->head)return 0;
-    if(!s->vertices || !s->layout || !s->layout->position_transformed ||
+    if(!s->vertices || !s->layout || !d9wg_process_canonical_output(s->layout) || !s->layout->position_transformed ||
             s->layout->position<0 || s->layout->position_floats!=4 || !s->count ||
             !s->stride || s->layout->stride>s->stride || !s->viewport.width || !s->viewport.height ||
             !work || !staging || !emit || s->primitive_type<1 || s->primitive_type>6 ||

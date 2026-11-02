@@ -123,7 +123,7 @@ int main(void){printf("[");${cases}printf("]\\n");return 0;}
             if (test.reference) check(actual.reference, test.reference, actual.name + " reference");
         });
         return { caseSha256: createHash("sha256").update(data).digest("hex"),
-            sourceSha256: Object.fromEntries(sources.map(p => [p, createHash("sha256").update(fs.readFileSync(path.join(root, p))).digest("hex")])), cases: output };
+            sourceSha256: Object.fromEntries([...sources, "runtime/d9wg_vertex.h", "runtime/d9wg_vertex_format.h", "runtime/d9wg_blend.h"].map(p => [p, createHash("sha256").update(fs.readFileSync(path.join(root, p))).digest("hex")])), cases: output };
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 module.exports = { buildFixture };

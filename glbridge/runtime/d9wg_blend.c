@@ -30,7 +30,9 @@ int d9wg_blend_init(D9WGVertexBlend *blend, uint32_t bytes, uint32_t mode,
 int d9wg_blend_layout(const D9WGVertexBlend *blend, const D9WGProcessLayout *layout)
 {
     uint32_t weights = blend->matrix_count - 1u;
-    uint32_t available = layout->blend_weight_type == 4 || layout->blend_weight_type == 8 ? 4u : layout->blend_weight_floats;
+    uint32_t type = layout->blend_weight_type;
+    uint32_t available = d9wg_decl_components(type);
+    if (weights && (type == 5 || type == 6 || type == 7 || type == 13 || type == 14)) return 0;
     if (weights && (layout->blend_weight < 0 || available < weights)) return 0;
     if (blend->indexed && (layout->blend_indices < 0 || (layout->blend_indices_type > 5 && layout->blend_indices_type != 8))) return 0;
     return 1;
@@ -72,12 +74,16 @@ void d9wg_blend_vertex_world(D9WGVertexBlend *blend, const D9WGProcessLayout *la
         if (layout->blend_weight_type == 4 || layout->blend_weight_type == 8)
             weights[i] = ((const uint8_t *)input)[layout->blend_weight +
                     (layout->blend_weight_type == 4 ? color_order[i] : i)] / 255.0f;
-        else __builtin_memcpy(&weights[i], (const uint8_t *)input + layout->blend_weight + i*4u, 4u);
+        else {
+            float decoded[4];d9wg_decl_read(layout->blend_weight_type,
+                    (const uint8_t *)input + layout->blend_weight, decoded);weights[i] = decoded[i];
+        }
         remainder -= weights[i];
     }
     weights[blend->matrix_count - 1u] = remainder;
-    if (layout->normal >= 0) for (unsigned i = 0; i < 3; ++i)
-        __builtin_memcpy(&normal[i], (const uint8_t *)input + layout->normal + i*4u, 4u);
+    if (layout->normal >= 0) d9wg_decl_read(layout->normal_type,
+            (const uint8_t *)input + layout->normal, normal);
+    normal[3] = 0;
     for (unsigned i = 0; i < 4; ++i) { eye[i] = clip[i] = 0.0f;if (world) world[i] = 0.0f; }
     for (unsigned i = 0; i < 3; ++i) eye_normal[i] = 0.0f;
     for (unsigned bone = 0; bone < blend->matrix_count; ++bone) {

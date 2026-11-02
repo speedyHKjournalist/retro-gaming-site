@@ -10,7 +10,7 @@ static uint32_t vread(const void *from) { uint32_t value;__builtin_memcpy(&value
 static void vfloat(void *to, float value) { __builtin_memcpy(to,&value,4u); }
 static float vfread(const void *from) { float value;__builtin_memcpy(&value,from,4u);return value; }
 static int vnear(float value, float wanted) { float delta=value-wanted;return delta < .0001f && delta > -.0001f; }
-static int vertex_cases(unsigned iterations)
+static __attribute__((noinline)) int vertex_cases(unsigned iterations)
 {
     uint32_t first;
     for (unsigned i=0;i<iterations;++i) {
@@ -85,7 +85,7 @@ static int vertex_cases(unsigned iterations)
     VCHECK(vnear(vfread(output),107) && vfread(output+12)==100000000.0f);
     elements[0].stream=1;VCHECK(!d9wg_process_layout(elements,1,&source));
     elements[0].stream=0;elements[0].method=1;VCHECK(!d9wg_process_layout(elements,1,&source));
-    elements[0].method=0;elements[0].type=4;VCHECK(!d9wg_process_layout(elements,1,&source));
+    elements[0].method=0;elements[0].type=4;VCHECK(d9wg_process_layout(elements,1,&source) && source.position_type==4);
     return 0;
 }
 #undef VCHECK

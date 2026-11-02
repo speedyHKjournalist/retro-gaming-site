@@ -2,18 +2,31 @@
 #define D9WG_VERTEX_H
 #include "d9wg_lighting.h"
 #include "d9wg_clip.h"
+#include "d9wg_vertex_format.h"
 #define D9WG_PV_DONOTCOPYDATA 1u
 
 typedef struct D9WGProcessLayout {
     int32_t position, normal, diffuse, specular, psize;
     uint32_t position_transformed, position_floats, stride, texcoord_count;
     uint32_t legacy_xyz_output, legacy_output, write_extent;
+    uint32_t position_type, normal_type, psize_type, texcoord_type[8];
     int32_t texcoord[8];
     uint32_t texcoord_floats[8];
     uint32_t has_blend;
     int32_t blend_weight, blend_indices;
     uint32_t blend_weight_floats, blend_weight_type, blend_indices_type;
 } D9WGProcessLayout;
+/* The current output writer and primitive clipper consume float geometry,
+ * D3DCOLOR and float texture coordinates. Packed output is a separate path. */
+static __inline int d9wg_process_canonical_output(const D9WGProcessLayout *layout)
+{
+    if (!layout || (layout->position_type != 3 && !layout->legacy_xyz_output) ||
+            (layout->normal >= 0 && layout->normal_type != 2 && layout->normal_type != 3) ||
+            (layout->psize >= 0 && layout->psize_type != 0)) return 0;
+    for (unsigned i = 0; i < 8; ++i)
+        if (layout->texcoord[i] >= 0 && layout->texcoord_type[i] > 3) return 0;
+    return 1;
+}
 typedef struct D9WGVertexBlend D9WGVertexBlend;
 typedef struct D9WGVertexState {
     uint32_t fog_mode, range_fog;
@@ -38,8 +51,8 @@ int d9wg_vertex_textures_init(D9WGVertexState *state, const void *stage_states,
         uint32_t stage_bytes, const void *texture_matrices);
 float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position);
 
-/* A canonical, SDK-independent subset for fixed-function software processing.
- * Packed programmable attributes and multiple streams remain explicit failures. */
+/* SDK-independent fixed-function source geometry, including packed attributes.
+ * Float colors, packed output and multiple streams remain explicit failures. */
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout);
 int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout);
 /* D3D7 RGB writes compact XYZRHW / color / float2 texture output using

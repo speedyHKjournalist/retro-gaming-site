@@ -23,7 +23,7 @@ int main(void){
  CHECK(d9wg_clip_batch_init(batch,bytes,0,16,3,&vp));
  for(unsigned v=0;v<3;++v){d9wg_clip_vertex(positions[v],&vp,guard,1,&batch->vertex[v]);d9wg_clip_user_vertex(&batch->vertex[v],positions[v],planes,1);__builtin_memcpy(vertices[v],batch->vertex[v].stored,16);}
  D9WGClipBuffer buffer={0};d9wg_clip_buffer_commit(&buffer,batch,0,sizeof(vertices),d9wg_vertex_windows_clip_release,0);
- D9WGProcessLayout layout={0};layout.position_transformed=1;layout.position_floats=4;layout.stride=16;layout.diffuse=layout.specular=layout.normal=layout.psize=-1;for(unsigned i=0;i<8;++i)layout.texcoord[i]=-1;
+ D9WGProcessLayout layout={0};layout.position_transformed=1;layout.position_floats=4;layout.position_type=3;layout.stride=16;layout.diffuse=layout.specular=layout.normal=layout.psize=-1;for(unsigned i=0;i<8;++i)layout.texcoord[i]=-1;
  D9WGClipDrawSource source={0};source.clips=&buffer;source.vertices=(const uint8_t *)vertices;source.length=sizeof(vertices);source.stride=16;source.count=source.vertex_count=3;source.primitive_type=4;source.layout=&layout;source.viewport=vp;
  Context c={32,0,0,0,0,0};CHECK(d9wg_vertex_windows_clip_draw_planes(&source,emit,set_mask,32,&c)==1 && c.mask==32 && c.emits==1 && c.changes==2 && allocations==1);
  c=(Context){32,0,0,1,0,0};CHECK(d9wg_vertex_windows_clip_draw_planes(&source,emit,set_mask,32,&c)==-2 && c.mask==32 && c.emits==1 && c.changes==2 && allocations==1);
