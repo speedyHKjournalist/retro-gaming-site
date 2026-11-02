@@ -132,8 +132,10 @@ compares the two tables by running both, register by register.
   multiple and constant streams, weighted matrix blending and CPU Tween,
   ambient/diffuse/specular lighting, vertex fog, generated/transformed texture
   coordinates, user-plane ClipStatus and clipping records for later FVF draws.
-  Every input aliasing the output uses the same pre-call snapshot. The Tween
-  capability flag awaits acceptance of ordinary declaration draws;
+  Every input aliasing the output uses the same pre-call snapshot. Ordinary
+  declaration draws validate every referenced stream and share Tween/user-plane
+  ClipStatus; UP declarations are limited to stream zero. The Tween capability
+  flag awaits actual guest pixel replay acceptance;
 - **4x multisampling** on the device, additional swap chains, render targets
   and depth surfaces;
 - vertex shader 1.0-1.1 and pixel shader 1.0-1.4: declaration parsing and
