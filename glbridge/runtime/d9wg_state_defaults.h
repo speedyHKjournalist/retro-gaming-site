@@ -59,4 +59,38 @@ static __inline uint32_t d9wg_render_default(uint32_t api, uint32_t state,
     default: return 0u;
     }
 }
+static __inline uint32_t d9wg_sampler_default(uint32_t state)
+{
+    switch (state) {
+    case 1u: return 0x1u;
+    case 2u: return 0x1u;
+    case 3u: return 0x1u;
+    case 5u: return 0x1u;
+    case 6u: return 0x1u;
+    case 10u: return 0x1u;
+    default: return 0u;
+    }
+}
+static __inline uint32_t d9wg_texture_default(uint32_t api, uint32_t stage, uint32_t state)
+{
+    switch (state) {
+    case 1u: return (stage ? 1u : 4u);
+    case 2u: return 0x2u;
+    case 3u: return 0x1u;
+    case 4u: return (stage ? 1u : 2u);
+    case 5u: return 0x2u;
+    case 6u: return 0x1u;
+    case 11u: return stage;
+    case 26u: return 0x1u;
+    case 27u: return 0x1u;
+    case 28u: return 0x1u;
+    case 13u: return api == 8u ? d9wg_sampler_default(1u) : 0u;
+    case 14u: return api == 8u ? d9wg_sampler_default(2u) : 0u;
+    case 25u: return api == 8u ? d9wg_sampler_default(3u) : 0u;
+    case 16u: return api == 8u ? d9wg_sampler_default(5u) : 0u;
+    case 17u: return api == 8u ? d9wg_sampler_default(6u) : 0u;
+    case 21u: return api == 8u ? d9wg_sampler_default(10u) : 0u;
+    default: return 0u;
+    }
+}
 #endif

@@ -24,6 +24,10 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
 - `IDirect3D9`/`IDirect3DDevice9` COM lifecycle, adapter enumeration, caps
   (`VertexShaderVersion`/`PixelShaderVersion` report `(3,0)` by default; the
   `ffp` and `sm2` diagnostic profiles remain selectable), and `CreateDevice`;
+- texture-stage and sampler defaults generated from the same host table,
+  including all pixel/vertex sampler slots, stage-dependent routing and
+  D3D8's legacy sampling-state mapping; first DIFFUSE=0 operand changes
+  are emitted from their CURRENT=1 defaults;
 - render-state defaults generated from the shared host table, including
   creation-time depth, the reported point-size maximum and D3D8's zero point
   minimum; explicit version/capability differences are synchronized after

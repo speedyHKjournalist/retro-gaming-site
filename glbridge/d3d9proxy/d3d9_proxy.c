@@ -3489,29 +3489,12 @@ static void device_init_states(D9Device *device)
     for (UINT state = 0; state < sizeof(device->render_states)/sizeof(device->render_states[0]); ++state)
         device->render_states[state] = d9wg_render_default(9, state,
                 device->present.EnableAutoDepthStencil, point_max_bits);
-    for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage) {
-        device->texture_stage_states[stage][D3DTSS_COLOROP] = stage == 0
-                ? D3DTOP_MODULATE : D3DTOP_DISABLE;
-        device->texture_stage_states[stage][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
-        device->texture_stage_states[stage][D3DTSS_COLORARG2] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_ALPHAOP] = stage == 0
-                ? D3DTOP_SELECTARG1 : D3DTOP_DISABLE;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG2] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_TEXCOORDINDEX] = stage;
-        device->texture_stage_states[stage][D3DTSS_COLORARG0] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG0] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_RESULTARG] = D3DTA_CURRENT;
-    }
-    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
-        device->sampler_states[slot][D3DSAMP_ADDRESSU] = D3DTADDRESS_WRAP;
-        device->sampler_states[slot][D3DSAMP_ADDRESSV] = D3DTADDRESS_WRAP;
-        device->sampler_states[slot][D3DSAMP_ADDRESSW] = D3DTADDRESS_WRAP;
-        device->sampler_states[slot][D3DSAMP_MAGFILTER] = D3DTEXF_POINT;
-        device->sampler_states[slot][D3DSAMP_MINFILTER] = D3DTEXF_POINT;
-        device->sampler_states[slot][D3DSAMP_MIPFILTER] = D3DTEXF_NONE;
-        device->sampler_states[slot][D3DSAMP_MAXANISOTROPY] = 1u;
-    }
+    for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage)
+        for (UINT state = 0; state < sizeof(device->texture_stage_states[stage])/sizeof(device->texture_stage_states[stage][0]); ++state)
+            device->texture_stage_states[stage][state] = d9wg_texture_default(9, stage, state);
+    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot)
+        for (UINT state = 0; state < sizeof(device->sampler_states[slot])/sizeof(device->sampler_states[slot][0]); ++state)
+            device->sampler_states[slot][state] = d9wg_sampler_default(state);
     for (slot = 0; slot < D9_MAX_STREAMS; ++slot)
         device->streams[slot].frequency = 1u;
     for (slot = 0; slot < D9_MAX_TRANSFORMS; ++slot) {

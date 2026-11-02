@@ -23,7 +23,7 @@ typedef IDirect3DStateBlock9* Block;
 #include "d3d_render_default_reference.h"
 static HANDLE logfile;
 static Device* device;
-static unsigned queries;
+static unsigned queries, texture_queries;
 static void report(const char* s)
 {
     DWORD n;
@@ -39,8 +39,33 @@ static void check(BOOL yes, const char* s)
     }
 }
 #define OK(x) check(SUCCEEDED(x), "FAIL " #x)
+static void verify_textures(void)
+{
+    for (UINT stage = 0; stage < 8; ++stage) {
+        for (UINT i = 0; i < sizeof(texture_default_reference)/sizeof(texture_default_reference[0]); ++i) {
+            const struct TextureDefaultReference *r = &texture_default_reference[i];
+            DWORD expected = r->context == 1 ? stage : r->context == 2 ? (stage ? D3DTOP_DISABLE : D3DTOP_MODULATE) : r->context == 3 ? (stage ? D3DTOP_DISABLE : D3DTOP_SELECTARG1) : r->value;
+            DWORD value;OK(CALL(GetTextureStageState)(device, stage, (D3DTEXTURESTAGESTATETYPE)r->state, &value));
+            check(value == expected, "FAIL texture-stage default");++texture_queries;
+        }
+#if D9WG_DEFAULTS_API == 8
+        for (UINT i = 0; i < sizeof(sampler_default_reference)/sizeof(sampler_default_reference[0]); ++i) {
+            const struct SamplerDefaultReference *r = &sampler_default_reference[i];if (!r->legacy) continue;
+            DWORD value;OK(CALL(GetTextureStageState)(device, stage, (D3DTEXTURESTAGESTATETYPE)r->legacy, &value));
+            check(value == r->value, "FAIL legacy sampler default");++texture_queries;
+        }
+#endif
+    }
+#if D9WG_DEFAULTS_API == 9
+    for (UINT slot = 0; slot < 20; ++slot) for (UINT i = 0; i < sizeof(sampler_default_reference)/sizeof(sampler_default_reference[0]); ++i) {
+        const struct SamplerDefaultReference *r = &sampler_default_reference[i];DWORD value;UINT sampler = slot < 16 ? slot : D3DVERTEXTEXTURESAMPLER0 + slot - 16;
+        OK(CALL(GetSamplerState)(device, sampler, (D3DSAMPLERSTATETYPE)r->state, &value));check(value == r->value, "FAIL pixel/vertex sampler default");++texture_queries;
+    }
+#endif
+}
 static void verify(BOOL depth)
 {
+    verify_textures();
     Caps caps;
     OK(CALL(GetDeviceCaps)(device, &caps));
     float maximum = caps.MaxPointSize > 1 ? caps.MaxPointSize : 64;
@@ -62,12 +87,22 @@ static void verify(BOOL depth)
 }
 static void change(void)
 {
+    OK(CALL(SetTextureStageState)(device, 1, D3DTSS_COLORARG0, D3DTA_DIFFUSE));
+    OK(CALL(SetTextureStageState)(device, 1, D3DTSS_ALPHAARG0, D3DTA_DIFFUSE));
+#if D9WG_DEFAULTS_API == 8
+    OK(CALL(SetTextureStageState)(device, 7, D3DTSS_ADDRESSW, D3DTADDRESS_CLAMP));
+#else
+    OK(CALL(SetSamplerState)(device, D3DVERTEXTEXTURESAMPLER0 + 3, D3DSAMP_ADDRESSW, D3DTADDRESS_CLAMP));
+#endif
+
     OK(CALL(SetRenderState)(device, D3DRS_ZENABLE, TRUE));
     OK(CALL(SetRenderState)(device, D3DRS_ZWRITEENABLE, FALSE));
     OK(CALL(SetRenderState)(device, D3DRS_CLIPPING, FALSE));
     OK(CALL(SetRenderState)(device, D3DRS_FOGEND, 0x40800000));
     OK(CALL(SetRenderState)(device, D3DRS_POINTSIZE_MAX, 0x42800000));
     DWORD v;
+    OK(CALL(GetTextureStageState)(device, 1, D3DTSS_COLORARG0, &v));check(v == D3DTA_DIFFUSE, "FAIL first zero COLORARG0 transition");
+    OK(CALL(GetTextureStageState)(device, 1, D3DTSS_ALPHAARG0, &v));check(v == D3DTA_DIFFUSE, "FAIL first zero ALPHAARG0 transition");
     OK(CALL(GetRenderState)(device, D3DRS_CLIPPING, &v));
     check(v == FALSE, "FAIL changed clipping");
 }
@@ -129,7 +164,7 @@ void WINAPI WinMainCRTStartup(void)
     FreeLibrary(module);
     DestroyWindow(window);
     char message[160];
-    wsprintfA(message, "PASS D3D%u render defaults: %u exact queries, fresh/ALL/reset, conditional depth, reported point maximum and SDK version differences", D9WG_DEFAULTS_API, queries);
+    wsprintfA(message, "PASS D3D%u render defaults: %u exact queries, fresh/ALL/reset, conditional depth, reported point maximum and SDK version differences; texture=%u", D9WG_DEFAULTS_API, queries, texture_queries);
     report(message);
     CloseHandle(logfile);
     ExitProcess(0);

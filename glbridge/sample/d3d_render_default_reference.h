@@ -177,3 +177,43 @@ static const struct RenderDefaultReference render_default_reference[] = {
     {154, 0x3f800000u, 0}, /* DirectX SDK */
 #endif
 };
+
+struct TextureDefaultReference {UINT state;DWORD value;UINT context;};
+static const struct TextureDefaultReference texture_default_reference[] = {
+    {1, 0u, 2}, /* COLOROP */
+    {2, 2u, 0}, /* COLORARG1 */
+    {3, 1u, 0}, /* COLORARG2 */
+    {4, 0u, 3}, /* ALPHAOP */
+    {5, 2u, 0}, /* ALPHAARG1 */
+    {6, 1u, 0}, /* ALPHAARG2 */
+    {7, 0u, 0}, /* BUMPENVMAT00 */
+    {8, 0u, 0}, /* BUMPENVMAT01 */
+    {9, 0u, 0}, /* BUMPENVMAT10 */
+    {10, 0u, 0}, /* BUMPENVMAT11 */
+    {11, 0u, 1}, /* TEXCOORDINDEX */
+    {22, 0u, 0}, /* BUMPENVLSCALE */
+    {23, 0u, 0}, /* BUMPENVLOFFSET */
+    {24, 0u, 0}, /* TEXTURETRANSFORMFLAGS */
+    {26, 1u, 0}, /* COLORARG0 */
+    {27, 1u, 0}, /* ALPHAARG0 */
+    {28, 1u, 0}, /* RESULTARG */
+#if D9WG_DEFAULTS_API == 9
+    {32, 0u, 0}, /* CONSTANT */
+#endif
+};
+struct SamplerDefaultReference {UINT state;DWORD value;UINT legacy;};
+static const struct SamplerDefaultReference sampler_default_reference[] = {
+    {1, 1u, 13}, /* ADDRESSU */
+    {2, 1u, 14}, /* ADDRESSV */
+    {3, 1u, 25}, /* ADDRESSW */
+    {4, 0u, 15}, /* BORDERCOLOR */
+    {5, 1u, 16}, /* MAGFILTER */
+    {6, 1u, 17}, /* MINFILTER */
+    {7, 0u, 18}, /* MIPFILTER */
+    {8, 0u, 19}, /* MIPMAPLODBIAS */
+    {9, 0u, 20}, /* MAXMIPLEVEL */
+    {10, 1u, 21}, /* MAXANISOTROPY */
+    {11, 0u, 0}, /* SRGBTEXTURE */
+    {12, 0u, 0}, /* ELEMENTINDEX */
+    {13, 0u, 0}, /* DMAPOFFSET */
+};

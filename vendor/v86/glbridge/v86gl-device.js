@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "cfad0009655b0a109c05";
+globalThis.V86GL_BUILD_REVISION = "6f16a361c67d83f7fde8";
 // The OpenGL protocol, once (docs/opengl-webgpu-plan.md C1): the VGL2 records
 // openglproxy's opengl32.dll writes and gl_executor.js reads -- every opcode,
 // the control records, the flat argument lists, the fixed headers of the

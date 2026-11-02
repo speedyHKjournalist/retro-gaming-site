@@ -137,6 +137,10 @@ compares the two tables by running both, register by register.
   ClipStatus; UP declarations are limited to stream zero. The Tween capability
   flag is advertised after paired raw/CPU guest pixel replay acceptance on
   SwiftShader and Metal;
+- texture-stage and sampler defaults generated from the same host table,
+  including all pixel/vertex sampler slots, stage-dependent routing and
+  D3D8's legacy sampling-state mapping; first DIFFUSE=0 operand changes
+  are emitted from their CURRENT=1 defaults;
 - render-state defaults generated from the shared host table, including
   creation-time depth, the reported point-size maximum and D3D8's zero point
   minimum; explicit version/capability differences are synchronized after

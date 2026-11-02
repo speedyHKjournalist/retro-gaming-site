@@ -2548,24 +2548,10 @@ static void device_init_states(D8Device *device)
         device->transforms[transform].m[2][2] = 1.0f;
         device->transforms[transform].m[3][3] = 1.0f;
     }
-    for (stage = 0; stage < D8WG_MAX_TEXTURE_STAGES; ++stage) {
-        device->texture_stage_states[stage][D3DTSS_COLOROP] =
-                stage == 0 ? D3DTOP_MODULATE : D3DTOP_DISABLE;
-        device->texture_stage_states[stage][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
-        device->texture_stage_states[stage][D3DTSS_COLORARG2] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_ALPHAOP] =
-                stage == 0 ? D3DTOP_SELECTARG1 : D3DTOP_DISABLE;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG2] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_TEXCOORDINDEX] = stage;
-        device->texture_stage_states[stage][D3DTSS_ADDRESSU] = D3DTADDRESS_WRAP;
-        device->texture_stage_states[stage][D3DTSS_ADDRESSV] = D3DTADDRESS_WRAP;
-        device->texture_stage_states[stage][D3DTSS_MAGFILTER] = D3DTEXF_POINT;
-        device->texture_stage_states[stage][D3DTSS_MINFILTER] = D3DTEXF_POINT;
-        device->texture_stage_states[stage][D3DTSS_MIPFILTER] = D3DTEXF_NONE;
-        device->texture_stage_states[stage][D3DTSS_MAXANISOTROPY] = 1;
-        device->texture_stage_states[stage][D3DTSS_RESULTARG] = D3DTA_CURRENT;
-    }
+    for (stage = 0; stage < D8WG_MAX_TEXTURE_STAGES; ++stage)
+        for (UINT state = 0; state < sizeof(device->texture_stage_states[stage])/sizeof(device->texture_stage_states[stage][0]); ++state)
+            device->texture_stage_states[stage][state] = d9wg_texture_default(8, stage, state);
+
 }
 
 static BOOL emit_vertex_buffer_create(D8Device *device,
