@@ -24,6 +24,7 @@ struct D3D7StateBlock {
     D3D7StateBlock *next;
     DWORD handle;
     D3DSTATEBLOCKTYPE type;
+    BOOL all_lights_scope;
     BYTE render_mask[D3D7_MAX_RENDER_STATES];
     BYTE texture_stage_mask[D3D7_MAX_TEXTURE_STAGES]
             [D3D7_MAX_TEXTURE_STAGE_STATES];
@@ -42,6 +43,7 @@ struct D3D7StateBlock {
     D3DLIGHT7 lights[D3D7_MAX_LIGHTS];
     BOOL light_set[D3D7_MAX_LIGHTS];
     BOOL light_enabled[D3D7_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
     float clip_planes[D3D7_MAX_CLIP_PLANES][4];
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
@@ -71,6 +73,7 @@ struct D3D7Device {
     D3DLIGHT7 lights[D3D7_MAX_LIGHTS];
     BOOL light_set[D3D7_MAX_LIGHTS];
     BOOL light_enabled[D3D7_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
     float clip_planes[D3D7_MAX_CLIP_PLANES][4];
     D9WGClipLegacyStatus clip_status;
     D3D7StateBlock *state_blocks;
@@ -1094,9 +1097,10 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
                 block->transform_mask[state] = 1;
         }
         for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
-            block->light_mask[state] = 1;
+            block->light_mask[state] = type == D3DSBT_ALL;
             block->light_enable_mask[state] = 1;
         }
+        block->all_lights_scope = TRUE;
         for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state)
             block->clip_plane_mask[state] = 1;
         block->viewport_mask = TRUE;
@@ -1104,8 +1108,8 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
     }
 }
 
-static void d3d7_state_block_capture(D3D7Device *device,
-        D3D7StateBlock *block)
+static BOOL d3d7_state_block_capture(D3D7Device *device,
+        D3D7StateBlock *block, BOOL preserve_lights)
 {
     UINT state, stage;
     for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
@@ -1130,13 +1134,26 @@ static void d3d7_state_block_capture(D3D7Device *device,
         if (block->transform_mask[state])
             block->transforms[state] = device->transforms[state];
     }
-    for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
-        if (block->light_mask[state]) {
-            block->lights[state] = device->lights[state];
-            block->light_set[state] = device->light_set[state];
+    if (!preserve_lights) {
+        if (block->all_lights_scope) {
+            for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
+                if (!entry->set) continue;
+                D9WGLightState *saved = d9wg_light_get(&block->extra_lights, entry->index, TRUE);
+                if (!saved) return FALSE;
+                saved->light_mask = block->type == D3DSBT_ALL;saved->enable_mask = TRUE;
+            }
         }
-        if (block->light_enable_mask[state])
-            block->light_enabled[state] = device->light_enabled[state];
+        for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
+            if (block->all_lights_scope && !device->light_set[state]) block->light_mask[state] = block->light_enable_mask[state] = 0;
+            if (block->light_mask[state]) {block->lights[state] = device->lights[state];block->light_set[state] = device->light_set[state];}
+            if (block->light_enable_mask[state]) block->light_enabled[state] = device->light_enabled[state];
+        }
+        for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+            D9WGLightState *current = d9wg_light_find(device->extra_lights, entry->index);
+            if (entry->light_mask) {entry->set = current && current->set;if (entry->set) entry->light = current->light;}
+            if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
+        }
+        block->all_lights_scope = FALSE;
     }
     for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) {
         if (block->clip_plane_mask[state])
@@ -1145,6 +1162,7 @@ static void d3d7_state_block_capture(D3D7Device *device,
     }
     if (block->viewport_mask) block->viewport = device->viewport;
     if (block->material_mask) block->material = device->material;
+    return TRUE;
 }
 
 static void d3d7_state_block_destroy(D3D7StateBlock *block)
@@ -1155,6 +1173,7 @@ static void d3d7_state_block_destroy(D3D7StateBlock *block)
         if (block->textures[stage])
             surface_Release((IDirectDrawSurface7 *)&block->textures[stage]->vtbl7);
     }
+    d9wg_light_free(&block->extra_lights);
     heap_free(block);
 }
 
@@ -1391,6 +1410,7 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
         }
         d3d7_state_block_destroy(device->recording_state_block);
         d3d_legacy_device_cleanup(device);
+        d9wg_light_free(&device->extra_lights);
         heap_free(device);
         ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
     }
@@ -1633,14 +1653,9 @@ static HRESULT WINAPI d3d7_device_GetMaterial(IDirect3DDevice7 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
-        DWORD index, D3DLIGHT7 *light)
+static BOOL d3d7_emit_light(D3D7Device *device, DWORD index, const D3DLIGHT7 *light)
 {
-    D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetLight command;
-    if (!light || index >= D3D7_MAX_LIGHTS) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (light->dltType < D3DLIGHT_POINT || light->dltType > D3DLIGHT_GLSPOT)
-        return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->owner->device_handle;
     command.index = index;
@@ -1660,12 +1675,32 @@ static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
     command.attenuation[2] = light->dvAttenuation2;
     command.theta = light->dvTheta;
     command.phi = light->dvPhi;
-    if (!emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command)))
+    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command));
+}
+
+static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
+        DWORD index, D3DLIGHT7 *light)
+{
+    D3D7Device *device = d3d7_device_from_iface(iface);
+    D9WGLightState *entry;
+    if (!light) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (light->dltType < D3DLIGHT_POINT || light->dltType > D3DLIGHT_GLSPOT)
         return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
-    device->lights[index] = *light;
-    device->light_set[index] = TRUE;
-    if (device->recording_state_block)
-        device->recording_state_block->light_mask[index] = 1;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        if (index < D3D7_MAX_LIGHTS) {block->light_mask[index] = 1;block->lights[index] = *light;block->light_set[index] = TRUE;}
+        else {
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+            entry->light_mask = TRUE;entry->light = *light;entry->set = TRUE;
+        }
+        return D3D_OK;
+    }
+    entry = index < D3D7_MAX_LIGHTS ? NULL : d9wg_light_get(&device->extra_lights, index, TRUE);
+    if (index >= D3D7_MAX_LIGHTS && !entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    if (!d3d7_emit_light(device, index, light)) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
+    if (entry) {entry->light = *light;entry->set = TRUE;}
+    else {device->lights[index] = *light;device->light_set[index] = TRUE;}
     return D3D_OK;
 }
 
@@ -1673,9 +1708,15 @@ static HRESULT WINAPI d3d7_device_GetLight(IDirect3DDevice7 *iface,
         DWORD index, D3DLIGHT7 *light)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    if (!light || index >= D3D7_MAX_LIGHTS || !device->light_set[index])
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *light = device->lights[index];
+    if (!light) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (index < D3D7_MAX_LIGHTS) {
+        if (!device->light_set[index]) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        *light = device->lights[index];
+    } else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        if (!entry || !entry->set) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        *light = entry->light;
+    }
     return D3D_OK;
 }
 
@@ -1890,7 +1931,7 @@ static HRESULT WINAPI d3d7_device_EndStateBlock(IDirect3DDevice7 *iface,
     device->recording_state_block = NULL;
     block->handle = device->next_state_block_handle++;
     if (!block->handle) block->handle = device->next_state_block_handle++;
-    d3d7_state_block_capture(device, block);
+    d3d7_state_block_capture(device, block, TRUE);
     block->next = device->state_blocks;
     device->state_blocks = block;
     *handle = block->handle;
@@ -2503,9 +2544,13 @@ static HRESULT WINAPI d3d7_device_ApplyStateBlock(IDirect3DDevice7 *iface,
         if (block->light_mask[state] && block->light_set[state])
             D3D7_APPLY(d3d7_device_SetLight(iface, state,
                     &block->lights[state]));
-        if (block->light_enable_mask[state] && block->light_set[state])
+        if (block->light_enable_mask[state])
             D3D7_APPLY(d3d7_device_LightEnable(iface, state,
                     block->light_enabled[state]));
+    }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        if (entry->light_mask && entry->set) D3D7_APPLY(d3d7_device_SetLight(iface, entry->index, &entry->light));
+        if (entry->enable_mask) D3D7_APPLY(d3d7_device_LightEnable(iface, entry->index, entry->enabled));
     }
     for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) {
         if (block->clip_plane_mask[state])
@@ -2523,8 +2568,7 @@ static HRESULT WINAPI d3d7_device_CaptureStateBlock(IDirect3DDevice7 *iface,
     D3D7StateBlock *block = d3d7_find_state_block(device, handle);
     if (!block) return DDWG_TRACE_ERROR(D3DERR_INVALIDSTATEBLOCK);
     if (device->recording_state_block) return DDWG_TRACE_ERROR(D3DERR_INBEGINSTATEBLOCK);
-    d3d7_state_block_capture(device, block);
-    return D3D_OK;
+    return d3d7_state_block_capture(device, block, FALSE) ? D3D_OK : DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
 }
 
 static HRESULT WINAPI d3d7_device_DeleteStateBlock(IDirect3DDevice7 *iface,
@@ -2559,7 +2603,7 @@ static HRESULT WINAPI d3d7_device_CreateStateBlock(IDirect3DDevice7 *iface,
     block->handle = device->next_state_block_handle++;
     if (!block->handle) block->handle = device->next_state_block_handle++;
     d3d7_state_block_mark_type(block, type);
-    d3d7_state_block_capture(device, block);
+    if (!d3d7_state_block_capture(device, block, FALSE)) {d3d7_state_block_destroy(block);return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);}
     block->next = device->state_blocks;
     device->state_blocks = block;
     *handle = block->handle;
@@ -2604,18 +2648,33 @@ static HRESULT WINAPI d3d7_device_LightEnable(IDirect3DDevice7 *iface,
         DWORD index, WINBOOL enable)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    D9WGLightEnable command;
-    if (index >= D3D7_MAX_LIGHTS || !device->light_set[index])
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
-    command.index = index;
-    command.enable = enable != FALSE;
-    if (!emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command)))
-        return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
-    device->light_enabled[index] = enable != FALSE;
-    if (device->recording_state_block)
-        device->recording_state_block->light_enable_mask[index] = 1;
+    D9WGLightState *entry;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        if (index < D3D7_MAX_LIGHTS) {
+            if (!block->light_mask[index] && !device->light_set[index]) {d9wg_light_default(&block->lights[index]);block->light_mask[index] = 1;block->light_set[index] = TRUE;}
+            block->light_enable_mask[index] = 1;block->light_enabled[index] = !!enable;
+        } else {
+            D9WGLightState *current = d9wg_light_find(device->extra_lights, index);
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+            if (!entry->light_mask && (!current || !current->set)) {d9wg_light_default(&entry->light);entry->light_mask = TRUE;entry->set = TRUE;}
+            entry->enable_mask = TRUE;entry->enabled = !!enable;
+        }
+        return D3D_OK;
+    }
+    entry = index < D3D7_MAX_LIGHTS ? NULL : d9wg_light_get(&device->extra_lights, index, TRUE);
+    if (index >= D3D7_MAX_LIGHTS && !entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    D3DLIGHT7 *light = entry ? &entry->light : &device->lights[index];
+    BOOL *set = entry ? &entry->set : &device->light_set[index];
+    if (!*set) {
+        d9wg_light_default(light);
+        if (!d3d7_emit_light(device, index, light)) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
+        *set = TRUE;
+    }
+    D9WGLightEnable command = {device->owner->device_handle, index, !!enable, 0};
+    if (!emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command))) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
+    if (entry) entry->enabled = !!enable;else device->light_enabled[index] = !!enable;
     return D3D_OK;
 }
 
@@ -2623,8 +2682,12 @@ static HRESULT WINAPI d3d7_device_GetLightEnable(IDirect3DDevice7 *iface,
         DWORD index, WINBOOL *enable)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    BOOL known = index < D3D7_MAX_LIGHTS && device->light_set[index];
-    BOOL enabled = known ? device->light_enabled[index] : FALSE;
+    BOOL known, enabled;
+    if (index < D3D7_MAX_LIGHTS) {known = device->light_set[index];enabled = device->light_enabled[index];}
+    else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        known = entry && entry->set;enabled = entry ? entry->enabled : FALSE;
+    }
     if (!d9wg_light_query_enable(known, enabled, enable))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return D3D_OK;
@@ -2799,6 +2862,10 @@ static BOOL d3d7_prepare_lighting(D3D7Device *device, const D3DMATRIX *world_vie
     for (index = 0; index < D3D7_MAX_LIGHTS; ++index) {
         if (device->light_set[index] && device->light_enabled[index] &&
                 !d9wg_lighting_sdk_add(state, index, &device->lights[index], (const void *)&device->transforms[D3DTRANSFORMSTATE_VIEW])) return FALSE;
+    }
+    for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
+        if (entry->set && entry->enabled && !d9wg_lighting_sdk_add(state, entry->index, &entry->light,
+                (const void *)&device->transforms[D3DTRANSFORMSTATE_VIEW])) return FALSE;
     }
     return TRUE;
 }

@@ -36,7 +36,7 @@ static const struct Native {int known,active;uint32_t expected;} native[]={${nat
 int main(void){Device device={0};const DWORD keys[]={0,7,8,37,1000,0xffffffffu};const BOOL inputs[]={0,1,7,-1,128};
  for(unsigned i=0;i<sizeof(native)/sizeof(native[0]);++i){BOOL value=(BOOL)0xccccccccu;int ok=d9wg_light_query_enable(native[i].known,native[i].active,&value);CHECK(ok==native[i].known&&(uint32_t)value==native[i].expected);}
  for(unsigned i=0;i<6;++i){DWORD index=keys[i];BOOL value=(BOOL)0xccccccccu;CHECK(${name}(&device,index,&value)==-1&&(uint32_t)value==0xccccccccu);CHECK(${name}(&device,index,NULL)==-1);
-  if(${api}==7&&index>=8)continue;D9WGLightState *entry=NULL;if(index>=8){entry=d9wg_light_get(&device.extra_lights,index,1);CHECK(entry);entry->enabled=1;value=(BOOL)0xccccccccu;CHECK(${name}(&device,index,&value)==-1&&(uint32_t)value==0xccccccccu);entry->set=1;}else device.light_set[index]=1;
+  D9WGLightState *entry=NULL;if(index>=8){entry=d9wg_light_get(&device.extra_lights,index,1);CHECK(entry);entry->enabled=1;value=(BOOL)0xccccccccu;CHECK(${name}(&device,index,&value)==-1&&(uint32_t)value==0xccccccccu);entry->set=1;}else device.light_set[index]=1;
   for(unsigned j=0;j<5;++j){if(entry)entry->enabled=inputs[j];else device.light_enabled[index]=inputs[j];CHECK(${name}(&device,index,&value)==0&&value==(inputs[j]?128:0));}
   if(entry)entry->set=0;else device.light_set[index]=0;value=(BOOL)0xccccccccu;CHECK(${name}(&device,index,&value)==-1&&(uint32_t)value==0xccccccccu);
  }d9wg_light_free(&device.extra_lights);return 0;}

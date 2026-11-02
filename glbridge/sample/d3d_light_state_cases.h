@@ -34,24 +34,33 @@ static void light_state_checks(void)
     }
     LightBlock block=light_block_create(D3DSBT_VERTEXSTATE);
     check(SUCCEEDED(CALL(SetLight)(device,37,&other)),"mutate captured light");check(SUCCEEDED(CALL(LightEnable)(device,37,TRUE)),"mutate captured enable");
-    light_block_apply(block);light_check_value(37,&custom,FALSE);
+    light_block_apply(block);
+#if D9WG_TNL_API == 7
+    light_check_value(37,&other,FALSE);
+#else
+    light_check_value(37,&custom,FALSE);
+#endif
     check(SUCCEEDED(CALL(SetLight)(device,37,&other)),"capture changed light");check(SUCCEEDED(CALL(LightEnable)(device,37,TRUE)),"capture changed enable");light_block_capture(block);
-    check(SUCCEEDED(CALL(SetLight)(device,37,&custom)),"mutate recaptured light");check(SUCCEEDED(CALL(LightEnable)(device,37,FALSE)),"mutate recaptured enable");light_block_apply(block);light_check_value(37,&other,TRUE);light_block_release(block);
+    check(SUCCEEDED(CALL(SetLight)(device,37,&custom)),"mutate recaptured light");check(SUCCEEDED(CALL(LightEnable)(device,37,FALSE)),"mutate recaptured enable");light_block_apply(block);
+#if D9WG_TNL_API == 7
+    light_check_value(37,&custom,TRUE);
+#else
+    light_check_value(37,&other,TRUE);
+#endif
+    light_block_release(block);
     block=light_block_create(D3DSBT_PIXELSTATE);check(SUCCEEDED(CALL(SetLight)(device,37,&custom)),"pixel block light mutation");light_block_apply(block);light_check_value(37,&custom,TRUE);light_block_release(block);
     report("PASS sparse light defaults and vertex/pixel captures");
-#if D9WG_TNL_API != 7
     check(SUCCEEDED(CALL(BeginStateBlock)(device)),"record sparse light begin");check(SUCCEEDED(CALL(SetLight)(device,37,&other)),"record sparse light");check(SUCCEEDED(CALL(LightEnable)(device,37,FALSE)),"record sparse enable");
-#if D9WG_TNL_API == 8 || D9WG_TNL_API == 9
     light_check_value(37,&custom,TRUE);
-#endif
     check(SUCCEEDED(CALL(EndStateBlock)(device,&block)),"record sparse light end");light_check_value(37,&custom,TRUE);light_block_apply(block);light_check_value(37,&other,FALSE);light_block_release(block);
     check(SUCCEEDED(CALL(BeginStateBlock)(device)),"record enable-only begin");check(SUCCEEDED(CALL(LightEnable)(device,37,TRUE)),"record enable-only");check(SUCCEEDED(CALL(EndStateBlock)(device,&block)),"record enable-only end");
     check(SUCCEEDED(CALL(SetLight)(device,37,&custom)),"change unrecorded light fields");light_block_apply(block);light_check_value(37,&custom,TRUE);light_block_release(block);
 #if D9WG_TNL_API == 9
     report("PASS D3D9 sparse recorded block restoration and masks");
-#else
+#elif D9WG_TNL_API == 8
     report("PASS D3D8 sparse recorded block restoration and masks");
-#endif
+#else
+    report("PASS D3D7 sparse recorded block restoration and masks");
 #endif
     check(SUCCEEDED(CALL(LightEnable)(device,37,FALSE)),"restore light test state");
     report("PASS sparse light state: default creation on disable, exact SDK fields, DWORD indices, enable persistence, vertex/pixel blocks and capture masks");
