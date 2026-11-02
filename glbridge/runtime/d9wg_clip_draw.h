@@ -4,7 +4,7 @@
 typedef struct D9WGClipDrawSource {
     D9WGClipBuffer *clips;
     const uint8_t *vertices, *indices;
-    uint32_t length, base, stride, first_vertex, vertex_count;
+    uint32_t length, base, stride, first_vertex, vertex_count, min_vertex;
     uint32_t count, index_bytes, index_stride, primitive_type, flat_shading;
     int32_t base_vertex;
     const D9WGProcessLayout *layout;

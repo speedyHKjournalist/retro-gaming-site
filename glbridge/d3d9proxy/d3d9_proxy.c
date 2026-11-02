@@ -1068,6 +1068,7 @@ struct D9VertexBuffer {
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
+    D9WGClipBuffer clips;
     UINT length;
     DWORD usage;
     DWORD fvf;
@@ -6552,6 +6553,45 @@ static BOOL device_has_vertex_format(D9Device *device)
     return device->vertex_declaration != NULL || device->fvf != 0;
 }
 
+static BOOL d9_current_source_layout(D9Device *device, D9WGProcessLayout *layout);
+
+static int d9_clip_emit(void *context, uint32_t primitive_type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D9Device *device = context;
+    D9WGDrawPrimitiveUP command;ZeroMemory(&command, sizeof(command));
+    command.device_handle = device->handle;command.primitive_type = primitive_type;
+    command.primitive_count = primitive_type == 1 ? count : primitive_type == 2 ? count/2u : count/3u;
+    command.stride = stride;command.vertex_count = count;command.vertex_bytes = count*stride;
+    /* Internal emission must preserve the application's bound VB and IB. */
+    return emit_draw_primitive_up(&command, vertices);
+}
+static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
+        uint32_t first, uint32_t count, const uint8_t *indices,
+        uint32_t index_bytes, uint32_t index_stride, int32_t base_vertex,
+        uint32_t min_vertex, uint32_t vertex_limit)
+{
+    D9VertexBuffer *buffer = device->streams[0].buffer;
+    D9WGProcessLayout layout;
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!buffer->clips.head) return 0;
+    if (!d9_current_source_layout(device, &layout)) return -1;
+    if (!layout.position_transformed) return 0;
+    if (device->streams[0].frequency != 1) return -1;
+    D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
+    source.clips = &buffer->clips;source.vertices = buffer->shadow;source.length = buffer->length;
+    source.base = device->streams[0].offset;source.stride = device->streams[0].stride;
+    source.first_vertex = first;source.count = count;source.indices = indices;
+    source.index_bytes = index_bytes;source.index_stride = index_stride;source.base_vertex = base_vertex;
+    source.min_vertex = min_vertex;source.vertex_count = vertex_limit;
+    source.primitive_type = primitive_type;source.layout = &layout;
+    source.flat_shading = device->render_states[D3DRS_SHADEMODE] == D3DSHADE_FLAT;
+    source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
+            (float)device->viewport.Width, (float)device->viewport.Height,
+            device->viewport.MinZ, device->viewport.MaxZ };
+    return d9wg_vertex_windows_clip_draw(&source, d9_clip_emit, device);
+}
+
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT start_vertex,
         UINT primitive_count)
@@ -6586,6 +6626,13 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
             || vertex_count > available_vertices - start_vertex) {
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
+    }
+    int clipped = d9_clip_vb_draw(device, primitive_type, start_vertex, vertex_count, NULL, 0, 0, 0, 0, vertex_count);
+    if (clipped) {
+        if (clipped < 0) return TRACE_REFUSE(clipped == -3 ? E_OUTOFMEMORY :
+                clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
+        TRACE_FRAME_DRAW(primitive_count);invalidate_render_target_mirrors(device);
+        return D3D_OK;
     }
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
@@ -6647,6 +6694,15 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
 
+    int clipped = d9_clip_vb_draw(device, primitive_type, 0, index_count, device->index_buffer->shadow + start_index*index_size,
+            index_count*index_size, index_size, base_vertex_index,
+            min_vertex_index, min_vertex_index + vertex_count);
+    if (clipped) {
+        if (clipped < 0) return TRACE_REFUSE(clipped == -3 ? E_OUTOFMEMORY :
+                clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
+        TRACE_FRAME_DRAW(primitive_count);invalidate_render_target_mirrors(device);
+        return D3D_OK;
+    }
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.base_vertex_index = base_vertex_index;
@@ -9217,13 +9273,28 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
             if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
             return TRACE_REFUSE(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
         }
+        D3DCAPS9 caps;fill_caps(&caps);
+        float guard[4] = { caps.GuardBandLeft, caps.GuardBandTop, caps.GuardBandRight, caps.GuardBandBottom };
+        D9WGClipBatch *clip_batch;
+        uint32_t clip_error = d9wg_vertex_windows_clip(&vertex_state, device->render_states[D3DRS_CLIPPING],
+                validated_offset + destination_layout.position, destination_layout.stride, count, &viewport, guard, &clip_batch);
+        if (clip_error) {
+            d9wg_vertex_windows_blend_free(&vertex_state);
+            if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+            return TRACE_REFUSE(clip_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+        }
         BOOL processed = d9wg_process_vertices(&source_layout, input, source->length,
                 device->streams[0].offset, source_stride, src_start,
                 &destination_layout, destination->shadow, destination->length, dst_index, count,
                 &world_view, &world_view_projection, &viewport, &light_state, copy_data, &vertex_state);
         d9wg_vertex_windows_blend_free(&vertex_state);
         if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
-        if (!processed) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (!processed) {
+            if (clip_batch) HeapFree(GetProcessHeap(), 0, clip_batch);
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
+        d9wg_clip_buffer_commit(&destination->clips, clip_batch, validated_offset,
+                count * destination_layout.stride, d9wg_vertex_windows_clip_release, NULL);
     }
 
     /* The transformed vertices live in the destination's guest shadow; the
@@ -12327,6 +12398,7 @@ static ULONG WINAPI vb_release(IDirect3DVertexBuffer9 *iface)
         destroy.resource_handle = buffer->handle;
         destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         HeapFree(GetProcessHeap(), 0, buffer->shadow);
         device_child_release(buffer->device);
         HeapFree(GetProcessHeap(), 0, buffer);
@@ -12398,8 +12470,10 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer9 *iface, UINT offset,
     buffer->lock_offset = offset;
     buffer->lock_size = size;
     buffer->lock_flags = flags;
-    if (flags & D3DLOCK_DISCARD)
+    if (flags & D3DLOCK_DISCARD) {
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         ZeroMemory(buffer->shadow, buffer->length);
+    }
     *data_out = buffer->shadow + offset;
     return D3D_OK;
 }

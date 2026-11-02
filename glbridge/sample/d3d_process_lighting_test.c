@@ -270,6 +270,11 @@ void WINAPI WinMainCRTStartup(void)
 #elif D9WG_TNL_API == 8
     check(SUCCEEDED(CALL(SetStreamSource)(device,0,source,sizeof(Input))),"source stream");check(SUCCEEDED(CALL(SetVertexShader)(device,input_fvf)),"source FVF");
 #endif
+#if D9WG_TNL_API != 7
+    /* These numeric probes isolate lighting/copying; clipping is covered by
+     * the separate processed-buffer draw probe. */
+    state(D3DRS_CLIPPING,FALSE);
+#endif
     identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"identity world");
     state(D3DRS_LIGHTING,TRUE);state(D3DRS_COLORVERTEX,TRUE);state(D3DRS_SPECULARENABLE,FALSE);state(D3DRS_LOCALVIEWER,FALSE);state(D3DRS_NORMALIZENORMALS,FALSE);state(D3DRS_AMBIENT,0);
     state(D3DRS_DIFFUSEMATERIALSOURCE,D3DMCS_COLOR1);state(D3DRS_SPECULARMATERIALSOURCE,D3DMCS_COLOR2);state(D3DRS_AMBIENTMATERIALSOURCE,D3DMCS_MATERIAL);state(D3DRS_EMISSIVEMATERIALSOURCE,D3DMCS_MATERIAL);

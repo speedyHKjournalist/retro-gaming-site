@@ -29,6 +29,29 @@ static __inline void d9wg_vertex_windows_blend_free(D9WGVertexState *state)
 }
 static __inline void d9wg_vertex_windows_clip_release(void *context, void *allocation)
 { (void)context;HeapFree(GetProcessHeap(), 0, allocation); }
+/* Scratch storage is shared by all three COM frontends. -3 is allocation
+ * failure; the remaining return codes are those of d9wg_clip_draw. */
+static __inline int d9wg_vertex_windows_clip_draw(const D9WGClipDrawSource *source,
+        D9WGClipEmit emit, void *context)
+{
+    uint32_t bytes = 65536u;
+    d9wg_clip_buffer_commit(source->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!source->clips->head) return 0;
+    if (source->stride > bytes/21u) {
+        if (source->stride > 0xffffffffu/21u) return -3;
+        bytes = source->stride*21u;
+    }
+    D9WGClipWork *work = HeapAlloc(GetProcessHeap(), 0, sizeof(*work));
+    void *staging = HeapAlloc(GetProcessHeap(), 0, bytes);
+    if (!work || !staging) {
+        if (work) HeapFree(GetProcessHeap(), 0, work);
+        if (staging) HeapFree(GetProcessHeap(), 0, staging);
+        return -3;
+    }
+    int result = d9wg_clip_draw(source, work, staging, bytes, emit, context);
+    HeapFree(GetProcessHeap(), 0, staging);HeapFree(GetProcessHeap(), 0, work);
+    return result;
+}
 static __inline uint32_t d9wg_vertex_windows_clip(D9WGVertexState *state,
         uint32_t enabled, uint32_t first, uint32_t stride, uint32_t count,
         const D9WGProcessViewport *viewport, const float *guard_band,
@@ -44,6 +67,13 @@ static __inline uint32_t d9wg_vertex_windows_clip(D9WGVertexState *state,
     }
     state->clip_vertices = batch->vertex;
     for (unsigned i = 0; i < 4; ++i) state->clip_guard_band[i] = guard_band[i];
+    /* Zero guard-band caps mean clipping at the viewport, not a band whose
+     * four screen coordinates all happen to be zero. */
+    if (!guard_band[0] && !guard_band[1] && !guard_band[2] && !guard_band[3]) {
+        state->clip_guard_band[0] = viewport->x;state->clip_guard_band[1] = viewport->y;
+        state->clip_guard_band[2] = viewport->x + viewport->width;
+        state->clip_guard_band[3] = viewport->y + viewport->height;
+    }
     *result = batch;return 0;
 }
 #endif

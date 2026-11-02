@@ -271,6 +271,7 @@ struct D8VertexBuffer {
     D8Device *device;
     uint32_t handle;
     BYTE *shadow;
+    D9WGClipBuffer clips;
     UINT length;
     DWORD usage;
     DWORD fvf;
@@ -3660,6 +3661,44 @@ static HRESULT WINAPI device_get_vertex_shader(IDirect3DDevice8 *iface,
     return D3D_OK;
 }
 
+
+static int d8_clip_emit(void *context, uint32_t primitive_type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D8Device *device = context;
+    D9WGDrawPrimitiveUP command;ZeroMemory(&command, sizeof(command));
+    command.device_handle = device->handle;command.primitive_type = primitive_type;
+    command.primitive_count = primitive_type == 1 ? count : primitive_type == 2 ? count/2u : count/3u;
+    command.stride = stride;command.vertex_count = count;command.vertex_bytes = count*stride;
+    /* Internal emission must preserve the application's bound VB and IB. */
+    return emit_draw_primitive_up(&command, vertices);
+}
+static int d8_clip_vb_draw(D8Device *device, uint32_t primitive_type,
+        uint32_t first, uint32_t count, const uint8_t *indices,
+        uint32_t index_bytes, uint32_t index_stride, int32_t base_vertex,
+        uint32_t min_vertex, uint32_t vertex_limit)
+{
+    D8VertexBuffer *buffer = device->streams[0].buffer;
+    D9WGProcessLayout layout;
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!buffer->clips.head) return 0;
+    if (device->vertex_shader & 1u) return 0;
+    if (!d9wg_process_fvf(D9WG_FVF_D3D8, device->vertex_shader, &layout)) return -1;
+    if (!layout.position_transformed) return 0;
+    D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
+    source.clips = &buffer->clips;source.vertices = buffer->shadow;source.length = buffer->length;
+    source.base = 0;source.stride = device->streams[0].stride;
+    source.first_vertex = first;source.count = count;source.indices = indices;
+    source.index_bytes = index_bytes;source.index_stride = index_stride;source.base_vertex = base_vertex;
+    source.min_vertex = min_vertex;source.vertex_count = vertex_limit;
+    source.primitive_type = primitive_type;source.layout = &layout;
+    source.flat_shading = device->render_states[D3DRS_SHADEMODE] == D3DSHADE_FLAT;
+    source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
+            (float)device->viewport.Width, (float)device->viewport.Height,
+            device->viewport.MinZ, device->viewport.MaxZ };
+    return d9wg_vertex_windows_clip_draw(&source, d8_clip_emit, device);
+}
+
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice8 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT start_vertex,
         UINT primitive_count)
@@ -3679,6 +3718,12 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice8 *iface,
     if (start_vertex > available_vertices
             || vertex_count > available_vertices - start_vertex)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    int clipped = d8_clip_vb_draw(device, primitive_type, start_vertex, vertex_count, NULL, 0, 0, 0, 0, vertex_count);
+    if (clipped) {
+        if (clipped < 0) return D8WG_TRACE_ERROR(clipped == -3 ? E_OUTOFMEMORY :
+                clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
+        return D3D_OK;
+    }
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.start_vertex = start_vertex;
@@ -3720,6 +3765,14 @@ static HRESULT WINAPI device_draw_indexed(IDirect3DDevice8 *iface,
             || vertex_count > available_vertices - first_vertex)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
+    int clipped = d8_clip_vb_draw(device, primitive_type, 0, index_count, device->index_buffer->shadow + start_index*index_size,
+            index_count*index_size, index_size, (int32_t)device->base_vertex_index,
+            min_vertex_index, min_vertex_index + vertex_count);
+    if (clipped) {
+        if (clipped < 0) return D8WG_TRACE_ERROR(clipped == -3 ? E_OUTOFMEMORY :
+                clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
+        return D3D_OK;
+    }
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.base_vertex_index = (int32_t)device->base_vertex_index;
@@ -3868,6 +3921,7 @@ static ULONG WINAPI vb_release(IDirect3DVertexBuffer8 *iface)
         destroy.resource_handle = buffer->handle;
         destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         HeapFree(GetProcessHeap(), 0, buffer->shadow);
         device_child_release(buffer->device);
         HeapFree(GetProcessHeap(), 0, buffer);
@@ -3954,8 +4008,10 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer8 *iface, UINT offset,
     buffer->lock_offset = offset;
     buffer->lock_size = size;
     buffer->lock_flags = flags;
-    if (flags & D3DLOCK_DISCARD)
+    if (flags & D3DLOCK_DISCARD) {
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         ZeroMemory(buffer->shadow, buffer->length);
+    }
     *data_out = buffer->shadow + offset;
     return D3D_OK;
 }
@@ -6418,17 +6474,43 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
             (float)device->viewport.Width, (float)device->viewport.Height,
             device->viewport.MinZ, device->viewport.MaxZ };
+    const BYTE *input = source->shadow;
+    BYTE *snapshot = NULL;
+    if (source == destination) {
+        snapshot = HeapAlloc(GetProcessHeap(), 0, source->length);
+        if (!snapshot) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+        CopyMemory(snapshot, source->shadow, source->length);input = snapshot;
+    }
     uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
             &device->transforms[D8WG_TRANSFORM_WORLD_SLOT], 256, 0,
             &device->transforms[D8WG_TRANSFORM_VIEW_SLOT], &device->transforms[D8WG_TRANSFORM_PROJECTION_SLOT]);
-    if (blend_error) return D8WG_TRACE_ERROR(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
-    BOOL processed = d9wg_process_vertices(&source_layout, source->shadow, source->length, 0,
+    if (blend_error) {
+        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        return D8WG_TRACE_ERROR(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+    }
+    D3DCAPS8 caps;fill_caps(&caps);
+    float guard[4] = { caps.GuardBandLeft, caps.GuardBandTop, caps.GuardBandRight, caps.GuardBandBottom };
+    D9WGClipBatch *clip_batch;
+    uint32_t clip_error = d9wg_vertex_windows_clip(&vertex_state, device->render_states[D3DRS_CLIPPING],
+            validated_offset + destination_layout.position, destination_layout.stride, vertex_count, &viewport, guard, &clip_batch);
+    if (clip_error) {
+        d9wg_vertex_windows_blend_free(&vertex_state);
+        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        return D8WG_TRACE_ERROR(clip_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+    }
+    BOOL processed = d9wg_process_vertices(&source_layout, input, source->length, 0,
             device->streams[0].stride, source_start_index, &destination_layout,
             destination->shadow, destination->length, destination_index, vertex_count,
             &world_view, &world_view_projection, &viewport, &light_state,
             !(flags & D9WG_PV_DONOTCOPYDATA), &vertex_state);
     d9wg_vertex_windows_blend_free(&vertex_state);
-    if (!processed) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+    if (!processed) {
+        if (clip_batch) HeapFree(GetProcessHeap(), 0, clip_batch);
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
+    d9wg_clip_buffer_commit(&destination->clips, clip_batch, validated_offset,
+            vertex_count * destination_layout.stride, d9wg_vertex_windows_clip_release, NULL);
 
     /* The transformed vertices live in the destination's guest shadow; the
      * host needs them too, since the app will draw straight from the buffer. */

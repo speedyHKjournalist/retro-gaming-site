@@ -112,6 +112,11 @@ static int clip_draw_cases(void)
     draw.index_bytes = 6;
     CLIP_DRAW_CHECK(
         d9wg_clip_draw(&draw, work, staging, sizeof(staging), clip_draw_emit, 0) == -1 && !clip_draw_calls);
+    draw.min_vertex = 1;
+    indices[2] = 2;
+    CLIP_DRAW_CHECK(
+        d9wg_clip_draw(&draw, work, staging, sizeof(staging), clip_draw_emit, 0) == -1 && !clip_draw_calls);
+    draw.min_vertex = 0;
     indices[2] = 2;
     CLIP_DRAW_CHECK(d9wg_clip_draw(&draw, work, staging, sizeof(staging), clip_draw_emit, 0) == 1
         && clip_draw_vertices == 6);

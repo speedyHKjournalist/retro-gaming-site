@@ -2019,18 +2019,6 @@ static HRESULT d3d7_clip_vb_draw(D3D7Device *device, D3D7VertexBuffer *buffer,
     *handled = TRUE;
     if (!d9wg_process_fvf(D9WG_FVF_D3D7, buffer->desc.dwFVF, &layout) ||
             index_count > 0x7fffffffu) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    uint32_t bytes = 65536u;
-    if (buffer->stride > bytes/21u) {
-        if (buffer->stride > 0xffffffffu/21u) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
-        bytes = buffer->stride*21u;
-    }
-    D9WGClipWork *work = HeapAlloc(GetProcessHeap(), 0, sizeof(*work));
-    BYTE *staging = HeapAlloc(GetProcessHeap(), 0, bytes);
-    if (!work || !staging) {
-        if (work) HeapFree(GetProcessHeap(), 0, work);
-        if (staging) HeapFree(GetProcessHeap(), 0, staging);
-        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
-    }
     D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
     source.clips = &buffer->clips;source.vertices = buffer->shadow;
     source.length = buffer->byte_count;source.stride = buffer->stride;
@@ -2043,10 +2031,10 @@ static HRESULT d3d7_clip_vb_draw(D3D7Device *device, D3D7VertexBuffer *buffer,
             (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
             device->viewport.dvMinZ, device->viewport.dvMaxZ };
     D3D7ClipEmitContext emit = { device, buffer->desc.dwFVF };
-    int result = d9wg_clip_draw(&source, work, staging, bytes, d3d7_clip_emit, &emit);
-    HeapFree(GetProcessHeap(), 0, staging);HeapFree(GetProcessHeap(), 0, work);
+    int result = d9wg_vertex_windows_clip_draw(&source, d3d7_clip_emit, &emit);
     *handled = result != 0;
-    return DDWG_TRACE_ERROR(result >= 0 ? D3D_OK : result == -2 ? D3DERR_INITFAILED : DDERR_INVALIDPARAMS);
+    return DDWG_TRACE_ERROR(result >= 0 ? D3D_OK : result == -2 ? D3DERR_INITFAILED :
+            result == -3 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
 }
 
 static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,

@@ -8,7 +8,8 @@ const mutations = [
     ["position writes keep stale processing records", "clip", "if (actual != expected) break;", "if (actual != expected && 0) break;", "buffer"],
     ["empty record batches never released", "clip", "if (!old->live)", "if (old->live == 0xffffffffu)", "buffer"],
     ["mapped depth lost before division", "clip_draw", "out[4]=processed_vp->min_z*out[3]+out[2]*(processed_vp->max_z-processed_vp->min_z);", "out[4]=out[2];", "draw"],
-    ["index at range end accepted", "clip_draw", "if(index>=s->vertex_count", "if(index>s->vertex_count", "draw"],
+    ["index at range end accepted", "clip_draw", "index>=s->vertex_count", "index>s->vertex_count", "draw"],
+    ["indices below MinVertexIndex accepted", "clip_draw", "index<s->min_vertex || ", "", "draw"],
     ["flat colour changes at clipped edges", "clip_draw", "if(s->flat_shading)", "if(s->flat_shading && 0)", "draw"],
     ["emission failure silently accepted", "clip_draw", "    if(queued && !emit(context,emitted_type,staging,queued,s->stride))return -2;\n    return 1;", "    if(queued)emit(context,emitted_type,staging,queued,s->stride);\n    return 1;", "draw"],
 ];
@@ -22,5 +23,5 @@ try {
         assert.notEqual(result.status, 0, "survived: " + label);
         assert.match(result.stderr, /clip (triangle|buffer|draw) mismatch/, "must fail an executed assertion: " + label);
     }
-    console.log("PASS C clip pipeline mutations: 8/8 semantic errors detected; production sources untouched");
+    console.log("PASS C clip pipeline mutations: 9/9 semantic errors detected; production sources untouched");
 } finally { fs.rmSync(directory, { recursive: true, force: true }); }

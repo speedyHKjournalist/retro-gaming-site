@@ -15,7 +15,7 @@ static int clip_vertex_offset(const D9WGClipDrawSource *s,uint32_t i,uint32_t *o
 {
     uint32_t index=clip_read_index(s,i);
     int64_t vertex=(int64_t)s->first_vertex+s->base_vertex+index;
-    if(index>=s->vertex_count || vertex<0)return 0;
+    if(index<s->min_vertex || index>=s->vertex_count || vertex<0)return 0;
     uint64_t at=(uint64_t)s->base+(uint64_t)vertex*s->stride;
     if(at>s->length || s->layout->stride>s->length-at)return 0;
     *offset=(uint32_t)at;return 1;
