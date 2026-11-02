@@ -38,6 +38,8 @@ ${extract(source,'state_block_set_scope')}
 #define D3DTS_WORLDMATRIX(i) (256+(i))
 ${Array.from({length:8},(_,i)=>'#define D3DTS_TEXTURE'+i+' '+(16+i)).join('\n')}
 #define D9_STATE_BLOCK_TRANSFORMS ${old?14:'D9WG_STATE_BLOCK_TRANSFORMS'}
+typedef struct D3DMATRIX {float m[16];} D3DMATRIX;
+#define CopyMemory memcpy
 typedef struct Light {uint32_t words[26];} Light;
 #define D9WG_LIGHTING_SDK_LIGHT Light
 #define D9WG_LIGHT_ALLOC(bytes) calloc(1,bytes)
@@ -45,7 +47,7 @@ typedef struct Light {uint32_t words[26];} Light;
 #include "${path.join(root,'runtime/d9wg_light_state.h')}"
 typedef struct D9StateBlock D9StateBlock;
 typedef struct D9Device {BOOL light_set[8];D9WGLightState *extra_lights;D9StateBlock *recording_result;} D9Device;
-struct D9StateBlock {D9Device *device;BOOL has_render_state[256],has_texture_stage_state[8][33],has_sampler_state[20][14],has_texture[20],has_transform[266],has_palette,has_material,has_clip_plane[6],has_npatch_mode,has_light[8],has_light_enable[8],has_vertex_shader,has_vertex_format,has_pixel_shader,has_vs_const_f[256],has_vs_const_i[16],has_vs_const_b[16],has_ps_const_f[224],has_ps_const_i[16],has_ps_const_b[16],has_viewport,has_scissor,has_stream[16],has_stream_frequency[16],has_indices,light_allocation_failed;D9WGLightState *extra_lights;};
+struct D9StateBlock {float transforms[266][16];D9Device *device;BOOL has_render_state[256],has_texture_stage_state[8][33],has_sampler_state[20][14],has_texture[20],has_transform[266],has_palette,has_material,has_clip_plane[6],has_npatch_mode,has_light[8],has_light_enable[8],has_vertex_shader,has_vertex_format,has_pixel_shader,has_vs_const_f[256],has_vs_const_i[16],has_vs_const_b[16],has_ps_const_f[224],has_ps_const_i[16],has_ps_const_b[16],has_viewport,has_scissor,has_stream[16],has_stream_frequency[16],has_indices,light_allocation_failed;D9WGLightState *extra_lights;};
 static BOOL device_light_is_set(D9Device *device,UINT index){return index<8&&device->light_set[index];}
 ${oldArrays}
 ${['state_block_record_transform','state_block_mark_pixel_states','state_block_mark_vertex_states','state_block_mark_all'].map(n=>extract(source,n)).join('\n')}
@@ -78,7 +80,7 @@ ${['state_block_record_transform','state_block_mark_pixel_states','state_block_m
  for(unsigned i=0;i<8;++i)CHECK(!!block.has_light[i]==(type!=2&&i==3)&&!!block.has_light_enable[i]==(type!=2&&i==3));
  CHECK(type==2?!block.extra_lights:block.extra_lights&&block.extra_lights->index==37&&block.extra_lights->light_mask&&block.extra_lights->enable_mask);
  d9wg_light_free(&block.extra_lights);
- D9StateBlock recorded={0};device.recording_result=&recorded;state_block_record_transform(&device,511);CHECK(recorded.has_transform[265]);
+ D9StateBlock recorded={0};device.recording_result=&recorded;${source.includes("const D3DMATRIX *matrix)\n{\n    D9StateBlock *block = device->recording_result;")?"D3DMATRIX matrix={{0}};state_block_record_transform(&device,511,&matrix);":"state_block_record_transform(&device,511);"}CHECK(recorded.has_transform[265]);
 `;
  const expected=['pixel','vertex'].map(kind=>Array.from({length:256},(_,i)=>ref[kind].some(r=>r.state===i)?1:0));
  const code=`#include <stdint.h>

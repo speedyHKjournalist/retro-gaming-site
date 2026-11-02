@@ -8,8 +8,8 @@ const mutations=[
  ["DMAP captured by pixel","header","return state == D3DSAMP_DMAPOFFSET ? type == D3DSBT_VERTEXSTATE : type == D3DSBT_PIXELSTATE;","return type == D3DSBT_PIXELSTATE;"],
  ["last world matrix omitted","header","#define D9WG_STATE_BLOCK_TRANSFORMS 266u","#define D9WG_STATE_BLOCK_TRANSFORMS 265u"],
  ["vertex captures ALL-only bindings","d8","if (type == D3DSBT_ALL) {\n        FillMemory(state->render_mask","if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {\n        FillMemory(state->render_mask"],
- ["NPatch omitted from vertex","d9","block->has_npatch_mode = TRUE;","block->has_npatch_mode = FALSE;"],
- ["material captured by vertex","d9","block->has_npatch_mode = TRUE;","block->has_npatch_mode = TRUE;block->has_material = TRUE;"],
+ ["NPatch omitted from vertex","d9","block->has_npatch_mode = TRUE;\n","block->has_npatch_mode = FALSE;\n"],
+ ["material captured by vertex","d9","block->has_npatch_mode = TRUE;\n","block->has_npatch_mode = TRUE;block->has_material = TRUE;\n"],
  ["vertex captures buffer instead of frequency","d9","block->has_stream_frequency[index] = TRUE;","block->has_stream[index] = TRUE;"],
  ["ALL omits clip planes","d9","FillMemory(block->has_clip_plane, sizeof(block->has_clip_plane), 1);","FillMemory(block->has_clip_plane, sizeof(block->has_clip_plane), 0);"],
  ["pixel captures native-excluded CCW function","header","D3DRS_CCW_STENCILPASS,","D3DRS_CCW_STENCILPASS, D3DRS_CCW_STENCILFUNC,"]

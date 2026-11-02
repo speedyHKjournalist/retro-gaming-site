@@ -1264,26 +1264,25 @@ static BOOL surface_is_implicit(const D9Surface *surface)
 /* BeginStateBlock records calls, including calls which write the value the
  * device already has.  The block structure itself lives near its COM methods;
  * these helpers keep its layout out of the ordinary Set* implementations. */
-static void state_block_record_render_state(D9Device *device, UINT state);
-static void state_block_record_texture_stage_state(D9Device *device,
-        UINT stage, UINT state);
-static void state_block_record_sampler_state(D9Device *device,
-        UINT sampler, UINT state);
-static void state_block_record_transform(D9Device *device, UINT state);
+static BOOL state_block_record_render_state(D9Device *device, UINT state, DWORD value);
+static BOOL state_block_record_texture_stage_state(D9Device *device, UINT stage, UINT state, DWORD value);
+static BOOL state_block_record_sampler_state(D9Device *device, UINT sampler, UINT state, DWORD value);
+static const float *state_block_transform_source(D9Device *device, UINT state);
+static BOOL state_block_record_transform(D9Device *device, UINT state, const D3DMATRIX *matrix);
 static void state_block_record_texture(D9Device *device, UINT stage);
 static BOOL state_block_record_palette(D9Device *device, UINT index);
-static void state_block_record_material(D9Device *device);
-static void state_block_record_clip_plane(D9Device *device, UINT index);
-static void state_block_record_npatch_mode(D9Device *device);
-static void state_block_record_stream_frequency(D9Device *device, UINT stream);
+static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material);
+static BOOL state_block_record_clip_plane(D9Device *device, UINT index, const float *plane);
+static BOOL state_block_record_npatch_mode(D9Device *device, float segments);
+static BOOL state_block_record_stream_frequency(D9Device *device, UINT stream, DWORD divider);
 static BOOL state_block_record_light(D9Device *device, UINT index);
 static BOOL state_block_record_light_enable(D9Device *device, UINT index);
-static void state_block_record_viewport(D9Device *device);
-static void state_block_record_scissor(D9Device *device);
+static BOOL state_block_record_viewport(D9Device *device, const D3DVIEWPORT9 *viewport);
+static BOOL state_block_record_scissor(D9Device *device, const RECT *rect);
 static void state_block_record_vertex_shader(D9Device *device);
 static void state_block_record_pixel_shader(D9Device *device);
-static void state_block_record_constant(D9Device *device, BOOL is_pixel,
-        BOOL is_float, BOOL is_bool, UINT start, UINT count);
+static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
+        BOOL is_float, BOOL is_bool, UINT start, UINT count, const void *data);
 static void state_block_record_vertex_format(D9Device *device);
 static void state_block_record_stream(D9Device *device, UINT stream);
 static void state_block_record_indices(D9Device *device);
@@ -5698,10 +5697,11 @@ static HRESULT WINAPI device_set_transform(IDirect3DDevice9 *iface,
         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
 {
     D9Device *device = device_from_iface(iface);
+    uint32_t slot;
     D9WGSetTransform command;
-    if (!matrix || (UINT)state >= D9_MAX_TRANSFORMS)
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_transform(device, (UINT)state);
+    if (state_block_record_transform(device, (UINT)state, matrix)) return D3D_OK;
     CopyMemory(device->transforms[state], matrix, sizeof(float) * 16);
     command.device_handle = device->handle;
     command.state = (uint32_t)state;
@@ -5715,7 +5715,8 @@ static HRESULT WINAPI device_get_transform(IDirect3DDevice9 *iface,
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetTransform");
     D9Device *device = device_from_iface(iface);
-    if (!matrix || (UINT)state >= D9_MAX_TRANSFORMS)
+    uint32_t slot;
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(matrix, device->transforms[state], sizeof(float) * 16);
     return D3D_OK;
@@ -5765,7 +5766,7 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
             viewport->X, viewport->Y, viewport->Width, viewport->Height,
             (LONG)(viewport->MinZ * 1000.0f),
             (LONG)(viewport->MaxZ * 1000.0f));
-    state_block_record_viewport(device);
+    if (state_block_record_viewport(device, viewport)) return D3D_OK;
     device->viewport = *viewport;
     command.device_handle = device->handle;
     command.x = viewport->X;
@@ -5796,7 +5797,7 @@ static HRESULT WINAPI device_set_render_state(IDirect3DDevice9 *iface,
     D9WGSetRenderState command;
     if ((UINT)state >= D9_MAX_RENDER_STATES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_render_state(device, (UINT)state);
+    if (state_block_record_render_state(device, (UINT)state, value)) return D3D_OK;
     if (device->render_states[state] == value)
         return D3D_OK;
     /*
@@ -6020,7 +6021,7 @@ static HRESULT WINAPI device_set_texture_stage_state(IDirect3DDevice9 *iface,
     if (stage >= D9_MAX_TEXTURE_STAGES
             || (UINT)state >= D9_MAX_TEXTURE_STAGE_STATES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_texture_stage_state(device, stage, (UINT)state);
+    if (state_block_record_texture_stage_state(device, stage, (UINT)state, value)) return D3D_OK;
     if (device->texture_stage_states[stage][state] == value)
         return D3D_OK;
     device->texture_stage_states[stage][state] = value;
@@ -6112,7 +6113,7 @@ static HRESULT WINAPI device_set_npatch_mode(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     if (segments > (float)D9_PATCH_MAX_SEGMENTS)
         segments = (float)D9_PATCH_MAX_SEGMENTS;
-    state_block_record_npatch_mode(device);
+    if (state_block_record_npatch_mode(device, segments > 1.0f ? segments : 0.0f)) return D3D_OK;
     device->npatch_segments = segments > 1.0f ? segments : 0.0f;
     return D3D_OK;
 }
@@ -7289,7 +7290,7 @@ static HRESULT set_constant_f(D9Device *device, BOOL is_pixel, UINT start,
 
     if (!data || !constant_range_valid(start, count, capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_constant(device, is_pixel, TRUE, FALSE, start, count);
+    if (state_block_record_constant(device, is_pixel, TRUE, FALSE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
         const float *source = data + index * 4;
         float *target = shadow[start + index];
@@ -7322,7 +7323,7 @@ static HRESULT set_constant_i(D9Device *device, BOOL is_pixel, UINT start,
 
     if (!data || !constant_range_valid(start, count, D9_MAX_CONST_I))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_constant(device, is_pixel, FALSE, FALSE, start, count);
+    if (state_block_record_constant(device, is_pixel, FALSE, FALSE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
         const int *source = data + index * 4;
         int *target = shadow[start + index];
@@ -7356,7 +7357,7 @@ static HRESULT set_constant_b(D9Device *device, BOOL is_pixel, UINT start,
 
     if (!data || !constant_range_valid(start, count, D9_MAX_CONST_B))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_constant(device, is_pixel, FALSE, TRUE, start, count);
+    if (state_block_record_constant(device, is_pixel, FALSE, TRUE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
         BOOL value = data[index] ? TRUE : FALSE;
         if (shadow[start + index] == value)
@@ -8788,15 +8789,18 @@ static HRESULT WINAPI device_multiply_transform(IDirect3DDevice9 *iface,
         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
 {
     D9Device *device = device_from_iface(iface);
+    uint32_t slot;
     D3DMATRIX result;
     UINT row, column, k;
-    if (!matrix || (UINT)state >= D9_MAX_TRANSFORMS)
+    const float *source;
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    source = state_block_transform_source(device, (UINT)state);
     for (row = 0; row < 4; ++row) {
         for (column = 0; column < 4; ++column) {
             float value = 0.0f;
             for (k = 0; k < 4; ++k)
-                value += device->transforms[state][row * 4 + k]
+                value += source[row * 4 + k]
                         * ((const float *)matrix)[k * 4 + column];
             ((float *)&result)[row * 4 + column] = value;
         }
@@ -8817,7 +8821,7 @@ static HRESULT WINAPI device_set_material(IDirect3DDevice9 *iface,
     D9WGSetMaterial command;
     if (!material)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_material(device);
+    if (state_block_record_material(device, material)) return D3D_OK;
     device->material = *material;
     command.device_handle = device->handle;
     CopyMemory(command.diffuse, &material->Diffuse, sizeof(command.diffuse));
@@ -8907,7 +8911,7 @@ static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,
     D9WGSetClipPlane command;
     if (!plane || index >= D9_MAX_CLIP_PLANES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_clip_plane(device, index);
+    if (state_block_record_clip_plane(device, index, plane)) return D3D_OK;
     CopyMemory(device->clip_planes[index], plane, sizeof(command.plane));
     command.device_handle = device->handle;
     command.index = index;
@@ -8967,7 +8971,7 @@ static HRESULT WINAPI device_set_sampler_state(IDirect3DDevice9 *iface,
     if (!sampler_state_slot(sampler, &slot)
             || (UINT)type >= D9_MAX_SAMPLER_STATES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_sampler_state(device, slot, (UINT)type);
+    if (state_block_record_sampler_state(device, slot, (UINT)type, value)) return D3D_OK;
     if (device->sampler_states[slot][type] == value)
         return D3D_OK;
     device->sampler_states[slot][type] = value;
@@ -9607,7 +9611,7 @@ static HRESULT WINAPI device_set_stream_source_freq(IDirect3DDevice9 *iface,
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
 
-    state_block_record_stream_frequency(device, stream);
+    if (state_block_record_stream_frequency(device, stream, divider)) return D3D_OK;
     if (device->streams[stream].frequency == divider)
         return D3D_OK;
     device->streams[stream].frequency = divider;
@@ -11083,7 +11087,7 @@ static HRESULT WINAPI device_set_scissor_rect(IDirect3DDevice9 *iface,
     if (rect->left < 0 || rect->top < 0 || rect->right < rect->left
             || rect->bottom < rect->top)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_scissor(device);
+    if (state_block_record_scissor(device, rect)) return D3D_OK;
     device->scissor_rect = *rect;
     device->scissor_set = TRUE;
     command.device_handle = device->handle;
@@ -11968,33 +11972,46 @@ static BOOL state_block_record_palette(D9Device *device, UINT index)
     return TRUE;
 }
 
-static void state_block_record_render_state(D9Device *device, UINT state)
+static BOOL state_block_record_render_state(D9Device *device, UINT state, DWORD value)
 {
-    if (device->recording_result && state < D9_MAX_RENDER_STATES)
-        device->recording_result->has_render_state[state] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_render_state[state] = TRUE;block->render_states[state] = value;
+    return TRUE;
 }
 
-static void state_block_record_texture_stage_state(D9Device *device,
-        UINT stage, UINT state)
+static BOOL state_block_record_texture_stage_state(D9Device *device, UINT stage, UINT state, DWORD value)
 {
-    if (device->recording_result && stage < D9_MAX_TEXTURE_STAGES
-            && state < D9_MAX_TEXTURE_STAGE_STATES)
-        device->recording_result->has_texture_stage_state[stage][state] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_texture_stage_state[stage][state] = TRUE;block->texture_stage_states[stage][state] = value;
+    return TRUE;
 }
 
-static void state_block_record_sampler_state(D9Device *device,
-        UINT sampler, UINT state)
+static BOOL state_block_record_sampler_state(D9Device *device, UINT sampler, UINT state, DWORD value)
 {
-    if (device->recording_result && sampler < D9_MAX_SAMPLERS
-            && state < D9_MAX_SAMPLER_STATES)
-        device->recording_result->has_sampler_state[sampler][state] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_sampler_state[sampler][state] = TRUE;block->sampler_states[sampler][state] = value;
+    return TRUE;
 }
 
-static void state_block_record_transform(D9Device *device, UINT state)
+static BOOL state_block_record_transform(D9Device *device, UINT state, const D3DMATRIX *matrix)
+{
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    uint32_t slot;if (!d9wg_state_block_transform_slot(state, &slot)) return FALSE;
+    block->has_transform[slot] = TRUE;CopyMemory(block->transforms[slot], matrix, 64);
+    return TRUE;
+}
+
+static const float *state_block_transform_source(D9Device *device, UINT state)
 {
     uint32_t slot;
-    if (device->recording_result && d9wg_state_block_transform_slot(state, &slot))
-        device->recording_result->has_transform[slot] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (block && d9wg_state_block_transform_slot(state, &slot) && block->has_transform[slot])
+        return block->transforms[slot];
+    return device->transforms[state];
 }
 
 static void state_block_record_texture(D9Device *device, UINT stage)
@@ -12003,18 +12020,35 @@ static void state_block_record_texture(D9Device *device, UINT stage)
         device->recording_result->has_texture[stage] = TRUE;
 }
 
-static void state_block_record_material(D9Device *device)
+static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material)
 {
-    if (device->recording_result)
-        device->recording_result->has_material = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_material = TRUE;block->material = *material;
+    return TRUE;
 }
 
-static void state_block_record_clip_plane(D9Device *device, UINT index)
-{ if (device->recording_result && index < D9_MAX_CLIP_PLANES) device->recording_result->has_clip_plane[index] = TRUE; }
-static void state_block_record_npatch_mode(D9Device *device)
-{ if (device->recording_result) device->recording_result->has_npatch_mode = TRUE; }
-static void state_block_record_stream_frequency(D9Device *device, UINT stream)
-{ if (device->recording_result && stream < D9_MAX_STREAMS) device->recording_result->has_stream_frequency[stream] = TRUE; }
+static BOOL state_block_record_clip_plane(D9Device *device, UINT index, const float *plane)
+{
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_clip_plane[index] = TRUE;CopyMemory(block->clip_planes[index], plane, 16);
+    return TRUE;
+}
+static BOOL state_block_record_npatch_mode(D9Device *device, float segments)
+{
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_npatch_mode = TRUE;block->npatch_segments = segments;
+    return TRUE;
+}
+static BOOL state_block_record_stream_frequency(D9Device *device, UINT stream, DWORD divider)
+{
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_stream_frequency[stream] = TRUE;block->streams[stream].frequency = divider;
+    return TRUE;
+}
 
 static BOOL state_block_record_light(D9Device *device, UINT index)
 {
@@ -12038,16 +12072,20 @@ static BOOL state_block_record_light_enable(D9Device *device, UINT index)
     }
     return TRUE;
 }
-static void state_block_record_viewport(D9Device *device)
+static BOOL state_block_record_viewport(D9Device *device, const D3DVIEWPORT9 *viewport)
 {
-    if (device->recording_result)
-        device->recording_result->has_viewport = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_viewport = TRUE;block->viewport = *viewport;
+    return TRUE;
 }
 
-static void state_block_record_scissor(D9Device *device)
+static BOOL state_block_record_scissor(D9Device *device, const RECT *rect)
 {
-    if (device->recording_result)
-        device->recording_result->has_scissor = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_scissor = TRUE;block->scissor_rect = *rect;
+    return TRUE;
 }
 
 static void state_block_record_vertex_shader(D9Device *device)
@@ -12062,25 +12100,26 @@ static void state_block_record_pixel_shader(D9Device *device)
         device->recording_result->has_pixel_shader = TRUE;
 }
 
-static void state_block_record_constant(D9Device *device, BOOL is_pixel,
-        BOOL is_float, BOOL is_bool, UINT start, UINT count)
+static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
+        BOOL is_float, BOOL is_bool, UINT start, UINT count, const void *data)
 {
-    struct D9StateBlock *block = device->recording_result;
-    UINT index;
-    if (!block)
-        return;
-    for (index = start; index < start + count; ++index) {
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    for (UINT i = 0; i < count; ++i) {
+        UINT index = start + i;
         if (is_float) {
-            if (is_pixel) block->has_ps_const_f[index] = TRUE;
-            else block->has_vs_const_f[index] = TRUE;
+            if (is_pixel) {block->has_ps_const_f[index] = TRUE;CopyMemory(block->ps_const_f[index], (const float *)data + i * 4, 16);}
+            else {block->has_vs_const_f[index] = TRUE;CopyMemory(block->vs_const_f[index], (const float *)data + i * 4, 16);}
         } else if (is_bool) {
-            if (is_pixel) block->has_ps_const_b[index] = TRUE;
-            else block->has_vs_const_b[index] = TRUE;
+            BOOL value = ((const WINBOOL *)data)[i] ? TRUE : FALSE;
+            if (is_pixel) {block->has_ps_const_b[index] = TRUE;block->ps_const_b[index] = value;}
+            else {block->has_vs_const_b[index] = TRUE;block->vs_const_b[index] = value;}
         } else {
-            if (is_pixel) block->has_ps_const_i[index] = TRUE;
-            else block->has_vs_const_i[index] = TRUE;
+            if (is_pixel) {block->has_ps_const_i[index] = TRUE;CopyMemory(block->ps_const_i[index], (const int *)data + i * 4, 16);}
+            else {block->has_vs_const_i[index] = TRUE;CopyMemory(block->vs_const_i[index], (const int *)data + i * 4, 16);}
         }
     }
+    return TRUE;
 }
 
 static void state_block_record_vertex_format(D9Device *device)
@@ -12146,18 +12185,19 @@ static void state_block_capture(struct D9StateBlock *block)
 {
     D9Device *device = block->device;
     UINT index, stage, slot;
+    BOOL finishing = block == device->recording_result;
 
     if (block->has_palette) block->current_palette = device->current_palette;
     state_block_release_references(block);
 
     for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
-        if (block->has_render_state[index])
+        if (!finishing && block->has_render_state[index])
             block->render_states[index] = device->render_states[index];
     }
     for (stage = 0; stage < D9_MAX_TEXTURE_BINDINGS; ++stage) {
         if (stage < D9_MAX_TEXTURE_STAGES) {
             for (index = 0; index < D9_MAX_TEXTURE_STAGE_STATES; ++index) {
-                if (block->has_texture_stage_state[stage][index])
+                if (!finishing && block->has_texture_stage_state[stage][index])
                     block->texture_stage_states[stage][index] =
                             device->texture_stage_states[stage][index];
             }
@@ -12177,21 +12217,21 @@ static void state_block_capture(struct D9StateBlock *block)
     }
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
         for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index) {
-            if (block->has_sampler_state[slot][index])
+            if (!finishing && block->has_sampler_state[slot][index])
                 block->sampler_states[slot][index] =
                         device->sampler_states[slot][index];
         }
     }
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
-        if (block->has_transform[index])
+        if (!finishing && block->has_transform[index])
             CopyMemory(block->transforms[index],
                     device->transforms[d9wg_state_block_transform_state(index)],
                     sizeof(block->transforms[index]));
     }
-    if (block->has_material) block->material = device->material;
+    if (!finishing && block->has_material) block->material = device->material;
     for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
-        if (block->has_clip_plane[index]) CopyMemory(block->clip_planes[index], device->clip_planes[index], 16);
-    if (block->has_npatch_mode) block->npatch_segments = device->npatch_segments;
+        if (!finishing && block->has_clip_plane[index]) CopyMemory(block->clip_planes[index], device->clip_planes[index], 16);
+    if (!finishing && block->has_npatch_mode) block->npatch_segments = device->npatch_segments;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index]) block->lights[index] = device->lights[index];
         if (block->has_light_enable[index])
@@ -12202,8 +12242,8 @@ static void state_block_capture(struct D9StateBlock *block)
         if (entry->light_mask && current && current->set) {entry->light = current->light;entry->set = TRUE;}
         if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
     }
-    if (block->has_viewport) block->viewport = device->viewport;
-    if (block->has_scissor) block->scissor_rect = device->scissor_rect;
+    if (!finishing && block->has_viewport) block->viewport = device->viewport;
+    if (!finishing && block->has_scissor) block->scissor_rect = device->scissor_rect;
     if (block->has_vertex_shader) {
         block->vertex_shader = device->vertex_shader;
         if (block->vertex_shader)
@@ -12215,23 +12255,23 @@ static void state_block_capture(struct D9StateBlock *block)
             IDirect3DPixelShader9_AddRef(&block->pixel_shader->iface.pixel);
     }
     for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
-        if (block->has_vs_const_f[index])
+        if (!finishing && block->has_vs_const_f[index])
             CopyMemory(block->vs_const_f[index], device->vs_const_f[index], 16);
     }
     for (index = 0; index < D9_MAX_PS_CONST_F; ++index) {
-        if (block->has_ps_const_f[index])
+        if (!finishing && block->has_ps_const_f[index])
             CopyMemory(block->ps_const_f[index], device->ps_const_f[index], 16);
     }
     for (index = 0; index < D9_MAX_CONST_I; ++index) {
-        if (block->has_vs_const_i[index])
+        if (!finishing && block->has_vs_const_i[index])
             CopyMemory(block->vs_const_i[index], device->vs_const_i[index], 16);
-        if (block->has_ps_const_i[index])
+        if (!finishing && block->has_ps_const_i[index])
             CopyMemory(block->ps_const_i[index], device->ps_const_i[index], 16);
     }
     for (index = 0; index < D9_MAX_CONST_B; ++index) {
-        if (block->has_vs_const_b[index])
+        if (!finishing && block->has_vs_const_b[index])
             block->vs_const_b[index] = device->vs_const_b[index];
-        if (block->has_ps_const_b[index])
+        if (!finishing && block->has_ps_const_b[index])
             block->ps_const_b[index] = device->ps_const_b[index];
     }
     if (block->has_vertex_format) {
@@ -12243,14 +12283,16 @@ static void state_block_capture(struct D9StateBlock *block)
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
+            DWORD frequency = block->streams[index].frequency;
             block->streams[index] = device->streams[index];
+            if (finishing && block->has_stream_frequency[index]) block->streams[index].frequency = frequency;
             if (block->streams[index].buffer)
                 IDirect3DVertexBuffer9_AddRef(
                         &block->streams[index].buffer->iface);
         }
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index)
-        if (block->has_stream_frequency[index]) block->streams[index].frequency = device->streams[index].frequency;
+        if (!finishing && block->has_stream_frequency[index]) block->streams[index].frequency = device->streams[index].frequency;
     if (block->has_indices) {
         block->index_buffer = device->index_buffer;
         if (block->index_buffer)

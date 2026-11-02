@@ -233,6 +233,9 @@ static void blend_checks(void)
 #if D9WG_TNL_API != 7
 #include "d3d_light_state_cases.h"
 #include "d3d_state_scope_cases.h"
+#if D9WG_TNL_API == 9
+#include "d3d9_record_scalar_cases.h"
+#endif
 #endif
 #if D9WG_TNL_API == 8
 #include "d3d8_state_record_cases.h"
@@ -293,6 +296,9 @@ void WINAPI WinMainCRTStartup(void)
 #endif
 #if D9WG_TNL_API != 7
     shared_state_scope_checks();
+#if D9WG_TNL_API == 9
+    d3d9_scalar_record_checks();
+#endif
 #endif
     identity(&matrix);check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_WORLD,&matrix)),"identity world");
     state(D3DRS_LIGHTING,TRUE);state(D3DRS_COLORVERTEX,TRUE);state(D3DRS_SPECULARENABLE,FALSE);state(D3DRS_LOCALVIEWER,FALSE);state(D3DRS_NORMALIZENORMALS,FALSE);state(D3DRS_AMBIENT,0);
