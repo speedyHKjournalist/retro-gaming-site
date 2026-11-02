@@ -172,6 +172,7 @@ typedef struct D8StateSnapshot {
     UINT base_vertex_index;
     DWORD vertex_shader;
     DWORD pixel_shader;
+    D8Shader *vertex_shader_ref, *pixel_shader_ref;
     D3DVIEWPORT8 viewport;
     D3DMATRIX transforms[D8WG_MAX_TRANSFORMS];
     D3DMATERIAL8 material;
@@ -222,6 +223,7 @@ struct D8Device {
     D8IndexBuffer *index_buffer;
     IDirect3DBaseTexture8 *textures[D8WG_MAX_TEXTURE_STAGES];
     UINT base_vertex_index;
+    D8Shader *vertex_shader_ref, *pixel_shader_ref;
     DWORD vertex_shader;
     DWORD pixel_shader;
     BOOL in_scene;
@@ -391,6 +393,9 @@ static HRESULT WINAPI device_set_current_palette(IDirect3DDevice8 *iface, UINT i
  */
 struct D8Shader {
     D8Shader *next;
+    D8Device *device;
+    UINT state_refs;
+    BOOL deleted;
     uint32_t handle;
     /*
      * D3D8 bundles a vertex declaration into CreateVertexShader; D3D9 makes it
@@ -472,6 +477,8 @@ static void device_clear_bindings(D8Device *device);
 static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
         DWORD shader);
 static void device_release_owned_references(D8Device *device);
+static void shader_assign(D8Shader **target, D8Shader *shader);
+static HRESULT device_bind_pixel_shader(D8Device *device, DWORD handle, D8Shader *shader);
 /* Cube helpers used by the shared surface paths, which appear earlier in the
  * file than the cube implementation they belong to. */
 static HRESULT cube_lock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
@@ -975,7 +982,7 @@ static D8Shader *find_shader(D8Shader *list, DWORD handle)
 {
     D8Shader *shader;
     for (shader = list; shader; shader = shader->next) {
-        if (shader->handle == handle) return shader;
+        if (shader->handle == handle && !shader->deleted) return shader;
     }
     return NULL;
 }
@@ -1118,7 +1125,8 @@ static BOOL emit_set_fvf(D8Device *device, DWORD fvf)
     uint8_t *blob;
     BOOL result;
 
-    if (!fvf_to_elements(fvf, elements, D8WG_MAX_VERTEX_ELEMENTS,
+    /* FVF zero clears the declaration when a shader is unbound. */
+    if (fvf && !fvf_to_elements(fvf, elements, D8WG_MAX_VERTEX_ELEMENTS,
             &element_count))
         return FALSE;
     element_bytes = element_count * (UINT)sizeof(D9WGVertexElement);
@@ -1335,6 +1343,29 @@ static BOOL multiply_u32(UINT left, UINT right, UINT *result)
         return FALSE;
     *result = left * right;
     return TRUE;
+}
+
+/* Public handles expire immediately on Delete; live state and snapshots retain
+ * the underlying shader/declaration until their final reference is replaced. */
+static void shader_collect(D8Shader *shader)
+{
+    D8Shader **link;
+    if (!shader || !shader->deleted || shader->state_refs) return;
+    link = shader->is_pixel_shader ? &shader->device->pixel_shaders : &shader->device->vertex_shaders;
+    while (*link && *link != shader) link = &(*link)->next;
+    if (*link) *link = shader->next;
+    emit_destroy_shader(shader);
+    HeapFree(GetProcessHeap(), 0, shader->declaration_tokens);
+    HeapFree(GetProcessHeap(), 0, shader->code_tokens);
+    HeapFree(GetProcessHeap(), 0, shader);
+}
+
+static void shader_assign(D8Shader **target, D8Shader *shader)
+{
+    D8Shader *previous = *target;
+    if (shader) ++shader->state_refs;
+    *target = shader;
+    if (previous) {--previous->state_refs;shader_collect(previous);}
 }
 
 /*
@@ -2665,6 +2696,8 @@ static void device_clear_bindings(D8Device *device)
     }
     device->vertex_shader = 0;
     device->pixel_shader = 0;
+    shader_assign(&device->vertex_shader_ref, NULL);
+    shader_assign(&device->pixel_shader_ref, NULL);
     if (device->render_target_texture) {
         D8Texture *texture = device->render_target_texture;
         device->render_target_texture = NULL;
@@ -3635,47 +3668,30 @@ static BOOL emit_bind_vertex_shader(D8Device *device, D8Shader *shader)
     return TRUE;
 }
 
-static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice8 *iface,
-        DWORD handle)
+static HRESULT device_bind_vertex_shader(D8Device *device, DWORD handle, D8Shader *shader)
+{
+    if (device->recording_state_block) {
+        D8StateSnapshot *state = &device->recording_state_block->state;
+        shader_assign(&state->vertex_shader_ref, shader);
+        state->vertex_shader_mask = TRUE;state->vertex_shader = handle;
+        return D3D_OK;
+    }
+    if (device->vertex_shader == handle && device->vertex_shader_ref == shader) return D3D_OK;
+    if (shader) {
+        if (!emit_bind_vertex_shader(device, shader)) return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    } else if (!emit_set_shader(D9WG_OP_SET_VERTEX_SHADER, device, 0) || !emit_set_fvf(device, handle))
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    device->vertex_shader = handle;
+    shader_assign(&device->vertex_shader_ref, shader);
+    return D3D_OK;
+}
+
+static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice8 *iface, DWORD handle)
 {
     D8Device *device = device_from_iface(iface);
-    /* D3D8 shader handles always carry bit 0; raw FVF tokens never do. */
-    if (handle & 1u) {
-        if (!find_shader(device->vertex_shaders, handle))
-            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-        if (device->recording_state_block) {
-            device->recording_state_block->state.vertex_shader_mask = TRUE;
-            device->recording_state_block->state.vertex_shader = handle;return D3D_OK;
-        }
-        if (device->vertex_shader == handle)
-            return D3D_OK;
-        device->vertex_shader = handle;
-        return emit_bind_vertex_shader(device,
-                find_shader(device->vertex_shaders, handle))
-                ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
-    }
-    {
-        if (device->recording_state_block) {
-            device->recording_state_block->state.vertex_shader_mask = TRUE;
-            device->recording_state_block->state.vertex_shader = handle;return D3D_OK;
-        }
-        if (device->vertex_shader == handle)
-            return D3D_OK;
-        device->vertex_shader = handle;
-        /*
-         * D3D8 overloads SetVertexShader: an even value is an FVF and also
-         * switches the device back to fixed-function vertex processing.
-         * D9WG keeps the D3D9-shaped shader and declaration states separate,
-         * so SET_FVF alone leaves the previously bound programmable shader
-         * alive. 3DMark2001 alternates those two paths between scene passes;
-         * the stale shader then reads inputs the FVF does not provide and the
-         * host correctly drops the draw. Explicitly unbind it as part of the
-         * D3D8-to-D3D9 translation.
-         */
-        return emit_set_shader(D9WG_OP_SET_VERTEX_SHADER, device, 0)
-                && emit_set_fvf(device, handle)
-                ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
-    }
+    D8Shader *shader = (handle & 1u) ? find_shader(device->vertex_shaders, handle) : NULL;
+    if ((handle & 1u) && !shader) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    return device_bind_vertex_shader(device, handle, shader);
 }
 
 static HRESULT WINAPI device_get_vertex_shader(IDirect3DDevice8 *iface,
@@ -6027,6 +6043,8 @@ static void state_block_set_scope(D8StateBlock *block, D3DSTATEBLOCKTYPE type)
 static void state_block_release_references(D8StateBlock *block)
 {
     UINT index;
+    shader_assign(&block->state.vertex_shader_ref, NULL);
+    shader_assign(&block->state.pixel_shader_ref, NULL);
     for (index = 0; index < D8WG_MAX_TEXTURE_STAGES; ++index) {
         if (block->state.textures[index]) {
             IDirect3DBaseTexture8_Release(block->state.textures[index]);
@@ -6095,10 +6113,14 @@ static BOOL state_block_capture(D8Device *device, D8StateBlock *block)
         state->index_buffer = buffer;
         state->base_vertex_index = device->base_vertex_index;
     }
-    if (state->vertex_shader_mask)
+    if (state->vertex_shader_mask) {
+        shader_assign(&state->vertex_shader_ref, device->vertex_shader_ref);
         state->vertex_shader = device->vertex_shader;
-    if (state->pixel_shader_mask)
+    }
+    if (state->pixel_shader_mask) {
+        shader_assign(&state->pixel_shader_ref, device->pixel_shader_ref);
         state->pixel_shader = device->pixel_shader;
+    }
     for (index = 0; index < D8WG_MAX_VS_CONSTANTS; ++index)
         if (state->vs_constant_mask[index]) CopyMemory(state->vs_constants[index], device->vs_constants[index], 16);
     for (index = 0; index < D8WG_MAX_PS_CONSTANTS; ++index)
@@ -6242,11 +6264,11 @@ static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
                 state->index_buffer ? &state->index_buffer->iface : NULL,
                 state->base_vertex_index));
     if (state->vertex_shader_mask)
-        APPLY_STATE(device_set_vertex_shader(&device->iface,
-                state->vertex_shader));
+        APPLY_STATE(device_bind_vertex_shader(device,
+                state->vertex_shader, state->vertex_shader_ref));
     if (state->pixel_shader_mask)
-        APPLY_STATE(device_set_pixel_shader(&device->iface,
-                state->pixel_shader));
+        APPLY_STATE(device_bind_pixel_shader(device,
+                state->pixel_shader, state->pixel_shader_ref));
     for (index = 0; index < D8WG_MAX_VS_CONSTANTS; ++index)
         if (state->vs_constant_mask[index]) APPLY_STATE(device_set_vs_constant(&device->iface, index, state->vs_constants[index], 1));
     for (index = 0; index < D8WG_MAX_PS_CONSTANTS; ++index)
@@ -6712,36 +6734,24 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
             "handle=%08lX hash=%08lX%08lX", version,
             entry->code_token_count, entry->handle,
             entry->hash_high, entry->hash_low);
+    entry->device = device;
     entry->next = device->vertex_shaders;
     device->vertex_shaders = entry;
     *shader = entry->handle;
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_delete_vertex_shader(IDirect3DDevice8 *iface,
-        DWORD shader)
+static HRESULT WINAPI device_delete_vertex_shader(IDirect3DDevice8 *iface, DWORD handle)
 {
     D8Device *device = device_from_iface(iface);
-    D8Shader **link = &device->vertex_shaders;
-    D8Shader *entry;
-    if (!(shader & 1u))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    while (*link && (*link)->handle != shader) link = &(*link)->next;
-    entry = *link;
-    if (!entry)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    /* Deleting the shader that is currently set is legal: the runtime unbinds
-     * it and destroys it, which is what Wine's d3d8 does and what 3DMark 2001
-     * relies on between test scenes. Refusing left the object bound, alive and
-     * unreachable -- a leak the app has no way to notice. Unbinding restores
-     * fixed-function vertex processing, exactly as SetVertexShader(0) does. */
-    if (device->vertex_shader == shader)
-        device_set_vertex_shader(iface, 0);
-    *link = entry->next;
-    emit_destroy_shader(entry);
-    HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
-    HeapFree(GetProcessHeap(), 0, entry->code_tokens);
-    HeapFree(GetProcessHeap(), 0, entry);
+    D8Shader *shader = (handle & 1u) ? find_shader(device->vertex_shaders, handle) : NULL;
+    if (!shader) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* A temporary reference protects deletion when unbinding drops the last
+     * state reference. During recording the unbind itself is recorded. */
+    ++shader->state_refs;
+    shader->deleted = TRUE;
+    if (device->vertex_shader == handle) device_set_vertex_shader(iface, 0);
+    --shader->state_refs;shader_collect(shader);
     return D3D_OK;
 }
 
@@ -6875,28 +6885,34 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice8 *iface,
             "handle=%08lX hash=%08lX%08lX", version,
             entry->code_token_count, entry->handle,
             entry->hash_high, entry->hash_low);
+    entry->device = device;
     entry->next = device->pixel_shaders;
     device->pixel_shaders = entry;
     *shader = entry->handle;
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
-        DWORD shader)
+static HRESULT device_bind_pixel_shader(D8Device *device, DWORD handle, D8Shader *shader)
+{
+    if (device->recording_state_block) {
+        D8StateSnapshot *state = &device->recording_state_block->state;
+        shader_assign(&state->pixel_shader_ref, shader);
+        state->pixel_shader_mask = TRUE;state->pixel_shader = handle;
+        return D3D_OK;
+    }
+    if (device->pixel_shader == handle && device->pixel_shader_ref == shader) return D3D_OK;
+    if (!emit_set_shader(D9WG_OP_SET_PIXEL_SHADER, device, handle)) return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    device->pixel_shader = handle;
+    shader_assign(&device->pixel_shader_ref, shader);
+    return D3D_OK;
+}
+
+static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface, DWORD handle)
 {
     D8Device *device = device_from_iface(iface);
-    if (shader && (!(shader & 1u)
-            || !find_shader(device->pixel_shaders, shader)))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->recording_state_block) {
-        device->recording_state_block->state.pixel_shader_mask = TRUE;
-        device->recording_state_block->state.pixel_shader = shader;return D3D_OK;
-    }
-    if (device->pixel_shader == shader)
-        return D3D_OK;
-    device->pixel_shader = shader;
-    return emit_set_shader(D9WG_OP_SET_PIXEL_SHADER, device, shader)
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    D8Shader *shader = handle ? find_shader(device->pixel_shaders, handle) : NULL;
+    if (handle && (!(handle & 1u) || !shader)) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    return device_bind_pixel_shader(device, handle, shader);
 }
 
 static HRESULT WINAPI device_get_pixel_shader(IDirect3DDevice8 *iface,
@@ -6907,25 +6923,17 @@ static HRESULT WINAPI device_get_pixel_shader(IDirect3DDevice8 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_delete_pixel_shader(IDirect3DDevice8 *iface,
-        DWORD shader)
+static HRESULT WINAPI device_delete_pixel_shader(IDirect3DDevice8 *iface, DWORD handle)
 {
     D8Device *device = device_from_iface(iface);
-    D8Shader **link = &device->pixel_shaders;
-    D8Shader *entry;
-    if (!(shader & 1u))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    while (*link && (*link)->handle != shader) link = &(*link)->next;
-    entry = *link;
-    if (!entry)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    /* Unbind first, for the reason device_delete_vertex_shader gives. */
-    if (device->pixel_shader == shader)
-        device_set_pixel_shader(iface, 0);
-    *link = entry->next;
-    emit_destroy_shader(entry);
-    HeapFree(GetProcessHeap(), 0, entry->code_tokens);
-    HeapFree(GetProcessHeap(), 0, entry);
+    D8Shader *shader = (handle & 1u) ? find_shader(device->pixel_shaders, handle) : NULL;
+    if (!shader) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* A temporary reference protects deletion when unbinding drops the last
+     * state reference. During recording the unbind itself is recorded. */
+    ++shader->state_refs;
+    shader->deleted = TRUE;
+    if (device->pixel_shader == handle) device_set_pixel_shader(iface, 0);
+    --shader->state_refs;shader_collect(shader);
     return D3D_OK;
 }
 

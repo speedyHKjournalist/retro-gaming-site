@@ -212,14 +212,8 @@ const cFunction = (source, name) => {
     return match[0];
 };
 
-// D3D8's SetVertexShader(FVF) is both a declaration change and a switch back
-// to fixed-function vertex processing. D9WG carries those as two D3D9-shaped
-// states; omitting the explicit shader-null bind leaves the previous vs_1_x
-// program alive and makes its reflected inputs disagree with the new FVF.
-const setVertexShader = cFunction(guest, "device_set_vertex_shader");
-assert.match(setVertexShader,
-    /emit_set_shader\(D9WG_OP_SET_VERTEX_SHADER,\s*device,\s*0\)[\s\S]*emit_set_fvf/,
-    "SetVertexShader(FVF) must unbind the old programmable vertex shader");
+// Actual shader/FVF unbinding and empty declaration behavior are exercised
+// by d8wg_shader_lifetime_test.js, including the emitted command order.
 
 // The executor trusts the 64-bit hash carried by CREATE_*_SHADER as its cache
 // key. A zero-filled D3D8 command aliases every distinct program to the first

@@ -236,6 +236,7 @@ static void blend_checks(void)
 #endif
 #if D9WG_TNL_API == 8
 #include "d3d8_state_record_cases.h"
+#include "d3d8_shader_lifetime_cases.h"
 #endif
 void WINAPI WinMainCRTStartup(void)
 {
@@ -288,6 +289,7 @@ void WINAPI WinMainCRTStartup(void)
 #if D9WG_TNL_API == 8
     d3d8_record_state_checks();
     d3d8_record_constant_checks();
+    d3d8_shader_lifetime_checks();
 #endif
 #if D9WG_TNL_API != 7
     shared_state_scope_checks();
