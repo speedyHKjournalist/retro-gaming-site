@@ -33,4 +33,8 @@ trap 'rm -rf "$object_dir"' EXIT HUP INT TERM
     -c "$script_dir/d9wg_transport.c" -o "$object_dir/d9wg_transport.o"
 "$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
     -c "$script_dir/d9wg_window_state.c" -o "$object_dir/d9wg_window_state.o"
-"$archiver" rcs "$output" "$object_dir/d9wg_runtime.o" "$object_dir/d9wg_fvf.o" "$object_dir/d9wg_fpu.o" "$object_dir/d9wg_math.o" "$object_dir/d9wg_tnl_math.o" "$object_dir/d9wg_lighting.o" "$object_dir/d9wg_vertex.o" "$object_dir/d9wg_blend.o" "$object_dir/d9wg_clip.o" "$object_dir/d9wg_clip_draw.o" "$object_dir/d9wg_process.o" "$object_dir/d9wg_transport.o" "$object_dir/d9wg_window_state.o"
+"$compiler" -std=gnu99 -Os -ffreestanding -fno-builtin -Wall -Wextra -Werror \
+    -c "$script_dir/d9wg_window_geometry.c" -o "$object_dir/d9wg_window_geometry.o"
+"$compiler" -std=gnu99 -Os -Wall -Wextra -Werror \
+    -c "$script_dir/d9wg_window_probe.c" -o "$object_dir/d9wg_window_probe.o"
+"$archiver" rcs "$output" "$object_dir/d9wg_runtime.o" "$object_dir/d9wg_fvf.o" "$object_dir/d9wg_fpu.o" "$object_dir/d9wg_math.o" "$object_dir/d9wg_tnl_math.o" "$object_dir/d9wg_lighting.o" "$object_dir/d9wg_vertex.o" "$object_dir/d9wg_blend.o" "$object_dir/d9wg_clip.o" "$object_dir/d9wg_clip_draw.o" "$object_dir/d9wg_process.o" "$object_dir/d9wg_transport.o" "$object_dir/d9wg_window_state.o" "$object_dir/d9wg_window_geometry.o" "$object_dir/d9wg_window_probe.o"

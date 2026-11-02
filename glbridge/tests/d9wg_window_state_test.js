@@ -4,11 +4,11 @@ const root=path.resolve(__dirname,".."),directory=fs.mkdtempSync(path.join(os.tm
 const extract=(source,name)=>{const match=source.match(new RegExp("static [^\\n]*\\b"+name+"\\([^;]*?\\)\\n\\{[\\s\\S]*?\\n}\\n"));assert(match,name);return match[0];};
 try{for(const api of [8,9,7]){
  const folder=api===7?"ddraw":"d3d"+api,file=process.env.D9WG_WINDOW_MUTATION_API===String(api)?process.env.D9WG_WINDOW_FRONTEND_SOURCE:root+"/"+folder+"proxy/"+folder+"_proxy.c",source=fs.readFileSync(file,"utf8");
- const functions=(api===8?["capture_surface","emit_surface_update_and_flush"]:api===9?["emit_window_state"]:["emit_window_state_showing","emit_window_state_not_showing"]).map(name=>extract(source,name)).join("\n");
+ const functions=(api===8?["capture_surface","emit_surface_update_and_flush"]:api===9?["emit_window_state_from_probe","emit_window_state"]:["emit_window_state_showing_from_probe","emit_window_state_showing","emit_window_state_not_showing"]).map(name=>extract(source,name)).join("\n");
  const code=`#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "runtime/d9wg_window_state.h"
+#include "runtime/d9wg_window_probe.h"
 typedef int BOOL;typedef uint32_t UINT,DWORD;typedef uintptr_t HWND;typedef struct{int32_t left,top,right,bottom;}RECT;typedef struct{int32_t x,y;}POINT;
 #define TRUE 1
 #define FALSE 0
@@ -28,10 +28,15 @@ static D9Device device;static DDrawObject object;static int g_transport_lock;
 static HWND foreground=2;static int valid_window=1,visible=1,iconic,visibility;static int32_t x=20,y=30,cw=160,ch=100,ww=176,wh=138;
 static V86WindowRegion region_value;static unsigned queued,submitted;static int fail_queue,fail_submit;static D9WGWindowStateWithRegion packet,pending;static uint32_t pending_bytes;
 static void EnterCriticalSection(int *lock){++*lock;}static void LeaveCriticalSection(int *lock){--*lock;}
-static HWND GetForegroundWindow(void){return foreground;}static BOOL IsWindow(HWND w){return w&&valid_window;}static BOOL IsWindowVisible(HWND w){(void)w;return visible;}static BOOL IsIconic(HWND w){(void)w;return iconic;}
-static BOOL GetClientRect(HWND w,RECT *r){(void)w;*r=(RECT){0,0,cw,ch};return 1;}static BOOL GetWindowRect(HWND w,RECT *r){(void)w;*r=(RECT){x-8,y-30,x-8+ww,y-30+wh};return 1;}static BOOL ClientToScreen(HWND w,POINT *p){(void)w;p->x=x;p->y=y;return 1;}
-static void SetRect(RECT *r,int32_t l,int32_t t,int32_t right,int32_t b){*r=(RECT){l,t,right,b};}
-static int v86_window_visible_region(HWND w,V86WindowRegion *out){(void)w;*out=region_value;return visibility;}
+void d9wg_window_probe_capture(uintptr_t w,uint32_t options,D9WGWindowProbe *p){
+ memset(p,0,sizeof(*p));p->state.hwnd=(uint32_t)w;p->state.foreground_hwnd=foreground;
+ if(options&D9WG_WINDOW_PROBE_IDENTITY_ONLY||!w||!valid_window)return;
+ p->state.flags=D9WG_WINDOW_IS_WINDOW|(visible?D9WG_WINDOW_VISIBLE:0)|(iconic?D9WG_WINDOW_ICONIC:0)|(w==foreground?D9WG_WINDOW_FOREGROUND:0);
+ p->state.window_x=x;p->state.window_y=y;p->state.client_width=cw;p->state.client_height=ch;
+ p->state.window_width=ww;p->state.window_height=wh;p->outer_x=x-8;p->outer_y=y-30;
+ p->client_succeeded=p->origin_succeeded=p->outer_succeeded=1;
+ if(options&D9WG_WINDOW_PROBE_REGION){if(visibility==1)p->state.flags|=D9WG_WINDOW_OCCLUDED;if(visibility==2){p->state.flags|=D9WG_WINDOW_REGION;p->region.rect_count=region_value.count;memcpy(p->region.rects,region_value.rects,sizeof(p->region.rects));}}
+}
 static BOOL emit_command(uint32_t op,const void *bytes,uint32_t size){if(op!=D9WG_OP_WINDOW_STATE||size>sizeof(packet))return FALSE;if(fail_queue){fail_queue=0;return FALSE;}memcpy(&packet,bytes,size);queued++;return TRUE;}
 static BOOL submit_batch_locked(BOOL present){if(present||g_transport_lock<1)return FALSE;submitted++;if(fail_submit){fail_submit=0;return FALSE;}return TRUE;}
 static BOOL reserve_command_locked(uint32_t op,uint32_t bytes,uint32_t extra,void *header,uint8_t **payload,void *blob){(void)header;(void)blob;if(extra||op!=D9WG_OP_WINDOW_STATE||g_transport_lock<1)return FALSE;if(fail_queue){fail_queue=0;return FALSE;}pending_bytes=bytes;*payload=(uint8_t*)&pending;return TRUE;}
@@ -40,7 +45,7 @@ static void emit(int force){${api===8?"(void)emit_surface_update_and_flush(&devi
 static D9WGWindowCache *cache(void){return ${api===7?"&object.window_cache":"&device.window_cache"};}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"window state line %u API=${api}: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){
- (void)emit_command;(void)submit_batch_locked;(void)reserve_command_locked;(void)SetRect;(void)GetWindowRect;(void)device;(void)object;
+ (void)emit_command;(void)submit_batch_locked;(void)reserve_command_locked;(void)device;(void)object;
  device.handle=41;device.present.Windowed=1;object.device_created=1;object.device_handle=41;object.primary=(void*)1;object.window=1;
  emit(0);CHECK(queued==1&&packet.state.foreground_hwnd==2&&packet.state.window_x==20&&packet.state.client_width==160);CHECK(!g_transport_lock);
  emit(0);CHECK(queued==1);foreground=3;emit(0);CHECK(queued==2&&packet.state.foreground_hwnd==3);
@@ -58,5 +63,5 @@ int main(void){
  puts("PASS actual API ${api} window reports: complete geometry/foreground/region identity, queue/flush failure retry, bounded active-byte cache and zero unused-tail comparisons");return 0;}
 `;
  const input=path.join(directory,folder+".c"),binary=path.join(directory,folder);fs.writeFileSync(input,code);
- const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-Wno-unused-function","-I",root,"-I",root+"/runtime",input,process.env.D9WG_WINDOW_CACHE_SOURCE||root+"/runtime/d9wg_window_state.c","-o",binary],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);
+ const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-Wno-unused-function","-I",root,"-I",root+"/runtime",input,root+"/runtime/d9wg_window_geometry.c",process.env.D9WG_WINDOW_CACHE_SOURCE||root+"/runtime/d9wg_window_state.c","-o",binary],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);
 }}finally{fs.rmSync(directory,{recursive:true,force:true});}

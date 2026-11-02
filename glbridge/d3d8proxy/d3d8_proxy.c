@@ -36,8 +36,7 @@
 #include "../runtime/d9wg_process_aliases.h"
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
-#include "../window_region.h"
-#include "../runtime/d9wg_window_state.h"
+#include "../runtime/d9wg_window_probe.h"
 
 /* These legacy D3D shade-cap bits are omitted by some d3d8.h variants. */
 #ifndef D3DPSHADECAPS_COLORFLATRGB
@@ -1514,25 +1513,14 @@ static BOOL primitive_element_count(D3DPRIMITIVETYPE type,
 static BOOL capture_surface(D8Device *device, HWND window,
         D8ClientArea *surface)
 {
-    RECT client;
-    POINT origin;
-
-    ZeroMemory(surface, sizeof(*surface));
-    surface->device_handle = device->handle;
-    surface->hwnd = (uint32_t)(uintptr_t)window;
-    if (!window || !IsWindow(window) || IsIconic(window))
-        return FALSE;
-    if (!GetClientRect(window, &client))
-        return FALSE;
-    origin.x = 0;
-    origin.y = 0;
-    if (!ClientToScreen(window, &origin))
-        return FALSE;
-    surface->x = origin.x;
-    surface->y = origin.y;
-    surface->width = (uint32_t)(client.right - client.left);
-    surface->height = (uint32_t)(client.bottom - client.top);
-    return surface->width != 0 && surface->height != 0;
+    D9WGWindowProbe probe;
+    D9WGWindowGeometry geometry;
+    d9wg_window_probe_capture((uintptr_t)window, 0, &probe);
+    d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_D3D8, 0, 0, &geometry);
+    surface->device_handle = device->handle;surface->hwnd = (uint32_t)(uintptr_t)window;
+    surface->x = geometry.x;surface->y = geometry.y;
+    surface->width = geometry.width;surface->height = geometry.height;
+    return geometry.width && geometry.height;
 }
 
 
@@ -1540,64 +1528,15 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
         BOOL hidden, BOOL force)
 {
     D9WGWindowStateWithRegion report;
-    D9WGWindowState *command = &report.state;
-    V86WindowRegion region;
-    D8ClientArea surface;
+    D9WGWindowProbe probe;
     uint8_t *payload;
     uint32_t bytes;
     BOOL result;
-    BOOL occluded;
-    int visible;
-
-    if (hidden) {
-        ZeroMemory(&surface, sizeof(surface));
-        surface.device_handle = device->handle;
-        surface.hwnd = (uint32_t)(uintptr_t)window;
-    } else {
-        capture_surface(device, window, &surface);
-    }
-    /* What of the client area other windows leave showing; see
-     * window_region.h (none of it: D9WG_WINDOW_OCCLUDED, part of it:
-     * D9WG_WINDOW_REGION) */
-    region.count = 0;
-    visible = hidden ? V86_WINDOW_REGION_ALL
-            : v86_window_visible_region(window, &region);
-    occluded = visible == V86_WINDOW_REGION_NONE;
-    ZeroMemory(&report, sizeof(report));
-    command->device_handle = surface.device_handle;
-    command->hwnd = surface.hwnd;
-    command->foreground_hwnd = (uint32_t)(uintptr_t)GetForegroundWindow();
-    /*
-     * The host both logs this and moves the overlay from it
-     * (applyWindowStateGeometry), so the flags have to be real: with none set
-     * it reads the window as gone and hides the canvas. The `hidden` branch
-     * above deliberately leaves them clear, which is exactly that meaning.
-     */
-    if (!hidden && window && IsWindow(window)) {
-        command->flags = D9WG_WINDOW_IS_WINDOW;
-        if (IsWindowVisible(window))
-            command->flags |= D9WG_WINDOW_VISIBLE;
-        if (IsIconic(window))
-            command->flags |= D9WG_WINDOW_ICONIC;
-        if (GetForegroundWindow() == window)
-            command->flags |= D9WG_WINDOW_FOREGROUND;
-        if (!device->present.Windowed)
-            command->flags |= D9WG_WINDOW_FULLSCREEN;
-        if (occluded)
-            command->flags |= D9WG_WINDOW_OCCLUDED;
-        if (visible == V86_WINDOW_REGION_PART)
-            command->flags |= D9WG_WINDOW_REGION;
-    }
-    command->window_x = surface.x;
-    command->window_y = surface.y;
-    command->window_width = surface.width;
-    command->window_height = surface.height;
-    /* capture_surface() measures the client rect, so these are the same
-     * rectangle -- the window rect would include the frame and place the
-     * overlay over the title bar. */
-    command->client_width = surface.width;
-    command->client_height = surface.height;
-    d9wg_window_report_region(&report, region.count, region.rects);
+    d9wg_window_probe_capture((uintptr_t)window, hidden
+        ? D9WG_WINDOW_PROBE_STATE | D9WG_WINDOW_PROBE_IDENTITY_ONLY
+        : D9WG_WINDOW_PROBE_STATE | D9WG_WINDOW_PROBE_REGION, &probe);
+    d9wg_window_probe_report(&probe, device->handle, !device->present.Windowed,
+        D9WG_WINDOW_REPORT_CLIENT_SIZE | (hidden ? D9WG_WINDOW_REPORT_HIDDEN : 0), &report);
     bytes = (uint32_t)D9WG_WINDOW_STATE_BYTES(&report);
     EnterCriticalSection(&g_transport_lock);
     if (!force && d9wg_window_cache_matches(&device->window_cache, &report)) {

@@ -72,15 +72,14 @@ static int v86_window_clip_box_kind(HWND window)
  * reported separately (D9WG_WINDOW_VISIBLE, D9WG_WINDOW_ICONIC), and an empty
  * client rect is what some fullscreen windows report.
  */
-static int v86_window_visible_region(HWND window, V86WindowRegion *region)
+static __inline int v86_window_visible_region_prepared(HWND window,
+        const RECT *client, const POINT *origin, V86WindowRegion *region)
 {
     struct {
         RGNDATAHEADER header;
         RECT rects[V86_WINDOW_REGION_MAX_RECTS];
     } data;
-    RECT client;
     RECT box;
-    POINT origin;
     HRGN visible;
     HRGN client_region;
     HDC dc;
@@ -90,11 +89,6 @@ static int v86_window_visible_region(HWND window, V86WindowRegion *region)
     uint32_t i;
 
     region->count = 0;
-    if (!window || !IsWindow(window) || !IsWindowVisible(window)
-            || IsIconic(window))
-        return V86_WINDOW_REGION_ALL;
-    if (!GetClientRect(window, &client) || IsRectEmpty(&client))
-        return V86_WINDOW_REGION_ALL;
     if (!v86_window_region_nt())
         return v86_window_clip_box_kind(window);
 
@@ -102,7 +96,7 @@ static int v86_window_visible_region(HWND window, V86WindowRegion *region)
     if (!dc)
         return V86_WINDOW_REGION_ALL;
     visible = CreateRectRgn(0, 0, 0, 0);
-    client_region = CreateRectRgnIndirect(&client);
+    client_region = CreateRectRgnIndirect(client);
     if (!visible || !client_region || GetRandomRgn(dc, visible, SYSRGN) != 1) {
         /* No system region to go by: the clip box still tells "none" */
         if (visible) DeleteObject(visible);
@@ -112,16 +106,13 @@ static int v86_window_visible_region(HWND window, V86WindowRegion *region)
     }
     ReleaseDC(window, dc);
 
-    origin.x = 0;
-    origin.y = 0;
-    ClientToScreen(window, &origin);
-    OffsetRgn(visible, -origin.x, -origin.y);
+    OffsetRgn(visible, -origin->x, -origin->y);
     kind = CombineRgn(visible, visible, client_region, RGN_AND);
     if (kind == NULLREGION) {
         result = V86_WINDOW_REGION_NONE;
     } else if (kind == SIMPLEREGION) {
         GetRgnBox(visible, &box);
-        if (!EqualRect(&box, &client)) {
+        if (!EqualRect(&box, client)) {
             region->rects[0][0] = box.left;
             region->rects[0][1] = box.top;
             region->rects[0][2] = box.right;
@@ -147,6 +138,19 @@ static int v86_window_visible_region(HWND window, V86WindowRegion *region)
     DeleteObject(visible);
     DeleteObject(client_region);
     return result;
+}
+
+static __inline int v86_window_visible_region(HWND window, V86WindowRegion *region)
+{
+    RECT client;
+    POINT origin = {0, 0};
+    region->count = 0;
+    if (!window || !IsWindow(window) || !IsWindowVisible(window) || IsIconic(window))
+        return V86_WINDOW_REGION_ALL;
+    if (!GetClientRect(window, &client) || IsRectEmpty(&client))
+        return V86_WINDOW_REGION_ALL;
+    if (!ClientToScreen(window, &origin)) return V86_WINDOW_REGION_ALL;
+    return v86_window_visible_region_prepared(window, &client, &origin, region);
 }
 
 static __inline BOOL v86_window_region_equal(const V86WindowRegion *a,

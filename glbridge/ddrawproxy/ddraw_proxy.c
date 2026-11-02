@@ -52,8 +52,7 @@
 #include <stdarg.h>
 #include "../openglproxy/v86gl_ioctl.h"
 #include "ddraw_protocol.h"
-#include "../window_region.h"
-#include "../runtime/d9wg_window_state.h"
+#include "../runtime/d9wg_window_probe.h"
 
 /* The legacy DirectX SDK declared these in auxiliary headers; current MinGW
  * intentionally omits them although the COM methods still take the values. */
@@ -1452,6 +1451,8 @@ static BOOL emit_overlay_state(DDSurface *surface)
 }
 
 static void emit_window_state_showing(DDrawObject *object, BOOL flush);
+static void emit_window_state_showing_from_probe(DDrawObject *object, BOOL flush,
+        const D9WGWindowProbe *probe);
 static void watch_object_window(DDrawObject *object);
 static void unwatch_object_window(DDrawObject *object);
 
@@ -1459,8 +1460,8 @@ static BOOL emit_present_and_flush(DDrawObject *object)
 {
     D9WGPresent present;
     DDSurface *overlay;
-    RECT client;
-    POINT origin;
+    D9WGWindowProbe probe;
+    D9WGWindowGeometry geometry;
     BOOL result;
 
     if (!ensure_device(object))
@@ -1475,20 +1476,12 @@ static BOOL emit_present_and_flush(DDrawObject *object)
     ZeroMemory(&present, sizeof(present));
     present.device_handle = object->device_handle;
     present.hwnd = (uint32_t)(uintptr_t)object->window;
-    present.width = object->mode_width;
-    present.height = object->mode_height;
-    if (object->window && GetClientRect(object->window, &client)) {
-        origin.x = client.left;
-        origin.y = client.top;
-        if (ClientToScreen(object->window, &origin)) {
-            present.x = origin.x;
-            present.y = origin.y;
-        }
-        if (client.right > client.left)
-            present.width = (uint32_t)(client.right - client.left);
-        if (client.bottom > client.top)
-            present.height = (uint32_t)(client.bottom - client.top);
-    }
+    d9wg_window_probe_capture((uintptr_t)object->window, D9WG_WINDOW_PROBE_STATE |
+        D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_DDRAW,
+        object->mode_width, object->mode_height, &geometry);
+    present.x = geometry.x;present.y = geometry.y;
+    present.width = geometry.width;present.height = geometry.height;
     /* An exclusive-fullscreen title whose mode change really happened owns the
      * whole screen; its window rectangle is the screen. */
     if ((object->cooperative_flags & DDSCL_FULLSCREEN) &&
@@ -1500,7 +1493,7 @@ static BOOL emit_present_and_flush(DDrawObject *object)
     }
     /* Where the window is and what of it shows, in the same batch (sent
      * only when it changed) */
-    emit_window_state_showing(object, FALSE);
+    emit_window_state_showing_from_probe(object, FALSE, &probe);
     DDWG_TRACE_CHECKPOINT("PRESENT BEGIN device=%lu hwnd=%08lX "
             "rect=%ld,%ld %lux%lu frame=%lu", present.device_handle,
             present.hwnd, present.x, present.y, present.width,
@@ -3852,48 +3845,18 @@ static void surface_destroy(DDSurface *surface)
  */
 static void emit_window_state_not_showing(DDrawObject *object)
 {
-    D9WGWindowState command;
-    HWND window;
-    HWND foreground;
-    RECT window_rect;
-    RECT client;
-    uint32_t flags = 0;
-
-    if (!object || !object->device_created || !object->device_handle)
-        return;
-    window = object->window;
-    foreground = GetForegroundWindow();
-    SetRect(&window_rect, 0, 0, 0, 0);
-    SetRect(&client, 0, 0, 0, 0);
-    if (window && IsWindow(window)) {
-        flags |= D9WG_WINDOW_IS_WINDOW;
-        if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
-        if (window == foreground) flags |= D9WG_WINDOW_FOREGROUND;
-        GetWindowRect(window, &window_rect);
-        GetClientRect(window, &client);
-    }
-    if (object->cooperative_flags & DDSCL_FULLSCREEN)
-        flags |= D9WG_WINDOW_FULLSCREEN;
-    /* Says which claim this is: nothing to present, rather than a window that
-     * has gone away. Without it the host reads a cleared VISIBLE bit as a
-     * minimised window and warns that input is going elsewhere -- for a title
-     * that has simply finished drawing and whose window is fine. */
-    flags |= D9WG_WINDOW_NO_SURFACE;
+    if (!object || !object->device_created || !object->device_handle) return;
+    D9WGWindowProbe probe;
+    D9WGWindowStateWithRegion report;
+    d9wg_window_probe_capture((uintptr_t)object->window,
+        D9WG_WINDOW_PROBE_STATE | D9WG_WINDOW_PROBE_OUTER, &probe);
+    d9wg_window_probe_report(&probe, object->device_handle,
+        (object->cooperative_flags & DDSCL_FULLSCREEN) != 0,
+        D9WG_WINDOW_REPORT_NO_SURFACE, &report);
     d9wg_window_cache_invalidate(&object->window_cache);
-    ZeroMemory(&command, sizeof(command));
-    command.device_handle = object->device_handle;
-    command.hwnd = (uint32_t)(uintptr_t)window;
-    command.foreground_hwnd = (uint32_t)(uintptr_t)foreground;
-    command.flags = flags;
-    command.window_x = window_rect.left;
-    command.window_y = window_rect.top;
-    command.window_width = (uint32_t)(window_rect.right - window_rect.left);
-    command.window_height = (uint32_t)(window_rect.bottom - window_rect.top);
-    command.client_width = (uint32_t)(client.right - client.left);
-    command.client_height = (uint32_t)(client.bottom - client.top);
     DDWG_TRACE_CHECKPOINT("WINDOW_STATE not_showing device=%lu hwnd=%08lX "
-            "flags=%08lX", command.device_handle, command.hwnd, flags);
-    if (!emit_command(D9WG_OP_WINDOW_STATE, &command, sizeof(command)))
+            "flags=%08lX", report.state.device_handle, report.state.hwnd, report.state.flags);
+    if (!emit_command(D9WG_OP_WINDOW_STATE, &report, sizeof(report.state)))
         return;
     /* Flushed rather than left in the batch: the app has stopped presenting,
      * so there may be no next submission until the process exits, and a
@@ -3912,78 +3875,39 @@ static void emit_window_state_not_showing(DDrawObject *object)
  * has been told there is nothing to show (emit_window_state_not_showing), and
  * that stands. Sent only when something in it changed.
  */
-static void emit_window_state_showing(DDrawObject *object, BOOL flush)
+static void emit_window_state_showing_from_probe(DDrawObject *object, BOOL flush,
+        const D9WGWindowProbe *probe)
 {
     D9WGWindowStateWithRegion report;
-    D9WGWindowState *command = &report.state;
-    V86WindowRegion region;
-    HWND window;
-    RECT window_rect;
-    RECT client;
-    POINT origin;
-    uint32_t flags;
     BOOL result;
-
-    if (!object || !object->device_created || !object->device_handle
-            || !object->primary)
-        return;
-    window = object->window;
-    if (!window || !IsWindow(window))
-        return;
-    ZeroMemory(&report, sizeof(report));
-    flags = D9WG_WINDOW_IS_WINDOW;
-    if (IsWindowVisible(window)) flags |= D9WG_WINDOW_VISIBLE;
-    if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
-    if (window == GetForegroundWindow()) flags |= D9WG_WINDOW_FOREGROUND;
-    if (object->cooperative_flags & DDSCL_FULLSCREEN)
-        flags |= D9WG_WINDOW_FULLSCREEN;
-    switch (v86_window_visible_region(window, &region)) {
-    case V86_WINDOW_REGION_NONE:
-        flags |= D9WG_WINDOW_OCCLUDED;
-        break;
-    case V86_WINDOW_REGION_PART:
-        flags |= D9WG_WINDOW_REGION;
-        break;
-    }
-    SetRect(&window_rect, 0, 0, 0, 0);
-    SetRect(&client, 0, 0, 0, 0);
-    GetWindowRect(window, &window_rect);
-    GetClientRect(window, &client);
-    origin.x = 0;
-    origin.y = 0;
-    ClientToScreen(window, &origin);
-    /* An exclusive-fullscreen title whose mode change really happened owns
-     * the whole screen, as emit_present_and_flush() reports it */
-    if ((object->cooperative_flags & DDSCL_FULLSCREEN)
-            && object->guest_mode_changed) {
-        origin.x = 0;
-        origin.y = 0;
-    }
-
-    command->device_handle = object->device_handle;
-    command->hwnd = (uint32_t)(uintptr_t)window;
-    command->foreground_hwnd = (uint32_t)(uintptr_t)GetForegroundWindow();
-    command->flags = flags;
-    command->window_x = origin.x;
-    command->window_y = origin.y;
-    command->window_width = (uint32_t)(window_rect.right - window_rect.left);
-    command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
-    command->client_width = (uint32_t)client.right;
-    command->client_height = (uint32_t)client.bottom;
-    d9wg_window_report_region(&report, region.count, region.rects);
+    if (!object || !object->device_created || !object->device_handle || !object->primary
+            || !(probe->state.flags & D9WG_WINDOW_IS_WINDOW)) return;
+    uint32_t policy = (object->cooperative_flags & DDSCL_FULLSCREEN) && object->guest_mode_changed
+        ? D9WG_WINDOW_REPORT_ZERO_ORIGIN : 0;
+    d9wg_window_probe_report(probe, object->device_handle,
+        (object->cooperative_flags & DDSCL_FULLSCREEN) != 0, policy, &report);
     EnterCriticalSection(&g_transport_lock);
     if (d9wg_window_cache_matches(&object->window_cache, &report)) {
         LeaveCriticalSection(&g_transport_lock);
         return;
     }
     DDWG_TRACE_CHECKPOINT("WINDOW_STATE showing device=%lu hwnd=%08lX "
-            "flags=%08lX rects=%lu", command->device_handle, command->hwnd,
-            flags, region.count);
+            "flags=%08lX rects=%lu", report.state.device_handle, report.state.hwnd,
+            report.state.flags, report.region.rect_count);
     result = emit_command(D9WG_OP_WINDOW_STATE, &report,
             (uint32_t)D9WG_WINDOW_STATE_BYTES(&report));
     if (result && flush) result = submit_batch_locked(FALSE);
     if (result) d9wg_window_cache_commit(&object->window_cache, &report);
     LeaveCriticalSection(&g_transport_lock);
+}
+
+static void emit_window_state_showing(DDrawObject *object, BOOL flush)
+{
+    if (!object || !object->device_created || !object->device_handle || !object->primary) return;
+    D9WGWindowProbe probe;
+    d9wg_window_probe_capture((uintptr_t)object->window, D9WG_WINDOW_PROBE_STATE |
+        D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    emit_window_state_showing_from_probe(object, flush, &probe);
 }
 
 /*

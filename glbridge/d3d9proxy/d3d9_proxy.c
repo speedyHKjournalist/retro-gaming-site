@@ -50,8 +50,7 @@
 #endif
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d9_protocol.h"
-#include "../window_region.h"
-#include "../runtime/d9wg_window_state.h"
+#include "../runtime/d9wg_window_probe.h"
 #include "../upload_bands.h"
 
 #ifndef D3DSTREAMSOURCE_INDEXEDDATA
@@ -1377,7 +1376,8 @@ static BOOL emit_window_state(D9Device *device, HWND window);
 static void watch_window_state(D9Device *device);
 static void unwatch_window_state(D9Device *device);
 static void claim_fullscreen_foreground(D9Device *device, HWND window);
-static void maintain_fullscreen_foreground(D9Device *device, HWND window);
+static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
+        const D9WGWindowProbe *probe);
 static void restore_display_mode(D9Device *device);
 
 static D9Direct3D *d3d_from_iface(IDirect3D9 *iface)
@@ -4378,89 +4378,12 @@ static HRESULT WINAPI device_set_cursor_properties(IDirect3DDevice9 *iface,
  * owns those pixels. That failure is invisible in the picture by construction,
  * so it has to be reported rather than deduced.
  */
-/*
- * Whether other windows cover all of the device window's client area.
- *
- * Without a desktop compositor (Windows 2000/XP) a window's DC is clipped to
- * the part of it nothing else is drawn over, so an empty clip box means
- * nothing of it shows -- which is how Warcraft III plays its cinematics: a
- * topmost "Blizzard Player" popup over the whole screen, the D3D window
- * untouched behind it. An empty client rect is not evidence either way (it is
- * what GetClientRect reports for some fullscreen windows), so it never counts
- * as covered; neither does anything under a compositor, where the clip box is
- * always the whole window.
- */
-static BOOL window_fully_covered(HWND window)
-{
-    RECT client;
-    RECT box;
-    HDC dc;
-    int kind;
-
-    if (!window || !IsWindow(window) || !IsWindowVisible(window)
-            || IsIconic(window))
-        return FALSE;
-    if (!GetClientRect(window, &client) || IsRectEmpty(&client))
-        return FALSE;
-    dc = GetDC(window);
-    if (!dc)
-        return FALSE;
-    kind = GetClipBox(dc, &box);
-    ReleaseDC(window, dc);
-    return kind == NULLREGION;
-}
-
-static BOOL emit_window_state(D9Device *device, HWND window)
+static BOOL emit_window_state_from_probe(D9Device *device, HWND window,
+        const D9WGWindowProbe *probe)
 {
     D9WGWindowStateWithRegion report;
-    D9WGWindowState *command = &report.state;
-    V86WindowRegion region;
-    HWND foreground = GetForegroundWindow();
-    RECT window_rect;
-    RECT client;
-    POINT origin;
-    uint32_t flags = 0;
     BOOL result;
-
-    SetRect(&window_rect, 0, 0, 0, 0);
-    SetRect(&client, 0, 0, 0, 0);
-    origin.x = 0;
-    origin.y = 0;
-    region.count = 0;
-    if (window && IsWindow(window)) {
-        flags |= D9WG_WINDOW_IS_WINDOW;
-        if (IsWindowVisible(window)) flags |= D9WG_WINDOW_VISIBLE;
-        if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
-        if (window == foreground) flags |= D9WG_WINDOW_FOREGROUND;
-        switch (v86_window_visible_region(window, &region)) {
-        case V86_WINDOW_REGION_NONE:
-            flags |= D9WG_WINDOW_OCCLUDED;
-            break;
-        case V86_WINDOW_REGION_PART:
-            flags |= D9WG_WINDOW_REGION;
-            break;
-        }
-        GetWindowRect(window, &window_rect);
-        GetClientRect(window, &client);
-        ClientToScreen(window, &origin);
-    }
-    if (!device->present.Windowed)
-        flags |= D9WG_WINDOW_FULLSCREEN;
-
-    command->device_handle = device->handle;
-    command->hwnd = (uint32_t)(uintptr_t)window;
-    command->foreground_hwnd = (uint32_t)(uintptr_t)foreground;
-    command->flags = flags;
-    /* Where the client area is, as D9WGPresent says it: the host places the
-     * picture from this report too */
-    command->window_x = origin.x;
-    command->window_y = origin.y;
-    command->window_width = (uint32_t)(window_rect.right - window_rect.left);
-    command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
-    command->client_width = (uint32_t)(client.right - client.left);
-    command->client_height = (uint32_t)(client.bottom - client.top);
-    d9wg_window_report_region(&report, region.count, region.rects);
-
+    d9wg_window_probe_report(probe, device->handle, !device->present.Windowed, 0, &report);
     EnterCriticalSection(&g_transport_lock);
     device->state_window = window;
     if (d9wg_window_cache_matches(&device->window_cache, &report)) {
@@ -4472,6 +4395,14 @@ static BOOL emit_window_state(D9Device *device, HWND window)
     if (result) d9wg_window_cache_commit(&device->window_cache, &report);
     LeaveCriticalSection(&g_transport_lock);
     return result;
+}
+
+static BOOL emit_window_state(D9Device *device, HWND window)
+{
+    D9WGWindowProbe probe;
+    d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
+        D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    return emit_window_state_from_probe(device, window, &probe);
 }
 
 /*
@@ -4720,32 +4651,34 @@ static void restore_window_style(D9Device *device)
  * is a syscall and losing focus is not something a frame boundary can fix
  * faster than a person can notice.
  */
-static void maintain_fullscreen_foreground(D9Device *device, HWND window)
+static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
+        const D9WGWindowProbe *probe)
 {
     DWORD now;
 
-    if (device->present.Windowed || !window || !IsWindow(window))
-        return;
-    if (GetForegroundWindow() == window)
-        return;
+    if (device->present.Windowed || !window || !(probe->state.flags & D9WG_WINDOW_IS_WINDOW))
+        return FALSE;
+    if ((probe->state.flags & D9WG_WINDOW_FOREGROUND) != 0)
+        return FALSE;
     /* Something the game itself put over its whole window -- Warcraft III's
      * cinematic player -- owns the screen and the keyboard (Esc skips the
      * video) until it goes away. A splash or a message-only window does not
      * cover the device window, so NFS's case below still re-claims. */
-    if (window_fully_covered(window))
-        return;
+    if ((probe->state.flags & D9WG_WINDOW_OCCLUDED) != 0)
+        return FALSE;
     now = GetTickCount();
     /* GetTickCount wraps every ~49 days; the subtraction is unsigned so the
      * wrap is harmless, but a zero initial value must not look like "claimed
      * just now" either -- hence the explicit first-time case. */
     if (device->foreground_claims &&
             (DWORD)(now - device->last_foreground_claim) < 500u)
-        return;
+        return FALSE;
     device->last_foreground_claim = now;
     ++device->foreground_claims;
-    if (IsIconic(window))
+    if ((probe->state.flags & D9WG_WINDOW_ICONIC) != 0)
         ShowWindow(window, SW_RESTORE);
     raise_window_to_foreground(window);
+    return TRUE;
 
 }
 
@@ -5192,26 +5125,13 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
 static void probe_window_rect(HWND window, int fallback_width,
         int fallback_height, RECT *client, POINT *origin)
 {
-    SetRect(client, 0, 0, fallback_width, fallback_height);
-    origin->x = 0;
-    origin->y = 0;
-    if (window) {
-        GetClientRect(window, client);
-        ClientToScreen(window, origin);
-    }
-    if (client->right - client->left > 0 && client->bottom - client->top > 0)
-        return;
-    {
-        RECT window_rect;
-        if (window && GetWindowRect(window, &window_rect)
-                && window_rect.right > window_rect.left
-                && window_rect.bottom > window_rect.top) {
-            origin->x = window_rect.left;
-            origin->y = window_rect.top;
-            SetRect(client, 0, 0, window_rect.right - window_rect.left,
-                    window_rect.bottom - window_rect.top);
-        }
-    }
+    D9WGWindowProbe probe;
+    D9WGWindowGeometry geometry;
+    d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_OUTER_IF_EMPTY, &probe);
+    d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_D3D9,
+        (uint32_t)fallback_width, (uint32_t)fallback_height, &geometry);
+    SetRect(client, 0, 0, (int)geometry.width, (int)geometry.height);
+    origin->x = geometry.x;origin->y = geometry.y;
 }
 
 /*
@@ -5258,19 +5178,24 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
     D9WGPresent present;
     HWND window = override_window ? override_window
             : device->present.hDeviceWindow;
-    RECT client;
-    POINT origin;
+    D9WGWindowProbe probe;
+    D9WGWindowGeometry geometry;
     uint8_t *payload;
     BOOL result;
 
     if (!window)
         window = device->creation.hFocusWindow;
-    probe_window_rect(window, (int)device->display_mode.Width,
-            (int)device->display_mode.Height, &client, &origin);
+    d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
+        D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    if (maintain_fullscreen_foreground(device, window, &probe))
+        d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
+            D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_D3D9,
+        device->display_mode.Width, device->display_mode.Height, &geometry);
     present.device_handle = device->handle;
     present.hwnd = (uint32_t)(uintptr_t)window;
-    present.x = origin.x;
-    present.y = origin.y;
+    present.x = geometry.x;
+    present.y = geometry.y;
     /*
      * An empty client rect is not a curiosity to work around -- it means the
      * host has no idea where the game's output actually is, and it positions
@@ -5283,15 +5208,14 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
      * reports nothing useful for, and it answers both questions at once
      * (position and size, in screen coordinates).
      */
-    present.width = (uint32_t)(client.right - client.left);
-    present.height = (uint32_t)(client.bottom - client.top);
+    present.width = geometry.width;
+    present.height = geometry.height;
 
     /* D3D9's hardware cursor follows the OS pointer on its own, so the app is
      * under no obligation to call SetCursorPosition -- most never do. Sample
      * it here instead, once per frame, and only while a cursor is actually
      * armed and visible. */
-    maintain_fullscreen_foreground(device, window);
-    emit_window_state(device, window);
+    emit_window_state_from_probe(device, window, &probe);
     if (device->app_cursor) {
         if (device->cursor_visible) {
             POINT pointer;
