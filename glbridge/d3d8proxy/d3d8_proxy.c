@@ -38,6 +38,13 @@
 #include "d3d8_protocol.h"
 #include "../runtime/d9wg_window_probe.h"
 #include "../runtime/d9wg_window_watch.h"
+#include "../runtime/d9wg_buffer_lock.h"
+
+_Static_assert(D3DLOCK_READONLY == D9WG_BUFFER_LOCK_READONLY, "readonly lock flag");
+_Static_assert(D3DLOCK_NOOVERWRITE == D9WG_BUFFER_LOCK_NOOVERWRITE, "nooverwrite lock flag");
+_Static_assert(D3DLOCK_DISCARD == D9WG_BUFFER_LOCK_DISCARD, "discard lock flag");
+_Static_assert(D3DUSAGE_WRITEONLY == D9WG_BUFFER_USAGE_WRITEONLY, "writeonly buffer usage");
+_Static_assert(D3DUSAGE_DYNAMIC == D9WG_BUFFER_USAGE_DYNAMIC, "dynamic buffer usage");
 
 /* These legacy D3D shade-cap bits are omitted by some d3d8.h variants. */
 #ifndef D3DPSHADECAPS_COLORFLATRGB
@@ -3947,14 +3954,6 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer8 *iface, UINT offset,
     D8VertexBuffer *buffer = vb_from_iface(iface);
     if (!data_out || buffer->locked || offset > buffer->length)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_DISCARD) && (flags & D3DLOCK_NOOVERWRITE))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE))
-            && !(buffer->usage & D3DUSAGE_DYNAMIC))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_READONLY)
-            && (flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE)))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
@@ -3962,10 +3961,10 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer8 *iface, UINT offset,
     buffer->locked = TRUE;
     buffer->lock_offset = offset;
     buffer->lock_size = size;
+    flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);
     buffer->lock_flags = flags;
     if (flags & D3DLOCK_DISCARD) {
         d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
-        ZeroMemory(buffer->shadow, buffer->length);
     }
     *data_out = buffer->shadow + offset;
     return D3D_OK;
@@ -4107,14 +4106,6 @@ static HRESULT WINAPI ib_lock(IDirect3DIndexBuffer8 *iface, UINT offset,
     D8IndexBuffer *buffer = ib_from_iface(iface);
     if (!data_out || buffer->locked || offset > buffer->length)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_DISCARD) && (flags & D3DLOCK_NOOVERWRITE))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE))
-            && !(buffer->usage & D3DUSAGE_DYNAMIC))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_READONLY)
-            && (flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE)))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
@@ -4122,9 +4113,8 @@ static HRESULT WINAPI ib_lock(IDirect3DIndexBuffer8 *iface, UINT offset,
     buffer->locked = TRUE;
     buffer->lock_offset = offset;
     buffer->lock_size = size;
+    flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);
     buffer->lock_flags = flags;
-    if (flags & D3DLOCK_DISCARD)
-        ZeroMemory(buffer->shadow, buffer->length);
     *data_out = buffer->shadow + offset;
     return D3D_OK;
 }
