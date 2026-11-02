@@ -60,6 +60,17 @@
 #define D9WG_HEARTBEAT_OFFSET \
     (D9WG_RESPONSE_REGION_BYTES - D9WG_HEARTBEAT_BYTES)
 
+/* HELLO replies use the remaining twelve bytes of the existing liveness
+ * tail. The heartbeat counter is unchanged. Host magic is published last;
+ * missing/old replies imply no optional host features, never all features. */
+#define D9WG_HOST_CAPS_OFFSET (D9WG_HEARTBEAT_OFFSET + 4u)
+#define D9WG_HOST_CAPS_MAGIC 0x50414348u
+#define D9WG_HOST_CAPS_VERSION 1u
+#define D9WG_HOST_FEATURE_FLOAT32_FILTERABLE (1u << 0)
+#define D9WG_HOST_FEATURE_FLOAT32_BLENDABLE (1u << 1)
+#define D9WG_HOST_FEATURE_TEXTURE_COMPRESSION_BC (1u << 2)
+#define D9WG_HOST_FEATURE_TIMESTAMP_QUERY (1u << 3)
+#define D9WG_HOST_FEATURE_MASK 0xFu
 #define D9WG_RESPONSE_PENDING 0u
 #define D9WG_RESPONSE_OK 1u
 #define D9WG_RESPONSE_FAILED 2u
@@ -314,6 +325,12 @@ typedef struct D9WGCommandHeader {
     uint32_t sequence;
     uint32_t reserved;
 } D9WGCommandHeader; /* 16 bytes */
+
+typedef struct D9WGHostCapabilities {
+    uint32_t feature_bits;
+    uint32_t version;
+    volatile uint32_t magic;
+} D9WGHostCapabilities;
 
 typedef struct D9WGHello {
     uint32_t guest_pointer_bits;
@@ -1177,6 +1194,10 @@ typedef char D9WGAssertCommandHeader_flags[offsetof(D9WGCommandHeader, flags) ==
 typedef char D9WGAssertCommandHeader_size[offsetof(D9WGCommandHeader, size) == 4 ? 1 : -1];
 typedef char D9WGAssertCommandHeader_sequence[offsetof(D9WGCommandHeader, sequence) == 8 ? 1 : -1];
 typedef char D9WGAssertCommandHeader_reserved[offsetof(D9WGCommandHeader, reserved) == 12 ? 1 : -1];
+typedef char D9WGAssertHostCapabilitiesSize[sizeof(D9WGHostCapabilities) == 12 ? 1 : -1];
+typedef char D9WGAssertHostCapabilities_feature_bits[offsetof(D9WGHostCapabilities, feature_bits) == 0 ? 1 : -1];
+typedef char D9WGAssertHostCapabilities_version[offsetof(D9WGHostCapabilities, version) == 4 ? 1 : -1];
+typedef char D9WGAssertHostCapabilities_magic[offsetof(D9WGHostCapabilities, magic) == 8 ? 1 : -1];
 typedef char D9WGAssertHelloSize[sizeof(D9WGHello) == 16 ? 1 : -1];
 typedef char D9WGAssertHello_guest_pointer_bits[offsetof(D9WGHello, guest_pointer_bits) == 0 ? 1 : -1];
 typedef char D9WGAssertHello_feature_bits[offsetof(D9WGHello, feature_bits) == 4 ? 1 : -1];

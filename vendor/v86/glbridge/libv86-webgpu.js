@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "d765137eda37adc53ad7";
+globalThis.V86GL_BUILD_REVISION = "24ce510eae7000c6d0e3";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -3123,6 +3123,15 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     { raw: [
         "",
     ] },
+    {"comment": ["/* HELLO replies use the remaining twelve bytes of the existing liveness", " * tail. The heartbeat counter is unchanged. Host magic is published last;", " * missing/old replies imply no optional host features, never all features. */"]},
+    {"define": "D9WG_HOST_CAPS_OFFSET", "c": "(D9WG_HEARTBEAT_OFFSET + 4u)", "text": ["#define D9WG_HOST_CAPS_OFFSET (D9WG_HEARTBEAT_OFFSET + 4u)"]},
+    {"define": "D9WG_HOST_CAPS_MAGIC", "c": "0x50414348u", "text": ["#define D9WG_HOST_CAPS_MAGIC 0x50414348u"]},
+    {"define": "D9WG_HOST_CAPS_VERSION", "c": "1u", "text": ["#define D9WG_HOST_CAPS_VERSION 1u"]},
+    {"define": "D9WG_HOST_FEATURE_FLOAT32_FILTERABLE", "c": "(1u << 0)", "text": ["#define D9WG_HOST_FEATURE_FLOAT32_FILTERABLE (1u << 0)"]},
+    {"define": "D9WG_HOST_FEATURE_FLOAT32_BLENDABLE", "c": "(1u << 1)", "text": ["#define D9WG_HOST_FEATURE_FLOAT32_BLENDABLE (1u << 1)"]},
+    {"define": "D9WG_HOST_FEATURE_TEXTURE_COMPRESSION_BC", "c": "(1u << 2)", "text": ["#define D9WG_HOST_FEATURE_TEXTURE_COMPRESSION_BC (1u << 2)"]},
+    {"define": "D9WG_HOST_FEATURE_TIMESTAMP_QUERY", "c": "(1u << 3)", "text": ["#define D9WG_HOST_FEATURE_TIMESTAMP_QUERY (1u << 3)"]},
+    {"define": "D9WG_HOST_FEATURE_MASK", "c": "0xFu", "text": ["#define D9WG_HOST_FEATURE_MASK 0xFu"]},
     { define: "D9WG_RESPONSE_PENDING", c: "0u", text: ["#define D9WG_RESPONSE_PENDING 0u"] },
     { define: "D9WG_RESPONSE_OK", c: "1u", text: ["#define D9WG_RESPONSE_OK 1u"] },
     { define: "D9WG_RESPONSE_FAILED", c: "2u", text: ["#define D9WG_RESPONSE_FAILED 2u"] },
@@ -3426,6 +3435,12 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     { raw: [
         "",
     ] },
+    { struct: "HostCapabilities", fields: [
+        ["uint32_t", "feature_bits"],
+        ["uint32_t", "version"],
+        ["volatile uint32_t", "magic"],
+    ] },
+    { raw: ["",] },
     { struct: "Hello", fields: [
         ["uint32_t", "guest_pointer_bits"],
         ["uint32_t", "feature_bits"],
@@ -12894,6 +12909,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // the sessions submitted since the arena's owner last released it
             this.ownerSessions = new Set();
             this.ownerSessionScopes = new Map();
+            this.hostCapabilitiesByOwner = new Map();
             this.batchOwnerToken = 0;
             this.frame = null;             // { ops, transientBuffers, serial }
             this.frameSerial = 0;
@@ -13330,6 +13346,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
 
         async resetForReplay() {
             await this.checkpointIdle();
+            for (const reply of this.hostCapabilitiesByOwner.values()) delete reply.publishedBits;
             for (const key of this.sessionStates.keys()) {
                 this.switchSession(key);
                 this.releaseActiveSession("state-restore");
@@ -13658,7 +13675,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return this._handlers;
         }
 
-        onHello(bytes, view, offset) {
+        onHello(bytes, view, offset, length, metadata) {
             void view.getUint32(offset + D9WG.F.Hello.guest_pointer_bits, true); // guest_pointer_bits
             const featureBits = view.getUint32(offset + D9WG.F.Hello.feature_bits, true);
             const sessionLow = view.getUint32(offset + D9WG.F.Hello.session_id_low, true);
@@ -13682,6 +13699,9 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
             const session = this.sessionStates.get(sessionKey);
             if (session) session.featureBits = featureBits;
+            let reply = this.hostCapabilitiesByOwner.get(this.batchOwnerToken);
+            if (!reply) this.hostCapabilitiesByOwner.set(this.batchOwnerToken, reply = {});
+            this.publishHostCapabilities(reply, metadata);
             this.stats.guestFeatureBits = featureBits;
             // Record the active caps profile so diagnostics can distinguish a
             // fixed-function/SM2 run from a default SM3 run directly.
@@ -13749,6 +13769,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     "D9WG SESSION_END session does not match its batch");
             }
             const endedKey = this.sessionKey;
+            this.hostCapabilitiesByOwner.delete(this.batchOwnerToken);
             this.releaseActiveSession("session-end");
             this.sessionStates.delete(endedKey);
             // SESSION_END is required to be the final command from a process.
@@ -13766,6 +13787,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         }
 
         endOwnerSessions(ownerToken) {
+            if (ownerToken === undefined) this.hostCapabilitiesByOwner.clear();
+            else this.hostCapabilitiesByOwner.delete(ownerToken);
             const sessions = ownerToken === undefined ? this.ownerSessions : this.ownerSessionScopes.get(ownerToken);
             if (!sessions) return;
             const original = this.sessionKey;
@@ -13973,6 +13996,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         }
 
         recoverDevice() {
+
+            for (const reply of this.hostCapabilitiesByOwner.values()) delete reply.publishedBits;
             // Everything below was created by the lost device and cannot be
             // destroyed or reused; dropping the references is all that is
             // possible and all that is needed.
@@ -14129,7 +14154,44 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
          * batches behind from one that has died -- and it gave up on the first,
          * reporting a readback failure for a host that was working correctly.
          */
+        hostFeatureBits() {
+            // Advertised adapter features are not necessarily enabled on the
+            // acquired device. Only that actual device may grant optional caps.
+            const features = this.device && this.device.features;
+            const has = name => !!(features && typeof features.has === "function" && features.has(name));
+            return (has("float32-filterable") ? D9WG.C.D9WG_HOST_FEATURE_FLOAT32_FILTERABLE : 0) |
+                (has("float32-blendable") ? D9WG.C.D9WG_HOST_FEATURE_FLOAT32_BLENDABLE : 0) |
+                (has("texture-compression-bc") ? D9WG.C.D9WG_HOST_FEATURE_TEXTURE_COMPRESSION_BC : 0) |
+                (has("timestamp-query") ? D9WG.C.D9WG_HOST_FEATURE_TIMESTAMP_QUERY : 0);
+        }
+
+        publishHostCapabilities(reply, metadata) {
+            const writer = metadata && metadata.writeGuestMemory;
+            if (typeof writer !== "function") return false;
+            const bits = this.hostFeatureBits();
+            if (reply.publishedBits === bits) return true;
+            const out = D9WG.encode("HostCapabilities", { feature_bits: bits,
+                version: D9WG.C.D9WG_HOST_CAPS_VERSION, magic: D9WG.C.D9WG_HOST_CAPS_MAGIC });
+            const at = D9WG_RESPONSE_REGION_OFFSET + D9WG.C.D9WG_HOST_CAPS_OFFSET;
+            try {
+                // Invalidate any earlier publication, write data, then publish
+                // completion. These bytes never overlap queries or readbacks.
+                writer(at + D9WG.F.HostCapabilities.magic, new Uint8Array(4));
+                writer(at, out.subarray(0, D9WG.F.HostCapabilities.magic));
+                writer(at + D9WG.F.HostCapabilities.magic, out.subarray(D9WG.F.HostCapabilities.magic));
+                reply.publishedBits = bits;
+                return true;
+            } catch (error) {
+                delete reply.publishedBits;
+                ++this.stats.responseWriteFailures;
+                this.warnOnce("host-capabilities-write", "host capabilities could not be written to the guest", { message: String(error) });
+                return false;
+            }
+        }
+
         beat(metadata) {
+            const reply = this.hostCapabilitiesByOwner.get(this.batchOwnerToken);
+            if (reply) this.publishHostCapabilities(reply, metadata);
             const writer = metadata && metadata.writeGuestMemory;
             if (typeof writer !== "function") {
                 this.warnOnce("beat-no-writer",
