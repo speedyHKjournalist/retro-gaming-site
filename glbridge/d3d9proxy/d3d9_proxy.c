@@ -33,6 +33,7 @@
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL9
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT9
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_light_state.h"
 #include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
@@ -931,6 +932,7 @@ struct D9Device {
     D3DLIGHT9 lights[D9_MAX_LIGHTS];
     BOOL light_set[D9_MAX_LIGHTS];
     BOOL light_enabled[D9_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
     D9StreamBinding streams[D9_MAX_STREAMS];
     D9IndexBuffer *index_buffer;
     D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
@@ -1277,8 +1279,8 @@ static void state_block_record_sampler_state(D9Device *device,
 static void state_block_record_transform(D9Device *device, UINT state);
 static void state_block_record_texture(D9Device *device, UINT stage);
 static void state_block_record_material(D9Device *device);
-static void state_block_record_light(D9Device *device, UINT index);
-static void state_block_record_light_enable(D9Device *device, UINT index);
+static BOOL state_block_record_light(D9Device *device, UINT index);
+static BOOL state_block_record_light_enable(D9Device *device, UINT index);
 static void state_block_record_viewport(D9Device *device);
 static void state_block_record_scissor(D9Device *device);
 static void state_block_record_vertex_shader(D9Device *device);
@@ -4264,6 +4266,7 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
     }
     if (!refs) {
         D9WGDestroyResource destroy;
+        d9wg_light_free(&device->extra_lights);
         TRACE("Device.Release destroy object=%08lX handle=%08lX pending=%lu",
                 (DWORD)(uintptr_t)iface, device->handle, g_command_count);
         unwatch_window_state(device);
@@ -8836,71 +8839,65 @@ static HRESULT WINAPI device_get_material(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_set_light(IDirect3DDevice9 *iface, DWORD index,
-        const D3DLIGHT9 *light)
+static BOOL d9_emit_light(D9Device *device, DWORD index, const D3DLIGHT9 *light)
 {
-    D9Device *device = device_from_iface(iface);
-    D9WGSetLight command;
-    if (!light || index >= D9_MAX_LIGHTS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_light(device, index);
-    device->lights[index] = *light;
-    device->light_set[index] = TRUE;
-    command.device_handle = device->handle;
-    command.index = index;
-    command.type = (uint32_t)light->Type;
-    CopyMemory(command.diffuse, &light->Diffuse, sizeof(command.diffuse));
-    CopyMemory(command.specular, &light->Specular, sizeof(command.specular));
-    CopyMemory(command.ambient, &light->Ambient, sizeof(command.ambient));
-    CopyMemory(command.position, &light->Position, sizeof(command.position));
-    CopyMemory(command.direction, &light->Direction, sizeof(command.direction));
-    command.range = light->Range;
-    command.falloff = light->Falloff;
-    command.attenuation[0] = light->Attenuation0;
-    command.attenuation[1] = light->Attenuation1;
-    command.attenuation[2] = light->Attenuation2;
-    command.theta = light->Theta;
-    command.phi = light->Phi;
-    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    D9WGSetLight command;command.device_handle = device->handle;command.index = index;
+    CopyMemory(&command.type, light, sizeof(*light));
+    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command));
 }
-
-static HRESULT WINAPI device_get_light(IDirect3DDevice9 *iface, DWORD index,
-        D3DLIGHT9 *light)
+static HRESULT WINAPI device_set_light(IDirect3DDevice9 *iface, DWORD index, const D3DLIGHT9 *light)
+{
+    D9Device *device = device_from_iface(iface);D9WGLightState *entry = NULL;
+    if (!light || light->Type < D3DLIGHT_POINT || light->Type > D3DLIGHT_DIRECTIONAL)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (index >= D9_MAX_LIGHTS && !(entry = d9wg_light_get(&device->extra_lights, index, TRUE)))
+        return TRACE_REFUSE(E_OUTOFMEMORY);
+    if (!state_block_record_light(device, index)) return TRACE_REFUSE(E_OUTOFMEMORY);
+    if (entry) {entry->light = *light;entry->set = TRUE;}
+    else {device->lights[index] = *light;device->light_set[index] = TRUE;}
+    return d9_emit_light(device, index, light) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+static HRESULT WINAPI device_get_light(IDirect3DDevice9 *iface, DWORD index, D3DLIGHT9 *light)
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetLight");
     D9Device *device = device_from_iface(iface);
-    if (!light || index >= D9_MAX_LIGHTS || !device->light_set[index])
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *light = device->lights[index];
+    if (!light) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (index < D9_MAX_LIGHTS) {
+        if (!device->light_set[index]) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        *light = device->lights[index];
+    } else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        if (!entry || !entry->set) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        *light = entry->light;
+    }
     return D3D_OK;
 }
-
-static HRESULT WINAPI device_light_enable(IDirect3DDevice9 *iface,
-        DWORD index, WINBOOL enable)
+static HRESULT WINAPI device_light_enable(IDirect3DDevice9 *iface, DWORD index, WINBOOL enable)
 {
-    D9Device *device = device_from_iface(iface);
-    D9WGLightEnable command;
-    if (index >= D9_MAX_LIGHTS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_light_enable(device, index);
-    device->light_enabled[index] = enable ? TRUE : FALSE;
-    command.device_handle = device->handle;
-    command.index = index;
-    command.enable = enable ? 1u : 0u;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    D9Device *device = device_from_iface(iface);D9WGLightState *entry = NULL;
+    D3DLIGHT9 *light;BOOL *set, *enabled;
+    if (index < D9_MAX_LIGHTS) {light = device->lights + index;set = device->light_set + index;enabled = device->light_enabled + index;}
+    else {
+        entry = d9wg_light_get(&device->extra_lights, index, TRUE);
+        if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
+        light = &entry->light;set = &entry->set;enabled = &entry->enabled;
+    }
+    if (!state_block_record_light_enable(device, index)) return TRACE_REFUSE(E_OUTOFMEMORY);
+    if (!*set) {
+        d9wg_light_default(light);*set = TRUE;
+        if (!d9_emit_light(device, index, light)) return D3DERR_DRIVERINTERNALERROR;
+    }
+    *enabled = !!enable;
+    D9WGLightEnable command = {device->handle, index, !!enable, 0};
+    return emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
-
-static HRESULT WINAPI device_get_light_enable(IDirect3DDevice9 *iface,
-        DWORD index, WINBOOL *enable)
+static HRESULT WINAPI device_get_light_enable(IDirect3DDevice9 *iface, DWORD index, WINBOOL *enable)
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetLightEnable");
     D9Device *device = device_from_iface(iface);
-    if (!enable || index >= D9_MAX_LIGHTS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *enable = device->light_enabled[index];
+    if (!enable) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (index < D9_MAX_LIGHTS) *enable = device->light_enabled[index];
+    else {D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);*enable = entry ? entry->enabled : FALSE;}
     return D3D_OK;
 }
 static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,
@@ -9182,6 +9179,9 @@ static BOOL d9_prepare_lighting(D9Device *device, const D3DMATRIX *world_view,
         if (device->light_set[index] && device->light_enabled[index] &&
                 !d9wg_lighting_sdk_add(state, index, &device->lights[index], (const void *)device->transforms[D3DTS_VIEW])) return FALSE;
     }
+    for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next)
+        if (entry->set && entry->enabled && !d9wg_lighting_sdk_add(state, entry->index, &entry->light,
+                (const void *)device->transforms[D3DTS_VIEW])) return FALSE;
     return TRUE;
 }
 
@@ -11985,6 +11985,8 @@ struct D9StateBlock {
     D3DLIGHT9 lights[D9_MAX_LIGHTS];
     BOOL has_light_enable[D9_MAX_LIGHTS];
     BOOL light_enabled[D9_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
+    BOOL light_allocation_failed;
     BOOL has_viewport;
     D3DVIEWPORT9 viewport;
     BOOL has_scissor;
@@ -12069,18 +12071,28 @@ static void state_block_record_material(D9Device *device)
         device->recording_result->has_material = TRUE;
 }
 
-static void state_block_record_light(D9Device *device, UINT index)
+static BOOL state_block_record_light(D9Device *device, UINT index)
 {
-    if (device->recording_result && index < D9_MAX_LIGHTS)
-        device->recording_result->has_light[index] = TRUE;
+    if (!device->recording_result) return TRUE;
+    if (index < D9_MAX_LIGHTS) device->recording_result->has_light[index] = TRUE;
+    else {
+        D9WGLightState *entry = d9wg_light_get(&device->recording_result->extra_lights, index, TRUE);
+        if (!entry) return FALSE;
+        entry->light_mask = TRUE;
+    }
+    return TRUE;
 }
-
-static void state_block_record_light_enable(D9Device *device, UINT index)
+static BOOL state_block_record_light_enable(D9Device *device, UINT index)
 {
-    if (device->recording_result && index < D9_MAX_LIGHTS)
-        device->recording_result->has_light_enable[index] = TRUE;
+    if (!device->recording_result) return TRUE;
+    if (index < D9_MAX_LIGHTS) device->recording_result->has_light_enable[index] = TRUE;
+    else {
+        D9WGLightState *entry = d9wg_light_get(&device->recording_result->extra_lights, index, TRUE);
+        if (!entry) return FALSE;
+        entry->enable_mask = TRUE;
+    }
+    return TRUE;
 }
-
 static void state_block_record_viewport(D9Device *device)
 {
     if (device->recording_result)
@@ -12236,6 +12248,11 @@ static void state_block_capture(struct D9StateBlock *block)
         if (block->has_light_enable[index])
             block->light_enabled[index] = device->light_enabled[index];
     }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        D9WGLightState *current = d9wg_light_find(device->extra_lights, entry->index);
+        if (entry->light_mask && current && current->set) {entry->light = current->light;entry->set = TRUE;}
+        if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
+    }
     if (block->has_viewport) block->viewport = device->viewport;
     if (block->has_scissor) block->scissor_rect = device->scissor_rect;
     if (block->has_vertex_shader) {
@@ -12336,7 +12353,13 @@ static void state_block_mark_vertex_states(struct D9StateBlock *block)
     block->has_material = TRUE;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         block->has_light[index] = device_light_is_set(block->device, index);
-        block->has_light_enable[index] = TRUE;
+        block->has_light_enable[index] = device_light_is_set(block->device, index);
+    }
+    for (D9WGLightState *light = block->device->extra_lights; light; light = light->next) {
+        if (!light->set) continue;
+        D9WGLightState *entry = d9wg_light_get(&block->extra_lights, light->index, TRUE);
+        if (!entry) {block->light_allocation_failed = TRUE;break;}
+        entry->light_mask = entry->enable_mask = TRUE;
     }
     block->has_vertex_shader = TRUE;
     block->has_vertex_format = TRUE;
@@ -12444,6 +12467,10 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
             IDirect3DDevice9_LightEnable(iface, index,
                     block->light_enabled[index]);
     }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        if (entry->light_mask && entry->set) IDirect3DDevice9_SetLight(iface, entry->index, &entry->light);
+        if (entry->enable_mask) IDirect3DDevice9_LightEnable(iface, entry->index, entry->enabled);
+    }
     if (block->has_viewport)
         IDirect3DDevice9_SetViewport(iface, &block->viewport);
     if (block->has_scissor)
@@ -12537,6 +12564,7 @@ static ULONG WINAPI state_block_release(IDirect3DStateBlock9 *iface)
             link = &(*link)->next_device_resource;
         if (*link) *link = block->next_device_resource;
         state_block_release_references(block);
+        d9wg_light_free(&block->extra_lights);
         device_child_release(block->device);
         HeapFree(GetProcessHeap(), 0, block);
     }
@@ -12597,6 +12625,7 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
     if (type == D3DSBT_ALL) state_block_mark_all(block);
     else if (type == D3DSBT_PIXELSTATE) state_block_mark_pixel_states(block);
     else state_block_mark_vertex_states(block);
+    if (block->light_allocation_failed) {IDirect3DStateBlock9_Release(&block->iface);return TRACE_REFUSE(E_OUTOFMEMORY);}
     state_block_capture(block);
     *block_out = &block->iface;
     return D3D_OK;
@@ -12619,6 +12648,9 @@ static HRESULT WINAPI device_begin_state_block(IDirect3DDevice9 *iface)
         return TRACE_REFUSE(E_OUTOFMEMORY);
     }
     state_block_mark_all(baseline);
+    if (baseline->light_allocation_failed) {
+        IDirect3DStateBlock9_Release(&baseline->iface);IDirect3DStateBlock9_Release(&result->iface);return TRACE_REFUSE(E_OUTOFMEMORY);
+    }
     state_block_capture(baseline);
     device->recording = baseline;
     device->recording_result = result;

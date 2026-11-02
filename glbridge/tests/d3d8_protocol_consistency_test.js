@@ -91,7 +91,7 @@ const protocolStructs = new Set(
     [...protocol.matchAll(/typedef struct (D9WG\w+) \{/g)].map(m => m[1])
         .concat([...protocol.matchAll(/typedef D9WG\w+ (D9WG\w+);/g)]
             .map(m => m[1])));
-const runtimeStructs = new Set([...(read("runtime/d9wg_runtime.h") + read("runtime/d9wg_process.h") + read("runtime/d9wg_lighting.h") + read("runtime/d9wg_vertex.h") + read("runtime/d9wg_clip.h") + read("runtime/d9wg_clip_draw.h")).matchAll(/typedef struct (D9WG\w+) \{/g)].map(m => m[1]));
+const runtimeStructs = new Set([...(read("runtime/d9wg_runtime.h") + read("runtime/d9wg_process.h") + read("runtime/d9wg_lighting.h") + read("runtime/d9wg_vertex.h") + read("runtime/d9wg_clip.h") + read("runtime/d9wg_clip_draw.h") + read("runtime/d9wg_light_state.h")).matchAll(/typedef struct (D9WG\w+) \{/g)].map(m => m[1]));
 for (const match of guest.matchAll(/\b(D9WG[A-Z]\w+)\b/g)) {
     assert.ok(protocolStructs.has(match[1]) || runtimeStructs.has(match[1]),
         "the D3D8 guest names " + match[1] + ", which is neither a D9WG payload nor a declared private runtime descriptor");

@@ -230,6 +230,9 @@ static void blend_checks(void)
 #endif
     state(D3DRS_VERTEXBLEND,0);report("PASS shared vertex blend checks");
 }
+#if D9WG_TNL_API != 7
+#include "d3d_light_state_cases.h"
+#endif
 void WINAPI WinMainCRTStartup(void)
 {
     char path[MAX_PATH],dll[MAX_PATH],text[100];UINT at;HMODULE module;HWND window;
@@ -264,6 +267,9 @@ void WINAPI WinMainCRTStartup(void)
     ZeroMemory(&pp,sizeof(pp));pp.BackBufferWidth=pp.BackBufferHeight=64;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.BackBufferCount=1;pp.hDeviceWindow=window;pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;
     check(SUCCEEDED(FACT(CreateDevice)(factory,0,D3DDEVTYPE_HAL,window,D3DCREATE_SOFTWARE_VERTEXPROCESSING,&pp,&device)),"device");
 #endif
+#if D9WG_TNL_API != 7
+    light_state_checks();
+#endif
     create_buffer(input_fvf,sizeof(Input),&source);create_buffer(D3DFVF_XYZRHW|D3DFVF_DIFFUSE|D3DFVF_SPECULAR|D3DFVF_TEX1|D3DFVF_TEXCOORDSIZE4(0),sizeof(Output),&destination);
 #if D9WG_TNL_API == 9
     check(SUCCEEDED(CALL(SetStreamSource)(device,0,source,0,sizeof(Input))),"source stream");check(SUCCEEDED(CALL(SetFVF)(device,input_fvf)),"source FVF");
@@ -281,7 +287,7 @@ void WINAPI WinMainCRTStartup(void)
     ZeroMemory(&material,sizeof(material));material.Diffuse.r=.4f;material.Diffuse.g=.2f;material.Diffuse.b=.6f;material.Diffuse.a=.75f;material.Power=8;
     check(SUCCEEDED(CALL(SetMaterial)(device,&material)),"material");
     ZeroMemory(&value,sizeof(value));value.Type=D3DLIGHT_DIRECTIONAL;value.Direction.z=1;value.Diffuse.r=value.Diffuse.g=value.Diffuse.b=1;value.Specular=value.Diffuse;value.Range=100;value.Attenuation0=1;
-    light_index=D9WG_TNL_API == 8 ? 37 : 3;light(&value);output=process(&input);color(output.diffuse,input.diffuse,"COLOR1 and high-index light");
+    light_index=D9WG_TNL_API == 7 ? 3 : 37;light(&value);output=process(&input);color(output.diffuse,input.diffuse,"COLOR1 and high-index light");
     state(D3DRS_COLORVERTEX,FALSE);output=process(&input);color(output.diffuse,0xbf663399u,"material source when COLORVERTEX false");
     state(D3DRS_COLORVERTEX,TRUE);state(D3DRS_SPECULARENABLE,TRUE);output=process(&input);color(output.specular,input.specular,"COLOR2 specular and fog alpha");
     state(D3DRS_SPECULARENABLE,FALSE);value.Type=D3DLIGHT_POINT;value.Position.z=-.5f;value.Attenuation0=.25f;light(&value);output=process(&input);color(output.diffuse,0xccccffffu,"point attenuation may exceed one");

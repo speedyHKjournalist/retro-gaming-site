@@ -23,6 +23,7 @@
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL8
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT8
 #include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_light_state.h"
 #include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
@@ -90,7 +91,7 @@ typedef struct D8Shader D8Shader;
 typedef struct D8CubeTexture D8CubeTexture;
 typedef struct D8VolumeTexture D8VolumeTexture;
 typedef struct D8Volume D8Volume;
-typedef struct D8LightState D8LightState;
+typedef D9WGLightState D8LightState;
 
 /*
  * The device window's client area in screen coordinates.
@@ -141,15 +142,7 @@ typedef struct D8StreamBinding {
  * entries inline for the hot fixed-function path and store sparse higher
  * indices here. The two masks are used only by state-block copies of a node.
  */
-struct D8LightState {
-    D8LightState *next;
-    DWORD index;
-    D3DLIGHT8 light;
-    BOOL set;
-    BOOL enabled;
-    BOOL light_mask;
-    BOOL enable_mask;
-};
+
 
 typedef struct D8StateSnapshot {
     BYTE render_mask[D8WG_MAX_RENDER_STATES];
@@ -5782,48 +5775,13 @@ static HRESULT WINAPI device_get_material(IDirect3DDevice8 *iface,
 }
 
 static D8LightState *find_extra_light(D8LightState *entry, DWORD index)
-{
-    while (entry && entry->index != index)
-        entry = entry->next;
-    return entry;
-}
-
-static D8LightState *get_extra_light(D8LightState **list, DWORD index,
-        BOOL create)
-{
-    D8LightState *entry = find_extra_light(*list, index);
-    if (entry || !create)
-        return entry;
-    entry = (D8LightState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(*entry));
-    if (!entry)
-        return NULL;
-    entry->index = index;
-    entry->next = *list;
-    *list = entry;
-    return entry;
-}
-
+{ return d9wg_light_find(entry, index); }
+static D8LightState *get_extra_light(D8LightState **list, DWORD index, BOOL create)
+{ return d9wg_light_get(list, index, create); }
 static void free_extra_lights(D8LightState **list)
-{
-    D8LightState *entry = *list;
-    *list = NULL;
-    while (entry) {
-        D8LightState *next = entry->next;
-        HeapFree(GetProcessHeap(), 0, entry);
-        entry = next;
-    }
-}
-
+{ d9wg_light_free(list); }
 static void initialize_default_light(D3DLIGHT8 *light)
-{
-    ZeroMemory(light, sizeof(*light));
-    light->Type = D3DLIGHT_DIRECTIONAL;
-    light->Diffuse.r = 1.0f;
-    light->Diffuse.g = 1.0f;
-    light->Diffuse.b = 1.0f;
-    light->Direction.z = 1.0f;
-}
+{ d9wg_light_default(light); }
 
 static BOOL emit_light(D8Device *device, DWORD index,
         const D3DLIGHT8 *light)
