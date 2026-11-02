@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "dffb0322a62fa650c089";
+globalThis.V86GL_BUILD_REVISION = "cfad0009655b0a109c05";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -4792,7 +4792,131 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 // mutable maps, registers, frames and uniform storage belong to one owner.
 (function(global) {
     "use strict";
-    function createDeviceState(handle, constants) {
+    // [state, D3D8, D3D9]. null means absent in that API; contextual values
+    // resolve at creation/reset. This table also generates the guest C header.
+    // Wine stateblock tests and DirectX 8.1/9 SDK defaults are independent test references.
+    const RENDER_DEFAULT_ROWS = Object.freeze([
+        [7, "autoDepth", "autoDepth"], // D3DRS_ZENABLE
+        [8, 3, 3], // D3DRS_FILLMODE
+        [9, 2, 2], // D3DRS_SHADEMODE
+        [14, 1, 1], // D3DRS_ZWRITEENABLE
+        [15, 0, 0], // D3DRS_ALPHATESTENABLE
+        [16, 1, 1], // D3DRS_LASTPIXEL
+        [19, 2, 2], // D3DRS_SRCBLEND
+        [20, 1, 1], // D3DRS_DESTBLEND
+        [22, 3, 3], // D3DRS_CULLMODE
+        [23, 4, 4], // D3DRS_ZFUNC
+        [24, 0, 0], // D3DRS_ALPHAREF
+        [25, 8, 8], // D3DRS_ALPHAFUNC
+        [26, 0, 0], // D3DRS_DITHERENABLE
+        [27, 0, 0], // D3DRS_ALPHABLENDENABLE
+        [28, 0, 0], // D3DRS_FOGENABLE
+        [29, 0, 0], // D3DRS_SPECULARENABLE
+        [34, 0, 0], // D3DRS_FOGCOLOR
+        [35, 0, 0], // D3DRS_FOGTABLEMODE
+        [36, 0, 0], // D3DRS_FOGSTART
+        [37, 0x3F800000, 0x3F800000], // D3DRS_FOGEND
+        [38, 0x3F800000, 0x3F800000], // D3DRS_FOGDENSITY
+        [47, 0, null], // D3D8RS_ZBIAS
+        [48, 0, 0], // D3DRS_RANGEFOGENABLE
+        [52, 0, 0], // D3DRS_STENCILENABLE
+        [53, 1, 1], // D3DRS_STENCILFAIL
+        [54, 1, 1], // D3DRS_STENCILZFAIL
+        [55, 1, 1], // D3DRS_STENCILPASS
+        [56, 8, 8], // D3DRS_STENCILFUNC
+        [57, 0, 0], // D3DRS_STENCILREF
+        [58, 0xFFFFFFFF, 0xFFFFFFFF], // D3DRS_STENCILMASK
+        [59, 0xFFFFFFFF, 0xFFFFFFFF], // D3DRS_STENCILWRITEMASK
+        [60, 0xFFFFFFFF, 0xFFFFFFFF], // D3DRS_TEXTUREFACTOR
+        [128, 0, 0], // D3DRS_WRAP0
+        [129, 0, 0], // D3DRS_WRAP1
+        [130, 0, 0], // D3DRS_WRAP2
+        [131, 0, 0], // D3DRS_WRAP3
+        [132, 0, 0], // D3DRS_WRAP4
+        [133, 0, 0], // D3DRS_WRAP5
+        [134, 0, 0], // D3DRS_WRAP6
+        [135, 0, 0], // D3DRS_WRAP7
+        [136, 1, 1], // D3DRS_CLIPPING
+        [137, 1, 1], // D3DRS_LIGHTING
+        [139, 0, 0], // D3DRS_AMBIENT
+        [140, 0, 0], // D3DRS_FOGVERTEXMODE
+        [141, 1, 1], // D3DRS_COLORVERTEX
+        [142, 1, 1], // D3DRS_LOCALVIEWER
+        [143, 0, 0], // D3DRS_NORMALIZENORMALS
+        [145, 1, 1], // D3DRS_DIFFUSEMATERIALSOURCE
+        [146, 2, 2], // D3DRS_SPECULARMATERIALSOURCE
+        [147, 0, 0], // D3DRS_AMBIENTMATERIALSOURCE
+        [148, 0, 0], // D3DRS_EMISSIVEMATERIALSOURCE
+        [151, 0, 0], // D3DRS_VERTEXBLEND
+        [152, 0, 0], // D3DRS_CLIPPLANEENABLE
+        [154, 0x3F800000, 0x3F800000], // D3DRS_POINTSIZE
+        [155, 0, 0x3F800000], // D3DRS_POINTSIZE_MIN
+        [156, 0, 0], // D3DRS_POINTSPRITEENABLE
+        [157, 0, 0], // D3DRS_POINTSCALEENABLE
+        [158, 0x3F800000, 0x3F800000], // D3DRS_POINTSCALE_A
+        [159, 0, 0], // D3DRS_POINTSCALE_B
+        [160, 0, 0], // D3DRS_POINTSCALE_C
+        [161, 1, 1], // D3DRS_MULTISAMPLEANTIALIAS
+        [162, 0xFFFFFFFF, 0xFFFFFFFF], // D3DRS_MULTISAMPLEMASK
+        [163, 0, 0], // D3DRS_PATCHEDGESTYLE
+        [166, "pointMax", "pointMax"], // D3DRS_POINTSIZE_MAX
+        [167, 0, 0], // D3DRS_INDEXEDVERTEXBLENDENABLE
+        [168, 15, 15], // D3DRS_COLORWRITEENABLE
+        [170, 0, 0], // D3DRS_TWEENFACTOR
+        [171, 1, 1], // D3DRS_BLENDOP
+        [172, 3, 3], // D3DRS_POSITIONDEGREE
+        [173, 1, 1], // D3DRS_NORMALDEGREE
+        [174, null, 0], // D3DRS_SCISSORTESTENABLE
+        [175, null, 0], // D3DRS_SLOPESCALEDEPTHBIAS
+        [176, null, 0], // D3DRS_ANTIALIASEDLINEENABLE
+        [178, null, 0x3F800000], // D3DRS_MINTESSELLATIONLEVEL
+        [179, null, 0x3F800000], // D3DRS_MAXTESSELLATIONLEVEL
+        [180, null, 0], // D3DRS_ADAPTIVETESS_X
+        [181, null, 0], // D3DRS_ADAPTIVETESS_Y
+        [182, null, 0x3F800000], // D3DRS_ADAPTIVETESS_Z
+        [183, null, 0], // D3DRS_ADAPTIVETESS_W
+        [184, null, 0], // D3DRS_ENABLEADAPTIVETESSELLATION
+        [185, null, 0], // D3DRS_TWOSIDEDSTENCILMODE
+        [186, null, 1], // D3DRS_CCW_STENCILFAIL
+        [187, null, 1], // D3DRS_CCW_STENCILZFAIL
+        [188, null, 1], // D3DRS_CCW_STENCILPASS
+        [189, null, 8], // D3DRS_CCW_STENCILFUNC
+        [190, null, 15], // D3DRS_COLORWRITEENABLE1
+        [191, null, 15], // D3DRS_COLORWRITEENABLE2
+        [192, null, 15], // D3DRS_COLORWRITEENABLE3
+        [193, null, 0xFFFFFFFF], // D3DRS_BLENDFACTOR
+        [194, null, 0], // D3DRS_SRGBWRITEENABLE
+        [195, null, 0], // D3DRS_DEPTHBIAS
+        [198, null, 0], // D3DRS_WRAP8
+        [199, null, 0], // D3DRS_WRAP9
+        [200, null, 0], // D3DRS_WRAP10
+        [201, null, 0], // D3DRS_WRAP11
+        [202, null, 0], // D3DRS_WRAP12
+        [203, null, 0], // D3DRS_WRAP13
+        [204, null, 0], // D3DRS_WRAP14
+        [205, null, 0], // D3DRS_WRAP15
+        [206, null, 0], // D3DRS_SEPARATEALPHABLENDENABLE
+        [207, null, 2], // D3DRS_SRCBLENDALPHA
+        [208, null, 1], // D3DRS_DESTBLENDALPHA
+        [209, null, 1], // D3DRS_BLENDOPALPHA
+    ].map(Object.freeze));
+    function renderDefaults(api = 9, autoDepth = true, pointMax = 256) {
+        const result = new Map();
+        for (const [state, d8, d9] of RENDER_DEFAULT_ROWS) {
+            const value = api === 8 ? d8 : d9;
+            if (value === null) continue;
+            let word = value;
+            if (value === "autoDepth") word = autoDepth ? 1 : 0;
+            if (value === "pointMax") {
+                const floats = new Float32Array([pointMax > 1 ? pointMax : 64]);
+                word = new Uint32Array(floats.buffer)[0];
+            }
+            result.set(state, word);
+        }
+        return result;
+    }
+
+    function createDeviceState(handle, constants, autoDepth = true) {
         const { D3DMULTISAMPLE_NONE, D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_WORLD, IDENTITY4x4,
             MAX_VS_CONST_F, MAX_PS_CONST_F, MAX_CONST_I, MAX_CONST_B } = constants;
         return {
@@ -4835,7 +4959,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // than from the 256 D3D9 allows, so an app using eight bones
             // uploads eight matrices per draw and not 256.
             maxWorldMatrixIndex: 0,
-            renderStates: new Map(),
+            renderStates: renderDefaults(9, autoDepth),
             // Auto depth-stencil surface, created on CREATE_DEVICE/RESET
             // when the guest asked for one. hasDepth drives both the
             // render pass attachment and whether pipelines declare a
@@ -4940,7 +5064,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     function activateSession(executor, state) {
         for (const field of SESSION_FIELDS) executor[field] = state[field];
     }
-    const api = { createDeviceState, createSessionState, captureSession, activateSession, SESSION_FIELDS };
+    const api = { RENDER_DEFAULT_ROWS, renderDefaults, createDeviceState, createSessionState, captureSession, activateSession, SESSION_FIELDS };
     global.D9WGState = api;
     if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
@@ -13272,8 +13396,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return state;
         }
 
-        createDeviceState(handle) {
-            return stateFactory.createDeviceState(handle, DEVICE_STATE_CONSTANTS);
+        createDeviceState(handle, autoDepth = true) {
+            return stateFactory.createDeviceState(handle, DEVICE_STATE_CONSTANTS, autoDepth);
         }
 
         createSessionState(key) {
@@ -13564,7 +13688,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 this.finishFrame(false);
                 this.retireDeviceState(previous, "replace");
             }
-            const state = this.createDeviceState(handle);
+            const state = this.createDeviceState(handle, enableAutoDepth !== 0);
             this.devices.set(handle, state);
             state.viewport = { x: 0, y: 0, width, height, minZ: 0, maxZ: 1 };
             state.surface = { hwnd, x, y, width, height, visible: true,
@@ -13611,7 +13735,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             }
             // Reset changes the generation/defaults of an existing logical
             // device; it cannot introduce a previously unknown device.
-            const state = Object.assign(oldState, this.createDeviceState(newHandle));
+            const state = Object.assign(oldState, this.createDeviceState(newHandle, enableAutoDepth !== 0));
             this.devices.set(newHandle, state);
             state.viewport = { x: 0, y: 0, width, height, minZ: 0, maxZ: 1 };
             state.surface = { hwnd, x, y, width, height, visible: true,
@@ -14258,10 +14382,8 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     tableMode: rs.get(D3DRS_FOGTABLEMODE) || 0,
                     vertexMode: rs.get(D3DRS_FOGVERTEXMODE) || 0,
                     color: "#" + (color & 0xffffff).toString(16).padStart(6, "0"),
-                    // null means the game never set it and the D3D9 default
-                    // (start 0, end 1) applies -- which fogs everything past
-                    // one unit completely, so a null here with LINEAR mode is
-                    // itself the explanation for a uniformly washed-out frame.
+                    // These are effective values, including the generated
+                    // creation/reset defaults when the game has not changed them.
                     start: asFloat(D3DRS_FOGSTART),
                     end: asFloat(D3DRS_FOGEND),
                     density: asFloat(D3DRS_FOGDENSITY),

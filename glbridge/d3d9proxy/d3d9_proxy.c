@@ -28,6 +28,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL9
@@ -1651,6 +1652,8 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
     LeaveCriticalSection(&g_transport_lock);
     return result;
 }
+
+#include "../runtime/d9wg_state_defaults_bridge.h"
 
 /*
  * Reports a refusal or failure to the host so it lands in the browser console.
@@ -3419,6 +3422,9 @@ static void device_release_owned_references(D9Device *device)
  */
 static BOOL emit_device_state_after_reset(D9Device *device)
 {
+    if (!emit_render_default_patches(device->handle, 9, device->present.EnableAutoDepthStencil, device->render_states))
+        return FALSE;
+
     if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
                     0, D9_MAX_VS_CONST_F, device->vs_const_f,
                     D9_MAX_VS_CONST_F * 16u)
@@ -3470,75 +3476,19 @@ static void device_init_states(D9Device *device)
     UINT stage;
     device->current_palette = 0;
 
-    /*
-     * These arrays are not merely Get*State backing stores: every Set*State
-     * path suppresses a command when the cached value already equals the new
-     * one.  Zero-initialising them therefore is only correct for states whose
-     * D3D9 default is actually zero.  In particular, a game commonly starts a
-     * UI/fog/shadow pass with ZENABLE=FALSE and ZWRITEENABLE=FALSE.  With an
-     * all-zero cache those first calls were discarded, while the host (quite
-     * correctly) retained D3D9's default enabled depth state.  The result was
-     * scene depth hiding UI glyphs/icons and depth-writing overlay passes
-     * corrupting fog and projected shadows.
-     *
-     * Keep this table aligned with the fallback values in
-     * d3d9_executor.js.  Initial state is not replayed: both ends begin from
-     * these same D3D9 defaults, and subsequent Set calls carry every change.
-     */
+    /* Setters suppress equal values, so the shadow and host must start from
+     * the same generated defaults, including creation-time depth state. */
     d9wg_clip_status_init(&device->clip_status);device->clip_status_valid = TRUE;
     ZeroMemory(device->render_states, sizeof(device->render_states));
     ZeroMemory(device->texture_stage_states,
             sizeof(device->texture_stage_states));
     ZeroMemory(device->sampler_states, sizeof(device->sampler_states));
 
-    device->render_states[D3DRS_ZENABLE] = D3DZB_TRUE;
-    device->render_states[D3DRS_FILLMODE] = D3DFILL_SOLID;
-    device->render_states[D3DRS_SHADEMODE] = D3DSHADE_GOURAUD;
-    device->render_states[D3DRS_ZWRITEENABLE] = TRUE;
-    device->render_states[D3DRS_LASTPIXEL] = TRUE;
-    device->render_states[D3DRS_SRCBLEND] = D3DBLEND_ONE;
-    device->render_states[D3DRS_DESTBLEND] = D3DBLEND_ZERO;
-    device->render_states[D3DRS_CULLMODE] = D3DCULL_CCW;
-    device->render_states[D3DRS_ZFUNC] = D3DCMP_LESSEQUAL;
-    device->render_states[D3DRS_ALPHAFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_FOGEND] = 0x3F800000u;
-    device->render_states[D3DRS_FOGDENSITY] = 0x3F800000u;
-    device->render_states[D3DRS_STENCILFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILZFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILPASS] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_STENCILMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_STENCILWRITEMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_TEXTUREFACTOR] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_CLIPPING] = TRUE;
-    device->render_states[D3DRS_LIGHTING] = TRUE;
-    device->render_states[D3DRS_COLORVERTEX] = TRUE;
-    device->render_states[D3DRS_LOCALVIEWER] = TRUE;
-    device->render_states[D3DRS_DIFFUSEMATERIALSOURCE] = D3DMCS_COLOR1;
-    device->render_states[D3DRS_SPECULARMATERIALSOURCE] = D3DMCS_COLOR2;
-    device->render_states[D3DRS_AMBIENTMATERIALSOURCE] = D3DMCS_MATERIAL;
-    device->render_states[D3DRS_EMISSIVEMATERIALSOURCE] = D3DMCS_MATERIAL;
-    device->render_states[D3DRS_POINTSIZE] = 0x3F800000u;
-    device->render_states[D3DRS_POINTSIZE_MIN] = 0x3F800000u;
-    device->render_states[D3DRS_POINTSCALE_A] = 0x3F800000u;
-    device->render_states[D3DRS_POINTSIZE_MAX] = 0x42800000u; /* 64.0f */
-    device->render_states[D3DRS_MULTISAMPLEANTIALIAS] = TRUE;
-    device->render_states[D3DRS_MULTISAMPLEMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_PATCHEDGESTYLE] = D3DPATCHEDGE_DISCRETE;
-    device->render_states[D3DRS_COLORWRITEENABLE] = 0xFu;
-    device->render_states[D3DRS_BLENDOP] = D3DBLENDOP_ADD;
-    device->render_states[D3DRS_CCW_STENCILFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_CCW_STENCILZFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_CCW_STENCILPASS] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_CCW_STENCILFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_COLORWRITEENABLE1] = 0xFu;
-    device->render_states[D3DRS_COLORWRITEENABLE2] = 0xFu;
-    device->render_states[D3DRS_COLORWRITEENABLE3] = 0xFu;
-    device->render_states[D3DRS_BLENDFACTOR] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_SRCBLENDALPHA] = D3DBLEND_ONE;
-    device->render_states[D3DRS_DESTBLENDALPHA] = D3DBLEND_ZERO;
-    device->render_states[D3DRS_BLENDOPALPHA] = D3DBLENDOP_ADD;
-
+    D3DCAPS9 caps;fill_caps(&caps);
+    DWORD point_max_bits;CopyMemory(&point_max_bits, &caps.MaxPointSize, sizeof(point_max_bits));
+    for (UINT state = 0; state < sizeof(device->render_states)/sizeof(device->render_states[0]); ++state)
+        device->render_states[state] = d9wg_render_default(9, state,
+                device->present.EnableAutoDepthStencil, point_max_bits);
     for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage) {
         device->texture_stage_states[stage][D3DTSS_COLOROP] = stage == 0
                 ? D3DTOP_MODULATE : D3DTOP_DISABLE;
@@ -4246,6 +4196,11 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
                 (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
+    if (!emit_render_default_patches(device->handle, 9, device->present.EnableAutoDepthStencil, device->render_states)) {
+        IDirect3DDevice9_Release(&device->iface);
+        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    }
+
     claim_fullscreen_foreground(device, window);
     emit_window_state(device, window);
     watch_window_state(device);

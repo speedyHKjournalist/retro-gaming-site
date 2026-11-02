@@ -137,6 +137,10 @@ compares the two tables by running both, register by register.
   ClipStatus; UP declarations are limited to stream zero. The Tween capability
   flag is advertised after paired raw/CPU guest pixel replay acceptance on
   SwiftShader and Metal;
+- render-state defaults generated from the shared host table, including
+  creation-time depth, the reported point-size maximum and D3D8's zero point
+  minimum; explicit version/capability differences are synchronized after
+  creation and Reset;
 - **4x multisampling** on the device, additional swap chains, render targets
   and depth surfaces;
 - vertex shader 1.0-1.1 and pixel shader 1.0-1.4: declaration parsing and

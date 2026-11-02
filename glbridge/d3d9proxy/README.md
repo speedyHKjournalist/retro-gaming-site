@@ -24,6 +24,10 @@ readback, and implements the SM3/HDR/MSAA and resource paths needed by a
 - `IDirect3D9`/`IDirect3DDevice9` COM lifecycle, adapter enumeration, caps
   (`VertexShaderVersion`/`PixelShaderVersion` report `(3,0)` by default; the
   `ffp` and `sm2` diagnostic profiles remain selectable), and `CreateDevice`;
+- render-state defaults generated from the shared host table, including
+  creation-time depth, the reported point-size maximum and D3D8's zero point
+  minimum; explicit version/capability differences are synchronized after
+  creation and Reset;
 - `Reset`, `Present`, `Clear`, `BeginScene`, `EndScene`;
 - vertex/index buffer create/`Lock`/`Unlock` with dirty-range upload;
 - 2D textures: create, `LockRect`/`UnlockRect` with subrect upload,

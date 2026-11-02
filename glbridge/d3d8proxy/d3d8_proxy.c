@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL8
@@ -683,6 +684,8 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
     LeaveCriticalSection(&g_transport_lock);
     return result;
 }
+
+#include "../runtime/d9wg_state_defaults_bridge.h"
 
 #define D9WG_RESERVE_UPLOAD(op, size, extra, payload, blob) \
     reserve_command_locked(op, size, extra, NULL, payload, blob)
@@ -2525,31 +2528,11 @@ static void device_init_states(D8Device *device)
     ZeroMemory(device->render_states, sizeof(device->render_states));
     ZeroMemory(device->texture_stage_states,
             sizeof(device->texture_stage_states));
-    device->render_states[D3DRS_ZENABLE] = D3DZB_TRUE;
-    device->render_states[D3DRS_ZWRITEENABLE] = TRUE;
-    device->render_states[D3DRS_ZFUNC] = D3DCMP_LESSEQUAL;
-    device->render_states[D3DRS_CULLMODE] = D3DCULL_CCW;
-    device->render_states[D3DRS_LIGHTING] = TRUE;
-    device->render_states[D3DRS_SHADEMODE] = D3DSHADE_GOURAUD;
-    device->render_states[D3DRS_ALPHAFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_SRCBLEND] = D3DBLEND_ONE;
-    device->render_states[D3DRS_DESTBLEND] = D3DBLEND_ZERO;
-    device->render_states[D3DRS_TEXTUREFACTOR] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_COLORWRITEENABLE] = 0xFu;
-    device->render_states[D3DRS_FOGEND] = 0x3F800000u;
-    device->render_states[D3DRS_FOGDENSITY] = 0x3F800000u;
-    device->render_states[D3DRS_STENCILFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILZFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILPASS] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_STENCILMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_STENCILWRITEMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_COLORVERTEX] = TRUE;
-    device->render_states[D3DRS_LOCALVIEWER] = TRUE;
-    device->render_states[D3DRS_DIFFUSEMATERIALSOURCE] = D3DMCS_COLOR1;
-    device->render_states[D3DRS_SPECULARMATERIALSOURCE] = D3DMCS_COLOR2;
-    device->render_states[D3DRS_AMBIENTMATERIALSOURCE] = D3DMCS_MATERIAL;
-    device->render_states[D3DRS_EMISSIVEMATERIALSOURCE] = D3DMCS_MATERIAL;
+    D3DCAPS8 caps;fill_caps(&caps);
+    DWORD point_max_bits;CopyMemory(&point_max_bits, &caps.MaxPointSize, sizeof(point_max_bits));
+    for (UINT state = 0; state < sizeof(device->render_states)/sizeof(device->render_states[0]); ++state)
+        device->render_states[state] = d9wg_render_default(8, state,
+                device->present.EnableAutoDepthStencil, point_max_bits);
     ZeroMemory(&device->material, sizeof(device->material));
     device->material.Diffuse.r = device->material.Diffuse.g =
             device->material.Diffuse.b = device->material.Diffuse.a = 1.0f;
@@ -2740,6 +2723,9 @@ static void device_release_owned_references(D8Device *device)
  */
 static BOOL emit_device_state_after_reset(D8Device *device)
 {
+    if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states))
+        return FALSE;
+
     /* Host-side constant registers live under the old device_handle and
      * do not survive Reset; resend the guest shadow banks so a shader
      * bound again after Reset sees the same constants it had before. */
@@ -2869,6 +2855,11 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
         HeapFree(GetProcessHeap(), 0, device);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
+    if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states)) {
+        IDirect3DDevice8_Release(&device->iface);
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    }
+
     attach_device_window(device, window);
     capture_surface(device, window, &device->last_surface);
     device->has_last_surface = TRUE;
