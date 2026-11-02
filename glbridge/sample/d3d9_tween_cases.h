@@ -1,5 +1,8 @@
 static void d3d9_tween_checks(void)
 {
+    D3DCAPS9 caps;
+    check(SUCCEEDED(CALL(GetDeviceCaps)(device, &caps)) && (caps.VertexProcessingCaps & D3DVTXPCAPS_TWEENING), "device declares verified tweening");
+    check(SUCCEEDED(FACT(GetDeviceCaps)(factory, 0, D3DDEVTYPE_HAL, &caps)) && (caps.VertexProcessingCaps & D3DVTXPCAPS_TWEENING), "factory declares verified tweening");
     IDirect3DStateBlock9 *baseline, *recorded;
     check(SUCCEEDED(CALL(CreateStateBlock)(device, D3DSBT_ALL, &baseline)), "tween baseline");
     IDirect3DVertexDeclaration9 *declaration, *missing, *position_only, *normal_only;

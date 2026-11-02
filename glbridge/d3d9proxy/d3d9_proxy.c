@@ -3225,7 +3225,7 @@ static void fill_caps(D3DCAPS9 *caps)
              * reflection vector -- the same formula GL_SPHERE_MAP and wined3d
              * use, which is what titles authored their sphere-map art
              * against. */
-            | D3DVTXPCAPS_TEXGEN_SPHEREMAP;
+            | D3DVTXPCAPS_TEXGEN_SPHEREMAP | D3DVTXPCAPS_TWEENING;
     caps->MaxActiveLights = 8;
     /* Implemented through interpolated distances plus fragment discard because
      * core WGSL has no user clip-distance builtin. */
@@ -3236,10 +3236,9 @@ static void fill_caps(D3DCAPS9 *caps)
      * too, and BLENDINDICES can name any of D3D9's 256 world matrices; the host
      * uploads a palette sized from the matrices the guest has actually set.
      *
-     * D3DVTXPCAPS_TWEENING is deliberately NOT set alongside it. Tweening
-     * interpolates two vertex streams by D3DRS_TWEENFACTOR rather than blending
-     * matrices, and nothing implements that -- it is a separate feature that
-     * happens to share the D3DVERTEXBLENDFLAGS enum. */
+     * Tweening independently interpolates POSITION1/NORMAL1 before the same
+     * transforms, lighting, texgen, fog and clipping. The common CPU path and
+     * real WebGPU pixels cover that separate mode before advertising it. */
     caps->MaxVertexBlendMatrices = 4;
     caps->MaxVertexBlendMatrixIndex = 255;
     /* The tessellation ceiling d9_draw_npatch() clamps to. It bounds the
