@@ -21,4 +21,38 @@ void d9wg_clip_project(const float *clip, const D9WGProcessViewport *viewport,
  * neither these nor viewport-mapped screen z alone suffice for later clipping. */
 void d9wg_clip_vertex(const float *clip, const D9WGProcessViewport *viewport,
         const float *guard_band, uint32_t clipping, D9WGClipVertex *vertex);
+
+/* Position occupies the first four floats; remaining attributes (including
+ * depth before division) interpolate in homogeneous space. Scratch belongs
+ * to the caller, keeping the CRT-free x86 implementation off the large stack. */
+#define D9WG_CLIP_MAX_FLOATS 52u
+#define D9WG_CLIP_MAX_VERTICES 9u
+typedef struct D9WGClipPoint { float data[D9WG_CLIP_MAX_FLOATS]; } D9WGClipPoint;
+typedef struct D9WGClipWork {
+    D9WGClipPoint polygon[2][D9WG_CLIP_MAX_VERTICES];
+} D9WGClipWork;
+int d9wg_clip_triangle(const D9WGClipPoint *input, uint32_t floats, D9WGClipWork *work,
+        const D9WGClipPoint **output, uint32_t *count);
+int d9wg_clip_segment(const D9WGClipPoint *input, uint32_t floats,
+        D9WGClipPoint *output, uint32_t *count);
+
+/* Per-buffer processing records use byte positions, so different stream
+ * offsets/strides cannot accidentally reuse one another's clipping state. */
+#define D9WG_CLIP_INVALID 0xffffffffu
+typedef struct D9WGClipBatch {
+    struct D9WGClipBatch *next;
+    uint32_t first, stride, count, live;
+    D9WGProcessViewport viewport;
+    D9WGClipVertex vertex[];
+} D9WGClipBatch;
+typedef struct D9WGClipBuffer { D9WGClipBatch *head; } D9WGClipBuffer;
+typedef void (*D9WGClipRelease)(void *context, void *allocation);
+uint32_t d9wg_clip_batch_bytes(uint32_t count);
+int d9wg_clip_batch_init(D9WGClipBatch *batch, uint32_t bytes, uint32_t first,
+        uint32_t stride, uint32_t count, const D9WGProcessViewport *viewport);
+void d9wg_clip_buffer_commit(D9WGClipBuffer *buffer, D9WGClipBatch *batch,
+        uint32_t offset, uint32_t bytes, D9WGClipRelease release, void *context);
+const D9WGClipVertex *d9wg_clip_buffer_lookup(D9WGClipBuffer *buffer, uint32_t position,
+        const void *stored, const D9WGProcessViewport **viewport);
+void d9wg_clip_buffer_free(D9WGClipBuffer *buffer, D9WGClipRelease release, void *context);
 #endif

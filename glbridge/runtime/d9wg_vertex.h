@@ -23,6 +23,8 @@ typedef struct D9WGVertexState {
         float matrix[16];
     } texture[8];
     D9WGVertexBlend *blend;
+    D9WGClipVertex *clip_vertices;
+    float clip_guard_band[4];
 } D9WGVertexState;
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states);
 int d9wg_vertex_texture_state(D9WGVertexState *state, uint32_t stage,

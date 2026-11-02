@@ -9,6 +9,7 @@ void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
     const uint8_t *bytes = render_states;
     state->texture_mask = 0;
     state->blend = 0;
+    state->clip_vertices = 0;
     /* The public D3D7/8/9 render-state indices and DWORD storage agree. Fog
      * generation follows FOGVERTEXMODE; FOGENABLE controls later blending. */
     __builtin_memcpy(&state->fog_mode, bytes + 140u*4u, 4u);
@@ -176,7 +177,11 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             d9wg_blend_vertex(blend, s, in, position, blended_eye, clip, blended_normal);
             if (lighting->flags.normalize_normals) d9wg_tnl_normalize3(blended_normal, 0.0f);
         } else d9wg_transform_vector4(world_view_projection, position, clip);
-        d9wg_clip_project(clip, viewport, screen);
+        if (vertex_state && vertex_state->clip_vertices) {
+            D9WGClipVertex *record = &vertex_state->clip_vertices[vertex];
+            d9wg_clip_vertex(clip, viewport, vertex_state->clip_guard_band, 1, record);
+            for (unsigned i = 0; i < 4; ++i) screen[i] = record->stored[i];
+        } else d9wg_clip_project(clip, viewport, screen);
         for (unsigned i = 0; i < 4; ++i) write_float(out + d->position + i*4u, screen[i]);
         /* DONOTCOPYDATA preserves only unaffected attributes. Lighting still
          * computes diffuse/specular even when passthrough copying is disabled. */
