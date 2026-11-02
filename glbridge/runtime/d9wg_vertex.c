@@ -435,6 +435,35 @@ static void gather_stream_vertex(const D9WGProcessStreamLayout *layout,
         copy_bytes(output + i*16u, stream->vertices + at, d9wg_decl_bytes(element->type));
     }
 }
+int d9wg_process_stream_gather(const D9WGProcessStreamLayout *layout,
+        const D9WGVertexStream *streams, uint32_t vertex, void *output)
+{
+    uint32_t first[D9WG_VERTEX_MAX_STREAMS];
+    if (!output || !d9wg_process_stream_validate(layout, streams, vertex, 1, first)) return 0;
+    gather_stream_vertex(layout, streams, first, 0, output);return 1;
+}
+static int stream_clip_offset(const D9WGClipDrawSource *source, int64_t vertex, uint32_t *offset)
+{
+    uint32_t first[D9WG_VERTEX_MAX_STREAMS];
+    if (vertex > 0xffffffffu) {
+        for (unsigned stream = 0; stream < D9WG_VERTEX_MAX_STREAMS; ++stream)
+            if ((source->stream_layout->stream_mask & (1u << stream)) && source->streams[stream].stride) return 0;
+        vertex = 0; /* Constant streams cannot observe the larger index. */
+    }
+    if (!d9wg_process_stream_validate(source->stream_layout, source->streams, (uint32_t)vertex, 1, first)) return 0;
+    *offset = (uint32_t)vertex;return 1;
+}
+static int stream_clip_gather(const D9WGClipDrawSource *source, uint32_t vertex, void *output)
+{
+    return d9wg_process_stream_gather(source->stream_layout, source->streams, vertex, output);
+}
+void d9wg_clip_draw_streams_init(D9WGClipDrawSource *source,
+        const D9WGProcessStreamLayout *layout, const D9WGVertexStream *streams)
+{
+    source->vertices = 0;source->layout = &layout->vertex;source->stride = layout->vertex.stride;
+    source->stream_layout = layout;source->streams = streams;
+    source->stream_offset = stream_clip_offset;source->stream_gather = stream_clip_gather;
+}
 int d9wg_process_vertices_streams(const D9WGProcessStreamLayout *layout,
         const D9WGVertexStream *streams, uint32_t source_start,
         const D9WGProcessLayout *destination, void *output, uint32_t output_length,
@@ -494,7 +523,8 @@ int d9wg_vertex_stream_clip_codes(const D9WGProcessStreamLayout *layout,
     source.vertices = vertex;source.length = source.stride = layout->vertex.stride;
     source.base = source.first_vertex = source.min_vertex = 0;
     source.count = source.vertex_count = 1;source.indices = 0;source.base_vertex = 0;
-    source.layout = &layout->vertex;
+    source.layout = &layout->vertex;source.stream_layout = 0;source.streams = 0;
+    source.stream_offset = 0;source.stream_gather = 0;
     D9WGClipStatus result = *status;
     /* Native software draws classify the whole declared range, including
      * vertices not referenced by the indices. Keep the result private until

@@ -6557,7 +6557,7 @@ static BOOL device_has_vertex_format(D9Device *device)
 
 static BOOL d9_current_source_layout(D9Device *device, D9WGProcessLayout *layout);
 static int d9_current_source_position_transformed(D9Device *device);
-static BOOL d9_multistream_clip_records(D9Device *device, const D9WGClipDrawSource *draw);
+static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const D9WGClipDrawSource *draw);
 static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex);
 static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *source,
         D9WGClipStatus *next, BOOL *valid);
@@ -6587,16 +6587,16 @@ static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
 {
     D9WGClipDrawSource submitted;ZeroMemory(&submitted, sizeof(submitted));
     submitted.first_vertex = first;submitted.count = count;submitted.indices = indices;
-    submitted.index_stride = index_stride;submitted.base_vertex = base_vertex;
+    submitted.index_bytes = index_bytes;submitted.index_stride = index_stride;submitted.base_vertex = base_vertex;
     submitted.min_vertex = min_vertex;submitted.vertex_count = vertex_limit;
     D9VertexBuffer *buffer = device->streams[0].buffer;
-    if (!buffer) return d9_multistream_clip_records(device, &submitted) ? -1 : 0;
+    if (!buffer) return d9_clip_stream_draw(device, primitive_type, &submitted);
     D9WGProcessLayout layout;
     d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
-    if (!buffer->clips.head) return d9_multistream_clip_records(device, &submitted) ? -1 : 0;
-    if (!d9_current_source_layout(device, &layout))
-        return d9_current_source_position_transformed(device) == 0 ? 0 : -1;
+    if (!buffer->clips.head) return d9_clip_stream_draw(device, primitive_type, &submitted);
+    if (!d9_current_source_layout(device, &layout)) return d9_clip_stream_draw(device, primitive_type, &submitted);
     if (!layout.position_transformed) return 0;
+    if (!device->streams[0].stride) return d9_clip_stream_draw(device, primitive_type, &submitted);
     if (device->streams[0].frequency != 1) return -1;
     D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
     source.clips = &buffer->clips;source.vertices = buffer->shadow;source.length = buffer->length;
@@ -9220,38 +9220,6 @@ static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
             d9_build_process_layout(elements, count, layout);
 }
 
-/* Processed POSITIONT records address the original position buffer. A
- * multi-stream clip emitter must gather attributes and remap those records;
- * until that path exists, never feed stored clip coordinates to the GPU as
- * ordinary screen positions. Raw POSITIONT declarations have no such records. */
-static BOOL d9_multistream_clip_records(D9Device *device, const D9WGClipDrawSource *draw)
-{
-    if (!device->vertex_declaration) return FALSE;
-    D9VertexDeclaration *declaration = device->vertex_declaration;
-    for (UINT i = 0; i < declaration->element_count; ++i) {
-        const D3DVERTEXELEMENT9 *element = declaration->elements + i;
-        if (element->Usage != D3DDECLUSAGE_POSITIONT || element->UsageIndex) continue;
-        if (element->Stream >= D9_MAX_STREAMS) return FALSE;
-        D9VertexBuffer *buffer = device->streams[element->Stream].buffer;
-        if (!buffer) return FALSE;
-        d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
-        if (!buffer->clips.head) return FALSE;
-        for (uint32_t vertex = 0; vertex < draw->count; ++vertex) {
-            uint32_t index = d9wg_clip_read_index(draw, vertex);
-            int64_t source = (int64_t)draw->first_vertex + draw->base_vertex + index;
-            if (index < draw->min_vertex || index >= draw->vertex_count || source < 0 ||
-                    (source > 0xffffffffu && device->streams[element->Stream].stride)) return TRUE;
-            uint64_t at = device->streams[element->Stream].offset + (uint64_t)source*device->streams[element->Stream].stride + element->Offset;
-            if (at > buffer->length || buffer->length - at < 16u) return TRUE;
-            const D9WGProcessViewport *viewport;
-            if (d9wg_clip_buffer_lookup(&buffer->clips, (uint32_t)at, buffer->shadow + (uint32_t)at, &viewport)) return TRUE;
-        }
-        d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
-        return FALSE;
-    }
-    return FALSE;
-}
-
 static int d9_current_source_position_transformed(D9Device *device)
 {
     D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
@@ -9344,6 +9312,106 @@ static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
     *result = input;return D3D_OK;
 fail:
     d9_process_input_free(input);return error;
+}
+
+/* Internal clipped UP emissions use one gathered stream. Only host wire
+ * state changes: the application's declaration and all VB/IB shadows stay
+ * bound, and the original host declaration is restored even after failure. */
+typedef struct D9StreamClipEmit {
+    D9Device *device;
+    const D9WGProcessStreamLayout *layout;
+    BOOL remapped;
+} D9StreamClipEmit;
+static BOOL d9_emit_clip_layout(D9Device *device, DWORD fvf,
+        const D9WGVertexElement *elements, uint32_t count, BOOL gather)
+{
+    BYTE payload[sizeof(D9WGSetFVF) + D3DMAXDECLLENGTH*sizeof(D9WGVertexElement)];
+    D9WGSetFVF *command = (D9WGSetFVF *)payload;
+    command->device_handle = device->handle;command->fvf = fvf;
+    command->element_count = count;command->reserved = 0;
+    D9WGVertexElement *output = (D9WGVertexElement *)(payload + sizeof(*command));
+    for (uint32_t i = 0; i < count; ++i) {
+        output[i] = elements[i];
+        if (gather) { output[i].stream = 0;output[i].offset = (uint16_t)(i*16u); }
+    }
+    return emit_command(D9WG_OP_SET_FVF, payload, sizeof(*command) + count*sizeof(*output));
+}
+static int d9_clip_stream_emit(void *context, uint32_t primitive_type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D9StreamClipEmit *state = context;
+    if (!state->remapped) {
+        if (!d9_emit_clip_layout(state->device, 0, state->layout->elements, state->layout->count, TRUE)) return 0;
+        state->remapped = TRUE;
+    }
+    return d9_clip_emit(state->device, primitive_type, vertices, count, stride);
+}
+static int d9_clip_stream_mask(void *context, uint32_t mask)
+{ return d9_clip_mask(((D9StreamClipEmit *)context)->device, mask); }
+static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const D9WGClipDrawSource *draw)
+{
+    UINT position_stream = 0, position_offset = 0;
+    if (device->vertex_declaration) {
+        BOOL found = FALSE;
+        D9VertexDeclaration *declaration = device->vertex_declaration;
+        for (UINT i = 0; i < declaration->element_count; ++i) {
+            const D3DVERTEXELEMENT9 *element = declaration->elements + i;
+            if (element->Usage == D3DDECLUSAGE_POSITIONT && !element->UsageIndex) {
+                position_stream = element->Stream;position_offset = element->Offset;found = TRUE;break;
+            }
+        }
+        if (!found) return 0;
+    } else if ((device->fvf & 0x00eu) != D3DFVF_XYZRHW) return 0;
+    if (position_stream >= D9_MAX_STREAMS) return -1;
+    D9VertexBuffer *buffer = device->streams[position_stream].buffer;
+    if (!buffer) return -1;
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!buffer->clips.head) return 0;
+    BOOL live = FALSE;
+    for (uint32_t vertex = 0; vertex < draw->count; ++vertex) {
+        uint32_t index = d9wg_clip_read_index(draw, vertex);
+        int64_t source = (int64_t)draw->first_vertex + draw->base_vertex + index;
+        if (index < draw->min_vertex || index >= draw->vertex_count || source < 0 ||
+                (source > 0xffffffffu && device->streams[position_stream].stride)) return -1;
+        uint64_t at = device->streams[position_stream].offset + (uint64_t)source*device->streams[position_stream].stride + position_offset;
+        if (at > buffer->length || buffer->length - at < 16u) return -1;
+        const D9WGProcessViewport *viewport;
+        if (d9wg_clip_buffer_lookup(&buffer->clips, (uint32_t)at, buffer->shadow + (uint32_t)at, &viewport)) live = TRUE;
+    }
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!live) return 0;
+    uint32_t begin = draw->indices ? draw->min_vertex : 0;
+    uint32_t count = draw->indices ? draw->vertex_count - begin : draw->count;
+    int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
+    if (start < 0 || start > 0xffffffffu) return -1;
+    D9ProcessInput *input;
+    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, &input);
+    if (FAILED(error)) return error == E_OUTOFMEMORY ? -3 : -1;
+    if (!d9wg_process_canonical_output(&input->layout.vertex)) {
+        d9_process_input_free(input);return -1;
+    }
+    D9WGClipDrawSource source = *draw;
+    d9wg_clip_draw_streams_init(&source, &input->layout, input->streams);
+    source.clips = &buffer->clips;source.primitive_type = primitive_type;
+    source.flat_shading = device->render_states[D3DRS_SHADEMODE] == D3DSHADE_FLAT;
+    source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
+            (float)device->viewport.Width, (float)device->viewport.Height, device->viewport.MinZ, device->viewport.MaxZ };
+    D9StreamClipEmit state = { device, &input->layout, FALSE };
+    int result = d9wg_vertex_windows_clip_draw_planes(&source, d9_clip_stream_emit, d9_clip_stream_mask,
+            device->render_states[D3DRS_CLIPPLANEENABLE], &state);
+    if (state.remapped) {
+        BOOL restored;
+        if (device->vertex_declaration) {
+            D9WGSetVertexDeclaration command = { device->handle, device->vertex_declaration->handle };
+            restored = emit_command(D9WG_OP_SET_VERTEX_DECLARATION, &command, sizeof(command));
+        } else {
+            D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
+            restored = fvf_to_declaration(device->fvf, elements, &element_count) &&
+                    d9_emit_clip_layout(device, device->fvf, elements, element_count, FALSE);
+        }
+        if (!restored) result = -2;
+    }
+    d9_process_input_free(input);return result;
 }
 
 static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *draw,

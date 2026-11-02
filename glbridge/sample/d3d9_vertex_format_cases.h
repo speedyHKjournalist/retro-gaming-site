@@ -1,3 +1,6 @@
+#ifdef D9WG_VERTEX_STREAM_CLIPPING_CASES
+#include "d3d9_vertex_stream_clipping_cases.h"
+#endif
 #ifdef D9WG_VERTEX_STREAM_DRAW_CASES
 #include "d3d9_vertex_stream_draw_cases.h"
 #endif
@@ -94,6 +97,9 @@ static void vertex_format_cases(void)
 #endif
 #ifdef D9WG_VERTEX_STREAM_DRAW_CASES
     vertex_stream_draw_cases();
+#endif
+#ifdef D9WG_VERTEX_STREAM_CLIPPING_CASES
+    vertex_stream_clipping_cases();
 #endif
     report("PASS real XP typed input: half positions, DEC3N normals, normalized coordinates, half size, stream/destination offsets, retained components, copy flags, clip status and atomic refusals");
 }

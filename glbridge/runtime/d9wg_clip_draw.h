@@ -13,6 +13,13 @@ typedef struct D9WGClipDrawSource {
     int32_t base_vertex;
     const D9WGProcessLayout *layout;
     D9WGProcessViewport viewport;
+    /* Optional virtual input: offsets identify vertex indices, and attributes
+     * are gathered into stream_layout->vertex. Output remains one stream. */
+    const D9WGProcessStreamLayout *stream_layout;
+    const D9WGVertexStream *streams;
+    int (*stream_offset)(const struct D9WGClipDrawSource *, int64_t, uint32_t *);
+    int (*stream_gather)(const struct D9WGClipDrawSource *, uint32_t, void *);
+
 } D9WGClipDrawSource;
 static __inline uint32_t d9wg_clip_read_index(const D9WGClipDrawSource *s, uint32_t i)
 {
@@ -26,6 +33,8 @@ static __inline int d9wg_clip_vertex_offset(const D9WGClipDrawSource *s, uint32_
     uint32_t index = d9wg_clip_read_index(s, i);
     int64_t vertex = (int64_t)s->first_vertex + s->base_vertex + index;
     if (index < s->min_vertex || index >= s->vertex_count || vertex < 0) return 0;
+    if (s->stream_layout)
+        return s->stream_offset && s->stream_offset(s, vertex, offset);
     uint64_t at = (uint64_t)s->base + (uint64_t)vertex*s->stride;
     if (at > s->length || s->layout->stride > s->length - at) return 0;
     *offset = (uint32_t)at;return 1;
