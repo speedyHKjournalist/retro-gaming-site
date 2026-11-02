@@ -1027,6 +1027,10 @@ static void d3d7_device_init_state(D3D7Device *device)
 static BOOL d3d7_render_state_is_vertex(DWORD state)
 {
     switch (state) {
+    case D3DRENDERSTATE_CULLMODE:
+    case D3DRENDERSTATE_SPECULARENABLE:
+    case D3DRENDERSTATE_FOGENABLE:
+    case D3DRENDERSTATE_SHADEMODE:
     case D3DRENDERSTATE_FOGVERTEXMODE:
     case D3DRENDERSTATE_LIGHTING:
     case D3DRENDERSTATE_AMBIENT:
@@ -1075,11 +1079,11 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
         for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
             if (d3d7_render_state_valid(state) &&
                     (type == D3DSBT_ALL ||
-                     !d3d7_render_state_is_vertex(state)))
+                     !d3d7_render_state_is_vertex(state) || state == D3DRENDERSTATE_SHADEMODE))
                 block->render_mask[state] = 1;
         }
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
-            block->texture_mask[stage] = 1;
+            if (type == D3DSBT_ALL) block->texture_mask[stage] = 1;
             for (state = D3DTSS_COLOROP;
                     state <= D3DTSS_TEXTURETRANSFORMFLAGS; ++state)
                 block->texture_stage_mask[stage][state] = 1;
@@ -1092,24 +1096,28 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
                      d3d7_render_state_is_vertex(state)))
                 block->render_mask[state] = 1;
         }
-        for (state = 0; state < D3D7_MAX_TRANSFORMS; ++state) {
-            if (d3d7_transform_state_valid(state))
-                block->transform_mask[state] = 1;
+        for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
+            block->texture_stage_mask[stage][D3DTSS_TEXCOORDINDEX] = 1;
+            block->texture_stage_mask[stage][D3DTSS_TEXTURETRANSFORMFLAGS] = 1;
         }
         for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
             block->light_mask[state] = type == D3DSBT_ALL;
             block->light_enable_mask[state] = 1;
         }
         block->all_lights_scope = TRUE;
-        for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state)
-            block->clip_plane_mask[state] = 1;
-        block->viewport_mask = TRUE;
-        block->material_mask = TRUE;
+
     }
+    if (type == D3DSBT_ALL) {
+        for (state = 0; state < D3D7_MAX_TRANSFORMS; ++state)
+            if (d3d7_transform_state_valid(state)) block->transform_mask[state] = 1;
+        for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) block->clip_plane_mask[state] = 1;
+        block->viewport_mask = block->material_mask = TRUE;
+    }
+
 }
 
 static BOOL d3d7_state_block_capture(D3D7Device *device,
-        D3D7StateBlock *block, BOOL preserve_lights)
+        D3D7StateBlock *block)
 {
     UINT state, stage;
     for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
@@ -1134,27 +1142,25 @@ static BOOL d3d7_state_block_capture(D3D7Device *device,
         if (block->transform_mask[state])
             block->transforms[state] = device->transforms[state];
     }
-    if (!preserve_lights) {
-        if (block->all_lights_scope) {
-            for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
-                if (!entry->set) continue;
-                D9WGLightState *saved = d9wg_light_get(&block->extra_lights, entry->index, TRUE);
-                if (!saved) return FALSE;
-                saved->light_mask = block->type == D3DSBT_ALL;saved->enable_mask = TRUE;
-            }
+    if (block->all_lights_scope) {
+        for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
+            if (!entry->set) continue;
+            D9WGLightState *saved = d9wg_light_get(&block->extra_lights, entry->index, TRUE);
+            if (!saved) return FALSE;
+            saved->light_mask = block->type == D3DSBT_ALL;saved->enable_mask = TRUE;
         }
-        for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
-            if (block->all_lights_scope && !device->light_set[state]) block->light_mask[state] = block->light_enable_mask[state] = 0;
-            if (block->light_mask[state]) {block->lights[state] = device->lights[state];block->light_set[state] = device->light_set[state];}
-            if (block->light_enable_mask[state]) block->light_enabled[state] = device->light_enabled[state];
-        }
-        for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
-            D9WGLightState *current = d9wg_light_find(device->extra_lights, entry->index);
-            if (entry->light_mask) {entry->set = current && current->set;if (entry->set) entry->light = current->light;}
-            if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
-        }
-        block->all_lights_scope = FALSE;
     }
+    for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
+        if (block->all_lights_scope && !device->light_set[state]) block->light_mask[state] = block->light_enable_mask[state] = 0;
+        if (block->light_mask[state]) {block->lights[state] = device->lights[state];block->light_set[state] = device->light_set[state];}
+        if (block->light_enable_mask[state]) block->light_enabled[state] = device->light_enabled[state];
+    }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        D9WGLightState *current = d9wg_light_find(device->extra_lights, entry->index);
+        if (entry->light_mask) {entry->set = current && current->set;if (entry->set) entry->light = current->light;}
+        if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
+    }
+    block->all_lights_scope = FALSE;
     for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) {
         if (block->clip_plane_mask[state])
             CopyMemory(block->clip_planes[state], device->clip_planes[state],
@@ -1555,6 +1561,11 @@ static HRESULT WINAPI d3d7_device_SetTransform(IDirect3DDevice7 *iface,
     D9WGSetTransform command;
     if (!matrix || !d3d7_transform_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->transform_mask[state] = 1;block->transforms[state] = *matrix;
+        return D3D_OK;
+    }
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->owner->device_handle;
     command.state = ddraw_transform_state_to_d3d9(state);
@@ -1562,8 +1573,6 @@ static HRESULT WINAPI d3d7_device_SetTransform(IDirect3DDevice7 *iface,
     if (!emit_command(D9WG_OP_SET_TRANSFORM, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device->transforms[state] = *matrix;
-    if (device->recording_state_block)
-        device->recording_state_block->transform_mask[state] = 1;
     return D3D_OK;
 }
 
@@ -1589,6 +1598,11 @@ static HRESULT WINAPI d3d7_device_SetViewport(IDirect3DDevice7 *iface,
             viewport->dvMinZ < 0.0f || viewport->dvMaxZ > 1.0f ||
             viewport->dvMinZ > viewport->dvMaxZ)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->viewport_mask = TRUE;block->viewport = *viewport;
+        return D3D_OK;
+    }
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->owner->device_handle;
     command.x = viewport->dwX;
@@ -1600,8 +1614,6 @@ static HRESULT WINAPI d3d7_device_SetViewport(IDirect3DDevice7 *iface,
     if (!emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device->viewport = *viewport;
-    if (device->recording_state_block)
-        device->recording_state_block->viewport_mask = TRUE;
     return D3D_OK;
 }
 
@@ -1612,7 +1624,9 @@ static HRESULT WINAPI d3d7_device_MultiplyTransform(IDirect3DDevice7 *iface,
     D3DMATRIX result;
     if (!matrix || !d3d7_transform_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d7_multiply_matrix(&device->transforms[state], matrix, &result);
+    const D3DMATRIX *source = device->recording_state_block && device->recording_state_block->transform_mask[state]
+            ? &device->recording_state_block->transforms[state] : &device->transforms[state];
+    d3d7_multiply_matrix(source, matrix, &result);
     return d3d7_device_SetTransform(iface, state, &result);
 }
 
@@ -1630,6 +1644,11 @@ static HRESULT WINAPI d3d7_device_SetMaterial(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetMaterial command;
     if (!material) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->material_mask = TRUE;block->material = *material;
+        return D3D_OK;
+    }
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->owner->device_handle;
     CopyMemory(command.diffuse, &material->diffuse, sizeof(command.diffuse));
@@ -1640,8 +1659,6 @@ static HRESULT WINAPI d3d7_device_SetMaterial(IDirect3DDevice7 *iface,
     if (!emit_command(D9WG_OP_SET_MATERIAL, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_MATERIAL_SETDATA_FAILED);
     device->material = *material;
-    if (device->recording_state_block)
-        device->recording_state_block->material_mask = TRUE;
     return D3D_OK;
 }
 
@@ -1848,6 +1865,38 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
     DWORD previous;
     if (!d3d7_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
+    if (state == D3DRENDERSTATE_TEXTUREHANDLE && value)
+        return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    DDrawBlendCascade cascade = {0};
+    if (state == D3DRENDERSTATE_TEXTUREMAPBLEND) {
+        ddraw_texture_map_blend_cascade(value, &cascade);
+        if (!cascade.supported) return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    }
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->render_mask[state] = 1;block->render_states[state] = value;
+        if (state == D3DRENDERSTATE_WRAPU && block->render_mask[D3D9RS_WRAP0]) {
+            if (value) block->render_states[D3D9RS_WRAP0] |= 1u;else block->render_states[D3D9RS_WRAP0] &= ~1u;
+        } else if (state == D3DRENDERSTATE_WRAPV && block->render_mask[D3D9RS_WRAP0]) {
+            if (value) block->render_states[D3D9RS_WRAP0] |= 2u;else block->render_states[D3D9RS_WRAP0] &= ~2u;
+        } else if ((DWORD)state == D3D9RS_WRAP0) {
+            if (block->render_mask[D3DRENDERSTATE_WRAPU]) block->render_states[D3DRENDERSTATE_WRAPU] = !!(value & 1u);
+            if (block->render_mask[D3DRENDERSTATE_WRAPV]) block->render_states[D3DRENDERSTATE_WRAPV] = !!(value & 2u);
+        }
+        if (state == D3DRENDERSTATE_TEXTUREADDRESS || state == D3DRENDERSTATE_TEXTUREADDRESSU || state == D3DRENDERSTATE_TEXTUREADDRESSV) {
+            UINT first = state == D3DRENDERSTATE_TEXTUREADDRESSV ? D3DTSS_ADDRESSV : D3DTSS_ADDRESSU;
+            UINT last = state == D3DRENDERSTATE_TEXTUREADDRESS ? D3DTSS_ADDRESSV : first;
+            for (UINT slot = first; slot <= last; ++slot) {block->texture_stage_mask[0][slot] = 1;block->texture_stage_states[0][slot] = value;}
+            if (state == D3DRENDERSTATE_TEXTUREADDRESS) {block->texture_stage_mask[0][D3D7TSS_ADDRESS] = 1;block->texture_stage_states[0][D3D7TSS_ADDRESS] = value;}
+        }
+        if (state == D3DRENDERSTATE_TEXTUREMAPBLEND) {
+            const UINT slots[6] = {D3DTSS_COLOROP,D3DTSS_COLORARG1,D3DTSS_COLORARG2,D3DTSS_ALPHAOP,D3DTSS_ALPHAARG1,D3DTSS_ALPHAARG2};
+            const DWORD values[6] = {cascade.color_op,cascade.color_arg1,cascade.color_arg2,cascade.alpha_op,cascade.alpha_arg1,cascade.alpha_arg2};
+            for (UINT slot = 0; slot < 6; ++slot) {block->texture_stage_mask[0][slots[slot]] = 1;block->texture_stage_states[0][slots[slot]] = values[slot];}
+        }
+        return D3D_OK;
+    }
+
     /* D3DRENDERSTATE_WRAPU/V and D3DRS_WRAP0's U/V bits are aliases.  WRAP1
      * through WRAP7 name the other FVF coordinate sets.  None goes on the
      * wire: d3d7_prepare_wrapped_primitives implements them before each draw. */
@@ -1872,8 +1921,6 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
                         (value & 2u) != 0;
             }
         }
-        if (device->recording_state_block)
-            device->recording_state_block->render_mask[state] = 1;
         return D3D_OK;
     }
 
@@ -1895,8 +1942,6 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
     } else if (state == D3DRENDERSTATE_TEXTUREADDRESSV) {
         device->texture_stage_states[0][D3DTSS_ADDRESSV] = value;
     }
-    if (device->recording_state_block)
-        device->recording_state_block->render_mask[state] = 1;
     return D3D_OK;
 }
 
@@ -1931,7 +1976,7 @@ static HRESULT WINAPI d3d7_device_EndStateBlock(IDirect3DDevice7 *iface,
     device->recording_state_block = NULL;
     block->handle = device->next_state_block_handle++;
     if (!block->handle) block->handle = device->next_state_block_handle++;
-    d3d7_state_block_capture(device, block, TRUE);
+    /* Recorded values and references are complete; End only publishes. */
     block->next = device->state_blocks;
     device->state_blocks = block;
     *handle = block->handle;
@@ -2322,14 +2367,18 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
             (surface && (surface->owner != device->owner ||
                     format_is_depth(surface->format))))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
+        if (block->textures[stage]) surface_Release((IDirectDrawSurface7 *)&block->textures[stage]->vtbl7);
+        block->textures[stage] = surface;block->texture_mask[stage] = 1;return D3D_OK;
+    }
     if (surface) {
         if (!sync_external_surface_for_read(surface)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         if (!prepare_surface_for_host(surface)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         rebind_host_surface_state(surface);
     }
     if (device->textures[stage] == surface) {
-        if (device->recording_state_block)
-            device->recording_state_block->texture_mask[stage] = 1;
         return D3D_OK;
     }
     if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
@@ -2345,8 +2394,6 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
     if (old) surface_Release((IDirectDrawSurface7 *)&old->vtbl7);
-    if (device->recording_state_block)
-        device->recording_state_block->texture_mask[stage] = 1;
     return D3D_OK;
 }
 
@@ -2397,6 +2444,18 @@ static HRESULT WINAPI d3d7_device_SetTextureStageState(
     if (stage >= D3D7_MAX_TEXTURE_STAGES ||
             !d3d7_texture_stage_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    sampler_state = ddraw_stage_state_to_sampler_state(state);
+    if (sampler_state && !d3d7_sampler_value(state, value, &translated_value))
+        return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->texture_stage_mask[stage][state] = 1;block->texture_stage_states[stage][state] = value;
+        if ((UINT)state == D3D7TSS_ADDRESS) {
+            block->texture_stage_mask[stage][D3DTSS_ADDRESSU] = block->texture_stage_mask[stage][D3DTSS_ADDRESSV] = 1;
+            block->texture_stage_states[stage][D3DTSS_ADDRESSU] = block->texture_stage_states[stage][D3DTSS_ADDRESSV] = value;
+        }
+        return D3D_OK;
+    }
     previous = device->texture_stage_states[stage][state];
     device->texture_stage_states[stage][state] = value;
     sampler_state = ddraw_stage_state_to_sampler_state(state);
@@ -2421,8 +2480,6 @@ static HRESULT WINAPI d3d7_device_SetTextureStageState(
         device->texture_stage_states[stage][D3DTSS_ADDRESSU] = value;
         device->texture_stage_states[stage][D3DTSS_ADDRESSV] = value;
     }
-    if (device->recording_state_block)
-        device->recording_state_block->texture_stage_mask[stage][state] = 1;
     return D3D_OK;
 }
 
@@ -2568,7 +2625,7 @@ static HRESULT WINAPI d3d7_device_CaptureStateBlock(IDirect3DDevice7 *iface,
     D3D7StateBlock *block = d3d7_find_state_block(device, handle);
     if (!block) return DDWG_TRACE_ERROR(D3DERR_INVALIDSTATEBLOCK);
     if (device->recording_state_block) return DDWG_TRACE_ERROR(D3DERR_INBEGINSTATEBLOCK);
-    return d3d7_state_block_capture(device, block, FALSE) ? D3D_OK : DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    return d3d7_state_block_capture(device, block) ? D3D_OK : DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
 }
 
 static HRESULT WINAPI d3d7_device_DeleteStateBlock(IDirect3DDevice7 *iface,
@@ -2603,7 +2660,7 @@ static HRESULT WINAPI d3d7_device_CreateStateBlock(IDirect3DDevice7 *iface,
     block->handle = device->next_state_block_handle++;
     if (!block->handle) block->handle = device->next_state_block_handle++;
     d3d7_state_block_mark_type(block, type);
-    if (!d3d7_state_block_capture(device, block, FALSE)) {d3d7_state_block_destroy(block);return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);}
+    if (!d3d7_state_block_capture(device, block)) {d3d7_state_block_destroy(block);return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);}
     block->next = device->state_blocks;
     device->state_blocks = block;
     *handle = block->handle;
@@ -2699,14 +2756,17 @@ static HRESULT WINAPI d3d7_device_SetClipPlane(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetClipPlane command;
     if (!plane || index >= D3D7_MAX_CLIP_PLANES) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->clip_plane_mask[index] = 1;CopyMemory(block->clip_planes[index], plane, sizeof(command.plane));
+        return D3D_OK;
+    }
     command.device_handle = device->owner->device_handle;
     command.index = index;
     CopyMemory(command.plane, plane, sizeof(command.plane));
     if (!emit_command(D9WG_OP_SET_CLIP_PLANE, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     CopyMemory(device->clip_planes[index], plane, sizeof(command.plane));
-    if (device->recording_state_block)
-        device->recording_state_block->clip_plane_mask[index] = 1;
     return D3D_OK;
 }
 
