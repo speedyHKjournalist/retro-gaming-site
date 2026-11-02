@@ -34,6 +34,8 @@
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT9
 #include "../runtime/d9wg_lighting_bridge.h"
 #include "../runtime/d9wg_light_state.h"
+#define D9WG_STATE_BLOCK_API 9
+#include "../runtime/d9wg_state_block_scope.h"
 #include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
@@ -1279,6 +1281,9 @@ static void state_block_record_sampler_state(D9Device *device,
 static void state_block_record_transform(D9Device *device, UINT state);
 static void state_block_record_texture(D9Device *device, UINT stage);
 static void state_block_record_material(D9Device *device);
+static void state_block_record_clip_plane(D9Device *device, UINT index);
+static void state_block_record_npatch_mode(D9Device *device);
+static void state_block_record_stream_frequency(D9Device *device, UINT stream);
 static BOOL state_block_record_light(D9Device *device, UINT index);
 static BOOL state_block_record_light_enable(D9Device *device, UINT index);
 static void state_block_record_viewport(D9Device *device);
@@ -6113,6 +6118,7 @@ static HRESULT WINAPI device_set_npatch_mode(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     if (segments > (float)D9_PATCH_MAX_SEGMENTS)
         segments = (float)D9_PATCH_MAX_SEGMENTS;
+    state_block_record_npatch_mode(device);
     device->npatch_segments = segments > 1.0f ? segments : 0.0f;
     return D3D_OK;
 }
@@ -8907,6 +8913,7 @@ static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,
     D9WGSetClipPlane command;
     if (!plane || index >= D9_MAX_CLIP_PLANES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    state_block_record_clip_plane(device, index);
     CopyMemory(device->clip_planes[index], plane, sizeof(command.plane));
     command.device_handle = device->handle;
     command.index = index;
@@ -9623,7 +9630,7 @@ static HRESULT WINAPI device_set_stream_source_freq(IDirect3DDevice9 *iface,
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
 
-    state_block_record_stream(device, stream);
+    state_block_record_stream_frequency(device, stream);
     if (device->streams[stream].frequency == divider)
         return D3D_OK;
     device->streams[stream].frequency = divider;
@@ -11902,65 +11909,10 @@ static IDirect3DCubeTexture9Vtbl g_cube_vtbl = {
  * so no draw can observe the temporary live values.
  */
 
-/* D3DSBT_PIXELSTATE's documented render-state list. Capturing more than D3D9
- * does is not a safe simplification: Apply() would then restore states the app
- * deliberately kept, which shows up as an unrelated render mode snapping back. */
-static const WORD g_pixel_state_render_states[] = {
-    D3DRS_ZENABLE, D3DRS_FILLMODE, D3DRS_SHADEMODE, D3DRS_ZWRITEENABLE,
-    D3DRS_ALPHATESTENABLE, D3DRS_LASTPIXEL, D3DRS_SRCBLEND, D3DRS_DESTBLEND,
-    D3DRS_ZFUNC, D3DRS_ALPHAREF, D3DRS_ALPHAFUNC, D3DRS_DITHERENABLE,
-    D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_FOGDENSITY, D3DRS_ALPHABLENDENABLE,
-    D3DRS_DEPTHBIAS, D3DRS_STENCILENABLE, D3DRS_STENCILFAIL,
-    D3DRS_STENCILZFAIL, D3DRS_STENCILPASS, D3DRS_STENCILFUNC,
-    D3DRS_STENCILREF, D3DRS_STENCILMASK, D3DRS_STENCILWRITEMASK,
-    D3DRS_TEXTUREFACTOR, D3DRS_WRAP0, D3DRS_WRAP1, D3DRS_WRAP2, D3DRS_WRAP3,
-    D3DRS_WRAP4, D3DRS_WRAP5, D3DRS_WRAP6, D3DRS_WRAP7, D3DRS_WRAP8,
-    D3DRS_WRAP9, D3DRS_WRAP10, D3DRS_WRAP11, D3DRS_WRAP12, D3DRS_WRAP13,
-    D3DRS_WRAP14, D3DRS_WRAP15, D3DRS_COLORWRITEENABLE, D3DRS_BLENDOP,
-    D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS,
-    D3DRS_ANTIALIASEDLINEENABLE, D3DRS_TWOSIDEDSTENCILMODE,
-    D3DRS_CCW_STENCILFAIL, D3DRS_CCW_STENCILZFAIL, D3DRS_CCW_STENCILPASS,
-    D3DRS_CCW_STENCILFUNC, D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2,
-    D3DRS_COLORWRITEENABLE3, D3DRS_BLENDFACTOR, D3DRS_SRGBWRITEENABLE,
-    D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SRCBLENDALPHA,
-    D3DRS_DESTBLENDALPHA, D3DRS_BLENDOPALPHA
-};
-
-static const WORD g_vertex_state_render_states[] = {
-    D3DRS_CULLMODE, D3DRS_FOGENABLE, D3DRS_FOGCOLOR, D3DRS_FOGTABLEMODE,
-    D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_FOGDENSITY, D3DRS_RANGEFOGENABLE,
-    D3DRS_AMBIENT, D3DRS_COLORVERTEX, D3DRS_FOGVERTEXMODE, D3DRS_CLIPPING,
-    D3DRS_LIGHTING, D3DRS_LOCALVIEWER, D3DRS_EMISSIVEMATERIALSOURCE,
-    D3DRS_AMBIENTMATERIALSOURCE, D3DRS_DIFFUSEMATERIALSOURCE,
-    D3DRS_SPECULARMATERIALSOURCE, D3DRS_VERTEXBLEND, D3DRS_CLIPPLANEENABLE,
-    D3DRS_POINTSIZE, D3DRS_POINTSIZE_MIN, D3DRS_POINTSPRITEENABLE,
-    D3DRS_POINTSCALEENABLE, D3DRS_POINTSCALE_A, D3DRS_POINTSCALE_B,
-    D3DRS_POINTSCALE_C, D3DRS_MULTISAMPLEANTIALIAS, D3DRS_MULTISAMPLEMASK,
-    D3DRS_PATCHEDGESTYLE, D3DRS_POINTSIZE_MAX,
-    D3DRS_INDEXEDVERTEXBLENDENABLE, D3DRS_TWEENFACTOR,
-    D3DRS_NORMALIZENORMALS, D3DRS_SPECULARENABLE, D3DRS_SHADEMODE
-};
-
-/* The transform indices a state block tracks. D3D9's full D3DTRANSFORMSTATETYPE
- * space is 512 entries wide, mostly the 256 world matrices vertex blending
- * uses, and snapshotting all of them would cost 32 KB per block.
- *
- * D3DTS_WORLDMATRIX(1..3) are here because unindexed vertex blending reads
- * exactly those: fill_caps() reports MaxVertexBlendMatrices = 4, so a block
- * that captured only D3DTS_WORLD would restore a skinned draw's pose from one
- * matrix and three stale ones. Indexed blending can name any of the other 252,
- * which a block still does not capture -- an app that records a state block
- * around an indexed-skinned pass and expects the palette restored gets the
- * palette as the pass left it. That is a bounded, stated limit rather than an
- * unnoticed one; lifting it means paying the 32 KB. */
-static const WORD g_state_block_transforms[] = {
-    D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_WORLD,
-    D3DTS_WORLDMATRIX(1), D3DTS_WORLDMATRIX(2), D3DTS_WORLDMATRIX(3),
-    D3DTS_TEXTURE0, D3DTS_TEXTURE1, D3DTS_TEXTURE2, D3DTS_TEXTURE3,
-    D3DTS_TEXTURE4, D3DTS_TEXTURE5, D3DTS_TEXTURE6, D3DTS_TEXTURE7
-};
-#define D9_STATE_BLOCK_TRANSFORMS \
-    (sizeof(g_state_block_transforms) / sizeof(g_state_block_transforms[0]))
+/* Predefined render/texture/sampler classes are shared with D3D8 in
+ * d9wg_state_block_scope.h. Explicit recorded masks remain frontend-owned. */
+/* ALL and explicit recordings preserve every SDK world matrix. */
+#define D9_STATE_BLOCK_TRANSFORMS D9WG_STATE_BLOCK_TRANSFORMS
 
 struct D9StateBlock {
     IDirect3DStateBlock9 iface;
@@ -11981,6 +11933,10 @@ struct D9StateBlock {
     D9VolumeTexture *volume_textures[D9_MAX_TEXTURE_BINDINGS];
     BOOL has_material;
     D3DMATERIAL9 material;
+    BOOL has_clip_plane[D9_MAX_CLIP_PLANES];
+    float clip_planes[D9_MAX_CLIP_PLANES][4];
+    BOOL has_npatch_mode;
+    float npatch_segments;
     BOOL has_light[D9_MAX_LIGHTS];
     D3DLIGHT9 lights[D9_MAX_LIGHTS];
     BOOL has_light_enable[D9_MAX_LIGHTS];
@@ -12011,6 +11967,7 @@ struct D9StateBlock {
     DWORD fvf;
     D9VertexDeclaration *vertex_declaration;
     BOOL has_stream[D9_MAX_STREAMS];
+    BOOL has_stream_frequency[D9_MAX_STREAMS];
     D9StreamBinding streams[D9_MAX_STREAMS];
     BOOL has_indices;
     D9IndexBuffer *index_buffer;
@@ -12048,15 +12005,9 @@ static void state_block_record_sampler_state(D9Device *device,
 
 static void state_block_record_transform(D9Device *device, UINT state)
 {
-    UINT index;
-    if (!device->recording_result)
-        return;
-    for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
-        if (g_state_block_transforms[index] == state) {
-            device->recording_result->has_transform[index] = TRUE;
-            return;
-        }
-    }
+    uint32_t slot;
+    if (device->recording_result && d9wg_state_block_transform_slot(state, &slot))
+        device->recording_result->has_transform[slot] = TRUE;
 }
 
 static void state_block_record_texture(D9Device *device, UINT stage)
@@ -12070,6 +12021,13 @@ static void state_block_record_material(D9Device *device)
     if (device->recording_result)
         device->recording_result->has_material = TRUE;
 }
+
+static void state_block_record_clip_plane(D9Device *device, UINT index)
+{ if (device->recording_result && index < D9_MAX_CLIP_PLANES) device->recording_result->has_clip_plane[index] = TRUE; }
+static void state_block_record_npatch_mode(D9Device *device)
+{ if (device->recording_result) device->recording_result->has_npatch_mode = TRUE; }
+static void state_block_record_stream_frequency(D9Device *device, UINT stream)
+{ if (device->recording_result && stream < D9_MAX_STREAMS) device->recording_result->has_stream_frequency[stream] = TRUE; }
 
 static BOOL state_block_record_light(D9Device *device, UINT index)
 {
@@ -12239,10 +12197,13 @@ static void state_block_capture(struct D9StateBlock *block)
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
         if (block->has_transform[index])
             CopyMemory(block->transforms[index],
-                    device->transforms[g_state_block_transforms[index]],
+                    device->transforms[d9wg_state_block_transform_state(index)],
                     sizeof(block->transforms[index]));
     }
     if (block->has_material) block->material = device->material;
+    for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
+        if (block->has_clip_plane[index]) CopyMemory(block->clip_planes[index], device->clip_planes[index], 16);
+    if (block->has_npatch_mode) block->npatch_segments = device->npatch_segments;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index]) block->lights[index] = device->lights[index];
         if (block->has_light_enable[index])
@@ -12300,6 +12261,8 @@ static void state_block_capture(struct D9StateBlock *block)
                         &block->streams[index].buffer->iface);
         }
     }
+    for (index = 0; index < D9_MAX_STREAMS; ++index)
+        if (block->has_stream_frequency[index]) block->streams[index].frequency = device->streams[index].frequency;
     if (block->has_indices) {
         block->index_buffer = device->index_buffer;
         if (block->index_buffer)
@@ -12317,17 +12280,12 @@ static void state_block_mark_pixel_states(struct D9StateBlock *block)
     }
     for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage) {
         for (index = 0; index < D9_MAX_TEXTURE_STAGE_STATES; ++index) {
-            /* TEXCOORDINDEX and TEXTURETRANSFORMFLAGS belong to vertex state:
-             * they decide which coordinates a stage gets, not how it blends. */
-            if (index == D3DTSS_TEXCOORDINDEX ||
-                    index == D3DTSS_TEXTURETRANSFORMFLAGS)
-                continue;
-            block->has_texture_stage_state[stage][index] = TRUE;
+            block->has_texture_stage_state[stage][index] = d9wg_state_block_texture_state(D3DSBT_PIXELSTATE, index);
         }
     }
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
         for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index)
-            block->has_sampler_state[slot][index] = TRUE;
+            if (d9wg_state_block_sampler_state(D3DSBT_PIXELSTATE, index)) block->has_sampler_state[slot][index] = TRUE;
     }
     block->has_pixel_shader = TRUE;
     for (index = 0; index < D9_MAX_PS_CONST_F; ++index)
@@ -12340,7 +12298,7 @@ static void state_block_mark_pixel_states(struct D9StateBlock *block)
 
 static void state_block_mark_vertex_states(struct D9StateBlock *block)
 {
-    UINT index, stage;
+    UINT index, stage, slot;
     for (index = 0; index < sizeof(g_vertex_state_render_states) /
             sizeof(g_vertex_state_render_states[0]); ++index) {
         WORD state = g_vertex_state_render_states[index];
@@ -12350,7 +12308,11 @@ static void state_block_mark_vertex_states(struct D9StateBlock *block)
         block->has_texture_stage_state[stage][D3DTSS_TEXCOORDINDEX] = TRUE;
         block->has_texture_stage_state[stage][D3DTSS_TEXTURETRANSFORMFLAGS] = TRUE;
     }
-    block->has_material = TRUE;
+    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot)
+        for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index)
+            if (d9wg_state_block_sampler_state(D3DSBT_VERTEXSTATE, index)) block->has_sampler_state[slot][index] = TRUE;
+    for (index = 0; index < D9_MAX_STREAMS; ++index) block->has_stream_frequency[index] = TRUE;
+    block->has_npatch_mode = TRUE;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         block->has_light[index] = device_light_is_set(block->device, index);
         block->has_light_enable[index] = device_light_is_set(block->device, index);
@@ -12387,6 +12349,8 @@ static void state_block_mark_all(struct D9StateBlock *block)
         block->has_texture[stage] = TRUE;
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index)
         block->has_transform[index] = TRUE;
+    block->has_material = TRUE;
+    FillMemory(block->has_clip_plane, sizeof(block->has_clip_plane), 1);
     block->has_viewport = TRUE;
     block->has_scissor = TRUE;
     for (index = 0; index < D9_MAX_STREAMS; ++index)
@@ -12455,11 +12419,14 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
         if (block->has_transform[index])
             IDirect3DDevice9_SetTransform(iface,
-                    (D3DTRANSFORMSTATETYPE)g_state_block_transforms[index],
+                    (D3DTRANSFORMSTATETYPE)d9wg_state_block_transform_state(index),
                     (const D3DMATRIX *)block->transforms[index]);
     }
     if (block->has_material)
         IDirect3DDevice9_SetMaterial(iface, &block->material);
+    for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
+        if (block->has_clip_plane[index]) IDirect3DDevice9_SetClipPlane(iface, index, block->clip_planes[index]);
+    if (block->has_npatch_mode) IDirect3DDevice9_SetNPatchMode(iface, block->npatch_segments);
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index])
             IDirect3DDevice9_SetLight(iface, index, &block->lights[index]);
@@ -12525,9 +12492,8 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
                     block->streams[index].buffer
                         ? &block->streams[index].buffer->iface : NULL,
                     block->streams[index].offset, block->streams[index].stride);
-            IDirect3DDevice9_SetStreamSourceFreq(iface, index,
-                    block->streams[index].frequency);
         }
+        if (block->has_stream_frequency[index]) IDirect3DDevice9_SetStreamSourceFreq(iface, index, block->streams[index].frequency);
     }
     if (block->has_indices)
         IDirect3DDevice9_SetIndices(iface, block->index_buffer

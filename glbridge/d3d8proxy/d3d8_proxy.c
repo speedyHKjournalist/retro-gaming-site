@@ -24,6 +24,8 @@
 #define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT8
 #include "../runtime/d9wg_lighting_bridge.h"
 #include "../runtime/d9wg_light_state.h"
+#define D9WG_STATE_BLOCK_API 8
+#include "../runtime/d9wg_state_block_scope.h"
 #include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
@@ -5657,26 +5659,7 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8 *iface,
             TRUE, surface_out);
 }
 static BOOL transform_slot(D3DTRANSFORMSTATETYPE state, UINT *slot)
-{
-    UINT value = (UINT)state;
-    if (state == D3DTS_VIEW) {
-        *slot = D8WG_TRANSFORM_VIEW_SLOT;
-        return TRUE;
-    }
-    if (state == D3DTS_PROJECTION) {
-        *slot = D8WG_TRANSFORM_PROJECTION_SLOT;
-        return TRUE;
-    }
-    if (value >= (UINT)D3DTS_TEXTURE0 && value <= (UINT)D3DTS_TEXTURE7) {
-        *slot = D8WG_TRANSFORM_TEXTURE_SLOT + value - (UINT)D3DTS_TEXTURE0;
-        return TRUE;
-    }
-    if (value >= (UINT)D3DTS_WORLD && value < (UINT)D3DTS_WORLD + 256u) {
-        *slot = D8WG_TRANSFORM_WORLD_SLOT + value - (UINT)D3DTS_WORLD;
-        return TRUE;
-    }
-    return FALSE;
-}
+{ uint32_t value;if (!d9wg_state_block_transform_slot((uint32_t)state, &value)) return FALSE;*slot = value;return TRUE; }
 
 static BOOL matrix_equal(const D3DMATRIX *left, const D3DMATRIX *right)
 {
@@ -6005,33 +5988,33 @@ static HRESULT WINAPI device_get_clip_plane(IDirect3DDevice8 *iface,
     return D3D_OK;
 }
 
-static void state_block_set_scope(D8StateBlock *block,
-        D3DSTATEBLOCKTYPE type)
+static void state_block_set_scope(D8StateBlock *block, D3DSTATEBLOCKTYPE type)
 {
-    D8StateSnapshot *state = &block->state;
+    D8StateSnapshot *state = &block->state;UINT index, stage;
     if (type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE) {
-        FillMemory(state->render_mask, sizeof(state->render_mask), 1);
-        FillMemory(state->texture_stage_mask,
-                sizeof(state->texture_stage_mask), 1);
-        FillMemory(state->texture_mask, sizeof(state->texture_mask), 1);
+        for (index = 0; index < sizeof(g_pixel_state_render_states)/sizeof(g_pixel_state_render_states[0]); ++index)
+            state->render_mask[g_pixel_state_render_states[index]] = 1;
         state->pixel_shader_mask = TRUE;
         FillMemory(state->ps_constant_mask, sizeof(state->ps_constant_mask), 1);
     }
     if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {
-        /* D3D8 has render states in both predefined state-block classes. */
+        for (index = 0; index < sizeof(g_vertex_state_render_states)/sizeof(g_vertex_state_render_states[0]); ++index)
+            state->render_mask[g_vertex_state_render_states[index]] = 1;
+        FillMemory(state->light_mask, sizeof(state->light_mask), 1);
+        FillMemory(state->light_enable_mask, sizeof(state->light_enable_mask), 1);
+        state->all_lights_scope = TRUE;state->vertex_shader_mask = TRUE;
+        FillMemory(state->vs_constant_mask, sizeof(state->vs_constant_mask), 1);
+    }
+    for (stage = 0; stage < D8WG_MAX_TEXTURE_STAGES; ++stage)
+        for (index = 0; index < D8WG_MAX_TEXTURE_STAGE_STATES; ++index)
+            state->texture_stage_mask[stage][index] = d9wg_state_block_texture_state(type, index);
+    if (type == D3DSBT_ALL) {
         FillMemory(state->render_mask, sizeof(state->render_mask), 1);
+        FillMemory(state->texture_mask, sizeof(state->texture_mask), 1);
         FillMemory(state->stream_mask, sizeof(state->stream_mask), 1);
         FillMemory(state->transform_mask, sizeof(state->transform_mask), 1);
-        FillMemory(state->light_mask, sizeof(state->light_mask), 1);
-        FillMemory(state->light_enable_mask,
-                sizeof(state->light_enable_mask), 1);
-        state->all_lights_scope = TRUE;
-        state->viewport_mask = TRUE;
-        state->material_mask = TRUE;
-        state->indices_mask = TRUE;
-        state->vertex_shader_mask = TRUE;
-        FillMemory(state->vs_constant_mask, sizeof(state->vs_constant_mask), 1);
         FillMemory(state->clip_plane_mask, sizeof(state->clip_plane_mask), 1);
+        state->viewport_mask = state->material_mask = state->indices_mask = TRUE;
     }
 }
 
@@ -6058,7 +6041,7 @@ static void state_block_release_references(D8StateBlock *block)
     free_extra_lights(&block->state.extra_lights);
 }
 
-static void state_block_capture(D8Device *device, D8StateBlock *block)
+static BOOL state_block_capture(D8Device *device, D8StateBlock *block)
 {
     D8StateSnapshot *state = &block->state;
     D8LightState *entry;
@@ -6124,6 +6107,7 @@ static void state_block_capture(D8Device *device, D8StateBlock *block)
             state->transforms[index] = device->transforms[index];
     }
     for (index = 0; index < D8WG_MAX_LIGHTS; ++index) {
+        if (state->all_lights_scope && !device->light_set[index]) state->light_mask[index] = state->light_enable_mask[index] = FALSE;
         if (state->light_mask[index]) {
             state->lights[index] = device->lights[index];
             state->light_set[index] = device->light_set[index];
@@ -6137,14 +6121,15 @@ static void state_block_capture(D8Device *device, D8StateBlock *block)
      * touched while recording. */
     if (state->all_lights_scope) {
         for (entry = device->extra_lights; entry; entry = entry->next) {
+            if (!entry->set) continue;
             D8LightState *captured = get_extra_light(&state->extra_lights,
                     entry->index, TRUE);
-            if (!captured)
-                continue;
+            if (!captured) return FALSE;
             captured->light_mask = TRUE;
             captured->enable_mask = TRUE;
         }
     }
+    state->all_lights_scope = FALSE;
     for (entry = state->extra_lights; entry; entry = entry->next) {
         D8LightState *current = find_extra_light(device->extra_lights,
                 entry->index);
@@ -6156,6 +6141,7 @@ static void state_block_capture(D8Device *device, D8StateBlock *block)
         if (entry->enable_mask)
             entry->enabled = current ? current->enabled : FALSE;
     }
+    return TRUE;
 }
 
 static D8StateBlock *device_find_state_block(D8Device *device, DWORD token,
@@ -6183,16 +6169,7 @@ static DWORD device_allocate_state_block_token(D8Device *device)
 }
 
 static D3DTRANSFORMSTATETYPE transform_state_from_slot(UINT slot)
-{
-    if (slot == D8WG_TRANSFORM_VIEW_SLOT) return D3DTS_VIEW;
-    if (slot == D8WG_TRANSFORM_PROJECTION_SLOT) return D3DTS_PROJECTION;
-    if (slot >= D8WG_TRANSFORM_TEXTURE_SLOT
-            && slot < D8WG_TRANSFORM_WORLD_SLOT)
-        return (D3DTRANSFORMSTATETYPE)((UINT)D3DTS_TEXTURE0
-                + slot - D8WG_TRANSFORM_TEXTURE_SLOT);
-    return (D3DTRANSFORMSTATETYPE)((UINT)D3DTS_WORLD
-            + slot - D8WG_TRANSFORM_WORLD_SLOT);
-}
+{ return (D3DTRANSFORMSTATETYPE)d9wg_state_block_transform_state(slot); }
 
 static HRESULT state_block_apply(D8Device *device, D8StateBlock *block)
 {
@@ -6322,8 +6299,7 @@ static HRESULT WINAPI device_capture_state_block(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     block = device_find_state_block(device, token, NULL);
     if (!block) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    state_block_capture(device, block);
-    return D3D_OK;
+    return state_block_capture(device, block) ? D3D_OK : D8WG_TRACE_ERROR(E_OUTOFMEMORY);
 }
 
 static HRESULT WINAPI device_delete_state_block(IDirect3DDevice8 *iface,
@@ -6357,7 +6333,9 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice8 *iface,
     block->type = type;
     block->token = device_allocate_state_block_token(device);
     state_block_set_scope(block, type);
-    state_block_capture(device, block);
+    if (!state_block_capture(device, block)) {
+        state_block_release_references(block);HeapFree(GetProcessHeap(), 0, block);return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    }
     block->next = device->state_blocks;
     device->state_blocks = block;
     *token = block->token;
