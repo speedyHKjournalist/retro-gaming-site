@@ -51,17 +51,19 @@ int d9wg_blend_indices(const D9WGVertexBlend *blend, const D9WGProcessLayout *la
     }
     return 1;
 }
+static const void *blend_world_matrix(const D9WGVertexBlend *blend, uint32_t index)
+{ return blend->worlds + (index + (index ? blend->world_gap : 0u))*64u; }
 static void prepare_matrix(D9WGVertexBlend *blend, uint32_t index)
 {
     D9WGVertexBlendMatrix *matrix = &blend->matrix[index];
-    const void *world = blend->worlds + (index + (index ? blend->world_gap : 0u))*64u;
+    const void *world = blend_world_matrix(blend, index);
     if (matrix->ready) return;
     d9wg_multiply_matrix(world, blend->view, matrix->world_view);
     d9wg_multiply_matrix(matrix->world_view, blend->projection, matrix->world_view_projection);
     d9wg_normal_matrix(matrix->world_view, matrix->normal);matrix->ready = 1;
 }
-void d9wg_blend_vertex(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
-        const void *input, const float *position, float *eye, float *clip, float *eye_normal)
+void d9wg_blend_vertex_world(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
+        const void *input, const float *position, float *eye, float *clip, float *eye_normal, float *world)
 {
     uint32_t indices[4];float weights[4], normal[4] = {0,0,0,0}, remainder = 1.0f;
     /* The caller validates layout and every vertex index before any writes. */
@@ -76,12 +78,18 @@ void d9wg_blend_vertex(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
     weights[blend->matrix_count - 1u] = remainder;
     if (layout->normal >= 0) for (unsigned i = 0; i < 3; ++i)
         __builtin_memcpy(&normal[i], (const uint8_t *)input + layout->normal + i*4u, 4u);
-    for (unsigned i = 0; i < 4; ++i) eye[i] = clip[i] = 0.0f;
+    for (unsigned i = 0; i < 4; ++i) { eye[i] = clip[i] = 0.0f;if (world) world[i] = 0.0f; }
     for (unsigned i = 0; i < 3; ++i) eye_normal[i] = 0.0f;
     for (unsigned bone = 0; bone < blend->matrix_count; ++bone) {
         float transformed_eye[4], transformed_clip[4], transformed_normal[4];
         prepare_matrix(blend, indices[bone]);
         const D9WGVertexBlendMatrix *matrix = &blend->matrix[indices[bone]];
+        if (world) {
+            float transformed[4];uint32_t index = indices[bone];
+            const void *bone_world = blend_world_matrix(blend, index);
+            d9wg_transform_vector4(bone_world, position, transformed);
+            for (unsigned i = 0; i < 4; ++i) world[i] += transformed[i]*weights[bone];
+        }
         d9wg_transform_vector4(matrix->world_view, position, transformed_eye);
         d9wg_transform_vector4(matrix->world_view_projection, position, transformed_clip);
         d9wg_transform_vector4(matrix->normal, normal, transformed_normal);
@@ -91,3 +99,7 @@ void d9wg_blend_vertex(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
         for (unsigned i = 0; i < 3; ++i) eye_normal[i] += transformed_normal[i]*weights[bone];
     }
 }
+
+void d9wg_blend_vertex(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
+        const void *input, const float *position, float *eye, float *clip, float *eye_normal)
+{ d9wg_blend_vertex_world(blend, layout, input, position, eye, clip, eye_normal, 0); }

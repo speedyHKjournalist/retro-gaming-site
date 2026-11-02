@@ -35,6 +35,8 @@ static void clip_load_point(const D9WGClipDrawSource *s,uint32_t offset,D9WGClip
             data+layout->position,&processed_vp);
     float *out=point->data;
     for(unsigned i=0;i<D9WG_CLIP_MAX_FLOATS;++i)out[i]=0;
+    for(unsigned i=0;i<6;++i)out[D9WG_CLIP_USER_FIRST+i]=
+            record && (record->user_mask & (1u<<i)) ? record->user_distance[i] : 1;
     if(record){
         /* Rewrite only the X/Y clip basis when the draw viewport changed.
          * These algebraic forms remain valid at W=0 and keep original depth
@@ -91,14 +93,16 @@ int d9wg_clip_draw(const D9WGClipDrawSource *s,D9WGClipWork *work,
             s->primitive_type==3?s->count-1u:s->primitive_type==4?s->count/3u:s->count-2u;
     uint32_t emitted_type=s->primitive_type==1?1:s->primitive_type<4?2:4;
     if(capacity<21)return -1;
-    unsigned live=0;
+    unsigned live=0,user_mask=0;
     for(uint32_t i=0;i<s->count;++i){
         uint32_t at;if(!clip_vertex_offset(s,i,&at))return -1;
         const D9WGProcessViewport *vp=0;
-        live|=d9wg_clip_buffer_lookup(s->clips,at+s->layout->position,
-                s->vertices+at+s->layout->position,&vp)!=0;
+        const D9WGClipVertex *record=d9wg_clip_buffer_lookup(s->clips,at+s->layout->position,
+                s->vertices+at+s->layout->position,&vp);
+        if(record){live=1;user_mask|=record->user_mask;}
     }
     if(!live)return 0;
+    if(user_mask && capacity<D9WG_CLIP_MAX_DRAW_VERTICES)return -1;
     for(uint32_t triangle=0;triangle<primitives;++triangle){
         uint32_t indices[3];D9WGClipPoint input[3];const D9WGClipPoint *polygon;uint32_t count;
         unsigned inputs=s->primitive_type==1?1:s->primitive_type<4?2:3;
@@ -108,9 +112,12 @@ int d9wg_clip_draw(const D9WGClipDrawSource *s,D9WGClipWork *work,
         else{indices[0]=0;indices[1]=triangle+1;indices[2]=triangle+2;}
         for(unsigned i=0;i<inputs;++i){uint32_t at;if(!clip_vertex_offset(s,indices[i],&at))return -1;clip_load_point(s,at,&input[i]);}
         if(s->flat_shading)for(unsigned i=1;i<inputs;++i)for(unsigned c=5;c<13;++c)input[i].data[c]=input[0].data[c];
-        if(inputs==1){polygon=input;count=!d9wg_clip_outcode(input[0].data) && input[0].data[3]>0?1u:0u;}
-        else if(inputs==2){polygon=work->polygon[0];if(!d9wg_clip_segment(input,49,work->polygon[0],&count))return -1;}
-        else if(!d9wg_clip_triangle(input,49,work,&polygon,&count))return -1;
+        if(inputs==1){
+            polygon=input;count=!d9wg_clip_outcode(input[0].data) && input[0].data[3]>0?1u:0u;
+            for(unsigned i=0;i<6;++i)if((user_mask&(1u<<i)) && input[0].data[D9WG_CLIP_USER_FIRST+i]<0)count=0;
+        }
+        else if(inputs==2){polygon=work->polygon[0];if(!d9wg_clip_segment_planes(input,55,user_mask,work->polygon[0],&count))return -1;}
+        else if(!d9wg_clip_triangle_planes(input,55,user_mask,work,&polygon,&count))return -1;
         if(!count || (inputs==3 && count<3))continue;
         uint32_t vertices=inputs<3?count:(count-2u)*3u;
         if(vertices>capacity-queued){if(queued && !emit(context,emitted_type,staging,queued,s->stride))return -2;queued=0;}

@@ -2009,6 +2009,12 @@ static int d3d7_clip_emit(void *context, uint32_t primitive_type,
     return d3d7_emit_draw_up(emit->device, (D3DPRIMITIVETYPE)primitive_type,
             emit->fvf, vertices, count);
 }
+static int d3d7_clip_mask(void *context, uint32_t mask)
+{
+    D3D7ClipEmitContext *emit = context;
+    D9WGSetRenderState command = { emit->device->owner->device_handle, D3DRENDERSTATE_CLIPPLANEENABLE, mask, 0 };
+    return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
+}
 static HRESULT d3d7_clip_vb_draw(D3D7Device *device, D3D7VertexBuffer *buffer,
         D3DPRIMITIVETYPE primitive_type, uint32_t first, uint32_t vertex_count,
         const WORD *indices, uint32_t index_count, BOOL *handled)
@@ -2031,7 +2037,8 @@ static HRESULT d3d7_clip_vb_draw(D3D7Device *device, D3D7VertexBuffer *buffer,
             (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
             device->viewport.dvMinZ, device->viewport.dvMaxZ };
     D3D7ClipEmitContext emit = { device, buffer->desc.dwFVF };
-    int result = d9wg_vertex_windows_clip_draw(&source, d3d7_clip_emit, &emit);
+    int result = d9wg_vertex_windows_clip_draw_planes(&source, d3d7_clip_emit, d3d7_clip_mask,
+            device->render_states[D3DRENDERSTATE_CLIPPLANEENABLE], &emit);
     *handled = result != 0;
     return DDWG_TRACE_ERROR(result >= 0 ? D3D_OK : result == -2 ? D3DERR_INITFAILED :
             result == -3 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
@@ -2778,6 +2785,8 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
             sizeof(device->texture_stage_states[0]), &device->transforms[D3DTRANSFORMSTATE_TEXTURE0]))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    d9wg_vertex_clip_planes_init(&vertex_state, device->render_states[D3DRENDERSTATE_CLIPPLANEENABLE],
+            device->clip_planes, &device->transforms[D3DTRANSFORMSTATE_WORLD]);
     D9WGProcessViewport viewport = { (float)device->viewport.dwX, (float)device->viewport.dwY,
             (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
             device->viewport.dvMinZ, device->viewport.dvMaxZ };

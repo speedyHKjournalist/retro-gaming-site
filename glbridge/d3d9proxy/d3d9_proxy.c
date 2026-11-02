@@ -6566,6 +6566,12 @@ static int d9_clip_emit(void *context, uint32_t primitive_type,
     /* Internal emission must preserve the application's bound VB and IB. */
     return emit_draw_primitive_up(&command, vertices);
 }
+static int d9_clip_mask(void *context, uint32_t mask)
+{
+    D9Device *device = context;
+    D9WGSetRenderState command = { device->handle, D3DRS_CLIPPLANEENABLE, mask, 0 };
+    return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
+}
 static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
         uint32_t first, uint32_t count, const uint8_t *indices,
         uint32_t index_bytes, uint32_t index_stride, int32_t base_vertex,
@@ -6589,7 +6595,8 @@ static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
     source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
             (float)device->viewport.Width, (float)device->viewport.Height,
             device->viewport.MinZ, device->viewport.MaxZ };
-    return d9wg_vertex_windows_clip_draw(&source, d9_clip_emit, device);
+    return d9wg_vertex_windows_clip_draw_planes(&source, d9_clip_emit, d9_clip_mask,
+            device->render_states[D3DRS_CLIPPLANEENABLE], device);
 }
 
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
@@ -9250,6 +9257,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
     if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
             sizeof(device->texture_stage_states[0]), device->transforms[D3DTS_TEXTURE0]))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    d9wg_vertex_clip_planes_init(&vertex_state, device->render_states[D3DRS_CLIPPLANEENABLE],
+            device->clip_planes, device->transforms[D3DTS_WORLD]);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
     /* Transformed channels are always written; this flag only suppresses

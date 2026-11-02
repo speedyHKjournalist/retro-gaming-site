@@ -9,7 +9,7 @@ void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
     const uint8_t *bytes = render_states;
     state->texture_mask = 0;
     state->blend = 0;
-    state->clip_vertices = 0;
+    state->clip_vertices = 0;state->clip_plane_mask = 0;
     /* The public D3D7/8/9 render-state indices and DWORD storage agree. Fog
      * generation follows FOGVERTEXMODE; FOGENABLE controls later blending. */
     __builtin_memcpy(&state->fog_mode, bytes + 140u*4u, 4u);
@@ -17,6 +17,13 @@ void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
     __builtin_memcpy(&state->fog_start, bytes + 36u*4u, 4u);
     __builtin_memcpy(&state->fog_end, bytes + 37u*4u, 4u);
     __builtin_memcpy(&state->fog_density, bytes + 38u*4u, 4u);
+}
+void d9wg_vertex_clip_planes_init(D9WGVertexState *state, uint32_t mask,
+        const void *planes, const void *world)
+{
+    state->clip_plane_mask = mask & 63u;
+    __builtin_memcpy(state->clip_world, world, 64);
+    __builtin_memcpy(state->clip_planes, planes, 96);
 }
 int d9wg_vertex_texture_state(D9WGVertexState *state, uint32_t stage,
         uint32_t coordinate_index, uint32_t flags, const void *matrix)
@@ -171,15 +178,21 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         const uint8_t *in = (const uint8_t *)source + first + vertex*source_stride;
         uint8_t *out = (uint8_t *)output + destination + vertex*d->stride;
         float position[4] = {0,0,0,1}, clip[4], screen[4];
-        float blended_eye[4], blended_normal[3];
+        float blended_eye[4], blended_normal[3], world_position[4];
+        uint32_t user_planes = vertex_state && vertex_state->clip_vertices ? vertex_state->clip_plane_mask : 0;
         for (unsigned i = 0; i < s->position_floats; ++i) position[i] = read_float(in + s->position + i*4u);
         if (blend) {
-            d9wg_blend_vertex(blend, s, in, position, blended_eye, clip, blended_normal);
+            d9wg_blend_vertex_world(blend, s, in, position, blended_eye, clip, blended_normal,
+                    user_planes ? world_position : 0);
             if (lighting->flags.normalize_normals) d9wg_tnl_normalize3(blended_normal, 0.0f);
         } else d9wg_transform_vector4(world_view_projection, position, clip);
         if (vertex_state && vertex_state->clip_vertices) {
             D9WGClipVertex *record = &vertex_state->clip_vertices[vertex];
             d9wg_clip_vertex(clip, viewport, vertex_state->clip_guard_band, 1, record);
+            if (user_planes) {
+                if (!blend) d9wg_transform_vector4(vertex_state->clip_world, position, world_position);
+                d9wg_clip_user_vertex(record, world_position, &vertex_state->clip_planes[0][0], user_planes);
+            }
             for (unsigned i = 0; i < 4; ++i) screen[i] = record->stored[i];
         } else d9wg_clip_project(clip, viewport, screen);
         for (unsigned i = 0; i < 4; ++i) write_float(out + d->position + i*4u, screen[i]);

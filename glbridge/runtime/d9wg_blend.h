@@ -22,4 +22,6 @@ int d9wg_blend_indices(const D9WGVertexBlend *blend, const D9WGProcessLayout *la
         const void *input, uint32_t *indices);
 void d9wg_blend_vertex(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
         const void *input, const float *position, float *eye, float *clip, float *eye_normal);
+void d9wg_blend_vertex_world(D9WGVertexBlend *blend, const D9WGProcessLayout *layout,
+        const void *input, const float *position, float *eye, float *clip, float *eye_normal, float *world);
 #endif

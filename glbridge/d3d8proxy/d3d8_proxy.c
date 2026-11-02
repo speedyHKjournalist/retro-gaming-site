@@ -3673,6 +3673,12 @@ static int d8_clip_emit(void *context, uint32_t primitive_type,
     /* Internal emission must preserve the application's bound VB and IB. */
     return emit_draw_primitive_up(&command, vertices);
 }
+static int d8_clip_mask(void *context, uint32_t mask)
+{
+    D8Device *device = context;
+    D9WGSetRenderState command = { device->handle, D3DRS_CLIPPLANEENABLE, mask, 0 };
+    return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
+}
 static int d8_clip_vb_draw(D8Device *device, uint32_t primitive_type,
         uint32_t first, uint32_t count, const uint8_t *indices,
         uint32_t index_bytes, uint32_t index_stride, int32_t base_vertex,
@@ -3696,7 +3702,8 @@ static int d8_clip_vb_draw(D8Device *device, uint32_t primitive_type,
     source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
             (float)device->viewport.Width, (float)device->viewport.Height,
             device->viewport.MinZ, device->viewport.MaxZ };
-    return d9wg_vertex_windows_clip_draw(&source, d8_clip_emit, device);
+    return d9wg_vertex_windows_clip_draw_planes(&source, d8_clip_emit, d8_clip_mask,
+            device->render_states[D3DRS_CLIPPLANEENABLE], device);
 }
 
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice8 *iface,
@@ -6468,6 +6475,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
             sizeof(device->texture_stage_states[0]), &device->transforms[D8WG_TRANSFORM_TEXTURE_SLOT]))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    d9wg_vertex_clip_planes_init(&vertex_state, device->render_states[D3DRS_CLIPPLANEENABLE],
+            device->clip_planes, &device->transforms[D8WG_TRANSFORM_WORLD_SLOT]);
     lighting = light_state.flags.lighting != 0;
     (void)lighting;
 

@@ -37,9 +37,9 @@ static __inline int d9wg_vertex_windows_clip_draw(const D9WGClipDrawSource *sour
     uint32_t bytes = 65536u;
     d9wg_clip_buffer_commit(source->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
     if (!source->clips->head) return 0;
-    if (source->stride > bytes/21u) {
-        if (source->stride > 0xffffffffu/21u) return -3;
-        bytes = source->stride*21u;
+    if (source->stride > bytes/D9WG_CLIP_MAX_DRAW_VERTICES) {
+        if (source->stride > 0xffffffffu/D9WG_CLIP_MAX_DRAW_VERTICES) return -3;
+        bytes = source->stride*D9WG_CLIP_MAX_DRAW_VERTICES;
     }
     D9WGClipWork *work = HeapAlloc(GetProcessHeap(), 0, sizeof(*work));
     void *staging = HeapAlloc(GetProcessHeap(), 0, bytes);
@@ -50,6 +50,34 @@ static __inline int d9wg_vertex_windows_clip_draw(const D9WGClipDrawSource *sour
     }
     int result = d9wg_clip_draw(source, work, staging, bytes, emit, context);
     HeapFree(GetProcessHeap(), 0, staging);HeapFree(GetProcessHeap(), 0, work);
+    return result;
+}
+typedef int (*D9WGClipSetMask)(void *context, uint32_t mask);
+typedef struct D9WGClipMaskedEmit {
+    D9WGClipEmit emit;
+    D9WGClipSetMask set_mask;
+    void *context;
+    uint32_t mask, suspended;
+} D9WGClipMaskedEmit;
+static __inline int d9wg_vertex_windows_clip_emit(void *context, uint32_t type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D9WGClipMaskedEmit *guard = context;
+    if (!guard->suspended) {
+        if (!guard->set_mask(guard->context, 0)) return 0;
+        guard->suspended = 1;
+    }
+    return guard->emit(guard->context, type, vertices, count, stride);
+}
+static __inline int d9wg_vertex_windows_clip_draw_planes(const D9WGClipDrawSource *source,
+        D9WGClipEmit emit, D9WGClipSetMask set_mask, uint32_t mask, void *context)
+{
+    /* The CPU has consumed the processing-time user planes. A second test
+     * against the emitted screen coordinates would use a different space. */
+    if (!mask) return d9wg_vertex_windows_clip_draw(source, emit, context);
+    D9WGClipMaskedEmit guard = { emit, set_mask, context, mask, 0 };
+    int result = d9wg_vertex_windows_clip_draw(source, d9wg_vertex_windows_clip_emit, &guard);
+    if (guard.suspended && !set_mask(context, guard.mask)) result = -2;
     return result;
 }
 static __inline uint32_t d9wg_vertex_windows_clip(D9WGVertexState *state,

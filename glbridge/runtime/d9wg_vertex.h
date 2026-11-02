@@ -25,8 +25,12 @@ typedef struct D9WGVertexState {
     D9WGVertexBlend *blend;
     D9WGClipVertex *clip_vertices;
     float clip_guard_band[4];
+    uint32_t clip_plane_mask;
+    float clip_world[16], clip_planes[6][4];
 } D9WGVertexState;
 void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states);
+void d9wg_vertex_clip_planes_init(D9WGVertexState *state, uint32_t mask,
+        const void *planes, const void *world);
 int d9wg_vertex_texture_state(D9WGVertexState *state, uint32_t stage,
         uint32_t coordinate_index, uint32_t flags, const void *matrix);
 int d9wg_vertex_textures_init(D9WGVertexState *state, const void *stage_states,

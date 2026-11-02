@@ -54,6 +54,9 @@ struct Scene {
   float min_z, max_z;
   BOOL perspective;
 };
+#ifdef D9WG_USER_CLIP_CAPTURE
+#include "d3d_user_clip_scenes.h"
+#else
 static const struct Scene scenes[] = {
     {{{-.8f, -.7f, -.4f, 0xffff0000},
       {.8f, -.7f, .5f, 0xff00ff00},
@@ -92,6 +95,7 @@ static const struct Scene scenes[] = {
      .75f,
      FALSE},
 };
+#endif
 static void set_fvf(DWORD fvf) {
 #if D9WG_CLIP_API == 9
   OK(CALL(SetFVF)(device, fvf));
@@ -246,11 +250,20 @@ void WINAPI WinMainCRTStartup(void) {
   identity._11 = identity._22 = identity._33 = identity._44 = 1;
   OK(CALL(SetTransform)(device, D3DTS_WORLD, &identity));
   OK(CALL(SetTransform)(device, D3DTS_VIEW, &identity));
+#ifdef D9WG_USER_CLIP_CAPTURE
+  D3DMATRIX world = identity, view = identity;
+  world._41 = .125f;world._22 = .75f;view._41 = -.25f;view._42 = .125f;
+  OK(CALL(SetTransform)(device,D3DTS_WORLD,&world));OK(CALL(SetTransform)(device,D3DTS_VIEW,&view));
+#endif
   OK(CALL(SetRenderState)(device, D3DRS_LIGHTING, FALSE));
   OK(CALL(SetRenderState)(device, D3DRS_CULLMODE, D3DCULL_NONE));
   OK(CALL(SetRenderState)(device, D3DRS_ZENABLE, TRUE));
   for (unsigned scene = 0; scene < 6; ++scene) {
     const struct Scene *s = &scenes[scene];
+#ifdef D9WG_USER_CLIP_CAPTURE
+    OK(CALL(SetClipPlane)(device,scene,user_planes[scene]));
+    OK(CALL(SetRenderState)(device,D3DRS_CLIPPLANEENABLE,1u<<scene));
+#endif
     OK(BUF(Lock)(source, 0, 0, (void *)&data, 0));
     ZeroMemory(data, 128);
     CopyMemory((BYTE *)data + (D9WG_CLIP_API == 9 ? 32 : 16), s->vertices,
@@ -305,11 +318,18 @@ void WINAPI WinMainCRTStartup(void) {
         indexed_draw();
         bindings(destination, ib16);
       } else if (mode == 3) {
-        indexed_draw();
-        bindings(destination, ib16);
+#ifdef D9WG_USER_CLIP_CAPTURE
+        set_fvf(D3DFVF_XYZ|D3DFVF_DIFFUSE);
+        OK(CALL(DrawPrimitiveUP)(device,D3DPT_TRIANGLELIST,1,s->vertices,16));
+#else
+        indexed_draw();bindings(destination,ib16);
+#endif
       }
 #if D9WG_CLIP_API == 9
       else if (mode == 4) {
+#ifdef D9WG_USER_CLIP_CAPTURE
+        set_fvf(D3DFVF_XYZRHW|D3DFVF_DIFFUSE);stream(destination,0,20);
+#endif
         stream(destination, 20, 20);
         OK(CALL(DrawPrimitive)(device, D3DPT_TRIANGLELIST, 1, 1));
         bindings(destination, ib16);
@@ -324,6 +344,9 @@ void WINAPI WinMainCRTStartup(void) {
       }
 #else
       else if (mode == 4) {
+#ifdef D9WG_USER_CLIP_CAPTURE
+        set_fvf(D3DFVF_XYZRHW|D3DFVF_DIFFUSE);stream(destination,0,20);
+#endif
         indices(ib32);
         indexed_draw();
         bindings(destination, ib32);

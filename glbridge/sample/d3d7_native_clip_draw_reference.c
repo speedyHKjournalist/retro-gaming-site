@@ -51,6 +51,9 @@ struct Scene
     float min_z, max_z;
     BOOL perspective;
 };
+#ifdef D9WG_USER_CLIP_CAPTURE
+#include "d3d_user_clip_scenes.h"
+#else
 static const struct Scene scenes[] = {
     { { { -.8f, -.7f, -.4f, 0xffff0000 }, { .8f, -.7f, .5f, 0xff00ff00 }, { 0, .8f, .5f, 0xff0000ff } }, .25f,
         .75f, FALSE },
@@ -65,6 +68,7 @@ static const struct Scene scenes[] = {
     { { { -200, -.7f, .5f, 0xffff0000 }, { .8f, -.7f, .5f, 0xff00ff00 }, { 0, .8f, .5f, 0xff0000ff } }, .25f,
         .75f, FALSE },
 };
+#endif
 static HRESULT save_surface(IDirectDrawSurface7* surface, unsigned index, unsigned processed)
 {
 #ifdef D9WG_PROXY_CAPTURE
@@ -188,6 +192,12 @@ void WINAPI WinMainCRTStartup(void)
     identity._11 = identity._22 = identity._33 = identity._44 = 1;
     TRY(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_WORLD, &identity));
     TRY(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_VIEW, &identity));
+#ifdef D9WG_USER_CLIP_CAPTURE
+    D3DMATRIX world = identity, view = identity;
+    world._41 = .125f;world._22 = .75f;view._41 = -.25f;view._42 = .125f;
+    TRY(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_WORLD, &world));
+    TRY(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_VIEW, &view));
+#endif
     TRY(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_LIGHTING, FALSE));
     TRY(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_CLIPPING, TRUE));
     TRY(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_CULLMODE, D3DCULL_NONE));
@@ -202,6 +212,10 @@ void WINAPI WinMainCRTStartup(void)
     for (unsigned scene = 0; scene < sizeof(scenes) / sizeof(scenes[0]); scene++)
     {
         const struct Scene* s = &scenes[scene];
+#ifdef D9WG_USER_CLIP_CAPTURE
+        TRY(IDirect3DDevice7_SetClipPlane(device, scene, (float *)user_planes[scene]));
+        TRY(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_CLIPPLANEENABLE, 1u << scene));
+#endif
         void* data;
         TRY(IDirect3DVertexBuffer7_Lock(source, 0, &data, NULL));
         CopyMemory(data, s->vertices, sizeof(s->vertices));
@@ -228,7 +242,13 @@ void WINAPI WinMainCRTStartup(void)
             report(text);
         }
         TRY(IDirect3DVertexBuffer7_Unlock(destination));
-        for (unsigned processed = 0; processed < 3; processed++)
+        for (unsigned processed = 0; processed <
+#ifdef D9WG_USER_CLIP_CAPTURE
+            4
+#else
+            3
+#endif
+            ; processed++)
         {
             TRY(IDirect3DDevice7_Clear(
                 device, 0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0xff102030, 1, 0));
@@ -239,7 +259,7 @@ void WINAPI WinMainCRTStartup(void)
                 TRY(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST,
                     destination, 0, 3, indices, 3, 0));
             }
-            else if (processed)
+            else if (processed && processed != 3)
             {
                 TRY(IDirect3DDevice7_DrawPrimitiveVB(device, D3DPT_TRIANGLELIST, destination, 0, 3, 0));
             }

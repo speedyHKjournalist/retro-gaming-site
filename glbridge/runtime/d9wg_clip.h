@@ -8,6 +8,8 @@ typedef struct D9WGProcessViewport {
 typedef struct D9WGClipVertex {
     float clip[4], screen[4], stored[4];
     uint32_t code, projected;
+    uint32_t user_mask;
+    float user_distance[6];
 } D9WGClipVertex;
 
 /* Public D3DCS bits, with z in [0,w]. Guard bands affect storage, not the
@@ -21,12 +23,16 @@ void d9wg_clip_project(const float *clip, const D9WGProcessViewport *viewport,
  * neither these nor viewport-mapped screen z alone suffice for later clipping. */
 void d9wg_clip_vertex(const float *clip, const D9WGProcessViewport *viewport,
         const float *guard_band, uint32_t clipping, D9WGClipVertex *vertex);
+void d9wg_clip_user_vertex(D9WGClipVertex *vertex, const float *world,
+        const float *planes, uint32_t mask);
 
 /* Position occupies the first four floats; remaining attributes (including
  * depth before division) interpolate in homogeneous space. Scratch belongs
  * to the caller, keeping the CRT-free x86 implementation off the large stack. */
-#define D9WG_CLIP_MAX_FLOATS 52u
-#define D9WG_CLIP_MAX_VERTICES 9u
+#define D9WG_CLIP_USER_FIRST 49u
+#define D9WG_CLIP_MAX_FLOATS 56u
+#define D9WG_CLIP_MAX_VERTICES 15u
+#define D9WG_CLIP_MAX_DRAW_VERTICES ((D9WG_CLIP_MAX_VERTICES - 2u)*3u)
 typedef struct D9WGClipPoint { float data[D9WG_CLIP_MAX_FLOATS]; } D9WGClipPoint;
 typedef struct D9WGClipWork {
     D9WGClipPoint polygon[2][D9WG_CLIP_MAX_VERTICES];
@@ -35,6 +41,12 @@ int d9wg_clip_triangle(const D9WGClipPoint *input, uint32_t floats, D9WGClipWork
         const D9WGClipPoint **output, uint32_t *count);
 int d9wg_clip_segment(const D9WGClipPoint *input, uint32_t floats,
         D9WGClipPoint *output, uint32_t *count);
+/* User distances occupy USER_FIRST..USER_FIRST+5. They are computed before
+ * projection in world space and interpolated with the other attributes. */
+int d9wg_clip_triangle_planes(const D9WGClipPoint *input, uint32_t floats,
+        uint32_t user_mask, D9WGClipWork *work, const D9WGClipPoint **output, uint32_t *count);
+int d9wg_clip_segment_planes(const D9WGClipPoint *input, uint32_t floats,
+        uint32_t user_mask, D9WGClipPoint *output, uint32_t *count);
 
 /* Per-buffer processing records use byte positions, so different stream
  * offsets/strides cannot accidentally reuse one another's clipping state. */

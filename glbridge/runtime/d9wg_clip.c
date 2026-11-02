@@ -27,7 +27,8 @@ void d9wg_clip_vertex(const float *clip, const D9WGProcessViewport *viewport,
         const float *guard_band, uint32_t clipping, D9WGClipVertex *vertex)
 {
     d9wg_clip_project(clip, viewport, vertex->screen);
-    vertex->code = d9wg_clip_outcode(clip);
+    vertex->code = d9wg_clip_outcode(clip);vertex->user_mask = 0;
+    for (unsigned i = 0; i < 6; ++i) vertex->user_distance[i] = 1;
     vertex->projected = clipping && ((vertex->code & 48u) || clip[3] <= 0.0f ||
             vertex->screen[0] < guard_band[0] || vertex->screen[1] < guard_band[1] ||
             vertex->screen[0] > guard_band[2] || vertex->screen[1] > guard_band[3]);
@@ -41,9 +42,27 @@ void d9wg_clip_vertex(const float *clip, const D9WGProcessViewport *viewport,
     }
 }
 
+void d9wg_clip_user_vertex(D9WGClipVertex *vertex, const float *world,
+        const float *planes, uint32_t mask)
+{
+    vertex->user_mask = mask & 63u;
+    for (unsigned p = 0; p < 6; ++p) if (vertex->user_mask & (1u << p)) {
+        const float *plane = planes + p*4u;
+        vertex->user_distance[p] = world[0]*plane[0] + world[1]*plane[1] + world[2]*plane[2] + world[3]*plane[3];
+        if (vertex->user_distance[p] < 0) vertex->code |= 64u << p;
+    }
+    if (vertex->code & 0xfc0u) {
+        vertex->projected = 1;
+        vertex->stored[0] = (vertex->clip[0] + vertex->clip[3])*0.5f;
+        vertex->stored[1] = (vertex->clip[1] + vertex->clip[3])*0.5f;
+        vertex->stored[2] = vertex->clip[2];vertex->stored[3] = vertex->clip[3];
+    }
+}
+
 static double clip_distance(const D9WGClipPoint *point, unsigned plane)
 {
     const float *p = point->data;
+    if (plane >= 6) return p[D9WG_CLIP_USER_FIRST + plane - 6u];
     switch (plane) {
     case 0: return (double)p[3] + p[0];
     case 1: return (double)p[3] - p[0];
@@ -67,21 +86,28 @@ static void clip_intersect(D9WGClipPoint *output, const D9WGClipPoint *a,
     /* Keep each generated point exactly on its defining plane. */
     if (plane < 4) output->data[plane < 2 ? 0 : 1] =
             plane == 0 || plane == 3 ? -output->data[3] : output->data[3];
-    else output->data[2] = plane == 4 ? 0.0f : output->data[3];
+    else if (plane < 6) output->data[2] = plane == 4 ? 0.0f : output->data[3];
+    else output->data[D9WG_CLIP_USER_FIRST + plane - 6u] = 0;
 }
-int d9wg_clip_triangle(const D9WGClipPoint *input, uint32_t floats, D9WGClipWork *work,
-        const D9WGClipPoint **output, uint32_t *count)
+int d9wg_clip_triangle_planes(const D9WGClipPoint *input, uint32_t floats,
+        uint32_t user_mask, D9WGClipWork *work, const D9WGClipPoint **output, uint32_t *count)
 {
     uint32_t vertices = 3, bank = 0;
-    if (!input || !work || !output || !count || floats < 4 || floats > D9WG_CLIP_MAX_FLOATS) return 0;
+    if (!input || !work || !output || !count || floats < 4 || floats > D9WG_CLIP_MAX_FLOATS || (user_mask & ~63u) ||
+            (user_mask && floats < D9WG_CLIP_USER_FIRST + 6u)) return 0;
     for (unsigned vertex = 0; vertex < 3; ++vertex) {
         for (unsigned component = 0; component < 4; ++component) {
             uint32_t bits;__builtin_memcpy(&bits, &input[vertex].data[component], 4);
             if ((bits & 0x7f800000u) == 0x7f800000u) return 0;
         }
+        for (unsigned p = 0; p < 6; ++p) if (user_mask & (1u << p)) {
+            uint32_t bits;__builtin_memcpy(&bits, &input[vertex].data[D9WG_CLIP_USER_FIRST+p], 4);
+            if ((bits & 0x7f800000u) == 0x7f800000u) return 0;
+        }
         clip_copy(&work->polygon[bank][vertex], &input[vertex], floats);
     }
-    for (unsigned plane = 0; plane < 6 && vertices; ++plane) {
+    for (unsigned plane = 0; plane < 12 && vertices; ++plane) {
+        if (plane >= 6 && !(user_mask & (1u << (plane - 6u)))) continue;
         uint32_t next = bank ^ 1u, written = 0;
         const D9WGClipPoint *previous = &work->polygon[bank][vertices - 1u];
         double previous_distance = clip_distance(previous, plane);
@@ -112,16 +138,22 @@ int d9wg_clip_triangle(const D9WGClipPoint *input, uint32_t floats, D9WGClipWork
     return 1;
 }
 
-int d9wg_clip_segment(const D9WGClipPoint *input, uint32_t floats,
-        D9WGClipPoint *output, uint32_t *count)
+int d9wg_clip_segment_planes(const D9WGClipPoint *input, uint32_t floats,
+        uint32_t user_mask, D9WGClipPoint *output, uint32_t *count)
 {
     double begin = 0, end = 1;int begin_plane = -1, end_plane = -1;
-    if (!input || !output || !count || floats < 4 || floats > D9WG_CLIP_MAX_FLOATS) return 0;
+    if (!input || !output || !count || floats < 4 || floats > D9WG_CLIP_MAX_FLOATS || (user_mask & ~63u) ||
+            (user_mask && floats < D9WG_CLIP_USER_FIRST + 6u)) return 0;
     for (unsigned v = 0; v < 2; ++v) for (unsigned c = 0; c < 4; ++c) {
         uint32_t bits;__builtin_memcpy(&bits, &input[v].data[c], 4);
         if ((bits & 0x7f800000u) == 0x7f800000u) return 0;
     }
-    for (unsigned plane = 0; plane < 6; ++plane) {
+    for (unsigned v = 0; v < 2; ++v) for (unsigned p = 0; p < 6; ++p) if (user_mask & (1u << p)) {
+        uint32_t bits;__builtin_memcpy(&bits, &input[v].data[D9WG_CLIP_USER_FIRST+p], 4);
+        if ((bits & 0x7f800000u) == 0x7f800000u) return 0;
+    }
+    for (unsigned plane = 0; plane < 12; ++plane) {
+        if (plane >= 6 && !(user_mask & (1u << (plane - 6u)))) continue;
         double a = clip_distance(&input[0], plane), b = clip_distance(&input[1], plane);
         if (a < 0 && b < 0) { *count = 0;return 1; }
         if (a < 0 || b < 0) {
@@ -141,6 +173,13 @@ int d9wg_clip_segment(const D9WGClipPoint *input, uint32_t floats,
     *count = output[0].data[3] > 0 && output[1].data[3] > 0 ? 2u : 0u;
     return 1;
 }
+
+int d9wg_clip_triangle(const D9WGClipPoint *input, uint32_t floats, D9WGClipWork *work,
+        const D9WGClipPoint **output, uint32_t *count)
+{ return d9wg_clip_triangle_planes(input, floats, 0, work, output, count); }
+int d9wg_clip_segment(const D9WGClipPoint *input, uint32_t floats,
+        D9WGClipPoint *output, uint32_t *count)
+{ return d9wg_clip_segment_planes(input, floats, 0, output, count); }
 
 uint32_t d9wg_clip_batch_bytes(uint32_t count)
 {
