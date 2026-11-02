@@ -7,6 +7,7 @@ try{for(const api of [8,9,7]){
  const functions=(api===8?["capture_surface","emit_surface_update_and_flush"]:api===9?["emit_window_state_from_probe","emit_window_state"]:["emit_window_state_showing_from_probe","emit_window_state_showing","emit_window_state_not_showing"]).map(name=>extract(source,name)).join("\n");
  const code=`#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "runtime/d9wg_window_probe.h"
 typedef int BOOL;typedef uint32_t UINT,DWORD;typedef uintptr_t HWND;typedef struct{int32_t left,top,right,bottom;}RECT;typedef struct{int32_t x,y;}POINT;
@@ -29,6 +30,7 @@ static HWND foreground=2;static int valid_window=1,visible=1,iconic,visibility;s
 static V86WindowRegion region_value;static unsigned queued,submitted;static int fail_queue,fail_submit;static D9WGWindowStateWithRegion packet,pending;static uint32_t pending_bytes;
 static void EnterCriticalSection(int *lock){++*lock;}static void LeaveCriticalSection(int *lock){--*lock;}
 void d9wg_window_probe_capture(uintptr_t w,uint32_t options,D9WGWindowProbe *p){
+ if(!g_transport_lock){fputs("window state line: unlocked capture",stderr);abort();}
  memset(p,0,sizeof(*p));p->state.hwnd=(uint32_t)w;p->state.foreground_hwnd=foreground;
  if(options&D9WG_WINDOW_PROBE_IDENTITY_ONLY||!w||!valid_window)return;
  p->state.flags=D9WG_WINDOW_IS_WINDOW|(visible?D9WG_WINDOW_VISIBLE:0)|(iconic?D9WG_WINDOW_ICONIC:0)|(w==foreground?D9WG_WINDOW_FOREGROUND:0);
@@ -54,7 +56,7 @@ int main(void){
  unsigned before=queued;foreground=4;fail_queue=1;D9WGWindowCache saved=*cache();emit(0);CHECK(queued==before&&!memcmp(cache(),&saved,sizeof(saved)));emit(0);CHECK(queued==before+1&&packet.state.foreground_hwnd==4);emit(0);CHECK(queued==before+1);
  visibility=2;region_value.count=2;region_value.rects[0][2]=80;region_value.rects[0][3]=120;region_value.rects[1][0]=100;region_value.rects[1][2]=180;region_value.rects[1][3]=120;emit(0);CHECK(packet.state.flags&D9WG_WINDOW_REGION);before=queued;region_value.rects[1][0]=110;emit(0);CHECK(queued==before+1&&packet.region.rects[1][0]==110);emit(0);CHECK(queued==before+1);
  ${api!==9?"before=queued;foreground=5;fail_submit=1;saved=*cache();emit(0);CHECK(!memcmp(cache(),&saved,sizeof(saved)));emit(0);CHECK(packet.state.foreground_hwnd==5&&queued==before+2);":""}
- ${api===7?"emit_window_state_not_showing(&object);CHECK(!cache()->valid&&(packet.state.flags&D9WG_WINDOW_NO_SURFACE));emit(0);CHECK(cache()->valid&&!(packet.state.flags&D9WG_WINDOW_NO_SURFACE));":""}
+ ${api===7?"fail_queue=1;emit_window_state_not_showing(&object);CHECK(!g_transport_lock&&!cache()->valid);emit_window_state_not_showing(&object);CHECK(!cache()->valid&&(packet.state.flags&D9WG_WINDOW_NO_SURFACE));emit(0);CHECK(cache()->valid&&!(packet.state.flags&D9WG_WINDOW_NO_SURFACE));":""}
  struct{uint64_t lo;D9WGWindowCache c;uint64_t hi;}guard={.lo=0x123456789abcdef0ull,.hi=0xfedcba9876543210ull};D9WGWindowStateWithRegion a,b;memset(&a,0xa5,sizeof(a));memset(&b,0x5a,sizeof(b));memset(&a.state,0,sizeof(a.state));b.state=a.state;CHECK(!d9wg_window_cache_matches(&guard.c,&a));d9wg_window_cache_commit(&guard.c,&a);CHECK(d9wg_window_cache_matches(&guard.c,&b));
  for(unsigned i=0;i<sizeof(a.state)/4;++i){uint32_t *word=(uint32_t*)&b.state;word[i]^=0x10203040u;CHECK(!d9wg_window_cache_matches(&guard.c,&b));word[i]^=0x10203040u;}
  int32_t rects[32][4];for(unsigned i=0;i<32;++i)for(unsigned j=0;j<4;++j)rects[i][j]=(int32_t)(i*11+j*3)-40;

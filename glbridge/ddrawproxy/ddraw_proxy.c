@@ -53,6 +53,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "ddraw_protocol.h"
 #include "../runtime/d9wg_window_probe.h"
+#include "../runtime/d9wg_window_watch.h"
 
 /* The legacy DirectX SDK declared these in auxiliary headers; current MinGW
  * intentionally omits them although the COM methods still take the values. */
@@ -629,6 +630,7 @@ struct DDrawObject {
     D3DLegacyMaterial *legacy_materials;
     /* The last window-state report while showing (emit_window_state_showing) */
     D9WGWindowCache window_cache;
+    D9WGWindowWatch window_watch;
     DDrawObject *next;
 };
 
@@ -1464,6 +1466,8 @@ static BOOL emit_present_and_flush(DDrawObject *object)
     D9WGWindowGeometry geometry;
     BOOL result;
 
+    d9wg_window_watch_retry();
+
     if (!ensure_device(object))
         return FALSE;
     /* An overlay backed by client memory can change without Lock/Unlock. Its
@@ -1476,6 +1480,7 @@ static BOOL emit_present_and_flush(DDrawObject *object)
     ZeroMemory(&present, sizeof(present));
     present.device_handle = object->device_handle;
     present.hwnd = (uint32_t)(uintptr_t)object->window;
+    EnterCriticalSection(&g_transport_lock);
     d9wg_window_probe_capture((uintptr_t)object->window, D9WG_WINDOW_PROBE_STATE |
         D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
     d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_DDRAW,
@@ -1498,10 +1503,8 @@ static BOOL emit_present_and_flush(DDrawObject *object)
             "rect=%ld,%ld %lux%lu frame=%lu", present.device_handle,
             present.hwnd, present.x, present.y, present.width,
             present.height, g_frame_id);
-    if (!emit_command(D9WG_OP_PRESENT, &present, sizeof(present)))
-        return FALSE;
-    EnterCriticalSection(&g_transport_lock);
-    result = submit_batch_locked(TRUE);
+    result = emit_command(D9WG_OP_PRESENT, &present, sizeof(present));
+    if (result) result = submit_batch_locked(TRUE);
     LeaveCriticalSection(&g_transport_lock);
     DDWG_TRACE_CHECKPOINT("PRESENT END device=%lu result=%lu next_frame=%lu",
             present.device_handle, result ? 1u : 0u, g_frame_id);
@@ -3848,6 +3851,7 @@ static void emit_window_state_not_showing(DDrawObject *object)
     if (!object || !object->device_created || !object->device_handle) return;
     D9WGWindowProbe probe;
     D9WGWindowStateWithRegion report;
+    EnterCriticalSection(&g_transport_lock);
     d9wg_window_probe_capture((uintptr_t)object->window,
         D9WG_WINDOW_PROBE_STATE | D9WG_WINDOW_PROBE_OUTER, &probe);
     d9wg_window_probe_report(&probe, object->device_handle,
@@ -3856,12 +3860,13 @@ static void emit_window_state_not_showing(DDrawObject *object)
     d9wg_window_cache_invalidate(&object->window_cache);
     DDWG_TRACE_CHECKPOINT("WINDOW_STATE not_showing device=%lu hwnd=%08lX "
             "flags=%08lX", report.state.device_handle, report.state.hwnd, report.state.flags);
-    if (!emit_command(D9WG_OP_WINDOW_STATE, &report, sizeof(report.state)))
+    if (!emit_command(D9WG_OP_WINDOW_STATE, &report, sizeof(report.state))) {
+        LeaveCriticalSection(&g_transport_lock);
         return;
+    }
     /* Flushed rather than left in the batch: the app has stopped presenting,
      * so there may be no next submission until the process exits, and a
      * hide that arrives then is no hide at all. */
-    EnterCriticalSection(&g_transport_lock);
     submit_batch_locked(FALSE);
     LeaveCriticalSection(&g_transport_lock);
 }
@@ -3905,93 +3910,31 @@ static void emit_window_state_showing(DDrawObject *object, BOOL flush)
 {
     if (!object || !object->device_created || !object->device_handle || !object->primary) return;
     D9WGWindowProbe probe;
+    EnterCriticalSection(&g_transport_lock);
     d9wg_window_probe_capture((uintptr_t)object->window, D9WG_WINDOW_PROBE_STATE |
         D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
     emit_window_state_showing_from_probe(object, flush, &probe);
+    LeaveCriticalSection(&g_transport_lock);
 }
 
-/*
- * A DirectDraw title presents only when it draws, and a video or dialog it
- * shows through another window may stop it drawing altogether. A WinEvent
- * hook on the thread that created the primary hears about every window shown,
- * hidden, moved, restacked or activated, in any process, and the window state
- * goes out right away. Out-of-context hooks are delivered while that thread
- * retrieves messages, which the thread of a title's window does.
- */
-#define DDWG_MAX_WATCHED_OBJECTS 8
-static DDrawObject *g_watched_objects[DDWG_MAX_WATCHED_OBJECTS];
-static UINT g_watched_object_count;
-static HWINEVENTHOOK g_foreground_hook;
-static HWINEVENTHOOK g_window_hook;
-
-static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
-        LONG object_id, LONG child, DWORD thread, DWORD time)
+/* A shared message thread observes foreground/window events even while the
+ * application stops presenting or pumping messages. Removal synchronizes with
+ * callbacks before the API object is destroyed; report/flush policy stays here. */
+static int notify_object_window(void *context)
 {
-    UINT i;
-
-    (void)hook; (void)thread; (void)time;
-    if (event != EVENT_SYSTEM_FOREGROUND) {
-        if (object_id != OBJID_WINDOW || child != CHILDID_SELF || !window)
-            return;
-        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
-                && event != EVENT_OBJECT_DESTROY
-                && event != EVENT_OBJECT_REORDER
-                && event != EVENT_OBJECT_LOCATIONCHANGE)
-            return;
-    }
-    /* The transport lock guards the list; emitting takes it again, which a
-     * critical section allows, and the object lock is never taken inside it */
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_object_count; ++i)
-        emit_window_state_showing(g_watched_objects[i], TRUE);
-    LeaveCriticalSection(&g_transport_lock);
+    emit_window_state_showing(context, TRUE);
+    return 0;
 }
 
 static void watch_object_window(DDrawObject *object)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_object_count; ++i) {
-        if (g_watched_objects[i] == object) {
-            LeaveCriticalSection(&g_transport_lock);
-            return;
-        }
-    }
-    if (g_watched_object_count < DDWG_MAX_WATCHED_OBJECTS) {
-        g_watched_objects[g_watched_object_count++] = object;
-        if (!g_foreground_hook)
-            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
-                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-        if (!g_window_hook)
-            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
-                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_add(&object->window_watch, object,
+        notify_object_window, NULL, &g_transport_lock);
 }
 
 static void unwatch_object_window(DDrawObject *object)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_object_count; ++i) {
-        if (g_watched_objects[i] == object) {
-            g_watched_objects[i] = g_watched_objects[--g_watched_object_count];
-            break;
-        }
-    }
-    if (!g_watched_object_count) {
-        if (g_foreground_hook)
-            UnhookWinEvent(g_foreground_hook);
-        if (g_window_hook)
-            UnhookWinEvent(g_window_hook);
-        g_foreground_hook = NULL;
-        g_window_hook = NULL;
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_remove(&object->window_watch);
 }
 
 static DDSurface *surface_allocate(DDrawObject *object,

@@ -10,7 +10,24 @@
 #else
 #include <ddraw.h>
 #endif
+#ifndef D9WG_WINDOW_WATCHERS
+#define D9WG_WINDOW_WATCHERS 1
+#endif
+#ifndef D9WG_WINDOW_NO_PUMP
+#define D9WG_WINDOW_NO_PUMP 0
+#endif
 static HANDLE logfile, phasefile;
+#if D9WG_WINDOW_WATCHERS > 1
+static HWND dummy_windows[D9WG_WINDOW_WATCHERS - 1];
+#if D9WG_WINDOW_API == 9
+static IDirect3DDevice9* dummy_devices[D9WG_WINDOW_WATCHERS - 1];
+#elif D9WG_WINDOW_API == 8
+static IDirect3DDevice8* dummy_devices[D9WG_WINDOW_WATCHERS - 1];
+#else
+static IDirectDraw7* dummy_factories[D9WG_WINDOW_WATCHERS - 1];
+static IDirectDrawSurface7* dummy_primaries[D9WG_WINDOW_WATCHERS - 1];
+#endif
+#endif
 static HWND main_window, auxiliary_a, auxiliary_b;
 #if D9WG_WINDOW_API == 9
 static IDirect3D9* factory;
@@ -45,6 +62,9 @@ static void phase(UINT value)
 }
 static void pump(void)
 {
+#if D9WG_WINDOW_NO_PUMP
+    Sleep(250);
+#else
     DWORD start = GetTickCount();
     MSG message;
     do {
@@ -54,6 +74,7 @@ static void pump(void)
         }
         Sleep(1);
     } while ((DWORD)(GetTickCount() - start) < 250);
+#endif
 }
 static void present(void)
 {
@@ -79,7 +100,7 @@ static void snapshot(UINT step, BOOL no_surface)
 }
 void WINAPI WinMainCRTStartup(void)
 {
-    char directory[MAX_PATH], path[MAX_PATH], name[32];
+    char directory[MAX_PATH], path[MAX_PATH], name[64];
     GetModuleFileNameA(NULL, directory, sizeof(directory));
     UINT at = lstrlenA(directory);
     while (at && directory[at - 1] != '\\')
@@ -119,6 +140,15 @@ void WINAPI WinMainCRTStartup(void)
     pp.BackBufferWidth = 64;
     pp.BackBufferHeight = 64;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i) {
+        dummy_windows[i] = CreateWindowExA(0, "STATIC", "Additional window subscriber", WS_POPUP, 400, 400, 64, 64, NULL, NULL, GetModuleHandleA(NULL), NULL);
+        check(dummy_windows[i] != NULL, "FAIL extra window");
+        D3DPRESENT_PARAMETERS extra = pp;
+        extra.hDeviceWindow = dummy_windows[i];
+        check(IDirect3D9_CreateDevice(factory, 0, D3DDEVTYPE_HAL, dummy_windows[i], D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &extra, &dummy_devices[i]) == D3D_OK, "FAIL extra device9");
+    }
+#endif
     check(IDirect3D9_CreateDevice(factory, 0, D3DDEVTYPE_HAL, main_window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device) == D3D_OK, "FAIL device9");
 #elif D9WG_WINDOW_API == 8
     lstrcpyA(path, directory);
@@ -137,6 +167,15 @@ void WINAPI WinMainCRTStartup(void)
     pp.BackBufferWidth = 64;
     pp.BackBufferHeight = 64;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i) {
+        dummy_windows[i] = CreateWindowExA(0, "STATIC", "Additional window subscriber", WS_POPUP, 400, 400, 64, 64, NULL, NULL, GetModuleHandleA(NULL), NULL);
+        check(dummy_windows[i] != NULL, "FAIL extra window");
+        D3DPRESENT_PARAMETERS extra = pp;
+        extra.hDeviceWindow = dummy_windows[i];
+        check(IDirect3D8_CreateDevice(factory, 0, D3DDEVTYPE_HAL, dummy_windows[i], D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &extra, &dummy_devices[i]) == D3D_OK, "FAIL extra device8");
+    }
+#endif
     check(IDirect3D8_CreateDevice(factory, 0, D3DDEVTYPE_HAL, main_window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device) == D3D_OK, "FAIL device8");
 #else
     lstrcpyA(path, directory);
@@ -145,15 +184,26 @@ void WINAPI WinMainCRTStartup(void)
     check(module != NULL, "FAIL DLL7");
     HRESULT(WINAPI * make)(GUID*, void**, REFIID, IUnknown*) = (void*)(uintptr_t)GetProcAddress(module, "DirectDrawCreateEx");
     check(make != NULL, "FAIL factory export7");
-    check(make(NULL, (void**)&factory, &IID_IDirectDraw7, NULL) == DD_OK, "FAIL factory7");
-    check(IDirectDraw7_SetCooperativeLevel(factory, main_window, DDSCL_NORMAL) == DD_OK, "FAIL cooperative");
     DDSURFACEDESC2 desc;
     ZeroMemory(&desc, sizeof(desc));
     desc.dwSize = sizeof(desc);
     desc.dwFlags = DDSD_CAPS;
     desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i) {
+        dummy_windows[i] = CreateWindowExA(0, "STATIC", "Additional window subscriber", WS_POPUP, 400, 400, 64, 64, NULL, NULL, GetModuleHandleA(NULL), NULL);
+        check(dummy_windows[i] != NULL, "FAIL extra window");
+        check(make(NULL, (void**)&dummy_factories[i], &IID_IDirectDraw7, NULL) == DD_OK, "FAIL extra factory7");
+        check(IDirectDraw7_SetCooperativeLevel(dummy_factories[i], dummy_windows[i], DDSCL_NORMAL) == DD_OK, "FAIL extra cooperative7");
+        check(IDirectDraw7_CreateSurface(dummy_factories[i], &desc, &dummy_primaries[i], NULL) == DD_OK, "FAIL extra primary7");
+    }
+#endif
+    check(make(NULL, (void**)&factory, &IID_IDirectDraw7, NULL) == DD_OK, "FAIL factory7");
+    check(IDirectDraw7_SetCooperativeLevel(factory, main_window, DDSCL_NORMAL) == DD_OK, "FAIL cooperative");
     check(IDirectDraw7_CreateSurface(factory, &desc, &primary, NULL) == DD_OK, "FAIL primary");
 #endif
+    wsprintfA(name, "WATCHED %u %u", D9WG_WINDOW_API, D9WG_WINDOW_WATCHERS);
+    report(name);
     pump();
     for (UINT step = 1; step <= 7; ++step) {
         phase(step);
@@ -196,20 +246,46 @@ void WINAPI WinMainCRTStartup(void)
     primary = NULL;
     pump();
     snapshot(8, TRUE);
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i) {
+        IDirectDrawSurface7_Release(dummy_primaries[i]);
+        IDirectDraw7_Release(dummy_factories[i]);
+    }
+#endif
     IDirectDraw7_Release(factory);
 #elif D9WG_WINDOW_API == 8
     IDirect3DDevice8_Release(device);
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i)
+        IDirect3DDevice8_Release(dummy_devices[i]);
+#endif
     IDirect3D8_Release(factory);
 #else
     IDirect3DDevice9_Release(device);
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i)
+        IDirect3DDevice9_Release(dummy_devices[i]);
+#endif
     IDirect3D9_Release(factory);
 #endif
     FreeLibrary(module);
+#if D9WG_WINDOW_NO_PUMP
+    DWORD unload_start = GetTickCount();
+    while (GetModuleHandleA(path) && (DWORD)(GetTickCount() - unload_start) < 2000)
+        Sleep(1);
+    check(GetModuleHandleA(path) == NULL, "FAIL event thread DLL unload");
+    wsprintfA(name, "UNLOADED %u", D9WG_WINDOW_API);
+    report(name);
+#endif
+#if D9WG_WINDOW_WATCHERS > 1
+    for (UINT i = 0; i < D9WG_WINDOW_WATCHERS - 1; ++i)
+        DestroyWindow(dummy_windows[i]);
+#endif
     DestroyWindow(auxiliary_a);
     DestroyWindow(auxiliary_b);
     DestroyWindow(main_window);
     CloseHandle(phasefile);
-    wsprintfA(name, "PASS window SDK API=%u", D9WG_WINDOW_API);
+    wsprintfA(name, "PASS window SDK API=%u no_pump=%u", D9WG_WINDOW_API, D9WG_WINDOW_NO_PUMP);
     report(name);
     CloseHandle(logfile);
     ExitProcess(0);

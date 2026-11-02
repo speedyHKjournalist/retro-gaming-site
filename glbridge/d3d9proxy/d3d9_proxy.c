@@ -51,6 +51,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d9_protocol.h"
 #include "../runtime/d9wg_window_probe.h"
+#include "../runtime/d9wg_window_watch.h"
 #include "../upload_bands.h"
 
 #ifndef D3DSTREAMSOURCE_INDEXEDDATA
@@ -1057,6 +1058,7 @@ struct D9Device {
     HCURSOR system_cursor;
     BOOL display_mode_changed;
     D9WGWindowCache window_cache;
+    D9WGWindowWatch window_watch;
     /* Saved across the borderless override an exclusive-fullscreen device
      * applies to its window, so the app's own frame comes back on teardown. */
     HWND styled_window;
@@ -4400,103 +4402,37 @@ static BOOL emit_window_state_from_probe(D9Device *device, HWND window,
 static BOOL emit_window_state(D9Device *device, HWND window)
 {
     D9WGWindowProbe probe;
+    EnterCriticalSection(&g_transport_lock);
     d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
         D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
-    return emit_window_state_from_probe(device, window, &probe);
+    BOOL emitted = emit_window_state_from_probe(device, window, &probe);
+    LeaveCriticalSection(&g_transport_lock);
+    return emitted;
 }
 
-/*
- * Present is not a reliable heartbeat: a game that shows a video, a dialog or
- * a loading screen through another window may not present at all until it is
- * done, and the host has to learn about that window meanwhile. A WinEvent hook
- * on the device's thread hears about every window that is shown, hidden,
- * moved, restacked or brought to the foreground, in any process, and the
- * window state is reported and sent right away. emit_window_state() only
- * emits when something it reports changed, so the frequent events (moves,
- * the pointer's location changes) cost one GetClipBox each.
- *
- * Out-of-context hooks are delivered while the installing thread retrieves
- * messages, which the device's window thread does, video or not.
- */
-#define D9_MAX_WATCHED_DEVICES 8
-static D9Device *g_watched_devices[D9_MAX_WATCHED_DEVICES];
-static UINT g_watched_device_count;
-static HWINEVENTHOOK g_foreground_hook;
-static HWINEVENTHOOK g_window_hook;
-
-static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
-        LONG object, LONG child, DWORD thread, DWORD time)
+/* A shared message thread observes foreground/window events even while the
+ * application stops presenting or pumping messages. Removal synchronizes with
+ * callbacks before the API object is destroyed; report/flush policy stays here. */
+static int notify_device_window(void *context)
 {
-    BOOL emitted = FALSE;
-    UINT i;
+    D9Device *device = context;
+    return device->state_window && emit_window_state(device, device->state_window);
+}
 
-    (void)hook; (void)thread; (void)time;
-    if (event != EVENT_SYSTEM_FOREGROUND) {
-        if (object != OBJID_WINDOW || child != CHILDID_SELF || !window)
-            return;
-        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
-                && event != EVENT_OBJECT_DESTROY
-                && event != EVENT_OBJECT_REORDER
-                && event != EVENT_OBJECT_LOCATIONCHANGE)
-            return;
-    }
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        D9Device *device = g_watched_devices[i];
-        if (device->state_window
-                && emit_window_state(device, device->state_window))
-            emitted = TRUE;
-    }
-    if (emitted && g_command_count)
-        submit_batch_locked(FALSE);
-    LeaveCriticalSection(&g_transport_lock);
+static void flush_window_reports(void)
+{
+    if (g_command_count) submit_batch_locked(FALSE);
 }
 
 static void watch_window_state(D9Device *device)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        if (g_watched_devices[i] == device) {
-            LeaveCriticalSection(&g_transport_lock);
-            return;
-        }
-    }
-    if (g_watched_device_count < D9_MAX_WATCHED_DEVICES) {
-        g_watched_devices[g_watched_device_count++] = device;
-        if (!g_foreground_hook)
-            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
-                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-        if (!g_window_hook)
-            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
-                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_add(&device->window_watch, device,
+        notify_device_window, flush_window_reports, &g_transport_lock);
 }
 
 static void unwatch_window_state(D9Device *device)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        if (g_watched_devices[i] == device) {
-            g_watched_devices[i] = g_watched_devices[--g_watched_device_count];
-            break;
-        }
-    }
-    if (!g_watched_device_count) {
-        if (g_foreground_hook)
-            UnhookWinEvent(g_foreground_hook);
-        if (g_window_hook)
-            UnhookWinEvent(g_window_hook);
-        g_foreground_hook = NULL;
-        g_window_hook = NULL;
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_remove(&device->window_watch);
 }
 
 /*
@@ -4675,9 +4611,13 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
         return FALSE;
     device->last_foreground_claim = now;
     ++device->foreground_claims;
+    /* Window activation can call application window procedures; release the
+     * transport lock while mutating, then recapture under it in Present. */
+    LeaveCriticalSection(&g_transport_lock);
     if ((probe->state.flags & D9WG_WINDOW_ICONIC) != 0)
         ShowWindow(window, SW_RESTORE);
     raise_window_to_foreground(window);
+    EnterCriticalSection(&g_transport_lock);
     return TRUE;
 
 }
@@ -5183,8 +5123,11 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
     uint8_t *payload;
     BOOL result;
 
+    d9wg_window_watch_retry();
+
     if (!window)
         window = device->creation.hFocusWindow;
+    EnterCriticalSection(&g_transport_lock);
     d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
         D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
     if (maintain_fullscreen_foreground(device, window, &probe))
@@ -5231,7 +5174,6 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
         update_system_cursor(device, window);
     }
 
-    EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_PRESENT, sizeof(present), 0,
             NULL, &payload, NULL);
     if (result) {

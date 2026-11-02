@@ -37,6 +37,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
 #include "../runtime/d9wg_window_probe.h"
+#include "../runtime/d9wg_window_watch.h"
 
 /* These legacy D3D shade-cap bits are omitted by some d3d8.h variants. */
 #ifndef D3DPSHADECAPS_COLORFLATRGB
@@ -234,6 +235,7 @@ struct D8Device {
     BOOL window_subclassed;
     BOOL window_unicode;
     D9WGWindowCache window_cache;
+    D9WGWindowWatch window_watch;
     /* D3D8 guarantees six user clip planes; the host implements them as
      * interpolated distances plus a fragment discard. */
     float clip_planes[D8WG_MAX_CLIP_PLANES][4];
@@ -1532,13 +1534,13 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
     uint8_t *payload;
     uint32_t bytes;
     BOOL result;
+    EnterCriticalSection(&g_transport_lock);
     d9wg_window_probe_capture((uintptr_t)window, hidden
         ? D9WG_WINDOW_PROBE_STATE | D9WG_WINDOW_PROBE_IDENTITY_ONLY
         : D9WG_WINDOW_PROBE_STATE | D9WG_WINDOW_PROBE_REGION, &probe);
     d9wg_window_probe_report(&probe, device->handle, !device->present.Windowed,
         D9WG_WINDOW_REPORT_CLIENT_SIZE | (hidden ? D9WG_WINDOW_REPORT_HIDDEN : 0), &report);
     bytes = (uint32_t)D9WG_WINDOW_STATE_BYTES(&report);
-    EnterCriticalSection(&g_transport_lock);
     if (!force && d9wg_window_cache_matches(&device->window_cache, &report)) {
         LeaveCriticalSection(&g_transport_lock);
         return TRUE;
@@ -1554,95 +1556,28 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
     return result;
 }
 
-/*
- * The subclassed window procedure hears about its own window only; another
- * window covering it -- a video or dialog the game shows while it stops
- * presenting -- sends it nothing. A WinEvent hook on the device's thread hears
- * about every window shown, hidden, moved, restacked or activated, in any
- * process, and the report goes out right away. Nothing is sent unless the
- * report changed. Out-of-context hooks are delivered while the thread
- * retrieves messages, as the device window's thread does.
- */
-#define D8_MAX_WATCHED_DEVICES 8
-static D8Device *g_watched_devices[D8_MAX_WATCHED_DEVICES];
-static UINT g_watched_device_count;
-static HWINEVENTHOOK g_foreground_hook;
-static HWINEVENTHOOK g_window_hook;
-
-static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
-        LONG object, LONG child, DWORD thread, DWORD time)
+/* A shared message thread observes foreground/window events even while the
+ * application stops presenting or pumping messages. Removal synchronizes with
+ * callbacks before the API object is destroyed; report/flush policy stays here. */
+static int notify_device_window(void *context)
 {
-    D8Device *devices[D8_MAX_WATCHED_DEVICES];
-    UINT count;
-    UINT i;
-
-    (void)hook; (void)thread; (void)time;
-    if (event != EVENT_SYSTEM_FOREGROUND) {
-        if (object != OBJID_WINDOW || child != CHILDID_SELF || !window)
-            return;
-        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
-                && event != EVENT_OBJECT_DESTROY
-                && event != EVENT_OBJECT_REORDER
-                && event != EVENT_OBJECT_LOCATIONCHANGE)
-            return;
-    }
-    EnterCriticalSection(&g_transport_lock);
-    count = g_watched_device_count;
-    CopyMemory(devices, g_watched_devices, count * sizeof(devices[0]));
-    LeaveCriticalSection(&g_transport_lock);
-    for (i = 0; i < count; ++i) {
-        HWND tracked = devices[i]->tracked_window;
-        if (tracked && IsWindow(tracked))
-            emit_surface_update_and_flush(devices[i], tracked,
-                    !IsWindowVisible(tracked) || IsIconic(tracked), FALSE);
-    }
+    D8Device *device = context;
+    HWND window = device->tracked_window;
+    if (window && IsWindow(window))
+        emit_surface_update_and_flush(device, window,
+            !IsWindowVisible(window) || IsIconic(window), FALSE);
+    return 0;
 }
 
 static void watch_device_window(D8Device *device)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        if (g_watched_devices[i] == device) {
-            LeaveCriticalSection(&g_transport_lock);
-            return;
-        }
-    }
-    if (g_watched_device_count < D8_MAX_WATCHED_DEVICES) {
-        g_watched_devices[g_watched_device_count++] = device;
-        if (!g_foreground_hook)
-            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
-                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-        if (!g_window_hook)
-            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
-                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_add(&device->window_watch, device,
+        notify_device_window, NULL, &g_transport_lock);
 }
 
 static void unwatch_device_window(D8Device *device)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        if (g_watched_devices[i] == device) {
-            g_watched_devices[i] = g_watched_devices[--g_watched_device_count];
-            break;
-        }
-    }
-    if (!g_watched_device_count) {
-        if (g_foreground_hook)
-            UnhookWinEvent(g_foreground_hook);
-        if (g_window_hook)
-            UnhookWinEvent(g_window_hook);
-        g_foreground_hook = NULL;
-        g_window_hook = NULL;
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_remove(&device->window_watch);
 }
 
 static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
@@ -1653,6 +1588,9 @@ static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
     uint8_t *payload;
     BOOL result;
 
+    d9wg_window_watch_retry();
+
+    EnterCriticalSection(&g_transport_lock);
     capture_surface(device, window, &surface);
     present.device_handle = surface.device_handle;
     present.hwnd = surface.hwnd;
@@ -1660,7 +1598,6 @@ static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
     present.y = surface.y;
     present.width = surface.width;
     present.height = surface.height;
-    EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_PRESENT, sizeof(present), 0,
             NULL, &payload, NULL);
     if (result) {
