@@ -7,6 +7,7 @@
 typedef struct D9WGProcessLayout {
     int32_t position, normal, diffuse, specular, psize;
     uint32_t position_transformed, position_floats, stride, texcoord_count;
+    uint32_t legacy_xyz_output, legacy_output, write_extent;
     int32_t texcoord[8];
     uint32_t texcoord_floats[8];
     uint32_t has_blend;
@@ -41,6 +42,10 @@ float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position);
  * Packed programmable attributes and multiple streams remain explicit failures. */
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout);
 int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout);
+/* D3D7 RGB writes compact XYZRHW / color / float2 texture output using
+ * the nominal FVF stride, even for XYZ / NORMAL declarations. Native spill
+ * writes stay bounded by output_length. */
+int d9wg_process_legacy_output(uint32_t fvf, D9WGProcessLayout *layout);
 /* Validate without adding/multiplying untrusted 32-bit indices first. The
  * final source vertex needs only its actual attributes, not trailing padding. */
 int d9wg_process_range(uint32_t length, uint32_t base, uint32_t stride,

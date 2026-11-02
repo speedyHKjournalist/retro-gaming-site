@@ -77,6 +77,7 @@ float d9wg_vertex_fog(const D9WGVertexState *state, const float *eye_position)
 
 int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGProcessLayout *layout)
 {
+    layout->legacy_xyz_output = layout->legacy_output = 0;
     layout->position = layout->normal = layout->diffuse = layout->specular = layout->psize = -1;
     layout->blend_weight = layout->blend_indices = -1;
     layout->blend_weight_floats = layout->blend_weight_type = layout->blend_indices_type = 0;
@@ -127,6 +128,7 @@ int d9wg_process_layout(const D9WGVertexElement *elements, uint32_t count, D9WGP
         default: break;
         }
     }
+    layout->write_extent = layout->stride;
     return layout->position >= 0;
 }
 int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout)
@@ -136,7 +138,30 @@ int d9wg_process_fvf(uint32_t api, uint32_t fvf, D9WGProcessLayout *layout)
     if (!d9wg_fvf_decode(api, fvf, elements, 18, &count, &fvf_layout) ||
             !d9wg_process_layout(elements, count, layout)) return 0;
     /* Reserved D3D7 data still contributes to the actual FVF stride. */
-    layout->stride = fvf_layout.stride;return 1;
+    layout->stride = layout->write_extent = fvf_layout.stride;return 1;
+}
+int d9wg_process_legacy_output(uint32_t fvf, D9WGProcessLayout *layout)
+{
+    if (!d9wg_process_fvf(D9WG_FVF_D3D7, fvf, layout)) return 0;
+    if (!layout->position_transformed) {
+        if ((fvf & 0x00eu) != 0x002u || layout->has_blend) return 0;
+        layout->legacy_xyz_output = 1;
+    }
+    layout->legacy_output = 1;
+    /* Original Microsoft RGB uses a compact XYZRHW output cursor even when
+     * XYZ / NORMAL / reserved data describe a different nominal FVF stride.
+     * It copies source texture components, ignoring destination dimensions.
+     * Keep the nominal stride for vertex stepping and bound every write. */
+    layout->normal = layout->psize = -1;
+    uint32_t cursor = 16;
+    if (layout->diffuse >= 0) { layout->diffuse = cursor;cursor += 4; }
+    if (layout->specular >= 0) { layout->specular = cursor;cursor += 4; }
+    layout->write_extent = cursor;
+    for (unsigned i = 0; i < layout->texcoord_count; ++i) {
+        layout->texcoord[i] = cursor;
+        layout->write_extent = cursor + 16;cursor += 8;
+    }
+    return 1;
 }
 int d9wg_process_range(uint32_t length, uint32_t base, uint32_t stride,
         uint32_t extent, uint32_t start, uint32_t count, uint32_t *first)
@@ -151,8 +176,11 @@ int d9wg_process_range(uint32_t length, uint32_t base, uint32_t stride,
 }
 static float read_float(const void *input)
 { float value;__builtin_memcpy(&value, input, sizeof(value));return value; }
-static void write_float(void *output, float value)
-{ __builtin_memcpy(output, &value, sizeof(value)); }
+static void write_output_word(void *output, uint32_t length, uint64_t offset, const void *word)
+{
+    if (offset <= length && length - offset >= 4)
+        __builtin_memcpy((uint8_t *)output + (uint32_t)offset, word, 4);
+}
 static void copy_bytes(void *destination, const void *source, uint32_t bytes)
 { for (uint32_t i = 0; i < bytes; ++i) ((uint8_t *)destination)[i] = ((const uint8_t *)source)[i]; }
 int d9wg_process_vertices(const D9WGProcessLayout *s,
@@ -164,7 +192,7 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
         const D9WGTNLLighting *lighting, uint32_t copy_data, const D9WGVertexState *vertex_state)
 {
     uint32_t first, destination;
-    if (!source || !output || s->position_transformed || !d->position_transformed ||
+    if (!source || !output || s->position_transformed || (!d->position_transformed && !d->legacy_xyz_output) ||
             !d9wg_process_range(source_length, source_base, source_stride, s->stride, source_start, count, &first) ||
             !d9wg_process_range(output_length, 0, d->stride, d->stride, output_start, count, &destination)) return 0;
     D9WGVertexBlend *blend = vertex_state ? vertex_state->blend : 0;
@@ -196,7 +224,10 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             }
             for (unsigned i = 0; i < 4; ++i) screen[i] = record->stored[i];
         } else d9wg_clip_project(clip, viewport, screen);
-        for (unsigned i = 0; i < 4; ++i) write_float(out + d->position + i*4u, screen[i]);
+        /* Never reproduce native spill writes beyond the public allocation. */
+        uint64_t output_base = (uint64_t)destination + (uint64_t)vertex*d->stride;
+        for (unsigned i = 0; i < 4; ++i)
+            write_output_word(output, output_length, output_base + d->position + i*4u, &screen[i]);
         /* DONOTCOPYDATA preserves only unaffected attributes. Lighting still
          * computes diffuse/specular even when passthrough copying is disabled. */
         if ((copy_data || lighting->flags.lighting) && (d->diffuse >= 0 || d->specular >= 0)) {
@@ -208,10 +239,11 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     s->normal >= 0 ? in + s->normal : 0,
                     s->diffuse >= 0 ? in + s->diffuse : 0,
                     s->specular >= 0 ? in + s->specular : 0, &diffuse, &specular);
-            if (d->diffuse >= 0) __builtin_memcpy(out + d->diffuse, &diffuse, 4u);
-            if (d->specular >= 0) __builtin_memcpy(out + d->specular, &specular, 4u);
+            if (d->diffuse >= 0) write_output_word(output, output_length, output_base + d->diffuse, &diffuse);
+            if (d->specular >= 0) write_output_word(output, output_length, output_base + d->specular, &specular);
         }
-        if (vertex_state && vertex_state->fog_mode && d->specular >= 0) {
+        if (vertex_state && vertex_state->fog_mode && d->specular >= 0 &&
+                output_base + d->specular + 4u <= output_length) {
             float eye[4];uint32_t specular;
             if (blend) for (unsigned i = 0; i < 4; ++i) eye[i] = blended_eye[i];
             else d9wg_transform_vector4(world_view, position, eye);
@@ -270,11 +302,11 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                 for (unsigned component = 0; component < 4; ++component) coordinate[component] = converted[component];
                 floats = transformed;
             }
-            uint32_t written = floats < d->texcoord_floats[i] ? floats : d->texcoord_floats[i];
+            uint32_t written = d->legacy_output || floats < d->texcoord_floats[i] ? floats : d->texcoord_floats[i];
             /* PROJECTED is consumed by the rasterizer, after interpolation;
              * ProcessVertices stores the undivided coordinate including q. */
             for (unsigned component = 0; component < written; ++component)
-                write_float(out + d->texcoord[i] + component*4u, coordinate[component]);
+                write_output_word(output, output_length, output_base + d->texcoord[i] + component*4u, &coordinate[component]);
         }
     }
     return 1;

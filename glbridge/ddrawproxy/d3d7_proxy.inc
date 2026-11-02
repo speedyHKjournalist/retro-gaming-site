@@ -2820,9 +2820,8 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     uint32_t destination_offset;
     if (!(vertex_op & D3DVOP_TRANSFORM) || !count || !source || destination->locked ||
             !d9wg_process_fvf(D9WG_FVF_D3D7, source_fvf, &source_layout) ||
-            !d9wg_process_fvf(D9WG_FVF_D3D7, destination->desc.dwFVF, &destination_layout) ||
-            source_layout.position_transformed ||
-            !destination_layout.position_transformed)
+            !d9wg_process_legacy_output(destination->desc.dwFVF, &destination_layout) ||
+            source_layout.position_transformed)
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     if (!d9wg_process_range(destination->byte_count, 0, destination->stride,
             destination_layout.stride, destination_index, count, &destination_offset))
@@ -2855,7 +2854,8 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     const float guard_band[4] = {caps.dvGuardBandLeft, caps.dvGuardBandTop,
             caps.dvGuardBandRight, caps.dvGuardBandBottom};
     uint32_t clip_error = d9wg_vertex_windows_clip(&vertex_state, (vertex_op & D3DVOP_CLIP) != 0,
-            destination_offset + destination_layout.position, destination->stride,
+            destination_layout.legacy_xyz_output ? 0 : destination_offset + destination_layout.position,
+            destination_layout.legacy_xyz_output ? 16 : destination->stride,
             count, &viewport, guard_band, &clip_batch);
     if (clip_error) {
         d9wg_vertex_windows_blend_free(&vertex_state);
@@ -2873,10 +2873,21 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     d9wg_clip_legacy_processed(&device->clip_status, clip_batch,
             destination->shadow + destination_offset + destination_layout.position,
             destination->stride, count, (vertex_op & D3DVOP_EXTENTS) != 0, &viewport);
+    /* XYZ records are temporary classification data. Their fourth position
+     * word overlaps an attribute / next vertex, so they cannot be retained
+     * as XYZRHW draw metadata. */
+    if (destination_layout.legacy_xyz_output && clip_batch) {
+        d9wg_vertex_windows_clip_release(NULL, clip_batch);clip_batch = NULL;
+    }
+    UINT written = count * destination->stride;
+    if (destination_layout.write_extent > destination->stride) {
+        UINT extra = destination_layout.write_extent - destination->stride;
+        UINT available = destination->byte_count - destination_offset - written;
+        written += extra < available ? extra : available;
+    }
     d9wg_clip_buffer_commit(&destination->clips, clip_batch, destination_offset,
-            count * destination->stride, d9wg_vertex_windows_clip_release, NULL);
-    return d3d7_upload_vertex_range(destination,
-            destination_index * destination->stride, count * destination->stride)
+            written, d9wg_vertex_windows_clip_release, NULL);
+    return d3d7_upload_vertex_range(destination, destination_offset, written)
             ? D3D_OK : D3DERR_VERTEXBUFFERUNLOCKFAILED;
 }
 
@@ -2898,9 +2909,17 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
             source_index > source->desc.dwNumVertices ||
             count > source->desc.dwNumVertices - source_index)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    return d3d7_process_vertex_bytes(destination, vertex_op,
-            destination_index, count, source->shadow, source->desc.dwFVF,
+    BYTE *snapshot = NULL;
+    const BYTE *input = source->shadow;
+    if (source == destination) {
+        snapshot = heap_alloc_zero(source->byte_count);
+        if (!snapshot) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+        CopyMemory(snapshot, source->shadow, source->byte_count);input = snapshot;
+    }
+    HRESULT result = d3d7_process_vertex_bytes(destination, vertex_op,
+            destination_index, count, input, source->desc.dwFVF,
             source->stride, source_index, d3d_device, flags);
+    heap_free(snapshot);return result;
 }
 
 static HRESULT WINAPI d3d7_vb_GetVertexBufferDesc(

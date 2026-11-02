@@ -8,7 +8,7 @@ const mutations = [
     ["COUNT1 skips matrix", "if (transformed) {", "if (transformed > 1) {", "d9wg_texcoord_test.js"],
     ["projection divides before rasterization", "floats = transformed;", "if(flags & 256u)for(unsigned c=0;c+1<transformed;c++)coordinate[c]/=coordinate[transformed-1];floats = transformed;", "d9wg_texcoord_test.js"],
     ["source set forced to zero", "source_set = index & 0xffffu;", "source_set = 0;", "d9wg_texcoord_test.js"],
-    ["vertex fog is never generated", "if (vertex_state && vertex_state->fog_mode && d->specular >= 0)", "if (0 && vertex_state && vertex_state->fog_mode && d->specular >= 0)"],
+    ["vertex fog is never generated", "if (vertex_state && vertex_state->fog_mode && d->specular >= 0 &&", "if (0 && vertex_state && vertex_state->fog_mode && d->specular >= 0 &&"],
     ["DONOTCOPYDATA suppresses lighting", "(copy_data || lighting->flags.lighting)", "(copy_data)"],
     ["DONOTCOPYDATA still copies textures", "if (!copy_data && !generated && !transformed) continue;", "if (0) continue;"],
     ["extra texture components overwritten", "floats < d->texcoord_floats[i]", "floats > d->texcoord_floats[i]"],
