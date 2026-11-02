@@ -154,6 +154,7 @@ static __inline unsigned d3d8_stage_state_to_sampler_state(unsigned state)
 #define D3D8_VSD_REG_TEXCOORD0 7u
 #define D3D8_VSD_REG_TEXCOORD7 14u
 #define D3D8_VSD_REG_POSITION2 15u
+#define D3D8_VSD_REG_NORMAL2 16u
 
 /* D3DVSD token field layout (d3d8types.h). */
 #define D3D8VSD_TOKENTYPESHIFT 29u
@@ -255,8 +256,7 @@ static __inline unsigned d3d8_vsdt_to_decltype(unsigned type)
 
 /*
  * The register -> (usage, usage_index) association a D3D8 declaration implies.
- * Registers above v14 have no fixed-function meaning; v15 is the tween
- * position.  Anything else is given a TEXCOORD usage with a usage index that
+ * Registers v15/v16 carry the second tween position/normal.  Anything else is given a TEXCOORD usage with a usage index that
  * cannot collide with a real texture coordinate set, so a shader that used a
  * register purely as an opaque input still receives its data.
  */
@@ -280,6 +280,8 @@ static __inline void d3d8_vsd_register_usage(unsigned reg,
         *usage = D3D9DECLUSAGE_COLOR; *usage_index = 1u; return;
     case D3D8_VSD_REG_POSITION2:
         *usage = D3D9DECLUSAGE_POSITION; *usage_index = 1u; return;
+    case D3D8_VSD_REG_NORMAL2:
+        *usage = D3D9DECLUSAGE_NORMAL; *usage_index = 1u; return;
     default:
         if (reg >= D3D8_VSD_REG_TEXCOORD0 && reg <= D3D8_VSD_REG_TEXCOORD7) {
             *usage = D3D9DECLUSAGE_TEXCOORD;

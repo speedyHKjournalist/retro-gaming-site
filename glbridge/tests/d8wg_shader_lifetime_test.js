@@ -27,7 +27,7 @@ static unsigned allocations,frees;static uint32_t destroyed[64],destroyed_kind[6
 static void release(void *p){if(p){frees++;free(p);}}
 #define HeapFree(heap,flags,pointer) release(pointer)
 typedef struct D8Device D8Device;typedef struct D8Shader D8Shader;
-struct D8Shader {D8Shader *next;D8Device *device;UINT state_refs;BOOL deleted;uint32_t handle,declaration_handle;BOOL is_pixel_shader;DWORD *declaration_tokens,*code_tokens;UINT declaration_token_count,code_token_count;};
+struct D8Shader {D8Shader *next;D8Device *device;UINT state_refs;BOOL deleted;uint32_t handle,declaration_handle;BOOL is_pixel_shader,declaration_only;DWORD *declaration_tokens,*code_tokens;UINT declaration_token_count,code_token_count;};
 typedef struct D8StateSnapshot {BOOL vertex_shader_mask,pixel_shader_mask;DWORD vertex_shader,pixel_shader;D8Shader *vertex_shader_ref,*pixel_shader_ref;} D8StateSnapshot;
 typedef struct D8StateBlock {D8StateSnapshot state;} D8StateBlock;
 struct D8Device {uint32_t handle;D8Shader *vertex_shaders,*pixel_shaders,*vertex_shader_ref,*pixel_shader_ref;DWORD vertex_shader,pixel_shader;D8StateBlock *recording_state_block;};

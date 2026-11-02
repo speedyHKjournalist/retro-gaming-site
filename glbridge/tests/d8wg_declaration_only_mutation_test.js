@@ -1,0 +1,15 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
+const root=path.resolve(__dirname,"../d3d8proxy"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-decl-mutants-"));
+const cases=[
+ ["source","NULL function rejected","if (!declaration || !shader)","if (!declaration || !function || !shader)"],
+ ["source","declaration-only flag lost","entry->declaration_only = !function;","entry->declaration_only = FALSE;"],
+ ["source","fixed declaration binds a shader handle","shader->declaration_only ? 0 : shader->handle","shader->handle"],
+ ["source","empty shader resource created","if (!shader->declaration_only)\n            result = reserve_command_locked(D9WG_OP_CREATE_VERTEX_SHADER,","if (1)\n            result = reserve_command_locked(D9WG_OP_CREATE_VERTEX_SHADER,"],
+ ["source","nonexistent shader resource destroyed","if (!shader->declaration_only)\n        result = emit_command(D9WG_OP_DESTROY_RESOURCE,","if (1)\n        result = emit_command(D9WG_OP_DESTROY_RESOURCE,"],
+ ["source","empty function invents END token","if (entry->declaration_only) { *size = 0;return D3D_OK; }","if (entry->declaration_only) { *size = 4;return D3D_OK; }"],
+ ["protocol","NORMAL2 semantic lost","case D3D8_VSD_REG_NORMAL2:\n        *usage = D3D9DECLUSAGE_NORMAL; *usage_index = 1u; return;","case D3D8_VSD_REG_NORMAL2:\n        *usage = D3D9DECLUSAGE_TEXCOORD; *usage_index = 8u; return;"],
+ ["source","invalid fixed primary normal accepted","if (declaration_valid && entry->declaration_only)","if (0 && declaration_valid && entry->declaration_only)"],
+ ["source","constant range extends past c95","(token & D3D8VSD_CONSTADDRESSMASK) > max_const_vectors - vectors","(0 && (token & D3D8VSD_CONSTADDRESSMASK) > max_const_vectors - vectors)"],
+];
+try{for(const [kind,label,before,after] of cases){const original=fs.readFileSync(path.join(root,kind==="protocol"?"d3d8_protocol.h":"d3d8_proxy.c"),"utf8");assert.equal(original.split(before).length,2,label);const file=path.join(directory,kind==="protocol"?"protocol.h":"source.c");const mutated=original.replace(before,after);fs.writeFileSync(file,kind==="protocol"?mutated.replace('#include "../d3d9proxy/d3d9_protocol.h"','#include "'+path.resolve(root,"../d3d9proxy/d3d9_protocol.h")+'"'):mutated);const variable=kind==="protocol"?"D8WG_DECL_ONLY_PROTOCOL":"D8WG_DECL_ONLY_SOURCE";const run=spawnSync(process.execPath,[path.join(__dirname,"d8wg_declaration_only_test.js")],{env:{...process.env,[variable]:file},encoding:"utf8"});assert.notEqual(run.status,0,"survived "+label);assert.match(run.stderr,/declaration-only line/,"runtime assertion required: "+label);}console.log("PASS D3D8 declaration-only mutations: 9/9; NULL acceptance, no code resource, bind/query/lifetime, SDK normal semantics and constant bounds");}finally{fs.rmSync(directory,{recursive:true,force:true});}

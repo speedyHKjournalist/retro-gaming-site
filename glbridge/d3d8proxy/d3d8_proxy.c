@@ -406,6 +406,9 @@ struct D8Shader {
      */
     uint32_t declaration_handle;    /* vertex shaders only; 0 for pixel */
     BOOL is_pixel_shader;
+    BOOL declaration_only;
+    UINT element_count;
+    D9WGVertexElement elements[D8WG_MAX_VERTEX_ELEMENTS];
     DWORD *declaration_tokens;      /* vertex shaders only; NULL for pixel */
     UINT declaration_token_count;
     DWORD *code_tokens;             /* version token + body, excludes END */
@@ -1083,7 +1086,8 @@ static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
                     >> D3D8VSD_CONSTCOUNTSHIFT;
             UINT dwords = vectors * 4u;
 
-            if (!vectors || vectors > max_const_vectors
+            if (!vectors || vectors > max_const_vectors ||
+                    (token & D3D8VSD_CONSTADDRESSMASK) > max_const_vectors - vectors
                     || i + dwords >= token_count)
                 return FALSE;
             *const_start = token & D3D8VSD_CONSTADDRESSMASK;
@@ -1146,49 +1150,35 @@ static BOOL emit_set_fvf(D8Device *device, DWORD fvf)
     return result;
 }
 
-static BOOL emit_create_vertex_shader(D8Device *device, D8Shader *shader)
+static BOOL emit_create_vertex_shader(D8Device* device, D8Shader* shader)
 {
     D9WGCreateVertexDeclaration declaration;
     D9WGCreateVertexShader command;
-    D9WGVertexElement elements[D8WG_MAX_VERTEX_ELEMENTS];
-    DWORD const_data[D8WG_MAX_VS_CONSTANTS * 4u];
-    UINT element_count = 0;
-    UINT const_start = 0;
-    UINT const_vectors = 0;
-    uint8_t *payload;
-    uint8_t *element_blob;
-    uint8_t *code_blob;
+    uint8_t* payload;
+    uint8_t* element_blob;
+    uint8_t* code_blob;
     UINT code_bytes = shader->code_token_count * (UINT)sizeof(DWORD);
     UINT element_bytes;
     BOOL result;
 
-    if (!declaration_to_elements(shader->declaration_tokens,
-            shader->declaration_token_count, elements,
-            D8WG_MAX_VERTEX_ELEMENTS, &element_count,
-            const_data, D8WG_MAX_VS_CONSTANTS, &const_start, &const_vectors))
-        return FALSE;
-    element_bytes = element_count * (UINT)sizeof(D9WGVertexElement);
-    shader->const_start = const_start;
-    shader->const_vector_count = const_vectors;
-    if (const_vectors)
-        CopyMemory(shader->const_data, const_data,
-                const_vectors * 4u * sizeof(DWORD));
+    element_bytes = shader->element_count * (UINT)sizeof(D9WGVertexElement);
 
     ZeroMemory(&declaration, sizeof(declaration));
     ZeroMemory(&command, sizeof(command));
     EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_CREATE_VERTEX_DECLARATION,
-            sizeof(declaration), element_bytes, NULL, &payload, &element_blob);
+        sizeof(declaration), element_bytes, NULL, &payload, &element_blob);
     if (result) {
         declaration.device_handle = device->handle;
         declaration.resource_handle = shader->declaration_handle;
-        declaration.element_count = element_count;
+        declaration.element_count = shader->element_count;
         CopyMemory(payload, &declaration, sizeof(declaration));
-        CopyMemory(element_blob, elements, element_bytes);
-        result = reserve_command_locked(D9WG_OP_CREATE_VERTEX_SHADER,
+        CopyMemory(element_blob, shader->elements, element_bytes);
+        if (!shader->declaration_only)
+            result = reserve_command_locked(D9WG_OP_CREATE_VERTEX_SHADER,
                 sizeof(command), code_bytes, NULL, &payload, &code_blob);
     }
-    if (result) {
+    if (result && !shader->declaration_only) {
         command.device_handle = device->handle;
         command.resource_handle = shader->handle;
         command.instruction_token_count = shader->code_token_count;
@@ -1267,12 +1257,13 @@ static BOOL emit_set_shader_constant(uint16_t opcode, D8Device *device,
 static BOOL emit_destroy_shader(D8Shader *shader)
 {
     D9WGDestroyResource destroy;
-    BOOL result;
+    BOOL result = TRUE;
 
     destroy.resource_handle = shader->handle;
     destroy.resource_kind = shader->is_pixel_shader
             ? D9WG_RESOURCE_PIXEL_SHADER : D9WG_RESOURCE_VERTEX_SHADER;
-    result = emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    if (!shader->declaration_only)
+        result = emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     /* A vertex shader owns the declaration resource created with it, so the
      * two are released together -- D3D8 exposes no way to outlive one. */
     if (!shader->is_pixel_shader && shader->declaration_handle) {
@@ -3657,7 +3648,7 @@ static BOOL emit_bind_vertex_shader(D8Device *device, D8Shader *shader)
     if (!emit_command(D9WG_OP_SET_VERTEX_DECLARATION, &declaration,
             sizeof(declaration)))
         return FALSE;
-    if (!emit_set_shader(D9WG_OP_SET_VERTEX_SHADER, device, shader->handle))
+    if (!emit_set_shader(D9WG_OP_SET_VERTEX_SHADER, device, shader->declaration_only ? 0 : shader->handle))
         return FALSE;
     if (shader->const_vector_count
             && !emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
@@ -6648,58 +6639,63 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
  * and never reaches the D8WG protocol, matching "illegal bytecode is
  * rejected, not silently mistranslated."
  */
-static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
-        const DWORD *declaration, const DWORD *function, DWORD *shader,
-        DWORD usage)
+static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8* iface,
+    const DWORD* declaration, const DWORD* function, DWORD* shader,
+    DWORD usage)
 {
-    D8Device *device = device_from_iface(iface);
-    D8Shader *entry;
+    D8Device* device = device_from_iface(iface);
+    D8Shader* entry;
     UINT decl_count = 0;
     UINT body_count = 0;
-    DWORD version;
-    UINT minor;
+    DWORD version = 0;
+    UINT minor = 0;
     (void)usage;
 
-    if (shader) *shader = 0;
-    if (!declaration || !function || !shader)
+    if (shader)
+        *shader = 0;
+    if (!declaration || !shader)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    version = function[0];
-    minor = (UINT)D3DSHADER_VERSION_MINOR(version);
-    /* A device that advertises vs_1_1 must also run vs_1_0: 1.1 only adds the
-     * address register, so 1.0 is a strict subset and the runtime hands it
-     * straight to the driver. Refusing it looks like a driver that cannot do
-     * vertex shaders at all -- 3DMark 2001 assembles most of its shaders as
-     * `vs.1.0`, does not check the HRESULT, and dereferences the handle it
-     * never got. */
-    if ((version & 0xFFFF0000u) != 0xFFFE0000u
+    if (function) {
+        version = function[0];
+        minor = (UINT)D3DSHADER_VERSION_MINOR(version);
+        /* A device that advertises vs_1_1 must also run vs_1_0: 1.1 only adds the
+         * address register, so 1.0 is a strict subset and the runtime hands it
+         * straight to the driver. Refusing it looks like a driver that cannot do
+         * vertex shaders at all -- 3DMark 2001 assembles most of its shaders as
+         * `vs.1.0`, does not check the HRESULT, and dereferences the handle it
+         * never got. */
+        if ((version & 0xFFFF0000u) != 0xFFFE0000u
             || (UINT)D3DSHADER_VERSION_MAJOR(version) != 1u || minor > 1u) {
-        D8WG_TRACE("SHADER REFUSE kind=vertex stage=version version=%08lX",
+            D8WG_TRACE("SHADER REFUSE kind=vertex stage=version version=%08lX",
                 version);
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+        }
     }
     if (!validate_vertex_declaration(declaration, D8WG_MAX_SHADER_TOKENS,
             &decl_count)) {
         D8WG_TRACE("SHADER REFUSE kind=vertex stage=declaration "
-                "version=%08lX", version);
+                   "version=%08lX",
+            version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
-    if (!validate_shader_body(function + 1, D8WG_MAX_SHADER_TOKENS, FALSE,
-            minor, &body_count)) {
+    if (function && !validate_shader_body(function + 1, D8WG_MAX_SHADER_TOKENS, FALSE, minor, &body_count)) {
         D8WG_TRACE("SHADER REFUSE kind=vertex stage=body version=%08lX",
-                version);
+            version);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
 
-    entry = (D8Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(*entry));
-    if (!entry) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    entry = (D8Shader*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        sizeof(*entry));
+    if (!entry)
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     entry->declaration_tokens = decl_count
-            ? (DWORD *)HeapAlloc(GetProcessHeap(), 0,
-                    decl_count * sizeof(DWORD))
-            : NULL;
-    entry->code_tokens = (DWORD *)HeapAlloc(GetProcessHeap(), 0,
-            (body_count + 1u) * sizeof(DWORD));
-    if ((decl_count && !entry->declaration_tokens) || !entry->code_tokens) {
+        ? (DWORD*)HeapAlloc(GetProcessHeap(), 0,
+              decl_count * sizeof(DWORD))
+        : NULL;
+    entry->code_tokens = function ? (DWORD*)HeapAlloc(GetProcessHeap(), 0,
+                                        (body_count + 1u) * sizeof(DWORD))
+                                  : NULL;
+    if ((decl_count && !entry->declaration_tokens) || (function && !entry->code_tokens)) {
         HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
         HeapFree(GetProcessHeap(), 0, entry->code_tokens);
         HeapFree(GetProcessHeap(), 0, entry);
@@ -6707,17 +6703,37 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
     }
     if (decl_count)
         CopyMemory(entry->declaration_tokens, declaration,
-                decl_count * sizeof(DWORD));
+            decl_count * sizeof(DWORD));
     entry->declaration_token_count = decl_count;
-    entry->code_tokens[0] = function[0];
+    if (function)
+        entry->code_tokens[0] = function[0];
     if (body_count)
         CopyMemory(entry->code_tokens + 1, function + 1,
-                body_count * sizeof(DWORD));
-    entry->code_token_count = body_count + 1u;
+            body_count * sizeof(DWORD));
+    entry->code_token_count = function ? body_count + 1u : 0;
+    entry->declaration_only = !function;
+    BOOL declaration_valid = declaration_to_elements(entry->declaration_tokens,
+        entry->declaration_token_count, entry->elements, D8WG_MAX_VERTEX_ELEMENTS,
+        &entry->element_count, entry->const_data, D8WG_MAX_VS_CONSTANTS,
+        &entry->const_start, &entry->const_vector_count);
+    if (declaration_valid && entry->declaration_only) {
+        for (UINT i = 0; i < entry->element_count; ++i) {
+            const D9WGVertexElement* element = entry->elements + i;
+            if (element->usage == D3D9DECLUSAGE_NORMAL && !element->usage_index && element->type != D3D9DECLTYPE_FLOAT3)
+                declaration_valid = FALSE;
+        }
+    }
+    if (!declaration_valid) {
+        HeapFree(GetProcessHeap(), 0, entry->declaration_tokens);
+        HeapFree(GetProcessHeap(), 0, entry->code_tokens);
+        HeapFree(GetProcessHeap(), 0, entry);
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     entry->is_pixel_shader = FALSE;
-    entry->major_version = 1;
+    entry->major_version = function ? 1 : 0;
     entry->minor_version = minor;
-    shader_bytecode_hash(entry->code_tokens, entry->code_token_count,
+    if (function)
+        shader_bytecode_hash(entry->code_tokens, entry->code_token_count,
             &entry->hash_low, &entry->hash_high);
     entry->handle = allocate_shader_handle();
     /* The declaration is a separate D9WG resource with its own handle, drawn
@@ -6731,9 +6747,10 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     D8WG_TRACE("SHADER CREATE kind=vertex version=%08lX tokens=%u "
-            "handle=%08lX hash=%08lX%08lX", version,
-            entry->code_token_count, entry->handle,
-            entry->hash_high, entry->hash_low);
+               "handle=%08lX hash=%08lX%08lX",
+        version,
+        entry->code_token_count, entry->handle,
+        entry->hash_high, entry->hash_low);
     entry->device = device;
     entry->next = device->vertex_shaders;
     device->vertex_shaders = entry;
@@ -6813,6 +6830,7 @@ static HRESULT WINAPI device_get_vs_function(IDirect3DDevice8 *iface,
     if (!(shader & 1u) || !size) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     entry = find_shader(device->vertex_shaders, shader);
     if (!entry) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (entry->declaration_only) { *size = 0;return D3D_OK; }
     needed = (entry->code_token_count + 1u) * (DWORD)sizeof(DWORD);
     if (!data) { *size = needed; return D3D_OK; }
     if (*size < needed) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
