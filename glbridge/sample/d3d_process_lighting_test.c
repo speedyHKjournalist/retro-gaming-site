@@ -244,6 +244,7 @@ static void blend_checks(void)
 #include "d3d8_state_record_cases.h"
 #include "d3d8_shader_lifetime_cases.h"
 #include "d3d8_declaration_only_cases.h"
+#include "d3d8_tween_cases.h"
 #endif
 void WINAPI WinMainCRTStartup(void)
 {
@@ -396,6 +397,8 @@ void WINAPI WinMainCRTStartup(void)
     blend_checks();
 #if D9WG_TNL_API == 9
     d3d9_tween_checks();
+#elif D9WG_TNL_API == 8
+    d3d8_tween_checks();
 #endif
     report("PASS shared texture coordinate checks");
     report("PASS shared vertex fog checks");

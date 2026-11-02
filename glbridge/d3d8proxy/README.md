@@ -127,9 +127,13 @@ compares the two tables by running both, register by register.
   instructions in the shader translator, and the ps_1_4 arithmetic form `bem`
   (3DMark 2001's Advanced Pixel Shader test is built on it). All were
   previously refused;
-- **`ProcessVertices`**: a real software fixed-function transform (world x view
-  x projection, viewport mapping to `XYZRHW`) with directional, point and spot
-  lighting over the shadowed material and light state;
+- **`ProcessVertices`**: shared software transforms for FVF and fixed-function
+  declarations created with a NULL shader function. Declared inputs support
+  multiple and constant streams, weighted matrix blending and CPU Tween,
+  ambient/diffuse/specular lighting, vertex fog, generated/transformed texture
+  coordinates, user-plane ClipStatus and clipping records for later FVF draws.
+  Every input aliasing the output uses the same pre-call snapshot. The Tween
+  capability flag awaits acceptance of ordinary declaration draws;
 - **4x multisampling** on the device, additional swap chains, render targets
   and depth surfaces;
 - vertex shader 1.0-1.1 and pixel shader 1.0-1.4: declaration parsing and
@@ -220,9 +224,6 @@ refused:
   advertised, rather than silently falling back to clamp.
 - **Point size** is emulated by expanding points to camera-facing quads, since
   WebGPU points are always one pixel.
-- **`ProcessVertices` lighting** computes ambient and diffuse per D3D8's model
-  but not the specular term, and does not clip. Every title that uses this call
-  does so to project geometry, not to shade it.
 - **ps_1_x 1D texture lookups** (`texdp3tex`) sample a 2D texture at `v = 0`,
   because WGSL has no 1D texture type. Every desktop driver did the same.
 - **depth-stencil bit layouts.** The host backs all six accepted depth formats

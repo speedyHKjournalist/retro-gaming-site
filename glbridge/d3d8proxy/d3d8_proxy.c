@@ -3695,6 +3695,67 @@ static HRESULT WINAPI device_get_vertex_shader(IDirect3DDevice8 *iface,
 }
 
 
+/* SDK version adaptation ends at this bounded shared stream description. */
+typedef struct D8ProcessInput {
+    D9WGProcessStreamLayout layout;
+    D9WGVertexStream streams[D8WG_MAX_STREAMS];
+    D9WGProcessLayout fast_layout;
+    BOOL gather;
+    BYTE *snapshot;
+} D8ProcessInput;
+static BOOL d8_current_source_elements(D8Device *device,
+        D9WGVertexElement *elements, UINT *count)
+{
+    if (device->vertex_shader & 1u) {
+        D8Shader *shader = device->vertex_shader_ref;
+        if (!shader || !shader->declaration_only || !shader->element_count || shader->element_count > D8WG_MAX_VERTEX_ELEMENTS) return FALSE;
+        *count = shader->element_count;
+        CopyMemory(elements, shader->elements, *count * sizeof(*elements));
+        return TRUE;
+    }
+    return fvf_to_elements(device->vertex_shader, elements, D8WG_MAX_VERTEX_ELEMENTS, count);
+}
+static void d8_process_input_free(D8ProcessInput *input)
+{
+    if (input->snapshot) HeapFree(GetProcessHeap(), 0, input->snapshot);
+    HeapFree(GetProcessHeap(), 0, input);
+}
+static HRESULT d8_process_input(D8Device *device, D8VertexBuffer *destination,
+        UINT start, UINT count, D8ProcessInput **result)
+{
+    D9WGVertexElement elements[D8WG_MAX_VERTEX_ELEMENTS];UINT element_count;
+    uint32_t first[D8WG_MAX_STREAMS];*result = NULL;
+    if (!d8_current_source_elements(device, elements, &element_count)) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8ProcessInput *input = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*input));
+    if (!input) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    HRESULT error = D3DERR_INVALIDCALL;
+    if (!d9wg_process_stream_layout(elements, element_count, &input->layout) ||
+            (destination && input->layout.vertex.position_transformed)) goto fail;
+    for (UINT i = 0; i < D8WG_MAX_STREAMS; ++i) {
+        if (!(input->layout.stream_mask & (1u << i))) continue;
+        D8VertexBuffer *buffer = device->streams[i].buffer;
+        if (!buffer || buffer->device != device || buffer->locked) goto fail;
+        input->streams[i].vertices = buffer->shadow;input->streams[i].length = buffer->length;
+        input->streams[i].stride = device->streams[i].stride;
+    }
+    if (!d9wg_process_stream_validate(&input->layout, input->streams, start, count, first)) goto fail;
+    input->gather = input->layout.stream_mask != 1u || !input->streams[0].stride;
+    if (!input->gather && !d9wg_process_layout(elements, element_count, &input->fast_layout)) goto fail;
+    /* A single pre-call snapshot protects every stream aliasing the output. */
+    for (UINT i = 0; i < D8WG_MAX_STREAMS; ++i) {
+        if (!(input->layout.stream_mask & (1u << i)) || device->streams[i].buffer != destination) continue;
+        if (!input->snapshot) {
+            input->snapshot = HeapAlloc(GetProcessHeap(), 0, destination->length);
+            if (!input->snapshot) {error = E_OUTOFMEMORY;goto fail;}
+            CopyMemory(input->snapshot, destination->shadow, destination->length);
+        }
+        input->streams[i].vertices = input->snapshot;
+    }
+    *result = input;return D3D_OK;
+fail:
+    d8_process_input_free(input);return error;
+}
+
 static int d8_clip_emit(void *context, uint32_t primitive_type,
         const void *vertices, uint32_t count, uint32_t stride)
 {
@@ -6526,8 +6587,6 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     D8VertexBuffer *destination;
-    D8VertexBuffer *source;
-    D8FVFLayout source_layout;
     D8FVFLayout destination_layout;
     D3DMATRIX world_view;
     D3DMATRIX world_view_projection;
@@ -6538,27 +6597,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
             || destination_iface->lpVtbl != &g_vb_vtbl)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     destination = vb_from_iface(destination_iface);
-    source = device->streams[0].buffer;
-    if (destination->device != device || !source || destination->locked
-            || source->locked || !vertex_count)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    /* A real shader means programmable vertex processing, which this software
-     * path deliberately does not emulate -- running the fixed-function
-     * pipeline instead would silently produce different geometry. */
-    if (device->vertex_shader & 1u)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (!d9wg_process_fvf(D9WG_FVF_D3D8, device->vertex_shader, &source_layout)
-            || !decode_fvf_layout(destination->fvf, &destination_layout))
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    /* D3D8 requires the destination to be pre-transformed, and refuses to
-     * transform something that already is. */
-    if (source_layout.position_transformed || !destination_layout.position_transformed)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (!device->streams[0].stride
-            || device->streams[0].stride < source_layout.stride)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (!d9wg_process_range(source->length, 0, device->streams[0].stride,
-                source_layout.stride, source_start_index, vertex_count, &validated_offset) ||
+    if (destination->device != device || destination->locked || !vertex_count ||
+            !decode_fvf_layout(destination->fvf, &destination_layout) || !destination_layout.position_transformed ||
             !d9wg_process_range(destination->length, 0, destination_layout.stride,
                 destination_layout.stride, destination_index, vertex_count, &validated_offset))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -6584,18 +6624,14 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
     D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
             (float)device->viewport.Width, (float)device->viewport.Height,
             device->viewport.MinZ, device->viewport.MaxZ };
-    const BYTE *input = source->shadow;
-    BYTE *snapshot = NULL;
-    if (source == destination) {
-        snapshot = HeapAlloc(GetProcessHeap(), 0, source->length);
-        if (!snapshot) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-        CopyMemory(snapshot, source->shadow, source->length);input = snapshot;
-    }
+    D8ProcessInput *input;
+    HRESULT input_error = d8_process_input(device, destination, source_start_index, vertex_count, &input);
+    if (FAILED(input_error)) return D8WG_TRACE_ERROR(input_error);
     uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
             &device->transforms[D8WG_TRANSFORM_WORLD_SLOT], 256, 0,
             &device->transforms[D8WG_TRANSFORM_VIEW_SLOT], &device->transforms[D8WG_TRANSFORM_PROJECTION_SLOT]);
     if (blend_error) {
-        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        d8_process_input_free(input);
         return D8WG_TRACE_ERROR(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
     }
     D3DCAPS8 caps;fill_caps(&caps);
@@ -6605,16 +6641,22 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice8 *iface,
             validated_offset + destination_layout.position, destination_layout.stride, vertex_count, &viewport, guard, &clip_batch);
     if (clip_error) {
         d9wg_vertex_windows_blend_free(&vertex_state);
-        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        d8_process_input_free(input);
         return D8WG_TRACE_ERROR(clip_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
     }
-    BOOL processed = d9wg_process_vertices(&source_layout, input, source->length, 0,
-            device->streams[0].stride, source_start_index, &destination_layout,
+    BOOL processed;
+    if (input->gather) processed = d9wg_process_vertices_streams(&input->layout,
+            input->streams, source_start_index, &destination_layout, destination->shadow,
+            destination->length, destination_index, vertex_count, &world_view, &world_view_projection,
+            &viewport, &light_state, !(flags & D9WG_PV_DONOTCOPYDATA), &vertex_state);
+    else processed = d9wg_process_vertices(&input->fast_layout,
+            input->streams[0].vertices, input->streams[0].length, 0,
+            input->streams[0].stride, source_start_index, &destination_layout,
             destination->shadow, destination->length, destination_index, vertex_count,
             &world_view, &world_view_projection, &viewport, &light_state,
             !(flags & D9WG_PV_DONOTCOPYDATA), &vertex_state);
     d9wg_vertex_windows_blend_free(&vertex_state);
-    if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+    d8_process_input_free(input);
     if (!processed) {
         if (clip_batch) HeapFree(GetProcessHeap(), 0, clip_batch);
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
