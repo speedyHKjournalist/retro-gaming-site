@@ -149,7 +149,7 @@ static int v86_window_visible_region(HWND window, V86WindowRegion *region)
     return result;
 }
 
-static BOOL v86_window_region_equal(const V86WindowRegion *a,
+static __inline BOOL v86_window_region_equal(const V86WindowRegion *a,
         const V86WindowRegion *b)
 {
     uint32_t i;
@@ -164,7 +164,7 @@ static BOOL v86_window_region_equal(const V86WindowRegion *a,
     return TRUE;
 }
 
-static void v86_window_region_copy(V86WindowRegion *to,
+static __inline void v86_window_region_copy(V86WindowRegion *to,
         const V86WindowRegion *from)
 {
     uint32_t i;

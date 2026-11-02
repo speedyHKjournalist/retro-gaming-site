@@ -53,6 +53,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "ddraw_protocol.h"
 #include "../window_region.h"
+#include "../runtime/d9wg_window_state.h"
 
 /* The legacy DirectX SDK declared these in auxiliary headers; current MinGW
  * intentionally omits them although the COM methods still take the values. */
@@ -628,13 +629,7 @@ struct DDrawObject {
     D3D7Device *d3d7_device;
     D3DLegacyMaterial *legacy_materials;
     /* The last window-state report while showing (emit_window_state_showing) */
-    BOOL window_state_sent;
-    uint32_t last_window_flags;
-    int32_t last_window_x;
-    int32_t last_window_y;
-    uint32_t last_client_width;
-    uint32_t last_client_height;
-    V86WindowRegion last_region;
+    D9WGWindowCache window_cache;
     DDrawObject *next;
 };
 
@@ -3884,7 +3879,7 @@ static void emit_window_state_not_showing(DDrawObject *object)
      * minimised window and warns that input is going elsewhere -- for a title
      * that has simply finished drawing and whose window is fine. */
     flags |= D9WG_WINDOW_NO_SURFACE;
-    object->window_state_sent = FALSE;
+    d9wg_window_cache_invalidate(&object->window_cache);
     ZeroMemory(&command, sizeof(command));
     command.device_handle = object->device_handle;
     command.hwnd = (uint32_t)(uintptr_t)window;
@@ -3927,7 +3922,7 @@ static void emit_window_state_showing(DDrawObject *object, BOOL flush)
     RECT client;
     POINT origin;
     uint32_t flags;
-    uint32_t i;
+    BOOL result;
 
     if (!object || !object->device_created || !object->device_handle
             || !object->primary)
@@ -3965,21 +3960,6 @@ static void emit_window_state_showing(DDrawObject *object, BOOL flush)
         origin.y = 0;
     }
 
-    if (object->window_state_sent && object->last_window_flags == flags
-            && object->last_window_x == origin.x
-            && object->last_window_y == origin.y
-            && object->last_client_width == (uint32_t)client.right
-            && object->last_client_height == (uint32_t)client.bottom
-            && v86_window_region_equal(&object->last_region, &region))
-        return;
-    object->window_state_sent = TRUE;
-    object->last_window_flags = flags;
-    object->last_window_x = origin.x;
-    object->last_window_y = origin.y;
-    object->last_client_width = (uint32_t)client.right;
-    object->last_client_height = (uint32_t)client.bottom;
-    v86_window_region_copy(&object->last_region, &region);
-
     command->device_handle = object->device_handle;
     command->hwnd = (uint32_t)(uintptr_t)window;
     command->foreground_hwnd = (uint32_t)(uintptr_t)GetForegroundWindow();
@@ -3990,24 +3970,20 @@ static void emit_window_state_showing(DDrawObject *object, BOOL flush)
     command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
     command->client_width = (uint32_t)client.right;
     command->client_height = (uint32_t)client.bottom;
-    report.region.rect_count = region.count;
-    for (i = 0; i < region.count; ++i) {
-        report.region.rects[i][0] = region.rects[i][0];
-        report.region.rects[i][1] = region.rects[i][1];
-        report.region.rects[i][2] = region.rects[i][2];
-        report.region.rects[i][3] = region.rects[i][3];
+    d9wg_window_report_region(&report, region.count, region.rects);
+    EnterCriticalSection(&g_transport_lock);
+    if (d9wg_window_cache_matches(&object->window_cache, &report)) {
+        LeaveCriticalSection(&g_transport_lock);
+        return;
     }
     DDWG_TRACE_CHECKPOINT("WINDOW_STATE showing device=%lu hwnd=%08lX "
             "flags=%08lX rects=%lu", command->device_handle, command->hwnd,
             flags, region.count);
-    if (!emit_command(D9WG_OP_WINDOW_STATE, &report,
-            (uint32_t)D9WG_WINDOW_STATE_BYTES(&report)))
-        return;
-    if (flush) {
-        EnterCriticalSection(&g_transport_lock);
-        submit_batch_locked(FALSE);
-        LeaveCriticalSection(&g_transport_lock);
-    }
+    result = emit_command(D9WG_OP_WINDOW_STATE, &report,
+            (uint32_t)D9WG_WINDOW_STATE_BYTES(&report));
+    if (result && flush) result = submit_batch_locked(FALSE);
+    if (result) d9wg_window_cache_commit(&object->window_cache, &report);
+    LeaveCriticalSection(&g_transport_lock);
 }
 
 /*

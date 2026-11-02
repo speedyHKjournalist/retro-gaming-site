@@ -51,6 +51,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d9_protocol.h"
 #include "../window_region.h"
+#include "../runtime/d9wg_window_state.h"
 #include "../upload_bands.h"
 
 #ifndef D3DSTREAMSOURCE_INDEXEDDATA
@@ -1056,7 +1057,7 @@ struct D9Device {
     BOOL app_cursor;
     HCURSOR system_cursor;
     BOOL display_mode_changed;
-    BOOL window_state_sent;
+    D9WGWindowCache window_cache;
     /* Saved across the borderless override an exclusive-fullscreen device
      * applies to its window, so the app's own frame comes back on teardown. */
     HWND styled_window;
@@ -1071,10 +1072,6 @@ struct D9Device {
     /* Rate limiting for maintain_fullscreen_foreground(). */
     DWORD last_foreground_claim;
     DWORD foreground_claims;
-    uint32_t last_window_flags;
-    uint32_t last_foreground;
-    /* The visible part of the client area last reported (D9WG_WINDOW_REGION) */
-    V86WindowRegion last_region;
     /* The window emit_window_state() last reported, which the window-event
      * hook reports again when anything on the screen changes. */
     HWND state_window;
@@ -4423,7 +4420,7 @@ static BOOL emit_window_state(D9Device *device, HWND window)
     RECT client;
     POINT origin;
     uint32_t flags = 0;
-    uint32_t i;
+    BOOL result;
 
     SetRect(&window_rect, 0, 0, 0, 0);
     SetRect(&client, 0, 0, 0, 0);
@@ -4462,26 +4459,19 @@ static BOOL emit_window_state(D9Device *device, HWND window)
     command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
     command->client_width = (uint32_t)(client.right - client.left);
     command->client_height = (uint32_t)(client.bottom - client.top);
-    report.region.rect_count = region.count;
-    for (i = 0; i < region.count; ++i) {
-        report.region.rects[i][0] = region.rects[i][0];
-        report.region.rects[i][1] = region.rects[i][1];
-        report.region.rects[i][2] = region.rects[i][2];
-        report.region.rects[i][3] = region.rects[i][3];
-    }
+    d9wg_window_report_region(&report, region.count, region.rects);
 
+    EnterCriticalSection(&g_transport_lock);
     device->state_window = window;
-    if (device->window_state_sent
-            && device->last_window_flags == flags
-            && device->last_foreground == command->foreground_hwnd
-            && v86_window_region_equal(&device->last_region, &region))
+    if (d9wg_window_cache_matches(&device->window_cache, &report)) {
+        LeaveCriticalSection(&g_transport_lock);
         return FALSE;
-    device->window_state_sent = TRUE;
-    device->last_window_flags = flags;
-    device->last_foreground = command->foreground_hwnd;
-    v86_window_region_copy(&device->last_region, &region);
-    return emit_command(D9WG_OP_WINDOW_STATE, &report,
+    }
+    result = emit_command(D9WG_OP_WINDOW_STATE, &report,
             (uint32_t)D9WG_WINDOW_STATE_BYTES(&report));
+    if (result) d9wg_window_cache_commit(&device->window_cache, &report);
+    LeaveCriticalSection(&g_transport_lock);
+    return result;
 }
 
 /*
@@ -5166,6 +5156,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
                 parameters->MultiSampleQuality;
     }
     device_init_states(device);
+    d9wg_window_cache_invalidate(&device->window_cache);
     device->viewport.X = device->viewport.Y = 0;
     device->viewport.Width = reset.width;
     device->viewport.Height = reset.height;

@@ -37,6 +37,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
 #include "../window_region.h"
+#include "../runtime/d9wg_window_state.h"
 
 /* These legacy D3D shade-cap bits are omitted by some d3d8.h variants. */
 #ifndef D3DPSHADECAPS_COLORFLATRGB
@@ -233,7 +234,7 @@ struct D8Device {
     WNDPROC original_window_proc;
     BOOL window_subclassed;
     BOOL window_unicode;
-    D8ClientArea last_surface;
+    D9WGWindowCache window_cache;
     /* D3D8 guarantees six user clip planes; the host implements them as
      * interpolated distances plus a fragment discard. */
     float clip_planes[D8WG_MAX_CLIP_PLANES][4];
@@ -244,11 +245,6 @@ struct D8Device {
      * a byte, so the table and the selection both have to reach the host. */
     D9WGPaletteStore palettes;
     UINT current_palette;
-    BOOL has_last_surface;
-    /* Whether the last report said other windows cover all of the window */
-    BOOL last_occluded;
-    /* The visible part of the client area last reported (D9WG_WINDOW_REGION) */
-    V86WindowRegion last_region;
     D8StateBlock *state_blocks;
     D8StateBlock *recording_state_block;
     DWORD next_state_block_token;
@@ -1539,16 +1535,6 @@ static BOOL capture_surface(D8Device *device, HWND window,
     return surface->width != 0 && surface->height != 0;
 }
 
-static BOOL same_surface(const D8ClientArea *left,
-        const D8ClientArea *right)
-{
-    return left->device_handle == right->device_handle
-            && left->hwnd == right->hwnd
-            && left->x == right->x
-            && left->y == right->y
-            && left->width == right->width
-            && left->height == right->height;
-}
 
 static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
         BOOL hidden, BOOL force)
@@ -1559,7 +1545,6 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
     D8ClientArea surface;
     uint8_t *payload;
     uint32_t bytes;
-    uint32_t i;
     BOOL result;
     BOOL occluded;
     int visible;
@@ -1578,13 +1563,6 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
     visible = hidden ? V86_WINDOW_REGION_ALL
             : v86_window_visible_region(window, &region);
     occluded = visible == V86_WINDOW_REGION_NONE;
-    if (!force && device->has_last_surface
-            && same_surface(&device->last_surface, &surface)
-            && device->last_occluded == occluded
-            && v86_window_region_equal(&device->last_region, &region))
-        return TRUE;
-
-    EnterCriticalSection(&g_transport_lock);
     ZeroMemory(&report, sizeof(report));
     command->device_handle = surface.device_handle;
     command->hwnd = surface.hwnd;
@@ -1619,27 +1597,21 @@ static BOOL emit_surface_update_and_flush(D8Device *device, HWND window,
      * overlay over the title bar. */
     command->client_width = surface.width;
     command->client_height = surface.height;
-    report.region.rect_count = region.count;
-    for (i = 0; i < region.count; ++i) {
-        report.region.rects[i][0] = region.rects[i][0];
-        report.region.rects[i][1] = region.rects[i][1];
-        report.region.rects[i][2] = region.rects[i][2];
-        report.region.rects[i][3] = region.rects[i][3];
-    }
+    d9wg_window_report_region(&report, region.count, region.rects);
     bytes = (uint32_t)D9WG_WINDOW_STATE_BYTES(&report);
+    EnterCriticalSection(&g_transport_lock);
+    if (!force && d9wg_window_cache_matches(&device->window_cache, &report)) {
+        LeaveCriticalSection(&g_transport_lock);
+        return TRUE;
+    }
     result = reserve_command_locked(D9WG_OP_WINDOW_STATE, bytes, 0,
             NULL, &payload, NULL);
     if (result) {
         CopyMemory(payload, &report, bytes);
         result = submit_batch_locked(FALSE);
     }
+    if (result) d9wg_window_cache_commit(&device->window_cache, &report);
     LeaveCriticalSection(&g_transport_lock);
-    if (result) {
-        device->last_surface = surface;
-        device->has_last_surface = TRUE;
-        device->last_occluded = occluded;
-        v86_window_region_copy(&device->last_region, &region);
-    }
     return result;
 }
 
@@ -1757,10 +1729,6 @@ static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
         result = submit_batch_locked(TRUE);
     }
     LeaveCriticalSection(&g_transport_lock);
-    if (result && !override_window) {
-        device->last_surface = surface;
-        device->has_last_surface = TRUE;
-    }
     return result;
 }
 
@@ -2778,8 +2746,6 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     }
 
     attach_device_window(device, window);
-    capture_surface(device, window, &device->last_surface);
-    device->has_last_surface = TRUE;
 
     *device_out = &device->iface;
     return D3D_OK;
@@ -2998,8 +2964,6 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
         detach_device_window(device);
         attach_device_window(device, window);
     }
-    capture_surface(device, window, &device->last_surface);
-    device->has_last_surface = TRUE;
     return D3D_OK;
 }
 

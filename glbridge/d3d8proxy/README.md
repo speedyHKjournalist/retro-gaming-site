@@ -351,3 +351,12 @@ surface and remain the way to exercise the DLL in the guest.
 The shared process runtime now includes bounded host-capability discovery.
 Deploy D3D8, D3D9 and DirectDraw DLLs from the same build together; mixed
 process-layout versions are rejected before accessing shared resource state.
+
+Window-report region encoding and duplicate suppression now use the shared
+`../runtime/d9wg_window_state.c` core. The full transmitted report participates
+in the comparison, including geometry and foreground HWND; inactive region
+tail bytes do not. Failed queueing/submission leaves the previous cache so an
+idempotent state report can retry. Actual XP move/resize, foreground, hide/show
+and no-surface observations pass, with the original command stream also
+replayed on SwiftShader and Metal. Win32 capture/event code and per-Present
+probe reuse continue in the following refactor step.

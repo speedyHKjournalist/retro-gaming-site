@@ -47,7 +47,7 @@ interface version and the Direct3D 1-7 fixed-function object models:
 | `Flip`, including storage rotation around a chain | done |
 | `IDirectDrawPalette`, palettised surfaces kept as GPU-side indices | done |
 | `IDirectDrawClipper`, resolved guest-side into per-rectangle blits | done |
-| Window state: where the cooperative window's client area is and what of it other windows leave showing (`D9WG_OP_WINDOW_STATE` with `D9WG_WINDOW_OCCLUDED`/`D9WG_WINDOW_REGION`), sent with each present and from a `SetWinEventHook` while there is a primary | done, not yet run in the guest |
+| Window state: where the cooperative window's client area is and what of it other windows leave showing (`D9WG_OP_WINDOW_STATE` with `D9WG_WINDOW_OCCLUDED`/`D9WG_WINDOW_REGION`), sent with each present and from a `SetWinEventHook` while there is a primary | done; window reports verified in real XP |
 | `GetDC`/`ReleaseDC` over a DIB section | done |
 | Windowed primary initial contents | seeded from the current GDI desktop, so save-under splash screens preserve rather than black out their background |
 | Overlay show/hide, position/stretch, dirty refresh, source/destination keys and overrides, mirroring, enumeration and all z-order operations | done as a non-destructive present-time composite |
@@ -237,3 +237,12 @@ separate from actual backend filtering/blending capabilities.
 The shared process runtime now includes bounded host-capability discovery.
 Deploy D3D8, D3D9 and DirectDraw DLLs from the same build together; mixed
 process-layout versions are rejected before accessing shared resource state.
+
+Window-report region encoding and duplicate suppression now use the shared
+`../runtime/d9wg_window_state.c` core. The full transmitted report participates
+in the comparison, including geometry and foreground HWND; inactive region
+tail bytes do not. Failed queueing/submission leaves the previous cache so an
+idempotent state report can retry. Actual XP move/resize, foreground, hide/show
+and no-surface observations pass, with the original command stream also
+replayed on SwiftShader and Metal. Win32 capture/event code and per-Present
+probe reuse continue in the following refactor step.

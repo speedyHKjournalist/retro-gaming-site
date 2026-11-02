@@ -915,3 +915,12 @@ Tests:
   unless `D9_CORPUS_STRICT=1`;
 - `../sample/d3d9_shader_test.c` — the real DLL in the real XP guest
   (`./build.sh --tests`);
+
+Window-report region encoding and duplicate suppression now use the shared
+`../runtime/d9wg_window_state.c` core. The full transmitted report participates
+in the comparison, including geometry and foreground HWND; inactive region
+tail bytes do not. Failed queueing/submission leaves the previous cache so an
+idempotent state report can retry. Actual XP move/resize, foreground, hide/show
+and no-surface observations pass, with the original command stream also
+replayed on SwiftShader and Metal. Win32 capture/event code and per-Present
+probe reuse continue in the following refactor step.
