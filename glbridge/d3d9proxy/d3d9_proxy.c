@@ -28,6 +28,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_reset.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
@@ -3188,55 +3189,134 @@ static void fill_caps(D3DCAPS9 *caps)
     caps->NumSimultaneousRTs = D9_MAX_RENDER_TARGETS;
 }
 
+static UINT reset_buffer_owned_refs(D9Device *device, const void *iface, BOOL index_buffer)
+{
+    UINT refs = 0;
+    if (index_buffer)
+        return device->index_buffer && &device->index_buffer->iface == iface ? 1u : 0u;
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i)
+        if (device->streams[i].buffer && &device->streams[i].buffer->iface == iface)
+            ++refs;
+    return refs;
+}
+
+static D9Surface *reset_bound_surface(D9Device *device, UINT slot)
+{
+    return slot < D9_MAX_RENDER_TARGETS ? device->render_target_surfaces[slot]
+                                      : device->depth_stencil_surface;
+}
+
+static UINT reset_surface_owned_refs(D9Device *device, D9Surface *surface)
+{
+    UINT refs = 0;
+    if (surface)
+        for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i)
+            if (reset_bound_surface(device, i) == surface)
+                ++refs;
+    return refs;
+}
+
+static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT kind)
+{
+    UINT refs = 0;
+    for (UINT i = 0; i < D9_MAX_TEXTURE_BINDINGS; ++i) {
+        if (kind == D9WG_RESOURCE_TEXTURE_2D && device->textures[i]
+                && &device->textures[i]->iface == iface)
+            ++refs;
+        if (kind == D9WG_RESOURCE_TEXTURE_CUBE && device->cube_bindings[i]
+                && &device->cube_bindings[i]->iface == iface)
+            ++refs;
+        if (kind == D9WG_RESOURCE_TEXTURE_VOLUME && device->volume_bindings[i]
+                && &device->volume_bindings[i]->iface == iface)
+            ++refs;
+    }
+    for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i) {
+        D9Surface *surface = reset_bound_surface(device, i);
+        if (!surface)
+            continue;
+        if (kind == D9WG_RESOURCE_TEXTURE_CUBE && surface->cube_texture
+                && &surface->cube_texture->iface == iface) {
+            ++refs;
+        } else if (kind == D9WG_RESOURCE_TEXTURE_2D && surface->texture
+                && &surface->texture->iface == iface) {
+            if (surface->texture_child) {
+                ++refs;
+            } else {
+                /* A standalone target owns one backing-texture reference,
+                 * independent of how many slots retain its surface. */
+                UINT j;
+                for (j = 0; j < i; ++j)
+                    if (reset_bound_surface(device, j) == surface)
+                        break;
+                if (j == i && (UINT)InterlockedCompareExchange(&surface->refcount, 0, 0)
+                        == reset_surface_owned_refs(device, surface))
+                    ++refs;
+            }
+        }
+    }
+    return refs;
+}
+
 static BOOL device_has_reset_blockers(D9Device *device)
 {
-    D9VertexBuffer *vb;
-    D9IndexBuffer *ib;
-    D9Texture *texture;
-    D9CubeTexture *cube;
-    D9VolumeTexture *volume;
-    UINT level;
-
-    if (device->in_scene)
+    if (device->in_scene || device->recording_result || device->additional_swap_chains)
         return TRUE;
-    for (vb = device->vertex_buffers; vb; vb = vb->next_device_resource) {
-        if (vb->pool == D3DPOOL_DEFAULT || vb->locked)
-            return TRUE;
-    }
-    for (ib = device->index_buffers; ib; ib = ib->next_device_resource) {
-        if (ib->pool == D3DPOOL_DEFAULT || ib->locked)
-            return TRUE;
-    }
-    for (texture = device->texture_resources; texture;
-            texture = texture->next_device_resource) {
-        if (texture->pool == D3DPOOL_DEFAULT)
-            return TRUE;
-        for (level = 0; level < texture->level_count; ++level) {
-            if (texture->levels[level].locked)
-                return TRUE;
-        }
-    }
-    for (cube = device->cube_textures; cube; cube = cube->next_device_resource) {
-        if (cube->pool == D3DPOOL_DEFAULT)
-            return TRUE;
-        for (level = 0; level < cube->level_count * 6u; ++level) {
-            if (cube->levels[level].locked)
-                return TRUE;
-        }
-    }
-    for (volume = device->volume_textures; volume;
-            volume = volume->next_device_resource) {
-        if (volume->pool == D3DPOOL_DEFAULT)
-            return TRUE;
-        for (level = 0; level < volume->level_count; ++level) {
-            if (volume->levels[level].locked)
-                return TRUE;
-        }
-    }
-    /* An open state-block recording spans the Reset, and the block it would
-     * produce describes resources the Reset is about to invalidate. */
-    if (device->recording_result)
+    if (device->implicit_back_buffer && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
+            (UINT)device->implicit_back_buffer->refcount,
+            reset_surface_owned_refs(device, device->implicit_back_buffer),
+            device->implicit_back_buffer->locked))
         return TRUE;
+    if (device->implicit_depth_stencil && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
+            (UINT)device->implicit_depth_stencil->refcount,
+            reset_surface_owned_refs(device, device->implicit_depth_stencil),
+            device->implicit_depth_stencil->locked))
+        return TRUE;
+    for (D9VertexBuffer *buffer = device->vertex_buffers; buffer; buffer = buffer->next_device_resource)
+        if (d9wg_reset_resource_blocks(buffer->pool,
+                (UINT)InterlockedCompareExchange(&buffer->refcount, 0, 0),
+                reset_buffer_owned_refs(device, &buffer->iface, FALSE), buffer->locked))
+            return TRUE;
+    for (D9IndexBuffer *buffer = device->index_buffers; buffer; buffer = buffer->next_device_resource)
+        if (d9wg_reset_resource_blocks(buffer->pool,
+                (UINT)InterlockedCompareExchange(&buffer->refcount, 0, 0),
+                reset_buffer_owned_refs(device, &buffer->iface, TRUE), buffer->locked))
+            return TRUE;
+    for (D9Texture *texture = device->texture_resources; texture; texture = texture->next_device_resource) {
+        BOOL locked = FALSE;
+        for (UINT level = 0; level < texture->level_count; ++level)
+            if (texture->levels[level].locked) {
+                locked = TRUE;
+                break;
+            }
+        if (d9wg_reset_resource_blocks(texture->pool,
+                (UINT)InterlockedCompareExchange(&texture->refcount, 0, 0),
+                reset_texture_owned_refs(device, &texture->iface, D9WG_RESOURCE_TEXTURE_2D), locked))
+            return TRUE;
+    }
+    for (D9CubeTexture *texture = device->cube_textures; texture; texture = texture->next_device_resource) {
+        BOOL locked = FALSE;
+        for (UINT level = 0; level < texture->level_count * 6u; ++level)
+            if (texture->levels[level].locked) {
+                locked = TRUE;
+                break;
+            }
+        if (d9wg_reset_resource_blocks(texture->pool,
+                (UINT)InterlockedCompareExchange(&texture->refcount, 0, 0),
+                reset_texture_owned_refs(device, &texture->iface, D9WG_RESOURCE_TEXTURE_CUBE), locked))
+            return TRUE;
+    }
+    for (D9VolumeTexture *texture = device->volume_textures; texture; texture = texture->next_device_resource) {
+        BOOL locked = FALSE;
+        for (UINT level = 0; level < texture->level_count; ++level)
+            if (texture->levels[level].locked) {
+                locked = TRUE;
+                break;
+            }
+        if (d9wg_reset_resource_blocks(texture->pool,
+                (UINT)InterlockedCompareExchange(&texture->refcount, 0, 0),
+                reset_texture_owned_refs(device, &texture->iface, D9WG_RESOURCE_TEXTURE_VOLUME), locked))
+            return TRUE;
+    }
     return FALSE;
 }
 

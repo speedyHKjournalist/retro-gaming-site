@@ -12,7 +12,7 @@ try{let killed=0;for(const api of[8,9]){const source=fs.readFileSync(root+'/d3d'
  ['surface_add_ref','each public AddRef pins device','if (refs == 1 && surface_is_implicit(surface))','if (refs && surface_is_implicit(surface))'],
  ['surface_release','each public Release drops device','if (!refs) {\n            D8Device *device = surface->device;','if (1) {\n            D8Device *device = surface->device;'],
  ['surface_release','zero Release underflows','if (!InterlockedCompareExchange(&surface->refcount, 0, 0))','if (0 && !InterlockedCompareExchange(&surface->refcount, 0, 0))'],
- ['device_has_reset_blockers','external depth refs ignored','(owned_depth && device->implicit_depth_stencil->refcount > 1)','(0 && owned_depth && device->implicit_depth_stencil->refcount > 1)'],
+ ['device_has_reset_blockers','external depth refs ignored','(UINT)device->implicit_depth_stencil->refcount, owned_depth,','owned_depth, owned_depth,'],
  ['device_has_reset_blockers','device-owned depth blocks Reset','&& device->depth_surface == device->implicit_depth_stencil','&& 0 && device->depth_surface == device->implicit_depth_stencil'],
  ['device_get_backbuffer','stereo selector rejected','if (index)','if (index || type)'],
  ['surface_is_implicit','requires both cache identities','|| surface == surface->device->implicit_depth_stencil','&& surface == surface->device->implicit_depth_stencil'],

@@ -8,6 +8,9 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include <assert.h>
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_private_data.h"
+#include "runtime/d9wg_reset.h"
+#define D8WG_MAX_STREAMS 16
+#define D8WG_MAX_TEXTURE_STAGES 8
 typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,D3DFORMAT,D3DPOOL,D3DBACKBUFFER_TYPE,D3DCUBEMAP_FACES;typedef uint8_t BYTE;
 #define WINAPI
 #define TRUE 1
@@ -38,16 +41,16 @@ typedef struct Interface Interface;typedef struct Vtable{ULONG(*AddRef)(Interfac
 typedef struct{Interface iface;}FakeChain;
 typedef Interface IDirect3DDevice${api},IDirect3DSurface${api};typedef struct Device Device;typedef struct Surface Surface;typedef struct Texture Texture;
 typedef struct{unsigned locked;}Level;
-struct Texture{Interface iface;Device*device;Texture*next_device_resource;UINT pool;BOOL locked;UINT level_count;Level*levels;};
+struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT pool;BOOL locked;UINT level_count;Level*levels;};
 typedef struct{UINT Width,Height;D3DFORMAT Format;}Mode;
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat,BackBufferFormat;BOOL EnableAutoDepthStencil;}Parameters;
 typedef Parameters D3DPRESENT_PARAMETERS;
 typedef struct{Interface iface;}Parent;
 typedef struct{D3DFORMAT Format;UINT Type,Usage,Pool,Size,MultiSampleType,Width,Height;}D3DSURFACE_DESC;
 #define D3DRTYPE_SURFACE 1
-struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;Parent*parent;UINT handle;Mode display_mode;Parameters present;Surface*implicit_back_buffer,*implicit_depth_stencil,*depth_surface,*depth_stencil_surface,*render_target_surfaces[4];BOOL depth_surface_enabled,depth_stencil_unbound;UINT implicit_surface_count,additional_swap_chain_count;Texture*render_target_texture,*render_target_cube,*vertex_buffers,*index_buffers,*texture_resources;UINT render_target_level,render_target_face;BOOL in_scene;void*recording_state_block,*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;FakeChain implicit_swap_chain;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;};
+struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;Parent*parent;UINT handle;Mode display_mode;Parameters present;Surface*implicit_back_buffer,*implicit_depth_stencil,*depth_surface,*depth_stencil_surface,*render_target_surfaces[4];BOOL depth_surface_enabled,depth_stencil_unbound;UINT implicit_surface_count,additional_swap_chain_count;Texture*render_target_texture,*render_target_cube,*vertex_buffers,*index_buffers,*texture_resources,*cube_resources,*volume_resources,*textures[8];struct{Texture*buffer;}streams[16];Texture*index_buffer;UINT render_target_level,render_target_face;BOOL in_scene;void*recording_state_block,*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;FakeChain implicit_swap_chain;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;};
 struct Surface{Interface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;FakeChain*swap_chain;void*shadow,*retained_private_data,*dc,*dc_previous,*dib;BOOL auto_depth_stencil,texture_child,reset_blocker,backbuffer,depth_stencil,locked;UINT level,face,width,height,multisample,multisample_quality,row_pitch;D3DFORMAT format;D3DSURFACE_DESC desc;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
-typedef Device D${api}Device;typedef Surface D${api}Surface;typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VertexBuffer,D${api}IndexBuffer;
+typedef Device D${api}Device;typedef Surface D${api}Surface;typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,D${api}VertexBuffer,D${api}IndexBuffer;
 static Device*device_from_iface(Interface*p){return (Device*)p;}static Surface*surface_from_iface(Interface*p){return (Surface*)p;}
 static Vtable g_surface_vtbl;static unsigned allocations,live,fail_at,parent_refs=1,destroys;static const D9WGPrivateOps d9wg_private_ops={0};static int g_transport_lock;
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;(void)f;allocations++;if(allocations==fail_at)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
@@ -70,7 +73,7 @@ static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b)
 static HRESULT texture_get_surface_level(Interface*t,UINT l,Interface**o){(void)t;(void)l;(void)o;assert(0);return -1;}
 static HRESULT cube_get_surface(Interface*t,D3DCUBEMAP_FACES f,UINT l,Interface**o){(void)t;(void)f;(void)l;(void)o;assert(0);return -1;}
 static void detach_device_window(Device*d){(void)d;}static void emit_device_destroy_and_flush(UINT h){assert(h==0x9000);destroys++;}static void free_shader_list(void*p){(void)p;}static void free_extra_lights(void**p){(void)p;}
-${['free_implicit_surfaces','device_has_reset_blockers','create_standalone_surface','create_backbuffer_surface'].map(n=>extract(source,n)).join('\n')}`:`
+${['free_implicit_surfaces','reset_buffer_owned_refs','reset_texture_owned_refs','device_has_reset_blockers','create_standalone_surface','create_backbuffer_surface'].map(n=>extract(source,n)).join('\n')}`:`
 static void SelectObject(void*a,void*b){(void)a;(void)b;}static void DeleteDC(void*p){(void)p;}static void DeleteObject(void*p){(void)p;}
 static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(Device*d){(void)d;}static void restore_display_mode(Device*d){(void)d;}
 static UINT g_command_count;
