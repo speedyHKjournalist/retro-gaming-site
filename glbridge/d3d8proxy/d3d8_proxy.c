@@ -269,7 +269,8 @@ struct D8Device {
     float ps_constants[D8WG_MAX_PS_CONSTANTS][4];
     uint32_t reset_epoch;
     D8Texture *render_target_texture;
-    UINT render_target_level;
+    D8CubeTexture *render_target_cube;
+    UINT render_target_level, render_target_face;
     BOOL depth_surface_enabled;
     BYTE *front_shadow;
     UINT front_shadow_pitch;
@@ -502,6 +503,8 @@ static HRESULT cube_unlock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
         UINT level);
 static HRESULT WINAPI cube_get_level_desc(IDirect3DCubeTexture8 *iface,
         UINT level, D3DSURFACE_DESC *desc);
+static HRESULT WINAPI cube_get_surface(IDirect3DCubeTexture8 *iface,
+        D3DCUBEMAP_FACES face, UINT level, IDirect3DSurface8 **surface_out);
 static BOOL emit_cube_texture_create(D8Device *device, D8CubeTexture *texture);
 static BOOL emit_volume_texture_create(D8Device *device,
         D8VolumeTexture *texture);
@@ -2422,6 +2425,19 @@ static BOOL device_has_reset_blockers(D8Device *device)
     return FALSE;
 }
 
+static void clear_render_target_binding(D8Device* device)
+{
+    D8Texture* texture = device->render_target_texture;
+    D8CubeTexture* cube = device->render_target_cube;
+    device->render_target_texture = NULL;
+    device->render_target_cube = NULL;
+    device->render_target_level = device->render_target_face = 0;
+    if (texture)
+        IDirect3DTexture8_Release(&texture->iface);
+    if (cube)
+        IDirect3DCubeTexture8_Release(&cube->iface);
+}
+
 static void device_clear_bindings(D8Device *device)
 {
     UINT index;
@@ -2446,12 +2462,7 @@ static void device_clear_bindings(D8Device *device)
     device->pixel_shader = 0;
     shader_assign(&device->vertex_shader_ref, NULL);
     shader_assign(&device->pixel_shader_ref, NULL);
-    if (device->render_target_texture) {
-        D8Texture *texture = device->render_target_texture;
-        device->render_target_texture = NULL;
-        device->render_target_level = 0;
-        IDirect3DTexture8_Release(&texture->iface);
-    }
+    clear_render_target_binding(device);
     if (device->depth_surface) {
         D8Surface *surface = device->depth_surface;
         device->depth_surface = NULL;
@@ -2896,6 +2907,16 @@ static HRESULT WINAPI device_end_scene(IDirect3DDevice8 *iface)
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
+static D8TextureLevel* bound_render_target_level(D8Device* device)
+{
+    if (device->render_target_texture)
+        return &device->render_target_texture->levels[device->render_target_level];
+    if (device->render_target_cube)
+        return cube_level(device->render_target_cube, (D3DCUBEMAP_FACES)device->render_target_face,
+            device->render_target_level);
+    return NULL;
+}
+
 static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
         const D3DRECT *rects, DWORD flags, D3DCOLOR color, float depth,
         DWORD stencil)
@@ -2942,14 +2963,14 @@ static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
         UINT block_height;
         UINT pixel_bytes;
         UINT rect_index;
-        if (device->render_target_texture) {
-            D8TextureLevel *level = &device->render_target_texture->levels[
-                    device->render_target_level];
+        D8TextureLevel *level = bound_render_target_level(device);
+        if (level) {
             shadow = level->shadow;
             pitch = level->row_pitch;
             width = level->width;
             height = level->height;
-            format = device->render_target_texture->format;
+            format = device->render_target_texture ? device->render_target_texture->format
+                    : device->render_target_cube->format;
         }
         if (!texture_format_layout(format, &block_width, &block_height,
                 &pixel_bytes) || block_width != 1 || block_height != 1)
@@ -2983,27 +3004,48 @@ static HRESULT WINAPI device_clear(IDirect3DDevice8 *iface, DWORD rect_count,
  * advanced pixel-shader test binds one larger than the 800x600 mode it runs
  * in. Same rule device_clear() already follows for its shadow copy.
  */
-static void current_render_target_size(D8Device *device, UINT *width,
-        UINT *height)
+static void current_render_target_size(D8Device* device, UINT* width,
+    UINT* height)
 {
-    if (device->render_target_texture) {
-        D8TextureLevel *level = &device->render_target_texture->levels[
-                device->render_target_level];
+    D8TextureLevel* level = bound_render_target_level(device);
+    if (level) {
         *width = level->width;
         *height = level->height;
         return;
     }
     *width = device->present.BackBufferWidth ? device->present.BackBufferWidth
-            : device->display_mode.Width;
+                                             : device->display_mode.Width;
     *height = device->present.BackBufferHeight
-            ? device->present.BackBufferHeight : device->display_mode.Height;
+        ? device->present.BackBufferHeight
+        : device->display_mode.Height;
+}
+
+static BOOL set_live_viewport(D8Device* device, const D3DVIEWPORT8* viewport)
+{
+    D9WGSetViewport command;
+    if (device->viewport.X == viewport->X
+        && device->viewport.Y == viewport->Y
+        && device->viewport.Width == viewport->Width
+        && device->viewport.Height == viewport->Height
+        && device->viewport.MinZ == viewport->MinZ
+        && device->viewport.MaxZ == viewport->MaxZ)
+        return TRUE;
+    device->viewport = *viewport;
+    command.device_handle = device->handle;
+    command.x = viewport->X;
+    command.y = viewport->Y;
+    command.width = viewport->Width;
+    command.height = viewport->Height;
+    command.min_z = viewport->MinZ;
+    command.max_z = viewport->MaxZ;
+    command.reserved = 0;
+    return emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command));
 }
 
 static HRESULT WINAPI device_set_viewport(IDirect3DDevice8 *iface,
         const D3DVIEWPORT8 *viewport)
 {
     D8Device *device = device_from_iface(iface);
-    D9WGSetViewport command;
     UINT target_width;
     UINT target_height;
     if (!viewport || !viewport->Width || !viewport->Height)
@@ -3028,24 +3070,7 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice8 *iface,
         D8StateSnapshot *recorded = &device->recording_state_block->state;
         recorded->viewport_mask = TRUE;recorded->viewport = *viewport;return D3D_OK;
     }
-    if (device->viewport.X == viewport->X
-            && device->viewport.Y == viewport->Y
-            && device->viewport.Width == viewport->Width
-            && device->viewport.Height == viewport->Height
-            && device->viewport.MinZ == viewport->MinZ
-            && device->viewport.MaxZ == viewport->MaxZ)
-        return D3D_OK;
-    device->viewport = *viewport;
-    command.device_handle = device->handle;
-    command.x = viewport->X;
-    command.y = viewport->Y;
-    command.width = viewport->Width;
-    command.height = viewport->Height;
-    command.min_z = viewport->MinZ;
-    command.max_z = viewport->MaxZ;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return set_live_viewport(device, viewport) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
 static HRESULT WINAPI device_get_viewport(IDirect3DDevice8 *iface,
@@ -5585,126 +5610,98 @@ static HRESULT WINAPI device_get_front_buffer(IDirect3DDevice8* iface,
     return D8WG_TRACE_ERROR(result);
 }
 
-static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
-        IDirect3DSurface8 *render_target_iface,
-        IDirect3DSurface8 *depth_iface)
+static HRESULT WINAPI device_set_render_target(IDirect3DDevice8* iface,
+    IDirect3DSurface8* render_target_iface, IDirect3DSurface8* depth_iface)
 {
-    D8Device *device = device_from_iface(iface);
-    D8Surface *render_target;
-    D8Surface *depth = depth_iface ? surface_from_iface(depth_iface) : NULL;
-    D8Texture *texture;
+    D8Device* device = device_from_iface(iface);
+    D8Surface* render_target = render_target_iface ? surface_from_iface(render_target_iface) : NULL;
+    D8Surface* depth = depth_iface ? surface_from_iface(depth_iface) : NULL;
+    D8Texture* texture = NULL;
+    D8CubeTexture* cube = NULL;
     D9WGSetRenderTarget command;
     D9WGSetDepthStencilSurfaceLevel depth_command;
     D3DVIEWPORT8 viewport;
-    UINT render_target_width;
-    UINT render_target_height;
-    UINT depth_width;
-    UINT depth_height;
-    if (!render_target_iface
-            || render_target_iface->lpVtbl != &g_surface_vtbl
-            || (depth_iface && depth_iface->lpVtbl != &g_surface_vtbl))
+    UINT render_target_width, render_target_height, depth_width, depth_height;
+    if ((render_target_iface && render_target_iface->lpVtbl != &g_surface_vtbl) || (depth_iface && depth_iface->lpVtbl != &g_surface_vtbl))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    render_target = surface_from_iface(render_target_iface);
-    if ((render_target->texture ? render_target->texture->device
-            : render_target->device) != device || render_target->depth_stencil)
+    ZeroMemory(&command, sizeof(command));
+    if (render_target) {
+        D3DSURFACE_DESC desc;
+        if (surface_device(render_target) != device || render_target->depth_stencil || FAILED(surface_get_desc(render_target_iface, &desc)) || desc.Pool != D3DPOOL_DEFAULT || !(desc.Usage & D3DUSAGE_RENDERTARGET) || !surface_gpu_location(render_target, &command.color_texture_handle, &command.color_level, &command.color_face))
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+        texture = render_target->texture;
+        cube = render_target->cube;
+        render_target_width = desc.Width;
+        render_target_height = desc.Height;
+    } else
+        current_render_target_size(device, &render_target_width, &render_target_height);
+    if (depth && (surface_device(depth) != device || !depth->depth_stencil || depth->cube))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    texture = render_target->backbuffer ? NULL : render_target->texture;
-    if (texture && !(texture->usage & D3DUSAGE_RENDERTARGET))
+    depth_width = !depth ? 0u : depth->texture ? depth->texture->levels[depth->level].width
+                                               : depth->desc.Width;
+    depth_height = !depth ? 0u : depth->texture ? depth->texture->levels[depth->level].height
+                                                : depth->desc.Height;
+    if (depth && (depth_width < render_target_width || depth_height < render_target_height))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (depth && ((depth->texture ? depth->texture->device : depth->device)
-                != device || !depth->depth_stencil)) {
-        D8WG_TRACE("RENDER TARGET REFUSE reason=depth-surface "
-                "depth_stencil=%d owner=%08lX device=%08lX",
-                (int)depth->depth_stencil,
-                (DWORD)(uintptr_t)(depth->texture ? depth->texture->device
-                        : depth->device), (DWORD)(uintptr_t)device);
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* Acquire before releasing, including rebinding the sole held cube ref. */
+    if (render_target) {
+        if (texture)
+            IDirect3DTexture8_AddRef(&texture->iface);
+        if (cube)
+            IDirect3DCubeTexture8_AddRef(&cube->iface);
+        clear_render_target_binding(device);
+        device->render_target_texture = texture;
+        device->render_target_cube = cube;
+        device->render_target_level = command.color_level;
+        device->render_target_face = command.color_face;
     }
-    render_target_width = render_target->texture
-            ? render_target->texture->levels[render_target->level].width
-            : render_target->desc.Width;
-    render_target_height = render_target->texture
-            ? render_target->texture->levels[render_target->level].height
-            : render_target->desc.Height;
-    depth_width = !depth ? 0u : depth->texture
-            ? depth->texture->levels[depth->level].width : depth->desc.Width;
-    depth_height = !depth ? 0u : depth->texture
-            ? depth->texture->levels[depth->level].height : depth->desc.Height;
-    /* D3D8 permits a depth/stencil surface larger than the colour target; it
-     * only returns INVALIDCALL when depth is smaller. 3DMark 2001 keeps its
-     * full-size depth surface while switching to a smaller offscreen target in
-     * the advanced pixel-shader test, so exact equality rejects a legal bind. */
-    if (depth && (depth_width < render_target_width
-            || depth_height < render_target_height)) {
-        D8WG_TRACE("RENDER TARGET REFUSE reason=depth-too-small rt=%ux%u "
-                "depth=%ux%u", render_target_width, render_target_height,
-                depth_width, depth_height);
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    }
-    if (texture) IDirect3DTexture8_AddRef(&texture->iface);
-    if (depth) IDirect3DSurface8_AddRef(&depth->iface);
-    if (device->render_target_texture)
-        IDirect3DTexture8_Release(&device->render_target_texture->iface);
-    if (device->depth_surface)
-        IDirect3DSurface8_Release(&device->depth_surface->iface);
-    device->render_target_texture = texture;
-    device->render_target_level = texture ? render_target->level : 0;
+    if (depth)
+        IDirect3DSurface8_AddRef(&depth->iface);
+    D8Surface* old_depth = device->depth_surface;
     device->depth_surface = depth;
     device->depth_surface_enabled = depth != NULL;
-    /*
-     * D3D8 binds colour and depth in one call; D3D9 splits them, so this
-     * becomes two commands.
-     *
-     * Two kinds of depth surface reach here. One created by
-     * CreateDepthStencilSurface owns a host texture and is bound by handle,
-     * so a render-to-texture pass gets depth of its own size. The surface
-     * GetDepthStencilSurface() hands back for the device's implicit buffer
-     * has no texture, and names the auto depth-stencil the host negotiated at
-     * CreateDevice.
-     */
-    command.device_handle = device->handle;
-    command.target_index = 0;
-    command.color_texture_handle = texture ? texture->handle : 0;
-    command.color_level = texture ? render_target->level : 0;
-    command.color_face = 0;
-    if (!emit_command(D9WG_OP_SET_RENDER_TARGET, &command, sizeof(command)))
-        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
-
+    if (old_depth)
+        IDirect3DSurface8_Release(&old_depth->iface);
+    if (render_target) {
+        command.device_handle = device->handle;
+        command.target_index = 0;
+        if (!emit_command(D9WG_OP_SET_RENDER_TARGET, &command, sizeof(command)))
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    }
     depth_command.device_handle = device->handle;
-    depth_command.depth_texture_handle = !depth ? 0u
-            : depth->texture ? depth->texture->handle
-            : D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+    depth_command.depth_texture_handle = !depth ? 0u : depth->texture ? depth->texture->handle
+                                                                      : D9WG_AUTO_DEPTH_STENCIL_HANDLE;
     depth_command.depth_level = depth && depth->texture ? depth->level : 0u;
     depth_command.width = depth_width;
     depth_command.height = depth_height;
-    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL,
-            &depth_command, sizeof(depth_command)))
+    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &depth_command, sizeof(depth_command)))
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
-
-    /* IDirect3DDevice8::SetRenderTarget resets the viewport to the complete
-     * new colour target. Keep both the guest shadow and WebGPU state in sync;
-     * otherwise a later GetViewport reports the old size and XYZRHW passes
-     * are mapped through the wrong pixel rectangle. */
-    viewport.X = 0;
-    viewport.Y = 0;
+    /* A NULL color target changes only depth, preserving viewport and color. */
+    if (!render_target)
+        return D3D_OK;
+    viewport.X = viewport.Y = 0;
     viewport.Width = render_target_width;
     viewport.Height = render_target_height;
     viewport.MinZ = 0.0f;
     viewport.MaxZ = 1.0f;
-    return D8WG_TRACE_ERROR(device_set_viewport(iface, &viewport));
+    return D8WG_TRACE_ERROR(set_live_viewport(device, &viewport) ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
-static HRESULT WINAPI device_get_render_target(IDirect3DDevice8 *iface,
-        IDirect3DSurface8 **surface_out)
+static HRESULT WINAPI device_get_render_target(IDirect3DDevice8* iface,
+    IDirect3DSurface8** surface_out)
 {
-    D8Device *device = device_from_iface(iface);
-    if (!surface_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8Device* device = device_from_iface(iface);
+    if (!surface_out)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (device->render_target_texture)
         return texture_get_surface_level(&device->render_target_texture->iface,
-                device->render_target_level, surface_out);
+            device->render_target_level, surface_out);
+    if (device->render_target_cube)
+        return cube_get_surface(&device->render_target_cube->iface,
+            (D3DCUBEMAP_FACES)device->render_target_face, device->render_target_level, surface_out);
     return create_backbuffer_surface(device, &device->present, TRUE,
-            surface_out);
+        surface_out);
 }
 
 static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8 *iface,
@@ -5715,7 +5712,7 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (!device->depth_surface_enabled)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+        return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
     if (device->depth_surface) {
         *surface_out = &device->depth_surface->iface;
         IDirect3DSurface8_AddRef(*surface_out);

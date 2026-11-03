@@ -290,7 +290,7 @@ assert.match(setRenderTarget,
     /depth_width\s*=[\s\S]*?depth->texture->levels\[depth->level\]\.width/,
     "the depth surface's size must come from its texture level when it has one");
 assert.match(setRenderTarget,
-    /viewport\.Width\s*=\s*render_target_width[\s\S]*?device_set_viewport/,
+    /viewport\.Width\s*=\s*render_target_width[\s\S]*?set_live_viewport/,
     "SetRenderTarget must reset and emit the viewport for the new target");
 
 // A depth surface the app created has a host texture of its own and must be
