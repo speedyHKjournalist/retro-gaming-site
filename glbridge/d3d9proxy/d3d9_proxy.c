@@ -1270,6 +1270,7 @@ struct D9VertexDeclaration {
 struct D9Surface {
     IDirect3DSurface9 iface;
     LONG refcount;
+    D9WGPrivateStore private_data;
     D9Device *device;
     /* Non-NULL for a texture-level or standalone render-target surface. The
      * surface is a view onto that texture level; LockRect/UnlockRect share its
@@ -4232,6 +4233,10 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         TRACE_MARK_EXIT("Device.Release", 0, NULL);
         TRACE_FLUSH();
+        if (device->implicit_back_buffer)
+            d9wg_private_clear(&device->implicit_back_buffer->private_data, &d9wg_private_ops);
+        if (device->implicit_depth_stencil)
+            d9wg_private_clear(&device->implicit_depth_stencil->private_data, &d9wg_private_ops);
         IDirect3D9_Release(&device->parent->iface);
         /* The implicit surfaces outlive every public reference to them by
          * design, so the device is what finally frees them. Reaching here means
@@ -13272,6 +13277,7 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
          * it.  Texture level surfaces never reach this path at all: they are
          * sub-objects freed by texture_release.  The back-buffer, offscreen
          * and auto-depth surfaces have no texture and only hold the device. */
+        d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
         if (texture)
             IDirect3DTexture9_Release(&texture->iface);
         /* An app that releases a surface without releasing its DC leaks a GDI
@@ -13318,7 +13324,7 @@ static D9WGPrivateStore* surface_private_store(D9Surface* surface)
         return &surface->cube_texture->levels[surface->cube_face * surface->cube_texture->level_count + surface->level].private_data;
     if (surface->texture_child)
         return &surface->texture->levels[surface->level].private_data;
-    return NULL;
+    return &surface->private_data;
 }
 
 static HRESULT WINAPI surface_set_private_data(IDirect3DSurface9* iface,

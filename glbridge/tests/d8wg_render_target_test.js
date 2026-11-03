@@ -33,10 +33,10 @@ typedef struct{UINT Format,Type,Usage,Pool,Size,MultiSampleType,Width,Height;}D3
 typedef struct{UINT width,height;}D8TextureLevel;
 typedef struct D8Device D8Device;typedef D8Device IDirect3DDevice8;
 typedef struct Texture{Iface iface;unsigned refs,freed;D8Device*device;UINT handle,level_count,usage,pool,format;D3DMULTISAMPLE_TYPE multisample_type;D8TextureLevel*levels;}D8Texture,D8CubeTexture;
-typedef struct Surface{Iface iface;unsigned refs,heap;D8Texture*texture;D8CubeTexture*cube;D8Device*device;UINT level,face;BOOL backbuffer,depth_stencil;D3DSURFACE_DESC desc;}D8Surface;
+typedef struct Surface{Iface iface;unsigned refs,heap;D8Texture*texture;D8CubeTexture*cube;D8Device*device;UINT level,face;BOOL backbuffer,depth_stencil;void*private_data_owner;D3DSURFACE_DESC desc;}D8Surface;
 typedef struct D8StateSnapshot{BOOL viewport_mask;D3DVIEWPORT8 viewport;}D8StateSnapshot;
 typedef struct D8StateBlock{D8StateSnapshot state;}D8StateBlock;
-struct D8Device{UINT handle;D8Texture*render_target_texture;D8CubeTexture*render_target_cube;UINT render_target_level,render_target_face;D8Surface*depth_surface;BOOL depth_surface_enabled;struct{UINT BackBufferWidth,BackBufferHeight,AutoDepthStencilFormat;D3DMULTISAMPLE_TYPE MultiSampleType;}present;struct{UINT Width,Height;}display_mode;D3DVIEWPORT8 viewport;D8StateBlock*recording_state_block;};
+struct D8Device{UINT handle,depth_surface_private_data;D8Texture*render_target_texture;D8CubeTexture*render_target_cube;UINT render_target_level,render_target_face;D8Surface*depth_surface;BOOL depth_surface_enabled;struct{UINT BackBufferWidth,BackBufferHeight,AutoDepthStencilFormat;D3DMULTISAMPLE_TYPE MultiSampleType;}present;struct{UINT Width,Height;}display_mode;D3DVIEWPORT8 viewport;D8StateBlock*recording_state_block;};
 static unsigned g_surface_vtbl,count,fail_at,live_views,allocated_views;
 static D8Device*active;
 static struct{UINT opcode;BYTE bytes[128];}commands[32];

@@ -35,8 +35,8 @@ typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferFormat;D3DMULTISA
 typedef struct{UINT width,height,depth,row_pitch,row_count,byte_count;BYTE*shadow;}D8TextureLevel;
 typedef struct D8Device D8Device;typedef D8Device IDirect3DDevice8;
 typedef struct Texture{Iface iface;UINT refcount;D8Device*device;UINT handle,width,height,level_count,usage;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample_type;BOOL lockable_render_target;D8TextureLevel*levels;struct Texture*next_device_resource;}D8Texture;
-typedef struct{Iface iface;UINT refcount;D8Texture*texture;D8Device*device;BOOL standalone;D3DSURFACE_DESC desc;}D8Surface;
-struct D8Device{UINT handle,child_refs;D8Texture*texture_resources;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height;D3DFORMAT Format;}display_mode;BOOL depth_surface_enabled;D8Surface*depth_surface;};
+typedef struct{Iface iface;UINT refcount;D8Texture*texture;D8Device*device;BOOL standalone;void*private_data_owner;D3DSURFACE_DESC desc;}D8Surface;
+struct D8Device{UINT handle,child_refs,back_buffer_private_data,depth_surface_private_data;D8Texture*texture_resources;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height;D3DFORMAT Format;}display_mode;BOOL depth_surface_enabled;D8Surface*depth_surface;};
 static unsigned g_texture_vtbl,allocations,allocation_call,fail_allocation,creates,fail_emit,fail_view,handles,cases;
 static D9WGCreateTexture2D commands[128];
 static void*GetProcessHeap(void){return NULL;}
@@ -68,8 +68,8 @@ int main(void){D8Device d={.handle=7,.present={80,48,22,4,75},.display_mode={640
  out=NULL;fail_emit=1;CHECK(device_create_render_target(&d,32,32,22,4,0,&out)==-2&&!out&&!allocations&&!d.child_refs&&!d.texture_resources);fail_emit=0;cases++;
  out=NULL;fail_view=1;CHECK(device_create_render_target(&d,32,32,22,4,0,&out)==-3&&!out&&!allocations&&!d.child_refs&&!d.texture_resources);fail_view=0;cases++;
  CHECK(!device_create_texture(&d,32,16,0,0,22,2,&out));D8Texture*t=(D8Texture*)out;CHECK(t->level_count==6&&!t->multisample_type&&commands[creates-1].multisample_type==0);IDirect3DTexture8_Release(out);cases++;
- CHECK(!create_backbuffer_surface(&d,&d.present,1,&out));D8Surface*s=(D8Surface*)out;CHECK(s->desc.MultiSampleType==4&&s->desc.Width==80&&s->desc.Height==48);release_surface(out);cases++;
- CHECK(!device_get_depth_surface(&d,&out));s=(D8Surface*)out;CHECK(s->desc.MultiSampleType==4&&s->desc.Width==80&&s->desc.Height==48&&s->desc.Format==75);release_surface(out);cases++;
+ CHECK(!create_backbuffer_surface(&d,&d.present,1,&out));D8Surface*s=(D8Surface*)out;CHECK(s->desc.MultiSampleType==4&&s->desc.Width==80&&s->desc.Height==48&&s->private_data_owner==&d.back_buffer_private_data);release_surface(out);cases++;
+ CHECK(!device_get_depth_surface(&d,&out));s=(D8Surface*)out;CHECK(s->desc.MultiSampleType==4&&s->desc.Width==80&&s->desc.Height==48&&s->desc.Format==75&&s->private_data_owner==&d.depth_surface_private_data);release_surface(out);cases++;
  d.present.BackBufferWidth=d.present.BackBufferHeight=d.present.MultiSampleType=0;CHECK(!device_get_depth_surface(&d,&out));s=(D8Surface*)out;CHECK(!s->desc.MultiSampleType&&s->desc.Width==640&&s->desc.Height==480);release_surface(out);cases++;
  allocation_call=0;fail_allocation=1;out=NULL;CHECK(create_backbuffer_surface(&d,&d.present,1,&out)==-3&&!out);allocation_call=0;CHECK(device_get_depth_surface(&d,&out)==-3&&!out);fail_allocation=0;CHECK(!allocations&&!d.child_refs&&!d.texture_resources);cases++;
  printf("PASS actual D3D8 MSAA construction: %u one-create, descriptor, allocation/transport/view failure and implicit extent cases\\n",cases);return 0;}

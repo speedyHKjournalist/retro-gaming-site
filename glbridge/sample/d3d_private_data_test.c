@@ -14,6 +14,9 @@ typedef IDirect3DCubeTexture8 Cube;
 typedef IDirect3DVolumeTexture8 VolumeTexture;
 typedef IDirect3DSurface8 Surface;
 typedef IDirect3DVolume8 Volume;
+typedef IDirect3DSwapChain8 Chain;
+#define SURFACE(method) IDirect3DSurface8_##method
+#define CHAIN(method) IDirect3DSwapChain8_##method
 #define TEX(method) IDirect3DTexture8_##method
 #define CUBE(method) IDirect3DCubeTexture8_##method
 #define VOLUME_TEX(method) IDirect3DVolumeTexture8_##method
@@ -38,6 +41,9 @@ typedef IDirect3DCubeTexture9 Cube;
 typedef IDirect3DVolumeTexture9 VolumeTexture;
 typedef IDirect3DSurface9 Surface;
 typedef IDirect3DVolume9 Volume;
+typedef IDirect3DSwapChain9 Chain;
+#define SURFACE(method) IDirect3DSurface9_##method
+#define CHAIN(method) IDirect3DSwapChain9_##method
 #define TEX(method) IDirect3DTexture9_##method
 #define CUBE(method) IDirect3DCubeTexture9_##method
 #define VOLUME_TEX(method) IDirect3DVolumeTexture9_##method
@@ -225,6 +231,106 @@ static void texture_cases(UINT kind)
     report(line);
 }
 #endif
+
+#ifdef D9WG_PRIVATE_SURFACES
+static Counter back_counter, depth_counter;
+static void surface_private_checks(Surface* surface, UINT kind)
+{
+    const ResourceMethods* methods = (const void*)((IUnknown*)surface)->lpVtbl;
+    DWORD value = 0x1234abcd, out = 0, size = 4;
+    Counter object;
+    object.iface.lpVtbl = &counter_vtable;
+    object.refs = 1;
+    check(methods->set(surface, &key, &value, 4, 0) == D3D_OK && methods->get(surface, &key, &out, &size) == D3D_OK && out == value, "FAIL standalone private bytes");
+    check(methods->set(surface, &other, &object, 4, D3DSPD_IUNKNOWN) == D3D_OK && object.refs == 2, "FAIL standalone interface");
+    check(SURFACE(Release)(surface) == 0 && object.refs == 1, "FAIL standalone destruction");
+    char line[100];
+    wsprintfA(line, "CHECK SURFACE PRIVATE %u %u refs=1 released=0", D9WG_PRIVATE_API, kind);
+    report(line);
+}
+static HRESULT get_back(Surface** out)
+{
+    return DEV(GetBackBuffer)(device,
+#if D9WG_PRIVATE_API == 9
+        0,
+#endif
+        0, D3DBACKBUFFER_TYPE_MONO, out);
+}
+static void surface_cases(D3DPRESENT_PARAMETERS* pp)
+{
+    Surface *a = NULL, *b = NULL;
+#if D9WG_PRIVATE_API == 8
+    check(DEV(CreateImageSurface)(device, 4, 4, D3DFMT_A8R8G8B8, &a) == D3D_OK, "FAIL image surface create");
+#else
+    check(DEV(CreateOffscreenPlainSurface)(device, 4, 4, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &a, NULL) == D3D_OK, "FAIL offscreen create");
+#endif
+    surface_private_checks(a, 0);
+    check(DEV(CreateRenderTarget)(device, 4, 4, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE,
+#if D9WG_PRIVATE_API == 9
+              0,
+#endif
+              FALSE, &a
+#if D9WG_PRIVATE_API == 9
+              ,
+              NULL
+#endif
+              )
+            == D3D_OK,
+        "FAIL target create");
+    surface_private_checks(a, 1);
+    check(DEV(CreateDepthStencilSurface)(device, 4, 4, D3DFMT_D24S8, D3DMULTISAMPLE_NONE,
+#if D9WG_PRIVATE_API == 9
+              0, TRUE,
+#endif
+              &a
+#if D9WG_PRIVATE_API == 9
+              ,
+              NULL
+#endif
+              )
+            == D3D_OK,
+        "FAIL depth create");
+    surface_private_checks(a, 2);
+    back_counter.iface.lpVtbl = &counter_vtable;
+    back_counter.refs = 1;
+    DWORD value = 0x55667788, out = 0, size = 4;
+    check(get_back(&a) == D3D_OK, "FAIL implicit back");
+    check(SURFACE(SetPrivateData)(a, &key, &value, 4, 0) == D3D_OK && SURFACE(SetPrivateData)(a, &other, &back_counter, 4, D3DSPD_IUNKNOWN) == D3D_OK && back_counter.refs == 2, "FAIL implicit back set");
+    SURFACE(Release)(a);
+    check(get_back(&b) == D3D_OK && SURFACE(GetPrivateData)(b, &key, &out, &size) == D3D_OK && out == value && back_counter.refs == 2, "FAIL back data lost after release");
+    SURFACE(Release)(b);
+    depth_counter.iface.lpVtbl = &counter_vtable;
+    depth_counter.refs = 1;
+    value = 0x778899aa;
+    size = 4;
+    check(DEV(GetDepthStencilSurface)(device, &a) == D3D_OK, "FAIL implicit depth");
+    check(SURFACE(SetPrivateData)(a, &key, &value, 4, 0) == D3D_OK && SURFACE(SetPrivateData)(a, &other, &depth_counter, 4, D3DSPD_IUNKNOWN) == D3D_OK && depth_counter.refs == 2, "FAIL implicit depth set");
+    SURFACE(Release)(a);
+    check(DEV(GetDepthStencilSurface)(device, &b) == D3D_OK && SURFACE(GetPrivateData)(b, &key, &out, &size) == D3D_OK && out == value && depth_counter.refs == 2, "FAIL depth data lost after release");
+    SURFACE(Release)(b);
+    Chain* chain = NULL;
+    check(DEV(CreateAdditionalSwapChain)(device, pp, &chain) == D3D_OK, "FAIL additional chain");
+    check(CHAIN(GetBackBuffer)(chain, 0, D3DBACKBUFFER_TYPE_MONO, &a) == D3D_OK && CHAIN(GetBackBuffer)(chain, 0, D3DBACKBUFFER_TYPE_MONO, &b) == D3D_OK, "FAIL chain views");
+    Counter object;
+    object.iface.lpVtbl = &counter_vtable;
+    object.refs = 1;
+    value = 0x99aabbcc;
+    check(SURFACE(SetPrivateData)(a, &key, &value, 4, 0) == D3D_OK && SURFACE(SetPrivateData)(a, &other, &object, 4, D3DSPD_IUNKNOWN) == D3D_OK && object.refs == 2, "FAIL chain private set");
+    check(CHAIN(Release)(chain) == 0 && object.refs == 2, "FAIL early chain release");
+    size = 4;
+    check(SURFACE(GetPrivateData)(b, &key, &out, &size) == D3D_OK && out == value, "FAIL chain data lost");
+    SURFACE(Release)(a);
+    check(object.refs == 2, "FAIL first chain view cleared data");
+    check(SURFACE(Release)(b) == 0 && object.refs == 1, "FAIL last chain view cleanup");
+    check(get_back(&a) == D3D_OK, "FAIL back after chain");
+    size = 4;
+    check(SURFACE(GetPrivateData)(a, &key, &out, &size) == D3D_OK && out == 0x55667788, "FAIL chain aliases device back store");
+    SURFACE(Release)(a);
+    char line[100];
+    wsprintfA(line, "CHECK SURFACE OWNERS %u back=2 depth=2 chain=1 earlyRelease=0 isolated=1", D9WG_PRIVATE_API);
+    report(line);
+}
+#endif
 static void private_cases(void)
 {
     VertexBuffer* vb = NULL;
@@ -250,7 +356,7 @@ static void private_cases(void)
 }
 void WINAPI WinMainCRTStartup(void)
 {
-    char directory[MAX_PATH], path[MAX_PATH], name[40];
+    char directory[MAX_PATH], path[MAX_PATH], name[100];
     GetModuleFileNameA(NULL, directory, sizeof(directory));
     UINT at = lstrlenA(directory);
     while (at && directory[at - 1] != '\\')
@@ -287,6 +393,10 @@ void WINAPI WinMainCRTStartup(void)
     pp.BackBufferWidth = 64;
     pp.BackBufferHeight = 64;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+#ifdef D9WG_PRIVATE_SURFACES
+    pp.EnableAutoDepthStencil = TRUE;
+    pp.AutoDepthStencilFormat = D3DFMT_D24S8;
+#endif
 #if D9WG_PRIVATE_API == 8
     check(IDirect3D8_CreateDevice(factory, 0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device) == D3D_OK, "FAIL device8");
 #else
@@ -297,7 +407,15 @@ void WINAPI WinMainCRTStartup(void)
     for (UINT kind = 0; kind < 3; kind++)
         texture_cases(kind);
 #endif
+#ifdef D9WG_PRIVATE_SURFACES
+    surface_cases(&pp);
+#endif
     check(DEV(Release)(device) == 0, "FAIL device references");
+#ifdef D9WG_PRIVATE_SURFACES
+    check(back_counter.refs == 1 && depth_counter.refs == 1, "FAIL implicit store device cleanup");
+    wsprintfA(name, "CHECK SURFACE DEVICE %u back=1 depth=1 released=0", D9WG_PRIVATE_API);
+    report(name);
+#endif
     FACTORY_RELEASE(factory);
     FreeLibrary(module);
     DestroyWindow(window);

@@ -2,6 +2,8 @@
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-msaa-mut-")),source=fs.readFileSync(root+"/d3d8proxy/d3d8_proxy.c","utf8");
 function span(name){const m=new RegExp("static [^;{}]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return[m.index,end];}
 const mutations=[
+ ["back-buffer private owner lost","create_backbuffer_surface","surface_from_iface(*surface_out)->private_data_owner = &device->back_buffer_private_data;","(void)device;"],
+ ["implicit depth private owner lost","device_get_depth_surface","surface_from_iface(*surface_out)->private_data_owner = &device->depth_surface_private_data;","(void)device;"],
  ["missing type in first create","create_texture_internal","texture->multisample_type = ms;","texture->multisample_type = 0;"],
  ["duplicate CREATE","create_texture_internal","if (!emit_texture_create(device, texture))", "if (!emit_texture_create(device, texture) || !emit_texture_create(device, texture))"],
  ["RT constructor forces no MSAA","device_create_render_target","D3DPOOL_DEFAULT, ms, &texture_iface", "D3DPOOL_DEFAULT, D3DMULTISAMPLE_NONE, &texture_iface"],

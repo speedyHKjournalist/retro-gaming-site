@@ -225,6 +225,8 @@ struct D8Device {
     D3DPRESENT_PARAMETERS present;
     D3DDISPLAYMODE display_mode;
     D9WGCursorState app_cursor_state;
+    D9WGPrivateStore back_buffer_private_data;
+    D9WGPrivateStore depth_surface_private_data;
     D3DVIEWPORT8 viewport;
     D3DGAMMARAMP gamma_ramp;
     BOOL gamma_ramp_set;
@@ -453,9 +455,17 @@ struct D8Shader {
     DWORD const_data[D8WG_MAX_VS_CONSTANTS * 4u];
 };
 
+typedef struct D8PrivateDataOwner {
+    LONG refs;
+    D9WGPrivateStore store;
+} D8PrivateDataOwner;
+
 struct D8Surface {
     IDirect3DSurface8 iface;
     LONG refcount;
+    D9WGPrivateStore private_data;
+    D9WGPrivateStore *private_data_owner;
+    D8PrivateDataOwner *retained_private_data;
     D8Texture *texture;
     /* Set instead of `texture` when this surface came from
      * GetCubeMapSurface; `face` then names which of the six it is. */
@@ -477,6 +487,7 @@ struct D8Surface {
 struct D8SwapChain {
     IDirect3DSwapChain8 iface;
     LONG refcount;
+    D8PrivateDataOwner *private_data_owner;
     D8Device *device;
     D3DPRESENT_PARAMETERS present;
 };
@@ -2718,6 +2729,8 @@ static ULONG WINAPI device_release(IDirect3DDevice8 *iface)
         refs = (ULONG)InterlockedCompareExchange(&device->refcount, 0, 0);
     }
     if (!refs) {
+        d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);
+        d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);
         detach_device_window(device);
         emit_device_destroy_and_flush(device->handle);
         IDirect3D8_Release(&device->parent->iface);
@@ -4762,11 +4775,22 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
     return (ULONG)InterlockedIncrement(&surface_from_iface(iface)->refcount);
 }
 
+static void private_data_owner_release(D8PrivateDataOwner* owner)
+{
+    if (!InterlockedDecrement(&owner->refs)) {
+        d9wg_private_clear(&owner->store, &d9wg_private_ops);
+        HeapFree(GetProcessHeap(), 0, owner);
+    }
+}
+
 static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
     ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
     if (!refs) {
+        d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
+        if (surface->retained_private_data)
+            private_data_owner_release(surface->retained_private_data);
         if (surface->reset_blocker && surface->device
                 && surface->device->implicit_surface_count)
             --surface->device->implicit_surface_count;
@@ -4795,11 +4819,13 @@ static HRESULT WINAPI surface_get_device(IDirect3DSurface8 *iface,
 
 static D9WGPrivateStore* surface_private_store(D8Surface* surface)
 {
+    if (surface->private_data_owner)
+        return surface->private_data_owner;
     if (surface->texture)
         return &surface->texture->levels[surface->level].private_data;
     if (surface->cube)
         return &surface->cube->levels[surface->face * surface->cube->level_count + surface->level].private_data;
-    return NULL;
+    return &surface->private_data;
 }
 
 static HRESULT WINAPI surface_set_private_data(IDirect3DSurface8* iface,
@@ -5168,8 +5194,10 @@ static HRESULT create_backbuffer_surface(D8Device* device,
     HRESULT result = create_standalone_surface(device, width, height, format,
         D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT, FALSE, TRUE, FALSE,
         reset_blocker, surface_out);
-    if (SUCCEEDED(result))
+    if (SUCCEEDED(result)) {
         surface_from_iface(*surface_out)->desc.MultiSampleType = present->MultiSampleType;
+        surface_from_iface(*surface_out)->private_data_owner = &device->back_buffer_private_data;
+    }
     return result;
 }
 
@@ -5490,6 +5518,7 @@ static ULONG WINAPI swapchain_release(IDirect3DSwapChain8 *iface)
     D8SwapChain *chain = (D8SwapChain *)iface;
     ULONG refs = (ULONG)InterlockedDecrement(&chain->refcount);
     if (!refs) {
+        private_data_owner_release(chain->private_data_owner);
         if (chain->device->additional_swap_chain_count)
             --chain->device->additional_swap_chain_count;
         device_child_release(chain->device);
@@ -5509,17 +5538,24 @@ static HRESULT WINAPI swapchain_present(IDirect3DSwapChain8 *iface,
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
-static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8 *iface,
-        UINT index, D3DBACKBUFFER_TYPE type, IDirect3DSurface8 **surface_out)
+static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8* iface,
+    UINT index, D3DBACKBUFFER_TYPE type, IDirect3DSurface8** surface_out)
 {
-    D8SwapChain *chain = (D8SwapChain *)iface;
+    D8SwapChain* chain = (D8SwapChain*)iface;
     if (!surface_out)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
     if (index || type != D3DBACKBUFFER_TYPE_MONO)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    return create_backbuffer_surface(chain->device, &chain->present, TRUE,
-            surface_out);
+    HRESULT result = create_backbuffer_surface(chain->device, &chain->present, TRUE,
+        surface_out);
+    if (SUCCEEDED(result)) {
+        D8Surface* surface = surface_from_iface(*surface_out);
+        surface->private_data_owner = &chain->private_data_owner->store;
+        surface->retained_private_data = chain->private_data_owner;
+        InterlockedIncrement(&chain->private_data_owner->refs);
+    }
+    return result;
 }
 
 static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
@@ -5542,6 +5578,12 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     chain = (D8SwapChain *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*chain));
     if (!chain) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    chain->private_data_owner = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*chain->private_data_owner));
+    if (!chain->private_data_owner) {
+        HeapFree(GetProcessHeap(), 0, chain);
+        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+    }
+    chain->private_data_owner->refs = 1;
     chain->iface.lpVtbl = &g_swapchain_vtbl;
     chain->refcount = 1;
     chain->device = device;
@@ -5836,8 +5878,10 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8* iface,
         device->present.AutoDepthStencilFormat,
         D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT, FALSE, FALSE, TRUE,
         TRUE, surface_out);
-    if (SUCCEEDED(result))
+    if (SUCCEEDED(result)) {
         surface_from_iface(*surface_out)->desc.MultiSampleType = device->present.MultiSampleType;
+        surface_from_iface(*surface_out)->private_data_owner = &device->depth_surface_private_data;
+    }
     return result;
 }
 static BOOL transform_slot(D3DTRANSFORMSTATETYPE state, UINT *slot)
