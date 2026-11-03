@@ -4069,6 +4069,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     if (!d9wg_present_interval_valid(9, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(9, parameters->SwapEffect, parameters->BackBufferCount))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     backbuffer_format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
@@ -4929,6 +4931,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     }
     if (!d9wg_present_interval_valid(9, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(9, parameters->SwapEffect, parameters->BackBufferCount))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -7244,6 +7248,8 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     }
     if (!d9wg_present_interval_valid(9, params->Windowed,
             params->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(9, params->SwapEffect, params->BackBufferCount))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (params->BackBufferCount > 3)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);

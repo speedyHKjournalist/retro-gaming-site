@@ -40,7 +40,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 #define TRACE_MARK_EXIT(...)
 #define HOSTLOG_REFUSED(...)
 #define HOSTLOG_FAILED(...)
-typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,BackBufferFormat;BOOL Windowed;DWORD FullScreen_PresentationInterval,PresentationInterval,Flags;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
+typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,BackBufferFormat;BOOL Windowed;DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect,Flags;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DDevice${api},IDirect3DSwapChain${api},IDirect3DSurface${api};
 typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer,device_pin_transferred;LONG refcount;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
@@ -77,9 +77,9 @@ ${[...(api===8&&source.includes("static void swapchain_destroy_storage(")?["swap
 #define CREATE(d,p,o) ${api===8?"device_create_swapchain(&(d)->iface,p,o)":"device_create_additional_swap_chain(&(d)->iface,p,o)"}
 #define RELEASE(c) ${api===8?"swapchain_release(c)":"swap_chain_release(c)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Additional parameters API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){unsigned checks=0,cases=0;const UINT counts[]={0,1,3};Device d={.refs=1,.handle=77,.present={.Windowed=1},.display_mode={128,96,22},.creation={.hFocusWindow=(void*)(uintptr_t)0x44}};
+int main(void){unsigned checks=0,cases=0;const UINT counts[]={0,1,3};Device d={.refs=1,.handle=77,.present={.SwapEffect=1,.Windowed=1},.display_mode={128,96,22},.creation={.hFocusWindow=(void*)(uintptr_t)0x44}};
 for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=0;h<2;h++)for(unsigned n=0;n<3;n++){
- D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferWidth=w?80:0,.BackBufferHeight=h?72:0,.BackBufferFormat=22,.BackBufferCount=counts[n],.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL},input=p;UINT width=w?80:window?96:128,height=h?72:window?80:96;Interface*out=(void*)(uintptr_t)1;
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=w?80:0,.BackBufferHeight=h?72:0,.BackBufferFormat=22,.BackBufferCount=counts[n],.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL},input=p;UINT width=w?80:window?96:128,height=h?72:window?80:96;Interface*out=(void*)(uintptr_t)1;
  CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;
  CHECK(c->present.BackBufferWidth==width&&c->present.BackBufferHeight==height&&c->present.BackBufferCount==(counts[n]?counts[n]:1)&&c->present.BackBufferFormat==22&&c->present.hDeviceWindow==(window?(void*)(uintptr_t)0x55:d.creation.hFocusWindow));
  input.BackBufferCount=counts[n]?counts[n]:1;${api===9?'input.BackBufferWidth=width;input.BackBufferHeight=height;':''}CHECK(!memcmp(&p,&input,sizeof(p)));
@@ -87,15 +87,15 @@ for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=
  CHECK(RELEASE(out)==0&&!live&&d.refs==1&&!d.pins&&${api===8?'!d.additional_swap_chain_count':'!d.additional_swap_chains'});cases++;
 }
 for(unsigned failure=0;failure<3;failure++){
- fail_at=failure<2?allocations+failure+1:0;fail_emit=failure==2;D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferFormat=22},input=p;Interface*out=(void*)(uintptr_t)1;
+ fail_at=failure<2?allocations+failure+1:0;fail_emit=failure==2;D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22},input=p;Interface*out=(void*)(uintptr_t)1;
  CHECK(CREATE(&d,&p,&out)==(failure<2?E_OUTOFMEMORY:D3DERR_DRIVERINTERNALERROR)&&!out&&!live&&d.refs==1&&!d.pins&&!memcmp(&p,&input,sizeof(p)));
 }
-fail_at=fail_emit=0;D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferFormat=22,.BackBufferCount=4},input=p;Interface*out=(void*)(uintptr_t)1;unsigned before=allocations;
+fail_at=fail_emit=0;D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22,.BackBufferCount=4},input=p;Interface*out=(void*)(uintptr_t)1;unsigned before=allocations;
 CHECK(CREATE(&d,&p,&out)==D3DERR_INVALIDCALL&&!out&&allocations==before&&!memcmp(&p,&input,sizeof(p))&&d.refs==1);
 ${api===9?`d.display_mode.Format=21;
 for(UINT profile=0;profile<3;profile++){
  desktop_format=profile?23:22;UINT requested_format=profile==2?21:0,wanted_format=profile==2?21:desktop_format,old_queries=desktop_queries;
- D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=48,.BackBufferFormat=requested_format};Interface*out=NULL;
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=48,.BackBufferFormat=requested_format};Interface*out=NULL;
  CHECK(!CREATE(&d,&p,&out)&&out);Chain*c=(Chain*)out;
  CHECK(p.BackBufferFormat==wanted_format&&c->present.BackBufferFormat==wanted_format&&last_texture_format==wanted_format&&desktop_queries==old_queries+(requested_format==0));
  CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins);cases++;

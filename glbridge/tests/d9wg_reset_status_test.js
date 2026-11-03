@@ -120,7 +120,7 @@ ${api === 9 ? "static BOOL d9wg_prepare_present(D9WGPresentClock*c,D9WGPresentPa
 ${functions.map(name => extract(source, name).replace(/&device->iface/g, "device")).join("\n")}
 #define PRESENT(c,f) ${api === 8 ? "swapchain_present(c,NULL,NULL,NULL,NULL)" : "swap_chain_present(c,NULL,NULL,NULL,NULL,f)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Reset status API ${api} case %u line %u: %s\\n",kind,__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){unsigned checks=0,failures=0;D3DPRESENT_PARAMETERS base={.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferCount=1,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.hDeviceWindow=(void*)(uintptr_t)0x44};
+int main(void){unsigned checks=0,failures=0;D3DPRESENT_PARAMETERS base={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferCount=1,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.hDeviceWindow=(void*)(uintptr_t)0x44};
 for(unsigned kind=0;kind<15;kind++){
  if((${api}==8&&(kind==12||kind==13))||(${api}==9&&(kind==8||kind==9)))continue;
  Device d={.handle=77,.creation={.BehaviorFlags=0x22},.display_mode={80,72,22,60},.tracked_window=(void*)(uintptr_t)0x33,.window_cache=99};active=&d;

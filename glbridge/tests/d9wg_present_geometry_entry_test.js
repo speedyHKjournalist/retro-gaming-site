@@ -79,7 +79,7 @@ ${extract(source, "d3d_create_device")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Present geometry API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){unsigned checks=0,cases=0;Factory factory={.refs=1};const UINT widths[]={0,64,256},heights[]={0,48,128},counts[]={0,1,3};const int clients[][2]={{160,120},{257,93},{0,0}};const DWORD behavior=D3DCREATE_SOFTWARE_VERTEXPROCESSING|D3DCREATE_FPU_PRESERVE;
 for(unsigned w=0;w<3;w++)for(unsigned h=0;h<3;h++)for(unsigned c=0;c<3;c++)for(unsigned window=0;window<2;window++)for(unsigned count=0;count<3;count++){
- client_width=clients[c][0];client_height=clients[c][1];D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferWidth=widths[w],.BackBufferHeight=heights[h],.BackBufferCount=counts[count],.BackBufferFormat=22,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75,.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL};D3DPRESENT_PARAMETERS input=p;
+ client_width=clients[c][0];client_height=clients[c][1];D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=widths[w],.BackBufferHeight=heights[h],.BackBufferCount=counts[count],.BackBufferFormat=22,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75,.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL};D3DPRESENT_PARAMETERS input=p;
  UINT ew=widths[w]?widths[w]:client_width?(UINT)client_width:640,eh=heights[h]?heights[h]:client_height?(UINT)client_height:480;HWND selected=window?p.hDeviceWindow:(void*)(uintptr_t)0x44;Interface*out=(void*)(uintptr_t)1;unsigned before_emits=emits;
  CHECK(!d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)&&out&&out==&active->iface);Device*d=(Device*)out;
  CHECK(d->display_mode.Width==ew&&d->display_mode.Height==eh&&d->viewport.Width==ew&&d->viewport.Height==eh&&d->viewport.MinZ==0&&d->viewport.MaxZ==1);
@@ -92,24 +92,24 @@ for(unsigned w=0;w<3;w++)for(unsigned h=0;h<3;h++)for(unsigned c=0;c<3;c++)for(u
 client_width=160;client_height=120;
 for(unsigned failure=0;failure<5;failure++){
  if(${api}==9&&failure==1)continue;fail_emit=failure==2;fail_states=failure==3;fail_mode=failure==4;fail_at=allocations+(failure==0?1:failure==1?2:0);
- D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferFormat=22,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75},before=p;Interface*out=(void*)(uintptr_t)1;HRESULT expected=failure<=1?E_OUTOFMEMORY:failure==4?D3DERR_INVALIDCALL:D3DERR_DRIVERINTERNALERROR;
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75},before=p;Interface*out=(void*)(uintptr_t)1;HRESULT expected=failure<=1?E_OUTOFMEMORY:failure==4?D3DERR_INVALIDCALL:D3DERR_DRIVERINTERNALERROR;
  CHECK(d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)==expected&&!out&&!live&&!active&&factory.refs==1&&!memcmp(&p,&before,sizeof(p)));
 }
-fail_emit=fail_states=fail_mode=fail_at=0;client_width=8193;D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferFormat=22};Interface*out=(void*)(uintptr_t)1;unsigned before_allocations=allocations;
+fail_emit=fail_states=fail_mode=fail_at=0;client_width=8193;D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22};Interface*out=(void*)(uintptr_t)1;unsigned before_allocations=allocations;
 CHECK(d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)==D3DERR_INVALIDCALL&&!out&&!live&&allocations==before_allocations);
 ${api===9?`client_width=128;client_height=96;
 for(UINT profile=0;profile<3;profile++){
  desktop_format=profile?23:22;UINT requested_format=profile==2?21:0,wanted_format=profile==2?21:desktop_format,old_queries=desktop_queries;
- D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=48,.BackBufferFormat=requested_format,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75};Interface*out=NULL;
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=48,.BackBufferFormat=requested_format,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75};Interface*out=NULL;
  CHECK(!d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)&&out);
  CHECK(p.BackBufferFormat==wanted_format&&active->display_mode.Format==wanted_format&&active->present.BackBufferFormat==wanted_format&&desktop_queries==old_queries+(requested_format==0));
  CHECK(!device_release(out)&&!live&&factory.refs==1);cases++;
 }
-D3DPRESENT_PARAMETERS full={.BackBufferWidth=640,.BackBufferHeight=480},full_before=full;out=(void*)(uintptr_t)1;before_allocations=allocations;unsigned old_queries=desktop_queries;
+D3DPRESENT_PARAMETERS full={.SwapEffect=1,.BackBufferWidth=640,.BackBufferHeight=480},full_before=full;out=(void*)(uintptr_t)1;before_allocations=allocations;unsigned old_queries=desktop_queries;
 CHECK(d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&full,&out)==D3DERR_INVALIDCALL&&!out&&allocations==before_allocations&&desktop_queries==old_queries&&!memcmp(&full,&full_before,sizeof(full)));`:''}
 printf("PASS actual API ${api} present geometry: %u checks, %u constructors; zero/explicit/client dimensions, fallback windows, count normalization, front storage/viewport, exact caller outputs and failure atomicity\\n",checks,cases);return 0;}
 `);
-        const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, dir + "/geometry.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/geometry"], {encoding: "utf8"}); assert.equal(build.status, 0, build.stderr);
+        const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, "-I", root + "/runtime", dir + "/geometry.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/geometry"], {encoding: "utf8"}); assert.equal(build.status, 0, build.stderr);
         const run = spawnSync(dir + "/geometry", [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stdout + run.stderr + " signal=" + run.signal); process.stdout.write(run.stdout);
     }
 } finally {fs.rmSync(dir, {recursive: true, force: true});}

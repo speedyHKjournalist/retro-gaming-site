@@ -2744,6 +2744,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8* iface, UINT adapter,
     if (!d9wg_present_interval_valid(8, parameters->Windowed,
             parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(8, parameters->SwapEffect, parameters->BackBufferCount))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!supported_multisample_type(parameters->MultiSampleType))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->EnableAutoDepthStencil
@@ -3007,6 +3009,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!d9wg_present_interval_valid(8, parameters->Windowed,
             parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(8, parameters->SwapEffect, parameters->BackBufferCount))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
         && !supported_depth_stencil_format(
@@ -5861,6 +5865,8 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!d9wg_present_interval_valid(8, parameters->Windowed,
             parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(8, parameters->SwapEffect, parameters->BackBufferCount))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
