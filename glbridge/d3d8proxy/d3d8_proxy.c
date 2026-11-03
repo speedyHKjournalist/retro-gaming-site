@@ -2508,8 +2508,7 @@ static BOOL device_has_reset_blockers(D8Device *device)
             + (device->implicit_depth_stencil && device->implicit_depth_stencil->refcount > 0);
     UINT owned_depth = device->implicit_depth_stencil
             && device->depth_surface == device->implicit_depth_stencil ? 1u : 0u;
-    if (device->recording_state_block
-            || device->additional_swap_chain_count
+    if (device->additional_swap_chain_count
             || device->implicit_surface_count > cached_active)
         return TRUE;
     if (device->implicit_back_buffer && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
@@ -2636,11 +2635,21 @@ static void device_clear_bindings(D8Device *device)
  * and break that otherwise-uncollectable COM cycle.  Externally held resources
  * continue to keep the device alive and may still return it from GetDevice().
  */
+static void device_cancel_recording(D8Device *device)
+{
+    D8StateBlock *recording = device->recording_state_block;
+    /* Detach before releasing resources: private-data callbacks may re-enter. */
+    device->recording_state_block = NULL;
+    if (recording) {
+        state_block_release_references(recording);
+        HeapFree(GetProcessHeap(), 0, recording);
+    }
+}
+
 static void device_release_owned_references(D8Device *device)
 {
     D8StateBlock *block;
-    D8StateBlock *recording;
-
+    device_cancel_recording(device);
     device_clear_bindings(device);
 
     block = device->state_blocks;
@@ -2650,12 +2659,6 @@ static void device_release_owned_references(D8Device *device)
         state_block_release_references(block);
         HeapFree(GetProcessHeap(), 0, block);
         block = next;
-    }
-    recording = device->recording_state_block;
-    device->recording_state_block = NULL;
-    if (recording) {
-        state_block_release_references(recording);
-        HeapFree(GetProcessHeap(), 0, recording);
     }
 }
 
@@ -2967,8 +2970,6 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
     if (!parameters || !supported_multisample_type(parameters->MultiSampleType)
         || parameters->BackBufferCount > 3)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device_has_reset_blockers(device))
-        return D8WG_TRACE_ERROR(D3DERR_DEVICELOST);
     if (!d9wg_present_interval_valid(8, parameters->Windowed,
             parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -3020,6 +3021,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
             &new_front_bytes)
         || new_front_rows != reset.height)
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
+    device_cancel_recording(device);
+    if (device_has_reset_blockers(device))
+        return D8WG_TRACE_ERROR(D3DERR_DEVICELOST);
     new_front_shadow = (BYTE*)HeapAlloc(GetProcessHeap(),
         HEAP_ZERO_MEMORY, new_front_bytes);
     if (!new_front_shadow)

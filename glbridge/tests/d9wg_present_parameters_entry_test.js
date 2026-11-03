@@ -27,7 +27,6 @@ typedef struct{int magic;}Factory;typedef struct{int magic,blocked;D9WGResetStat
 typedef Factory D${api}Direct3D,IDirect3D${api};typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api},D${api}Surface,IDirect3DSurface${api};
 typedef struct{BOOL Windowed;DWORD PresentationInterval,FullScreen_PresentationInterval,BackBufferCount,MultiSampleType,BackBufferWidth,BackBufferHeight;}D3DPRESENT_PARAMETERS;
 static unsigned trace_errors;static Factory*d3d_from_iface(Factory*f){return f;}static Device*device_from_iface(Device*d){return d;}
-static BOOL device_has_reset_blockers(Device*d){return d->blocked;}
 ${api===8?'static BOOL supported_multisample_type(UINT type){return !type||type==4;}':''}
 ${prefix('d3d_create_device',api===8?'    if (!supported_multisample_type(parameters->MultiSampleType))':'    backbuffer_format = parameters->BackBufferFormat')}
 ${prefix('device_reset',api===8?'    if (parameters->EnableAutoDepthStencil':'    if (!supported_multisample(')}

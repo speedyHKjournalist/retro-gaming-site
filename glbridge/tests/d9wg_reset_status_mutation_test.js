@@ -37,6 +37,10 @@ try {
     for (const api of [8, 9]) {
         const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         for (const [name, fn, old, replacement] of [
+            ["Reset retains recording", "device_reset", "    device_cancel_recording(device);", ""],
+            ["recording cancelled before input validation", "device_reset", "d9wg_reset_begin(&device->reset_state);", "device_cancel_recording(device);\n    d9wg_reset_begin(&device->reset_state);"],
+            ["recording cancelled after resource preflight", "device_reset", "    device_cancel_recording(device);\n    if (device_has_reset_blockers(device))\n        return " + (api === 8 ? "D8WG_TRACE_ERROR(D3DERR_DEVICELOST);" : "TRACE_REFUSE(D3DERR_INVALIDCALL);"), "    if (device_has_reset_blockers(device))\n        return " + (api === 8 ? "D8WG_TRACE_ERROR(D3DERR_DEVICELOST);" : "TRACE_REFUSE(D3DERR_INVALIDCALL);") + "\n    device_cancel_recording(device);"],
+            ["recording slot cleared after callback", "device_cancel_recording", api === 8 ? "device->recording_state_block = NULL;" : "device->recording_result = NULL;", ""],
             ["Scene not ended by accepted Reset", "device_reset", "    device->in_scene = FALSE;", ""],
             ["Scene ended before Reset acceptance", "device_reset", "d9wg_reset_begin(&device->reset_state);", "device->in_scene = FALSE;\n    d9wg_reset_begin(&device->reset_state);"],
             ["Reset never marks failure", "device_reset", "d9wg_reset_begin(&device->reset_state);", ""],
@@ -56,5 +60,5 @@ try {
             run("D3D8 resource refusal HRESULT", {D8WG_RESET_STATUS_FRONTEND: file}); killed++;
         }
     }
-    console.log("PASS Reset status mutations: " + killed + "/23; both public Reset/cooperative/Present paths, HRESULT distinction, recovery publication and shared status policy");
+    console.log("PASS Reset status mutations: " + killed + "/31; both public Reset/cooperative/Present paths, HRESULT distinction, recovery publication and shared status policy");
 } finally { fs.rmSync(dir, {recursive: true, force: true}); }

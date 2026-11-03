@@ -3263,7 +3263,7 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
 
 static BOOL device_has_reset_blockers(D9Device *device)
 {
-    if (device->recording_result || device->additional_swap_chains)
+    if (device->additional_swap_chains)
         return TRUE;
     if (device->implicit_back_buffer && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
             (UINT)device->implicit_back_buffer->refcount,
@@ -3411,15 +3411,23 @@ static void device_clear_bindings(D9Device *device)
     device->fvf = 0;
 }
 
+static void device_cancel_recording(D9Device *device)
+{
+    D9StateBlock *recording = device->recording_result;
+    /* Detach before releasing resources: private-data callbacks may re-enter. */
+    device->recording_result = NULL;
+    if (recording) {
+        IDirect3DStateBlock9_Release(&recording->iface);
+    }
+}
+
 static void device_release_owned_references(D9Device *device)
 {
     TRACE("ENTER Device.ReleaseOwnedReferences device=%08lX refs=%ld child_refs=%ld",
             device->handle,
             InterlockedCompareExchange(&device->refcount, 0, 0),
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
-    D9StateBlock *recording = device->recording_result;
-    device->recording_result = NULL;
-    if (recording) IDirect3DStateBlock9_Release(&recording->iface);
+    device_cancel_recording(device);
     device_clear_bindings(device);
     TRACE("LEAVE Device.ReleaseOwnedReferences device=%08lX refs=%ld child_refs=%ld",
             device->handle,
@@ -4900,8 +4908,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     /* D3D9 takes up to D3DPRESENT_BACK_BUFFERS_MAX (3) back buffers here,
      * as CreateDevice does; refusing more than one failed every Reset of a
      * double- or triple-buffered game (review S1-9b) */
-    if (!parameters || parameters->BackBufferCount > 3
-        || device_has_reset_blockers(device)) {
+    if (!parameters || parameters->BackBufferCount > 3) {
         TRACE("FAIL Reset parameters=%lu multisample=%lu count=%lu "
               "blockers=%lu -> %08lX",
             (DWORD)(parameters != NULL),
@@ -4979,6 +4986,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     reset.multisample_type = parameters->MultiSampleType;
     reset.multisample_quality = parameters->MultiSampleQuality;
     if (reset.width > 8192 || reset.height > 8192)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    device_cancel_recording(device);
+    if (device_has_reset_blockers(device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset)))
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);

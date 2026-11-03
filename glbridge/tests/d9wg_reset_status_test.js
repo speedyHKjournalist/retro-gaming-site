@@ -19,7 +19,7 @@ function extract(source, name) {
 try {
     for (const api of [8, 9]) {
         const source = fs.readFileSync(process.env["D" + api + "WG_RESET_STATUS_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
-        const functions = ["device_reset", "device_begin_scene", "device_end_scene", "device_test_cooperative_level", "device_present", api === 8 ? "swapchain_present" : "swap_chain_present"];
+        const functions = ["device_cancel_recording", "device_reset", "device_begin_scene", "device_end_scene", "device_test_cooperative_level", "device_present", api === 8 ? "swapchain_present" : "swap_chain_present"];
         fs.writeFileSync(dir + "/status.c", `#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,7 +61,10 @@ typedef struct {UINT Width,Height,Format,RefreshRate;} Mode;
 typedef struct {UINT Width,Height,Format,MultiSampleType,Size;} Desc;
 typedef struct {Desc desc;UINT row_pitch,width,height,format,multisample,multisample_quality;} Surface;
 typedef struct Device Device;
+typedef struct Block {int iface;Device*device;unsigned*references,*finalized;} Block;
+typedef Block D${api}StateBlock;
 struct Device {
+ Block *recording_state_block,*recording_result; unsigned recorded_refs;
  int iface; D9WGResetState reset_state; D9WGPresentClock present_clock; D9WGPresentPacing present_pacing;
  UINT handle,reset_epoch; BOOL blocked,in_scene; struct {HWND hFocusWindow;UINT BehaviorFlags;} creation;
  D3DPRESENT_PARAMETERS present; Mode display_mode; Surface *implicit_back_buffer,*implicit_depth_stencil;
@@ -76,7 +79,7 @@ static unsigned allocations,frees,live,emits,replays,clears,initializations,fram
 static Device*active;
 static Device*device_from_iface(Device*d){return d;}
 ${api === 9 ? "static Chain*swap_chain_from_iface(Chain*c){return c;}" : ""}
-static BOOL device_has_reset_blockers(Device*d){return d->blocked;}
+static BOOL device_has_reset_blockers(Device*d){return d->blocked||d->recorded_refs;}
 ${api === 8 ? "static BOOL supported_multisample_type(UINT ms){return ms==0||ms==4;}" : "static BOOL supported_multisample(D3DFORMAT f,UINT ms){return (ms==0||ms==4)&&!(f==75&&ms==4&&fail_depth_ms);}"}
 static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}
 static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
@@ -84,12 +87,19 @@ static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND h,RECT*r){assert(h);windows++;SetRect(r,0,0,64,64);}
 static void ClientToScreen(HWND h,POINT*p){assert(h);windows++;p->x=30;p->y=40;}
 static UINT allocate_handle(void){return ++handles+100;}
-${api === 8 ? `static void*GetProcessHeap(void){return NULL;}
+static void*GetProcessHeap(void){return NULL;}
 static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==1&&n);allocations++;if(fail_alloc)return NULL;live++;return calloc(1,n);}
 static void HeapFree(void*h,UINT f,void*p){(void)h;(void)f;if(p){assert(live);live--;frees++;free(p);}}
-static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=*p*h;return !fail_layout;}
+${api === 8 ? `static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=*p*h;return !fail_layout;}
 static void detach_device_window(Device*d){d->tracked_window=NULL;}
 static void attach_device_window(Device*d,HWND w){d->tracked_window=w;}` : "static void d9wg_window_cache_invalidate(int*p){*p=0;}"}
+static unsigned recording_releases;
+static void release_recording(Block*b){
+ assert(!b->device->recording_state_block&&!b->device->recording_result);
+ assert(*b->references&&b->device->recorded_refs);recording_releases++;
+ b->device->recorded_refs--;if(!--*b->references)(*b->finalized)++;
+}
+${api===8?'static void state_block_release_references(Block*b){release_recording(b);}':'static void IDirect3DStateBlock9_Release(int*iface){Block*b=(Block*)iface;release_recording(b);HeapFree(NULL,0,b);}'}
 static BOOL reset_window_mode(Device*d,HWND w){(void)w;assert(d->reset_state.required);return !fail_window_mode;}
 ${api===8?'static BOOL emit_surface_update_and_flush(Device*d,HWND w,BOOL hidden,BOOL force){(void)w;(void)hidden;(void)force;assert(d->reset_state.required);mode_reports++;return 1;}':'static BOOL emit_window_state(Device*d,HWND w){(void)w;assert(d->reset_state.required);mode_reports++;return 1;}'}
 static BOOL emit_command(UINT op,const void*p,UINT size){
@@ -144,6 +154,36 @@ for(unsigned kind=0;kind<15;kind++){
 /* Retrying while the resource remains held must never recover the device. */
 unsigned kind=99;Device d={.handle=77,.display_mode={64,64,22,60},.blocked=1};active=&d;
 for(unsigned n=0;n<8;n++){D3DPRESENT_PARAMETERS p=base;CHECK(device_reset(&d,&p)==${api === 8 ? "D3DERR_DEVICELOST" : "D3DERR_INVALIDCALL"});CHECK(device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET);}
+/* Recording-only references are discarded before resource checks. Input errors
+ * preserve the recording; failures after cancellation cannot resurrect it. */
+unsigned recording_checks=checks;
+for(kind=100;kind<106;kind++){
+ unsigned refs=kind==101?2:1,finalized=0,old_releases=recording_releases,old_frees=frees;
+ d=(Device){.handle=77,.display_mode={64,64,22,60},.recorded_refs=1,.blocked=kind==101};active=&d;
+ Block*b=HeapAlloc(NULL,HEAP_ZERO_MEMORY,sizeof(*b));assert(b);*b=(Block){.device=&d,.references=&refs,.finalized=&finalized};
+ d.${api===8?'recording_state_block':'recording_result'}=b;
+ D3DPRESENT_PARAMETERS p=base;
+ if(kind==102)p.FullScreen_PresentationInterval=p.PresentationInterval=3;
+ if(kind==103)p.BackBufferWidth=8193;
+ if(kind==104){${api===8?'fail_alloc=1;':'fail_reset_emit=1;'}}
+ if(kind==105)fail_state_emit=1;
+ HRESULT expected=kind==101?${api===8?'D3DERR_DEVICELOST':'D3DERR_INVALIDCALL'}:kind==102||kind==103?D3DERR_INVALIDCALL:kind==104?${api===8?'E_OUTOFMEMORY':'D3DERR_DRIVERINTERNALERROR'}:kind==105?D3DERR_DRIVERINTERNALERROR:D3D_OK;
+ CHECK(device_reset(&d,&p)==expected);
+ CHECK(device_test_cooperative_level(&d)==(kind==100?D3D_OK:D3DERR_DEVICENOTRESET));
+ if(kind==102||kind==103){
+  CHECK(d.${api===8?'recording_state_block':'recording_result'}==b&&refs==1&&!finalized&&recording_releases==old_releases&&frees==old_frees);
+ }else{
+  CHECK(!d.${api===8?'recording_state_block':'recording_result'}&&!d.recorded_refs&&recording_releases==old_releases+1);
+  CHECK(refs==(kind==101?1u:0u)&&finalized==(kind==101?0u:1u));
+ }
+ if(kind==101){CHECK(!--refs);finalized++;CHECK(finalized==1);d.blocked=0;}
+ fail_alloc=fail_reset_emit=fail_state_emit=0;p=base;
+ CHECK(device_reset(&d,&p)==D3D_OK&&!d.reset_state.required);
+ CHECK(!d.${api===8?'recording_state_block':'recording_result'}&&!d.recorded_refs&&!refs&&finalized==1&&recording_releases==old_releases+1);
+ ${api===8?'HeapFree(NULL,0,d.front_shadow);':''}
+ CHECK(!live);
+}
+printf("PASS actual API ${api} Reset recording: %u checks, six input/resource/allocation/transport/replay paths, detached callbacks and exactly-once resource finalization\\n",checks-recording_checks);
 printf("PASS actual API ${api} Reset status: %u checks, %u failure paths; repeated queries/retries, device isolation, no lost Present commands/timing and complete recovery and native Scene reset boundaries\\n",checks,failures);return 0;}
 `);
         const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, dir + "/status.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/status"], {encoding: "utf8"});
