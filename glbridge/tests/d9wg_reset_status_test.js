@@ -81,9 +81,10 @@ static Device*active;
 static Device*device_from_iface(Device*d){return d;}
 ${api === 9 ? "static Chain*swap_chain_from_iface(Chain*c){return c;}" : ""}
 static BOOL device_has_reset_blockers(Device*d){return d->blocked||d->recorded_refs;}
+${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
 ${api === 8 ? "static BOOL supported_multisample_type(UINT ms){return ms==0||ms==4;}" : "static BOOL supported_multisample(D3DFORMAT f,UINT ms){return (ms==0||ms==4)&&!(f==75&&ms==4&&fail_depth_ms);}"}
 static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}
-static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
+static BOOL supported_backbuffer_format(D3DFORMAT f){return f==21||f==22||f==23;}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND h,RECT*r){assert(h);windows++;SetRect(r,0,0,64,64);}
 static void ClientToScreen(HWND h,POINT*p){assert(h);windows++;p->x=30;p->y=40;}
@@ -200,6 +201,20 @@ for(unsigned g=0;g<5;g++){
  CHECK(!live);
 }
 printf("PASS actual API ${api} Reset geometry: %u checks; zero/partial dimensions, effective parameters, caller version rules, cached color/depth surfaces and failed replay/mode output atomicity\\n",checks-geometry_checks);
+${api===9?`unsigned format_checks=checks;Surface format_back={0};
+for(UINT profile=0;profile<3;profile++){
+ kind=300+profile;format_back=(Surface){0};d=(Device){.handle=77,.display_mode={64,64,21,60},.implicit_back_buffer=&format_back};active=&d;
+ desktop_format=profile?23:22;UINT requested=profile==2?21:0,wanted=profile==2?21:desktop_format,old_queries=desktop_queries;
+ D3DPRESENT_PARAMETERS p=base;p.BackBufferFormat=requested;
+ CHECK(device_reset(&d,&p)==D3D_OK);
+ CHECK(p.BackBufferFormat==wanted&&d.display_mode.Format==wanted&&d.present.BackBufferFormat==wanted&&desktop_queries==old_queries+(requested==0));
+ CHECK(format_back.format==wanted&&format_back.width==64&&format_back.height==64);
+ CHECK(device_test_cooperative_level(&d)==D3D_OK&&!live);
+}
+kind=399;D3DPRESENT_PARAMETERS full=base;full.Windowed=0;full.BackBufferFormat=0;D3DPRESENT_PARAMETERS full_before=full;unsigned old_queries=desktop_queries,old_emits=emits;
+CHECK(device_reset(&d,&full)==D3DERR_INVALIDCALL&&device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET&&desktop_queries==old_queries&&emits==old_emits&&!memcmp(&full,&full_before,sizeof(full)));failures++;
+full.Windowed=1;CHECK(device_reset(&d,&full)==D3D_OK&&full.BackBufferFormat==23&&!d.reset_state.required);
+printf("PASS actual API 9 Reset default format: %u checks; live desktop instead of old buffer format, explicit preservation and fullscreen refusal/recovery\\n",checks-format_checks);`:''}
 printf("PASS actual API ${api} Reset recording: %u checks, six input/resource/allocation/transport/replay paths, detached callbacks and exactly-once resource finalization\\n",recording_total);
 printf("PASS actual API ${api} Reset status: %u checks, %u failure paths; repeated queries/retries, device isolation, no lost Present commands/timing and complete recovery and native Scene reset boundaries\\n",checks,failures);return 0;}
 `);

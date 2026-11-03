@@ -57,8 +57,9 @@ static ULONG factory_add_ref(Interface*p){parent_calls++;return ++((Factory*)p)-
 static ULONG device_release(Interface*p){Device*d=(Device*)p;factory_release(&d->parent->iface);HeapFree(NULL,0,d->front_shadow);HeapFree(NULL,0,d);return 0;}
 #define IDirect3DDevice${api}_Release device_release
 static void d9wg_fpu_setup(BOOL p){assert(p);}
-static BOOL supported_multisample_type(UINT t){return t==0;}static BOOL supported_multisample(D3DFORMAT f,UINT t){return (f==22||f==75)&&!t;}
-static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
+${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
+static BOOL supported_multisample_type(UINT t){return t==0;}static BOOL supported_multisample(D3DFORMAT f,UINT t){return (f==21||f==22||f==23||f==75)&&!t;}
+static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==21||f==22||f==23;}
 static UINT allocate_handle(void){return 77;}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND h,RECT*r){assert(h);observed_window=h;SetRect(r,0,0,client_width,client_height);}
@@ -96,6 +97,16 @@ for(unsigned failure=0;failure<5;failure++){
 }
 fail_emit=fail_states=fail_mode=fail_at=0;client_width=8193;D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferFormat=22};Interface*out=(void*)(uintptr_t)1;unsigned before_allocations=allocations;
 CHECK(d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)==D3DERR_INVALIDCALL&&!out&&!live&&allocations==before_allocations);
+${api===9?`client_width=128;client_height=96;
+for(UINT profile=0;profile<3;profile++){
+ desktop_format=profile?23:22;UINT requested_format=profile==2?21:0,wanted_format=profile==2?21:desktop_format,old_queries=desktop_queries;
+ D3DPRESENT_PARAMETERS p={.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=48,.BackBufferFormat=requested_format,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75};Interface*out=NULL;
+ CHECK(!d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)&&out);
+ CHECK(p.BackBufferFormat==wanted_format&&active->display_mode.Format==wanted_format&&active->present.BackBufferFormat==wanted_format&&desktop_queries==old_queries+(requested_format==0));
+ CHECK(!device_release(out)&&!live&&factory.refs==1);cases++;
+}
+D3DPRESENT_PARAMETERS full={.BackBufferWidth=640,.BackBufferHeight=480},full_before=full;out=(void*)(uintptr_t)1;before_allocations=allocations;unsigned old_queries=desktop_queries;
+CHECK(d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&full,&out)==D3DERR_INVALIDCALL&&!out&&allocations==before_allocations&&desktop_queries==old_queries&&!memcmp(&full,&full_before,sizeof(full)));`:''}
 printf("PASS actual API ${api} present geometry: %u checks, %u constructors; zero/explicit/client dimensions, fallback windows, count normalization, front storage/viewport, exact caller outputs and failure atomicity\\n",checks,cases);return 0;}
 `);
         const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, dir + "/geometry.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/geometry"], {encoding: "utf8"}); assert.equal(build.status, 0, build.stderr);

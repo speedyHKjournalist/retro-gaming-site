@@ -50,6 +50,8 @@ struct Profile{UINT w,h,bits,hz,expected_hz,format,fail;}profiles[]={
 for(unsigned p=0;p<sizeof(profiles)/sizeof(profiles[0]);p++){
  struct Profile v=profiles[p];physical=(DEVMODEA){.dmPelsWidth=v.w,.dmPelsHeight=v.h,.dmBitsPerPel=v.bits,.dmDisplayFrequency=v.hz};fail_query=v.fail;
  UINT w=v.fail||!v.w||!v.h?1024:v.w,h=v.fail||!v.w||!v.h?768:v.h,format=v.fail||!v.w||!v.h?22:v.format;
+ unsigned format_queries=queries;CHECK(d9wg_display_mode_backbuffer_format(0)==format&&queries==format_queries+1);
+ for(UINT explicit_format=21;explicit_format<=23;explicit_format++)CHECK(d9wg_display_mode_backbuffer_format(explicit_format)==explicit_format&&queries==format_queries+1);
  for(unsigned method=0;method<${api === 9 ? 3 : 2};method++)for(unsigned c=0;c<2;c++){
   struct{uint32_t left;D3DDISPLAYMODE mode;uint32_t right;}out;memset(&out,0xcd,sizeof(out));unsigned old_queries=queries;
   CHECK(query(method,&parent,&device,c?&chain:&implicit,&out.mode)==D3D_OK);CHECK(out.mode.Width==w&&out.mode.Height==h&&out.mode.Format==(int)format&&out.mode.RefreshRate==v.expected_hz);

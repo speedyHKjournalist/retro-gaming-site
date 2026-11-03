@@ -24,4 +24,15 @@ static inline int d9wg_display_mode_current(D9WGDisplayMode* mode)
     *mode = (D9WGDisplayMode) { 1024, 768, 22, 60 };
     return 0;
 }
+
+/* D3D9 windowed UNKNOWN selects the live adapter format. Explicit formats
+ * never query Win32 and must not be replaced by the previous buffer format. */
+static inline uint32_t d9wg_display_mode_backbuffer_format(uint32_t requested)
+{
+    D9WGDisplayMode mode;
+    if (requested)
+        return requested;
+    d9wg_display_mode_current(&mode);
+    return mode.format;
+}
 #endif

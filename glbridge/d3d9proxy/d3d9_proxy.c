@@ -4062,9 +4062,10 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     if (!d9wg_present_interval_valid(9, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
-        ? D3DFMT_X8R8G8B8
-        : parameters->BackBufferFormat;
+    if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    backbuffer_format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+        parameters->BackBufferFormat);
     if (!supported_multisample(backbuffer_format,
             parameters->MultiSampleType)
         || parameters->MultiSampleQuality != 0) {
@@ -4185,9 +4186,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     device->creation.BehaviorFlags = behavior;
     fill_display_mode(&device->display_mode,
         width, height,
-        parameters->BackBufferFormat == D3DFMT_UNKNOWN
-            ? D3DFMT_X8R8G8B8
-            : parameters->BackBufferFormat);
+        backbuffer_format);
     d9wg_present_parameters_effective(&device->present, parameters,
         width, height, device->display_mode.Format, window);
     device->viewport.X = 0;
@@ -4888,6 +4887,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     RECT client;
     POINT origin;
     HWND window;
+    D3DFORMAT backbuffer_format;
 
     d9wg_reset_begin(&device->reset_state);
     /* Reset was completely untraced, which left a hole exactly where one is
@@ -4923,11 +4923,11 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     if (!d9wg_present_interval_valid(9, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!supported_multisample(
-            parameters->BackBufferFormat == D3DFMT_UNKNOWN
-                ? device->display_mode.Format
-                : parameters->BackBufferFormat,
-            parameters->MultiSampleType)
+    if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    backbuffer_format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+        parameters->BackBufferFormat);
+    if (!supported_multisample(backbuffer_format, parameters->MultiSampleType)
         || parameters->MultiSampleQuality != 0) {
         TRACE("FAIL Reset unsupported multisample=%lu quality=%lu -> %08lX",
             (DWORD)parameters->MultiSampleType,
@@ -4972,9 +4972,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
         (uint32_t)(client.right - client.left), device->display_mode.Width);
     reset.height = d9wg_present_extent(parameters->BackBufferHeight,
         (uint32_t)(client.bottom - client.top), device->display_mode.Height);
-    reset.backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
-        ? device->display_mode.Format
-        : parameters->BackBufferFormat;
+    reset.backbuffer_format = backbuffer_format;
     reset.windowed = parameters->Windowed;
     reset.behavior_flags = device->creation.BehaviorFlags;
     reset.enable_auto_depth_stencil = parameters->EnableAutoDepthStencil;
@@ -7281,8 +7279,8 @@ static HRESULT WINAPI device_create_additional_swap_chain(
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    format = params->BackBufferFormat == D3DFMT_UNKNOWN
-            ? device->display_mode.Format : params->BackBufferFormat;
+    format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+        params->BackBufferFormat);
 
     hr = create_target_texture(device, width, height, format,
             D3DUSAGE_RENDERTARGET, D3DMULTISAMPLE_NONE, 0, &back_buffer);
