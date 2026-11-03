@@ -43,9 +43,9 @@ typedef struct{DWORD Width,Height;D3DFORMAT Format;}Mode;
 typedef struct{HWND hDeviceWindow;BOOL Windowed;UINT FullScreen_PresentationInterval,MultiSampleType,BackBufferCount,BackBufferWidth,BackBufferHeight,Flags;D3DFORMAT BackBufferFormat;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
 typedef struct{Interface iface;}Parent;
-struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources;};
+struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources,*render_target_texture;};
 typedef struct{D9WGPrivateStore private_data;View*level_surface;void*shadow;}Level;typedef Level D8TextureLevel;
-struct Texture{Interface iface;Level*levels;unsigned level_count,usage;LONG refcount;Device*device;Texture*next_device_resource;UINT handle;D9WGPrivateStore private_data;};
+struct Texture{Interface iface;Level*levels;unsigned level_count,usage;LONG refcount;Device*device;Texture*next_device_resource;UINT handle;BOOL private_back_buffer;D9WGPrivateStore private_data;};
 typedef struct D8PrivateDataOwner{LONG refs;D9WGPrivateStore store;}D8PrivateDataOwner;
 struct View{Interface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;BOOL texture_child,reset_blocker,implicit,depth_stencil,additional_back_buffer;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;D8PrivateDataOwner*retained_private_data;void*shadow,*dc,*dc_previous,*dib;struct{UINT MultiSampleType;}desc;};
 typedef struct{Interface iface;LONG refcount;D8PrivateDataOwner*private_data_owner;Device*device;D3DPRESENT_PARAMETERS present;UINT handle;View*back_buffer;}D8SwapChain;
@@ -64,20 +64,23 @@ static unsigned IUnknown_AddRef(IUnknown*o){assert(!held&&o->refs);return ++o->r
 static unsigned IUnknown_Release(IUnknown*o){assert(!held&&o->refs&&parent_refs==1);return --o->refs;}
 static LONG InterlockedDecrement(LONG*p){return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG exchange,LONG compare){LONG old=*p;if(old==compare)*p=exchange;return old;}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}
-static void device_child_add_ref(Device*d){d->refcount++;d->child_parent_refs++;}
+${api===8?`static ULONG device_add_ref(Device*);static ULONG device_release(Device*);static void device_child_add_ref(Device*);static void device_child_release(Device*);
+#define IDirect3DDevice8_AddRef(p) device_add_ref((Device*)(p))
+#define IDirect3DDevice8_Release(p) device_release((Device*)(p))`:`static void device_child_add_ref(Device*d){d->refcount++;d->child_parent_refs++;}`}
 static ULONG surface_add_ref(View*);static ULONG surface_release(View*);
 ${api===8?"static ULONG texture_add_ref(Interface*);static ULONG texture_release(Interface*);typedef Interface IDirect3DTexture8;":""}
 #define IDirect3DSurface${api}_AddRef(p) surface_add_ref(p)
 ${api===8?"#define IDirect3DTexture8_AddRef texture_add_ref":"#define IDirect3DTexture9_AddRef(p) ((void)(p),0u)"}
 #define IDirect3DCubeTexture${api}_AddRef(p) ((void)(p),0u)
-static void device_child_release(Device*d){assert(d->refcount>1&&d->child_parent_refs>0);d->refcount--;d->child_parent_refs--;}
-static void device_release_owned_references(Device*d){(void)d;}
+${api===8?`static void device_release_owned_references(Device*d){Texture*t=d->render_target_texture;d->render_target_texture=NULL;if(t)texture_release(&t->iface);}`:`static void device_child_release(Device*d){assert(d->refcount>1&&d->child_parent_refs>0);d->refcount--;d->child_parent_refs--;}
+static void device_release_owned_references(Device*d){(void)d;}`}
 static void parent_release(void*p){(void)p;assert(parent_refs==1);parent_refs=0;}
 #define IDirect3D${api}_Release(p) parent_release(p)
 ${api===8?"#define IDirect3DTexture8_Release texture_release\n#define IDirect3DSurface8_Release surface_release":"#define IDirect3DTexture9_Release(p) ((void)(p),0u)"}
 #define IDirect3DCubeTexture${api}_Release(p) ((void)(p),0u)
 #include "runtime/d9wg_private_data_bridge.h"
 ${api===8?`static int g_swapchain_vtbl,g_surface_vtbl;
+${['device_add_ref','device_child_add_ref','device_child_release'].map(n=>extract(source,n)).join('\n')}
 static UINT next_handle=0x9100;
 static UINT allocate_handle(void){return next_handle++;}
 static Texture*texture_from_iface(Interface*p){return (Texture*)p;}
@@ -106,9 +109,49 @@ ${api===8?`View*a=NULL,*b=NULL;CHECK(!device_get_backbuffer(d,0,0,&a));CHECK(!su
 for(unsigned nth=1;nth<=4;nth++){IDirect3DSwapChain8*chain=(void*)1;unsigned before=allocated;allocation_calls=0;fail_nth=nth;CHECK(device_create_swapchain(d,&d->present,&chain)==E_OUTOFMEMORY&&!chain&&allocated==before&&d->refcount==1&&!d->additional_swap_chain_count&&!d->texture_resources);fail_nth=0;cases++;}
 IDirect3DSwapChain8*chain_iface=(void*)1;fail_create=1;unsigned before=allocated;CHECK(device_create_swapchain(d,&d->present,&chain_iface)==E_OUTOFMEMORY&&!chain_iface&&allocated==before&&d->refcount==1);fail_create=0;cases++;
 CHECK(!device_create_swapchain(d,&d->present,&chain_iface));D8SwapChain*chain=(D8SwapChain*)chain_iface;CHECK(chain->refcount==1&&chain->back_buffer&&chain->back_buffer->additional_back_buffer&&chain->back_buffer->texture->refcount==1&&d->additional_swap_chain_count==1);fail_create=1;
-CHECK(!swapchain_get_backbuffer(chain_iface,0,0,&a)&&!swapchain_get_backbuffer(chain_iface,0,0,&b)&&a==b&&a==chain->back_buffer&&a->texture->refcount==3&&chain->refcount==1);fail_create=0;DWORD different=0x55667788;size=4;CHECK(surface_get_private_data(a,key,&out,&size)==D3DERR_NOTFOUND);CHECK(!surface_set_private_data(a,key,&different,4,0));CHECK(!surface_set_private_data(a,object_key,&object,sizeof(void*),1)&&object.refs==3);size=4;CHECK(!surface_get_private_data(b,key,&out,&size)&&out==different);CHECK(!swapchain_release(chain_iface)&&object.refs==3&&!d->additional_swap_chain_count);size=4;CHECK(!surface_get_private_data(b,key,&out,&size)&&out==different);CHECK(surface_release(a)==1&&object.refs==3);CHECK(!surface_release(b)&&object.refs==2&&d->refcount==1&&!d->implicit_surface_count&&!d->texture_resources);CHECK(!d9wg_private_set(&d->depth_surface_private_data,object_key,&object,sizeof(void*),1,&d9wg_private_ops)&&object.refs==3);cases++;
+CHECK(!swapchain_get_backbuffer(chain_iface,0,0,&a)&&!swapchain_get_backbuffer(chain_iface,0,0,&b)&&a==b&&a==chain->back_buffer&&a->refcount==2&&a->texture->refcount==2&&d->refcount==3&&chain->refcount==1);fail_create=0;DWORD different=0x55667788;size=4;CHECK(surface_get_private_data(a,key,&out,&size)==D3DERR_NOTFOUND);CHECK(!surface_set_private_data(a,key,&different,4,0));CHECK(!surface_set_private_data(a,object_key,&object,sizeof(void*),1)&&object.refs==3);size=4;CHECK(!surface_get_private_data(b,key,&out,&size)&&out==different);CHECK(!swapchain_release(chain_iface)&&object.refs==3&&!d->additional_swap_chain_count);size=4;CHECK(!surface_get_private_data(b,key,&out,&size)&&out==different);CHECK(surface_release(a)==1&&object.refs==3);CHECK(!surface_release(b)&&object.refs==2&&d->refcount==1&&!d->implicit_surface_count&&!d->texture_resources);CHECK(!d9wg_private_set(&d->depth_surface_private_data,object_key,&object,sizeof(void*),1,&d9wg_private_ops)&&object.refs==3);cases++;
 `:`for(unsigned i=0;i<2;i++){View*v=HeapAlloc(NULL,0,sizeof(*v));v->device=d;v->implicit=1;v->refcount=1;d->refcount++;d->child_parent_refs++;if(i)d->implicit_depth_stencil=v;else d->implicit_back_buffer=v;CHECK(!surface_set_private_data(v,key,&data,4,0));CHECK(!surface_set_private_data(v,object_key,&object,sizeof(void*),1)&&object.refs==2+i);CHECK(!surface_release(v)&&object.refs==2+i);size=4;CHECK(!surface_get_private_data(v,key,&out,&size)&&out==data);CHECK(surface_add_ref(v)==1);CHECK(!surface_release(v)&&object.refs==2+i);cases++;}`}
 View empty={0};size=4;CHECK(surface_get_private_data(&empty,key,&out,&size)==D3DERR_NOTFOUND&&surface_free_private_data(&empty,key)==D3DERR_NOTFOUND);cases++;
 CHECK(d->refcount==1&&!d->child_parent_refs);CHECK(!device_release(d)&&object.refs==1&&!allocated&&!parent_refs);cases++;
+${api===8?`unsigned life=0;
+#define LCHECK(v) do{CHECK(v);life++;}while(0)
+for(unsigned path=0;path<3;path++){
+ parent_refs=1;d=HeapAlloc(NULL,0,sizeof(*d));d->refcount=1;d->parent=&parent;d->handle=0x9000;d->display_mode=(Mode){64,64,22};d->present=(D3DPRESENT_PARAMETERS){.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferFormat=22};
+ IDirect3DSwapChain8*ci=NULL;LCHECK(!device_create_swapchain(d,&d->present,&ci));D8SwapChain*c=(D8SwapChain*)ci;View*v=c->back_buffer,*w=NULL;
+ LCHECK(d->refcount==2&&d->child_parent_refs==1&&v->refcount==0&&v->texture->refcount==1&&v->texture->private_back_buffer);
+ LCHECK(!swapchain_get_backbuffer(ci,0,0,&v)&&v==c->back_buffer&&v->refcount==1&&v->texture->refcount==2&&d->refcount==3&&d->child_parent_refs==2);
+ LCHECK(!surface_set_private_data(v,object_key,&object,sizeof(void*),1)&&object.refs==2);
+ if(!path){
+  LCHECK(!surface_release(v)&&d->refcount==2&&v->texture->refcount==1&&object.refs==2);
+  for(unsigned n=0;n<128;n++){
+   LCHECK(!swapchain_get_backbuffer(ci,0,0,&w)&&w==v&&v->refcount==1&&v->texture->refcount==2&&d->refcount==3&&d->child_parent_refs==2);
+   LCHECK(!swapchain_get_backbuffer(ci,0,2,&w)&&w==v&&v->refcount==2&&v->texture->refcount==2&&d->refcount==3);
+   LCHECK(surface_add_ref(v)==3&&v->texture->refcount==2&&d->refcount==3);
+   LCHECK(surface_release(w)==2&&d->refcount==3);
+   LCHECK(surface_release(v)==1&&d->refcount==3);
+   LCHECK(!surface_release(v)&&v->texture->refcount==1&&d->refcount==2&&d->child_parent_refs==1&&object.refs==2);
+   LCHECK(!surface_release(v)&&!surface_release(v)&&d->refcount==2&&v->texture->refcount==1);
+   LCHECK(surface_add_ref(v)==1&&v->texture->refcount==2&&d->refcount==3);
+   LCHECK(!surface_release(v)&&d->refcount==2&&v->texture->refcount==1);
+  }
+  LCHECK(!swapchain_release(ci)&&d->refcount==1&&!d->child_parent_refs&&!d->texture_resources&&object.refs==1);
+  LCHECK(!device_release(d)&&!allocated&&!parent_refs);
+ }else if(path==1){
+  LCHECK(surface_add_ref(v)==2&&d->refcount==3&&v->texture->refcount==2);
+  LCHECK(device_release(d)==2&&d->child_parent_refs==2);
+  LCHECK(!swapchain_release(ci)&&d->refcount==1&&d->child_parent_refs==1&&v->texture->refcount==1&&object.refs==2);
+  LCHECK(surface_release(v)==1&&d->refcount==1);
+  LCHECK(!surface_release(v)&&!allocated&&!parent_refs&&object.refs==1);
+ }else{
+  Texture*t=v->texture;LCHECK(texture_add_ref(&t->iface)==3);d->render_target_texture=t;
+  LCHECK(!surface_release(v)&&d->refcount==2&&t->refcount==2);
+  LCHECK(!swapchain_release(ci)&&d->refcount==1&&!d->child_parent_refs&&t->refcount==1&&object.refs==2);
+  LCHECK(!texture_get_surface_level(&t->iface,0,&w)&&w==v&&v->refcount==1&&d->refcount==2&&t->refcount==2);
+  LCHECK(!surface_release(w)&&d->refcount==1&&t->refcount==1&&object.refs==2);
+  LCHECK(!device_release(d)&&!allocated&&!parent_refs&&object.refs==1);
+ }
+}
+printf("PASS actual D3D8 additional lifetime: %u checks; 128 cached zero-count revivals, repeated zero Release, precise device pins, storage/private retention, device-first/chain-first/final-view teardown and binding-only device cleanup\\n",life);
+`:''}
 printf("PASS actual API ${api} surface private data: %u standalone/implicit/store lifetime, final device cleanup${api===8?', cached chain surfaces, retained texture-level stores, early chain release and allocation failures':''} cases\\n",cases);return 0;}
 `);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/entry.c',root+'/runtime/d9wg_private_data.c',root+'/runtime/d9wg_present_pacing.c','-o',dir+'/entry'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/entry',[],{encoding:'utf8',timeout:20000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}

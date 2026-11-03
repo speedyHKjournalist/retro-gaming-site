@@ -41,7 +41,7 @@ typedef struct Interface Interface;typedef struct Vtable{ULONG(*AddRef)(Interfac
 typedef struct{Interface iface;}FakeChain;
 typedef Interface IDirect3DDevice${api},IDirect3DSurface${api};typedef struct Device Device;typedef struct Surface Surface;typedef struct Texture Texture;
 typedef struct{unsigned locked;}Level;
-struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT pool;BOOL locked;UINT level_count;Level*levels;};
+struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT pool;BOOL locked;UINT level_count;Level*levels;BOOL private_back_buffer;};
 typedef struct{UINT Width,Height;D3DFORMAT Format;}Mode;
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat,BackBufferFormat;BOOL EnableAutoDepthStencil;}Parameters;
 typedef Parameters D3DPRESENT_PARAMETERS;
@@ -49,7 +49,7 @@ typedef struct{Interface iface;}Parent;
 typedef struct{D3DFORMAT Format;UINT Type,Usage,Pool,Size,MultiSampleType,Width,Height;}D3DSURFACE_DESC;
 #define D3DRTYPE_SURFACE 1
 struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;Parent*parent;UINT handle;Mode display_mode;Parameters present;Surface*implicit_back_buffer,*implicit_depth_stencil,*depth_surface,*depth_stencil_surface,*render_target_surfaces[4];BOOL depth_surface_enabled,depth_stencil_unbound;UINT implicit_surface_count,additional_swap_chain_count;Texture*render_target_texture,*render_target_cube,*vertex_buffers,*index_buffers,*texture_resources,*cube_resources,*volume_resources,*textures[8];struct{Texture*buffer;}streams[16];Texture*index_buffer;UINT render_target_level,render_target_face;BOOL in_scene;void*recording_state_block,*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;FakeChain implicit_swap_chain;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;};
-struct Surface{Interface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;FakeChain*swap_chain;void*shadow,*retained_private_data,*dc,*dc_previous,*dib;BOOL auto_depth_stencil,texture_child,reset_blocker,backbuffer,depth_stencil,locked;UINT level,face,width,height,multisample,multisample_quality,row_pitch;D3DFORMAT format;D3DSURFACE_DESC desc;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
+struct Surface{Interface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;FakeChain*swap_chain;void*shadow,*retained_private_data,*dc,*dc_previous,*dib;BOOL auto_depth_stencil,texture_child,reset_blocker,backbuffer,depth_stencil,locked,additional_back_buffer;UINT level,face,width,height,multisample,multisample_quality,row_pitch;D3DFORMAT format;D3DSURFACE_DESC desc;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
 typedef Device D${api}Device;typedef Surface D${api}Surface;typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,D${api}VertexBuffer,D${api}IndexBuffer;
 static Device*device_from_iface(Interface*p){return (Device*)p;}static Surface*surface_from_iface(Interface*p){return (Surface*)p;}
 static Vtable g_surface_vtbl;static unsigned allocations,live,fail_at,parent_refs=1,destroys;static const D9WGPrivateOps d9wg_private_ops={0};static int g_transport_lock;

@@ -21,7 +21,7 @@ typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REF
 typedef struct Texture Texture;typedef struct View View;typedef struct{void*lpVtbl;}Interface;
 typedef struct{Texture*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;unsigned refs;}Device;
 typedef struct{D9WGPrivateStore private_data;View*level_surface;View*level_volume;void*shadow;}Level;
-struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount;uint32_t handle,level_count;D9WGPrivateStore private_data;Level*levels;};
+struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount;uint32_t handle,level_count;int private_back_buffer;D9WGPrivateStore private_data;Level*levels;};
 struct View{Interface iface;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;int texture_child;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
 typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3DTexture${api},IDirect3DCubeTexture${api},IDirect3DVolumeTexture${api};
 typedef View D${api}Surface,D${api}Volume,IDirect3DSurface${api},IDirect3DVolume${api};

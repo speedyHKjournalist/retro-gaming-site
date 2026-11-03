@@ -361,6 +361,8 @@ struct D8Texture {
     D8TextureLevel *levels;
     D8Texture *next_device_resource;
     BOOL lockable_render_target;
+    /* Additional chains own the storage's original device pin explicitly. */
+    BOOL private_back_buffer;
     /* Only a render target can be multisampled; every other texture is
      * D3DMULTISAMPLE_NONE and the host allocates it with sampleCount 1. */
     D3DMULTISAMPLE_TYPE multisample_type;
@@ -4808,7 +4810,8 @@ static ULONG WINAPI texture_release(IDirect3DTexture8* iface)
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
         }
         HeapFree(GetProcessHeap(), 0, texture->levels);
-        device_child_release(texture->device);
+        if (!texture->private_back_buffer)
+            device_child_release(texture->device);
         HeapFree(GetProcessHeap(), 0, texture);
     }
     return refs;
@@ -4990,6 +4993,14 @@ static BOOL surface_is_implicit(D8Surface *surface)
 static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
+    if (surface->additional_back_buffer) {
+        ULONG refs = (ULONG)InterlockedIncrement(&surface->refcount);
+        if (refs == 1) {
+            IDirect3DTexture8_AddRef(&surface->texture->iface);
+            device_child_add_ref(surface->device);
+        }
+        return refs;
+    }
     if (surface->texture)
         return IDirect3DTexture8_AddRef(&surface->texture->iface);
     if (surface->cube)
@@ -5005,6 +5016,19 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
 static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
+    if (surface->additional_back_buffer) {
+        if (!InterlockedCompareExchange(&surface->refcount, 0, 0))
+            return 0;
+        ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
+        if (!refs) {
+            D8Device *device = surface->device;
+            /* Storage destruction can free this cached view. Release the
+             * public device pin last, without touching the view again. */
+            IDirect3DTexture8_Release(&surface->texture->iface);
+            device_child_release(device);
+        }
+        return refs;
+    }
     /* The parent release can free this cached view; do not touch it later. */
     if (surface->texture)
         return IDirect3DTexture8_Release(&surface->texture->iface);
@@ -5754,7 +5778,8 @@ static ULONG WINAPI swapchain_release(IDirect3DSwapChain8 *iface)
         emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
         if (device->additional_swap_chain_count)
             --device->additional_swap_chain_count;
-        IDirect3DSurface8_Release(chain->back_buffer);
+        D8Surface *surface = surface_from_iface(chain->back_buffer);
+        IDirect3DTexture8_Release(&surface->texture->iface);
         HeapFree(GetProcessHeap(), 0, chain);
         device_child_release(device);
     }
@@ -5853,7 +5878,6 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
         return hr;
     }
     D8Surface *surface = surface_from_iface(chain->back_buffer);
-    surface->additional_back_buffer = TRUE;
     chain->handle = allocate_handle();
     if (window)
         ClientToScreen(window, &origin);
@@ -5872,7 +5896,11 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
         HeapFree(GetProcessHeap(), 0, chain);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
-    device_child_add_ref(device);
+    /* Transfer the storage's original device pin to the chain. Public views
+     * acquire their own pin only while their independent count is nonzero. */
+    surface->texture->private_back_buffer = TRUE;
+    surface->additional_back_buffer = TRUE;
+    surface->refcount = 0;
     ++device->additional_swap_chain_count;
     d9wg_present_parameters_return(8, parameters, &chain->present);
     *chain_out = &chain->iface;
