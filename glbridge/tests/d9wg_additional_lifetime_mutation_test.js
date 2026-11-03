@@ -22,7 +22,7 @@ try {
         ["surface leaks final device pin", "surface_release", "device_child_release(device);", "(void)device;"],
         ["zero surface destroys live chain", "surface_release", "if (!InterlockedCompareExchange(&chain->refcount, 0, 0))", "if (1)"],
         ["zero chain destroys held surface", "swap_chain_release", "if (!InterlockedCompareExchange(&surface->refcount, 0, 0))", "if ((void)surface, 1)"],
-        ["surface returns transferred pin twice", "surface_release", "if (!surface->device_pin_transferred)", "if (1)"],
+        ["surface returns transferred pin twice", "surface_release", "BOOL release_device = !surface->device_pin_transferred;", "BOOL release_device = TRUE;"],
         ["texture returns transferred pin twice", "texture_release", "if (!texture->private_back_buffer)", "if (1)"],
         ["zero chain blocks binding-only Reset", "device_has_reset_blockers", "if (InterlockedCompareExchange(&chain->refcount, 0, 0))", "if (1)", "resources"],
     ]) {

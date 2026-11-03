@@ -159,7 +159,7 @@ static void target_cases(HWND window, const D3DPRESENT_PARAMETERS* base)
         check(create_device(window,&p,&device) == D3D_OK && device, "FAIL binding-only device create");
         Surface* surface = create_profile(bound_profiles[i],i ? 64 : 32,i ? 64 : 24);
         attach_private(surface,1,0x39405060 + i);
-        check((i ? DEV(SetDepthStencilSurface)(device,surface) : DEV(SetRenderTarget)(device,0,surface)) == D3D_OK && refs((IUnknown*)device) == 2 && SURFACE(Release)(surface) == 1 && tracker.refs == 1 && !tracker.finalized, "FAIL binding-only target retention");
+        check((i ? DEV(SetDepthStencilSurface)(device,surface) : DEV(SetRenderTarget)(device,0,surface)) == D3D_OK && refs((IUnknown*)device) == 2 && SURFACE(Release)(surface) == 0 && refs((IUnknown*)device) == 1 && tracker.refs == 1 && !tracker.finalized, "FAIL binding-only target retention");
         check(DEV(Release)(device) == 0 && !tracker.refs && tracker.finalized == 1 && tracker.observed_device_refs == 1 && refs((IUnknown*)factory) == 1, "FAIL binding-only target/device cleanup");
         device = NULL;
         wsprintfA(line,"TARGET BOUND kind=%u callbackRefs=1 privateFinalized=1 deviceRefs=0 factoryRefs=1",bound_profiles[i]);

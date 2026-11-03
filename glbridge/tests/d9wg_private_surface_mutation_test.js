@@ -5,7 +5,7 @@ const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("n
 function run(name,api,file){const r=spawnSync(process.execPath,[__dirname+'/d9wg_private_surface_test.js'],{encoding:'utf8',timeout:30000,env:{...process.env,['D'+api+'WG_PRIVATE_SURFACE_SOURCE']:file}});assert(!r.error,name+': '+r.error);assert.notEqual(r.status,0,name+' survived');const output=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(output),name+' failed compile: '+output);assert(/Private surface|Assertion|signal=/.test(output),name+' no runtime failure');}
 function mutate(source,fn,old,replacement){const m=new RegExp('static [^;{}\\n]*?\\b'+fn+'\\([^;]*?\\)\\s*\\{').exec(source);assert(m,fn);let end=source.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(source[end]==='{')depth++;if(source[end]==='}')depth--;}const part=source.slice(m.index,end);assert(part.includes(old),fn+': '+old);return source.slice(0,m.index)+part.replace(old,replacement)+source.slice(end);}
 try{let killed=0,total=0;for(const api of[8,9]){const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),mutations=[
-['surface final cleanup','surface_release','d9wg_private_clear(&surface->private_data, &d9wg_private_ops);','/* omitted */'],
+['surface final cleanup',api===9?'surface_destroy_storage':'surface_release','d9wg_private_clear(&surface->private_data, &d9wg_private_ops);','/* omitted */'],
 ['standalone fallback','surface_private_store','return &surface->private_data;','return NULL;'],
 ];if(api===8)mutations.push(
 ['device depth cleanup','device_release','d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);','/* omitted */'],

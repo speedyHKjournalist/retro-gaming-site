@@ -1278,6 +1278,8 @@ struct D9VertexDeclaration {
 struct D9Surface {
     IDirect3DSurface9 iface;
     LONG refcount;
+    /* Standalone storage can remain bound after its public count reaches zero. */
+    LONG binding_refs;
     D9WGPrivateStore private_data;
     D9Device *device;
     /* Non-NULL for a texture-level or standalone render-target surface. The
@@ -1354,6 +1356,33 @@ static BOOL surface_is_implicit(const D9Surface *surface)
 {
     return (surface->swap_chain && !surface->swap_chain->handle)
         || surface->auto_depth_stencil;
+}
+
+static void surface_destroy_storage(D9Surface *surface);
+
+static BOOL surface_uses_private_bindings(const D9Surface *surface)
+{
+    return !surface->swap_chain && !surface->auto_depth_stencil
+        && !surface->texture_child && !surface->cube_texture;
+}
+
+static void surface_binding_add_ref(D9Surface *surface)
+{
+    if (surface_uses_private_bindings(surface))
+        InterlockedIncrement(&surface->binding_refs);
+    else
+        IDirect3DSurface9_AddRef(&surface->iface);
+}
+
+static void surface_binding_release(D9Surface *surface)
+{
+    if (!surface_uses_private_bindings(surface)) {
+        IDirect3DSurface9_Release(&surface->iface);
+        return;
+    }
+    if (!InterlockedDecrement(&surface->binding_refs)
+            && !InterlockedCompareExchange(&surface->refcount, 0, 0))
+        surface_destroy_storage(surface);
 }
 
 static void swap_chain_destroy_storage(D9SwapChain *chain);
@@ -3261,7 +3290,7 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
                     if (reset_bound_surface(device, j) == surface)
                         break;
                 if (j == i && (UINT)InterlockedCompareExchange(&surface->refcount, 0, 0)
-                        == reset_surface_owned_refs(device, surface))
+                        == (surface->swap_chain ? reset_surface_owned_refs(device, surface) : 0u))
                     ++refs;
             }
         }
@@ -3395,12 +3424,12 @@ static void device_clear_bindings(D9Device *device)
     for (index = 0; index < D9_MAX_RENDER_TARGETS; ++index) {
         D9Surface *surface = device->render_target_surfaces[index];
         device->render_target_surfaces[index] = NULL;
-        if (surface) IDirect3DSurface9_Release(&surface->iface);
+        if (surface) surface_binding_release(surface);
     }
     if (device->depth_stencil_surface) {
         D9Surface *surface = device->depth_stencil_surface;
         device->depth_stencil_surface = NULL;
-        IDirect3DSurface9_Release(&surface->iface);
+        surface_binding_release(surface);
     }
     device->depth_stencil_unbound = FALSE;
     if (device->vertex_declaration) {
@@ -4309,9 +4338,12 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
                 (DWORD)(uintptr_t)iface, refs,
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         device->releasing_owned_refs = TRUE;
+        /* Final private-data callbacks may query the device while bound-only
+         * storage is retired, even when every public parent pin is gone. */
+        InterlockedIncrement(&device->refcount);
         device_release_owned_references(device);
+        refs = (ULONG)InterlockedDecrement(&device->refcount);
         device->releasing_owned_refs = FALSE;
-        refs = (ULONG)InterlockedCompareExchange(&device->refcount, 0, 0);
     }
     if (!refs) {
         D9WGDestroyResource destroy;
@@ -10444,10 +10476,10 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
      * the usual COM replacement discipline, this keeps same-object rebinding
      * safe even when the caller is holding only a borrowed alias. */
     if (surface)
-        IDirect3DSurface9_AddRef(surface_iface);
+        surface_binding_add_ref(surface);
     device->render_target_surfaces[index] = surface;
     if (old_surface)
-        IDirect3DSurface9_Release(&old_surface->iface);
+        surface_binding_release(old_surface);
 
     command.device_handle = device->handle;
     command.target_index = index;
@@ -10530,10 +10562,10 @@ static HRESULT WINAPI device_set_depth_stencil_surface(IDirect3DDevice9 *iface,
             surface ? InterlockedCompareExchange(&surface->refcount, 0, 0)
                     : 0);
     if (surface)
-        IDirect3DSurface9_AddRef(surface_iface);
+        surface_binding_add_ref(surface);
     device->depth_stencil_surface = surface;
     if (old_surface)
-        IDirect3DSurface9_Release(&old_surface->iface);
+        surface_binding_release(old_surface);
     command.device_handle = device->handle;
     command.depth_texture_handle = handle;
     command.depth_level = level;
@@ -13123,6 +13155,8 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
 #endif
     TRACE_MARK_ENTER("Surface.AddRef");
     refs = (ULONG)InterlockedIncrement(&surface->refcount);
+    if (refs == 1)
+        device_child_add_ref(surface->device);
     TRACE("SURFACE ADDREF object=%08lX vtbl=%08lX before=%ld after=%lu "
             "texture=%08lX shadow=%08lX level=%lu",
             (DWORD)(uintptr_t)iface,
@@ -13132,6 +13166,54 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
     (void)before;
     TRACE_MARK_EXIT("Surface.AddRef", (HRESULT)refs, iface);
     return refs;
+}
+
+static void surface_destroy_storage(D9Surface *surface)
+{
+    void *iface = surface;
+    (void)iface;
+    D9Device *device = surface->device;
+    (void)device;
+    D9Texture *texture = surface->texture;
+    BYTE *shadow = surface->shadow;
+
+    TRACE("SURFACE FREE_BEGIN object=%08lX vtbl=%08lX device=%08lX "
+            "texture=%08lX swapchain=%08lX shadow=%08lX level=%lu "
+            "size=%lux%lu format=%08lX locked=%lu",
+            (DWORD)(uintptr_t)iface,
+            (DWORD)(uintptr_t)surface->iface.lpVtbl,
+            (DWORD)(uintptr_t)device, (DWORD)(uintptr_t)texture,
+            (DWORD)(uintptr_t)surface->swap_chain,
+            (DWORD)(uintptr_t)shadow, surface->level, surface->width,
+            surface->height, (DWORD)surface->format,
+            (DWORD)surface->locked);
+    /* Only a create_target_texture surface arrives here with a texture,
+     * and it holds that texture's sole reference, so the texture goes with
+     * it.  Texture level surfaces never reach this path at all: they are
+     * sub-objects freed by texture_release.  The back-buffer, offscreen
+     * and auto-depth surfaces have no texture and only hold the device. */
+    d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
+    if (texture)
+        IDirect3DTexture9_Release(&texture->iface);
+    /* An app that releases a surface without releasing its DC leaks a GDI
+     * object and a DC handle -- both process-wide and both scarce -- so
+     * the teardown reclaims them rather than trusting the caller. The
+     * contents are deliberately *not* copied back: a surface being freed
+     * has nowhere for them to go. */
+    if (surface->dc) {
+        SelectObject(surface->dc, surface->dc_previous);
+        DeleteDC(surface->dc);
+        surface->dc = NULL;
+    }
+    if (surface->dib) {
+        DeleteObject(surface->dib);
+        surface->dib = NULL;
+    }
+    if (shadow)
+        HeapFree(GetProcessHeap(), 0, shadow);
+    TRACE("SURFACE FREE_END object=%08lX", (DWORD)(uintptr_t)iface);
+    TRACE_SURFACE_FREED(iface);
+    HeapFree(GetProcessHeap(), 0, surface);
 }
 
 static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
@@ -13208,6 +13290,10 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
     before = InterlockedCompareExchange(&surface->refcount, 0, 0);
 #endif
     TRACE_MARK_ENTER("Surface.Release");
+    if (!InterlockedCompareExchange(&surface->refcount, 0, 0)) {
+        TRACE_MARK_EXIT("Surface.Release", 0, iface);
+        return 0;
+    }
     refs = (ULONG)InterlockedDecrement(&surface->refcount);
     TRACE("SURFACE RELEASE object=%08lX vtbl=%08lX before=%ld after=%lu "
             "device=%08lX texture=%08lX swapchain=%08lX shadow=%08lX "
@@ -13222,49 +13308,13 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
     (void)before;
     if (!refs) {
         D9Device *device = surface->device;
-        D9Texture *texture = surface->texture;
-        BYTE *shadow = surface->shadow;
-
-        TRACE("SURFACE FREE_BEGIN object=%08lX vtbl=%08lX device=%08lX "
-                "texture=%08lX swapchain=%08lX shadow=%08lX level=%lu "
-                "size=%lux%lu format=%08lX locked=%lu",
-                (DWORD)(uintptr_t)iface,
-                (DWORD)(uintptr_t)surface->iface.lpVtbl,
-                (DWORD)(uintptr_t)device, (DWORD)(uintptr_t)texture,
-                (DWORD)(uintptr_t)surface->swap_chain,
-                (DWORD)(uintptr_t)shadow, surface->level, surface->width,
-                surface->height, (DWORD)surface->format,
-                (DWORD)surface->locked);
-        /* Only a create_target_texture surface arrives here with a texture,
-         * and it holds that texture's sole reference, so the texture goes with
-         * it.  Texture level surfaces never reach this path at all: they are
-         * sub-objects freed by texture_release.  The back-buffer, offscreen
-         * and auto-depth surfaces have no texture and only hold the device. */
-        d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
-        if (texture)
-            IDirect3DTexture9_Release(&texture->iface);
-        /* An app that releases a surface without releasing its DC leaks a GDI
-         * object and a DC handle -- both process-wide and both scarce -- so
-         * the teardown reclaims them rather than trusting the caller. The
-         * contents are deliberately *not* copied back: a surface being freed
-         * has nowhere for them to go. */
-        if (surface->dc) {
-            SelectObject(surface->dc, surface->dc_previous);
-            DeleteDC(surface->dc);
-            surface->dc = NULL;
-        }
-        if (surface->dib) {
-            DeleteObject(surface->dib);
-            surface->dib = NULL;
-        }
-        if (shadow)
-            HeapFree(GetProcessHeap(), 0, shadow);
-        if (!surface->device_pin_transferred)
-            device_child_release(device);
-        TRACE("SURFACE FREE_END object=%08lX", (DWORD)(uintptr_t)iface);
+        BOOL release_device = !surface->device_pin_transferred;
+        if (!InterlockedCompareExchange(&surface->binding_refs, 0, 0))
+            surface_destroy_storage(surface);
         TRACE_MARK_EXIT("Surface.Release", 0, iface);
-        TRACE_SURFACE_FREED(iface);
-        HeapFree(GetProcessHeap(), 0, surface);
+        /* This can destroy both objects through final binding cleanup. */
+        if (release_device)
+            device_child_release(device);
         return 0;
     }
     TRACE_MARK_EXIT("Surface.Release", (HRESULT)refs, iface);

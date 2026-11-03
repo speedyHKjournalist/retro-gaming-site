@@ -34,6 +34,8 @@ struct Device{Interface iface;UINT handle;D9Surface*render_target_surfaces[4];D3
 static int g_surface_vtbl,bad_vtbl;static unsigned commands,viewport_calls,scissor_calls,checks,cases;static D9WGSetRenderTarget last;
 static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Surface*surface_from_iface(Interface*p){return (D9Surface*)p;}
 static ULONG IDirect3DSurface9_AddRef(Interface*p){return ++p->refs;}static ULONG IDirect3DSurface9_Release(Interface*p){assert(p->refs);return --p->refs;}
+static void surface_binding_add_ref(D9Surface*s){IDirect3DSurface9_AddRef(&s->iface);}
+static void surface_binding_release(D9Surface*s){IDirect3DSurface9_Release(&s->iface);}
 static void SetRect(RECT*r,int l,int t,int right,int b){*r=(RECT){l,t,right,b};}
 static HRESULT IDirect3DDevice9_SetViewport(Interface*p,const D3DVIEWPORT9*v){viewport_calls++;device_from_iface(p)->viewport=*v;return 0;}
 static HRESULT IDirect3DDevice9_SetScissorRect(Interface*p,const RECT*r){scissor_calls++;device_from_iface(p)->scissor=*r;return 0;}
