@@ -35,8 +35,9 @@ static BOOL format_is_compressed(UINT f){return f==0x31545844u;}
 static UINT format_compressed_block_bytes(UINT f){(void)f;return 8;}
 static BOOL surface_readback(DDSurface*s){reads++;if(fail_read){fail_read=0;return FALSE;}memcpy(s->shadow,gpu,64);s->memory->gpu_dirty=FALSE;return TRUE;}
 static void emit_surface_upload(DDSurface*s,RECT*r){uploads++;uploaded=*r;for(LONG y=r->top;y<r->bottom;y++)for(LONG x=r->left;x<r->right;x++)memcpy(gpu+y*s->pitch+x*4,s->shadow+y*s->pitch+x*4,4);}
-static void emit_blt_to_screen(DDSurface*s,RECT*r){(void)s;(void)r;presents++;}
-static void emit_present_and_flush(void*p){(void)p;presents++;}
+static BOOL emit_blt_to_screen(DDSurface*s,const RECT*r){(void)s;(void)r;presents++;return TRUE;}
+static BOOL emit_present_and_flush(void*p){(void)p;presents++;return TRUE;}
+${source.includes("static BOOL present_changed_primary(") ? extract("present_changed_primary") : ""}
 ${extract("surface_Lock")}
 ${extract("surface_Unlock")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw lock line %u: %s\\n",__LINE__,#x);return 1;}}while(0)

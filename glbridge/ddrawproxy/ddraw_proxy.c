@@ -1332,6 +1332,45 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
     return TRUE;
 }
 
+/* A windowed primary holds desktop coordinates. A whole-surface CPU write
+ * still only presents the application's client area, rather than marking the
+ * retained desktop-sized texture as newly visible. */
+static BOOL primary_present_area(DDSurface *source, const RECT *dirty,
+        RECT *area)
+{
+    DDrawObject *object = source->owner;
+    area->left = area->top = 0;
+    area->right = (LONG)source->width;
+    area->bottom = (LONG)source->height;
+    if (dirty) {
+        if (dirty->left > area->left) area->left = dirty->left;
+        if (dirty->top > area->top) area->top = dirty->top;
+        if (dirty->right < area->right) area->right = dirty->right;
+        if (dirty->bottom < area->bottom) area->bottom = dirty->bottom;
+    }
+    if (source->primary && (object->cooperative_flags & DDSCL_NORMAL)) {
+        HWND window = source->clipper && source->clipper->window
+            ? source->clipper->window : object->window;
+        if (window) {
+            D9WGWindowProbe probe;
+            int64_t right, bottom;
+            d9wg_window_probe_capture((uintptr_t)window,
+                    D9WG_WINDOW_PROBE_STATE, &probe);
+            if (!probe.client_succeeded || !probe.origin_succeeded)
+                return FALSE;
+            right = (int64_t)probe.state.window_x + probe.state.client_width;
+            bottom = (int64_t)probe.state.window_y + probe.state.client_height;
+            if (probe.state.window_x > area->left)
+                area->left = probe.state.window_x;
+            if (probe.state.window_y > area->top)
+                area->top = probe.state.window_y;
+            if (right < area->right) area->right = (LONG)right;
+            if (bottom < area->bottom) area->bottom = (LONG)bottom;
+        }
+    }
+    return area->right > area->left && area->bottom > area->top;
+}
+
 /* A blit into the swap-chain image (handle 0), which is what makes a surface
  * visible. Flip and "blit to the primary" both end here. */
 static BOOL emit_blt_to_screen(DDSurface *source, const RECT *dirty_rect)
@@ -1344,18 +1383,7 @@ static BOOL emit_blt_to_screen(DDSurface *source, const RECT *dirty_rect)
         return FALSE;
     if (!prepare_surface_for_host(source))
         return FALSE;
-    area.left = 0;
-    area.top = 0;
-    area.right = (LONG)source->width;
-    area.bottom = (LONG)source->height;
-    if (dirty_rect) {
-        if (dirty_rect->left > area.left) area.left = dirty_rect->left;
-        if (dirty_rect->top > area.top) area.top = dirty_rect->top;
-        if (dirty_rect->right < area.right) area.right = dirty_rect->right;
-        if (dirty_rect->bottom < area.bottom)
-            area.bottom = dirty_rect->bottom;
-    }
-    if (area.right <= area.left || area.bottom <= area.top)
+    if (!primary_present_area(source, dirty_rect, &area))
         return TRUE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = object->device_handle;
@@ -1526,6 +1554,15 @@ static BOOL emit_present_and_flush(DDrawObject *object)
  * behind keeps this waiting, and only a host that has stopped answering trips
  * the cap.
  */
+
+/* Front-buffer writes are visible immediately even on a flip chain. The
+ * surface identity names the current front storage after each rotation. */
+static BOOL present_changed_primary(DDSurface *surface, const RECT *dirty)
+{
+    return !surface->primary ||
+        (emit_blt_to_screen(surface, dirty) &&
+         emit_present_and_flush(surface->owner));
+}
 
 static BOOL surface_readback(DDSurface *surface)
 {
@@ -2233,10 +2270,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     /* A blit that lands on the visible primary is visible immediately -- there
      * is no flip to wait for. This is how every windowed 2D title puts a frame
      * on screen. */
-    if (ok && destination->primary && !destination->flip_next) {
-        emit_blt_to_screen(destination, &effective_destination);
-        emit_present_and_flush(destination->owner);
-    }
+    if (ok && !present_changed_primary(destination, &effective_destination))
+        ok = FALSE;
     return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
 }
 
@@ -2301,10 +2336,8 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
     if (ok && destination->external_memory &&
             !surface_readback(destination))
         ok = FALSE;
-    if (ok && destination->primary && !destination->flip_next) {
-        emit_blt_to_screen(destination, &destination_rect);
-        emit_present_and_flush(destination->owner);
-    }
+    if (ok && !present_changed_primary(destination, &destination_rect))
+        ok = FALSE;
     return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
 }
 
@@ -2784,10 +2817,8 @@ static HRESULT surface_finish_dc(DDSurface *surface, BOOL present)
     surface->old_bitmap = NULL;
     emit_surface_upload(surface, NULL);
     surface->memory->gpu_dirty = FALSE;
-    if (present && surface->primary && !surface->flip_next) {
-        emit_blt_to_screen(surface, NULL);
-        emit_present_and_flush(surface->owner);
-    }
+    if (present && !present_changed_primary(surface, NULL))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
     return DD_OK;
 }
 
@@ -3101,10 +3132,8 @@ static HRESULT WINAPI surface_Unlock(IDirectDrawSurface7 *iface, LPRECT rect)
     if (!(surface->lock_flags & DDLOCK_READONLY)) {
         emit_surface_upload(surface, &uploaded);
         surface->memory->gpu_dirty = FALSE;
-        if (surface->primary && !surface->flip_next) {
-            emit_blt_to_screen(surface, &uploaded);
-            emit_present_and_flush(surface->owner);
-        }
+        if (!present_changed_primary(surface, &uploaded))
+            return DDWG_TRACE_ERROR(DDERR_GENERIC);
     }
     return DDWG_TRACE_RESULT(DD_OK);
 }

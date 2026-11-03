@@ -1,0 +1,42 @@
+/* Immediate front writes, including flip chains, and windowed desktop bounds.
+ * The implicit back-buffer cleanup defect is separately tracked as S2-53. */
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#define DIRECTDRAW_VERSION 0x0700
+#include <stdint.h>
+#include <windows.h>
+#include <initguid.h>
+#include <ddraw.h>
+static HANDLE logfile;
+static const UINT versions[]={1,2,3,4,7};
+static const GUID*ids[]={&IID_IDirectDrawSurface,&IID_IDirectDrawSurface2,&IID_IDirectDrawSurface3,&IID_IDirectDrawSurface4,&IID_IDirectDrawSurface7};
+static void report(const char*s){DWORD n;WriteFile(logfile,s,lstrlenA(s),&n,NULL);WriteFile(logfile,"\r\n",2,&n,NULL);FlushFileBuffers(logfile);}
+static void check(BOOL ok,const char*s){if(!ok){report(s);ExitProcess(1);}}
+static void expect(HRESULT hr,const char*s){if(FAILED(hr)){char text[180];wsprintfA(text,"%s actual=%08lX",s,(DWORD)hr);report(text);ExitProcess(1);}}
+static HRESULT lock(UINT api,IUnknown*s,void**bits,LONG*pitch)
+{
+    if(api<4){DDSURFACEDESC d;ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);HRESULT hr=api==1?IDirectDrawSurface_Lock((IDirectDrawSurface*)s,NULL,&d,DDLOCK_WRITEONLY|DDLOCK_WAIT,NULL):api==2?IDirectDrawSurface2_Lock((IDirectDrawSurface2*)s,NULL,&d,DDLOCK_WRITEONLY|DDLOCK_WAIT,NULL):IDirectDrawSurface3_Lock((IDirectDrawSurface3*)s,NULL,&d,DDLOCK_WRITEONLY|DDLOCK_WAIT,NULL);if(SUCCEEDED(hr)){*bits=d.lpSurface;*pitch=d.lPitch;}return hr;}
+    DDSURFACEDESC2 d;ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);HRESULT hr=api==4?IDirectDrawSurface4_Lock((IDirectDrawSurface4*)s,NULL,&d,DDLOCK_WRITEONLY|DDLOCK_WAIT,NULL):IDirectDrawSurface7_Lock((IDirectDrawSurface7*)s,NULL,&d,DDLOCK_WRITEONLY|DDLOCK_WAIT,NULL);if(SUCCEEDED(hr)){*bits=d.lpSurface;*pitch=d.lPitch;}return hr;
+}
+static void unlock(UINT api,IUnknown*s){expect(api==1?IDirectDrawSurface_Unlock((IDirectDrawSurface*)s,NULL):api==2?IDirectDrawSurface2_Unlock((IDirectDrawSurface2*)s,NULL):api==3?IDirectDrawSurface3_Unlock((IDirectDrawSurface3*)s,NULL):api==4?IDirectDrawSurface4_Unlock((IDirectDrawSurface4*)s,NULL):IDirectDrawSurface7_Unlock((IDirectDrawSurface7*)s,NULL),"FAIL Unlock");}
+static void write(UINT api,IUnknown*s,UINT width,UINT height,DWORD color){void*bits=NULL;LONG pitch=0;expect(lock(api,s,&bits,&pitch),"FAIL Lock");for(UINT y=0;y<height;y++)for(UINT x=0;x<width;x++)*(DWORD*)((BYTE*)bits+y*pitch+x*4)=color;unlock(api,s);}
+static void fill(UINT api,IUnknown*s,DWORD color){DDBLTFX fx;ZeroMemory(&fx,sizeof(fx));fx.dwSize=sizeof(fx);fx.dwFillColor=color;DWORD flags=DDBLT_COLORFILL|DDBLT_WAIT;expect(api==1?IDirectDrawSurface_Blt((IDirectDrawSurface*)s,NULL,NULL,NULL,flags,&fx):api==2?IDirectDrawSurface2_Blt((IDirectDrawSurface2*)s,NULL,NULL,NULL,flags,&fx):api==3?IDirectDrawSurface3_Blt((IDirectDrawSurface3*)s,NULL,NULL,NULL,flags,&fx):api==4?IDirectDrawSurface4_Blt((IDirectDrawSurface4*)s,NULL,NULL,NULL,flags,&fx):IDirectDrawSurface7_Blt((IDirectDrawSurface7*)s,NULL,NULL,NULL,flags,&fx),"FAIL Blt");}
+static void fast(UINT api,IUnknown*destination,IUnknown*source,UINT x,UINT y){expect(api==1?IDirectDrawSurface_BltFast((IDirectDrawSurface*)destination,x,y,(IDirectDrawSurface*)source,NULL,DDBLTFAST_WAIT):api==2?IDirectDrawSurface2_BltFast((IDirectDrawSurface2*)destination,x,y,(IDirectDrawSurface2*)source,NULL,DDBLTFAST_WAIT):api==3?IDirectDrawSurface3_BltFast((IDirectDrawSurface3*)destination,x,y,(IDirectDrawSurface3*)source,NULL,DDBLTFAST_WAIT):api==4?IDirectDrawSurface4_BltFast((IDirectDrawSurface4*)destination,x,y,(IDirectDrawSurface4*)source,NULL,DDBLTFAST_WAIT):IDirectDrawSurface7_BltFast((IDirectDrawSurface7*)destination,x,y,(IDirectDrawSurface7*)source,NULL,DDBLTFAST_WAIT),"FAIL BltFast");}
+static void dc_write(UINT api,IUnknown*s,UINT width,UINT height,DWORD color)
+{
+    HDC dc=NULL;expect(api==1?IDirectDrawSurface_GetDC((IDirectDrawSurface*)s,&dc):api==2?IDirectDrawSurface2_GetDC((IDirectDrawSurface2*)s,&dc):api==3?IDirectDrawSurface3_GetDC((IDirectDrawSurface3*)s,&dc):api==4?IDirectDrawSurface4_GetDC((IDirectDrawSurface4*)s,&dc):IDirectDrawSurface7_GetDC((IDirectDrawSurface7*)s,&dc),"FAIL GetDC");HBRUSH brush=CreateSolidBrush(RGB(color>>16&255,color>>8&255,color&255));check(brush!=NULL,"FAIL brush");RECT r={0,0,(LONG)width,(LONG)height};check(FillRect(dc,&r,brush),"FAIL GDI fill");DeleteObject(brush);expect(api==1?IDirectDrawSurface_ReleaseDC((IDirectDrawSurface*)s,dc):api==2?IDirectDrawSurface2_ReleaseDC((IDirectDrawSurface2*)s,dc):api==3?IDirectDrawSurface3_ReleaseDC((IDirectDrawSurface3*)s,dc):api==4?IDirectDrawSurface4_ReleaseDC((IDirectDrawSurface4*)s,dc):IDirectDrawSurface7_ReleaseDC((IDirectDrawSurface7*)s,dc),"FAIL ReleaseDC");
+}
+static DWORD frame_color(UINT mode,UINT api,UINT op){return 0xff000000|(32+mode*96+api*8)<<16|(32+op*40)<<8|(16+api);}
+static void frame(UINT mode,UINT api,UINT op){char text[180];wsprintfA(text,"PRIMARY FRAME mode=%u api=%u op=%u color=%08lX present=1",mode,api,op,frame_color(mode,api,op));report(text);}
+static void cases(HMODULE module,HWND window,UINT mode)
+{
+    HRESULT(WINAPI*make)(GUID*,void**,REFIID,IUnknown*)=(void*)(uintptr_t)GetProcAddress(module,"DirectDrawCreateEx");check(make!=NULL,"FAIL export");IDirectDraw7*root=NULL;expect(make(NULL,(void**)&root,&IID_IDirectDraw7,NULL),"FAIL factory");expect(IDirectDraw7_SetCooperativeLevel(root,window,mode?DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN:DDSCL_NORMAL),"FAIL cooperation");if(mode)expect(IDirectDraw7_SetDisplayMode(root,32,24,32,0,0),"FAIL virtual flip mode");
+    DDSURFACEDESC2 d;ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);d.dwFlags=DDSD_CAPS|(mode?DDSD_BACKBUFFERCOUNT:0);d.dwBackBufferCount=mode?1:0;d.ddsCaps.dwCaps=DDSCAPS_PRIMARYSURFACE|(mode?DDSCAPS_COMPLEX|DDSCAPS_FLIP:0);IDirectDrawSurface7*primary=NULL,*source=NULL;expect(IDirectDraw7_CreateSurface(root,&d,&primary,NULL),"FAIL primary");ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);expect(IDirectDrawSurface7_GetSurfaceDesc(primary,&d),"FAIL primary desc");UINT width=d.dwWidth,height=d.dwHeight;check(width==(mode?32:800)&&height==(mode?24:600),"FAIL primary extent");
+    ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);d.dwFlags=DDSD_CAPS|DDSD_WIDTH|DDSD_HEIGHT|DDSD_PIXELFORMAT;d.dwWidth=32;d.dwHeight=24;d.ddsCaps.dwCaps=DDSCAPS_OFFSCREENPLAIN|DDSCAPS_SYSTEMMEMORY;d.ddpfPixelFormat.dwSize=sizeof(DDPIXELFORMAT);d.ddpfPixelFormat.dwFlags=DDPF_RGB;d.ddpfPixelFormat.dwRGBBitCount=32;d.ddpfPixelFormat.dwRBitMask=0xff0000;d.ddpfPixelFormat.dwGBitMask=0xff00;d.ddpfPixelFormat.dwBBitMask=0xff;expect(IDirectDraw7_CreateSurface(root,&d,&source,NULL),"FAIL offscreen");
+    for(UINT at=0;at<5;at++){UINT api=versions[at];IUnknown*view=NULL,*src=NULL;expect(IDirectDrawSurface7_QueryInterface(primary,ids[at],(void**)&view),"FAIL primary view");expect(IDirectDrawSurface7_QueryInterface(source,ids[at],(void**)&src),"FAIL source view");fill(api,view,frame_color(mode,api,0));frame(mode,api,0);write(api,src,32,24,frame_color(mode,api,1));fast(api,view,src,mode?0:30,mode?0:40);frame(mode,api,1);write(api,view,width,height,frame_color(mode,api,2));frame(mode,api,2);dc_write(api,view,width,height,frame_color(mode,api,3));frame(mode,api,3);IUnknown_Release(src);IUnknown_Release(view);}
+    check(IDirectDrawSurface7_Release(source)==0&&IDirectDrawSurface7_Release(primary)==0,"FAIL surface refs");check(IDirectDraw7_Release(root)==0,"FAIL factory refs");char text[180];wsprintfA(text,"PRIMARY MODE mode=%u apis=5 frames=20 primary=%ux%u rootRefs=0",mode,width,height);report(text);
+}
+void WINAPI WinMainCRTStartup(void)
+{
+    char directory[MAX_PATH],path[MAX_PATH];GetModuleFileNameA(NULL,directory,sizeof(directory));UINT at=lstrlenA(directory);while(at&&directory[at-1]!='\\')at--;directory[at]=0;lstrcpyA(path,directory);lstrcatA(path,"PRIM.TXT");logfile=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);check(logfile!=INVALID_HANDLE_VALUE,"FAIL log");HWND window=CreateWindowExA(0,"STATIC","Primary writes",WS_POPUP,30,40,32,24,NULL,NULL,GetModuleHandleA(NULL),NULL);check(window!=NULL,"FAIL window");ShowWindow(window,SW_SHOW);lstrcpyA(path,directory);lstrcatA(path,"DDRAW.DLL");HMODULE module=LoadLibraryA(path);check(module!=NULL,"FAIL DLL");cases(module,window,0);cases(module,window,1);FreeLibrary(module);DestroyWindow(window);report("PRIMARY STATUS modes=2 apis=5 frames=40 writeKinds=4 noFlipCall=1 factoryRefs=0");report("PASS DirectDraw primary writes");CloseHandle(logfile);ExitProcess(0);
+}
