@@ -57,6 +57,7 @@ typedef struct {
  DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;
  BOOL Windowed,EnableAutoDepthStencil; HWND hDeviceWindow;
 } D3DPRESENT_PARAMETERS;
+#include "runtime/d9wg_present_parameters.h"
 typedef struct {UINT Width,Height,Format,RefreshRate;} Mode;
 typedef struct {UINT Width,Height,Format,MultiSampleType,Size;} Desc;
 typedef struct {Desc desc;UINT row_pitch,width,height,format,multisample,multisample_quality;} Surface;
@@ -183,7 +184,23 @@ for(kind=100;kind<106;kind++){
  ${api===8?'HeapFree(NULL,0,d.front_shadow);':''}
  CHECK(!live);
 }
-printf("PASS actual API ${api} Reset recording: %u checks, six input/resource/allocation/transport/replay paths, detached callbacks and exactly-once resource finalization\\n",checks-recording_checks);
+unsigned recording_total=checks-recording_checks,geometry_checks=checks;
+for(unsigned g=0;g<5;g++){
+ kind=200+g;Surface back={0},depth={0};d=(Device){.handle=77,.creation={.hFocusWindow=(void*)(uintptr_t)0x55},.display_mode={80,72,22,60},.implicit_back_buffer=&back,.implicit_depth_stencil=&depth};active=&d;
+ D3DPRESENT_PARAMETERS p=base;p.hDeviceWindow=NULL;p.BackBufferCount=0;p.BackBufferWidth=g==1?80:0;p.BackBufferHeight=g==2?72:0;D3DPRESENT_PARAMETERS input=p;
+ UINT width=g==1?80:64,height=g==2?72:64;
+ fail_state_emit=g==3;fail_window_mode=g==4;
+ CHECK(device_reset(&d,&p)==(g==3?D3DERR_DRIVERINTERNALERROR:g==4?D3DERR_INVALIDCALL:D3D_OK));
+ if(g>=3){CHECK(!memcmp(&p,&input,sizeof(p))&&d.reset_state.required);fail_state_emit=fail_window_mode=0;CHECK(device_reset(&d,&p)==D3D_OK);}
+ input.BackBufferCount=1;${api===9?'input.BackBufferWidth=width;input.BackBufferHeight=height;':''}
+ CHECK(!memcmp(&p,&input,sizeof(p)));
+ CHECK(d.present.BackBufferWidth==width&&d.present.BackBufferHeight==height&&d.present.BackBufferCount==1&&d.present.hDeviceWindow==d.creation.hFocusWindow);
+ CHECK(d.viewport.Width==width&&d.viewport.Height==height&&!d.reset_state.required);
+ ${api===8?'CHECK(back.desc.Width==width&&back.desc.Height==height&&back.desc.Size==width*height*4&&depth.desc.Width==width&&depth.desc.Height==height);HeapFree(NULL,0,d.front_shadow);':'CHECK(back.width==width&&back.height==height&&depth.width==width&&depth.height==height);'}
+ CHECK(!live);
+}
+printf("PASS actual API ${api} Reset geometry: %u checks; zero/partial dimensions, effective parameters, caller version rules, cached color/depth surfaces and failed replay/mode output atomicity\\n",checks-geometry_checks);
+printf("PASS actual API ${api} Reset recording: %u checks, six input/resource/allocation/transport/replay paths, detached callbacks and exactly-once resource finalization\\n",recording_total);
 printf("PASS actual API ${api} Reset status: %u checks, %u failure paths; repeated queries/retries, device isolation, no lost Present commands/timing and complete recovery and native Scene reset boundaries\\n",checks,failures);return 0;}
 `);
         const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, dir + "/status.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/status"], {encoding: "utf8"});

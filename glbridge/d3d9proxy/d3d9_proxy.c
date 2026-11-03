@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
+#include "../runtime/d9wg_present_parameters.h"
 #include "../runtime/d9wg_display_mode.h"
 #include "../runtime/d9wg_window_reset.h"
 #include "../runtime/d9wg_window_mode.h"
@@ -4030,6 +4031,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     HWND window;
     RECT client;
     POINT origin;
+    UINT width, height;
     D3DFORMAT backbuffer_format;
 
     TRACE("CALL CreateDevice adapter=%lu type=%lu focus=%08lX behavior=%08lX",
@@ -4147,6 +4149,22 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
         }
     }
 
+    window = parameters->hDeviceWindow ? parameters->hDeviceWindow
+                                       : focus_window;
+    SetRect(&client, 0, 0, 640, 480);
+    origin.x = 0;
+    origin.y = 0;
+    if (window) {
+        GetClientRect(window, &client);
+        ClientToScreen(window, &origin);
+    }
+    width = d9wg_present_extent(parameters->BackBufferWidth,
+        (uint32_t)(client.right - client.left), 640);
+    height = d9wg_present_extent(parameters->BackBufferHeight,
+        (uint32_t)(client.bottom - client.top), 480);
+    if (width > 8192 || height > 8192)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+
     device = (D9Device*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
         sizeof(*device));
     if (!device) {
@@ -4161,17 +4179,17 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     device->parent = d3d;
     IDirect3D9_AddRef(iface);
     device->handle = allocate_handle();
-    device->present = *parameters;
     device->creation.AdapterOrdinal = adapter;
     device->creation.DeviceType = type;
     device->creation.hFocusWindow = focus_window;
     device->creation.BehaviorFlags = behavior;
     fill_display_mode(&device->display_mode,
-        parameters->BackBufferWidth ? parameters->BackBufferWidth : 640,
-        parameters->BackBufferHeight ? parameters->BackBufferHeight : 480,
+        width, height,
         parameters->BackBufferFormat == D3DFMT_UNKNOWN
             ? D3DFMT_X8R8G8B8
             : parameters->BackBufferFormat);
+    d9wg_present_parameters_effective(&device->present, parameters,
+        width, height, device->display_mode.Format, window);
     device->viewport.X = 0;
     device->viewport.Y = 0;
     device->viewport.Width = device->display_mode.Width;
@@ -4184,31 +4202,13 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
         (int)device->display_mode.Height);
     device_init_states(device);
 
-    window = parameters->hDeviceWindow ? parameters->hDeviceWindow
-                                       : focus_window;
-    SetRect(&client, 0, 0, (int)device->display_mode.Width,
-        (int)device->display_mode.Height);
-    origin.x = 0;
-    origin.y = 0;
-    if (window) {
-        GetClientRect(window, &client);
-        ClientToScreen(window, &origin);
-    }
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
     command.hwnd = (uint32_t)(uintptr_t)window;
     command.x = origin.x;
     command.y = origin.y;
-    command.width = parameters->BackBufferWidth
-        ? parameters->BackBufferWidth
-        : (uint32_t)(client.right - client.left);
-    command.height = parameters->BackBufferHeight
-        ? parameters->BackBufferHeight
-        : (uint32_t)(client.bottom - client.top);
-    if (!command.width)
-        command.width = 640;
-    if (!command.height)
-        command.height = 480;
+    command.width = width;
+    command.height = height;
     command.backbuffer_format = device->display_mode.Format;
     command.windowed = parameters->Windowed;
     command.behavior_flags = behavior;
@@ -4235,6 +4235,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     }
     emit_window_state(device, window);
     watch_window_state(device);
+    d9wg_present_parameters_return(9, parameters, &device->present);
     *device_out = &device->iface;
 #ifdef D9WG_DIAGNOSTIC_TRACE
     g_trace_device_window = window;
@@ -4967,16 +4968,10 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     reset.hwnd = (uint32_t)(uintptr_t)window;
     reset.x = origin.x;
     reset.y = origin.y;
-    reset.width = parameters->BackBufferWidth
-        ? parameters->BackBufferWidth
-        : (uint32_t)(client.right - client.left);
-    reset.height = parameters->BackBufferHeight
-        ? parameters->BackBufferHeight
-        : (uint32_t)(client.bottom - client.top);
-    if (!reset.width)
-        reset.width = device->display_mode.Width;
-    if (!reset.height)
-        reset.height = device->display_mode.Height;
+    reset.width = d9wg_present_extent(parameters->BackBufferWidth,
+        (uint32_t)(client.right - client.left), device->display_mode.Width);
+    reset.height = d9wg_present_extent(parameters->BackBufferHeight,
+        (uint32_t)(client.bottom - client.top), device->display_mode.Height);
     reset.backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
         ? device->display_mode.Format
         : parameters->BackBufferFormat;
@@ -4998,7 +4993,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     device_clear_bindings(device);
     device->handle = reset.new_device_handle;
     ++device->reset_epoch;
-    device->present = *parameters;
+    d9wg_present_parameters_effective(&device->present, parameters,
+        reset.width, reset.height, reset.backbuffer_format, window);
     fill_display_mode(&device->display_mode, reset.width, reset.height,
         reset.backbuffer_format);
     /* A Reset resizes the implicit surfaces rather than replacing them -- the
@@ -5038,6 +5034,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
         reset.old_device_handle, device->handle, reset.width, reset.height,
         device->reset_epoch);
 
+    d9wg_present_parameters_return(9, parameters, &device->present);
     d9wg_reset_complete(&device->reset_state);
     return D3D_OK;
 }
