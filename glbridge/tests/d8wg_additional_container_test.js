@@ -18,7 +18,7 @@ static BOOL iid_is_unknown(REFIID iid){return *iid==iid_unknown;}
 static BOOL guid_equal(REFIID a,REFIID b){return *a==*b;}
 typedef struct{unsigned refs;}Interface;
 typedef struct{Interface iface;}Device,Texture,Cube;
-typedef struct{Interface iface;Device*device;Texture*texture;Cube*cube;BOOL additional_back_buffer;}D8Surface;
+typedef struct{Interface iface;Device*device;Texture*texture;Cube*cube;BOOL additional_back_buffer,device_container;}D8Surface;
 typedef Interface IDirect3DSurface8;
 static D8Surface*surface_from_iface(Interface*p){return (D8Surface*)p;}
 static unsigned add_ref(Interface*p){return ++p->refs;}

@@ -11,8 +11,8 @@ function mutate(s, name, old, replacement) {
 try {
     const source = fs.readFileSync(root + "/d3d8proxy/d3d8_proxy.c", "utf8"); let killed = 0;
     for (const [label, old, replacement] of [
-        ["hidden texture exposed", "surface->texture && !surface->additional_back_buffer", "surface->texture"],
-        ["ordinary texture container lost", "surface->texture && !surface->additional_back_buffer", "surface->texture && 0"],
+        ["hidden texture exposed", "surface->texture && !surface->additional_back_buffer\n            && !surface->device_container", "surface->texture"],
+        ["ordinary texture container lost", "surface->texture && !surface->additional_back_buffer\n            && !surface->device_container", "surface->texture && 0"],
         ["device reference missing", "IDirect3DDevice8_AddRef(&surface->device->iface);", "(void)surface->device;"],
         ["device identity lost", "*container = &surface->device->iface;", "*container = &surface->texture->iface;"],
         ["failed output preserved", "*container = NULL;", "(void)container;"],

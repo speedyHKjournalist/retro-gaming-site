@@ -496,6 +496,8 @@ struct D8Surface {
     BOOL backbuffer;
     BOOL depth_stencil;
     BOOL reset_blocker;
+    /* Standalone targets expose the device, even when stored in a texture. */
+    BOOL device_container;
     /* The GPU storage is private; a D3D8 backbuffer's container is its device. */
     BOOL additional_back_buffer;
 };
@@ -5124,7 +5126,8 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface8 *iface,
     if (!container)
         return D8WG_TRACE_ERROR(E_POINTER);
     *container = NULL;
-    if (surface->texture && !surface->additional_back_buffer) {
+    if (surface->texture && !surface->additional_back_buffer
+            && !surface->device_container) {
         if (!iid || (!iid_is_unknown(iid)
                 && !guid_equal(iid, &IID_IDirect3DResource8)
                 && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
@@ -6002,6 +6005,8 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice8* iface,
         return D8WG_TRACE_ERROR(hr);
     texture_from_iface(texture_iface)->lockable_render_target = !!lockable;
     hr = IDirect3DTexture8_GetSurfaceLevel(texture_iface, 0, surface_out);
+    if (SUCCEEDED(hr))
+        surface_from_iface(*surface_out)->device_container = TRUE;
     IDirect3DTexture8_Release(texture_iface);
     return D8WG_TRACE_ERROR(hr);
 }
@@ -6020,6 +6025,8 @@ static HRESULT WINAPI device_create_depth_surface(IDirect3DDevice8 *iface,
             format, ms, &texture);
     if (FAILED(hr)) return hr;
     hr = IDirect3DTexture8_GetSurfaceLevel(&texture->iface, 0, surface_out);
+    if (SUCCEEDED(hr))
+        surface_from_iface(*surface_out)->device_container = TRUE;
     IDirect3DTexture8_Release(&texture->iface);
     return D8WG_TRACE_ERROR(hr);
 }
