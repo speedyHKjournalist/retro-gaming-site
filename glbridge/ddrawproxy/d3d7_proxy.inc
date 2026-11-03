@@ -2738,34 +2738,17 @@ static HRESULT WINAPI d3d7_device_Load(IDirect3DDevice7 *iface,
         IDirectDrawSurface7 *destination_iface, POINT *destination_point,
         IDirectDrawSurface7 *source_iface, RECT *source_rect, DWORD flags)
 {
-    DDSurface *destination;
-    DDSurface *source;
-    RECT destination_rect;
-    (void)iface; (void)flags;
+    D3D7Device *device = d3d7_device_from_iface(iface);
+    DDSurface *destination, *source;
     if (!destination_iface || destination_iface->lpVtbl != &g_surface_vtbl ||
             !source_iface || source_iface->lpVtbl != &g_surface_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     destination = surface_from_any(destination_iface, NULL);
     source = surface_from_any(source_iface, NULL);
-    if (destination->owner != d3d7_device_from_iface(iface)->owner ||
-            source->owner != d3d7_device_from_iface(iface)->owner)
+    if (destination->owner != device->owner || source->owner != device->owner)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (!source_rect) {
-        destination_rect.left = destination_point ? destination_point->x : 0;
-        destination_rect.top = destination_point ? destination_point->y : 0;
-        destination_rect.right = destination_rect.left + (LONG)source->width;
-        destination_rect.bottom = destination_rect.top + (LONG)source->height;
-    } else {
-        destination_rect.left = destination_point ? destination_point->x : 0;
-        destination_rect.top = destination_point ? destination_point->y : 0;
-        destination_rect.right = destination_rect.left +
-                (source_rect->right - source_rect->left);
-        destination_rect.bottom = destination_rect.top +
-                (source_rect->bottom - source_rect->top);
-    }
-    return surface_Blt((IDirectDrawSurface7 *)&destination->vtbl7,
-            &destination_rect, (IDirectDrawSurface7 *)&source->vtbl7,
-            source_rect, DDBLT_WAIT, NULL);
+    return DDWG_TRACE_ERROR(d3d_texture_load7(destination, source,
+            destination_point, source_rect, flags));
 }
 
 static HRESULT WINAPI d3d7_device_LightEnable(IDirect3DDevice7 *iface,

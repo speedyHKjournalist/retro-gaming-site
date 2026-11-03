@@ -1259,34 +1259,7 @@ static HRESULT WINAPI d3d_texture2_PaletteChanged(IDirect3DTexture2 *iface,
 static HRESULT d3d_legacy_texture_load_surface(DDSurface *destination,
         DDSurface *source)
 {
-    DDSurface *dst_level = destination;
-    DDSurface *src_level = source;
-    UINT face;
-    HRESULT result;
-    if (!destination || !source || destination->owner != source->owner ||
-            destination->format != source->format ||
-            destination->width != source->width ||
-            destination->height != source->height)
-        return DDWG_TRACE_ERROR(D3DERR_TEXTURE_BADSIZE);
-    while (dst_level && src_level) {
-        result = surface_Blt((IDirectDrawSurface7 *)&dst_level->vtbl7, NULL,
-                (IDirectDrawSurface7 *)&src_level->vtbl7, NULL, DDBLT_WAIT,
-                NULL);
-        if (FAILED(result)) return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
-        dst_level = dst_level->mip_next;
-        src_level = src_level->mip_next;
-    }
-    if (dst_level || src_level) return DDWG_TRACE_ERROR(D3DERR_TEXTURE_BADSIZE);
-    for (face = 1; face < 6u; ++face) {
-        if (!!destination->cube_faces[face] != !!source->cube_faces[face])
-            return DDWG_TRACE_ERROR(D3DERR_TEXTURE_BADSIZE);
-        if (destination->cube_faces[face]) {
-            result = d3d_legacy_texture_load_surface(
-                    destination->cube_faces[face], source->cube_faces[face]);
-            if (FAILED(result)) return DDWG_TRACE_ERROR(result);
-        }
-    }
-    return D3D_OK;
+    return DDWG_TRACE_ERROR(d3d_texture_load_legacy(destination, source));
 }
 
 static HRESULT WINAPI d3d_texture2_Load(IDirect3DTexture2 *iface,

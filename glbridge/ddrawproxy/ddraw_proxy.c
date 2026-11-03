@@ -2624,7 +2624,8 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
         }
         return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     }
-    if (caps->dwCaps & DDSCAPS_MIPMAP) {
+    if ((caps->dwCaps & DDSCAPS_MIPMAP) ||
+            (caps->dwCaps2 & DDSCAPS2_MIPMAPSUBLEVEL)) {
         if (!surface->mip_next) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
         *out = (IDirectDrawSurface7 *)surface->mip_next;
         IDirectDrawSurface7_AddRef(*out);
@@ -4264,7 +4265,7 @@ static BOOL surface_build_mip_chain(DDSurface *top,
         seed.dwHeight = height;
         seed.dwMipMapCount = level_count - level;
         seed.ddsCaps.dwCaps = child_caps;
-        seed.ddsCaps.dwCaps2 = cube_caps;
+        seed.ddsCaps.dwCaps2 = cube_caps | DDSCAPS2_MIPMAPSUBLEVEL;
         child = surface_allocate(top->owner, &seed, format, width, height,
                 child_caps, top->storage, level, top->cube_face);
         if (!child) return FALSE;
@@ -4326,6 +4327,193 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
         root->cube_faces[face] = face_surface;
     }
     return root;
+}
+
+/* Shared texture loading mechanics. Device7 preflights an entire mip/face
+ * graph, while Texture1/2 retain the native common-prefix loading contract. */
+static HRESULT d3d_texture_copy_palette(DDSurface *destination,
+        DDSurface *source, BOOL required)
+{
+    if (!source->palette) return DD_OK;
+    if (!destination->palette)
+        return required ? DDERR_NOPALETTEATTACHED : DD_OK;
+    return palette_SetEntries((IDirectDrawPalette *)destination->palette,
+            0, 0, 256, source->palette->entries);
+}
+
+static HRESULT d3d_texture_copy_keys(DDSurface *destination,
+        DDSurface *source, BOOL all_keys)
+{
+    static const DWORD flags[4] = { DDCKEY_DESTBLT, DDCKEY_DESTOVERLAY,
+        DDCKEY_SRCBLT, DDCKEY_SRCOVERLAY };
+    UINT index;
+    for (index = 0; index < 4u; ++index) {
+        DWORD kind, description_flag;
+        HRESULT hr;
+        if (!all_keys && flags[index] != DDCKEY_SRCBLT) continue;
+        if (!surface_color_key_kind(flags[index], &kind, &description_flag))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (!(source->color_key_present & (1u << kind))) continue;
+        hr = surface_SetColorKey((IDirectDrawSurface7 *)&destination->vtbl7,
+                flags[index], &source->color_key[kind]);
+        if (FAILED(hr)) return hr;
+    }
+    return DD_OK;
+}
+
+static HRESULT d3d_texture_copy_region(DDSurface *destination,
+        DDSurface *source, const POINT *point, const RECT *source_rect)
+{
+    RECT destination_rect;
+    if (destination->lock_depth || source->lock_depth)
+        return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
+    destination_rect.left = point->x;
+    destination_rect.top = point->y;
+    destination_rect.right = (LONG)((int64_t)point->x + source_rect->right - source_rect->left);
+    destination_rect.bottom = (LONG)((int64_t)point->y + source_rect->bottom - source_rect->top);
+    /* Loading texture bits ignores surface clippers and attached color keys.
+     * The common emitter already addresses the exact mip/face and tracks the
+     * GPU-dirty memory shared with DuplicateSurface aliases. */
+    if (!emit_blt(destination, &destination_rect, source, source_rect,
+            0, 0, 0.0f)) return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    if (destination->external_memory && !surface_readback(destination))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    return DD_OK;
+}
+
+static BOOL d3d_texture_mip_subset(DDSurface *destination, DDSurface *source)
+{
+    BOOL found = FALSE;
+    while (destination && source) {
+        if (destination->width == source->width &&
+                destination->height == source->height) {
+            found = TRUE;
+            destination = destination->mip_next;
+        }
+        source = source->mip_next;
+    }
+    return found && !destination;
+}
+
+static void d3d_texture_next_coordinates(POINT *point, RECT *rect)
+{
+    point->x /= 2; point->y /= 2;
+    rect->left /= 2; rect->top /= 2;
+    rect->right = (LONG)(((int64_t)rect->right + 1) / 2);
+    rect->bottom = (LONG)(((int64_t)rect->bottom + 1) / 2);
+}
+
+static HRESULT d3d_texture_load_mip_subset(DDSurface *destination,
+        DDSurface *source, const POINT *destination_point,
+        const RECT *source_rect)
+{
+    POINT point = *destination_point;
+    RECT rect = *source_rect;
+    HRESULT hr = d3d_texture_copy_palette(destination, source, FALSE);
+    if (FAILED(hr)) return hr;
+    hr = d3d_texture_copy_keys(destination, source, TRUE);
+    if (FAILED(hr)) return hr;
+    while (source && destination) {
+        if (source->width == destination->width &&
+                source->height == destination->height) {
+            hr = d3d_texture_copy_region(destination, source, &point, &rect);
+            if (FAILED(hr)) return hr;
+            destination = destination->mip_next;
+        }
+        source = source->mip_next;
+        d3d_texture_next_coordinates(&point, &rect);
+    }
+    return DD_OK;
+}
+
+static DDSurface *d3d_texture_load_face(DDSurface *surface, UINT face)
+{
+    if (surface->cube_faces[0]) return surface->cube_faces[face];
+    return surface->cube_face == face ? surface : NULL;
+}
+
+static HRESULT d3d_texture_load7(DDSurface *destination, DDSurface *source,
+        const POINT *destination_point, const RECT *source_rect, DWORD flags)
+{
+    POINT point = {0, 0};
+    RECT rect = {0, 0, (LONG)source->width, (LONG)source->height};
+    BOOL source_cube = (source->desc.ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP) != 0;
+    BOOL destination_cube = (destination->desc.ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP) != 0;
+    UINT face;
+    if (destination_point) point = *destination_point;
+    if (source_rect) rect = *source_rect;
+    if (rect.left < 0 || rect.top < 0 || point.x < 0 || point.y < 0 ||
+            rect.right <= rect.left || rect.bottom <= rect.top ||
+            (uint64_t)rect.right > source->width ||
+            (uint64_t)rect.bottom > source->height ||
+            (int64_t)point.x + rect.right - rect.left > source->width ||
+            (int64_t)point.y + rect.bottom - rect.top > source->height ||
+            destination->width > source->width || destination->height > source->height ||
+            source->mip_level || destination->mip_level ||
+            (source->desc.ddsCaps.dwCaps2 & DDSCAPS2_MIPMAPSUBLEVEL) ||
+            (destination->desc.ddsCaps.dwCaps2 & DDSCAPS2_MIPMAPSUBLEVEL) ||
+            source_cube != destination_cube)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!source_cube) {
+        if (!d3d_texture_mip_subset(destination, source))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        return d3d_texture_load_mip_subset(destination, source, &point, &rect);
+    }
+    /* Check every source face before copying any selected one, including
+     * calls whose face selection is empty. Extra destination faces survive. */
+    for (face = 0; face < 6u; ++face) {
+        DDSurface *src = d3d_texture_load_face(source, face);
+        DDSurface *dst = d3d_texture_load_face(destination, face);
+        if (src && (!dst || !d3d_texture_mip_subset(dst, src)))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
+    for (face = 0; face < 6u; ++face) {
+        DDSurface *src = d3d_texture_load_face(source, face);
+        DDSurface *dst = d3d_texture_load_face(destination, face);
+        HRESULT hr;
+        if (!src || !(flags & (DDSCAPS2_CUBEMAP_POSITIVEX << face))) continue;
+        hr = d3d_texture_load_mip_subset(dst, src, &point, &rect);
+        if (FAILED(hr)) return hr;
+    }
+    return DD_OK;
+}
+
+static HRESULT d3d_texture_load_legacy(DDSurface *destination,
+        DDSurface *source)
+{
+    DDSurface *dst = destination, *src = source;
+    UINT face;
+    HRESULT hr;
+    if (!destination || !source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (destination == source) return DD_OK;
+    if (destination->owner != source->owner || destination->format != source->format)
+        return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
+    while (dst && src) {
+        POINT point = {0, 0};
+        RECT rect = {0, 0, (LONG)src->width, (LONG)src->height};
+        dst->desc.ddsCaps.dwCaps &= ~DDSCAPS_ALLOCONLOAD;
+        hr = d3d_texture_copy_palette(dst, src, TRUE);
+        if (FAILED(hr)) return hr;
+        if (dst->width != src->width || dst->height != src->height)
+            return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
+        hr = d3d_texture_copy_keys(dst, src, FALSE);
+        if (FAILED(hr)) return hr;
+        hr = d3d_texture_copy_region(dst, src, &point, &rect);
+        if (FAILED(hr)) return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
+        dst = dst->mip_next; src = src->mip_next;
+    }
+    /* The older public interfaces have no cube selector; preserve this
+     * frontend's existing all-face extension with the same shared loader. */
+    for (face = 1; face < 6u; ++face) {
+        if (!!destination->cube_faces[face] != !!source->cube_faces[face])
+            return DDWG_TRACE_ERROR(D3DERR_TEXTURE_LOAD_FAILED);
+        if (source->cube_faces[face]) {
+            hr = d3d_texture_load_legacy(destination->cube_faces[face],
+                    source->cube_faces[face]);
+            if (FAILED(hr)) return hr;
+        }
+    }
+    return DD_OK;
 }
 
 /* Direct3D 7 is kept in a separate include so the already-large DirectDraw
