@@ -18,9 +18,9 @@ const source=fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8");for(const[
  ["setter omits description presence","surface_SetColorKey","surface->desc.dwFlags |= description_flag;","(void)description_flag;"],
  ["setter description differs from cache","surface_SetColorKey","*surface_description_color_key(surface, kind) = *key;","*surface_description_color_key(surface, kind) = (DDCOLORKEY){1,2};"],
  ["failed setter refreshes overlay","surface_SetColorKey","    if (key) {","    if (key) { emit_overlay_state(surface);"],
- ["creation omits key preflight","ddraw_CreateSurface","if (!surface_request_color_keys_valid(request))","if (0 && !surface_request_color_keys_valid(request))"],
+ ["creation omits key preflight","ddraw_CreateSurfaceForVersion","if (!surface_request_color_keys_valid(request))","if (0 && !surface_request_color_keys_valid(request))"],
  ["creation skips fourth key","surface_request_color_keys_valid","i < 4u","i < 3u"],
  ["creation inspects unflagged keys","surface_request_color_keys_valid","(request->dwFlags & flags[i])","((request->dwFlags & flags[i]) || TRUE)"],
- ["creation wrong refusal code","ddraw_CreateSurface","DDWG_TRACE_ERROR(DDERR_NOCOLORKEYHW)","DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS)"],
+ ["creation wrong refusal code","ddraw_CreateSurfaceForVersion","DDWG_TRACE_ERROR(DDERR_NOCOLORKEYHW)","DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS)"],
 ]){const file=dir+"/frontend.c";fs.writeFileSync(file,mutate(source,fn,old,replacement));run(label,{DDRAW_COLOR_KEY_SOURCE:file});killed++;}
 console.log("PASS DDraw color-key mutations: "+killed+"/16; shared canonicalization, explicit ranges, cache/description/wire agreement, overlay failure atomicity, full creation preflight, all selectors and ignored unflagged values");}finally{fs.rmSync(dir,{recursive:true,force:true});}

@@ -55,9 +55,13 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 typedef struct{DWORD dwColorSpaceLowValue,dwColorSpaceHighValue;}DDCOLORKEY,*LPDDCOLORKEY;
 typedef struct{DWORD dwSize,dwFlags,dwRGBBitCount,dwRBitMask,dwGBitMask,dwBBitMask;}DDPIXELFORMAT;
 typedef struct{DWORD dwSize,dwFlags,dwWidth,dwHeight,dwBackBufferCount,dwMipMapCount;struct{DWORD dwCaps,dwCaps2;}ddsCaps;DDPIXELFORMAT ddpfPixelFormat;DDCOLORKEY ddckCKSrcBlt,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKDestOverlay;}DDSURFACEDESC2,*LPDDSURFACEDESC2;
-typedef struct DDSurface DDSurface;typedef struct{DWORD mode_bpp;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
-struct DDSurface{DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;BOOL overlay_visible,front_of_chain,implicit;DDSurface*overlay_destination,*next,*flip_next;};
+typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
+struct DDSurface{void*vtbl7;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;typedef struct{unsigned unused;}DDrawPixelFormatDesc;
+#define DD_VERSION_4 4u
+#define DD_VERSION_7 7u
+static unsigned ddraw_AddRef(DDrawObject*d){return ++d->ref;}
+static void surface_destroy(DDSurface*s){free(s);}
 static unsigned checks,sets,overlays,creates;static DWORD emitted_kind;static BOOL emitted_present;static DDCOLORKEY emitted_key;
 static DDSurface*surface_from_iface(DDSurface*s){return s;}static DDrawObject*object_from_iface(DDrawObject*d){return d;}
 static void emit_color_key(DDSurface*s,DWORD kind,const DDCOLORKEY*key,BOOL present){assert(s&&kind<4);sets++;emitted_kind=kind;emitted_present=present;if(key)emitted_key=*key;}
@@ -69,10 +73,10 @@ static unsigned ddraw_pixel_format_to_d3dformat(const DDrawPixelFormatDesc*p){(v
 static void watch_object_window(DDrawObject*d){assert(d);}static BOOL seed_windowed_primary_from_screen(DDSurface*s){assert(s);return 1;}
 static DDSurface*surface_create(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps){assert(d&&f==22&&w==32&&h==32&&caps==p->ddsCaps.dwCaps);creates++;DDSurface*s=calloc(1,sizeof(*s));assert(s);s->owner=d;s->desc=*p;return s;}
 static DDSurface*surface_create_complex_texture(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps,UINT levels,BOOL cube){assert(levels==2&&!cube);return surface_create(d,p,f,w,h,caps);}
-${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKey','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
+${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKey','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),...(source.includes('static HRESULT ddraw_CreateSurfaceForVersion(')?['ddraw_CreateSurfaceForVersion']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
 #define CHECK(v) do{checks++;if(!(v)){fprintf(stderr,"DDraw color key line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 static void events(void){sets=overlays=0;emitted_kind=99;emitted_present=0;emitted_key=(DDCOLORKEY){0};}
-int main(void){(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;
+int main(void){(void)&ddraw_AddRef;(void)&surface_destroy;(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;
 const DWORD selectors[]={DDCKEY_SRCBLT,DDCKEY_DESTBLT,DDCKEY_SRCOVERLAY,DDCKEY_DESTOVERLAY},descflags[]={DDSD_CKSRCBLT,DDSD_CKDESTBLT,DDSD_CKSRCOVERLAY,DDSD_CKDESTOVERLAY};
 const DWORD values[]={0,1,0xff,0xffff,0x12345678,0xffffffff};unsigned set_cases=0,create_cases=0;
 for(UINT kind=0;kind<4;kind++)for(UINT lo=0;lo<6;lo++)for(UINT hi=0;hi<6;hi++)for(UINT range=0;range<2;range++){

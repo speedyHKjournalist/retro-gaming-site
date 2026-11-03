@@ -477,6 +477,7 @@ struct DDPalette {
     const IDirectDrawPaletteVtbl *vtbl;
     LONG ref;
     DDrawObject *owner;
+    BOOL owner_public_ref;
     DWORD caps;
     uint32_t slot;              /* which D9WG palette slot holds the table */
     PALETTEENTRY entries[256];
@@ -552,6 +553,7 @@ struct DDSurface {
     const IDirectDrawGammaControlVtbl *gamma_vtbl;
     LONG ref;
     DDrawObject *owner;
+    BOOL owner_public_ref;
     uint32_t handle;            /* the D9WG texture behind it */
     uint32_t overlay_id;        /* object identity, unlike aliased handle */
     DDTextureStorage *storage;
@@ -575,6 +577,7 @@ struct DDSurface {
     DWORD lock_flags;
     BOOL primary;
     BOOL front_of_chain;
+    BOOL owns_flip_chain;
     DDSurface *flip_next;       /* ring of the flip chain, NULL when alone */
     DDSurface *mip_next;        /* next smaller level, owned by this surface */
     DDSurface *cube_faces[6];   /* level-zero faces; only the cube root owns */
@@ -611,6 +614,7 @@ struct DDrawObject {
     const IDirect3D2Vtbl *d3d2_vtbl;
     const IDirect3DVtbl *d3d1_vtbl;
     LONG ref;
+    LONG lifetime_ref;          /* public refs plus private child allocations */
     HWND window;
     DWORD cooperative_flags;
     uint32_t device_handle;
@@ -1845,6 +1849,23 @@ static HRESULT WINAPI ddraw_QueryInterface(IDirectDraw7 *iface, REFIID iid,
         void **out);
 static ULONG WINAPI ddraw_AddRef(IDirectDraw7 *iface);
 static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface);
+static void ddraw_lifetime_release(DDrawObject *object);
+
+/* DD1/2 children retain the allocation without changing the public count.
+ * DD4/7 explicit surfaces and palettes additionally retain their creator. */
+static void ddraw_child_attach(DDrawObject *object, BOOL public_ref)
+{
+    InterlockedIncrement(&object->lifetime_ref);
+    if (public_ref) ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
+}
+
+static void ddraw_child_detach(DDrawObject *object, BOOL public_ref)
+{
+    if (!object) return;
+    if (public_ref) ddraw_Release((IDirectDraw7 *)&object->vtbl7);
+    ddraw_lifetime_release(object);
+}
+
 static void d3d7_rebind_after_flip(DDrawObject *object);
 static void d3d7_refresh_render_target(DDrawObject *object,
         DDSurface *surface);
@@ -1919,7 +1940,7 @@ static ULONG WINAPI surface_Release(IDirectDrawSurface7 *iface)
     DDSurface *surface = surface_from_any(iface, NULL);
     LONG remaining = InterlockedDecrement(&surface->ref);
 
-    if (remaining == 0) {
+    if (remaining == 0 && !surface->implicit) {
         DDWG_TRACE_CHECKPOINT("SURFACE DESTROY handle=%lu object=%08lX "
                 "primary=%lu", surface->handle,
                 (DWORD)(uintptr_t)surface, surface->primary ? 1u : 0u);
@@ -2011,6 +2032,7 @@ static HRESULT WINAPI surface_AddAttachedSurface(IDirectDrawSurface7 *iface,
     }
     if (other->desc.ddsCaps.dwCaps & DDSCAPS_BACKBUFFER) {
         /* An explicitly attached back buffer joins the flip ring. */
+        surface->owns_flip_chain = TRUE;
         other->flip_next = surface->flip_next ? surface->flip_next : surface;
         surface->flip_next = other;
         IDirectDrawSurface7_AddRef(attachment);
@@ -2348,6 +2370,20 @@ static HRESULT WINAPI surface_DeleteAttachedSurface(IDirectDrawSurface7 *iface,
     DDSurface *other = attachment ? surface_from_iface(attachment) : NULL;
 
     (void)flags;
+    if (other && other->implicit) {
+        DDSurface *walk = surface->flip_next;
+        UINT face;
+        if (surface->mip_next == other)
+            return DDWG_TRACE_ERROR(DDERR_CANNOTDETACHSURFACE);
+        for (face = 1u; face < 6u; ++face)
+            if (surface->cube_faces[face] == other)
+                return DDWG_TRACE_ERROR(DDERR_CANNOTDETACHSURFACE);
+        while (walk && walk != surface) {
+            if (walk == other)
+                return DDWG_TRACE_ERROR(DDERR_CANNOTDETACHSURFACE);
+            walk = walk->flip_next;
+        }
+    }
     if (other && surface->attached_depth == other) {
         surface->attached_depth = NULL;
         d3d7_refresh_render_target(surface->owner, surface);
@@ -3046,11 +3082,10 @@ static HRESULT WINAPI surface_SetClipper(IDirectDrawSurface7 *iface,
     DDClipper *clipper = clipper_iface ? clipper_from_iface(clipper_iface)
         : NULL;
 
+    if (clipper) IDirectDrawClipper_AddRef(clipper_iface);
     if (surface->clipper)
         IDirectDrawClipper_Release((IDirectDrawClipper *)surface->clipper);
     surface->clipper = clipper;
-    if (clipper)
-        IDirectDrawClipper_AddRef(clipper_iface);
     return DD_OK;
 }
 
@@ -3130,11 +3165,11 @@ static HRESULT WINAPI surface_SetPalette(IDirectDrawSurface7 *iface,
     DDPalette *palette = palette_iface ? palette_from_iface(palette_iface)
         : NULL;
 
+    if (palette) IDirectDrawPalette_AddRef(palette_iface);
     if (surface->palette)
         IDirectDrawPalette_Release((IDirectDrawPalette *)surface->palette);
     surface->palette = palette;
     if (palette) {
-        IDirectDrawPalette_AddRef(palette_iface);
         emit_palette_table(palette);
         emit_surface_palette_binding(surface);
     }
@@ -3614,6 +3649,8 @@ static ULONG WINAPI palette_Release(IDirectDrawPalette *iface)
     LONG remaining = InterlockedDecrement(&palette->ref);
 
     if (remaining == 0) {
+        DDrawObject *owner = palette->owner;
+        BOOL public_ref = palette->owner_public_ref;
         EnterCriticalSection(&g_object_lock);
         if (palette->owner) {
             DDPalette **link = &palette->owner->palettes;
@@ -3622,6 +3659,7 @@ static ULONG WINAPI palette_Release(IDirectDrawPalette *iface)
         }
         LeaveCriticalSection(&g_object_lock);
         heap_free(palette);
+        ddraw_child_detach(owner, public_ref);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -3715,6 +3753,7 @@ static ULONG WINAPI clipper_Release(IDirectDrawClipper *iface)
     LONG remaining = InterlockedDecrement(&clipper->ref);
 
     if (remaining == 0) {
+        DDrawObject *owner = clipper->owner;
         EnterCriticalSection(&g_object_lock);
         if (clipper->owner) {
             DDClipper **link = &clipper->owner->clippers;
@@ -3724,6 +3763,7 @@ static ULONG WINAPI clipper_Release(IDirectDrawClipper *iface)
         LeaveCriticalSection(&g_object_lock);
         heap_free(clipper->clip_list);
         heap_free(clipper);
+        ddraw_child_detach(owner, FALSE);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -3858,6 +3898,7 @@ static void surface_destroy(DDSurface *surface)
     DDrawObject *owner = surface->owner;
     UINT face;
     BOOL was_primary = FALSE;
+    BOOL public_ref = surface->owner_public_ref;
 
     if ((surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY) &&
             surface->overlay_destination) {
@@ -3870,16 +3911,30 @@ static void surface_destroy(DDSurface *surface)
         DeleteObject(surface->dib);
         DeleteDC(surface->dc);
     }
+    if (surface->owns_flip_chain) {
+        DDSurface *walk = surface->flip_next;
+        surface->flip_next = NULL;
+        surface->owns_flip_chain = FALSE;
+        while (walk && walk != surface) {
+            DDSurface *next = walk->flip_next;
+            walk->flip_next = NULL;
+            if (walk->implicit) surface_destroy(walk);
+            else surface_Release((IDirectDrawSurface7 *)&walk->vtbl7);
+            walk = next;
+        }
+    }
     if (surface->mip_next) {
         DDSurface *mip = surface->mip_next;
         surface->mip_next = NULL;
-        surface_Release((IDirectDrawSurface7 *)&mip->vtbl7);
+        if (mip->implicit) surface_destroy(mip);
+        else surface_Release((IDirectDrawSurface7 *)&mip->vtbl7);
     }
     for (face = 1u; face < 6u; ++face) {
         if (surface->cube_faces[face]) {
             DDSurface *attached = surface->cube_faces[face];
             surface->cube_faces[face] = NULL;
-            surface_Release((IDirectDrawSurface7 *)&attached->vtbl7);
+            if (attached->implicit) surface_destroy(attached);
+            else surface_Release((IDirectDrawSurface7 *)&attached->vtbl7);
         }
     }
     if (surface->attached_depth) {
@@ -3913,6 +3968,7 @@ static void surface_destroy(DDSurface *surface)
     if (was_primary) emit_window_state_not_showing(owner);
     surface_memory_release(surface->memory);
     heap_free(surface);
+    ddraw_child_detach(owner, public_ref);
 }
 
 /*
@@ -4144,6 +4200,7 @@ static DDSurface *surface_allocate(DDrawObject *object,
     surface->next = object->surfaces;
     object->surfaces = surface;
     LeaveCriticalSection(&g_object_lock);
+    ddraw_child_attach(object, FALSE);
     return surface;
 }
 
@@ -4262,7 +4319,7 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
         if (!face_surface || !surface_build_mip_chain(face_surface, &seed,
                 format, level_count, caps, seed.ddsCaps.dwCaps2)) {
             if (face_surface)
-                surface_Release((IDirectDrawSurface7 *)&face_surface->vtbl7);
+                surface_destroy(face_surface);
             surface_Release((IDirectDrawSurface7 *)&root->vtbl7);
             return NULL;
         }
@@ -4332,15 +4389,14 @@ static HRESULT WINAPI ddraw_QueryInterface(IDirectDraw7 *iface, REFIID iid,
 
 static ULONG WINAPI ddraw_AddRef(IDirectDraw7 *iface)
 {
-    return (ULONG)InterlockedIncrement(&object_from_any(iface, NULL)->ref);
+    DDrawObject *object = object_from_any(iface, NULL);
+    InterlockedIncrement(&object->lifetime_ref);
+    return (ULONG)InterlockedIncrement(&object->ref);
 }
 
-static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
+static void ddraw_lifetime_release(DDrawObject *object)
 {
-    DDrawObject *object = object_from_any(iface, NULL);
-    LONG remaining = InterlockedDecrement(&object->ref);
-
-    if (remaining == 0) {
+    if (InterlockedDecrement(&object->lifetime_ref) == 0) {
         DDWG_TRACE_CHECKPOINT("DIRECTDRAW DESTROY object=%08lX device=%lu "
                 "mode_changed=%lu", (DWORD)(uintptr_t)object,
                 object->device_handle,
@@ -4362,6 +4418,13 @@ static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
         InterlockedDecrement(&g_object_count);
         heap_free(object);
     }
+}
+
+static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
+{
+    DDrawObject *object = object_from_any(iface, NULL);
+    LONG remaining = InterlockedDecrement(&object->ref);
+    ddraw_lifetime_release(object);
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
 
@@ -4390,12 +4453,14 @@ static HRESULT WINAPI ddraw_CreateClipper(IDirectDraw7 *iface, DWORD flags,
     clipper->next = object->clippers;
     object->clippers = clipper;
     LeaveCriticalSection(&g_object_lock);
+    ddraw_child_attach(object, FALSE);
     *out = (IDirectDrawClipper *)clipper;
     return DD_OK;
 }
 
-static HRESULT WINAPI ddraw_CreatePalette(IDirectDraw7 *iface, DWORD flags,
-        LPPALETTEENTRY table, LPDIRECTDRAWPALETTE *out, IUnknown *outer)
+static HRESULT ddraw_CreatePaletteForVersion(IDirectDraw7 *iface, DWORD flags,
+        LPPALETTEENTRY table, LPDIRECTDRAWPALETTE *out, IUnknown *outer,
+        unsigned version)
 {
     DDrawObject *object = object_from_iface(iface);
     DDPalette *palette;
@@ -4414,17 +4479,26 @@ static HRESULT WINAPI ddraw_CreatePalette(IDirectDraw7 *iface, DWORD flags,
     palette->vtbl = &g_palette_vtbl;
     palette->ref = 1;
     palette->owner = object;
+    palette->owner_public_ref = version >= DD_VERSION_4;
     palette->caps = flags;
     EnterCriticalSection(&g_object_lock);
     palette->slot = object->next_palette_slot++;
     palette->next = object->palettes;
     object->palettes = palette;
     LeaveCriticalSection(&g_object_lock);
+    ddraw_child_attach(object, palette->owner_public_ref);
     for (index = 0; index < 256u; ++index)
         palette->entries[index] = table[index];
     emit_palette_table(palette);
     *out = (IDirectDrawPalette *)palette;
     return DD_OK;
+}
+
+static HRESULT WINAPI ddraw_CreatePalette(IDirectDraw7 *iface, DWORD flags,
+        LPPALETTEENTRY table, LPDIRECTDRAWPALETTE *out, IUnknown *outer)
+{
+    return ddraw_CreatePaletteForVersion(iface, flags, table, out, outer,
+            DD_VERSION_7);
 }
 
 static BOOL surface_request_color_keys_valid(const DDSURFACEDESC2 *request)
@@ -4445,8 +4519,9 @@ static BOOL surface_request_color_keys_valid(const DDSURFACEDESC2 *request)
     return TRUE;
 }
 
-static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
-        LPDDSURFACEDESC2 request, LPDIRECTDRAWSURFACE7 *out, IUnknown *outer)
+static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
+        LPDDSURFACEDESC2 request, LPDIRECTDRAWSURFACE7 *out, IUnknown *outer,
+        unsigned version)
 {
     DDrawObject *object = object_from_iface(iface);
     DDSurface *surface;
@@ -4567,6 +4642,7 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
     if (back_buffers) {
         DDSurface *previous = surface;
         DWORD index;
+        surface->owns_flip_chain = TRUE;
         for (index = 0; index < back_buffers; ++index) {
             DDSURFACEDESC2 seed = *request;
             DWORD buffer_caps = (caps & ~(DDSCAPS_PRIMARYSURFACE |
@@ -4577,7 +4653,11 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
             seed.dwFlags &= ~DDSD_BACKBUFFERCOUNT;
             back = surface_create(object, &seed, format, width, height,
                     buffer_caps);
-            if (!back) break;
+            if (!back) {
+                previous->flip_next = surface;
+                surface_destroy(surface);
+                return DDWG_TRACE_ERROR(DDERR_OUTOFVIDEOMEMORY);
+            }
             back->implicit = TRUE;
             previous->flip_next = back;
             previous = back;
@@ -4586,6 +4666,8 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
         surface->desc.ddsCaps.dwCaps |= DDSCAPS_FLIP;
     }
 
+    surface->owner_public_ref = version >= DD_VERSION_4;
+    if (surface->owner_public_ref) ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
     *out = (IDirectDrawSurface7 *)surface;
     DDWG_TRACE("SURFACE CREATED handle=%lu object=%08lX size=%lux%lu "
             "pitch=%lu format=%u caps=%08lX primary=%lu backbuffers=%lu",
@@ -4595,8 +4677,15 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
     return DDWG_TRACE_RESULT(DD_OK);
 }
 
-static HRESULT WINAPI ddraw_DuplicateSurface(IDirectDraw7 *iface,
-        LPDIRECTDRAWSURFACE7 source, LPDIRECTDRAWSURFACE7 *out)
+static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
+        LPDDSURFACEDESC2 request, LPDIRECTDRAWSURFACE7 *out, IUnknown *outer)
+{
+    return ddraw_CreateSurfaceForVersion(iface, request, out, outer,
+            DD_VERSION_7);
+}
+
+static HRESULT ddraw_DuplicateSurfaceForVersion(IDirectDraw7 *iface,
+        LPDIRECTDRAWSURFACE7 source, LPDIRECTDRAWSURFACE7 *out, unsigned version)
 {
     DDrawObject *object = object_from_iface(iface);
     DDSurface *original;
@@ -4643,8 +4732,16 @@ static HRESULT WINAPI ddraw_DuplicateSurface(IDirectDraw7 *iface,
         duplicate->clipper = original->clipper;
         IDirectDrawClipper_AddRef((IDirectDrawClipper *)duplicate->clipper);
     }
+    duplicate->owner_public_ref = version >= DD_VERSION_4;
+    if (duplicate->owner_public_ref) ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
     *out = (IDirectDrawSurface7 *)&duplicate->vtbl7;
     return DD_OK;
+}
+
+static HRESULT WINAPI ddraw_DuplicateSurface(IDirectDraw7 *iface,
+        LPDIRECTDRAWSURFACE7 source, LPDIRECTDRAWSURFACE7 *out)
+{
+    return ddraw_DuplicateSurfaceForVersion(iface, source, out, DD_VERSION_7);
 }
 
 /* The modes this path can really present. Anything not listed is a mode the
@@ -5224,6 +5321,7 @@ static DDrawObject *object_create(void)
     object->d3d2_vtbl = &g_d3d2_vtbl;
     object->d3d1_vtbl = &g_d3d1_vtbl;
     object->ref = 1;
+    object->lifetime_ref = 1;
     object->device_handle = allocate_handle();
     object->mode_bpp = 32;
     EnterCriticalSection(&g_object_lock);
@@ -6045,7 +6143,7 @@ static HRESULT WINAPI tag##_CreateClipper(IFACE *iface, DWORD flags, \
 static HRESULT WINAPI tag##_CreatePalette(IFACE *iface, DWORD flags, \
         LPPALETTEENTRY table, LPDIRECTDRAWPALETTE *out, IUnknown *outer) \
 { \
-    return ddraw_CreatePalette(DDRAW7(iface), flags, table, out, outer); \
+    return ddraw_CreatePaletteForVersion(DDRAW7(iface), flags, table, out, outer, VERSION); \
 } \
 static HRESULT WINAPI tag##_CreateSurface(IFACE *iface, DESC *request, \
         SURFIFACE **out, IUnknown *outer) \
@@ -6057,7 +6155,7 @@ static HRESULT WINAPI tag##_CreateSurface(IFACE *iface, DESC *request, \
     *out = NULL; \
     if (request->dwSize != sizeof(DESC)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     legacy_widen(request, &request2); \
-    result = ddraw_CreateSurface(DDRAW7(iface), &request2, &created, outer); \
+    result = ddraw_CreateSurfaceForVersion(DDRAW7(iface), &request2, &created, outer, VERSION); \
     if (SUCCEEDED(result) && created) \
         *out = (SURFIFACE *)surface_interface( \
                 surface_from_any(created, NULL), VERSION); \
@@ -6070,8 +6168,8 @@ static HRESULT WINAPI tag##_DuplicateSurface(IFACE *iface, SURFIFACE *source, \
     HRESULT result; \
     if (!out || !source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
-    result = ddraw_DuplicateSurface(DDRAW7(iface), SURFACE7(source), \
-            &duplicate); \
+    result = ddraw_DuplicateSurfaceForVersion(DDRAW7(iface), SURFACE7(source), \
+            &duplicate, VERSION); \
     if (SUCCEEDED(result)) \
         *out = (SURFIFACE *)surface_interface( \
                 surface_from_any(duplicate, NULL), VERSION); \
