@@ -21,7 +21,7 @@ typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REF
 typedef struct Texture Texture;typedef struct View View;typedef struct{void*lpVtbl;}Interface;
 typedef struct{Texture*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;unsigned refs;}Device;
 typedef struct{D9WGPrivateStore private_data;View*level_surface;View*level_volume;void*shadow;}Level;
-struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount;uint32_t handle,level_count;int private_back_buffer;D9WGPrivateStore private_data;Level*levels;};
+struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount;uint32_t handle,level_count;int private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;Level*levels;};
 struct View{Interface iface;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;int texture_child;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
 typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3DTexture${api},IDirect3DCubeTexture${api},IDirect3DVolumeTexture${api};
 typedef View D${api}Surface,D${api}Volume,IDirect3DSurface${api},IDirect3DVolume${api};
@@ -36,6 +36,7 @@ typedef struct{unsigned refs;Texture*texture;int check_destroy;}IUnknown;
 static unsigned IUnknown_AddRef(IUnknown*o){assert(!held&&o->refs);return ++o->refs;}
 static unsigned IUnknown_Release(IUnknown*o){assert(!held&&o->refs);if(o->check_destroy){assert(device.refs==2);assert(device.texture_resources!=o->texture&&device.cube_${api===8?'resources':'textures'}!=o->texture&&device.volume_${api===8?'resources':'textures'}!=o->texture);}return --o->refs;}
 static int32_t InterlockedDecrement(int32_t*p){return --*p;}
+${api===8?"static void swapchain_destroy_storage(void*p){(void)p;assert(0);}":""}
 static void device_child_release(Device*d){assert(d->refs==2);d->refs--;}
 static int emit_command(uint16_t op,const void*p,uint32_t size){assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;assert(c->resource_handle==0x8000+destroys&&c->resource_kind==3+destroys);destroys++;return 1;}
 #include "runtime/d9wg_private_data_bridge.h"

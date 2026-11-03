@@ -45,7 +45,7 @@ typedef struct{HWND hDeviceWindow;BOOL Windowed;UINT FullScreen_PresentationInte
 typedef struct{Interface iface;}Parent;
 struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources,*render_target_texture;View*render_target_surface;D9SwapChain*additional_swap_chains;};
 typedef struct{D9WGPrivateStore private_data;View*level_surface;void*shadow;}Level;typedef Level D8TextureLevel;
-struct Texture{Interface iface;Level*levels;unsigned level_count,usage;LONG refcount;Device*device;Texture*next_device_resource;UINT handle;BOOL private_back_buffer;D9WGPrivateStore private_data;};
+struct Texture{Interface iface;Level*levels;unsigned level_count,usage;LONG refcount;Device*device;Texture*next_device_resource;UINT handle;BOOL private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;};
 typedef struct D8PrivateDataOwner{LONG refs;D9WGPrivateStore store;}D8PrivateDataOwner;
 struct View{Interface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;BOOL texture_child,reset_blocker,implicit,depth_stencil,additional_back_buffer,device_pin_transferred;D9SwapChain*swap_chain;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;D8PrivateDataOwner*retained_private_data;void*shadow,*dc,*dc_previous,*dib;struct{UINT MultiSampleType;}desc;};
 typedef struct{Interface iface;LONG refcount;D8PrivateDataOwner*private_data_owner;Device*device;D3DPRESENT_PARAMETERS present;UINT handle;View*back_buffer;}D8SwapChain;
@@ -94,9 +94,9 @@ static void detach_device_window(Device*d){(void)d;}static void restore_display_
 static void emit_device_destroy_and_flush(uint32_t h){assert(h==0x9000);}
 static void free_shader_list(void*p){(void)p;}static void free_extra_lights(void**p){(void)p;}
 static HRESULT create_standalone_surface(Device*d,UINT width,UINT height,D3DFORMAT format,DWORD usage,int pool,BOOL lockable,BOOL backbuffer,BOOL depth,BOOL blocker,View**out){(void)lockable;(void)depth;assert(width==64&&height==64&&format==22&&usage==1&&pool==0&&backbuffer);*out=NULL;if(fail_create)return E_OUTOFMEMORY;View*v=HeapAlloc(NULL,0,sizeof(*v));if(!v)return E_OUTOFMEMORY;v->device=d;v->refcount=1;v->reset_blocker=blocker;if(blocker)d->implicit_surface_count++;device_child_add_ref(d);*out=v;return 0;}
-${['texture_add_ref','texture_release','texture_get_surface_level'].map(n=>extract(source,n).replace(/\*surface_out = &surface->iface;/g,'*surface_out = surface;').replace(/IDirect3DSurface8_AddRef\(&surface->iface\)/g,'surface_add_ref(surface)')).join('\n')}
+${['swapchain_destroy_storage','texture_add_ref','texture_release','texture_get_surface_level'].map(n=>extract(source,n).replace(/\*surface_out = &surface->iface;/g,'*surface_out = surface;').replace(/IDirect3DSurface8_AddRef\(&surface->iface\)/g,'surface_add_ref(surface)')).join('\n')}
 static HRESULT device_create_render_target(Device*d,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,View**out){assert(w==64&&h==64&&f==22&&!ms&&!lockable);*out=NULL;if(fail_create)return E_OUTOFMEMORY;Texture*t=HeapAlloc(NULL,0,sizeof(*t));if(!t)return E_OUTOFMEMORY;t->levels=HeapAlloc(NULL,0,sizeof(*t->levels));if(!t->levels){HeapFree(NULL,0,t);return E_OUTOFMEMORY;}t->refcount=1;t->level_count=1;t->usage=1;t->device=d;t->handle=allocate_handle();t->next_device_resource=d->texture_resources;d->texture_resources=t;device_child_add_ref(d);HRESULT hr=texture_get_surface_level(&t->iface,0,out);texture_release(&t->iface);return hr;}
-${['surface_is_implicit','free_implicit_surfaces','create_backbuffer_surface','device_get_backbuffer','device_create_swapchain','swapchain_get_backbuffer','swapchain_release'].map(n=>extract(source,n).replace(/&device->implicit_back_buffer->iface/g,'device->implicit_back_buffer')).join('\n')}`:`static D9SwapChain*swap_chain_from_iface(Interface*p){return (D9SwapChain*)p;}
+${['surface_is_implicit','free_implicit_surfaces','create_backbuffer_surface','device_get_backbuffer','device_create_swapchain','swapchain_get_backbuffer','swapchain_add_ref','swapchain_release'].map(n=>extract(source,n).replace(/&device->implicit_back_buffer->iface/g,'device->implicit_back_buffer')).join('\n')}`:`static D9SwapChain*swap_chain_from_iface(Interface*p){return (D9SwapChain*)p;}
 static BOOL surface_is_implicit(View*v){return v->implicit;}
 static void SelectObject(void*a,void*b){(void)a;(void)b;}static void DeleteDC(void*p){(void)p;}static void DeleteObject(void*p){(void)p;}
 static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(Device*d){(void)d;}static void restore_display_mode(Device*d){(void)d;}
@@ -118,7 +118,7 @@ View empty={0};size=4;CHECK(surface_get_private_data(&empty,key,&out,&size)==D3D
 CHECK(d->refcount==1&&!d->child_parent_refs);CHECK(!device_release(d)&&object.refs==1&&!allocated&&!parent_refs);cases++;
 ${api===8?`unsigned life=0;
 #define LCHECK(v) do{CHECK(v);life++;}while(0)
-for(unsigned path=0;path<3;path++){
+for(unsigned path=0;path<4;path++){
  parent_refs=1;d=HeapAlloc(NULL,0,sizeof(*d));d->refcount=1;d->parent=&parent;d->handle=0x9000;d->display_mode=(Mode){64,64,22};d->present=(D3DPRESENT_PARAMETERS){.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferFormat=22};
  IDirect3DSwapChain8*ci=NULL;LCHECK(!device_create_swapchain(d,&d->present,&ci));D8SwapChain*c=(D8SwapChain*)ci;View*v=c->back_buffer,*w=NULL;
  LCHECK(d->refcount==2&&d->child_parent_refs==1&&v->refcount==0&&v->texture->refcount==1&&v->texture->private_back_buffer);
@@ -137,7 +137,15 @@ for(unsigned path=0;path<3;path++){
    LCHECK(surface_add_ref(v)==1&&v->texture->refcount==2&&d->refcount==3);
    LCHECK(!surface_release(v)&&d->refcount==2&&v->texture->refcount==1);
   }
-  LCHECK(!swapchain_release(ci)&&d->refcount==1&&!d->child_parent_refs&&!d->texture_resources&&object.refs==1);
+  LCHECK(surface_add_ref(v)==1&&d->refcount==3);
+  LCHECK(!swapchain_release(ci)&&d->refcount==2&&!c->refcount&&v->texture->refcount==1&&!d->additional_swap_chain_count&&object.refs==2);
+  for(unsigned n=0;n<128;n++){
+   LCHECK(swapchain_add_ref(ci)==1&&d->refcount==3&&v->texture->refcount==2&&d->additional_swap_chain_count==1);
+   LCHECK(swapchain_add_ref(ci)==2&&d->refcount==3&&v->texture->refcount==2&&d->additional_swap_chain_count==1);
+   LCHECK(swapchain_release(ci)==1&&d->refcount==3&&d->additional_swap_chain_count==1);
+   LCHECK(!swapchain_release(ci)&&d->refcount==2&&v->texture->refcount==1&&!d->additional_swap_chain_count&&object.refs==2);
+  }
+  LCHECK(!surface_release(v)&&d->refcount==1&&!d->child_parent_refs&&!d->texture_resources&&object.refs==1);
   LCHECK(!device_release(d)&&!allocated&&!parent_refs);
  }else if(path==1){
   LCHECK(surface_add_ref(v)==2&&d->refcount==3&&v->texture->refcount==2);
@@ -145,16 +153,22 @@ for(unsigned path=0;path<3;path++){
   LCHECK(!swapchain_release(ci)&&d->refcount==1&&d->child_parent_refs==1&&v->texture->refcount==1&&object.refs==2);
   LCHECK(surface_release(v)==1&&d->refcount==1);
   LCHECK(!surface_release(v)&&!allocated&&!parent_refs&&object.refs==1);
- }else{
+ }else if(path==2){
   Texture*t=v->texture;LCHECK(texture_add_ref(&t->iface)==3);d->render_target_texture=t;
   LCHECK(!surface_release(v)&&d->refcount==2&&t->refcount==2);
   LCHECK(!swapchain_release(ci)&&d->refcount==1&&!d->child_parent_refs&&t->refcount==1&&object.refs==2);
+  LCHECK(swapchain_add_ref(ci)==1&&d->refcount==2&&t->refcount==2&&d->additional_swap_chain_count==1);
+  LCHECK(!swapchain_release(ci)&&d->refcount==1&&t->refcount==1&&!d->additional_swap_chain_count);
   LCHECK(!texture_get_surface_level(&t->iface,0,&w)&&w==v&&v->refcount==1&&d->refcount==2&&t->refcount==2);
   LCHECK(!surface_release(w)&&d->refcount==1&&t->refcount==1&&object.refs==2);
   LCHECK(!device_release(d)&&!allocated&&!parent_refs&&object.refs==1);
+ }else{
+  LCHECK(!surface_release(v)&&d->refcount==2&&v->texture->refcount==1&&object.refs==2);
+  LCHECK(!swapchain_release(ci)&&d->refcount==1&&!d->texture_resources&&object.refs==1);
+  LCHECK(!device_release(d)&&!allocated&&!parent_refs);
  }
 }
-printf("PASS actual D3D8 additional lifetime: %u checks; 128 cached zero-count revivals, repeated zero Release, precise device pins, storage/private retention, device-first/chain-first/final-view teardown and binding-only device cleanup\\n",life);
+printf("PASS actual D3D8 additional lifetime: %u checks; 128 surface and 128 raw-chain zero-count revivals, precise device/storage pins, physical chain/private retention, both final-owner orders and binding-only revival/cleanup\\n",life);
 `:''}
 ${api===9?`unsigned life9=0;
 #define LCHECK9(v) do{CHECK(v);life9++;}while(0)

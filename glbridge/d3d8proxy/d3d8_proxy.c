@@ -363,6 +363,7 @@ struct D8Texture {
     BOOL lockable_render_target;
     /* Additional chains own the storage's original device pin explicitly. */
     BOOL private_back_buffer;
+    D8SwapChain *swap_chain;
     /* Only a render target can be multisampled; every other texture is
      * D3DMULTISAMPLE_NONE and the host allocates it with sampleCount 1. */
     D3DMULTISAMPLE_TYPE multisample_type;
@@ -540,6 +541,7 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
 static HRESULT WINAPI device_create_render_target(IDirect3DDevice8* iface,
     UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
     WINBOOL lockable, IDirect3DSurface8** surface_out);
+static void swapchain_destroy_storage(D8SwapChain *chain);
 static void device_release_owned_references(D8Device *device);
 static void shader_assign(D8Shader **target, D8Shader *shader);
 static HRESULT device_bind_pixel_shader(D8Device *device, DWORD handle, D8Shader *shader);
@@ -3061,11 +3063,11 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
     }
     /* Reset ends an active Scene once the host accepts the new device. */
     device->in_scene = FALSE;
+    device->handle = reset.new_device_handle;
     device_clear_bindings(device);
     HeapFree(GetProcessHeap(), 0, device->front_shadow);
     device->front_shadow = new_front_shadow;
     device->front_shadow_pitch = new_front_pitch;
-    device->handle = reset.new_device_handle;
     ++device->reset_epoch;
     d9wg_present_parameters_effective(&device->present, parameters,
         reset.width, reset.height, reset.backbuffer_format, window);
@@ -4800,6 +4802,8 @@ static ULONG WINAPI texture_release(IDirect3DTexture8* iface)
             link = &(*link)->next_device_resource;
         if (*link)
             *link = texture->next_device_resource;
+        if (texture->swap_chain)
+            swapchain_destroy_storage(texture->swap_chain);
         d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
         destroy.resource_handle = texture->handle;
         destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
@@ -5761,26 +5765,40 @@ static HRESULT WINAPI swapchain_query_interface(IDirect3DSwapChain8 *iface,
     return S_OK;
 }
 
+static void swapchain_destroy_storage(D8SwapChain *chain)
+{
+    D9WGDestroySwapChain destroy;
+    destroy.device_handle = chain->device->handle;
+    destroy.swap_chain_handle = chain->handle;
+    emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
+    HeapFree(GetProcessHeap(), 0, chain);
+}
+
 static ULONG WINAPI swapchain_add_ref(IDirect3DSwapChain8 *iface)
 {
-    return (ULONG)InterlockedIncrement(&((D8SwapChain *)iface)->refcount);
+    D8SwapChain *chain = (D8SwapChain *)iface;
+    ULONG refs = (ULONG)InterlockedIncrement(&chain->refcount);
+    if (refs == 1) {
+        D8Surface *surface = surface_from_iface(chain->back_buffer);
+        IDirect3DTexture8_AddRef(&surface->texture->iface);
+        device_child_add_ref(chain->device);
+        ++chain->device->additional_swap_chain_count;
+    }
+    return refs;
 }
 
 static ULONG WINAPI swapchain_release(IDirect3DSwapChain8 *iface)
 {
     D8SwapChain *chain = (D8SwapChain *)iface;
+    if (!InterlockedCompareExchange(&chain->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&chain->refcount);
     if (!refs) {
         D8Device *device = chain->device;
-        D9WGDestroySwapChain destroy;
-        destroy.device_handle = device->handle;
-        destroy.swap_chain_handle = chain->handle;
-        emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
         if (device->additional_swap_chain_count)
             --device->additional_swap_chain_count;
         D8Surface *surface = surface_from_iface(chain->back_buffer);
         IDirect3DTexture8_Release(&surface->texture->iface);
-        HeapFree(GetProcessHeap(), 0, chain);
         device_child_release(device);
     }
     return refs;
@@ -5899,6 +5917,7 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     /* Transfer the storage's original device pin to the chain. Public views
      * acquire their own pin only while their independent count is nonzero. */
     surface->texture->private_back_buffer = TRUE;
+    surface->texture->swap_chain = chain;
     surface->additional_back_buffer = TRUE;
     surface->refcount = 0;
     ++device->additional_swap_chain_count;

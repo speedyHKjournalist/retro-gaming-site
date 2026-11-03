@@ -32,7 +32,7 @@ typedef Interface IDirect3DTexture8,IDirect3DCubeTexture8,IDirect3DVolumeTexture
 #define IDirect3DVolume8_AddRef IDirect3DTexture8_AddRef
 typedef struct Texture Texture;typedef struct Surface Surface;typedef struct Volume Volume;typedef struct{Texture*texture_resources,*cube_resources,*volume_resources;unsigned refs,implicit_surface_count;}Device;
 typedef struct{D9WGPrivateStore private_data;void*shadow;Surface*level_surface;Volume*level_volume;}D8TextureLevel;
-struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT handle,level_count,usage;BOOL private_back_buffer;D9WGPrivateStore private_data;D8TextureLevel*levels;};
+struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT handle,level_count,usage;BOOL private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;D8TextureLevel*levels;};
 struct Surface{Interface iface;LONG refcount;Texture*texture,*cube;Device*device;UINT level,face;BOOL depth_stencil,reset_blocker,additional_back_buffer;void*shadow,*retained_private_data;D9WGPrivateStore private_data;};
 struct Volume{Interface iface;LONG refcount;Texture*texture;UINT level;};
 typedef Device D8Device;
@@ -47,6 +47,7 @@ static LONG InterlockedIncrement(LONG*p){return ++*p;}static LONG InterlockedDec
 static BOOL surface_is_implicit(Surface*s){(void)s;return 0;}
 static void device_child_add_ref(Device*d){(void)d;assert(0);}
 static LONG InterlockedCompareExchange(LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}
+static void swapchain_destroy_storage(void*p){(void)p;assert(0);}
 static void device_child_release(Device*d){assert(d->refs==2);d->refs--;}
 static int emit_command(UINT op,const void*p,UINT size){const D9WGDestroyResource*c=p;assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(*c)&&c->resource_handle==expected_handle&&c->resource_kind==expected_kind);destroys++;return 1;}
 ${['texture_add_ref','texture_release','cube_add_ref','cube_release','volume_texture_add_ref','volume_texture_release','texture_get_surface_level','cube_get_surface','volume_texture_get_volume_level','surface_query_interface','surface_add_ref','surface_release','volume_query_interface','volume_add_ref','volume_release'].map(extract).join('\n')}

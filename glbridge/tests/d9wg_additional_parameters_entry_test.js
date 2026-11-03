@@ -43,7 +43,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,BackBufferFormat;BOOL Windowed;DWORD FullScreen_PresentationInterval,PresentationInterval,Flags;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DDevice${api},IDirect3DSwapChain${api},IDirect3DSurface${api};
-typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer,device_pin_transferred;LONG refcount;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
+typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer,device_pin_transferred;LONG refcount;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
 struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Chain*next_device_chain;};
 struct Device{Interface iface;unsigned refs,pins;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height,Format;}display_mode;struct{HWND hFocusWindow;}creation;UINT additional_swap_chain_count;Chain*additional_swap_chains;};
 typedef Chain D${api}SwapChain;typedef Device D${api}Device;typedef Surface D${api}Surface;
@@ -59,19 +59,21 @@ static void private_data_owner_release(Owner*p){assert(p->refs==1);HeapFree(NULL
 static void surface_release(Interface*p){Surface*s=(Surface*)p;Device*d=s->device;UINT pins=!s->texture->private_back_buffer${api===9?'+!s->device_pin_transferred':''};HeapFree(NULL,0,s);while(pins--)device_child_release(d);}
 #define IDirect3DSurface9_Release surface_release
 #define IDirect3DSurface8_Release surface_release
-static void texture_release(Interface*p){assert(p==&backing_texture.iface);surface_release(&latest_surface->iface);}
-#define IDirect3DTexture8_Release texture_release
+${api===8?`static void swapchain_destroy_storage(Chain*);
+static void texture_release(Interface*p){assert(p==&backing_texture.iface);Chain*c=backing_texture.swap_chain;backing_texture.swap_chain=NULL;if(c)swapchain_destroy_storage(c);surface_release(&latest_surface->iface);}
+#define IDirect3DTexture8_Release texture_release`:""}
 ${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
 static BOOL supported_multisample_type(UINT t){return t==0;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND w,RECT*r){observed_window=w;assert(w==(void*)(uintptr_t)0x44||w==(void*)(uintptr_t)0x55);SetRect(r,0,0,w==(void*)(uintptr_t)0x55?96:128,w==(void*)(uintptr_t)0x55?80:96);}
 static void probe_window_rect(HWND w,int fw,int fh,RECT*r,POINT*p){assert(fw==128&&fh==96);GetClientRect(w,r);*p=(POINT){30,40};}
-static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert((f==21||f==22||f==23)&&usage==1&&!ms&&!quality);last_texture_format=f;backing_texture.private_back_buffer=0;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);${api===9?'device_child_add_ref(d);':''}latest_surface=s;*out=&s->iface;return D3D_OK;}
+static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert((f==21||f==22||f==23)&&usage==1&&!ms&&!quality);last_texture_format=f;backing_texture.private_back_buffer=0;backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);${api===9?'device_child_add_ref(d);':''}latest_surface=s;*out=&s->iface;return D3D_OK;}
 static HRESULT device_create_render_target(Interface*p,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,Interface**out){assert(!lockable);return create_target_texture((Device*)p,w,h,f,1,ms,0,out);}
 static void ClientToScreen(HWND w,POINT*p){assert(w==observed_window);*p=(POINT){30,40};}
 static UINT allocate_handle(void){return next_handle++;}
 static BOOL emit_command(UINT op,const void*p,UINT n){if(op==D9WG_OP_CREATE_SWAP_CHAIN){const D9WGCreateSwapChain*c=p;assert(n==sizeof(*c)&&c->device_handle==77&&c->back_buffer_handle==99&&c->hwnd==(uint32_t)(uintptr_t)observed_window&&c->width==latest_surface->width&&c->height==latest_surface->height);emits++;return !fail_emit;}const D9WGDestroySwapChain*c=p;assert(op==D9WG_OP_DESTROY_SWAP_CHAIN&&n==sizeof(*c)&&c->device_handle==77);destroys++;return 1;}
-${[api===8?"device_create_swapchain":"device_create_additional_swap_chain",...(api===9&&source.includes("static void swap_chain_destroy_storage(")?["swap_chain_destroy_storage"]:[]),api===8?"swapchain_release":"swap_chain_release"].map(n=>extract(source,n)).join("\n")}
+${api===8&&!source.includes("static void swapchain_destroy_storage(")?"static void swapchain_destroy_storage(Chain*c){(void)c;assert(0);}":""}
+${[...(api===8&&source.includes("static void swapchain_destroy_storage(")?["swapchain_destroy_storage"]:[]),api===8?"device_create_swapchain":"device_create_additional_swap_chain",...(api===9&&source.includes("static void swap_chain_destroy_storage(")?["swap_chain_destroy_storage"]:[]),api===8?"swapchain_release":"swap_chain_release"].map(n=>extract(source,n)).join("\n")}
 #define CREATE(d,p,o) ${api===8?"device_create_swapchain(&(d)->iface,p,o)":"device_create_additional_swap_chain(&(d)->iface,p,o)"}
 #define RELEASE(c) ${api===8?"swapchain_release(c)":"swap_chain_release(c)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Additional parameters API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
@@ -81,7 +83,7 @@ for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=
  CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;
  CHECK(c->present.BackBufferWidth==width&&c->present.BackBufferHeight==height&&c->present.BackBufferCount==(counts[n]?counts[n]:1)&&c->present.BackBufferFormat==22&&c->present.hDeviceWindow==(window?(void*)(uintptr_t)0x55:d.creation.hFocusWindow));
  input.BackBufferCount=counts[n]?counts[n]:1;${api===9?'input.BackBufferWidth=width;input.BackBufferHeight=height;':''}CHECK(!memcmp(&p,&input,sizeof(p)));
- CHECK(d.refs==2&&d.pins==1&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer':'d.additional_swap_chains==c&&((Surface*)c->back_buffer)->swap_chain==c&&((Surface*)c->back_buffer)->device_pin_transferred&&!((Surface*)c->back_buffer)->refcount'});
+ CHECK(d.refs==2&&d.pins==1&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer&&((Surface*)c->back_buffer)->texture->swap_chain==c':'d.additional_swap_chains==c&&((Surface*)c->back_buffer)->swap_chain==c&&((Surface*)c->back_buffer)->device_pin_transferred&&!((Surface*)c->back_buffer)->refcount'});
  CHECK(RELEASE(out)==0&&!live&&d.refs==1&&!d.pins&&${api===8?'!d.additional_swap_chain_count':'!d.additional_swap_chains'});cases++;
 }
 for(unsigned failure=0;failure<3;failure++){

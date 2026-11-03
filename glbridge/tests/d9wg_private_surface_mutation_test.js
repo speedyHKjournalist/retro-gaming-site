@@ -15,7 +15,7 @@ try{let killed=0,total=0;for(const api of[8,9]){const source=fs.readFileSync(roo
 ['chain shares device store','swapchain_get_backbuffer','    *surface_out = chain->back_buffer;','    surface_from_iface(chain->back_buffer)->private_data_owner = &chain->device->back_buffer_private_data;\n    *surface_out = chain->back_buffer;'],
 ['chain view reference missing','swapchain_get_backbuffer','IDirect3DSurface8_AddRef(*surface_out);','(void)surface_add_ref;'],
 ['chain eagerly clears live texture store','swapchain_release','IDirect3DTexture8_Release(&surface->texture->iface);','d9wg_private_clear(&surface->texture->levels[0].private_data, &d9wg_private_ops); IDirect3DTexture8_Release(&surface->texture->iface);'],
-['chain allocation leaked','swapchain_release','HeapFree(GetProcessHeap(), 0, chain);','/* omitted */'],
+['chain allocation leaked','swapchain_destroy_storage','HeapFree(GetProcessHeap(), 0, chain);','/* omitted */'],
 ['target allocation failure ignored','device_create_swapchain','if (FAILED(hr))','if (0 && FAILED(hr))'],
 ['missing backing GPU handle','device_create_swapchain','command.back_buffer_handle = surface->texture ? surface->texture->handle : 0;','command.back_buffer_handle = 0; (void)surface;']
 );else for(const field of['implicit_back_buffer','implicit_depth_stencil'])mutations.push([field+' cleanup','device_release','d9wg_private_clear(&device->'+field+'->private_data, &d9wg_private_ops);','/* omitted */']);total+=mutations.length;for(const[name,fn,old,replacement]of mutations){const file=dir+'/candidate.c';fs.writeFileSync(file,mutate(source,fn,old,replacement));run('API '+api+' '+name,api,file);killed++;}}

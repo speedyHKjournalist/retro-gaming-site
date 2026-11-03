@@ -6,7 +6,7 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include <stdio.h>
 #include "runtime/d9wg_private_data.h"
 typedef uint32_t UINT,DWORD;typedef int32_t LONG;typedef int BOOL,D3DFORMAT,D3DPOOL,D3DMULTISAMPLE_TYPE,D3DTEXTUREFILTERTYPE;
-typedef struct D${api}Device D${api}Device;typedef struct D${api}TextureLevel D${api}TextureLevel;
+typedef struct D${api}Device D${api}Device;typedef struct D${api}TextureLevel D${api}TextureLevel;typedef struct D${api}SwapChain D${api}SwapChain;
 ${types.map(type=>'typedef struct D'+api+type+' D'+api+type+';typedef struct{const void*lpVtbl;}IDirect3D'+type+api+';').join('\n')}
 ${structures}
 ${['texture_from_iface','cube_from_iface','volume_texture_from_iface'].map(name=>extract(source,name)).join('\n')}
