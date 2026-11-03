@@ -10417,6 +10417,11 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
     /* D3D9 forbids unbinding slot 0: something always has to receive colour. */
     if (!surface_iface && index == 0)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* A host handle is valid only in the creating device's target state.
+     * Reject before retaining/replacing bindings or changing viewport state. */
+    if (surface_iface && (surface_iface->lpVtbl != &g_surface_vtbl
+            || surface->device != device))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (surface_iface && !surface_target_handle(surface, &handle, &level, &face))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (surface_iface && surface->texture
