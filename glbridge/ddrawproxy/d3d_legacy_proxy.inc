@@ -588,6 +588,8 @@ static HRESULT WINAPI d3d_light_SetLight(IDirect3DLight *iface,
     ZeroMemory(&light->light, sizeof(light->light));
     CopyMemory(&light->light, data, size);
     light->light.dwSize = sizeof(light->light);
+    if (data->dwSize < sizeof(D3DLIGHT2))
+        light->light.dwFlags = D3DLIGHT_ACTIVE;
     if (light->viewport && light->viewport->device &&
             light->viewport->device->legacy_current_viewport ==
             light->viewport)
