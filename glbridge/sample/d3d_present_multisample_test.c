@@ -126,10 +126,15 @@ static void multisample_cases(HWND window, const D3DPRESENT_PARAMETERS* base)
 #if D9WG_IMPLICIT_API == 9
     p = *base;
     p.MultiSampleType = D3DMULTISAMPLE_4_SAMPLES;
-    D3DPRESENT_PARAMETERS unsupported = p;
-    chain = (void*)(uintptr_t)0x1234;
-    check(DEV(CreateAdditionalSwapChain)(device, &p, &chain) == D3DERR_INVALIDCALL && !chain && same_parameters(&p, &unsupported) && refs((IUnknown*)device) == 1 && DEV(TestCooperativeLevel)(device) == D3D_OK, "FAIL retained additional MSAA refusal");
-    report("MSAA ADDITIONAL api=9 samples=4 unsupported=1 unchanged=1 refs=1");
+    chain = NULL;
+    check(DEV(CreateAdditionalSwapChain)(device, &p, &chain) == D3D_OK && chain && refs((IUnknown*)device) == 2, "FAIL additional MSAA9 support");
+    surface = NULL;
+    check(CHAIN(GetBackBuffer)(chain, 0, D3DBACKBUFFER_TYPE_MONO, &surface) == D3D_OK && surface, "FAIL additional MSAA9 buffer");
+    D3DSURFACE_DESC extra_desc;
+    check(SURFACE(GetDesc)(surface, &extra_desc) == D3D_OK && extra_desc.MultiSampleType == D3DMULTISAMPLE_4_SAMPLES && !extra_desc.MultiSampleQuality, "FAIL additional MSAA9 metadata");
+    SURFACE(Release)(surface);
+    check(CHAIN(Release)(chain) == 0 && refs((IUnknown*)device) == 1, "FAIL additional MSAA9 cleanup");
+    report("MSAA ADDITIONAL api=9 samples=4 supported=1 quality=0 refs=1");
 #endif
     const struct {UINT effect, samples, quality, flags;} bad[] = {
         {2,4,0,0}, {3,4,0,0},
@@ -160,7 +165,7 @@ static void multisample_cases(HWND window, const D3DPRESENT_PARAMETERS* base)
         wsprintfA(line, "MSAA REFUSE api=%u effect=%u samples=%u quality=%u flags=%u routes=3 unchanged=1 resetLost=1 recovered=1", D9WG_IMPLICIT_API, bad[i].effect, bad[i].samples, bad[i].quality, bad[i].flags);
         report(line);
     }
-    wsprintfA(line, "MSAA STATUS api=%u acceptedMatrixCalls=3 refusedMatrixCalls=%u successfulResets=%u extraUnsupported=%u locksRefused=4 deviceRefs=1", D9WG_IMPLICIT_API, failures * 3, failures + 1, D9WG_IMPLICIT_API == 9 ? 1 : 0);
+    wsprintfA(line, "MSAA STATUS api=%u acceptedMatrixCalls=3 refusedMatrixCalls=%u successfulResets=%u extraUnsupported=%u locksRefused=4 deviceRefs=1", D9WG_IMPLICIT_API, failures * 3, failures + 1, 0);
     report(line);
 }
 void WINAPI WinMainCRTStartup(void)

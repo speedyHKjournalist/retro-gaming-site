@@ -7268,17 +7268,6 @@ static HRESULT WINAPI device_create_additional_swap_chain(
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    if (params->MultiSampleType != D3DMULTISAMPLE_NONE) {
-        /* The chain's back buffer would have to be a multisampled texture that
-         * also resolves at present; nothing here does that resolve, and a
-         * silently single-sampled chain is a difference the app cannot see. */
-        HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: multisample=%lu is "
-                "not implemented for an additional chain",
-                (DWORD)params->MultiSampleType);
-        TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain",
-                D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
 
     window = params->hDeviceWindow ? params->hDeviceWindow
             : device->creation.hFocusWindow;
@@ -7302,8 +7291,11 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
         params->BackBufferFormat);
 
+    if (!supported_multisample(format, params->MultiSampleType))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     hr = create_target_texture(device, width, height, format,
-            D3DUSAGE_RENDERTARGET, D3DMULTISAMPLE_NONE, 0, &back_buffer);
+            D3DUSAGE_RENDERTARGET, params->MultiSampleType,
+            params->MultiSampleQuality, &back_buffer);
     if (FAILED(hr)) {
         HOSTLOG_FAILED("CreateAdditionalSwapChain refused: its back buffer "
                 "(%lux%lu format=%08lX) could not be created", width, height,

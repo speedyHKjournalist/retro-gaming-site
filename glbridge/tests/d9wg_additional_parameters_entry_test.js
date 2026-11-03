@@ -63,11 +63,11 @@ ${api===8?`static void swapchain_destroy_storage(Chain*);
 static void texture_release(Interface*p){assert(p==&backing_texture.iface);Chain*c=backing_texture.swap_chain;backing_texture.swap_chain=NULL;if(c)swapchain_destroy_storage(c);surface_release(&latest_surface->iface);}
 #define IDirect3DTexture8_Release texture_release`:""}
 ${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
-static BOOL supported_multisample_type(UINT t){return t==0||t==4;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
+static BOOL supported_multisample_type(UINT t){return t==0||t==4;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}static BOOL supported_multisample(D3DFORMAT f,UINT ms){return (f==21||f==22||f==23)&&(!ms||ms==4);}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND w,RECT*r){observed_window=w;assert(w==(void*)(uintptr_t)0x44||w==(void*)(uintptr_t)0x55);SetRect(r,0,0,w==(void*)(uintptr_t)0x55?96:128,w==(void*)(uintptr_t)0x55?80:96);}
 static void probe_window_rect(HWND w,int fw,int fh,RECT*r,POINT*p){assert(fw==128&&fh==96);GetClientRect(w,r);*p=(POINT){30,40};}
-static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert((f==21||f==22||f==23)&&usage==1&&(!ms||(${api}==8&&ms==4))&&!quality);last_texture_format=f;backing_texture.private_back_buffer=0;backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);${api===9?'device_child_add_ref(d);':''}latest_surface=s;*out=&s->iface;return D3D_OK;}
+static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert((f==21||f==22||f==23)&&usage==1&&(!ms||ms==4)&&!quality);last_ms=ms;last_texture_format=f;backing_texture.private_back_buffer=0;backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);${api===9?'device_child_add_ref(d);':''}latest_surface=s;*out=&s->iface;return D3D_OK;}
 static HRESULT device_create_render_target(Interface*p,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,Interface**out){last_ms=ms;last_lockable=lockable;if(lockable&&ms)return D3DERR_INVALIDCALL;return create_target_texture((Device*)p,w,h,f,1,ms,0,out);}
 static void ClientToScreen(HWND w,POINT*p){assert(w==observed_window);*p=(POINT){30,40};}
 static UINT allocate_handle(void){return next_handle++;}
@@ -99,7 +99,15 @@ for(unsigned failure=0;failure<3;failure++){
 }
 fail_at=fail_emit=0;D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22,.BackBufferCount=4},input=p;Interface*out=(void*)(uintptr_t)1;unsigned before=allocations;
 CHECK(CREATE(&d,&p,&out)==D3DERR_INVALIDCALL&&!out&&allocations==before&&!memcmp(&p,&input,sizeof(p))&&d.refs==1);
-${api===9?`d.display_mode.Format=21;
+${api===9?`{
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=32,.BackBufferHeight=24,.BackBufferFormat=22,.BackBufferCount=1,.MultiSampleType=4},input=p;Interface*out=NULL;
+ CHECK(!CREATE(&d,&p,&out)&&out&&last_ms==4);Chain*c=(Chain*)out;
+ CHECK(c->present.MultiSampleType==4&&!c->present.MultiSampleQuality&&!memcmp(&p,&input,sizeof(p)));
+ CHECK(d.refs==2&&d.pins==1&&d.additional_swap_chains==c);
+ CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins&&!d.additional_swap_chains);cases++;
+ const UINT unsupported[]={1,2,16,0xffffffffu};for(UINT i=0;i<4;i++){p=input;p.MultiSampleType=unsupported[i];input=p;out=(void*)(uintptr_t)1;UINT old_allocations=allocations;CHECK(CREATE(&d,&p,&out)==D3DERR_INVALIDCALL&&!out&&old_allocations==allocations&&!memcmp(&p,&input,sizeof(p))&&d.refs==1&&!d.pins);}
+}
+ d.display_mode.Format=21;
 for(UINT profile=0;profile<3;profile++){
  desktop_format=profile?23:22;UINT requested_format=profile==2?21:0,wanted_format=profile==2?21:desktop_format,old_queries=desktop_queries;
  D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=48,.BackBufferFormat=requested_format};Interface*out=NULL;
