@@ -7,6 +7,7 @@ try{for(const api of (process.env.D9WG_WINDOW_PRESENT_ONLY_API?[Number(process.e
  const names=api===8?["capture_surface","emit_surface_update_and_flush","emit_present_and_flush"]:api===9?["emit_window_state_from_probe","maintain_fullscreen_foreground","emit_present_and_flush"]:["emit_window_state_showing_from_probe","emit_present_and_flush"];
  const code=`#include "window_mock.h"
 #include "runtime/d9wg_window_probe.h"
+#include "runtime/d9wg_cursor.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +15,7 @@ try{for(const api of (process.env.D9WG_WINDOW_PRESENT_ONLY_API?[Number(process.e
 #define DDWG_TRACE_CHECKPOINT(...) ((void)0)
 #define CopyMemory(p,q,n) memcpy(p,q,n)
 typedef struct{uint32_t device_handle,hwnd;int32_t x,y;uint32_t width,height;}D8ClientArea;
-typedef struct{uint32_t handle;struct{BOOL Windowed;HWND hDeviceWindow;}present;struct{HWND hFocusWindow;}creation;struct{uint32_t Width,Height;}display_mode;D9WGWindowCache window_cache;HWND state_window,tracked_window;void *app_cursor;BOOL cursor_visible;DWORD foreground_claims,last_foreground_claim;}D9Device;
+typedef struct{uint32_t handle;struct{BOOL Windowed;HWND hDeviceWindow;}present;struct{HWND hFocusWindow;}creation;struct{uint32_t Width,Height;}display_mode;D9WGWindowCache window_cache;HWND state_window,tracked_window;void *app_cursor;BOOL cursor_visible;D9WGCursorState app_cursor_state;DWORD foreground_claims,last_foreground_claim;}D9Device;
 typedef D9Device D8Device;
 typedef struct DDSurface{struct DDSurface *next;BOOL overlay_visible,external_memory;struct{BOOL gpu_dirty;}*memory;}DDSurface;
 typedef struct{BOOL device_created;uint32_t device_handle;DDSurface *primary,*surfaces;HWND window;uint32_t cooperative_flags,mode_width,mode_height;BOOL guest_mode_changed;D9WGWindowCache window_cache;}DDrawObject;
@@ -25,6 +26,7 @@ DWORD GetTickCount(void){return 1000;}
 static void raise_window_to_foreground(HWND w){if(g_transport_lock.held){fputs("window present line: activation held transport lock",stderr);abort();}claims++;fixture.foreground=w;fixture.origin=(POINT){30,40};fixture.screen_rects[0]=(RECT){30,40,190,140};}
 static void ShowWindow(HWND w,int action){(void)w;(void)action;restores++;fixture.iconic=0;}
 static BOOL GetCursorPos(POINT *p){(void)p;return FALSE;}static BOOL ScreenToClient(HWND w,POINT *p){(void)w;(void)p;return FALSE;}
+static void d9wg_cursor_present(uint32_t handle,HWND window,D9WGCursorState*state){(void)handle;(void)window;(void)state;}
 static void emit_cursor_position(D9Device*d,int x,int y,int f){(void)d;(void)x;(void)y;(void)f;}static void update_system_cursor(D9Device*d,HWND w){(void)d;(void)w;}
 void d9wg_window_watch_retry(void){retries++;}
 static BOOL ensure_device(DDrawObject *o){return o->device_created;}static void emit_surface_upload(DDSurface*s,void*r){(void)s;(void)r;}

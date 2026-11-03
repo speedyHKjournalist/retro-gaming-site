@@ -28,6 +28,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_format_queries.h"
@@ -990,6 +991,7 @@ struct D9Device {
     D3DDEVICE_CREATION_PARAMETERS creation;
     D3DPRESENT_PARAMETERS present;
     D3DDISPLAYMODE display_mode;
+    D9WGCursorState app_cursor_state;
     D3DVIEWPORT9 viewport;
     float transforms[D9_MAX_TRANSFORMS][16];
     DWORD render_states[D9_MAX_RENDER_STATES];
@@ -1772,6 +1774,8 @@ static void host_log(uint32_t severity, const char *format, ...)
 #include "../runtime/d9wg_mapped_draw_bridge.h"
 #include "../runtime/d9wg_texture_lod_bridge.h"
 #include "../runtime/d9wg_gamma_bridge.h"
+static BOOL submit_readback_batch_locked(BOOL present);
+#include "../runtime/d9wg_cursor_bridge.h"
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -4319,66 +4323,44 @@ static HRESULT WINAPI device_set_cursor_properties(IDirect3DDevice9 *iface,
         UINT hotspot_x, UINT hotspot_y, IDirect3DSurface9 *bitmap)
 {
     D9Device *device = device_from_iface(iface);
-    D9Surface *surface;
-    D9WGSetCursorProperties command;
-    const BYTE *pixels;
-    UINT row_pitch;
-    uint8_t *payload;
-    uint8_t *blob;
-    UINT byte_count;
-    BOOL result;
-
-    if (!bitmap || bitmap->lpVtbl != &g_surface_vtbl) {
+    if (!bitmap || bitmap->lpVtbl != &g_surface_vtbl)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    surface = surface_from_iface(bitmap);
-    if (surface->shadow) {
-        pixels = surface->shadow;
-        row_pitch = surface->row_pitch;
-    } else if (surface->texture
-            && surface->level < surface->texture->level_count
-            && surface->texture->levels[surface->level].shadow) {
-        /* A cursor built as a texture level rather than a plain surface. */
-        pixels = surface->texture->levels[surface->level].shadow;
-        row_pitch = surface->texture->levels[surface->level].row_pitch;
-    } else {
-
+    D9Surface *surface = surface_from_iface(bitmap);
+    D9TextureLevel *level = surface_texture_level(surface);
+    D3DDISPLAYMODE adapter;
+    if (FAILED(d3d_get_adapter_display_mode(&device->parent->iface,
+            device->creation.AdapterOrdinal, &adapter)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    if (surface->format != D3DFMT_A8R8G8B8 && surface->format != D3DFMT_X8R8G8B8) {
-
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    if (!multiply_u32(surface->width * 4u, surface->height, &byte_count))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-
-    ZeroMemory(&command, sizeof(command));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_SET_CURSOR_PROPERTIES,
-            sizeof(command), byte_count, NULL, &payload, &blob);
-    if (result) {
-        UINT row;
-        command.device_handle = device->handle;
-        command.hotspot_x = hotspot_x;
-        command.hotspot_y = hotspot_y;
-        command.width = surface->width;
-        command.height = surface->height;
-        command.data_bytes = byte_count;
-        command.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &command, sizeof(command));
-        /* Repack to a tight width*4 stride; the source pitch is whatever the
-         * surface was allocated with. */
-        for (row = 0; row < surface->height; ++row)
-            CopyMemory(blob + row * surface->width * 4u,
-                    pixels + row * row_pitch, surface->width * 4u);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    if (!result)
-        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    D9WGCursorImage image;
+    ZeroMemory(&image, sizeof(image));
+    image.adapter_width = adapter.Width;
+    image.adapter_height = adapter.Height;
+    image.level = surface->level;
+    image.locked = surface->locked || (level && level->locked);
+    image.device = surface->device->handle;
+    image.format = surface->format;
+    image.width = surface->width;
+    image.height = surface->height;
+    image.pixels = surface->shadow ? surface->shadow : level ? level->shadow : NULL;
+    image.pitch = surface->shadow ? surface->row_pitch : level ? level->row_pitch : 0;
+    image.byte_count = surface->shadow ? surface->byte_count : level ? level->byte_count : 0;
+    DWORD usage = surface->texture ? surface->texture->usage
+            : surface->cube_texture ? surface->cube_texture->usage : 0;
+    image.readback = surface->pool == D3DPOOL_DEFAULT
+            && (surface->swap_chain || (usage & D3DUSAGE_RENDERTARGET)
+                || !level || !level->shadow_valid);
+    image.handle = surface->texture ? surface->texture->handle
+            : surface->cube_texture ? surface->cube_texture->handle : 0;
+    image.face = surface->cube_texture ? surface->cube_face : 0;
+    HRESULT result = d9wg_cursor_upload(device->handle, hotspot_x, hotspot_y, &image);
+    if (FAILED(result))
+        return TRACE_REFUSE(result);
+    BOOL committed = d9wg_cursor_commit(device->handle, &device->app_cursor_state,
+            image.width, image.height);
     device->cursor_ready = TRUE;
     device->app_cursor = TRUE;
-
-    return D3D_OK;
+    device->cursor_visible = device->app_cursor_state.visible;
+    return TRACE_REFUSE(committed ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 /*
@@ -4646,12 +4628,7 @@ static void restore_display_mode(D9Device *device)
 
 static void emit_cursor_position(D9Device *device, int x, int y, DWORD flags)
 {
-    D9WGSetCursorPosition command;
-    command.device_handle = device->handle;
-    command.x = x;
-    command.y = y;
-    command.flags = flags;
-    emit_command(D9WG_OP_SET_CURSOR_POSITION, &command, sizeof(command));
+    d9wg_cursor_position_wire(device->handle, x, y, flags);
 }
 
 /*
@@ -4867,34 +4844,17 @@ static void WINAPI device_set_cursor_position(IDirect3DDevice9 *iface,
         int x, int y, DWORD flags)
 {
     D9Device *device = device_from_iface(iface);
-    POINT point;
-
-    /* D3D9 takes screen coordinates here; the host draws into back-buffer
-     * space, so convert through the device window the same way
-     * emit_present_and_flush() does. */
-    point.x = x;
-    point.y = y;
-    if (device->present.hDeviceWindow)
-        ScreenToClient(device->present.hDeviceWindow, &point);
-    emit_cursor_position(device, point.x, point.y, flags);
+    HWND window = device->present.hDeviceWindow ? device->present.hDeviceWindow : device->creation.hFocusWindow;
+    d9wg_cursor_set_position(device->handle, window, &device->app_cursor_state,
+            (int32_t)x, (int32_t)y, flags);
 }
 
-static WINBOOL WINAPI device_show_cursor(IDirect3DDevice9 *iface,
-        WINBOOL show)
+static WINBOOL WINAPI device_show_cursor(IDirect3DDevice9 *iface, WINBOOL show)
 {
     D9Device *device = device_from_iface(iface);
-    D9WGShowCursor command;
-    WINBOOL previous = device->cursor_visible;
-
-    /* Worth tracing on its own: ShowCursor(FALSE) from a game that never
-     * called SetCursorProperties means it intends to draw the pointer itself,
-     * as ordinary geometry. A missing cursor would then be a lost draw, not a
-     * missing cursor feature -- a completely different bug. */
-
-    device->cursor_visible = show ? TRUE : FALSE;
-    command.device_handle = device->handle;
-    command.show = device->cursor_visible ? 1u : 0u;
-    emit_command(D9WG_OP_SHOW_CURSOR, &command, sizeof(command));
+    HWND window = device->present.hDeviceWindow ? device->present.hDeviceWindow : device->creation.hFocusWindow;
+    WINBOOL previous = d9wg_cursor_show(device->handle, window, &device->app_cursor_state, show);
+    device->cursor_visible = device->app_cursor_state.visible;
     return previous;
 }
 
@@ -5171,14 +5131,7 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
      * armed and visible. */
     emit_window_state_from_probe(device, window, &probe);
     if (device->app_cursor) {
-        if (device->cursor_visible) {
-            POINT pointer;
-            if (GetCursorPos(&pointer)) {
-                if (window)
-                    ScreenToClient(window, &pointer);
-                emit_cursor_position(device, pointer.x, pointer.y, 0);
-            }
-        }
+        d9wg_cursor_present(device->handle, window, &device->app_cursor_state);
     } else {
         /* The application is leaving the pointer to Windows; capture it out
          * of GDI instead (see emit_system_cursor_bitmap). */

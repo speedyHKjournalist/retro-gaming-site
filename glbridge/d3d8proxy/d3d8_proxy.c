@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_state_defaults.h"
@@ -221,6 +222,7 @@ struct D8Device {
     D3DDEVICE_CREATION_PARAMETERS creation;
     D3DPRESENT_PARAMETERS present;
     D3DDISPLAYMODE display_mode;
+    D9WGCursorState app_cursor_state;
     D3DVIEWPORT8 viewport;
     D3DGAMMARAMP gamma_ramp;
     BOOL gamma_ramp_set;
@@ -713,6 +715,8 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
 #include "../runtime/d9wg_mapped_draw_bridge.h"
 #include "../runtime/d9wg_texture_lod_bridge.h"
 #include "../runtime/d9wg_gamma_bridge.h"
+static BOOL submit_readback_batch_locked(BOOL present);
+#include "../runtime/d9wg_cursor_bridge.h"
 
 /* ---- Stage 6: D3D8 shader model 1.x bytecode validation ---- */
 
@@ -1622,6 +1626,7 @@ static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
     present.y = surface.y;
     present.width = surface.width;
     present.height = surface.height;
+    d9wg_cursor_present(device->handle, window, &device->app_cursor_state);
     result = reserve_command_locked(D9WG_OP_PRESENT, sizeof(present), 0,
             NULL, &payload, NULL);
     if (result) {
@@ -1790,6 +1795,7 @@ static void fill_caps(D3DCAPS8 *caps)
              * the lock paths honour DISCARD/NOOVERWRITE. */
             | D3DCAPS2_DYNAMICTEXTURES
             | D3DCAPS2_FULLSCREENGAMMA;
+    caps->CursorCaps = D3DCURSORCAPS_COLOR;
     caps->PresentationIntervals = D3DPRESENT_INTERVAL_IMMEDIATE
             | D3DPRESENT_INTERVAL_ONE;
     caps->DevCaps = D3DDEVCAPS_HWRASTERIZATION
@@ -5378,13 +5384,60 @@ static HRESULT copy_surface_rect(D8Surface* source, const RECT* source_rect,
 #define DEV_STUB(name, ...) \
     static HRESULT WINAPI device_##name(IDirect3DDevice8 *iface, __VA_ARGS__)
 
-DEV_STUB(set_cursor_properties, UINT x, UINT y, IDirect3DSurface8 *surface)
-{ (void)iface; (void)x; (void)y; (void)surface; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
+static HRESULT WINAPI device_set_cursor_properties(IDirect3DDevice8 *iface,
+        UINT hotspot_x, UINT hotspot_y, IDirect3DSurface8 *bitmap)
+{
+    D8Device *device = device_from_iface(iface);
+    if (!bitmap || bitmap->lpVtbl != &g_surface_vtbl)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8Surface *surface = surface_from_iface(bitmap);
+    D8TextureLevel *level = surface_texture_level(surface);
+    D3DDISPLAYMODE adapter;
+    if (FAILED(d3d_get_adapter_display_mode(&device->parent->iface,
+            device->creation.AdapterOrdinal, &adapter)))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D9WGCursorImage image;
+    ZeroMemory(&image, sizeof(image));
+    image.adapter_width = adapter.Width;
+    image.adapter_height = adapter.Height;
+    image.level = surface->level;
+    image.locked = surface->locked || (level && level->locked);
+    D3DSURFACE_DESC desc;
+    if (FAILED(surface_get_desc(bitmap, &desc)))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    image.device = surface_device(surface)->handle;
+    image.format = desc.Format;
+    image.width = desc.Width;
+    image.height = desc.Height;
+    image.pixels = surface_pixels(surface, &image.pitch);
+    image.byte_count = level ? level->byte_count : desc.Size;
+    image.readback = desc.Pool == D3DPOOL_DEFAULT
+            && (surface->backbuffer || (desc.Usage & D3DUSAGE_RENDERTARGET)
+                || (level && level->gpu_dirty));
+    if (image.readback && !surface_gpu_location(surface, &image.handle, &image.level, &image.face))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    HRESULT result = d9wg_cursor_upload(device->handle, hotspot_x, hotspot_y, &image);
+    if (FAILED(result))
+        return D8WG_TRACE_ERROR(result);
+    BOOL committed = d9wg_cursor_commit(device->handle, &device->app_cursor_state,
+            image.width, image.height);
+    return D8WG_TRACE_ERROR(committed ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
+}
 static void WINAPI device_set_cursor_position(IDirect3DDevice8 *iface,
         UINT x, UINT y, DWORD flags)
-{ (void)iface; (void)x; (void)y; (void)flags; }
+{
+    D8Device *device = device_from_iface(iface);
+    HWND window = device->present.hDeviceWindow ? device->present.hDeviceWindow : device->creation.hFocusWindow;
+    d9wg_cursor_set_position(device->handle, window, &device->app_cursor_state,
+            (int32_t)x, (int32_t)y, flags);
+}
 static WINBOOL WINAPI device_show_cursor(IDirect3DDevice8 *iface, WINBOOL show)
-{ (void)iface; (void)show; return FALSE; }
+{
+    D8Device *device = device_from_iface(iface);
+    HWND window = device->present.hDeviceWindow ? device->present.hDeviceWindow : device->creation.hFocusWindow;
+    WINBOOL previous = d9wg_cursor_show(device->handle, window, &device->app_cursor_state, show);
+    return previous;
+}
 
 static HRESULT WINAPI swapchain_query_interface(IDirect3DSwapChain8 *iface,
         REFIID iid, void **object)
