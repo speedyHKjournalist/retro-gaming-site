@@ -3260,7 +3260,7 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
 
 static BOOL device_has_reset_blockers(D9Device *device)
 {
-    if (device->in_scene || device->recording_result || device->additional_swap_chains)
+    if (device->recording_result || device->additional_swap_chains)
         return TRUE;
     if (device->implicit_back_buffer && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
             (UINT)device->implicit_back_buffer->refcount,
@@ -5081,6 +5081,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset)))
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    /* Reset ends an active Scene once the host accepts the new device. */
+    device->in_scene = FALSE;
     device_clear_bindings(device);
     device->handle = reset.new_device_handle;
     ++device->reset_epoch;

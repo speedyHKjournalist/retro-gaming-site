@@ -2478,7 +2478,7 @@ static BOOL device_has_reset_blockers(D8Device *device)
             + (device->implicit_depth_stencil && device->implicit_depth_stencil->refcount > 0);
     UINT owned_depth = device->implicit_depth_stencil
             && device->depth_surface == device->implicit_depth_stencil ? 1u : 0u;
-    if (device->in_scene || device->recording_state_block
+    if (device->recording_state_block
             || device->additional_swap_chain_count
             || device->implicit_surface_count > cached_active)
         return TRUE;
@@ -2990,6 +2990,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
         HeapFree(GetProcessHeap(), 0, new_front_shadow);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
+    /* Reset ends an active Scene once the host accepts the new device. */
+    device->in_scene = FALSE;
     device_clear_bindings(device);
     HeapFree(GetProcessHeap(), 0, device->front_shadow);
     device->front_shadow = new_front_shadow;

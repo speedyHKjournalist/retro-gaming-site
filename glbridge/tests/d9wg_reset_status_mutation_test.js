@@ -37,6 +37,8 @@ try {
     for (const api of [8, 9]) {
         const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         for (const [name, fn, old, replacement] of [
+            ["Scene not ended by accepted Reset", "device_reset", "    device->in_scene = FALSE;", ""],
+            ["Scene ended before Reset acceptance", "device_reset", "d9wg_reset_begin(&device->reset_state);", "device->in_scene = FALSE;\n    d9wg_reset_begin(&device->reset_state);"],
             ["Reset never marks failure", "device_reset", "d9wg_reset_begin(&device->reset_state);", ""],
             ["success never restores readiness", "device_reset", "d9wg_reset_complete(&device->reset_state);", ""],
             ["recovery published before state replay", "device_reset", "if (!emit_device_state_after_reset(device))", "d9wg_reset_complete(&device->reset_state);\n    if (!emit_device_state_after_reset(device))"],
@@ -54,5 +56,5 @@ try {
             run("D3D8 resource refusal HRESULT", {D8WG_RESET_STATUS_FRONTEND: file}); killed++;
         }
     }
-    console.log("PASS Reset status mutations: " + killed + "/19; both public Reset/cooperative/Present paths, HRESULT distinction, recovery publication and shared status policy");
+    console.log("PASS Reset status mutations: " + killed + "/23; both public Reset/cooperative/Present paths, HRESULT distinction, recovery publication and shared status policy");
 } finally { fs.rmSync(dir, {recursive: true, force: true}); }

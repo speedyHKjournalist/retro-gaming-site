@@ -19,7 +19,7 @@ function extract(source, name) {
 try {
     for (const api of [8, 9]) {
         const source = fs.readFileSync(process.env["D" + api + "WG_RESET_STATUS_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
-        const functions = ["device_reset", "device_test_cooperative_level", "device_present", api === 8 ? "swapchain_present" : "swap_chain_present"];
+        const functions = ["device_reset", "device_begin_scene", "device_end_scene", "device_test_cooperative_level", "device_present", api === 8 ? "swapchain_present" : "swap_chain_present"];
         fs.writeFileSync(dir + "/status.c", `#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +63,7 @@ typedef struct {Desc desc;UINT row_pitch,width,height,format,multisample,multisa
 typedef struct Device Device;
 struct Device {
  int iface; D9WGResetState reset_state; D9WGPresentClock present_clock; D9WGPresentPacing present_pacing;
- UINT handle,reset_epoch; BOOL blocked; struct {HWND hFocusWindow;UINT BehaviorFlags;} creation;
+ UINT handle,reset_epoch; BOOL blocked,in_scene; struct {HWND hFocusWindow;UINT BehaviorFlags;} creation;
  D3DPRESENT_PARAMETERS present; Mode display_mode; Surface *implicit_back_buffer,*implicit_depth_stencil;
  BYTE*front_shadow;UINT front_shadow_pitch; HWND tracked_window;
  struct {UINT X,Y,Width,Height;float MinZ,MaxZ;} viewport;
@@ -91,13 +91,14 @@ static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b)
 static void detach_device_window(Device*d){d->tracked_window=NULL;}
 static void attach_device_window(Device*d,HWND w){d->tracked_window=w;}` : "static void d9wg_window_cache_invalidate(int*p){*p=0;}"}
 static BOOL emit_command(UINT op,const void*p,UINT size){
+ if(op==D9WG_OP_BEGIN_SCENE||op==D9WG_OP_END_SCENE){const D9WGDeviceOnly*c=p;assert(size==sizeof(*c)&&c->device_handle==active->handle);assert(active->in_scene==(op==D9WG_OP_BEGIN_SCENE));return 1;}
  const D9WGResetDevice*r=p;assert(active->reset_state.required&&op==D9WG_OP_RESET&&size==sizeof(*r));
  assert(r->old_device_handle==active->handle&&r->new_device_handle!=r->old_device_handle);emits++;return !fail_reset_emit;
 }
 static void device_clear_bindings(Device*d){assert(d==active&&d->reset_state.required);clears++;}
 static void fill_display_mode(Mode*m,UINT w,UINT h,UINT f){*m=(Mode){w,h,f,60};}
 static void device_init_states(Device*d){assert(d==active&&d->reset_state.required);initializations++;}
-static BOOL emit_device_state_after_reset(Device*d){assert(d==active&&d->reset_state.required);replays++;return !fail_state_emit;}
+static BOOL emit_device_state_after_reset(Device*d){assert(d==active&&d->reset_state.required&&!d->in_scene);replays++;return !fail_state_emit;}
 static BOOL emit_present_and_flush(Device*d,HWND w){(void)w;assert(d==active&&!d->reset_state.required);frames++;return 1;}
 ${api === 9 ? "static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND w){return emit_present_and_flush(c->device,w);}" : ""}
 static void d9wg_throttle_present(D9WGPresentClock*c,D9WGPresentPacing*p,UINT i,UINT hz){(void)c;(void)i;(void)hz;paces++;p->deadline++;}
@@ -117,7 +118,7 @@ for(unsigned kind=0;kind<14;kind++){
  case 7:p.BackBufferWidth=8193;break;case 8:fail_layout=1;expected=D3DERR_NOTAVAILABLE;break;case 9:fail_alloc=1;expected=E_OUTOFMEMORY;break;
  case 10:fail_reset_emit=1;expected=D3DERR_DRIVERINTERNALERROR;break;case 11:fail_state_emit=1;expected=D3DERR_DRIVERINTERNALERROR;break;
  case 12:p.MultiSampleQuality=1;expected=D3DERR_NOTAVAILABLE;break;case 13:fail_depth_ms=1;p.MultiSampleType=4;expected=D3DERR_NOTAVAILABLE;break;}
- Device before=d;D3DPRESENT_PARAMETERS input=p;unsigned old_emits=emits,old_clears=clears;
+ d.in_scene=1;Device before=d;D3DPRESENT_PARAMETERS input=p;unsigned old_emits=emits,old_clears=clears;
  CHECK(device_reset(&d,kind?&p:NULL)==expected);failures++;CHECK(!memcmp(&p,&input,sizeof(p)));
  CHECK(d.reset_state.required);if(kind!=11){before.reset_state.required=1;CHECK(!memcmp(&before,&d,sizeof(d))&&clears==old_clears);}
  CHECK(emits==old_emits+(kind>=10&&kind<=11));CHECK(clears==old_clears+(kind==11));
@@ -131,6 +132,7 @@ for(unsigned kind=0;kind<14;kind++){
  fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=0;d.blocked=0;busy=0;
  CHECK(device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET);
  p=base;CHECK(device_reset(&d,&p)==D3D_OK&&!d.reset_state.required);CHECK(device_test_cooperative_level(&d)==D3D_OK);
+ CHECK(!d.in_scene&&device_end_scene(&d)==D3DERR_INVALIDCALL);CHECK(device_begin_scene(&d)==D3D_OK&&d.in_scene);CHECK(device_end_scene(&d)==D3D_OK&&!d.in_scene);CHECK(device_end_scene(&d)==D3DERR_INVALIDCALL);
  CHECK(d.viewport.Width==64&&d.viewport.Height==64&&d.display_mode.Width==64&&d.handle!=77);
  CHECK(device_present(&d,NULL,NULL,NULL,NULL)==D3D_OK&&PRESENT(&additional,0)==D3D_OK&&PRESENT(&implicit,1)==D3D_OK);
  CHECK(device_test_cooperative_level(&untouched)==D3D_OK);
@@ -140,7 +142,7 @@ for(unsigned kind=0;kind<14;kind++){
 /* Retrying while the resource remains held must never recover the device. */
 unsigned kind=99;Device d={.handle=77,.display_mode={64,64,22,60},.blocked=1};active=&d;
 for(unsigned n=0;n<8;n++){D3DPRESENT_PARAMETERS p=base;CHECK(device_reset(&d,&p)==${api === 8 ? "D3DERR_DEVICELOST" : "D3DERR_INVALIDCALL"});CHECK(device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET);}
-printf("PASS actual API ${api} Reset status: %u checks, %u failure paths; repeated queries/retries, device isolation, no lost Present commands/timing and complete recovery\\n",checks,failures);return 0;}
+printf("PASS actual API ${api} Reset status: %u checks, %u failure paths; repeated queries/retries, device isolation, no lost Present commands/timing and complete recovery and native Scene reset boundaries\\n",checks,failures);return 0;}
 `);
         const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, dir + "/status.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/status"], {encoding: "utf8"});
         assert.equal(build.status, 0, build.stderr);

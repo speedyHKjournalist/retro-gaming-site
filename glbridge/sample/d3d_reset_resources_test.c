@@ -83,13 +83,22 @@ typedef IDirect3DBaseTexture9 BaseTexture;
 #endif
 static const GUID key = { 0x10293847, 1, 2, { 3, 4, 5, 6, 7, 8, 9, 10 } };
 static Texture* marker;
-static UINT accepted, refused;
+static UINT accepted, refused, scene_resets, refused_ends, fresh_pairs;
 static HRESULT refusal_hr, cooperative_hr, lost_present_hr;
+static void open_reset_scene(void)
+{
+    check(DEV(BeginScene)(device) == D3D_OK, "FAIL pre-Reset BeginScene");
+    scene_resets++;
+}
 static void accept_reset(D3DPRESENT_PARAMETERS* parameters)
 {
     D3DPRESENT_PARAMETERS p = *parameters;
     check(DEV(Reset)(device, &p) == D3D_OK, "FAIL accepted resource Reset");
     check(DEV(TestCooperativeLevel)(device) == D3D_OK, "FAIL successful Reset cooperative status");
+    check(DEV(EndScene)(device) == D3DERR_INVALIDCALL, "FAIL Reset retained active Scene");
+    refused_ends++;
+    check(DEV(BeginScene)(device) == D3D_OK && DEV(EndScene)(device) == D3D_OK, "FAIL fresh Scene after Reset");
+    fresh_pairs++;
     DWORD value = 0, size = 4;
     check(TEX(GetPrivateData)(marker, &key, &value, &size) == D3D_OK && size == 4 && value == 0x11223344u, "FAIL managed private data after Reset");
     accepted++;
@@ -215,6 +224,7 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
         IUnknown* resource = NULL;
         check(make_resource(kind, D3DPOOL_DEFAULT, &resource) == D3D_OK && resource && bind_resource(kind, resource) == D3D_OK, "FAIL device-owned resource bind");
         IUnknown_Release(resource);
+        open_reset_scene();
         accept_reset(base);
     }
     for (UINT pool = D3DPOOL_SYSTEMMEM; pool <= D3DPOOL_SCRATCH; pool++) {
@@ -227,6 +237,7 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
         bytes[1] = 0x43;
         bytes[2] = 0x65;
         bytes[3] = 0x87;
+        open_reset_scene();
         accept_reset(base);
         check(bytes[0] == (BYTE)(0x21u + pool) && bytes[1] == 0x43 && bytes[2] == 0x65 && bytes[3] == 0x87, "FAIL mapped CPU storage changed");
         check(TEX(UnlockRect)(texture, 0) == D3D_OK, "FAIL CPU lock state lost");
@@ -273,6 +284,7 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
 #endif
     SURFACE(Release)(target);
     SURFACE(Release)(depth);
+    open_reset_scene();
     accept_reset(base);
     check(get_implicit(0, &target) == D3D_OK && get_implicit(1, &depth) == D3D_OK, "FAIL restored implicit targets");
     D3DSURFACE_DESC desc;
@@ -302,6 +314,9 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
     wsprintfA(line, "RESET GRAPH %u accepted=15 refused=7 families=5 cpuMapped=2 implicit=2 ownedTargets=1 private=11223344 frame=1", D9WG_RESET_API);
     report(line);
     wsprintfA(line, "RESET STATUS %u refused=7 recovered=15 lostPresents=7 coopNotReset=28 coopReady=15 resetHR=%08lX coopHR=%08lX presentHR=%08lX", D9WG_RESET_API, (DWORD)refusal_hr, (DWORD)cooperative_hr, (DWORD)lost_present_hr);
+    report(line);
+    check(scene_resets == 8 && refused_ends == 15 && fresh_pairs == 15, "FAIL Reset Scene counts");
+    wsprintfA(line, "RESET SCENE %u resetOpen=%u endRefused=%u freshPairs=%u", D9WG_RESET_API, scene_resets, refused_ends, fresh_pairs);
     report(line);
 }
 void WINAPI WinMainCRTStartup(void)
