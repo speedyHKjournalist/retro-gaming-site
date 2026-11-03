@@ -2896,8 +2896,7 @@ static void fill_caps(D3DCAPS9 *caps)
     /* A single-adapter device is a group of one. Zero is not a value any
      * runtime reports, and an app that iterates the group gets nothing. */
     caps->NumberOfAdaptersInGroup = 1;
-    caps->PresentationIntervals = D3DPRESENT_INTERVAL_IMMEDIATE
-            | D3DPRESENT_INTERVAL_ONE;
+    caps->PresentationIntervals = D9WG_PRESENT_INTERVAL_MASK;
     caps->DevCaps = D3DDEVCAPS_HWRASTERIZATION
             | D3DDEVCAPS_HWTRANSFORMANDLIGHT
             | D3DDEVCAPS_DRAWPRIMTLVERTEX
@@ -3982,6 +3981,9 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
             (DWORD)parameters->AutoDepthStencilFormat, parameters->Flags,
             parameters->PresentationInterval,
             (DWORD)(uintptr_t)parameters->hDeviceWindow);
+    if (!d9wg_present_interval_valid(9, parameters->Windowed,
+            parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
             ? D3DFMT_X8R8G8B8 : parameters->BackBufferFormat;
     if (!supported_multisample(backbuffer_format,
@@ -4924,6 +4926,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
                 (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    if (!d9wg_present_interval_valid(9, parameters->Windowed,
+            parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!supported_multisample(
             parameters->BackBufferFormat == D3DFMT_UNKNOWN
                     ? device->display_mode.Format
@@ -7228,6 +7233,9 @@ static HRESULT WINAPI device_create_additional_swap_chain(
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
+    if (!d9wg_present_interval_valid(9, params->Windowed,
+            params->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!params->Windowed || !device->present.Windowed) {
         HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: D3D9 allows "
                 "additional chains only on a windowed device, and only for a "

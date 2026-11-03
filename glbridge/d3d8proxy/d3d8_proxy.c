@@ -1824,8 +1824,7 @@ static void fill_caps(D3DCAPS8 *caps)
             | D3DCAPS2_DYNAMICTEXTURES
             | D3DCAPS2_FULLSCREENGAMMA;
     caps->CursorCaps = D3DCURSORCAPS_COLOR;
-    caps->PresentationIntervals = D3DPRESENT_INTERVAL_IMMEDIATE
-            | D3DPRESENT_INTERVAL_ONE;
+    caps->PresentationIntervals = D9WG_PRESENT_INTERVAL_MASK;
     caps->DevCaps = D3DDEVCAPS_HWRASTERIZATION
             | D3DDEVCAPS_HWTRANSFORMANDLIGHT
             | D3DDEVCAPS_DRAWPRIMTLVERTEX
@@ -2584,6 +2583,9 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     *device_out = NULL;
     if (adapter || type != D3DDEVTYPE_HAL || !parameters)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(8, parameters->Windowed,
+            parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!supported_multisample_type(parameters->MultiSampleType))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->EnableAutoDepthStencil
@@ -2837,6 +2839,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     if (!parameters || !supported_multisample_type(parameters->MultiSampleType)
             || parameters->BackBufferCount > 3
             || device_has_reset_blockers(device))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(8, parameters->Windowed,
+            parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
             && !supported_depth_stencil_format(
@@ -5579,6 +5584,9 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
             || parameters->BackBufferCount > 3
             || parameters->BackBufferWidth > 8192
             || parameters->BackBufferHeight > 8192)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(8, parameters->Windowed,
+            parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))

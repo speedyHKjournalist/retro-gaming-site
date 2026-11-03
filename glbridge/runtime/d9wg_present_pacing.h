@@ -2,6 +2,8 @@
 #define D9WG_PRESENT_PACING_H
 #include <stdint.h>
 
+#define D9WG_PRESENT_INTERVAL_MASK 0x80000001u
+
 typedef struct D9WGPresentClock {
     uint32_t hz;
     uint8_t shift;
@@ -20,6 +22,7 @@ typedef struct D9WGPresentPacingOps {
 
 uint32_t d9wg_present_frames(uint32_t interval);
 uint32_t d9wg_present_interval8(uint32_t requested, int windowed, uint32_t swap_effect);
+int d9wg_present_interval_valid(uint32_t api, int windowed, uint32_t requested, uint32_t supported);
 void d9wg_present_pacing_reset(D9WGPresentPacing*);
 /* Call only after a successful presentation, without holding a transport lock.
  * Ops supply the clock's current units on each sample, including fallback.

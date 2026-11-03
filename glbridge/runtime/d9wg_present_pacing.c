@@ -25,6 +25,21 @@ uint32_t d9wg_present_interval8(uint32_t requested, int windowed, uint32_t swap_
     return windowed ? 0x80000000u : requested;
 }
 
+int d9wg_present_interval_valid(uint32_t api, int windowed, uint32_t requested, uint32_t supported)
+{
+    if (api != 8 && api != 9)
+        return 0;
+    if (api == 8 && windowed)
+        return requested == 0;
+    if (!requested)
+        return 1;
+    if (requested != 1 && requested != 2 && requested != 4 && requested != 8 && requested != 0x80000000u)
+        return 0;
+    if (windowed && requested != 1 && requested != 0x80000000u)
+        return 0;
+    return (supported & requested) == requested;
+}
+
 void d9wg_present_pacing_reset(D9WGPresentPacing* state)
 {
     if (state) {

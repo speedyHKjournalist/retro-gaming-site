@@ -8,6 +8,7 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include <string.h>
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_private_data.h"
+#include "runtime/d9wg_present_pacing.h"
 typedef uint32_t DWORD,ULONG,UINT;typedef int32_t LONG,HRESULT;typedef uint8_t BYTE;typedef int BOOL,D3DFORMAT,D3DBACKBUFFER_TYPE;typedef const void*REFGUID;
 #define WINAPI
 #define TRUE 1
@@ -33,7 +34,7 @@ typedef uint32_t DWORD,ULONG,UINT;typedef int32_t LONG,HRESULT;typedef uint8_t B
 #define TRACE_SURFACE_FREED(...)
 typedef struct Texture Texture;typedef struct View View;typedef struct Device Device;typedef struct{void*lpVtbl;}Interface;
 typedef struct{DWORD Width,Height;D3DFORMAT Format;}Mode;
-typedef struct{BOOL Windowed;UINT MultiSampleType,BackBufferCount,BackBufferWidth,BackBufferHeight;D3DFORMAT BackBufferFormat;}D3DPRESENT_PARAMETERS;
+typedef struct{BOOL Windowed;UINT FullScreen_PresentationInterval,MultiSampleType,BackBufferCount,BackBufferWidth,BackBufferHeight;D3DFORMAT BackBufferFormat;}D3DPRESENT_PARAMETERS;
 typedef struct{Interface iface;}Parent;
 struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;};
 typedef struct{D9WGPrivateStore private_data;}Level;
@@ -86,4 +87,4 @@ CHECK(!swapchain_get_backbuffer(chain_iface,0,0,&a)&&!swapchain_get_backbuffer(c
 View empty={0};size=4;CHECK(surface_get_private_data(&empty,key,&out,&size)==D3DERR_NOTFOUND&&surface_free_private_data(&empty,key)==D3DERR_NOTFOUND);cases++;
 CHECK(d->refcount==1&&!d->child_parent_refs);CHECK(!device_release(d)&&object.refs==1&&!allocated&&!parent_refs);cases++;
 printf("PASS actual API ${api} surface private data: %u standalone/implicit/store lifetime, final device cleanup${api===8?', chain-view pins with unchanged COM refs, early chain release and allocation failures':''} cases\\n",cases);return 0;}
-`);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/entry.c',root+'/runtime/d9wg_private_data.c','-o',dir+'/entry'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/entry',[],{encoding:'utf8',timeout:20000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}
+`);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/entry.c',root+'/runtime/d9wg_private_data.c',root+'/runtime/d9wg_present_pacing.c','-o',dir+'/entry'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/entry',[],{encoding:'utf8',timeout:20000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}
