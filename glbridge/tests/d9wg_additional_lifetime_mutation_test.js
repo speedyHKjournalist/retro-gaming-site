@@ -23,7 +23,7 @@ try {
         ["zero surface destroys live chain", "surface_release", "if (!InterlockedCompareExchange(&chain->refcount, 0, 0)\n                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))", "if (1)"],
         ["zero chain destroys held surface", "swap_chain_release", "if (!InterlockedCompareExchange(&surface->refcount, 0, 0)\n                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))", "if ((void)surface, 1)"],
         ["chain storage creates a fake public release", "swap_chain_destroy_storage", "surface_destroy_storage(surface);", "surface->refcount = 1; IDirect3DSurface9_Release(&surface->iface);"],
-        ["texture returns transferred pin twice", "texture_release", "if (!texture->private_back_buffer)", "if (1)"],
+        ["texture returns transferred pin twice", "texture_release", "if (!private_storage)", "if (TRUE || !private_storage)"],
         ["zero chain blocks binding-only Reset", "device_has_reset_blockers", "if (InterlockedCompareExchange(&chain->refcount, 0, 0))", "if (1)", "resources"],
     ]) {
         const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, fn, old, replacement));

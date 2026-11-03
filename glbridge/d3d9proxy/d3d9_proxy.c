@@ -1180,6 +1180,7 @@ struct D9IndexBuffer {
 struct D9Texture {
     IDirect3DTexture9 iface;
     LONG refcount;
+    LONG binding_refs;          /* sampler/target holds do not expose COM refs */
     D9Device *device;
     uint32_t handle;
     UINT width;
@@ -1357,6 +1358,20 @@ static BOOL surface_is_implicit(const D9Surface *surface)
         || surface->auto_depth_stencil;
 }
 
+static void texture_destroy_storage(D9Texture *texture);
+
+static void texture_binding_add_ref(D9Texture *texture)
+{
+    InterlockedIncrement(&texture->binding_refs);
+}
+
+static void texture_binding_release(D9Texture *texture)
+{
+    if (!InterlockedDecrement(&texture->binding_refs)
+            && !InterlockedCompareExchange(&texture->refcount, 0, 0))
+        texture_destroy_storage(texture);
+}
+
 static void surface_destroy_storage(D9Surface *surface);
 static void swap_chain_destroy_storage(D9SwapChain *chain);
 
@@ -1367,7 +1382,9 @@ static BOOL surface_uses_private_bindings(const D9Surface *surface)
 
 static void surface_binding_add_ref(D9Surface *surface)
 {
-    if (surface_uses_private_bindings(surface))
+    if (surface->texture_child)
+        texture_binding_add_ref(surface->texture);
+    else if (surface_uses_private_bindings(surface))
         InterlockedIncrement(&surface->binding_refs);
     else
         IDirect3DSurface9_AddRef(&surface->iface);
@@ -1375,6 +1392,10 @@ static void surface_binding_add_ref(D9Surface *surface)
 
 static void surface_binding_release(D9Surface *surface)
 {
+    if (surface->texture_child) {
+        texture_binding_release(surface->texture);
+        return;
+    }
     if (!surface_uses_private_bindings(surface)) {
         IDirect3DSurface9_Release(&surface->iface);
         return;
@@ -3269,9 +3290,6 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
 {
     UINT refs = 0;
     for (UINT i = 0; i < D9_MAX_TEXTURE_BINDINGS; ++i) {
-        if (kind == D9WG_RESOURCE_TEXTURE_2D && device->textures[i]
-                && &device->textures[i]->iface == iface)
-            ++refs;
         if (kind == D9WG_RESOURCE_TEXTURE_CUBE && device->cube_bindings[i]
                 && &device->cube_bindings[i]->iface == iface)
             ++refs;
@@ -3288,9 +3306,7 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
             ++refs;
         } else if (kind == D9WG_RESOURCE_TEXTURE_2D && surface->texture
                 && &surface->texture->iface == iface) {
-            if (surface->texture_child) {
-                ++refs;
-            } else {
+            if (!surface->texture_child) {
                 /* A standalone target owns one backing-texture reference,
                  * independent of how many slots retain its surface. */
                 UINT j;
@@ -3425,7 +3441,7 @@ static void device_clear_bindings(D9Device *device)
         device->textures[index] = NULL;
         device->cube_bindings[index] = NULL;
         device->volume_bindings[index] = NULL;
-        if (texture) IDirect3DTexture9_Release(&texture->iface);
+        if (texture) texture_binding_release(texture);
         if (cube) IDirect3DCubeTexture9_Release(&cube->iface);
         if (volume) IDirect3DVolumeTexture9_Release(&volume->iface);
     }
@@ -5700,18 +5716,18 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
     if (device->textures[slot] == texture && device->cube_bindings[slot] == cube
             && device->volume_bindings[slot] == volume)
         return D3D_OK;
-    if (texture) IDirect3DTexture9_AddRef(&texture->iface);
+    D9Texture *old_texture = device->textures[slot];
+    D9CubeTexture *old_cube = device->cube_bindings[slot];
+    D9VolumeTexture *old_volume = device->volume_bindings[slot];
+    if (texture) texture_binding_add_ref(texture);
     if (cube) IDirect3DCubeTexture9_AddRef(&cube->iface);
     if (volume) IDirect3DVolumeTexture9_AddRef(&volume->iface);
-    if (device->textures[slot])
-        IDirect3DTexture9_Release(&device->textures[slot]->iface);
-    if (device->cube_bindings[slot])
-        IDirect3DCubeTexture9_Release(&device->cube_bindings[slot]->iface);
-    if (device->volume_bindings[slot])
-        IDirect3DVolumeTexture9_Release(&device->volume_bindings[slot]->iface);
     device->textures[slot] = texture;
     device->cube_bindings[slot] = cube;
     device->volume_bindings[slot] = volume;
+    if (old_texture) texture_binding_release(old_texture);
+    if (old_cube) IDirect3DCubeTexture9_Release(&old_cube->iface);
+    if (old_volume) IDirect3DVolumeTexture9_Release(&old_volume->iface);
     command.device_handle = device->handle;
     command.stage = stage;
     command.texture_handle = handle;
@@ -12619,43 +12635,58 @@ static HRESULT WINAPI texture_query_interface(IDirect3DTexture9 *iface,
 
 static ULONG WINAPI texture_add_ref(IDirect3DTexture9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&texture_from_iface(iface)->refcount);
+    D9Texture *texture = texture_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&texture->refcount);
+    if (refs == 1 && !texture->private_back_buffer)
+        device_child_add_ref(texture->device);
+    return refs;
+}
+
+static void texture_destroy_storage(D9Texture *texture)
+{
+    D9Texture** link = &texture->device->texture_resources;
+    D9WGDestroyResource destroy;
+    UINT level;
+    while (*link && *link != texture)
+        link = &(*link)->next_device_resource;
+    if (*link)
+        *link = texture->next_device_resource;
+    d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
+    destroy.resource_handle = texture->handle;
+    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    for (level = 0; level < texture->level_count; ++level) {
+        d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
+        /* The level's surface sub-object dies with the texture; nothing
+         * can still hold it, because every surface reference is one of the
+         * texture references that just reached zero. */
+        if (texture->levels[level].level_surface) {
+            TRACE_SURFACE_FREED(
+                &texture->levels[level].level_surface->iface);
+            HeapFree(GetProcessHeap(), 0,
+                texture->levels[level].level_surface);
+            texture->levels[level].level_surface = NULL;
+        }
+        HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
+    }
+    HeapFree(GetProcessHeap(), 0, texture->levels);
+    HeapFree(GetProcessHeap(), 0, texture);
 }
 
 static ULONG WINAPI texture_release(IDirect3DTexture9* iface)
 {
-    D9Texture* texture = texture_from_iface(iface);
+    D9Texture *texture = texture_from_iface(iface);
+    if (!InterlockedCompareExchange(&texture->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9Texture** link = &texture->device->texture_resources;
-        D9WGDestroyResource destroy;
-        UINT level;
-        while (*link && *link != texture)
-            link = &(*link)->next_device_resource;
-        if (*link)
-            *link = texture->next_device_resource;
-        d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
-        destroy.resource_handle = texture->handle;
-        destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        for (level = 0; level < texture->level_count; ++level) {
-            d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
-            /* The level's surface sub-object dies with the texture; nothing
-             * can still hold it, because every surface reference is one of the
-             * texture references that just reached zero. */
-            if (texture->levels[level].level_surface) {
-                TRACE_SURFACE_FREED(
-                    &texture->levels[level].level_surface->iface);
-                HeapFree(GetProcessHeap(), 0,
-                    texture->levels[level].level_surface);
-                texture->levels[level].level_surface = NULL;
-            }
-            HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
-        }
-        HeapFree(GetProcessHeap(), 0, texture->levels);
-        if (!texture->private_back_buffer)
-            device_child_release(texture->device);
-        HeapFree(GetProcessHeap(), 0, texture);
+        D9Device *device = texture->device;
+        BOOL private_storage = texture->private_back_buffer;
+        if (!InterlockedCompareExchange(&texture->binding_refs, 0, 0))
+            texture_destroy_storage(texture);
+        /* May destroy both objects through final binding cleanup. */
+        if (!private_storage)
+            device_child_release(device);
     }
     return refs;
 }

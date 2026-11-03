@@ -48,7 +48,7 @@ static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Sur
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==8&&n);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;assert(!f);if(p){assert(live);live--;free(p);}}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}static LONG InterlockedDecrement(LONG*p){assert(*p>0);return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG v,LONG c){LONG old=*p;if(old==c)*p=v;return old;}
-static void surface_destroy_storage(D9Surface*);static void surface_binding_release(D9Surface*);
+static void texture_destroy_storage(D9Texture*);static void texture_binding_add_ref(D9Texture*);static void texture_binding_release(D9Texture*);static void surface_destroy_storage(D9Surface*);static void surface_binding_release(D9Surface*);
 static ULONG device_add_ref(Interface*);static ULONG device_release(Interface*);static ULONG surface_add_ref(Interface*);static ULONG surface_release(Interface*);static ULONG texture_release(Interface*);
 #define IDirect3DSurface9_AddRef surface_add_ref
 #define IDirect3DSurface9_Release surface_release
@@ -68,7 +68,7 @@ static UINT allocate_handle(void){return ++handles;}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){if(fail_layout||f!=22)return 0;*p=w*4;*r=h;*b=w*h*4;return 1;}
 static BOOL emit_texture_create(D9Device*d,D9Texture*t){assert(t->device==d&&t->width&&t->height&&t->level_count==1&&t->multisample_quality==0);creates++;return !fail_emit;}
 static BOOL emit_command(UINT op,const void*p,UINT n){assert(op==D9WG_OP_DESTROY_RESOURCE&&n==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;if(c->resource_kind==3)destroys++;else{assert(!c->resource_kind&&c->resource_handle==7&&active_device&&!active_device->texture_resources&&!active_device->render_target_surface&&!active_device->child_parent_refs);device_destroys++;}return 1;}
-${["device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "texture_release", "surface_uses_private_bindings", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture"].map(n => extract(source, n)).join("\n")}
+${["device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_uses_private_bindings", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture"].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Target lifetime line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 static D9Device*new_device(Parent*p){D9Device*d=HeapAlloc(NULL,8,sizeof(*d));d->refcount=1;d->handle=7;d->parent=p;p->refs=1;active_device=d;return d;}
 int main(void){unsigned cases=0;const UINT usages[]={1,1,2,2,0},samples[]={0,4,0,4,0};

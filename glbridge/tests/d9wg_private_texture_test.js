@@ -8,7 +8,7 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include <string.h>
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_private_data.h"
-typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REFGUID;
+typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REFGUID;typedef int BOOL;
 #define WINAPI
 #define D3D_OK 0
 #define D3DERR_NOTFOUND ((HRESULT)0x88760866u)
@@ -21,8 +21,9 @@ typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REF
 typedef struct Texture Texture;typedef struct View View;typedef struct{void*lpVtbl;}Interface;
 typedef struct{Texture*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;unsigned refs;}Device;
 typedef struct{D9WGPrivateStore private_data;View*level_surface;View*level_volume;void*shadow;}Level;
-struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount;uint32_t handle,level_count;int private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;Level*levels;};
+struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount,binding_refs;uint32_t handle,level_count;int private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;Level*levels;};
 struct View{Interface iface;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;int texture_child;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
+typedef Device D${api}Device;
 typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3DTexture${api},IDirect3DCubeTexture${api},IDirect3DVolumeTexture${api};
 typedef View D${api}Surface,D${api}Volume,IDirect3DSurface${api},IDirect3DVolume${api};
 static Texture*texture_from_iface(Texture*t){return t;}static Texture*cube_from_iface(Texture*t){return t;}static Texture*volume_texture_from_iface(Texture*t){return t;}static View*surface_from_iface(View*v){return v;}static View*volume_from_iface(View*v){return v;}
@@ -36,11 +37,12 @@ typedef struct{unsigned refs;Texture*texture;int check_destroy;}IUnknown;
 static unsigned IUnknown_AddRef(IUnknown*o){assert(!held&&o->refs);return ++o->refs;}
 static unsigned IUnknown_Release(IUnknown*o){assert(!held&&o->refs);if(o->check_destroy){assert(device.refs==2);assert(device.texture_resources!=o->texture&&device.cube_${api===8?'resources':'textures'}!=o->texture&&device.volume_${api===8?'resources':'textures'}!=o->texture);}return --o->refs;}
 static int32_t InterlockedDecrement(int32_t*p){return --*p;}
+${api===9?"static int32_t InterlockedCompareExchange(int32_t*p,int32_t v,int32_t c){int32_t old=*p;if(old==c)*p=v;return old;}":""}
 ${api===8?"static void swapchain_destroy_storage(void*p){(void)p;assert(0);}":""}
 static void device_child_release(Device*d){assert(d->refs==2);d->refs--;}
 static int emit_command(uint16_t op,const void*p,uint32_t size){assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;assert(c->resource_handle==0x8000+destroys&&c->resource_kind==3+destroys);destroys++;return 1;}
 #include "runtime/d9wg_private_data_bridge.h"
-${['surface_private_store',...['texture','cube','volume_texture','surface','volume'].flatMap(k=>['set','get','free'].map(m=>k+'_'+m+'_private_data')),'texture_release','cube_release','volume_texture_release'].map(n=>extract(source,n)).join('\n')}
+${['surface_private_store',...['texture','cube','volume_texture','surface','volume'].flatMap(k=>['set','get','free'].map(m=>k+'_'+m+'_private_data')),...(api===9?['texture_destroy_storage']:[]),'texture_release','cube_release','volume_texture_release'].map(n=>extract(source,n)).join('\n')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Private texture API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){unsigned cases=0;const uint8_t key[16]={1},object_key[16]={2};HRESULT(*set[3])(Texture*,REFGUID,const void*,DWORD,DWORD)={texture_set_private_data,cube_set_private_data,volume_texture_set_private_data};HRESULT(*get[3])(Texture*,REFGUID,void*,DWORD*)={texture_get_private_data,cube_get_private_data,volume_texture_get_private_data};HRESULT(*drop[3])(Texture*,REFGUID)={texture_free_private_data,cube_free_private_data,volume_texture_free_private_data};ULONG(*release_texture[3])(Texture*)={texture_release,cube_release,volume_texture_release};
 for(unsigned kind=0;kind<3;kind++){Texture*t=HeapAlloc(NULL,0,sizeof(*t));t->device=&device;t->refcount=2;t->handle=0x8000+kind;t->level_count=2;unsigned count=kind==1?12:2;device.refs=2;if(!kind)device.texture_resources=t;else if(kind==1)device.cube_${api===8?'resources':'textures'}=t;else device.volume_${api===8?'resources':'textures'}=t;t->levels=HeapAlloc(NULL,0,count*sizeof(Level));for(unsigned i=0;i<count;i++){t->levels[i].shadow=HeapAlloc(NULL,0,4);if(kind==2)t->levels[i].level_volume=HeapAlloc(NULL,0,sizeof(View));else t->levels[i].level_surface=HeapAlloc(NULL,0,sizeof(View));}

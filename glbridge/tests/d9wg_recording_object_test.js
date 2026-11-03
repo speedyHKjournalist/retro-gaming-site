@@ -52,6 +52,11 @@ static const int g_texture_vtbl=1,g_cube_vtbl=2,g_volume_texture_vtbl=3,g_vb_vtb
 static struct {void *iface;int *refs;} registry[32];static unsigned registry_count,emissions;static int fail_alloc;
 static int addref(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0)abort();return ++*registry[i].refs;}abort();}
 static int release(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0)abort();return --*registry[i].refs;}abort();}
+/* These are backend construction stubs; public recording references remain
+ * independently observed. The complete private lifetime runs in its own suite. */
+static void texture_binding_add_ref(D9Texture*t){addref(&t->iface);}
+static void texture_binding_release(D9Texture*t){release(&t->iface);}
+
 ${['VertexBuffer','IndexBuffer','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','BaseTexture'].map(n=>'#define IDirect3D'+n+'9_AddRef(p) addref(p)\n#define IDirect3D'+n+'9_Release(p) release(p)').join('\n')}
 static D9Device *device_from_iface(D9Device *p){return p;}
 static D9VertexBuffer *vb_from_iface(Interface *p){return (void*)p;}

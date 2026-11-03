@@ -78,6 +78,7 @@ static ULONG device_add_ref(Device*);static ULONG device_release(Device*);static
 static ULONG surface_add_ref(View*);static ULONG surface_release(View*);
 static void surface_binding_add_ref(View*);static void surface_binding_release(View*);
 ${api===9?"static void surface_destroy_storage(View*);":""}
+${api===9?"static void texture_destroy_storage(Texture*);static void texture_binding_add_ref(Texture*);static void texture_binding_release(Texture*);":""}
 static ULONG texture_add_ref(Interface*);static ULONG texture_release(Interface*);typedef Interface IDirect3DTexture${api};
 static Texture*texture_from_iface(Interface*p){return (Texture*)p;}
 #define IDirect3DSurface${api}_AddRef(p) surface_add_ref((View*)(p))
@@ -114,7 +115,7 @@ static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void
 static unsigned g_command_count;
 static int emit_command(uint16_t op,const void*p,uint32_t size){if(op==D9WG_OP_DESTROY_SWAP_CHAIN){const D9WGDestroySwapChain*c=p;assert(size==sizeof(*c)&&c->device_handle==0x9000);return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;assert(c->resource_kind==3||(c->resource_handle==0x9000&&!c->resource_kind));return 1;}
 static BOOL submit_batch_locked(BOOL present){(void)present;return 1;}
-${["texture_add_ref","texture_release","swap_chain_destroy_storage","swap_chain_add_ref","swap_chain_release"].map(n=>extract(source,n)).join("\n")}`}
+${["texture_add_ref","texture_destroy_storage","texture_binding_add_ref","texture_binding_release","texture_release","swap_chain_destroy_storage","swap_chain_add_ref","swap_chain_release"].map(n=>extract(source,n)).join("\n")}`}
 ${['surface_private_store','surface_set_private_data','surface_get_private_data','surface_free_private_data',...(api===9?['surface_uses_private_bindings']:[]),'surface_binding_add_ref','surface_binding_release','surface_add_ref',...(api===9?['surface_destroy_storage']:[]),'surface_release','device_release'].map(n=>extract(source,n)).join('\n')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Private surface API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){(void)fail_create;unsigned cases=0;Parent parent={0};Device*d=HeapAlloc(NULL,0,sizeof(*d));d->refcount=1;d->parent=&parent;d->handle=0x9000;d->display_mode=(Mode){64,64,22};d->present=(D3DPRESENT_PARAMETERS){.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferFormat=22};const uint8_t key[16]={1},object_key[16]={2};DWORD data=0x10203040,size,out=0;IUnknown object={.refs=1};

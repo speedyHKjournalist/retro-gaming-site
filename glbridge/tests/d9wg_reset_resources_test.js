@@ -33,12 +33,12 @@ else if(kind==1){d->index_buffer=r;refs++;}
 else{UINT last=${api===8?7:19};${api===8?'d->textures[0]=r;':'if(kind==2)d->textures[0]=r;else if(kind==3)d->cube_bindings[0]=r;else d->volume_bindings[0]=r;'}refs++;if(mode==2){${api===8?'d->textures[last]=r;':'if(kind==2)d->textures[last]=r;else if(kind==3)d->cube_bindings[last]=r;else d->volume_bindings[last]=r;'}refs++;
 if(kind<4){view->texture_child=kind==2;view->texture=kind==2?r:NULL;view->cube_texture=kind==3?r:NULL;
 ${api===8?'if(kind==2){d->render_target_texture=r;d->depth_surface=view;refs+=2;}else{d->render_target_cube=r;refs++;}':'d->render_target_surfaces[0]=view;d->render_target_surfaces[3]=view;refs+=2;if(kind==2){d->depth_stencil_surface=view;refs++;}'}
-}}}return refs;}
+}}}return ${api===9?"kind==2?0:refs":"refs"};}
 int main(void){unsigned cases=0;Device d={0};CHECK(!device_has_reset_blockers(&d));cases++;
 /* Wine Windows cases: CPU pools survive (including locked SYSTEMMEM/SCRATCH),
  * referenced DEFAULT objects block, and target bindings alone allow Reset. */
 for(UINT kind=0;kind<5;kind++)for(UINT pool=0;pool<4;pool++)for(UINT mode=0;mode<3;mode++)for(UINT external=0;external<3;external++)for(UINT locked=0;locked<2;locked++){
-Level levels[12]={0};Resource r={.pool=pool,.level_count=2,.levels=levels};Surface view={0};d=(Device){0};UINT owned=bind_resource(&d,&r,&view,kind,mode);if(!owned&&!external)continue;r.refcount=(LONG)(owned+external);r.locked=locked;levels[kind==3?11:1].locked=locked;root_resource(&d,&r,kind);BOOL expected=pool==0&&(external>0||locked);Device before=d;Resource before_r=r;CHECK(device_has_reset_blockers(&d)==expected&&!memcmp(&d,&before,sizeof(d))&&!memcmp(&r,&before_r,sizeof(r)));cases++;
+Level levels[12]={0};Resource r={.pool=pool,.level_count=2,.levels=levels};Surface view={0};d=(Device){0};UINT owned=bind_resource(&d,&r,&view,kind,mode);if(!owned&&!external&&!mode)continue;r.refcount=(LONG)(owned+external);r.locked=locked;levels[kind==3?11:1].locked=locked;root_resource(&d,&r,kind);BOOL expected=pool==0&&(external>0||locked);Device before=d;Resource before_r=r;CHECK(device_has_reset_blockers(&d)==expected&&!memcmp(&d,&before,sizeof(d))&&!memcmp(&r,&before_r,sizeof(r)));cases++;
 if(!expected){Resource tail={.pool=0,.refcount=1};r.next_device_resource=&tail;CHECK(device_has_reset_blockers(&d));cases++;}
 }
 ${api===9?`D9SwapChain tail={.refcount=1},head={.next_device_chain=&tail};d=(Device){.additional_swap_chains=&head};CHECK(device_has_reset_blockers(&d));tail.refcount=0;CHECK(!device_has_reset_blockers(&d));head.next_device_chain=NULL;CHECK(!device_has_reset_blockers(&d));cases+=3;`:''}
