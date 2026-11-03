@@ -130,6 +130,9 @@ typedef struct D8ClientArea {
 
 typedef struct D8TextureLevel {
     D9WGPrivateStore private_data;
+    /* Contained COM views share the texture's reference count and lifetime. */
+    D8Surface *level_surface;
+    D8Volume *level_volume;
     BYTE *shadow;
     UINT width;
     UINT height;
@@ -4616,6 +4619,7 @@ static ULONG WINAPI texture_release(IDirect3DTexture8* iface)
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         for (level = 0; level < texture->level_count; ++level) {
             d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
+            HeapFree(GetProcessHeap(), 0, texture->levels[level].level_surface);
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
         }
         HeapFree(GetProcessHeap(), 0, texture->levels);
@@ -4729,17 +4733,24 @@ static HRESULT WINAPI texture_get_surface_level(IDirect3DTexture8 *iface,
     *surface_out = NULL;
     if (level >= texture->level_count)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8TextureLevel *level_data = &texture->levels[level];
+    surface = level_data->level_surface;
+    if (surface) {
+        IDirect3DSurface8_AddRef(&surface->iface);
+        *surface_out = &surface->iface;
+        return D3D_OK;
+    }
     surface = (D8Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
     if (!surface)
         return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     surface->iface.lpVtbl = &g_surface_vtbl;
-    surface->refcount = 1;
     surface->texture = texture;
     surface->device = texture->device;
     surface->level = level;
     /* What SetRenderTarget tests to tell a colour target from a depth one. */
     surface->depth_stencil = (texture->usage & D3DUSAGE_DEPTHSTENCIL) != 0;
+    level_data->level_surface = surface;
     IDirect3DTexture8_AddRef(iface);
     *surface_out = &surface->iface;
     return D3D_OK;
@@ -4787,7 +4798,12 @@ static HRESULT WINAPI surface_query_interface(IDirect3DSurface8 *iface,
 
 static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
 {
-    return (ULONG)InterlockedIncrement(&surface_from_iface(iface)->refcount);
+    D8Surface *surface = surface_from_iface(iface);
+    if (surface->texture)
+        return IDirect3DTexture8_AddRef(&surface->texture->iface);
+    if (surface->cube)
+        return IDirect3DCubeTexture8_AddRef(&surface->cube->iface);
+    return (ULONG)InterlockedIncrement(&surface->refcount);
 }
 
 static void private_data_owner_release(D8PrivateDataOwner* owner)
@@ -4801,6 +4817,11 @@ static void private_data_owner_release(D8PrivateDataOwner* owner)
 static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
+    /* The parent release can free this cached view; do not touch it later. */
+    if (surface->texture)
+        return IDirect3DTexture8_Release(&surface->texture->iface);
+    if (surface->cube)
+        return IDirect3DCubeTexture8_Release(&surface->cube->iface);
     ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
     if (!refs) {
         d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
@@ -4809,11 +4830,7 @@ static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
         if (surface->reset_blocker && surface->device
                 && surface->device->implicit_surface_count)
             --surface->device->implicit_surface_count;
-        if (surface->texture)
-            IDirect3DTexture8_Release(&surface->texture->iface);
-        else if (surface->cube)
-            IDirect3DCubeTexture8_Release(&surface->cube->iface);
-        else if (surface->device)
+        if (surface->device)
             device_child_release(surface->device);
         HeapFree(GetProcessHeap(), 0, surface->shadow);
         HeapFree(GetProcessHeap(), 0, surface);
@@ -7730,6 +7747,7 @@ static ULONG WINAPI cube_release(IDirect3DCubeTexture8* iface)
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         for (index = 0; index < texture->level_count * 6u; ++index) {
             d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
+            HeapFree(GetProcessHeap(), 0, texture->levels[index].level_surface);
             HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
         }
         HeapFree(GetProcessHeap(), 0, texture->levels);
@@ -7829,15 +7847,22 @@ static HRESULT WINAPI cube_get_surface(IDirect3DCubeTexture8 *iface,
     *surface_out = NULL;
     if ((UINT)face >= 6u || level >= texture->level_count)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8TextureLevel *level_data = &texture->levels[(UINT)face * texture->level_count + level];
+    surface = level_data->level_surface;
+    if (surface) {
+        IDirect3DSurface8_AddRef(&surface->iface);
+        *surface_out = &surface->iface;
+        return D3D_OK;
+    }
     surface = (D8Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
     if (!surface) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     surface->iface.lpVtbl = &g_surface_vtbl;
-    surface->refcount = 1;
     surface->cube = texture;
     surface->face = (UINT)face;
     surface->device = texture->device;
     surface->level = level;
+    level_data->level_surface = surface;
     IDirect3DCubeTexture8_AddRef(iface);
     *surface_out = &surface->iface;
     return D3D_OK;
@@ -8012,6 +8037,7 @@ static ULONG WINAPI volume_texture_release(IDirect3DVolumeTexture8* iface)
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         for (level = 0; level < texture->level_count; ++level) {
             d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
+            HeapFree(GetProcessHeap(), 0, texture->levels[level].level_volume);
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
         }
         HeapFree(GetProcessHeap(), 0, texture->levels);
@@ -8115,13 +8141,20 @@ static HRESULT WINAPI volume_texture_get_volume_level(
     if (!volume_out) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *volume_out = NULL;
     if (level >= texture->level_count) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8TextureLevel *level_data = &texture->levels[level];
+    volume = level_data->level_volume;
+    if (volume) {
+        IDirect3DVolumeTexture8_AddRef(iface);
+        *volume_out = &volume->iface;
+        return D3D_OK;
+    }
     volume = (D8Volume *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*volume));
     if (!volume) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     volume->iface.lpVtbl = &g_volume_vtbl;
-    volume->refcount = 1;
     volume->texture = texture;
     volume->level = level;
+    level_data->level_volume = volume;
     IDirect3DVolumeTexture8_AddRef(iface);
     *volume_out = &volume->iface;
     return D3D_OK;
@@ -8160,17 +8193,15 @@ static HRESULT WINAPI volume_query_interface(IDirect3DVolume8 *iface,
 }
 
 static ULONG WINAPI volume_add_ref(IDirect3DVolume8 *iface)
-{ return (ULONG)InterlockedIncrement(&volume_from_iface(iface)->refcount); }
+{
+    D8Volume *volume = volume_from_iface(iface);
+    return IDirect3DVolumeTexture8_AddRef(&volume->texture->iface);
+}
 
 static ULONG WINAPI volume_release(IDirect3DVolume8 *iface)
 {
     D8Volume *volume = volume_from_iface(iface);
-    ULONG refs = (ULONG)InterlockedDecrement(&volume->refcount);
-    if (!refs) {
-        IDirect3DVolumeTexture8_Release(&volume->texture->iface);
-        HeapFree(GetProcessHeap(), 0, volume);
-    }
-    return refs;
+    return IDirect3DVolumeTexture8_Release(&volume->texture->iface);
 }
 
 static HRESULT WINAPI volume_get_device(IDirect3DVolume8 *iface,
