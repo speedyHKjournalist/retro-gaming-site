@@ -4234,12 +4234,12 @@ static UINT full_mip_level_count(UINT width, UINT height)
     return levels;
 }
 
-static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
-        UINT width, UINT height, UINT levels, DWORD usage,
-        D3DFORMAT format, D3DPOOL pool, IDirect3DTexture8 **texture_out)
+static HRESULT create_texture_internal(D8Device* device,
+    UINT width, UINT height, UINT levels, DWORD usage,
+    D3DFORMAT format, D3DPOOL pool, D3DMULTISAMPLE_TYPE ms,
+    IDirect3DTexture8** texture_out)
 {
-    D8Device *device = device_from_iface(iface);
-    D8Texture *texture;
+    D8Texture* texture;
     UINT full_levels;
     UINT level;
     UINT level_width;
@@ -4250,12 +4250,14 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *texture_out = NULL;
     if (!width || !height || width > 4096 || height > 4096
-            || !supported_texture_format(format)
-            || (usage & D3DUSAGE_DEPTHSTENCIL)
-            || (usage & D3DUSAGE_RENDERTARGET
-                && (pool != D3DPOOL_DEFAULT || levels != 1
-                    || !supported_render_target_format(format)))
-            || pool > D3DPOOL_SCRATCH)
+        || !supported_texture_format(format)
+        || !supported_multisample_type(ms)
+        || (ms != D3DMULTISAMPLE_NONE && !(usage & D3DUSAGE_RENDERTARGET))
+        || (usage & D3DUSAGE_DEPTHSTENCIL)
+        || (usage & D3DUSAGE_RENDERTARGET
+            && (pool != D3DPOOL_DEFAULT || levels != 1
+                || !supported_render_target_format(format)))
+        || pool > D3DPOOL_SCRATCH)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(width, height);
     if (!levels)
@@ -4263,12 +4265,12 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
     if (levels > full_levels)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
-    texture = (D8Texture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(*texture));
+    texture = (D8Texture*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        sizeof(*texture));
     if (!texture)
         return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-    texture->levels = (D8TextureLevel *)HeapAlloc(GetProcessHeap(),
-            HEAP_ZERO_MEMORY, levels * sizeof(*texture->levels));
+    texture->levels = (D8TextureLevel*)HeapAlloc(GetProcessHeap(),
+        HEAP_ZERO_MEMORY, levels * sizeof(*texture->levels));
     if (!texture->levels) {
         HeapFree(GetProcessHeap(), 0, texture);
         return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
@@ -4283,12 +4285,13 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice8 *iface,
     texture->usage = usage;
     texture->format = format;
     texture->pool = pool;
+    texture->multisample_type = ms;
     device_child_add_ref(device);
 
     level_width = width;
     level_height = height;
     for (level = 0; level < levels; ++level) {
-        D8TextureLevel *level_data = &texture->levels[level];
+        D8TextureLevel* level_data = &texture->levels[level];
         if (!allocate_texture_level(level_data, format, level_width,
                 level_height, 1u))
             goto allocation_failed;
@@ -4316,6 +4319,15 @@ allocation_failed:
     HeapFree(GetProcessHeap(), 0, texture->levels);
     HeapFree(GetProcessHeap(), 0, texture);
     return failure;
+}
+
+static HRESULT WINAPI device_create_texture(IDirect3DDevice8* iface,
+    UINT width, UINT height, UINT levels, DWORD usage,
+    D3DFORMAT format, D3DPOOL pool, IDirect3DTexture8** texture_out)
+{
+    return D8WG_TRACE_ERROR(create_texture_internal(device_from_iface(iface),
+        width, height, levels, usage, format, pool,
+        D3DMULTISAMPLE_NONE, texture_out));
 }
 
 /*
@@ -4627,11 +4639,11 @@ static DWORD WINAPI texture_get_level_count(IDirect3DTexture8 *iface)
     return texture_from_iface(iface)->level_count;
 }
 
-static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture8 *iface,
-        UINT level, D3DSURFACE_DESC *desc)
+static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture8* iface,
+    UINT level, D3DSURFACE_DESC* desc)
 {
-    D8Texture *texture = texture_from_iface(iface);
-    D8TextureLevel *level_data;
+    D8Texture* texture = texture_from_iface(iface);
+    D8TextureLevel* level_data;
     if (!desc || level >= texture->level_count)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
@@ -4641,7 +4653,7 @@ static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture8 *iface,
     desc->Usage = texture->usage;
     desc->Pool = texture->pool;
     desc->Size = level_data->byte_count;
-    desc->MultiSampleType = D3DMULTISAMPLE_NONE;
+    desc->MultiSampleType = texture->multisample_type;
     desc->Width = level_data->width;
     desc->Height = level_data->height;
     return D3D_OK;
@@ -5101,19 +5113,23 @@ static HRESULT create_standalone_surface(D8Device *device, UINT width,
     return D3D_OK;
 }
 
-static HRESULT create_backbuffer_surface(D8Device *device,
-        const D3DPRESENT_PARAMETERS *present, BOOL reset_blocker,
-        IDirect3DSurface8 **surface_out)
+static HRESULT create_backbuffer_surface(D8Device* device,
+    const D3DPRESENT_PARAMETERS* present, BOOL reset_blocker,
+    IDirect3DSurface8** surface_out)
 {
     UINT width = present->BackBufferWidth ? present->BackBufferWidth
-            : device->display_mode.Width;
+                                          : device->display_mode.Width;
     UINT height = present->BackBufferHeight ? present->BackBufferHeight
-            : device->display_mode.Height;
+                                            : device->display_mode.Height;
     D3DFORMAT format = present->BackBufferFormat == D3DFMT_UNKNOWN
-            ? device->display_mode.Format : present->BackBufferFormat;
-    return create_standalone_surface(device, width, height, format,
-            D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT, FALSE, TRUE, FALSE,
-            reset_blocker, surface_out);
+        ? device->display_mode.Format
+        : present->BackBufferFormat;
+    HRESULT result = create_standalone_surface(device, width, height, format,
+        D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT, FALSE, TRUE, FALSE,
+        reset_blocker, surface_out);
+    if (SUCCEEDED(result))
+        surface_from_iface(*surface_out)->desc.MultiSampleType = present->MultiSampleType;
+    return result;
 }
 
 static D8TextureLevel* surface_texture_level(D8Surface* surface)
@@ -5467,11 +5483,11 @@ static void WINAPI device_set_gamma(IDirect3DDevice8 *iface, DWORD flags,
 { (void)iface; (void)flags; (void)ramp; }
 static void WINAPI device_get_gamma(IDirect3DDevice8 *iface, D3DGAMMARAMP *ramp)
 { (void)iface; if (ramp) ZeroMemory(ramp, sizeof(*ramp)); }
-static HRESULT WINAPI device_create_render_target(IDirect3DDevice8 *iface,
-        UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
-        WINBOOL lockable, IDirect3DSurface8 **surface_out)
+static HRESULT WINAPI device_create_render_target(IDirect3DDevice8* iface,
+    UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
+    WINBOOL lockable, IDirect3DSurface8** surface_out)
 {
-    IDirect3DTexture8 *texture_iface = NULL;
+    IDirect3DTexture8* texture_iface = NULL;
     HRESULT hr;
     if (!surface_out || !supported_multisample_type(ms))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -5481,20 +5497,11 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice8 *iface,
     if (lockable && ms != D3DMULTISAMPLE_NONE)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
-    hr = device_create_texture(iface, width, height, 1,
-            D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture_iface);
-    if (FAILED(hr)) return D8WG_TRACE_ERROR(hr);
+    hr = create_texture_internal(device_from_iface(iface), width, height, 1,
+        D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, ms, &texture_iface);
+    if (FAILED(hr))
+        return D8WG_TRACE_ERROR(hr);
     texture_from_iface(texture_iface)->lockable_render_target = !!lockable;
-    /* Set after creation and re-sent, because device_create_texture has no
-     * multisample parameter of its own -- every other caller wants NONE. */
-    if (ms != D3DMULTISAMPLE_NONE) {
-        texture_from_iface(texture_iface)->multisample_type = ms;
-        if (!emit_texture_create(device_from_iface(iface),
-                texture_from_iface(texture_iface))) {
-            IDirect3DTexture8_Release(texture_iface);
-            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
-        }
-    }
     hr = IDirect3DTexture8_GetSurfaceLevel(texture_iface, 0, surface_out);
     IDirect3DTexture8_Release(texture_iface);
     return D8WG_TRACE_ERROR(hr);
@@ -5622,6 +5629,10 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8* iface,
     D9WGSetDepthStencilSurfaceLevel depth_command;
     D3DVIEWPORT8 viewport;
     UINT render_target_width, render_target_height, depth_width, depth_height;
+    D3DMULTISAMPLE_TYPE color_ms = device->render_target_texture
+        ? device->render_target_texture->multisample_type
+        : device->render_target_cube ? D3DMULTISAMPLE_NONE
+                                     : device->present.MultiSampleType;
     if ((render_target_iface && render_target_iface->lpVtbl != &g_surface_vtbl) || (depth_iface && depth_iface->lpVtbl != &g_surface_vtbl))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(&command, sizeof(command));
@@ -5633,6 +5644,7 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8* iface,
         cube = render_target->cube;
         render_target_width = desc.Width;
         render_target_height = desc.Height;
+        color_ms = desc.MultiSampleType;
     } else
         current_render_target_size(device, &render_target_width, &render_target_height);
     if (depth && (surface_device(depth) != device || !depth->depth_stencil || depth->cube))
@@ -5642,6 +5654,8 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8* iface,
     depth_height = !depth ? 0u : depth->texture ? depth->texture->levels[depth->level].height
                                                 : depth->desc.Height;
     if (depth && (depth_width < render_target_width || depth_height < render_target_height))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (depth && (depth->texture ? depth->texture->multisample_type : depth->desc.MultiSampleType) != color_ms)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* Acquire before releasing, including rebinding the sole held cube ref. */
     if (render_target) {
@@ -5704,10 +5718,10 @@ static HRESULT WINAPI device_get_render_target(IDirect3DDevice8* iface,
         surface_out);
 }
 
-static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8 *iface,
-        IDirect3DSurface8 **surface_out)
+static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8* iface,
+    IDirect3DSurface8** surface_out)
 {
-    D8Device *device = device_from_iface(iface);
+    D8Device* device = device_from_iface(iface);
     if (!surface_out)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
@@ -5718,11 +5732,16 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8 *iface,
         IDirect3DSurface8_AddRef(*surface_out);
         return D3D_OK;
     }
-    return create_standalone_surface(device, device->display_mode.Width,
-            device->display_mode.Height,
-            device->present.AutoDepthStencilFormat,
-            D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT, FALSE, FALSE, TRUE,
-            TRUE, surface_out);
+    UINT width, height;
+    width = device->present.BackBufferWidth ? device->present.BackBufferWidth : device->display_mode.Width;
+    height = device->present.BackBufferHeight ? device->present.BackBufferHeight : device->display_mode.Height;
+    HRESULT result = create_standalone_surface(device, width, height,
+        device->present.AutoDepthStencilFormat,
+        D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT, FALSE, FALSE, TRUE,
+        TRUE, surface_out);
+    if (SUCCEEDED(result))
+        surface_from_iface(*surface_out)->desc.MultiSampleType = device->present.MultiSampleType;
+    return result;
 }
 static BOOL transform_slot(D3DTRANSFORMSTATETYPE state, UINT *slot)
 { uint32_t value;if (!d9wg_state_block_transform_slot((uint32_t)state, &value)) return FALSE;*slot = value;return TRUE; }

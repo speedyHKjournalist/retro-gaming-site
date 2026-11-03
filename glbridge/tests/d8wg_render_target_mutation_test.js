@@ -2,6 +2,10 @@
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-target-mut-")),source=fs.readFileSync(root+"/d3d8proxy/d3d8_proxy.c","utf8");
 function span(name){const m=new RegExp("static [^;{}]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return[m.index,end];}
 const mutations=[
+ ["color sample metadata ignored","device_set_render_target","color_ms = desc.MultiSampleType;","color_ms = D3DMULTISAMPLE_NONE;"],
+ ["bound sample metadata ignored","device_set_render_target","? device->render_target_texture->multisample_type","? D3DMULTISAMPLE_NONE"],
+ ["back sample metadata ignored","device_set_render_target",": device->present.MultiSampleType;",": D3DMULTISAMPLE_NONE;"],
+ ["depth sample mismatch accepted","device_set_render_target","if (depth && (depth->texture ? depth->texture->multisample_type", "if (0 && depth && (depth->texture ? depth->texture->multisample_type"],
  ["color uses back buffer","device_set_render_target","command.device_handle = device->handle;","command.color_texture_handle = 0; command.device_handle = device->handle;"],
  ["wrong cube wire face","surface_gpu_location","*face = surface->face;","*face = 0;"],
  ["wrong cube wire mip","surface_gpu_location","*level = surface->level;","*level = 0;"],
