@@ -847,6 +847,7 @@ typedef struct D9StateBlock D9StateBlock;
 typedef struct D9Query D9Query;
 
 typedef struct D9TextureLevel {
+    D9WGPrivateStore private_data;
     BYTE *shadow;
     /* The one surface GetSurfaceLevel hands out for this level, created on
      * first request and destroyed with the texture.  D3D9 makes a level
@@ -1185,6 +1186,7 @@ struct D9Texture {
     DWORD multisample_quality;
     DWORD priority;
     DWORD lod;
+    D9WGPrivateStore private_data;
     D9TextureLevel *levels;
     D9Texture *next_device_resource;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
@@ -1205,6 +1207,7 @@ struct D9CubeTexture {
     D3DPOOL pool;
     DWORD priority;
     DWORD lod;
+    D9WGPrivateStore private_data;
     D9TextureLevel *levels; /* face * level_count + level */
     D9CubeTexture *next_device_resource;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
@@ -1227,9 +1230,15 @@ struct D9VolumeTexture {
     D3DPOOL pool;
     DWORD priority;
     DWORD lod;
+    D9WGPrivateStore private_data;
     D9TextureLevel *levels;
     D9VolumeTexture *next_device_resource;
 };
+
+/* The COM conversion helpers cast interface pointers to these objects. */
+typedef char D9WGTextureInterfaceFirst[
+    offsetof(D9Texture, iface) == 0 && offsetof(D9CubeTexture, iface) == 0
+            && offsetof(D9VolumeTexture, iface) == 0 ? 1 : -1];
 
 struct D9Volume {
     IDirect3DVolume9 iface;
@@ -7726,21 +7735,24 @@ static ULONG WINAPI volume_texture_add_ref(IDirect3DVolumeTexture9 *iface)
 { return (ULONG)InterlockedIncrement(
         &volume_texture_from_iface(iface)->refcount); }
 
-static ULONG WINAPI volume_texture_release(IDirect3DVolumeTexture9 *iface)
+static ULONG WINAPI volume_texture_release(IDirect3DVolumeTexture9* iface)
 {
-    D9VolumeTexture *texture = volume_texture_from_iface(iface);
+    D9VolumeTexture* texture = volume_texture_from_iface(iface);
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9VolumeTexture **link = &texture->device->volume_textures;
+        D9VolumeTexture** link = &texture->device->volume_textures;
         D9WGDestroyResource destroy;
         UINT level;
         while (*link && *link != texture)
             link = &(*link)->next_device_resource;
-        if (*link) *link = texture->next_device_resource;
+        if (*link)
+            *link = texture->next_device_resource;
+        d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
         destroy.resource_handle = texture->handle;
         destroy.resource_kind = D9WG_RESOURCE_TEXTURE_VOLUME;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         for (level = 0; level < texture->level_count; ++level) {
+            d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
             HeapFree(GetProcessHeap(), 0, texture->levels[level].level_volume);
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
         }
@@ -7760,21 +7772,24 @@ static HRESULT WINAPI volume_texture_get_device(IDirect3DVolumeTexture9 *iface,
     return D3D_OK;
 }
 
-#define VOLUME_TEX_PRIVATE_STUB(name, result) \
-static HRESULT WINAPI volume_texture_##name(IDirect3DVolumeTexture9 *iface, \
-        REFGUID guid) \
-{ (void)iface; (void)guid; return result; }
-
 static HRESULT WINAPI volume_texture_set_private_data(
-        IDirect3DVolumeTexture9 *iface, REFGUID guid, const void *data,
-        DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+    IDirect3DVolumeTexture9* iface, REFGUID guid, const void* data,
+    DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = &volume_texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
 static HRESULT WINAPI volume_texture_get_private_data(
-        IDirect3DVolumeTexture9 *iface, REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size;
-  return TRACE_REFUSE(D3DERR_NOTFOUND); }
-VOLUME_TEX_PRIVATE_STUB(free_private_data, D3DERR_NOTFOUND)
+    IDirect3DVolumeTexture9* iface, REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = &volume_texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
+static HRESULT WINAPI volume_texture_free_private_data(IDirect3DVolumeTexture9* iface, REFGUID guid)
+{
+    D9WGPrivateStore* store = &volume_texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI volume_texture_set_priority(
         IDirect3DVolumeTexture9 *iface, DWORD priority)
@@ -7950,17 +7965,27 @@ static HRESULT WINAPI volume_get_device(IDirect3DVolume9 *iface,
         IDirect3DDevice9 **out)
 { D9Volume *volume = volume_from_iface(iface);
   return IDirect3DVolumeTexture9_GetDevice(&volume->texture->iface, out); }
-static HRESULT WINAPI volume_set_private_data(IDirect3DVolume9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
-static HRESULT WINAPI volume_get_private_data(IDirect3DVolume9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size;
-  return TRACE_REFUSE(D3DERR_NOTFOUND); }
-static HRESULT WINAPI volume_free_private_data(IDirect3DVolume9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI volume_set_private_data(IDirect3DVolume9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9Volume* volume = volume_from_iface(iface);
+    D9WGPrivateStore* store = &volume->texture->levels[volume->level].private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
+static HRESULT WINAPI volume_get_private_data(IDirect3DVolume9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9Volume* volume = volume_from_iface(iface);
+    D9WGPrivateStore* store = &volume->texture->levels[volume->level].private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
+static HRESULT WINAPI volume_free_private_data(IDirect3DVolume9* iface,
+    REFGUID guid)
+{
+    D9Volume* volume = volume_from_iface(iface);
+    D9WGPrivateStore* store = &volume->texture->levels[volume->level].private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 static HRESULT WINAPI volume_get_container(IDirect3DVolume9 *iface,
         REFIID iid, void **object)
 { D9Volume *volume = volume_from_iface(iface);
@@ -11298,23 +11323,26 @@ static ULONG WINAPI cube_add_ref(IDirect3DCubeTexture9 *iface)
     return (ULONG)InterlockedIncrement(&cube_from_iface(iface)->refcount);
 }
 
-static ULONG WINAPI cube_release(IDirect3DCubeTexture9 *iface)
+static ULONG WINAPI cube_release(IDirect3DCubeTexture9* iface)
 {
-    D9CubeTexture *texture = cube_from_iface(iface);
+    D9CubeTexture* texture = cube_from_iface(iface);
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9CubeTexture **link = &texture->device->cube_textures;
+        D9CubeTexture** link = &texture->device->cube_textures;
         D9WGDestroyResource destroy;
         UINT index;
         while (*link && *link != texture)
             link = &(*link)->next_device_resource;
-        if (*link) *link = texture->next_device_resource;
+        if (*link)
+            *link = texture->next_device_resource;
+        d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
         destroy.resource_handle = texture->handle;
         destroy.resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         for (index = 0; index < texture->level_count * 6u; ++index) {
+            d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
             HeapFree(GetProcessHeap(), 0,
-                    texture->levels[index].level_surface);
+                texture->levels[index].level_surface);
             HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
         }
         HeapFree(GetProcessHeap(), 0, texture->levels);
@@ -11335,16 +11363,24 @@ static HRESULT WINAPI cube_get_device(IDirect3DCubeTexture9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI cube_set_private_data(IDirect3DCubeTexture9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
-static HRESULT WINAPI cube_get_private_data(IDirect3DCubeTexture9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
-static HRESULT WINAPI cube_free_private_data(IDirect3DCubeTexture9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI cube_set_private_data(IDirect3DCubeTexture9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = &cube_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
+static HRESULT WINAPI cube_get_private_data(IDirect3DCubeTexture9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = &cube_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
+static HRESULT WINAPI cube_free_private_data(IDirect3DCubeTexture9* iface,
+    REFGUID guid)
+{
+    D9WGPrivateStore* store = &cube_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI cube_set_priority(IDirect3DCubeTexture9 *iface,
         DWORD priority)
@@ -12597,29 +12633,32 @@ static ULONG WINAPI texture_add_ref(IDirect3DTexture9 *iface)
     return (ULONG)InterlockedIncrement(&texture_from_iface(iface)->refcount);
 }
 
-static ULONG WINAPI texture_release(IDirect3DTexture9 *iface)
+static ULONG WINAPI texture_release(IDirect3DTexture9* iface)
 {
-    D9Texture *texture = texture_from_iface(iface);
+    D9Texture* texture = texture_from_iface(iface);
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9Texture **link = &texture->device->texture_resources;
+        D9Texture** link = &texture->device->texture_resources;
         D9WGDestroyResource destroy;
         UINT level;
         while (*link && *link != texture)
             link = &(*link)->next_device_resource;
-        if (*link) *link = texture->next_device_resource;
+        if (*link)
+            *link = texture->next_device_resource;
+        d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
         destroy.resource_handle = texture->handle;
         destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         for (level = 0; level < texture->level_count; ++level) {
+            d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
             /* The level's surface sub-object dies with the texture; nothing
              * can still hold it, because every surface reference is one of the
              * texture references that just reached zero. */
             if (texture->levels[level].level_surface) {
                 TRACE_SURFACE_FREED(
-                        &texture->levels[level].level_surface->iface);
+                    &texture->levels[level].level_surface->iface);
                 HeapFree(GetProcessHeap(), 0,
-                        texture->levels[level].level_surface);
+                    texture->levels[level].level_surface);
                 texture->levels[level].level_surface = NULL;
             }
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
@@ -12642,18 +12681,26 @@ static HRESULT WINAPI texture_get_device(IDirect3DTexture9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI texture_set_private_data(IDirect3DTexture9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+static HRESULT WINAPI texture_set_private_data(IDirect3DTexture9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = &texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
 
-static HRESULT WINAPI texture_get_private_data(IDirect3DTexture9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI texture_get_private_data(IDirect3DTexture9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = &texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
 
-static HRESULT WINAPI texture_free_private_data(IDirect3DTexture9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI texture_free_private_data(IDirect3DTexture9* iface,
+    REFGUID guid)
+{
+    D9WGPrivateStore* store = &texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI texture_set_priority(IDirect3DTexture9 *iface,
         DWORD priority)
@@ -13265,18 +13312,35 @@ static HRESULT WINAPI surface_get_device(IDirect3DSurface9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI surface_set_private_data(IDirect3DSurface9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+static D9WGPrivateStore* surface_private_store(D9Surface* surface)
+{
+    if (surface->cube_texture)
+        return &surface->cube_texture->levels[surface->cube_face * surface->cube_texture->level_count + surface->level].private_data;
+    if (surface->texture_child)
+        return &surface->texture->levels[surface->level].private_data;
+    return NULL;
+}
 
-static HRESULT WINAPI surface_get_private_data(IDirect3DSurface9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI surface_set_private_data(IDirect3DSurface9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = surface_private_store(surface_from_iface(iface));
+    return TRACE_REFUSE(store ? d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)) : D3DERR_INVALIDCALL);
+}
 
-static HRESULT WINAPI surface_free_private_data(IDirect3DSurface9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI surface_get_private_data(IDirect3DSurface9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = surface_private_store(surface_from_iface(iface));
+    return TRACE_REFUSE(store ? d9wg_get_private_data(store, guid, data, size) : D3DERR_NOTFOUND);
+}
+
+static HRESULT WINAPI surface_free_private_data(IDirect3DSurface9* iface,
+    REFGUID guid)
+{
+    D9WGPrivateStore* store = surface_private_store(surface_from_iface(iface));
+    return TRACE_REFUSE(store ? d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)) : D3DERR_NOTFOUND);
+}
 
 static DWORD WINAPI surface_set_priority(IDirect3DSurface9 *iface,
         DWORD priority)

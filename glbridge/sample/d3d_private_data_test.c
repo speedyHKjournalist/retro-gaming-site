@@ -9,6 +9,14 @@ typedef IDirect3D8 Factory;
 typedef IDirect3DDevice8 Device;
 typedef IDirect3DVertexBuffer8 VertexBuffer;
 typedef IDirect3DIndexBuffer8 IndexBuffer;
+typedef IDirect3DTexture8 Texture;
+typedef IDirect3DCubeTexture8 Cube;
+typedef IDirect3DVolumeTexture8 VolumeTexture;
+typedef IDirect3DSurface8 Surface;
+typedef IDirect3DVolume8 Volume;
+#define TEX(method) IDirect3DTexture8_##method
+#define CUBE(method) IDirect3DCubeTexture8_##method
+#define VOLUME_TEX(method) IDirect3DVolumeTexture8_##method
 #define VB_LOCK IDirect3DVertexBuffer8_Lock
 #define IB_LOCK IDirect3DIndexBuffer8_Lock
 #define VB_UNLOCK IDirect3DVertexBuffer8_Unlock
@@ -25,6 +33,14 @@ typedef IDirect3D9 Factory;
 typedef IDirect3DDevice9 Device;
 typedef IDirect3DVertexBuffer9 VertexBuffer;
 typedef IDirect3DIndexBuffer9 IndexBuffer;
+typedef IDirect3DTexture9 Texture;
+typedef IDirect3DCubeTexture9 Cube;
+typedef IDirect3DVolumeTexture9 VolumeTexture;
+typedef IDirect3DSurface9 Surface;
+typedef IDirect3DVolume9 Volume;
+#define TEX(method) IDirect3DTexture9_##method
+#define CUBE(method) IDirect3DCubeTexture9_##method
+#define VOLUME_TEX(method) IDirect3DVolumeTexture9_##method
 #define VB_LOCK IDirect3DVertexBuffer9_Lock
 #define IB_LOCK IDirect3DIndexBuffer9_Lock
 #define VB_UNLOCK IDirect3DVertexBuffer9_Unlock
@@ -71,17 +87,17 @@ static ULONG WINAPI add(IUnknown* iface) { return (ULONG)InterlockedIncrement(&(
 static ULONG WINAPI drop(IUnknown* iface) { return (ULONG)InterlockedDecrement(&((Counter*)iface)->refs); }
 static IUnknownVtbl counter_vtable = { query, add, drop };
 /* Only the common IUnknown/Resource prefix is used; VB and IB layouts match. */
+typedef struct {
+    HRESULT(WINAPI* qi)(void*, REFIID, void**);
+    ULONG(WINAPI* add)(void*);
+    ULONG(WINAPI* release)(void*);
+    HRESULT(WINAPI* device)(void*, void**);
+    HRESULT(WINAPI* set)(void*, REFGUID, const void*, DWORD, DWORD);
+    HRESULT(WINAPI* get)(void*, REFGUID, void*, DWORD*);
+    HRESULT(WINAPI* free)(void*, REFGUID);
+} ResourceMethods;
 static void buffer_cases(IUnknown* buffer, UINT kind)
 {
-    typedef struct {
-        HRESULT(WINAPI* qi)(void*, REFIID, void**);
-        ULONG(WINAPI* add)(void*);
-        ULONG(WINAPI* release)(void*);
-        HRESULT(WINAPI* device)(void*, void**);
-        HRESULT(WINAPI* set)(void*, REFGUID, const void*, DWORD, DWORD);
-        HRESULT(WINAPI* get)(void*, REFGUID, void*, DWORD*);
-        HRESULT(WINAPI* free)(void*, REFGUID);
-    } ResourceMethods;
     const ResourceMethods* methods = (const void*)buffer->lpVtbl;
     DWORD size = 0xdeadbabe, out = 0xdeadbeef, input = 0x1234abcd;
     check(methods->get(buffer, &key, &out, &size) == D3DERR_NOTFOUND && out == 0xdeadbeef && size == 0xdeadbabe, "FAIL missing preserves output");
@@ -123,6 +139,92 @@ static void buffer_cases(IUnknown* buffer, UINT kind)
     wsprintfA(line, "CHECK PRIVATE %u %u raw=1234ABCD size=4 refs=1 released=0", D9WG_PRIVATE_API, kind);
     report(line);
 }
+
+#ifdef D9WG_PRIVATE_TEXTURES
+static HRESULT get_child(IUnknown* parent, UINT kind, UINT index, IUnknown** out)
+{
+    if (kind == 0)
+        return TEX(GetSurfaceLevel)((Texture*)parent, index, (Surface**)out);
+    if (kind == 1)
+        return CUBE(GetCubeMapSurface)((Cube*)parent, index == 1 ? 2 : 4, index == 2 ? 1 : 0, (Surface**)out);
+    return VOLUME_TEX(GetVolumeLevel)((VolumeTexture*)parent, index, (Volume**)out);
+}
+static void texture_cases(UINT kind)
+{
+    IUnknown* parent = NULL;
+    HRESULT hr;
+    if (kind == 0)
+        hr = DEV(CreateTexture)(device, 4, 4, 2, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, (Texture**)&parent
+#if D9WG_PRIVATE_API == 9
+            ,
+            NULL
+#endif
+        );
+    else if (kind == 1)
+        hr = DEV(CreateCubeTexture)(device, 4, 2, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, (Cube**)&parent
+#if D9WG_PRIVATE_API == 9
+            ,
+            NULL
+#endif
+        );
+    else
+        hr = DEV(CreateVolumeTexture)(device, 4, 4, 4, 2, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, (VolumeTexture**)&parent
+#if D9WG_PRIVATE_API == 9
+            ,
+            NULL
+#endif
+        );
+    check(hr == D3D_OK && parent, "FAIL texture create");
+    const ResourceMethods* methods = (const void*)parent->lpVtbl;
+    DWORD data = 0x10203040, size = 4, out = 0;
+    check(methods->set(parent, &key, &data, 4, 0) == D3D_OK, "FAIL texture private set");
+    Counter object;
+    object.iface.lpVtbl = &counter_vtable;
+    object.refs = 1;
+    check(methods->set(parent, &other, &object, 4, D3DSPD_IUNKNOWN) == D3D_OK && object.refs == 2, "FAIL parent interface");
+    IUnknown* children[3] = { NULL, NULL, NULL };
+    UINT count = kind == 1 ? 3 : 2;
+    for (UINT i = 0; i < count; i++) {
+        check(get_child(parent, kind, i, &children[i]) == D3D_OK, "FAIL get child");
+        const ResourceMethods* child = (const void*)children[i]->lpVtbl;
+        size = 4;
+        out = 0xdeadbeef;
+        check(child->get(children[i], &key, &out, &size) == D3DERR_NOTFOUND && out == 0xdeadbeef && size == 4, "FAIL child inherits parent or other level");
+        data = 0x33445500 + i;
+        check(child->set(children[i], &key, &data, 4, 0) == D3D_OK, "FAIL child set");
+        check(child->set(children[i], &other, &object, 4, D3DSPD_IUNKNOWN) == D3D_OK && object.refs == (LONG)(3 + i), "FAIL child retain");
+    }
+    for (UINT i = 0; i < count; i++) {
+        const ResourceMethods* child = (const void*)children[i]->lpVtbl;
+        size = 4;
+        check(child->get(children[i], &key, &out, &size) == D3D_OK && out == 0x33445500 + i, "FAIL sibling/parent overwrite");
+    }
+    IUnknown* duplicate = NULL;
+    check(get_child(parent, kind, 0, &duplicate) == D3D_OK, "FAIL duplicate child");
+    const ResourceMethods* child = (const void*)duplicate->lpVtbl;
+    size = 4;
+    check(child->get(duplicate, &key, &out, &size) == D3D_OK && out == 0x33445500, "FAIL logical child identity");
+    IUnknown_Release(duplicate);
+    for (UINT i = 0; i < count; i++)
+        IUnknown_Release(children[i]);
+    check(object.refs == (LONG)(2 + count), "FAIL releasing child view cleared store");
+    check(get_child(parent, kind, 0, &duplicate) == D3D_OK, "FAIL reacquire child");
+    child = (const void*)duplicate->lpVtbl;
+    size = 4;
+    check(child->get(duplicate, &key, &out, &size) == D3D_OK && out == 0x33445500, "FAIL child data lost on reacquire");
+    IUnknown* held = NULL;
+    size = 4;
+    check(child->get(duplicate, &other, &held, &size) == D3D_OK && held == &object.iface && object.refs == (LONG)(3 + count), "FAIL child interface query");
+    IUnknown_Release(held);
+    size = 4;
+    check(methods->get(parent, &key, &out, &size) == D3D_OK && out == 0x10203040, "FAIL parent store changed");
+    check(IUnknown_Release(parent) == 1 && object.refs == (LONG)(2 + count), "FAIL parent released before child");
+    check(IUnknown_Release(duplicate) == 0 && object.refs == 1, "FAIL texture and logical child destruction refs");
+    char line[100];
+    wsprintfA(line, "CHECK TEXTURE PRIVATE %u %u children=%u parent=10203040 persistent=1 refs=1 released=0", D9WG_PRIVATE_API, kind, count);
+    report(line);
+}
+#endif
 static void private_cases(void)
 {
     VertexBuffer* vb = NULL;
@@ -191,6 +293,10 @@ void WINAPI WinMainCRTStartup(void)
     check(IDirect3D9_CreateDevice(factory, 0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device) == D3D_OK, "FAIL device9");
 #endif
     private_cases();
+#ifdef D9WG_PRIVATE_TEXTURES
+    for (UINT kind = 0; kind < 3; kind++)
+        texture_cases(kind);
+#endif
     check(DEV(Release)(device) == 0, "FAIL device references");
     FACTORY_RELEASE(factory);
     FreeLibrary(module);
