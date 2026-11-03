@@ -964,7 +964,8 @@ struct D9Direct3D {
  * COM identity embedded in D9Device so repeated GetSwapChain(0) calls return
  * the same object, just as the native runtime does.  The device itself does
  * not own a COM reference to this object (that would form a cycle); every
- * external swap-chain reference holds one ordinary device reference instead.
+ * active implicit chain holds one child reference while its public count is
+ * nonzero; additional chains own one child reference for their lifetime.
  */
 struct D9SwapChain {
     IDirect3DSwapChain9 iface;
@@ -13695,9 +13696,11 @@ static ULONG WINAPI swap_chain_add_ref(IDirect3DSwapChain9 *iface)
     ULONG refs;
 
     TRACE_MARK_ENTER("SwapChain.AddRef");
-    /* A live swap-chain pointer must keep its embedded storage alive. */
-    IDirect3DDevice9_AddRef(&swap_chain->device->iface);
     refs = (ULONG)InterlockedIncrement(&swap_chain->refcount);
+    /* Embedded storage is pinned once per active implicit chain. Additional
+     * chains acquired their lifetime pin in CreateAdditionalSwapChain. */
+    if (!swap_chain->handle && refs == 1)
+        device_child_add_ref(swap_chain->device);
     TRACE("CALL SwapChain.AddRef object=%08lX refs=%lu device_refs=%ld",
             (DWORD)(uintptr_t)iface, refs,
             InterlockedCompareExchange(&swap_chain->device->refcount, 0, 0));
@@ -13709,14 +13712,12 @@ static ULONG WINAPI swap_chain_release(IDirect3DSwapChain9 *iface)
 {
     D9SwapChain *swap_chain = swap_chain_from_iface(iface);
     D9Device *device = swap_chain->device;
-    ULONG device_refs;
     ULONG refs;
 
     TRACE_MARK_ENTER("SwapChain.Release");
     if (swap_chain->handle) {
         /* An additional chain is an ordinary heap object with its own
-         * lifetime, unlike the implicit one, which is a member of the device
-         * and whose refcount is really the device's. */
+         * lifetime, unlike the implicit one embedded in the device. */
         refs = (ULONG)InterlockedDecrement(&swap_chain->refcount);
         if (!refs) {
             D9SwapChain **link = &device->additional_swap_chains;
@@ -13736,17 +13737,18 @@ static ULONG WINAPI swap_chain_release(IDirect3DSwapChain9 *iface)
         TRACE_MARK_EXIT("SwapChain.Release", (HRESULT)refs, iface);
         return refs;
     }
+    /* The cached implicit chain remains usable at public count zero. */
+    if (!InterlockedCompareExchange(&swap_chain->refcount, 0, 0))
+        return 0;
     refs = (ULONG)InterlockedDecrement(&swap_chain->refcount);
     TRACE("CALL SwapChain.Release object=%08lX refs=%lu device_refs_before=%ld",
             (DWORD)(uintptr_t)iface, refs,
             InterlockedCompareExchange(&device->refcount, 0, 0));
     /* This can free device (and therefore swap_chain); do not touch either
      * object after the call. */
-    device_refs = IDirect3DDevice9_Release(&device->iface);
+    if (!refs)
+        device_child_release(device);
     TRACE_MARK_EXIT("SwapChain.Release", (HRESULT)refs, NULL);
-    TRACE("LEAVE SwapChain.Release object=%08lX refs=%lu device_refs=%lu",
-            (DWORD)(uintptr_t)iface, refs, device_refs);
-    (void)device_refs;
     return refs;
 }
 
