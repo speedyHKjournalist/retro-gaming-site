@@ -35,6 +35,7 @@ typedef struct{D9WGPrivateStore private_data;void*shadow;Surface*level_surface;V
 struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT handle,level_count,usage;D9WGPrivateStore private_data;D8TextureLevel*levels;};
 struct Surface{Interface iface;LONG refcount;Texture*texture,*cube;Device*device;UINT level,face;BOOL depth_stencil,reset_blocker;void*shadow,*retained_private_data;D9WGPrivateStore private_data;};
 struct Volume{Interface iface;LONG refcount;Texture*texture;UINT level;};
+typedef Device D8Device;
 typedef Texture D8Texture,D8CubeTexture,D8VolumeTexture;typedef Surface D8Surface;typedef Volume D8Volume;
 static Texture*texture_from_iface(Interface*p){return (Texture*)p;}static Texture*cube_from_iface(Interface*p){return (Texture*)p;}static Texture*volume_texture_from_iface(Interface*p){return (Texture*)p;}static Surface*surface_from_iface(Interface*p){return (Surface*)p;}static Volume*volume_from_iface(Interface*p){return (Volume*)p;}
 static Vtable g_surface_vtbl,g_volume_vtbl;static const int IID_IDirect3DResource8=3,IID_IDirect3DSurface8=1,IID_IDirect3DVolume8=2,unknown=0,bad_iid=99;
@@ -43,6 +44,9 @@ static const D9WGPrivateOps d9wg_private_ops={0};static unsigned allocations,liv
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT flags,size_t size){(void)h;(void)flags;allocations++;if(allocations==fail_at)return NULL;void*p=calloc(1,size);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT flags,void*p){(void)h;(void)flags;if(p){assert(live);live--;free(p);}}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}static LONG InterlockedDecrement(LONG*p){return --*p;}
+static BOOL surface_is_implicit(Surface*s){(void)s;return 0;}
+static void device_child_add_ref(Device*d){(void)d;assert(0);}
+static LONG InterlockedCompareExchange(LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}
 static void device_child_release(Device*d){assert(d->refs==2);d->refs--;}
 static void private_data_owner_release(void*p){(void)p;assert(0);}
 static int emit_command(UINT op,const void*p,UINT size){const D9WGDestroyResource*c=p;assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(*c)&&c->resource_handle==expected_handle&&c->resource_kind==expected_kind);destroys++;return 1;}

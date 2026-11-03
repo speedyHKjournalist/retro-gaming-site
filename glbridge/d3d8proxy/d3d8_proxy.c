@@ -233,6 +233,7 @@ struct D8Device {
     D9WGPresentPacing present_pacing;
     D9WGPrivateStore back_buffer_private_data;
     D9WGPrivateStore depth_surface_private_data;
+    D8Surface *implicit_back_buffer, *implicit_depth_stencil;
     D3DVIEWPORT8 viewport;
     D3DGAMMARAMP gamma_ramp;
     BOOL gamma_ramp_set;
@@ -2445,9 +2446,13 @@ static BOOL device_has_reset_blockers(D8Device *device)
     D8IndexBuffer *ib;
     D8Texture *texture;
     UINT level;
+    UINT owned_depth = device->implicit_depth_stencil
+            && device->depth_surface == device->implicit_depth_stencil
+            && device->implicit_depth_stencil->refcount > 0 ? 1u : 0u;
     if (device->in_scene || device->recording_state_block
             || device->additional_swap_chain_count
-            || device->implicit_surface_count)
+            || device->implicit_surface_count > owned_depth
+            || (owned_depth && device->implicit_depth_stencil->refcount > 1))
         return TRUE;
     for (vb = device->vertex_buffers; vb; vb = vb->next_device_resource) {
         if (vb->pool == D3DPOOL_DEFAULT || vb->locked)
@@ -2467,6 +2472,21 @@ static BOOL device_has_reset_blockers(D8Device *device)
         }
     }
     return FALSE;
+}
+
+static void free_implicit_surfaces(D8Device *device)
+{
+    D8Surface *back = device->implicit_back_buffer;
+    D8Surface *depth = device->implicit_depth_stencil;
+    device->implicit_back_buffer = device->implicit_depth_stencil = NULL;
+    if (back) {
+        HeapFree(GetProcessHeap(), 0, back->shadow);
+        HeapFree(GetProcessHeap(), 0, back);
+    }
+    if (depth) {
+        HeapFree(GetProcessHeap(), 0, depth->shadow);
+        HeapFree(GetProcessHeap(), 0, depth);
+    }
 }
 
 static void clear_render_target_binding(D8Device* device)
@@ -2742,6 +2762,7 @@ static ULONG WINAPI device_release(IDirect3DDevice8 *iface)
     if (!refs) {
         d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);
         d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);
+        free_implicit_surfaces(device);
         detach_device_window(device);
         emit_device_destroy_and_flush(device->handle);
         IDirect3D8_Release(&device->parent->iface);
@@ -2910,6 +2931,24 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     device->present = *parameters;
     fill_display_mode(&device->display_mode, reset.width, reset.height,
             reset.backbuffer_format);
+    if (device->implicit_back_buffer) {
+        D8Surface *surface = device->implicit_back_buffer;
+        surface->desc.Width = reset.width;
+        surface->desc.Height = reset.height;
+        surface->desc.Format = reset.backbuffer_format;
+        surface->desc.MultiSampleType = parameters->MultiSampleType;
+        surface->desc.Size = new_front_bytes;
+        surface->row_pitch = new_front_pitch;
+    }
+    if (device->implicit_depth_stencil) {
+        D8Surface *surface = device->implicit_depth_stencil;
+        surface->desc.Width = reset.width;
+        surface->desc.Height = reset.height;
+        surface->desc.Format = parameters->AutoDepthStencilFormat;
+        surface->desc.MultiSampleType = parameters->MultiSampleType;
+        surface->row_pitch = reset.width * 4u;
+        surface->desc.Size = surface->row_pitch * reset.height;
+    }
     device_init_states(device);
     device->viewport.X = device->viewport.Y = 0;
     device->viewport.Width = reset.width;
@@ -4796,6 +4835,12 @@ static HRESULT WINAPI surface_query_interface(IDirect3DSurface8 *iface,
     return S_OK;
 }
 
+static BOOL surface_is_implicit(D8Surface *surface)
+{
+    return surface->device && (surface == surface->device->implicit_back_buffer
+            || surface == surface->device->implicit_depth_stencil);
+}
+
 static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
@@ -4803,7 +4848,12 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
         return IDirect3DTexture8_AddRef(&surface->texture->iface);
     if (surface->cube)
         return IDirect3DCubeTexture8_AddRef(&surface->cube->iface);
-    return (ULONG)InterlockedIncrement(&surface->refcount);
+    ULONG refs = (ULONG)InterlockedIncrement(&surface->refcount);
+    if (refs == 1 && surface_is_implicit(surface)) {
+        ++surface->device->implicit_surface_count;
+        device_child_add_ref(surface->device);
+    }
+    return refs;
 }
 
 static void private_data_owner_release(D8PrivateDataOwner* owner)
@@ -4822,6 +4872,17 @@ static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
         return IDirect3DTexture8_Release(&surface->texture->iface);
     if (surface->cube)
         return IDirect3DCubeTexture8_Release(&surface->cube->iface);
+    if (surface_is_implicit(surface)) {
+        if (!InterlockedCompareExchange(&surface->refcount, 0, 0))
+            return 0;
+        ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
+        if (!refs) {
+            D8Device *device = surface->device;
+            --device->implicit_surface_count;
+            device_child_release(device);
+        }
+        return refs;
+    }
     ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
     if (!refs) {
         d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
@@ -5641,10 +5702,18 @@ static HRESULT WINAPI device_get_backbuffer(IDirect3DDevice8 *iface, UINT index,
     if (!surface_out)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *surface_out = NULL;
-    if (index || type != D3DBACKBUFFER_TYPE_MONO)
+    (void)type;
+    if (index)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    return create_backbuffer_surface(device, &device->present, TRUE,
-            surface_out);
+    if (device->implicit_back_buffer) {
+        *surface_out = &device->implicit_back_buffer->iface;
+        IDirect3DSurface8_AddRef(*surface_out);
+        return D3D_OK;
+    }
+    HRESULT result = create_backbuffer_surface(device, &device->present, TRUE, surface_out);
+    if (SUCCEEDED(result))
+        device->implicit_back_buffer = surface_from_iface(*surface_out);
+    return result;
 }
 DEV_STUB(get_raster_status, D3DRASTER_STATUS *s)
 { (void)iface; (void)s; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
@@ -5893,8 +5962,7 @@ static HRESULT WINAPI device_get_render_target(IDirect3DDevice8* iface,
     if (device->render_target_cube)
         return cube_get_surface(&device->render_target_cube->iface,
             (D3DCUBEMAP_FACES)device->render_target_face, device->render_target_level, surface_out);
-    return create_backbuffer_surface(device, &device->present, TRUE,
-        surface_out);
+    return device_get_backbuffer(iface, 0, D3DBACKBUFFER_TYPE_MONO, surface_out);
 }
 
 static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8* iface,
@@ -5911,6 +5979,11 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8* iface,
         IDirect3DSurface8_AddRef(*surface_out);
         return D3D_OK;
     }
+    if (device->implicit_depth_stencil) {
+        *surface_out = &device->implicit_depth_stencil->iface;
+        IDirect3DSurface8_AddRef(*surface_out);
+        return D3D_OK;
+    }
     UINT width, height;
     width = device->present.BackBufferWidth ? device->present.BackBufferWidth : device->display_mode.Width;
     height = device->present.BackBufferHeight ? device->present.BackBufferHeight : device->display_mode.Height;
@@ -5919,6 +5992,7 @@ static HRESULT WINAPI device_get_depth_surface(IDirect3DDevice8* iface,
         D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT, FALSE, FALSE, TRUE,
         TRUE, surface_out);
     if (SUCCEEDED(result)) {
+        device->implicit_depth_stencil = surface_from_iface(*surface_out);
         surface_from_iface(*surface_out)->desc.MultiSampleType = device->present.MultiSampleType;
         surface_from_iface(*surface_out)->private_data_owner = &device->depth_surface_private_data;
     }

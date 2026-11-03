@@ -1336,9 +1336,9 @@ struct D9Surface {
  * fields tested here is written by exactly one place, so the pair already
  * identifies them and no extra flag is needed.
  *
- * Such a surface behaves like a texture level surface: AddRef/Release adjust
- * the parent's reference count, and the object itself survives to the parent's
- * teardown, so an app is free to drop its reference and keep using the pointer.
+ * The surface has its own public count. Only its zero/nonzero transitions
+ * retain/release the device; the cached wrapper survives a zero public count
+ * until device teardown.
  */
 static BOOL surface_is_implicit(const D9Surface *surface)
 {
@@ -4242,8 +4242,8 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
         IDirect3D9_Release(&device->parent->iface);
         /* The implicit surfaces outlive every public reference to them by
          * design, so the device is what finally frees them. Reaching here means
-         * their refcounts are zero: each public reference held one of the
-         * device references that had to reach zero to get this far. */
+         * their public counts are zero: each active surface pinned one device
+         * reference that had to reach zero to get this far. */
         if (device->implicit_back_buffer)
             HeapFree(GetProcessHeap(), 0, device->implicit_back_buffer);
         if (device->implicit_depth_stencil)
@@ -7394,7 +7394,8 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *out = NULL;
-    if (swapchain || index || type != D3DBACKBUFFER_TYPE_MONO) {
+    (void)type;
+    if (swapchain || index) {
         TRACE("FAIL GetBackBuffer chain=%lu index=%lu type=%lu -> %08lX",
                 swapchain, index, (DWORD)type, (DWORD)D3DERR_INVALIDCALL);
         TRACE_MARK_EXIT("Device.GetBackBuffer", D3DERR_INVALIDCALL, NULL);
@@ -7434,7 +7435,7 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
                 surface->width, surface->height, (DWORD)surface->format);
     }
     *out = &surface->iface;
-    /* Takes the device reference standing behind this public reference. */
+    /* The first live surface reference pins the device. */
     IDirect3DSurface9_AddRef(*out);
     TRACE("OK GetBackBuffer object=%08lX %lux%lu fmt=%08lX refs=%ld",
             (DWORD)(uintptr_t)*out, surface->width, surface->height,
@@ -13075,13 +13076,14 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
         return refs;
     }
     /* The implicit back buffer and auto depth-stencil are sub-objects of the
-     * device in the same way, so each public reference on them is backed by one
-     * device reference -- that is what stops a device from being torn down
-     * while the app still holds one of its implicit surfaces. */
+     * device. Transitioning from zero to one surface reference pins that device;
+     * subsequent AddRefs leave its count unchanged. The last surface reference
+     * drops the pin, while the cached wrapper survives until device teardown. */
     if (surface_is_implicit(surface)) {
         TRACE_MARK_ENTER("Surface.AddRef");
         refs = (ULONG)InterlockedIncrement(&surface->refcount);
-        device_child_add_ref(surface->device);
+        if (refs == 1)
+            device_child_add_ref(surface->device);
         TRACE("SURFACE ADDREF object=%08lX implicit=1 after=%lu device=%08lX "
                 "device_refs=%ld", (DWORD)(uintptr_t)iface, refs,
                 (DWORD)(uintptr_t)surface->device,
@@ -13145,6 +13147,10 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
         D9Device *device = surface->device;
 
         TRACE_MARK_ENTER("Surface.Release");
+        if (!InterlockedCompareExchange(&surface->refcount, 0, 0)) {
+            TRACE_MARK_EXIT("Surface.Release", 0, iface);
+            return 0;
+        }
         refs = (ULONG)InterlockedDecrement(&surface->refcount);
         TRACE("SURFACE RELEASE object=%08lX implicit=1 after=%lu device=%08lX "
                 "device_refs_before=%ld", (DWORD)(uintptr_t)iface, refs,
@@ -13153,7 +13159,8 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
         TRACE_MARK_EXIT("Surface.Release", (HRESULT)refs, iface);
         /* This can destroy the device, which frees `surface`; touch neither
          * object afterwards. */
-        device_child_release(device);
+        if (!refs)
+            device_child_release(device);
         return refs;
     }
 #ifdef D9WG_DIAGNOSTIC_TRACE
@@ -13301,6 +13308,14 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface9 *iface,
             return E_NOINTERFACE;
         *container = &surface->cube_texture->iface;
         IDirect3DCubeTexture9_AddRef(&surface->cube_texture->iface);
+        return D3D_OK;
+    }
+    if (surface->auto_depth_stencil) {
+        if (!riid || (!iid_is_unknown(riid)
+                && !guid_equal(riid, &IID_IDirect3DDevice9)))
+            return E_NOINTERFACE;
+        *container = &surface->device->iface;
+        IDirect3DDevice9_AddRef(&surface->device->iface);
         return D3D_OK;
     }
     if (!surface->texture)
