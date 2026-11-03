@@ -62,6 +62,8 @@ struct D3D7Device {
      * that asked for the non-T&L HAL and is told it has hardware T&L will
      * measure the wrong thing and believe the wrong caps. */
     GUID device_guid;
+    UINT creation_version;
+    BOOL legacy_texture_blending;
     BOOL in_scene;
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
@@ -959,6 +961,13 @@ static void d3d7_device_init_state(D3D7Device *device)
 {
     d9wg_clip_legacy_init(&device->clip_status);
     UINT index, stage;
+    D9WGLegacyDeviceDefaults defaults =
+        d9wg_legacy_device_defaults(device->creation_version);
+    device->creation_version = defaults.version;
+    device->legacy_texture_blending = defaults.legacy_texture_blending;
+    device->render_states[D3DRENDERSTATE_COLORKEYENABLE] = defaults.color_key;
+    device->render_states[D3DRENDERSTATE_SPECULARENABLE] = defaults.specular;
+    device->render_states[D3DRENDERSTATE_NORMALIZENORMALS] = defaults.normalize_normals;
     for (index = 0; index < D3D7_MAX_TRANSFORMS; ++index)
         d3d7_identity_matrix(&device->transforms[index]);
     device->viewport.dwX = device->viewport.dwY = 0;
@@ -981,7 +990,7 @@ static void d3d7_device_init_state(D3D7Device *device)
     device->render_states[D3DRENDERSTATE_TEXTUREMAG] = D3D7FILTER_NEAREST;
     device->render_states[D3DRENDERSTATE_TEXTUREMIN] = D3D7FILTER_NEAREST;
     device->render_states[D3DRENDERSTATE_TEXTUREMAPBLEND] =
-            D3D7TBLEND_MODULATE;
+            defaults.texture_map_blend;
     device->render_states[D3DRENDERSTATE_ALPHAFUNC] = D3DCMP_ALWAYS;
     device->render_states[D3DRENDERSTATE_SRCBLEND] = D3DBLEND_ONE;
     device->render_states[D3DRENDERSTATE_DESTBLEND] = D3DBLEND_ZERO;
@@ -1233,8 +1242,9 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
             sizeof(depth));
 }
 
-static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
-        IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out)
+static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
+        IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out,
+        UINT version)
 {
     DDrawObject *owner = d3d7_object_from_iface(iface);
     DDSurface *surface;
@@ -1263,6 +1273,7 @@ static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
     device->owner = owner;
     device->render_target = surface;
     device->device_guid = *clsid;
+    device->creation_version = version;
     ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     d3d7_device_init_state(device);
@@ -1283,6 +1294,12 @@ static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
     }
     *out = (IDirect3DDevice7 *)device;
     return D3D_OK;
+}
+
+static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
+        IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out)
+{
+    return d3d7_create_device_for_version(iface, clsid, surface_iface, out, 7u);
 }
 
 static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
@@ -1770,6 +1787,38 @@ static BOOL d3d7_emit_texture_stage_state(D3D7Device *device, DWORD stage,
             sizeof(command));
 }
 
+static DWORD d3d7_legacy_texture_alpha_op(const DDSurface *texture)
+{
+    return d9wg_legacy_modulate_alpha_op(texture != NULL,
+            texture && texture->desc.ddpfPixelFormat.dwRGBAlphaBitMask != 0);
+}
+
+static void d3d7_texture_map_blend_cascade(D3D7Device *device, DWORD value,
+        DDrawBlendCascade *cascade)
+{
+    DDSurface *texture = device->textures[0];
+    if (device->recording_state_block && device->recording_state_block->texture_mask[0])
+        texture = device->recording_state_block->textures[0];
+    ddraw_texture_map_blend_cascade(value, cascade);
+    if (value == D3D7TBLEND_MODULATE)
+        cascade->alpha_op = d3d7_legacy_texture_alpha_op(texture);
+}
+
+static BOOL d3d7_fixup_legacy_texture_alpha(D3D7Device *device)
+{
+    DWORD op;
+    if (!device->legacy_texture_blending ||
+            device->render_states[D3DRENDERSTATE_TEXTUREMAPBLEND] != D3D7TBLEND_MODULATE)
+        return TRUE;
+    op = d3d7_legacy_texture_alpha_op(device->textures[0]);
+    if (op == device->texture_stage_states[0][D3DTSS_ALPHAOP])
+        return TRUE;
+    if (!d3d7_emit_texture_stage_state(device, 0, D3DTSS_ALPHAOP, op))
+        return FALSE;
+    device->texture_stage_states[0][D3DTSS_ALPHAOP] = op;
+    return TRUE;
+}
+
 static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
         DWORD value)
 {
@@ -1809,7 +1858,7 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
     }
     case D3DRENDERSTATE_TEXTUREMAPBLEND: {
         DDrawBlendCascade cascade;
-        ddraw_texture_map_blend_cascade(value, &cascade);
+        d3d7_texture_map_blend_cascade(device, value, &cascade);
         if (!cascade.supported) return FALSE;
         device->texture_stage_states[0][D3DTSS_COLOROP] = cascade.color_op;
         device->texture_stage_states[0][D3DTSS_COLORARG1] = cascade.color_arg1;
@@ -1879,9 +1928,12 @@ static HRESULT WINAPI d3d7_set_render_state(IDirect3DDevice7 *iface,
         return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
     DDrawBlendCascade cascade = {0};
     if (state == D3DRENDERSTATE_TEXTUREMAPBLEND) {
-        ddraw_texture_map_blend_cascade(value, &cascade);
+        d3d7_texture_map_blend_cascade(device, value, &cascade);
         if (!cascade.supported) return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
     }
+    if (!device->recording_state_block && state == D3DRENDERSTATE_TEXTUREMAPBLEND &&
+            device->render_states[state] == value)
+        return D3D_OK;
     if (device->recording_state_block) {
         D3D7StateBlock *block = device->recording_state_block;
         block->render_mask[state] = 1;block->render_states[state] = value;
@@ -1940,6 +1992,8 @@ static HRESULT WINAPI d3d7_set_render_state(IDirect3DDevice7 *iface,
         device->render_states[state] = previous;
         return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
     }
+    if (state == D3DRENDERSTATE_TEXTUREMAPBLEND)
+        device->legacy_texture_blending = TRUE;
     /* The old render-state spellings address sampler 0 and are aliases of
      * D3DTSS_ADDRESS/U/V.  Keep one authoritative shadow for restoring a
      * sampler temporarily forced to repeat by wrapped interpolation. */
@@ -2407,7 +2461,8 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
         rebind_host_surface_state(surface);
     }
     if (device->textures[stage] == surface) {
-        return D3D_OK;
+        return stage != 0u || d3d7_fixup_legacy_texture_alpha(device)
+            ? D3D_OK : DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
     if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     old = device->textures[stage];
@@ -2421,8 +2476,9 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
         if (surface) surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
+    BOOL alpha_ready = stage != 0u || d3d7_fixup_legacy_texture_alpha(device);
     if (old) surface_Release((IDirectDrawSurface7 *)&old->vtbl7);
-    return D3D_OK;
+    return alpha_ready ? D3D_OK : DDWG_TRACE_ERROR(D3DERR_INITFAILED);
 }
 
 static HRESULT WINAPI d3d7_device_GetTextureStageState(
@@ -2522,28 +2578,6 @@ static HRESULT WINAPI d3d7_device_ValidateDevice(IDirect3DDevice7 *iface,
 
 static BOOL d3d7_sync_initial_state(D3D7Device *device)
 {
-    static const DWORD render_states[] = {
-        D3DRENDERSTATE_ANTIALIAS, D3DRENDERSTATE_TEXTUREADDRESS,
-        D3DRENDERSTATE_TEXTUREPERSPECTIVE,
-        D3DRENDERSTATE_ZENABLE, D3DRENDERSTATE_ZWRITEENABLE,
-        D3DRENDERSTATE_ZFUNC, D3DRENDERSTATE_FILLMODE,
-        D3DRENDERSTATE_CULLMODE, D3DRENDERSTATE_SHADEMODE,
-        D3DRENDERSTATE_LASTPIXEL, D3DRENDERSTATE_TEXTUREMAG,
-        D3DRENDERSTATE_TEXTUREMIN, D3DRENDERSTATE_TEXTUREMAPBLEND,
-        D3DRENDERSTATE_ALPHAFUNC,
-        D3DRENDERSTATE_SRCBLEND, D3DRENDERSTATE_DESTBLEND,
-        D3DRENDERSTATE_TEXTUREFACTOR, D3DRENDERSTATE_FOGEND,
-        D3DRENDERSTATE_FOGDENSITY, D3DRENDERSTATE_STENCILFAIL,
-        D3DRENDERSTATE_STENCILZFAIL, D3DRENDERSTATE_STENCILPASS,
-        D3DRENDERSTATE_STENCILFUNC, D3DRENDERSTATE_STENCILMASK,
-        D3DRENDERSTATE_STENCILWRITEMASK, D3DRENDERSTATE_LIGHTING,
-        D3DRENDERSTATE_CLIPPING,
-        D3DRENDERSTATE_COLORVERTEX, D3DRENDERSTATE_LOCALVIEWER,
-        D3DRENDERSTATE_DIFFUSEMATERIALSOURCE,
-        D3DRENDERSTATE_SPECULARMATERIALSOURCE,
-        D3DRENDERSTATE_AMBIENTMATERIALSOURCE,
-        D3DRENDERSTATE_EMISSIVEMATERIALSOURCE,
-    };
     static const DWORD texture_states[] = {
         D3DTSS_COLOROP, D3DTSS_COLORARG1, D3DTSS_COLORARG2,
         D3DTSS_ALPHAOP, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2,
@@ -2563,11 +2597,13 @@ static BOOL d3d7_sync_initial_state(D3D7Device *device)
                         &device->transforms[index])))
             return FALSE;
     }
-    for (index = 0; index < sizeof(render_states) / sizeof(render_states[0]);
-            ++index) {
-        DWORD state = render_states[index];
-        if (FAILED(d3d7_set_render_state(iface,
-                (D3DRENDERSTATETYPE)state, device->render_states[state])))
+    /* Reusing an owner's host device must also clear zero defaults left by
+     * the previous public device. Legacy TEXTUREMAPBLEND is not a Device7
+     * state and must not overwrite the initialized texture-stage cascade. */
+    for (index = 0; index < D3D7_MAX_RENDER_STATES; ++index) {
+        if (d3d7_render_state_valid(index) &&
+                FAILED(d3d7_set_render_state(iface,
+                    (D3DRENDERSTATETYPE)index, device->render_states[index])))
             return FALSE;
     }
     for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {

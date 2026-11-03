@@ -1341,9 +1341,9 @@ static HRESULT d3d_legacy_create_device(DDrawObject *owner, REFCLSID clsid,
             guid_equal(clsid, &IID_IDirect3DMMXDevice) ||
             guid_equal(clsid, &IID_IDirect3DRefDevice))
         normalized_class = &IID_IDirect3DRGBDevice;
-    result = d3d7_CreateDevice((IDirect3D7 *)&owner->d3d7_vtbl,
+    result = d3d7_create_device_for_version((IDirect3D7 *)&owner->d3d7_vtbl,
             normalized_class,
-            (IDirectDrawSurface7 *)&surface->vtbl7, &device7);
+            (IDirectDrawSurface7 *)&surface->vtbl7, &device7, version);
     if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     if (version == 3u)
         *out = &d3d7_device_from_iface(device7)->device3_vtbl;
@@ -1790,6 +1790,11 @@ static HRESULT WINAPI d3d3_device_GetRenderState(IDirect3DDevice3 *iface,
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
     if (!value || !d3d_legacy_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (state == D3DRENDERSTATE_LIGHTING || state == D3DRENDERSTATE_NORMALIZENORMALS ||
+            state == D3DRENDERSTATE_LOCALVIEWER) {
+        *value = 0xffffffffu;
+        return D3D_OK;
+    }
     *value = device->render_states[state];
     return D3D_OK;
 }
@@ -1809,6 +1814,9 @@ static HRESULT WINAPI d3d3_device_SetRenderState(IDirect3DDevice3 *iface,
             device->render_states[D3DRENDERSTATE_TEXTUREHANDLE] = value;
         return DDWG_TRACE_ERROR(result);
     }
+    if (state == D3DRENDERSTATE_LIGHTING || state == D3DRENDERSTATE_NORMALIZENORMALS ||
+            state == D3DRENDERSTATE_LOCALVIEWER)
+        return D3D_OK;
     return d3d7_set_render_state((IDirect3DDevice7 *)device, state,
             value);
 }
@@ -2088,8 +2096,17 @@ static HRESULT WINAPI d3d3_device_SetTextureStageState(
         IDirect3DDevice3 *iface, DWORD stage, D3DTEXTURESTAGESTATETYPE state,
         DWORD value)
 {
-    return d3d7_device_SetTextureStageState((IDirect3DDevice7 *)
-            d3d3_device_from_iface(iface), stage, state, value);
+    D3D7Device *device = d3d3_device_from_iface(iface);
+    DWORD previous;
+    HRESULT hr = d3d7_device_GetTextureStageState((IDirect3DDevice7 *)device,
+            stage, state, &previous);
+    if (FAILED(hr)) return hr;
+    if (previous == value) return D3D_OK;
+    hr = d3d7_device_SetTextureStageState((IDirect3DDevice7 *)device,
+            stage, state, value);
+    if (SUCCEEDED(hr) && !device->recording_state_block)
+        device->legacy_texture_blending = FALSE;
+    return hr;
 }
 
 static HRESULT WINAPI d3d3_device_ValidateDevice(IDirect3DDevice3 *iface,

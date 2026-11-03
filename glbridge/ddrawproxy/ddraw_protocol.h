@@ -1,5 +1,6 @@
 #ifndef DDRAW_PROTOCOL_H
 #define DDRAW_PROTOCOL_H
+#include "../runtime/d9wg_legacy_device_defaults.h"
 
 /*
  * The DirectDraw / Direct3D 1-7 guest frontend does not define a wire protocol
@@ -747,9 +748,9 @@ static __inline void ddraw_texture_map_blend_cascade(unsigned blend,
         return;
     case D3D7TBLEND_MODULATE:
         out->color_op = D3D9TOP_MODULATE;
-        /* MODULATE keeps the *vertex* alpha, unlike MODULATEALPHA. */
-        out->alpha_op = D3D9TOP_SELECTARG2;
-        out->alpha_arg2 = D3D9TA_DIFFUSE;
+        /* The device selects CURRENT instead when the bound texture has no
+         * alpha. No texture uses this same SELECTARG1 default. */
+        out->alpha_op = D3D9TOP_SELECTARG1;
         return;
     case D3D7TBLEND_MODULATEALPHA:
         out->color_op = D3D9TOP_MODULATE;
@@ -758,12 +759,10 @@ static __inline void ddraw_texture_map_blend_cascade(unsigned blend,
     case D3D7TBLEND_DECALALPHA:
         out->color_op = D3D9TOP_BLENDTEXTUREALPHA;
         out->alpha_op = D3D9TOP_SELECTARG2;
-        out->alpha_arg2 = D3D9TA_DIFFUSE;
         return;
     case D3D7TBLEND_ADD:
         out->color_op = D3D9TOP_ADD;
         out->alpha_op = D3D9TOP_SELECTARG2;
-        out->alpha_arg2 = D3D9TA_DIFFUSE;
         return;
     /* DECALMASK/MODULATEMASK are the 1-bit-mask forms, which need the colour
      * key path rather than a blend cascade, and no driver of the era

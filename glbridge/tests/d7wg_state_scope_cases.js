@@ -63,7 +63,7 @@ typedef DWORD D3DTEXTUREHANDLE;
 #define SUCCEEDED(x) ((x)>=0)
 static D3D7Device *d3d3_device_from_iface(IDirect3DDevice3 *d){return d;}
 static DDSurface *d3d_legacy_find_texture(Owner *owner,DWORD handle){(void)owner;(void)handle;return NULL;}
-${["d3d3_device_GetRenderState", "d3d3_device_SetRenderState"].map(extract).join("\n")}
+${["d3d3_device_GetRenderState", "d3d3_device_SetRenderState", "d3d3_device_SetTextureStageState"].map(extract).join("\n")}
 static int legacy_state_cases(D3D7Device *d){
  for(unsigned state=2;state<=152;++state){if(!d3d_legacy_render_state_valid(state)||d3d7_render_state_valid(state))continue;DWORD value=0xcccccccc;CHECK(d3d7_device_SetRenderState(d,state,0x12345678)==DDERR_INVALIDPARAMS&&d3d7_device_GetRenderState(d,state,&value)==DDERR_INVALIDPARAMS&&value==0xcccccccc);CHECK(d3d3_device_SetRenderState(d,state,state==21?2:1)==0);CHECK(d3d3_device_GetRenderState(d,state,&value)==0&&value==(state==21?2:1));value=0xcccccccc;CHECK(d3d7_device_GetRenderState(d,state,&value)==DDERR_INVALIDPARAMS&&value==0xcccccccc);}
  unsigned sent=emissions;CHECK(d3d7_device_SetRenderState(d,3,0x2468)==DDERR_INVALIDPARAMS&&d3d7_device_SetRenderState(d,3,0x2468)==0&&emissions==sent);CHECK(d3d7_device_BeginStateBlock(d)==0&&d3d7_device_SetRenderState(d,3,0x2468)==DDERR_INVALIDPARAMS);DWORD empty;CHECK(d3d7_device_EndStateBlock(d,&empty)==0&&d3d7_device_ApplyStateBlock(d,empty)==0&&d3d7_device_DeleteStateBlock(d,empty)==0&&emissions==sent);
