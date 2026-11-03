@@ -17,15 +17,15 @@ const mutations=[
  ['IMMEDIATE paced','    default:\n        return 0;','    default:\n        return 1;'],
  ['refresh fallback wrong','refresh = 60;','refresh = 50;'],
  ['fractional remainder discarded','state->fraction += numerator % refresh;','state->fraction = 0;'],
- ['millisecond debt mistaken for clock jump','maximum + tolerance','maximum'],
+ ['millisecond debt mistaken for clock jump','*maximum + *tolerance','*maximum'],
  ['wait in counter ticks','(uint32_t)remaining * 1000u / hz','(uint32_t)remaining'],
- ['clock read after sleep omitted','ops->sleep(ops->context, wait);\n                ops->read_clock(ops->context, &now, &hz);','ops->sleep(ops->context, wait);'],
+ ['clock read after sleep omitted','ops->sleep(ops->context, wait);\n        ops->read_clock(ops->context, &now, &hz);','ops->sleep(ops->context, wait);'],
  ['timebase change retains deadline','state->hz != hz || state->refresh != refresh || state->frames != frames','state->refresh != refresh || state->frames != frames'],
  ['first frame waits on invalid history','state->ready && remaining > 0','remaining > 0'],
- ['late frame keeps old deadline','(int32_t)(now - state->deadline) >= (int32_t)maximum','0'],
+ ['late frame keeps old deadline','(int32_t)(now - state->deadline) >= (int32_t)*maximum','0'],
  ['manual reset leaves cadence ready','state->ready = 0;','state->ready = 1;'],
 ];
-try{let killed=0;for(const[name,old,replacement]of mutations){assert(runtime.includes(old),name);const file=dir+'/runtime.c';fs.writeFileSync(file,runtime.replace(old,replacement));run(name,'d9wg_present_pacing_test.js',{D9WG_PACING_RUNTIME_SOURCE:file});killed++;}
+try{let killed=0;for(const[name,old,replacement]of mutations){assert(runtime.includes(old),name);const file=dir+'/runtime.c';fs.writeFileSync(file,runtime.replaceAll(old,replacement));run(name,'d9wg_present_pacing_test.js',{D9WG_PACING_RUNTIME_SOURCE:file});killed++;}
 for(const[name,old,replacement]of[
  ['stalled QPC never falls back','if (frames && !pacing->ready && clock->shift != 0xff)','if (0 && frames && !pacing->ready && clock->shift != 0xff)'],
  ['fallback keeps QPC frequency','clock->shift = 0xff;\n    clock->hz = 1000;','clock->shift = 0xff;\n    (void)clock->hz;'],

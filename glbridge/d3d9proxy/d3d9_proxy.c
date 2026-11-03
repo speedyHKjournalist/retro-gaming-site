@@ -978,6 +978,8 @@ struct D9SwapChain {
     D3DPRESENT_PARAMETERS present;
     IDirect3DSurface9 *back_buffer;
     D9SwapChain *next_device_chain;
+    D9WGPresentClock present_clock;
+    D9WGPresentPacing present_pacing;
 };
 
 struct D9Device {
@@ -13734,24 +13736,36 @@ static HRESULT WINAPI swap_chain_present(IDirect3DSwapChain9 *iface,
         const RGNDATA *dirty_region, DWORD flags)
 {
     D9SwapChain *swap_chain = swap_chain_from_iface(iface);
+    D9Device *device = swap_chain->device;
+    D9WGPresentClock *clock = swap_chain->handle ? &swap_chain->present_clock : &device->present_clock;
+    D9WGPresentPacing *pacing = swap_chain->handle ? &swap_chain->present_pacing : &device->present_pacing;
+    DWORD interval = swap_chain->handle ? swap_chain->present.PresentationInterval : device->present.PresentationInterval;
+    BOOL nonblocking = (flags & D3DPRESENT_DONOTWAIT) != 0;
+    D9WGPresentPacing candidate = *pacing;
     HRESULT result;
 
     TRACE_MARK_ENTER("SwapChain.Present");
     TRACE("CALL SwapChain.Present object=%08lX flags=%08lX override=%08lX",
-            (DWORD)(uintptr_t)iface, flags,
-            (DWORD)(uintptr_t)override_window);
-    (void)flags;
-    (void)src_rect;
-    (void)dst_rect;
-    (void)dirty_region;
-    /* The bridge presents synchronously, so DONOTWAIT cannot make it return
-     * WASSTILLDRAWING.  LINEAR_CONTENT does not change the guest-side work;
-     * both flags can otherwise use the device's normal presentation path. */
-    if (swap_chain->handle) {
-        result = emit_present_swap_chain_and_flush(swap_chain, override_window)
-                ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+            (DWORD)(uintptr_t)iface, flags, (DWORD)(uintptr_t)override_window);
+    /* LINEAR_CONTENT is accepted but has no effect without the corresponding
+     * caps bit. DONOTWAIT never sleeps or emits a frame while its virtual
+     * deadline is pending. Prepare first, publish only after successful emit. */
+    if (nonblocking && !d9wg_prepare_present(clock, &candidate, interval,
+            device->display_mode.RefreshRate)) {
+        result = D3DERR_WASSTILLDRAWING;
+    } else if (swap_chain->handle || nonblocking) {
+        BOOL ok = swap_chain->handle
+            ? emit_present_swap_chain_and_flush(swap_chain, override_window)
+            : emit_present_and_flush(device, override_window);
+        result = ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+        if (ok) {
+            if (nonblocking)
+                *pacing = candidate;
+            else
+                d9wg_throttle_present(clock, pacing, interval, device->display_mode.RefreshRate);
+        }
     } else {
-        result = device_present(&swap_chain->device->iface, src_rect, dst_rect,
+        result = device_present(&device->iface, src_rect, dst_rect,
                 override_window, dirty_region);
     }
     TRACE("%s SwapChain.Present object=%08lX -> %08lX",

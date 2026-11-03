@@ -493,6 +493,8 @@ struct D8SwapChain {
     D8PrivateDataOwner *private_data_owner;
     D8Device *device;
     D3DPRESENT_PARAMETERS present;
+    D9WGPresentClock present_clock;
+    D9WGPresentPacing present_pacing;
 };
 
 /* A transport failure is never permanent (review S1-3; d3d9_proxy.c's
@@ -5547,8 +5549,13 @@ static HRESULT WINAPI swapchain_present(IDirect3DSwapChain8 *iface,
     D8SwapChain *chain = (D8SwapChain *)iface;
     HWND window = override_window ? override_window : chain->present.hDeviceWindow;
     (void)source; (void)destination; (void)dirty_region;
-    return emit_present_and_flush(chain->device, window)
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    BOOL ok = emit_present_and_flush(chain->device, window);
+    if (ok)
+        d9wg_throttle_present(&chain->present_clock, &chain->present_pacing,
+            d9wg_present_interval8(chain->present.FullScreen_PresentationInterval,
+                chain->present.Windowed, chain->present.SwapEffect),
+            chain->device->display_mode.RefreshRate);
+    return ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
 static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8* iface,

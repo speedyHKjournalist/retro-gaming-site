@@ -52,6 +52,18 @@ static BOOL d9wg_present_throttle_disabled(void)
     return value != 0;
 }
 
+static inline BOOL d9wg_prepare_present(D9WGPresentClock* clock, D9WGPresentPacing* candidate,
+    uint32_t interval, uint32_t refresh)
+{
+    uint32_t frames = d9wg_present_throttle_disabled() ? 0 : d9wg_present_frames(interval);
+    if (!frames) {
+        d9wg_present_pacing_reset(candidate);
+        return 1;
+    }
+    uint32_t now = d9wg_present_clock_now(clock);
+    return d9wg_present_try(candidate, frames, refresh, now, clock->hz);
+}
+
 static void d9wg_throttle_present(D9WGPresentClock* clock, D9WGPresentPacing* pacing,
     uint32_t interval, uint32_t refresh)
 {
