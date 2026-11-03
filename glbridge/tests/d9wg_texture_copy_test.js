@@ -33,7 +33,7 @@ static unsigned allocations,frees,attempts,fail_alloc;
 static void *HeapAlloc(void*h,UINT flags,size_t n){(void)h;if(++attempts==fail_alloc)return NULL;void*p=flags?calloc(1,n):malloc(n);if(p)allocations++;return p;}
 typedef struct{const void *lpVtbl;}Iface;
 typedef struct{unsigned marker;}Device;
-typedef struct Level{UINT guard_a;BOOL locked;UINT depth;BYTE *shadow;UINT byte_count,width,height,row_pitch,row_count,slice_pitch;BOOL shadow_valid;UINT guard_b;}Level;
+typedef struct Level{UINT guard_a;BOOL locked;UINT depth;BYTE *shadow;UINT byte_count,width,height,row_pitch,row_count,slice_pitch;BOOL shadow_valid,gpu_dirty;UINT guard_b;}Level;
 typedef struct Texture{Iface iface;Device *device;UINT handle,width,height,depth,edge_length,level_count,format,pool;Level *levels;}Texture;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Level D${api}TextureLevel;
 typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3DCubeTexture${api},IDirect3DVolumeTexture${api};typedef Iface IDirect3DBaseTexture${api},IDirect3DBaseTexture${api}Vtbl;
@@ -50,7 +50,8 @@ static int emit_level(Texture*t,UINT kind,UINT layer,UINT level,const RECT*rect,
 static BOOL emit_texture_update(Texture*t,UINT level,const RECT*r){return emit_level(t,0,0,level,r,0,1);}
 ${api===8?`static BOOL emit_level_update(UINT handle,UINT format,Level*level,UINT mip,UINT face,const RECT*r){if(handle!=current_destination->handle||format!=current_destination->format||level!=current_destination->levels+face*current_destination->level_count+mip){event_error=__LINE__;return 0;}return emit_level(current_destination,1,face,mip,r,0,1);}
 static BOOL emit_volume_level_update(Texture*t,UINT level,const RECT*r,UINT front,UINT depth){return emit_level(t,2,0,level,r,front,depth);}
-${extract(source,"d8_copy_volume_upload")}`:`static BOOL emit_cube_texture_update(Texture*t,UINT face,UINT level,const RECT*r){return emit_level(t,1,face,level,r,0,1);}
+${extract(source,"d8_copy_volume_upload")}
+${extract(source,"d8_copy_upload_result")}`:`static BOOL emit_cube_texture_update(Texture*t,UINT face,UINT level,const RECT*r){return emit_level(t,1,face,level,r,0,1);}
 static BOOL emit_volume_texture_update(Texture*t,UINT level,const D3DBOX*b){RECT r={(int)b->Left,(int)b->Top,(int)b->Right,(int)b->Bottom};return emit_level(t,2,0,level,&r,b->Front,b->Back-b->Front);}`}
 ${adapter[0].replace('../runtime/d9wg_texture_copy_bridge.h',process.env.D9WG_TEXTURE_COPY_BRIDGE_HEADER||'runtime/d9wg_texture_copy_bridge.h')}
 ${(api===8?["update_cube_texture","update_volume_texture","device_update_texture"]:["device_update_texture"]).map(n=>extract(source,n)).join("\n")}

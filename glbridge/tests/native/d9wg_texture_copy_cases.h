@@ -12,7 +12,7 @@ static void build_texture(Texture *t,Device *device,UINT kind,UINT width,UINT he
     unsigned layers=kind==1?6:1;t->levels=calloc(layers*levels,sizeof(*t->levels));if(!t->levels)abort();
     for(unsigned layer=0;layer<layers;++layer){UINT w=width,h=kind==1?width:height,d=kind==2?depth:1;
         for(unsigned level=0;level<levels;++level){Level *l=t->levels+layer*levels+level;l->width=w;l->height=h;l->depth=kind==2?d:0;l->row_pitch=w*4;l->row_count=h;l->slice_pitch=kind==2?w*h*4:0;l->byte_count=w*h*d*4;l->guard_a=0x24680;l->guard_b=0x13579;
-            l->shadow_valid=source?TRUE:FALSE;if(!lazy){l->shadow=malloc(l->byte_count);if(!l->shadow)abort();for(UINT b=0;b<l->byte_count;++b)l->shadow[b]=source?(BYTE)(1+(layer*31+level*7+b)%251):0x3c;}
+            l->gpu_dirty=!source;l->shadow_valid=source?TRUE:FALSE;if(!lazy){l->shadow=malloc(l->byte_count);if(!l->shadow)abort();for(UINT b=0;b<l->byte_count;++b)l->shadow[b]=source?(BYTE)(1+(layer*31+level*7+b)%251):0x3c;}
             w=next_dimension(w);h=next_dimension(h);d=next_dimension(d);
         }
     }
@@ -30,6 +30,8 @@ static int inspect_texture(Texture *source,Texture *destination,UINT kind,UINT e
         if(level<count){Level *from=source->levels+layer*source->level_count+expected_skip+level;CHECK(to->shadow&&to->byte_count==from->byte_count&&!memcmp(to->shadow,from->shadow,to->byte_count));CHECK(events[layer*count+level].size==to->byte_count&&!memcmp(events[layer*count+level].data,from->shadow,to->byte_count));
 #if API == 9
             CHECK(to->shadow_valid);
+#else
+            CHECK(!to->gpu_dirty);
 #endif
         }else if(lazy)CHECK(!to->shadow&&!to->shadow_valid);else for(UINT b=0;b<to->byte_count;++b)CHECK(to->shadow[b]==0x3c);
     }return 0;
@@ -64,6 +66,9 @@ int main(void)
     for(unsigned i=0;i<24;++i)memset(destination.levels[i].shadow,0x3c,destination.levels[i].byte_count);
     fail_emit=2;CHECK(call_update(&device,&source,&destination)==-2&&emits==2);
     for(unsigned i=0;i<24;++i)if(i<2)CHECK(!memcmp(destination.levels[i].shadow,source.levels[2+i].shadow,destination.levels[i].byte_count));else for(UINT b=0;b<destination.levels[i].byte_count;++b)CHECK(destination.levels[i].shadow[b]==0x3c);
+#if API == 8
+    CHECK(!destination.levels[0].gpu_dirty && destination.levels[1].gpu_dirty);
+#endif
 fail_emit=0;clear_events();free_texture(&source,1,FALSE);free_texture(&destination,1,FALSE);
     /* Lazy target mirrors are prepared entirely before the first pixel copy. */
     build_texture(&source,&device,0,16,8,1,5,FALSE,TRUE);build_texture(&destination,&device,0,8,4,1,3,TRUE,FALSE);current_source=&source;current_destination=&destination;current_kind=0;skip=1;copied=3;fail_alloc=attempts+2;

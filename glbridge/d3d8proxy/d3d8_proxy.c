@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
@@ -142,6 +143,7 @@ typedef struct D8TextureLevel {
     UINT lock_depth;
     DWORD lock_flags;
     BOOL locked;
+    BOOL gpu_dirty; /* A GPU copy changed bytes outside the CPU mirror. */
 } D8TextureLevel;
 
 typedef struct D8StreamBinding {
@@ -477,6 +479,9 @@ static IDirect3DVolumeTexture8Vtbl g_volume_texture_vtbl;
 static IDirect3DVolume8Vtbl g_volume_vtbl;
 static IDirect3DSwapChain8Vtbl g_swapchain_vtbl;
 
+static HRESULT readback_surface_pixels(D8Surface *surface, D3DFORMAT format,
+        BYTE *destination, UINT pitch, UINT bytes);
+static HRESULT refresh_surface_pixels(D8Surface *surface);
 static void state_block_release_references(D8StateBlock *block);
 static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
 static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
@@ -4416,17 +4421,40 @@ static HRESULT unlock_texture_level(uint32_t handle, D3DFORMAT format,
 
     if (!level_data->locked)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (!(level_data->lock_flags & D3DLOCK_READONLY))
+    if (!(level_data->lock_flags & D3DLOCK_READONLY)) {
         result = emit_level_update(handle, format, level_data, level, z,
                 &level_data->lock_rect);
+        level_data->gpu_dirty = !result;
+    }
     level_data->locked = FALSE;
     level_data->lock_flags = 0;
     ZeroMemory(&level_data->lock_rect, sizeof(level_data->lock_rect));
     return D8WG_TRACE_ERROR(result ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
-static HRESULT texture_lock_level(D8Texture *texture, UINT level,
-        D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
+static HRESULT lock_surface_texture_level(D8Surface* surface, D8TextureLevel* level,
+    D3DFORMAT format, BOOL lockable, D3DLOCKED_RECT* out,
+    const RECT* rect, DWORD flags)
+{
+    if (!out)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D3DLOCKED_RECT locked;
+    HRESULT result = lock_texture_level(level, format, lockable, &locked, rect, flags);
+    if (FAILED(result))
+        return D8WG_TRACE_ERROR(result);
+    result = refresh_surface_pixels(surface);
+    if (FAILED(result)) {
+        level->locked = FALSE;
+        level->lock_flags = 0;
+        ZeroMemory(&level->lock_rect, sizeof(level->lock_rect));
+        return D8WG_TRACE_ERROR(result);
+    }
+    *out = locked;
+    return D3D_OK;
+}
+
+static HRESULT texture_lock_level(D8Texture* texture, UINT level,
+    D3DLOCKED_RECT* locked_rect, const RECT* rect, DWORD flags)
 {
     if (level >= texture->level_count)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -4435,10 +4463,14 @@ static HRESULT texture_lock_level(D8Texture *texture, UINT level,
      * advertise (see the README). */
     if (texture->usage & D3DUSAGE_DEPTHSTENCIL)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    return lock_texture_level(&texture->levels[level], texture->format,
-            !(texture->usage & D3DUSAGE_RENDERTARGET)
-                || texture->lockable_render_target,
-            locked_rect, rect, flags);
+    D8Surface surface;
+    ZeroMemory(&surface, sizeof(surface));
+    surface.texture = texture;
+    surface.device = texture->device;
+    surface.level = level;
+    return lock_surface_texture_level(&surface, &texture->levels[level], texture->format,
+        !(texture->usage & D3DUSAGE_RENDERTARGET) || texture->lockable_render_target,
+        locked_rect, rect, flags);
 }
 
 static HRESULT texture_unlock_level(D8Texture *texture, UINT level)
@@ -4901,14 +4933,19 @@ static BOOL d8_copy_volume_upload(D8VolumeTexture *texture, UINT level, const D3
     RECT full;SetRect(&full, (int)box->Left, (int)box->Top, (int)box->Right, (int)box->Bottom);
     return emit_volume_level_update(texture, level, &full, box->Front, box->Back - box->Front);
 }
+static BOOL d8_copy_upload_result(D8TextureLevel* level, BOOL result)
+{
+    level->gpu_dirty = !result;
+    return result;
+}
 #define D9WG_COPY_LEVEL D8TextureLevel
 #define D9WG_COPY_2D_TYPE D8Texture
 #define D9WG_COPY_CUBE_TYPE D8CubeTexture
 #define D9WG_COPY_VOLUME_TYPE D8VolumeTexture
-#define D9WG_COPY_MARK_VALID(level) ((void)(level))
-#define D9WG_COPY_UPLOAD_2D(t,l,r) emit_texture_update((t),(l),(r))
-#define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_level_update((t)->handle,(t)->format,&(t)->levels[(f)*(t)->level_count+(l)],(l),(f),(r))
-#define D9WG_COPY_UPLOAD_VOLUME(t,l,b) d8_copy_volume_upload((t),(l),(b))
+#define D9WG_COPY_MARK_VALID(level) ((level)->gpu_dirty = FALSE)
+#define D9WG_COPY_UPLOAD_2D(t,l,r) d8_copy_upload_result(&(t)->levels[l],emit_texture_update((t),(l),(r)))
+#define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) d8_copy_upload_result(&(t)->levels[(f)*(t)->level_count+(l)],emit_level_update((t)->handle,(t)->format,&(t)->levels[(f)*(t)->level_count+(l)],(l),(f),(r)))
+#define D9WG_COPY_UPLOAD_VOLUME(t,l,b) d8_copy_upload_result(&(t)->levels[l],d8_copy_volume_upload((t),(l),(b)))
 #include "../runtime/d9wg_texture_copy_bridge.h"
 
 static HRESULT update_cube_texture(D8Device *device,
@@ -5054,10 +5091,43 @@ static HRESULT create_backbuffer_surface(D8Device *device,
             reset_blocker, surface_out);
 }
 
-static BYTE *surface_pixels(D8Surface *surface, UINT *pitch_out)
+static D8TextureLevel* surface_texture_level(D8Surface* surface)
 {
-    if (surface->texture) {
-        D8TextureLevel *level = &surface->texture->levels[surface->level];
+    if (surface->texture)
+        return &surface->texture->levels[surface->level];
+    if (surface->cube)
+        return cube_level(surface->cube, (D3DCUBEMAP_FACES)surface->face, surface->level);
+    return NULL;
+}
+
+static D8Device* surface_device(D8Surface* surface)
+{
+    return surface->texture ? surface->texture->device : surface->cube ? surface->cube->device
+                                                                       : surface->device;
+}
+
+static BOOL surface_gpu_location(D8Surface* surface, uint32_t* handle,
+    uint32_t* level, uint32_t* face)
+{
+    *level = surface->level;
+    *face = 0;
+    if (surface->texture)
+        *handle = surface->texture->handle;
+    else if (surface->cube) {
+        *handle = surface->cube->handle;
+        *face = surface->face;
+    } else if (surface->backbuffer) {
+        *handle = 0;
+        *level = 0;
+    } else
+        return FALSE;
+    return TRUE;
+}
+
+static BYTE* surface_pixels(D8Surface* surface, UINT* pitch_out)
+{
+    D8TextureLevel* level = surface_texture_level(surface);
+    if (level) {
         *pitch_out = level->row_pitch;
         return level->shadow;
     }
@@ -5069,68 +5139,190 @@ static BYTE *surface_pixels(D8Surface *surface, UINT *pitch_out)
     return surface->shadow;
 }
 
-static HRESULT copy_surface_rect(D8Surface *source, const RECT *source_rect,
-        D8Surface *destination, const POINT *destination_point)
+static BOOL submit_readback_batch_locked(BOOL present)
 {
-    D3DSURFACE_DESC source_desc;
-    D3DSURFACE_DESC destination_desc;
-    RECT area;
-    POINT point;
-    BYTE *source_data;
-    BYTE *destination_data;
-    UINT source_pitch;
-    UINT destination_pitch;
-    UINT block_width, block_height, pixel_bytes;
-    UINT row;
-    if (FAILED(surface_get_desc(&source->iface, &source_desc))
-            || FAILED(surface_get_desc(&destination->iface,
-                    &destination_desc))
-            || (source_desc.Format != destination_desc.Format
-                && !((source_desc.Format == D3DFMT_A8R8G8B8
-                        || source_desc.Format == D3DFMT_X8R8G8B8)
-                    && (destination_desc.Format == D3DFMT_A8R8G8B8
-                        || destination_desc.Format == D3DFMT_X8R8G8B8)))
-            || !texture_format_layout(source_desc.Format, &block_width,
-                    &block_height, &pixel_bytes)
-            || block_width != 1 || block_height != 1)
+    return d9wg_transport_submit(g_process, present);
+}
+
+static HRESULT readback_surface_pixels(D8Surface* surface, D3DFORMAT format,
+    BYTE* destination, UINT pitch, UINT bytes)
+{
+    D3DSURFACE_DESC desc;
+    D9WGReadbackSurface request;
+    D9WGReadbackDiagnostic detail;
+    UINT block_width, block_height, block_bytes, row_bytes;
+    ZeroMemory(&request, sizeof(request));
+    if (FAILED(surface_get_desc(&surface->iface, &desc)) || surface->depth_stencil || !surface_gpu_location(surface, &request.texture_handle, &request.level, &request.face) || !texture_format_layout(format, &block_width, &block_height, &block_bytes) || block_width != 1 || block_height != 1 || !multiply_u32(desc.Width, block_bytes, &row_bytes))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (source_rect) area = *source_rect;
-    else SetRect(&area, 0, 0, (int)source_desc.Width,
-            (int)source_desc.Height);
-    if (destination_point) point = *destination_point;
-    else point.x = point.y = 0;
-    if (area.left < 0 || area.top < 0 || area.right <= area.left
-            || area.bottom <= area.top
-            || (UINT)area.right > source_desc.Width
-            || (UINT)area.bottom > source_desc.Height || point.x < 0
-            || point.y < 0
-            || (UINT)(point.x + area.right - area.left)
-                    > destination_desc.Width
-            || (UINT)(point.y + area.bottom - area.top)
-                    > destination_desc.Height)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    source_data = surface_pixels(source, &source_pitch);
-    destination_data = surface_pixels(destination, &destination_pitch);
-    if (!source_data || !destination_data) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    for (row = 0; row < (UINT)(area.bottom - area.top); ++row) {
-        CopyMemory(destination_data + (point.y + row) * destination_pitch
-                + point.x * pixel_bytes,
-                source_data + (area.top + row) * source_pitch
-                + area.left * pixel_bytes,
-                (area.right - area.left) * pixel_bytes);
-    }
-    if (destination->texture) {
-        RECT dirty;
-        SetRect(&dirty, point.x, point.y,
-                point.x + area.right - area.left,
-                point.y + area.bottom - area.top);
-        if (!emit_texture_update(destination->texture, destination->level,
-                &dirty))
-            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    request.device_handle = surface_device(surface)->handle;
+    request.format = format;
+    request.width = desc.Width;
+    request.height = desc.Height;
+    request.destination_pitch = pitch;
+    int result = d9wg_surface_readback(g_process, &request, row_bytes, desc.Height,
+        destination, bytes, submit_readback_batch_locked, &detail);
+    if (result) {
+        D8WG_TRACE("READBACK FAIL result=%d row=%lu id=%08lX got=%08lX status=%lu bytes=%lu/%lu silence=%lu",
+            result, (DWORD)detail.first_row, (DWORD)detail.request_id, (DWORD)detail.response_id,
+            (DWORD)detail.status, (DWORD)detail.actual_bytes, (DWORD)detail.expected_bytes, (DWORD)detail.silent_ms);
+        return D8WG_TRACE_ERROR(result == D9WG_READBACK_INVALID ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
     }
     return D3D_OK;
 }
 
+static HRESULT refresh_surface_pixels(D8Surface* surface)
+{
+    D3DSURFACE_DESC desc;
+    D8TextureLevel* level = surface_texture_level(surface);
+    if (FAILED(surface_get_desc(&surface->iface, &desc)))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    /* CPU-accessible pools remain authoritative even if their GPU upload failed. */
+    if (!surface->backbuffer && (desc.Pool != D3DPOOL_DEFAULT || (!(desc.Usage & D3DUSAGE_RENDERTARGET) && !(level && level->gpu_dirty))))
+        return D3D_OK;
+    UINT pitch;
+    BYTE* pixels = surface_pixels(surface, &pitch);
+    HRESULT result = readback_surface_pixels(surface, desc.Format, pixels, pitch, level ? level->byte_count : desc.Size);
+    if (SUCCEEDED(result) && level)
+        level->gpu_dirty = FALSE;
+    return D8WG_TRACE_ERROR(result);
+}
+
+/* CPU-only image surfaces have no resource handle. A small transient texture
+ * uploads only the copied rectangle when the destination is the back buffer. */
+static BOOL upload_backbuffer_rect(D8Surface* surface, D3DFORMAT format,
+    const RECT* area, const BYTE* pixels, UINT pitch, UINT pixel_bytes)
+{
+    D8Device* device = surface_device(surface);
+    D9WGCreateTexture2D create;
+    D9WGTextureRows rows;
+    D9WGStretchRect copy;
+    D9WGDestroyResource destroy;
+    ZeroMemory(&create, sizeof(create));
+    create.device_handle = device->handle;
+    create.resource_handle = allocate_handle();
+    create.width = area->right - area->left;
+    create.height = area->bottom - area->top;
+    create.level_count = 1;
+    create.format = format;
+    create.pool = D3DPOOL_DEFAULT;
+    if (!emit_command(D9WG_OP_CREATE_TEXTURE_2D, &create, sizeof(create)))
+        return FALSE;
+    ZeroMemory(&rows, sizeof(rows));
+    rows.resource_handle = create.resource_handle;
+    rows.width = create.width;
+    rows.height = create.height;
+    rows.block_height = 1;
+    rows.row_count = create.height;
+    rows.row_bytes = create.width * pixel_bytes;
+    rows.source_pitch = pitch;
+    rows.source = pixels;
+    BOOL result = emit_texture_rows(&rows);
+    if (result) {
+        ZeroMemory(&copy, sizeof(copy));
+        copy.device_handle = device->handle;
+        copy.source_texture_handle = create.resource_handle;
+        copy.source_right = create.width;
+        copy.source_bottom = create.height;
+        copy.destination_left = area->left;
+        copy.destination_top = area->top;
+        copy.destination_right = area->right;
+        copy.destination_bottom = area->bottom;
+        copy.filter_point = 1;
+        result = emit_command(D9WG_OP_STRETCH_RECT, &copy, sizeof(copy));
+    }
+    destroy.resource_handle = create.resource_handle;
+    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
+    if (!emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy)))
+        result = FALSE;
+    return result;
+}
+
+static BOOL upload_surface_rect(D8Surface* surface, D3DFORMAT format,
+    const RECT* area, const BYTE* pixels, UINT pitch, UINT pixel_bytes)
+{
+    if (surface->texture || surface->cube) {
+        uint32_t handle, level, face;
+        surface_gpu_location(surface, &handle, &level, &face);
+        return emit_level_update(handle, format, surface_texture_level(surface), level, face, area);
+    }
+    if (surface->backbuffer)
+        return upload_backbuffer_rect(surface, format, area,
+            pixels + area->top * pitch + area->left * pixel_bytes, pitch, pixel_bytes);
+    return TRUE;
+}
+
+static HRESULT copy_surface_rect(D8Surface* source, const RECT* source_rect,
+    D8Surface* destination, const POINT* destination_point)
+{
+    D3DSURFACE_DESC from, to;
+    D8TextureLevel *from_level = surface_texture_level(source), *to_level = surface_texture_level(destination);
+    RECT area, target;
+    POINT point = { 0, 0 };
+    UINT block_width, block_height, pixel_bytes;
+    if (FAILED(surface_get_desc(&source->iface, &from)) || FAILED(surface_get_desc(&destination->iface, &to)) || from.Format != to.Format || (from.Usage & D3DUSAGE_DEPTHSTENCIL) || (to.Usage & D3DUSAGE_DEPTHSTENCIL) || source->depth_stencil || destination->depth_stencil || source->locked || destination->locked || (from_level && from_level->locked) || (to_level && to_level->locked) || !texture_format_layout(from.Format, &block_width, &block_height, &pixel_bytes) || block_width != 1 || block_height != 1)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (source_rect)
+        area = *source_rect;
+    else
+        SetRect(&area, 0, 0, (int)from.Width, (int)from.Height);
+    if (destination_point)
+        point = *destination_point;
+    if (area.left < 0 || area.top < 0 || area.right <= area.left || area.bottom <= area.top || (UINT)area.right > from.Width || (UINT)area.bottom > from.Height || point.x < 0 || point.y < 0 || (UINT)point.x > to.Width || (UINT)point.y > to.Height || (UINT)(area.right - area.left) > to.Width - (UINT)point.x || (UINT)(area.bottom - area.top) > to.Height - (UINT)point.y)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    SetRect(&target, point.x, point.y, point.x + area.right - area.left, point.y + area.bottom - area.top);
+    D9WGStretchRect copy;
+    ZeroMemory(&copy, sizeof(copy));
+    BOOL gpu_from = surface_gpu_location(source, &copy.source_texture_handle, &copy.source_level, &copy.source_face);
+    BOOL gpu_to = surface_gpu_location(destination, &copy.destination_texture_handle, &copy.destination_level, &copy.destination_face);
+    BOOL same = gpu_from && gpu_to && copy.source_texture_handle == copy.destination_texture_handle && copy.source_level == copy.destination_level && copy.source_face == copy.destination_face;
+    if (from.Pool == D3DPOOL_DEFAULT && to.Pool == D3DPOOL_DEFAULT && gpu_from && gpu_to && !same) {
+        copy.device_handle = surface_device(source)->handle;
+        copy.source_left = area.left;
+        copy.source_top = area.top;
+        copy.source_right = area.right;
+        copy.source_bottom = area.bottom;
+        copy.destination_left = target.left;
+        copy.destination_top = target.top;
+        copy.destination_right = target.right;
+        copy.destination_bottom = target.bottom;
+        copy.filter_point = 1;
+        if (!emit_command(D9WG_OP_STRETCH_RECT, &copy, sizeof(copy)))
+            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+        if (to_level)
+            to_level->gpu_dirty = TRUE;
+        return D3D_OK;
+    }
+    HRESULT result = refresh_surface_pixels(source);
+    if (FAILED(result))
+        return D8WG_TRACE_ERROR(result);
+    UINT from_pitch, to_pitch;
+    BYTE *input = surface_pixels(source, &from_pitch), *output = surface_pixels(destination, &to_pitch);
+    if (!input || !output)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    UINT row_bytes = (area.right - area.left) * pixel_bytes, rows = area.bottom - area.top;
+    BYTE* snapshot = NULL;
+    if (input == output) {
+        snapshot = HeapAlloc(GetProcessHeap(), 0, row_bytes * rows);
+        if (!snapshot)
+            return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+        for (UINT y = 0; y < rows; ++y)
+            CopyMemory(snapshot + y * row_bytes, input + (area.top + y) * from_pitch + area.left * pixel_bytes, row_bytes);
+    }
+    for (UINT y = 0; y < rows; ++y)
+        CopyMemory(output + (target.top + y) * to_pitch + target.left * pixel_bytes,
+            snapshot ? snapshot + y * row_bytes : input + (area.top + y) * from_pitch + area.left * pixel_bytes, row_bytes);
+    if (snapshot)
+        HeapFree(GetProcessHeap(), 0, snapshot);
+    BOOL emitted = upload_surface_rect(destination, to.Format, &target, output, to_pitch, pixel_bytes);
+    if (!emitted) {
+        if (to_level)
+            to_level->gpu_dirty = TRUE;
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    }
+    if (to_level && target.left == 0 && target.top == 0 && (UINT)target.right == to.Width && (UINT)target.bottom == to.Height)
+        to_level->gpu_dirty = FALSE;
+    return D3D_OK;
+}
 /* Typed unsupported methods keep stdcall stack cleanup correct on 32-bit XP. */
 #define DEV_STUB0(name) \
     static HRESULT WINAPI device_##name(IDirect3DDevice8 *iface) \
@@ -5312,54 +5504,85 @@ static HRESULT WINAPI device_create_image_surface(IDirect3DDevice8 *iface,
             surface_out);
 }
 
-static HRESULT WINAPI device_copy_rects(IDirect3DDevice8 *iface,
-        IDirect3DSurface8 *source_iface, const RECT *rects, UINT count,
-        IDirect3DSurface8 *destination_iface, const POINT *points)
+static HRESULT WINAPI device_copy_rects(IDirect3DDevice8* iface,
+    IDirect3DSurface8* source_iface, const RECT* rects, UINT count,
+    IDirect3DSurface8* destination_iface, const POINT* points)
 {
-    D8Device *device = device_from_iface(iface);
-    D8Surface *source;
-    D8Surface *destination;
+    D8Device* device = device_from_iface(iface);
+    D8Surface* source;
+    D8Surface* destination;
     UINT index;
     if (!source_iface || !destination_iface
-            || source_iface->lpVtbl != &g_surface_vtbl
-            || destination_iface->lpVtbl != &g_surface_vtbl
-            || (count && (!rects || !points)))
+        || source_iface->lpVtbl != &g_surface_vtbl
+        || destination_iface->lpVtbl != &g_surface_vtbl
+        || (count && !rects))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     source = surface_from_iface(source_iface);
     destination = surface_from_iface(destination_iface);
-    if ((source->texture ? source->texture->device : source->device) != device
-            || (destination->texture ? destination->texture->device
-                    : destination->device) != device)
+    if (surface_device(source) != device || surface_device(destination) != device)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (!count) return copy_surface_rect(source, NULL, destination, NULL);
+    D3DSURFACE_DESC source_desc, destination_desc;
+    if (FAILED(surface_get_desc(source_iface, &source_desc)) || FAILED(surface_get_desc(destination_iface, &destination_desc)) || source_desc.Format != destination_desc.Format || (source_desc.Usage & D3DUSAGE_DEPTHSTENCIL) || (destination_desc.Usage & D3DUSAGE_DEPTHSTENCIL))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!count)
+        return rects || points ? D3D_OK : copy_surface_rect(source, NULL, destination, NULL);
     for (index = 0; index < count; ++index) {
         HRESULT hr = copy_surface_rect(source, &rects[index], destination,
-                &points[index]);
-        if (FAILED(hr)) return D8WG_TRACE_ERROR(hr);
+            points ? &points[index] : NULL);
+        if (FAILED(hr))
+            return D8WG_TRACE_ERROR(hr);
     }
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_get_front_buffer(IDirect3DDevice8 *iface,
-        IDirect3DSurface8 *destination_iface)
+static HRESULT WINAPI device_get_front_buffer(IDirect3DDevice8* iface,
+    IDirect3DSurface8* destination_iface)
 {
-    D8Device *device = device_from_iface(iface);
-    IDirect3DSurface8 *source_iface = NULL;
-    HRESULT hr;
+    D8Device* device = device_from_iface(iface);
     if (!destination_iface || destination_iface->lpVtbl != &g_surface_vtbl)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if ((surface_from_iface(destination_iface)->texture
-            ? surface_from_iface(destination_iface)->texture->device
-            : surface_from_iface(destination_iface)->device) != device)
+    D8Surface* destination = surface_from_iface(destination_iface);
+    D3DSURFACE_DESC desc;
+    D8TextureLevel* level = surface_texture_level(destination);
+    if (surface_device(destination) != device || FAILED(surface_get_desc(destination_iface, &desc)) || destination->locked || destination->depth_stencil || (level && level->locked))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    hr = create_backbuffer_surface(device, &device->present, FALSE,
-            &source_iface);
-    if (SUCCEEDED(hr)) {
-        hr = copy_surface_rect(surface_from_iface(source_iface), NULL,
-                surface_from_iface(destination_iface), NULL);
-        IDirect3DSurface8_Release(source_iface);
+    IDirect3DSurface8* source_iface = NULL;
+    HRESULT result = create_backbuffer_surface(device, &device->present, FALSE, &source_iface);
+    if (FAILED(result))
+        return D8WG_TRACE_ERROR(result);
+    D8Surface* source = surface_from_iface(source_iface);
+    D3DSURFACE_DESC source_desc;
+    surface_get_desc(source_iface, &source_desc);
+    UINT bw, bh, pixel_bytes;
+    if (desc.Width < source_desc.Width || desc.Height < source_desc.Height || (desc.Format != source_desc.Format && !((desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8) && (source_desc.Format == D3DFMT_A8R8G8B8 || source_desc.Format == D3DFMT_X8R8G8B8))) || !texture_format_layout(desc.Format, &bw, &bh, &pixel_bytes) || bw != 1 || bh != 1)
+        result = D3DERR_INVALIDCALL;
+    else {
+        UINT source_pitch, destination_pitch;
+        BYTE *input = surface_pixels(source, &source_pitch), *output = surface_pixels(destination, &destination_pitch);
+        if (!output)
+            result = D3DERR_INVALIDCALL;
+        else {
+            result = readback_surface_pixels(source, desc.Format, input, source_pitch, source_desc.Size);
+            if (SUCCEEDED(result)) {
+                for (UINT y = 0; y < source_desc.Height; ++y) {
+                    CopyMemory(output + y * destination_pitch, input + y * source_pitch, source_desc.Width * pixel_bytes);
+                    if (desc.Format == D3DFMT_A8R8G8B8)
+                        for (UINT x = 0; x < source_desc.Width; ++x)
+                            output[y * destination_pitch + x * 4u + 3u] = 255;
+                }
+                RECT area;
+                SetRect(&area, 0, 0, (int)source_desc.Width, (int)source_desc.Height);
+                if (!upload_surface_rect(destination, desc.Format, &area, output, destination_pitch, pixel_bytes)) {
+                    if (level)
+                        level->gpu_dirty = TRUE;
+                    result = D3DERR_DRIVERINTERNALERROR;
+                } else if (level && desc.Width == source_desc.Width && desc.Height == source_desc.Height)
+                    level->gpu_dirty = FALSE;
+            }
+        }
     }
-    return D8WG_TRACE_ERROR(hr);
+    IDirect3DSurface8_Release(source_iface);
+    return D8WG_TRACE_ERROR(result);
 }
 
 static HRESULT WINAPI device_set_render_target(IDirect3DDevice8 *iface,
@@ -7265,13 +7488,19 @@ static D8TextureLevel *cube_level(D8CubeTexture *texture,
     return &texture->levels[(UINT)face * texture->level_count + level];
 }
 
-static HRESULT cube_lock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
-        UINT level, D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
+static HRESULT cube_lock_face(D8CubeTexture* texture, D3DCUBEMAP_FACES face,
+    UINT level, D3DLOCKED_RECT* locked_rect, const RECT* rect, DWORD flags)
 {
     if ((UINT)face >= 6u || level >= texture->level_count)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    return lock_texture_level(cube_level(texture, face, level),
-            texture->format, TRUE, locked_rect, rect, flags);
+    D8Surface surface;
+    ZeroMemory(&surface, sizeof(surface));
+    surface.cube = texture;
+    surface.device = texture->device;
+    surface.face = (UINT)face;
+    surface.level = level;
+    return lock_surface_texture_level(&surface, cube_level(texture, face, level),
+        texture->format, TRUE, locked_rect, rect, flags);
 }
 
 static HRESULT cube_unlock_face(D8CubeTexture *texture, D3DCUBEMAP_FACES face,
