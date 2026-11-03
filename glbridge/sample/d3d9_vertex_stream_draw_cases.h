@@ -69,8 +69,12 @@ static __attribute__((noinline)) void vertex_stream_draw_cases(void)
     check(FAILED(CALL(DrawIndexedPrimitive)(device, D3DPT_TRIANGLELIST, -1, 2, 3, 0, 1)), "indexed draw checks late stream bounds");
     OK(CALL(SetStreamSource)(device, 15, colors, 4, 0));
     OK(BUF(Lock)(colors, 0, 24, &mapped, 0));
-    check(FAILED(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 1, 3)), "draw checks locked used stream");
+    OK(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 1, 3));
+    OK(CALL(GetClipStatus)(device, &status));
+    check(status.ClipUnion == 0x80000005u && status.ClipIntersection == 0, "mapped used stream participates in software Draw classification");
     OK(BUF(Unlock)(colors));
+    status = (D3DCLIPSTATUS9) { 0x80000000u, 0x80000000u };
+    OK(CALL(SetClipStatus)(device, &status));
     check(SUCCEEDED(CALL(DrawIndexedPrimitive)(device, D3DPT_TRIANGLELIST, -3, 2, 3, 0, 1)) && FAILED(CALL(GetClipStatus)(device, &status)), "negative hinted start is advisory; actual indices remain valid");
     check(SUCCEEDED(CALL(DrawIndexedPrimitive)(device, D3DPT_TRIANGLELIST, 0, 0xffffffffu, 2, 0, 1)) && FAILED(CALL(GetClipStatus)(device, &status)), "overflowing hints preserve drawing without unsafe software classification");
     OK(IB(Lock)(indices, 0, 6, &mapped, 0));

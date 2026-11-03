@@ -59,6 +59,18 @@ int main(void)
     CHECK(device_draw_indexed_primitive(&device,4,0,0,0,0,1)==0&&!device.clip_status_valid);
     CHECK(device_draw_indexed_primitive(&device,4,0,1,1,0,1)==0&&device.clip_status_valid);
 
+    vb.handle=41;vb.lock_size=vb.length;instance.handle=42;instance.lock_size=instance.length;ib.handle=43;ib.lock_size=ib.length;
+    vb.locked=instance.locked=ib.locked=TRUE;vb.lock_flags=instance.lock_flags=ib.lock_flags=8192;
+    sequence_count=0;unsigned uploads_before=uploads;before=emits;mirrors=invalidations;
+    CHECK(device_draw_indexed_primitive(&device,4,INT32_MIN,UINT32_MAX,0,UINT32_MAX,0)==0&&uploads==uploads_before&&!sequence_count&&emits==before&&invalidations==mirrors&&ib.lock_flags==8192);
+    sequence_count=0;
+    CHECK(device_draw_primitive(&device,1,1,1)==0&&sequence_count==3&&!memcmp(sequence,"UUD",3)&&device.clip_status_valid&&!vb.lock_flags&&!instance.lock_flags&&ib.lock_flags==8192&&vb.locked&&instance.locked&&ib.locked);
+    vb.lock_flags=instance.lock_flags=8192;sequence_count=0;before=emits;mirrors=invalidations;
+    device.clip_status=(D9WGClipStatus){0x80000000u,0x80000000u};status=device.clip_status;upload_fail_at=uploads+2;
+    CHECK(device_draw_indexed_primitive(&device,4,0,1,1,0,1)==-3&&emits==before&&invalidations==mirrors&&!memcmp(&status,&device.clip_status,sizeof(status))&&sequence_count==2&&!memcmp(sequence,"UU",2)&&!vb.lock_flags&&instance.lock_flags==8192&&ib.lock_flags==8192);
+    upload_fail_at=0;sequence_count=0;
+    CHECK(device_draw_indexed_primitive(&device,4,0,1,1,0,1)==0&&sequence_count==4&&!memcmp(sequence,"UUUD",4)&&device.clip_status_valid&&vb.locked&&instance.locked&&ib.locked&&!vb.lock_flags&&!instance.lock_flags&&!ib.lock_flags);
+    vb.locked=instance.locked=ib.locked=FALSE;
     declaration.elements[0].Usage=9;declaration.elements[0].Type=3;device.streams[15].stride=16;
     device.clip_status=(D9WGClipStatus){11,17};device.clip_status_valid=TRUE;
     CHECK(device_draw_indexed_primitive(&device,4,0,0,0,0,1)==0&&device.clip_status_valid&&device.clip_status.clip_union==11&&device.clip_status.clip_intersection==17);

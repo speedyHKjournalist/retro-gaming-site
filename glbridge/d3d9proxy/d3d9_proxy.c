@@ -1764,6 +1764,10 @@ static void host_log(uint32_t severity, const char *format, ...)
     reserve_command_locked(op, size, extra, NULL, payload, blob)
 #define D9WG_DISCARD_FLAG D3DLOCK_DISCARD
 #include "../runtime/d9wg_upload_bridge.h"
+#define D9WG_MAPPED_DEVICE D9Device
+#define D9WG_MAPPED_VERTEX D9VertexBuffer
+#define D9WG_MAPPED_INDEX D9IndexBuffer
+#include "../runtime/d9wg_mapped_draw_bridge.h"
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -6520,6 +6524,8 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
         TRACE_FRAME_DRAW(primitive_count);invalidate_render_target_mirrors(device);
         return D3D_OK;
     }
+    if (!d9wg_flush_draw_buffers(device, FALSE))
+        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.start_vertex = start_vertex;
@@ -6545,7 +6551,7 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     UINT available_indices;
 
     if (!device->index_buffer
-            || device->index_buffer->locked || !device_has_vertex_format(device)
+            || !device_has_vertex_format(device)
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count)) {
         TRACE_FRAME_REJECT();
@@ -6604,6 +6610,8 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         TRACE_FRAME_DRAW(primitive_count);invalidate_render_target_mirrors(device);
         return D3D_OK;
     }
+    if (!d9wg_flush_draw_buffers(device, TRUE))
+        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.base_vertex_index = base_vertex_index;
@@ -9113,7 +9121,7 @@ static HRESULT d9_draw_index_bounds(D9Device *device, INT base_vertex, D9WGDrawI
         UINT stream = elements[i].stream;
         if (stream >= D9_MAX_STREAMS) return D3DERR_INVALIDCALL;
         D9VertexBuffer *buffer = device->streams[stream].buffer;
-        if (!buffer || buffer->device != device || buffer->locked) return D3DERR_INVALIDCALL;
+        if (!buffer || buffer->device != device) return D3DERR_INVALIDCALL;
         streams[stream].length = buffer->length;streams[stream].base = device->streams[stream].offset;
         streams[stream].stride = device->streams[stream].stride;
     }
@@ -9140,7 +9148,7 @@ static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT
     for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
         if (!extent[i]) continue;
         D9VertexBuffer *buffer = device->streams[i].buffer;
-        if (!buffer || buffer->device != device || buffer->locked) return D3DERR_INVALIDCALL;
+        if (!buffer || buffer->device != device) return D3DERR_INVALIDCALL;
         uint32_t vertex = (uint32_t)start, vertices = count, at;
         frequency = device->streams[i].frequency;
         if (frequency & D3DSTREAMSOURCE_INSTANCEDATA) {
@@ -9167,7 +9175,7 @@ static void d9_process_input_free(D9ProcessInput *input)
     HeapFree(GetProcessHeap(), 0, input);
 }
 static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
-        UINT start, UINT count, D9ProcessInput **result)
+        UINT start, UINT count, BOOL allow_locked, D9ProcessInput **result)
 {
     D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
     uint32_t first[D9_MAX_STREAMS];
@@ -9181,7 +9189,7 @@ static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
     for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
         if (!(input->layout.stream_mask & (1u << i))) continue;
         D9VertexBuffer *buffer = device->streams[i].buffer;
-        if (!buffer || buffer->device != device || buffer->locked || device->streams[i].frequency != 1u) goto fail;
+        if (!buffer || buffer->device != device || (buffer->locked && !allow_locked) || device->streams[i].frequency != 1u) goto fail;
         input->streams[i].vertices = buffer->shadow;
         input->streams[i].length = buffer->length;
         input->streams[i].base = device->streams[i].offset;
@@ -9278,7 +9286,7 @@ static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const 
     int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
     if (start < 0 || start > 0xffffffffu) return -1;
     D9ProcessInput *input;
-    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, &input);
+    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, TRUE, &input);
     if (FAILED(error)) return error == E_OUTOFMEMORY ? -3 : -1;
     D9WGVertexElement output_elements[D3DMAXDECLLENGTH];D9WGProcessLayout output_layout;
     if (!d9wg_clip_stream_output(&input->layout, output_elements, &output_layout)) {
@@ -9324,7 +9332,7 @@ static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDra
     int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
     if (start < 0 || start > 0xffffffffu) return D3DERR_INVALIDCALL;
     D9ProcessInput *input;
-    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, &input);
+    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, TRUE, &input);
     if (error == D3DERR_INVALIDCALL) { *valid = FALSE;return D3D_OK; }
     if (FAILED(error)) return error;
     D9WGClipDrawSource source = *draw;source.layout = &input->layout.vertex;
@@ -9441,7 +9449,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
                 (float)device->viewport.Width, (float)device->viewport.Height,
                 device->viewport.MinZ, device->viewport.MaxZ };
         D9ProcessInput *input;
-        HRESULT input_error = d9_process_input(device, destination, src_start, count, &input);
+        HRESULT input_error = d9_process_input(device, destination, src_start, count, FALSE, &input);
         if (FAILED(input_error)) return TRACE_REFUSE(input_error);
         uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
                 device->transforms[D3DTS_WORLD], 256, 0, device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION]);

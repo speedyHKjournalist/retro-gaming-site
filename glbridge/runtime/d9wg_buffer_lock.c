@@ -15,3 +15,32 @@ uint32_t d9wg_buffer_lock_flags(uint32_t usage, uint32_t pool, uint32_t requeste
         return D9WG_BUFFER_LOCK_NOOVERWRITE;
     return streaming & D9WG_BUFFER_LOCK_DISCARD;
 }
+
+int d9wg_flush_mapped_buffers(D9WGMappedBuffer *maps, uint32_t count,
+        D9WGEmitMappedBuffer emit, void *context)
+{
+    if (count > D9WG_MAX_DRAW_MAPS || (count && (!maps || !emit))) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const D9WGMappedBuffer *map = maps + i;
+        if (!map->identity || !map->handle || map->offset > map->length ||
+                map->size > map->length - map->offset || (map->size && !map->shadow)) return 0;
+        for (uint32_t j = 0; j < i; ++j) {
+            const D9WGMappedBuffer *prior = maps + j;
+            if (prior->identity == map->identity && (prior->handle != map->handle ||
+                    prior->shadow != map->shadow || prior->length != map->length ||
+                    prior->offset != map->offset || prior->size != map->size || prior->flags != map->flags)) return 0;
+        }
+    }
+    for (uint32_t i = 0; i < count; ++i) maps[i].uploaded = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        D9WGMappedBuffer *map = maps + i;
+        if (map->flags & D9WG_BUFFER_LOCK_READONLY) continue;
+        uint32_t j = 0;
+        for (; j < i; ++j) if (maps[j].identity == map->identity) break;
+        if (j < i) continue;
+        if (!emit(context, map->handle, map->offset,
+                map->shadow ? map->shadow + map->offset : 0, map->size, map->flags)) return 0;
+        map->uploaded = 1;
+    }
+    return 1;
+}

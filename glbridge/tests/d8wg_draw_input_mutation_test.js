@@ -4,7 +4,7 @@ const source=fs.readFileSync(path.join(__dirname,"../d3d8proxy/d3d8_proxy.c"),"u
 const cases=[
  ["secondary extent ignored","d8_draw_stream_range","if (extent[stream] < end)","if (stream == 15 && extent[stream] < end)"],
  ["foreign draw buffers accepted","d8_draw_stream_range","buffer->device != device ||","0 ||"],
- ["locked draw buffers accepted","d8_draw_stream_range","|| buffer->locked ||","|| 0 ||"],
+ ["mapped upload omitted","device_draw_primitive","if (!d9wg_flush_draw_buffers(device, FALSE))","if (0 && !d9wg_flush_draw_buffers(device, FALSE))"],
  ["draw starts at zero","d8_draw_stream_range","extent[stream], start, count, &first)","extent[stream], (start & 0u), count, &first)"],
  ["draw ignores final vertex","d8_draw_stream_range","extent[stream], start, count, &first)","extent[stream], start, 1u + (count & 0u), &first)"],
  ["UP allows multiple streams","d8_draw_stream_range","(up_stride && stream)","(0 && up_stride && stream)"],

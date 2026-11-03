@@ -93,7 +93,8 @@ static void d3d8_tween_checks(void)
     check(SUCCEEDED(CALL(SetStreamSource)(device, 1, small, 0)) && FAILED(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 0, 2)), "D3D8 declaration draw short constant stream");
     check(SUCCEEDED(CALL(SetStreamSource)(device, 1, secondary, 0)), "D3D8 declaration draw restore secondary");
     lock_buffer(secondary);
-    check(FAILED(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 0, 2)) && SUCCEEDED(BUF(Unlock)(secondary)), "D3D8 declaration draw locked secondary");
+    check(SUCCEEDED(CALL(DrawPrimitive)(device, D3DPT_POINTLIST, 0, 2)) && FAILED(CALL(ProcessVertices)(device, 0, 0, 1, output, 0)) && SUCCEEDED(BUF(Unlock)(secondary)), "D3D8 locked secondary draws without relaxing ProcessVertices");
+    check(SUCCEEDED(CALL(ProcessVertices)(device, 0, 0, 1, output, 0)), "D3D8 ProcessVertices source becomes usable after Unlock");
     check(FAILED(CALL(DrawPrimitiveUP)(device, D3DPT_POINTLIST, 1, first, 24)), "D3D8 UP refuses nonzero declaration streams");
     IDirect3DIndexBuffer8 *indices;
     check(SUCCEEDED(CALL(CreateIndexBuffer)(device, 6, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &indices)), "D3D8 declared draw index buffer");

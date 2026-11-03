@@ -6,7 +6,7 @@ const cases=[
  ["programmable shader accepted as fixed input","all","!device->vertex_shader_ref->declaration_only)","0)"],
  ["stream ranges unchecked","helper","if (!d9wg_process_stream_validate(","if (0 && !d9wg_process_stream_validate("],
  ["foreign buffers accepted","helper","buffer->device != device ||","0 ||"],
- ["locked buffers accepted","helper","|| buffer->locked)","|| 0)"],
+ ["locked buffers accepted","helper","(buffer->locked && !allow_locked)","(buffer->locked && allow_locked)"],
  ["constant stream sent to strided fast path","helper","input->layout.stream_mask != 1u || !input->streams[0].stride","input->layout.stream_mask != 1u"],
  ["snapshot does not preserve input bytes","helper","CopyMemory(input->snapshot, destination->shadow, destination->length);","memset(input->snapshot, 0, destination->length);"],
  ["aliased stream reads live output","helper","input->streams[i].vertices = input->snapshot;","input->streams[i].vertices = destination->shadow;"],
