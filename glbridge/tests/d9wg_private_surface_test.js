@@ -1,7 +1,8 @@
 "use strict";
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-private-entry-"));
 function extract(source,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);if(!m&&name==='surface_binding_add_ref')return 'static void surface_binding_add_ref(D8Surface*s){IDirect3DSurface8_AddRef(&s->iface);}';if(!m&&name==='surface_binding_release')return 'static void surface_binding_release(D8Surface*s){IDirect3DSurface8_Release(&s->iface);}';assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
-try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_PRIVATE_SURFACE_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/entry.c',`#include <assert.h>
+const apis=process.env.D9WG_PRIVATE_API?[Number(process.env.D9WG_PRIVATE_API)]:[8,9];assert(apis.every(api=>api===8||api===9));
+try{for(const api of apis){const source=fs.readFileSync(process.env['D'+api+'WG_PRIVATE_SURFACE_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/entry.c',`#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,9 +63,13 @@ static void*HeapAlloc(void*h,unsigned flags,uint32_t size){(void)h;(void)flags;a
 static void HeapFree(void*h,unsigned flags,void*p){(void)h;(void)flags;assert(!held);if(!p)return;assert(allocated);allocated--;free(p);}
 static void EnterCriticalSection(int*lock){(void)lock;assert(!held);held=1;}
 static void LeaveCriticalSection(int*lock){(void)lock;assert(held);held=0;}
+static Device* callback_device;static unsigned callback_calls;
+static ULONG device_add_ref(Device*);static ULONG device_release(Device*);
 typedef struct{unsigned refs;}IUnknown;
+static BOOL callback_keep_device;static D9WGPrivateStore* callback_readd_store;static IUnknown* callback_readd_object;
+static void reenter_private_store(void);
 static unsigned IUnknown_AddRef(IUnknown*o){assert(!held&&o->refs);return ++o->refs;}
-static unsigned IUnknown_Release(IUnknown*o){assert(!held&&o->refs&&parent_refs==1);return --o->refs;}
+static unsigned IUnknown_Release(IUnknown*o){assert(!held&&o->refs&&parent_refs==1);unsigned refs=--o->refs;if(!refs&&callback_device){unsigned before=(unsigned)callback_device->refcount;assert(before>0);assert(device_add_ref(callback_device)==before+1);assert(device_release(callback_device)==before);if(callback_keep_device){callback_keep_device=0;device_add_ref(callback_device);}reenter_private_store();callback_calls++;}return refs;}
 static LONG InterlockedDecrement(LONG*p){return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG exchange,LONG compare){LONG old=*p;if(old==compare)*p=exchange;return old;}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}
 static ULONG device_add_ref(Device*);static ULONG device_release(Device*);static void device_child_add_ref(Device*);static void device_child_release(Device*);
@@ -84,6 +89,8 @@ static void parent_release(void*p){(void)p;assert(parent_refs==1);parent_refs=0;
 #define IDirect3DSurface${api}_Release(p) surface_release((View*)(p))
 #define IDirect3DCubeTexture${api}_Release(p) ((void)(p),0u)
 #include "runtime/d9wg_private_data_bridge.h"
+static void reenter_private_store(void){if(callback_readd_store){D9WGPrivateStore*store=callback_readd_store;IUnknown*object=callback_readd_object;callback_readd_store=NULL;callback_readd_object=NULL;const uint8_t tag[16]={3};assert(!d9wg_private_set(store,tag,object,sizeof(void*),1,&d9wg_private_ops));assert(IUnknown_Release(object)==1);}}
+
 ${['device_add_ref','device_child_add_ref','device_child_release'].map(n=>extract(source,n)).join('\n')}
 ${api===8?`static int g_swapchain_vtbl,g_surface_vtbl;
 static UINT next_handle=0x9100;
@@ -249,5 +256,27 @@ for(unsigned depth=0;depth<2;depth++)for(unsigned order=0;order<4;order++){
 }
 printf("PASS actual D3D8 standalone binding lifetime: %u checks, %u public-zero revivals; real public/storage/device methods, separate color/depth storage holds, private retention, cached revival and four final-owner orders\\n",standalone_checks,standalone_revivals);
 `:""}
+unsigned implicit_callbacks=0;
+for(unsigned order=0;order<5;order++){
+ parent_refs=1;d=HeapAlloc(NULL,0,sizeof(*d));d->refcount=1;d->parent=&parent;d->handle=0x9000;
+ View*cached[2]={HeapAlloc(NULL,0,sizeof(View)),HeapAlloc(NULL,0,sizeof(View))};
+ d->implicit_back_buffer=cached[0];d->implicit_depth_stencil=cached[1];
+ IUnknown owners[3]={{1},{1},{1}};
+ for(unsigned i=0;i<2;i++){
+  cached[i]->device=d;cached[i]->implicit=1;
+  ${api===8?'cached[i]->private_data_owner=i?&d->depth_surface_private_data:&d->back_buffer_private_data;':''}
+  CHECK(!surface_set_private_data(cached[i],object_key,&owners[i],sizeof(void*),1)&&owners[i].refs==2);
+  CHECK(IUnknown_Release(&owners[i])==1);
+ }
+ if(order==1){${api===8?'d->depth_surface=cached[1];surface_binding_add_ref(cached[1]);':'d->render_target_surface=cached[0];surface_add_ref(cached[0]);'}}
+ if(order==2)CHECK(surface_add_ref(cached[0])==1&&d->refcount==2);
+ unsigned old_callbacks=callback_calls;callback_device=d;callback_keep_device=order==3;
+ if(order==4){callback_readd_store=${api===8?'&d->back_buffer_private_data':'&cached[0]->private_data'};callback_readd_object=&owners[2];}
+ if(order==2){CHECK(device_release(d)==1&&callback_calls==old_callbacks&&owners[0].refs==1&&owners[1].refs==1);CHECK(!surface_release(cached[0]));}
+ else if(order==3){CHECK(device_release(d)==1&&callback_calls==old_callbacks+1&&!owners[0].refs&&owners[1].refs==1&&parent_refs==1);CHECK(!device_release(d));}
+ else CHECK(!device_release(d));
+ callback_device=NULL;unsigned expected_callbacks=order==4?3:2;CHECK(callback_calls==old_callbacks+expected_callbacks&&!owners[0].refs&&!owners[1].refs&&(order!=4||!owners[2].refs)&&!parent_refs&&!allocated);implicit_callbacks+=expected_callbacks;
+}
+printf("PASS actual API ${api} implicit private callbacks: %u exact finalizers; empty/owned-bound/last-public/retained-parent/reentrant-insertion orders, protected queries, deferred stores and complete cache cleanup\\n",implicit_callbacks);
 printf("PASS actual API ${api} surface private data: %u standalone/implicit/store lifetime, final device cleanup${api===8?', cached chain surfaces, retained texture-level stores, early chain release and allocation failures':''} cases\\n",cases);return 0;}
 `);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/entry.c',root+'/runtime/d9wg_private_data.c',root+'/runtime/d9wg_present_pacing.c','-o',dir+'/entry'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/entry',[],{encoding:'utf8',timeout:20000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}

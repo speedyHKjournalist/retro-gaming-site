@@ -8,8 +8,8 @@ try{let killed=0,total=0;for(const api of[8,9]){const source=fs.readFileSync(roo
 ['surface final cleanup',api===9?'surface_destroy_storage':'surface_release','d9wg_private_clear(&surface->private_data, &d9wg_private_ops);','/* omitted */'],
 ['standalone fallback','surface_private_store','return &surface->private_data;','return NULL;'],
 ];if(api===8)mutations.push(
-['device depth cleanup','device_release','d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);','/* omitted */'],
-['device back cleanup','device_release','d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);','/* omitted */'],
+['device depth cleanup','device_release','d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);','ZeroMemory(&device->depth_surface_private_data, sizeof(device->depth_surface_private_data));'],
+['device back cleanup','device_release','d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);','ZeroMemory(&device->back_buffer_private_data, sizeof(device->back_buffer_private_data));'],
 ['implicit views use temporary stores','create_backbuffer_surface','surface_from_iface(*surface_out)->private_data_owner = &device->back_buffer_private_data;','/* omitted */'],
 ['chain backing reference leaked','swapchain_release','IDirect3DTexture8_Release(&surface->texture->iface);','(void)surface;'],
 ['chain shares device store','swapchain_get_backbuffer','    *surface_out = chain->back_buffer;','    surface_from_iface(chain->back_buffer)->private_data_owner = &chain->device->back_buffer_private_data;\n    *surface_out = chain->back_buffer;'],
@@ -18,5 +18,5 @@ try{let killed=0,total=0;for(const api of[8,9]){const source=fs.readFileSync(roo
 ['chain allocation leaked','swapchain_destroy_storage','HeapFree(GetProcessHeap(), 0, chain);','/* omitted */'],
 ['target allocation failure ignored','device_create_swapchain','if (FAILED(hr))','if (0 && FAILED(hr))'],
 ['missing backing GPU handle','device_create_swapchain','command.back_buffer_handle = surface->texture ? surface->texture->handle : 0;','command.back_buffer_handle = 0; (void)surface;']
-);else for(const field of['implicit_back_buffer','implicit_depth_stencil'])mutations.push([field+' cleanup','device_release','d9wg_private_clear(&device->'+field+'->private_data, &d9wg_private_ops);','/* omitted */']);total+=mutations.length;for(const[name,fn,old,replacement]of mutations){const file=dir+'/candidate.c';fs.writeFileSync(file,mutate(source,fn,old,replacement));run('API '+api+' '+name,api,file);killed++;}}
+);else for(const field of['implicit_back_buffer','implicit_depth_stencil'])mutations.push([field+' cleanup','device_release','d9wg_private_clear(&device->'+field+'->private_data, &d9wg_private_ops);','ZeroMemory(&device->'+field+'->private_data, sizeof(device->'+field+'->private_data));']);total+=mutations.length;for(const[name,fn,old,replacement]of mutations){const file=dir+'/candidate.c';fs.writeFileSync(file,mutate(source,fn,old,replacement));run('API '+api+' '+name,api,file);killed++;}}
 console.log('PASS surface private-data mutations: '+killed+'/'+total+'; standalone and device cleanup, separate back-buffer stores, early chain release, cached texture views, backing lifetime and allocation failures');}finally{fs.rmSync(dir,{recursive:true,force:true});}

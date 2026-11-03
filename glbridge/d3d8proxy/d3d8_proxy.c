@@ -2907,12 +2907,20 @@ static ULONG WINAPI device_release(IDirect3DDevice8 *iface)
         /* Bound-only storage can have no public parent pin left. */
         InterlockedIncrement(&device->refcount);
         device_release_owned_references(device);
+        /* Finalizers may query/retain the device or add another cache entry.
+         * Drain while the temporary pin is its only owner; a retained public
+         * reference postpones the remaining cache cleanup to its Release. */
+        while (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                && (device->back_buffer_private_data.head
+                    || device->depth_surface_private_data.head)) {
+            d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);
+            if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1)
+                d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);
+        }
         refs = (ULONG)InterlockedDecrement(&device->refcount);
         device->releasing_owned_refs = FALSE;
     }
     if (!refs) {
-        d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);
-        d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);
         free_implicit_surfaces(device);
         detach_device_window(device);
         restore_display_mode(device);

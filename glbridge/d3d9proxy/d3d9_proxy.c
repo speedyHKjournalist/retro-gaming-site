@@ -4342,6 +4342,20 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
          * storage is retired, even when every public parent pin is gone. */
         InterlockedIncrement(&device->refcount);
         device_release_owned_references(device);
+        /* Cache finalizers run before host/device teardown under the same
+         * temporary pin. Reentrant insertion is drained; retaining the device
+         * leaves subsequent stores intact until its next final Release. */
+        while (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                && ((device->implicit_back_buffer
+                        && device->implicit_back_buffer->private_data.head)
+                    || (device->implicit_depth_stencil
+                        && device->implicit_depth_stencil->private_data.head))) {
+            if (device->implicit_back_buffer)
+                d9wg_private_clear(&device->implicit_back_buffer->private_data, &d9wg_private_ops);
+            if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                    && device->implicit_depth_stencil)
+                d9wg_private_clear(&device->implicit_depth_stencil->private_data, &d9wg_private_ops);
+        }
         refs = (ULONG)InterlockedDecrement(&device->refcount);
         device->releasing_owned_refs = FALSE;
     }
@@ -4365,10 +4379,6 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         TRACE_MARK_EXIT("Device.Release", 0, NULL);
         TRACE_FLUSH();
-        if (device->implicit_back_buffer)
-            d9wg_private_clear(&device->implicit_back_buffer->private_data, &d9wg_private_ops);
-        if (device->implicit_depth_stencil)
-            d9wg_private_clear(&device->implicit_depth_stencil->private_data, &d9wg_private_ops);
         IDirect3D9_Release(&device->parent->iface);
         /* The implicit surfaces outlive every public reference to them by
          * design, so the device is what finally frees them. Reaching here means
