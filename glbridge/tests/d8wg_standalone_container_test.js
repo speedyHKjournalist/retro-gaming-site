@@ -28,8 +28,8 @@ typedef int HRESULT,BOOL,WINBOOL,D3DFORMAT,D3DMULTISAMPLE_TYPE;typedef const int
 #define SUCCEEDED(v) ((v)>=0)
 #define D8WG_TRACE_ERROR(v) (v)
 typedef struct{ULONG refs;}Interface;typedef struct{Interface iface;}D8Device,IDirect3DDevice8,Owner;
-typedef struct{Interface iface;BOOL lockable_render_target;}D8Texture;typedef Interface IDirect3DTexture8;
-typedef struct{Interface iface;D8Device*device;D8Texture*texture;Owner*cube;BOOL additional_back_buffer,device_container;}D8Surface,IDirect3DSurface8;
+typedef struct{Interface iface;BOOL lockable_render_target,private_back_buffer;}D8Texture;typedef Interface IDirect3DTexture8;
+typedef struct{Interface iface;ULONG refcount;D8Device*device;D8Texture*texture;Owner*cube;BOOL additional_back_buffer,device_container;}D8Surface,IDirect3DSurface8;
 static const int unknown_id=0,IID_IDirect3DDevice8=1,IID_IDirect3DResource8=2,IID_IDirect3DBaseTexture8=3,IID_IDirect3DTexture8=4,IID_IDirect3DCubeTexture8=5,surface_id=6,chain_id=7,bad_id=99;
 static D8Surface*surface_from_iface(IDirect3DSurface8*p){return p;}
 static D8Texture*texture_from_iface(IDirect3DTexture8*p){return (D8Texture*)p;}
@@ -52,7 +52,7 @@ int main(void){unsigned checks=0,calls=0;D8Device device={{7}};D8Texture texture
 const int*ids[]={&unknown_id,&IID_IDirect3DDevice8,&IID_IDirect3DResource8,&IID_IDirect3DBaseTexture8,&IID_IDirect3DTexture8,&IID_IDirect3DCubeTexture8,&surface_id,&chain_id,&bad_id};
 for(unsigned kind=0;kind<10;kind++){
  D8Surface ordinary={.iface={19},.device=&device},*s=&ordinary;
- if(kind<4){D8Surface*out=NULL;HRESULT hr=kind<2?device_create_render_target(&device,32,24,22,kind%2?4:0,0,&out):device_create_depth_surface(&device,32,24,75,kind%2?4:0,&out);CHECK(hr==0&&out==&view&&out->device_container&&storage.iface.refs==1);s=out;}
+ if(kind<4){D8Surface*out=NULL;HRESULT hr=kind<2?device_create_render_target(&device,32,24,22,kind%2?4:0,0,&out):device_create_depth_surface(&device,32,24,75,kind%2?4:0,&out);CHECK(hr==0&&out==&view&&out->device_container&&out->refcount==1&&storage.private_back_buffer&&storage.iface.refs==1);s=out;}
  if(kind==6||kind==7||kind==9)s->texture=&texture;
  if(kind==8)s->cube=&cube;if(kind==9)s->additional_back_buffer=1;
  CHECK(surface_get_container(s,&unknown_id,NULL)==E_POINTER);

@@ -33,7 +33,7 @@ typedef Interface IDirect3DTexture8,IDirect3DCubeTexture8,IDirect3DVolumeTexture
 typedef struct Texture Texture;typedef struct Surface Surface;typedef struct Volume Volume;typedef struct{Texture*texture_resources,*cube_resources,*volume_resources;unsigned refs,implicit_surface_count;}Device;
 typedef struct{D9WGPrivateStore private_data;void*shadow;Surface*level_surface;Volume*level_volume;}D8TextureLevel;
 struct Texture{Interface iface;LONG refcount;Device*device;Texture*next_device_resource;UINT handle,level_count,usage;BOOL private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;D8TextureLevel*levels;};
-struct Surface{Interface iface;LONG refcount;Texture*texture,*cube;Device*device;UINT level,face;BOOL depth_stencil,reset_blocker,additional_back_buffer;void*shadow,*retained_private_data;D9WGPrivateStore private_data;};
+struct Surface{Interface iface;LONG refcount;Texture*texture,*cube;Device*device;UINT level,face;BOOL depth_stencil,reset_blocker,additional_back_buffer,device_container;void*shadow,*retained_private_data;D9WGPrivateStore private_data;};
 struct Volume{Interface iface;LONG refcount;Texture*texture;UINT level;};
 typedef Device D8Device;
 typedef Texture D8Texture,D8CubeTexture,D8VolumeTexture;typedef Surface D8Surface;typedef Volume D8Volume;

@@ -14,7 +14,7 @@ try {
         ["storage pin not transferred", "device_create_swapchain", "surface->texture->private_back_buffer = TRUE;", "surface->texture->private_back_buffer = 0;"],
         ["internal surface reference exposed", "device_create_swapchain", "surface->refcount = 0;", "surface->refcount = 1;"],
         ["duplicate chain device pin", "device_create_swapchain", "++device->additional_swap_chain_count;", "device_child_add_ref(device); ++device->additional_swap_chain_count;"],
-        ["surface forwards public parent count", "surface_add_ref", "if (surface->additional_back_buffer)", "if (0 && surface->additional_back_buffer)"],
+        ["surface forwards public parent count", "surface_add_ref", "if (surface->additional_back_buffer || surface->device_container)", "if (0 && (surface->additional_back_buffer || surface->device_container))"],
         ["pin acquired on every AddRef", "surface_add_ref", "if (refs == 1)", "if (refs > 0)"],
         ["public edge loses storage", "surface_add_ref", "IDirect3DTexture8_AddRef(&surface->texture->iface);", "(void)surface->texture;"],
         ["public edge loses device", "surface_add_ref", "device_child_add_ref(surface->device);", "(void)surface->device;"],

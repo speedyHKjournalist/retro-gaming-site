@@ -361,7 +361,7 @@ struct D8Texture {
     D8TextureLevel *levels;
     D8Texture *next_device_resource;
     BOOL lockable_render_target;
-    /* Additional chains own the storage's original device pin explicitly. */
+    /* A standalone surface or additional chain owns the public device pin. */
     BOOL private_back_buffer;
     D8SwapChain *swap_chain;
     /* Only a render target can be multisampled; every other texture is
@@ -537,6 +537,8 @@ static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface, DWORD reg,
 static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
 static BOOL emit_device_state_after_reset(D8Device *device);
 static BOOL device_has_reset_blockers(D8Device *device);
+static void surface_binding_add_ref(D8Surface *surface);
+static void surface_binding_release(D8Surface *surface);
 static void device_clear_bindings(D8Device *device);
 static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
         DWORD shader);
@@ -2660,7 +2662,7 @@ static void device_clear_bindings(D8Device *device)
     if (device->depth_surface) {
         D8Surface *surface = device->depth_surface;
         device->depth_surface = NULL;
-        IDirect3DSurface8_Release(&surface->iface);
+        surface_binding_release(surface);
     }
     device->depth_surface_enabled = device->present.EnableAutoDepthStencil;
 }
@@ -2902,9 +2904,11 @@ static ULONG WINAPI device_release(IDirect3DDevice8 *iface)
     if ((LONG)refs == InterlockedCompareExchange(
             &device->child_parent_refs, 0, 0)) {
         device->releasing_owned_refs = TRUE;
+        /* Bound-only storage can have no public parent pin left. */
+        InterlockedIncrement(&device->refcount);
         device_release_owned_references(device);
+        refs = (ULONG)InterlockedDecrement(&device->refcount);
         device->releasing_owned_refs = FALSE;
-        refs = (ULONG)InterlockedCompareExchange(&device->refcount, 0, 0);
     }
     if (!refs) {
         d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);
@@ -5007,10 +5011,26 @@ static BOOL surface_is_implicit(D8Surface *surface)
             || surface == surface->device->implicit_depth_stencil);
 }
 
+static void surface_binding_add_ref(D8Surface *surface)
+{
+    if (surface->device_container && !surface->additional_back_buffer)
+        IDirect3DTexture8_AddRef(&surface->texture->iface);
+    else
+        IDirect3DSurface8_AddRef(&surface->iface);
+}
+
+static void surface_binding_release(D8Surface *surface)
+{
+    if (surface->device_container && !surface->additional_back_buffer)
+        IDirect3DTexture8_Release(&surface->texture->iface);
+    else
+        IDirect3DSurface8_Release(&surface->iface);
+}
+
 static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
-    if (surface->additional_back_buffer) {
+    if (surface->additional_back_buffer || surface->device_container) {
         ULONG refs = (ULONG)InterlockedIncrement(&surface->refcount);
         if (refs == 1) {
             IDirect3DTexture8_AddRef(&surface->texture->iface);
@@ -5033,7 +5053,7 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
 static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
-    if (surface->additional_back_buffer) {
+    if (surface->additional_back_buffer || surface->device_container) {
         if (!InterlockedCompareExchange(&surface->refcount, 0, 0))
             return 0;
         ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
@@ -5937,8 +5957,9 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
         HeapFree(GetProcessHeap(), 0, chain);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
-    /* Transfer the storage's original device pin to the chain. Public views
-     * acquire their own pin only while their independent count is nonzero. */
+    /* Transfer the standalone surface's public pin to the chain, keeping its
+     * storage reference as the chain's base reference. Public views acquire
+     * their own pin only while their independent count is nonzero. */
     surface->texture->private_back_buffer = TRUE;
     surface->texture->swap_chain = chain;
     surface->additional_back_buffer = TRUE;
@@ -6005,8 +6026,11 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice8* iface,
         return D8WG_TRACE_ERROR(hr);
     texture_from_iface(texture_iface)->lockable_render_target = !!lockable;
     hr = IDirect3DTexture8_GetSurfaceLevel(texture_iface, 0, surface_out);
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr)) {
         surface_from_iface(*surface_out)->device_container = TRUE;
+        surface_from_iface(*surface_out)->refcount = 1;
+        texture_from_iface(texture_iface)->private_back_buffer = TRUE;
+    }
     IDirect3DTexture8_Release(texture_iface);
     return D8WG_TRACE_ERROR(hr);
 }
@@ -6025,8 +6049,11 @@ static HRESULT WINAPI device_create_depth_surface(IDirect3DDevice8 *iface,
             format, ms, &texture);
     if (FAILED(hr)) return hr;
     hr = IDirect3DTexture8_GetSurfaceLevel(&texture->iface, 0, surface_out);
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr)) {
         surface_from_iface(*surface_out)->device_container = TRUE;
+        surface_from_iface(*surface_out)->refcount = 1;
+        texture->private_back_buffer = TRUE;
+    }
     IDirect3DTexture8_Release(&texture->iface);
     return D8WG_TRACE_ERROR(hr);
 }
@@ -6176,12 +6203,12 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice8* iface,
         device->render_target_face = command.color_face;
     }
     if (depth)
-        IDirect3DSurface8_AddRef(&depth->iface);
+        surface_binding_add_ref(depth);
     D8Surface* old_depth = device->depth_surface;
     device->depth_surface = depth;
     device->depth_surface_enabled = depth != NULL;
     if (old_depth)
-        IDirect3DSurface8_Release(&old_depth->iface);
+        surface_binding_release(old_depth);
     if (render_target) {
         command.device_handle = device->handle;
         command.target_index = 0;
