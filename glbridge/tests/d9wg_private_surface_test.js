@@ -9,6 +9,7 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_private_data.h"
 #include "runtime/d9wg_present_pacing.h"
+typedef void*HWND;typedef struct{int left,top,right,bottom;}RECT;
 typedef uint32_t DWORD,ULONG,UINT;typedef int32_t LONG,HRESULT;typedef uint8_t BYTE;typedef int BOOL,D3DFORMAT,D3DBACKBUFFER_TYPE;typedef const void*REFGUID;
 #define WINAPI
 #define TRUE 1
@@ -34,9 +35,10 @@ typedef uint32_t DWORD,ULONG,UINT;typedef int32_t LONG,HRESULT;typedef uint8_t B
 #define TRACE_SURFACE_FREED(...)
 typedef struct Texture Texture;typedef struct View View;typedef struct Device Device;typedef struct{void*lpVtbl;}Interface;
 typedef struct{DWORD Width,Height;D3DFORMAT Format;}Mode;
-typedef struct{BOOL Windowed;UINT FullScreen_PresentationInterval,MultiSampleType,BackBufferCount,BackBufferWidth,BackBufferHeight;D3DFORMAT BackBufferFormat;}D3DPRESENT_PARAMETERS;
+typedef struct{HWND hDeviceWindow;BOOL Windowed;UINT FullScreen_PresentationInterval,MultiSampleType,BackBufferCount,BackBufferWidth,BackBufferHeight;D3DFORMAT BackBufferFormat;}D3DPRESENT_PARAMETERS;
+#include "runtime/d9wg_present_parameters.h"
 typedef struct{Interface iface;}Parent;
-struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;};
+struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;};
 typedef struct{D9WGPrivateStore private_data;}Level;
 struct Texture{Interface iface;Level*levels;unsigned level_count;};
 typedef struct D8PrivateDataOwner{LONG refs;D9WGPrivateStore store;}D8PrivateDataOwner;
@@ -45,6 +47,8 @@ typedef struct{Interface iface;LONG refcount;D8PrivateDataOwner*private_data_own
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Texture D${api}Texture,D${api}CubeTexture;typedef View D${api}Surface,IDirect3DSurface${api};typedef Interface IDirect3DSwapChain8;
 static Device*device_from_iface(Device*d){return d;}static View*surface_from_iface(View*v){return v;}
 static unsigned allocated,held,allocation_calls,fail_nth,fail_create,parent_refs=1;static int g_transport_lock;
+${api===8?`static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
+static void GetClientRect(HWND h,RECT*r){(void)h;SetRect(r,0,0,64,64);}`:""}
 static void*GetProcessHeap(void){return NULL;}
 static void*HeapAlloc(void*h,unsigned flags,uint32_t size){(void)h;(void)flags;assert(!held);allocation_calls++;if(fail_nth&&allocation_calls==fail_nth)return NULL;void*p=calloc(1,size);assert(p);allocated++;return p;}
 static void HeapFree(void*h,unsigned flags,void*p){(void)h;(void)flags;assert(!held);if(!p)return;assert(allocated);allocated--;free(p);}

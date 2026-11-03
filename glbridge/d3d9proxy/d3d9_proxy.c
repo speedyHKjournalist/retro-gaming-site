@@ -7240,6 +7240,8 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     if (!d9wg_present_interval_valid(9, params->Windowed,
             params->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (params->BackBufferCount > 3)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!params->Windowed || !device->present.Windowed) {
         HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: D3D9 allows "
                 "additional chains only on a windowed device, and only for a "
@@ -7307,13 +7309,8 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     chain->handle = allocate_handle();
     chain->window = window;
     chain->back_buffer = back_buffer;
-    chain->present = *params;
-    chain->present.BackBufferWidth = width;
-    chain->present.BackBufferHeight = height;
-    chain->present.BackBufferFormat = format;
-    chain->present.BackBufferCount = params->BackBufferCount
-            ? params->BackBufferCount : 1;
-    chain->present.hDeviceWindow = window;
+    d9wg_present_parameters_effective(&chain->present, params,
+        width, height, format, window);
 
     command.device_handle = device->handle;
     command.swap_chain_handle = chain->handle;
@@ -7336,6 +7333,7 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     chain->next_device_chain = device->additional_swap_chains;
     device->additional_swap_chains = chain;
     device_child_add_ref(device);
+    d9wg_present_parameters_return(9, params, &chain->present);
     *out = &chain->iface;
     TRACE("OK CreateAdditionalSwapChain device=%08lX chain=%08lX back=%08lX "
             "%lux%lu window=%08lX", device->handle, chain->handle,

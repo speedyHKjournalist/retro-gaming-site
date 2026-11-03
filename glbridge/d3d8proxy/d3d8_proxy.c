@@ -5784,6 +5784,10 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
 {
     D8Device *device = device_from_iface(iface);
     D8SwapChain *chain;
+    HWND window;
+    RECT client;
+    UINT width, height;
+    D3DFORMAT format;
     if (!chain_out)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *chain_out = NULL;
@@ -5799,6 +5803,20 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
+    window = parameters->hDeviceWindow ? parameters->hDeviceWindow
+                                       : device->creation.hFocusWindow;
+    SetRect(&client, 0, 0, (int)device->display_mode.Width,
+        (int)device->display_mode.Height);
+    if (window)
+        GetClientRect(window, &client);
+    width = d9wg_present_extent(parameters->BackBufferWidth,
+        (uint32_t)(client.right - client.left), device->display_mode.Width);
+    height = d9wg_present_extent(parameters->BackBufferHeight,
+        (uint32_t)(client.bottom - client.top), device->display_mode.Height);
+    if (width > 8192 || height > 8192)
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
+        ? device->display_mode.Format : parameters->BackBufferFormat;
     chain = (D8SwapChain *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*chain));
     if (!chain) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
@@ -5811,9 +5829,11 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     chain->iface.lpVtbl = &g_swapchain_vtbl;
     chain->refcount = 1;
     chain->device = device;
-    chain->present = *parameters;
+    d9wg_present_parameters_effective(&chain->present, parameters,
+        width, height, format, window);
     device_child_add_ref(device);
     ++device->additional_swap_chain_count;
+    d9wg_present_parameters_return(8, parameters, &chain->present);
     *chain_out = &chain->iface;
     return D3D_OK;
 }
