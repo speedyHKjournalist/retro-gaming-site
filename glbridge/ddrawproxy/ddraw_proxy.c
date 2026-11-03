@@ -2135,7 +2135,24 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     effective_destination.bottom = (LONG)destination->height;
     if (dest_rect) effective_destination = *dest_rect;
 
-    if (flags & DDBLT_COLORFILL) {
+    if (flags & DDBLT_ROP) {
+        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (fx->dwROP != SRCCOPY && fx->dwROP != BLACKNESS &&
+                fx->dwROP != WHITENESS)
+            return UNSUPPORTED("Blt with a raster operation other than "
+                    "SRCCOPY/BLACKNESS/WHITENESS", DDERR_NORASTEROPHW);
+    }
+    /* Source-independent raster operations must bypass source validation.
+     * Fill native RGB bits (or the P8 index); ARGB alpha remains zero. */
+    if ((flags & DDBLT_ROP) && (fx->dwROP == BLACKNESS ||
+            fx->dwROP == WHITENESS)) {
+        blt_flags |= D9WG_DDBLT_COLOR_FILL;
+        fill_color = fx->dwROP == BLACKNESS ? 0 : destination->indexed ?
+                0xffu : destination->desc.ddpfPixelFormat.dwRBitMask |
+                destination->desc.ddpfPixelFormat.dwGBitMask |
+                destination->desc.ddpfPixelFormat.dwBBitMask;
+        source = NULL;
+    } else if (flags & DDBLT_COLORFILL) {
         if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         blt_flags |= D9WG_DDBLT_COLOR_FILL;
         fill_color = fx->dwFillColor;
@@ -2211,17 +2228,6 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                 DDBLTFX_ROTATE270 | DDBLTFX_ARITHSTRETCHY))
             HOSTLOG_REFUSED("Blt DDBLTFX rotation/arithmetic stretch is "
                     "ignored; only mirroring is implemented");
-    }
-    if ((flags & DDBLT_ROP) && fx) {
-        /* DirectDraw only ever required SRCCOPY and BLACKNESS of a driver. */
-        if (fx->dwROP == BLACKNESS) {
-            blt_flags |= D9WG_DDBLT_COLOR_FILL;
-            fill_color = 0;
-            source = NULL;
-        } else if (fx->dwROP != SRCCOPY) {
-            return UNSUPPORTED("Blt with a raster operation other than "
-                    "SRCCOPY/BLACKNESS", DDERR_NORASTEROPHW);
-        }
     }
 
     clip_count = clipper_rects(destination->clipper, clip_rects,
@@ -2807,15 +2813,18 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
         info.table.masks[2] = surface->desc.ddpfPixelFormat.dwBBitMask;
         info.header.biCompression = BI_BITFIELDS;
     } else if (surface->bytes_per_pixel == 1u) {
+        DDPalette *palette = surface->palette;
+        if (!palette && surface->owner && surface->owner->primary)
+            palette = surface->owner->primary->palette;
         info.header.biClrUsed = 256;
         for (index = 0; index < 256u; ++index) {
-            if (surface->palette) {
+            if (palette) {
                 info.table.colors[index].rgbRed =
-                        surface->palette->entries[index].peRed;
+                        palette->entries[index].peRed;
                 info.table.colors[index].rgbGreen =
-                        surface->palette->entries[index].peGreen;
+                        palette->entries[index].peGreen;
                 info.table.colors[index].rgbBlue =
-                        surface->palette->entries[index].peBlue;
+                        palette->entries[index].peBlue;
             }
         }
     }
