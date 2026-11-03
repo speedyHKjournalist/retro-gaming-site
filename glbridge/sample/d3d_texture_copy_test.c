@@ -172,7 +172,8 @@ static void run_copy_cases(void)
     DEV(SetTextureStageState)(device, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
     sampler(SAMP(MAGFILTER), D3DTEXF_POINT);
     sampler(SAMP(MINFILTER), D3DTEXF_POINT);
-    sampler(SAMP(MIPFILTER), D3DTEXF_NONE);
+    /* MAXMIPLEVEL selects our test mip only with mip filtering enabled. */
+    sampler(SAMP(MIPFILTER), D3DTEXF_POINT);
     sampler(SAMP(ADDRESSU), D3DTADDRESS_CLAMP);
     sampler(SAMP(ADDRESSV), D3DTADDRESS_CLAMP);
     sampler(SAMP(ADDRESSW), D3DTADDRESS_CLAMP);

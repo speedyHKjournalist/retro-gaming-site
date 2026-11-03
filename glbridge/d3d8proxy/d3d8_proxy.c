@@ -708,6 +708,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
 #define D9WG_MAPPED_VERTEX D8VertexBuffer
 #define D9WG_MAPPED_INDEX D8IndexBuffer
 #include "../runtime/d9wg_mapped_draw_bridge.h"
+#include "../runtime/d9wg_texture_lod_bridge.h"
 
 /* ---- Stage 6: D3D8 shader model 1.x bytecode validation ---- */
 
@@ -4622,11 +4623,8 @@ static D3DRESOURCETYPE WINAPI texture_get_type(IDirect3DTexture8 *iface)
 static DWORD WINAPI texture_set_lod(IDirect3DTexture8 *iface, DWORD lod)
 {
     D8Texture *texture = texture_from_iface(iface);
-    DWORD old = texture->lod;
-    if (lod >= texture->level_count)
-        lod = texture->level_count - 1;
-    texture->lod = lod;
-    return old;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI texture_get_lod(IDirect3DTexture8 *iface)
@@ -7615,10 +7613,8 @@ static D3DRESOURCETYPE WINAPI cube_get_type(IDirect3DCubeTexture8 *iface)
 static DWORD WINAPI cube_set_lod(IDirect3DCubeTexture8 *iface, DWORD lod)
 {
     D8CubeTexture *texture = cube_from_iface(iface);
-    DWORD old = texture->lod;
-    if (lod >= texture->level_count) lod = texture->level_count - 1;
-    texture->lod = lod;
-    return old;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI cube_get_lod(IDirect3DCubeTexture8 *iface)
@@ -7886,14 +7882,11 @@ static D3DRESOURCETYPE WINAPI volume_texture_get_type(
         IDirect3DVolumeTexture8 *iface)
 { (void)iface; return D3DRTYPE_VOLUMETEXTURE; }
 
-static DWORD WINAPI volume_texture_set_lod(IDirect3DVolumeTexture8 *iface,
-        DWORD lod)
+static DWORD WINAPI volume_texture_set_lod(IDirect3DVolumeTexture8 *iface, DWORD lod)
 {
     D8VolumeTexture *texture = volume_texture_from_iface(iface);
-    DWORD old = texture->lod;
-    if (lod >= texture->level_count) lod = texture->level_count - 1;
-    texture->lod = lod;
-    return old;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI volume_texture_get_lod(IDirect3DVolumeTexture8 *iface)

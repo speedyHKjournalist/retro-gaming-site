@@ -1769,6 +1769,7 @@ static void host_log(uint32_t severity, const char *format, ...)
 #define D9WG_MAPPED_VERTEX D9VertexBuffer
 #define D9WG_MAPPED_INDEX D9IndexBuffer
 #include "../runtime/d9wg_mapped_draw_bridge.h"
+#include "../runtime/d9wg_texture_lod_bridge.h"
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -1923,14 +1924,6 @@ static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
 static HRESULT d9_draw_npatch(IDirect3DDevice9 *iface, D9Device *device,
         D3DPRIMITIVETYPE primitive_type, UINT primitive_count,
         const void *indices, UINT index_size, UINT base_vertex);
-/*
- * IDirect3DBaseTexture9::SetLOD. D3D9 defines it as a no-op on anything but a
- * MANAGED texture, so the three callers below apply it under the same
- * condition and only then tell the host -- a host that clamped a DEFAULT-pool
- * texture's LOD would be honouring a call D3D9 ignores.
- */
-static BOOL emit_texture_lod(D9Device *device, uint32_t resource_handle,
-        DWORD lod);
 static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
         D3DFORMAT format, DWORD usage, D3DMULTISAMPLE_TYPE multisample,
         DWORD multisample_quality, IDirect3DSurface9 **surface_out);
@@ -7866,15 +7859,12 @@ static void WINAPI volume_texture_preload(IDirect3DVolumeTexture9 *iface)
 static D3DRESOURCETYPE WINAPI volume_texture_get_type(
         IDirect3DVolumeTexture9 *iface)
 { (void)iface; return D3DRTYPE_VOLUMETEXTURE; }
-static DWORD WINAPI volume_texture_set_lod(IDirect3DVolumeTexture9 *iface,
-        DWORD lod)
-{ D9VolumeTexture *texture = volume_texture_from_iface(iface);
-  DWORD previous = texture->lod;
-  if (texture->pool != D3DPOOL_MANAGED) return previous;
-  if (lod >= texture->level_count) lod = texture->level_count - 1;
-  texture->lod = lod;
-  emit_texture_lod(texture->device, texture->handle, lod);
-  return previous; }
+static DWORD WINAPI volume_texture_set_lod(IDirect3DVolumeTexture9 *iface, DWORD lod)
+{
+    D9VolumeTexture *texture = volume_texture_from_iface(iface);
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
+}
 static DWORD WINAPI volume_texture_get_lod(IDirect3DVolumeTexture9 *iface)
 { return volume_texture_from_iface(iface)->lod; }
 static DWORD WINAPI volume_texture_get_level_count(
@@ -11445,12 +11435,8 @@ static D3DRESOURCETYPE WINAPI cube_get_type(IDirect3DCubeTexture9 *iface)
 static DWORD WINAPI cube_set_lod(IDirect3DCubeTexture9 *iface, DWORD lod)
 {
     D9CubeTexture *texture = cube_from_iface(iface);
-    DWORD previous = texture->lod;
-    if (texture->pool != D3DPOOL_MANAGED) return previous;
-    if (lod >= texture->level_count) lod = texture->level_count - 1;
-    texture->lod = lod;
-    emit_texture_lod(texture->device, texture->handle, lod);
-    return previous;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI cube_get_lod(IDirect3DCubeTexture9 *iface)
@@ -12743,14 +12729,8 @@ static D3DRESOURCETYPE WINAPI texture_get_type(IDirect3DTexture9 *iface)
 static DWORD WINAPI texture_set_lod(IDirect3DTexture9 *iface, DWORD lod)
 {
     D9Texture *texture = texture_from_iface(iface);
-    DWORD old = texture->lod;
-    if (texture->pool != D3DPOOL_MANAGED)
-        return old;
-    if (lod >= texture->level_count)
-        lod = texture->level_count - 1;
-    texture->lod = lod;
-    emit_texture_lod(texture->device, texture->handle, lod);
-    return old;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI texture_get_lod(IDirect3DTexture9 *iface)
@@ -12772,16 +12752,7 @@ static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
     return emit_command(D9WG_OP_GENERATE_MIPS, &command, sizeof(command));
 }
 
-static BOOL emit_texture_lod(D9Device *device, uint32_t resource_handle,
-        DWORD lod)
-{
-    D9WGSetTextureLOD command;
-    command.device_handle = device->handle;
-    command.resource_handle = resource_handle;
-    command.lod = (uint32_t)lod;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_SET_TEXTURE_LOD, &command, sizeof(command));
-}
+
 
 /* Filtering follows the enabled per-format device support. Setters dirty
  * without immediately generating; creation and Reset replay the stored filter. */
