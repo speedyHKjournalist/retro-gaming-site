@@ -71,8 +71,8 @@ struct Device {
 };
 typedef struct {Device*device;UINT handle;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;D3DPRESENT_PARAMETERS present;} Chain;
 typedef Device D${api}Device,IDirect3DDevice${api}; typedef Surface D${api}Surface; typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};
-static unsigned fail_layout,fail_alloc,fail_reset_emit,fail_state_emit,fail_depth_ms,busy;
-static unsigned allocations,frees,live,emits,replays,clears,initializations,frames,paces,prepares,windows,handles;
+static unsigned fail_layout,fail_alloc,fail_reset_emit,fail_state_emit,fail_depth_ms,fail_window_mode,busy;
+static unsigned allocations,frees,live,emits,replays,clears,initializations,frames,paces,prepares,windows,handles,mode_reports;
 static Device*active;
 static Device*device_from_iface(Device*d){return d;}
 ${api === 9 ? "static Chain*swap_chain_from_iface(Chain*c){return c;}" : ""}
@@ -89,7 +89,7 @@ static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==1&&n);allocation
 static void HeapFree(void*h,UINT f,void*p){(void)h;(void)f;if(p){assert(live);live--;frees++;free(p);}}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=*p*h;return !fail_layout;}
 static void detach_device_window(Device*d){d->tracked_window=NULL;}
-static void attach_device_window(Device*d,HWND w){d->tracked_window=w;}` : "static void d9wg_window_cache_invalidate(int*p){*p=0;}"}
+static void attach_device_window(Device*d,HWND w){d->tracked_window=w;}` : "static void d9wg_window_cache_invalidate(int*p){*p=0;} static BOOL reset_window_mode(Device*d,HWND w){(void)w;assert(d->reset_state.required);return !fail_window_mode;} static BOOL emit_window_state(Device*d,HWND w){(void)w;assert(d->reset_state.required);mode_reports++;return 1;}"}
 static BOOL emit_command(UINT op,const void*p,UINT size){
  if(op==D9WG_OP_BEGIN_SCENE||op==D9WG_OP_END_SCENE){const D9WGDeviceOnly*c=p;assert(size==sizeof(*c)&&c->device_handle==active->handle);assert(active->in_scene==(op==D9WG_OP_BEGIN_SCENE));return 1;}
  const D9WGResetDevice*r=p;assert(active->reset_state.required&&op==D9WG_OP_RESET&&size==sizeof(*r));
@@ -107,21 +107,21 @@ ${functions.map(name => extract(source, name).replace(/&device->iface/g, "device
 #define PRESENT(c,f) ${api === 8 ? "swapchain_present(c,NULL,NULL,NULL,NULL)" : "swap_chain_present(c,NULL,NULL,NULL,NULL,f)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Reset status API ${api} case %u line %u: %s\\n",kind,__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){unsigned checks=0,failures=0;D3DPRESENT_PARAMETERS base={.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferCount=1,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.hDeviceWindow=(void*)(uintptr_t)0x44};
-for(unsigned kind=0;kind<14;kind++){
+for(unsigned kind=0;kind<15;kind++){
  if((${api}==8&&kind>=12)||(${api}==9&&(kind==8||kind==9)))continue;
  Device d={.handle=77,.creation={.BehaviorFlags=0x22},.display_mode={80,72,22,60},.tracked_window=(void*)(uintptr_t)0x33,.window_cache=99};active=&d;
  Device untouched={0};CHECK(device_test_cooperative_level(&d)==D3D_OK);D3DPRESENT_PARAMETERS p=base;HRESULT expected=D3DERR_INVALIDCALL;
- fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=0;
+ fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=fail_window_mode=0;
  switch(kind){case 1:p.BackBufferCount=4;break;case 2:d.blocked=1;expected=${api === 8 ? "D3DERR_DEVICELOST" : "D3DERR_INVALIDCALL"};break;
  case 3:p.FullScreen_PresentationInterval=p.PresentationInterval=3;break;case 4:p.MultiSampleType=3;expected=${api === 8 ? "D3DERR_INVALIDCALL" : "D3DERR_NOTAVAILABLE"};break;
  case 5:p.AutoDepthStencilFormat=999;expected=D3DERR_NOTAVAILABLE;break;case 6:p.BackBufferFormat=999;expected=D3DERR_NOTAVAILABLE;break;
  case 7:p.BackBufferWidth=8193;break;case 8:fail_layout=1;expected=D3DERR_NOTAVAILABLE;break;case 9:fail_alloc=1;expected=E_OUTOFMEMORY;break;
  case 10:fail_reset_emit=1;expected=D3DERR_DRIVERINTERNALERROR;break;case 11:fail_state_emit=1;expected=D3DERR_DRIVERINTERNALERROR;break;
- case 12:p.MultiSampleQuality=1;expected=D3DERR_NOTAVAILABLE;break;case 13:fail_depth_ms=1;p.MultiSampleType=4;expected=D3DERR_NOTAVAILABLE;break;}
- d.in_scene=1;Device before=d;D3DPRESENT_PARAMETERS input=p;unsigned old_emits=emits,old_clears=clears;
- CHECK(device_reset(&d,kind?&p:NULL)==expected);failures++;CHECK(!memcmp(&p,&input,sizeof(p)));
- CHECK(d.reset_state.required);if(kind!=11){before.reset_state.required=1;CHECK(!memcmp(&before,&d,sizeof(d))&&clears==old_clears);}
- CHECK(emits==old_emits+(kind>=10&&kind<=11));CHECK(clears==old_clears+(kind==11));
+ case 12:p.MultiSampleQuality=1;expected=D3DERR_NOTAVAILABLE;break;case 13:fail_depth_ms=1;p.MultiSampleType=4;expected=D3DERR_NOTAVAILABLE;break;case 14:fail_window_mode=1;p.Windowed=0;break;}
+ d.in_scene=1;Device before=d;D3DPRESENT_PARAMETERS input=p;unsigned old_emits=emits,old_clears=clears,old_reports=mode_reports;
+ CHECK(device_reset(&d,kind?&p:NULL)==expected);failures++;if(${api}==9)CHECK(mode_reports==old_reports);CHECK(!memcmp(&p,&input,sizeof(p)));
+ CHECK(d.reset_state.required);if(kind!=11&&kind!=14){before.reset_state.required=1;CHECK(!memcmp(&before,&d,sizeof(d))&&clears==old_clears);}
+ CHECK(emits==old_emits+((kind>=10&&kind<=11)||kind==14));CHECK(clears==old_clears+(kind==11||kind==14));
  for(unsigned n=0;n<4;n++)CHECK(device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET);
  CHECK(device_test_cooperative_level(&untouched)==D3D_OK);
  unsigned old_frames=frames,old_paces=paces,old_prepares=prepares,old_windows=windows;Device lost=d;
@@ -129,10 +129,10 @@ for(unsigned kind=0;kind<14;kind++){
  CHECK(device_present(&d,NULL,NULL,NULL,NULL)==D3DERR_DEVICELOST);
  for(unsigned flags=0;flags<4;flags++){CHECK(PRESENT(&additional,flags)==D3DERR_DEVICELOST);CHECK(PRESENT(&implicit,flags)==D3DERR_DEVICELOST);}
  CHECK(frames==old_frames&&paces==old_paces&&prepares==old_prepares&&windows==old_windows&&!memcmp(&lost,&d,sizeof(d)));
- fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=0;d.blocked=0;busy=0;
+ fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=fail_window_mode=0;d.blocked=0;busy=0;
  CHECK(device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET);
  p=base;CHECK(device_reset(&d,&p)==D3D_OK&&!d.reset_state.required);CHECK(device_test_cooperative_level(&d)==D3D_OK);
- CHECK(!d.in_scene&&device_end_scene(&d)==D3DERR_INVALIDCALL);CHECK(device_begin_scene(&d)==D3D_OK&&d.in_scene);CHECK(device_end_scene(&d)==D3D_OK&&!d.in_scene);CHECK(device_end_scene(&d)==D3DERR_INVALIDCALL);
+ if(${api}==9)CHECK(mode_reports==old_reports+1);CHECK(!d.in_scene&&device_end_scene(&d)==D3DERR_INVALIDCALL);CHECK(device_begin_scene(&d)==D3D_OK&&d.in_scene);CHECK(device_end_scene(&d)==D3D_OK&&!d.in_scene);CHECK(device_end_scene(&d)==D3DERR_INVALIDCALL);
  CHECK(d.viewport.Width==64&&d.viewport.Height==64&&d.display_mode.Width==64&&d.handle!=77);
  CHECK(device_present(&d,NULL,NULL,NULL,NULL)==D3D_OK&&PRESENT(&additional,0)==D3D_OK&&PRESENT(&implicit,1)==D3D_OK);
  CHECK(device_test_cooperative_level(&untouched)==D3D_OK);

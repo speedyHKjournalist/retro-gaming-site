@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
+#include "../runtime/d9wg_window_reset.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
@@ -1402,10 +1403,10 @@ static void update_system_cursor(D9Device *device, HWND window);
 static BOOL emit_window_state(D9Device *device, HWND window);
 static void watch_window_state(D9Device *device);
 static void unwatch_window_state(D9Device *device);
-static void claim_fullscreen_foreground(D9Device *device, HWND window);
+static BOOL claim_fullscreen_foreground(D9Device *device, HWND window);
 static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
         const D9WGWindowProbe *probe);
-static void restore_display_mode(D9Device *device);
+static BOOL restore_display_mode(D9Device *device);
 
 static D9Direct3D *d3d_from_iface(IDirect3D9 *iface)
 {
@@ -4563,13 +4564,13 @@ static void raise_window_to_foreground(HWND window)
         AttachThreadInput(our_thread, foreground_thread, FALSE);
 }
 
-static void claim_fullscreen_foreground(D9Device *device, HWND window)
+static BOOL claim_fullscreen_foreground(D9Device* device, HWND window)
 {
     DEVMODEA mode;
     LONG result;
 
     if (device->present.Windowed)
-        return;
+        return TRUE;
 
     /*
      * Switch the guest's display mode to the one the device asked for.
@@ -4595,10 +4596,12 @@ static void claim_fullscreen_foreground(D9Device *device, HWND window)
         mode.dmBitsPerPel = 16;
         result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
     }
-    device->display_mode_changed = (result == DISP_CHANGE_SUCCESSFUL);
+    if (result != DISP_CHANGE_SUCCESSFUL)
+        return FALSE;
+    device->display_mode_changed = TRUE;
 
     if (!window || !IsWindow(window))
-        return;
+        return TRUE;
     if (IsIconic(window))
         ShowWindow(window, SW_RESTORE);
     /*
@@ -4618,11 +4621,9 @@ static void claim_fullscreen_foreground(D9Device *device, HWND window)
     if (device->styled_window != window) {
         LONG style = GetWindowLongA(window, GWL_STYLE);
         LONG exstyle = GetWindowLongA(window, GWL_EXSTYLE);
-        LONG bare_style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_BORDER
-                | WS_DLGFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU))
-                | WS_POPUP;
-        LONG bare_exstyle = exstyle & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE
-                | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+        LONG bare_style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU))
+            | WS_POPUP;
+        LONG bare_exstyle = exstyle & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
 
         device->styled_window = window;
         device->saved_window_style = style;
@@ -4635,11 +4636,11 @@ static void claim_fullscreen_foreground(D9Device *device, HWND window)
     /* SWP_FRAMECHANGED so the stripped style is recalculated now rather than
      * at some later, unrelated window event. */
     SetWindowPos(window, HWND_TOP, 0, 0, (int)device->display_mode.Width,
-            (int)device->display_mode.Height,
-            SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+        (int)device->display_mode.Height,
+        SWP_SHOWWINDOW | SWP_FRAMECHANGED);
     raise_window_to_foreground(window);
     device->last_foreground_claim = GetTickCount();
-
+    return TRUE;
 }
 
 /* Undoes the borderless override, so a window that outlives the device (a
@@ -4717,13 +4718,46 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
 
 /* Undo the mode change when the device goes away, so a crashed or closed game
  * does not leave the guest desktop stuck at the game's resolution. */
-static void restore_display_mode(D9Device *device)
+static BOOL restore_display_mode(D9Device* device)
 {
     restore_window_style(device);
     if (!device->display_mode_changed)
-        return;
+        return TRUE;
+    if (ChangeDisplaySettingsA(NULL, 0) != DISP_CHANGE_SUCCESSFUL)
+        return FALSE;
     device->display_mode_changed = FALSE;
-    ChangeDisplaySettingsA(NULL, 0);
+    return TRUE;
+}
+
+static BOOL reset_window_mode(D9Device* device, HWND window)
+{
+    D9WGWindowResetScope scopes[3];
+    HWND windows[3] = { device->styled_window, window, device->creation.hFocusWindow };
+    UINT prepared = 0;
+    BOOL result = FALSE;
+
+    if (device->present.Windowed && !device->styled_window && !device->display_mode_changed)
+        return TRUE;
+    for (UINT i = 0; i < 3; ++i) {
+        HWND candidate = windows[i];
+        for (UINT j = 0; j < i; ++j)
+            if (candidate == windows[j])
+                candidate = NULL;
+        if (!d9wg_window_reset_begin(&scopes[i], candidate))
+            goto done;
+        ++prepared;
+    }
+    if (device->present.Windowed) {
+        result = restore_display_mode(device);
+    } else {
+        if (device->styled_window && device->styled_window != window)
+            restore_window_style(device);
+        result = claim_fullscreen_foreground(device, window);
+    }
+done:
+    while (prepared)
+        d9wg_window_reset_end(&scopes[--prepared]);
+    return result;
 }
 
 static void emit_cursor_position(D9Device *device, int x, int y, DWORD flags)
@@ -5119,6 +5153,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
             (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
+    if (!reset_window_mode(device, window))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    emit_window_state(device, window);
     TRACE("OK Reset old_handle=%08lX new_handle=%08lX %lux%lu epoch=%lu",
         reset.old_device_handle, device->handle, reset.width, reset.height,
         device->reset_epoch);
