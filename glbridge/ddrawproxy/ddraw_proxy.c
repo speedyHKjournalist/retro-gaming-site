@@ -36,6 +36,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_format_layouts.h"
+#include "../runtime/d9wg_ddraw_color_key.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
@@ -2994,9 +2995,21 @@ static HRESULT WINAPI surface_SetColorKey(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
     DDSurface *walk;
     DWORD kind, description_flag;
+    D9WGDDColorKeyValues values;
+    DDCOLORKEY fixed_key;
 
     if (!surface_color_key_kind(flags, &kind, &description_flag))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+
+    if (key) {
+        if (!d9wg_ddraw_color_key_normalize(key->dwColorSpaceLowValue,
+                key->dwColorSpaceHighValue, (flags & DDCKEY_COLORSPACE) != 0,
+                &values))
+            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEYHW);
+        fixed_key.dwColorSpaceLowValue = values.low;
+        fixed_key.dwColorSpaceHighValue = values.high;
+        key = &fixed_key;
+    }
 
     if (!key) {
         surface->color_key_present &= ~(1u << kind);
@@ -4342,6 +4355,24 @@ static HRESULT WINAPI ddraw_CreatePalette(IDirectDraw7 *iface, DWORD flags,
     return DD_OK;
 }
 
+static BOOL surface_request_color_keys_valid(const DDSURFACEDESC2 *request)
+{
+    const DWORD flags[4] = { DDSD_CKSRCBLT, DDSD_CKDESTBLT,
+        DDSD_CKSRCOVERLAY, DDSD_CKDESTOVERLAY };
+    const DDCOLORKEY *keys[4] = { &request->ddckCKSrcBlt,
+        &request->ddckCKDestBlt, &request->ddckCKSrcOverlay,
+        &request->ddckCKDestOverlay };
+    UINT i;
+    for (i = 0; i < 4u; ++i) {
+        if ((request->dwFlags & flags[i])
+                && !d9wg_ddraw_color_key_normalize(
+                    keys[i]->dwColorSpaceLowValue,
+                    keys[i]->dwColorSpaceHighValue, TRUE, NULL))
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
         LPDDSURFACEDESC2 request, LPDIRECTDRAWSURFACE7 *out, IUnknown *outer)
 {
@@ -4370,6 +4401,8 @@ static HRESULT WINAPI ddraw_CreateSurface(IDirectDraw7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
     *out = NULL;
+    if (!surface_request_color_keys_valid(request))
+        return DDWG_TRACE_ERROR(DDERR_NOCOLORKEYHW);
     caps = request->ddsCaps.dwCaps;
     back_buffers = (request->dwFlags & DDSD_BACKBUFFERCOUNT)
         ? request->dwBackBufferCount : 0;
