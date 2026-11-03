@@ -12,13 +12,14 @@ function extract(source, name) {
         surface_binding_release: "static void surface_binding_release(D9Surface*s){IDirect3DSurface9_Release(&s->iface);}",
     };
     if (!m && compatibility[name]) return compatibility[name];
-    if (!m && ["texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release"].includes(name))
+    if (!m && ["cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release"].includes(name))
         return extract(fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"), name);
     assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1;
     for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;}
     return source.slice(m.index, end);
 }
-const textureBindings = process.env.D9WG_TEST_TEXTURE_BINDINGS === "1";
+const cubeBindings = process.env.D9WG_TEST_CUBE_BINDINGS === "1";
+const textureBindings = cubeBindings || process.env.D9WG_TEST_TEXTURE_BINDINGS === "1";
 try {
     const source = fs.readFileSync(process.env.D9WG_TARGET_BINDING_SOURCE || root + "/d3d9proxy/d3d9_proxy.c", "utf8");
     fs.writeFileSync(dir + "/target.c", `#include <assert.h>
@@ -29,7 +30,7 @@ try {
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_private_data.h"
 #include "runtime/d9wg_reset.h"
-typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESULT;typedef int BOOL,D3DFORMAT,D3DPOOL;typedef uint8_t BYTE;
+typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESULT;typedef int BOOL,D3DFORMAT,D3DPOOL,D3DCUBEMAP_FACES;typedef uint8_t BYTE;
 #define D9_MAX_RENDER_TARGETS 4
 #define D9_MAX_STREAMS 16
 #define D9_MAX_TEXTURE_BINDINGS 20
@@ -45,6 +46,7 @@ typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESU
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
 #define D3DPOOL_DEFAULT 0
+#define D3DMULTISAMPLE_NONE 0
 #define D3DVERTEXTEXTURESAMPLER0 257
 #define PURE_DEVICE_REFUSE(...)
 #define D3DUSAGE_RENDERTARGET 1
@@ -77,19 +79,19 @@ static void trace_exit(const char*m,HRESULT result,const void*out){(void)result;
 static D9Device*active_device;
 static UINT live,allocations,fail_allocation,fail_emit,fail_layout,handles,creates,destroys,device_destroys,checks;
 static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Surface*surface_from_iface(Interface*p){return (D9Surface*)p;}static D9Texture*texture_from_iface(Interface*p){return (D9Texture*)p;}
+${textureBindings?"static D9CubeTexture*cube_from_iface(Interface*p){return (D9CubeTexture*)p;}":""}
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==8&&n);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;assert(!f);if(p){assert(live);live--;free(p);}}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}static LONG InterlockedDecrement(LONG*p){assert(*p>0);return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG v,LONG c){LONG old=*p;if(old==c)*p=v;return old;}
-static void texture_destroy_storage(D9Texture*);static void texture_binding_add_ref(D9Texture*);static void texture_binding_release(D9Texture*);static void surface_destroy_storage(D9Surface*);static void surface_binding_release(D9Surface*);
+static void cube_destroy_storage(D9CubeTexture*);static void cube_binding_add_ref(D9CubeTexture*);static void cube_binding_release(D9CubeTexture*);static void texture_destroy_storage(D9Texture*);static void texture_binding_add_ref(D9Texture*);static void texture_binding_release(D9Texture*);static void surface_destroy_storage(D9Surface*);static void surface_binding_release(D9Surface*);
 static ULONG device_add_ref(Interface*);static ULONG device_release(Interface*);static ULONG surface_add_ref(Interface*);static ULONG surface_release(Interface*);static ULONG texture_release(Interface*);
 #define IDirect3DSurface9_AddRef surface_add_ref
 #define IDirect3DSurface9_Release surface_release
 #define IDirect3DDevice9_AddRef device_add_ref
 #define IDirect3DDevice9_Release device_release
 #define IDirect3DTexture9_Release texture_release
-${textureBindings?"static ULONG texture_add_ref(Interface*);\n#define IDirect3DTexture9_AddRef texture_add_ref\n#define IDirect3DBaseTexture9_AddRef texture_add_ref":"#define IDirect3DTexture9_AddRef(p) (assert(0),(void)(p),0u)"}
-#define IDirect3DCubeTexture9_AddRef(p) (assert(0),(void)(p),0u)
-#define IDirect3DCubeTexture9_Release(p) (assert(0),(void)(p),0u)
+${textureBindings?"static ULONG texture_add_ref(Interface*);static ULONG cube_add_ref(Interface*);static ULONG cube_release(Interface*);\nstatic ULONG base_texture_add_ref(Interface*p){return p->lpVtbl==&g_cube_vtbl?cube_add_ref(p):texture_add_ref(p);}\n#define IDirect3DTexture9_AddRef texture_add_ref\n#define IDirect3DBaseTexture9_AddRef base_texture_add_ref":"#define IDirect3DTexture9_AddRef(p) (assert(0),(void)(p),0u)"}
+${textureBindings?"#define IDirect3DCubeTexture9_AddRef cube_add_ref\n#define IDirect3DCubeTexture9_Release cube_release":"#define IDirect3DCubeTexture9_AddRef(p) (assert(0),(void)(p),0u)\n#define IDirect3DCubeTexture9_Release(p) (assert(0),(void)(p),0u)"}
 #define IDirect3D9_Release(p) (--((Parent*)(p))->refs)
 #define IDirect3DVertexBuffer9_Release(p) ((void)(p),assert(0),0u)
 #define IDirect3DIndexBuffer9_Release(p) ((void)(p),assert(0),0u)
@@ -101,8 +103,8 @@ ${textureBindings?"static ULONG texture_add_ref(Interface*);\n#define IDirect3DT
 static void device_release_owned_references(D9Device*);
 static void device_cancel_recording(D9Device*d){(void)d;}
 static void SetRect(RECT*r,int l,int t,int right,int b){*r=(RECT){l,t,right,b};}
-static HRESULT IDirect3DDevice9_SetViewport(Interface*p,const D3DVIEWPORT9*v){(void)p;assert(v->Width==32&&v->Height==24);return 0;}
-static HRESULT IDirect3DDevice9_SetScissorRect(Interface*p,const RECT*r){(void)p;assert(r->right==32&&r->bottom==24);return 0;}
+static HRESULT IDirect3DDevice9_SetViewport(Interface*p,const D3DVIEWPORT9*v){(void)p;assert(v->Width==32&&(v->Height==24${cubeBindings?"||v->Height==32":""}));return 0;}
+static HRESULT IDirect3DDevice9_SetScissorRect(Interface*p,const RECT*r){(void)p;assert(r->right==32&&(r->bottom==24${cubeBindings?"||r->bottom==32":""}));return 0;}
 static HRESULT IDirect3DDevice9_GetBackBuffer(Interface*p,UINT a,UINT b,UINT c,Interface**out){(void)p;(void)a;(void)b;(void)c;(void)out;assert(0);return -1;}
 static void swap_chain_destroy_storage(D9SwapChain*c){(void)c;assert(0);}
 static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(D9Device*d){(void)d;}static void restore_display_mode(D9Device*d){(void)d;}
@@ -111,15 +113,16 @@ static void EnterCriticalSection(int*p){(void)p;}static void LeaveCriticalSectio
 static UINT allocate_handle(void){return ++handles;}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){if(fail_layout||f!=22)return 0;*p=w*4;*r=h;*b=w*h*4;return 1;}
 static BOOL emit_texture_create(D9Device*d,D9Texture*t){assert(t->device==d&&t->width&&t->height&&t->level_count==1&&t->multisample_quality==0);creates++;return !fail_emit;}
-static BOOL emit_command(UINT op,const void*p,UINT n){assert(active_device&&(op==D9WG_OP_DESTROY_RESOURCE&&((const D9WGDestroyResource*)p)->resource_kind==0?active_device->refcount==0:active_device->refcount>0));if(op==D9WG_OP_SET_TEXTURE){assert(n==sizeof(D9WGSetTexture));return !fail_emit;}if(op==D9WG_OP_SET_RENDER_TARGET){assert(n==sizeof(D9WGSetRenderTarget));return 1;}if(op==D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL){assert(n==sizeof(D9WGSetDepthStencilSurfaceLevel));return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&n==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;if(c->resource_kind==3)destroys++;else{assert(!c->resource_kind&&c->resource_handle==7&&!active_device->texture_resources&&!active_device->depth_stencil_surface&&!active_device->child_parent_refs);for(UINT i=0;i<4;i++)assert(!active_device->render_target_surfaces[i]);device_destroys++;}return 1;}
+static BOOL emit_command(UINT op,const void*p,UINT n){assert(active_device&&(op==D9WG_OP_DESTROY_RESOURCE&&((const D9WGDestroyResource*)p)->resource_kind==0?active_device->refcount==0:active_device->refcount>0));if(op==D9WG_OP_SET_TEXTURE){assert(n==sizeof(D9WGSetTexture));return !fail_emit;}if(op==D9WG_OP_SET_RENDER_TARGET){assert(n==sizeof(D9WGSetRenderTarget));return 1;}if(op==D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL){assert(n==sizeof(D9WGSetDepthStencilSurfaceLevel));return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&n==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;if(c->resource_kind==3||c->resource_kind==4)destroys++;else{assert(!c->resource_kind&&c->resource_handle==7&&!active_device->texture_resources&&!active_device->cube_textures&&!active_device->depth_stencil_surface&&!active_device->child_parent_refs);for(UINT i=0;i<4;i++)assert(!active_device->render_target_surfaces[i]);device_destroys++;}return 1;}
 
-${["device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "surface_uses_private_bindings", "reset_buffer_owned_refs", "reset_bound_surface", "reset_surface_owned_refs", "reset_texture_owned_refs", "device_has_reset_blockers", "device_clear_bindings", "device_release_owned_references", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture", "surface_target_handle", "device_set_render_target", "device_get_render_target", "device_set_depth_stencil_surface", "device_get_depth_stencil_surface", ...(textureBindings?["texture_binding_slot","texture_add_ref","texture_get_surface_level","device_set_texture","device_get_texture"]:[])].map(n => extract(source, n)).join("\n")}
+${["device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "surface_uses_private_bindings", "reset_buffer_owned_refs", "reset_bound_surface", "reset_surface_owned_refs", "reset_texture_owned_refs", "device_has_reset_blockers", "device_clear_bindings", "device_release_owned_references", "cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture", "surface_target_handle", "device_set_render_target", "device_get_render_target", "device_set_depth_stencil_surface", "device_get_depth_stencil_surface", ...(textureBindings?["texture_binding_slot","texture_add_ref","cube_add_ref","cube_release","texture_get_surface_level","device_set_texture","device_get_texture",...(cubeBindings?["cube_get_cube_map_surface"]:[])]:[])].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)||release_enters!=release_exits){fprintf(stderr,"Target binding line %u: %s release markers=%u/%u\\n",__LINE__,#v,release_enters,release_exits);return 1;}checks++;}while(0)
 static D9Device*new_device(Parent*p){D9Device*d=HeapAlloc(NULL,8,sizeof(*d));d->refcount=1;d->handle=7;d->parent=p;p->refs=1;active_device=d;return d;}
 static HRESULT get_bound(D9Device*d,BOOL depth,Interface**out){return depth?device_get_depth_stencil_surface(&d->iface,out):device_get_render_target(&d->iface,3,out);}
 static HRESULT bind_target(D9Device*d,BOOL depth,D9Surface*s){return depth?device_set_depth_stencil_surface(&d->iface,s?&s->iface:NULL):device_set_render_target(&d->iface,3,s?&s->iface:NULL);}
 ${textureBindings?'#include "tests/native/d9wg_texture_binding_cases.h"':""}
-int main(void){(void)&texture_binding_add_ref;(void)&texture_binding_release;${textureBindings?"CHECK(!texture_binding_cases());":""}(void)surface_destroy_storage;(void)surface_binding_add_ref;(void)surface_binding_release;unsigned cases=0,revivals=0;for(UINT profile=0;profile<4;profile++)for(UINT order=0;order<4;order++){
+${cubeBindings?'#include "tests/native/d9wg_cube_binding_cases.h"':""}
+int main(void){(void)&cube_binding_add_ref;(void)&cube_binding_release;(void)&texture_binding_add_ref;(void)&texture_binding_release;${textureBindings?"CHECK(!texture_binding_cases());":""}${cubeBindings?"CHECK(!cube_binding_cases());":""}(void)surface_destroy_storage;(void)surface_binding_add_ref;(void)surface_binding_release;unsigned cases=0,revivals=0;for(UINT profile=0;profile<4;profile++)for(UINT order=0;order<4;order++){
  Parent parent={0};D9Device*d=new_device(&parent);BOOL depth=profile>=2;UINT bindings=depth?1:order%2?1:2;Interface*out=NULL;UINT old_destroys=destroys;
  CHECK(!create_target_texture(d,32,24,depth?75:22,depth?2:1,profile%2?4:0,0,&out)&&out);D9Surface*s=(D9Surface*)out;
  CHECK(!bind_target(d,depth,s));if(bindings==2)CHECK(!device_set_render_target(&d->iface,2,out));

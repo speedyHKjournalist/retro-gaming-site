@@ -58,7 +58,7 @@ static Vtable g_surface_vtbl;static unsigned allocations,live,fail_at,parent_ref
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;(void)f;allocations++;if(allocations==fail_at)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;(void)f;if(p){assert(live);live--;free(p);}}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}static LONG InterlockedDecrement(LONG*p){return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG v,LONG c){LONG old=*p;if(old==c)*p=v;return old;}
-${api===9?"static void texture_binding_add_ref(D9Texture*t){(void)t;assert(0);}\nstatic void texture_binding_release(D9Texture*t){(void)t;assert(0);}":""}
+${api===9?"static void cube_binding_add_ref(D9Texture*t){(void)t;assert(0); }\nstatic void cube_binding_release(D9Texture*t){(void)t;assert(0); }\nstatic void texture_binding_add_ref(D9Texture*t){(void)t;assert(0);}\nstatic void texture_binding_release(D9Texture*t){(void)t;assert(0);}":""}
 static void device_child_add_ref(Device*);static void device_child_release(Device*);
 #define IDirect3DDevice${api}_AddRef(p) ((p)->lpVtbl->AddRef(p))
 #define IDirect3DDevice${api}_Release(p) ((p)->lpVtbl->Release(p))

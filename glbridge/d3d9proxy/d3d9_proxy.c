@@ -1207,6 +1207,7 @@ struct D9Texture {
 struct D9CubeTexture {
     IDirect3DCubeTexture9 iface;
     LONG refcount;
+    LONG binding_refs;          /* sampler and cube-face target storage holds */
     D9Device *device;
     uint32_t handle;
     UINT edge_length;
@@ -1372,6 +1373,20 @@ static void texture_binding_release(D9Texture *texture)
         texture_destroy_storage(texture);
 }
 
+static void cube_destroy_storage(D9CubeTexture *texture);
+
+static void cube_binding_add_ref(D9CubeTexture *texture)
+{
+    InterlockedIncrement(&texture->binding_refs);
+}
+
+static void cube_binding_release(D9CubeTexture *texture)
+{
+    if (!InterlockedDecrement(&texture->binding_refs)
+            && !InterlockedCompareExchange(&texture->refcount, 0, 0))
+        cube_destroy_storage(texture);
+}
+
 static void surface_destroy_storage(D9Surface *surface);
 static void swap_chain_destroy_storage(D9SwapChain *chain);
 
@@ -1382,7 +1397,9 @@ static BOOL surface_uses_private_bindings(const D9Surface *surface)
 
 static void surface_binding_add_ref(D9Surface *surface)
 {
-    if (surface->texture_child)
+    if (surface->cube_texture)
+        cube_binding_add_ref(surface->cube_texture);
+    else if (surface->texture_child)
         texture_binding_add_ref(surface->texture);
     else if (surface_uses_private_bindings(surface))
         InterlockedIncrement(&surface->binding_refs);
@@ -1392,6 +1409,10 @@ static void surface_binding_add_ref(D9Surface *surface)
 
 static void surface_binding_release(D9Surface *surface)
 {
+    if (surface->cube_texture) {
+        cube_binding_release(surface->cube_texture);
+        return;
+    }
     if (surface->texture_child) {
         texture_binding_release(surface->texture);
         return;
@@ -3290,9 +3311,6 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
 {
     UINT refs = 0;
     for (UINT i = 0; i < D9_MAX_TEXTURE_BINDINGS; ++i) {
-        if (kind == D9WG_RESOURCE_TEXTURE_CUBE && device->cube_bindings[i]
-                && &device->cube_bindings[i]->iface == iface)
-            ++refs;
         if (kind == D9WG_RESOURCE_TEXTURE_VOLUME && device->volume_bindings[i]
                 && &device->volume_bindings[i]->iface == iface)
             ++refs;
@@ -3301,10 +3319,7 @@ static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT k
         D9Surface *surface = reset_bound_surface(device, i);
         if (!surface)
             continue;
-        if (kind == D9WG_RESOURCE_TEXTURE_CUBE && surface->cube_texture
-                && &surface->cube_texture->iface == iface) {
-            ++refs;
-        } else if (kind == D9WG_RESOURCE_TEXTURE_2D && surface->texture
+        if (kind == D9WG_RESOURCE_TEXTURE_2D && surface->texture
                 && &surface->texture->iface == iface) {
             if (!surface->texture_child) {
                 /* A standalone target owns one backing-texture reference,
@@ -3442,7 +3457,7 @@ static void device_clear_bindings(D9Device *device)
         device->cube_bindings[index] = NULL;
         device->volume_bindings[index] = NULL;
         if (texture) texture_binding_release(texture);
-        if (cube) IDirect3DCubeTexture9_Release(&cube->iface);
+        if (cube) cube_binding_release(cube);
         if (volume) IDirect3DVolumeTexture9_Release(&volume->iface);
     }
     for (index = 0; index < D9_MAX_RENDER_TARGETS; ++index) {
@@ -5720,13 +5735,13 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
     D9CubeTexture *old_cube = device->cube_bindings[slot];
     D9VolumeTexture *old_volume = device->volume_bindings[slot];
     if (texture) texture_binding_add_ref(texture);
-    if (cube) IDirect3DCubeTexture9_AddRef(&cube->iface);
+    if (cube) cube_binding_add_ref(cube);
     if (volume) IDirect3DVolumeTexture9_AddRef(&volume->iface);
     device->textures[slot] = texture;
     device->cube_bindings[slot] = cube;
     device->volume_bindings[slot] = volume;
     if (old_texture) texture_binding_release(old_texture);
-    if (old_cube) IDirect3DCubeTexture9_Release(&old_cube->iface);
+    if (old_cube) cube_binding_release(old_cube);
     if (old_volume) IDirect3DVolumeTexture9_Release(&old_volume->iface);
     command.device_handle = device->handle;
     command.stage = stage;
@@ -11325,34 +11340,47 @@ static HRESULT WINAPI cube_query_interface(IDirect3DCubeTexture9 *iface,
 
 static ULONG WINAPI cube_add_ref(IDirect3DCubeTexture9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&cube_from_iface(iface)->refcount);
+    D9CubeTexture *texture = cube_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&texture->refcount);
+    if (refs == 1)
+        device_child_add_ref(texture->device);
+    return refs;
+}
+
+static void cube_destroy_storage(D9CubeTexture *texture)
+{
+    D9CubeTexture** link = &texture->device->cube_textures;
+    D9WGDestroyResource destroy;
+    UINT index;
+    while (*link && *link != texture)
+        link = &(*link)->next_device_resource;
+    if (*link)
+        *link = texture->next_device_resource;
+    d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
+    destroy.resource_handle = texture->handle;
+    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    for (index = 0; index < texture->level_count * 6u; ++index) {
+        d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
+        HeapFree(GetProcessHeap(), 0,
+            texture->levels[index].level_surface);
+        HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
+    }
+    HeapFree(GetProcessHeap(), 0, texture->levels);
+    HeapFree(GetProcessHeap(), 0, texture);
 }
 
 static ULONG WINAPI cube_release(IDirect3DCubeTexture9* iface)
 {
-    D9CubeTexture* texture = cube_from_iface(iface);
+    D9CubeTexture *texture = cube_from_iface(iface);
+    if (!InterlockedCompareExchange(&texture->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9CubeTexture** link = &texture->device->cube_textures;
-        D9WGDestroyResource destroy;
-        UINT index;
-        while (*link && *link != texture)
-            link = &(*link)->next_device_resource;
-        if (*link)
-            *link = texture->next_device_resource;
-        d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
-        destroy.resource_handle = texture->handle;
-        destroy.resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        for (index = 0; index < texture->level_count * 6u; ++index) {
-            d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
-            HeapFree(GetProcessHeap(), 0,
-                texture->levels[index].level_surface);
-            HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
-        }
-        HeapFree(GetProcessHeap(), 0, texture->levels);
-        device_child_release(texture->device);
-        HeapFree(GetProcessHeap(), 0, texture);
+        D9Device *device = texture->device;
+        if (!InterlockedCompareExchange(&texture->binding_refs, 0, 0))
+            cube_destroy_storage(texture);
+        device_child_release(device);
     }
     return refs;
 }
