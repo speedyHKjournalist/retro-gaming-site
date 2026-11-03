@@ -21,7 +21,7 @@ try{let killed=0;for(const api of[8,9]){const source=fs.readFileSync(root+'/d3d'
  ['surface_release','each public Release drops device','if (!refs)\n            device_child_release(device);','if (1)\n            device_child_release(device);'],
  ['surface_release','zero Release underflows','if (!InterlockedCompareExchange(&surface->refcount, 0, 0)) {','if (0 && !InterlockedCompareExchange(&surface->refcount, 0, 0)) {'],
  ['device_get_back_buffer','stereo selector rejected','if (swapchain || index) {','if (swapchain || index || type) {'],
- ['surface_get_container','auto-depth container missing','if (surface->auto_depth_stencil) {','if (0 && surface->auto_depth_stencil) {'],
+ ['surface_get_container','auto-depth container missing','if (surface->auto_depth_stencil || !surface->texture_child) {','if (!surface->auto_depth_stencil && !surface->texture_child) {'],
  ['surface_get_container','auto-depth wrong identity','*container = &surface->device->iface;','*container = &surface->iface;'],
  ['surface_get_container','auto-depth container unretained','IDirect3DDevice9_AddRef(&surface->device->iface);','(void)surface->device;'],
  ['device_get_back_buffer','back cache unpublished','device->implicit_back_buffer = surface;','(void)surface;'],

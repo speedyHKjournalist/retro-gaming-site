@@ -13349,7 +13349,9 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface9 *iface,
         IDirect3DCubeTexture9_AddRef(&surface->cube_texture->iface);
         return D3D_OK;
     }
-    if (surface->auto_depth_stencil) {
+    /* Standalone render/depth/offscreen surfaces have the device as their
+     * public container. Their private backing texture is not an API object. */
+    if (surface->auto_depth_stencil || !surface->texture_child) {
         if (!riid || (!iid_is_unknown(riid)
                 && !guid_equal(riid, &IID_IDirect3DDevice9)))
             return E_NOINTERFACE;
