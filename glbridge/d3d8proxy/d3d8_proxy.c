@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
+#include "../runtime/d9wg_display_mode.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
@@ -2131,13 +2132,16 @@ static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D8 *iface, UINT adapter,
     return D3D_OK;
 }
 
-static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D8 *iface,
-        UINT adapter, D3DDISPLAYMODE *mode)
+static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D8* iface,
+    UINT adapter, D3DDISPLAYMODE* mode)
 {
     (void)iface;
     if (adapter || !mode)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    fill_display_mode(mode, 1024, 768, D3DFMT_X8R8G8B8);
+    D9WGDisplayMode current;
+    d9wg_display_mode_current(&current);
+    fill_display_mode(mode, current.width, current.height, (D3DFORMAT)current.format);
+    mode->RefreshRate = current.refresh_rate;
     return D3D_OK;
 }
 
@@ -2894,13 +2898,12 @@ static HRESULT WINAPI device_get_caps(IDirect3DDevice8 *iface, D3DCAPS8 *caps)
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_get_display_mode(IDirect3DDevice8 *iface,
-        D3DDISPLAYMODE *mode)
+static HRESULT WINAPI device_get_display_mode(IDirect3DDevice8* iface,
+    D3DDISPLAYMODE* mode)
 {
-    if (!mode)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    *mode = device_from_iface(iface)->display_mode;
-    return D3D_OK;
+    D8Device* device = device_from_iface(iface);
+    return d3d_get_adapter_display_mode(&device->parent->iface,
+        device->creation.AdapterOrdinal, mode);
 }
 
 static HRESULT WINAPI device_get_creation_parameters(IDirect3DDevice8 *iface,

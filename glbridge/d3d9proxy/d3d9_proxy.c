@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
+#include "../runtime/d9wg_display_mode.h"
 #include "../runtime/d9wg_window_reset.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
@@ -3771,38 +3772,19 @@ static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D9 *iface, UINT adapter,
     return D3D_OK;
 }
 
-static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D9 *iface,
-        UINT adapter, D3DDISPLAYMODE *mode)
+static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D9* iface,
+    UINT adapter, D3DDISPLAYMODE* mode)
 {
     (void)iface;
 
     if (adapter || !mode)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /*
-     * The guest's actual desktop mode, not a fixed 1024x768. This is what the
-     * question asks -- "what is the display doing right now" -- and answering
-     * it with a constant meant reporting a resolution the guest was not in:
-     * a title that sizes a windowed device to the desktop, or compares the
-     * mode against its saved settings, is then working from a number that was
-     * never true. The reference implementation reports the real mode.
-     */
-    {
-        DEVMODEA current;
-        ZeroMemory(&current, sizeof(current));
-        current.dmSize = sizeof(current);
-        if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &current)
-                && current.dmPelsWidth && current.dmPelsHeight) {
-            fill_display_mode(mode, current.dmPelsWidth, current.dmPelsHeight,
-                    current.dmBitsPerPel == 16 ? D3DFMT_R5G6B5
-                            : D3DFMT_X8R8G8B8);
-            if (current.dmDisplayFrequency > 1)
-                mode->RefreshRate = current.dmDisplayFrequency;
-        } else {
-            fill_display_mode(mode, 1024, 768, D3DFMT_X8R8G8B8);
-        }
-    }
+    D9WGDisplayMode current;
+    d9wg_display_mode_current(&current);
+    fill_display_mode(mode, current.width, current.height, (D3DFORMAT)current.format);
+    mode->RefreshRate = current.refresh_rate;
     TRACE("OK GetAdapterDisplayMode -> %lux%lu format=%08lX refresh=%lu",
-            mode->Width, mode->Height, (DWORD)mode->Format, mode->RefreshRate);
+        mode->Width, mode->Height, (DWORD)mode->Format, mode->RefreshRate);
     return D3D_OK;
 }
 
@@ -4382,16 +4364,18 @@ static HRESULT WINAPI device_get_caps(IDirect3DDevice9 *iface, D3DCAPS9 *caps)
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_get_display_mode(IDirect3DDevice9 *iface,
-        UINT swapchain, D3DDISPLAYMODE *mode)
+static HRESULT WINAPI device_get_display_mode(IDirect3DDevice9* iface,
+    UINT swapchain, D3DDISPLAYMODE* mode)
 {
-    D9Device *device = device_from_iface(iface);
+    D9Device* device = device_from_iface(iface);
     if (swapchain || !mode)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *mode = device->display_mode;
-    TRACE("OK Device.GetDisplayMode -> %lux%lu format=%08lX refresh=%lu",
+    HRESULT result = d3d_get_adapter_display_mode(&device->parent->iface,
+        device->creation.AdapterOrdinal, mode);
+    if (SUCCEEDED(result))
+        TRACE("OK Device.GetDisplayMode -> %lux%lu format=%08lX refresh=%lu",
             mode->Width, mode->Height, (DWORD)mode->Format, mode->RefreshRate);
-    return D3D_OK;
+    return result;
 }
 
 static HRESULT WINAPI device_get_creation_parameters(IDirect3DDevice9 *iface,
@@ -13992,24 +13976,26 @@ static HRESULT WINAPI swap_chain_get_raster_status(IDirect3DSwapChain9 *iface,
     return result;
 }
 
-static HRESULT WINAPI swap_chain_get_display_mode(IDirect3DSwapChain9 *iface,
-        D3DDISPLAYMODE *mode)
+static HRESULT WINAPI swap_chain_get_display_mode(IDirect3DSwapChain9* iface,
+    D3DDISPLAYMODE* mode)
 {
-    D9SwapChain *swap_chain = swap_chain_from_iface(iface);
+    D9SwapChain* swap_chain = swap_chain_from_iface(iface);
 
     TRACE_MARK_ENTER("SwapChain.GetDisplayMode");
     if (!mode) {
         TRACE("FAIL SwapChain.GetDisplayMode object=%08lX missing output -> %08lX",
-                (DWORD)(uintptr_t)iface, (DWORD)D3DERR_INVALIDCALL);
+            (DWORD)(uintptr_t)iface, (DWORD)D3DERR_INVALIDCALL);
         TRACE_MARK_EXIT("SwapChain.GetDisplayMode", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    *mode = swap_chain->device->display_mode;
-    TRACE("OK SwapChain.GetDisplayMode object=%08lX %lux%lu fmt=%08lX refresh=%lu",
+    HRESULT result = d3d_get_adapter_display_mode(&swap_chain->device->parent->iface,
+        swap_chain->device->creation.AdapterOrdinal, mode);
+    if (SUCCEEDED(result))
+        TRACE("OK SwapChain.GetDisplayMode object=%08lX %lux%lu fmt=%08lX refresh=%lu",
             (DWORD)(uintptr_t)iface, mode->Width, mode->Height,
             (DWORD)mode->Format, mode->RefreshRate);
-    TRACE_MARK_EXIT("SwapChain.GetDisplayMode", D3D_OK, mode);
-    return D3D_OK;
+    TRACE_MARK_EXIT("SwapChain.GetDisplayMode", result, mode);
+    return result;
 }
 
 static HRESULT WINAPI swap_chain_get_device(IDirect3DSwapChain9 *iface,
