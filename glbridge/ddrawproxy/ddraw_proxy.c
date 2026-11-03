@@ -3617,6 +3617,15 @@ static HRESULT WINAPI palette_SetEntries(IDirectDrawPalette *iface,
      * this is the path that carries it.
      */
     emit_palette_table(palette);
+    /* Palette animation changes the already visible indexed front buffer
+     * without another Lock/Blt/Flip. Resolve it into the swap image now. */
+    if (palette->owner && palette->owner->primary &&
+            palette->owner->primary->indexed &&
+            palette->owner->primary->palette == palette) {
+        if (!emit_blt_to_screen(palette->owner->primary, NULL) ||
+                !emit_present_and_flush(palette->owner))
+            return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    }
     return DD_OK;
 }
 
