@@ -222,6 +222,9 @@ struct D8Device {
     D3DPRESENT_PARAMETERS present;
     D3DDISPLAYMODE display_mode;
     D3DVIEWPORT8 viewport;
+    D3DGAMMARAMP gamma_ramp;
+    BOOL gamma_ramp_set;
+    DWORD gamma_ramp_flags;
     D3DMATRIX transforms[D8WG_MAX_TRANSFORMS];
     D3DMATERIAL8 material;
     D3DLIGHT8 lights[D8WG_MAX_LIGHTS];
@@ -709,6 +712,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
 #define D9WG_MAPPED_INDEX D8IndexBuffer
 #include "../runtime/d9wg_mapped_draw_bridge.h"
 #include "../runtime/d9wg_texture_lod_bridge.h"
+#include "../runtime/d9wg_gamma_bridge.h"
 
 /* ---- Stage 6: D3D8 shader model 1.x bytecode validation ---- */
 
@@ -1784,7 +1788,8 @@ static void fill_caps(D3DCAPS8 *caps)
             | D3DCAPS2_CANMANAGERESOURCE
             /* D3DUSAGE_DYNAMIC survives CreateTexture/CreateVertexBuffer and
              * the lock paths honour DISCARD/NOOVERWRITE. */
-            | D3DCAPS2_DYNAMICTEXTURES;
+            | D3DCAPS2_DYNAMICTEXTURES
+            | D3DCAPS2_FULLSCREENGAMMA;
     caps->PresentationIntervals = D3DPRESENT_INTERVAL_IMMEDIATE
             | D3DPRESENT_INTERVAL_ONE;
     caps->DevCaps = D3DDEVCAPS_HWRASTERIZATION
@@ -2512,6 +2517,10 @@ static BOOL emit_device_state_after_reset(D8Device *device)
 {
     if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states)
             || !emit_object_default_patches(device->handle, &device->material))
+        return FALSE;
+
+    if (device->gamma_ramp_set && !d9wg_emit_gamma_ramp(device->handle,
+            device->gamma_ramp_flags, &device->gamma_ramp))
         return FALSE;
 
     /* Host-side constant registers live under the old device_handle and
@@ -5476,11 +5485,20 @@ static HRESULT WINAPI device_get_backbuffer(IDirect3DDevice8 *iface, UINT index,
 }
 DEV_STUB(get_raster_status, D3DRASTER_STATUS *s)
 { (void)iface; (void)s; return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL); }
-static void WINAPI device_set_gamma(IDirect3DDevice8 *iface, DWORD flags,
-        const D3DGAMMARAMP *ramp)
-{ (void)iface; (void)flags; (void)ramp; }
-static void WINAPI device_get_gamma(IDirect3DDevice8 *iface, D3DGAMMARAMP *ramp)
-{ (void)iface; if (ramp) ZeroMemory(ramp, sizeof(*ramp)); }
+static void WINAPI device_set_gamma(IDirect3DDevice8 *iface,
+        DWORD flags, const D3DGAMMARAMP *ramp)
+{
+    D8Device *device = device_from_iface(iface);
+    D8WG_TRACE("CALL SetGammaRamp device=%08lX flags=%08lX", device->handle, flags);
+    d9wg_set_gamma_ramp(device->handle, flags, ramp, &device->gamma_ramp,
+            &device->gamma_ramp_set, &device->gamma_ramp_flags);
+}
+static void WINAPI device_get_gamma(IDirect3DDevice8 *iface,
+        D3DGAMMARAMP *ramp)
+{
+    D8Device *device = device_from_iface(iface);
+    d9wg_get_gamma_ramp(&device->gamma_ramp, device->gamma_ramp_set, ramp);
+}
 static HRESULT WINAPI device_create_render_target(IDirect3DDevice8* iface,
     UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
     WINBOOL lockable, IDirect3DSurface8** surface_out)

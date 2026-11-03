@@ -998,10 +998,11 @@ struct D9Device {
     D3DMATERIAL9 material;
     /* The last ramp SetGammaRamp was given, kept so GetGammaRamp answers with
      * it rather than with zeroes. D3D9 has no "no ramp set" state -- a device
-     * starts at identity -- so `gamma_ramp_set` only records whether the host
-     * has been told, which decides whether Reset has to tell it again. */
+     * starts at identity -- so `gamma_ramp_set` records whether the app supplied one;
+     * Reset replays that stored ramp and its flags to the new device. */
     D3DGAMMARAMP gamma_ramp;
     BOOL gamma_ramp_set;
+    DWORD gamma_ramp_flags;
     /* Only meaningful on a D3DCREATE_MIXED_VERTEXPROCESSING device; the other
      * two modes are fixed at creation and answer from BehaviorFlags. */
     BOOL software_vertex_processing;
@@ -1770,6 +1771,7 @@ static void host_log(uint32_t severity, const char *format, ...)
 #define D9WG_MAPPED_INDEX D9IndexBuffer
 #include "../runtime/d9wg_mapped_draw_bridge.h"
 #include "../runtime/d9wg_texture_lod_bridge.h"
+#include "../runtime/d9wg_gamma_bridge.h"
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -3338,6 +3340,10 @@ static BOOL emit_device_state_after_reset(D9Device *device)
 {
     if (!emit_render_default_patches(device->handle, 9, device->present.EnableAutoDepthStencil, device->render_states)
             || !emit_object_default_patches(device->handle, &device->material))
+        return FALSE;
+
+    if (device->gamma_ramp_set && !d9wg_emit_gamma_ramp(device->handle,
+            device->gamma_ramp_flags, &device->gamma_ramp))
         return FALSE;
 
     if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
@@ -5339,52 +5345,18 @@ static void WINAPI device_set_gamma_ramp(IDirect3DDevice9 *iface,
         UINT swapchain, DWORD flags, const D3DGAMMARAMP *ramp)
 {
     D9Device *device = device_from_iface(iface);
-    D9WGSetGammaRamp command;
-    UINT index;
-
-    TRACE("CALL SetGammaRamp device=%08lX chain=%lu flags=%08lX ramp=%08lX",
-            device->handle, swapchain, flags, (DWORD)(uintptr_t)ramp);
-    if (!ramp || swapchain)
-        return;
-    device->gamma_ramp = *ramp;
-    device->gamma_ramp_set = TRUE;
-    command.device_handle = device->handle;
-    command.swap_chain = swapchain;
-    command.flags = flags;
-    command.reserved = 0;
-    for (index = 0; index < 256; ++index) {
-        command.ramp[index] = (uint16_t)ramp->red[index];
-        command.ramp[256 + index] = (uint16_t)ramp->green[index];
-        command.ramp[512 + index] = (uint16_t)ramp->blue[index];
-    }
-    emit_command(D9WG_OP_SET_GAMMA_RAMP, &command, sizeof(command));
+    TRACE("CALL SetGammaRamp device=%08lX chain=%lu flags=%08lX ramp=%08lX", device->handle, swapchain, flags, (DWORD)(uintptr_t)ramp);
+    if (swapchain) return;
+    d9wg_set_gamma_ramp(device->handle, flags, ramp, &device->gamma_ramp,
+            &device->gamma_ramp_set, &device->gamma_ramp_flags);
 }
 
 static void WINAPI device_get_gamma_ramp(IDirect3DDevice9 *iface,
         UINT swapchain, D3DGAMMARAMP *ramp)
 {
     D9Device *device = device_from_iface(iface);
-    UINT index;
-    if (!ramp)
-        return;
-    if (swapchain) {
-        ZeroMemory(ramp, sizeof(*ramp));
-        return;
-    }
-    if (device->gamma_ramp_set) {
-        *ramp = device->gamma_ramp;
-        return;
-    }
-    /* A device that has never been given a ramp is at identity, not at zero.
-     * Answering zero tells a title the display is black, and one that reads the
-     * ramp before writing it -- to restore it on exit -- would then "restore"
-     * the screen to black. */
-    for (index = 0; index < 256; ++index) {
-        WORD level = (WORD)((index << 8) | index);
-        ramp->red[index] = level;
-        ramp->green[index] = level;
-        ramp->blue[index] = level;
-    }
+    if (swapchain) { if (ramp) ZeroMemory(ramp, sizeof(*ramp)); return; }
+    d9wg_get_gamma_ramp(&device->gamma_ramp, device->gamma_ramp_set, ramp);
 }
 
 static HRESULT WINAPI device_begin_scene(IDirect3DDevice9 *iface)
