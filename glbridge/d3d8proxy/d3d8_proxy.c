@@ -18,6 +18,7 @@
 #include <d3d8.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
@@ -296,6 +297,7 @@ struct D8VertexBuffer {
     DWORD fvf;
     D3DPOOL pool;
     DWORD priority;
+    D9WGPrivateStore private_data;
     UINT lock_offset;
     UINT lock_size;
     DWORD lock_flags;
@@ -314,6 +316,7 @@ struct D8IndexBuffer {
     D3DFORMAT format;
     D3DPOOL pool;
     DWORD priority;
+    D9WGPrivateStore private_data;
     UINT lock_offset;
     UINT lock_size;
     DWORD lock_flags;
@@ -715,6 +718,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
 #include "../runtime/d9wg_mapped_draw_bridge.h"
 #include "../runtime/d9wg_texture_lod_bridge.h"
 #include "../runtime/d9wg_gamma_bridge.h"
+#include "../runtime/d9wg_private_data_bridge.h"
 static BOOL submit_readback_batch_locked(BOOL present);
 #include "../runtime/d9wg_cursor_bridge.h"
 
@@ -3966,6 +3970,7 @@ static ULONG WINAPI vb_release(IDirect3DVertexBuffer8 *iface)
         while (*link && *link != buffer)
             link = &(*link)->next_device_resource;
         if (*link) *link = buffer->next_device_resource;
+        d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
         destroy.resource_handle = buffer->handle;
         destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
@@ -3988,25 +3993,25 @@ static HRESULT WINAPI vb_get_device(IDirect3DVertexBuffer8 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI vb_set_private_data(IDirect3DVertexBuffer8 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
+static HRESULT WINAPI vb_set_private_data(IDirect3DVertexBuffer8* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
 {
-    (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8VertexBuffer* buffer = vb_from_iface(iface);
+    return D8WG_TRACE_ERROR(d9wg_private_hresult(d9wg_private_set(&buffer->private_data, guid, data, size, flags, &d9wg_private_ops)));
 }
 
-static HRESULT WINAPI vb_get_private_data(IDirect3DVertexBuffer8 *iface,
-        REFGUID guid, void *data, DWORD *size)
+static HRESULT WINAPI vb_get_private_data(IDirect3DVertexBuffer8* iface,
+    REFGUID guid, void* data, DWORD* size)
 {
-    (void)iface; (void)guid; (void)data; (void)size;
-    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
+    D8VertexBuffer* buffer = vb_from_iface(iface);
+    return D8WG_TRACE_ERROR(d9wg_get_private_data(&buffer->private_data, guid, data, size));
 }
 
-static HRESULT WINAPI vb_free_private_data(IDirect3DVertexBuffer8 *iface,
-        REFGUID guid)
+static HRESULT WINAPI vb_free_private_data(IDirect3DVertexBuffer8* iface,
+    REFGUID guid)
 {
-    (void)iface; (void)guid;
-    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
+    D8VertexBuffer* buffer = vb_from_iface(iface);
+    return D8WG_TRACE_ERROR(d9wg_private_hresult(d9wg_private_free(&buffer->private_data, guid, &d9wg_private_ops)));
 }
 
 static DWORD WINAPI vb_set_priority(IDirect3DVertexBuffer8 *iface,
@@ -4119,6 +4124,7 @@ static ULONG WINAPI ib_release(IDirect3DIndexBuffer8 *iface)
         while (*link && *link != buffer)
             link = &(*link)->next_device_resource;
         if (*link) *link = buffer->next_device_resource;
+        d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
         destroy.resource_handle = buffer->handle;
         destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
@@ -4140,25 +4146,25 @@ static HRESULT WINAPI ib_get_device(IDirect3DIndexBuffer8 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI ib_set_private_data(IDirect3DIndexBuffer8 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
+static HRESULT WINAPI ib_set_private_data(IDirect3DIndexBuffer8* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
 {
-    (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-    return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    D8IndexBuffer* buffer = ib_from_iface(iface);
+    return D8WG_TRACE_ERROR(d9wg_private_hresult(d9wg_private_set(&buffer->private_data, guid, data, size, flags, &d9wg_private_ops)));
 }
 
-static HRESULT WINAPI ib_get_private_data(IDirect3DIndexBuffer8 *iface,
-        REFGUID guid, void *data, DWORD *size)
+static HRESULT WINAPI ib_get_private_data(IDirect3DIndexBuffer8* iface,
+    REFGUID guid, void* data, DWORD* size)
 {
-    (void)iface; (void)guid; (void)data; (void)size;
-    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
+    D8IndexBuffer* buffer = ib_from_iface(iface);
+    return D8WG_TRACE_ERROR(d9wg_get_private_data(&buffer->private_data, guid, data, size));
 }
 
-static HRESULT WINAPI ib_free_private_data(IDirect3DIndexBuffer8 *iface,
-        REFGUID guid)
+static HRESULT WINAPI ib_free_private_data(IDirect3DIndexBuffer8* iface,
+    REFGUID guid)
 {
-    (void)iface; (void)guid;
-    return D8WG_TRACE_ERROR(D3DERR_NOTFOUND);
+    D8IndexBuffer* buffer = ib_from_iface(iface);
+    return D8WG_TRACE_ERROR(d9wg_private_hresult(d9wg_private_free(&buffer->private_data, guid, &d9wg_private_ops)));
 }
 
 static DWORD WINAPI ib_set_priority(IDirect3DIndexBuffer8 *iface,
