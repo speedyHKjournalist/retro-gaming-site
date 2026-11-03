@@ -2911,6 +2911,7 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
 {
     DDSurface *surface = surface_from_iface(iface);
     LONG left = 0, top = 0;
+    RECT locked_rect;
 
     (void)event;
     DDWG_TRACE_CHECKPOINT("CALL surface_Lock handle=%lu flags=%08lX "
@@ -2925,9 +2926,6 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     if (!surface->shadow) return DDWG_TRACE_ERROR(DDERR_GENERIC);
     if (surface->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
-    if (surface->memory->gpu_dirty && !(flags & DDLOCK_WRITEONLY))
-        surface_readback(surface);
-
     if (rect) {
         if (rect->left < 0 || rect->top < 0 ||
                 rect->right > (LONG)surface->width ||
@@ -2940,15 +2938,22 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
                  ((rect->bottom & 3) &&
                     rect->bottom != (LONG)surface->height)))
             return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
-        surface->locked_rect = *rect;
+        locked_rect = *rect;
         left = rect->left;
         top = rect->top;
     } else {
-        surface->locked_rect.left = 0;
-        surface->locked_rect.top = 0;
-        surface->locked_rect.right = (LONG)surface->width;
-        surface->locked_rect.bottom = (LONG)surface->height;
+        locked_rect.left = 0;
+        locked_rect.top = 0;
+        locked_rect.right = (LONG)surface->width;
+        locked_rect.bottom = (LONG)surface->height;
     }
+    /* WRITEONLY removes the caller's read access; it does not discard the
+     * rest of the surface. Unlock uploads the complete locked rectangle, so
+     * its shadow must include GPU writes before even a write-only lock. */
+    if (surface->memory->gpu_dirty && !surface_readback(surface))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
+
+    surface->locked_rect = locked_rect;
     surface->lock_flags = flags;
     ++surface->lock_depth;
 
