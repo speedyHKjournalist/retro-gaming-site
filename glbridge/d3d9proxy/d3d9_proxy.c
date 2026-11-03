@@ -28,6 +28,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_format_queries.h"
 #include "../runtime/d9wg_state_defaults.h"
@@ -8242,6 +8243,14 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
  * unchanged and only the alpha channel's meaning differs: the front buffer is
  * what is on screen, and what is on screen is opaque.
  */
+/* Mandatory reads must observe submission failure, including a capacity flush
+ * of the draws preceding the request. Ordinary draw-drop continuation is not
+ * a successful readback submission. The common reader already pins the map. */
+static BOOL submit_readback_batch_locked(BOOL present)
+{
+    return d9wg_transport_submit(g_process, present);
+}
+
 static HRESULT copy_surface_to_system_memory(D9Device *device,
         IDirect3DSurface9 *rt_iface, IDirect3DSurface9 *dst_iface,
         BOOL front_buffer)
@@ -8322,141 +8331,29 @@ static HRESULT copy_surface_to_system_memory(D9Device *device,
                     source_level->shadow + row * source_level->row_pitch,
                     source_row_bytes);
     } else {
-        D9WGReadbackSurface command;
-        D9WGReadbackResponse *response;
-        volatile uint32_t *heartbeat;
-        uint32_t last_beat;
-        uint8_t *base;
-        UINT first_row = 0;
-        UINT rows_per_chunk;
-        UINT capacity;
-        HRESULT result = D3D_OK;
-
-        EnterCriticalSection(&g_readback_lock);
-        EnterCriticalSection(&g_transport_lock);
-        if (!open_transport_locked()) {
-            LeaveCriticalSection(&g_transport_lock);
-            LeaveCriticalSection(&g_readback_lock);
-            return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+        D9WGReadbackSurface request;
+        D9WGReadbackDiagnostic detail;
+        ZeroMemory(&request, sizeof(request));
+        request.device_handle = device->handle;
+        request.texture_handle = rt->texture ? rt->texture->handle : 0;
+        request.level = rt->level;
+        request.format = dst->format;
+        request.width = rt->width;
+        request.height = rt->height;
+        request.destination_pitch = destination_pitch;
+        UINT destination_bytes = dst->shadow ? dst->byte_count : destination_level->byte_count;
+        int result = d9wg_surface_readback(g_process, &request, source_row_bytes,
+                source_rows, destination, destination_bytes, submit_readback_batch_locked, &detail);
+        if (result) {
+            HOSTLOG_FAILED("readback failed: result=%d row=%lu request=%08lX response=%08lX "
+                    "status=%lu bytes=%lu/%lu silence=%lums heartbeat=%08lX",
+                    result, (DWORD)detail.first_row, (DWORD)detail.request_id,
+                    (DWORD)detail.response_id, (DWORD)detail.status,
+                    (DWORD)detail.actual_bytes, (DWORD)detail.expected_bytes,
+                    (DWORD)detail.silent_ms, (DWORD)detail.heartbeat);
+            return TRACE_REFUSE(result == D9WG_READBACK_INVALID
+                    ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
         }
-        base = response_region();
-        response = (D9WGReadbackResponse *)(base +
-                D9WG_READBACK_REGION_OFFSET);
-        heartbeat = (volatile uint32_t *)(base + D9WG_HEARTBEAT_OFFSET);
-        capacity = D9WG_RESPONSE_REGION_BYTES - D9WG_READBACK_REGION_OFFSET
-                - (UINT)sizeof(*response) - D9WG_HEARTBEAT_BYTES;
-        rows_per_chunk = v86wg_upload_band(capacity, 0, destination_pitch, source_rows);
-        TRACE("READBACK BEGIN source=%08lX texture=%08lX dst_format=%08lX "
-                "src_format=%08lX %lux%lu rows=%lu pitch=%lu rows_per_chunk=%lu "
-                "capacity=%lu front=%lu",
-                (DWORD)(uintptr_t)rt_iface,
-                rt->texture ? rt->texture->handle : 0,
-                (DWORD)dst->format, (DWORD)rt->format, rt->width, rt->height,
-                source_rows, destination_pitch, rows_per_chunk, capacity,
-                (DWORD)front_buffer);
-        if (!rows_per_chunk) {
-            LeaveCriticalSection(&g_transport_lock);
-            LeaveCriticalSection(&g_readback_lock);
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        }
-        LeaveCriticalSection(&g_transport_lock);
-
-        while (first_row < source_rows) {
-            uint32_t request_id = (uint32_t)next_response_request_id();
-            UINT chunk_rows = source_rows - first_row;
-            DWORD start;
-            BOOL emitted;
-            uint8_t *payload;
-            if (chunk_rows > rows_per_chunk) chunk_rows = rows_per_chunk;
-
-            ZeroMemory(response, sizeof(*response));
-            response->request_id = request_id;
-            response->status = D9WG_RESPONSE_PENDING;
-            MemoryBarrier();
-            ZeroMemory(&command, sizeof(command));
-            command.device_handle = device->handle;
-            command.texture_handle = rt->texture ? rt->texture->handle : 0;
-            command.level = rt->level;
-            command.format = dst->format;
-            command.width = rt->width;
-            command.height = rt->height;
-            command.first_row = first_row;
-            command.row_count = chunk_rows;
-            command.destination_pitch = destination_pitch;
-            command.destination_bytes = chunk_rows * destination_pitch;
-            command.response_offset = D9WG_READBACK_REGION_OFFSET;
-            command.request_id = request_id;
-
-            EnterCriticalSection(&g_transport_lock);
-            emitted = reserve_command_locked(D9WG_OP_READBACK_SURFACE,
-                    sizeof(command), 0, NULL, &payload, NULL);
-            if (emitted) {
-                CopyMemory(payload, &command, sizeof(command));
-                emitted = submit_batch_locked(FALSE);
-            }
-            LeaveCriticalSection(&g_transport_lock);
-            if (!emitted) {
-                TRACE("READBACK FAIL emit first_row=%lu rows=%lu bytes=%lu",
-                        first_row, chunk_rows, command.destination_bytes);
-                result = D3DERR_DRIVERINTERNALERROR;
-                break;
-            }
-
-            /*
-             * The deadline measures host *silence*, not elapsed time. Every
-             * batch the host finishes bumps the heartbeat, so a host that is
-             * simply thousands of batches behind keeps this loop waiting; only
-             * a host that has stopped answering entirely trips the cap. The
-             * host bounds its own side of the handshake (readbackTimeoutMs in
-             * d3d9_executor.js) and reports a failure rather than going quiet,
-             * so reaching this cap means the host went away.
-             */
-            start = GetTickCount();
-            last_beat = *heartbeat;
-            for (;;) {
-                uint32_t beat;
-                MemoryBarrier();
-                if (response->status != D9WG_RESPONSE_PENDING)
-                    break;
-                beat = *heartbeat;
-                if (beat != last_beat) {
-                    last_beat = beat;
-                    start = GetTickCount();
-                }
-                if (GetTickCount() - start >= 6000u)
-                    break;
-                Sleep(1);
-            }
-            MemoryBarrier();
-            if (response->request_id != request_id
-                    || response->status != D9WG_RESPONSE_OK
-                    || response->byte_count != command.destination_bytes) {
-                /* status 0 with the elapsed time at the cap is a timeout; 2 is
-                 * the host reporting a failure, and its own message names the
-                 * JS error. A mismatched request id means a stale response. */
-                TRACE("READBACK FAIL response first_row=%lu rows=%lu "
-                        "want_id=%08lX got_id=%08lX status=%lu want_bytes=%lu "
-                        "got_bytes=%lu silent_for=%lu beat=%08lX",
-                        first_row, chunk_rows, request_id,
-                        response->request_id, response->status,
-                        command.destination_bytes, response->byte_count,
-                        GetTickCount() - start, last_beat);
-                HOSTLOG_FAILED("readback failed: status=%lu host silent for "
-                        "%lums (heartbeat=%08lX) rows=%lu pitch=%lu (0=the "
-                        "host stopped answering, 2=it reported a failure -- "
-                        "see its own console message)",
-                        response->status, GetTickCount() - start,
-                        last_beat, chunk_rows, destination_pitch);
-                result = D3DERR_DRIVERINTERNALERROR;
-                break;
-            }
-            CopyMemory(destination + first_row * destination_pitch,
-                    response + 1, command.destination_bytes);
-            first_row += chunk_rows;
-        }
-        LeaveCriticalSection(&g_readback_lock);
-        if (FAILED(result))
-            return TRACE_REFUSE(result);
     }
     if (front_buffer) {
         /* Opaque, whichever path filled the destination. The readback already

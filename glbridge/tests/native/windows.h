@@ -43,3 +43,7 @@ DWORD GetLastError(void);void SetLastError(DWORD);
 #define ERROR_INVALID_FUNCTION 1u
 #define ERROR_NOT_SUPPORTED 50u
 #endif
+
+#ifndef MemoryBarrier
+#define MemoryBarrier() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#endif
