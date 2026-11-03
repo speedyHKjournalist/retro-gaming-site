@@ -72,7 +72,7 @@ static BOOL texture_format_layout(D3DFORMAT f,UINT*w,UINT*h,UINT*b){assert(f==22
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=*p*h;return 1;}
 static HRESULT texture_get_surface_level(Interface*t,UINT l,Interface**o){(void)t;(void)l;(void)o;assert(0);return -1;}
 static HRESULT cube_get_surface(Interface*t,D3DCUBEMAP_FACES f,UINT l,Interface**o){(void)t;(void)f;(void)l;(void)o;assert(0);return -1;}
-static void detach_device_window(Device*d){(void)d;}static void emit_device_destroy_and_flush(UINT h){assert(h==0x9000);destroys++;}static void free_shader_list(void*p){(void)p;}static void free_extra_lights(void**p){(void)p;}
+static void detach_device_window(Device*d){(void)d;}static void restore_display_mode(Device*d){(void)d;}static void emit_device_destroy_and_flush(UINT h){assert(h==0x9000);destroys++;}static void free_shader_list(void*p){(void)p;}static void free_extra_lights(void**p){(void)p;}
 ${['free_implicit_surfaces','reset_buffer_owned_refs','reset_texture_owned_refs','device_has_reset_blockers','create_standalone_surface','create_backbuffer_surface'].map(n=>extract(source,n)).join('\n')}`:`
 static void SelectObject(void*a,void*b){(void)a;(void)b;}static void DeleteDC(void*p){(void)p;}static void DeleteObject(void*p){(void)p;}
 static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(Device*d){(void)d;}static void restore_display_mode(Device*d){(void)d;}

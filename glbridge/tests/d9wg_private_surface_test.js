@@ -70,7 +70,7 @@ static void parent_release(void*p){(void)p;assert(parent_refs==1);parent_refs=0;
 ${api===8?`static int g_swapchain_vtbl;
 static BOOL supported_multisample_type(UINT v){return v==0||v==4;}
 static BOOL supported_backbuffer_format(D3DFORMAT v){return v==21||v==22;}
-static void detach_device_window(Device*d){(void)d;}
+static void detach_device_window(Device*d){(void)d;}static void restore_display_mode(Device*d){(void)d;}
 static void emit_device_destroy_and_flush(uint32_t h){assert(h==0x9000);}
 static void free_shader_list(void*p){(void)p;}static void free_extra_lights(void**p){(void)p;}
 static HRESULT create_standalone_surface(Device*d,UINT width,UINT height,D3DFORMAT format,DWORD usage,int pool,BOOL lockable,BOOL backbuffer,BOOL depth,BOOL blocker,View**out){(void)lockable;(void)depth;assert(width==64&&height==64&&format==22&&usage==1&&pool==0&&backbuffer);*out=NULL;if(fail_create)return E_OUTOFMEMORY;View*v=HeapAlloc(NULL,0,sizeof(*v));if(!v)return E_OUTOFMEMORY;v->device=d;v->refcount=1;v->reset_blocker=blocker;if(blocker)d->implicit_surface_count++;device_child_add_ref(d);*out=v;return 0;}

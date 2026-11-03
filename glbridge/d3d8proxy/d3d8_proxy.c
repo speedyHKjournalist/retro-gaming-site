@@ -20,6 +20,8 @@
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
 #include "../runtime/d9wg_display_mode.h"
+#include "../runtime/d9wg_window_reset.h"
+#include "../runtime/d9wg_window_mode.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
@@ -259,6 +261,10 @@ struct D8Device {
     DWORD pixel_shader;
     BOOL in_scene;
     HWND tracked_window;
+    HWND styled_window;
+    LONG saved_window_style, saved_window_exstyle;
+    BOOL display_mode_changed;
+    DWORD last_foreground_claim;
     WNDPROC original_window_proc;
     BOOL window_subclassed;
     BOOL window_unicode;
@@ -1786,6 +1792,26 @@ static void attach_device_window(D8Device *device, HWND window)
     device->window_subclassed = TRUE;
 }
 
+static D9WGWindowModeBindings window_mode_bindings(D8Device* device)
+{
+    return (D9WGWindowModeBindings) { &device->styled_window,
+        &device->saved_window_style, &device->saved_window_exstyle,
+        &device->display_mode_changed, &device->last_foreground_claim };
+}
+
+static BOOL restore_display_mode(D8Device* device)
+{
+    D9WGWindowModeBindings bindings = window_mode_bindings(device);
+    return d9wg_window_mode_restore(&bindings);
+}
+
+static BOOL reset_window_mode(D8Device* device, HWND window)
+{
+    D9WGWindowModeBindings bindings = window_mode_bindings(device);
+    return d9wg_window_mode_apply(&bindings, device->present.Windowed, window,
+        device->creation.hFocusWindow, device->display_mode.Width, device->display_mode.Height);
+}
+
 static void emit_hello_once(void)
 {
     D9WGHello hello;
@@ -2658,12 +2684,12 @@ static BOOL emit_device_state_after_reset(D8Device *device)
                 device, 0, &device->ps_constants[0][0], D8WG_MAX_PS_CONSTANTS);
 }
 
-static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
-        D3DDEVTYPE type, HWND focus_window, DWORD behavior,
-        D3DPRESENT_PARAMETERS *parameters, IDirect3DDevice8 **device_out)
+static HRESULT WINAPI d3d_create_device(IDirect3D8* iface, UINT adapter,
+    D3DDEVTYPE type, HWND focus_window, DWORD behavior,
+    D3DPRESENT_PARAMETERS* parameters, IDirect3DDevice8** device_out)
 {
-    D8Direct3D *d3d = d3d_from_iface(iface);
-    D8Device *device;
+    D8Direct3D* d3d = d3d_from_iface(iface);
+    D8Device* device;
     D9WGCreateDevice command;
     HWND window;
     RECT client;
@@ -2682,14 +2708,14 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     if (!supported_multisample_type(parameters->MultiSampleType))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->EnableAutoDepthStencil
-            && !supported_depth_stencil_format(
-                parameters->AutoDepthStencilFormat))
+        && !supported_depth_stencil_format(
+            parameters->AutoDepthStencilFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-            && !supported_backbuffer_format(parameters->BackBufferFormat))
+        && !supported_backbuffer_format(parameters->BackBufferFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferWidth > 8192
-            || parameters->BackBufferHeight > 8192)
+        || parameters->BackBufferHeight > 8192)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* D3D8 permits 0..3 back buffers (0 meaning 1). The host always presents
      * through a single WebGPU surface, so extra back buffers are a
@@ -2698,8 +2724,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     if (parameters->BackBufferCount > 3)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
-    device = (D8Device *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(*device));
+    device = (D8Device*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        sizeof(*device));
     if (!device)
         return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
     d9wg_fpu_setup((behavior & D3DCREATE_FPU_PRESERVE) != 0);
@@ -2714,10 +2740,11 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     device->creation.hFocusWindow = focus_window;
     device->creation.BehaviorFlags = behavior;
     fill_display_mode(&device->display_mode,
-            parameters->BackBufferWidth ? parameters->BackBufferWidth : 640,
-            parameters->BackBufferHeight ? parameters->BackBufferHeight : 480,
-            parameters->BackBufferFormat == D3DFMT_UNKNOWN
-                    ? D3DFMT_X8R8G8B8 : parameters->BackBufferFormat);
+        parameters->BackBufferWidth ? parameters->BackBufferWidth : 640,
+        parameters->BackBufferHeight ? parameters->BackBufferHeight : 480,
+        parameters->BackBufferFormat == D3DFMT_UNKNOWN
+            ? D3DFMT_X8R8G8B8
+            : parameters->BackBufferFormat);
     device->viewport.X = 0;
     device->viewport.Y = 0;
     device->viewport.Width = device->display_mode.Width;
@@ -2730,13 +2757,13 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
             device->display_mode.Width, device->display_mode.Height,
             &device->front_shadow_pitch, &front_row_count,
             &front_byte_count)
-            || front_row_count != device->display_mode.Height) {
+        || front_row_count != device->display_mode.Height) {
         IDirect3D8_Release(iface);
         HeapFree(GetProcessHeap(), 0, device);
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     }
-    device->front_shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
-            HEAP_ZERO_MEMORY, front_byte_count);
+    device->front_shadow = (BYTE*)HeapAlloc(GetProcessHeap(),
+        HEAP_ZERO_MEMORY, front_byte_count);
     if (!device->front_shadow) {
         IDirect3D8_Release(iface);
         HeapFree(GetProcessHeap(), 0, device);
@@ -2744,9 +2771,9 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     }
 
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
-            : focus_window;
+                                       : focus_window;
     SetRect(&client, 0, 0, (int)device->display_mode.Width,
-            (int)device->display_mode.Height);
+        (int)device->display_mode.Height);
     origin.x = 0;
     origin.y = 0;
     if (window) {
@@ -2758,9 +2785,11 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
     command.x = origin.x;
     command.y = origin.y;
     command.width = parameters->BackBufferWidth
-            ? parameters->BackBufferWidth : (uint32_t)(client.right - client.left);
+        ? parameters->BackBufferWidth
+        : (uint32_t)(client.right - client.left);
     command.height = parameters->BackBufferHeight
-            ? parameters->BackBufferHeight : (uint32_t)(client.bottom - client.top);
+        ? parameters->BackBufferHeight
+        : (uint32_t)(client.bottom - client.top);
     if (!command.width)
         command.width = 640;
     if (!command.height)
@@ -2782,12 +2811,17 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8 *iface, UINT adapter,
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
     if (!emit_render_default_patches(device->handle, 8, device->present.EnableAutoDepthStencil, device->render_states)
-            || !emit_object_default_patches(device->handle, &device->material)) {
+        || !emit_object_default_patches(device->handle, &device->material)) {
         IDirect3DDevice8_Release(&device->iface);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
 
+    if (!reset_window_mode(device, window)) {
+        IDirect3DDevice8_Release(&device->iface);
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    }
     attach_device_window(device, window);
+    emit_surface_update_and_flush(device, window, FALSE, FALSE);
 
     *device_out = &device->iface;
     return D3D_OK;
@@ -2832,6 +2866,7 @@ static ULONG WINAPI device_release(IDirect3DDevice8 *iface)
         d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);
         free_implicit_surfaces(device);
         detach_device_window(device);
+        restore_display_mode(device);
         emit_device_destroy_and_flush(device->handle);
         IDirect3D8_Release(&device->parent->iface);
         /* Shaders are not COM objects (no per-object refcount/Release), so
@@ -3031,10 +3066,13 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
     device->depth_surface_enabled = parameters->EnableAutoDepthStencil;
     if (!emit_device_state_after_reset(device))
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    if (!reset_window_mode(device, window))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (window != device->tracked_window) {
         detach_device_window(device);
         attach_device_window(device, window);
     }
+    emit_surface_update_and_flush(device, window, FALSE, FALSE);
     d9wg_reset_complete(&device->reset_state);
     return D3D_OK;
 }

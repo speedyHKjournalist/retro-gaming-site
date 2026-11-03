@@ -31,6 +31,7 @@
 #include "../runtime/d9wg_reset.h"
 #include "../runtime/d9wg_display_mode.h"
 #include "../runtime/d9wg_window_reset.h"
+#include "../runtime/d9wg_window_mode.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
@@ -1404,7 +1405,7 @@ static void update_system_cursor(D9Device *device, HWND window);
 static BOOL emit_window_state(D9Device *device, HWND window);
 static void watch_window_state(D9Device *device);
 static void unwatch_window_state(D9Device *device);
-static BOOL claim_fullscreen_foreground(D9Device *device, HWND window);
+static BOOL reset_window_mode(D9Device *device, HWND window);
 static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
         const D9WGWindowProbe *probe);
 static BOOL restore_display_mode(D9Device *device);
@@ -4009,13 +4010,13 @@ static HMONITOR WINAPI d3d_get_adapter_monitor(IDirect3D9 *iface, UINT adapter)
     return monitor;
 }
 
-static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
-        D3DDEVTYPE type, HWND focus_window, DWORD behavior,
-        D3DPRESENT_PARAMETERS *parameters,
-        IDirect3DDevice9 **device_out)
+static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
+    D3DDEVTYPE type, HWND focus_window, DWORD behavior,
+    D3DPRESENT_PARAMETERS* parameters,
+    IDirect3DDevice9** device_out)
 {
-    D9Direct3D *d3d = d3d_from_iface(iface);
-    D9Device *device;
+    D9Direct3D* d3d = d3d_from_iface(iface);
+    D9Device* device;
     D9WGCreateDevice command;
     HWND window;
     RECT client;
@@ -4023,80 +4024,81 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     D3DFORMAT backbuffer_format;
 
     TRACE("CALL CreateDevice adapter=%lu type=%lu focus=%08lX behavior=%08lX",
-            adapter, (DWORD)type, (DWORD)(uintptr_t)focus_window, behavior);
+        adapter, (DWORD)type, (DWORD)(uintptr_t)focus_window, behavior);
 
     if (!device_out) {
         TRACE("FAIL CreateDevice missing output -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     *device_out = NULL;
     if (adapter || type != D3DDEVTYPE_HAL || !parameters) {
         TRACE("FAIL CreateDevice invalid arguments -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     TRACE("CreateDevice params %lux%lu fmt=%08lX count=%lu multisample=%lu "
-            "quality=%lu swap=%lu windowed=%lu auto_depth=%lu "
-            "depth_fmt=%08lX flags=%08lX interval=%08lX hwnd=%08lX",
-            parameters->BackBufferWidth, parameters->BackBufferHeight,
-            (DWORD)parameters->BackBufferFormat, parameters->BackBufferCount,
-            (DWORD)parameters->MultiSampleType, parameters->MultiSampleQuality,
-            (DWORD)parameters->SwapEffect, (DWORD)parameters->Windowed,
-            (DWORD)parameters->EnableAutoDepthStencil,
-            (DWORD)parameters->AutoDepthStencilFormat, parameters->Flags,
-            parameters->PresentationInterval,
-            (DWORD)(uintptr_t)parameters->hDeviceWindow);
+          "quality=%lu swap=%lu windowed=%lu auto_depth=%lu "
+          "depth_fmt=%08lX flags=%08lX interval=%08lX hwnd=%08lX",
+        parameters->BackBufferWidth, parameters->BackBufferHeight,
+        (DWORD)parameters->BackBufferFormat, parameters->BackBufferCount,
+        (DWORD)parameters->MultiSampleType, parameters->MultiSampleQuality,
+        (DWORD)parameters->SwapEffect, (DWORD)parameters->Windowed,
+        (DWORD)parameters->EnableAutoDepthStencil,
+        (DWORD)parameters->AutoDepthStencilFormat, parameters->Flags,
+        parameters->PresentationInterval,
+        (DWORD)(uintptr_t)parameters->hDeviceWindow);
     if (!d9wg_present_interval_valid(9, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
-            ? D3DFMT_X8R8G8B8 : parameters->BackBufferFormat;
+        ? D3DFMT_X8R8G8B8
+        : parameters->BackBufferFormat;
     if (!supported_multisample(backbuffer_format,
             parameters->MultiSampleType)
-            || parameters->MultiSampleQuality != 0) {
+        || parameters->MultiSampleQuality != 0) {
         TRACE("FAIL CreateDevice unsupported multisample=%lu quality=%lu "
-                "format=%08lX -> %08lX",
-                (DWORD)parameters->MultiSampleType,
-                parameters->MultiSampleQuality, (DWORD)backbuffer_format,
-                (DWORD)D3DERR_NOTAVAILABLE);
+              "format=%08lX -> %08lX",
+            (DWORD)parameters->MultiSampleType,
+            parameters->MultiSampleQuality, (DWORD)backbuffer_format,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-            && !supported_depth_stencil_format(
-                    parameters->AutoDepthStencilFormat)) {
+        && !supported_depth_stencil_format(
+            parameters->AutoDepthStencilFormat)) {
         TRACE("FAIL CreateDevice unsupported depth_fmt=%08lX -> %08lX",
-                (DWORD)parameters->AutoDepthStencilFormat,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->AutoDepthStencilFormat,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-            && !supported_multisample(parameters->AutoDepthStencilFormat,
-                    parameters->MultiSampleType)) {
+        && !supported_multisample(parameters->AutoDepthStencilFormat,
+            parameters->MultiSampleType)) {
         TRACE("FAIL CreateDevice depth multisample mismatch depth_fmt=%08lX "
-                "multisample=%lu -> %08lX",
-                (DWORD)parameters->AutoDepthStencilFormat,
-                (DWORD)parameters->MultiSampleType,
-                (DWORD)D3DERR_NOTAVAILABLE);
+              "multisample=%lu -> %08lX",
+            (DWORD)parameters->AutoDepthStencilFormat,
+            (DWORD)parameters->MultiSampleType,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-            && !supported_backbuffer_format(parameters->BackBufferFormat)) {
+        && !supported_backbuffer_format(parameters->BackBufferFormat)) {
         TRACE("FAIL CreateDevice unsupported backbuffer_fmt=%08lX -> %08lX",
-                (DWORD)parameters->BackBufferFormat,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->BackBufferFormat,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->BackBufferWidth > 8192
-            || parameters->BackBufferHeight > 8192) {
+        || parameters->BackBufferHeight > 8192) {
         TRACE("FAIL CreateDevice oversized backbuffer=%lux%lu -> %08lX",
-                parameters->BackBufferWidth, parameters->BackBufferHeight,
-                (DWORD)D3DERR_INVALIDCALL);
+            parameters->BackBufferWidth, parameters->BackBufferHeight,
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     if (parameters->BackBufferCount > 3) {
         TRACE("FAIL CreateDevice backbuffer_count=%lu -> %08lX",
-                parameters->BackBufferCount, (DWORD)D3DERR_INVALIDCALL);
+            parameters->BackBufferCount, (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     /*
@@ -4108,33 +4110,36 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
      */
     {
         const DWORD vertex_processing = behavior
-                & (D3DCREATE_SOFTWARE_VERTEXPROCESSING
-                        | D3DCREATE_HARDWARE_VERTEXPROCESSING
-                        | D3DCREATE_MIXED_VERTEXPROCESSING);
+            & (D3DCREATE_SOFTWARE_VERTEXPROCESSING
+                | D3DCREATE_HARDWARE_VERTEXPROCESSING
+                | D3DCREATE_MIXED_VERTEXPROCESSING);
         if (vertex_processing != D3DCREATE_SOFTWARE_VERTEXPROCESSING
-                && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING
-                && vertex_processing != D3DCREATE_MIXED_VERTEXPROCESSING) {
+            && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING
+            && vertex_processing != D3DCREATE_MIXED_VERTEXPROCESSING) {
             TRACE("FAIL CreateDevice behavior=%08lX names %s vertex processing "
-                    "mode -> %08lX", behavior,
-                    vertex_processing ? "more than one" : "no",
-                    (DWORD)D3DERR_INVALIDCALL);
+                  "mode -> %08lX",
+                behavior,
+                vertex_processing ? "more than one" : "no",
+                (DWORD)D3DERR_INVALIDCALL);
             HOSTLOG_FAILED("CreateDevice refused: BehaviorFlags %08lX must "
-                    "name exactly one vertex-processing mode", behavior);
+                           "name exactly one vertex-processing mode",
+                behavior);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
         if ((behavior & D3DCREATE_PUREDEVICE)
-                && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING) {
+            && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING) {
             TRACE("FAIL CreateDevice behavior=%08lX pairs PUREDEVICE with "
-                    "non-hardware vertex processing -> %08lX", behavior,
-                    (DWORD)D3DERR_INVALIDCALL);
+                  "non-hardware vertex processing -> %08lX",
+                behavior,
+                (DWORD)D3DERR_INVALIDCALL);
             HOSTLOG_FAILED("CreateDevice refused: D3DCREATE_PUREDEVICE "
-                    "requires D3DCREATE_HARDWARE_VERTEXPROCESSING");
+                           "requires D3DCREATE_HARDWARE_VERTEXPROCESSING");
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
 
-    device = (D9Device *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(*device));
+    device = (D9Device*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        sizeof(*device));
     if (!device) {
         TRACE("FAIL CreateDevice allocation -> %08lX", (DWORD)E_OUTOFMEMORY);
         return E_OUTOFMEMORY;
@@ -4153,10 +4158,11 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     device->creation.hFocusWindow = focus_window;
     device->creation.BehaviorFlags = behavior;
     fill_display_mode(&device->display_mode,
-            parameters->BackBufferWidth ? parameters->BackBufferWidth : 640,
-            parameters->BackBufferHeight ? parameters->BackBufferHeight : 480,
-            parameters->BackBufferFormat == D3DFMT_UNKNOWN
-                    ? D3DFMT_X8R8G8B8 : parameters->BackBufferFormat);
+        parameters->BackBufferWidth ? parameters->BackBufferWidth : 640,
+        parameters->BackBufferHeight ? parameters->BackBufferHeight : 480,
+        parameters->BackBufferFormat == D3DFMT_UNKNOWN
+            ? D3DFMT_X8R8G8B8
+            : parameters->BackBufferFormat);
     device->viewport.X = 0;
     device->viewport.Y = 0;
     device->viewport.Width = device->display_mode.Width;
@@ -4166,13 +4172,13 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     /* D3D9's default scissor rect is the whole back buffer (a state block of
      * D3DSBT_ALL captured it as {0,0,0,0}) */
     SetRect(&device->scissor_rect, 0, 0, (int)device->display_mode.Width,
-            (int)device->display_mode.Height);
+        (int)device->display_mode.Height);
     device_init_states(device);
 
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
-            : focus_window;
+                                       : focus_window;
     SetRect(&client, 0, 0, (int)device->display_mode.Width,
-            (int)device->display_mode.Height);
+        (int)device->display_mode.Height);
     origin.x = 0;
     origin.y = 0;
     if (window) {
@@ -4185,11 +4191,15 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     command.x = origin.x;
     command.y = origin.y;
     command.width = parameters->BackBufferWidth
-            ? parameters->BackBufferWidth : (uint32_t)(client.right - client.left);
+        ? parameters->BackBufferWidth
+        : (uint32_t)(client.right - client.left);
     command.height = parameters->BackBufferHeight
-            ? parameters->BackBufferHeight : (uint32_t)(client.bottom - client.top);
-    if (!command.width) command.width = 640;
-    if (!command.height) command.height = 480;
+        ? parameters->BackBufferHeight
+        : (uint32_t)(client.bottom - client.top);
+    if (!command.width)
+        command.width = 640;
+    if (!command.height)
+        command.height = 480;
     command.backbuffer_format = device->display_mode.Format;
     command.windowed = parameters->Windowed;
     command.behavior_flags = behavior;
@@ -4201,16 +4211,19 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
         IDirect3D9_Release(iface);
         HeapFree(GetProcessHeap(), 0, device);
         TRACE("FAIL CreateDevice transport -> %08lX",
-                (DWORD)D3DERR_DRIVERINTERNALERROR);
+            (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
     if (!emit_render_default_patches(device->handle, 9, device->present.EnableAutoDepthStencil, device->render_states)
-            || !emit_object_default_patches(device->handle, &device->material)) {
+        || !emit_object_default_patches(device->handle, &device->material)) {
         IDirect3DDevice9_Release(&device->iface);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
 
-    claim_fullscreen_foreground(device, window);
+    if (!reset_window_mode(device, window)) {
+        IDirect3DDevice9_Release(&device->iface);
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
     emit_window_state(device, window);
     watch_window_state(device);
     *device_out = &device->iface;
@@ -4218,8 +4231,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
     g_trace_device_window = window;
 #endif
     TRACE("OK CreateDevice handle=%08lX surface=%lux%lu hwnd=%08lX",
-            device->handle, command.width, command.height,
-            (DWORD)(uintptr_t)window);
+        device->handle, command.width, command.height,
+        (DWORD)(uintptr_t)window);
     return D3D_OK;
 }
 
@@ -4532,118 +4545,17 @@ static void unwatch_window_state(D9Device *device)
  */
 static void raise_window_to_foreground(HWND window)
 {
-    HWND foreground = GetForegroundWindow();
-    DWORD foreground_thread = foreground
-            ? GetWindowThreadProcessId(foreground, NULL) : 0;
-    DWORD our_thread = GetCurrentThreadId();
-    BOOL attached = FALSE;
-
-    if (foreground_thread && foreground_thread != our_thread)
-        attached = AttachThreadInput(our_thread, foreground_thread, TRUE);
-    BringWindowToTop(window);
-    SetForegroundWindow(window);
-    SetActiveWindow(window);
-    SetFocus(window);
-    if (attached)
-        AttachThreadInput(our_thread, foreground_thread, FALSE);
+    d9wg_window_mode_raise(window);
 }
 
-static BOOL claim_fullscreen_foreground(D9Device* device, HWND window)
+static D9WGWindowModeBindings window_mode_bindings(D9Device* device)
 {
-    DEVMODEA mode;
-    LONG result;
-
-    if (device->present.Windowed)
-        return TRUE;
-
-    /*
-     * Switch the guest's display mode to the one the device asked for.
-     *
-     * This is the other half of what "exclusive fullscreen" means, and it is
-     * not cosmetic. Warcraft III creates an 800x600 fullscreen device on a
-     * 1024x768 desktop; with no mode change Windows keeps reporting a
-     * 1024x768 screen, so the guest's pointer coordinates, the window
-     * geometry and the game's own 800x600 layout all disagree -- the picture
-     * looks right while a click lands somewhere else entirely. Doing the mode
-     * change makes the guest's idea of the screen match what the game
-     * renders, which is what every other part of this path already assumes.
-     */
-    ZeroMemory(&mode, sizeof(mode));
-    mode.dmSize = sizeof(mode);
-    mode.dmPelsWidth = device->display_mode.Width;
-    mode.dmPelsHeight = device->display_mode.Height;
-    mode.dmBitsPerPel = 32;
-    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
-    result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
-    if (result != DISP_CHANGE_SUCCESSFUL) {
-        /* 16bpp is the other mode a v86 guest is likely to actually have. */
-        mode.dmBitsPerPel = 16;
-        result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
-    }
-    if (result != DISP_CHANGE_SUCCESSFUL)
-        return FALSE;
-    device->display_mode_changed = TRUE;
-
-    if (!window || !IsWindow(window))
-        return TRUE;
-    if (IsIconic(window))
-        ShowWindow(window, SW_RESTORE);
-    /*
-     * Size the device window to the mode as well: testing showed War3's window
-     * reporting an empty rect to both GetClientRect and GetWindowRect, so
-     * nothing downstream can discover where the game's output belongs.
-     *
-     * Strip the frame first. SetWindowPos sizes the *window*, so on a window
-     * that still has a caption and border the client area comes out smaller
-     * than the mode -- an 800x600 window is a 792x573 client -- and the WM_SIZE
-     * this call sends tells the application that smaller number, from inside
-     * CreateDevice, while its engine is still starting. GTA San Andreas took
-     * exactly that WM_SIZE (792x573 at client origin 4,23) and then destroyed
-     * its window and exited. An exclusive-fullscreen window is borderless and
-     * covers the mode, which is also what makes client == back buffer true.
-     */
-    if (device->styled_window != window) {
-        LONG style = GetWindowLongA(window, GWL_STYLE);
-        LONG exstyle = GetWindowLongA(window, GWL_EXSTYLE);
-        LONG bare_style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU))
-            | WS_POPUP;
-        LONG bare_exstyle = exstyle & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
-
-        device->styled_window = window;
-        device->saved_window_style = style;
-        device->saved_window_exstyle = exstyle;
-        if (bare_style != style)
-            SetWindowLongA(window, GWL_STYLE, bare_style);
-        if (bare_exstyle != exstyle)
-            SetWindowLongA(window, GWL_EXSTYLE, bare_exstyle);
-    }
-    /* SWP_FRAMECHANGED so the stripped style is recalculated now rather than
-     * at some later, unrelated window event. */
-    SetWindowPos(window, HWND_TOP, 0, 0, (int)device->display_mode.Width,
-        (int)device->display_mode.Height,
-        SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-    raise_window_to_foreground(window);
-    device->last_foreground_claim = GetTickCount();
-    return TRUE;
+    return (D9WGWindowModeBindings) { &device->styled_window,
+        &device->saved_window_style, &device->saved_window_exstyle,
+        &device->display_mode_changed, &device->last_foreground_claim };
 }
 
-/* Undoes the borderless override, so a window that outlives the device (a
- * Reset back to windowed, or a title that keeps running after releasing it)
- * gets its own frame back rather than staying stripped. */
-static void restore_window_style(D9Device *device)
-{
-    HWND window = device->styled_window;
 
-    if (!window)
-        return;
-    device->styled_window = NULL;
-    if (!IsWindow(window))
-        return;
-    SetWindowLongA(window, GWL_STYLE, device->saved_window_style);
-    SetWindowLongA(window, GWL_EXSTYLE, device->saved_window_exstyle);
-    SetWindowPos(window, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE
-            | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
 
 /*
  * Re-takes the foreground for a fullscreen device that has lost it.
@@ -4704,44 +4616,15 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
  * does not leave the guest desktop stuck at the game's resolution. */
 static BOOL restore_display_mode(D9Device* device)
 {
-    restore_window_style(device);
-    if (!device->display_mode_changed)
-        return TRUE;
-    if (ChangeDisplaySettingsA(NULL, 0) != DISP_CHANGE_SUCCESSFUL)
-        return FALSE;
-    device->display_mode_changed = FALSE;
-    return TRUE;
+    D9WGWindowModeBindings bindings = window_mode_bindings(device);
+    return d9wg_window_mode_restore(&bindings);
 }
 
 static BOOL reset_window_mode(D9Device* device, HWND window)
 {
-    D9WGWindowResetScope scopes[3];
-    HWND windows[3] = { device->styled_window, window, device->creation.hFocusWindow };
-    UINT prepared = 0;
-    BOOL result = FALSE;
-
-    if (device->present.Windowed && !device->styled_window && !device->display_mode_changed)
-        return TRUE;
-    for (UINT i = 0; i < 3; ++i) {
-        HWND candidate = windows[i];
-        for (UINT j = 0; j < i; ++j)
-            if (candidate == windows[j])
-                candidate = NULL;
-        if (!d9wg_window_reset_begin(&scopes[i], candidate))
-            goto done;
-        ++prepared;
-    }
-    if (device->present.Windowed) {
-        result = restore_display_mode(device);
-    } else {
-        if (device->styled_window && device->styled_window != window)
-            restore_window_style(device);
-        result = claim_fullscreen_foreground(device, window);
-    }
-done:
-    while (prepared)
-        d9wg_window_reset_end(&scopes[--prepared]);
-    return result;
+    D9WGWindowModeBindings bindings = window_mode_bindings(device);
+    return d9wg_window_mode_apply(&bindings, device->present.Windowed, window,
+        device->creation.hFocusWindow, device->display_mode.Width, device->display_mode.Height);
 }
 
 static void emit_cursor_position(D9Device *device, int x, int y, DWORD flags)

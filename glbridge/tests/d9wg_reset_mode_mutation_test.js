@@ -35,29 +35,47 @@ try {
         const file = dir + "/guard.h"; fs.writeFileSync(file, mutate(header, fn, old, replacement));
         run(label, "d9wg_window_reset_test", {D9WG_WINDOW_RESET_HEADER: file}); killed++;
     }
-    const source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8");
+    const policy = fs.readFileSync(root + "/runtime/d9wg_window_mode.h", "utf8");
     for (const [label, fn, old, replacement] of [
-        ["windowed restore omitted", "reset_window_mode", "result = restore_display_mode(device);", "result = TRUE;"],
-        ["fullscreen setup omitted", "reset_window_mode", "result = claim_fullscreen_foreground(device, window);", "result = TRUE;"],
-        ["old window style not restored", "reset_window_mode", "if (device->styled_window &&", "if (0 && device->styled_window &&"],
-        ["failed guard ignored", "reset_window_mode", "if (!d9wg_window_reset_begin(", "if (0 & !d9wg_window_reset_begin("],
-        ["first guard not unwound", "reset_window_mode", "while (prepared)", "while (prepared > 1)"],
-        ["focus window unguarded", "reset_window_mode", "device->creation.hFocusWindow }", "NULL }"],
-        ["mode failure swallowed", "reset_window_mode", "result = claim_fullscreen_foreground(device, window);", "claim_fullscreen_foreground(device, window); result = TRUE;"],
-        ["16-bit fallback omitted", "claim_fullscreen_foreground", "if (result != DISP_CHANGE_SUCCESSFUL) {", "if (0 && result != DISP_CHANGE_SUCCESSFUL) {"],
-        ["saved styles replaced by fullscreen styles", "claim_fullscreen_foreground", "if (device->styled_window != window)", "if (1)"],
-        ["active mode ownership lost after failure", "claim_fullscreen_foreground", "if (result != DISP_CHANGE_SUCCESSFUL)\n        return FALSE;", "if (result != DISP_CHANGE_SUCCESSFUL) { device->display_mode_changed = FALSE; return FALSE; }"],
-        ["desktop restoration failure swallowed", "restore_display_mode", "if (ChangeDisplaySettingsA(NULL, 0) != DISP_CHANGE_SUCCESSFUL)", "if (0 & (ChangeDisplaySettingsA(NULL, 0) != DISP_CHANGE_SUCCESSFUL))"],
+        ["windowed restore omitted", "d9wg_window_mode_apply", "result = d9wg_window_mode_restore(bindings);", "result = TRUE;"],
+        ["fullscreen setup omitted", "d9wg_window_mode_apply", "result = d9wg_window_mode_enter(bindings, window, width, height);", "(void)width; (void)height; result = TRUE;"],
+        ["old window style not restored", "d9wg_window_mode_apply", "if (*bindings->styled_window &&", "if (0 && *bindings->styled_window &&"],
+        ["failed guard ignored", "d9wg_window_mode_apply", "if (!d9wg_window_reset_begin(", "if (0 & !d9wg_window_reset_begin("],
+        ["first guard not unwound", "d9wg_window_mode_apply", "while (prepared)", "while (prepared > 1)"],
+        ["focus window unguarded", "d9wg_window_mode_apply", "window, focus_window }", "window, (1 ? NULL : focus_window) }"],
+        ["mode failure swallowed", "d9wg_window_mode_apply", "result = d9wg_window_mode_enter(bindings, window, width, height);", "d9wg_window_mode_enter(bindings, window, width, height); result = TRUE;"],
+        ["16-bit fallback omitted", "d9wg_window_mode_enter", "if (result != DISP_CHANGE_SUCCESSFUL) {", "if (0 && result != DISP_CHANGE_SUCCESSFUL) {"],
+        ["saved styles replaced", "d9wg_window_mode_enter", "if (*bindings->styled_window != window)", "if (1)"],
+        ["active mode ownership lost", "d9wg_window_mode_enter", "if (result != DISP_CHANGE_SUCCESSFUL)\n        return FALSE;", "if (result != DISP_CHANGE_SUCCESSFUL) { *bindings->display_mode_changed = FALSE; return FALSE; }"],
+        ["desktop restoration failure swallowed", "d9wg_window_mode_restore", "if (ChangeDisplaySettingsA(NULL, 0) != DISP_CHANGE_SUCCESSFUL)", "if (0 & (ChangeDisplaySettingsA(NULL, 0) != DISP_CHANGE_SUCCESSFUL))"],
+        ["raise omitted", "d9wg_window_mode_raise", "BringWindowToTop(window);", ""],
+        ["foreground omitted", "d9wg_window_mode_raise", "SetForegroundWindow(window);", ""],
+        ["activation omitted", "d9wg_window_mode_raise", "SetActiveWindow(window);", ""],
+        ["focus omitted", "d9wg_window_mode_raise", "SetFocus(window);", ""],
+        ["input queues never attached", "d9wg_window_mode_raise", "if (foreground_thread &&", "if (0 && foreground_thread &&"],
+        ["attachment result lost", "d9wg_window_mode_raise", "attached = AttachThreadInput(our_thread, foreground_thread, TRUE);", "attached = (AttachThreadInput(our_thread, foreground_thread, TRUE), FALSE);"],
+        ["input queues never detached", "d9wg_window_mode_raise", "if (attached)", "if (0 && attached)"],
     ]) {
-        const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, fn, old, replacement));
-        run(label, "d9wg_reset_mode_entry_test", {D9WG_RESET_MODE_FRONTEND: file}); killed++;
+        const file = dir + "/mode.h"; fs.writeFileSync(file, mutate(policy, fn, old, replacement));
+        run(label, "d9wg_reset_mode_entry_test", {D9WG_WINDOW_MODE_HEADER: file}); killed++;
     }
-    for (const [label, old, replacement] of [
-        ["Reset ignores mode failure", "if (!reset_window_mode(device, window))", "if (0 & !reset_window_mode(device, window))"],
-        ["Reset omits updated window report", "emit_window_state(device, window);", ""],
-    ]) {
-        const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, "device_reset", old, replacement));
-        run(label, "d9wg_reset_status_test", {D9WG_RESET_STATUS_FRONTEND: file}); killed++;
+    for (const api of [8, 9]) {
+        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        for (const [label, old, replacement] of [
+            ["saved style binding wrong", "&device->saved_window_style", "&device->saved_window_exstyle"],
+            ["saved extended style binding wrong", "&device->saved_window_exstyle", "&device->saved_window_style"],
+            ["mode ownership binding wrong", "&device->display_mode_changed", "&device->present.Windowed"],
+        ]) {
+            const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, "window_mode_bindings", old, replacement));
+            run("API " + api + " " + label, "d9wg_reset_mode_entry_test", {["D" + api + "WG_RESET_MODE_FRONTEND"]: file}); killed++;
+        }
+        for (const [label, old, replacement] of [
+            ["Reset ignores mode failure", "if (!reset_window_mode(device, window))", "if (0 & !reset_window_mode(device, window))"],
+            ["Reset omits updated window report", api === 8 ? "emit_surface_update_and_flush(device, window, FALSE, FALSE);" : "emit_window_state(device, window);", ""],
+        ]) {
+            const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, "device_reset", old, replacement));
+            run("API " + api + " " + label, "d9wg_reset_status_test", {["D" + api + "WG_RESET_STATUS_FRONTEND"]: file}); killed++;
+        }
     }
-    console.log("PASS Reset mode mutations: " + killed + "/25; message dispatch/lifetime/Unicode/nesting, mode/style/foreground cleanup and both public Reset failure/report boundaries");
+    console.log("PASS Reset mode mutations: " + killed + "/40; message dispatch/lifetime/Unicode/nesting, mode/style/foreground cleanup and both public Reset failure/report boundaries");
 } finally { fs.rmSync(dir, {recursive: true, force: true}); }
