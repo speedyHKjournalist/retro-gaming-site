@@ -4896,70 +4896,45 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice8 *iface,
  * A mismatched pair -- one cube and one 2D texture, say -- reaches here and is
  * refused, which is what D3D8 does too.
  */
+static BOOL d8_copy_volume_upload(D8VolumeTexture *texture, UINT level, const D3DBOX *box)
+{
+    RECT full;SetRect(&full, (int)box->Left, (int)box->Top, (int)box->Right, (int)box->Bottom);
+    return emit_volume_level_update(texture, level, &full, box->Front, box->Back - box->Front);
+}
+#define D9WG_COPY_LEVEL D8TextureLevel
+#define D9WG_COPY_2D_TYPE D8Texture
+#define D9WG_COPY_CUBE_TYPE D8CubeTexture
+#define D9WG_COPY_VOLUME_TYPE D8VolumeTexture
+#define D9WG_COPY_MARK_VALID(level) ((void)(level))
+#define D9WG_COPY_UPLOAD_2D(t,l,r) emit_texture_update((t),(l),(r))
+#define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_level_update((t)->handle,(t)->format,&(t)->levels[(f)*(t)->level_count+(l)],(l),(f),(r))
+#define D9WG_COPY_UPLOAD_VOLUME(t,l,b) d8_copy_volume_upload((t),(l),(b))
+#include "../runtime/d9wg_texture_copy_bridge.h"
+
 static HRESULT update_cube_texture(D8Device *device,
-        IDirect3DCubeTexture8 *source_iface,
-        IDirect3DCubeTexture8 *destination_iface)
+        IDirect3DCubeTexture8 *source_iface, IDirect3DCubeTexture8 *destination_iface)
 {
     D8CubeTexture *source = (D8CubeTexture *)source_iface;
     D8CubeTexture *destination = (D8CubeTexture *)destination_iface;
-    UINT face;
-    UINT level;
-
-    if (source->iface.lpVtbl != &g_cube_texture_vtbl
-            || destination->iface.lpVtbl != &g_cube_texture_vtbl
-            || source->device != device || destination->device != device
-            || source->format != destination->format
-            || source->edge_length != destination->edge_length)
+    if (source->iface.lpVtbl != &g_cube_texture_vtbl || destination->iface.lpVtbl != &g_cube_texture_vtbl ||
+            source->device != device || destination->device != device || source->format != destination->format)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    for (face = 0; face < 6u; ++face) {
-        for (level = 0; level < source->level_count
-                && level < destination->level_count; ++level) {
-            D8TextureLevel *from =
-                    cube_level(source, (D3DCUBEMAP_FACES)face, level);
-            D8TextureLevel *to =
-                    cube_level(destination, (D3DCUBEMAP_FACES)face, level);
-            RECT full;
-            if (from->locked || to->locked)
-                return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-            CopyMemory(to->shadow, from->shadow, to->byte_count);
-            SetRect(&full, 0, 0, (int)to->width, (int)to->height);
-            if (!emit_level_update(destination->handle, destination->format,
-                    to, level, face, &full))
-                return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
-        }
-    }
-    return D3D_OK;
+    return D8WG_TRACE_ERROR(d9wg_update_texture_common(destination, D9WG_COPY_CUBE,
+            source->levels, (D9WGTextureCopyExtent){source->edge_length, source->edge_length, 1, source->level_count},
+            destination->levels, (D9WGTextureCopyExtent){destination->edge_length, destination->edge_length, 1, destination->level_count}));
 }
 
 static HRESULT update_volume_texture(D8Device *device,
-        IDirect3DVolumeTexture8 *source_iface,
-        IDirect3DVolumeTexture8 *destination_iface)
+        IDirect3DVolumeTexture8 *source_iface, IDirect3DVolumeTexture8 *destination_iface)
 {
     D8VolumeTexture *source = (D8VolumeTexture *)source_iface;
     D8VolumeTexture *destination = (D8VolumeTexture *)destination_iface;
-    UINT level;
-
-    if (source->iface.lpVtbl != &g_volume_texture_vtbl
-            || destination->iface.lpVtbl != &g_volume_texture_vtbl
-            || source->device != device || destination->device != device
-            || source->format != destination->format
-            || source->width != destination->width
-            || source->height != destination->height
-            || source->depth != destination->depth)
+    if (source->iface.lpVtbl != &g_volume_texture_vtbl || destination->iface.lpVtbl != &g_volume_texture_vtbl ||
+            source->device != device || destination->device != device || source->format != destination->format)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    for (level = 0; level < source->level_count
-            && level < destination->level_count; ++level) {
-        D8TextureLevel *to = &destination->levels[level];
-        RECT full;
-        if (source->levels[level].locked || to->locked)
-            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-        CopyMemory(to->shadow, source->levels[level].shadow, to->byte_count);
-        SetRect(&full, 0, 0, (int)to->width, (int)to->height);
-        if (!emit_volume_level_update(destination, level, &full, 0,
-                to->depth))
-            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
-    }
-    return D3D_OK;
+    return D8WG_TRACE_ERROR(d9wg_update_texture_common(destination, D9WG_COPY_VOLUME,
+            source->levels, (D9WGTextureCopyExtent){source->width, source->height, source->depth, source->level_count},
+            destination->levels, (D9WGTextureCopyExtent){destination->width, destination->height, destination->depth, destination->level_count}));
 }
 
 static HRESULT WINAPI device_update_texture(IDirect3DDevice8 *iface,
@@ -4969,7 +4944,6 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D8Texture *source;
     D8Texture *destination;
-    UINT level;
 
     if (!source_iface || !destination_iface)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
@@ -4995,24 +4969,11 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice8 *iface,
     if (source->iface.lpVtbl != &g_texture_vtbl
             || destination->iface.lpVtbl != &g_texture_vtbl
             || source->device != device || destination->device != device
-            || source->format != destination->format
-            || source->width != destination->width
-            || source->height != destination->height)
+            || source->format != destination->format)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    for (level = 0; level < source->level_count
-            && level < destination->level_count; ++level) {
-        RECT full;
-        if (source->levels[level].locked || destination->levels[level].locked)
-            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-        CopyMemory(destination->levels[level].shadow,
-                source->levels[level].shadow,
-                destination->levels[level].byte_count);
-        SetRect(&full, 0, 0, (int)destination->levels[level].width,
-                (int)destination->levels[level].height);
-        if (!emit_texture_update(destination, level, &full))
-            return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
-    }
-    return D3D_OK;
+    return D8WG_TRACE_ERROR(d9wg_update_texture_common(destination, D9WG_COPY_2D,
+            source->levels, (D9WGTextureCopyExtent){source->width, source->height, 1, source->level_count},
+            destination->levels, (D9WGTextureCopyExtent){destination->width, destination->height, 1, destination->level_count}));
 }
 
 static HRESULT create_standalone_surface(D8Device *device, UINT width,

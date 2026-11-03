@@ -1,5 +1,51 @@
 #include "d9wg_runtime.h"
 
+static uint32_t texture_copy_max_dimension(const D9WGTextureCopyExtent *extent)
+{
+    uint32_t value = extent->width > extent->height ? extent->width : extent->height;
+    return value > extent->depth ? value : extent->depth;
+}
+
+int d9wg_texture_copy_plan(const D9WGTextureCopyExtent *source,
+        const D9WGTextureCopyExtent *destination, D9WGTextureCopyPlan *plan)
+{
+    if (!source || !destination || !plan || !source->width || !source->height || !source->depth ||
+            !destination->width || !destination->height || !destination->depth ||
+            !source->levels || source->levels > 32 || !destination->levels || destination->levels > 32) return 0;
+    uint32_t size = texture_copy_max_dimension(source), target = texture_copy_max_dimension(destination), skip = 0;
+    while (size > target) { size >>= 1;++skip; }
+    uint32_t width = source->width >> skip, height = source->height >> skip, depth = source->depth >> skip;
+    if (!width) width = 1;
+    if (!height) height = 1;
+    if (!depth) depth = 1;
+    if (width != destination->width || height != destination->height || depth != destination->depth) return 0;
+    uint32_t levels = skip < source->levels ? source->levels - skip : 0;
+    if (levels > destination->levels) levels = destination->levels;
+    plan->source_first = skip;plan->levels = levels;
+    return 1;
+}
+
+int d9wg_texture_copy_levels(const D9WGTextureCopyPlan *plan, uint32_t layers,
+        D9WGTextureCopyLevel validate, D9WGTextureCopyLevel prepare,
+        D9WGTextureCopyLevel copy, void *context)
+{
+    if (!plan || !layers || layers > 6 || plan->source_first >= 32 ||
+            plan->levels > 32u - plan->source_first) return D9WG_TEXTURE_COPY_INVALID;
+    if (!plan->levels) return D9WG_TEXTURE_COPY_OK;
+    if (!validate || !copy) return D9WG_TEXTURE_COPY_INVALID;
+    for (uint32_t pass = 0; pass < 3; ++pass) {
+        D9WGTextureCopyLevel callback = pass == 0 ? validate : pass == 1 ? prepare : copy;
+        if (!callback) continue;
+        for (uint32_t layer = 0; layer < layers; ++layer) {
+            for (uint32_t level = 0; level < plan->levels; ++level) {
+                int result = callback(context, layer, plan->source_first + level, level);
+                if (result) return result;
+            }
+        }
+    }
+    return D9WG_TEXTURE_COPY_OK;
+}
+
 int d9wg_retry_ready(uint32_t now, uint32_t failed_at, int armed)
 {
     /* GetTickCount is a wrapping DWORD on XP. Unsigned subtraction preserves

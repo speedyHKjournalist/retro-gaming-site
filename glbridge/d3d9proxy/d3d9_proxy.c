@@ -8182,110 +8182,49 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
  * the same UPDATE_TEXTURE emission an unlock would have produced. Declared
  * after the texture helpers it calls; see the forward declaration above.
  */
+#define D9WG_COPY_LEVEL D9TextureLevel
+#define D9WG_COPY_2D_TYPE D9Texture
+#define D9WG_COPY_CUBE_TYPE D9CubeTexture
+#define D9WG_COPY_VOLUME_TYPE D9VolumeTexture
+#define D9WG_COPY_MARK_VALID(level) ((level)->shadow_valid = TRUE)
+#define D9WG_COPY_UPLOAD_2D(t,l,r) emit_texture_update((t),(l),(r))
+#define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_cube_texture_update((t),(f),(l),(r))
+#define D9WG_COPY_UPLOAD_VOLUME(t,l,b) emit_volume_texture_update((t),(l),(b))
+#include "../runtime/d9wg_texture_copy_bridge.h"
+
 static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
         IDirect3DBaseTexture9 *src_iface, IDirect3DBaseTexture9 *dst_iface)
 {
     D9Device *device = device_from_iface(iface);
-    D9Texture *source = (D9Texture *)src_iface;
-    D9Texture *destination = (D9Texture *)dst_iface;
-    const void *source_vtbl;
-    const void *destination_vtbl;
-    UINT level;
-
-    if (!source || !destination)
+    D9Texture *source = (D9Texture *)src_iface, *destination = (D9Texture *)dst_iface;
+    if (!source || !destination || source->iface.lpVtbl != destination->iface.lpVtbl)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    source_vtbl = source->iface.lpVtbl;
-    destination_vtbl = destination->iface.lpVtbl;
-    if (source_vtbl != destination_vtbl)
+    if (source->iface.lpVtbl == (const void *)&g_volume_texture_vtbl) {
+        D9VolumeTexture *from = (D9VolumeTexture *)src_iface, *to = (D9VolumeTexture *)dst_iface;
+        if (from->device != device || to->device != device || from->pool != D3DPOOL_SYSTEMMEM ||
+                to->pool != D3DPOOL_DEFAULT || from->format != to->format)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(d9wg_update_texture_common(to, D9WG_COPY_VOLUME,
+                from->levels, (D9WGTextureCopyExtent){from->width, from->height, from->depth, from->level_count},
+                to->levels, (D9WGTextureCopyExtent){to->width, to->height, to->depth, to->level_count}));
+    }
+    if (source->iface.lpVtbl == (const void *)&g_cube_vtbl) {
+        D9CubeTexture *from = (D9CubeTexture *)src_iface, *to = (D9CubeTexture *)dst_iface;
+        if (from->device != device || to->device != device || from->pool != D3DPOOL_SYSTEMMEM ||
+                to->pool != D3DPOOL_DEFAULT || from->format != to->format)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(d9wg_update_texture_common(to, D9WG_COPY_CUBE,
+                from->levels, (D9WGTextureCopyExtent){from->edge_length, from->edge_length, 1, from->level_count},
+                to->levels, (D9WGTextureCopyExtent){to->edge_length, to->edge_length, 1, to->level_count}));
+    }
+    if (source->iface.lpVtbl != &g_texture_vtbl || source->device != device || destination->device != device ||
+            source->pool != D3DPOOL_SYSTEMMEM || destination->pool != D3DPOOL_DEFAULT || source->format != destination->format)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (source_vtbl == &g_volume_texture_vtbl) {
-        D9VolumeTexture *volume_source = (D9VolumeTexture *)src_iface;
-        D9VolumeTexture *volume_destination = (D9VolumeTexture *)dst_iface;
-        if (volume_source->device != device
-                || volume_destination->device != device
-                || volume_source->pool != D3DPOOL_SYSTEMMEM
-                || volume_destination->pool != D3DPOOL_DEFAULT
-                || volume_source->format != volume_destination->format
-                || volume_source->width != volume_destination->width
-                || volume_source->height != volume_destination->height
-                || volume_source->depth != volume_destination->depth)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        for (level = 0; level < volume_source->level_count
-                && level < volume_destination->level_count; ++level) {
-            D9TextureLevel *from = &volume_source->levels[level];
-            D9TextureLevel *to = &volume_destination->levels[level];
-            D3DBOX full;
-            if (from->locked || to->locked
-                    || from->byte_count != to->byte_count)
-                return TRACE_REFUSE(D3DERR_INVALIDCALL);
-            CopyMemory(to->shadow, from->shadow, to->byte_count);
-            full.Left = full.Top = full.Front = 0;
-            full.Right = to->width;
-            full.Bottom = to->height;
-            full.Back = to->depth;
-            if (!emit_volume_texture_update(volume_destination, level, &full))
-                return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-        }
-        return D3D_OK;
-    }
-    if (source_vtbl == &g_cube_vtbl) {
-        D9CubeTexture *cube_source = (D9CubeTexture *)src_iface;
-        D9CubeTexture *cube_destination = (D9CubeTexture *)dst_iface;
-        UINT face;
-        if (cube_source->device != device
-                || cube_destination->device != device
-                || cube_source->pool != D3DPOOL_SYSTEMMEM
-                || cube_destination->pool != D3DPOOL_DEFAULT
-                || cube_source->format != cube_destination->format
-                || cube_source->edge_length != cube_destination->edge_length)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        for (face = 0; face < 6u; ++face) {
-            for (level = 0; level < cube_source->level_count
-                    && level < cube_destination->level_count; ++level) {
-                D9TextureLevel *from = &cube_source->levels[
-                        face * cube_source->level_count + level];
-                D9TextureLevel *to = &cube_destination->levels[
-                        face * cube_destination->level_count + level];
-                RECT full;
-                if (from->locked || to->locked
-                        || from->byte_count != to->byte_count)
-                    return TRACE_REFUSE(D3DERR_INVALIDCALL);
-                CopyMemory(to->shadow, from->shadow, to->byte_count);
-                SetRect(&full, 0, 0, (int)to->width, (int)to->height);
-                if (!emit_cube_texture_update(cube_destination, face, level,
-                        &full))
-                    return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-            }
-        }
-        return D3D_OK;
-    }
-    if (source_vtbl != &g_texture_vtbl
-            || source->device != device || destination->device != device
-            || source->pool != D3DPOOL_SYSTEMMEM
-            || destination->pool != D3DPOOL_DEFAULT
-            || source->format != destination->format
-            || source->width != destination->width
-            || source->height != destination->height)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /* D3D9 allows the source to carry fewer levels than the destination;
-     * only the levels both actually have can be copied. */
-    for (level = 0; level < source->level_count
-            && level < destination->level_count; ++level) {
-        D9TextureLevel *from = &source->levels[level];
-        D9TextureLevel *to = &destination->levels[level];
-        RECT full;
-        if (from->locked || to->locked)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        if (from->byte_count != to->byte_count)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        CopyMemory(to->shadow, from->shadow, to->byte_count);
-        to->shadow_valid = TRUE;
-        SetRect(&full, 0, 0, (int)to->width, (int)to->height);
-        if (!emit_texture_update(destination, level, &full))
-            return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-    }
-    return D3D_OK;
+    return TRACE_REFUSE(d9wg_update_texture_common(destination, D9WG_COPY_2D,
+            source->levels, (D9WGTextureCopyExtent){source->width, source->height, 1, source->level_count},
+            destination->levels, (D9WGTextureCopyExtent){destination->width, destination->height, 1, destination->level_count}));
 }
+
 /*
  * Shared by GetRenderTargetData and GetFrontBufferData, which differ only in
  * how strict they are about the destination format.
