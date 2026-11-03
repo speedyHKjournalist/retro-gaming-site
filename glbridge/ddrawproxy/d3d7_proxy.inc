@@ -68,6 +68,7 @@ struct D3D7Device {
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
     D3DMATRIX transforms[D3D7_MAX_TRANSFORMS];
+    D3DMATRIX legacy_projection, legacy_clipspace;
     DWORD render_states[D3D7_MAX_RENDER_STATES];
     DWORD rejected_render_values[D3D7_MAX_RENDER_STATES];
     BYTE rejected_render_set[D3D7_MAX_RENDER_STATES];
@@ -970,6 +971,8 @@ static void d3d7_device_init_state(D3D7Device *device)
     device->render_states[D3DRENDERSTATE_NORMALIZENORMALS] = defaults.normalize_normals;
     for (index = 0; index < D3D7_MAX_TRANSFORMS; ++index)
         d3d7_identity_matrix(&device->transforms[index]);
+    d3d7_identity_matrix(&device->legacy_projection);
+    d3d7_identity_matrix(&device->legacy_clipspace);
     device->viewport.dwX = device->viewport.dwY = 0;
     device->viewport.dwWidth = device->render_target->width;
     device->viewport.dwHeight = device->render_target->height;

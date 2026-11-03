@@ -644,30 +644,63 @@ static void d3d_legacy_viewport7(D3DLegacyViewport *viewport,
         viewport7->dwY = viewport->viewport2.dwY;
         viewport7->dwWidth = viewport->viewport2.dwWidth;
         viewport7->dwHeight = viewport->viewport2.dwHeight;
-        viewport7->dvMinZ = viewport->viewport2.dvMinZ;
-        viewport7->dvMaxZ = viewport->viewport2.dvMaxZ;
+        viewport7->dvMinZ = 0.0f;
+        viewport7->dvMaxZ = 1.0f;
     } else {
         viewport7->dwX = viewport->viewport1.dwX;
         viewport7->dwY = viewport->viewport1.dwY;
         viewport7->dwWidth = viewport->viewport1.dwWidth;
         viewport7->dwHeight = viewport->viewport1.dwHeight;
-        viewport7->dvMinZ = viewport->viewport1.dvMinZ;
-        viewport7->dvMaxZ = viewport->viewport1.dvMaxZ;
+        viewport7->dvMinZ = 0.0f;
+        viewport7->dvMaxZ = 1.0f;
     }
+}
+
+static void d3d_legacy_viewport_clipspace(D3DLegacyViewport *viewport,
+        D3DMATRIX *matrix)
+{
+    D9WGLegacyViewportClip clip;
+    if (viewport->viewport2_set) {
+        const D3DVIEWPORT2 *v = &viewport->viewport2;
+        clip = d9wg_legacy_viewport2_clip(v->dvClipX, v->dvClipY,
+                v->dvClipWidth, v->dvClipHeight, v->dvMinZ, v->dvMaxZ);
+    } else {
+        const D3DVIEWPORT *v = &viewport->viewport1;
+        clip = d9wg_legacy_viewport1_clip(v->dwWidth, v->dwHeight,
+                v->dvScaleX, v->dvScaleY);
+    }
+    d3d7_identity_matrix(matrix);
+    matrix->_11 = clip.scale[0]; matrix->_22 = clip.scale[1];
+    matrix->_33 = clip.scale[2]; matrix->_41 = clip.offset[0];
+    matrix->_42 = clip.offset[1]; matrix->_43 = clip.offset[2];
+}
+
+static HRESULT d3d_legacy_apply_viewport_projection(D3DLegacyViewport *viewport)
+{
+    D3D7Device *device = viewport->device;
+    D3DVIEWPORT7 vp;
+    D3DMATRIX clip, projection;
+    HRESULT hr;
+    if (!device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
+    if (!viewport->viewport1_set && !viewport->viewport2_set)
+        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
+    d3d_legacy_viewport7(viewport, &vp);
+    d3d_legacy_viewport_clipspace(viewport, &clip);
+    d3d7_multiply_matrix(&device->legacy_projection, &clip, &projection);
+    hr = d3d7_device_SetViewport((IDirect3DDevice7 *)device, &vp);
+    if (FAILED(hr)) return hr;
+    hr = d3d7_device_SetTransform((IDirect3DDevice7 *)device,
+            D3DTRANSFORMSTATE_PROJECTION, &projection);
+    if (SUCCEEDED(hr) && !device->recording_state_block)
+        device->legacy_clipspace = clip;
+    return hr;
 }
 
 static HRESULT d3d_legacy_apply_viewport(D3DLegacyViewport *viewport)
 {
-    D3DVIEWPORT7 viewport7;
     D3DLegacyLight *light;
     DWORD index = 0;
-    HRESULT result;
-    if (!viewport->device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
-    if (!viewport->viewport1_set && !viewport->viewport2_set)
-        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
-    d3d_legacy_viewport7(viewport, &viewport7);
-    result = d3d7_device_SetViewport((IDirect3DDevice7 *)viewport->device,
-            &viewport7);
+    HRESULT result = d3d_legacy_apply_viewport_projection(viewport);
     if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     for (light = viewport->lights; light && index < D3D7_MAX_LIGHTS;
             light = light->next_in_viewport, ++index) {
@@ -800,32 +833,32 @@ static HRESULT WINAPI d3d_viewport_TransformVertices(
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
     D3D7Device *device = viewport->device;
-    D3DMATRIX world_view, transform;
+    D3DMATRIX world_view, logical, clipspace, transform;
     D3DVIEWPORT7 viewport7;
-    DWORD index;
-    DWORD clip_union = 0, clip_intersection = 0x3fu;
+    DWORD index, clip_union = 0, clip_intersection = ~0u;
+    BOOL clipped = (flags & D3DTRANSFORM_CLIPPED) != 0;
     if (!device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
-    if (!data || data->dwSize < sizeof(*data) || !data->lpIn ||
-            !data->lpOut || data->dwInSize < sizeof(D3DVECTOR) ||
-            data->dwOutSize < sizeof(D3DTLVERTEX) ||
+    if (!data || data->dwSize < sizeof(*data) ||
+            (count && (!data->lpIn || !data->lpOut ||
+                data->dwInSize < 32u || data->dwOutSize < 32u)) ||
             !(flags & (D3DTRANSFORM_CLIPPED | D3DTRANSFORM_UNCLIPPED)))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!viewport->viewport1_set && !viewport->viewport2_set)
         return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
-    d3d7_multiply_matrix(&world_view,
-            &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &transform);
+    d3d7_multiply_matrix(&world_view, &device->legacy_projection, &logical);
+    d3d_legacy_viewport_clipspace(viewport, &clipspace);
+    d3d7_multiply_matrix(&logical, &clipspace, &transform);
     d3d_legacy_viewport7(viewport, &viewport7);
     for (index = 0; index < count; ++index) {
-        const D3DVECTOR *input = (const D3DVECTOR *)((BYTE *)data->lpIn +
-                index * data->dwInSize);
-        D3DTLVERTEX *output = (D3DTLVERTEX *)((BYTE *)data->lpOut +
-                index * data->dwOutSize);
-        float source[4] = { input->x, input->y, input->z, 1.0f };
-        float clip[4];
-        float reciprocal_w;
+        const BYTE *input = (const BYTE *)data->lpIn + index * data->dwInSize;
+        BYTE *output = (BYTE *)data->lpOut + index * data->dwOutSize;
+        const D3DVECTOR *position = (const D3DVECTOR *)input;
+        float source[4] = {position->x, position->y, position->z, 1.0f};
+        float raw[4], clip[4], result[4], reciprocal_w;
         DWORD vertex_clip = 0;
+        d3d7_transform_vector(&logical, source, raw);
         d3d7_transform_vector(&transform, source, clip);
         if (clip[0] < -clip[3]) vertex_clip |= D3DCLIP_LEFT;
         if (clip[0] > clip[3]) vertex_clip |= D3DCLIP_RIGHT;
@@ -835,24 +868,31 @@ static HRESULT WINAPI d3d_viewport_TransformVertices(
         if (clip[2] > clip[3]) vertex_clip |= D3DCLIP_BACK;
         clip_union |= vertex_clip;
         clip_intersection &= vertex_clip;
-        reciprocal_w = clip[3] != 0.0f ? 1.0f / clip[3] : 0.0f;
-        output->sx = viewport7.dwX + (clip[0] * reciprocal_w + 1.0f) *
-                (float)viewport7.dwWidth * 0.5f;
-        output->sy = viewport7.dwY + (1.0f - clip[1] * reciprocal_w) *
-                (float)viewport7.dwHeight * 0.5f;
-        output->sz = viewport7.dvMinZ + clip[2] * reciprocal_w *
-                (viewport7.dvMaxZ - viewport7.dvMinZ);
-        output->rhw = reciprocal_w;
-        if (data->lpHOut) {
+        if (clipped && data->lpHOut) {
             data->lpHOut[index].dwFlags = vertex_clip;
-            data->lpHOut[index].hx = clip[0];
-            data->lpHOut[index].hy = clip[1];
-            data->lpHOut[index].hz = clip[2];
+            data->lpHOut[index].hx = raw[0];
+            data->lpHOut[index].hy = raw[1];
+            data->lpHOut[index].hz = raw[2];
         }
+        if (clipped && vertex_clip) {
+            /* Match Wine's bounded rejected-vertex output. Native tests pin
+             * the clip flags, but do not define these rejected coordinates. */
+            CopyMemory(output, clip, sizeof(clip));
+            continue;
+        }
+        reciprocal_w = clip[3] != 0.0f ? 1.0f / clip[3] : 0.0f;
+        result[0] = viewport7.dwX + (clip[0] * reciprocal_w + 1.0f) *
+                (float)viewport7.dwWidth * 0.5f;
+        result[1] = viewport7.dwY + (1.0f - clip[1] * reciprocal_w) *
+                (float)viewport7.dwHeight * 0.5f;
+        result[2] = clip[2] * reciprocal_w;
+        result[3] = reciprocal_w;
+        CopyMemory(output, result, sizeof(result));
+        CopyMemory(output + 16u, input + 16u, 16u);
     }
     data->dwClipUnion = clip_union;
     data->dwClipIntersection = count ? clip_intersection : 0;
-    if (offscreen) *offscreen = clip_intersection ? TRUE : FALSE;
+    if (offscreen) *offscreen = clipped ? clip_intersection : 0;
     return D3D_OK;
 }
 
@@ -1892,25 +1932,61 @@ static HRESULT WINAPI d3d3_device_SetLightState(IDirect3DDevice3 *iface,
     }
 }
 
+/* Legacy callers query their logical projection. The common Device7 state
+ * contains the effective projection consumed by every CPU and GPU path. */
+static HRESULT d3d_legacy_set_transform(D3D7Device *device,
+        D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
+{
+    D3DMATRIX projection;
+    HRESULT hr;
+    if (!matrix) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (state != D3DTRANSFORMSTATE_PROJECTION)
+        return d3d7_device_SetTransform((IDirect3DDevice7 *)device, state, matrix);
+    d3d7_multiply_matrix(matrix, &device->legacy_clipspace, &projection);
+    hr = d3d7_device_SetTransform((IDirect3DDevice7 *)device, state, &projection);
+    if (SUCCEEDED(hr) && !device->recording_state_block)
+        device->legacy_projection = *matrix;
+    return hr;
+}
+
+static HRESULT d3d_legacy_get_transform(D3D7Device *device,
+        D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
+{
+    if (!matrix) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (state == D3DTRANSFORMSTATE_PROJECTION) {
+        *matrix = device->legacy_projection;
+        return D3D_OK;
+    }
+    return d3d7_device_GetTransform((IDirect3DDevice7 *)device, state, matrix);
+}
+
+static HRESULT d3d_legacy_multiply_transform(D3D7Device *device,
+        D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
+{
+    D3DMATRIX projection;
+    if (!matrix) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (state != D3DTRANSFORMSTATE_PROJECTION)
+        return d3d7_device_MultiplyTransform((IDirect3DDevice7 *)device, state, matrix);
+    d3d7_multiply_matrix(matrix, &device->legacy_projection, &projection);
+    return d3d_legacy_set_transform(device, state, &projection);
+}
+
 static HRESULT WINAPI d3d3_device_SetTransform(IDirect3DDevice3 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
-    return d3d7_device_SetTransform((IDirect3DDevice7 *)
-            d3d3_device_from_iface(iface), state, matrix);
+    return d3d_legacy_set_transform(d3d3_device_from_iface(iface), state, matrix);
 }
 
 static HRESULT WINAPI d3d3_device_GetTransform(IDirect3DDevice3 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
-    return d3d7_device_GetTransform((IDirect3DDevice7 *)
-            d3d3_device_from_iface(iface), state, matrix);
+    return d3d_legacy_get_transform(d3d3_device_from_iface(iface), state, matrix);
 }
 
 static HRESULT WINAPI d3d3_device_MultiplyTransform(IDirect3DDevice3 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
-    return d3d7_device_MultiplyTransform((IDirect3DDevice7 *)
-            d3d3_device_from_iface(iface), state, matrix);
+    return d3d_legacy_multiply_transform(d3d3_device_from_iface(iface), state, matrix);
 }
 
 static HRESULT WINAPI d3d3_device_DrawPrimitive(IDirect3DDevice3 *iface,
@@ -2359,22 +2435,19 @@ static HRESULT WINAPI d3d2_device_SetLightState(IDirect3DDevice2 *iface,
 static HRESULT WINAPI d3d2_device_SetTransform(IDirect3DDevice2 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
-    return d3d7_device_SetTransform((IDirect3DDevice7 *)
-            d3d2_device_from_iface(iface), state, matrix);
+    return d3d_legacy_set_transform(d3d2_device_from_iface(iface), state, matrix);
 }
 
 static HRESULT WINAPI d3d2_device_GetTransform(IDirect3DDevice2 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
-    return d3d7_device_GetTransform((IDirect3DDevice7 *)
-            d3d2_device_from_iface(iface), state, matrix);
+    return d3d_legacy_get_transform(d3d2_device_from_iface(iface), state, matrix);
 }
 
 static HRESULT WINAPI d3d2_device_MultiplyTransform(IDirect3DDevice2 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
-    return d3d7_device_MultiplyTransform((IDirect3DDevice7 *)
-            d3d2_device_from_iface(iface), state, matrix);
+    return d3d_legacy_multiply_transform(d3d2_device_from_iface(iface), state, matrix);
 }
 
 static HRESULT WINAPI d3d2_device_DrawPrimitive(IDirect3DDevice2 *iface,
@@ -2883,7 +2956,13 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &transform);
-    if (!d3d7_prepare_lighting(device, &world_view, TRUE, &light_state))
+    if ((uint64_t)buffer->data.dwVertexOffset +
+            ((uint64_t)process->wStart + process->dwCount) * sizeof(D3DVERTEX)
+            > buffer->byte_count)
+        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
+    if (operation == D3DPROCESSVERTICES_TRANSFORMLIGHT &&
+            !(process->dwFlags & D3DPROCESSVERTICES_NOCOLOR) &&
+            !d3d7_prepare_lighting(device, &world_view, TRUE, &light_state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     for (index = 0; index < process->dwCount; ++index) {
         const D3DVERTEX *source = (const D3DVERTEX *)(buffer->memory +
@@ -2906,7 +2985,6 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
         destination->rhw = reciprocal_w;
         destination->tu = source->tu;
         destination->tv = source->tv;
-        destination->specular = 0;
         if (operation == D3DPROCESSVERTICES_TRANSFORMLIGHT &&
                 !(process->dwFlags & D3DPROCESSVERTICES_NOCOLOR)) {
             uint32_t diffuse, specular;
@@ -2914,7 +2992,9 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
                     &source->nx, NULL, NULL, &diffuse, &specular);
             destination->color = diffuse;destination->specular = specular;
         } else if (!(process->dwFlags & D3DPROCESSVERTICES_NOCOLOR)) {
-            destination->color = 0xffffffffu;
+            const D3DLVERTEX *prelit = (const D3DLVERTEX *)source;
+            destination->color = prelit->color;
+            destination->specular = prelit->specular;
         }
         if (process->dwFlags & D3DPROCESSVERTICES_UPDATEEXTENTS) {
             LONG x = (LONG)destination->sx, y = (LONG)destination->sy;
@@ -3149,7 +3229,7 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
                 D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(device,
                         state->dwArg[0]);
                 if (!matrix) return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
-                result = d3d7_device_SetTransform((IDirect3DDevice7 *)device,
+                result = d3d_legacy_set_transform(device,
                         state->dtstTransformStateType, &matrix->matrix);
                 if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }

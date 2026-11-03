@@ -1,6 +1,7 @@
 #ifndef DDRAW_PROTOCOL_H
 #define DDRAW_PROTOCOL_H
 #include "../runtime/d9wg_legacy_device_defaults.h"
+#include "../runtime/d9wg_legacy_viewport.h"
 
 /*
  * The DirectDraw / Direct3D 1-7 guest frontend does not define a wire protocol

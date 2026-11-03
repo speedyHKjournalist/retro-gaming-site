@@ -74,7 +74,7 @@ static BOOL prepare_surface_for_host(DDSurface *p){(void)p;uploads++;return TRUE
 static void rebind_host_surface_state(DDSurface *p){(void)p;uploads++;}
 typedef struct D3D7StateBlock D3D7StateBlock;
 ${block[0]}
-typedef struct D3D7Device {UINT creation_version;unsigned clip_status;struct{DWORD dwSize;}legacy_stats;BOOL legacy_texture_blending;Owner *owner;DDSurface *render_target;DWORD render_states[256],rejected_render_values[256];BYTE rejected_render_set[256];DWORD texture_stage_states[8][33];DDSurface *textures[8];D3DMATRIX transforms[24];D3DMATERIAL7 material;D3DVIEWPORT7 viewport;float clip_planes[6][4];D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;D3D7StateBlock *recording_state_block,*state_blocks;DWORD next_state_block_handle;} D3D7Device;
+typedef struct D3D7Device {UINT creation_version;unsigned clip_status;struct{DWORD dwSize;}legacy_stats;BOOL legacy_texture_blending;Owner *owner;DDSurface *render_target;DWORD render_states[256],rejected_render_values[256];BYTE rejected_render_set[256];DWORD texture_stage_states[8][33];DDSurface *textures[8];D3DMATRIX transforms[24],legacy_projection,legacy_clipspace;D3DMATERIAL7 material;D3DVIEWPORT7 viewport;float clip_planes[6][4];D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;D3D7StateBlock *recording_state_block,*state_blocks;DWORD next_state_block_handle;} D3D7Device;
 typedef D3D7Device IDirect3DDevice7;
 static D3D7Device *d3d7_device_from_iface(D3D7Device *p){return p;}
 static BOOL emit_command(uint32_t op,const void *p,uint32_t n){(void)p;(void)n;emissions++;if(op==fail_opcode){fail_opcode=0;return FALSE;}return TRUE;}
