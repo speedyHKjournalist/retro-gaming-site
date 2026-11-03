@@ -48,7 +48,6 @@ static BOOL surface_is_implicit(Surface*s){(void)s;return 0;}
 static void device_child_add_ref(Device*d){(void)d;assert(0);}
 static LONG InterlockedCompareExchange(LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}
 static void device_child_release(Device*d){assert(d->refs==2);d->refs--;}
-static void private_data_owner_release(void*p){(void)p;assert(0);}
 static int emit_command(UINT op,const void*p,UINT size){const D9WGDestroyResource*c=p;assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(*c)&&c->resource_handle==expected_handle&&c->resource_kind==expected_kind);destroys++;return 1;}
 ${['texture_add_ref','texture_release','cube_add_ref','cube_release','volume_texture_add_ref','volume_texture_release','texture_get_surface_level','cube_get_surface','volume_texture_get_volume_level','surface_query_interface','surface_add_ref','surface_release','volume_query_interface','volume_add_ref','volume_release'].map(extract).join('\n')}
 static Vtable parents[3];

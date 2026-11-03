@@ -1,5 +1,5 @@
 {
-  "revision": "a532e70eacef8cba3d10",
+  "revision": "53aef54a6a8491c26cd2",
   "files": [
     "libv86-webgpu.js",
     "d3d9_shader_worker.js",

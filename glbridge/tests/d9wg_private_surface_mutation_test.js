@@ -10,16 +10,13 @@ try{let killed=0,total=0;for(const api of[8,9]){const source=fs.readFileSync(roo
 ];if(api===8)mutations.push(
 ['device depth cleanup','device_release','d9wg_private_clear(&device->depth_surface_private_data, &d9wg_private_ops);','/* omitted */'],
 ['device back cleanup','device_release','d9wg_private_clear(&device->back_buffer_private_data, &d9wg_private_ops);','/* omitted */'],
-['owner clear','private_data_owner_release','d9wg_private_clear(&owner->store, &d9wg_private_ops);','/* omitted */'],
-['owner allocation leaked','private_data_owner_release','HeapFree(GetProcessHeap(), 0, owner);','/* omitted */'],
-['owner final reference never destroyed','private_data_owner_release','if (!InterlockedDecrement(&owner->refs))','if (0 && !InterlockedDecrement(&owner->refs))'],
-['chain owner reference leaked','swapchain_release','private_data_owner_release(chain->private_data_owner);','/* omitted */'],
-['surface owner reference leaked','surface_release','private_data_owner_release(surface->retained_private_data);','(void)surface->retained_private_data;'],
 ['implicit views use temporary stores','create_backbuffer_surface','surface_from_iface(*surface_out)->private_data_owner = &device->back_buffer_private_data;','/* omitted */'],
-['chain shares device store','swapchain_get_backbuffer','surface->private_data_owner = &chain->private_data_owner->store;','surface->private_data_owner = &chain->device->back_buffer_private_data;'],
-['chain view pin missing','swapchain_get_backbuffer','InterlockedIncrement(&chain->private_data_owner->refs);','(void)InterlockedIncrement;'],
-['chain eagerly clears live views','swapchain_release','private_data_owner_release(chain->private_data_owner);','d9wg_private_clear(&chain->private_data_owner->store, &d9wg_private_ops); private_data_owner_release(chain->private_data_owner);'],
-['owner initial reference absent','device_create_swapchain','chain->private_data_owner->refs = 1;','chain->private_data_owner->refs = 0;'],
-['owner OOM dereferences NULL','device_create_swapchain','if (!chain->private_data_owner)','if (0 && !chain->private_data_owner)']
+['chain backing reference leaked','swapchain_release','IDirect3DSurface8_Release(chain->back_buffer);','/* omitted */'],
+['chain shares device store','swapchain_get_backbuffer','    *surface_out = chain->back_buffer;','    surface_from_iface(chain->back_buffer)->private_data_owner = &chain->device->back_buffer_private_data;\n    *surface_out = chain->back_buffer;'],
+['chain view reference missing','swapchain_get_backbuffer','IDirect3DSurface8_AddRef(*surface_out);','(void)surface_add_ref;'],
+['chain eagerly clears live texture store','swapchain_release','IDirect3DSurface8_Release(chain->back_buffer);','d9wg_private_clear(&surface_from_iface(chain->back_buffer)->texture->levels[0].private_data, &d9wg_private_ops); IDirect3DSurface8_Release(chain->back_buffer);'],
+['chain allocation leaked','swapchain_release','HeapFree(GetProcessHeap(), 0, chain);','/* omitted */'],
+['target allocation failure ignored','device_create_swapchain','if (FAILED(hr))','if (0 && FAILED(hr))'],
+['missing backing GPU handle','device_create_swapchain','command.back_buffer_handle = surface->texture ? surface->texture->handle : 0;','command.back_buffer_handle = 0; (void)surface;']
 );else for(const field of['implicit_back_buffer','implicit_depth_stencil'])mutations.push([field+' cleanup','device_release','d9wg_private_clear(&device->'+field+'->private_data, &d9wg_private_ops);','/* omitted */']);total+=mutations.length;for(const[name,fn,old,replacement]of mutations){const file=dir+'/candidate.c';fs.writeFileSync(file,mutate(source,fn,old,replacement));run('API '+api+' '+name,api,file);killed++;}}
-console.log('PASS surface private-data mutations: '+killed+'/'+total+'; standalone and device cleanup, separate back-buffer stores, early chain release, view pins, owner allocation and OOM paths');}finally{fs.rmSync(dir,{recursive:true,force:true});}
+console.log('PASS surface private-data mutations: '+killed+'/'+total+'; standalone and device cleanup, separate back-buffer stores, early chain release, cached texture views, backing lifetime and allocation failures');}finally{fs.rmSync(dir,{recursive:true,force:true});}

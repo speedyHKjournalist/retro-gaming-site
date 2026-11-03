@@ -32,8 +32,7 @@ typedef struct {int iface;Surface implicit;}Device;
 typedef struct {Device*device;UINT handle;Surface*back_buffer;int present;Owner*private_data_owner;}Chain;
 typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};typedef Surface D${api}Surface,IDirect3DSurface${api};
 static unsigned calls,allocations,live,fail_alloc;static D3DBACKBUFFER_TYPE forwarded_type;
-${api===8?`static Surface*surface_from_iface(Surface*s){return s;}static LONG InterlockedIncrement(LONG*p){return ++*p;}
-static HRESULT create_backbuffer_surface(Device*d,int*p,BOOL blocker,Surface**out){assert(d&&*p==96&&blocker);calls++;*out=NULL;if(fail_alloc)return E_OUTOFMEMORY;*out=calloc(1,sizeof(**out));assert(*out);(*out)->refs=1;allocations++;live++;return D3D_OK;}`:`static Chain*swap_chain_from_iface(Chain*c){return c;}
+${api===8?`static void IDirect3DSurface8_AddRef(Surface*s){assert(s);s->refs++;}`:`static Chain*swap_chain_from_iface(Chain*c){return c;}
 static void IDirect3DSurface9_AddRef(Surface*s){assert(s);s->refs++;}
 static HRESULT device_get_back_buffer(int*iface,UINT chain,UINT index,D3DBACKBUFFER_TYPE type,Surface**out){Device*d=(Device*)iface;assert(!chain&&out);calls++;forwarded_type=type;*out=NULL;if(index)return D3DERR_INVALIDCALL;*out=&d->implicit;IDirect3DSurface9_AddRef(*out);return D3D_OK;}`}
 ${extract(source, api===8?"swapchain_get_backbuffer":"swap_chain_get_back_buffer")}
@@ -47,10 +46,10 @@ for(unsigned route=0;route<${api===8?1:2};route++){
   unsigned before=calls;CHECK(GET(&c,0,(int32_t)types[t],NULL)==D3DERR_INVALIDCALL&&calls==before&&owner.refs==1&&backing.refs==1&&!d.implicit.refs);
   for(unsigned i=0;i<4;i++){Surface*out=(void*)(uintptr_t)0x1234;CHECK(GET(&c,indices[i],(int32_t)types[t],&out)==D3DERR_INVALIDCALL&&out==(void*)(uintptr_t)0x1234&&calls==before&&owner.refs==1&&backing.refs==1&&!d.implicit.refs);}
   Surface*out=NULL;CHECK(GET(&c,0,(int32_t)types[t],&out)==D3D_OK&&out);
-  ${api===8?`CHECK(out->refs==1&&out->private_data_owner==&owner.store&&out->retained_private_data==&owner&&owner.refs==2&&calls==before+1&&live==1);owner.refs--;live--;free(out);`:`CHECK(out==(route?&d.implicit:&backing)&&out->refs==(route?1u:2u)&&owner.refs==1&&calls==before+route);if(route)CHECK(forwarded_type==(int32_t)types[t]);out->refs--;`}
+  ${api===8?`CHECK(out==&backing&&out->refs==2&&owner.refs==1&&calls==before&&!live&&!allocations);out->refs--;`:`CHECK(out==(route?&d.implicit:&backing)&&out->refs==(route?1u:2u)&&owner.refs==1&&calls==before+route);if(route)CHECK(forwarded_type==(int32_t)types[t]);out->refs--;`}
  }
 }
-${api===8?`fail_alloc=1;Surface*out=(void*)(uintptr_t)0x1234;CHECK(GET(&c,0,2,&out)==E_OUTOFMEMORY&&!out&&owner.refs==1&&!live&&allocations==5);`:'(void)allocations;(void)live;(void)fail_alloc;'}
+${api===8?`fail_alloc=1;Surface*out=(void*)(uintptr_t)0x1234;CHECK(GET(&c,0,2,&out)==D3D_OK&&out==&backing&&out->refs==2&&owner.refs==1&&!live&&!allocations);out->refs--;`:'(void)allocations;(void)live;(void)fail_alloc;'}
 printf("PASS actual API ${api} backbuffer selectors: %u checks; ignored stereo values, NULL/bad-index boundaries, preserved outputs, exact successful references and unchanged failure ownership\\n",checks);return 0;}
 `);
         const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-I", root, dir + "/selector.c", "-o", dir + "/selector"], {encoding: "utf8"}); assert.equal(build.status, 0, build.stderr);

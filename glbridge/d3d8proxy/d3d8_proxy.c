@@ -472,17 +472,11 @@ struct D8Shader {
     DWORD const_data[D8WG_MAX_VS_CONSTANTS * 4u];
 };
 
-typedef struct D8PrivateDataOwner {
-    LONG refs;
-    D9WGPrivateStore store;
-} D8PrivateDataOwner;
-
 struct D8Surface {
     IDirect3DSurface8 iface;
     LONG refcount;
     D9WGPrivateStore private_data;
     D9WGPrivateStore *private_data_owner;
-    D8PrivateDataOwner *retained_private_data;
     D8Texture *texture;
     /* Set instead of `texture` when this surface came from
      * GetCubeMapSurface; `face` then names which of the six it is. */
@@ -504,9 +498,10 @@ struct D8Surface {
 struct D8SwapChain {
     IDirect3DSwapChain8 iface;
     LONG refcount;
-    D8PrivateDataOwner *private_data_owner;
     D8Device *device;
     D3DPRESENT_PARAMETERS present;
+    UINT handle;
+    IDirect3DSurface8 *back_buffer;
     D9WGPresentClock present_clock;
     D9WGPresentPacing present_pacing;
 };
@@ -538,6 +533,9 @@ static BOOL device_has_reset_blockers(D8Device *device);
 static void device_clear_bindings(D8Device *device);
 static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice8 *iface,
         DWORD shader);
+static HRESULT WINAPI device_create_render_target(IDirect3DDevice8* iface,
+    UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
+    WINBOOL lockable, IDirect3DSurface8** surface_out);
 static void device_release_owned_references(D8Device *device);
 static void shader_assign(D8Shader **target, D8Shader *shader);
 static HRESULT device_bind_pixel_shader(D8Device *device, DWORD handle, D8Shader *shader);
@@ -1673,6 +1671,36 @@ static BOOL emit_present_and_flush(D8Device *device, HWND override_window)
     d9wg_cursor_present(device->handle, window, &device->app_cursor_state);
     result = reserve_command_locked(D9WG_OP_PRESENT, sizeof(present), 0,
             NULL, &payload, NULL);
+    if (result) {
+        CopyMemory(payload, &present, sizeof(present));
+        result = submit_batch_locked(TRUE);
+    }
+    LeaveCriticalSection(&g_transport_lock);
+    return result;
+}
+
+static BOOL emit_present_swap_chain_and_flush(D8SwapChain *chain,
+    HWND override_window)
+{
+    D8ClientArea surface;
+    D9WGPresentSwapChain present;
+    uint8_t *payload;
+    BOOL result;
+    HWND window = override_window ? override_window : chain->present.hDeviceWindow;
+
+    d9wg_window_watch_retry();
+    EnterCriticalSection(&g_transport_lock);
+    capture_surface(chain->device, window, &surface);
+    present.device_handle = chain->device->handle;
+    present.swap_chain_handle = chain->handle;
+    present.hwnd = surface.hwnd;
+    present.x = surface.x;
+    present.y = surface.y;
+    present.width = surface.width;
+    present.height = surface.height;
+    present.reserved = 0;
+    result = reserve_command_locked(D9WG_OP_PRESENT_SWAP_CHAIN, sizeof(present),
+        0, NULL, &payload, NULL);
     if (result) {
         CopyMemory(payload, &present, sizeof(present));
         result = submit_batch_locked(TRUE);
@@ -4972,14 +5000,6 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface8 *iface)
     return refs;
 }
 
-static void private_data_owner_release(D8PrivateDataOwner* owner)
-{
-    if (!InterlockedDecrement(&owner->refs)) {
-        d9wg_private_clear(&owner->store, &d9wg_private_ops);
-        HeapFree(GetProcessHeap(), 0, owner);
-    }
-}
-
 static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
 {
     D8Surface *surface = surface_from_iface(iface);
@@ -5002,8 +5022,6 @@ static ULONG WINAPI surface_release(IDirect3DSurface8 *iface)
     ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
     if (!refs) {
         d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
-        if (surface->retained_private_data)
-            private_data_owner_release(surface->retained_private_data);
         if (surface->reset_blocker && surface->device
                 && surface->device->implicit_surface_count)
             --surface->device->implicit_surface_count;
@@ -5727,11 +5745,16 @@ static ULONG WINAPI swapchain_release(IDirect3DSwapChain8 *iface)
     D8SwapChain *chain = (D8SwapChain *)iface;
     ULONG refs = (ULONG)InterlockedDecrement(&chain->refcount);
     if (!refs) {
-        private_data_owner_release(chain->private_data_owner);
-        if (chain->device->additional_swap_chain_count)
-            --chain->device->additional_swap_chain_count;
-        device_child_release(chain->device);
+        D8Device *device = chain->device;
+        D9WGDestroySwapChain destroy;
+        destroy.device_handle = device->handle;
+        destroy.swap_chain_handle = chain->handle;
+        emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
+        if (device->additional_swap_chain_count)
+            --device->additional_swap_chain_count;
+        IDirect3DSurface8_Release(chain->back_buffer);
         HeapFree(GetProcessHeap(), 0, chain);
+        device_child_release(device);
     }
     return refs;
 }
@@ -5748,7 +5771,7 @@ static HRESULT WINAPI swapchain_present(IDirect3DSwapChain8* iface,
     HRESULT status = d9wg_reset_present_result(&chain->device->reset_state);
     if (status != D3D_OK)
         return D8WG_TRACE_ERROR(status);
-    BOOL ok = emit_present_and_flush(chain->device, window);
+    BOOL ok = emit_present_swap_chain_and_flush(chain, window);
     if (ok)
         d9wg_throttle_present(&chain->present_clock, &chain->present_pacing,
             d9wg_present_interval8(chain->present.FullScreen_PresentationInterval,
@@ -5757,26 +5780,17 @@ static HRESULT WINAPI swapchain_present(IDirect3DSwapChain8* iface,
     return ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
-static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8* iface,
-    UINT index, D3DBACKBUFFER_TYPE type, IDirect3DSurface8** surface_out)
+static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8 *iface,
+    UINT index, D3DBACKBUFFER_TYPE type, IDirect3DSurface8 **surface_out)
 {
-    D8SwapChain* chain = (D8SwapChain*)iface;
-    if (!surface_out)
+    D8SwapChain *chain = (D8SwapChain *)iface;
+    if (!surface_out || index)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    /* Native ignores the stereo selector and preserves output on bad index. */
+    /* The surface is the retained render-target texture's cached level view. */
     (void)type;
-    if (index)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    *surface_out = NULL;
-    HRESULT result = create_backbuffer_surface(chain->device, &chain->present, TRUE,
-        surface_out);
-    if (SUCCEEDED(result)) {
-        D8Surface* surface = surface_from_iface(*surface_out);
-        surface->private_data_owner = &chain->private_data_owner->store;
-        surface->retained_private_data = chain->private_data_owner;
-        InterlockedIncrement(&chain->private_data_owner->refs);
-    }
-    return result;
+    *surface_out = chain->back_buffer;
+    IDirect3DSurface8_AddRef(*surface_out);
+    return D3D_OK;
 }
 
 static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
@@ -5788,6 +5802,9 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     RECT client;
     UINT width, height;
     D3DFORMAT format;
+    D9WGCreateSwapChain command;
+    POINT origin = { 0, 0 };
+    HRESULT hr;
     if (!chain_out)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     *chain_out = NULL;
@@ -5820,17 +5837,38 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     chain = (D8SwapChain *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*chain));
     if (!chain) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-    chain->private_data_owner = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*chain->private_data_owner));
-    if (!chain->private_data_owner) {
-        HeapFree(GetProcessHeap(), 0, chain);
-        return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-    }
-    chain->private_data_owner->refs = 1;
     chain->iface.lpVtbl = &g_swapchain_vtbl;
     chain->refcount = 1;
     chain->device = device;
     d9wg_present_parameters_effective(&chain->present, parameters,
         width, height, format, window);
+    hr = device_create_render_target(iface, width, height, format,
+        parameters->MultiSampleType,
+        (parameters->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER) != 0,
+        &chain->back_buffer);
+    if (FAILED(hr)) {
+        HeapFree(GetProcessHeap(), 0, chain);
+        return hr;
+    }
+    D8Surface *surface = surface_from_iface(chain->back_buffer);
+    chain->handle = allocate_handle();
+    if (window)
+        ClientToScreen(window, &origin);
+    ZeroMemory(&command, sizeof(command));
+    command.device_handle = device->handle;
+    command.swap_chain_handle = chain->handle;
+    command.back_buffer_handle = surface->texture ? surface->texture->handle : 0;
+    command.hwnd = (uint32_t)(uintptr_t)window;
+    command.x = origin.x;
+    command.y = origin.y;
+    command.width = width;
+    command.height = height;
+    if (!command.back_buffer_handle
+        || !emit_command(D9WG_OP_CREATE_SWAP_CHAIN, &command, sizeof(command))) {
+        IDirect3DSurface8_Release(chain->back_buffer);
+        HeapFree(GetProcessHeap(), 0, chain);
+        return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
+    }
     device_child_add_ref(device);
     ++device->additional_swap_chain_count;
     d9wg_present_parameters_return(8, parameters, &chain->present);

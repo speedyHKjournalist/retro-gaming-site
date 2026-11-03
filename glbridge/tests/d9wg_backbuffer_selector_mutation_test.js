@@ -13,10 +13,10 @@ try {
     for(const api of [8,9]) {
         const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'), fn=api===8?'swapchain_get_backbuffer':'swap_chain_get_back_buffer';
         const changes=api===8?[
-            ['stereo rejected','if (index)','if (index || type != D3DBACKBUFFER_TYPE_MONO)'],
-            ['bad index clears output','    if (index)','    *surface_out = NULL;\n    if (index)'],
-            ['index ignored','if (index)','if (0 && index)'],
-            ['successful view loses owner pin','InterlockedIncrement(&chain->private_data_owner->refs);','(void)InterlockedIncrement;'],
+            ['stereo rejected','if (!surface_out || index)','if (!surface_out || index || type != D3DBACKBUFFER_TYPE_MONO)'],
+            ['bad index clears output','    if (!surface_out || index)','    if(surface_out) *surface_out = NULL;\n    if (!surface_out || index)'],
+            ['index ignored','if (!surface_out || index)','(void)index; if (!surface_out)'],
+            ['successful view loses reference','IDirect3DSurface8_AddRef(*surface_out);','(void)IDirect3DSurface8_AddRef;'],
         ]:[
             ['stereo rejected','if (!out || index)','if (!out || index || type != D3DBACKBUFFER_TYPE_MONO)'],
             ['bad index clears output','    if (!out || index)','    if(out) *out = NULL;\n    if (!out || index)'],

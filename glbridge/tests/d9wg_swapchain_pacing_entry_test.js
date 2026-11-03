@@ -33,7 +33,7 @@ static void Sleep(DWORD ms){assert(!locked&&ms&&ms<=201);sleeps++;time_us+=(uint
 static Device*device_from_iface(Device*d){return d;}
 ${api===9?'static Chain*swap_chain_from_iface(Chain*c){return c;}':''}
 static BOOL emit_present_and_flush(Device*d,HWND window){(void)d;assert(!locked);locked=1;emits++;device_emits++;last_window=window;locked=0;return !fail_emit;}
-${api===9?'static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND window){assert(c->handle&&!locked);locked=1;emits++;chain_emits++;last_window=window;locked=0;return !fail_emit;}':''}
+static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND window){assert(c->handle&&!locked);locked=1;emits++;chain_emits++;last_window=window;locked=0;return !fail_emit;}
 #include "${process.env.D9WG_CHAIN_BRIDGE||root+'/runtime/d9wg_present_pacing_bridge.h'}"
 ${extract(source,'device_present').replace(/&device->iface/g,'device').replace(/&swap_chain->device->iface/g,'swap_chain->device')}
 ${extract(source,api===8?'swapchain_present':'swap_chain_present').replace(/&device->iface/g,'device').replace(/&swap_chain->device->iface/g,'swap_chain->device')}
@@ -41,7 +41,7 @@ ${extract(source,api===8?'swapchain_present':'swap_chain_present').replace(/&dev
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Chain pacing API ${api} mode %u line %u: %s\\n",mode,__LINE__,#v);return 1;}}while(0)
 int main(int argc,char**argv){CHECK(argc==2);mode=(unsigned)(argv[1][0]-'0');Device device={.display_mode={60}};device.present.PresentationInterval=1;Chain a={.device=&device,.present={.Windowed=1,.SwapEffect=4,.PresentationInterval=1,.hDeviceWindow=(void*)(uintptr_t)0x55},.handle=10},b=a;b.handle=11;b.present.hDeviceWindow=(void*)(uintptr_t)0x66;unsigned cases=0;
 for(unsigned n=0;n<61;n++){CHECK(!PRESENT(&a,0,NULL));CHECK(!PRESENT(&b,0,NULL));}CHECK(emits==122&&env_reads==1&&!device.present_pacing.ready&&!device.present_clock.hz&&!locked);CHECK(mode==1?!time_us:time_us>=999000&&time_us<=1000000);cases++;
-${api===8?'CHECK(last_window==b.present.hDeviceWindow&&!chain_emits);':'CHECK(!last_window&&chain_emits==122&&!device_emits);'}cases++;
+${api===8?'CHECK(last_window==b.present.hDeviceWindow&&chain_emits==122&&!device_emits);':'CHECK(!last_window&&chain_emits==122&&!device_emits);'}cases++;
 D9WGPresentPacing before=a.present_pacing;unsigned before_sleeps=sleeps,before_emits=emits;fail_emit=1;CHECK(PRESENT(&a,0,(void*)(uintptr_t)0x77)==-1&&!memcmp(&before,&a.present_pacing,sizeof(before))&&sleeps==before_sleeps&&emits==before_emits+1&&last_window==(void*)(uintptr_t)0x77);fail_emit=0;cases++;
 a.present.PresentationInterval=0x80000000u;a.present.SwapEffect=1;CHECK(!PRESENT(&a,0,NULL)&&!a.present_pacing.ready&&sleeps==before_sleeps);cases++;
 a.present.PresentationInterval=1;a.present.SwapEffect=4;CHECK(!PRESENT(&a,0,NULL)&&sleeps==before_sleeps);cases++;

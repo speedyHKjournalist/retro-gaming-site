@@ -114,7 +114,7 @@ static void fill_display_mode(Mode*m,UINT w,UINT h,UINT f){*m=(Mode){w,h,f,60};}
 static void device_init_states(Device*d){assert(d==active&&d->reset_state.required);initializations++;}
 static BOOL emit_device_state_after_reset(Device*d){assert(d==active&&d->reset_state.required&&!d->in_scene);replays++;return !fail_state_emit;}
 static BOOL emit_present_and_flush(Device*d,HWND w){(void)w;assert(d==active&&!d->reset_state.required);frames++;return 1;}
-${api === 9 ? "static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND w){return emit_present_and_flush(c->device,w);}" : ""}
+static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND w){return emit_present_and_flush(c->device,w);}
 static void d9wg_throttle_present(D9WGPresentClock*c,D9WGPresentPacing*p,UINT i,UINT hz){(void)c;(void)i;(void)hz;paces++;p->deadline++;}
 ${api === 9 ? "static BOOL d9wg_prepare_present(D9WGPresentClock*c,D9WGPresentPacing*p,UINT i,UINT hz){(void)c;(void)i;(void)hz;prepares++;p->deadline++;return !busy;}" : ""}
 ${functions.map(name => extract(source, name).replace(/&device->iface/g, "device")).join("\n")}

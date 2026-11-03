@@ -67,7 +67,7 @@ static void device_child_add_ref(Device*);static void device_child_release(Devic
 static void parent_release(Interface*p){(void)p;assert(parent_refs==1);parent_refs--;}
 #define IDirect3D${api}_Release parent_release
 static void device_release_owned_references(Device*d){(void)d;}
-${api===8?`static void private_data_owner_release(void*p){(void)p;assert(0);}
+${api===8?`
 static BOOL texture_format_layout(D3DFORMAT f,UINT*w,UINT*h,UINT*b){assert(f==22);*w=*h=1;*b=4;return 1;}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=*p*h;return 1;}
 static HRESULT texture_get_surface_level(Interface*t,UINT l,Interface**o){(void)t;(void)l;(void)o;assert(0);return -1;}
