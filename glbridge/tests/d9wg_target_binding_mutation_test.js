@@ -28,7 +28,7 @@ try {
         ["texture child uses private counter", "surface_uses_private_bindings", "!surface->texture_child", "surface->texture_child"] ,
         ["cube child uses private counter", "surface_uses_private_bindings", "!surface->cube_texture", "1"] ,
         ["chain buffer uses private counter", "surface_uses_private_bindings", "!surface->swap_chain", "1"] ,
-        ["implicit depth uses private counter", "surface_uses_private_bindings", "!surface->auto_depth_stencil", "1"] ,
+        ["implicit depth incorrectly uses public counter", "surface_uses_private_bindings", "return !surface->texture_child", "return !surface->auto_depth_stencil && !surface->texture_child"] ,
         ["same target released before retaining new binding", "device_set_render_target", "if (surface)\n        surface_binding_add_ref(surface);\n    device->render_target_surfaces[index] = surface;\n    if (old_surface)\n        surface_binding_release(old_surface);", "if (old_surface)\n        surface_binding_release(old_surface);\n    if (surface)\n        surface_binding_add_ref(surface);\n    device->render_target_surfaces[index] = surface;"] ,
         ["public zero Release lacks exit marker", "surface_release", "TRACE_MARK_EXIT(\"Surface.Release\", 0, iface);", "(void)iface;", true],
         ["private destruction creates a public Release exit", "surface_destroy_storage", "TRACE_SURFACE_FREED(iface);", "TRACE_MARK_EXIT(\"Surface.Release\", 0, iface); TRACE_SURFACE_FREED(iface);"],

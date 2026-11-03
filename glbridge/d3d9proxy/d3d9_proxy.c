@@ -1362,8 +1362,8 @@ static void surface_destroy_storage(D9Surface *surface);
 
 static BOOL surface_uses_private_bindings(const D9Surface *surface)
 {
-    return !surface->swap_chain && !surface->auto_depth_stencil
-        && !surface->texture_child && !surface->cube_texture;
+    return !surface->texture_child && !surface->cube_texture
+        && (!surface->swap_chain || !surface->swap_chain->handle);
 }
 
 static void surface_binding_add_ref(D9Surface *surface)
@@ -1381,7 +1381,8 @@ static void surface_binding_release(D9Surface *surface)
         return;
     }
     if (!InterlockedDecrement(&surface->binding_refs)
-            && !InterlockedCompareExchange(&surface->refcount, 0, 0))
+            && !InterlockedCompareExchange(&surface->refcount, 0, 0)
+            && !surface_is_implicit(surface))
         surface_destroy_storage(surface);
 }
 
@@ -3250,6 +3251,9 @@ static D9Surface *reset_bound_surface(D9Device *device, UINT slot)
 static UINT reset_surface_owned_refs(D9Device *device, D9Surface *surface)
 {
     UINT refs = 0;
+    /* Implicit binding references are private, so every public ref blocks. */
+    if (surface && surface_is_implicit(surface))
+        return 0;
     if (surface)
         for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i)
             if (reset_bound_surface(device, i) == surface)

@@ -2545,8 +2545,6 @@ static BOOL device_has_reset_blockers(D8Device *device)
 {
     UINT cached_active = (device->implicit_back_buffer && device->implicit_back_buffer->refcount > 0)
             + (device->implicit_depth_stencil && device->implicit_depth_stencil->refcount > 0);
-    UINT owned_depth = device->implicit_depth_stencil
-            && device->depth_surface == device->implicit_depth_stencil ? 1u : 0u;
     if (device->additional_swap_chain_count
             || device->implicit_surface_count > cached_active)
         return TRUE;
@@ -2554,7 +2552,7 @@ static BOOL device_has_reset_blockers(D8Device *device)
             (UINT)device->implicit_back_buffer->refcount, 0, device->implicit_back_buffer->locked))
         return TRUE;
     if (device->implicit_depth_stencil && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
-            (UINT)device->implicit_depth_stencil->refcount, owned_depth,
+            (UINT)device->implicit_depth_stencil->refcount, 0,
             device->implicit_depth_stencil->locked))
         return TRUE;
     for (D8VertexBuffer *buffer = device->vertex_buffers; buffer; buffer = buffer->next_device_resource)
@@ -5021,6 +5019,9 @@ static BOOL surface_is_implicit(D8Surface *surface)
 
 static void surface_binding_add_ref(D8Surface *surface)
 {
+    /* The device owns cached implicit storage independently of bindings. */
+    if (surface_is_implicit(surface))
+        return;
     if (surface->device_container && !surface->additional_back_buffer)
         IDirect3DTexture8_AddRef(&surface->texture->iface);
     else
@@ -5029,6 +5030,9 @@ static void surface_binding_add_ref(D8Surface *surface)
 
 static void surface_binding_release(D8Surface *surface)
 {
+    /* The device owns cached implicit storage independently of bindings. */
+    if (surface_is_implicit(surface))
+        return;
     if (surface->device_container && !surface->additional_back_buffer)
         IDirect3DTexture8_Release(&surface->texture->iface);
     else

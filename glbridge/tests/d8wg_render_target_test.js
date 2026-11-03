@@ -37,7 +37,7 @@ typedef struct Texture{Iface iface;unsigned refs,freed;D8Device*device;UINT hand
 typedef struct Surface{Iface iface;unsigned refs,heap;D8Texture*texture;D8CubeTexture*cube;D8Device*device;UINT level,face;BOOL backbuffer,depth_stencil,device_container,additional_back_buffer;void*private_data_owner;D3DSURFACE_DESC desc;}D8Surface;
 typedef struct D8StateSnapshot{BOOL viewport_mask;D3DVIEWPORT8 viewport;}D8StateSnapshot;
 typedef struct D8StateBlock{D8StateSnapshot state;}D8StateBlock;
-struct D8Device{UINT handle,depth_surface_private_data;D8Texture*render_target_texture;D8CubeTexture*render_target_cube;UINT render_target_level,render_target_face;D8Surface*depth_surface,*implicit_depth_stencil;BOOL depth_surface_enabled;struct{UINT BackBufferWidth,BackBufferHeight,AutoDepthStencilFormat;D3DMULTISAMPLE_TYPE MultiSampleType;}present;struct{UINT Width,Height;}display_mode;D3DVIEWPORT8 viewport;D8StateBlock*recording_state_block;};
+struct D8Device{UINT handle,depth_surface_private_data;D8Texture*render_target_texture;D8CubeTexture*render_target_cube;UINT render_target_level,render_target_face;D8Surface*depth_surface,*implicit_back_buffer,*implicit_depth_stencil;BOOL depth_surface_enabled;struct{UINT BackBufferWidth,BackBufferHeight,AutoDepthStencilFormat;D3DMULTISAMPLE_TYPE MultiSampleType;}present;struct{UINT Width,Height;}display_mode;D3DVIEWPORT8 viewport;D8StateBlock*recording_state_block;};
 static unsigned g_surface_vtbl,count,fail_at,live_views,allocated_views;
 static D8Device*active;
 static struct{UINT opcode;BYTE bytes[128];}commands[32];
@@ -59,7 +59,7 @@ static HRESULT create_backbuffer_surface(D8Device*d,const void*p,BOOL blocker,If
 static HRESULT create_standalone_surface(D8Device*d,UINT w,UINT h,D3DFORMAT f,DWORD u,D3DPOOL p,BOOL l,BOOL b,BOOL depth,BOOL blocker,Iface**out){(void)d;(void)w;(void)h;(void)f;(void)u;(void)p;(void)l;(void)b;(void)depth;(void)blocker;(void)out;assert(0);return -1;}
 static BOOL emit_command(uint16_t op,const void*p,UINT n){assert(count<32&&n<=128);commands[count].opcode=op;memcpy(commands[count].bytes,p,n);count++;return !fail_at||count!=fail_at;}
 static HRESULT device_get_backbuffer(D8Device*d,UINT index,UINT type,Iface**out){(void)index;(void)type;return create_backbuffer_surface(d,&d->present,1,out);}
-${["cube_level","surface_device","surface_gpu_location","bound_render_target_level","current_render_target_size","set_live_viewport","device_set_viewport","device_get_viewport","clear_render_target_binding","surface_binding_add_ref","surface_binding_release","device_set_render_target","device_get_render_target","device_get_depth_surface"].map(extract).join("\n")}
+${["cube_level","surface_device","surface_gpu_location","bound_render_target_level","current_render_target_size","set_live_viewport","device_set_viewport","device_get_viewport","clear_render_target_binding","surface_is_implicit","surface_binding_add_ref","surface_binding_release","device_set_render_target","device_get_render_target","device_get_depth_surface"].map(extract).join("\n")}
 static HRESULT bind(D8Device*d,D8Surface*c,D8Surface*z){return device_set_render_target(d,c?&c->iface:NULL,z?&z->iface:NULL);}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"D8 target line %u: %s count=%u\\n",__LINE__,#v,count);return 1;}}while(0)
 static void reset_events(void){count=fail_at=0;memset(commands,0,sizeof(commands));}

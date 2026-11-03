@@ -17,13 +17,14 @@ typedef uint32_t UINT;typedef int32_t LONG;typedef int BOOL;
 #define D9_MAX_RENDER_TARGETS 4
 typedef struct{void*lpVtbl;}Interface;typedef struct{BOOL locked;}Level;typedef struct Resource Resource;typedef struct Surface Surface;
 struct Resource{Interface iface;LONG refcount;UINT pool,level_count;BOOL locked;Level*levels;Resource*next_device_resource;};
-struct Surface{void*swap_chain;LONG refcount;BOOL locked,texture_child;Resource*texture,*cube_texture;};
+typedef struct Chain{LONG refcount;UINT handle;struct Chain*next_device_chain;}D9SwapChain;
+struct Surface{D9SwapChain*swap_chain;LONG refcount;BOOL locked,texture_child,auto_depth_stencil;Resource*texture,*cube_texture;};
 typedef struct{Resource*buffer;}Stream;
-typedef struct Chain{LONG refcount;struct Chain*next_device_chain;}D9SwapChain;
+
 typedef struct{BOOL in_scene;void*recording_state_block,*recording_result;D9SwapChain*additional_swap_chains;UINT additional_swap_chain_count,implicit_surface_count;Resource*vertex_buffers,*index_buffers,*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;Stream streams[16];Resource*index_buffer,*textures[20],*cube_bindings[20],*volume_bindings[20];Resource*render_target_texture,*render_target_cube;Surface*depth_surface,*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;}Device;
 typedef Device D${api}Device;typedef Resource D${api}VertexBuffer,D${api}IndexBuffer,D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture;typedef Surface D${api}Surface;
 static LONG InterlockedCompareExchange(LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}
-${['reset_buffer_owned_refs',...(api===9?['reset_bound_surface','reset_surface_owned_refs']:[]),'reset_texture_owned_refs','device_has_reset_blockers'].map(n=>extract(source,n)).join('\n')}
+${['reset_buffer_owned_refs',...(api===9?['surface_is_implicit','reset_bound_surface','reset_surface_owned_refs']:[]),'reset_texture_owned_refs','device_has_reset_blockers'].map(n=>extract(source,n)).join('\n')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Reset resource API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 static void root_resource(Device*d,Resource*r,UINT kind){if(kind==0)d->vertex_buffers=r;else if(kind==1)d->index_buffers=r;else if(kind==2)d->texture_resources=r;else if(kind==3)d->cube_${api===8?'resources':'textures'}=r;else d->volume_${api===8?'resources':'textures'}=r;}
 static UINT bind_resource(Device*d,Resource*r,Surface*view,UINT kind,UINT mode){UINT refs=0;if(!mode)return 0;
@@ -42,13 +43,13 @@ if(!expected){Resource tail={.pool=0,.refcount=1};r.next_device_resource=&tail;C
 }
 ${api===9?`D9SwapChain tail={.refcount=1},head={.next_device_chain=&tail};d=(Device){.additional_swap_chains=&head};CHECK(device_has_reset_blockers(&d));tail.refcount=0;CHECK(!device_has_reset_blockers(&d));head.next_device_chain=NULL;CHECK(!device_has_reset_blockers(&d));cases+=3;`:''}
 d=(Device){.in_scene=1};CHECK(!device_has_reset_blockers(&d));d=(Device){.${api===8?'recording_state_block':'recording_result'}=(void*)(uintptr_t)1};CHECK(!device_has_reset_blockers(&d));d=(Device){.${api===8?'additional_swap_chain_count':'additional_swap_chains'}=${api===8?'1':'&(D9SwapChain){.refcount=1}'}};CHECK(device_has_reset_blockers(&d));cases++;
-Surface back={0},depth={0};for(UINT own=0;own<2;own++)for(UINT external=0;external<3;external++){d=(Device){.implicit_back_buffer=&back,.implicit_depth_stencil=&depth};back=(Surface){0};depth=(Surface){.refcount=(LONG)(own+external)};${api===8?'d.implicit_surface_count=depth.refcount>0;d.depth_surface=own?&depth:NULL;':'d.depth_stencil_surface=own?&depth:NULL;'}CHECK(device_has_reset_blockers(&d)==(external>0));cases++;}
+D9SwapChain implicit_chain={0};Surface back={0},depth={0};for(UINT own=0;own<2;own++)for(UINT external=0;external<3;external++){d=(Device){.implicit_back_buffer=&back,.implicit_depth_stencil=&depth};back=(Surface){.swap_chain=&implicit_chain};depth=(Surface){.refcount=(LONG)external,.auto_depth_stencil=1};${api===8?'d.implicit_surface_count=depth.refcount>0;d.depth_surface=own?&depth:NULL;':'d.depth_stencil_surface=own?&depth:NULL;'}CHECK(device_has_reset_blockers(&d)==(external>0));cases++;}
 d=(Device){.implicit_back_buffer=&back};back=(Surface){.refcount=1};${api===8?'d.implicit_surface_count=1;':''}CHECK(device_has_reset_blockers(&d));cases++;
 ${api===8?'d=(Device){.implicit_surface_count=1};CHECK(device_has_reset_blockers(&d));cases++;':`
 /* A standalone surface holds one backing-texture ref, even when multiple
  * bindings retain the same surface. External surface/container refs block. */
 for(UINT legacy=0;legacy<2;legacy++)for(UINT bindings=1;bindings<=2;bindings++)for(UINT external_surface=0;external_surface<2;external_surface++)for(UINT external_texture=0;external_texture<2;external_texture++){
-Level level={0};Resource r={.pool=0,.refcount=(LONG)(1+external_texture),.level_count=1,.levels=&level};Surface target={.swap_chain=legacy?(void*)(uintptr_t)1:NULL,.refcount=(LONG)((legacy?bindings:0)+external_surface),.texture=&r};d=(Device){.texture_resources=&r};d.render_target_surfaces[0]=&target;if(bindings==2)d.render_target_surfaces[3]=&target;CHECK(device_has_reset_blockers(&d)==(external_surface||external_texture));cases++;
+Level level={0};Resource r={.pool=0,.refcount=(LONG)(1+external_texture),.level_count=1,.levels=&level};D9SwapChain legacy_chain={.handle=7};Surface target={.swap_chain=legacy?&legacy_chain:NULL,.refcount=(LONG)((legacy?bindings:0)+external_surface),.texture=&r};d=(Device){.texture_resources=&r};d.render_target_surfaces[0]=&target;if(bindings==2)d.render_target_surfaces[3]=&target;CHECK(device_has_reset_blockers(&d)==(external_surface||external_texture));cases++;
 }
 `}
 printf("PASS actual API ${api} Reset resource graph: %u observations; five resource families, four pools, mapped CPU resources, all binding classes/last slots, device-only targets, external implicit refs, tails and no preflight mutation\\n",cases);return 0;}

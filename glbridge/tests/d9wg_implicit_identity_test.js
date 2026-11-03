@@ -1,7 +1,8 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'d9wg-implicit-'));
 function extract(s,name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(s);assert(m,name);let end=s.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(s[end]==='{')depth++;if(s[end]==='}')depth--;}return s.slice(m.index,end);}
-try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_IMPLICIT_FRONTEND']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/implicit.c',`#include <stdint.h>
+const apis=process.env.D9WG_IMPLICIT_API?[Number(process.env.D9WG_IMPLICIT_API)]:[8,9];assert(apis.every(api=>api===8||api===9));
+try{for(const api of apis){const source=fs.readFileSync(process.env['D'+api+'WG_IMPLICIT_FRONTEND']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/implicit.c',`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,13 +62,18 @@ static void device_child_add_ref(Device*);static void device_child_release(Devic
 #define IDirect3DDevice${api}_AddRef(p) ((p)->lpVtbl->AddRef(p))
 #define IDirect3DDevice${api}_Release(p) ((p)->lpVtbl->Release(p))
 #define IDirect3DSurface${api}_AddRef(p) ((p)->lpVtbl->AddRef(p))
+#define IDirect3DSurface${api}_Release(p) ((p)->lpVtbl->Release(p))
 #define IDirect3DTexture${api}_AddRef(p) ((void)(p),0u)
 #define IDirect3DCubeTexture${api}_AddRef(p) ((void)(p),0u)
 #define IDirect3DTexture${api}_Release(p) ((void)(p),0u)
 #define IDirect3DCubeTexture${api}_Release(p) ((void)(p),0u)
 static void parent_release(Interface*p){(void)p;assert(parent_refs==1);parent_refs--;}
 #define IDirect3D${api}_Release parent_release
-static void device_release_owned_references(Device*d){(void)d;}
+static void surface_binding_add_ref(Surface*);static void surface_binding_release(Surface*);
+${api===9?'static void surface_destroy_storage(Surface*);':''}
+static void device_release_owned_references(Device*d){
+${api===8?'Surface*s=d->depth_surface;d->depth_surface=NULL;if(s)surface_binding_release(s);':'for(UINT i=0;i<4;i++){Surface*s=d->render_target_surfaces[i];d->render_target_surfaces[i]=NULL;if(s)surface_binding_release(s);}Surface*s=d->depth_stencil_surface;d->depth_stencil_surface=NULL;if(s)surface_binding_release(s);'}
+}
 ${api===8?`
 static BOOL texture_format_layout(D3DFORMAT f,UINT*w,UINT*h,UINT*b){assert(f==22);*w=*h=1;*b=4;return 1;}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=*p*h;return 1;}
@@ -87,7 +93,7 @@ static const int IID_IDirect3DSwapChain9=1,IID_IDirect3DResource9=2,IID_IDirect3
 static BOOL iid_is_unknown(REFIID p){return p&&!*p;}static BOOL guid_equal(REFIID a,REFIID b){return a&&b&&*a==*b;}
 #define IDirect3DSwapChain9_AddRef(p) ((void)(p),0u)
 `:''}
-${['surface_is_implicit','device_add_ref','device_release','device_child_add_ref','device_child_release','surface_add_ref',...(api===9?['surface_destroy_storage']:[]),'surface_release',api===8?'device_get_backbuffer':'device_get_back_buffer'].map(n=>extract(source,n)).join('\n')}
+${['surface_is_implicit','device_add_ref','device_release','device_child_add_ref','device_child_release','surface_add_ref',...(api===9?['surface_uses_private_bindings','surface_destroy_storage','reset_bound_surface','reset_surface_owned_refs']:[]),'surface_binding_add_ref','surface_binding_release','surface_release',api===8?'device_get_backbuffer':'device_get_back_buffer'].map(n=>extract(source,n)).join('\n')}
 ${api===9?'#define IDirect3DDevice9_GetBackBuffer device_get_back_buffer':''}
 ${[api===8?'device_get_depth_surface':'device_get_depth_stencil_surface','device_get_render_target',...(api===9?['surface_get_container']:[])].map(n=>extract(source,n)).join('\n')}
 #define BACK(d,t,o) ${api===8?'device_get_backbuffer(&(d)->iface,0,t,o)':'device_get_back_buffer(&(d)->iface,0,0,t,o)'}
@@ -105,7 +111,23 @@ fail_at=allocations+1;CHECK(!(kind?DEPTH(d,&b):BACK(d,0,&b))&&a==b&&allocations+
 ${api===9?`if(kind){void*q=NULL;CHECK(!surface_get_container(a,&unknown_id,&q)&&q==&d->iface&&d->refcount==2);CHECK(((Interface*)q)->lpVtbl->Release(q)==1);q=(void*)(uintptr_t)1;CHECK(surface_get_container(a,&bad_iid,&q)==-4&&!q&&d->refcount==1);cases++;}`:''}
 if(!kind){for(UINT type=0;type<4;type++){DWORD value=type==3?0xdeadbeef:type;CHECK(!BACK(d,(int)value,&b)&&b==a&&d->refcount==2);CHECK(b->lpVtbl->Release(b)==0&&d->refcount==1);cases++;}CHECK(!TARGET(d,&b)&&b==a&&b->lpVtbl->Release(b)==0);cases++;}
 }
-${api===8?`CHECK(!device_has_reset_blockers(d));Interface*depth=NULL;CHECK(!DEPTH(d,&depth)&&device_has_reset_blockers(d));d->depth_surface=(Surface*)depth;CHECK(!device_has_reset_blockers(d));CHECK(depth->lpVtbl->AddRef(depth)==2&&device_has_reset_blockers(d));CHECK(depth->lpVtbl->Release(depth)==1&&!device_has_reset_blockers(d));d->depth_surface=NULL;CHECK(depth->lpVtbl->Release(depth)==0&&!device_has_reset_blockers(d));cases++;`:''}
+Surface*bound_back=d->implicit_back_buffer,*bound_depth=d->implicit_depth_stencil;
+CHECK(!bound_back->refcount&&!bound_depth->refcount&&d->refcount==1);
+surface_binding_add_ref(bound_back);surface_binding_add_ref(bound_depth);
+${api===8?'d->depth_surface=bound_depth;':'d->render_target_surfaces[0]=bound_back;d->depth_stencil_surface=bound_depth;surface_binding_add_ref(bound_back);d->render_target_surfaces[1]=bound_back;'}
+CHECK(!bound_back->refcount&&!bound_depth->refcount&&d->refcount==1&&!d->child_parent_refs);
+${api===8?'CHECK(!device_has_reset_blockers(d));':'CHECK(bound_back->binding_refs==2&&bound_depth->binding_refs==1&&!reset_surface_owned_refs(d,bound_back)&&!reset_surface_owned_refs(d,bound_depth));'}
+for(UINT cycle=0;cycle<128;cycle++){
+ Interface*color=NULL,*depth=NULL;CHECK(!TARGET(d,&color)&&!DEPTH(d,&depth)&&color==&bound_back->iface&&depth==&bound_depth->iface&&d->refcount==3&&d->child_parent_refs==2);
+ surface_binding_add_ref(bound_back);surface_binding_add_ref(bound_depth);surface_binding_release(bound_back);surface_binding_release(bound_depth);CHECK(bound_back->refcount==1&&bound_depth->refcount==1&&d->refcount==3);
+ ${api===8?'CHECK(device_has_reset_blockers(d));':'CHECK(!reset_surface_owned_refs(d,bound_back)&&!reset_surface_owned_refs(d,bound_depth));'}
+ CHECK(color->lpVtbl->Release(color)==0&&depth->lpVtbl->Release(depth)==0&&d->refcount==1&&!d->child_parent_refs);
+ surface_binding_add_ref(bound_back);surface_binding_release(bound_back);surface_binding_add_ref(bound_depth);surface_binding_release(bound_depth);
+ CHECK(!bound_back->refcount&&!bound_depth->refcount&&d->refcount==1);
+}
+device_release_owned_references(d);CHECK(!bound_back->refcount&&!bound_depth->refcount&&!bound_back->binding_refs&&!bound_depth->binding_refs&&d->refcount==1&&live==3);
+printf("PASS actual API ${api} implicit bindings: 128 rounds, 256 public-zero revivals; cached color/depth private holds, repeated binding, one parent pin per public surface, public-only Reset accounting and cache storage after last unbind\\n");
+${api===8?`CHECK(!device_has_reset_blockers(d));Interface*depth=NULL;CHECK(!DEPTH(d,&depth)&&device_has_reset_blockers(d));d->depth_surface=(Surface*)depth;CHECK(device_has_reset_blockers(d));CHECK(depth->lpVtbl->AddRef(depth)==2&&device_has_reset_blockers(d));CHECK(depth->lpVtbl->Release(depth)==1&&device_has_reset_blockers(d));d->depth_surface=NULL;CHECK(depth->lpVtbl->Release(depth)==0&&!device_has_reset_blockers(d));cases++;`:''}
 Interface*a=NULL,*b=NULL;CHECK(!BACK(d,0,&a)&&!DEPTH(d,&b)&&a!=b&&d->refcount==3&&d->child_parent_refs==2);CHECK(device_release(&d->iface)==2&&destroys==0);CHECK(a->lpVtbl->Release(a)==0&&d->refcount==1&&d->child_parent_refs==1&&!destroys);CHECK(b->lpVtbl->Release(b)==0&&!live&&destroys==1&&!parent_refs);cases++;
 printf("PASS actual API ${api} implicit identity: %u lifecycle groups, repeated/revived/zero Release identity, one device pin per active surface, ignored stereo types, failed allocation atomicity and last-surface teardown\\n",cases);return 0;}
 `);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/implicit.c',root+'/runtime/d9wg_private_data.c','-o',dir+'/implicit'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/implicit',[],{encoding:'utf8',timeout:10000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}

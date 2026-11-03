@@ -130,7 +130,7 @@ int main(void){(void)surface_destroy_storage;(void)surface_binding_add_ref;(void
  if(order==3){device_clear_bindings(d);CHECK(d->refcount==1&&!d->texture_resources&&destroys==old_destroys+1&&live==1);CHECK(!device_release(&d->iface)&&!live&&!parent.refs);}
  cases++;
 }
-D9Surface s={0};D9Texture t={0};D9SwapChain chain={0};CHECK(surface_uses_private_bindings(&s));s.texture_child=1;CHECK(!surface_uses_private_bindings(&s));s.texture_child=0;s.cube_texture=&t;CHECK(!surface_uses_private_bindings(&s));s.cube_texture=NULL;s.swap_chain=&chain;CHECK(!surface_uses_private_bindings(&s));s.swap_chain=NULL;s.auto_depth_stencil=1;CHECK(!surface_uses_private_bindings(&s));
+D9Surface s={0};D9Texture t={0};D9SwapChain chain={0};CHECK(surface_uses_private_bindings(&s));s.texture_child=1;CHECK(!surface_uses_private_bindings(&s));s.texture_child=0;s.cube_texture=&t;CHECK(!surface_uses_private_bindings(&s));s.cube_texture=NULL;s.swap_chain=&chain;CHECK(surface_uses_private_bindings(&s));chain.handle=1;CHECK(!surface_uses_private_bindings(&s));s.swap_chain=NULL;s.auto_depth_stencil=1;CHECK(surface_uses_private_bindings(&s));
 printf("PASS actual D3D9 target bindings: %u checks, %u lifecycle groups, %u public-zero revivals; actual RT/depth setters/getters, one/two internal slots, one public device pin, public-only Reset blockers, same-object rebinding and unbind/device-first/last-public cleanup\\n",checks,cases,revivals);return 0;}
 
 `);
