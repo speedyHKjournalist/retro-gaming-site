@@ -7,12 +7,15 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include <string.h>
 #include <limits.h>
 #include "runtime/d9wg_present_pacing.h"
+#include "runtime/d9wg_reset.h"
 typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef void*HWND;typedef struct{int unused;}RECT,RGNDATA;typedef struct{int64_t QuadPart;}LARGE_INTEGER;
 #define WINAPI
 #define D3D_OK 0
 #define D3DERR_DRIVERINTERNALERROR (-1)
+#define D8WG_TRACE_ERROR(v) (v)
+#define TRACE_REFUSE(v) (v)
 #define TRACE(...)
-typedef struct{D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;}present;struct{DWORD RefreshRate;}display_mode;}Device;
+typedef struct{D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;}present;struct{DWORD RefreshRate;}display_mode;}Device;
 typedef Device D${api}Device,IDirect3DDevice${api};
 static unsigned mode,locked,emits,fail_emit,env_reads,qpf_reads,qpc_reads,tick_reads,sleeps;static uint64_t time_us;
 static LONG InterlockedCompareExchange(volatile LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}

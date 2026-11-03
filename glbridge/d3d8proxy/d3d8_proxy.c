@@ -232,6 +232,7 @@ struct D8Device {
     D9WGCursorState app_cursor_state;
     D9WGPresentClock present_clock;
     D9WGPresentPacing present_pacing;
+    D9WGResetState reset_state;
     D9WGPrivateStore back_buffer_private_data;
     D9WGPrivateStore depth_surface_private_data;
     D8Surface *implicit_back_buffer, *implicit_depth_stencil;
@@ -2855,10 +2856,9 @@ static void device_child_release(D8Device *device)
     IDirect3DDevice8_Release(&device->iface);
 }
 
-static HRESULT WINAPI device_test_cooperative_level(IDirect3DDevice8 *iface)
+static HRESULT WINAPI device_test_cooperative_level(IDirect3DDevice8* iface)
 {
-    (void)iface;
-    return D3D_OK;
+    return d9wg_reset_cooperative_result(&device_from_iface(iface)->reset_state);
 }
 
 static UINT WINAPI device_get_available_texture_mem(IDirect3DDevice8 *iface)
@@ -2912,35 +2912,37 @@ static HRESULT WINAPI device_get_creation_parameters(IDirect3DDevice8 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
-        D3DPRESENT_PARAMETERS *parameters)
+static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
+    D3DPRESENT_PARAMETERS* parameters)
 {
-    D8Device *device = device_from_iface(iface);
+    D8Device* device = device_from_iface(iface);
     D9WGResetDevice reset;
     RECT client;
     POINT origin;
     HWND window;
-    BYTE *new_front_shadow;
+    BYTE* new_front_shadow;
     UINT new_front_pitch;
     UINT new_front_rows;
     UINT new_front_bytes;
 
+    d9wg_reset_begin(&device->reset_state);
     if (!parameters || !supported_multisample_type(parameters->MultiSampleType)
-            || parameters->BackBufferCount > 3
-            || device_has_reset_blockers(device))
+        || parameters->BackBufferCount > 3)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (device_has_reset_blockers(device))
+        return D8WG_TRACE_ERROR(D3DERR_DEVICELOST);
     if (!d9wg_present_interval_valid(8, parameters->Windowed,
             parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
-            && !supported_depth_stencil_format(
-                parameters->AutoDepthStencilFormat))
+        && !supported_depth_stencil_format(
+            parameters->AutoDepthStencilFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-            && !supported_backbuffer_format(parameters->BackBufferFormat))
+        && !supported_backbuffer_format(parameters->BackBufferFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
-            : device->creation.hFocusWindow;
+                                       : device->creation.hFocusWindow;
     SetRect(&client, 0, 0, 640, 480);
     origin.x = origin.y = 0;
     if (window) {
@@ -2954,15 +2956,18 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     reset.x = origin.x;
     reset.y = origin.y;
     reset.width = parameters->BackBufferWidth
-            ? parameters->BackBufferWidth : (uint32_t)(client.right - client.left);
+        ? parameters->BackBufferWidth
+        : (uint32_t)(client.right - client.left);
     reset.height = parameters->BackBufferHeight
-            ? parameters->BackBufferHeight : (uint32_t)(client.bottom - client.top);
+        ? parameters->BackBufferHeight
+        : (uint32_t)(client.bottom - client.top);
     if (!reset.width)
         reset.width = device->display_mode.Width;
     if (!reset.height)
         reset.height = device->display_mode.Height;
     reset.backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
-            ? device->display_mode.Format : parameters->BackBufferFormat;
+        ? device->display_mode.Format
+        : parameters->BackBufferFormat;
     reset.windowed = parameters->Windowed;
     reset.behavior_flags = device->creation.BehaviorFlags;
     reset.enable_auto_depth_stencil = parameters->EnableAutoDepthStencil;
@@ -2974,14 +2979,14 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!texture_level_layout((D3DFORMAT)reset.backbuffer_format,
             reset.width, reset.height, &new_front_pitch, &new_front_rows,
-            &new_front_bytes) || new_front_rows != reset.height)
+            &new_front_bytes)
+        || new_front_rows != reset.height)
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
-    new_front_shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
-            HEAP_ZERO_MEMORY, new_front_bytes);
+    new_front_shadow = (BYTE*)HeapAlloc(GetProcessHeap(),
+        HEAP_ZERO_MEMORY, new_front_bytes);
     if (!new_front_shadow)
         return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
-    if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset)))
-    {
+    if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset))) {
         HeapFree(GetProcessHeap(), 0, new_front_shadow);
         return D8WG_TRACE_ERROR(D3DERR_DRIVERINTERNALERROR);
     }
@@ -2993,9 +2998,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
     ++device->reset_epoch;
     device->present = *parameters;
     fill_display_mode(&device->display_mode, reset.width, reset.height,
-            reset.backbuffer_format);
+        reset.backbuffer_format);
     if (device->implicit_back_buffer) {
-        D8Surface *surface = device->implicit_back_buffer;
+        D8Surface* surface = device->implicit_back_buffer;
         surface->desc.Width = reset.width;
         surface->desc.Height = reset.height;
         surface->desc.Format = reset.backbuffer_format;
@@ -3004,7 +3009,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
         surface->row_pitch = new_front_pitch;
     }
     if (device->implicit_depth_stencil) {
-        D8Surface *surface = device->implicit_depth_stencil;
+        D8Surface* surface = device->implicit_depth_stencil;
         surface->desc.Width = reset.width;
         surface->desc.Height = reset.height;
         surface->desc.Format = parameters->AutoDepthStencilFormat;
@@ -3025,17 +3030,21 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8 *iface,
         detach_device_window(device);
         attach_device_window(device, window);
     }
+    d9wg_reset_complete(&device->reset_state);
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_present(IDirect3DDevice8 *iface,
-        const RECT *source, const RECT *destination, HWND override_window,
-        const RGNDATA *dirty_region)
+static HRESULT WINAPI device_present(IDirect3DDevice8* iface,
+    const RECT* source, const RECT* destination, HWND override_window,
+    const RGNDATA* dirty_region)
 {
     (void)source;
     (void)destination;
     (void)dirty_region;
-    D8Device *device = device_from_iface(iface);
+    D8Device* device = device_from_iface(iface);
+    HRESULT status = d9wg_reset_present_result(&device->reset_state);
+    if (status != D3D_OK)
+        return D8WG_TRACE_ERROR(status);
     BOOL ok = emit_present_and_flush(device, override_window);
     if (ok)
         d9wg_throttle_present(&device->present_clock, &device->present_pacing,
@@ -5683,13 +5692,18 @@ static ULONG WINAPI swapchain_release(IDirect3DSwapChain8 *iface)
     return refs;
 }
 
-static HRESULT WINAPI swapchain_present(IDirect3DSwapChain8 *iface,
-        const RECT *source, const RECT *destination, HWND override_window,
-        const RGNDATA *dirty_region)
+static HRESULT WINAPI swapchain_present(IDirect3DSwapChain8* iface,
+    const RECT* source, const RECT* destination, HWND override_window,
+    const RGNDATA* dirty_region)
 {
-    D8SwapChain *chain = (D8SwapChain *)iface;
+    D8SwapChain* chain = (D8SwapChain*)iface;
     HWND window = override_window ? override_window : chain->present.hDeviceWindow;
-    (void)source; (void)destination; (void)dirty_region;
+    (void)source;
+    (void)destination;
+    (void)dirty_region;
+    HRESULT status = d9wg_reset_present_result(&chain->device->reset_state);
+    if (status != D3D_OK)
+        return D8WG_TRACE_ERROR(status);
     BOOL ok = emit_present_and_flush(chain->device, window);
     if (ok)
         d9wg_throttle_present(&chain->present_clock, &chain->present_pacing,

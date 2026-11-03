@@ -6,18 +6,21 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include <assert.h>
 #include <string.h>
 #include "runtime/d9wg_present_pacing.h"
+#include "runtime/d9wg_reset.h"
 typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef void*HWND;typedef struct{int unused;}RECT,RGNDATA;typedef struct{int64_t QuadPart;}LARGE_INTEGER;
 #define WINAPI
 #define D3D_OK 0
 #define D3DERR_DRIVERINTERNALERROR (-1)
 #define D3DERR_WASSTILLDRAWING (-2)
 #define D3DPRESENT_DONOTWAIT 1
+#define D8WG_TRACE_ERROR(v) (v)
+#define TRACE_REFUSE(v) (v)
 #define TRACE(...)
 #define TRACE_MARK_ENTER(...)
 #define TRACE_MARK_EXIT(...)
 #define SUCCEEDED(hr) ((hr)>=0)
 typedef struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;HWND hDeviceWindow;}Parameters;
-typedef struct{D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Parameters present;struct{DWORD RefreshRate;}display_mode;int iface;}Device;
+typedef struct{D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Parameters present;struct{DWORD RefreshRate;}display_mode;int iface;}Device;
 typedef struct{D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Device*device;Parameters present;DWORD handle;}Chain;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};
 static unsigned mode,locked,emits,fail_emit,env_reads,qpc_reads,sleeps,device_emits,chain_emits;static uint64_t time_us;static HWND last_window;

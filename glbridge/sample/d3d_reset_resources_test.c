@@ -1,4 +1,4 @@
-/* Private-data API/COM probe, without a C runtime. */
+/* Reset resource/status and managed-pixel SDK probe, without a C runtime. */
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include <stdint.h>
@@ -84,13 +84,36 @@ typedef IDirect3DBaseTexture9 BaseTexture;
 static const GUID key = { 0x10293847, 1, 2, { 3, 4, 5, 6, 7, 8, 9, 10 } };
 static Texture* marker;
 static UINT accepted, refused;
+static HRESULT refusal_hr, cooperative_hr, lost_present_hr;
 static void accept_reset(D3DPRESENT_PARAMETERS* parameters)
 {
     D3DPRESENT_PARAMETERS p = *parameters;
     check(DEV(Reset)(device, &p) == D3D_OK, "FAIL accepted resource Reset");
+    check(DEV(TestCooperativeLevel)(device) == D3D_OK, "FAIL successful Reset cooperative status");
     DWORD value = 0, size = 4;
     check(TEX(GetPrivateData)(marker, &key, &value, &size) == D3D_OK && size == 4 && value == 0x11223344u, "FAIL managed private data after Reset");
     accepted++;
+}
+static void refuse_reset(D3DPRESENT_PARAMETERS* parameters)
+{
+    D3DPRESENT_PARAMETERS p = *parameters;
+#if D9WG_RESET_API == 8
+    const HRESULT expected = D3DERR_DEVICELOST;
+#else
+    const HRESULT expected = D3DERR_INVALIDCALL;
+#endif
+    refusal_hr = DEV(Reset)(device, &p);
+    check(refusal_hr == expected, "FAIL resource Reset HRESULT");
+    cooperative_hr = DEV(TestCooperativeLevel)(device);
+    check(cooperative_hr == D3DERR_DEVICENOTRESET
+            && DEV(TestCooperativeLevel)(device) == D3DERR_DEVICENOTRESET,
+        "FAIL refused Reset cooperative status");
+    lost_present_hr = DEV(Present)(device, NULL, NULL, NULL, NULL);
+    check(lost_present_hr == D3DERR_DEVICELOST,
+        "FAIL lost Present HRESULT");
+    check(DEV(TestCooperativeLevel)(device) == D3DERR_DEVICENOTRESET,
+        "FAIL Present changed cooperative status");
+    refused++;
 }
 static HRESULT make_resource(UINT kind, D3DPOOL pool, IUnknown** out)
 {
@@ -182,10 +205,10 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
     for (UINT kind = 0; kind < 5; kind++) {
         IUnknown* resource = NULL;
         check(make_resource(kind, D3DPOOL_DEFAULT, &resource) == D3D_OK && resource, "FAIL held resource create");
-        D3DPRESENT_PARAMETERS p = *base;
-        check(FAILED(DEV(Reset)(device, &p)), "FAIL live DEFAULT resource accepted");
-        refused++;
+        refuse_reset(base);
         IUnknown_Release(resource);
+        check(DEV(TestCooperativeLevel)(device) == D3DERR_DEVICENOTRESET,
+            "FAIL resource release recovered device without Reset");
         accept_reset(base);
     }
     for (UINT kind = 0; kind < 5; kind++) {
@@ -212,10 +235,10 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
     for (UINT kind = 0; kind < 2; kind++) {
         Surface* surface = NULL;
         check(get_implicit(kind, &surface) == D3D_OK && surface, "FAIL held implicit get");
-        D3DPRESENT_PARAMETERS p = *base;
-        check(FAILED(DEV(Reset)(device, &p)), "FAIL held implicit Reset accepted");
-        refused++;
+        refuse_reset(base);
         SURFACE(Release)(surface);
+        check(DEV(TestCooperativeLevel)(device) == D3DERR_DEVICENOTRESET,
+            "FAIL implicit release recovered device without Reset");
         accept_reset(base);
     }
     Surface *target = NULL, *depth = NULL;
@@ -275,8 +298,10 @@ static void resource_cases(D3DPRESENT_PARAMETERS* base)
 #endif
     check(DEV(Clear)(device, 0, NULL, D3DCLEAR_TARGET, 0xff30a070u, 1, 0) == D3D_OK && DEV(BeginScene)(device) == D3D_OK && DEV(DrawPrimitiveUP)(device, D3DPT_TRIANGLESTRIP, 2, quad, sizeof(quad[0])) == D3D_OK && DEV(EndScene)(device) == D3D_OK && DEV(Present)(device, NULL, NULL, NULL, NULL) == D3D_OK, "FAIL post-Reset frame");
     TEX(Release)(marker);
-    char line[160];
+    char line[224];
     wsprintfA(line, "RESET GRAPH %u accepted=15 refused=7 families=5 cpuMapped=2 implicit=2 ownedTargets=1 private=11223344 frame=1", D9WG_RESET_API);
+    report(line);
+    wsprintfA(line, "RESET STATUS %u refused=7 recovered=15 lostPresents=7 coopNotReset=28 coopReady=15 resetHR=%08lX coopHR=%08lX presentHR=%08lX", D9WG_RESET_API, (DWORD)refusal_hr, (DWORD)cooperative_hr, (DWORD)lost_present_hr);
     report(line);
 }
 void WINAPI WinMainCRTStartup(void)
@@ -325,6 +350,7 @@ void WINAPI WinMainCRTStartup(void)
 #else
     check(IDirect3D9_CreateDevice(factory, 0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, &device) == D3D_OK, "FAIL device9");
 #endif
+    check(DEV(TestCooperativeLevel)(device) == D3D_OK, "FAIL initial cooperative status");
     resource_cases(&pp);
     check(DEV(Release)(device) == 0, "FAIL device references");
     FACTORY_RELEASE(factory);
