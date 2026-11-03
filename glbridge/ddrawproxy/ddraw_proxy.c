@@ -2456,12 +2456,60 @@ static HRESULT WINAPI surface_EnumOverlayZOrders(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
+static BOOL surface_flip_contains(const DDSurface *root,
+        const DDSurface *member)
+{
+    const DDSurface *walk;
+    if (!member) return FALSE;
+    if (root == member) return TRUE;
+    for (walk = root->flip_next; walk && walk != root; walk = walk->flip_next)
+        if (walk == member) return TRUE;
+    return FALSE;
+}
+
+static void surface_swap_flip_storage(DDSurface *a, DDSurface *b)
+{
+    uint32_t handle = a->handle;
+    DDTextureStorage *storage = a->storage;
+    DDSurfaceMemory *memory = a->memory;
+    BYTE *shadow = a->shadow;
+    BOOL external = a->external_memory, pending = a->upload_pending;
+    a->handle = b->handle; a->storage = b->storage;
+    a->memory = b->memory; a->shadow = b->shadow;
+    a->external_memory = b->external_memory;
+    a->upload_pending = b->upload_pending;
+    b->handle = handle; b->storage = storage;
+    b->memory = memory; b->shadow = shadow;
+    b->external_memory = external; b->upload_pending = pending;
+}
+
+/* Overlay identity belongs to the public surface; source and destination
+ * texture handles belong to the storage just moved by Flip. */
+static BOOL surface_rebind_flip_overlays(DDSurface *root, BOOL *visible)
+{
+    DDSurface *overlay;
+    *visible = root->primary;
+    for (overlay = root->owner->surfaces; overlay; overlay = overlay->next) {
+        if (!overlay->overlay_visible ||
+                !(overlay->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
+            continue;
+        if (!surface_flip_contains(root, overlay) &&
+                !surface_flip_contains(root, overlay->overlay_destination))
+            continue;
+        if (!emit_overlay_state(overlay)) return FALSE;
+        *visible = TRUE;
+    }
+    return TRUE;
+}
+
 static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
         LPDIRECTDRAWSURFACE7 override_iface, DWORD flags)
 {
     DDSurface *surface = surface_from_iface(iface);
     DDSurface *override_surface = override_iface
-        ? surface_from_iface(override_iface) : NULL;
+        ? surface_from_any(override_iface, NULL) : NULL;
+    DDSurface *walk;
+    BOOL visible;
 
     DDWG_TRACE_CHECKPOINT("CALL surface_Flip front=%lu override=%lu "
             "flags=%08lX has_chain=%lu", surface->handle,
@@ -2470,56 +2518,37 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
     if (!surface->primary && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_FLIP))
         return DDWG_TRACE_ERROR(DDERR_NOTFLIPPABLE);
     if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
+    if (override_iface && (!override_surface || override_surface == surface ||
+            override_surface->owner != surface->owner ||
+            !surface_flip_contains(surface, override_surface)))
+        return DDWG_TRACE_ERROR(DDERR_NOTFLIPPABLE);
 
     if (override_surface) {
-        /* Flip to a named surface: that surface's contents become the front
-         * buffer, and the chain is not rotated. */
-        emit_blt_to_screen(override_surface, NULL);
+        /* A named member exchanges storage with the front; other members
+         * retain their content, as opposed to rotating up to the target. */
+        surface_swap_flip_storage(surface, override_surface);
     } else if (surface->flip_next && surface->flip_next != surface) {
-        /*
-         * Real DirectDraw rotates which memory the display scans out while the
-         * interface pointers stay put, so an app that cached its back-buffer
-         * pointer keeps drawing into the buffer that is now off screen. The
-         * storage rotates here for exactly that reason: the handles and
-         * shadows move between the surface objects, the objects do not move.
-         */
-        DDSurface *walk = surface;
-        uint32_t handle = surface->handle;
-        DDTextureStorage *storage = surface->storage;
-        DDSurfaceMemory *memory = surface->memory;
-        BYTE *shadow = surface->shadow;
-        BOOL external_memory = surface->external_memory;
         DDSurface *previous = surface;
-
-        walk = surface->flip_next;
-        while (walk != surface) {
-            previous->handle = walk->handle;
-            previous->storage = walk->storage;
-            previous->memory = walk->memory;
-            previous->shadow = walk->shadow;
-            previous->external_memory = walk->external_memory;
-            previous = walk;
-            walk = walk->flip_next;
-        }
-        previous->handle = handle;
-        previous->storage = storage;
-        previous->memory = memory;
-        previous->shadow = shadow;
-        previous->external_memory = external_memory;
-        /* The storage moved; the per-handle host state has to follow it. */
-        rebind_host_surface_state(surface);
         for (walk = surface->flip_next; walk && walk != surface;
-                walk = walk->flip_next)
-            rebind_host_surface_state(walk);
-        d3d7_rebind_after_flip(surface->owner);
-        emit_blt_to_screen(surface, NULL);
-    } else {
-        emit_blt_to_screen(surface, NULL);
+                walk = walk->flip_next) {
+            surface_swap_flip_storage(previous, walk);
+            previous = walk;
+        }
     }
-    (void)flags; /* DDFLIP_NOVSYNC/WAIT/INTERVALn: the browser's presentation
-                  * cadence is not ours to choose. Recorded in README.md. */
-    return DDWG_TRACE_RESULT(emit_present_and_flush(surface->owner)
-            ? DD_OK : DDERR_GENERIC);
+    rebind_host_surface_state(surface);
+    for (walk = surface->flip_next; walk && walk != surface;
+            walk = walk->flip_next)
+        rebind_host_surface_state(walk);
+    d3d7_rebind_after_flip(surface->owner);
+
+    if (surface->primary && !emit_blt_to_screen(surface, NULL))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    if (!surface_rebind_flip_overlays(surface, &visible))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    (void)flags; /* Existing browser cadence/interval policy is unchanged. */
+    if (visible && !emit_present_and_flush(surface->owner))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
+    return DD_OK;
 }
 
 static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
