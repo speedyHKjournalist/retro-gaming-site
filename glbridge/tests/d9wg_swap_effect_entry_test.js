@@ -7,6 +7,7 @@ try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_present_pacing.h"
 #include "runtime/d9wg_reset.h"
+#include "runtime/d9wg_present_multisample.h"
 #include "${process.env.D9WG_SWAP_EFFECT_HEADER || root + "/runtime/d9wg_swap_effect.h"}"
 typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT,D3DDEVTYPE,D3DFORMAT;typedef void*HWND;typedef struct{int left,top,right,bottom;}RECT;typedef struct{int x,y;}POINT;
 #define WINAPI
@@ -27,7 +28,7 @@ typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT,D3DDEV
 #define HOSTLOG_REFUSED(...)
 typedef struct{int magic;}Factory;typedef struct{int magic,blocked;D9WGResetState reset_state;struct{BOOL Windowed;}present;}Device;typedef struct{int magic;}Chain;
 typedef Factory D${api}Direct3D,IDirect3D${api};typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api},D${api}Surface,IDirect3DSurface${api};
-typedef struct{BOOL Windowed;DWORD PresentationInterval,FullScreen_PresentationInterval,BackBufferCount,MultiSampleType,BackBufferWidth,BackBufferHeight,BackBufferFormat,SwapEffect;}D3DPRESENT_PARAMETERS;
+typedef struct{BOOL Windowed;DWORD PresentationInterval,FullScreen_PresentationInterval,BackBufferCount,MultiSampleType,BackBufferWidth,BackBufferHeight,BackBufferFormat,SwapEffect,MultiSampleQuality,Flags;}D3DPRESENT_PARAMETERS;
 static unsigned trace_errors;static Factory*d3d_from_iface(Factory*f){return f;}static Device*device_from_iface(Device*d){return d;}
 ${api===9?'static UINT d9wg_display_mode_backbuffer_format(UINT f){return f?f:22;}':''}
 ${api===8?'static BOOL supported_multisample_type(UINT type){return !type||type==4;}':''}

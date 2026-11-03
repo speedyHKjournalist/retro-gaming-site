@@ -47,7 +47,7 @@ typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface
 struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Chain*next_device_chain;};
 struct Device{Interface iface;unsigned refs,pins;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height,Format;}display_mode;struct{HWND hFocusWindow;}creation;UINT additional_swap_chain_count;Chain*additional_swap_chains;};
 typedef Chain D${api}SwapChain;typedef Device D${api}Device;typedef Surface D${api}Surface;
-static unsigned allocations,live,fail_at,fail_emit,emits,destroys;static UINT next_handle=100;static int g_chain_vtbl;static HWND observed_window;static Texture backing_texture={.handle=99};static Surface*latest_surface;static UINT last_texture_format;
+static unsigned allocations,live,fail_at,fail_emit,emits,destroys;static UINT next_handle=100;static int g_chain_vtbl;static HWND observed_window;static Texture backing_texture={.handle=99};static Surface*latest_surface;static UINT last_texture_format,last_ms;static BOOL last_lockable;
 #define g_swapchain_vtbl g_chain_vtbl
 #define g_swap_chain_vtbl g_chain_vtbl
 static Device*device_from_iface(Interface*p){return (Device*)p;}static Chain*swap_chain_from_iface(Interface*p){return (Chain*)p;}static Surface*surface_from_iface(Interface*p){return (Surface*)p;}
@@ -63,12 +63,12 @@ ${api===8?`static void swapchain_destroy_storage(Chain*);
 static void texture_release(Interface*p){assert(p==&backing_texture.iface);Chain*c=backing_texture.swap_chain;backing_texture.swap_chain=NULL;if(c)swapchain_destroy_storage(c);surface_release(&latest_surface->iface);}
 #define IDirect3DTexture8_Release texture_release`:""}
 ${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
-static BOOL supported_multisample_type(UINT t){return t==0;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
+static BOOL supported_multisample_type(UINT t){return t==0||t==4;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND w,RECT*r){observed_window=w;assert(w==(void*)(uintptr_t)0x44||w==(void*)(uintptr_t)0x55);SetRect(r,0,0,w==(void*)(uintptr_t)0x55?96:128,w==(void*)(uintptr_t)0x55?80:96);}
 static void probe_window_rect(HWND w,int fw,int fh,RECT*r,POINT*p){assert(fw==128&&fh==96);GetClientRect(w,r);*p=(POINT){30,40};}
-static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert((f==21||f==22||f==23)&&usage==1&&!ms&&!quality);last_texture_format=f;backing_texture.private_back_buffer=0;backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);${api===9?'device_child_add_ref(d);':''}latest_surface=s;*out=&s->iface;return D3D_OK;}
-static HRESULT device_create_render_target(Interface*p,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,Interface**out){assert(!lockable);return create_target_texture((Device*)p,w,h,f,1,ms,0,out);}
+static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert((f==21||f==22||f==23)&&usage==1&&(!ms||(${api}==8&&ms==4))&&!quality);last_texture_format=f;backing_texture.private_back_buffer=0;backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);${api===9?'device_child_add_ref(d);':''}latest_surface=s;*out=&s->iface;return D3D_OK;}
+static HRESULT device_create_render_target(Interface*p,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,Interface**out){last_ms=ms;last_lockable=lockable;if(lockable&&ms)return D3DERR_INVALIDCALL;return create_target_texture((Device*)p,w,h,f,1,ms,0,out);}
 static void ClientToScreen(HWND w,POINT*p){assert(w==observed_window);*p=(POINT){30,40};}
 static UINT allocate_handle(void){return next_handle++;}
 static BOOL emit_command(UINT op,const void*p,UINT n){if(op==D9WG_OP_CREATE_SWAP_CHAIN){const D9WGCreateSwapChain*c=p;assert(n==sizeof(*c)&&c->device_handle==77&&c->back_buffer_handle==99&&c->hwnd==(uint32_t)(uintptr_t)observed_window&&c->width==latest_surface->width&&c->height==latest_surface->height);emits++;return !fail_emit;}const D9WGDestroySwapChain*c=p;assert(op==D9WG_OP_DESTROY_SWAP_CHAIN&&n==sizeof(*c)&&c->device_handle==77);destroys++;return 1;}
@@ -86,6 +86,13 @@ for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=
  CHECK(d.refs==2&&d.pins==1&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer&&((Surface*)c->back_buffer)->texture->swap_chain==c':'d.additional_swap_chains==c&&((Surface*)c->back_buffer)->swap_chain==c&&((Surface*)c->back_buffer)->device_pin_transferred&&!((Surface*)c->back_buffer)->refcount'});
  CHECK(RELEASE(out)==0&&!live&&d.refs==1&&!d.pins&&${api===8?'!d.additional_swap_chain_count':'!d.additional_swap_chains'});cases++;
 }
+${api===8?`{
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=32,.BackBufferHeight=24,.BackBufferFormat=22,.BackBufferCount=1,.MultiSampleType=4,.Flags=1},input=p;Interface*out=NULL;
+ CHECK(!CREATE(&d,&p,&out)&&out&&last_ms==4&&!last_lockable);Chain*c=(Chain*)out;
+ CHECK(c->present.MultiSampleType==4&&c->present.Flags==1&&!memcmp(&p,&input,sizeof(p)));
+ CHECK(d.refs==2&&d.pins==1&&d.additional_swap_chain_count==1);
+ CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins&&!d.additional_swap_chain_count);cases++;
+}`:''}
 for(unsigned failure=0;failure<3;failure++){
  fail_at=failure<2?allocations+failure+1:0;fail_emit=failure==2;D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22},input=p;Interface*out=(void*)(uintptr_t)1;
  CHECK(CREATE(&d,&p,&out)==(failure<2?E_OUTOFMEMORY:D3DERR_DRIVERINTERNALERROR)&&!out&&!live&&d.refs==1&&!d.pins&&!memcmp(&p,&input,sizeof(p)));

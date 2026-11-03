@@ -14,7 +14,7 @@ typedef struct{UINT Format,Type,Usage,Pool,Size,MultiSampleType,Width,Height;}D3
 typedef struct{const void*lpVtbl;}Iface;typedef Iface IDirect3DSurface8;
 typedef struct D8Device{UINT handle;BYTE*front_shadow;UINT front_shadow_pitch;D3DSURFACE_DESC display_mode;UINT present;}D8Device,IDirect3DDevice8;
 typedef struct{BYTE*shadow;UINT width,height,depth,row_pitch,row_count,slice_pitch,byte_count;RECT lock_rect;UINT lock_z,lock_depth;DWORD lock_flags;BOOL locked,gpu_dirty;}D8TextureLevel;
-typedef struct{D8Device*device;UINT handle,level_count,format,pool,usage;D8TextureLevel*levels;BOOL lockable_render_target;}D8Texture,D8CubeTexture;
+typedef struct{D8Device*device;UINT handle,level_count,format,pool,usage,multisample_type;D8TextureLevel*levels;BOOL lockable_render_target;}D8Texture,D8CubeTexture;
 typedef struct{Iface iface;D8Texture*texture;D8CubeTexture*cube;UINT face;D8Device*device;UINT level;D3DSURFACE_DESC desc;BYTE*shadow;UINT row_pitch;RECT lock_rect;DWORD lock_flags;BOOL locked,backbuffer,depth_stencil,reset_blocker;}D8Surface;
 #define D3D_OK 0
 #define D3DERR_INVALIDCALL (-1)
@@ -24,6 +24,7 @@ typedef struct{Iface iface;D8Texture*texture;D8CubeTexture*cube;UINT face;D8Devi
 #define D3DPOOL_MANAGED 1
 #define D3DPOOL_SYSTEMMEM 2
 #define D3DPOOL_SCRATCH 3
+#define D3DMULTISAMPLE_NONE 0
 #define D3DUSAGE_RENDERTARGET 1
 #define D3DUSAGE_DEPTHSTENCIL 2
 #define D3DFMT_A8R8G8B8 21
@@ -78,6 +79,7 @@ int main(void){D8Device device={.handle=7,.front_shadow_pitch=16,.display_mode={
  ta.usage=1;for(unsigned pass=0;pass<2;pass++){reset_events();BYTE*ag=gpu_pixels(11,0,0,&w,&h);pattern(ag,64,100+pass);memcpy(before,ag,64);CHECK(!texture_lock_level(&ta,0,&lock,&r,pass?0:16)&&reads==1);CHECK(lock.pBits==cpu_a+4);if(pass)memset(lock.pBits,0xa6,4);CHECK(!texture_unlock_level(&ta,0)&&updates==pass);if(pass)memset(before+4,0xa6,4);CHECK(!memcmp(ag,before,64));cases++;}
  reset_events();lc[9].gpu_dirty=TRUE;BYTE*cg=gpu_pixels(13,1,4,&w,&h);pattern(cg,64,211);CHECK(!cube_lock_face(&cube,4,1,&lock,NULL,16)&&reads==1&&lock.pBits==lc[9].shadow&&!memcmp(lock.pBits,cg,64));CHECK(!cube_unlock_face(&cube,4,1)&&!updates);cube.usage=1;pattern(cg,64,213);CHECK(!cube_lock_face(&cube,4,1,&lock,NULL,16)&&reads==2&&!memcmp(lock.pBits,cg,64));CHECK(!cube_unlock_face(&cube,4,1)&&!updates);cube.usage=0;cases++;
  /* Readback failures roll locks back and preserve output fields. */
+ const UINT samples[]={1,2,4,16,0xffffffffu};for(unsigned i=0;i<5;i++)for(unsigned readonly=0;readonly<2;readonly++){reset_events();ta.multisample_type=samples[i];lock=(D3DLOCKED_RECT){123,(void*)99};D8TextureLevel saved=la[0];memcpy(before,cpu_a,64);CHECK(texture_lock_level(&ta,0,&lock,NULL,readonly?16:0)==-1&&lock.Pitch==123&&lock.pBits==(void*)99&&!memcmp(&la[0],&saved,sizeof(saved))&&!memcmp(cpu_a,before,64)&&!reads&&!updates&&!emissions);cases++;}ta.multisample_type=0;
  for(unsigned error=1;error<=3;error++){reset_events();read_error=error;lock=(D3DLOCKED_RECT){123,(void*)99};CHECK(texture_lock_level(&ta,0,&lock,NULL,16)==(error==1?-1:-2)&&!la[0].locked&&lock.Pitch==123&&lock.pBits==(void*)99&&!updates);cases++;}ta.usage=0;
  /* GPU to CPU and CPU to GPU, including cube face stride and back-buffer staging. */
  for(unsigned kind=0;kind<3;kind++){D8Surface*view=kind==0?&a:kind==1?&c:&back;D8TextureLevel*l=surface_texture_level(view);if(l)l->gpu_dirty=TRUE;uint32_t handle,level,face;surface_gpu_location(view,&handle,&level,&face);BYTE*g=gpu_pixels(handle,level,face,&w,&h);pattern(g,64,50+kind);memcpy(source_before,g,64);memset(cpu_a,0x3c,64);/* image and a share cpu_a: use independent destination. */image.shadow=cpu_b;memset(cpu_b,0x3c,64);memcpy(before,cpu_b,64);expected_copy(expected,before,4,source_before,4,&r,&pt);reset_events();CHECK(!call_copy(&device,view,&r,1,&image,&pt)&&reads==1&&!blits&&!updates);CHECK(!memcmp(cpu_b,expected,64));cases++;

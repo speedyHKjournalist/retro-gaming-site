@@ -54,7 +54,7 @@ typedef void* HWND; typedef struct {int left,top,right,bottom;} RECT; typedef st
 #define ZeroMemory(p,n) memset(p,0,n)
 typedef struct {
  UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat,BackBufferFormat;
- DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;
+ DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect,Flags;
  BOOL Windowed,EnableAutoDepthStencil; HWND hDeviceWindow;
 } D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
@@ -131,7 +131,7 @@ for(unsigned kind=0;kind<15;kind++){
  case 5:p.AutoDepthStencilFormat=999;expected=D3DERR_NOTAVAILABLE;break;case 6:p.BackBufferFormat=999;expected=D3DERR_NOTAVAILABLE;break;
  case 7:p.BackBufferWidth=8193;break;case 8:fail_layout=1;expected=D3DERR_NOTAVAILABLE;break;case 9:fail_alloc=1;expected=E_OUTOFMEMORY;break;
  case 10:fail_reset_emit=1;expected=D3DERR_DRIVERINTERNALERROR;break;case 11:fail_state_emit=1;expected=D3DERR_DRIVERINTERNALERROR;break;
- case 12:p.MultiSampleQuality=1;expected=D3DERR_NOTAVAILABLE;break;case 13:fail_depth_ms=1;p.MultiSampleType=4;expected=D3DERR_NOTAVAILABLE;break;case 14:fail_window_mode=1;p.Windowed=0;break;}
+ case 12:p.MultiSampleQuality=1;expected=D3DERR_INVALIDCALL;break;case 13:fail_depth_ms=1;p.MultiSampleType=4;expected=D3DERR_NOTAVAILABLE;break;case 14:fail_window_mode=1;p.Windowed=0;break;}
  d.in_scene=1;Device before=d;D3DPRESENT_PARAMETERS input=p;unsigned old_emits=emits,old_clears=clears,old_reports=mode_reports;
  CHECK(device_reset(&d,kind?&p:NULL)==expected);failures++;CHECK(mode_reports==old_reports);CHECK(!memcmp(&p,&input,sizeof(p)));
  CHECK(d.reset_state.required);if(kind!=11&&kind!=14){before.reset_state.required=1;CHECK(!memcmp(&before,&d,sizeof(d))&&clears==old_clears);}

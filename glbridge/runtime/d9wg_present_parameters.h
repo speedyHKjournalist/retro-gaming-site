@@ -2,6 +2,7 @@
 #define D9WG_PRESENT_PARAMETERS_H
 #include <stdint.h>
 #include "d9wg_swap_effect.h"
+#include "d9wg_present_multisample.h"
 
 /* The SDK defines D3DPRESENT_PARAMETERS before this shared header, using the
  * correct D3D8 or D3D9 layout in each frontend. No cross-layout casts. */

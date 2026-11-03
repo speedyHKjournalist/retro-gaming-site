@@ -2746,6 +2746,9 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8* iface, UINT adapter,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!d9wg_swap_effect_valid(8, parameters->SwapEffect, parameters->BackBufferCount))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_present_multisample_valid(8, parameters->SwapEffect,
+            parameters->MultiSampleType, 0, parameters->Flags))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!supported_multisample_type(parameters->MultiSampleType))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     if (parameters->EnableAutoDepthStencil
@@ -3011,6 +3014,9 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
             parameters->FullScreen_PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!d9wg_swap_effect_valid(8, parameters->SwapEffect, parameters->BackBufferCount))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_present_multisample_valid(8, parameters->SwapEffect,
+            parameters->MultiSampleType, 0, parameters->Flags))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->EnableAutoDepthStencil
         && !supported_depth_stencil_format(
@@ -4748,7 +4754,8 @@ static HRESULT lock_surface_texture_level(D8Surface* surface, D8TextureLevel* le
 static HRESULT texture_lock_level(D8Texture* texture, UINT level,
     D3DLOCKED_RECT* locked_rect, const RECT* rect, DWORD flags)
 {
-    if (level >= texture->level_count)
+    if (level >= texture->level_count
+            || texture->multisample_type != D3DMULTISAMPLE_NONE)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     /* A depth-stencil level carries no shadow, and D3D8 only ever allows
      * locking one through D3DFMT_D16_LOCKABLE, which this DLL does not
@@ -5868,6 +5875,9 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (!d9wg_swap_effect_valid(8, parameters->SwapEffect, parameters->BackBufferCount))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!d9wg_present_multisample_valid(8, parameters->SwapEffect,
+            parameters->MultiSampleType, 0, parameters->Flags))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
             && !supported_backbuffer_format(parameters->BackBufferFormat))
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
@@ -5893,9 +5903,13 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     chain->device = device;
     d9wg_present_parameters_effective(&chain->present, parameters,
         width, height, format, window);
+    /* D3D8 permits the presentation flag with MSAA, but its buffers remain
+     * non-lockable. The standalone render-target constructor rejects that
+     * flag combination, so only pass it through for single-sample storage. */
     hr = device_create_render_target(iface, width, height, format,
         parameters->MultiSampleType,
-        (parameters->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER) != 0,
+        (parameters->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER) != 0
+            && parameters->MultiSampleType == D3DMULTISAMPLE_NONE,
         &chain->back_buffer);
     if (FAILED(hr)) {
         HeapFree(GetProcessHeap(), 0, chain);
