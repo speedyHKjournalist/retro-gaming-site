@@ -1195,6 +1195,7 @@ struct D9Texture {
     D9WGPrivateStore private_data;
     D9TextureLevel *levels;
     D9Texture *next_device_resource;
+    /* Private surface/backbuffer storage: its public owner holds the device pin. */
     BOOL private_back_buffer;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
      * downsample with. Zero means it never said, which D3D9 reports as
@@ -7342,13 +7343,11 @@ static HRESULT WINAPI device_create_additional_swap_chain(
 
     chain->next_device_chain = device->additional_swap_chains;
     device->additional_swap_chains = chain;
-    /* The target's surface pin becomes the chain's public lifetime pin.
-     * Its texture storage no longer needs a separate device pin. */
-    surface->texture->private_back_buffer = TRUE;
+    /* Transfer the standalone surface's one device pin to the public chain.
+     * Its private texture storage has no separate device pin. */
     surface->device_pin_transferred = TRUE;
     surface->swap_chain = chain;
     surface->refcount = 0;
-    device_child_release(device);
     d9wg_present_parameters_return(9, params, &chain->present);
     *out = &chain->iface;
     TRACE("OK CreateAdditionalSwapChain device=%08lX chain=%08lX back=%08lX "
@@ -10253,6 +10252,7 @@ static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
     texture->iface.lpVtbl = &g_texture_vtbl;
     texture->refcount = 1;
     texture->device = device;
+    texture->private_back_buffer = TRUE;
     texture->handle = allocate_handle();
     texture->width = width;
     texture->height = height;
@@ -10297,9 +10297,7 @@ static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
         }
         texture->levels[0].shadow_valid = TRUE;
     }
-    device_child_add_ref(device);
     if (!emit_texture_create(device, texture)) {
-        device_child_release(device);
         if (texture->levels[0].shadow)
             HeapFree(GetProcessHeap(), 0, texture->levels[0].shadow);
         HeapFree(GetProcessHeap(), 0, texture->levels);
