@@ -7,6 +7,7 @@ const code=`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include "runtime/d9wg_vertex.h"
 #include "runtime/d9wg_fvf.h"
 #include "d3d9proxy/d3d9_protocol.h"
@@ -32,6 +33,8 @@ typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT,D3DPRI
 #define D3DRS_CLIPPLANEENABLE 152
 #define D3DRS_SHADEMODE 9
 #define D3DSHADE_FLAT 1
+#define D3DFVF_POSITION_MASK 14u
+#define D3DFVF_XYZRHW 4u
 #define D3DFMT_INDEX16 101
 #define D3DFMT_INDEX32 102
 #define D3DPT_POINTLIST 1
@@ -61,7 +64,7 @@ static BOOL emit_command(UINT op,const void *data,UINT bytes){(void)op;(void)dat
 static BOOL emit_draw_primitive_up(const D9WGDrawPrimitiveUP *command,const void *vertices){(void)command;(void)vertices;++emits;return transport_ok;}
 static BOOL emit_draw_indexed_primitive_up(const D9WGDrawIndexedPrimitiveUP *command,const void *indices,const void *vertices){(void)command;(void)indices;(void)vertices;++emits;return transport_ok;}
 ${input[0]}
-${['multiply_u32','primitive_element_count','d8_current_source_elements','d8_process_input_free','d8_process_input','d8_clip_emit','d8_clip_mask','d8_clip_vb_draw','d8_software_vertex_processing','d8_prepare_clip_status','d8_draw_stream_range','device_draw_primitive','device_draw_indexed','clear_stream_zero_after_up','clear_indices_after_indexed_up','device_draw_up','device_draw_indexed_up'].map(extract).join('\n')}
+${['multiply_u32','primitive_element_count','d8_current_draw_elements','d8_current_source_elements','d8_process_input_free','d8_process_input','d8_clip_emit','d8_clip_mask','d8_clip_vb_draw','d8_software_vertex_processing','d8_prepare_clip_status','d8_draw_stream_range','d8_draw_index_bounds','device_draw_primitive','device_draw_indexed','clear_stream_zero_after_up','clear_indices_after_indexed_up','device_draw_up','device_draw_indexed_up'].map(extract).join('\n')}
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"D3D8 draw input line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 static void reset_status(D8Device *device){device->clip_status=(D9WGClipStatus){0,0xffffffffu};device->clip_status_valid=TRUE;}
 static int unchanged(D8Device *d,unsigned emitted,D9WGClipStatus before){return emits==emitted&&!memcmp(&d->clip_status,&before,sizeof(before));}
@@ -86,8 +89,14 @@ int main(void){
  device.render_states[152]=0;
  uint16_t indices[3]={0,0,0};D8IndexBuffer ib={.device=&device,.shadow=(void*)indices,.length=sizeof(indices),.format=101};device.index_buffer=&ib;device.base_vertex_index=1;
  reset_status(&device);CHECK(device_draw_indexed(&device,1,0,2,0,1)==0&&(device.clip_status.clip_union&2)); /* unreferenced physical vertex 2 is right of clip volume */
- status=device.clip_status;before=emits;indices[0]=2;CHECK(device_draw_indexed(&device,1,0,2,0,1)==-1&&unchanged(&device,before,status));indices[0]=0;
- CHECK(device_draw_indexed(&device,1,0xffffffffu,2,0,1)==-1&&unchanged(&device,before,status));
+ status=device.clip_status;before=emits;indices[0]=2;CHECK(device_draw_indexed(&device,1,0,2,0,1)==0&&!device.clip_status_valid);indices[0]=0;
+ CHECK(device_draw_indexed(&device,1,0xffffffffu,2,0,1)==0);before=emits;status=device.clip_status;
+ CHECK(device_draw_indexed(&device,1,0xffffffffu,0,0,1)==0);before=emits;status=device.clip_status;
+ CHECK(device_draw_primitive(&device,4,0xffffffffu,0)==0&&unchanged(&device,before,status));
+ CHECK(device_draw_indexed(&device,5,0xffffffffu,0,0xffffffffu,0)==0&&unchanged(&device,before,status));
+ device.base_vertex_index=0xffffffffu;indices[0]=2;CHECK(device_draw_indexed(&device,1,2,1,0,1)==0&&(device.clip_status.clip_union&2));
+ before=emits;status=device.clip_status;indices[0]=0;CHECK(device_draw_indexed(&device,1,0,0,0,1)==0&&!device.clip_status_valid);before=emits;status=device.clip_status;
+ device.base_vertex_index=1;indices[0]=0;
  CHECK(device_draw_indexed(&device,1,0,2,3,1)==-1&&unchanged(&device,before,status));
  ib.locked=TRUE;CHECK(device_draw_indexed(&device,1,0,2,0,1)==-1&&unchanged(&device,before,status));ib.locked=FALSE;
  reset_status(&device);before=emits;status=device.clip_status;transport_ok=0;CHECK(device_draw_primitive(&device,1,2,1)==-3&&emits==before+1&&!memcmp(&status,&device.clip_status,sizeof(status)));transport_ok=1;
@@ -111,7 +120,10 @@ int main(void){
  /* FVF compatibility: ordinary transformed buffer draws retain ClipStatus. */
  device.creation.BehaviorFlags=0x20;device.vertex_shader=4;float screen[4]={32,32,.5f,1};p.shadow=(void*)screen;p.length=16;device.streams[0].buffer=&p;device.streams[0].stride=16;status=device.clip_status;
  CHECK(device_draw_primitive(&device,1,0,1)==0&&!memcmp(&status,&device.clip_status,sizeof(status)));
- CHECK(allocations==frees);puts("PASS actual D3D8 draw C: multi/constant/deleted declarations, all stream extents, locks/owners, indexed unreferenced range, Tween/user-plane ClipStatus, shader availability, UP restrictions, atomic allocation/transport failure and FVF compatibility");return 0;
+ void *guard=mmap(NULL,4096,PROT_NONE,MAP_PRIVATE|MAP_ANON,-1,0);CHECK(guard!=MAP_FAILED);
+ device.index_buffer=&ib;device.base_vertex_index=0;ib.shadow=guard;ib.length=6;
+ CHECK(device_draw_indexed(&device,4,0,1,0,1)==0);CHECK(munmap(guard,4096)==0);
+ CHECK(allocations==frees);puts("PASS actual D3D8 draw C: multi/constant/deleted declarations, all stream extents, locks/owners, indexed binding bounds/ignored hints/signed base/zero no-ops, Tween/user-plane ClipStatus, shader availability, UP restrictions, atomic allocation/transport failure and FVF compatibility");return 0;
 }
 `;
-try{fs.writeFileSync(path.join(directory,"windows.h"),"/* Win32 allocation is provided by the harness. */\n");const file=path.join(directory,"draw.c"),binary=path.join(directory,"draw");fs.writeFileSync(file,code);const sources=["clip","clip_draw","blend","vertex","fvf","math","lighting","tnl_math"].map(n=>path.join(root,"runtime/d9wg_"+n+".c"));const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-I",directory,"-I",root,"-I",path.join(root,"runtime"),file,...sources,"-o",binary],{encoding:"utf8"});assert.equal(build.status,0,build.stderr||String(build.error));const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr||String(run.error));process.stdout.write(run.stdout);}finally{fs.rmSync(directory,{recursive:true,force:true});}
+try{fs.writeFileSync(path.join(directory,"windows.h"),"/* Win32 allocation is provided by the harness. */\n");const file=path.join(directory,"draw.c"),binary=path.join(directory,"draw");fs.writeFileSync(file,code);const sources=["clip","clip_draw","blend","vertex","fvf","math","lighting","tnl_math"].map(n=>path.join(root,"runtime/d9wg_"+n+".c"));const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-I",directory,"-I",root,"-I",path.join(root,"runtime"),file,...sources,"-o",binary],{encoding:"utf8"});assert.equal(build.status,0,build.stderr||String(build.error));const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr||"native run signal "+run.signal);process.stdout.write(run.stdout);}finally{fs.rmSync(directory,{recursive:true,force:true});}

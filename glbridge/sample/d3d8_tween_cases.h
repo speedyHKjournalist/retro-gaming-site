@@ -101,11 +101,12 @@ static void d3d8_tween_checks(void)
     check(SUCCEEDED(IDirect3DIndexBuffer8_Lock(indices, 0, 6, &index_bytes, 0)), "D3D8 declared draw index upload");
     ((WORD*)index_bytes)[0] = 0;((WORD*)index_bytes)[1] = 1;((WORD*)index_bytes)[2] = 0;
     check(SUCCEEDED(IDirect3DIndexBuffer8_Unlock(indices)) && SUCCEEDED(CALL(SetIndices)(device, indices, 0)) && SUCCEEDED(CALL(DrawIndexedPrimitive)(device, D3DPT_POINTLIST, 0, 2, 0, 3)), "D3D8 indexed declaration draw");
-    check(FAILED(CALL(DrawIndexedPrimitive)(device, D3DPT_POINTLIST, 0xffffffffu, 2, 0, 3)), "D3D8 indexed declaration range overflow");
+    check(SUCCEEDED(CALL(DrawIndexedPrimitive)(device, D3DPT_POINTLIST, 0xffffffffu, 2, 0, 3)) && FAILED(CALL(GetClipStatus)(device, &status)), "D3D8 overflowing hints preserve drawing, unavailable software range");
     check(SUCCEEDED(IDirect3DIndexBuffer8_Lock(indices, 0, 6, &index_bytes, 0)), "D3D8 declared draw invalid index upload");
-    ((WORD*)index_bytes)[1] = 2;
-    check(SUCCEEDED(IDirect3DIndexBuffer8_Unlock(indices)) && FAILED(CALL(DrawIndexedPrimitive)(device, D3DPT_POINTLIST, 0, 2, 0, 3)), "D3D8 indexed declaration draw rejects invalid index");
-    check(SUCCEEDED(CALL(GetClipStatus)(device, &status)) && !status.ClipUnion, "D3D8 refused declaration draws preserve clip status");
+    ((WORD*)index_bytes)[1] = 1;
+    check(SUCCEEDED(IDirect3DIndexBuffer8_Unlock(indices)) && SUCCEEDED(CALL(DrawIndexedPrimitive)(device, D3DPT_POINTLIST, 0, 1, 0, 3)) && FAILED(CALL(GetClipStatus)(device, &status)), "D3D8 underspecified hints preserve valid indexed draw");
+    check(SUCCEEDED(CALL(DrawIndexedPrimitive)(device, D3DPT_POINTLIST, 0, 2, 0, 3)), "D3D8 valid hint restores software classification");
+    check(SUCCEEDED(CALL(GetClipStatus)(device, &status)) && !status.ClipUnion, "D3D8 subsequent valid hints restore clip status");
     check(SUCCEEDED(CALL(SetIndices)(device, NULL, 0)) && SUCCEEDED(CALL(EndScene)(device)), "D3D8 declaration draw finish");
     IDirect3DIndexBuffer8_Release(indices);
     report("PASS D3D8 declared draws: stream 15 with constant secondary, Tween ClipStatus, primary/secondary bounds, locked streams, indexed bounds and UP single-stream restriction");

@@ -6379,6 +6379,7 @@ static BOOL d9_current_source_layout(D9Device *device, D9WGProcessLayout *layout
 static int d9_current_source_position_transformed(D9Device *device);
 static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const D9WGClipDrawSource *draw);
 static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex);
+static HRESULT d9_draw_index_bounds(D9Device *device, INT base_vertex, D9WGDrawIndexBounds *bounds);
 static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *source,
         D9WGClipStatus *next, BOOL *valid);
 
@@ -6447,6 +6448,16 @@ static HRESULT d9_prepare_clip_status(D9Device *device, const D9WGClipDrawSource
     if (!d9_software_vertex_processing(device)) return D3D_OK;
     D9WGProcessLayout layout;
     BOOL supported_layout = d9_current_source_layout(device, &layout);
+    if (input->indices && input->min_vertex >= input->vertex_count) {
+        if (!input->status_screen && ((supported_layout && layout.position_transformed) ||
+                d9_current_source_position_transformed(device) == 1)) return D3D_OK;
+        /* No trustworthy software range: preserve rendering without reading
+         * arbitrary VB contents or returning a stale ClipStatus query. */
+        if (!device->render_states[D3DRS_CLIPPING]) {
+            next->clip_union = next->clip_intersection = 0;*valid = TRUE;
+        } else *valid = FALSE;
+        return D3D_OK;
+    }
     if (bound_stream && (!supported_layout || !device->streams[0].stride))
         return d9_prepare_stream_clip_status(device, input, next, valid);
     BOOL pretransformed = supported_layout && layout.position_transformed;
@@ -6462,7 +6473,7 @@ static HRESULT d9_prepare_clip_status(D9Device *device, const D9WGClipDrawSource
     D9WGClipDrawSource source = *input;source.layout = &layout;
     uint32_t error = d9wg_vertex_windows_clip_status(&source, device->render_states,
             device->transforms[D3DTS_WORLD], 256, 0, device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION], device->clip_planes, next);
-    if (!layout.position_transformed && !device->render_states[D3DRS_CLIPPING]) *valid = TRUE;
+    if (!error && (!layout.position_transformed || source.status_screen)) *valid = TRUE;
     return TRACE_REFUSE(error == 2 ? E_OUTOFMEMORY : error ? D3DERR_INVALIDCALL : D3D_OK);
 }
 
@@ -6474,12 +6485,13 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
     D9WGDrawPrimitive command;
     UINT vertex_count = 0;
 
-    if (!device_has_vertex_format(device) || !primitive_count
+    if (!device_has_vertex_format(device)
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count)) {
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
+    if (!primitive_count) return D3D_OK;
     if (device->npatch_segments > 1.0f && device->streams[0].buffer && device->streams[0].stride) {
         HRESULT tessellated = d9_draw_npatch(iface, device, primitive_type,
                 primitive_count, NULL, 0, start_vertex);
@@ -6534,12 +6546,12 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
 
     if (!device->index_buffer
             || device->index_buffer->locked || !device_has_vertex_format(device)
-            || !primitive_count || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count)) {
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
+    if (!primitive_count) return D3D_OK;
     index_size = device->index_buffer->format == D3DFMT_INDEX16 ? 2u : 4u;
     available_indices = device->index_buffer->length / index_size;
     if (start_index > available_indices
@@ -6558,8 +6570,8 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         /* See the note in device_draw_primitive: falling through draws the
          * mesh flat rather than dropping it. */
     }
-    if (min_vertex_index > 0xffffffffu - vertex_count) return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    HRESULT range_result = d9_bound_draw_range(device, min_vertex_index, vertex_count, base_vertex_index);
+    D9WGDrawIndexBounds bounds;
+    HRESULT range_result = d9_draw_index_bounds(device, base_vertex_index, &bounds);
     if (FAILED(range_result)) return TRACE_REFUSE(range_result);
 
     D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
@@ -6569,15 +6581,22 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     status_source.base = device->streams[0].offset;status_source.stride = device->streams[0].stride;
     status_source.indices = device->index_buffer->shadow + start_index*index_size;
     status_source.index_bytes = index_count*index_size;status_source.index_stride = index_size;
-    status_source.count = index_count;status_source.min_vertex = min_vertex_index;
-    status_source.vertex_count = min_vertex_index + vertex_count;
+    /* Only a supported software classification needs to read index contents. */
+    UINT status_index_count = d9_software_vertex_processing(device) && device->render_states[D3DRS_CLIPPING] &&
+            !device->vertex_shader && device->streams[0].frequency == 1u &&
+            d9_current_source_position_transformed(device) == 0 ? index_count : 0;
+    BOOL status_hints = d9_software_vertex_processing(device) &&
+            d9wg_draw_status_hints(&bounds, min_vertex_index, vertex_count,
+                    status_source.indices, status_index_count, index_size);
+    status_source.count = index_count;status_source.min_vertex = status_hints ? min_vertex_index : 0;
+    status_source.vertex_count = status_hints ? min_vertex_index + vertex_count : 0;
     status_source.base_vertex = base_vertex_index;
     D9WGClipStatus next_status;BOOL next_status_valid;
     HRESULT status_result = d9_prepare_clip_status(device, &status_source, TRUE, &next_status, &next_status_valid);
     if (FAILED(status_result)) return status_result;
     int clipped = d9_clip_vb_draw(device, primitive_type, 0, index_count, device->index_buffer->shadow + start_index*index_size,
             index_count*index_size, index_size, base_vertex_index,
-            min_vertex_index, min_vertex_index + vertex_count);
+            bounds.min_vertex, bounds.vertex_limit);
     if (clipped) {
         if (clipped < 0) return TRACE_REFUSE(clipped == -3 ? E_OUTOFMEMORY :
                 clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
@@ -9079,6 +9098,28 @@ static int d9_current_source_position_transformed(D9Device *device)
             !d9wg_process_stream_layout(elements, count, &layout)) return -1;
     return layout.vertex.position_transformed != 0;
 }
+static HRESULT d9_draw_index_bounds(D9Device *device, INT base_vertex, D9WGDrawIndexBounds *bounds)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
+    D9WGVertexStream streams[D9_MAX_STREAMS] = {{0}};
+    uint32_t frequencies[D9_MAX_STREAMS];
+    if (!d9_current_source_elements(device, elements, &count)) return D3DERR_INVALIDCALL;
+    /* Programs without vertex inputs may use an empty declaration. */
+    if (!count) {
+        bounds->min_vertex = 0;bounds->vertex_limit = UINT32_MAX;return D3D_OK;
+    }
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) frequencies[i] = device->streams[i].frequency;
+    for (UINT i = 0; i < count; ++i) {
+        UINT stream = elements[i].stream;
+        if (stream >= D9_MAX_STREAMS) return D3DERR_INVALIDCALL;
+        D9VertexBuffer *buffer = device->streams[stream].buffer;
+        if (!buffer || buffer->device != device || buffer->locked) return D3DERR_INVALIDCALL;
+        streams[stream].length = buffer->length;streams[stream].base = device->streams[stream].offset;
+        streams[stream].stride = device->streams[stream].stride;
+    }
+    return d9wg_draw_index_bounds(elements, count, streams, frequencies, base_vertex, bounds) ? D3D_OK : D3DERR_INVALIDCALL;
+}
+
 static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex)
 {
     D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
@@ -9291,6 +9332,7 @@ static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDra
             device->render_states, device->transforms[D3DTS_WORLD], 256, 0,
             device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION], device->clip_planes, next);
     d9_process_input_free(input);
+    if (!result) *valid = TRUE;
     return result == 2 ? E_OUTOFMEMORY : result ? D3DERR_INVALIDCALL : D3D_OK;
 }
 

@@ -413,6 +413,64 @@ int d9wg_process_stream_layout(const D9WGVertexElement *elements, uint32_t count
     if (!d9wg_process_layout(normalized, count, &layout->vertex)) return 0;
     layout->count = count;return 1;
 }
+int d9wg_draw_index_bounds(const D9WGVertexElement *elements, uint32_t count,
+        const D9WGVertexStream *streams, const uint32_t *frequencies,
+        int32_t base_vertex, D9WGDrawIndexBounds *result)
+{
+    uint32_t extent[D9WG_VERTEX_MAX_STREAMS] = {0};
+    if (!elements || !count || count > D9WG_VERTEX_MAX_ELEMENTS || !streams || !result) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t bytes = d9wg_decl_bytes(elements[i].type), stream = elements[i].stream;
+        if (!bytes || stream >= D9WG_VERTEX_MAX_STREAMS) return 0;
+        uint32_t end = (uint32_t)elements[i].offset + bytes;
+        if (extent[stream] < end) extent[stream] = end;
+    }
+    uint32_t frequency = frequencies ? frequencies[0] : 1u;
+    uint32_t instances = frequency & 0x40000000u ? frequency & 0x3fffffffu : 1u;
+    if (!instances) return 0;
+    int64_t lower = base_vertex < 0 ? -(int64_t)base_vertex : 0;
+    int64_t upper = UINT32_MAX;
+    for (uint32_t i = 0; i < D9WG_VERTEX_MAX_STREAMS; ++i) {
+        if (!extent[i]) continue;
+        const D9WGVertexStream *stream = streams + i;
+        uint32_t first, vertices = 1;
+        frequency = frequencies ? frequencies[i] : 1u;
+        if (frequency & 0x80000000u) {
+            uint32_t divisor = frequency & 0x3fffffffu;
+            if (!divisor) return 0;
+            vertices = (instances - 1u)/divisor + 1u;
+        }
+        if (!d9wg_process_stream_range(stream->length, stream->base, stream->stride,
+                extent[i], 0, vertices, &first)) return 0;
+        if (stream->stride && !(frequency & 0x80000000u)) {
+            int64_t end = (stream->length - stream->base - extent[i])/stream->stride;
+            end = end - base_vertex + 1;
+            if (end < upper) upper = end;
+        }
+    }
+    if (upper <= lower) return 0;
+    /* Commit only after every stream, including per-instance data, is valid. */
+    result->min_vertex = (uint32_t)lower;result->vertex_limit = (uint32_t)upper;
+    return 1;
+}
+
+int d9wg_draw_status_hints(const D9WGDrawIndexBounds *bounds,
+        uint32_t first, uint32_t count, const void *indices,
+        uint32_t index_count, uint32_t index_stride)
+{
+    if (!bounds || !indices || !count || first < bounds->min_vertex ||
+            first >= bounds->vertex_limit || count > bounds->vertex_limit - first ||
+            (index_stride != 2 && index_stride != 4) || index_count > UINT32_MAX/index_stride) return 0;
+    for (uint32_t i = 0; i < index_count; ++i) {
+        uint32_t index = 0;
+        if (index_stride == 2) {
+            uint16_t value;__builtin_memcpy(&value, (const uint8_t *)indices + i*2u, 2);index = value;
+        } else __builtin_memcpy(&index, (const uint8_t *)indices + i*4u, 4);
+        if (index < first || index - first >= count) return 0;
+    }
+    return 1;
+}
+
 int d9wg_process_stream_range(uint32_t length, uint32_t base, uint32_t stride,
         uint32_t extent, uint32_t start, uint32_t count, uint32_t *first)
 {

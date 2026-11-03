@@ -3,7 +3,7 @@ const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("n
 const source=fs.readFileSync(path.join(__dirname,"../d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-input-mutants-"));
 const start=source.indexOf("static HRESULT d8_process_input("),end=source.indexOf("static int d8_clip_emit(",start);assert(start>=0&&end>start);const helper=source.slice(start,end);
 const cases=[
- ["programmable shader accepted as fixed input","all","!shader->declaration_only ||","0 ||"],
+ ["programmable shader accepted as fixed input","all","!device->vertex_shader_ref->declaration_only)","0)"],
  ["stream ranges unchecked","helper","if (!d9wg_process_stream_validate(","if (0 && !d9wg_process_stream_validate("],
  ["foreign buffers accepted","helper","buffer->device != device ||","0 ||"],
  ["locked buffers accepted","helper","|| buffer->locked)","|| 0)"],

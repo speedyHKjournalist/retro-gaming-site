@@ -29,7 +29,7 @@ typedef struct D8Shader {BOOL declaration_only,deleted;UINT element_count;D9WGVe
 struct D8Device {DWORD vertex_shader;D8Shader *vertex_shader_ref;struct {D8VertexBuffer *buffer;UINT stride;} streams[16];};
 static BOOL fvf_to_elements(DWORD fvf,D9WGVertexElement *elements,UINT maximum,UINT *count){return d9wg_fvf_decode(8,fvf,elements,maximum,count,NULL);}
 ${input[0]}
-${['d8_current_source_elements','d8_process_input_free','d8_process_input'].map(extract).join('\n')}
+${['d8_current_draw_elements','d8_current_source_elements','d8_process_input_free','d8_process_input'].map(extract).join('\n')}
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"D3D8 process input line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 int main(void){
  D8Device device={.vertex_shader=0x12},other={0};float fvfs[12]={-.5f,0,.25f,-1,0,0,-.25f,0,.25f,-1,0,0};D8VertexBuffer fvf={&device,(void*)fvfs,sizeof(fvfs),FALSE};device.streams[0].buffer=&fvf;device.streams[0].stride=24;D8ProcessInput *input;

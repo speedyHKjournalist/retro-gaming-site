@@ -39,6 +39,21 @@ typedef struct D9WGVertexStream {
     const uint8_t *vertices;
     uint32_t length, base, stride;
 } D9WGVertexStream;
+typedef struct D9WGDrawIndexBounds {
+    uint32_t min_vertex, vertex_limit;
+} D9WGDrawIndexBounds;
+/* Derive CPU-readable raw-index bounds from bindings, independently of the
+ * application's optional MinVertexIndex/NumVertices hints. No indices are read.
+ * Frequencies may be NULL for D3D8; zero stride reuses one attribute value. */
+int d9wg_draw_index_bounds(const D9WGVertexElement *elements, uint32_t count,
+        const D9WGVertexStream *streams, const uint32_t *frequencies,
+        int32_t base_vertex, D9WGDrawIndexBounds *result);
+/* Software ClipStatus classifies the declared hint range, including its
+ * unreferenced vertices. Unusable hints must not reject the GPU draw or cause
+ * a scan of the complete bound VB. Call only when software status is needed. */
+int d9wg_draw_status_hints(const D9WGDrawIndexBounds *bounds,
+        uint32_t first, uint32_t count, const void *indices,
+        uint32_t index_count, uint32_t index_stride);
 typedef struct D9WGProcessStreamLayout {
     D9WGProcessLayout vertex;
     uint32_t count, stream_mask, extent[D9WG_VERTEX_MAX_STREAMS];

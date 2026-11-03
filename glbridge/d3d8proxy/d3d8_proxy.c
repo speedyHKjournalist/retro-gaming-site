@@ -3342,9 +3342,8 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice8 *iface,
     D8IndexBuffer *buffer = buffer_iface ? ib_from_iface(buffer_iface) : NULL;
     D9WGSetIndices command;
 
-    if (base_vertex_index > 0x7FFFFFFFu
-            || (buffer && (buffer_iface->lpVtbl != &g_ib_vtbl
-                || buffer->device != device)))
+    if (buffer && (buffer_iface->lpVtbl != &g_ib_vtbl
+                || buffer->device != device))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (device->recording_state_block) {
         D8StateSnapshot *recorded = &device->recording_state_block->state;
@@ -3457,17 +3456,24 @@ typedef struct D8ProcessInput {
     BOOL gather;
     BYTE *snapshot;
 } D8ProcessInput;
-static BOOL d8_current_source_elements(D8Device *device,
+static BOOL d8_current_draw_elements(D8Device *device,
         D9WGVertexElement *elements, UINT *count)
 {
     if (device->vertex_shader & 1u) {
         D8Shader *shader = device->vertex_shader_ref;
-        if (!shader || !shader->declaration_only || !shader->element_count || shader->element_count > D8WG_MAX_VERTEX_ELEMENTS) return FALSE;
+        if (!shader || !shader->element_count || shader->element_count > D8WG_MAX_VERTEX_ELEMENTS) return FALSE;
         *count = shader->element_count;
         CopyMemory(elements, shader->elements, *count * sizeof(*elements));
         return TRUE;
     }
     return fvf_to_elements(device->vertex_shader, elements, D8WG_MAX_VERTEX_ELEMENTS, count);
+}
+static BOOL d8_current_source_elements(D8Device *device,
+        D9WGVertexElement *elements, UINT *count)
+{
+    if ((device->vertex_shader & 1u) &&
+            (!device->vertex_shader_ref || !device->vertex_shader_ref->declaration_only)) return FALSE;
+    return d8_current_draw_elements(device, elements, count);
 }
 static void d8_process_input_free(D8ProcessInput *input)
 {
@@ -3575,6 +3581,16 @@ static HRESULT d8_prepare_clip_status(D8Device *device, const D9WGClipDrawSource
         } else *valid = FALSE;
         return D3D_OK;
     }
+    if (input->indices && input->min_vertex >= input->vertex_count) {
+        if (d9wg_process_layout(elements, element_count, &layout) &&
+                layout.position_transformed && !input->status_screen) return D3D_OK;
+        /* No trustworthy software range: preserve rendering without reading
+         * arbitrary VB contents or returning a stale ClipStatus query. */
+        if (!device->render_states[D3DRS_CLIPPING]) {
+            next->clip_union = next->clip_intersection = 0;*valid = TRUE;
+        } else *valid = FALSE;
+        return D3D_OK;
+    }
     D9WGClipDrawSource source = *input;
     D8ProcessInput *streams = NULL;
     if (bound_stream) {
@@ -3604,12 +3620,7 @@ static BOOL d8_draw_stream_range(D8Device *device, UINT start, UINT count, UINT 
 {
     D9WGVertexElement elements[D8WG_MAX_VERTEX_ELEMENTS];UINT element_count;
     UINT extent[D8WG_MAX_STREAMS] = {0};
-    if (device->vertex_shader & 1u) {
-        D8Shader *shader = device->vertex_shader_ref;
-        if (!shader || !shader->element_count || shader->element_count > D8WG_MAX_VERTEX_ELEMENTS) return FALSE;
-        element_count = shader->element_count;
-        CopyMemory(elements, shader->elements, element_count * sizeof(*elements));
-    } else if (!fvf_to_elements(device->vertex_shader, elements, D8WG_MAX_VERTEX_ELEMENTS, &element_count)) return FALSE;
+    if (!d8_current_draw_elements(device, elements, &element_count)) return FALSE;
     for (UINT i = 0; i < element_count; ++i) {
         UINT bytes = d9wg_decl_bytes(elements[i].type), stream = elements[i].stream;
         if (!bytes || stream >= D8WG_MAX_STREAMS || (up_stride && stream)) return FALSE;
@@ -3627,6 +3638,22 @@ static BOOL d8_draw_stream_range(D8Device *device, UINT start, UINT count, UINT 
     return element_count != 0;
 }
 
+static BOOL d8_draw_index_bounds(D8Device *device, D9WGDrawIndexBounds *bounds)
+{
+    D9WGVertexElement elements[D8WG_MAX_VERTEX_ELEMENTS];UINT count;
+    D9WGVertexStream streams[D8WG_MAX_STREAMS] = {{0}};
+    if (!d8_current_draw_elements(device, elements, &count)) return FALSE;
+    for (UINT i = 0; i < count; ++i) {
+        UINT stream = elements[i].stream;
+        if (stream >= D8WG_MAX_STREAMS) return FALSE;
+        D8VertexBuffer *buffer = device->streams[stream].buffer;
+        if (!buffer || buffer->device != device || buffer->locked) return FALSE;
+        streams[stream].length = buffer->length;streams[stream].stride = device->streams[stream].stride;
+    }
+    return d9wg_draw_index_bounds(elements, count, streams, NULL,
+            (int32_t)device->base_vertex_index, bounds);
+}
+
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice8 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT start_vertex,
         UINT primitive_count)
@@ -3634,10 +3661,11 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice8 *iface,
     D8Device *device = device_from_iface(iface);
     D9WGDrawPrimitive command;
     UINT vertex_count;
-    if (!device->vertex_shader || !primitive_count
+    if (!device->vertex_shader
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!primitive_count) return D3D_OK;
     if (!d8_draw_stream_range(device, start_vertex, vertex_count, 0))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
@@ -3670,38 +3698,42 @@ static HRESULT WINAPI device_draw_indexed(IDirect3DDevice8 *iface,
     UINT index_count;
     UINT index_size;
     UINT available_indices;
-    UINT first_vertex;
+    D9WGDrawIndexBounds bounds;
 
-    if (!device->index_buffer || device->index_buffer->device != device
+    if (!device->index_buffer) return D3D_OK;
+    if (device->index_buffer->device != device
             || device->index_buffer->locked || !device->vertex_shader
-            || !primitive_count || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    if (!primitive_count) return D3D_OK;
     index_size = device->index_buffer->format == D3DFMT_INDEX16 ? 2u : 4u;
     available_indices = device->index_buffer->length / index_size;
     if (start_index > available_indices
             || index_count > available_indices - start_index)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    if (device->base_vertex_index > 0xFFFFFFFFu - min_vertex_index
-            || min_vertex_index > 0xFFFFFFFFu - vertex_count)
-        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    first_vertex = device->base_vertex_index + min_vertex_index;
-    if (!d8_draw_stream_range(device, first_vertex, vertex_count, 0))
+    if (!d8_draw_index_bounds(device, &bounds))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
 
     D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
     status_source.indices = device->index_buffer->shadow + start_index*index_size;
     status_source.index_bytes = index_count*index_size;status_source.index_stride = index_size;
-    status_source.count = index_count;status_source.min_vertex = min_vertex_index;
-    status_source.vertex_count = min_vertex_index + vertex_count;
+    /* Hardware/programmed/transformed draws do not classify index contents. */
+    UINT status_index_count = d8_software_vertex_processing(device) && device->render_states[D3DRS_CLIPPING] &&
+            (!(device->vertex_shader & 1u) || (device->vertex_shader_ref && device->vertex_shader_ref->declaration_only)) &&
+            ((device->vertex_shader & 1u) || (device->vertex_shader & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW) ? index_count : 0;
+    BOOL status_hints = d8_software_vertex_processing(device) &&
+            d9wg_draw_status_hints(&bounds, min_vertex_index, vertex_count,
+                    status_source.indices, status_index_count, index_size);
+    status_source.count = index_count;status_source.min_vertex = status_hints ? min_vertex_index : 0;
+    status_source.vertex_count = status_hints ? min_vertex_index + vertex_count : 0;
     status_source.base_vertex = (int32_t)device->base_vertex_index;
     D9WGClipStatus next_status;BOOL next_status_valid;
     HRESULT status_result = d8_prepare_clip_status(device, &status_source, TRUE, &next_status, &next_status_valid);
     if (FAILED(status_result)) return status_result;
     int clipped = d8_clip_vb_draw(device, primitive_type, 0, index_count, device->index_buffer->shadow + start_index*index_size,
             index_count*index_size, index_size, (int32_t)device->base_vertex_index,
-            min_vertex_index, min_vertex_index + vertex_count);
+            bounds.min_vertex, bounds.vertex_limit);
     if (clipped) {
         if (clipped < 0) return D8WG_TRACE_ERROR(clipped == -3 ? E_OUTOFMEMORY :
                 clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
