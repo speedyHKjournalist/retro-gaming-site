@@ -43,7 +43,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,BackBufferFormat;BOOL Windowed;DWORD FullScreen_PresentationInterval,PresentationInterval,Flags;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DDevice${api},IDirect3DSwapChain${api},IDirect3DSurface${api};
-typedef struct Device Device;typedef struct Chain Chain;typedef struct{UINT handle;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
+typedef struct Device Device;typedef struct Chain Chain;typedef struct{UINT handle;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
 struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Chain*next_device_chain;};
 struct Device{Interface iface;unsigned refs,pins;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height,Format;}display_mode;struct{HWND hFocusWindow;}creation;UINT additional_swap_chain_count;Chain*additional_swap_chains;};
 typedef Chain D${api}SwapChain;typedef Device D${api}Device;typedef Surface D${api}Surface;
@@ -79,7 +79,7 @@ for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=
  CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;
  CHECK(c->present.BackBufferWidth==width&&c->present.BackBufferHeight==height&&c->present.BackBufferCount==(counts[n]?counts[n]:1)&&c->present.BackBufferFormat==22&&c->present.hDeviceWindow==(window?(void*)(uintptr_t)0x55:d.creation.hFocusWindow));
  input.BackBufferCount=counts[n]?counts[n]:1;${api===9?'input.BackBufferWidth=width;input.BackBufferHeight=height;':''}CHECK(!memcmp(&p,&input,sizeof(p)));
- CHECK(d.refs==3&&d.pins==2&&${api===8?'d.additional_swap_chain_count==1':'d.additional_swap_chains==c'});
+ CHECK(d.refs==3&&d.pins==2&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer':'d.additional_swap_chains==c'});
  CHECK(RELEASE(out)==0&&!live&&d.refs==1&&!d.pins&&${api===8?'!d.additional_swap_chain_count':'!d.additional_swap_chains'});cases++;
 }
 for(unsigned failure=0;failure<3;failure++){

@@ -493,6 +493,8 @@ struct D8Surface {
     BOOL backbuffer;
     BOOL depth_stencil;
     BOOL reset_blocker;
+    /* The GPU storage is private; a D3D8 backbuffer's container is its device. */
+    BOOL additional_back_buffer;
 };
 
 struct D8SwapChain {
@@ -5083,7 +5085,7 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface8 *iface,
     if (!container)
         return D8WG_TRACE_ERROR(E_POINTER);
     *container = NULL;
-    if (surface->texture) {
+    if (surface->texture && !surface->additional_back_buffer) {
         if (!iid || (!iid_is_unknown(iid)
                 && !guid_equal(iid, &IID_IDirect3DResource8)
                 && !guid_equal(iid, &IID_IDirect3DBaseTexture8)
@@ -5851,6 +5853,7 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
         return hr;
     }
     D8Surface *surface = surface_from_iface(chain->back_buffer);
+    surface->additional_back_buffer = TRUE;
     chain->handle = allocate_handle();
     if (window)
         ClientToScreen(window, &origin);
