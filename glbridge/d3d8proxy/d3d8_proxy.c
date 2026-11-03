@@ -5766,9 +5766,11 @@ static HRESULT WINAPI swapchain_get_backbuffer(IDirect3DSwapChain8* iface,
     D8SwapChain* chain = (D8SwapChain*)iface;
     if (!surface_out)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
-    *surface_out = NULL;
-    if (index || type != D3DBACKBUFFER_TYPE_MONO)
+    /* Native ignores the stereo selector and preserves output on bad index. */
+    (void)type;
+    if (index)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    *surface_out = NULL;
     HRESULT result = create_backbuffer_surface(chain->device, &chain->present, TRUE,
         surface_out);
     if (SUCCEEDED(result)) {

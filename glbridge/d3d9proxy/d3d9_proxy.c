@@ -13831,19 +13831,14 @@ static HRESULT WINAPI swap_chain_get_back_buffer(IDirect3DSwapChain9 *iface,
     HRESULT result;
 
     TRACE_MARK_ENTER("SwapChain.GetBackBuffer");
-    if (swap_chain->handle) {
-        /* An additional chain owns a real surface rather than borrowing the
-         * device's implicit one. */
-        if (!out) {
-            result = D3DERR_INVALIDCALL;
-        } else if (index || type != D3DBACKBUFFER_TYPE_MONO) {
-            *out = NULL;
-            result = D3DERR_INVALIDCALL;
-        } else {
-            *out = swap_chain->back_buffer;
-            IDirect3DSurface9_AddRef(*out);
-            result = D3D_OK;
-        }
+    /* Unlike Device.GetBackBuffer, a bad chain index preserves the output.
+     * Native ignores the stereo selector for both chain kinds. */
+    if (!out || index) {
+        result = D3DERR_INVALIDCALL;
+    } else if (swap_chain->handle) {
+        *out = swap_chain->back_buffer;
+        IDirect3DSurface9_AddRef(*out);
+        result = D3D_OK;
     } else {
         result = device_get_back_buffer(&swap_chain->device->iface, 0, index,
                 type, out);
