@@ -1300,7 +1300,6 @@ struct D9Surface {
      * that surface holds the texture's only reference and takes its own
      * refcount, so forwarding there would be a cycle. */
     BOOL texture_child;
-    BOOL device_pin_transferred;
     /* IDirect3DSurface9::GetDC state. The DC is backed by a DIB section --
      * the only bitmap GDI both draws into and exposes a raw pointer for -- so
      * the surface's bits live in two places while a DC is out, and `dc_bits` /
@@ -1359,11 +1358,11 @@ static BOOL surface_is_implicit(const D9Surface *surface)
 }
 
 static void surface_destroy_storage(D9Surface *surface);
+static void swap_chain_destroy_storage(D9SwapChain *chain);
 
 static BOOL surface_uses_private_bindings(const D9Surface *surface)
 {
-    return !surface->texture_child && !surface->cube_texture
-        && (!surface->swap_chain || !surface->swap_chain->handle);
+    return !surface->texture_child && !surface->cube_texture;
 }
 
 static void surface_binding_add_ref(D9Surface *surface)
@@ -1382,11 +1381,16 @@ static void surface_binding_release(D9Surface *surface)
     }
     if (!InterlockedDecrement(&surface->binding_refs)
             && !InterlockedCompareExchange(&surface->refcount, 0, 0)
-            && !surface_is_implicit(surface))
-        surface_destroy_storage(surface);
+            && !surface_is_implicit(surface)) {
+        if (surface->swap_chain) {
+            D9SwapChain *chain = surface->swap_chain;
+            if (!InterlockedCompareExchange(&chain->refcount, 0, 0))
+                swap_chain_destroy_storage(chain);
+        } else {
+            surface_destroy_storage(surface);
+        }
+    }
 }
-
-static void swap_chain_destroy_storage(D9SwapChain *chain);
 
 /* BeginStateBlock records calls, including calls which write the value the
  * device already has.  The block structure itself lives near its COM methods;
@@ -3251,8 +3255,8 @@ static D9Surface *reset_bound_surface(D9Device *device, UINT slot)
 static UINT reset_surface_owned_refs(D9Device *device, D9Surface *surface)
 {
     UINT refs = 0;
-    /* Implicit binding references are private, so every public ref blocks. */
-    if (surface && surface_is_implicit(surface))
+    /* Internal target slots never discount a private surface public ref. */
+    if (surface && surface_uses_private_bindings(surface))
         return 0;
     if (surface)
         for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i)
@@ -7391,7 +7395,6 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     device->additional_swap_chains = chain;
     /* Transfer the standalone surface's one device pin to the public chain.
      * Its private texture storage has no separate device pin. */
-    surface->device_pin_transferred = TRUE;
     surface->swap_chain = chain;
     surface->refcount = 0;
     d9wg_present_parameters_return(9, params, &chain->present);
@@ -13243,7 +13246,8 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
         if (!refs) {
             D9Device *device = surface->device;
             D9SwapChain *chain = surface->swap_chain;
-            if (!InterlockedCompareExchange(&chain->refcount, 0, 0))
+            if (!InterlockedCompareExchange(&chain->refcount, 0, 0)
+                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))
                 swap_chain_destroy_storage(chain);
             device_child_release(device);
         }
@@ -13322,13 +13326,11 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
     (void)before;
     if (!refs) {
         D9Device *device = surface->device;
-        BOOL release_device = !surface->device_pin_transferred;
         if (!InterlockedCompareExchange(&surface->binding_refs, 0, 0))
             surface_destroy_storage(surface);
         TRACE_MARK_EXIT("Surface.Release", 0, iface);
         /* This can destroy both objects through final binding cleanup. */
-        if (release_device)
-            device_child_release(device);
+        device_child_release(device);
         return 0;
     }
     TRACE_MARK_EXIT("Surface.Release", (HRESULT)refs, iface);
@@ -13809,10 +13811,9 @@ static void swap_chain_destroy_storage(D9SwapChain *chain)
     emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
     chain->back_buffer = NULL;
     surface->swap_chain = NULL;
-    /* Enter the ordinary storage destructor without returning the device
-     * pin transferred to the current public chain/surface release. */
-    surface->refcount = 1;
-    IDirect3DSurface9_Release(&surface->iface);
+    /* Public pins belong to the actual chain/surface Release caller;
+     * binding-only destruction runs under the pending device pin. */
+    surface_destroy_storage(surface);
     HeapFree(GetProcessHeap(), 0, chain);
 }
 
@@ -13846,7 +13847,8 @@ static ULONG WINAPI swap_chain_release(IDirect3DSwapChain9 *iface)
         refs = (ULONG)InterlockedDecrement(&swap_chain->refcount);
         if (!refs) {
             D9Surface *surface = surface_from_iface(swap_chain->back_buffer);
-            if (!InterlockedCompareExchange(&surface->refcount, 0, 0))
+            if (!InterlockedCompareExchange(&surface->refcount, 0, 0)
+                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))
                 swap_chain_destroy_storage(swap_chain);
             device_child_release(device);
         }

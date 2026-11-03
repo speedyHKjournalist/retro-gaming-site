@@ -43,7 +43,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,BackBufferFormat;BOOL Windowed;DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect,Flags;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DDevice${api},IDirect3DSwapChain${api},IDirect3DSurface${api};
-typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer,device_pin_transferred;LONG refcount;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
+typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer;LONG refcount,binding_refs;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
 struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Chain*next_device_chain;};
 struct Device{Interface iface;unsigned refs,pins;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height,Format;}display_mode;struct{HWND hFocusWindow;}creation;UINT additional_swap_chain_count;Chain*additional_swap_chains;};
 typedef Chain D${api}SwapChain;typedef Device D${api}Device;typedef Surface D${api}Surface;
@@ -56,7 +56,8 @@ static void HeapFree(void*h,UINT f,void*p){(void)h;(void)f;assert(p&&live);live-
 static LONG InterlockedDecrement(LONG*p){assert(*p>0);return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG v,LONG c){LONG old=*p;if(old==c)*p=v;return old;}
 static void device_child_add_ref(Device*d){d->refs++;d->pins++;}static void device_child_release(Device*d){assert(d->pins&&d->refs>1);d->pins--;d->refs--;}
 static void private_data_owner_release(Owner*p){assert(p->refs==1);HeapFree(NULL,0,p);}
-static void surface_release(Interface*p){Surface*s=(Surface*)p;Device*d=s->device;UINT pins=!s->texture->private_back_buffer${api===9?'+!s->device_pin_transferred':''};HeapFree(NULL,0,s);while(pins--)device_child_release(d);}
+static void surface_release(Interface*p){Surface*s=(Surface*)p;Device*d=s->device;UINT pins=${api===9?'1':'!s->texture->private_back_buffer'};HeapFree(NULL,0,s);while(pins--)device_child_release(d);}
+${api===9?'static void surface_destroy_storage(Surface*s){HeapFree(NULL,0,s);}':''}
 #define IDirect3DSurface9_Release surface_release
 #define IDirect3DSurface8_Release surface_release
 ${api===8?`static void swapchain_destroy_storage(Chain*);
@@ -83,7 +84,7 @@ for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=
  CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;
  CHECK(c->present.BackBufferWidth==width&&c->present.BackBufferHeight==height&&c->present.BackBufferCount==(counts[n]?counts[n]:1)&&c->present.BackBufferFormat==22&&c->present.hDeviceWindow==(window?(void*)(uintptr_t)0x55:d.creation.hFocusWindow));
  input.BackBufferCount=counts[n]?counts[n]:1;${api===9?'input.BackBufferWidth=width;input.BackBufferHeight=height;':''}CHECK(!memcmp(&p,&input,sizeof(p)));
- CHECK(d.refs==2&&d.pins==1&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer&&((Surface*)c->back_buffer)->texture->swap_chain==c':'d.additional_swap_chains==c&&((Surface*)c->back_buffer)->swap_chain==c&&((Surface*)c->back_buffer)->device_pin_transferred&&!((Surface*)c->back_buffer)->refcount'});
+ CHECK(d.refs==2&&d.pins==1&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer&&((Surface*)c->back_buffer)->texture->swap_chain==c':'d.additional_swap_chains==c&&((Surface*)c->back_buffer)->swap_chain==c&&!((Surface*)c->back_buffer)->refcount'});
  CHECK(RELEASE(out)==0&&!live&&d.refs==1&&!d.pins&&${api===8?'!d.additional_swap_chain_count':'!d.additional_swap_chains'});cases++;
 }
 ${api===8?`{

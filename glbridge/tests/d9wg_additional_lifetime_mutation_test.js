@@ -12,7 +12,7 @@ try {
     const source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"); let killed = 0;
     for (const [label, fn, old, replacement, harness = "private"] of [
         ["private storage device ownership lost", "create_target_texture", "texture->private_back_buffer = TRUE;", "texture->private_back_buffer = 0;", "target"],
-        ["surface device pin not transferred", "device_create_additional_swap_chain", "surface->device_pin_transferred = TRUE;", "surface->device_pin_transferred = 0;", "parameters"],
+        ["chain parent association lost", "device_create_additional_swap_chain", "chain->device = device;", "chain->device = NULL;", "parameters"],
         ["chain container missing", "device_create_additional_swap_chain", "surface->swap_chain = chain;", "surface->swap_chain = NULL;", "parameters"],
         ["internal reference exposed", "device_create_additional_swap_chain", "surface->refcount = 0;", "surface->refcount = 1;", "parameters"],
         ["extra texture device pin retained", "create_target_texture", "    if (!emit_texture_create(device, texture))", "    device_child_add_ref(device);\n    if (!emit_texture_create(device, texture))", "target"],
@@ -20,9 +20,9 @@ try {
         ["surface pins device per AddRef", "surface_add_ref", "if (refs == 1)", "if (refs > 0)"],
         ["zero surface Release underflows", "surface_release", "if (!InterlockedCompareExchange(&surface->refcount, 0, 0))", "if (0 && !InterlockedCompareExchange(&surface->refcount, 0, 0))"],
         ["surface leaks final device pin", "surface_release", "device_child_release(device);", "(void)device;"],
-        ["zero surface destroys live chain", "surface_release", "if (!InterlockedCompareExchange(&chain->refcount, 0, 0))", "if (1)"],
-        ["zero chain destroys held surface", "swap_chain_release", "if (!InterlockedCompareExchange(&surface->refcount, 0, 0))", "if ((void)surface, 1)"],
-        ["surface returns transferred pin twice", "surface_release", "BOOL release_device = !surface->device_pin_transferred;", "BOOL release_device = TRUE;"],
+        ["zero surface destroys live chain", "surface_release", "if (!InterlockedCompareExchange(&chain->refcount, 0, 0)\n                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))", "if (1)"],
+        ["zero chain destroys held surface", "swap_chain_release", "if (!InterlockedCompareExchange(&surface->refcount, 0, 0)\n                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))", "if ((void)surface, 1)"],
+        ["chain storage creates a fake public release", "swap_chain_destroy_storage", "surface_destroy_storage(surface);", "surface->refcount = 1; IDirect3DSurface9_Release(&surface->iface);"],
         ["texture returns transferred pin twice", "texture_release", "if (!texture->private_back_buffer)", "if (1)"],
         ["zero chain blocks binding-only Reset", "device_has_reset_blockers", "if (InterlockedCompareExchange(&chain->refcount, 0, 0))", "if (1)", "resources"],
     ]) {

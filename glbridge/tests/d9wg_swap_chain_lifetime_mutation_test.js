@@ -18,7 +18,7 @@ try {
         ["implicit retains final pin", "swap_chain_release", "if (!refs)\n        device_child_release(device);", "if (0 && !refs)\n        device_child_release(device);"],
         ["zero Release underflows", "swap_chain_release", "    if (!InterlockedCompareExchange(&swap_chain->refcount, 0, 0))\n        return 0;", ""],
         ["additional list keeps retired chain", "swap_chain_destroy_storage", "if (*link)\n        *link = chain->next_device_chain;", "if (0 && *link)\n        *link = chain->next_device_chain;"],
-        ["additional backing leaked", "swap_chain_destroy_storage", "IDirect3DSurface9_Release(&surface->iface);", "(void)surface_release; (void)surface;"],
+        ["additional backing leaked", "swap_chain_destroy_storage", "surface_destroy_storage(surface);", "(void)surface_destroy_storage; (void)surface;"],
         ["additional pin leaked", "swap_chain_release", "            device_child_release(device);", ""],
         ["additional allocation leaked", "swap_chain_destroy_storage", "HeapFree(GetProcessHeap(), 0, chain);", "(void)chain;"],
         ["additional destroyed before final ref", "swap_chain_release", "        if (!refs) {", "        if (refs <= 1) {"],

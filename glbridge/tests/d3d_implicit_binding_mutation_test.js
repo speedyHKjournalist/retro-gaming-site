@@ -17,10 +17,10 @@ try {
             ["implicit unbind returns public ref", "surface_binding_release", "if (surface_is_implicit(surface))", "if (0 && surface_is_implicit(surface))"],
             ["Reset discounts private depth binding", "device_has_reset_blockers", "(UINT)device->implicit_depth_stencil->refcount, 0,", "(UINT)device->implicit_depth_stencil->refcount, device->depth_surface == device->implicit_depth_stencil ? 1u : 0u,"],
         ] : [
-            ["implicit back uses public binding", "surface_uses_private_bindings", "(!surface->swap_chain || !surface->swap_chain->handle)", "!surface->swap_chain"],
+            ["implicit back uses public binding", "surface_uses_private_bindings", "return !surface->texture_child", "return !surface->swap_chain && !surface->texture_child"],
             ["implicit depth uses public binding", "surface_uses_private_bindings", "return !surface->texture_child", "return !surface->auto_depth_stencil && !surface->texture_child"],
             ["last implicit unbind frees cache", "surface_binding_release", "&& !surface_is_implicit(surface)", "&& 1"],
-            ["Reset discounts private implicit slots", "reset_surface_owned_refs", "if (surface && surface_is_implicit(surface))", "if (0 && surface && surface_is_implicit(surface))"],
+            ["Reset discounts private implicit slots", "reset_surface_owned_refs", "if (surface && surface_uses_private_bindings(surface))", "if (0 && surface && surface_uses_private_bindings(surface))"],
             ["implicit add leaks public parent pin", "surface_binding_add_ref", "if (surface_uses_private_bindings(surface))", "if (surface_uses_private_bindings(surface) && !surface_is_implicit(surface))"],
             ["implicit release consumes public parent pin", "surface_binding_release", "if (!surface_uses_private_bindings(surface))", "if (!surface_uses_private_bindings(surface) || surface_is_implicit(surface))"],
             ["implicit release leaks private counter", "surface_binding_release", "!InterlockedDecrement(&surface->binding_refs)", "0"],

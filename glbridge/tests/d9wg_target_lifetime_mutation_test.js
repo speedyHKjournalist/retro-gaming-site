@@ -16,12 +16,12 @@ try {
         ["public AddRef pins per reference", "surface_add_ref", "refs = (ULONG)InterlockedIncrement(&surface->refcount);", "device_child_add_ref(surface->device); refs = (ULONG)InterlockedIncrement(&surface->refcount);", true],
         ["every Release frees the target", "surface_release", "if (!refs) {", "if (1) {", true],
         ["private texture returns transferred parent pin", "texture_release", "if (!texture->private_back_buffer)", "if (1)"],
-        ["surface leaks its parent pin", "surface_release", "if (release_device)", "if (0 && release_device)"],
+        ["surface leaks its parent pin", "surface_release", "device_child_release(device);", "(void)device;", true],
         ["parent dies before storage cleanup", "surface_destroy_storage", "d9wg_private_clear(&surface->private_data, &d9wg_private_ops);", "device_child_release(device);\n    d9wg_private_clear(&surface->private_data, &d9wg_private_ops);"],
         ["retired storage stays linked", "texture_release", "*link = texture->next_device_resource;", "*link = texture;"],
         ["failed emission returns nonexistent pin", "create_target_texture", "if (!emit_texture_create(device, texture)) {", "if (!emit_texture_create(device, texture)) {\n        device_child_release(device);"],
         ["surface allocation failure leaks storage", "create_target_texture", "IDirect3DTexture9_Release(&texture->iface);", "(void)texture;"],
-        ["standalone pin incorrectly transferred", "create_target_texture", "surface->refcount = 1;", "surface->refcount = 1; surface->device_pin_transferred = TRUE;"],
+        ["standalone starts at zero public count", "create_target_texture", "surface->refcount = 1;", "surface->refcount = 0;"],
     ]) {
         const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, fn, old, replacement, last));
         const r = spawnSync(process.execPath, [__dirname + "/d9wg_target_lifetime_test.js"], {encoding: "utf8", timeout: 30000, env: {...process.env, D9WG_TARGET_LIFETIME_SOURCE: file}}), output = r.stdout + r.stderr;

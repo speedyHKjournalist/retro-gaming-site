@@ -25,7 +25,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;
 #define TRACE_MARK_ENTER(...)
 #define TRACE_MARK_EXIT(...)
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DSwapChain9,IDirect3DDevice9;
-typedef struct Device Device;typedef struct Chain Chain;typedef struct Surface{Interface iface;Device*device;LONG refcount;Chain*swap_chain;}Surface;typedef Surface D9Surface;
+typedef struct Device Device;typedef struct Chain Chain;typedef struct Surface{Interface iface;Device*device;LONG refcount,binding_refs;Chain*swap_chain;}Surface;typedef Surface D9Surface;
 struct Chain{Interface iface;LONG refcount;Device*device;UINT handle;Chain*next_device_chain;Surface*back_buffer;};
 struct Device{Interface iface;LONG refcount,child_parent_refs;UINT handle;Chain implicit_swap_chain,*additional_swap_chains;};
 typedef Chain D9SwapChain;typedef Device D9Device;
@@ -43,8 +43,7 @@ static ULONG device_release(Interface*p){Device*d=device_from_iface(p);assert(d-
 #define IDirect3DDevice9_AddRef device_add_ref
 #define IDirect3DDevice9_Release device_release
 ${["device_child_add_ref", "device_child_release"].map(n => extract(source, n)).join("\n")}
-static void surface_release(Interface*p){Surface*s=(Surface*)p;assert(s->refcount);if(!--s->refcount){surface_destroys++;HeapFree(GetProcessHeap(),0,s);}}
-#define IDirect3DSurface9_Release surface_release
+static void surface_destroy_storage(Surface*s){assert(!s->refcount&&!s->binding_refs);surface_destroys++;HeapFree(GetProcessHeap(),0,s);}
 static BOOL emit_command(UINT op,const void*p,UINT n){const D9WGDestroySwapChain*q=p;assert(op==D9WG_OP_DESTROY_SWAP_CHAIN&&n==sizeof(*q)&&q->device_handle==77&&q->swap_chain_handle>=100&&q->swap_chain_handle<=102);assert(!retired[q->swap_chain_handle-100]++);chain_destroys++;return 1;}
 ${["swap_chain_destroy_storage", "swap_chain_add_ref", "swap_chain_release"].map(n => extract(source, n)).join("\n")}
 #define IDirect3DSwapChain9_AddRef swap_chain_add_ref
