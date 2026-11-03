@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_private_data.h"
+#include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
@@ -1077,12 +1078,8 @@ struct D9Device {
     HWND styled_window;
     LONG saved_window_style;
     LONG saved_window_exstyle;
-    /* Reconstructs the vertical-retrace wait Present owes the app; see
-     * throttle_to_presentation_interval().  Times are present_clock() ticks. */
-    DWORD present_deadline;
-    DWORD present_clock_hz;
-    BYTE present_clock_shift;
-    BOOL present_paced;
+    D9WGPresentClock present_clock;
+    D9WGPresentPacing present_pacing;
     /* Rate limiting for maintain_fullscreen_foreground(). */
     DWORD last_foreground_claim;
     DWORD foreground_claims;
@@ -1788,6 +1785,7 @@ static void host_log(uint32_t severity, const char *format, ...)
 #include "../runtime/d9wg_texture_lod_bridge.h"
 #include "../runtime/d9wg_gamma_bridge.h"
 #include "../runtime/d9wg_private_data_bridge.h"
+#include "../runtime/d9wg_present_pacing_bridge.h"
 static BOOL submit_readback_batch_locked(BOOL present);
 #include "../runtime/d9wg_cursor_bridge.h"
 
@@ -5166,107 +5164,10 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
     return result;
 }
 
-/*
- * D3DPRESENT_INTERVAL_ONE..FOUR ask Present to block until the Nth vertical
- * retrace.  That wait is the only back-pressure a D3D9 title has on its own
- * frame rate: the render loop is `while (running) { render(); Present(); }` and
- * nothing else in it sleeps.  Returning immediately -- what this proxy did
- * until now, whatever the app requested -- lets the guest spin as fast as the
- * emulator can retire the command stream.  San Andreas' loading screen reached
- * roughly 1000 Present/s that way, which starves every other thread in the
- * process of timeslices and spends the emulator's budget on frames nobody sees.
- *
- * There is no retrace to wait on here, so the wait is reconstructed from the
- * clock: each Present may return no earlier than a deadline one interval after
- * the previous one's.  A frame that finishes late by less than an interval
- * keeps the cadence -- the next frame's wait is shorter -- so frames that
- * straddle the interval still average the refresh rate, as with a retrace
- * wait and a render-ahead queue; later than that, the cadence restarts from
- * now instead of letting the frames that follow run unthrottled to catch up.
- *
- * The clock must resolve well under a millisecond.  GetTickCount advances in
- * whole clock-interrupt periods -- 10 ms on the XP HAL v86 runs -- so the
- * elapsed time it reports for a 14 ms frame is 10 ms or 20 ms.  Measuring
- * from it held a KartRider race at 50 frames/s with a fifth of the game
- * thread asleep, while the frames themselves took 14 ms, and capped even an
- * idle loop below 60.
- */
-static BOOL present_throttle_disabled(void)
-{
-    static LONG cached = -1;
-
-    if (cached < 0)
-        cached = env_flag_enabled("D9WG_PRESENT_NO_THROTTLE") ? 1 : 0;
-    return cached != 0;
-}
-
-/* QueryPerformanceCounter, shifted down to at most 2^20 ticks/s (a
- * microsecond or so) so that pacing needs only 32-bit arithmetic -- this DLL
- * links no compiler runtime for 64-bit division -- and still wraps only about
- * once an hour, which the signed differences below tolerate.  GetTickCount is
- * the fallback where there is no performance counter. */
+/* Raster status shares the presentation clock and its fallback units. */
 static DWORD present_clock(D9Device *device)
 {
-    LARGE_INTEGER value;
-
-    if (!device->present_clock_hz) {
-        BYTE shift = 0;
-        if (!QueryPerformanceFrequency(&value) || value.QuadPart <= 0) {
-            device->present_clock_shift = 0xFF;
-            device->present_clock_hz = 1000u;
-        } else {
-            while ((value.QuadPart >> shift) > (1 << 20))
-                ++shift;
-            device->present_clock_shift = shift;
-            device->present_clock_hz = (DWORD)(value.QuadPart >> shift);
-        }
-    }
-    if (device->present_clock_shift == 0xFF || !QueryPerformanceCounter(&value))
-        return GetTickCount();
-    return (DWORD)(value.QuadPart >> device->present_clock_shift);
-}
-
-static void throttle_to_presentation_interval(D9Device *device)
-{
-    DWORD frames, refresh, interval, now, deadline;
-
-    if (present_throttle_disabled())
-        return;
-
-    switch (device->present.PresentationInterval) {
-    /* DEFAULT is documented as equivalent to ONE, not as "do not wait". */
-    case D3DPRESENT_INTERVAL_DEFAULT:
-    case D3DPRESENT_INTERVAL_ONE:   frames = 1; break;
-    case D3DPRESENT_INTERVAL_TWO:   frames = 2; break;
-    case D3DPRESENT_INTERVAL_THREE: frames = 3; break;
-    case D3DPRESENT_INTERVAL_FOUR:  frames = 4; break;
-    default:                        return;  /* IMMEDIATE */
-    }
-
-    refresh = device->display_mode.RefreshRate;
-    if (refresh < 20u || refresh > 240u)
-        refresh = 60u;
-    now = present_clock(device);
-    interval = device->present_clock_hz * frames / refresh;
-    if (!interval)
-        return;
-
-    deadline = device->present_deadline;
-    /* The first Present has no predecessor to wait for. */
-    if (device->present_paced && (LONG)(deadline - now) > 0) {
-        /* Whole milliseconds: Sleep cannot do better, and waking up to a
-         * millisecond early is absorbed by the next frame's deadline. */
-        DWORD wait = deadline - now <= interval
-                ? (deadline - now) * 1000u / device->present_clock_hz : 0;
-        if (wait)
-            Sleep(wait);
-        now = present_clock(device);
-    }
-    if (!device->present_paced || (LONG)(now - deadline) >= (LONG)interval
-            || (LONG)(deadline - now) > (LONG)interval)
-        deadline = now;
-    device->present_deadline = deadline + interval;
-    device->present_paced = TRUE;
+    return d9wg_present_clock_now(&device->present_clock);
 }
 
 static HRESULT WINAPI device_present(IDirect3DDevice9 *iface,
@@ -5292,7 +5193,11 @@ static HRESULT WINAPI device_present(IDirect3DDevice9 *iface,
     ok = emit_present_and_flush(device_from_iface(iface), override_window);
     /* After the flush, so the frame is on its way to the host while this
      * thread is parked rather than before it. */
-    throttle_to_presentation_interval(device_from_iface(iface));
+    if (ok) {
+        D9Device *device = device_from_iface(iface);
+        d9wg_throttle_present(&device->present_clock, &device->present_pacing,
+            device->present.PresentationInterval, device->display_mode.RefreshRate);
+    }
     TRACE("%s Present device=%08lX -> %08lX", ok ? "OK" : "FAIL",
             device_from_iface(iface)->handle,
             (DWORD)(ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR));
@@ -7541,7 +7446,7 @@ static HRESULT WINAPI device_get_raster_status(IDirect3DDevice9 *iface,
      * the last 1/17 of each frame is the blank.  present_clock(), because
      * GetTickCount's 10 ms steps land in a 1 ms blank once every 170 ms. */
     now = present_clock(device);
-    period = device->present_clock_hz / 60u;
+    period = device->present_clock.hz / 60u;
     visible = period * 16u / 17u;
     if (!visible) {
         status->InVBlank = FALSE;

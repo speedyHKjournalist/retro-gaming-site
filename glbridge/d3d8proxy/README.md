@@ -40,11 +40,21 @@ MapleStory-class 2D behaviour they validated.
 | `SetVertexShader(FVF token)` | `SetFVF` carrying the expanded element array | `fvf_to_elements`, `emit_set_fvf` |
 | `SetIndices(buffer, baseVertexIndex)` | `SetIndices(buffer)`; base vertex is per-draw | `device_set_indices`, `device_draw_indexed` |
 | `SetRenderTarget(colour, depth)` | `SetRenderTarget(0, colour)` + `SetDepthStencilSurface(depth)` | `device_set_render_target` |
+| Windowed swap effect and fullscreen presentation interval | Effective D3D9 interval, with a shared virtual deadline clock | `d9wg_present_interval8`, `d9wg_present_pace` |
 | window moved with no `Present` | `D9WG_OP_WINDOW_STATE` | `emit_surface_update_and_flush` |
 
-`d3d8_protocol.h` states the reasoning for each; the ZBIAS scale factor in
+`d3d8_protocol.h` describes the protocol conversions; the ZBIAS scale factor in
 particular is a driver-quality choice rather than a specification, and matches
 DXVK's so that content tuned against it lands the same way here.
+
+Device `Present` shares its clock and deadline logic with D3D9. D3D8 windowed
+DISCARD/FLIP/COPY chains present immediately; COPY_VSYNC uses one refresh.
+Fullscreen COPY_VSYNC also converts an IMMEDIATE request to one refresh.
+The common clock keeps fractional tick debt, resamples early timer wakes and
+falls back to a millisecond timebase if the performance counter fails or stalls.
+`D9WG_PRESENT_NO_THROTTLE=1` disables device Present pacing in both frontends.
+These are virtual deadlines; physical retrace, additional-chain pacing, full
+presentation-parameter validation and Reset boundaries have separate review steps.
 
 ### Vertex registers vs usages
 

@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_private_data.h"
+#include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
 #include "../runtime/d9wg_format_layouts.h"
@@ -225,6 +226,8 @@ struct D8Device {
     D3DPRESENT_PARAMETERS present;
     D3DDISPLAYMODE display_mode;
     D9WGCursorState app_cursor_state;
+    D9WGPresentClock present_clock;
+    D9WGPresentPacing present_pacing;
     D9WGPrivateStore back_buffer_private_data;
     D9WGPrivateStore depth_surface_private_data;
     D3DVIEWPORT8 viewport;
@@ -739,6 +742,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
 #include "../runtime/d9wg_texture_lod_bridge.h"
 #include "../runtime/d9wg_gamma_bridge.h"
 #include "../runtime/d9wg_private_data_bridge.h"
+#include "../runtime/d9wg_present_pacing_bridge.h"
 static BOOL submit_readback_batch_locked(BOOL present);
 #include "../runtime/d9wg_cursor_bridge.h"
 
@@ -2919,8 +2923,12 @@ static HRESULT WINAPI device_present(IDirect3DDevice8 *iface,
     (void)source;
     (void)destination;
     (void)dirty_region;
-    return emit_present_and_flush(device_from_iface(iface), override_window)
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    D8Device *device = device_from_iface(iface);
+    BOOL ok = emit_present_and_flush(device, override_window);
+    if (ok)
+        d9wg_throttle_present(&device->present_clock, &device->present_pacing,
+            d9wg_present_interval8(device->present.FullScreen_PresentationInterval, device->present.Windowed, device->present.SwapEffect), device->display_mode.RefreshRate);
+    return ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
 static HRESULT WINAPI device_begin_scene(IDirect3DDevice8 *iface)
