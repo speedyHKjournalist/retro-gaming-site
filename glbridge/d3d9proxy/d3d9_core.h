@@ -145,6 +145,11 @@ HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(struct IDirect3DDevice9 *devic
  * layout too. Raw8 GetVertexShader/FVF-vs-handle state stays in the frontend.
  * Internal9 GetFVF iszero because the actual converted layout is authoritative. */
 HRESULT WINAPI d9wg_d3d9_core_set_fvf8(struct IDirect3DDevice9 *device, DWORD fvf);
+/* Process into a real9 VB whose raw FVF belongs to8. Source bindings and
+ * math use the shared core pipeline;destination8 masks stay versioned. */
+HRESULT WINAPI d9wg_d3d9_core_process_vertices8(struct IDirect3DDevice9 *device,
+        UINT src_start, UINT dst_index, UINT count,
+        struct IDirect3DVertexBuffer9 *destination, DWORD flags);
 /* Frontend8 supplies its selected raw snapshot through recordable translated
  * setters on this device. The callback/context are used only during this call;
  * the published real9 block retains values/objects, never frontend pointers.

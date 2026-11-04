@@ -43,6 +43,7 @@
 #define D9WG_STATE_BLOCK_API 8
 #include "../runtime/d9wg_state_block_scope.h"
 #include "../runtime/d9wg_vertex.h"
+#include "../runtime/d9wg_process_layout8.h"
 #include "../runtime/d9wg_vertex_windows.h"
 #include "../runtime/d9wg_fpu.h"
 #include "../runtime/d9wg_transport.h"
@@ -6458,10 +6459,7 @@ static void multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,
 typedef D9WGProcessLayout D8FVFLayout;
 static BOOL decode_fvf_layout(DWORD fvf, D8FVFLayout *layout)
 {
-    DWORD position = fvf & D3DFVF_POSITION_MASK;
-    if (position != D3DFVF_XYZ && position != D3DFVF_XYZRHW) return FALSE;
-    if (position == D3DFVF_XYZRHW && (fvf & D3DFVF_NORMAL)) return FALSE;
-    return d9wg_process_fvf(D9WG_FVF_D3D8, fvf, layout);
+    return d9wg_process_fvf8_subset(fvf, layout);
 }
 
 

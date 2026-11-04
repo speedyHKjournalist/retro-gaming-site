@@ -1342,3 +1342,25 @@ End/Delete orEnd/Release;private8 callbackfailure usesactualcancel. BothGPUs
 verify20complete images/1,280pixels zeroerror. CPU replies areexplicit analytic
 injection;fullpublic8 DWORD/predefined-scope wrappers remainopen. Evidence:
 `../deployments/d3d-webgpu-review-4K35.json`.
+
+
+### Review 4K36: ProcessVertices8 through the shared software pipeline
+
+The private `d9wg_d3d9_core_process_vertices8` (stdcall24) selects the existing8
+FVF output subset, then executes the factored actual9 processing body without
+a temporary output declaration. Ordinary9 keeps its validation and output
+layout policy. Reconstructed old8 decoder and whole9 ProcessVertices match
+exactly;390 other8 /638 other9 functions and eight shared runtime files match.
+
+Native coverage:392,170checks/364,469cases,22strict semantic mutants andtwo
+ASAN families. Frozen9/new9/private8 compare full output bytes,aliasing,
+matrices,attributes,padding,DONOTCOPYDATA,ClipStatus anduploads. Numerical
+cases areunlit;zeroW isexisting localpolicy. Upload failure retains already
+processed CPU data,matching old9. XP compares accurate4K35old/current8,
+ordinary9 normalizedFVF andcoreSDK120/220:5devices/5Reset/10managedVB,
+800actual CPU vertex DWORD checks,raw8bit14 layouts and20bounddraws.
+Independentwire verifies45updates/5,760bytes;8,084corruptions caught.
+BothGPUs verify20complete images/1,280pixels zeroerror. Framebuffer CPU
+replies areexplicit analytic injection,separate from actualCPUvertex results
+andGPU images. Evidence:`../deployments/d3d-webgpu-review-4K36.json`.
+Fullpublic8 DWORD state-block ownership/predefined scopes andwrappers remain.
