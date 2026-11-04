@@ -24,6 +24,9 @@ static const D9WGSurfaceMethods8 mock_methods={mock_set,mock_get,mock_free,mock_
 static const D9WGSurfaceMethods8*d9wg_d3d9_core_surface_methods8(struct IDirect3DSurface9*p){Backend*b=(Backend*)p;return p&&p->lpVtbl==&backend_vtbl&&b->profile&&!b->kind?&mock_methods:NULL;}
 static HRESULT d9wg_d3d9_core_get_view8(IUnknown*p,void**out){Backend*b=(Backend*)p;*out=NULL;if(b->fail_get)return -77;*out=b->view;return 0;}
 static HRESULT d9wg_d3d9_core_attach_view8(IUnknown*p,void*view,D9WGCoreViewRetire8 retire){Backend*b=(Backend*)p;if(b->view)return D3DERR_INVALIDCALL;if(b->race){UINT mode=b->race;b->race=0;if(mode==2)return D3DERR_INVALIDCALL;
+#ifdef D8WG_NATIVE_CUBE_ADAPTER
+if(b->kind){D8CoreCubeTexture*winner=HeapAlloc(NULL,8,sizeof(*winner));assert(winner);*winner=*(D8CoreCubeTexture*)view;b->view=winner;}else
+#endif
 #ifdef D8WG_NATIVE_TEXTURE_ADAPTER
 if(b->kind){D8CoreTexture*winner=HeapAlloc(NULL,8,sizeof(*winner));assert(winner);*winner=*(D8CoreTexture*)view;b->view=winner;}else
 #endif

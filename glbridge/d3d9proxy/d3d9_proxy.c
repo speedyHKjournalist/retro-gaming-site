@@ -16182,6 +16182,50 @@ const D9WGTextureMethods8 *WINAPI d9wg_d3d9_core_texture_methods8(IDirect3DTextu
     return &methods;
 }
 
+static UINT WINAPI core_cube_texture_type8(IDirect3DCubeTexture9 *texture)
+{
+    return (UINT)IDirect3DCubeTexture9_GetType(texture);
+}
+static HRESULT WINAPI core_cube_texture_lock8(IDirect3DCubeTexture9 *texture, UINT face, UINT level,
+        void *locked, const RECT *rect, DWORD flags)
+{
+    return IDirect3DCubeTexture9_LockRect(texture, (D3DCUBEMAP_FACES)face, level, (D3DLOCKED_RECT *)locked, rect, flags);
+}
+static HRESULT WINAPI core_cube_texture_desc8(IDirect3DCubeTexture9 *texture, UINT level,
+        void *out, UINT bytes)
+{
+    if (!out || bytes != D9WG_D3D8_SURFACE_DESC_BYTES) return D3DERR_INVALIDCALL;
+    D3DSURFACE_DESC desc;
+    HRESULT hr = IDirect3DCubeTexture9_GetLevelDesc(texture, level, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_surface_desc8(&desc, out);
+}
+static HRESULT WINAPI core_cube_texture_surface8(IDirect3DCubeTexture9 *texture,
+        UINT face, UINT level, IDirect3DSurface9 **out)
+{
+    return IDirect3DCubeTexture9_GetCubeMapSurface(texture, (D3DCUBEMAP_FACES)face, level, out);
+}
+static HRESULT WINAPI core_cube_texture_unlock8(IDirect3DCubeTexture9 *texture, UINT face, UINT level)
+{
+    return IDirect3DCubeTexture9_UnlockRect(texture, (D3DCUBEMAP_FACES)face, level);
+}
+static HRESULT WINAPI core_cube_texture_dirty8(IDirect3DCubeTexture9 *texture, UINT face, const RECT *rect)
+{
+    return IDirect3DCubeTexture9_AddDirtyRect(texture, (D3DCUBEMAP_FACES)face, rect);
+}
+const D9WGCubeTextureMethods8 *WINAPI d9wg_d3d9_core_cube_texture_methods8(IDirect3DCubeTexture9 *texture)
+{
+    static const D9WGCubeTextureMethods8 methods = {
+        cube_set_private_data, cube_get_private_data, cube_free_private_data,
+        cube_set_priority, cube_get_priority, cube_preload, core_cube_texture_type8,
+        cube_set_lod, cube_get_lod, cube_get_level_count, core_cube_texture_desc8,
+        core_cube_texture_surface8, core_cube_texture_lock8, core_cube_texture_unlock8, core_cube_texture_dirty8
+    };
+    if (!texture || texture->lpVtbl != &g_cube_vtbl
+            || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
+}
+
 /* Only the layout object is published here. Raw8 declaration/function and
  * local constant shadows stay with the shader-handle adapter. The shared
  * parser still validates every constant block before constructing storage. */

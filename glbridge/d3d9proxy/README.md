@@ -1487,3 +1487,26 @@ wire corruptions. CPUframebuffer replies areanalytic;actualCPUshadow andGPU
 checks areseparate. 376guest/87core regressions,32EXEs/fourstrictDLLs/site2/
 scopedlint0. ExactXPaccepted retail DLLs andsame-source diagnostics published.
 Evidence:`../deployments/d3d-webgpu-review-4K41.json`.
+
+
+### Review 4K42: real SDK8 CubeTexture8 and Surface8 face containers
+
+The real19-method CubeTexture8 adapter forwards through a typed15-method core9
+boundary andreturns actual Surface8 face/mip views,with real CubeTexture8
+containers. Both interfaces share core lock state,coupled refs andweak identity.
+All663oldcore9 functions,tenstorage structs,wholeold8/runtime/Surface8/Texture8/
+commonview match. The public8 build adds one source;defaultfactory remainsopen.
+
+Native:61,952checks/1,164cases,47strict mutants andASAN,including face-loss
+routing failures. The backend is anexplicit COM/metadata shim. RetainedTexture8
+andSurface8 checks/mutations pass. ActualSDK8 XP:128s/52batches,nine devices/
+nineReset,all24face-mip views pernewdevice,shared/independent locks,QI/private/
+priority/LOD/desc/publiczero/Reset/final0. NewDevice8 parent is anIUnknown fixture.
+
+Sixfacecolors pluspostResetwhite add14GPU images:38fullimages/2,432pixels
+zeroerror onbothGPUs. 24uploads/4,992bytes,27,582wire corruptions,1,280actual
+CPUshadow DWORDs acrossallprobes. CPUframebuffer replies areanalytic,separate
+fromactualCPUshadow andGPUchecks. CubeAddDirtyRect retains the current core9
+no-op policy. 378guest/88core regressions,32EXEs/fourstrictDLLs/site2/scopedlint0.
+ExactXPaccepted retail DLLs andsame-source diagnostics published.
+Evidence:`../deployments/d3d-webgpu-review-4K42.json`.

@@ -178,6 +178,24 @@ typedef struct D9WGTextureMethods8 {
     HRESULT (WINAPI *add_dirty_rect)(struct IDirect3DTexture9 *, const RECT *);
 } D9WGTextureMethods8;
 const D9WGTextureMethods8 *WINAPI d9wg_d3d9_core_texture_methods8(struct IDirect3DTexture9 *texture);
+typedef struct D9WGCubeTextureMethods8 {
+    HRESULT (WINAPI *set_private_data)(struct IDirect3DCubeTexture9 *, const GUID *, const void *, DWORD, DWORD);
+    HRESULT (WINAPI *get_private_data)(struct IDirect3DCubeTexture9 *, const GUID *, void *, DWORD *);
+    HRESULT (WINAPI *free_private_data)(struct IDirect3DCubeTexture9 *, const GUID *);
+    DWORD (WINAPI *set_priority)(struct IDirect3DCubeTexture9 *, DWORD);
+    DWORD (WINAPI *get_priority)(struct IDirect3DCubeTexture9 *);
+    void (WINAPI *preload)(struct IDirect3DCubeTexture9 *);
+    UINT (WINAPI *get_type)(struct IDirect3DCubeTexture9 *);
+    DWORD (WINAPI *set_lod)(struct IDirect3DCubeTexture9 *, DWORD);
+    DWORD (WINAPI *get_lod)(struct IDirect3DCubeTexture9 *);
+    DWORD (WINAPI *get_level_count)(struct IDirect3DCubeTexture9 *);
+    HRESULT (WINAPI *get_level_desc)(struct IDirect3DCubeTexture9 *, UINT, void *, UINT);
+    HRESULT (WINAPI *get_cube_map_surface)(struct IDirect3DCubeTexture9 *, UINT, UINT, struct IDirect3DSurface9 **);
+    HRESULT (WINAPI *lock_rect)(struct IDirect3DCubeTexture9 *, UINT, UINT, void *, const RECT *, DWORD);
+    HRESULT (WINAPI *unlock_rect)(struct IDirect3DCubeTexture9 *, UINT, UINT);
+    HRESULT (WINAPI *add_dirty_rect)(struct IDirect3DCubeTexture9 *, UINT, const RECT *);
+} D9WGCubeTextureMethods8;
+const D9WGCubeTextureMethods8 *WINAPI d9wg_d3d9_core_cube_texture_methods8(struct IDirect3DCubeTexture9 *texture);
 /* The SDK8 adapter uses this typed boundary without including SDK9 headers.
  * Its resource pointer must already belong to this8-profile core. */
 typedef struct D9WGSurfaceMethods8 {
