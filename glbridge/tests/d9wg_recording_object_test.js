@@ -54,6 +54,10 @@ static int addref(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry
 static int release(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0)abort();return --*registry[i].refs;}abort();}
 /* These are backend construction stubs; public recording references remain
  * independently observed. The complete private lifetime runs in its own suite. */
+static void decl_binding_add_ref(D9VertexDeclaration*d){addref(&d->iface);}
+static void decl_binding_release(D9VertexDeclaration*d){release(&d->iface);}
+static void shader_binding_add_ref(D9Shader*s){addref(&s->iface);}
+static void shader_binding_release(D9Shader*s){release(&s->iface);}
 static void vb_binding_add_ref(D9VertexBuffer*b){addref(&b->iface);}
 static void vb_binding_release(D9VertexBuffer*b){release(&b->iface);}
 static void ib_binding_add_ref(D9IndexBuffer*b){addref(&b->iface);}

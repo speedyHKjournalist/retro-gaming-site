@@ -1128,6 +1128,7 @@ struct D9Shader {
         IDirect3DPixelShader9 pixel;
     } iface;
     LONG refcount;
+    LONG binding_refs;          /* private declaration/shader slot holds */
     D9Device *device;
     uint32_t handle;
     BOOL is_pixel;
@@ -1268,6 +1269,7 @@ static IDirect3DVolume9Vtbl g_volume_vtbl;
 struct D9VertexDeclaration {
     IDirect3DVertexDeclaration9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private declaration/shader slot holds */
     D9Device *device;
     uint32_t handle;
     UINT element_count;
@@ -1430,6 +1432,34 @@ static void ib_binding_release(D9IndexBuffer *buffer)
     if (!InterlockedDecrement(&buffer->binding_refs)
             && !InterlockedCompareExchange(&buffer->refcount, 0, 0))
         ib_destroy_storage(buffer);
+}
+
+static void decl_destroy_storage(D9VertexDeclaration *object);
+
+static void decl_binding_add_ref(D9VertexDeclaration *object)
+{
+    InterlockedIncrement(&object->binding_refs);
+}
+
+static void decl_binding_release(D9VertexDeclaration *object)
+{
+    if (!InterlockedDecrement(&object->binding_refs)
+            && !InterlockedCompareExchange(&object->refcount, 0, 0))
+        decl_destroy_storage(object);
+}
+
+static void shader_destroy_storage(D9Shader *object);
+
+static void shader_binding_add_ref(D9Shader *object)
+{
+    InterlockedIncrement(&object->binding_refs);
+}
+
+static void shader_binding_release(D9Shader *object)
+{
+    if (!InterlockedDecrement(&object->binding_refs)
+            && !InterlockedCompareExchange(&object->refcount, 0, 0))
+        shader_destroy_storage(object);
 }
 
 static void surface_destroy_storage(D9Surface *surface);
@@ -3510,17 +3540,17 @@ static void device_clear_bindings(D9Device *device)
     if (device->vertex_declaration) {
         D9VertexDeclaration *decl = device->vertex_declaration;
         device->vertex_declaration = NULL;
-        IDirect3DVertexDeclaration9_Release(&decl->iface);
+        decl_binding_release(decl);
     }
     if (device->vertex_shader) {
         D9Shader *shader = device->vertex_shader;
         device->vertex_shader = NULL;
-        IDirect3DVertexShader9_Release(&shader->iface.vertex);
+        shader_binding_release(shader);
     }
     if (device->pixel_shader) {
         D9Shader *shader = device->pixel_shader;
         device->pixel_shader = NULL;
-        IDirect3DPixelShader9_Release(&shader->iface.pixel);
+        shader_binding_release(shader);
     }
     device->fvf = 0;
 }
@@ -6810,13 +6840,11 @@ static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
         if (block->vertex_declaration) IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
         block->has_vertex_format = TRUE;block->vertex_declaration = decl;block->fvf = 0;return D3D_OK;
     }
-    if (decl)
-        IDirect3DVertexDeclaration9_AddRef(decl_iface);
-    if (device->vertex_declaration)
-        IDirect3DVertexDeclaration9_Release(
-                &device->vertex_declaration->iface);
+    D9VertexDeclaration *old_decl = device->vertex_declaration;
+    if (decl) decl_binding_add_ref(decl);
     device->vertex_declaration = decl;
     device->fvf = 0;
+    if (old_decl) decl_binding_release(old_decl);
     command.device_handle = device->handle;
     command.declaration_handle = decl ? decl->handle : 0;
     return emit_command(D9WG_OP_SET_VERTEX_DECLARATION, &command,
@@ -6859,12 +6887,10 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
         if (block->vertex_declaration) IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
         block->has_vertex_format = TRUE;block->vertex_declaration = NULL;block->fvf = fvf;return D3D_OK;
     }
-    if (device->vertex_declaration) {
-        IDirect3DVertexDeclaration9_Release(
-                &device->vertex_declaration->iface);
-        device->vertex_declaration = NULL;
-    }
+    D9VertexDeclaration *old_decl = device->vertex_declaration;
+    device->vertex_declaration = NULL;
     device->fvf = fvf;
+    if (old_decl) decl_binding_release(old_decl);
     return emit_set_fvf(device, fvf, wire, count)
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -6972,7 +6998,7 @@ static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
     return D3D_OK;
 }
 
-static void shader_destroy(D9Shader *shader)
+static void shader_destroy_storage(D9Shader *shader)
 {
     D9Shader **link = &shader->device->shaders;
     D9WGDestroyResource destroy;
@@ -6985,9 +7011,28 @@ static void shader_destroy(D9Shader *shader)
     destroy.resource_kind = shader->is_pixel ? D9WG_RESOURCE_PIXEL_SHADER
             : D9WG_RESOURCE_VERTEX_SHADER;
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-    device_child_release(shader->device);
     HeapFree(GetProcessHeap(), 0, shader->code);
     HeapFree(GetProcessHeap(), 0, shader);
+}
+
+static ULONG shader_public_add_ref(D9Shader *shader)
+{
+    ULONG refs = (ULONG)InterlockedIncrement(&shader->refcount);
+    if (refs == 1) device_child_add_ref(shader->device);
+    return refs;
+}
+
+static ULONG shader_public_release(D9Shader *shader)
+{
+    if (!InterlockedCompareExchange(&shader->refcount, 0, 0)) return 0;
+    ULONG refs = (ULONG)InterlockedDecrement(&shader->refcount);
+    if (!refs) {
+        D9Device *device = shader->device;
+        if (!InterlockedCompareExchange(&shader->binding_refs, 0, 0))
+            shader_destroy_storage(shader);
+        device_child_release(device);
+    }
+    return refs;
 }
 
 static HRESULT emit_set_shader(D9Device *device, D9Shader *shader,
@@ -7048,11 +7093,10 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice9 *iface,
         if (block->vertex_shader) IDirect3DVertexShader9_Release(&block->vertex_shader->iface.vertex);
         block->has_vertex_shader = TRUE;block->vertex_shader = shader;return D3D_OK;
     }
-    if (shader)
-        IDirect3DVertexShader9_AddRef(shader_iface);
-    if (device->vertex_shader)
-        IDirect3DVertexShader9_Release(&device->vertex_shader->iface.vertex);
+    D9Shader *old_shader = device->vertex_shader;
+    if (shader) shader_binding_add_ref(shader);
     device->vertex_shader = shader;
+    if (old_shader) shader_binding_release(old_shader);
     return emit_set_shader(device, shader, FALSE);
 }
 
@@ -7085,11 +7129,10 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice9 *iface,
         if (block->pixel_shader) IDirect3DPixelShader9_Release(&block->pixel_shader->iface.pixel);
         block->has_pixel_shader = TRUE;block->pixel_shader = shader;return D3D_OK;
     }
-    if (shader)
-        IDirect3DPixelShader9_AddRef(shader_iface);
-    if (device->pixel_shader)
-        IDirect3DPixelShader9_Release(&device->pixel_shader->iface.pixel);
+    D9Shader *old_shader = device->pixel_shader;
+    if (shader) shader_binding_add_ref(shader);
     device->pixel_shader = shader;
+    if (old_shader) shader_binding_release(old_shader);
     return emit_set_shader(device, shader, TRUE);
 }
 
@@ -13058,24 +13101,35 @@ static HRESULT WINAPI decl_query_interface(IDirect3DVertexDeclaration9 *iface,
 
 static ULONG WINAPI decl_add_ref(IDirect3DVertexDeclaration9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&decl_from_iface(iface)->refcount);
+    D9VertexDeclaration *decl = decl_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&decl->refcount);
+    if (refs == 1) device_child_add_ref(decl->device);
+    return refs;
+}
+
+static void decl_destroy_storage(D9VertexDeclaration *decl)
+{
+    D9VertexDeclaration **link = &decl->device->vertex_declarations;
+    D9WGDestroyResource destroy;
+    while (*link && *link != decl)
+        link = &(*link)->next_device_resource;
+    if (*link) *link = decl->next_device_resource;
+    destroy.resource_handle = decl->handle;
+    destroy.resource_kind = D9WG_RESOURCE_VERTEX_DECLARATION;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    HeapFree(GetProcessHeap(), 0, decl);
 }
 
 static ULONG WINAPI decl_release(IDirect3DVertexDeclaration9 *iface)
 {
     D9VertexDeclaration *decl = decl_from_iface(iface);
+    if (!InterlockedCompareExchange(&decl->refcount, 0, 0)) return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&decl->refcount);
     if (!refs) {
-        D9VertexDeclaration **link = &decl->device->vertex_declarations;
-        D9WGDestroyResource destroy;
-        while (*link && *link != decl)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = decl->next_device_resource;
-        destroy.resource_handle = decl->handle;
-        destroy.resource_kind = D9WG_RESOURCE_VERTEX_DECLARATION;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        device_child_release(decl->device);
-        HeapFree(GetProcessHeap(), 0, decl);
+        D9Device *device = decl->device;
+        if (!InterlockedCompareExchange(&decl->binding_refs, 0, 0))
+            decl_destroy_storage(decl);
+        device_child_release(device);
     }
     return refs;
 }
@@ -13137,7 +13191,7 @@ static HRESULT shader_query_interface(D9Shader *shader, REFIID iid,
     if (!iid || (!iid_is_unknown(iid) && !guid_equal(iid, interface_guid)))
         return E_NOINTERFACE;
     *object = &shader->iface;
-    InterlockedIncrement(&shader->refcount);
+    shader_public_add_ref(shader);
     return S_OK;
 }
 
@@ -13166,17 +13220,12 @@ static HRESULT WINAPI vertex_shader_query_interface(
 
 static ULONG WINAPI vertex_shader_add_ref(IDirect3DVertexShader9 *iface)
 {
-    return (ULONG)InterlockedIncrement(
-            &vertex_shader_from_iface(iface)->refcount);
+    return shader_public_add_ref(vertex_shader_from_iface(iface));
 }
 
 static ULONG WINAPI vertex_shader_release(IDirect3DVertexShader9 *iface)
 {
-    D9Shader *shader = vertex_shader_from_iface(iface);
-    ULONG refs = (ULONG)InterlockedDecrement(&shader->refcount);
-    if (!refs)
-        shader_destroy(shader);
-    return refs;
+    return shader_public_release(vertex_shader_from_iface(iface));
 }
 
 static HRESULT WINAPI vertex_shader_get_device(IDirect3DVertexShader9 *iface,
@@ -13205,17 +13254,12 @@ static HRESULT WINAPI pixel_shader_query_interface(
 
 static ULONG WINAPI pixel_shader_add_ref(IDirect3DPixelShader9 *iface)
 {
-    return (ULONG)InterlockedIncrement(
-            &pixel_shader_from_iface(iface)->refcount);
+    return shader_public_add_ref(pixel_shader_from_iface(iface));
 }
 
 static ULONG WINAPI pixel_shader_release(IDirect3DPixelShader9 *iface)
 {
-    D9Shader *shader = pixel_shader_from_iface(iface);
-    ULONG refs = (ULONG)InterlockedDecrement(&shader->refcount);
-    if (!refs)
-        shader_destroy(shader);
-    return refs;
+    return shader_public_release(pixel_shader_from_iface(iface));
 }
 
 static HRESULT WINAPI pixel_shader_get_device(IDirect3DPixelShader9 *iface,
