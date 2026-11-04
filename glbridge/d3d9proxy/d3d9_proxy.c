@@ -1395,6 +1395,7 @@ static BOOL surface_is_implicit(const D9Surface *surface)
         || surface->auto_depth_stencil;
 }
 
+static void core_view_retire8(void *object);
 static void texture_destroy_storage(D9Texture *texture);
 
 static void texture_binding_add_ref(D9Texture *texture)
@@ -1770,6 +1771,106 @@ static void dump_shader_bytecode(const DWORD *code, UINT token_count,
         return;
     WriteFile(file, code, token_count * 4u, &written, NULL);
     CloseHandle(file);
+}
+
+/* A frontend8 view is weak with respect to its real9 object. The caller
+ * owns an ordinary resource reference while looking up/installing the view.
+ * Its metadata lasts until actual storage retirement, including public zero.
+ * Tombstones remain linked during callbacks so retirement cannot reattach a
+ * view to the same dying object. Callbacks run outside the transport lock. */
+typedef struct D9CoreView8 {
+    struct D9CoreView8 *next;
+    void *object;
+    void *view;
+    D9WGCoreViewRetire8 retire;
+    BOOL retiring;
+} D9CoreView8;
+static D9CoreView8 *g_core_views8;
+
+static D9Device *core_view_device8(IUnknown *object)
+{
+    if (!object) return NULL;
+    const void *vtbl = object->lpVtbl;
+    D9Device *device = NULL;
+    if (vtbl == &g_vb_vtbl) device = ((D9VertexBuffer *)object)->device;
+    else if (vtbl == &g_ib_vtbl) device = ((D9IndexBuffer *)object)->device;
+    else if (vtbl == &g_texture_vtbl) device = ((D9Texture *)object)->device;
+    else if (vtbl == &g_cube_vtbl) device = ((D9CubeTexture *)object)->device;
+    else if (vtbl == &g_volume_texture_vtbl) device = ((D9VolumeTexture *)object)->device;
+    else if (vtbl == &g_volume_vtbl) device = ((D9Volume *)object)->texture->device;
+    else if (vtbl == &g_surface_vtbl) device = ((D9Surface *)object)->device;
+    else if (vtbl == &g_swap_chain_vtbl) {
+        D9SwapChain *chain = (D9SwapChain *)object;
+        /* D3D8 only exposes additional chains;its implicit surfaces use the
+         * frontend device as their container. */
+        if (chain->handle) device = chain->device;
+    }
+    return device && device_compatibility_api(device) == 8u ? device : NULL;
+}
+
+/* Called only while holding g_transport_lock. */
+static D9CoreView8 **core_view_link8(void *object)
+{
+    D9CoreView8 **link = &g_core_views8;
+    while (*link && (*link)->object != object) link = &(*link)->next;
+    return link;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_get_view8(IUnknown *object, void **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!core_view_device8(object)) return D3DERR_INVALIDCALL;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 *entry = *core_view_link8(object);
+    HRESULT hr = entry && entry->retiring ? D3DERR_INVALIDCALL : D3D_OK;
+    if (entry && !entry->retiring) *out = entry->view;
+    LeaveCriticalSection(&g_transport_lock);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_attach_view8(IUnknown *object, void *view,
+        D9WGCoreViewRetire8 retire)
+{
+    if (!view || !retire || !core_view_device8(object)) return D3DERR_INVALIDCALL;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 **link = core_view_link8(object);
+    if (*link) {
+        LeaveCriticalSection(&g_transport_lock);
+        return D3DERR_INVALIDCALL;
+    }
+    D9CoreView8 *entry = (D9CoreView8 *)HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, sizeof(*entry));
+    if (!entry) {
+        LeaveCriticalSection(&g_transport_lock);
+        return E_OUTOFMEMORY;
+    }
+    entry->object = object;
+    entry->view = view;
+    entry->retire = retire;
+    *link = entry;
+    LeaveCriticalSection(&g_transport_lock);
+    return D3D_OK;
+}
+
+static void core_view_retire8(void *object)
+{
+    if (!object) return;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 *entry = *core_view_link8(object);
+    if (!entry || entry->retiring) {
+        LeaveCriticalSection(&g_transport_lock);
+        return;
+    }
+    entry->retiring = TRUE;
+    LeaveCriticalSection(&g_transport_lock);
+    entry->retire(entry->view);
+    EnterCriticalSection(&g_transport_lock);
+    /* Another object's callback may have changed adjacent links. */
+    D9CoreView8 **link = core_view_link8(object);
+    if (*link == entry) *link = entry->next;
+    LeaveCriticalSection(&g_transport_lock);
+    HeapFree(GetProcessHeap(), 0, entry);
 }
 
 static uint32_t allocate_handle(void)
@@ -4960,10 +5061,14 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
          * design, so the device is what finally frees them. Reaching here means
          * their public counts are zero: each active surface pinned one device
          * reference that had to reach zero to get this far. */
-        if (device->implicit_back_buffer)
+        if (device->implicit_back_buffer) {
+            core_view_retire8(device->implicit_back_buffer);
             HeapFree(GetProcessHeap(), 0, device->implicit_back_buffer);
-        if (device->implicit_depth_stencil)
+        }
+        if (device->implicit_depth_stencil) {
+            core_view_retire8(device->implicit_depth_stencil);
             HeapFree(GetProcessHeap(), 0, device->implicit_depth_stencil);
+        }
         HeapFree(GetProcessHeap(), 0, device);
         return 0;
     }
@@ -8556,10 +8661,12 @@ static void volume_texture_destroy_storage(D9VolumeTexture *texture)
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     for (level = 0; level < texture->level_count; ++level) {
         d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
+        core_view_retire8(texture->levels[level].level_volume);
         HeapFree(GetProcessHeap(), 0, texture->levels[level].level_volume);
         HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
     }
     HeapFree(GetProcessHeap(), 0, texture->levels);
+    core_view_retire8(texture);
     HeapFree(GetProcessHeap(), 0, texture);
 }
 
@@ -12198,11 +12305,13 @@ static void cube_destroy_storage(D9CubeTexture *texture)
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     for (index = 0; index < texture->level_count * 6u; ++index) {
         d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
+        core_view_retire8(texture->levels[index].level_surface);
         HeapFree(GetProcessHeap(), 0,
             texture->levels[index].level_surface);
         HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
     }
     HeapFree(GetProcessHeap(), 0, texture->levels);
+    core_view_retire8(texture);
     HeapFree(GetProcessHeap(), 0, texture);
 }
 
@@ -13182,6 +13291,7 @@ static void vb_destroy_storage(D9VertexBuffer *buffer)
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
     HeapFree(GetProcessHeap(), 0, buffer->shadow);
+    core_view_retire8(buffer);
     HeapFree(GetProcessHeap(), 0, buffer);
 }
 
@@ -13343,6 +13453,7 @@ static void ib_destroy_storage(D9IndexBuffer *buffer)
     destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     HeapFree(GetProcessHeap(), 0, buffer->shadow);
+    core_view_retire8(buffer);
     HeapFree(GetProcessHeap(), 0, buffer);
 }
 
@@ -13579,6 +13690,7 @@ static void texture_destroy_storage(D9Texture *texture)
         if (texture->levels[level].level_surface) {
             TRACE_SURFACE_FREED(
                 &texture->levels[level].level_surface->iface);
+            core_view_retire8(texture->levels[level].level_surface);
             HeapFree(GetProcessHeap(), 0,
                 texture->levels[level].level_surface);
             texture->levels[level].level_surface = NULL;
@@ -13586,6 +13698,7 @@ static void texture_destroy_storage(D9Texture *texture)
         HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
     }
     HeapFree(GetProcessHeap(), 0, texture->levels);
+    core_view_retire8(texture);
     HeapFree(GetProcessHeap(), 0, texture);
 }
 
@@ -14178,6 +14291,7 @@ static void surface_destroy_storage(D9Surface *surface)
         HeapFree(GetProcessHeap(), 0, shadow);
     TRACE("SURFACE FREE_END object=%08lX", (DWORD)(uintptr_t)iface);
     TRACE_SURFACE_FREED(iface);
+    core_view_retire8(surface);
     HeapFree(GetProcessHeap(), 0, surface);
 }
 
@@ -14850,6 +14964,7 @@ static void swap_chain_destroy_storage(D9SwapChain *chain)
     /* Public pins belong to the actual chain/surface Release caller;
      * binding-only destruction runs under the pending device pin. */
     surface_destroy_storage(surface);
+    core_view_retire8(chain);
     HeapFree(GetProcessHeap(), 0, chain);
 }
 

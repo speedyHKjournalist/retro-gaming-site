@@ -4,6 +4,8 @@ function extract(source,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\
 const apis=process.env.D9WG_PRIVATE_API?[Number(process.env.D9WG_PRIVATE_API)]:[8,9];assert(apis.every(api=>api===8||api===9));
 try{for(const api of apis){const source=fs.readFileSync(process.env['D'+api+'WG_PRIVATE_SURFACE_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/entry.c',`#include <assert.h>
 #include <stdint.h>
+/* No frontend views are attached in this isolated lifetime fixture. */
+#define core_view_retire8(object) ((void)(object))
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

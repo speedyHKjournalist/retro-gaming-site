@@ -3,6 +3,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 function extract(s,name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(s);assert(m,name);let end=s.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(s[end]==='{')depth++;if(s[end]==='}')depth--;}return s.slice(m.index,end);}
 const apis=process.env.D9WG_IMPLICIT_API?[Number(process.env.D9WG_IMPLICIT_API)]:[8,9];assert(apis.every(api=>api===8||api===9));
 try{for(const api of apis){const source=fs.readFileSync(process.env['D'+api+'WG_IMPLICIT_FRONTEND']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/implicit.c',`#include <stdint.h>
+/* No frontend views are attached in this isolated lifetime fixture. */
+#define core_view_retire8(object) ((void)(object))
 #include "${root}/runtime/d9wg_depth_surface_layout8.h"
 #include <stdio.h>
 #include <stdlib.h>

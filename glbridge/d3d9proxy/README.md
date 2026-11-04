@@ -1409,3 +1409,29 @@ Independentwire catches11,756corruptions;bothGPUs verify20fullimages/1,280pixels
 zeroerror. CPUframebuffer replies areexplicit analytic injection. Fullpublic8
 wrappers/predefined scopes remainopen. Evidence:
 `../deployments/d3d-webgpu-review-4K38.json`.
+
+
+### Review 4K39: weak identity cache for frontend8 object views
+
+Private get/attach-view8 entries (stdcall8/12,retire callback4) associate one
+frontend metadata object with actual9 resource storage. They add no public
+resource/device references;cached identity survives public zero while core
+bindings retain storage. Eight destruction paths retire metadata once after
+private-data finalizers. A linked tombstone refuses same-object get/reattach
+while callbacks run. The registry finds its link again after nested retirement.
+Callbacks release frontend metadata,not the dying core object.
+
+Native:112,181checks/1,038cases,35strict semantic mutants andcombinedASAN.
+Five resource parents,three cached level views,two implicit surfaces,standalone
+RT,private-data ordering,public-zero revival,nested removal/OOM/profile guards
+are covered. Additional-chain native coverage istype recognition;real SDK/XP
+covers the actual new destruction callback.643 existing9 functions andten
+storage structs match;destructors differ only byretirement calls/braces.
+
+XP:five retainedrenderer profiles plusSDK120/220 lifecycle devices,7devices/
+7Reset/80protocol handles/28callbacks,32actualCPUshadow DWORD checks. Wire
+model catches16,339corruptions. BothGPUs verify20fullimages/1,280pixels zeroerror,
+including real additional canvas creation (2created/0refused/2destroyed) and
+empty mapsbeforeSessionEnd. Framebuffer CPU replies remainanalytic injection.
+These entries provide cache metadata;fullpublic8 COMwrappers still need
+integration. Evidence:`../deployments/d3d-webgpu-review-4K39.json`.

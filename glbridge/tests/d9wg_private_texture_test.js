@@ -3,6 +3,8 @@ const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("n
 function extract(source,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
 try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_PRIVATE_TEXTURE_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/entry.c',`#include <assert.h>
 #include <stdint.h>
+/* No frontend views are attached in this isolated lifetime fixture. */
+#define core_view_retire8(object) ((void)(object))
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

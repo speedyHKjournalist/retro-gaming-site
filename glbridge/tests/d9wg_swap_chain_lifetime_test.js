@@ -11,6 +11,8 @@ try {
     const source = fs.readFileSync(process.env.D9WG_CHAIN_LIFETIME_SOURCE || root + "/d3d9proxy/d3d9_proxy.c", "utf8");
     fs.writeFileSync(dir + "/chain.c", `#include <assert.h>
 #include <stdint.h>
+/* No frontend views are attached in this isolated lifetime fixture. */
+#define core_view_retire8(object) ((void)(object))
 #include <stdio.h>
 #include <stdlib.h>
 #include "d3d9proxy/d3d9_protocol.h"

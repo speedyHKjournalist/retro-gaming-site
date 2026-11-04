@@ -4,6 +4,7 @@
 /* Deliberately forward declared: a D3D8 frontend can include this boundary
  * without mixing incompatible D3D8 and D3D9 SDK declarations. Its adapter
  * implementation uses the D3D9 SDK in a separate compilation unit. */
+struct IUnknown;
 struct IDirect3D9;
 struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
@@ -159,6 +160,16 @@ typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *devic
 HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot,
         struct IDirect3DStateBlock9 **out);
+/* One weak frontend8 view per real resource storage identity. The caller
+ * holds a resource reference across get/attach. A missing view returns S_OK
+ * and NULL. Successful attach owns the metadata until the retirement callback
+ * runs exactly once,after resource private-data finalizers. Duplicate attach
+ * leaves the existing view intact;retiring objects reject get/attach.
+ * The callback releases only frontend metadata,not the dying core object. */
+typedef void (WINAPI *D9WGCoreViewRetire8)(void *view);
+HRESULT WINAPI d9wg_d3d9_core_get_view8(struct IUnknown *object, void **out);
+HRESULT WINAPI d9wg_d3d9_core_attach_view8(struct IUnknown *object, void *view,
+        D9WGCoreViewRetire8 retire);
 /* Device-owned DWORD state blocks: no public9 block/device parent pin.
  * Raw8 scopes and Get metadata remain frontend-owned. Capture rebuilds the
  * mapped snapshot behind the same token; failed rebuild preserves it. */

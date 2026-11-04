@@ -12,6 +12,8 @@ try {
         const source = fs.readFileSync(process.env.D8WG_BACKEND_ADDITIONAL_SOURCE || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         fs.writeFileSync(dir + "/additional.c", `#include <assert.h>
 #include <stdint.h>
+/* No frontend views are attached in this isolated lifetime fixture. */
+#define core_view_retire8(object) ((void)(object))
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
