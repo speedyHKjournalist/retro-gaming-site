@@ -144,6 +144,12 @@ HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(struct IDirect3DDevice9 *devic
  * layout too. Raw8 GetVertexShader/FVF-vs-handle state stays in the frontend.
  * Internal9 GetFVF iszero because the actual converted layout is authoritative. */
 HRESULT WINAPI d9wg_d3d9_core_set_fvf8(struct IDirect3DDevice9 *device, DWORD fvf);
+/* Raw8 BaseVertexIndex stays with the frontend index binding/Get shadow.
+ * This backend entry preserves its bits in core9 per-draw signed storage. */
+HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(struct IDirect3DDevice9 *device,
+        UINT primitive_type, UINT base_vertex_index,
+        UINT min_vertex_index, UINT vertex_count, UINT start_index,
+        UINT primitive_count);
 /* Bind a resolved8 declaration/VS pair (NULL VS permits declaration-only).
  * Both owners are checked before setters run;NULL/NULL clears8 bindings.
  * Frontend8 owns DWORD handle publication/deletion and raw Get shadows. */

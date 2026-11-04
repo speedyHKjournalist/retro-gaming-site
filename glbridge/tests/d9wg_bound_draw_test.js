@@ -1,7 +1,8 @@
 "use strict";
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D9WG_BOUND_DRAW_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-bound-draw-"));
-function extract(name){const m=new RegExp("static (?:BOOL|void|int|HRESULT)(?: WINAPI)? "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
+function extract(name){const m=new RegExp((name.startsWith("d9wg_d3d9_core_")?"HRESULT WINAPI ":"static (?:BOOL|void|int|HRESULT)(?: WINAPI)? ")+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
+const legacyIndexed = process.env.D9WG_TEST_INDEXED8 === "1";
 const input=/typedef struct D9ProcessInput \{[\s\S]*?\} D9ProcessInput;/.exec(source);assert(input);
 try{
  const code=`#include <stdint.h>
@@ -62,6 +63,7 @@ struct D9Device{D9VertexDeclaration *vertex_declaration;DWORD fvf;void *vertex_s
 static unsigned uploads,upload_fail_at,sequence_count;static char sequence[128];
 static unsigned emits,invalidations;static int transport_ok=1;static UINT last_opcode;static D9WGDrawIndexedPrimitive indexed;
 static D9Device *device_from_iface(IDirect3DDevice9 *d){return d;}
+${legacyIndexed?"static UINT active_api=8;static UINT device_compatibility_api(D9Device*d){(void)d;return active_api;}":""}
 static BOOL emit_command(UINT op,const void *data,UINT bytes){if(op==D9WG_OP_DRAW_PRIMITIVE||op==D9WG_OP_DRAW_INDEXED_PRIMITIVE)sequence[sequence_count++]='D';++emits;last_opcode=op;if(op==D9WG_OP_DRAW_INDEXED_PRIMITIVE){if(bytes!=sizeof(indexed))abort();memcpy(&indexed,data,bytes);}return transport_ok;}
 static BOOL emit_draw_primitive_up(const D9WGDrawPrimitiveUP *p,const void*v){(void)p;(void)v;abort();}
 static void invalidate_render_target_mirrors(D9Device *d){(void)d;++invalidations;}
@@ -77,8 +79,11 @@ static BOOL emit_buffer_update(uint32_t h,uint32_t off,const void *p,uint32_t n,
 ${input[0]}
 static HRESULT d9_draw_npatch(IDirect3DDevice9*i,D9Device*d,D3DPRIMITIVETYPE t,UINT c,const void*p,UINT s,UINT b){(void)i;(void)d;(void)t;(void)c;(void)p;(void)s;(void)b;abort();}
 ${["multiply_u32","primitive_element_count","device_has_vertex_format","d9_current_source_elements","d9_current_source_layout","d9_current_source_position_transformed","d9_process_input_free","d9_process_input","d9_prepare_stream_clip_status","d9_draw_index_bounds","d9_bound_draw_range","d9_clip_emit","d9_clip_mask","d9_clip_vb_draw","d9_software_vertex_processing","d9_prepare_clip_status","device_draw_primitive","device_draw_indexed_primitive"].map(extract).join("\n")}
+${legacyIndexed?"#define IDirect3DDevice9_DrawIndexedPrimitive device_draw_indexed_primitive\n"+extract("d9wg_d3d9_core_draw_indexed8"):""}
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"D3D9 bound draw line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
+${legacyIndexed?"#define main retained_bound_draw_main":""}
 #include "tests/native/d9wg_bound_draw_cases.h"
+${legacyIndexed?'#undef main\n#include "tests/native/d8wg_indexed_core_cases.h"':""}
 `;
  fs.writeFileSync(dir+"/windows.h","/* allocation supplied by native harness */\n");fs.writeFileSync(dir+"/draw.c",code);
  const sources=["clip","clip_draw","blend","vertex","fvf","math","lighting","tnl_math","buffer_lock"].map(n=>root+"/runtime/d9wg_"+n+".c");

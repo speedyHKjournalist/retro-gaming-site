@@ -767,3 +767,24 @@ andReset restore,localDEF/APIbank isolation andfinalrefs0. BothGPUs verify
 numerical drawing. VMCPUreplies areexplicit analytic injection;fullraw8
 handle/query/stateblock wrappers andProcessVertices destination8FVF remainopen.
 Evidence: `../deployments/d3d-webgpu-review-4K33.json`.
+
+
+### Review 4K34: raw8 BaseVertexIndex to signed core9 indexed draws
+
+`d9wg_d3d9_core_draw_indexed8` (stdcall28) takes the raw UINT saved by8
+SetIndices and copies its bits into the9 signed per-draw base. It forwards
+to actual9 DrawIndexedPrimitive without changing index binding state.
+The opaque header uses UINT primitive type and requires no Direct3D SDK.
+Frontend8 retains raw GetIndices/base and state-block metadata ownership.
+
+Native verification covers50,004cases/115,727checks,independently enumerated
+physical stream addresses,16/32bit IB bounds,signed extrema,zero calls and
+submission failure;16strict semantic mutants andtwoASAN families pass.
+Final-source XP compares accurate4K33old/current8,ordinary9,coreSDK120/220:
++1/-1/0 selectfour interior vertices fromsix sentinel-padded vertices,
+managedVB/IB survivefiveReset,raw8 queries/zero/two refusals andfinalrefs0 pass.
+BothGPUs verify20complete indexed images/1,280pixels withzeroerror. Extreme
+bases are native metadata/range tests;GPU images use valid+1/-1/0 geometry.
+VMCPUreplies areexplicit analytic injection. Evidence:
+`../deployments/d3d-webgpu-review-4K34.json`. Fullraw8 state-block/wrappers
+andProcessVertices destination8FVF remainopen.

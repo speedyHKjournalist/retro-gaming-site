@@ -16086,6 +16086,23 @@ HRESULT WINAPI d9wg_d3d9_core_set_fvf8(IDirect3DDevice9 *iface, DWORD fvf)
             decl ? &decl->iface : NULL);
 }
 
+/* D3D8 keeps the unsigned BaseVertexIndex with its index binding. The
+ * frontend passes that raw DWORD on every indexed draw; core9 consumes the
+ * same bits as a signed per-draw base, without changing SetIndices state. */
+HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(IDirect3DDevice9 *iface,
+        UINT primitive_type, UINT base_vertex_index,
+        UINT min_vertex_index, UINT vertex_count, UINT start_index,
+        UINT primitive_count)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    INT signed_base;
+    CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));
+    return IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,
+            signed_base, min_vertex_index, vertex_count, start_index,
+            primitive_count);
+}
+
 /* Backend for an already resolved8 DWORD shader handle. Validate both
  * owners before either setter changes state; public raw-handle queries and
  * deletion remain frontend responsibilities. NULL/NULL is the8 zero bind. */
