@@ -54,6 +54,8 @@ static int addref(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry
 static int release(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0)abort();return --*registry[i].refs;}abort();}
 /* These are backend construction stubs; public recording references remain
  * independently observed. The complete private lifetime runs in its own suite. */
+static void volume_texture_binding_add_ref(D9VolumeTexture*t){addref(&t->iface);}
+static void volume_texture_binding_release(D9VolumeTexture*t){release(&t->iface);}
 static void cube_binding_add_ref(D9CubeTexture*t){addref(&t->iface);}
 static void cube_binding_release(D9CubeTexture*t){release(&t->iface);}
 static void texture_binding_add_ref(D9Texture*t){addref(&t->iface);}
