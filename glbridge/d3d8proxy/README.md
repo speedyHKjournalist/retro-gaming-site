@@ -407,3 +407,11 @@ Quality is zero;legacy8 swap/interval/flag values and caller publication stay
 intact. Native alias/guard/provider tests and real SDK120/220 zero-parameter
 constructors cover the path. Reset/additional-chain normalization remains for
 the next step. See `../deployments/d3d-webgpu-review-4K8.json`.
+
+Stage 4K9 completes effective parameter routing for D3D8 Reset and
+additional swap chains through the same checked PP8/PP9 core bridge.
+SDK120/220 actually resets each device and creates/releases a transient
+texture/swap-chain pair,verifies count-only caller publication and8x8
+backbuffers,then replays five main images on both GPU backends with all
+resources retired before SessionEnd. Actual device/resource wrapping follows.
+See `../deployments/d3d-webgpu-review-4K9.json`.

@@ -44,6 +44,10 @@ typedef struct Texture Texture;typedef struct View View;typedef struct Device De
 typedef struct{DWORD Width,Height;D3DFORMAT Format;}Mode;
 typedef struct{HWND hDeviceWindow;BOOL Windowed;UINT FullScreen_PresentationInterval,MultiSampleType,BackBufferCount,BackBufferWidth,BackBufferHeight,SwapEffect,Flags;D3DFORMAT BackBufferFormat;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
+/* This fixture isolates private ownership;packed PP8/9 ABI and normalized
+ * outputs are independently exercised by parameter and lifecycle tests. */
+${api===8?'static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
+
 typedef struct{Interface iface;}Parent;
 struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources,*cube_textures,*render_target_texture;View*render_target_surface,*render_target_surface_2,*depth_surface;D9SwapChain*additional_swap_chains;};
 typedef struct{D9WGPrivateStore private_data;View*level_surface;void*shadow;}Level;typedef Level D8TextureLevel;

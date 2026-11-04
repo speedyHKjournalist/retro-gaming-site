@@ -20,7 +20,7 @@ try {
             ['explicit width ignored',api===8?'d9wg_present_extent(parameters->BackBufferWidth':'width = params->BackBufferWidth ? params->BackBufferWidth',api===8?'d9wg_present_extent(0u * parameters->BackBufferWidth':'width = 0 && params->BackBufferWidth ? params->BackBufferWidth'],
         ];
         for(const[label,old,replacement]of changes){
-            const file=dir+'/frontend.c';fs.writeFileSync(file,mutate(source,fn,old,replacement));
+            const file=dir+'/frontend.c';fs.writeFileSync(file,mutate(source,fn,api===8?old.replace("d9wg_present_parameters_effective(","d9wg_d3d9_core_parameters_effective8("):old,replacement));
             const r=spawnSync(process.execPath,[__dirname+'/d9wg_additional_parameters_entry_test.js'],{encoding:'utf8',timeout:30000,env:{...process.env,['D'+api+'WG_ADDITIONAL_PARAMETERS_SOURCE']:file}}),out=r.stdout+r.stderr;
             assert(!r.error,label+': '+r.error);assert.notEqual(r.status,0,label+' survived');assert(!/error:|undefined reference|Undefined symbols/.test(out),label+' compile failure: '+out);assert(/Additional parameters|Assertion|signal=/.test(out));killed++;
         }

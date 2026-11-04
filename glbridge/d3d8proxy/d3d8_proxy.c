@@ -2868,7 +2868,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
     device->front_shadow = new_front_shadow;
     device->front_shadow_pitch = new_front_pitch;
     ++device->reset_epoch;
-    d9wg_present_parameters_effective(&device->present, parameters,
+    d9wg_d3d9_core_parameters_effective8(&device->present, parameters,
         reset.width, reset.height, reset.backbuffer_format, window);
     fill_display_mode(&device->display_mode, reset.width, reset.height,
         reset.backbuffer_format);
@@ -5713,7 +5713,7 @@ static HRESULT WINAPI device_create_swapchain(IDirect3DDevice8 *iface,
     chain->iface.lpVtbl = &g_swapchain_vtbl;
     chain->refcount = 1;
     chain->device = device;
-    d9wg_present_parameters_effective(&chain->present, parameters,
+    d9wg_d3d9_core_parameters_effective8(&chain->present, parameters,
         width, height, format, window);
     /* D3D8 permits the presentation flag with MSAA, but its buffers remain
      * non-lockable. The standalone render-target constructor rejects that

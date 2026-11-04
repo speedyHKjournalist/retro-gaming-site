@@ -58,6 +58,8 @@ typedef struct {
  BOOL Windowed,EnableAutoDepthStencil; HWND hDeviceWindow;
 } D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
+/* Logical PP provider;real packed SDK8/9 bridge is independently tested. */
+${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 typedef struct {UINT Width,Height,Format,RefreshRate;} Mode;
 typedef struct {UINT Width,Height,Format,MultiSampleType,Size;} Desc;
 typedef struct {Desc desc;UINT row_pitch,width,height,format,multisample,multisample_quality;} Surface;
@@ -120,7 +122,7 @@ ${api === 9 ? "static BOOL d9wg_prepare_present(D9WGPresentClock*c,D9WGPresentPa
 ${functions.map(name => extract(source, name).replace(/&device->iface/g, "device")).join("\n")}
 #define PRESENT(c,f) ${api === 8 ? "swapchain_present(c,NULL,NULL,NULL,NULL)" : "swap_chain_present(c,NULL,NULL,NULL,NULL,f)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Reset status API ${api} case %u line %u: %s\\n",kind,__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){unsigned checks=0,failures=0;D3DPRESENT_PARAMETERS base={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferCount=1,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.hDeviceWindow=(void*)(uintptr_t)0x44};
+int main(void){unsigned checks=0,failures=0;${api===8?'(void)&d9wg_d3d9_core_parameters_effective8;':''}D3DPRESENT_PARAMETERS base={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferCount=1,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.hDeviceWindow=(void*)(uintptr_t)0x44};
 for(unsigned kind=0;kind<15;kind++){
  if((${api}==8&&(kind==12||kind==13))||(${api}==9&&(kind==8||kind==9)))continue;
  Device d={.handle=77,.creation={.BehaviorFlags=0x22},.display_mode={80,72,22,60},.tracked_window=(void*)(uintptr_t)0x33,.window_cache=99};active=&d;
@@ -145,7 +147,7 @@ for(unsigned kind=0;kind<15;kind++){
  CHECK(frames==old_frames&&paces==old_paces&&prepares==old_prepares&&windows==old_windows&&!memcmp(&lost,&d,sizeof(d)));
  fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=fail_window_mode=0;d.blocked=0;busy=0;
  CHECK(device_test_cooperative_level(&d)==D3DERR_DEVICENOTRESET);
- p=base;CHECK(device_reset(&d,&p)==D3D_OK&&!d.reset_state.required);CHECK(device_test_cooperative_level(&d)==D3D_OK);
+ p=base;${api===8?'unsigned before_core=core_parameter_calls;':''}CHECK(device_reset(&d,&p)==D3D_OK&&!d.reset_state.required${api===8?'&&core_parameter_calls==before_core+1':''});CHECK(device_test_cooperative_level(&d)==D3D_OK);
  CHECK(mode_reports==old_reports+1);CHECK(!d.in_scene&&device_end_scene(&d)==D3DERR_INVALIDCALL);CHECK(device_begin_scene(&d)==D3D_OK&&d.in_scene);CHECK(device_end_scene(&d)==D3D_OK&&!d.in_scene);CHECK(device_end_scene(&d)==D3DERR_INVALIDCALL);
  CHECK(d.viewport.Width==64&&d.viewport.Height==64&&d.display_mode.Width==64&&d.handle!=77);
  CHECK(device_present(&d,NULL,NULL,NULL,NULL)==D3D_OK&&PRESENT(&additional,0)==D3D_OK&&PRESENT(&implicit,1)==D3D_OK);
