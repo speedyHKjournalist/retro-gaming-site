@@ -9,6 +9,7 @@ const code=`#include <stdint.h>
 #include <stddef.h>
 #include <assert.h>
 #include "${root}/runtime/d9wg_format_layouts.h"
+#include "${process.env.D9WG_DEPTH_LAYOUT_HEADER||root+'/runtime/d9wg_depth_surface_layout8.h'}"
 typedef uint32_t UINT,DWORD,D3DFORMAT,D3DRESOURCETYPE,D3DPOOL,D3DMULTISAMPLE_TYPE;typedef int32_t BOOL,HRESULT;
 ${desc(eight,'Desc8')}
 ${desc(nine,'D3DSURFACE_DESC')}
@@ -30,8 +31,8 @@ ${extract(source,'supported_depth_stencil_format8')}
 ${extract(source,'d9wg_d3d9_core_surface_desc8')}
 static UINT checks,cases;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Surface desc bridge line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
-static BOOL oracle_size(UINT f,UINT kind,UINT w,UINT h,UINT*size){__uint128_t bytes;if(kind>=2){if(!legacy_depth(f))return 0;bytes=kind==3?(__uint128_t)w*h*4u:0;}else{const D9WGFormatLayout*l=d9wg_find_format(f);if(!l||!(l->apis&2u))return 0;bytes=(((__uint128_t)w+l->block_width-1)/l->block_width)*l->block_bytes*(((__uint128_t)h+l->block_height-1)/l->block_height);}if(bytes>UINT32_MAX)return 0;*size=(UINT)bytes;return 1;}
-int main(void){(void)&IDirect3DSurface9_GetDesc;Device good={8},wrong={9};D9Surface surface={{&g_surface_vtbl},&good,0};const UINT widths[]={3,8192,0xffffffffu,0xffffffffu,0},heights[]={2,8192,2,0xffffffffu,0};
+static BOOL oracle_size(UINT f,UINT kind,UINT w,UINT h,UINT*size){__uint128_t bytes;if(kind>=2){if(!legacy_depth(f)||!w||!h)return 0;UINT b=f==D3DFMT_D16||f==D3DFMT_D15S1?2:4;bytes=(((__uint128_t)w*b+3)/4*4)*h;}else{const D9WGFormatLayout*l=d9wg_find_format(f);if(!l||!(l->apis&2u))return 0;bytes=(((__uint128_t)w+l->block_width-1)/l->block_width)*l->block_bytes*(((__uint128_t)h+l->block_height-1)/l->block_height);}if(bytes>UINT32_MAX)return 0;*size=(UINT)bytes;return 1;}
+int main(void){(void)&IDirect3DSurface9_GetDesc;(void)&supported_depth_stencil_format8;Device good={8},wrong={9};D9Surface surface={{&g_surface_vtbl},&good,0};const UINT widths[]={3,8192,0xffffffffu,0xffffffffu,0},heights[]={2,8192,2,0xffffffffu,0};
 _Static_assert(sizeof(Desc8)==32&&sizeof(D3DSURFACE_DESC)==32,"SDK sizes");_Static_assert(offsetof(Desc8,Size)==16&&offsetof(Desc8,MultiSampleType)==20&&offsetof(D3DSURFACE_DESC,MultiSampleType)==16&&offsetof(D3DSURFACE_DESC,MultiSampleQuality)==20,"SDK swapped words");
 for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT kind=0;kind<4;kind++)for(UINT dim=0;dim<5;dim++)for(UINT ms=0;ms<2;ms++)for(UINT quality=0;quality<2;quality++)for(UINT error=0;error<2;error++)for(UINT bad=0;bad<5;bad++){
  const UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format;provider_desc=(D3DSURFACE_DESC){.Format=format,.Type=1,.Usage=kind>=2?2:kind,.Pool=kind==0?2:0,.MultiSampleType=ms?4:0,.MultiSampleQuality=quality?17:0,.Width=widths[dim],.Height=heights[dim]};surface.auto_depth_stencil=kind==3;surface.iface.lpVtbl=bad==4?NULL:&g_surface_vtbl;provider_error=error?-2:0;calls=0;

@@ -1071,3 +1071,17 @@ refusal,andatomic descriptor byte guards. Both GPUs independently retain the
 Depth Size currently mirrors the old proxy's0/fixed4 metadata. Pinned Wine
 shows this is a resource-size issue to correct next; it is not native compliance.
 Public8 wrapping stays pending. See `../deployments/d3d-webgpu-review-4K20.json`.
+
+Stage 4K21 corrects API8 depth resource Size through one shared format layout.
+Six depth formats use 2/4 bytes per pixel and four-byte row alignment, without
+multiplying the logical size by MSAA. Public8 standalone/implicit descriptors
+and Reset caches now agree with the private core8 SDK descriptor. Pinned Wine
+sources support this rule; native Windows and physical depth precision remain
+unverified. Color/CPU-image pitch retains its prior behavior.
+XP reproduces the accurate4K20 baseline bug and checks56 metadata records,
+including odd dimensions and Reset. Both GPUs retain20images/1280pixels with
+zero errors; CPU replies are explicit analytic injection. Native checks include
+103680 layout cases,192 public descriptor cases,47203 SDK descriptor cases,
+31 strict runtime mutations,four actual old-function controls andfive ASAN
+families. Public8 wrapping remains pending. Evidence:
+`../deployments/d3d-webgpu-review-4K21.json`.

@@ -31,6 +31,7 @@
 #include "../runtime/d9wg_surface_lock.h"
 #include "../runtime/d9wg_backbuffer_upload.h"
 #include "../runtime/d9wg_format_layouts.h"
+#include "../runtime/d9wg_depth_surface_layout8.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
@@ -2600,6 +2601,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
     UINT new_front_pitch;
     UINT new_front_rows;
     UINT new_front_bytes;
+    UINT new_depth_pitch = 0, new_depth_bytes = 0;
 
     d9wg_reset_begin(&device->reset_state);
     if (!parameters || !supported_multisample_type(parameters->MultiSampleType)
@@ -2655,6 +2657,10 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
             &new_front_bytes)
         || new_front_rows != reset.height)
         return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
+    if (parameters->EnableAutoDepthStencil
+            && !d9wg_depth_surface_layout8(parameters->AutoDepthStencilFormat,
+                reset.width, reset.height, &new_depth_pitch, &new_depth_bytes))
+        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
     device_cancel_recording(device);
     if (device_has_reset_blockers(device))
         return D8WG_TRACE_ERROR(D3DERR_DEVICELOST);
@@ -2693,8 +2699,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice8* iface,
         surface->desc.Height = reset.height;
         surface->desc.Format = parameters->AutoDepthStencilFormat;
         surface->desc.MultiSampleType = parameters->MultiSampleType;
-        surface->row_pitch = reset.width * 4u;
-        surface->desc.Size = surface->row_pitch * reset.height;
+        surface->row_pitch = new_depth_pitch;
+        surface->desc.Size = new_depth_bytes;
     }
     device_init_states(device);
     device->viewport.X = device->viewport.Y = 0;
@@ -4500,12 +4506,17 @@ static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture8* iface,
     if (!desc || level >= texture->level_count)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
+    UINT depth_pitch, size = level_data->byte_count;
+    if ((texture->usage & D3DUSAGE_DEPTHSTENCIL)
+            && !d9wg_depth_surface_layout8(texture->format,
+                level_data->width, level_data->height, &depth_pitch, &size))
+        return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     ZeroMemory(desc, sizeof(*desc));
     desc->Format = texture->format;
     desc->Type = D3DRTYPE_SURFACE;
     desc->Usage = texture->usage;
     desc->Pool = texture->pool;
-    desc->Size = level_data->byte_count;
+    desc->Size = size;
     desc->MultiSampleType = texture->multisample_type;
     desc->Width = level_data->width;
     desc->Height = level_data->height;
@@ -5054,9 +5065,10 @@ static HRESULT create_standalone_surface(D8Device *device, UINT width,
             return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     }
     if (depth_stencil) {
-        row_pitch = width * 4u;
+        if (!d9wg_depth_surface_layout8(format, width, height,
+                &row_pitch, &byte_count))
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
         row_count = height;
-        byte_count = row_pitch * row_count;
     }
     surface = (D8Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));

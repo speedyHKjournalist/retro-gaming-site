@@ -48,6 +48,7 @@
 #include "../runtime/d9wg_surface_lock.h"
 #include "../runtime/d9wg_backbuffer_upload.h"
 #include "../runtime/d9wg_format_layouts.h"
+#include "../runtime/d9wg_depth_surface_layout8.h"
 #include "../runtime/d9wg_format_queries.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
@@ -15535,15 +15536,9 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
     HRESULT hr = IDirect3DSurface9_GetDesc(iface, &desc);
     if (FAILED(hr)) return hr;
     if (desc.Usage & D3DUSAGE_DEPTHSTENCIL) {
-        if (!supported_depth_stencil_format8(desc.Format))
+        if (!d9wg_depth_surface_layout8(desc.Format, desc.Width,
+                desc.Height, &pitch, &size))
             return D3DERR_INVALIDCALL;
-        /* Legacy standalone depth texture levels have no CPU byte_count;
-         * its implicit depth surface used a four-byte metadata stride. */
-        if (surface->auto_depth_stencil) {
-            if ((uint64_t)desc.Width * desc.Height > UINT32_MAX / 4u)
-                return D3DERR_INVALIDCALL;
-            size = desc.Width * desc.Height * 4u;
-        }
     } else if (!d9wg_texture_level_layout(8u, desc.Format,
             desc.Width, desc.Height, &pitch, &rows, &size))
         return D3DERR_INVALIDCALL;

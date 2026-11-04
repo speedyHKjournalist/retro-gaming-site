@@ -7,6 +7,7 @@ try{fs.writeFileSync(dir+"/msaa.c",`#include <stdio.h>
 #include <assert.h>
 #include <stdint.h>
 #include "d3d9proxy/d3d9_protocol.h"
+#include "runtime/d9wg_depth_surface_layout8.h"
 typedef uint32_t UINT,DWORD,D3DMULTISAMPLE_TYPE;typedef int BOOL,WINBOOL,HRESULT,D3DFORMAT,D3DPOOL;typedef uint8_t BYTE;
 #define WINAPI
 #define TRUE 1

@@ -27,6 +27,7 @@ try {
 #include <assert.h>
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_present_pacing.h"
+#include "runtime/d9wg_depth_surface_layout8.h"
 #include "${process.env.D9WG_RESET_STATUS_POLICY || root + "/runtime/d9wg_reset.h"}"
 typedef uint32_t UINT,DWORD; typedef int32_t HRESULT; typedef int BOOL,D3DFORMAT; typedef uint8_t BYTE;
 typedef void* HWND; typedef struct {int left,top,right,bottom;} RECT; typedef struct {int x,y;} POINT; typedef RECT RGNDATA;
@@ -87,7 +88,7 @@ ${api === 9 ? "static Chain*swap_chain_from_iface(Chain*c){return c;}" : ""}
 static BOOL device_has_reset_blockers(Device*d){return d->blocked||d->recorded_refs;}
 ${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
 ${api === 8 ? "static BOOL supported_multisample_type(UINT ms){return ms==0||ms==4;}" : "static BOOL supported_multisample(D3DFORMAT f,UINT ms){return (ms==0||ms==4)&&!(f==75&&ms==4&&fail_depth_ms);}"}
-static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}
+static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==71||f==73||f==75||f==77||f==79||f==80;}
 static BOOL supported_backbuffer_format(D3DFORMAT f){return f==21||f==22||f==23;}
 ${api===9?'static UINT device_compatibility_api(const Device*d){(void)d;return 9;}static BOOL supported_render_target_format8(D3DFORMAT f){return supported_backbuffer_format(f);}static BOOL supported_depth_stencil_format8(D3DFORMAT f){return supported_depth_stencil_format(f);}':''}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
@@ -207,6 +208,12 @@ for(unsigned g=0;g<5;g++){
  ${api===8?'CHECK(back.desc.Width==width&&back.desc.Height==height&&back.desc.Size==width*height*4&&depth.desc.Width==width&&depth.desc.Height==height);HeapFree(NULL,0,d.front_shadow);':'CHECK(back.width==width&&back.height==height&&depth.width==width&&depth.height==height);'}
  CHECK(!live);
 }
+${api===8?`unsigned depth_size_checks=checks;
+{const UINT formats[]={71,73,75,77,79,80};for(UINT f=0;f<6;f++)for(UINT ms=0;ms<2;ms++){
+ kind=400+f;Surface back={0},depth={0};d=(Device){.handle=77,.creation={.hFocusWindow=(void*)(uintptr_t)0x55},.display_mode={8,8,22,60},.implicit_back_buffer=&back,.implicit_depth_stencil=&depth};active=&d;D3DPRESENT_PARAMETERS p=base;p.BackBufferWidth=3;p.BackBufferHeight=2;p.EnableAutoDepthStencil=1;p.AutoDepthStencilFormat=formats[f];p.MultiSampleType=ms?4:0;
+ UINT b=formats[f]==73||formats[f]==80?2:4,pitch=(3*b+3)/4*4;CHECK(device_reset(&d,&p)==D3D_OK&&!d.reset_state.required);CHECK(depth.desc.Width==3&&depth.desc.Height==2&&depth.desc.Format==formats[f]&&depth.desc.MultiSampleType==(ms?4u:0u)&&depth.row_pitch==pitch&&depth.desc.Size==pitch*2);HeapFree(NULL,0,d.front_shadow);CHECK(!live);
+}}printf("PASS actual API8 Reset depth Size: %u checks,12 format/MSAA cases; odd-width aligned cached depth metadata andparent/output state\\n",checks-depth_size_checks);
+`:''}
 printf("PASS actual API ${api} Reset geometry: %u checks; zero/partial dimensions, effective parameters, caller version rules, cached color/depth surfaces and failed replay/mode output atomicity\\n",checks-geometry_checks);
 ${api===9?`unsigned format_checks=checks;Surface format_back={0};
 for(UINT profile=0;profile<3;profile++){
