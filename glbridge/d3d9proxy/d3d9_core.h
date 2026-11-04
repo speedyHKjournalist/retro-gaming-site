@@ -9,6 +9,7 @@ struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
 struct IDirect3DSurface9;
 struct IDirect3DTexture9;
+struct IDirect3DCubeTexture9;
 struct D9WGProcess;
 #define D9WG_D3D8_SHADER_TOKENS 8192u
 #define D9WG_D3D8_CAPS_BYTES 212u
@@ -77,6 +78,10 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* API8 cube creation: six face-major mip chains,4096/legacy policy. */
+HRESULT WINAPI d9wg_d3d9_core_cube_texture8(struct IDirect3DDevice9 *device,
+        UINT edge, UINT levels, DWORD usage, UINT format, UINT pool,
+        struct IDirect3DCubeTexture9 **out);
 /* API8 2D creation policy (4096 bound, format/pool/mip/output rules).
  * This migrates creation and ordinary CPU texture storage; renderable texture
  * readback and complete public8 resource wrapping remain separate work. */

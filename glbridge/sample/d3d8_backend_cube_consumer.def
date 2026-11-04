@@ -1,0 +1,12 @@
+LIBRARY core8
+EXPORTS
+    Core8CreateFactory=Core8CreateFactory@4
+    Core8CreateDevice=Core8CreateDevice@28
+    Core8Reset=Core8Reset@8
+    Core8Additional=Core8Additional@12
+    Core8RenderTarget=Core8RenderTarget@28
+    Core8DepthSurface=Core8DepthSurface@24
+    Core8ImageSurface=Core8ImageSurface@20
+    Core8SurfaceDesc=Core8SurfaceDesc@12
+    Core8Texture=Core8Texture@32
+    Core8CubeTexture=Core8CubeTexture@28

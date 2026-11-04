@@ -32,7 +32,9 @@ typedef uint32_t UINT,D3DFORMAT;typedef int32_t LONG;typedef int BOOL;
 typedef struct {LONG left,top,right,bottom;} RECT;
 typedef struct {uint8_t *shadow;UINT row_pitch,slice_pitch,depth,byte_count;} D8TextureLevel,D9TextureLevel;
 typedef struct {UINT handle,format;D8TextureLevel levels[4];} D8VolumeTexture,D9VolumeTexture;
-typedef struct {UINT handle,format,level_count;D9TextureLevel levels[24];} D9CubeTexture;
+typedef struct {UINT api;} Device;
+typedef struct {UINT handle,format,level_count;D9TextureLevel levels[24];Device*device;} D9CubeTexture;
+${api === "d3d9" ? "static Device cube_device={9};static UINT device_compatibility_api(Device*d){return d->api;}" : ""}
 typedef struct {UINT Left,Top,Right,Bottom,Front,Back;} D3DBOX;
 typedef int INT;
 ${api === "d3d9" ? "static void SetRect(RECT *rect,INT l,INT t,INT r,INT b){rect->left=l;rect->top=t;rect->right=r;rect->bottom=b;}" : ""}
@@ -96,7 +98,7 @@ static void run_case(UINT width,UINT height,BOOL bc,BOOL partial,UINT mip,UINT f
  ${api === "ddraw" ? `DDSurface surface={shadow,77,width+origin_x,height+origin_y,mip,face,bc?0x31545844u:21,bc?0:4,source_pitch,partial?FALSE:TRUE};
  assert(emit_surface_upload(&surface,&rect));assert(!surface.upload_pending);`
     : `${api === "d3d9" ? "D9" : "D8"}TextureLevel data={.shadow=shadow,.row_pitch=source_pitch};
- ${api === "d3d9" ? `if(face){D9CubeTexture cube={.handle=77,.format=bc?0x31545844u:21,.level_count=3};cube.levels[face*3+mip]=data;assert(emit_cube_texture_update(&cube,face,mip,&rect));}
+ ${api === "d3d9" ? `if(face){D9CubeTexture cube={.device=&cube_device,.handle=77,.format=bc?0x31545844u:21,.level_count=3};cube.levels[face*3+mip]=data;assert(emit_cube_texture_update(&cube,face,mip,&rect));}
  else assert(emit_level_update(77,bc?0x31545844u:21,&data,mip,face,&rect));` : "assert(emit_level_update(77,bc?0x31545844u:21,&data,mip,face,&rect));"}`}
  flush();assert(rows_done==row_count&&records==2&&!g_transport_lock);free(shadow);
 }

@@ -1098,3 +1098,16 @@ four-level21 storage/surface views,partial uploads andBC1. Both GPUs match
 are explicit analytic injection. Renderable texture readback,fullpublic8
 wrapping andnative alignment/format conformance remain pending. Evidence:
 `../deployments/d3d-webgpu-review-4K22.json`.
+
+Stage 4K23 adds private API8 cube creation through the28-byte stdcall boundary.
+Shared storage preserves8's4096/legacy policy and9's8192/autogen policy,with
+six face-major mip chains. Ordinary cube CPU locks/uploads use the device API,
+including8-only65 and8's BC-subrectangle alignment rules. Native comparison
+covers2548803 constructors and467712 lock/upload cases,26 strict runtime
+mutants,three actual historical controls andtwo ASAN families. XP old/current8,
+ordinary9,core8SDK120/220 validateface/mip storage,metadata/identity,partial
+surface writes andBC1. Both GPUs independently match45images/2880pixels from
+173uploads,six face colors andunchanged adjacent face afterediting+Z.
+CPU GPUreadback replies are explicit analytic injection. Renderable cube
+readback,fullpublic8wrapping andnative alignment/fullformat conformance remain
+pending. Evidence: `../deployments/d3d-webgpu-review-4K23.json`.
