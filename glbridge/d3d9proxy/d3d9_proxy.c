@@ -1141,6 +1141,7 @@ struct D9Shader {
 struct D9VertexBuffer {
     IDirect3DVertexBuffer9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private stream/index storage holds */
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
@@ -1161,6 +1162,7 @@ struct D9VertexBuffer {
 struct D9IndexBuffer {
     IDirect3DIndexBuffer9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private stream/index storage holds */
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
@@ -1400,6 +1402,34 @@ static void volume_texture_binding_release(D9VolumeTexture *texture)
     if (!InterlockedDecrement(&texture->binding_refs)
             && !InterlockedCompareExchange(&texture->refcount, 0, 0))
         volume_texture_destroy_storage(texture);
+}
+
+static void vb_destroy_storage(D9VertexBuffer *buffer);
+
+static void vb_binding_add_ref(D9VertexBuffer *buffer)
+{
+    InterlockedIncrement(&buffer->binding_refs);
+}
+
+static void vb_binding_release(D9VertexBuffer *buffer)
+{
+    if (!InterlockedDecrement(&buffer->binding_refs)
+            && !InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        vb_destroy_storage(buffer);
+}
+
+static void ib_destroy_storage(D9IndexBuffer *buffer);
+
+static void ib_binding_add_ref(D9IndexBuffer *buffer)
+{
+    InterlockedIncrement(&buffer->binding_refs);
+}
+
+static void ib_binding_release(D9IndexBuffer *buffer)
+{
+    if (!InterlockedDecrement(&buffer->binding_refs)
+            && !InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        ib_destroy_storage(buffer);
 }
 
 static void surface_destroy_storage(D9Surface *surface);
@@ -3294,13 +3324,9 @@ static void fill_caps(D3DCAPS9 *caps)
 
 static UINT reset_buffer_owned_refs(D9Device *device, const void *iface, BOOL index_buffer)
 {
-    UINT refs = 0;
-    if (index_buffer)
-        return device->index_buffer && &device->index_buffer->iface == iface ? 1u : 0u;
-    for (UINT i = 0; i < D9_MAX_STREAMS; ++i)
-        if (device->streams[i].buffer && &device->streams[i].buffer->iface == iface)
-            ++refs;
-    return refs;
+    /* Stream/index slots retain storage without a public COM reference. */
+    (void)device;(void)iface;(void)index_buffer;
+    return 0;
 }
 
 static D9Surface *reset_bound_surface(D9Device *device, UINT slot)
@@ -3452,12 +3478,12 @@ static void device_clear_bindings(D9Device *device)
         device->streams[index].stride = 0;
         device->streams[index].offset = 0;
         device->streams[index].frequency = 1u;
-        if (buffer) IDirect3DVertexBuffer9_Release(&buffer->iface);
+        if (buffer) vb_binding_release(buffer);
     }
     if (device->index_buffer) {
         D9IndexBuffer *buffer = device->index_buffer;
         device->index_buffer = NULL;
-        IDirect3DIndexBuffer9_Release(&buffer->iface);
+        ib_binding_release(buffer);
     }
     for (index = 0; index < D9_MAX_TEXTURE_BINDINGS; ++index) {
         D9Texture *texture = device->textures[index];
@@ -6254,13 +6280,12 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
             && device->streams[stream].stride == stride
             && device->streams[stream].offset == offset)
         return D3D_OK;
-    if (buffer)
-        IDirect3DVertexBuffer9_AddRef(buffer_iface);
-    if (device->streams[stream].buffer)
-        IDirect3DVertexBuffer9_Release(&device->streams[stream].buffer->iface);
+    D9VertexBuffer *old_buffer = device->streams[stream].buffer;
+    if (buffer) vb_binding_add_ref(buffer);
     device->streams[stream].buffer = buffer;
     device->streams[stream].stride = stride;
     device->streams[stream].offset = offset;
+    if (old_buffer) vb_binding_release(old_buffer);
     command.device_handle = device->handle;
     command.stream = stream;
     command.buffer_handle = buffer ? buffer->handle : 0;
@@ -6306,11 +6331,10 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice9 *iface,
     }
     if (device->index_buffer == buffer)
         return D3D_OK;
-    if (buffer)
-        IDirect3DIndexBuffer9_AddRef(buffer_iface);
-    if (device->index_buffer)
-        IDirect3DIndexBuffer9_Release(&device->index_buffer->iface);
+    D9IndexBuffer *old_buffer = device->index_buffer;
+    if (buffer) ib_binding_add_ref(buffer);
     device->index_buffer = buffer;
+    if (old_buffer) ib_binding_release(old_buffer);
     command.device_handle = device->handle;
     command.buffer_handle = buffer ? buffer->handle : 0;
     return emit_command(D9WG_OP_SET_INDICES, &command, sizeof(command))
@@ -6589,14 +6613,14 @@ static void clear_stream_zero_after_up(D9Device *device)
     D9VertexBuffer *old = device->streams[0].buffer;
     device->streams[0].buffer = NULL;
     device->streams[0].stride = 0;
-    if (old) IDirect3DVertexBuffer9_Release(&old->iface);
+    if (old) vb_binding_release(old);
 }
 
 static void clear_indices_after_indexed_up(D9Device *device)
 {
     D9IndexBuffer *old = device->index_buffer;
     device->index_buffer = NULL;
-    if (old) IDirect3DIndexBuffer9_Release(&old->iface);
+    if (old) ib_binding_release(old);
 }
 
 static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
@@ -12325,27 +12349,40 @@ static HRESULT WINAPI vb_query_interface(IDirect3DVertexBuffer9 *iface,
 
 static ULONG WINAPI vb_add_ref(IDirect3DVertexBuffer9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&vb_from_iface(iface)->refcount);
+    D9VertexBuffer *buffer = vb_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&buffer->refcount);
+    if (refs == 1)
+        device_child_add_ref(buffer->device);
+    return refs;
+}
+
+static void vb_destroy_storage(D9VertexBuffer *buffer)
+{
+    D9VertexBuffer **link = &buffer->device->vertex_buffers;
+    D9WGDestroyResource destroy;
+    while (*link && *link != buffer)
+        link = &(*link)->next_device_resource;
+    if (*link) *link = buffer->next_device_resource;
+    d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
+    destroy.resource_handle = buffer->handle;
+    destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
+    HeapFree(GetProcessHeap(), 0, buffer->shadow);
+    HeapFree(GetProcessHeap(), 0, buffer);
 }
 
 static ULONG WINAPI vb_release(IDirect3DVertexBuffer9 *iface)
 {
     D9VertexBuffer *buffer = vb_from_iface(iface);
+    if (!InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&buffer->refcount);
     if (!refs) {
-        D9VertexBuffer **link = &buffer->device->vertex_buffers;
-        D9WGDestroyResource destroy;
-        while (*link && *link != buffer)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = buffer->next_device_resource;
-        d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
-        destroy.resource_handle = buffer->handle;
-        destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
-        device_child_release(buffer->device);
-        HeapFree(GetProcessHeap(), 0, buffer);
+        D9Device *device = buffer->device;
+        if (!InterlockedCompareExchange(&buffer->binding_refs, 0, 0))
+            vb_destroy_storage(buffer);
+        device_child_release(device);
     }
     return refs;
 }
@@ -12474,26 +12511,39 @@ static HRESULT WINAPI ib_query_interface(IDirect3DIndexBuffer9 *iface,
 
 static ULONG WINAPI ib_add_ref(IDirect3DIndexBuffer9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&ib_from_iface(iface)->refcount);
+    D9IndexBuffer *buffer = ib_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&buffer->refcount);
+    if (refs == 1)
+        device_child_add_ref(buffer->device);
+    return refs;
+}
+
+static void ib_destroy_storage(D9IndexBuffer *buffer)
+{
+    D9IndexBuffer **link = &buffer->device->index_buffers;
+    D9WGDestroyResource destroy;
+    while (*link && *link != buffer)
+        link = &(*link)->next_device_resource;
+    if (*link) *link = buffer->next_device_resource;
+    d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
+    destroy.resource_handle = buffer->handle;
+    destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    HeapFree(GetProcessHeap(), 0, buffer->shadow);
+    HeapFree(GetProcessHeap(), 0, buffer);
 }
 
 static ULONG WINAPI ib_release(IDirect3DIndexBuffer9 *iface)
 {
     D9IndexBuffer *buffer = ib_from_iface(iface);
+    if (!InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&buffer->refcount);
     if (!refs) {
-        D9IndexBuffer **link = &buffer->device->index_buffers;
-        D9WGDestroyResource destroy;
-        while (*link && *link != buffer)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = buffer->next_device_resource;
-        d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
-        destroy.resource_handle = buffer->handle;
-        destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
-        device_child_release(buffer->device);
-        HeapFree(GetProcessHeap(), 0, buffer);
+        D9Device *device = buffer->device;
+        if (!InterlockedCompareExchange(&buffer->binding_refs, 0, 0))
+            ib_destroy_storage(buffer);
+        device_child_release(device);
     }
     return refs;
 }

@@ -18,7 +18,8 @@ typedef uint32_t DWORD,ULONG;typedef int32_t HRESULT;typedef const void*REFGUID;
 #define D8WG_TRACE_ERROR(v) (v)
 #define TRACE_REFUSE(v) (v)
 typedef struct Buffer Buffer;typedef struct{Buffer*vertex_buffers,*index_buffers;unsigned refs;}Device;
-struct Buffer{Device*device;Buffer*next_device_resource;int32_t refcount;uint32_t handle;void*shadow;int clips;D9WGPrivateStore private_data;};
+struct Buffer{Device*device;Buffer*next_device_resource;int32_t refcount,binding_refs;uint32_t handle;void*shadow;int clips;D9WGPrivateStore private_data;};
+typedef Device D${api}Device;
 typedef Buffer D${api}VertexBuffer,D${api}IndexBuffer,IDirect3DVertexBuffer${api},IDirect3DIndexBuffer${api};
 static Buffer*vb_from_iface(Buffer*b){return b;}static Buffer*ib_from_iface(Buffer*b){return b;}
 static unsigned allocated,destroys,clips_freed,held,fail;static int g_transport_lock;
@@ -31,11 +32,12 @@ typedef struct{unsigned refs;Device*device;Buffer*buffer;int check_destroy;}IUnk
 static unsigned IUnknown_AddRef(IUnknown*o){assert(!held&&o->refs);return ++o->refs;}
 static unsigned IUnknown_Release(IUnknown*o){assert(!held&&o->refs);if(o->check_destroy){assert(o->device->refs==2);assert(o->device->vertex_buffers!=o->buffer&&o->device->index_buffers!=o->buffer);}return --o->refs;}
 static int32_t InterlockedDecrement(int32_t*p){return --*p;}
+${api===9?"static int32_t InterlockedCompareExchange(int32_t*p,int32_t v,int32_t c){int32_t old=*p;if(old==c)*p=v;return old;}":""}
 static void device_child_release(Device*d){assert(d->refs==2);d->refs--;}
 #define d9wg_clip_buffer_free(a,b,c) do{(void)(a);clips_freed++;}while(0)
 static int emit_command(uint16_t op,const void*p,uint32_t size){assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;assert(c->resource_handle==0x7000+destroys&&c->resource_kind==(destroys%2?D9WG_RESOURCE_BUFFER_INDEX:D9WG_RESOURCE_BUFFER_VERTEX));destroys++;return 1;}
 #include "runtime/d9wg_private_data_bridge.h"
-${['vb_set_private_data','vb_get_private_data','vb_free_private_data','vb_release','ib_set_private_data','ib_get_private_data','ib_free_private_data','ib_release'].map(n=>extract(source,n)).join('\n')}
+${[...(api===9?['vb_destroy_storage','ib_destroy_storage']:[]),'vb_set_private_data','vb_get_private_data','vb_free_private_data','vb_release','ib_set_private_data','ib_get_private_data','ib_free_private_data','ib_release'].map(n=>extract(source,n)).join('\n')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Private entry API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){unsigned cases=0;Device d={.refs=1};const uint8_t key[16]={1},missing[16]={2};HRESULT(*set[2])(Buffer*,REFGUID,const void*,DWORD,DWORD)={vb_set_private_data,ib_set_private_data};HRESULT(*get[2])(Buffer*,REFGUID,void*,DWORD*)={vb_get_private_data,ib_get_private_data};HRESULT(*drop[2])(Buffer*,REFGUID)={vb_free_private_data,ib_free_private_data};ULONG(*release_buffer[2])(Buffer*)={vb_release,ib_release};
 for(unsigned kind=0;kind<2;kind++){Buffer*b=HeapAlloc(NULL,0,sizeof(*b));b->device=&d;b->refcount=2;b->handle=0x7000+kind;b->shadow=HeapAlloc(NULL,0,64);d.refs++;if(kind)d.index_buffers=b;else d.vertex_buffers=b;
