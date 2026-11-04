@@ -1,0 +1,22 @@
+"use strict";
+const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-pp-core-mut-"));
+function mutate(before,after,name="d9wg_d3d9_core_parameters_effective8"){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}const body=source.slice(m.index,end);assert(body.includes(before),before);return source.slice(0,m.index)+body.replace(before,after)+source.slice(end);}
+const cases=[
+ ["additional uses9 interval","d9wg_present_interval_valid(api,","d9wg_present_interval_valid(9,","device_create_additional_swap_chain","preflight"],
+ ["additional rejects copy-vsync","d9wg_swap_effect_valid(api,","d9wg_swap_effect_valid(9,","device_create_additional_swap_chain","preflight"],
+ ["additional rejects MSAA-lockable","d9wg_present_multisample_valid(api,","d9wg_present_multisample_valid(9,","device_create_additional_swap_chain","preflight"],
+ ["additional omits8 format filter","if (api == 8 && params->BackBufferFormat != D3DFMT_UNKNOWN","if (0 && api == 8 && params->BackBufferFormat != D3DFMT_UNKNOWN","device_create_additional_swap_chain","preflight"],
+ ["additional rejects8 fullscreen parent","(api == 9 && !device->present.Windowed)","!device->present.Windowed","device_create_additional_swap_chain","status"],
+ ["additional rejects8 NULL window","if (api == 9 && !window)","if (!window)","device_create_additional_swap_chain","status"],
+ ["additional UNKNOWN uses stale desktop","params->BackBufferFormat ? params->BackBufferFormat : device->display_mode.Format","params->BackBufferFormat ? params->BackBufferFormat : 22","device_create_additional_swap_chain","status"],
+ ["additional loses client fallback","(UINT)(client.right - client.left), device->display_mode.Width);","(UINT)(client.right - client.left), 0);","device_create_additional_swap_chain","status"],
+ ["additional NULL origin not zero","if (api == 8 && window) ClientToScreen(window, &origin);","if (api == 8) ClientToScreen(window, &origin);","device_create_additional_swap_chain","status"],
+ ["additional caller gets9 publication","d9wg_present_parameters_return(api, params,","d9wg_present_parameters_return(9, params,","device_create_additional_swap_chain","status"],
+ ["additional sample storage is zero","D3DUSAGE_RENDERTARGET, params->MultiSampleType,","D3DUSAGE_RENDERTARGET, D3DMULTISAMPLE_NONE,","device_create_additional_swap_chain","status"],
+ ["additional cached flags lost","width, height, format, window);","width, height, format, window);chain->present.Flags=0;","device_create_additional_swap_chain","status"],
+ ["additional bridge accepts9 profile","device_compatibility_api(device_from_iface(iface)) != 8","device_compatibility_api(device_from_iface(iface)) == 0","d9wg_d3d9_core_additional8","bridge"],
+ ["additional bridge quality nonzero","parameters8_to9(&parameters, parameters8);","parameters8_to9(&parameters, parameters8);parameters.MultiSampleQuality=1;","d9wg_d3d9_core_additional8","bridge"],
+ ["additional bridge bypasses core","return IDirect3DDevice9_CreateAdditionalSwapChain(iface, &parameters, out);","return D3D_OK;","d9wg_d3d9_core_additional8","bridge"],
+ ["additional bridge failure output unchanged","*out = NULL;","if(iface&&parameters8)*out = NULL;","d9wg_d3d9_core_additional8","bridge"],
+];
+try{for(const[label,before,after,name,test]of cases){const file=dir+"/proxy.c";fs.writeFileSync(file,mutate(before,after,name));const r=spawnSync(process.execPath,[__dirname+"/d8wg_backend_additional"+(test==="status"?"":"_"+test)+"_test.js"],{env:{...process.env,D8WG_BACKEND_ADDITIONAL_SOURCE:file},encoding:"utf8",timeout:30000}),out=r.stdout+r.stderr;assert(!r.error,label);assert.notEqual(r.status,0,"survived "+label);assert(!/error:|undefined reference|Undefined symbols/.test(out),label+" compile failure: "+out);assert.match(out,/Backend8 additional (preflight|parameters|bridge).*line|Assertion.*failed|Assertion failed/,label+" must fail runtime assertion: "+out);console.log("KILL "+label);}console.log(`PASS backend8 additional mutations:${cases.length}/${cases.length}, strict compilation then runtime assertions`);}finally{fs.rmSync(dir,{recursive:true,force:true});}

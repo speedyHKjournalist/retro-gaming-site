@@ -17,14 +17,14 @@ try {
   ['explicit formats poll Win32','if (requested)\n        return requested;','if (requested) { d9wg_display_mode_current(&mode); return requested; }'],
  ]){assert(header.includes(old),label);const file=dir+'/mode.h';fs.writeFileSync(file,header.replace(old,replacement));run(label,'d9wg_display_mode_test.js',{D9WG_DISPLAY_HEADER:file});killed++;}
  const source=fs.readFileSync(root+'/d3d9proxy/d3d9_proxy.c','utf8');
- for(const[fn,p,output,test,env]of[
+ for(const[fn,p,,test,env]of[
   ['d3d_create_device','parameters','backbuffer_format','d9wg_present_geometry_entry_test.js','D9WG_GEOMETRY_SOURCE'],
   ['device_reset','parameters','backbuffer_format','d9wg_reset_status_test.js','D9WG_RESET_STATUS_FRONTEND'],
   ['device_create_additional_swap_chain','params','format','d9wg_additional_parameters_entry_test.js','D9WG_ADDITIONAL_PARAMETERS_SOURCE'],
  ]){
   const call='d9wg_display_mode_backbuffer_format(\n        '+p+'->BackBufferFormat)';
   const changes=[
-   ['stale/constant fallback',((fn==='d3d_create_device'||fn==='device_reset')?'(D3DFORMAT)'+call:output+' = (D3DFORMAT)'+call+';'),((fn==='d3d_create_device'||fn==='device_reset')?'('+p+'->BackBufferFormat ? '+p+'->BackBufferFormat : '+(fn==='device_reset'?'device->display_mode.Format':'D3DFMT_X8R8G8B8')+')':output+' = '+p+'->BackBufferFormat ? '+p+'->BackBufferFormat : device->display_mode.Format;')],
+   ['stale/constant fallback','(D3DFORMAT)'+call,'('+p+'->BackBufferFormat ? '+p+'->BackBufferFormat : '+(fn==='d3d_create_device'?'D3DFMT_X8R8G8B8':'device->display_mode.Format')+')'],
    ['explicit format forced UNKNOWN',call,'d9wg_display_mode_backbuffer_format(\n        0)'],
   ];
   if(fn==='d3d_create_device')changes.push(['resolved format not cached','        backbuffer_format);','        D3DFMT_X8R8G8B8);']);

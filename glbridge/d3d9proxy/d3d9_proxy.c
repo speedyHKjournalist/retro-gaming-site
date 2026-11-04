@@ -7736,6 +7736,7 @@ static HRESULT WINAPI device_create_additional_swap_chain(
         IDirect3DSwapChain9 **out)
 {
     D9Device *device = device_from_iface(iface);
+    const UINT api = device_compatibility_api(device);
     D9SwapChain *chain;
     D9WGCreateSwapChain command;
     IDirect3DSurface9 *back_buffer = NULL;
@@ -7755,17 +7756,26 @@ static HRESULT WINAPI device_create_additional_swap_chain(
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    if (!d9wg_present_interval_valid(9, params->Windowed,
+    if (api == 8 && (!params->Windowed
+            || (params->MultiSampleType != D3DMULTISAMPLE_NONE
+                && params->MultiSampleType != D3DMULTISAMPLE_4_SAMPLES)
+            || params->BackBufferCount > 3
+            || params->BackBufferWidth > 8192 || params->BackBufferHeight > 8192))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(api, params->Windowed,
             params->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!d9wg_swap_effect_valid(9, params->SwapEffect, params->BackBufferCount))
+    if (!d9wg_swap_effect_valid(api, params->SwapEffect, params->BackBufferCount))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!d9wg_present_multisample_valid(9, params->SwapEffect,
+    if (!d9wg_present_multisample_valid(api, params->SwapEffect,
             params->MultiSampleType, params->MultiSampleQuality, params->Flags))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 8 && params->BackBufferFormat != D3DFMT_UNKNOWN
+            && !supported_render_target_format8(params->BackBufferFormat))
+        return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     if (params->BackBufferCount > 3)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!params->Windowed || !device->present.Windowed) {
+    if (!params->Windowed || (api == 9 && !device->present.Windowed)) {
         HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: D3D9 allows "
                 "additional chains only on a windowed device, and only for a "
                 "windowed chain");
@@ -7776,24 +7786,38 @@ static HRESULT WINAPI device_create_additional_swap_chain(
 
     window = params->hDeviceWindow ? params->hDeviceWindow
             : device->creation.hFocusWindow;
-    if (!window) {
+    if (api == 9 && !window) {
         TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain",
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    /* D3D9 fills a zero width/height from the window's client area. */
-    probe_window_rect(window, (int)device->display_mode.Width,
-            (int)device->display_mode.Height, &client, &origin);
-    width = params->BackBufferWidth ? params->BackBufferWidth
-            : (UINT)(client.right - client.left);
-    height = params->BackBufferHeight ? params->BackBufferHeight
-            : (UINT)(client.bottom - client.top);
-    if (!width || !height) {
-        TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain",
-                D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
+    if (api == 8) {
+        SetRect(&client, 0, 0, (int)device->display_mode.Width,
+                (int)device->display_mode.Height);
+        origin.x = origin.y = 0;
+        if (window) GetClientRect(window, &client);
+        width = d9wg_present_extent(params->BackBufferWidth,
+                (UINT)(client.right - client.left), device->display_mode.Width);
+        height = d9wg_present_extent(params->BackBufferHeight,
+                (UINT)(client.bottom - client.top), device->display_mode.Height);
+        if (width > 8192 || height > 8192)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    } else {
+        /* D3D9 fills zero extents from the window probe. */
+        probe_window_rect(window, (int)device->display_mode.Width,
+                (int)device->display_mode.Height, &client, &origin);
+        width = params->BackBufferWidth ? params->BackBufferWidth
+                : (UINT)(client.right - client.left);
+        height = params->BackBufferHeight ? params->BackBufferHeight
+                : (UINT)(client.bottom - client.top);
+        if (!width || !height) {
+            TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain", D3DERR_INVALIDCALL, NULL);
+            return D3DERR_INVALIDCALL;
+        }
     }
-    format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+    format = api == 8
+        ? (params->BackBufferFormat ? params->BackBufferFormat : device->display_mode.Format)
+        : (D3DFORMAT)d9wg_display_mode_backbuffer_format(
         params->BackBufferFormat);
 
     if (!supported_multisample(format, params->MultiSampleType))
@@ -7827,6 +7851,7 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     d9wg_present_parameters_effective(&chain->present, params,
         width, height, format, window);
 
+    if (api == 8 && window) ClientToScreen(window, &origin);
     command.device_handle = device->handle;
     command.swap_chain_handle = chain->handle;
     command.back_buffer_handle = surface->texture ? surface->texture->handle : 0;
@@ -7851,7 +7876,7 @@ static HRESULT WINAPI device_create_additional_swap_chain(
      * Its private texture storage has no separate device pin. */
     surface->swap_chain = chain;
     surface->refcount = 0;
-    d9wg_present_parameters_return(9, params, &chain->present);
+    d9wg_present_parameters_return(api, params, &chain->present);
     *out = &chain->iface;
     TRACE("OK CreateAdditionalSwapChain device=%08lX chain=%08lX back=%08lX "
             "%lux%lu window=%08lX", device->handle, chain->handle,
@@ -15080,6 +15105,21 @@ HRESULT WINAPI d9wg_d3d9_core_reset8(IDirect3DDevice9 *iface, const void *parame
         return IDirect3DDevice9_Reset(iface, NULL);
     parameters8_to9(&parameters, parameters8);
     return IDirect3DDevice9_Reset(iface, &parameters);
+}
+
+/* Construction/metadata bridge. Surface locks and API8 public wrappers are
+ * separate adapters; returned object is a real private IDirect3DSwapChain9. */
+HRESULT WINAPI d9wg_d3d9_core_additional8(IDirect3DDevice9 *iface,
+        const void *parameters8, IDirect3DSwapChain9 **out)
+{
+    D3DPRESENT_PARAMETERS parameters;
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || !parameters8
+            || device_compatibility_api(device_from_iface(iface)) != 8)
+        return D3DERR_INVALIDCALL;
+    parameters8_to9(&parameters, parameters8);
+    return IDirect3DDevice9_CreateAdditionalSwapChain(iface, &parameters, out);
 }
 
 #endif

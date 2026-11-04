@@ -980,3 +980,12 @@ ordinary9 Reset preserves9 publication anddefaults. Three actual Reset
 commands replay five images/320 pixels on both GPUs. Public8 devices remain
 legacy;additional/shader adapters anddevice/resource wrapping follow.
 See `../deployments/d3d-webgpu-review-4K11.json`.
+
+Stage 4K12 adds private API8 core additional-chain construction with
+immutable PP8 input,legacy validation/current-format fallback,count-only
+publication andNULL/empty-client window geometry. XP verifies six real
+RT texture/chain lifetimes,16-bit NULL-window chains,MSAA4/flag1 metadata,
+container identity andcomplete retirement beforedrawing. Both GPUs replay
+five images/320 pixels with allmaps empty beforefallback cleanup. Public8
+wrappers,surface LockRect andadditional Present remain separate adapters.
+See `../deployments/d3d-webgpu-review-4K12.json`.

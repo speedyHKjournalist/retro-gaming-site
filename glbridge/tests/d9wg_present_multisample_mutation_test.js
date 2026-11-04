@@ -25,7 +25,7 @@ try {
     for (const api of [8, 9]) {
         const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         for (const fn of ["d3d_create_device", "device_reset", api === 8 ? "device_create_swapchain" : "device_create_additional_swap_chain"]) {
-            for (const [label, old, replacement] of [["guard omitted", "if (!d9wg_present_multisample_valid(", "if (0 && !d9wg_present_multisample_valid("], ["wrong version", "d9wg_present_multisample_valid(" + (api===9&&(fn==="d3d_create_device"||fn==="device_reset")?"api":api) + ",", "d9wg_present_multisample_valid(" + (api === 8 ? 9 : 8) + ","]]) {
+            for (const [label, old, replacement] of [["guard omitted", "if (!d9wg_present_multisample_valid(", "if (0 && !d9wg_present_multisample_valid("], ["wrong version", "d9wg_present_multisample_valid(" + (api===9?"api":api) + ",", "d9wg_present_multisample_valid(" + (api === 8 ? 9 : 8) + ","]]) {
                 const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, fn, old, replacement)); fail("API " + api + " " + fn + " " + label, {["D" + api + "WG_MSAA_FRONTEND"]: file}); killed++;
             }
         }

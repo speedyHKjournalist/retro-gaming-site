@@ -6,6 +6,7 @@
  * implementation uses the D3D9 SDK in a separate compilation unit. */
 struct IDirect3D9;
 struct IDirect3DDevice9;
+struct IDirect3DSwapChain9;
 struct D9WGProcess;
 #define D9WG_D3D8_CAPS_BYTES 212u
 #define D9WG_D3D8_RASTER_ZBIAS 0x00004000u
@@ -58,4 +59,7 @@ HRESULT WINAPI d9wg_d3d9_core_create_device8(struct IDirect3D9 *factory, UINT ad
 /* Immutable52-byte API8 Reset input;NULL forwards to core Reset status rules. */
 HRESULT WINAPI d9wg_d3d9_core_reset8(struct IDirect3DDevice9 *device,
         const void *parameters8);
+/* Immutable52-byte API8 additional-chain construction/metadata bridge. */
+HRESULT WINAPI d9wg_d3d9_core_additional8(struct IDirect3DDevice9 *device,
+        const void *parameters8, struct IDirect3DSwapChain9 **out);
 #endif

@@ -32,12 +32,12 @@ typedef struct{int magic;UINT compatibility_api;}Factory;typedef struct{int magi
 typedef Factory D${api}Direct3D,IDirect3D${api};typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api},D${api}Surface,IDirect3DSurface${api};
 typedef struct{BOOL Windowed;DWORD PresentationInterval,FullScreen_PresentationInterval,BackBufferCount,MultiSampleType,BackBufferWidth,BackBufferHeight,BackBufferFormat,SwapEffect,MultiSampleQuality,Flags;}D3DPRESENT_PARAMETERS;
 static unsigned trace_errors;static Factory*d3d_from_iface(Factory*f){return f;}static Device*device_from_iface(Device*d){return d;}
-${api===9?'static UINT device_compatibility_api(const Device*d){(void)d;return 9;}':''}
+${api===9?'static UINT device_compatibility_api(const Device*d){(void)d;return 9;}static BOOL supported_render_target_format8(UINT f){(void)f;return 1;}':''}
 ${api===9?'static UINT d9wg_display_mode_backbuffer_format(UINT f){return f?f:22;}':''}
 ${api===8?'static BOOL supported_multisample_type(UINT type){return !type||type==4;}':''}
 ${prefix('d3d_create_device',api===8?'    if (!supported_multisample_type(parameters->MultiSampleType))':'    backbuffer_format = ')}
 ${prefix('device_reset',api===8?'    if (parameters->EnableAutoDepthStencil':'    if (!supported_multisample(')}
-${prefix(chain,api===8?'    if (parameters->BackBufferFormat != D3DFMT_UNKNOWN':'    if (!params->Windowed || !device->present.Windowed)')}
+${prefix(chain,api===8?'    if (parameters->BackBufferFormat != D3DFMT_UNKNOWN':'    if (!params->Windowed || (api == 9 && !device->present.Windowed))')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Parameter preflight API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){Factory factory={123,9};Device device={.magic=456,.present={1}},before_device=device;unsigned cases=0,checks=0;
 /* Structural expectations: DISCARD MSAA, D3D8 lockable flag exception, and the backend's one advertised quality level. */

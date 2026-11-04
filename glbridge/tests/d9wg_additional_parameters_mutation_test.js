@@ -13,7 +13,7 @@ try {
     for(const api of [8,9]) {
         const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),fn=api===8?'device_create_swapchain':'device_create_additional_swap_chain',p=api===8?'parameters':'params';
         const changes=[
-            ['caller output omitted','    d9wg_present_parameters_return('+api+', '+p+', &chain->present);',''],
+            ['caller output omitted','    d9wg_present_parameters_return('+(api===9?'api':api)+', '+p+', &chain->present);',''],
             ['cached parameters not resolved','    d9wg_present_parameters_effective(&chain->present, '+p+',\n        width, height, format, window);','    chain->present = *'+p+'; (void)format;'],
             ['secondary window ignored',p+'->hDeviceWindow ? '+p+'->hDeviceWindow','0 && '+p+'->hDeviceWindow ? '+p+'->hDeviceWindow'],
             ['count limit ignored',api===8?'|| parameters->BackBufferCount > 3':'if (params->BackBufferCount > 3)',api===8?'|| (0 && parameters->BackBufferCount > 3)':'if (0 && params->BackBufferCount > 3)'],

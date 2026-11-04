@@ -28,6 +28,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 #define D3DERR_DRIVERINTERNALERROR (-4)
 #define D3DFMT_UNKNOWN 0
 #define D3DMULTISAMPLE_NONE 0
+#define D3DMULTISAMPLE_4_SAMPLES 4
 #define D3DUSAGE_RENDERTARGET 1
 #define HEAP_ZERO_MEMORY 1
 #define D3DPRESENTFLAG_LOCKABLE_BACKBUFFER 1
@@ -66,6 +67,7 @@ ${api===8?`static void swapchain_destroy_storage(Chain*);
 static void texture_release(Interface*p){assert(p==&backing_texture.iface);Chain*c=backing_texture.swap_chain;backing_texture.swap_chain=NULL;if(c)swapchain_destroy_storage(c);surface_release(&latest_surface->iface);}
 #define IDirect3DTexture8_Release texture_release`:""}
 ${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
+${api===9?'static UINT device_compatibility_api(const Device*d){(void)d;return 9;}static BOOL supported_render_target_format8(D3DFORMAT f){return f>=21&&f<=26;}':''}
 static BOOL supported_multisample_type(UINT t){return t==0||t==4;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==22;}static BOOL supported_multisample(D3DFORMAT f,UINT ms){return (f==21||f==22||f==23)&&(!ms||ms==4);}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND w,RECT*r){observed_window=w;assert(w==(void*)(uintptr_t)0x44||w==(void*)(uintptr_t)0x55);SetRect(r,0,0,w==(void*)(uintptr_t)0x55?96:128,w==(void*)(uintptr_t)0x55?80:96);}
