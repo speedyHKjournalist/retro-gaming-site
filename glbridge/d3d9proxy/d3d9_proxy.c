@@ -16174,6 +16174,42 @@ static void state_block_adopt_handle8(D9StateBlock *block, DWORD token)
     device_child_release(block->device);
 }
 
+static DWORD state_block_publish_handle8(D9StateBlock *block)
+{
+    DWORD token;
+    do { token = allocate_handle(); }
+    while (state_block_handle8(block->device, token));
+    state_block_adopt_handle8(block, token);
+    return token;
+}
+
+/* Incremental8 recording uses the same actual9 recorder as mapped snapshots.
+ * A failed End leaves that recording intact and clears only the caller output. */
+HRESULT WINAPI d9wg_d3d9_core_begin_state_block8(IDirect3DDevice9 *iface)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || device_from_iface(iface)->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_BeginStateBlock(iface);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_end_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD *out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = 0;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || device_from_iface(iface)->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    IDirect3DStateBlock9 *created = NULL;
+    IDirect3DDevice9_AddRef(iface);
+    HRESULT hr = IDirect3DDevice9_EndStateBlock(iface, &created);
+    if (SUCCEEDED(hr))
+        *out = state_block_publish_handle8(state_block_from_iface(created));
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
 HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(IDirect3DDevice9 *iface,
         D9WGStateBlockRecorder8 recorder, const void *snapshot, DWORD *out)
 {
@@ -16186,13 +16222,8 @@ HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(IDirect3DDevice9 *iface
     IDirect3DStateBlock9 *created = NULL;
     IDirect3DDevice9_AddRef(iface);
     HRESULT hr = d9wg_d3d9_core_record_state_block8(iface, recorder, snapshot, &created);
-    if (SUCCEEDED(hr)) {
-        DWORD token;
-        do { token = allocate_handle(); }
-        while (state_block_handle8(device_from_iface(iface), token));
-        state_block_adopt_handle8(state_block_from_iface(created), token);
-        *out = token;
-    }
+    if (SUCCEEDED(hr))
+        *out = state_block_publish_handle8(state_block_from_iface(created));
     IDirect3DDevice9_Release(iface);
     return hr;
 }

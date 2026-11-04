@@ -162,6 +162,11 @@ HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *devic
 /* Device-owned DWORD state blocks: no public9 block/device parent pin.
  * Raw8 scopes and Get metadata remain frontend-owned. Capture rebuilds the
  * mapped snapshot behind the same token; failed rebuild preserves it. */
+/* Raw8 Begin/End masks stay in the frontend. Mapped setters record in the
+ * actual9 recorder; successful End publishes a device-owned DWORD token. */
+HRESULT WINAPI d9wg_d3d9_core_begin_state_block8(struct IDirect3DDevice9 *device);
+HRESULT WINAPI d9wg_d3d9_core_end_state_block_handle8(struct IDirect3DDevice9 *device,
+        DWORD *out);
 HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot, DWORD *out);
 HRESULT WINAPI d9wg_d3d9_core_capture_state_block_handle8(struct IDirect3DDevice9 *device,

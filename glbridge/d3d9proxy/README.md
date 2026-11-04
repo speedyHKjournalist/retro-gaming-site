@@ -1388,3 +1388,24 @@ Independentwire catches11,753corruptions. DualGPU:20fullimages/1,280pixels
 zeroerror. CPUframebuffer replies areexplicit analytic injection. Public8
 wrappers/raw scopes/Get metadata still need frontend integration. Evidence:
 `../deployments/d3d-webgpu-review-4K37.json`.
+
+
+### Review 4K38: incremental8 Begin/End to core DWORD tokens
+
+Private Begin8 (stdcall4) uses actual9 Begin;End8 (stdcall8) uses actual9 End
+and the same token publisher as snapshot creation. Invalid End preserves the
+recording and clears the caller output. Tokens remain device-owned without
+public device parent cycles. Frontend8 still owns raw scopes/Get metadata.
+
+Native:79,400checks/1,038cases;1,024 all-eight-resource/pool/cleanup groups,
+live isolation,repeated recorded bindings,invalid End/OOM/profile/teardown,
+ordinary9 interoperability andunfinished-recording cleanup.15new plus25retained
+strict semantic mutants pass. CombinedASAN also covers retained token and9
+state-block lifetime tests.647 existing9 functions match;reconstructedCreate8
+and moved publisher match exactly;block storage/wholepublic8/policy unchanged.
+XP compares accurate4K37old/current8/ordinary9/coreSDK120/220:private profiles
+exercise Begin/nestedBegin/invalidEnd/End-token/Apply andReset restoration.
+Independentwire catches11,756corruptions;bothGPUs verify20fullimages/1,280pixels
+zeroerror. CPUframebuffer replies areexplicit analytic injection. Fullpublic8
+wrappers/predefined scopes remainopen. Evidence:
+`../deployments/d3d-webgpu-review-4K38.json`.

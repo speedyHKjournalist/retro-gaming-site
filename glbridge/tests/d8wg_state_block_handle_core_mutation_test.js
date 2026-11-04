@@ -34,13 +34,13 @@ const plan=[
   [
     "success output lost",
     "d9wg_d3d9_core_create_state_block_handle8",
-    "        *out = token;",
-    "        *out = 0;"
+    "        *out = state_block_publish_handle8(state_block_from_iface(created));",
+    "        { *out = 0; (void)&state_block_publish_handle8; }"
   ],
   [
     "token allocator collision",
-    "d9wg_d3d9_core_create_state_block_handle8",
-    "while (state_block_handle8(device_from_iface(iface), token));",
+    "state_block_publish_handle8",
+    "while (state_block_handle8(block->device, token));",
     "while (0);"
   ],
   [
