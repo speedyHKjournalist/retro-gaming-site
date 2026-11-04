@@ -33,6 +33,9 @@
 #include <windows.h>
 #include <initguid.h>
 #include <d3d9.h>
+#ifdef D9WG_STATIC_CORE
+#include "d3d9_core.h"
+#endif
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
@@ -3056,10 +3059,8 @@ static void apply_permissive_caps(D3DCAPS9 *caps)
     caps->MaxPShaderInstructionsExecuted = 0xFFFFFFFFu;
 }
 
-static void fill_caps(D3DCAPS9 *caps)
+static void fill_caps_for_profile(D3DCAPS9 *caps, UINT shader_model, BOOL permissive)
 {
-    UINT shader_model = shader_model_version();
-
     ZeroMemory(caps, sizeof(*caps));
     caps->DeviceType = D3DDEVTYPE_HAL;
     caps->AdapterOrdinal = D3DADAPTER_DEFAULT;
@@ -3377,11 +3378,16 @@ static void fill_caps(D3DCAPS9 *caps)
      * scratch each draw allocates; 16-bit output indices bound it further for
      * a large mesh, and a draw that would overflow them is left flat. */
     caps->MaxNpatchTessellationLevel = (float)D9_PATCH_MAX_SEGMENTS;
-    apply_permissive_caps(caps);
+    if (permissive) apply_permissive_caps(caps);
     /* Render targets and MRT: the host binds up to four colour attachments and
      * a translated pixel shader's oC0..oC3 reach them (M4 work brought forward
      * because a 2005-era D3D9 game renders most of its frame into textures). */
     caps->NumSimultaneousRTs = D9_MAX_RENDER_TARGETS;
+}
+
+static void fill_caps(D3DCAPS9 *caps)
+{
+    fill_caps_for_profile(caps, shader_model_version(), TRUE);
 }
 
 static UINT reset_buffer_owned_refs(D9Device *device, const void *iface, BOOL index_buffer)
@@ -14711,6 +14717,19 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
 #ifdef D9WG_STATIC_CORE
 /* The D3D8 wrapper publishes its own compatibility profile. Creating its
  * backend factory must not insert a D3D9 HELLO into the shared stream. */
+/* D3D8 retains its Shader1.x policy in the adapter. Query the shared base
+ * capabilities without a D3D9-only diagnostic/permissive profile. */
+void WINAPI d9wg_d3d9_core_caps8(void *caps8)
+{
+    _Static_assert(__builtin_offsetof(D3DCAPS9, DevCaps2) == D9WG_D3D8_CAPS_BYTES,
+            "D3D9 shared caps prefix size");
+    D3DCAPS9 caps;
+    fill_caps_for_profile(&caps, 0, FALSE);
+    if (caps.RasterCaps & D3DPRASTERCAPS_DEPTHBIAS)
+        caps.RasterCaps |= D9WG_D3D8_RASTER_ZBIAS;
+    CopyMemory(caps8, &caps, D9WG_D3D8_CAPS_BYTES);
+}
+
 IDirect3D9 *WINAPI d9wg_d3d9_core_create8(void)
 {
     return d3d_create_root(D3D_SDK_VERSION_9C, FALSE);
