@@ -4,8 +4,8 @@ const root = path.resolve(__dirname, ".."), source = fs.readFileSync(root + "/d3
 function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} const mutationStart = m.index; const body = source.slice(mutationStart, end); assert(body.includes(before), name + " " + before); return source.slice(0, mutationStart) + body.replace(before, after) + source.slice(end);}
 const cases = [
     ["zero FVF is no longer a no-op", "device_set_fvf", "if (!fvf) return D3D_OK;", "if (FALSE && !fvf) return D3D_OK;"],
-    ["cache lookup misses exact identity", "device_fvf_declaration", "if (decl->fvf != fvf) continue;", "if (TRUE || decl->fvf != fvf) continue;"],
-    ["cache aliases distinct FVFs", "device_fvf_declaration", "if (decl->fvf != fvf) continue;", "if (FALSE && decl->fvf != fvf) continue;"],
+    ["cache lookup misses exact identity", "device_fvf_declaration", "if (!decl->fvf_converted || decl->fvf != fvf) continue;", "if (TRUE || !decl->fvf_converted || decl->fvf != fvf) continue;"],
+    ["cache aliases distinct FVFs", "device_fvf_declaration", "if (!decl->fvf_converted || decl->fvf != fvf) continue;", "if (!decl->fvf_converted) continue;"],
     ["cached declaration starts public", "device_fvf_declaration", "decl->binding_refs = 1;", "decl->binding_refs = 1;decl->refcount = 1;"],
     ["cache omits storage hold", "device_fvf_declaration", "decl->binding_refs = 1;", "decl->binding_refs = 0;"],
     ["cache adds a parent pin", "device_fvf_declaration", "decl->device = device;", "decl->device = device;device_child_add_ref(device);"],

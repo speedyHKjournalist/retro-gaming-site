@@ -1274,7 +1274,8 @@ struct D9VertexDeclaration {
     D9Device *device;
     uint32_t handle;
     UINT element_count;
-    DWORD fvf;                 /* nonzero only for an FVF-converted declaration */
+    DWORD fvf;                 /* native association, also for POSITION-only user views */
+    BOOL fvf_converted;         /* cache origin is distinct from an associated user FVF */
     BOOL fvf_cache_ref;         /* device cache owns one private storage hold */
     D3DVERTEXELEMENT9 elements[D3DMAXDECLLENGTH];
     D9VertexDeclaration *next_device_resource;
@@ -6822,6 +6823,21 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
     return result;
 }
 
+/* Windows exposes these two POSITION-only user declarations as legacy FVFs.
+ * Keep all other reverse mappings at zero rather than guessing a layout. */
+static DWORD declaration_fvf(const D3DVERTEXELEMENT9 *elements, UINT count)
+{
+    if (count != 1 || !elements) return 0;
+    const D3DVERTEXELEMENT9 *e = elements;
+    if (e->Stream || e->Offset || e->Method != D3DDECLMETHOD_DEFAULT
+            || e->UsageIndex) return 0;
+    if (e->Type == D3DDECLTYPE_FLOAT3 && e->Usage == D3DDECLUSAGE_POSITION)
+        return D3DFVF_XYZ;
+    if (e->Type == D3DDECLTYPE_FLOAT4 && e->Usage == D3DDECLUSAGE_POSITIONT)
+        return D3DFVF_XYZRHW;
+    return 0;
+}
+
 static HRESULT WINAPI device_create_vertex_declaration(
         IDirect3DDevice9 *iface, const D3DVERTEXELEMENT9 *elements,
         IDirect3DVertexDeclaration9 **decl_out)
@@ -6852,6 +6868,7 @@ static HRESULT WINAPI device_create_vertex_declaration(
     decl->device = device;
     decl->handle = allocate_handle();
     decl->element_count = count;
+    decl->fvf = declaration_fvf(elements, count);
     CopyMemory(decl->elements, elements, count * sizeof(D3DVERTEXELEMENT9));
     device_child_add_ref(device);
 
@@ -6874,7 +6891,7 @@ static HRESULT device_fvf_declaration(D9Device *device, DWORD fvf,
     D9VertexDeclaration *decl;
     *out = NULL;
     for (decl = device->vertex_declarations; decl; decl = decl->next_device_resource) {
-        if (decl->fvf != fvf) continue;
+        if (!decl->fvf_converted || decl->fvf != fvf) continue;
         if (!decl->fvf_cache_ref) {
             decl_binding_add_ref(decl);
             decl->fvf_cache_ref = TRUE;
@@ -6890,6 +6907,7 @@ static HRESULT device_fvf_declaration(D9Device *device, DWORD fvf,
     decl->handle = allocate_handle();
     decl->element_count = count;
     decl->fvf = fvf;
+    decl->fvf_converted = TRUE;
     decl->fvf_cache_ref = TRUE;
     decl->binding_refs = 1;
     /* SDK and protocol elements share the WORD/WORD/BYTE/BYTE/BYTE/BYTE ABI. */

@@ -18,7 +18,8 @@ function extract(source, name) {
     for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;}
     return source.slice(m.index, end);
 }
-const fvfBindings = process.env.D9WG_TEST_FVF_BINDINGS === "1";
+const declarationBindings = process.env.D9WG_TEST_DECLARATION_FVF === "1";
+const fvfBindings = declarationBindings || process.env.D9WG_TEST_FVF_BINDINGS === "1";
 const streamBindings = fvfBindings || process.env.D9WG_TEST_STREAM_BINDINGS === "1";
 const rootBindings = streamBindings || process.env.D9WG_TEST_ROOT_BINDINGS === "1";
 const stateBindings = rootBindings || process.env.D9WG_TEST_STATE_BINDINGS === "1";
@@ -78,15 +79,51 @@ typedef struct{Interface iface;LONG refs;}Parent;
 typedef struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}D3DVIEWPORT9;
 typedef struct{int left,top,right,bottom;}RECT;
 typedef struct{uint16_t Stream,Offset;BYTE Type,Method,Usage,UsageIndex;}D3DVERTEXELEMENT9;
+#define D3DDECLTYPE_FLOAT1 0
+#define D3DDECLTYPE_FLOAT2 1
+#define D3DDECLTYPE_FLOAT3 2
+#define D3DDECLTYPE_FLOAT4 3
+#define D3DDECLTYPE_D3DCOLOR 4
+#define D3DDECLTYPE_UBYTE4 5
+#define D3DDECLTYPE_SHORT2 6
+#define D3DDECLTYPE_SHORT4 7
+#define D3DDECLTYPE_UBYTE4N 8
+#define D3DDECLTYPE_SHORT2N 9
+#define D3DDECLTYPE_SHORT4N 10
+#define D3DDECLTYPE_USHORT2N 11
+#define D3DDECLTYPE_USHORT4N 12
+#define D3DDECLTYPE_UDEC3 13
+#define D3DDECLTYPE_DEC3N 14
+#define D3DDECLTYPE_FLOAT16_2 15
+#define D3DDECLTYPE_FLOAT16_4 16
+#define D3DDECLTYPE_UNUSED 17
+#define D3DDECLUSAGE_POSITION 0
+#define D3DDECLUSAGE_BLENDWEIGHT 1
+#define D3DDECLUSAGE_BLENDINDICES 2
+#define D3DDECLUSAGE_NORMAL 3
+#define D3DDECLUSAGE_PSIZE 4
+#define D3DDECLUSAGE_TEXCOORD 5
+#define D3DDECLUSAGE_TANGENT 6
+#define D3DDECLUSAGE_BINORMAL 7
+#define D3DDECLUSAGE_TESSFACTOR 8
+#define D3DDECLUSAGE_POSITIONT 9
+#define D3DDECLUSAGE_COLOR 10
+#define D3DDECLUSAGE_FOG 11
+#define D3DDECLUSAGE_DEPTH 12
+#define D3DDECLUSAGE_SAMPLE 13
+#define D3DDECLMETHOD_DEFAULT 0
+#define D3DFVF_XYZ 2
+#define D3DFVF_XYZRHW 4
 #define D3DMAXDECLLENGTH 18
 #define D3DDECL_END() ((D3DVERTEXELEMENT9){255,0,17,0,0,0})
 #define CopyMemory memcpy
+#define HOSTLOG_REFUSED(...)
 #define HOSTLOG_FAILED(...)
 #define S_OK 0
 #define E_POINTER (-5)
 #define E_NOINTERFACE (-6)
 typedef const void*REFIID;
-typedef struct Declaration{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,element_count;DWORD fvf;BOOL fvf_cache_ref;D3DVERTEXELEMENT9 elements[18];struct Declaration*next_device_resource;}D9VertexDeclaration;
+typedef struct Declaration{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,element_count;DWORD fvf;BOOL fvf_converted,fvf_cache_ref;D3DVERTEXELEMENT9 elements[18];struct Declaration*next_device_resource;}D9VertexDeclaration;
 typedef struct Shader{union{Interface vertex,pixel;}iface;LONG refcount,binding_refs;D9Device*device;UINT handle;BOOL is_pixel;DWORD*code;UINT token_count;struct Shader*next_device_resource;}D9Shader;
 typedef struct{D9VertexBuffer*buffer;UINT stride,offset,frequency;}D9StreamBinding;
 typedef struct{float values[17];}D3DMATERIAL9;
@@ -200,7 +237,7 @@ static D9WGLightState*d9wg_light_find(void*p,UINT i){(void)p;(void)i;return NULL
 static UINT texture_binding_stage(UINT i){return i<16?i:i+241;}
 static HRESULT device_set_current_texture_palette(Interface*p,UINT n){((D9Device*)p)->current_palette=n;return 0;}
 `:""}
-${["decl_destroy_storage", "decl_binding_add_ref", "decl_binding_release", "device_clear_fvf_cache", "shader_destroy_storage", "shader_binding_add_ref", "shader_binding_release", "device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "surface_uses_private_bindings", "reset_buffer_owned_refs", "reset_bound_surface", "reset_surface_owned_refs", "reset_texture_owned_refs", "device_has_reset_blockers", "device_clear_bindings", "device_release_owned_references", "vb_destroy_storage", "vb_binding_add_ref", "vb_binding_release", "ib_destroy_storage", "ib_binding_add_ref", "ib_binding_release", "volume_texture_destroy_storage", "volume_texture_binding_add_ref", "volume_texture_binding_release", "cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture", "surface_target_handle", "device_set_render_target", "device_get_render_target", "device_set_depth_stencil_surface", "device_get_depth_stencil_surface", ...(shaderBindings?["device_fvf_declaration","decl_add_ref","decl_release","decl_query_interface","decl_get_device","decl_get_declaration","shader_public_add_ref","shader_public_release","shader_query_interface","shader_get_function","vertex_shader_add_ref","vertex_shader_release","vertex_shader_query_interface","vertex_shader_get_device","vertex_shader_get_function","pixel_shader_add_ref","pixel_shader_release","pixel_shader_query_interface","pixel_shader_get_device","pixel_shader_get_function","emit_set_shader","device_set_vertex_declaration","device_get_vertex_declaration","device_set_fvf","device_get_fvf","device_set_vertex_shader","device_get_vertex_shader","device_set_pixel_shader","device_get_pixel_shader"]:[]), ...(textureBindings?["texture_binding_slot","texture_add_ref","cube_add_ref","cube_release","volume_texture_add_ref","volume_texture_release","texture_get_surface_level","device_set_texture","device_get_texture",...(cubeBindings?["cube_get_cube_map_surface"]:[]),...(volumeBindings?["volume_add_ref","volume_release","volume_texture_get_volume_level"]:[]),...(bufferBindings?["vb_add_ref","vb_release","ib_add_ref","ib_release","device_set_stream_binding","device_set_stream_source","device_get_stream_source","device_set_indices","device_get_indices","clear_stream_zero_after_up","clear_indices_after_indexed_up"]:[])]:[]), ...(rootBindings?["texture_get_device","cube_get_device","volume_texture_get_device","vb_get_device","ib_get_device"]:[]), ...(stateBindings?["state_block_release_references","state_block_capture","state_block_apply","state_block_alloc","state_block_release","state_block_capture_method","state_block_apply_method","device_begin_state_block","device_end_state_block"]:[])].map(n => extract(source, n)).join("\n")}
+${["decl_destroy_storage", "decl_binding_add_ref", "decl_binding_release", "device_clear_fvf_cache", "shader_destroy_storage", "shader_binding_add_ref", "shader_binding_release", "device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "surface_uses_private_bindings", "reset_buffer_owned_refs", "reset_bound_surface", "reset_surface_owned_refs", "reset_texture_owned_refs", "device_has_reset_blockers", "device_clear_bindings", "device_release_owned_references", "vb_destroy_storage", "vb_binding_add_ref", "vb_binding_release", "ib_destroy_storage", "ib_binding_add_ref", "ib_binding_release", "volume_texture_destroy_storage", "volume_texture_binding_add_ref", "volume_texture_binding_release", "cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture", "surface_target_handle", "device_set_render_target", "device_get_render_target", "device_set_depth_stencil_surface", "device_get_depth_stencil_surface", ...(declarationBindings?["declaration_element_supported","parse_vertex_declaration","declaration_fvf","device_create_vertex_declaration"]:[]), ...(shaderBindings?["device_fvf_declaration","decl_add_ref","decl_release","decl_query_interface","decl_get_device","decl_get_declaration","shader_public_add_ref","shader_public_release","shader_query_interface","shader_get_function","vertex_shader_add_ref","vertex_shader_release","vertex_shader_query_interface","vertex_shader_get_device","vertex_shader_get_function","pixel_shader_add_ref","pixel_shader_release","pixel_shader_query_interface","pixel_shader_get_device","pixel_shader_get_function","emit_set_shader","device_set_vertex_declaration","device_get_vertex_declaration","device_set_fvf","device_get_fvf","device_set_vertex_shader","device_get_vertex_shader","device_set_pixel_shader","device_get_pixel_shader"]:[]), ...(textureBindings?["texture_binding_slot","texture_add_ref","cube_add_ref","cube_release","volume_texture_add_ref","volume_texture_release","texture_get_surface_level","device_set_texture","device_get_texture",...(cubeBindings?["cube_get_cube_map_surface"]:[]),...(volumeBindings?["volume_add_ref","volume_release","volume_texture_get_volume_level"]:[]),...(bufferBindings?["vb_add_ref","vb_release","ib_add_ref","ib_release","device_set_stream_binding","device_set_stream_source","device_get_stream_source","device_set_indices","device_get_indices","clear_stream_zero_after_up","clear_indices_after_indexed_up"]:[])]:[]), ...(rootBindings?["texture_get_device","cube_get_device","volume_texture_get_device","vb_get_device","ib_get_device"]:[]), ...(stateBindings?["state_block_release_references","state_block_capture","state_block_apply","state_block_alloc","state_block_release","state_block_capture_method","state_block_apply_method","device_begin_state_block","device_end_state_block"]:[])].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)||release_enters!=release_exits){fprintf(stderr,"Target binding line %u: %s release markers=%u/%u\\n",__LINE__,#v,release_enters,release_exits);return 1;}checks++;}while(0)
 static D9Device*new_device(Parent*p){D9Device*d=HeapAlloc(NULL,8,sizeof(*d));d->refcount=1;d->handle=7;d->parent=p;p->refs=1;active_device=d;return d;}
 static HRESULT get_bound(D9Device*d,BOOL depth,Interface**out){return depth?device_get_depth_stencil_surface(&d->iface,out):device_get_render_target(&d->iface,3,out);}
@@ -214,7 +251,8 @@ ${stateBindings?'#include "tests/native/d9wg_state_binding_cases.h"':""}
 ${rootBindings?'#include "tests/native/d9wg_root_binding_cases.h"':""}
 ${streamBindings?'#include "tests/native/d9wg_stream_binding_cases.h"':""}
 ${fvfBindings?'#include "tests/native/d9wg_fvf_binding_cases.h"':""}
-int main(void){(void)&device_clear_fvf_cache;${shaderBindings?"(void)&device_fvf_declaration;":""}${bufferBindings?"(void)&device_set_stream_binding;":""}${textureBindings?"(void)&volume_texture_release;":""}(void)&decl_binding_add_ref;(void)&decl_binding_release;(void)&shader_binding_add_ref;(void)&shader_binding_release;(void)&vb_binding_add_ref;(void)&vb_binding_release;(void)&ib_binding_add_ref;(void)&ib_binding_release;(void)&volume_texture_binding_add_ref;(void)&volume_texture_binding_release;(void)&cube_binding_add_ref;(void)&cube_binding_release;(void)&texture_binding_add_ref;(void)&texture_binding_release;${textureBindings?"CHECK(!texture_binding_cases());":""}${cubeBindings?"CHECK(!cube_binding_cases());":""}${volumeBindings?"CHECK(!volume_binding_cases());":""}${bufferBindings?"CHECK(!buffer_binding_cases());":""}${shaderBindings?"CHECK(!shader_binding_cases());":""}${stateBindings?"CHECK(!state_binding_cases());":""}${rootBindings?"CHECK(!root_binding_cases());":""}${streamBindings?"CHECK(!stream_binding_cases());":""}${fvfBindings?"CHECK(!fvf_binding_cases());":""}(void)surface_destroy_storage;(void)surface_binding_add_ref;(void)surface_binding_release;unsigned cases=0,revivals=0;for(UINT profile=0;profile<4;profile++)for(UINT order=0;order<4;order++){
+${declarationBindings?'#include "tests/native/d9wg_declaration_fvf_cases.h"':""}
+int main(void){${declarationBindings?"(void)&declaration_fvf;":""}(void)&device_clear_fvf_cache;${shaderBindings?"(void)&device_fvf_declaration;":""}${bufferBindings?"(void)&device_set_stream_binding;":""}${textureBindings?"(void)&volume_texture_release;":""}(void)&decl_binding_add_ref;(void)&decl_binding_release;(void)&shader_binding_add_ref;(void)&shader_binding_release;(void)&vb_binding_add_ref;(void)&vb_binding_release;(void)&ib_binding_add_ref;(void)&ib_binding_release;(void)&volume_texture_binding_add_ref;(void)&volume_texture_binding_release;(void)&cube_binding_add_ref;(void)&cube_binding_release;(void)&texture_binding_add_ref;(void)&texture_binding_release;${textureBindings?"CHECK(!texture_binding_cases());":""}${cubeBindings?"CHECK(!cube_binding_cases());":""}${volumeBindings?"CHECK(!volume_binding_cases());":""}${bufferBindings?"CHECK(!buffer_binding_cases());":""}${shaderBindings?"CHECK(!shader_binding_cases());":""}${stateBindings?"CHECK(!state_binding_cases());":""}${rootBindings?"CHECK(!root_binding_cases());":""}${streamBindings?"CHECK(!stream_binding_cases());":""}${fvfBindings?"CHECK(!fvf_binding_cases());":""}${declarationBindings?"CHECK(!declaration_fvf_cases());":""}(void)surface_destroy_storage;(void)surface_binding_add_ref;(void)surface_binding_release;unsigned cases=0,revivals=0;for(UINT profile=0;profile<4;profile++)for(UINT order=0;order<4;order++){
  Parent parent={0};D9Device*d=new_device(&parent);BOOL depth=profile>=2;UINT bindings=depth?1:order%2?1:2;Interface*out=NULL;UINT old_destroys=destroys;
  CHECK(!create_target_texture(d,32,24,depth?75:22,depth?2:1,profile%2?4:0,0,&out)&&out);D9Surface*s=(D9Surface*)out;
  CHECK(!bind_target(d,depth,s));if(bindings==2)CHECK(!device_set_render_target(&d->iface,2,out));
