@@ -362,20 +362,9 @@ for (const name of HOST_INLINE_SHAPES) {
         "not mention it; this list has gone stale");
 }
 
-const guestOpcodes = new Map();
-let pendingCases = [];
-for (const line of cFunction(guest, "shader_opcode_supported").split("\n")) {
-    const opcode = line.match(/case (D3DSIO_\w+):/);
-    if (opcode) { pendingCases.push(opcode[1].slice("D3DSIO_".length)); continue; }
-    const words = line.match(/\*operand_words = ([^;]+);/);
-    if (!words) continue;
-    const literal = words[1].trim().match(/^(\d+)u?$/);
-    for (const name of pendingCases)
-        guestOpcodes.set(name.toUpperCase(), literal ? Number(literal[1]) : null);
-    pendingCases = [];
-}
+const guestOpcodes = require("./native/shader8_opcode_policy.js")(root);
 assert.ok(guestOpcodes.size > 25,
-    "failed to parse the D3D8 guest opcode table");
+    "failed to execute the shared D3D8 opcode policy");
 
 for (const [name, words] of guestOpcodes) {
     assert.ok(hostOperands.has(name) || HOST_INLINE_SHAPES.has(name),

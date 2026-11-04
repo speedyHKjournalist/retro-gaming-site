@@ -79,9 +79,9 @@ assert.match(d3d8, /TRANSPORT MAP_FAIL[\s\S]*?win32=170/,
     "D3D8 must distinguish a busy DMA mapping from a missing driver");
 assert.match(d3d8, /TRANSPORT SUBMIT_FAIL[\s\S]*?descriptor_bytes=%lu/,
     "D3D8 must trace failed IOCTL submissions with batch context");
-assert.match(d3d8,
+assert.match(read("d3d9proxy/d3d9_proxy.c"),
     /SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u[\s\S]*?opcode=%04X/,
-    "D3D8 shader rejection must identify the opcode and token offset");
+    "shared legacy8 shader rejection must identify the opcode and token offset");
 assert.match(ddraw, /could not open [^\n]{0,24}v86gl \(Win32 error %lu\)/,
     "DirectDraw must preserve the Win32 reason when v86gl.sys is unavailable");
 assert.match(ddraw,

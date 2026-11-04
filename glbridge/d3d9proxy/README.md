@@ -989,3 +989,15 @@ container identity andcomplete retirement beforedrawing. Both GPUs replay
 five images/320 pixels with allmaps empty beforefallback cleanup. Public8
 wrappers,surface LockRect andadditional Present remain separate adapters.
 See `../deployments/d3d-webgpu-review-4K12.json`.
+
+Stage 4K13 shares the existing legacy8 shader body/opcode/register policy in
+this static core. Public8 delegates body validation; API8 core devices use
+legacy version/bounds rules, including VS1.0/1.1 without dcl and PS1.0–1.4.
+Ordinary9 retains its prior scanner. SDK8 shifted register enums are normalized
+to SDK9 ordinal enums. The existing shader hash/wire encoding is preserved.
+XP compares the accepted 4K12 public8 DLL with the current DLL and exercises
+core8 shader creation, byte queries, zero-public-reference bindings and two
+programmable draws. SwiftShader and Metal each verify five frames/320 pixels;
+all 22 shader resources retire before fallback cleanup. Public8 device/resource/
+handle wrapping and numeric shader differential testing remain open.
+See `../deployments/d3d-webgpu-review-4K13.json`.
