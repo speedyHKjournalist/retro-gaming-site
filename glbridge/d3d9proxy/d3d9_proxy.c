@@ -21,6 +21,13 @@
  * getStats() counters.
  */
 
+/* Private consumers link the same implementation without publishing the
+ * d3d9.dll loader/compatibility exports in their own module. */
+#ifdef D9WG_STATIC_CORE
+#define Direct3DCreate9 d9wg_d3d9_core_create
+#define DllMain d9wg_d3d9_core_module
+#endif
+
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include <windows.h>
@@ -142,9 +149,15 @@ static void trace_open(HINSTANCE instance)
         return;
     while (length && path[length - 1] != '\\' && path[length - 1] != '/')
         --length;
+#ifdef D9WG_STATIC_CORE
+    if (length + sizeof("d3d9_core_trace_4294967295.log") > MAX_PATH)
+        return;
+    wsprintfA(path + length, "d3d9_core_trace_%lu.log", GetCurrentProcessId());
+#else
     if (length + sizeof("d3d9_trace_4294967295.log") > MAX_PATH)
         return;
     wsprintfA(path + length, "d3d9_trace_%lu.log", GetCurrentProcessId());
+#endif
     g_trace_file = CreateFileA(path, GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, NULL);
@@ -14700,6 +14713,7 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
  * commonly pulled in by profiling-instrumented engine builds even when the
  * game never calls them at runtime. All are harmless no-ops here.
  */
+#ifndef D9WG_STATIC_CORE
 void WINAPI DebugSetMute(void)
 {
 }
@@ -14739,6 +14753,8 @@ DWORD WINAPI D3DPERF_GetStatus(void)
 {
     return 0;
 }
+
+#endif
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {

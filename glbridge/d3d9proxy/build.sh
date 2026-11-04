@@ -8,22 +8,30 @@
 #                                   shipping d3d9.dll beside them
 #                                   (default: /private/tmp/d3d9-smoke-test)
 #
-# CC and OBJDUMP select the mingw tools (D9WG_CC the tests' compiler).
+# --static / --static-diagnostic [out.a] build the private D3D9 object core,
+# including the shared runtime, for a frontend with its own loader entry.
+#
+# CC, AR and OBJDUMP select the mingw tools (D9WG_CC the tests' compiler).
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 compiler=${CC:-i686-w64-mingw32-gcc}
 objdump=${OBJDUMP:-i686-w64-mingw32-objdump}
+archiver=${AR:-i686-w64-mingw32-ar}
 
 usage() {
     printf '%s\n' "usage: $0 [--diagnostic] [out.dll]" \
-        "       $0 --tests [dir]"
+        "       $0 --tests [dir]" \
+        "       $0 --static [out.a]" \
+        "       $0 --static-diagnostic [out.a]"
 }
 
 mode=dll
 case ${1-} in
     --diagnostic) mode=diagnostic; shift ;;
     --tests) mode=tests; shift ;;
+    --static) mode=static; shift ;;
+    --static-diagnostic) mode=static_diagnostic; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) usage >&2; exit 2 ;;
 esac
@@ -61,7 +69,30 @@ build_dll() {
     check_imports "$output"
 }
 
+# The archive contains only prefixed private entry points and the common
+# runtime. Secondary DLL exports stay in the ordinary frontend build.
+build_static() {
+    output=$1
+    shift
+    "$compiler" -std=gnu99 -Os \
+        -Wall -Wextra -Werror -DD9WG_STATIC_CORE=1 "$@" \
+        -c "$script_dir/d3d9_proxy.c" -o "$runtime_dir/d3d9_core.o"
+    (cd "$runtime_dir" && "$archiver" x "$runtime_archive")
+    "$archiver" rcs "$runtime_dir/libd9wg_d3d9.a" "$runtime_dir"/*.o
+    cp "$runtime_dir/libd9wg_d3d9.a" "$output"
+}
+
 case $mode in
+    static)
+        output=${1:-/private/tmp/libd9wg_d3d9.a}
+        build_static "$output"
+        printf '%s\n' "Built private D3D9 core $output"
+        ;;
+    static_diagnostic)
+        output=${1:-/private/tmp/libd9wg_d3d9-diagnostic.a}
+        build_static "$output" -DD9WG_DIAGNOSTIC_TRACE=1
+        printf '%s\n' "Built private diagnostic D3D9 core $output"
+        ;;
     dll)
         output=${1:-"$script_dir/d3d9.dll"}
         build_dll "$output"
