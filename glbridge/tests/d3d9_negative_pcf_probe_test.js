@@ -22,7 +22,8 @@ fs.writeFileSync(input, `
 #include "${path.resolve(__dirname, "../runtime/d9wg_format_queries.h")}"
 #include "${path.resolve(__dirname, "../d3d9proxy/d3d9_protocol.h")}"
 typedef int BOOL;
-typedef void IDirect3D9;
+typedef struct{uint32_t compatibility_api;}IDirect3D9;
+#define d3d_from_iface(p) (p)
 typedef uint32_t UINT, DWORD, D3DDEVTYPE, D3DFORMAT, D3DRESOURCETYPE;
 typedef int32_t HRESULT;
 #define WINAPI
@@ -67,19 +68,23 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
     return type == D3DRTYPE_TEXTURE && usage == 2 && format == 71 && pool == 0;
 }
 ${source.match(/static uint32_t runtime_host_features\(void\)[\s\S]*?\n}/)[0]}
+// This test targets ordinary9 diagnostics; the actual API8 helper is covered
+// by d8wg_format_core_test. Reaching it from a profile9 root is a failure.
+static HRESULT d3d_check_device_format8(IDirect3D9*r,UINT a,D3DDEVTYPE t,D3DFORMAT d,DWORD u,D3DRESOURCETYPE k,D3DFORMAT f){(void)r;(void)a;(void)t;(void)d;(void)u;(void)k;(void)f;assert(!"API8 route on ordinary9 root");return D3DERR_NOTAVAILABLE;}
 ${source.slice(start, end)}
 int main(void) {
-    HRESULT hr = d3d_check_device_format(0, 0, D3DDEVTYPE_HAL, 22, 0, 3, D9FOURCC_NO_PCF);
+    IDirect3D9 factory={9};
+    HRESULT hr = d3d_check_device_format(&factory, 0, D3DDEVTYPE_HAL, 22, 0, 3, D9FOURCC_NO_PCF);
     assert(hr == D3DERR_NOTAVAILABLE);
     assert(infos == 1 && warnings == 0);
-    hr = d3d_check_device_format(0, 0, D3DDEVTYPE_HAL, 22, 0x20002, 3, 71);
+    hr = d3d_check_device_format(&factory, 0, D3DDEVTYPE_HAL, 22, 0x20002, 3, 71);
     assert(hr == D3D_OK && warnings == 0);
     // Unrelated unknown formats and non-probe combinations stay visible.
-    assert(d3d_check_device_format(0, 0, 1, 22, 0, 3, 0x12345678) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 0, 1, 22, 2, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 0, 1, 22, 0, 5, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 1, 1, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 0, 2, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 3, 0x12345678) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 2, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 5, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 1, 1, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 2, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
     assert(infos == 1 && warnings == 5);
     return 0;
 }

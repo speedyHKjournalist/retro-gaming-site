@@ -2075,23 +2075,6 @@ static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D8 *iface,
 }
 
 /*
- * An off-screen plain surface (CreateImageSurface) is CPU memory the app
- * locks, so every uncompressed format can be one -- but only those: a
- * block-compressed or packed-pair surface has no single-texel row for a lock
- * to describe, which is the rule create_standalone_surface already enforces.
- * Answering this query at all matters because an app that asks before
- * creating took silence for "no such format".
- */
-static BOOL supported_image_surface_format(D3DFORMAT format)
-{
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    return texture_format_layout(format, &block_width, &block_height,
-            &block_bytes) && block_width == 1 && block_height == 1;
-}
-
-/*
  * Render-target formats. Wider than the two 32-bit ones this frontend started
  * with, because a 16-bit display mode is only usable when its own format is a
  * legal render target: 3DMark 2001 validates every mode it enumerates with
@@ -2169,65 +2152,8 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D8 *iface,
         UINT adapter, D3DDEVTYPE type, D3DFORMAT adapter_format,
         DWORD usage, D3DRESOURCETYPE resource_type, D3DFORMAT format)
 {
-    (void)iface;
-    (void)adapter_format;
-    if (adapter || type != D3DDEVTYPE_HAL)
-        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
-    if (resource_type == D3DRTYPE_TEXTURE
-            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
-            && supported_texture_format(format))
-        return D3D_OK;
-    if (resource_type == D3DRTYPE_CUBETEXTURE
-            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
-            && supported_texture_format(format))
-        return D3D_OK;
-    if (resource_type == D3DRTYPE_CUBETEXTURE
-            && usage == D3DUSAGE_RENDERTARGET
-            && supported_render_target_format(format))
-        return D3D_OK;
-    /* Volumes have no block-compressed layout on this path, and are never
-     * render targets -- device_create_volume_texture refuses both. */
-    if (resource_type == D3DRTYPE_VOLUMETEXTURE
-            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
-            && format != D3DFMT_DXT1 && format != D3DFMT_DXT2
-            && format != D3DFMT_DXT3 && format != D3DFMT_DXT4
-            && format != D3DFMT_DXT5
-            && supported_texture_format(format))
-        return D3D_OK;
-    if (resource_type == D3DRTYPE_TEXTURE
-            && usage == D3DUSAGE_RENDERTARGET
-            && supported_render_target_format(format))
-        return D3D_OK;
-    /*
-     * 3DMark2001 validates every enumerated display mode with this exact
-     * query before it exposes the adapter:
-     *
-     *   CheckDeviceFormat(display_format, D3DUSAGE_RENDERTARGET,
-     *           D3DRTYPE_SURFACE, display_format)
-     *
-     * A render-target surface is the object returned by CreateRenderTarget,
-     * which this frontend backs with the same one-level target texture as the
-     * texture case above. Omitting SURFACE here therefore hid a capability the
-     * device really has and made 3DMark reject every 32-bit display mode as
-     * non-renderable before CreateDevice was ever reached.
-     */
-    if (resource_type == D3DRTYPE_SURFACE
-            && usage == D3DUSAGE_RENDERTARGET
-            && supported_render_target_format(format))
-        return D3D_OK;
-    if (resource_type == D3DRTYPE_SURFACE
-            && (usage & D3DUSAGE_DEPTHSTENCIL)
-            && supported_depth_stencil_format(format))
-        return D3D_OK;
-    if (resource_type == D3DRTYPE_SURFACE
-            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
-            && supported_image_surface_format(format))
-        return D3D_OK;
-    D8WG_TRACE("CHECK_FORMAT REFUSE adapter=%lu type=%lu adapter_fmt=%08lX "
-            "usage=%08lX resource_type=%lu format=%08lX", adapter,
-            (DWORD)type, (DWORD)adapter_format, usage, (DWORD)resource_type,
-            (DWORD)format);
-    return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
+    return d9wg_d3d9_core_check_format8(d3d_from_iface(iface)->backend, adapter,
+            type, adapter_format, usage, resource_type, format);
 }
 
 /*

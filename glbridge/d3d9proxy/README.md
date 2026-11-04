@@ -940,3 +940,10 @@ predicates, while ordinary D3D9 query and quality results stay unchanged.
 Native current/prior-C matrix checks and old-DLL XP comparisons cover both
 APIs. See `../deployments/d3d-webgpu-review-4K6.json`. The legacy D3D8
 creation predicates remain until device/resource objects are wrapped.
+
+Stage 4K7 delegates D3D8 CheckDeviceFormat through the API8-profile core.
+It retains API8 shared-layout filtering and legacy resource/usage rules;
+ordinary D3D9 query/autogen/host-capability behavior stays unchanged.
+Native prior-C comparisons and old-DLL XP comparisons cover the move. XP
+uses an explicit simulated capability response0; real pixels are separately
+replayed on SwiftShader/Metal. See `../deployments/d3d-webgpu-review-4K7.json`.

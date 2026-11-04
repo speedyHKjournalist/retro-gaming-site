@@ -42,4 +42,6 @@ HRESULT WINAPI d9wg_d3d9_core_check_multisample8(struct IDirect3D9 *factory, UIN
         UINT type, UINT format, BOOL windowed, UINT multisample);
 HRESULT WINAPI d9wg_d3d9_core_check_depth(struct IDirect3D9 *factory, UINT adapter,
         UINT type, UINT display, UINT render, UINT depth);
+HRESULT WINAPI d9wg_d3d9_core_check_format8(struct IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, DWORD usage, UINT resource_type, UINT format);
 #endif

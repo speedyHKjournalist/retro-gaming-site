@@ -4082,13 +4082,88 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
     return ok ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
 
+static BOOL supported_format8(D3DFORMAT format, BOOL image_surface)
+{
+    UINT width, height, bytes;
+    return d9wg_format_layout(8, (uint32_t)format, &width, &height, &bytes)
+            && (!image_surface || (width == 1 && height == 1));
+}
+
+static HRESULT WINAPI d3d_check_device_format8(IDirect3D9 *iface,
+        UINT adapter, D3DDEVTYPE type, D3DFORMAT adapter_format,
+        DWORD usage, D3DRESOURCETYPE resource_type, D3DFORMAT format)
+{
+    (void)iface;
+    (void)adapter_format;
+    if (adapter || type != D3DDEVTYPE_HAL)
+        return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
+    if (resource_type == D3DRTYPE_TEXTURE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_format8(format, FALSE))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_CUBETEXTURE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_format8(format, FALSE))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_CUBETEXTURE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format8(format))
+        return D3D_OK;
+    /* Volumes have no block-compressed layout on this path, and are never
+     * render targets -- device_create_volume_texture refuses both. */
+    if (resource_type == D3DRTYPE_VOLUMETEXTURE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && format != D3DFMT_DXT1 && format != D3DFMT_DXT2
+            && format != D3DFMT_DXT3 && format != D3DFMT_DXT4
+            && format != D3DFMT_DXT5
+            && supported_format8(format, FALSE))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_TEXTURE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format8(format))
+        return D3D_OK;
+    /*
+     * 3DMark2001 validates every enumerated display mode with this exact
+     * query before it exposes the adapter:
+     *
+     *   CheckDeviceFormat(display_format, D3DUSAGE_RENDERTARGET,
+     *           D3DRTYPE_SURFACE, display_format)
+     *
+     * A render-target surface is the object returned by CreateRenderTarget,
+     * which this frontend backs with the same one-level target texture as the
+     * texture case above. Omitting SURFACE here therefore hid a capability the
+     * device really has and made 3DMark reject every 32-bit display mode as
+     * non-renderable before CreateDevice was ever reached.
+     */
+    if (resource_type == D3DRTYPE_SURFACE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format8(format))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_SURFACE
+            && (usage & D3DUSAGE_DEPTHSTENCIL)
+            && supported_depth_stencil_format8(format))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_SURFACE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_format8(format, TRUE))
+        return D3D_OK;
+    TRACE("CHECK_FORMAT REFUSE adapter=%lu type=%lu adapter_fmt=%08lX "
+            "usage=%08lX resource_type=%lu format=%08lX", adapter,
+            (DWORD)type, (DWORD)adapter_format, usage, (DWORD)resource_type,
+            (DWORD)format);
+    return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
+}
+
 static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
         UINT adapter, D3DDEVTYPE type, D3DFORMAT adapter_format,
         DWORD usage, D3DRESOURCETYPE resource_type, D3DFORMAT format)
 {
     BOOL ok = FALSE;
     HRESULT result;
-    (void)iface; (void)adapter_format;
+    if (d3d_from_iface(iface)->compatibility_api == 8)
+        return d3d_check_device_format8(iface, adapter, type, adapter_format,
+                usage, resource_type, format);
+    (void)adapter_format;
     /* 3DMark05's 0x0046F240 probe stops looking for filtered depth textures
      * when '-PCF' succeeds. Our depth comparison sampler supports PCF, so
      * NOTAVAILABLE is the expected answer here. Keep this query out of the
@@ -14915,6 +14990,13 @@ HRESULT WINAPI d9wg_d3d9_core_check_depth(IDirect3D9 *factory, UINT adapter,
 {
     return IDirect3D9_CheckDepthStencilMatch(factory, adapter, (D3DDEVTYPE)type,
             (D3DFORMAT)display, (D3DFORMAT)render, (D3DFORMAT)depth);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_format8(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, DWORD usage, UINT resource_type, UINT format)
+{
+    return IDirect3D9_CheckDeviceFormat(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)display, usage, (D3DRESOURCETYPE)resource_type, (D3DFORMAT)format);
 }
 
 #endif
