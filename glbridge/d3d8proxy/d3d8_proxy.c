@@ -49,6 +49,7 @@
 #include "../runtime/d9wg_process_aliases.h"
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
+#include "../runtime/d9wg_declaration8.h"
 #include "../runtime/d9wg_window_probe.h"
 #include "../runtime/d9wg_window_watch.h"
 #include "../runtime/d9wg_buffer_lock.h"
@@ -828,27 +829,7 @@ static void shader_bytecode_hash(const DWORD *code, UINT token_count,
 static BOOL validate_vertex_declaration(const DWORD *tokens, UINT max_tokens,
         UINT *token_count)
 {
-    UINT offset = 0;
-    while (offset < max_tokens) {
-        DWORD token = tokens[offset];
-        DWORD token_type;
-        if (token == 0xFFFFFFFFu) {
-            *token_count = offset;
-            return TRUE;
-        }
-        token_type = (token >> D3DVSD_TOKENTYPESHIFT) & 0x7u;
-        if (token_type > (DWORD)D3DVSD_TOKEN_END)
-            return FALSE;
-        /* Literal DWORDs may themselves equal END or resemble declaration
-         * tokens. They are data, so only inspect the next token after them. */
-        UINT words = token_type == D3DVSD_TOKEN_CONSTMEM
-                ? 1u + ((token & D3DVSD_CONSTCOUNTMASK)
-                        >> D3DVSD_CONSTCOUNTSHIFT) * 4u : 1u;
-        if (words > max_tokens - offset)
-            return FALSE;
-        offset += words;
-    }
-    return FALSE;
+    return d9wg_declaration8_validate(tokens, max_tokens, token_count);
 }
 
 static D8Shader *find_shader(D8Shader *list, DWORD handle)
@@ -890,96 +871,9 @@ static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
         DWORD *const_data, UINT max_const_vectors, BYTE *const_mask,
         UINT *const_vector_count)
 {
-    UINT offsets[D8WG_MAX_STREAMS];
-    UINT stream = 0;
-    UINT count = 0;
-    UINT i;
-
-    ZeroMemory(offsets, sizeof(offsets));
-    *element_count = 0;
-    ZeroMemory(const_mask, max_const_vectors * sizeof(*const_mask));
-    *const_vector_count = 0;
-
-    for (i = 0; i < token_count; ++i) {
-        DWORD token = tokens[i];
-        DWORD type = (token & D3D8VSD_TOKENTYPEMASK) >> D3D8VSD_TOKENTYPESHIFT;
-
-        if (token == 0xFFFFFFFFu)
-            break;
-        switch (type) {
-        case D3D8VSD_TOKEN_NOP:
-            break;
-        case D3D8VSD_TOKEN_STREAM:
-            /* The tessellator variant drives an N-patch source, which this
-             * path does not implement; see fill_caps(). */
-            if (token & D3D8VSD_STREAM_TESSFLAG)
-                return FALSE;
-            stream = token & D3D8VSD_STREAMNUMBERMASK;
-            if (stream >= D8WG_MAX_STREAMS)
-                return FALSE;
-            break;
-        case D3D8VSD_TOKEN_STREAMDATA:
-            if (token & D3D8VSD_SKIPFLAG) {
-                UINT skip = (token & D3D8VSD_SKIPCOUNTMASK)
-                        >> D3D8VSD_SKIPCOUNTSHIFT;
-                offsets[stream] += skip * (UINT)sizeof(DWORD);
-            } else {
-                UINT reg = token & D3D8VSD_VERTEXREGMASK;
-                UINT data_type = (token & D3D8VSD_DATATYPEMASK)
-                        >> D3D8VSD_DATATYPESHIFT;
-                UINT size = d3d8_vsdt_size(data_type);
-                unsigned usage = 0;
-                unsigned usage_index = 0;
-
-                if (!size || count >= max_elements
-                        || offsets[stream] > 0xFFFFu)
-                    return FALSE;
-                d3d8_vsd_register_usage(reg, &usage, &usage_index);
-                elements[count].stream = (uint16_t)stream;
-                elements[count].offset = (uint16_t)offsets[stream];
-                elements[count].type =
-                        (uint8_t)d3d8_vsdt_to_decltype(data_type);
-                elements[count].method = (uint8_t)D3D9DECLMETHOD_DEFAULT;
-                elements[count].usage = (uint8_t)usage;
-                elements[count].usage_index = (uint8_t)usage_index;
-                ++count;
-                offsets[stream] += size;
-            }
-            break;
-        case D3D8VSD_TOKEN_CONSTMEM: {
-            /*
-             * Each block contributes shader-local constants. Keep disjoint
-             * ranges and holes separately so no device constant is overwritten.
-             * A repeated register takes the last declaration block's value.
-             */
-            UINT vectors = (token & D3D8VSD_CONSTCOUNTMASK)
-                    >> D3D8VSD_CONSTCOUNTSHIFT;
-            UINT dwords = vectors * 4u;
-
-            if (!vectors || vectors > max_const_vectors ||
-                    (token & D3D8VSD_CONSTADDRESSMASK) > max_const_vectors - vectors
-                    || i + dwords >= token_count)
-                return FALSE;
-            UINT start = token & D3D8VSD_CONSTADDRESSMASK;
-            for (UINT reg = start; reg < start + vectors; ++reg) {
-                if (!const_mask[reg]) ++*const_vector_count;
-                const_mask[reg] = TRUE;
-            }
-            CopyMemory(const_data + start * 4u, &tokens[i + 1],
-                    dwords * sizeof(DWORD));
-            i += dwords;
-            break;
-        }
-        case D3D8VSD_TOKEN_TESSELLATOR:
-        case D3D8VSD_TOKEN_EXT:
-        default:
-            return FALSE;
-        }
-    }
-    if (!count)
-        return FALSE;
-    *element_count = count;
-    return TRUE;
+    return d9wg_declaration8_elements(tokens, token_count, elements,
+            max_elements, element_count, const_data, max_const_vectors,
+            const_mask, const_vector_count);
 }
 
 static BOOL fvf_to_elements(DWORD fvf, D9WGVertexElement *elements,

@@ -684,3 +684,22 @@ and20blits; noDraw/Present. CPU replies in XP are explicit analytic injection.
 This phase publishes exact accepted public8 and same-source built9 retail DLLs;
 it does not claim a new ordinary9 SDK execution. Evidence:
 `../deployments/d3d-webgpu-review-4K29.json`.
+
+
+### Review 4K30: shared API8 declarations
+
+Legacy8 declaration fields/register semantics and bounded parsing now live in
+`d9wg_declaration8_policy.h` / `d9wg_declaration8.h`. Public8 delegates to them;
+private `d9wg_d3d9_core_vertex_declaration8` (stdcall16) creates a real core9
+layout, including the8 declaration-only primary NORMAL rule. Raw declaration,
+local constant metadata and DWORD handle ownership remain in the8 frontend.
+Byte-based word access avoids Win32 DWORD/uint32_t C type alias assumptions.
+
+Frozen actual8 comparison covers1,105,927 cases /4,013,650 checks,25strict C
+semantic mutants andtwo sanitizer families. The five-mode XP probe checksraw8
+queries/coreCOM identity,16invalid declarations,API constant isolation andfive
+Reset operations retaining managedbuffers/layouts. Both GPUs verifyten complete
+images /640pixels, two offset input streams, red-to-green afterReset, withzero
+error. XP CPU replies are explicitly analytic injection. Complete shader/handle
+wrapping and the8-vs9 NULL-stream metadata difference remain adapter work.
+Evidence: `../deployments/d3d-webgpu-review-4K30.json`.

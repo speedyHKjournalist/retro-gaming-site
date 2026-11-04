@@ -34,6 +34,7 @@
 #include <initguid.h>
 #include <d3d9.h>
 #include "d3d9_core.h"
+#include "../runtime/d9wg_declaration8.h"
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
@@ -15970,6 +15971,40 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
             desc.Width, desc.Height};
     CopyMemory(out, packed, sizeof(packed));
     return D3D_OK;
+}
+
+/* Only the layout object is published here. Raw8 declaration/function and
+ * local constant shadows stay with the shader-handle adapter. The shared
+ * parser still validates every constant block before constructing storage. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(IDirect3DDevice9 *iface,
+        const DWORD *tokens, BOOL declaration_only,
+        IDirect3DVertexDeclaration9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || !tokens
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9WGVertexElement wire[32];
+    DWORD constants[96 * 4];
+    BYTE mask[96];
+    UINT tokens_count, count, vectors;
+    if (!d9wg_declaration8_validate(tokens, D9WG_D3D8_SHADER_TOKENS,
+                &tokens_count)
+            || !d9wg_declaration8_elements(tokens, tokens_count, wire, 32,
+                &count, constants, 96, mask, &vectors))
+        return D3DERR_INVALIDCALL;
+    D3DVERTEXELEMENT9 elements[33];
+    for (UINT i = 0; i < count; ++i) {
+        const D9WGVertexElement *e = &wire[i];
+        if (declaration_only && e->usage == D3D9DECLUSAGE_NORMAL
+                && !e->usage_index && e->type != D3D9DECLTYPE_FLOAT3)
+            return D3DERR_INVALIDCALL;
+        elements[i] = (D3DVERTEXELEMENT9){e->stream, e->offset, e->type,
+            e->method, e->usage, e->usage_index};
+    }
+    elements[count] = (D3DVERTEXELEMENT9)D3DDECL_END();
+    return IDirect3DDevice9_CreateVertexDeclaration(iface, elements, out);
 }
 
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,

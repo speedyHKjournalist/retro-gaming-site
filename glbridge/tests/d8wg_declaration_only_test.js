@@ -9,6 +9,7 @@ const code=`#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include "${process.env.D8WG_DECL_ONLY_PROTOCOL||path.join(root,'d3d8proxy/d3d8_protocol.h')}"
+#include "${process.env.D8WG_DECLARATION8_HEADER||path.join(root,'runtime/d9wg_declaration8.h')}"
 typedef uint32_t DWORD,UINT;typedef unsigned char BYTE;typedef int BOOL,HRESULT;
 #define WINAPI
 #define TRUE 1

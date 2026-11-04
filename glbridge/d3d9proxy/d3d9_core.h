@@ -7,6 +7,7 @@
 struct IDirect3D9;
 struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
+struct IDirect3DVertexDeclaration9;
 struct IDirect3DSurface9;
 struct IDirect3DBaseTexture9;
 struct IDirect3DTexture9;
@@ -132,6 +133,11 @@ HRESULT WINAPI d9wg_d3d9_core_image_surface8(struct IDirect3DDevice9 *device,
  * Invalid size/profile/format/provider results leave caller bytes unchanged. */
 HRESULT WINAPI d9wg_d3d9_core_surface_desc8(struct IDirect3DSurface9 *surface,
         void *out, UINT bytes);
+/* API8 token declaration -> actual private core9 layout object. Raw tokens
+ * and shader-local constant metadata remain owned by the8 handle adapter. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(struct IDirect3DDevice9 *device,
+        const DWORD *tokens, BOOL declaration_only,
+        struct IDirect3DVertexDeclaration9 **out);
 /* Body starts after version token;success count excludes END. Version/handle
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,
