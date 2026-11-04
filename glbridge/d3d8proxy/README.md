@@ -903,3 +903,30 @@ including real additional canvas creation (2created/0refused/2destroyed) and
 empty mapsbeforeSessionEnd. Framebuffer CPU replies remainanalytic injection.
 These entries provide cache metadata;fullpublic8 COMwrappers still need
 integration. Evidence:`../deployments/d3d-webgpu-review-4K39.json`.
+
+
+### Review 4K40: actual SDK8 Surface8 adapter on core9 storage
+
+`d3d8_core_surface.c` implements the real11-method IDirect3DSurface8 vtable.
+It forwards descriptor/private-data/lock operations through a typed Windows-only
+core9 boundary anduses the weak registry for identity. Texture/cube levels use
+the frontend container count;other surfaces coalesce public refs into one core
+surface reference andone frontend device pin. Getter-owned input references
+are consumed on every path. Cached construction needs no allocation andracing
+publication cleans its candidate before using the winner. Release uses saved
+locals because core retirement can immediately free the wrapper.
+
+Native:54,571checks/1,037cases,34strict semantic mutants andASAN. The backend
+is anexplicit COM/metadata shim. RealSDK8 XP covers14Surface8 interfaces over
+seven surface kinds,descriptor32bytes/privateData/locks/own-coupled counts/
+publiczero/Reset identity,128actualCPUshadow DWORDs. Frontend device/container
+parents areexplicit IUnknown-only reference fixtures,not full parent adapters.
+The old public factory isnotyet switched. All656 oldcore9 functions/tenstorage
+structs/wholeold8source match;the shipping8 build adds the new source only.
+
+Surface8 texture Lock/Unlock uploadsred/blue into real9 fixed-function draws:
+4new images plus20retainedprogrammable images,24fullimages/1,536pixels zeroerror
+onbothGPUs. Wire catches17,108corruptions,including sixuploads/384bytes. Cube
+green isCPU/upload coverage,not sampled here. CPUframebuffer replies remain
+analytic injection,separate fromactualCPUshadow checks andGPU images.
+Evidence:`../deployments/d3d-webgpu-review-4K40.json`.

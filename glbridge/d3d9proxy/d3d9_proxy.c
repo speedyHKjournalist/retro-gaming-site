@@ -16096,6 +16096,25 @@ HRESULT WINAPI d9wg_d3d9_core_image_surface8(IDirect3DDevice9 *iface,
             (D3DFORMAT)format, D3DPOOL_SYSTEMMEM, 8u, out);
 }
 
+static HRESULT WINAPI core_surface_lock_rect8(IDirect3DSurface9 *surface,
+        void *locked, const RECT *rect, DWORD flags)
+{
+    return IDirect3DSurface9_LockRect(surface, (D3DLOCKED_RECT *)locked, rect, flags);
+}
+
+const D9WGSurfaceMethods8 *WINAPI d9wg_d3d9_core_surface_methods8(
+        IDirect3DSurface9 *surface)
+{
+    static const D9WGSurfaceMethods8 methods = {
+        surface_set_private_data, surface_get_private_data, surface_free_private_data,
+        d9wg_d3d9_core_surface_desc8, core_surface_lock_rect8, surface_unlock_rect
+    };
+    if (!surface || surface->lpVtbl != &g_surface_vtbl
+            || !core_view_device8((IUnknown *)surface))
+        return NULL;
+    return &methods;
+}
+
 /* Equal sizeof does not make these SDK descriptors interchangeable: API8
  * has Size at word4 and samples at word5; API9 puts samples/quality there.
  * Stage the complete eight-word result so failure never partly writes it. */

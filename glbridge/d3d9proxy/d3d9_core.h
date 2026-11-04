@@ -160,6 +160,20 @@ typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *devic
 HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot,
         struct IDirect3DStateBlock9 **out);
+/* The SDK8 adapter uses this typed boundary without including SDK9 headers.
+ * Its resource pointer must already belong to this8-profile core. */
+typedef struct D9WGSurfaceMethods8 {
+    HRESULT (WINAPI *set_private_data)(struct IDirect3DSurface9 *, const GUID *,
+            const void *, DWORD, DWORD);
+    HRESULT (WINAPI *get_private_data)(struct IDirect3DSurface9 *, const GUID *,
+            void *, DWORD *);
+    HRESULT (WINAPI *free_private_data)(struct IDirect3DSurface9 *, const GUID *);
+    HRESULT (WINAPI *get_desc)(struct IDirect3DSurface9 *, void *, UINT);
+    HRESULT (WINAPI *lock_rect)(struct IDirect3DSurface9 *, void *, const RECT *, DWORD);
+    HRESULT (WINAPI *unlock_rect)(struct IDirect3DSurface9 *);
+} D9WGSurfaceMethods8;
+const D9WGSurfaceMethods8 *WINAPI d9wg_d3d9_core_surface_methods8(
+        struct IDirect3DSurface9 *surface);
 /* One weak frontend8 view per real resource storage identity. The caller
  * holds a resource reference across get/attach. A missing view returns S_OK
  * and NULL. Successful attach owns the metadata until the retirement callback
