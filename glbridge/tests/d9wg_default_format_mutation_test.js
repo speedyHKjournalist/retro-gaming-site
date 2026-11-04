@@ -24,13 +24,13 @@ try {
  ]){
   const call='d9wg_display_mode_backbuffer_format(\n        '+p+'->BackBufferFormat)';
   const changes=[
-   ['stale/constant fallback',output+' = (D3DFORMAT)'+call+';',output+' = '+p+'->BackBufferFormat ? '+p+'->BackBufferFormat : '+(fn==='d3d_create_device'?'D3DFMT_X8R8G8B8':'device->display_mode.Format')+';'],
+   ['stale/constant fallback',(fn==='d3d_create_device'?'(D3DFORMAT)'+call:output+' = (D3DFORMAT)'+call+';'),(fn==='d3d_create_device'?'('+p+'->BackBufferFormat ? '+p+'->BackBufferFormat : D3DFMT_X8R8G8B8)':output+' = '+p+'->BackBufferFormat ? '+p+'->BackBufferFormat : device->display_mode.Format;')],
    ['explicit format forced UNKNOWN',call,'d9wg_display_mode_backbuffer_format(\n        0)'],
   ];
   if(fn==='d3d_create_device')changes.push(['resolved format not cached','        backbuffer_format);','        D3DFMT_X8R8G8B8);']);
   else if(fn==='device_reset')changes.push(['resolved format not sent','    reset.backbuffer_format = backbuffer_format;','    reset.backbuffer_format = 22;']);
   else changes.push(['resolved format not returned','        width, height, format, window);','        width, height, 22, window);']);
-  if(fn!=='device_create_additional_swap_chain')changes.push(['fullscreen UNKNOWN accepted','    if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)\n        return TRACE_REFUSE(D3DERR_INVALIDCALL);','']);
+  if(fn!=='device_create_additional_swap_chain')changes.push(['fullscreen UNKNOWN accepted','    if ('+(fn==='d3d_create_device'?'api == 9 && ':'')+'!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)\n        return TRACE_REFUSE(D3DERR_INVALIDCALL);','']);
   for(const[label,old,replacement]of changes){const file=dir+'/frontend.c';fs.writeFileSync(file,mutate(source,fn,old,replacement));run(fn+' '+label,test,{[env]:file});killed++;}
  }
  console.log('PASS default-format mutations: '+killed+'/14; live UNKNOWN, explicit no-query preservation, all three frontend uses and fullscreen guards');

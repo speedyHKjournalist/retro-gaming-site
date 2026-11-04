@@ -5,6 +5,7 @@
  * without mixing incompatible D3D8 and D3D9 SDK declarations. Its adapter
  * implementation uses the D3D9 SDK in a separate compilation unit. */
 struct IDirect3D9;
+struct IDirect3DDevice9;
 struct D9WGProcess;
 #define D9WG_D3D8_CAPS_BYTES 212u
 #define D9WG_D3D8_RASTER_ZBIAS 0x00004000u
@@ -49,4 +50,9 @@ HRESULT WINAPI d9wg_d3d9_core_check_format8(struct IDirect3D9 *factory, UINT ada
  * in-place input, and computes effective storage through SDK9 layout. */
 void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *requested8,
         UINT width, UINT height, UINT format, HWND window);
+/* Actual core9 device constructed with API8 initial-validation/default policy.
+ * Other device/resource adapter entry points are migrated separately. */
+HRESULT WINAPI d9wg_d3d9_core_create_device8(struct IDirect3D9 *factory, UINT adapter,
+        UINT type, HWND focus, DWORD behavior, const void *parameters8,
+        struct IDirect3DDevice9 **out);
 #endif

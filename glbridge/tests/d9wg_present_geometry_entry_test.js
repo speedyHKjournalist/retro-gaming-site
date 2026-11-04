@@ -46,7 +46,7 @@ typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSample
 /* Logical constructor fixture uses its own PP layout. The actual packed
  * SDK8/9 ABI is exercised separately by d8wg_parameters_core_test. */
 ${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
-typedef struct{void*lpVtbl;}Interface;typedef struct{Interface iface;unsigned refs;}Factory;
+typedef struct{void*lpVtbl;}Interface;typedef struct{Interface iface;unsigned refs;UINT compatibility_api;}Factory;
 typedef struct{UINT Width,Height,Format,RefreshRate;}Mode;
 typedef struct Device{Interface iface;unsigned refcount;Factory*parent;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT AdapterOrdinal;D3DDEVTYPE DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;}creation;Mode display_mode;struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}viewport;RECT scissor_rect;BOOL depth_surface_enabled;BYTE*front_shadow;UINT front_shadow_pitch;int palettes,material,render_states[4];struct{Interface iface;struct Device*device;}implicit_swap_chain;}Device;
 typedef Factory D${api}Direct3D;typedef Device D${api}Device;typedef Interface IDirect3D${api},IDirect3DDevice${api};
@@ -69,6 +69,7 @@ static void GetClientRect(HWND h,RECT*r){assert(h);observed_window=h;SetRect(r,0
 static void ClientToScreen(HWND h,POINT*p){assert(h==observed_window);*p=(POINT){30,40};}
 static void fill_display_mode(Mode*m,UINT w,UINT h,UINT f){*m=(Mode){w,h,f,60};}
 static void device_init_states(Device*d){assert(d->present.BackBufferWidth==d->display_mode.Width&&d->present.BackBufferHeight==d->display_mode.Height&&d->viewport.Width==d->display_mode.Width);}
+${api===9?'static void device_init_states_for_api(Device*d,UINT api){assert(api==9);device_init_states(d);}static BOOL supported_render_target_format8(D3DFORMAT f){return supported_backbuffer_format(f);}static BOOL supported_depth_stencil_format8(D3DFORMAT f){return supported_depth_stencil_format(f);}':''}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){assert(f==22);*p=w*4;*r=h;*b=w*h*4;return 1;}
 static void d9wg_palette_free(int*p){(void)p;}
 static BOOL emit_command(UINT op,const void*p,UINT size){const D9WGCreateDevice*c=p;assert(op==D9WG_OP_CREATE_DEVICE&&size==sizeof(*c)&&c->device_handle==active->handle&&c->width==active->display_mode.Width&&c->height==active->display_mode.Height);emits++;return !fail_emit;}

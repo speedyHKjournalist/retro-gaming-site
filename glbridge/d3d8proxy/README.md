@@ -415,3 +415,12 @@ texture/swap-chain pair,verifies count-only caller publication and8x8
 backbuffers,then replays five main images on both GPU backends with all
 resources retired before SessionEnd. Actual device/resource wrapping follows.
 See `../deployments/d3d-webgpu-review-4K9.json`.
+
+Stage 4K10 adds a private API8-profile actual core9 device constructor.
+It preserves immutable PP8 input,legacy constructor validation and initial
+API8 states while ordinary9 stays byte-compatible with its prior defaults.
+A test-only SDK8 consumer verifies seven actual devices and two private
+module lifetimes in XP;both GPUs replay five images/320 pixels with all
+resources retired before SessionEnd. Public8 device/resource wrapping and
+API8 Reset/additional/shader adapters remain open.
+See `../deployments/d3d-webgpu-review-4K10.json`.

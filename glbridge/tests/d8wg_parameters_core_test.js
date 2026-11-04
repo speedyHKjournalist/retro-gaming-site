@@ -2,7 +2,7 @@
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),nine=fs.readFileSync(process.env.D8WG_PARAMETERS_BACKEND_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-parameters-core-"));
 function extract(source,name){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end).replace(/__attribute__\s*\(\(__stdcall__\)\)/g,"");}
-function preprocess(api){const file=dir+"/sdk"+api+".c";fs.writeFileSync(file,`#include <d3d${api}.h>\n#include "${root}/d3d9proxy/d3d9_core.h"\n#include "${root}/runtime/d9wg_present_parameters.h"\n`+fs.readFileSync(root+"/tests/fixtures/d3d_parameters_before_core.c","utf8")+(api===9?extract(nine,"d9wg_d3d9_core_parameters_effective8").replace(/\bWINAPI\b/g,""):""));const p=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P",file],{encoding:"utf8",maxBuffer:16<<20});assert.equal(p.status,0,p.stderr);return p.stdout;}
+function preprocess(api){const file=dir+"/sdk"+api+".c";fs.writeFileSync(file,`#include <d3d${api}.h>\n#include "${root}/d3d9proxy/d3d9_core.h"\n#include "${root}/runtime/d9wg_present_parameters.h"\n`+fs.readFileSync(root+"/tests/fixtures/d3d_parameters_before_core.c","utf8")+(api===9?(extract(nine,"parameters8_to9")+"\n"+extract(nine,"d9wg_d3d9_core_parameters_effective8")).replace(/\bWINAPI\b/g,""):""));const p=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P",file],{encoding:"utf8",maxBuffer:16<<20});assert.equal(p.status,0,p.stderr);return p.stdout;}
 try{
  const sdk8=preprocess(8),sdk9=preprocess(9),rename=(s,n)=>s.replace(/\bD3DPRESENT_PARAMETERS\b/g,n);
  function type(s,n){const m=s.match(/typedef struct _D3DPRESENT_PARAMETERS_\s*\{[\s\S]*?\}\s*D3DPRESENT_PARAMETERS\s*;/);assert(m);return rename(m[0].replace('struct _D3DPRESENT_PARAMETERS_','struct'),n);}
@@ -20,6 +20,7 @@ ${rename(extract(sdk8,"parameters_before_core"),"PP8").replace(/\bparameters_bef
 ${rename(extract(sdk9,"parameters_before_core"),"PP9").replace(/\bparameters_before_core\b/g,"parameters_before9")}
 ${rename(extract(sdk9,"d9wg_present_parameters_effective"),"PP9").replace(/\bd9wg_present_parameters_effective\b/g,"effective_actual9")}
 static void d9wg_present_parameters_effective(PP9*out,const PP9*in,UINT w,UINT h,UINT f,HWND window){provider_calls++;assert(in->MultiSampleQuality==0);assert(!memcmp(in,&observed_input,20));assert(!memcmp((const BYTE*)in+24,(const BYTE*)&observed_input+20,32));PP9 before;parameters_before9(&before,in,w,h,f,window);effective_actual9(out,in,w,h,f,window);assert(!memcmp(out,&before,56));if(injection){out->BackBufferCount=2;out->Flags^=0x40000000u;}}
+${rename(extract(sdk9,"parameters8_to9"),"PP9")}
 ${rename(extract(sdk9,"d9wg_d3d9_core_parameters_effective8"),"PP9")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"PP8 core line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 static UINT next(void){seed=seed*1664525u+1013904223u;return seed;}

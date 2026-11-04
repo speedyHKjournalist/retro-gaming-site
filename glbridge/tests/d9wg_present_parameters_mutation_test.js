@@ -13,6 +13,6 @@ try{let killed=0;const runtime=fs.readFileSync(root+'/runtime/d9wg_present_pacin
 ]){assert(part.includes(old),name);const file=dir+'/runtime.c';fs.writeFileSync(file,runtime.slice(0,start)+part.replace(old,replacement)+runtime.slice(end));run(name,'d9wg_present_parameters_test.js',{D9WG_PARAMETERS_RUNTIME:file});killed++;}
 for(const api of[8,9]){const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');for(const fn of['d3d_create_device','device_reset',api===8?'device_create_swapchain':'device_create_additional_swap_chain'])for(const[description,old,replacement]of[
  ['guard omitted','if (!d9wg_present_interval_valid(','if (0 && !d9wg_present_interval_valid('],
- ['wrong version policy','d9wg_present_interval_valid('+api+',','d9wg_present_interval_valid('+(api===8?9:8)+','],
+ ['wrong version policy','d9wg_present_interval_valid('+(api===9&&fn==='d3d_create_device'?'api':api)+',','d9wg_present_interval_valid('+(api===8?9:8)+','],
 ]){const[a,b]=span(source,fn),body=source.slice(a,b);assert(body.includes(old),fn);const file=dir+'/frontend.c';fs.writeFileSync(file,source.slice(0,a)+body.replace(old,replacement)+source.slice(b));run('API '+api+' '+fn+' '+description,'d9wg_present_parameters_entry_test.js',{['D'+api+'WG_PARAMETERS_FRONTEND']:file});killed++;}}
 console.log('PASS presentation-parameter mutations: '+killed+'/18; version/window/caps/default/single-flag policy and all six actual preflight guards');}finally{fs.rmSync(dir,{recursive:true,force:true});}

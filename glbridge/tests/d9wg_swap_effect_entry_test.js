@@ -26,17 +26,17 @@ typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT,D3DDEV
 #define TRACE_MARK_ENTER(...)
 #define TRACE_MARK_EXIT(...)
 #define HOSTLOG_REFUSED(...)
-typedef struct{int magic;}Factory;typedef struct{int magic,blocked;D9WGResetState reset_state;struct{BOOL Windowed;}present;}Device;typedef struct{int magic;}Chain;
+typedef struct{int magic;UINT compatibility_api;}Factory;typedef struct{int magic,blocked;D9WGResetState reset_state;struct{BOOL Windowed;}present;}Device;typedef struct{int magic;}Chain;
 typedef Factory D${api}Direct3D,IDirect3D${api};typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api},D${api}Surface,IDirect3DSurface${api};
 typedef struct{BOOL Windowed;DWORD PresentationInterval,FullScreen_PresentationInterval,BackBufferCount,MultiSampleType,BackBufferWidth,BackBufferHeight,BackBufferFormat,SwapEffect,MultiSampleQuality,Flags;}D3DPRESENT_PARAMETERS;
 static unsigned trace_errors;static Factory*d3d_from_iface(Factory*f){return f;}static Device*device_from_iface(Device*d){return d;}
 ${api===9?'static UINT d9wg_display_mode_backbuffer_format(UINT f){return f?f:22;}':''}
 ${api===8?'static BOOL supported_multisample_type(UINT type){return !type||type==4;}':''}
-${prefix('d3d_create_device',api===8?'    if (!supported_multisample_type(parameters->MultiSampleType))':'    backbuffer_format = (D3DFORMAT)')}
+${prefix('d3d_create_device',api===8?'    if (!supported_multisample_type(parameters->MultiSampleType))':'    backbuffer_format = ')}
 ${prefix('device_reset',api===8?'    if (parameters->EnableAutoDepthStencil':'    if (!supported_multisample(')}
 ${prefix(chain,api===8?'    if (parameters->BackBufferFormat != D3DFMT_UNKNOWN':'    if (!params->Windowed || !device->present.Windowed)')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Parameter preflight API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
-int main(void){Factory factory={123};Device device={.magic=456,.present={1}},before_device=device;unsigned cases=0,checks=0;
+int main(void){Factory factory={123,9};Device device={.magic=456,.present={1}},before_device=device;unsigned cases=0,checks=0;
 /* Expectations transcribed from the pinned Windows swap-effect tests, not the helper. */
 const struct{UINT effect,count;int valid8,valid9;}tests[]={
  {0,1,0,0},{0xffffffffu,1,0,0},{5,1,0,0},{6,1,0,0},

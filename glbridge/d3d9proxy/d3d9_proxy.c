@@ -3684,7 +3684,7 @@ static BOOL device_light_is_set(D9Device *device, UINT index)
     return index < D9_MAX_LIGHTS && device->light_set[index];
 }
 
-static void device_init_states(D9Device *device)
+static void device_init_states_for_api(D9Device *device, UINT api)
 {
     UINT slot;
     UINT stage;
@@ -3701,16 +3701,16 @@ static void device_init_states(D9Device *device)
     D3DCAPS9 caps;fill_caps(&caps);
     DWORD point_max_bits;CopyMemory(&point_max_bits, &caps.MaxPointSize, sizeof(point_max_bits));
     for (UINT state = 0; state < sizeof(device->render_states)/sizeof(device->render_states[0]); ++state)
-        device->render_states[state] = d9wg_render_default(9, state,
+        device->render_states[state] = d9wg_render_default(api, state,
                 device->present.EnableAutoDepthStencil, point_max_bits);
-    d9wg_object_defaults(9, &device->material, device->clip_planes, D9_MAX_CLIP_PLANES);
+    d9wg_object_defaults(api, &device->material, device->clip_planes, D9_MAX_CLIP_PLANES);
     d9wg_light_free(&device->extra_lights);
     ZeroMemory(device->lights, sizeof(device->lights));
     ZeroMemory(device->light_set, sizeof(device->light_set));
     ZeroMemory(device->light_enabled, sizeof(device->light_enabled));
     for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage)
         for (UINT state = 0; state < sizeof(device->texture_stage_states[stage])/sizeof(device->texture_stage_states[stage][0]); ++state)
-            device->texture_stage_states[stage][state] = d9wg_texture_default(9, stage, state);
+            device->texture_stage_states[stage][state] = d9wg_texture_default(api, stage, state);
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot)
         for (UINT state = 0; state < sizeof(device->sampler_states[slot])/sizeof(device->sampler_states[slot][0]); ++state)
             device->sampler_states[slot][state] = d9wg_sampler_default(state);
@@ -3723,6 +3723,11 @@ static void device_init_states(D9Device *device)
         device->transforms[slot][10] = 1.0f;
         device->transforms[slot][15] = 1.0f;
     }
+}
+
+static void device_init_states(D9Device *device)
+{
+    device_init_states_for_api(device, 9);
 }
 
 /* ---- IDirect3D9 ---- */
@@ -4372,6 +4377,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
 {
     D9Direct3D* d3d = d3d_from_iface(iface);
     D9Device* device;
+    UINT api;
     D9WGCreateDevice command;
     HWND window;
     RECT client;
@@ -4393,6 +4399,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
             (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    api = d3d->compatibility_api == 8 ? 8u : 9u;
     TRACE("CreateDevice params %lux%lu fmt=%08lX count=%lu multisample=%lu "
           "quality=%lu swap=%lu windowed=%lu auto_depth=%lu "
           "depth_fmt=%08lX flags=%08lX interval=%08lX hwnd=%08lX",
@@ -4404,17 +4411,19 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
         (DWORD)parameters->AutoDepthStencilFormat, parameters->Flags,
         parameters->PresentationInterval,
         (DWORD)(uintptr_t)parameters->hDeviceWindow);
-    if (!d9wg_present_interval_valid(9, parameters->Windowed,
+    if (!d9wg_present_interval_valid(api, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!d9wg_swap_effect_valid(9, parameters->SwapEffect, parameters->BackBufferCount))
+    if (!d9wg_swap_effect_valid(api, parameters->SwapEffect, parameters->BackBufferCount))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!d9wg_present_multisample_valid(9, parameters->SwapEffect,
+    if (!d9wg_present_multisample_valid(api, parameters->SwapEffect,
             parameters->MultiSampleType, parameters->MultiSampleQuality, parameters->Flags))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
+    if (api == 9 && !parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    backbuffer_format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+    backbuffer_format = api == 8
+        ? (parameters->BackBufferFormat ? parameters->BackBufferFormat : D3DFMT_X8R8G8B8)
+        : (D3DFORMAT)d9wg_display_mode_backbuffer_format(
         parameters->BackBufferFormat);
     if (!supported_multisample(backbuffer_format,
             parameters->MultiSampleType)) {
@@ -4426,8 +4435,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-        && !supported_depth_stencil_format(
-            parameters->AutoDepthStencilFormat)) {
+        && !(api == 8 ? supported_depth_stencil_format8(parameters->AutoDepthStencilFormat)
+            : supported_depth_stencil_format(parameters->AutoDepthStencilFormat))) {
         TRACE("FAIL CreateDevice unsupported depth_fmt=%08lX -> %08lX",
             (DWORD)parameters->AutoDepthStencilFormat,
             (DWORD)D3DERR_NOTAVAILABLE);
@@ -4444,7 +4453,8 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-        && !supported_backbuffer_format(parameters->BackBufferFormat)) {
+        && !(api == 8 ? supported_render_target_format8(parameters->BackBufferFormat)
+            : supported_backbuffer_format(parameters->BackBufferFormat))) {
         TRACE("FAIL CreateDevice unsupported backbuffer_fmt=%08lX -> %08lX",
             (DWORD)parameters->BackBufferFormat,
             (DWORD)D3DERR_NOTAVAILABLE);
@@ -4469,7 +4479,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
      * requires exactly one vertex-processing mode, and D3DCREATE_PUREDEVICE
      * only alongside the hardware one.
      */
-    {
+    if (api == 9) {
         const DWORD vertex_processing = behavior
             & (D3DCREATE_SOFTWARE_VERTEXPROCESSING
                 | D3DCREATE_HARDWARE_VERTEXPROCESSING
@@ -4548,7 +4558,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
      * D3DSBT_ALL captured it as {0,0,0,0}) */
     SetRect(&device->scissor_rect, 0, 0, (int)device->display_mode.Width,
         (int)device->display_mode.Height);
-    device_init_states(device);
+    device_init_states_for_api(device, api);
 
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
@@ -4571,7 +4581,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
             (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
-    if (!emit_render_default_patches(device->handle, 9, device->present.EnableAutoDepthStencil, device->render_states)
+    if (!emit_render_default_patches(device->handle, api, device->present.EnableAutoDepthStencil, device->render_states)
         || !emit_object_default_patches(device->handle, &device->material)) {
         IDirect3DDevice9_Release(&device->iface);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
@@ -4583,7 +4593,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     }
     emit_window_state(device, window);
     watch_window_state(device);
-    d9wg_present_parameters_return(9, parameters, &device->present);
+    d9wg_present_parameters_return(api, parameters, &device->present);
     *device_out = &device->iface;
 #ifdef D9WG_DIAGNOSTIC_TRACE
     g_trace_device_window = window;
@@ -15002,6 +15012,14 @@ HRESULT WINAPI d9wg_d3d9_core_check_format8(IDirect3D9 *factory, UINT adapter,
 /* This is a layout conversion for the API8 compatibility path. Version8
  * swap/interval/flag values stay intact; it is not ordinary9 CreateDevice
  * validation. All input is staged before output, including in-place callers. */
+static void parameters8_to9(D3DPRESENT_PARAMETERS *requested, const void *requested8)
+{
+    CopyMemory(requested, requested8, 20);
+    requested->MultiSampleQuality = 0;
+    CopyMemory((BYTE *)requested + 24, (const BYTE *)requested8 + 20,
+            D9WG_D3D8_PARAMETERS_BYTES - 20);
+}
+
 void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *requested8,
         UINT width, UINT height, UINT format, HWND window)
 {
@@ -15015,15 +15033,28 @@ void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *request
     _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, PresentationInterval) == 52,
             "D3D9 parameter interval offset");
     D3DPRESENT_PARAMETERS requested, effective;
-    CopyMemory(&requested, requested8, 20);
-    requested.MultiSampleQuality = 0;
-    CopyMemory((BYTE *)&requested + 24, (const BYTE *)requested8 + 20,
-            D9WG_D3D8_PARAMETERS_BYTES - 20);
+    parameters8_to9(&requested, requested8);
     d9wg_present_parameters_effective(&effective, &requested,
             width, height, format, window);
     CopyMemory(out8, &effective, 20);
     CopyMemory((BYTE *)out8 + 20, (const BYTE *)&effective + 24,
             D9WG_D3D8_PARAMETERS_BYTES - 20);
+}
+
+/* Private constructor only. The embedding8 wrapper owns its public caller
+ * publication,identity and remaining methods. Never mutates the52-byte input. */
+HRESULT WINAPI d9wg_d3d9_core_create_device8(IDirect3D9 *factory, UINT adapter,
+        UINT type, HWND focus, DWORD behavior, const void *parameters8,
+        IDirect3DDevice9 **out)
+{
+    D3DPRESENT_PARAMETERS parameters;
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!factory || !parameters8 || d3d_from_iface(factory)->compatibility_api != 8)
+        return D3DERR_INVALIDCALL;
+    parameters8_to9(&parameters, parameters8);
+    return IDirect3D9_CreateDevice(factory, adapter, (D3DDEVTYPE)type,
+            focus, behavior, &parameters, out);
 }
 
 #endif
