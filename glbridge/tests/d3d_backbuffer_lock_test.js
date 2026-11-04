@@ -9,11 +9,12 @@ const code=`#include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include "${root}/runtime/d9wg_surface_readback.h"
+#include "${root}/runtime/d9wg_format_layouts.h"
 #include "${process.env.D9WG_SURFACE_LOCK_HEADER||root+'/runtime/d9wg_surface_lock.h'}"
 #include "${process.env.D9WG_BACKBUFFER_UPLOAD_HEADER||root+'/runtime/d9wg_backbuffer_upload.h'}"
 typedef int HRESULT,D3DFORMAT;typedef uint8_t BYTE;typedef int32_t LONG,INT;typedef struct {LONG left,top,right,bottom;}RECT;
 typedef struct{INT Pitch;void*pBits;}D3DLOCKED_RECT;typedef struct{const void*lpVtbl;}Iface;typedef struct {BOOL locked,shadow_valid;}D9TextureLevel;typedef struct{Iface iface;UINT handle,usage;D9TextureLevel*levels;}Texture;
-typedef struct Device{UINT handle;BYTE*front_shadow;UINT front_shadow_pitch;struct{DWORD Flags;}present;}Device,D8Device,D9Device;
+typedef struct Device{UINT handle;BYTE*front_shadow;UINT front_shadow_pitch;struct{DWORD Flags;}present;UINT compatibility_api;}Device,D8Device,D9Device;
 typedef struct Surface{Iface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;UINT face,cube_face,level;void*swap_chain;struct{UINT Format,Pool,Usage,Size,MultiSampleType,Width,Height;}desc;UINT width,height,format,multisample,row_pitch,byte_count;BYTE*shadow;BOOL locked,backbuffer,depth_stencil,lockable_render_target,texture_child;RECT lock_rect;DWORD lock_flags;}Surface,D8Surface,D9Surface;
 typedef struct Device Device;typedef struct Surface Surface;typedef Iface IDirect3DSurface8,IDirect3DSurface9;
 #define WINAPI
@@ -41,6 +42,7 @@ static UINT allocations,frees,fail_alloc,read_error,reads,emits,creates,uploads,
 static D9WGProcess process,*g_process=&process;
 static BOOL SetRect(RECT*r,int l,int t,int rr,int b){*r=(RECT){l,t,rr,b};return TRUE;}
 static Surface*surface_from_iface(Iface*p){return (Surface*)p;}
+static UINT device_compatibility_api(Device*d){return d->compatibility_api?d->compatibility_api:9;}
 static BOOL texture_format_layout(D3DFORMAT f,UINT*bw,UINT*bh,UINT*b){if(f<21||f>26)return FALSE;*bw=*bh=1;*b=f<=22?4:2;return TRUE;}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*pitch,UINT*rows,UINT*bytes){UINT bw,bh,b;if(!texture_format_layout(f,&bw,&bh,&b))return FALSE;*pitch=w*b+padding;*rows=h;*bytes=*pitch*h;return TRUE;}
 static void*HeapAlloc(void*h,UINT flags,size_t n){(void)h;(void)flags;if(fail_alloc){fail_alloc=0;return NULL;}void*p=malloc(n);assert(p);memset(p,0xcd,n);allocations++;return p;}
@@ -65,7 +67,7 @@ static UINT checks,cases,plans;
 static HRESULT lock(UINT api,Surface*s,D3DLOCKED_RECT*out,const RECT*r,UINT f){return api==8?surface_lock_rect8(&s->iface,out,r,f):surface_lock_rect9(&s->iface,out,r,f);}
 static HRESULT unlock(UINT api,Surface*s){return api==8?surface_unlock_rect8(&s->iface):surface_unlock_rect9(&s->iface);}
 static void events(void){reads=emits=creates=uploads=blits=destroys=fail_emit=read_error=fail_alloc=0;assert(!live);}
-int main(void){(void)&surface_lock_renderable;(void)&surface_unlock_renderable;(void)&readback_surface_pixels;
+int main(void){(void)&device_compatibility_api;(void)&surface_lock_renderable;(void)&surface_unlock_renderable;(void)&readback_surface_pixels;
  const UINT dims[]={1,2,7,257},pads[]={0,4,31},bpp[]={1,2,4,8},flags[]={0,16,8192,0xffffffff};
  for(UINT wi=0;wi<4;wi++)for(UINT hi=0;hi<4;hi++)for(UINT pi=0;pi<3;pi++)for(UINT bi=0;bi<4;bi++)for(UINT allowed=0;allowed<2;allowed++)for(UINT locked=0;locked<2;locked++)for(UINT ms=0;ms<2;ms++)for(UINT fi=0;fi<4;fi++)for(UINT rect=0;rect<7;rect++){
  UINT w=dims[wi],h=dims[hi],pitch=w*bpp[bi]+pads[pi];D9WGSurfaceLockRect r={0,0,(int32_t)w,(int32_t)h};if(rect==2)r.left=-1;if(rect==3)r.right++;if(rect==4)r.bottom++;if(rect==5)r.right=0;if(rect==6)r.top=-1;D9WGSurfaceLockPlan plan,saved;memset(&plan,0xa5,sizeof(plan));saved=plan;BOOL good=allowed&&!locked&&!ms&&rect<2;CHECK(d9wg_surface_lock_plan(w,h,pitch,bpp[bi],ms?4:0,allowed,locked,rect?&r:NULL,flags[fi],&plan)==good);if(good)CHECK(!plan.offset&&plan.readonly==!!(flags[fi]&16)&&plan.area.right==(int32_t)w&&plan.area.bottom==(int32_t)h);else CHECK(!memcmp(&plan,&saved,sizeof(plan)));plans++;
@@ -90,6 +92,8 @@ int main(void){(void)&surface_lock_renderable;(void)&surface_unlock_renderable;(
  active_target=0;
  events();pixel_bytes=4;padding=0;Device d={.handle=7,.present={1}};active=&d;Surface s={.device=&d,.swap_chain=(void*)1,.width=width,.height=height,.format=21};D3DLOCKED_RECT out={123,(void*)99};fail_alloc=1;CHECK(lock(9,&s,&out,NULL,16)==-3&&!s.shadow&&!s.locked&&!reads&&out.Pitch==123&&out.pBits==(void*)99);
  Surface cpu={.device=&d,.width=width,.height=height,.format=21,.shadow=front,.row_pitch=32,.desc={.Width=width,.Height=height},.locked=FALSE};CHECK(!lock(8,&cpu,&out,NULL,16)&&!unlock(8,&cpu)&&!lock(9,&cpu,&out,NULL,16)&&!unlock(9,&cpu)&&!reads&&!emits);Texture texture={0};cpu.shadow=NULL;cpu.texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-11&&unlock(8,&cpu)==-21&&lock(9,&cpu,&out,NULL,0)==-11&&unlock(9,&cpu)==-21);cpu.texture=NULL;cpu.cube=cpu.cube_texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-12&&unlock(8,&cpu)==-22&&lock(9,&cpu,&out,NULL,0)==-12&&unlock(9,&cpu)==-22);CHECK(allocations==frees);
+ for(UINT api=8;api<=9;api++){Device profile={.compatibility_api=api};Surface image={.device=&profile,.width=3,.height=2,.format=65,.row_pitch=16,.shadow=front};RECT part={1,0,3,2};memset(front,0,sizeof(front));out=(D3DLOCKED_RECT){123,(void*)99};events();HRESULT hr=lock(9,&image,&out,&part,0);if(api==8){CHECK(!hr&&out.Pitch==16&&out.pBits==front+4&&image.locked);memset(out.pBits,0x73,8);memset((BYTE*)out.pBits+16,0x45,8);CHECK(!unlock(9,&image)&&!image.locked&&!reads&&!emits);CHECK(!lock(9,&image,&out,NULL,16)&&out.pBits==front&&out.Pitch==16&&front[4]==0x73&&front[20]==0x45&&!unlock(9,&image));}else CHECK(hr==-1&&!image.locked&&out.Pitch==123&&out.pBits==(void*)99);CHECK(!reads&&!emits);}
+
  printf("PASS actual8/9 renderable locks: %u checks,%u pureplans,%u adapter scenarios;six formats/padded pitches/partial writes,real shared upload bytes,readonly GPU refresh,no-upload,output guards,MSAA/flags/doublelock,readback/OOM/emission failure cleanup andCPU/texture/cube dispatch;standalone/additional targets,target flags/identity,level lock Reset tracking andstale-mirror invalidation\\n",checks,plans,cases);return 0;
 }
 `;

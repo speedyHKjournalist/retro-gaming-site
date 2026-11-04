@@ -1060,3 +1060,14 @@ and a half-screen stencil mask,plusmetadata/identity/lock refusal andReset.
 Both GPUs independently match20images/1280pixels; CPU replies are analytic
 injection. MSAA4 depth metadata/storage is tested,not physical coverage or
 precision. Public8wrapping remains pending. See `../deployments/d3d-webgpu-review-4K19.json`.
+
+Stage 4K20 adds private API8 CPU-image and32-byte surface-descriptor adapters.
+Shared CPU allocation preserves ordinary9 behavior; image8 selects its linear
+formats and8192 limit. CPU locks use the device API,including8-only format65.
+The descriptor stages SDK8 Size/samples words instead of copying9 samples/quality.
+XP verifies local CPU65 bits/pitch/Size inold/current8/core8SDK120/220,ordinary9
+refusal,andatomic descriptor byte guards. Both GPUs independently retain the
+20-image/1280-pixel depth/stencil contract; no GPU-format65 claim is made.
+Depth Size currently mirrors the old proxy's0/fixed4 metadata. Pinned Wine
+shows this is a resource-size issue to correct next; it is not native compliance.
+Public8 wrapping stays pending. See `../deployments/d3d-webgpu-review-4K20.json`.

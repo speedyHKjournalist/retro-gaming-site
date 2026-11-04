@@ -14,6 +14,7 @@ struct D9WGProcess;
 #define D9WG_D3D8_RASTER_ZBIAS 0x00004000u
 #define D9WG_D3D8_IDENTIFIER_BYTES 1068u
 #define D9WG_D3D8_PARAMETERS_BYTES 52u
+#define D9WG_D3D8_SURFACE_DESC_BYTES 32u
 #define D9WG_D3D8_NO_WHQL_LEVEL 2u
 /* One attach/detach pair per embedding frontend module, called from that
  * module's loader entry. Release all owned COM objects before explicit
@@ -75,6 +76,13 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* CPU-only SYSTEMMEM image with API8 linear formats (including8-only65). */
+HRESULT WINAPI d9wg_d3d9_core_image_surface8(struct IDirect3DDevice9 *device,
+        UINT width, UINT height, UINT format, struct IDirect3DSurface9 **out);
+/* Exact32-byte SDK8 descriptor, including legacy Size instead of9 quality.
+ * Invalid size/profile/format/provider results leave caller bytes unchanged. */
+HRESULT WINAPI d9wg_d3d9_core_surface_desc8(struct IDirect3DSurface9 *surface,
+        void *out, UINT bytes);
 /* Body starts after version token;success count excludes END. Version/handle
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,

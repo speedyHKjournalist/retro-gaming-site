@@ -9087,45 +9087,16 @@ static HRESULT WINAPI device_get_front_buffer_data(IDirect3DDevice9 *iface,
  * SetCursorProperties; it is deliberately limited to the 32-bit formats a
  * cursor may use, so nothing else starts depending on it as a general
  * offscreen surface. */
-static HRESULT WINAPI device_create_offscreen_plain_surface(
-        IDirect3DDevice9 *iface, UINT width, UINT height, D3DFORMAT format,
-        D3DPOOL pool, IDirect3DSurface9 **out, HANDLE *shared)
+/* CPU surfaces share allocation/lifetime mechanics; their frontend selects
+ * the format layout. API8 has linear formats absent from the9 layout. */
+static HRESULT create_cpu_surface(D9Device *device, UINT width, UINT height,
+        D3DFORMAT format, D3DPOOL pool, UINT api, IDirect3DSurface9 **out)
 {
-    D9Device *device = device_from_iface(iface);
     D9Surface *surface;
-    UINT row_pitch;
-    UINT byte_count;
-
-    (void)shared;
-    if (!out)
+    UINT row_pitch, row_count, byte_count;
+    if (!d9wg_texture_level_layout(api, format, width, height,
+            &row_pitch, &row_count, &byte_count))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *out = NULL;
-    if (!width || !height || pool == D3DPOOL_MANAGED
-            || pool > D3DPOOL_SCRATCH || !supported_texture_format(format))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /*
-     * A D3DPOOL_DEFAULT offscreen surface lives on the GPU, and D3D9 lets it be
-     * a StretchRect operand -- both operands have to be DEFAULT, and this is
-     * how apps get the second one. Backing it with the same texture a render
-     * target uses is what makes that true here; a CPU-only surface has no
-     * handle to blit with, which is precisely how 3DMark06 ended up looking at
-     * an "IDirect3DDevice9::StretchRect failed" box.
-     *
-     * SYSTEMMEM and SCRATCH keep the CPU-only form below. D3D9 refuses
-     * StretchRect on those too, so refusing them costs nothing and they stay
-     * cheap: no GPU allocation for a surface whose whole purpose is to be
-     * locked.
-     */
-    if (pool == D3DPOOL_DEFAULT)
-        return create_target_texture(device, width, height, format, 0u,
-                D3DMULTISAMPLE_NONE, 0u, out);
-    {
-        UINT row_count;
-        if (!texture_level_layout(format, width, height, &row_pitch,
-                &row_count, &byte_count))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-
     surface = (D9Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
     if (!surface)
@@ -9162,6 +9133,25 @@ static HRESULT WINAPI device_create_offscreen_plain_surface(
             surface->height, (DWORD)surface->format, surface->byte_count);
     return D3D_OK;
 }
+
+static HRESULT WINAPI device_create_offscreen_plain_surface(
+        IDirect3DDevice9 *iface, UINT width, UINT height, D3DFORMAT format,
+        D3DPOOL pool, IDirect3DSurface9 **out, HANDLE *shared)
+{
+    D9Device *device = device_from_iface(iface);
+    (void)shared;
+    if (!out)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *out = NULL;
+    if (!width || !height || pool == D3DPOOL_MANAGED
+            || pool > D3DPOOL_SCRATCH || !supported_texture_format(format))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (pool == D3DPOOL_DEFAULT)
+        return create_target_texture(device, width, height, format, 0u,
+                D3DMULTISAMPLE_NONE, 0u, out);
+    return create_cpu_surface(device, width, height, format, pool, 9u, out);
+}
+
 static HRESULT WINAPI device_multiply_transform(IDirect3DDevice9 *iface,
         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
 {
@@ -14401,8 +14391,8 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
                     || rect->bottom <= rect->top
                     || rect->right > (LONG)surface->width
                     || rect->bottom > (LONG)surface->height))
-                || !texture_format_layout(surface->format, &block_width,
-                    &block_height, &block_bytes)
+                || !d9wg_format_layout(device_compatibility_api(surface->device),
+                    surface->format, &block_width, &block_height, &block_bytes)
                 || x >= surface->width || y >= surface->height
                 || x % block_width || y % block_height) {
             result = D3DERR_INVALIDCALL;
@@ -15512,6 +15502,56 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_CreateDepthStencilSurface(iface, width, height,
             (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
             FALSE, out, NULL);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_image_surface8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT format, IDirect3DSurface9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8
+            || !width || !height || width > 8192 || height > 8192
+            || !supported_format8((D3DFORMAT)format, TRUE))
+        return D3DERR_INVALIDCALL;
+    return create_cpu_surface(device_from_iface(iface), width, height,
+            (D3DFORMAT)format, D3DPOOL_SYSTEMMEM, 8u, out);
+}
+
+/* Equal sizeof does not make these SDK descriptors interchangeable: API8
+ * has Size at word4 and samples at word5; API9 puts samples/quality there.
+ * Stage the complete eight-word result so failure never partly writes it. */
+HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
+        void *out, UINT bytes)
+{
+    D9Surface *surface;
+    D3DSURFACE_DESC desc;
+    UINT pitch, rows, size = 0;
+    if (!iface || iface->lpVtbl != &g_surface_vtbl || !out
+            || bytes != D9WG_D3D8_SURFACE_DESC_BYTES)
+        return D3DERR_INVALIDCALL;
+    surface = surface_from_iface(iface);
+    if (device_compatibility_api(surface->device) != 8)
+        return D3DERR_INVALIDCALL;
+    HRESULT hr = IDirect3DSurface9_GetDesc(iface, &desc);
+    if (FAILED(hr)) return hr;
+    if (desc.Usage & D3DUSAGE_DEPTHSTENCIL) {
+        if (!supported_depth_stencil_format8(desc.Format))
+            return D3DERR_INVALIDCALL;
+        /* Legacy standalone depth texture levels have no CPU byte_count;
+         * its implicit depth surface used a four-byte metadata stride. */
+        if (surface->auto_depth_stencil) {
+            if ((uint64_t)desc.Width * desc.Height > UINT32_MAX / 4u)
+                return D3DERR_INVALIDCALL;
+            size = desc.Width * desc.Height * 4u;
+        }
+    } else if (!d9wg_texture_level_layout(8u, desc.Format,
+            desc.Width, desc.Height, &pitch, &rows, &size))
+        return D3DERR_INVALIDCALL;
+    DWORD packed[8] = {(DWORD)desc.Format, (DWORD)desc.Type, desc.Usage,
+            (DWORD)desc.Pool, size, (DWORD)desc.MultiSampleType,
+            desc.Width, desc.Height};
+    CopyMemory(out, packed, sizeof(packed));
+    return D3D_OK;
 }
 
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,
