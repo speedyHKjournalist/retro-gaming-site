@@ -12,6 +12,8 @@ struct IDirect3DTexture9;
 struct IDirect3DCubeTexture9;
 struct IDirect3DVolumeTexture9;
 struct IDirect3DVolume9;
+struct IDirect3DVertexBuffer9;
+struct IDirect3DIndexBuffer9;
 struct D9WGProcess;
 #define D9WG_D3D8_SHADER_TOKENS 8192u
 #define D9WG_D3D8_CAPS_BYTES 212u
@@ -81,6 +83,13 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* API8 buffer creation with core lifetime/lock/descriptor implementation. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_buffer8(struct IDirect3DDevice9 *device,
+        UINT length, DWORD usage, DWORD fvf, UINT pool,
+        struct IDirect3DVertexBuffer9 **out);
+HRESULT WINAPI d9wg_d3d9_core_index_buffer8(struct IDirect3DDevice9 *device,
+        UINT length, DWORD usage, UINT format, UINT pool,
+        struct IDirect3DIndexBuffer9 **out);
 /* API8 3D creation policy;32-byte volume descriptor adds legacy Size. */
 HRESULT WINAPI d9wg_d3d9_core_volume_texture8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT depth, UINT levels, DWORD usage,

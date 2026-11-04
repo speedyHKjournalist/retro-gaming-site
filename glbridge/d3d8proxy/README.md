@@ -593,3 +593,17 @@ both GPUs match30images/1920pixels from56uploads. CPU GPUreadback replies
 are explicit analytic injection. Native alignment/fullflags/formats/filtering
 andfullpublic8wrapping remain open. Evidence:
 `../deployments/d3d-webgpu-review-4K24.json`.
+
+Stage 4K25 adds private API8 VB/IB constructors,both24-byte stdcall entries.
+They validate the API8 device profile andforward toactual9 storage/locks/
+descriptors withshared=NULL. Frozen8/9 comparison covers52806cases,realSDK
+24/20-byte descriptions,initial state/zero bytes/OOM/transport/list/pins and
+24 strict runtime mutants. Legacy lock coverage is reused;27mutants now
+requirestrict compilation,23C assertions or4 controlled protected-page faults.
+XP validatesVB/index16/index32,readonly/DISCARD/NOOVERWRITE andpartial writes;
+the final rerun uses matching SDK FVF=68 afterpreserving the original probe
+capture withdecimal44 metadata. Both GPUs match20images/1280pixels through
+15indexed and5nonindexed draws. CPU GPUreadback replies are explicit analytic
+injection. This preserves existing proxy validation,including knownnative
+pool/FVF-length gaps;fullpublic8wrapping remains open. Evidence:
+`../deployments/d3d-webgpu-review-4K25.json`.

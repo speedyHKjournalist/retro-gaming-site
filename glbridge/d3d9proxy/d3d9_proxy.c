@@ -15609,6 +15609,33 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
             FALSE, out, NULL);
 }
 
+/* Buffer creation/lock/descriptor contracts already agree between the
+ * legacy8 andordinary9 implementations. Keep the profile boundary explicit
+ * and reuse the actual core objects;public8 interface wrappers follow later. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_buffer8(IDirect3DDevice9 *iface,
+        UINT length, DWORD usage, DWORD fvf, UINT pool,
+        IDirect3DVertexBuffer9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateVertexBuffer(iface, length, usage, fvf,
+            (D3DPOOL)pool, out, NULL);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_index_buffer8(IDirect3DDevice9 *iface,
+        UINT length, DWORD usage, UINT format, UINT pool,
+        IDirect3DIndexBuffer9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateIndexBuffer(iface, length, usage,
+            (D3DFORMAT)format, (D3DPOOL)pool, out, NULL);
+}
+
 /* Private API8 volume construction and exact32-byte SDK8 descriptor. */
 HRESULT WINAPI d9wg_d3d9_core_volume_texture8(IDirect3DDevice9 *iface,
         UINT width, UINT height, UINT depth, UINT levels, DWORD usage,
