@@ -55,4 +55,7 @@ void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *request
 HRESULT WINAPI d9wg_d3d9_core_create_device8(struct IDirect3D9 *factory, UINT adapter,
         UINT type, HWND focus, DWORD behavior, const void *parameters8,
         struct IDirect3DDevice9 **out);
+/* Immutable52-byte API8 Reset input;NULL forwards to core Reset status rules. */
+HRESULT WINAPI d9wg_d3d9_core_reset8(struct IDirect3DDevice9 *device,
+        const void *parameters8);
 #endif

@@ -424,3 +424,12 @@ module lifetimes in XP;both GPUs replay five images/320 pixels with all
 resources retired before SessionEnd. Public8 device/resource wrapping and
 API8 Reset/additional/shader adapters remain open.
 See `../deployments/d3d-webgpu-review-4K10.json`.
+
+Stage 4K11 extends the private API8 core device to Reset validation,
+legacy blocker errors,cooperative pending/recovery,count-only publication,
+current-format UNKNOWN fallback andprofile-specific defaults/replay patches.
+SDK8 consumers verify real held-backbuffer failures andsuccessful recovery;
+ordinary9 Reset preserves9 publication anddefaults. Three actual Reset
+commands replay five images/320 pixels on both GPUs. Public8 devices remain
+legacy;additional/shader adapters anddevice/resource wrapping follow.
+See `../deployments/d3d-webgpu-review-4K11.json`.

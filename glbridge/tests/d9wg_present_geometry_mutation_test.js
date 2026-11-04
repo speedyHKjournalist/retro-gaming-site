@@ -34,7 +34,7 @@ try {
             ["height uses client width", "d3d_create_device", "(uint32_t)(client.bottom - client.top), 480)", "(uint32_t)(client.right - client.left), 480)", "d9wg_present_geometry_entry_test.js"],
             ["caller output published before mode succeeds", "d3d_create_device", "    if (!reset_window_mode(device, window))", "    d9wg_present_parameters_return(" + api + ", parameters, &device->present);\n    if (!reset_window_mode(device, window))", "d9wg_present_geometry_entry_test.js"],
             ["Reset keeps raw cached parameters", "device_reset", "    d9wg_present_parameters_effective(&device->present, parameters,\n        reset.width, reset.height, reset.backbuffer_format, window);", "    device->present = *parameters;", "d9wg_reset_status_test.js"],
-            ["Reset omits caller normalization", "device_reset", "    d9wg_present_parameters_return(" + api + ", parameters, &device->present);", "", "d9wg_reset_status_test.js"],
+            ["Reset omits caller normalization", "device_reset", "    d9wg_present_parameters_return(" + (api===9?"api":api) + ", parameters, &device->present);", "", "d9wg_reset_status_test.js"],
         ]) {
             const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, fn, api===8?old.replace("d9wg_present_parameters_effective(","d9wg_d3d9_core_parameters_effective8("):old, replacement));
             run("API " + api + " " + label, test, {["D" + api + (fn === "device_reset" ? "WG_RESET_STATUS_FRONTEND" : "WG_GEOMETRY_SOURCE")]: file}); killed++;

@@ -1615,6 +1615,11 @@ static D9Device *device_from_iface(IDirect3DDevice9 *iface)
     return (D9Device *)iface;
 }
 
+static UINT device_compatibility_api(const D9Device *device)
+{
+    return device->parent->compatibility_api == 8 ? 8u : 9u;
+}
+
 static D9SwapChain *swap_chain_from_iface(IDirect3DSwapChain9 *iface)
 {
     return (D9SwapChain *)iface;
@@ -3631,7 +3636,7 @@ static void device_release_owned_references(D9Device *device)
  */
 static BOOL emit_device_state_after_reset(D9Device *device)
 {
-    if (!emit_render_default_patches(device->handle, 9, device->present.EnableAutoDepthStencil, device->render_states)
+    if (!emit_render_default_patches(device->handle, device_compatibility_api(device), device->present.EnableAutoDepthStencil, device->render_states)
             || !emit_object_default_patches(device->handle, &device->material))
         return FALSE;
 
@@ -3727,7 +3732,7 @@ static void device_init_states_for_api(D9Device *device, UINT api)
 
 static void device_init_states(D9Device *device)
 {
-    device_init_states_for_api(device, 9);
+    device_init_states_for_api(device, device_compatibility_api(device));
 }
 
 /* ---- IDirect3D9 ---- */
@@ -5258,6 +5263,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
 {
     D9Device* device = device_from_iface(iface);
     D9WGResetDevice reset;
+    const UINT api = device_compatibility_api(device);
     RECT client;
     POINT origin;
     HWND window;
@@ -5294,17 +5300,22 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
             (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    if (!d9wg_present_interval_valid(9, parameters->Windowed,
+    if (api == 8 && parameters->MultiSampleType != D3DMULTISAMPLE_NONE
+            && parameters->MultiSampleType != D3DMULTISAMPLE_4_SAMPLES)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(api, parameters->Windowed,
             parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!d9wg_swap_effect_valid(9, parameters->SwapEffect, parameters->BackBufferCount))
+    if (!d9wg_swap_effect_valid(api, parameters->SwapEffect, parameters->BackBufferCount))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!d9wg_present_multisample_valid(9, parameters->SwapEffect,
+    if (!d9wg_present_multisample_valid(api, parameters->SwapEffect,
             parameters->MultiSampleType, parameters->MultiSampleQuality, parameters->Flags))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
+    if (api == 9 && !parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    backbuffer_format = (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+    backbuffer_format = api == 8
+        ? (parameters->BackBufferFormat ? parameters->BackBufferFormat : device->display_mode.Format)
+        : (D3DFORMAT)d9wg_display_mode_backbuffer_format(
         parameters->BackBufferFormat);
     if (!supported_multisample(backbuffer_format, parameters->MultiSampleType)) {
         TRACE("FAIL Reset unsupported multisample=%lu quality=%lu -> %08lX",
@@ -5314,8 +5325,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-        && !supported_depth_stencil_format(
-            parameters->AutoDepthStencilFormat)) {
+        && !(api == 8 ? supported_depth_stencil_format8(parameters->AutoDepthStencilFormat)
+            : supported_depth_stencil_format(parameters->AutoDepthStencilFormat))) {
         TRACE("FAIL Reset depth_fmt=%08lX -> %08lX",
             (DWORD)parameters->AutoDepthStencilFormat,
             (DWORD)D3DERR_NOTAVAILABLE);
@@ -5326,7 +5337,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
             parameters->MultiSampleType))
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-        && !supported_backbuffer_format(parameters->BackBufferFormat)) {
+        && !(api == 8 ? supported_render_target_format8(parameters->BackBufferFormat)
+            : supported_backbuffer_format(parameters->BackBufferFormat))) {
         TRACE("FAIL Reset backbuffer_fmt=%08lX -> %08lX",
             (DWORD)parameters->BackBufferFormat,
             (DWORD)D3DERR_NOTAVAILABLE);
@@ -5361,7 +5373,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     device_cancel_recording(device);
     if (device_has_reset_blockers(device))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(api == 8 ? D3DERR_DEVICELOST : D3DERR_INVALIDCALL);
     if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset)))
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     /* Reset ends an active Scene once the host accepts the new device. */
@@ -5410,7 +5422,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
         reset.old_device_handle, device->handle, reset.width, reset.height,
         device->reset_epoch);
 
-    d9wg_present_parameters_return(9, parameters, &device->present);
+    d9wg_present_parameters_return(api, parameters, &device->present);
     d9wg_reset_complete(&device->reset_state);
     return D3D_OK;
 }
@@ -15055,6 +15067,19 @@ HRESULT WINAPI d9wg_d3d9_core_create_device8(IDirect3D9 *factory, UINT adapter,
     parameters8_to9(&parameters, parameters8);
     return IDirect3D9_CreateDevice(factory, adapter, (D3DDEVTYPE)type,
             focus, behavior, &parameters, out);
+}
+
+/* API8 wrapper performs its own public count-only publication after success.
+ * NULL parameters still enter Reset so its cooperative state becomes pending. */
+HRESULT WINAPI d9wg_d3d9_core_reset8(IDirect3DDevice9 *iface, const void *parameters8)
+{
+    D3DPRESENT_PARAMETERS parameters;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8)
+        return D3DERR_INVALIDCALL;
+    if (!parameters8)
+        return IDirect3DDevice9_Reset(iface, NULL);
+    parameters8_to9(&parameters, parameters8);
+    return IDirect3DDevice9_Reset(iface, &parameters);
 }
 
 #endif

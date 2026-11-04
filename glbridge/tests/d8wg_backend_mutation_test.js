@@ -10,7 +10,7 @@ const cases=[
  ["render defaults lose API8","d9wg_render_default(api, state,","d9wg_render_default(9, state,","device_init_states_for_api","defaults"],
  ["material defaults lose API8","d9wg_object_defaults(api,","d9wg_object_defaults(9,","device_init_states_for_api","defaults"],
  ["texture defaults lose API8","d9wg_texture_default(api, stage, state)","d9wg_texture_default(9, stage, state)","device_init_states_for_api","defaults"],
- ["Reset wrapper changes9 defaults","device_init_states_for_api(device, 9);","device_init_states_for_api(device, 8);","device_init_states","defaults"],
+ ["Reset wrapper changes9 defaults","device_init_states_for_api(device, device_compatibility_api(device));","device_init_states_for_api(device, 8);","device_init_states","defaults"],
  ["bridge accepts ordinary9 factory","d3d_from_iface(factory)->compatibility_api != 8","d3d_from_iface(factory)->compatibility_api == 0","d9wg_d3d9_core_create_device8","bridge"],
  ["bridge drops adapter","factory, adapter, (D3DDEVTYPE)type,","factory, adapter & 0u, (D3DDEVTYPE)type,","d9wg_d3d9_core_create_device8","bridge"],
  ["bridge drops device type","(D3DDEVTYPE)type,","(D3DDEVTYPE)(type & 0u),","d9wg_d3d9_core_create_device8","bridge"],

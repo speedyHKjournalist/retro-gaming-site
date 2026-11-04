@@ -1,0 +1,21 @@
+"use strict";
+const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-pp-core-mut-"));
+function mutate(before,after,name="d9wg_d3d9_core_parameters_effective8"){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}const body=source.slice(m.index,end);assert(body.includes(before),before);return source.slice(0,m.index)+body.replace(before,after)+source.slice(end);}
+const cases=[
+ ["Reset emits9 defaults for8","emit_render_default_patches(device->handle, device_compatibility_api(device),","emit_render_default_patches(device->handle, 9,","emit_device_state_after_reset","gamma"],
+ ["Reset uses9 interval policy","d9wg_present_interval_valid(api,","d9wg_present_interval_valid(9,","device_reset","preflight"],
+ ["Reset rejects copy-vsync","d9wg_swap_effect_valid(api,","d9wg_swap_effect_valid(9,","device_reset","preflight"],
+ ["Reset rejects MSAA-lockable","d9wg_present_multisample_valid(api,","d9wg_present_multisample_valid(9,","device_reset","preflight"],
+ ["Reset unsupported samples return9 error","if (api == 8 && parameters->MultiSampleType", "if (0 && api == 8 && parameters->MultiSampleType","device_reset","preflight"],
+ ["Reset accepts9 depth formats","api == 8 ? supported_depth_stencil_format8(parameters->AutoDepthStencilFormat)","api == 8 ? supported_depth_stencil_format(parameters->AutoDepthStencilFormat)","device_reset","preflight"],
+ ["Reset rejects8 target formats","api == 8 ? supported_render_target_format8(parameters->BackBufferFormat)","api == 8 ? supported_backbuffer_format(parameters->BackBufferFormat)","device_reset","preflight"],
+ ["Reset uses stale desktop format","parameters->BackBufferFormat ? parameters->BackBufferFormat : device->display_mode.Format","parameters->BackBufferFormat ? parameters->BackBufferFormat : D3DFMT_X8R8G8B8","device_reset","status"],
+ ["Reset blocker returns9 status","api == 8 ? D3DERR_DEVICELOST : D3DERR_INVALIDCALL","D3DERR_INVALIDCALL","device_reset","status"],
+ ["Reset caller gets9 publication","d9wg_present_parameters_return(api,","d9wg_present_parameters_return(9,","device_reset","status"],
+ ["Reset does not initialize states","    device_init_states(device);","    if(0)device_init_states(device);","device_reset","status"],
+ ["Reset publishes recovered before replay","if (!emit_device_state_after_reset(device))","d9wg_reset_complete(&device->reset_state);if (!emit_device_state_after_reset(device))","device_reset","status"],
+ ["Reset bridge allows ordinary9","device_compatibility_api(device_from_iface(iface)) != 8","device_compatibility_api(device_from_iface(iface)) == 0","d9wg_d3d9_core_reset8","bridge"],
+ ["Reset NULL bypasses core pending state","return IDirect3DDevice9_Reset(iface, NULL);","return D3DERR_INVALIDCALL;","d9wg_d3d9_core_reset8","bridge"],
+ ["Reset bridge bypasses core","return IDirect3DDevice9_Reset(iface, &parameters);","return 0x12345678;","d9wg_d3d9_core_reset8","bridge"],
+];
+try{for(const[label,before,after,name,test]of cases){const file=dir+"/proxy.c";fs.writeFileSync(file,mutate(before,after,name));const r=spawnSync(process.execPath,[__dirname+(test==="gamma"?"/d9wg_gamma_test.js":"/d8wg_backend_reset"+(test==="status"?"":"_"+test)+"_test.js")],{env:{...process.env,D8WG_BACKEND_RESET_SOURCE:file,D9WG_GAMMA_SOURCE:file},encoding:"utf8",timeout:30000}),out=r.stdout+r.stderr;assert(!r.error,label);assert.notEqual(r.status,0,"survived "+label);assert(!/error:|undefined reference|Undefined symbols/.test(out),label+" compile failure: "+out);assert.match(out,/Backend8 Reset (preflight|status|bridge).*line|Reset status API|Assertion.*failed|Assertion failed/,label+" must fail runtime assertion: "+out);console.log("KILL "+label);}console.log(`PASS backend8 Reset mutations:${cases.length}/${cases.length}, strict compilation then runtime assertions`);}finally{fs.rmSync(dir,{recursive:true,force:true});}
