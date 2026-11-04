@@ -6288,31 +6288,12 @@ allocation_failed:
     return failure;
 }
 
-static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
-        UINT stream, IDirect3DVertexBuffer9 *buffer_iface, UINT offset,
-        UINT stride)
+/* Internal updates restore exact captured metadata, including NULL buffers.
+ * The public SetStreamSource wrapper applies its live-metadata NULL rule. */
+static HRESULT device_set_stream_binding(D9Device *device, UINT stream,
+        D9VertexBuffer *buffer, UINT offset, UINT stride)
 {
-    D9Device *device = device_from_iface(iface);
-    D9VertexBuffer *buffer = buffer_iface ? vb_from_iface(buffer_iface) : NULL;
     D9WGSetStreamSource command;
-    if (stream >= D9_MAX_STREAMS) {
-
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    if (buffer && (buffer_iface->lpVtbl != &g_vb_vtbl
-            || buffer->device != device))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (buffer && offset >= buffer->length)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device->recording_result) {
-        D9StateBlock *block = device->recording_result;
-        D9VertexBuffer *old = block->streams[stream].buffer;
-        if (buffer) vb_binding_add_ref(buffer);
-        block->has_stream[stream] = TRUE;block->streams[stream].buffer = buffer;
-        block->streams[stream].offset = offset;block->streams[stream].stride = stride;
-        if (old) vb_binding_release(old);
-        return D3D_OK;
-    }
     if (device->streams[stream].buffer == buffer
             && device->streams[stream].stride == stride
             && device->streams[stream].offset == offset)
@@ -6331,6 +6312,38 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
     command.reserved = 0;
     return emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command))
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+
+static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
+        UINT stream, IDirect3DVertexBuffer9 *buffer_iface, UINT offset,
+        UINT stride)
+{
+    D9Device *device = device_from_iface(iface);
+    D9VertexBuffer *buffer = buffer_iface ? vb_from_iface(buffer_iface) : NULL;
+    if (stream >= D9_MAX_STREAMS) {
+
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+    if (buffer && (buffer_iface->lpVtbl != &g_vb_vtbl
+            || buffer->device != device))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (buffer && offset >= buffer->length)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!buffer) {
+        /* Retail keeps the current live offset/stride, even while recording. */
+        offset = device->streams[stream].offset;
+        stride = device->streams[stream].stride;
+    }
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9VertexBuffer *old = block->streams[stream].buffer;
+        if (buffer) vb_binding_add_ref(buffer);
+        block->has_stream[stream] = TRUE;block->streams[stream].buffer = buffer;
+        block->streams[stream].offset = offset;block->streams[stream].stride = stride;
+        if (old) vb_binding_release(old);
+        return D3D_OK;
+    }
+    return device_set_stream_binding(device, stream, buffer, offset, stride);
 }
 
 static HRESULT WINAPI device_get_stream_source(IDirect3DDevice9 *iface,
@@ -6651,6 +6664,7 @@ static void clear_stream_zero_after_up(D9Device *device)
 {
     D9VertexBuffer *old = device->streams[0].buffer;
     device->streams[0].buffer = NULL;
+    device->streams[0].offset = 0;
     device->streams[0].stride = 0;
     if (old) vb_binding_release(old);
 }
@@ -12257,9 +12271,8 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
-            IDirect3DDevice9_SetStreamSource(iface, index,
-                    block->streams[index].buffer
-                        ? &block->streams[index].buffer->iface : NULL,
+            device_set_stream_binding(device, index,
+                    block->streams[index].buffer,
                     block->streams[index].offset, block->streams[index].stride);
         }
         if (block->has_stream_frequency[index]) IDirect3DDevice9_SetStreamSourceFreq(iface, index, block->streams[index].frequency);

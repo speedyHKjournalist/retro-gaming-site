@@ -8,9 +8,9 @@ function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\
     }
     const body = source.slice(mutationStart, end); assert.equal(body.split(before).length, 2, name + " " + before); return source.slice(0, mutationStart) + body.replace(before, after) + source.slice(end);}
 const cases = [];
-for (const [kind, iface, setter, getter, slot, up] of [["vb", "IDirect3DVertexBuffer9", "device_set_stream_source", "device_get_stream_source", "device->streams[stream].buffer", "clear_stream_zero_after_up"], ["ib", "IDirect3DIndexBuffer9", "device_set_indices", "device_get_indices", "device->index_buffer", "clear_indices_after_indexed_up"]]) {
+for (const [kind, iface, setter, getter, slot, up] of [["vb", "IDirect3DVertexBuffer9", "device_set_stream_binding", "device_get_stream_source", "device->streams[stream].buffer", "clear_stream_zero_after_up"], ["ib", "IDirect3DIndexBuffer9", "device_set_indices", "device_get_indices", "device->index_buffer", "clear_indices_after_indexed_up"]]) {
     cases.push(
-        [kind + " binding exposes public ref", setter, "if (buffer) " + kind + "_binding_add_ref(buffer);", "if (buffer) " + iface + "_AddRef(buffer_iface);"],
+        [kind + " binding exposes public ref", setter, "if (buffer) " + kind + "_binding_add_ref(buffer);", "if (buffer) " + iface + "_AddRef(&buffer->iface);"],
         [kind + " zero leaks device pin", kind + "_release", "device_child_release(device);", "if (FALSE) device_child_release(device);"],
         [kind + " revival omits device pin", kind + "_add_ref", "if (refs == 1)", "if (FALSE && refs == 1)"],
         [kind + " each public ref pins device", kind + "_add_ref", "if (refs == 1)", "if (refs > 0)"],

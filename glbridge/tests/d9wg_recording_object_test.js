@@ -4,7 +4,7 @@ const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D9WG_
 function extract(name){const m=new RegExp("static (?:HRESULT(?: WINAPI)?|BOOL|void) "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 const names=['texture_binding_slot',...['texture','stream_source','indices','vertex_shader','pixel_shader','vertex_declaration','fvf','light'].flatMap(n=>['device_set_'+n,'device_get_'+n]),'d9_emit_light','device_light_enable','device_get_light_enable','state_block_release_references','device_begin_state_block','device_end_state_block'];
 // The SetLight function calls this emitter, so put its definition first.
-names.splice(names.indexOf('d9_emit_light'),1);names.unshift('d9_emit_light');
+names.splice(names.indexOf('d9_emit_light'),1);names.unshift('d9_emit_light');names.unshift('device_set_stream_binding');
 const interfaces=['VertexBuffer','IndexBuffer','BaseTexture','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','StateBlock'].map(n=>'typedef Interface IDirect3D'+n+'9;').join('\n');
 const code=`#include <assert.h>
 #include <stdint.h>
