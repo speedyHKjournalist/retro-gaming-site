@@ -1,0 +1,35 @@
+/* D3D8 CND1.4 acceptance and scalar/componentwise 0.5 comparisons. */
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#include <windows.h>
+#include <initguid.h>
+#include <d3d8.h>
+static HANDLE logfile;static HWND window;static char directory[MAX_PATH];static UINT frame;
+static void report(const char*s){DWORD n;WriteFile(logfile,s,lstrlenA(s),&n,NULL);WriteFile(logfile,"\r\n",2,&n,NULL);FlushFileBuffers(logfile);}
+static void check(BOOL ok,const char*s){if(!ok){report(s);ExitProcess(1);}}
+static void expect(HRESULT hr,const char*s){if(FAILED(hr)){char line[160];wsprintfA(line,"%s hr=%08lX",s,(DWORD)hr);report(line);ExitProcess(1);}}
+static BOOL equal(const void*a,const void*b,UINT n){const volatile BYTE*x=a,*y=b;for(UINT i=0;i<n;i++)if(x[i]!=y[i])return FALSE;return TRUE;}
+static void setup(IDirect3DDevice8*d){expect(IDirect3DDevice8_SetRenderState(d,D3DRS_ZENABLE,FALSE),"FAIL Z");expect(IDirect3DDevice8_SetRenderState(d,D3DRS_LIGHTING,FALSE),"FAIL lighting");expect(IDirect3DDevice8_SetRenderState(d,D3DRS_CULLMODE,D3DCULL_NONE),"FAIL cull");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_COLOROP,D3DTOP_SELECTARG2),"FAIL color op");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_COLORARG2,D3DTA_DIFFUSE),"FAIL color arg");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_ALPHAOP,D3DTOP_SELECTARG2),"FAIL alpha op");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_ALPHAARG2,D3DTA_DIFFUSE),"FAIL alpha arg");}
+static void draw(IDirect3DDevice8*d,UINT module,UINT sdk,UINT step,DWORD color)
+{
+ struct Vertex{float x,y,z,w;DWORD color;};const struct Vertex v[6]={{-.5f,-.5f,.5f,1,0xffffffff},{7.5f,-.5f,.5f,1,0xffffffff},{-.5f,7.5f,.5f,1,0xffffffff},{-.5f,7.5f,.5f,1,0xffffffff},{7.5f,-.5f,.5f,1,0xffffffff},{7.5f,7.5f,.5f,1,0xffffffff}};
+ expect(IDirect3DDevice8_BeginScene(d),"FAIL begin");expect(IDirect3DDevice8_DrawPrimitiveUP(d,D3DPT_TRIANGLELIST,2,v,20),"FAIL draw");expect(IDirect3DDevice8_EndScene(d),"FAIL end");IDirect3DSurface8*back=NULL;expect(IDirect3DDevice8_GetBackBuffer(d,0,D3DBACKBUFFER_TYPE_MONO,&back),"FAIL back");IDirect3DSurface8*cpu=NULL;expect(IDirect3DDevice8_CreateImageSurface(d,8,8,D3DFMT_A8R8G8B8,&cpu),"FAIL CPU surface");expect(IDirect3DDevice8_CopyRects(d,back,NULL,0,cpu,NULL),"FAIL transport readback");D3DLOCKED_RECT lock;expect(IDirect3DSurface8_LockRect(cpu,&lock,NULL,D3DLOCK_READONLY),"FAIL CPU lock");expect(IDirect3DSurface8_UnlockRect(cpu),"FAIL CPU unlock");check(!IDirect3DSurface8_Release(cpu)&&!IDirect3DSurface8_Release(back),"FAIL surface refs");char line[180];wsprintfA(line,"CND8 FRAME index=%u module=%u sdk=%u step=%u color=%08lX readback=1",frame++,module,sdk,step,color);report(line);
+}
+static const DWORD patterns[6][4]={{0,0x3f000000,0x3f800000,0x3f800000},{0x3f800000,0x3f800000,0x3f000000,0x3f000000},{0x3effffff,0x3f000000,0x3f000001,0x3f000000},{0x3f400000,0x3e800000,0x3f000000,0x3f400000},{0x3f000000,0x3f000000,0x3f000000,0x3f000000},{0x3f800000,0,0x3f800000,0}};
+static const DWORD colors[2][6]={{0xffffffff,0,0,0xffffffff,0,0},{0xff0000ff,0x00ffff00,0x000000ff,0xffff0000,0,0x00ff00ff}};
+static void query(IDirect3DDevice8*d,DWORD h,const DWORD*code)
+{
+ DWORD bytes=0,out[16];expect(IDirect3DDevice8_GetPixelShaderFunction(d,h,NULL,&bytes),"FAIL PS size");check(bytes==40,"FAIL PS original size");expect(IDirect3DDevice8_GetPixelShaderFunction(d,h,out,&bytes),"FAIL PS bytes");check(bytes==40&&equal(out,code,40),"FAIL exact original PS");
+}
+void WINAPI WinMainCRTStartup(void)
+{
+ GetModuleFileNameA(NULL,directory,sizeof(directory));UINT at=lstrlenA(directory);while(at&&directory[at-1]!='\\')at--;directory[at]=0;char path[MAX_PATH];lstrcpyA(path,directory);lstrcatA(path,"CND8.TXT");logfile=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);check(logfile!=INVALID_HANDLE_VALUE,"FAIL log");window=CreateWindowExA(0,"STATIC","Pixel shader CND",WS_POPUP|WS_VISIBLE,0,0,8,8,NULL,NULL,GetModuleHandleA(NULL),NULL);check(window!=NULL,"FAIL window");HMODULE modules[2];for(UINT m=0;m<2;m++){lstrcpyA(path,directory);lstrcatA(path,m?"D3D8.DLL":"BASE8.DLL");modules[m]=LoadLibraryA(path);check(modules[m]!=NULL,"FAIL module");}
+ for(UINT module=0;module<2;module++)for(UINT sdk=120;sdk<=220;sdk+=100){
+  IDirect3D8*(WINAPI*make)(UINT)=(void*)GetProcAddress(modules[module],"Direct3DCreate8");check(make!=NULL,"FAIL export");IDirect3D8*root=make(sdk);check(root!=NULL,"FAIL root");D3DPRESENT_PARAMETERS pp;ZeroMemory(&pp,sizeof(pp));pp.BackBufferWidth=pp.BackBufferHeight=8;pp.BackBufferFormat=D3DFMT_A8R8G8B8;pp.BackBufferCount=1;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.hDeviceWindow=window;pp.Windowed=TRUE;IDirect3DDevice8*d=NULL;expect(IDirect3D8_CreateDevice(root,0,D3DDEVTYPE_HAL,window,D3DCREATE_SOFTWARE_VERTEXPROCESSING,&pp,&d),"FAIL device");check(IDirect3D8_Release(root)==1,"FAIL root pin");setup(d);expect(IDirect3DDevice8_SetVertexShader(d,D3DFVF_XYZRHW|D3DFVF_DIFFUSE),"FAIL FVF");DWORD shaders[5]={0};
+  for(UINT minor=0;minor<=4;minor++){const DWORD code[]={0xffff0100u+minor,1,0x800f0000,0xa0e40000,80,0x800f0000,minor==4?0x80e40000:0x80ff0000,0xa0e40001,0xa0e40002,0xffff};DWORD handle=0xcccccccc;HRESULT hr=IDirect3DDevice8_CreatePixelShader(d,code,&handle);if(!module&&minor==4)check(hr==D3DERR_INVALIDCALL&&!handle,"FAIL baseline must reproduce CND1.4 refusal");else{expect(hr,"FAIL CND legacy version");check(handle!=0,"FAIL CND handle");shaders[minor]=handle;query(d,handle,code);}}
+  const float yes[4]={1,1,1,1},no[4]={0,0,0,0};expect(IDirect3DDevice8_SetPixelShaderConstant(d,1,yes,1),"FAIL true source");expect(IDirect3DDevice8_SetPixelShaderConstant(d,2,no,1),"FAIL false source");
+  for(UINT mode=0;mode<(module?2u:1u);mode++){UINT minor=mode?4:1;expect(IDirect3DDevice8_SetPixelShader(d,shaders[minor]),"FAIL CND bind");DWORD active=0;expect(IDirect3DDevice8_GetPixelShader(d,&active),"FAIL active query");check(active==shaders[minor],"FAIL active handle");for(UINT trial=0;trial<(module?6u:1u);trial++){expect(IDirect3DDevice8_SetPixelShaderConstant(d,0,patterns[trial],1),"FAIL CND input");DWORD got[4];expect(IDirect3DDevice8_GetPixelShaderConstant(d,0,got,1),"FAIL input query");check(equal(got,patterns[trial],16),"FAIL exact comparison input");draw(d,module,sdk,mode*6+trial,colors[mode][trial]);}}
+  UINT valid=module?5:4;for(UINT minor=0;minor<valid;minor++){expect(IDirect3DDevice8_DeletePixelShader(d,shaders[minor]),"FAIL PS delete");DWORD size=0x12345678;check(IDirect3DDevice8_GetPixelShaderFunction(d,shaders[minor],NULL,&size)==D3DERR_INVALIDCALL&&size==0x12345678,"FAIL expired PS");}check(!IDirect3DDevice8_Release(d),"FAIL device refs");char line[200];wsprintfA(line,"CND8 CHECK module=%u sdk=%u accepted=%u refused=%u originalFunctions=%u expiredHandles=%u frames=%u boundaryBits=1 activeIdentity=1 finalRefs=0",module,sdk,valid,module?0:1,valid,valid,module?12:1);report(line);
+ }
+ check(FreeLibrary(modules[0])&&FreeLibrary(modules[1]),"FAIL unload");report("PASS D3D8 CND1.4 frames=26 devices=4 finalRefs=0");DestroyWindow(window);CloseHandle(logfile);ExitProcess(0);
+}

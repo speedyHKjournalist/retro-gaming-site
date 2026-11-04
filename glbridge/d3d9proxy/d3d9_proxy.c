@@ -2780,7 +2780,8 @@ static BOOL shader8_opcode_supported(WORD opcode, BOOL is_pixel_shader,
         if (!is_pixel_shader) return FALSE;
         *operand_words = 4; return TRUE;
     case D3DSIO_CND:
-        if (!is_pixel_shader || minor > 3u) return FALSE;
+        /* ps_1_4 keeps CND and compares each source component to 0.5. */
+        if (!is_pixel_shader || minor > 4u) return FALSE;
         *operand_words = 4; return TRUE;
     case D3DSIO_CMP:
         if (!is_pixel_shader || minor < 2u) return FALSE;

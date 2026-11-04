@@ -1001,3 +1001,15 @@ programmable draws. SwiftShader and Metal each verify five frames/320 pixels;
 all 22 shader resources retire before fallback cleanup. Public8 device/resource/
 handle wrapping and numeric shader differential testing remain open.
 See `../deployments/d3d-webgpu-review-4K13.json`.
+
+Stage 4K15 accepts documented CND in ps_1_4 through the shared API8 policy.
+Vertex rejection, other opcode rules and the ordinary9 scanner stay intact.
+Historical native oracles include one explicit CND1.4 contract correction;
+17 runtime mutants and an actual prior-policy control distinguish the fix.
+XP SDK120/220 reproduces the old1.4 refusal and validates current creation,
+original function bytes and expired handles. SwiftShader/Metal each compare
+26 frames/1664 pixels: scalar alpha in1.1 versus per-component1.4 at0.5 and
+adjacent float32 values,including alpha. Coissue,NaN arithmetic and the full
+numeric differential corpus remain separate work. The shipped ordinary9 DLL
+inherits its accepted version; only the accepted current8 DLL is published.
+See `../deployments/d3d-webgpu-review-4K15.json`.
