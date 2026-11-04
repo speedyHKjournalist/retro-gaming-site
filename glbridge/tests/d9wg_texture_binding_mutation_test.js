@@ -1,7 +1,12 @@
 "use strict";
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-texture-binding-mut-"));
-function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} const body = source.slice(m.index, end); assert.equal(body.split(before).length, 2, name + " " + before); return source.slice(0, m.index) + body.replace(before, after) + source.slice(end);}
+function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} let mutationStart = m.index;
+    if (name.startsWith("device_set_")) {
+        const recording = source.indexOf("    if (device->recording_result) {", m.index);
+        if (recording >= 0 && recording < end) {let at = source.indexOf("{", recording) + 1, nesting = 1; for (; nesting; at++) {if (source[at] === "{") nesting++; if (source[at] === "}") nesting--;} mutationStart = at;}
+    }
+    const body = source.slice(mutationStart, end); assert.equal(body.split(before).length, 2, name + " " + before); return source.slice(0, mutationStart) + body.replace(before, after) + source.slice(end);}
 const cases = [
     ["sampler exposes public reference", "device_set_texture", "if (texture) texture_binding_add_ref(texture);", "if (texture) IDirect3DTexture9_AddRef(&texture->iface);"],
     ["target exposes public parent reference", "surface_binding_add_ref", "texture_binding_add_ref(surface->texture);", "IDirect3DTexture9_AddRef(&surface->texture->iface);"],

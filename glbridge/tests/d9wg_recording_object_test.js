@@ -6,7 +6,8 @@ const names=['texture_binding_slot',...['texture','stream_source','indices','ver
 // The SetLight function calls this emitter, so put its definition first.
 names.splice(names.indexOf('d9_emit_light'),1);names.unshift('d9_emit_light');
 const interfaces=['VertexBuffer','IndexBuffer','BaseTexture','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','StateBlock'].map(n=>'typedef Interface IDirect3D'+n+'9;').join('\n');
-const code=`#include <stdint.h>
+const code=`#include <assert.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -49,25 +50,28 @@ typedef struct D9StateBlock {Interface iface;D9Device *device;D9Texture *texture
 struct D9Device {D9Texture *textures[20];D9CubeTexture *cube_bindings[20];D9VolumeTexture *volume_bindings[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;DWORD fvf;D9StateBlock *recording_result;D3DLIGHT9 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;uint32_t handle;};
 typedef D9Device IDirect3DDevice9;
 static const int g_texture_vtbl=1,g_cube_vtbl=2,g_volume_texture_vtbl=3,g_vb_vtbl=4,g_ib_vtbl=5,g_decl_vtbl=6,g_vertex_shader_vtbl=7,g_pixel_shader_vtbl=8;
-static struct {void *iface;int *refs;} registry[32];static unsigned registry_count,emissions;static int fail_alloc;
+static struct {void *iface;int *refs;int binding_refs;} registry[32];static unsigned registry_count,emissions;static int fail_alloc;
 static int addref(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0)abort();return ++*registry[i].refs;}abort();}
 static int release(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0)abort();return --*registry[i].refs;}abort();}
-/* These are backend construction stubs; public recording references remain
- * independently observed. The complete private lifetime runs in its own suite. */
-static void decl_binding_add_ref(D9VertexDeclaration*d){addref(&d->iface);}
-static void decl_binding_release(D9VertexDeclaration*d){release(&d->iface);}
-static void shader_binding_add_ref(D9Shader*s){addref(&s->iface);}
-static void shader_binding_release(D9Shader*s){release(&s->iface);}
-static void vb_binding_add_ref(D9VertexBuffer*b){addref(&b->iface);}
-static void vb_binding_release(D9VertexBuffer*b){release(&b->iface);}
-static void ib_binding_add_ref(D9IndexBuffer*b){addref(&b->iface);}
-static void ib_binding_release(D9IndexBuffer*b){release(&b->iface);}
-static void volume_texture_binding_add_ref(D9VolumeTexture*t){addref(&t->iface);}
-static void volume_texture_binding_release(D9VolumeTexture*t){release(&t->iface);}
-static void cube_binding_add_ref(D9CubeTexture*t){addref(&t->iface);}
-static void cube_binding_release(D9CubeTexture*t){release(&t->iface);}
-static void texture_binding_add_ref(D9Texture*t){addref(&t->iface);}
-static void texture_binding_release(D9Texture*t){release(&t->iface);}
+/* Registry models public refs and private storage holds independently; actual
+ * allocation/device-pin teardown is covered by the complete graph suite. */
+static int binding_refs(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface)return registry[i].binding_refs;abort();}
+static void retain_storage(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){if(*registry[i].refs<=0&&registry[i].binding_refs<=0)abort();registry[i].binding_refs++;return;}abort();}
+static void release_storage(void *iface){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==iface){assert(registry[i].binding_refs>0);registry[i].binding_refs--;return;}abort();}
+static void decl_binding_add_ref(D9VertexDeclaration*d){retain_storage(&d->iface);}
+static void decl_binding_release(D9VertexDeclaration*d){release_storage(&d->iface);}
+static void shader_binding_add_ref(D9Shader*s){retain_storage(&s->iface);}
+static void shader_binding_release(D9Shader*s){release_storage(&s->iface);}
+static void vb_binding_add_ref(D9VertexBuffer*b){retain_storage(&b->iface);}
+static void vb_binding_release(D9VertexBuffer*b){release_storage(&b->iface);}
+static void ib_binding_add_ref(D9IndexBuffer*b){retain_storage(&b->iface);}
+static void ib_binding_release(D9IndexBuffer*b){release_storage(&b->iface);}
+static void volume_texture_binding_add_ref(D9VolumeTexture*t){retain_storage(&t->iface);}
+static void volume_texture_binding_release(D9VolumeTexture*t){release_storage(&t->iface);}
+static void cube_binding_add_ref(D9CubeTexture*t){retain_storage(&t->iface);}
+static void cube_binding_release(D9CubeTexture*t){release_storage(&t->iface);}
+static void texture_binding_add_ref(D9Texture*t){retain_storage(&t->iface);}
+static void texture_binding_release(D9Texture*t){release_storage(&t->iface);}
 
 ${['VertexBuffer','IndexBuffer','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','BaseTexture'].map(n=>'#define IDirect3D'+n+'9_AddRef(p) addref(p)\n#define IDirect3D'+n+'9_Release(p) release(p)').join('\n')}
 static D9Device *device_from_iface(D9Device *p){return p;}
@@ -90,16 +94,16 @@ static int refcount(void *p){for(unsigned i=0;i<registry_count;++i)if(registry[i
 int main(void){D9Device device={0};Object old_vb,new_vb,old_ib,new_ib,old_decl,new_decl,texture,cube,volume;D9Shader old_vs,new_vs,old_ps,new_ps;make(&old_vb,&device,&g_vb_vtbl,1);make(&new_vb,&device,&g_vb_vtbl,2);make(&old_ib,&device,&g_ib_vtbl,3);make(&new_ib,&device,&g_ib_vtbl,4);make(&old_decl,&device,&g_decl_vtbl,5);make(&new_decl,&device,&g_decl_vtbl,6);make(&texture,&device,&g_texture_vtbl,7);make(&cube,&device,&g_cube_vtbl,8);make(&volume,&device,&g_volume_texture_vtbl,9);make_shader(&old_vs,&device,&g_vertex_shader_vtbl,10);make_shader(&new_vs,&device,&g_vertex_shader_vtbl,11);make_shader(&old_ps,&device,&g_pixel_shader_vtbl,12);make_shader(&new_ps,&device,&g_pixel_shader_vtbl,13);
  CHECK(device_set_stream_source(&device,1,&old_vb.iface,0,12)==0&&device_set_indices(&device,&old_ib.iface)==0&&device_set_vertex_declaration(&device,&old_decl.iface)==0&&device_set_vertex_shader(&device,&old_vs.iface.vertex)==0&&device_set_pixel_shader(&device,&old_ps.iface.pixel)==0);D3DLIGHT9 light={0};light.Type=3;light.data[0]=.75f;CHECK(device_set_light(&device,37,&light)==0&&device_light_enable(&device,37,TRUE)==0);
  unsigned sent=emissions;CHECK(device_begin_state_block(&device)==0);D9Device before=device;CHECK(device_begin_state_block(&device)==-1);
- CHECK(device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&new_vb.refs==2);CHECK(device_set_indices(&device,&new_ib.iface)==0&&new_ib.refs==2);
- CHECK(device_set_texture(&device,0,&texture.iface)==0&&texture.refs==2);CHECK(device_set_texture(&device,0,&cube.iface)==0&&texture.refs==1&&cube.refs==2);CHECK(device_set_texture(&device,0,&volume.iface)==0&&cube.refs==1&&volume.refs==2);CHECK(device_set_texture(&device,0,&texture.iface)==0&&volume.refs==1);CHECK(device_set_texture(&device,1,&cube.iface)==0&&device_set_texture(&device,260,&volume.iface)==0);CHECK(texture.refs==2&&cube.refs==2&&volume.refs==2);
- CHECK(device_set_vertex_shader(&device,&new_vs.iface.vertex)==0&&device_set_pixel_shader(&device,&new_ps.iface.pixel)==0&&new_vs.refs==2&&new_ps.refs==2);CHECK(device_set_vertex_declaration(&device,&new_decl.iface)==0&&new_decl.refs==2);CHECK(device_set_fvf(&device,2)==0&&new_decl.refs==1&&recording.fvf==2);CHECK(device_set_vertex_declaration(&device,&new_decl.iface)==0&&new_decl.refs==2&&recording.fvf==0);
+ CHECK(device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&new_vb.refs==1&&binding_refs(&new_vb)==1);CHECK(device_set_indices(&device,&new_ib.iface)==0&&new_ib.refs==1&&binding_refs(&new_ib)==1);
+ CHECK(device_set_texture(&device,0,&texture.iface)==0&&texture.refs==1&&binding_refs(&texture)==1);CHECK(device_set_texture(&device,0,&cube.iface)==0&&texture.refs==1&&cube.refs==1&&binding_refs(&cube)==1);CHECK(device_set_texture(&device,0,&volume.iface)==0&&cube.refs==1&&volume.refs==1&&binding_refs(&volume)==1);CHECK(device_set_texture(&device,0,&texture.iface)==0&&volume.refs==1);CHECK(device_set_texture(&device,1,&cube.iface)==0&&device_set_texture(&device,260,&volume.iface)==0);CHECK(texture.refs==1&&binding_refs(&texture)==1&&cube.refs==1&&binding_refs(&cube)==1&&volume.refs==1&&binding_refs(&volume)==1);
+ CHECK(device_set_vertex_shader(&device,&new_vs.iface.vertex)==0&&device_set_pixel_shader(&device,&new_ps.iface.pixel)==0&&new_vs.refs==1&&binding_refs(&new_vs)==1&&new_ps.refs==1&&binding_refs(&new_ps)==1);CHECK(device_set_vertex_declaration(&device,&new_decl.iface)==0&&new_decl.refs==1&&binding_refs(&new_decl)==1);CHECK(device_set_fvf(&device,2)==0&&new_decl.refs==1&&recording.fvf==2);CHECK(device_set_vertex_declaration(&device,&new_decl.iface)==0&&new_decl.refs==1&&binding_refs(&new_decl)==1&&recording.fvf==0);
  Interface *got;UINT offset,stride;DWORD fvf;CHECK(device_get_stream_source(&device,1,&got,&offset,&stride)==0&&got==&old_vb.iface&&offset==0&&stride==12);release(got);CHECK(device_get_indices(&device,&got)==0&&got==&old_ib.iface);release(got);CHECK(device_get_texture(&device,0,&got)==0&&!got);CHECK(device_get_vertex_shader(&device,&got)==0&&got==&old_vs.iface.vertex);release(got);CHECK(device_get_pixel_shader(&device,&got)==0&&got==&old_ps.iface.pixel);release(got);CHECK(device_get_vertex_declaration(&device,&got)==0&&got==&old_decl.iface);release(got);CHECK(device_get_fvf(&device,&fvf)==0&&fvf==0);
  light.data[0]=.125f;CHECK(device_set_light(&device,3,&light)==0&&recording.has_light[3]);D3DLIGHT9 low;memset(&low,0xcc,sizeof(low));CHECK(device_get_light(&device,3,&low)==-1);CHECK(device_set_light(&device,37,&light)==0&&device_light_enable(&device,37,FALSE)==0);D3DLIGHT9 queried;BOOL active;CHECK(device_get_light(&device,37,&queried)==0&&queried.data[0]==.75f&&device_get_light_enable(&device,37,&active)==0&&active);CHECK(device_light_enable(&device,1002,FALSE)==0);memset(&queried,0xcc,sizeof(queried));CHECK(device_get_light(&device,1002,&queried)==-1);D9WGLightState *entry=d9wg_light_find(recording.extra_lights,1002);CHECK(entry&&entry->set&&entry->light_mask&&entry->enable_mask&&!entry->enabled&&entry->light.Type==3&&entry->light.data[0]==1&&entry->light.data[17]==1);fail_light=1;CHECK(device_light_enable(&device,1003,TRUE)==-3&&!d9wg_light_find(recording.extra_lights,1003));fail_light=0;CHECK(!memcmp(&device,&before,sizeof(device))&&emissions==sent);
  CHECK(device_set_stream_source(&device,1,&new_vb.iface,64,12)==-1&&device_set_texture(&device,256,&texture.iface)==-1&&device_set_fvf(&device,0xffffffffu)==-1);Interface *result=(void*)1;CHECK(device_end_state_block(&device,NULL)==-1&&device.recording_result==&recording);CHECK(device_end_state_block(&device,&result)==0&&result==&recording.iface&&!device.recording_result&&emissions==sent);CHECK(device_end_state_block(&device,&result)==-1);
- /* Drop the app references; Apply setters and snapshot release now transfer
-  * the last references to the live bindings, which finally release them. */
- void *recorded[]={&new_vb,&new_ib,&new_decl,&new_vs,&new_ps,&texture,&cube,&volume};for(unsigned i=0;i<8;++i)CHECK(release(recorded[i])==1);
- CHECK(device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&device_set_indices(&device,&new_ib.iface)==0&&device_set_vertex_shader(&device,&new_vs.iface.vertex)==0&&device_set_pixel_shader(&device,&new_ps.iface.pixel)==0&&device_set_vertex_declaration(&device,&new_decl.iface)==0);CHECK(device_set_texture(&device,0,&texture.iface)==0&&device_set_texture(&device,1,&cube.iface)==0&&device_set_texture(&device,260,&volume.iface)==0);state_block_release_references(&recording);d9wg_light_free(&recording.extra_lights);CHECK(device_set_stream_source(&device,1,NULL,0,0)==0&&device_set_indices(&device,NULL)==0&&device_set_vertex_shader(&device,NULL)==0&&device_set_pixel_shader(&device,NULL)==0&&device_set_vertex_declaration(&device,NULL)==0);CHECK(device_set_texture(&device,0,NULL)==0&&device_set_texture(&device,1,NULL)==0&&device_set_texture(&device,260,NULL)==0);for(unsigned i=0;i<8;++i)CHECK(refcount(recorded[i])==0);
+ /* App public refs reach zero while the recorded storage remains. Applying
+  * adds private live holds; snapshot release and unbind then retire storage. */
+ void *recorded[]={&new_vb,&new_ib,&new_decl,&new_vs,&new_ps,&texture,&cube,&volume};for(unsigned i=0;i<8;++i)CHECK(release(recorded[i])==0&&binding_refs(recorded[i])==1);
+ CHECK(device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&device_set_indices(&device,&new_ib.iface)==0&&device_set_vertex_shader(&device,&new_vs.iface.vertex)==0&&device_set_pixel_shader(&device,&new_ps.iface.pixel)==0&&device_set_vertex_declaration(&device,&new_decl.iface)==0);CHECK(device_set_texture(&device,0,&texture.iface)==0&&device_set_texture(&device,1,&cube.iface)==0&&device_set_texture(&device,260,&volume.iface)==0);state_block_release_references(&recording);d9wg_light_free(&recording.extra_lights);CHECK(device_set_stream_source(&device,1,NULL,0,0)==0&&device_set_indices(&device,NULL)==0&&device_set_vertex_shader(&device,NULL)==0&&device_set_pixel_shader(&device,NULL)==0&&device_set_vertex_declaration(&device,NULL)==0);CHECK(device_set_texture(&device,0,NULL)==0&&device_set_texture(&device,1,NULL)==0&&device_set_texture(&device,260,NULL)==0);for(unsigned i=0;i<8;++i)CHECK(refcount(recorded[i])==0&&binding_refs(recorded[i])==0);
  void *original[]={&old_vb,&old_ib,&old_decl,&old_vs,&old_ps};for(unsigned i=0;i<5;++i)CHECK(release(original[i])==0);d9wg_light_free(&device.extra_lights);CHECK(allocations==frees);fail_alloc=1;CHECK(device_begin_state_block(&device)==-3&&!device.recording_result);return 0;}
 `;
-const directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-record-objects-"));try{const input=path.join(directory,"objects.c"),binary=path.join(directory,"objects");fs.writeFileSync(input,code);const built=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",input,"-o",binary],{encoding:"utf8"});assert.equal(built.status,0,built.stderr||String(built.error));const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr||String(run.error));console.log("PASS actual D3D9 object C recording: live queries, exact VB/IB/texture/shader/declaration refs, kind replacement, sparse default lights, atomic OOM, Begin/End isolation and final release");}finally{fs.rmSync(directory,{recursive:true,force:true});}
+const directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-record-objects-"));try{const input=path.join(directory,"objects.c"),binary=path.join(directory,"objects");fs.writeFileSync(input,code);const built=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",input,"-o",binary],{encoding:"utf8"});assert.equal(built.status,0,built.stderr||String(built.error));const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr||String(run.error));console.log("PASS actual D3D9 object C recording: live queries, separate public/private VB/IB/texture/shader/declaration refs, kind replacement, sparse default lights, atomic OOM, Begin/End isolation and final release");}finally{fs.rmSync(directory,{recursive:true,force:true});}

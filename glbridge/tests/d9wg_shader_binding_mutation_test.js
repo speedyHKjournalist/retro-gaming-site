@@ -1,7 +1,12 @@
 "use strict";
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-shader-binding-mut-"));
-function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} const body = source.slice(m.index, end); assert(body.includes(before), name + " " + before); return source.slice(0, m.index) + body.replace(before, after) + source.slice(end);}
+function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} let mutationStart = m.index;
+    if (name.startsWith("device_set_")) {
+        const recording = source.indexOf("    if (device->recording_result) {", m.index);
+        if (recording >= 0 && recording < end) {let at = source.indexOf("{", recording) + 1, nesting = 1; for (; nesting; at++) {if (source[at] === "{") nesting++; if (source[at] === "}") nesting--;} mutationStart = at;}
+    }
+    const body = source.slice(mutationStart, end); assert(body.includes(before), name + " " + before); return source.slice(0, mutationStart) + body.replace(before, after) + source.slice(end);}
 const cases = [];
 for (const [kind, iface, setter, getter, slot] of [["decl", "IDirect3DVertexDeclaration9", "device_set_vertex_declaration", "device_get_vertex_declaration", "vertex_declaration"], ["vs", "IDirect3DVertexShader9", "device_set_vertex_shader", "device_get_vertex_shader", "vertex_shader"], ["ps", "IDirect3DPixelShader9", "device_set_pixel_shader", "device_get_pixel_shader", "pixel_shader"]]) {
     const object = kind === "decl" ? "decl" : "shader", helper = kind === "decl" ? "decl" : "shader", member = kind === "decl" ? "iface" : "iface." + (kind === "vs" ? "vertex" : "pixel");

@@ -1,7 +1,12 @@
 "use strict";
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-buffer-binding-mut-"));
-function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} const body = source.slice(m.index, end); assert.equal(body.split(before).length, 2, name + " " + before); return source.slice(0, m.index) + body.replace(before, after) + source.slice(end);}
+function mutate(name, before, after) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name); let end = source.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;} let mutationStart = m.index;
+    if (name.startsWith("device_set_")) {
+        const recording = source.indexOf("    if (device->recording_result) {", m.index);
+        if (recording >= 0 && recording < end) {let at = source.indexOf("{", recording) + 1, nesting = 1; for (; nesting; at++) {if (source[at] === "{") nesting++; if (source[at] === "}") nesting--;} mutationStart = at;}
+    }
+    const body = source.slice(mutationStart, end); assert.equal(body.split(before).length, 2, name + " " + before); return source.slice(0, mutationStart) + body.replace(before, after) + source.slice(end);}
 const cases = [];
 for (const [kind, iface, setter, getter, slot, up] of [["vb", "IDirect3DVertexBuffer9", "device_set_stream_source", "device_get_stream_source", "device->streams[stream].buffer", "clear_stream_zero_after_up"], ["ib", "IDirect3DIndexBuffer9", "device_set_indices", "device_get_indices", "device->index_buffer", "clear_indices_after_indexed_up"]]) {
     cases.push(

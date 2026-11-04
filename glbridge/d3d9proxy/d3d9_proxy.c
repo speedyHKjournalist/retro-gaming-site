@@ -5784,14 +5784,17 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
     }
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (texture) IDirect3DTexture9_AddRef(&texture->iface);
-        if (cube) IDirect3DCubeTexture9_AddRef(&cube->iface);
-        if (volume) IDirect3DVolumeTexture9_AddRef(&volume->iface);
-        if (block->textures[slot]) IDirect3DTexture9_Release(&block->textures[slot]->iface);
-        if (block->cube_textures[slot]) IDirect3DCubeTexture9_Release(&block->cube_textures[slot]->iface);
-        if (block->volume_textures[slot]) IDirect3DVolumeTexture9_Release(&block->volume_textures[slot]->iface);
+        D9Texture *old_texture = block->textures[slot];
+        D9CubeTexture *old_cube = block->cube_textures[slot];
+        D9VolumeTexture *old_volume = block->volume_textures[slot];
+        if (texture) texture_binding_add_ref(texture);
+        if (cube) cube_binding_add_ref(cube);
+        if (volume) volume_texture_binding_add_ref(volume);
         block->has_texture[slot] = TRUE;block->textures[slot] = texture;
         block->cube_textures[slot] = cube;block->volume_textures[slot] = volume;
+        if (old_texture) texture_binding_release(old_texture);
+        if (old_cube) cube_binding_release(old_cube);
+        if (old_volume) volume_texture_binding_release(old_volume);
         return D3D_OK;
     }
     if (device->textures[slot] == texture && device->cube_bindings[slot] == cube
@@ -6300,10 +6303,11 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (buffer) IDirect3DVertexBuffer9_AddRef(buffer_iface);
-        if (block->streams[stream].buffer) IDirect3DVertexBuffer9_Release(&block->streams[stream].buffer->iface);
+        D9VertexBuffer *old = block->streams[stream].buffer;
+        if (buffer) vb_binding_add_ref(buffer);
         block->has_stream[stream] = TRUE;block->streams[stream].buffer = buffer;
         block->streams[stream].offset = offset;block->streams[stream].stride = stride;
+        if (old) vb_binding_release(old);
         return D3D_OK;
     }
     if (device->streams[stream].buffer == buffer
@@ -6355,9 +6359,11 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (buffer) IDirect3DIndexBuffer9_AddRef(buffer_iface);
-        if (block->index_buffer) IDirect3DIndexBuffer9_Release(&block->index_buffer->iface);
-        block->has_indices = TRUE;block->index_buffer = buffer;return D3D_OK;
+        D9IndexBuffer *old = block->index_buffer;
+        if (buffer) ib_binding_add_ref(buffer);
+        block->has_indices = TRUE;block->index_buffer = buffer;
+        if (old) ib_binding_release(old);
+        return D3D_OK;
     }
     if (device->index_buffer == buffer)
         return D3D_OK;
@@ -6836,9 +6842,12 @@ static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (decl) IDirect3DVertexDeclaration9_AddRef(decl_iface);
-        if (block->vertex_declaration) IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
-        block->has_vertex_format = TRUE;block->vertex_declaration = decl;block->fvf = 0;return D3D_OK;
+        D9VertexDeclaration *old = block->vertex_declaration;
+        if (decl) decl_binding_add_ref(decl);
+        block->has_vertex_format = TRUE;block->vertex_declaration = decl;
+        block->fvf = 0;
+        if (old) decl_binding_release(old);
+        return D3D_OK;
     }
     D9VertexDeclaration *old_decl = device->vertex_declaration;
     if (decl) decl_binding_add_ref(decl);
@@ -6884,8 +6893,10 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
     }
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (block->vertex_declaration) IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
-        block->has_vertex_format = TRUE;block->vertex_declaration = NULL;block->fvf = fvf;return D3D_OK;
+        D9VertexDeclaration *old = block->vertex_declaration;
+        block->has_vertex_format = TRUE;block->vertex_declaration = NULL;block->fvf = fvf;
+        if (old) decl_binding_release(old);
+        return D3D_OK;
     }
     D9VertexDeclaration *old_decl = device->vertex_declaration;
     device->vertex_declaration = NULL;
@@ -7089,9 +7100,11 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (shader) IDirect3DVertexShader9_AddRef(shader_iface);
-        if (block->vertex_shader) IDirect3DVertexShader9_Release(&block->vertex_shader->iface.vertex);
-        block->has_vertex_shader = TRUE;block->vertex_shader = shader;return D3D_OK;
+        D9Shader *old = block->vertex_shader;
+        if (shader) shader_binding_add_ref(shader);
+        block->has_vertex_shader = TRUE;block->vertex_shader = shader;
+        if (old) shader_binding_release(old);
+        return D3D_OK;
     }
     D9Shader *old_shader = device->vertex_shader;
     if (shader) shader_binding_add_ref(shader);
@@ -7125,9 +7138,11 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
-        if (shader) IDirect3DPixelShader9_AddRef(shader_iface);
-        if (block->pixel_shader) IDirect3DPixelShader9_Release(&block->pixel_shader->iface.pixel);
-        block->has_pixel_shader = TRUE;block->pixel_shader = shader;return D3D_OK;
+        D9Shader *old = block->pixel_shader;
+        if (shader) shader_binding_add_ref(shader);
+        block->has_pixel_shader = TRUE;block->pixel_shader = shader;
+        if (old) shader_binding_release(old);
+        return D3D_OK;
     }
     D9Shader *old_shader = device->pixel_shader;
     if (shader) shader_binding_add_ref(shader);
@@ -11863,42 +11878,40 @@ static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
 
 
 
-/* D3D9 state blocks keep every captured COM object alive.  Without these
- * references an engine may release the texture/shader it used to build a UI
- * block, leaving Apply() with a dangling pointer and the host with a destroyed
- * resource handle. */
+/* State blocks retain captured storage independently of public COM refs.
+ * Apply may revive bindings after the application has released every public
+ * resource reference, without introducing resource/device reference cycles. */
 static void state_block_release_references(struct D9StateBlock *block)
 {
     UINT index;
     for (index = 0; index < D9_MAX_TEXTURE_BINDINGS; ++index) {
-        if (block->textures[index])
-            IDirect3DTexture9_Release(&block->textures[index]->iface);
-        if (block->cube_textures[index])
-            IDirect3DCubeTexture9_Release(&block->cube_textures[index]->iface);
-        if (block->volume_textures[index])
-            IDirect3DVolumeTexture9_Release(
-                    &block->volume_textures[index]->iface);
+        D9Texture *texture = block->textures[index];
+        D9CubeTexture *cube = block->cube_textures[index];
+        D9VolumeTexture *volume = block->volume_textures[index];
         block->textures[index] = NULL;
         block->cube_textures[index] = NULL;
         block->volume_textures[index] = NULL;
+        if (texture) texture_binding_release(texture);
+        if (cube) cube_binding_release(cube);
+        if (volume) volume_texture_binding_release(volume);
     }
-    if (block->vertex_shader)
-        IDirect3DVertexShader9_Release(&block->vertex_shader->iface.vertex);
-    if (block->pixel_shader)
-        IDirect3DPixelShader9_Release(&block->pixel_shader->iface.pixel);
+    D9Shader *vertex_shader = block->vertex_shader;
+    D9Shader *pixel_shader = block->pixel_shader;
+    D9VertexDeclaration *decl = block->vertex_declaration;
     block->vertex_shader = NULL;
     block->pixel_shader = NULL;
-    if (block->vertex_declaration)
-        IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
     block->vertex_declaration = NULL;
+    if (vertex_shader) shader_binding_release(vertex_shader);
+    if (pixel_shader) shader_binding_release(pixel_shader);
+    if (decl) decl_binding_release(decl);
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
-        if (block->streams[index].buffer)
-            IDirect3DVertexBuffer9_Release(&block->streams[index].buffer->iface);
+        D9VertexBuffer *buffer = block->streams[index].buffer;
         block->streams[index].buffer = NULL;
+        if (buffer) vb_binding_release(buffer);
     }
-    if (block->index_buffer)
-        IDirect3DIndexBuffer9_Release(&block->index_buffer->iface);
+    D9IndexBuffer *indices = block->index_buffer;
     block->index_buffer = NULL;
+    if (indices) ib_binding_release(indices);
 }
 
 /* Copies the live device value into every slot the mask already marks. This is
@@ -11929,12 +11942,11 @@ static void state_block_capture(struct D9StateBlock *block)
             block->cube_textures[stage] = device->cube_bindings[stage];
             block->volume_textures[stage] = device->volume_bindings[stage];
             if (block->textures[stage])
-                IDirect3DTexture9_AddRef(&block->textures[stage]->iface);
+                texture_binding_add_ref(block->textures[stage]);
             if (block->cube_textures[stage])
-                IDirect3DCubeTexture9_AddRef(&block->cube_textures[stage]->iface);
+                cube_binding_add_ref(block->cube_textures[stage]);
             if (block->volume_textures[stage])
-                IDirect3DVolumeTexture9_AddRef(
-                        &block->volume_textures[stage]->iface);
+                volume_texture_binding_add_ref(block->volume_textures[stage]);
         }
     }
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
@@ -11969,12 +11981,12 @@ static void state_block_capture(struct D9StateBlock *block)
     if (block->has_vertex_shader) {
         block->vertex_shader = device->vertex_shader;
         if (block->vertex_shader)
-            IDirect3DVertexShader9_AddRef(&block->vertex_shader->iface.vertex);
+            shader_binding_add_ref(block->vertex_shader);
     }
     if (block->has_pixel_shader) {
         block->pixel_shader = device->pixel_shader;
         if (block->pixel_shader)
-            IDirect3DPixelShader9_AddRef(&block->pixel_shader->iface.pixel);
+            shader_binding_add_ref(block->pixel_shader);
     }
     for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
         if (block->has_vs_const_f[index])
@@ -12000,15 +12012,13 @@ static void state_block_capture(struct D9StateBlock *block)
         block->fvf = device->fvf;
         block->vertex_declaration = device->vertex_declaration;
         if (block->vertex_declaration)
-            IDirect3DVertexDeclaration9_AddRef(
-                    &block->vertex_declaration->iface);
+            decl_binding_add_ref(block->vertex_declaration);
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
             block->streams[index] = device->streams[index];
             if (block->streams[index].buffer)
-                IDirect3DVertexBuffer9_AddRef(
-                        &block->streams[index].buffer->iface);
+                vb_binding_add_ref(block->streams[index].buffer);
         }
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index)
@@ -12016,7 +12026,7 @@ static void state_block_capture(struct D9StateBlock *block)
     if (block->has_indices) {
         block->index_buffer = device->index_buffer;
         if (block->index_buffer)
-            IDirect3DIndexBuffer9_AddRef(&block->index_buffer->iface);
+            ib_binding_add_ref(block->index_buffer);
     }
 }
 
@@ -12286,8 +12296,9 @@ static ULONG WINAPI state_block_release(IDirect3DStateBlock9 *iface)
         if (*link) *link = block->next_device_resource;
         state_block_release_references(block);
         d9wg_light_free(&block->extra_lights);
-        device_child_release(block->device);
+        D9Device *device = block->device;
         HeapFree(GetProcessHeap(), 0, block);
+        device_child_release(device);
     }
     return refs;
 }
@@ -12305,7 +12316,10 @@ static HRESULT WINAPI state_block_get_device(IDirect3DStateBlock9 *iface,
 
 static HRESULT WINAPI state_block_capture_method(IDirect3DStateBlock9 *iface)
 {
-    state_block_capture(state_block_from_iface(iface));
+    D9StateBlock *block = state_block_from_iface(iface);
+    if (block->device->recording_result)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    state_block_capture(block);
     return D3D_OK;
 }
 

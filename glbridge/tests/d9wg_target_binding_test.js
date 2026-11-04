@@ -18,13 +18,16 @@ function extract(source, name) {
     for (; depth; end++) {if (source[end] === "{") depth++; if (source[end] === "}") depth--;}
     return source.slice(m.index, end);
 }
-const shaderBindings = process.env.D9WG_TEST_SHADER_BINDINGS === "1";
+const stateBindings = process.env.D9WG_TEST_STATE_BINDINGS === "1";
+const shaderBindings = stateBindings || process.env.D9WG_TEST_SHADER_BINDINGS === "1";
 const bufferBindings = shaderBindings || process.env.D9WG_TEST_BUFFER_BINDINGS === "1";
 const volumeBindings = bufferBindings || process.env.D9WG_TEST_VOLUME_BINDINGS === "1";
 const cubeBindings = volumeBindings || process.env.D9WG_TEST_CUBE_BINDINGS === "1";
 const textureBindings = cubeBindings || process.env.D9WG_TEST_TEXTURE_BINDINGS === "1";
 try {
     const source = fs.readFileSync(process.env.D9WG_TARGET_BINDING_SOURCE || root + "/d3d9proxy/d3d9_proxy.c", "utf8");
+    const blockDefinition = stateBindings ? "typedef struct D9StateBlock D9StateBlock;\n" + source.match(/struct D9StateBlock \{[\s\S]*?\n\};/)[0] : "";
+    const stateFields = `DWORD render_states[256],texture_stage_states[8][33],sampler_states[20][14];float transforms[512][16],clip_planes[6][4],npatch_segments;D3DMATERIAL9 material;D3DVIEWPORT9 viewport;RECT scissor_rect;D3DLIGHT9 lights[8];BOOL light_set[8],light_enabled[8];UINT current_palette;float vs_const_f[256][4],ps_const_f[224][4];int vs_const_i[16][4],ps_const_i[16][4];BOOL vs_const_b[16],ps_const_b[16];`;
     fs.writeFileSync(dir + "/target.c", `#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -62,7 +65,7 @@ typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESU
 #define TRACE_REGISTER_RANGE(...)
 #define TRACE_SURFACE_FREED(...)
 #define TRACE_FLUSH(...)
-typedef struct{const void*lpVtbl;}Interface;typedef Interface IDirect3DDevice9,IDirect3DSurface9,IDirect3DTexture9,IDirect3DBaseTexture9,IDirect3DCubeTexture9,IDirect3DVolumeTexture9,IDirect3DVolume9,IDirect3DVertexBuffer9,IDirect3DIndexBuffer9,IDirect3DVertexDeclaration9,IDirect3DVertexShader9,IDirect3DPixelShader9;
+typedef struct{const void*lpVtbl;}Interface;typedef Interface IDirect3DDevice9,IDirect3DSurface9,IDirect3DTexture9,IDirect3DBaseTexture9,IDirect3DCubeTexture9,IDirect3DVolumeTexture9,IDirect3DVolume9,IDirect3DVertexBuffer9,IDirect3DIndexBuffer9,IDirect3DVertexDeclaration9,IDirect3DVertexShader9,IDirect3DPixelShader9,IDirect3DStateBlock9;
 typedef struct Device D9Device;typedef struct Surface D9Surface,D9Volume;typedef struct Texture D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuffer;typedef struct Chain{LONG refcount;UINT handle;struct Chain*next_device_chain;}D9SwapChain;
 typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL shadow_valid,locked;D9WGPrivateStore private_data;D9Surface*level_surface,*level_volume;}D9TextureLevel;
 struct Texture{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,width,height,level_count,usage,length,fvf;BYTE*shadow;void*clips;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;D9TextureLevel*levels;D9Texture*next_device_resource;BOOL private_back_buffer;D9WGPrivateStore private_data;BOOL locked;};
@@ -81,12 +84,30 @@ typedef struct{uint16_t Stream,Offset;BYTE Type,Method,Usage,UsageIndex;}D3DVERT
 typedef const void*REFIID;
 typedef struct Declaration{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,element_count;D3DVERTEXELEMENT9 elements[18];struct Declaration*next_device_resource;}D9VertexDeclaration;
 typedef struct Shader{union{Interface vertex,pixel;}iface;LONG refcount,binding_refs;D9Device*device;UINT handle;BOOL is_pixel;DWORD*code;UINT token_count;struct Shader*next_device_resource;}D9Shader;
-typedef struct{D9Texture*textures[20],*cube_textures[20],*volume_textures[20],*index_buffer;struct{D9Texture*buffer;UINT offset,stride;}streams[16];BOOL has_texture[20],has_stream[16],has_indices,has_vertex_format,has_vertex_shader,has_pixel_shader;D9VertexDeclaration*vertex_declaration;D9Shader*vertex_shader,*pixel_shader;DWORD fvf;}D9StateBlock;
-struct Device{Interface iface;D9StateBlock*recording_result;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;UINT handle;Parent*parent;D9Texture*texture_resources;D9Surface*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;BOOL depth_stencil_unbound;void*extra_lights;int palettes;D9Texture*vertex_buffers,*index_buffers,*cube_textures,*volume_textures,*textures[20],*cube_bindings[20],*volume_bindings[20],*index_buffer;struct{D9Texture*buffer;UINT stride,offset,frequency;}streams[16];D9VertexDeclaration*vertex_declaration,*vertex_declarations;D9Shader*vertex_shader,*pixel_shader,*shaders;UINT fvf;struct{UINT BackBufferWidth,BackBufferHeight,BackBufferFormat,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat;BOOL EnableAutoDepthStencil;}present;D9SwapChain*additional_swap_chains;};
+typedef struct{D9VertexBuffer*buffer;UINT stride,offset,frequency;}D9StreamBinding;
+typedef struct{float values[17];}D3DMATERIAL9;
+typedef struct{float values[26];}D3DLIGHT9;
+typedef struct D9WGLightState{struct D9WGLightState*next;UINT index;BOOL light_mask,enable_mask,set,enabled;D3DLIGHT9 light;}D9WGLightState;
+${stateBindings?`#define D9_MAX_RENDER_STATES 256
+#define D9_MAX_TEXTURE_STAGES 8
+#define D9_MAX_TEXTURE_STAGE_STATES 33
+#define D9_MAX_SAMPLERS 20
+#define D9_MAX_SAMPLER_STATES 14
+#define D9_STATE_BLOCK_TRANSFORMS 266
+#define D9_MAX_CLIP_PLANES 6
+#define D9_MAX_LIGHTS 8
+#define D9_MAX_VS_CONST_F 256
+#define D9_MAX_PS_CONST_F 224
+#define D9_MAX_CONST_I 16
+#define D9_MAX_CONST_B 16
+`+blockDefinition:`typedef struct D9StateBlock{D9Texture*textures[20],*cube_textures[20],*volume_textures[20],*index_buffer;D9StreamBinding streams[16];BOOL has_texture[20],has_stream[16],has_indices,has_vertex_format,has_vertex_shader,has_pixel_shader;D9VertexDeclaration*vertex_declaration;D9Shader*vertex_shader,*pixel_shader;DWORD fvf;}D9StateBlock;`}
+
+struct Device{Interface iface;D9StateBlock*recording_result;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;UINT handle;Parent*parent;D9Texture*texture_resources;D9Surface*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;BOOL depth_stencil_unbound;void*extra_lights;int palettes;D9Texture*vertex_buffers,*index_buffers,*cube_textures,*volume_textures,*textures[20],*cube_bindings[20],*volume_bindings[20],*index_buffer;D9StreamBinding streams[16];D9VertexDeclaration*vertex_declaration,*vertex_declarations;D9Shader*vertex_shader,*pixel_shader,*shaders;UINT fvf;struct{UINT BackBufferWidth,BackBufferHeight,BackBufferFormat,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat;BOOL EnableAutoDepthStencil;}present;D9SwapChain*additional_swap_chains;D9StateBlock*state_blocks;${stateBindings?stateFields:""}};
 static const D9WGPrivateOps d9wg_private_ops={0};static int g_texture_vtbl,g_surface_vtbl,g_transport_lock;
 ${textureBindings?"static int g_cube_vtbl,g_volume_texture_vtbl;":""}
 ${bufferBindings?"static int g_vb_vtbl,g_ib_vtbl;":""}
 ${shaderBindings?"static int g_decl_vtbl,g_vertex_shader_vtbl,g_pixel_shader_vtbl,IID_IUnknown,IID_IDirect3DVertexDeclaration9,IID_IDirect3DVertexShader9,IID_IDirect3DPixelShader9;":""}static UINT g_command_count;
+${stateBindings?"static int g_state_block_vtbl;":""}
 static unsigned release_enters,release_exits;
 static void trace_enter(const char*m){if(!strcmp(m,"Surface.Release"))release_enters++;}
 static void trace_exit(const char*m,HRESULT result,const void*out){(void)result;(void)out;if(!strcmp(m,"Surface.Release"))release_exits++;}
@@ -130,21 +151,50 @@ static BOOL fvf_to_declaration(DWORD f,D9WGVertexElement*w,UINT*n){(void)w;*n=1;
 static BOOL emit_set_fvf(D9Device*d,DWORD f,const D9WGVertexElement*w,UINT n){(void)d;(void)w;assert(f==2&&n==1);return !fail_emit;}
 `:""}
 static void device_release_owned_references(D9Device*);
-static void device_cancel_recording(D9Device*d){(void)d;}
+${stateBindings?"static ULONG state_block_release(Interface*);\n#define IDirect3DStateBlock9_Release state_block_release\n"+extract(source,"device_cancel_recording"):"static void device_cancel_recording(D9Device*d){(void)d;}"}
 static void SetRect(RECT*r,int l,int t,int right,int b){*r=(RECT){l,t,right,b};}
 static HRESULT IDirect3DDevice9_SetViewport(Interface*p,const D3DVIEWPORT9*v){(void)p;assert(v->Width==32&&(v->Height==24${cubeBindings?"||v->Height==32":""}));return 0;}
 static HRESULT IDirect3DDevice9_SetScissorRect(Interface*p,const RECT*r){(void)p;assert(r->right==32&&(r->bottom==24${cubeBindings?"||r->bottom==32":""}));return 0;}
 static HRESULT IDirect3DDevice9_GetBackBuffer(Interface*p,UINT a,UINT b,UINT c,Interface**out){(void)p;(void)a;(void)b;(void)c;(void)out;assert(0);return -1;}
 static void swap_chain_destroy_storage(D9SwapChain*c){(void)c;assert(0);}
-static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(D9Device*d){(void)d;}static void restore_display_mode(D9Device*d){(void)d;}
+static void d9wg_light_free(void*p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(D9Device*d){(void)d;}static void restore_display_mode(D9Device*d){(void)d;}
 static void SelectObject(void*a,void*b){(void)a;(void)b;}static void DeleteDC(void*p){(void)p;}static void DeleteObject(void*p){(void)p;}
 static void EnterCriticalSection(int*p){(void)p;}static void LeaveCriticalSection(int*p){(void)p;}static BOOL submit_batch_locked(BOOL present){assert(!present);return 1;}
 static UINT allocate_handle(void){return ++handles;}
 static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){if(fail_layout||f!=22)return 0;*p=w*4;*r=h;*b=w*h*4;return 1;}
 static BOOL emit_texture_create(D9Device*d,D9Texture*t){assert(t->device==d&&t->width&&t->height&&t->level_count==1&&t->multisample_quality==0);creates++;return !fail_emit;}
-static BOOL emit_command(UINT op,const void*p,UINT n){assert(active_device&&(op==D9WG_OP_DESTROY_RESOURCE&&((const D9WGDestroyResource*)p)->resource_kind==0?active_device->refcount==0:active_device->refcount>0));if(op==D9WG_OP_SET_VERTEX_DECLARATION||op==D9WG_OP_SET_VERTEX_SHADER||op==D9WG_OP_SET_PIXEL_SHADER)return !fail_emit;if(op==D9WG_OP_SET_STREAM_SOURCE){assert(n==sizeof(D9WGSetStreamSource));return !fail_emit;}if(op==D9WG_OP_SET_INDICES){assert(n==sizeof(D9WGSetIndices));return !fail_emit;}if(op==D9WG_OP_SET_TEXTURE){assert(n==sizeof(D9WGSetTexture));return !fail_emit;}if(op==D9WG_OP_SET_RENDER_TARGET){assert(n==sizeof(D9WGSetRenderTarget));return 1;}if(op==D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL){assert(n==sizeof(D9WGSetDepthStencilSurfaceLevel));return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&n==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;if(c->resource_kind>=1&&c->resource_kind<=8)destroys++;else{assert(!c->resource_kind&&c->resource_handle==7&&!active_device->vertex_buffers&&!active_device->index_buffers&&!active_device->texture_resources&&!active_device->cube_textures&&!active_device->volume_textures&&!active_device->depth_stencil_surface&&!active_device->child_parent_refs&&!active_device->vertex_declarations&&!active_device->shaders);for(UINT i=0;i<4;i++)assert(!active_device->render_target_surfaces[i]);device_destroys++;}return 1;}
+static BOOL emit_command(UINT op,const void*p,UINT n){assert(active_device&&(op==D9WG_OP_DESTROY_RESOURCE&&((const D9WGDestroyResource*)p)->resource_kind==0?active_device->refcount==0:active_device->refcount>0));if(op==D9WG_OP_SET_VERTEX_DECLARATION||op==D9WG_OP_SET_VERTEX_SHADER||op==D9WG_OP_SET_PIXEL_SHADER)return !fail_emit;if(op==D9WG_OP_SET_STREAM_SOURCE){assert(n==sizeof(D9WGSetStreamSource));return !fail_emit;}if(op==D9WG_OP_SET_INDICES){assert(n==sizeof(D9WGSetIndices));return !fail_emit;}if(op==D9WG_OP_SET_TEXTURE){assert(n==sizeof(D9WGSetTexture));return !fail_emit;}if(op==D9WG_OP_SET_RENDER_TARGET){assert(n==sizeof(D9WGSetRenderTarget));return 1;}if(op==D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL){assert(n==sizeof(D9WGSetDepthStencilSurfaceLevel));return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&n==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;if(c->resource_kind>=1&&c->resource_kind<=8)destroys++;else{assert(!c->resource_kind&&c->resource_handle==7&&!active_device->vertex_buffers&&!active_device->index_buffers&&!active_device->texture_resources&&!active_device->cube_textures&&!active_device->volume_textures&&!active_device->depth_stencil_surface&&!active_device->child_parent_refs&&!active_device->vertex_declarations&&!active_device->shaders&&!active_device->state_blocks);for(UINT i=0;i<4;i++)assert(!active_device->render_target_surfaces[i]);device_destroys++;}return 1;}
 
-${["decl_destroy_storage", "decl_binding_add_ref", "decl_binding_release", "shader_destroy_storage", "shader_binding_add_ref", "shader_binding_release", "device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "surface_uses_private_bindings", "reset_buffer_owned_refs", "reset_bound_surface", "reset_surface_owned_refs", "reset_texture_owned_refs", "device_has_reset_blockers", "device_clear_bindings", "device_release_owned_references", "vb_destroy_storage", "vb_binding_add_ref", "vb_binding_release", "ib_destroy_storage", "ib_binding_add_ref", "ib_binding_release", "volume_texture_destroy_storage", "volume_texture_binding_add_ref", "volume_texture_binding_release", "cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture", "surface_target_handle", "device_set_render_target", "device_get_render_target", "device_set_depth_stencil_surface", "device_get_depth_stencil_surface", ...(shaderBindings?["decl_add_ref","decl_release","decl_query_interface","decl_get_device","decl_get_declaration","shader_public_add_ref","shader_public_release","shader_query_interface","shader_get_function","vertex_shader_add_ref","vertex_shader_release","vertex_shader_query_interface","vertex_shader_get_device","vertex_shader_get_function","pixel_shader_add_ref","pixel_shader_release","pixel_shader_query_interface","pixel_shader_get_device","pixel_shader_get_function","emit_set_shader","device_set_vertex_declaration","device_get_vertex_declaration","device_set_fvf","device_get_fvf","device_set_vertex_shader","device_get_vertex_shader","device_set_pixel_shader","device_get_pixel_shader"]:[]), ...(textureBindings?["texture_binding_slot","texture_add_ref","cube_add_ref","cube_release","volume_texture_add_ref","volume_texture_release","texture_get_surface_level","device_set_texture","device_get_texture",...(cubeBindings?["cube_get_cube_map_surface"]:[]),...(volumeBindings?["volume_add_ref","volume_release","volume_texture_get_volume_level"]:[]),...(bufferBindings?["vb_add_ref","vb_release","ib_add_ref","ib_release","device_set_stream_source","device_get_stream_source","device_set_indices","device_get_indices","clear_stream_zero_after_up","clear_indices_after_indexed_up"]:[])]:[])].map(n => extract(source, n)).join("\n")}
+${stateBindings?`static D9StateBlock*state_block_from_iface(Interface*p){return (D9StateBlock*)p;}
+static UINT d9wg_state_block_transform_state(UINT i){return i;}
+static D9WGLightState*d9wg_light_find(void*p,UINT i){(void)p;(void)i;return NULL;}
+#define IDirect3DDevice9_SetRenderState(...) ((void)0)
+#define IDirect3DDevice9_SetTextureStageState(...) ((void)0)
+#define IDirect3DDevice9_SetSamplerState(...) ((void)0)
+#define IDirect3DDevice9_SetTransform(...) ((void)0)
+#define IDirect3DDevice9_SetMaterial(...) ((void)0)
+#define IDirect3DDevice9_SetClipPlane(...) ((void)0)
+#define IDirect3DDevice9_SetNPatchMode(...) ((void)0)
+#define IDirect3DDevice9_SetLight(...) ((void)0)
+#define IDirect3DDevice9_LightEnable(...) ((void)0)
+#define IDirect3DDevice9_SetVertexShaderConstantF(...) ((void)0)
+#define IDirect3DDevice9_SetPixelShaderConstantF(...) ((void)0)
+#define IDirect3DDevice9_SetVertexShaderConstantI(...) ((void)0)
+#define IDirect3DDevice9_SetPixelShaderConstantI(...) ((void)0)
+#define IDirect3DDevice9_SetVertexShaderConstantB(...) ((void)0)
+#define IDirect3DDevice9_SetPixelShaderConstantB(...) ((void)0)
+#define IDirect3DDevice9_SetStreamSourceFreq(...) ((void)0)
+#define IDirect3DDevice9_SetTexture device_set_texture
+#define IDirect3DDevice9_SetVertexShader device_set_vertex_shader
+#define IDirect3DDevice9_SetPixelShader device_set_pixel_shader
+#define IDirect3DDevice9_SetVertexDeclaration device_set_vertex_declaration
+#define IDirect3DDevice9_SetFVF device_set_fvf
+#define IDirect3DDevice9_SetStreamSource device_set_stream_source
+#define IDirect3DDevice9_SetIndices device_set_indices
+static UINT texture_binding_stage(UINT i){return i<16?i:i+241;}
+static HRESULT device_set_current_texture_palette(Interface*p,UINT n){((D9Device*)p)->current_palette=n;return 0;}
+`:""}
+${["decl_destroy_storage", "decl_binding_add_ref", "decl_binding_release", "shader_destroy_storage", "shader_binding_add_ref", "shader_binding_release", "device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "surface_uses_private_bindings", "reset_buffer_owned_refs", "reset_bound_surface", "reset_surface_owned_refs", "reset_texture_owned_refs", "device_has_reset_blockers", "device_clear_bindings", "device_release_owned_references", "vb_destroy_storage", "vb_binding_add_ref", "vb_binding_release", "ib_destroy_storage", "ib_binding_add_ref", "ib_binding_release", "volume_texture_destroy_storage", "volume_texture_binding_add_ref", "volume_texture_binding_release", "cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture", "surface_target_handle", "device_set_render_target", "device_get_render_target", "device_set_depth_stencil_surface", "device_get_depth_stencil_surface", ...(shaderBindings?["decl_add_ref","decl_release","decl_query_interface","decl_get_device","decl_get_declaration","shader_public_add_ref","shader_public_release","shader_query_interface","shader_get_function","vertex_shader_add_ref","vertex_shader_release","vertex_shader_query_interface","vertex_shader_get_device","vertex_shader_get_function","pixel_shader_add_ref","pixel_shader_release","pixel_shader_query_interface","pixel_shader_get_device","pixel_shader_get_function","emit_set_shader","device_set_vertex_declaration","device_get_vertex_declaration","device_set_fvf","device_get_fvf","device_set_vertex_shader","device_get_vertex_shader","device_set_pixel_shader","device_get_pixel_shader"]:[]), ...(textureBindings?["texture_binding_slot","texture_add_ref","cube_add_ref","cube_release","volume_texture_add_ref","volume_texture_release","texture_get_surface_level","device_set_texture","device_get_texture",...(cubeBindings?["cube_get_cube_map_surface"]:[]),...(volumeBindings?["volume_add_ref","volume_release","volume_texture_get_volume_level"]:[]),...(bufferBindings?["vb_add_ref","vb_release","ib_add_ref","ib_release","device_set_stream_source","device_get_stream_source","device_set_indices","device_get_indices","clear_stream_zero_after_up","clear_indices_after_indexed_up"]:[])]:[]), ...(stateBindings?["state_block_release_references","state_block_capture","state_block_apply","state_block_alloc","state_block_release","state_block_capture_method","state_block_apply_method","device_begin_state_block","device_end_state_block"]:[])].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)||release_enters!=release_exits){fprintf(stderr,"Target binding line %u: %s release markers=%u/%u\\n",__LINE__,#v,release_enters,release_exits);return 1;}checks++;}while(0)
 static D9Device*new_device(Parent*p){D9Device*d=HeapAlloc(NULL,8,sizeof(*d));d->refcount=1;d->handle=7;d->parent=p;p->refs=1;active_device=d;return d;}
 static HRESULT get_bound(D9Device*d,BOOL depth,Interface**out){return depth?device_get_depth_stencil_surface(&d->iface,out):device_get_render_target(&d->iface,3,out);}
@@ -154,7 +204,8 @@ ${cubeBindings?'#include "tests/native/d9wg_cube_binding_cases.h"':""}
 ${volumeBindings?'#include "tests/native/d9wg_volume_binding_cases.h"':""}
 ${bufferBindings?'#include "tests/native/d9wg_buffer_binding_cases.h"':""}
 ${shaderBindings?'#include "tests/native/d9wg_shader_binding_cases.h"':""}
-int main(void){(void)&decl_binding_add_ref;(void)&decl_binding_release;(void)&shader_binding_add_ref;(void)&shader_binding_release;(void)&vb_binding_add_ref;(void)&vb_binding_release;(void)&ib_binding_add_ref;(void)&ib_binding_release;(void)&volume_texture_binding_add_ref;(void)&volume_texture_binding_release;(void)&cube_binding_add_ref;(void)&cube_binding_release;(void)&texture_binding_add_ref;(void)&texture_binding_release;${textureBindings?"CHECK(!texture_binding_cases());":""}${cubeBindings?"CHECK(!cube_binding_cases());":""}${volumeBindings?"CHECK(!volume_binding_cases());":""}${bufferBindings?"CHECK(!buffer_binding_cases());":""}${shaderBindings?"CHECK(!shader_binding_cases());":""}(void)surface_destroy_storage;(void)surface_binding_add_ref;(void)surface_binding_release;unsigned cases=0,revivals=0;for(UINT profile=0;profile<4;profile++)for(UINT order=0;order<4;order++){
+${stateBindings?'#include "tests/native/d9wg_state_binding_cases.h"':""}
+int main(void){${textureBindings?"(void)&volume_texture_release;":""}(void)&decl_binding_add_ref;(void)&decl_binding_release;(void)&shader_binding_add_ref;(void)&shader_binding_release;(void)&vb_binding_add_ref;(void)&vb_binding_release;(void)&ib_binding_add_ref;(void)&ib_binding_release;(void)&volume_texture_binding_add_ref;(void)&volume_texture_binding_release;(void)&cube_binding_add_ref;(void)&cube_binding_release;(void)&texture_binding_add_ref;(void)&texture_binding_release;${textureBindings?"CHECK(!texture_binding_cases());":""}${cubeBindings?"CHECK(!cube_binding_cases());":""}${volumeBindings?"CHECK(!volume_binding_cases());":""}${bufferBindings?"CHECK(!buffer_binding_cases());":""}${shaderBindings?"CHECK(!shader_binding_cases());":""}${stateBindings?"CHECK(!state_binding_cases());":""}(void)surface_destroy_storage;(void)surface_binding_add_ref;(void)surface_binding_release;unsigned cases=0,revivals=0;for(UINT profile=0;profile<4;profile++)for(UINT order=0;order<4;order++){
  Parent parent={0};D9Device*d=new_device(&parent);BOOL depth=profile>=2;UINT bindings=depth?1:order%2?1:2;Interface*out=NULL;UINT old_destroys=destroys;
  CHECK(!create_target_texture(d,32,24,depth?75:22,depth?2:1,profile%2?4:0,0,&out)&&out);D9Surface*s=(D9Surface*)out;
  CHECK(!bind_target(d,depth,s));if(bindings==2)CHECK(!device_set_render_target(&d->iface,2,out));
