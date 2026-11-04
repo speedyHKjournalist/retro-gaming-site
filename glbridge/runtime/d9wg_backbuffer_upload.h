@@ -4,10 +4,11 @@
 #include "d9wg_runtime.h"
 #include "d9wg_surface_lock.h"
 /* A temporary texture carries only the locked rectangle. Its upload is ordered
- * before the backbuffer blit, and accepted creation is retired even if upload
+ * before the renderable-surface blit, and accepted creation is retired even if upload
  * or blit fails. The caller supplies a fresh process-global resource handle. */
-static inline int d9wg_backbuffer_upload(uint32_t device, uint32_t handle,
-        uint32_t format, const D9WGSurfaceLockRect *area, const uint8_t *pixels,
+static inline int d9wg_renderable_upload(uint32_t device, uint32_t handle,
+        uint32_t format, uint32_t destination, uint32_t level, uint32_t face,
+        const D9WGSurfaceLockRect *area, const uint8_t *pixels,
         uint32_t pitch, uint32_t pixel_bytes,
         int (*emit)(uint16_t, const void *, uint32_t),
         int (*emit_rows)(const D9WGTextureRows *))
@@ -38,6 +39,9 @@ static inline int d9wg_backbuffer_upload(uint32_t device, uint32_t handle,
         copy.source_texture_handle = handle;
         copy.source_right = create.width;
         copy.source_bottom = create.height;
+        copy.destination_texture_handle = destination;
+        copy.destination_level = level;
+        copy.destination_face = face;
         copy.destination_left = area->left;
         copy.destination_top = area->top;
         copy.destination_right = area->right;
@@ -50,5 +54,15 @@ static inline int d9wg_backbuffer_upload(uint32_t device, uint32_t handle,
     if (!emit(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy)))
         result = 0;
     return result;
+}
+/* Implicit backbuffer adapter retained for API8 and existing copy callers. */
+static inline int d9wg_backbuffer_upload(uint32_t device, uint32_t handle,
+        uint32_t format, const D9WGSurfaceLockRect *area, const uint8_t *pixels,
+        uint32_t pitch, uint32_t pixel_bytes,
+        int (*emit)(uint16_t, const void *, uint32_t),
+        int (*emit_rows)(const D9WGTextureRows *))
+{
+    return d9wg_renderable_upload(device, handle, format, 0, 0, 0, area,
+            pixels, pitch, pixel_bytes, emit, emit_rows);
 }
 #endif

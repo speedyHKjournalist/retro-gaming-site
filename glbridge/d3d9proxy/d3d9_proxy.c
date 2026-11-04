@@ -1364,6 +1364,7 @@ struct D9Surface {
     BOOL locked;
     RECT lock_rect;
     DWORD lock_flags;
+    BOOL lockable_render_target;
     /* TRUE for the surface GetDepthStencilSurface hands back for the device's
      * implicit auto depth-stencil. It has no texture and no pixels; its only
      * job is to be passed back to SetDepthStencilSurface, which is how an app
@@ -8089,6 +8090,7 @@ static HRESULT WINAPI device_create_additional_swap_chain(
         return hr;
     }
     surface = surface_from_iface(back_buffer);
+    surface->lockable_render_target = !!(params->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER);
 
     chain = (D9SwapChain *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*chain));
@@ -8955,6 +8957,10 @@ static HRESULT copy_surface_to_system_memory(D9Device *device,
      * attempt at this function into a second round trip through the VM.
      */
     if (rt->device != device || dst->device != device)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (rt->locked || dst->locked
+            || (surface_texture_level(rt) && surface_texture_level(rt)->locked)
+            || (surface_texture_level(dst) && surface_texture_level(dst)->locked))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rt->width != dst->width || rt->height != dst->height)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -11154,9 +11160,10 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice9 *iface,
     }
     if (!supported_render_target_format(format))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    return create_target_texture(device_from_iface(iface), width, height, format,
-            D3DUSAGE_RENDERTARGET, multisample, multisample_quality,
-            surface_out);
+    HRESULT hr = create_target_texture(device_from_iface(iface), width, height, format,
+            D3DUSAGE_RENDERTARGET, multisample, multisample_quality, surface_out);
+    if (SUCCEEDED(hr)) surface_from_iface(*surface_out)->lockable_render_target = !!lockable;
+    return hr;
 }
 
 static HRESULT WINAPI device_create_depth_stencil_surface(
@@ -14279,10 +14286,10 @@ static HRESULT WINAPI surface_get_desc(IDirect3DSurface9 *iface,
  * render target remains non-lockable. An implicit backbuffer with the explicit
  * lockable flag uses the shared GPU readback/writeback adapter below.
  */
-/* Implicit lockable backbuffers share the same pure bounds and upload bridge
- * as API8. Read every successful lock from GPU; only the published lock rect
+/* Explicitly lockable implicit/additional backbuffers and standalone targets
+ * share the same pure bounds and upload bridge as API8. Read every successful lock from GPU; only the published lock rect
  * is written back, and READONLY never emits an upload. */
-static HRESULT surface_lock_backbuffer(D9Surface *surface,
+static HRESULT surface_lock_renderable(D9Surface *surface,
         D3DLOCKED_RECT *out, const RECT *rect, DWORD flags)
 {
     D9WGSurfaceLockPlan plan;
@@ -14295,8 +14302,10 @@ static HRESULT surface_lock_backbuffer(D9Surface *surface,
                 &pitch, &rows, &bytes) || rows != surface->height
             || !d9wg_surface_lock_plan(surface->width, surface->height, pitch,
                 pixel_bytes, surface->multisample,
-                !!(surface->device->present.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER),
-                surface->locked, rect ? &requested : NULL, flags, &plan))
+                surface->texture ? surface->lockable_render_target
+                    : !!(surface->device->present.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER),
+                surface->locked || (surface->texture && surface->texture->levels[surface->level].locked),
+                rect ? &requested : NULL, flags, &plan))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!surface->shadow) {
         surface->shadow = HeapAlloc(GetProcessHeap(), 0, bytes);
@@ -14307,6 +14316,8 @@ static HRESULT surface_lock_backbuffer(D9Surface *surface,
     D9WGReadbackSurface request = {0};
     D9WGReadbackDiagnostic detail;
     request.device_handle = surface->device->handle;
+    request.texture_handle = surface->texture ? surface->texture->handle : 0;
+    request.level = surface->level;
     request.format = surface->format;
     request.width = surface->width;
     request.height = surface->height;
@@ -14319,12 +14330,13 @@ static HRESULT surface_lock_backbuffer(D9Surface *surface,
     surface->lock_rect = (RECT){plan.area.left, plan.area.top, plan.area.right, plan.area.bottom};
     surface->lock_flags = flags;
     surface->locked = TRUE;
+    if (surface->texture) surface->texture->levels[surface->level].locked = TRUE;
     out->Pitch = pitch;
     out->pBits = surface->shadow + plan.offset;
     return D3D_OK;
 }
 
-static HRESULT surface_unlock_backbuffer(D9Surface *surface)
+static HRESULT surface_unlock_renderable(D9Surface *surface)
 {
     if (!surface->locked) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     BOOL uploaded = TRUE;
@@ -14333,10 +14345,18 @@ static HRESULT surface_unlock_backbuffer(D9Surface *surface)
         const RECT *r = &surface->lock_rect;
         const D9WGSurfaceLockRect area = {r->left, r->top, r->right, r->bottom};
         uploaded = texture_format_layout(surface->format, &bw, &bh, &pixel_bytes)
-                && d9wg_backbuffer_upload(surface->device->handle, allocate_handle(),
-                    surface->format, &area, surface->shadow
+                && d9wg_renderable_upload(surface->device->handle, allocate_handle(),
+                    surface->format, surface->texture ? surface->texture->handle : 0,
+                    surface->level, 0, &area, surface->shadow
                         + r->top * surface->row_pitch + r->left * pixel_bytes,
                     surface->row_pitch, pixel_bytes, emit_command, emit_texture_rows);
+    }
+    if (surface->texture) {
+        D9TextureLevel *level = &surface->texture->levels[surface->level];
+        level->locked = FALSE;
+        /* A partial or failed write cannot leave an older Clear/ColorFill
+         * mirror authoritative. The next read must observe GPU storage. */
+        if (!(surface->lock_flags & D3DLOCK_READONLY)) level->shadow_valid = FALSE;
     }
     surface->locked = FALSE;
     surface->lock_flags = 0;
@@ -14359,8 +14379,10 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked, (DWORD)(uintptr_t)rect, flags);
 
-    if (surface->swap_chain && !surface->texture) {
-        result = surface_lock_backbuffer(surface, locked_rect, rect, flags);
+    if ((surface->swap_chain && !surface->texture)
+            || (surface->texture && !surface->texture_child
+                && (surface->texture->usage & D3DUSAGE_RENDERTARGET))) {
+        result = surface_lock_renderable(surface, locked_rect, rect, flags);
         goto done;
     }
     if (surface->shadow) {
@@ -14430,8 +14452,10 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
             (DWORD)(uintptr_t)surface->texture,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked);
-    if (surface->swap_chain && !surface->texture) {
-        result = surface_unlock_backbuffer(surface);
+    if ((surface->swap_chain && !surface->texture)
+            || (surface->texture && !surface->texture_child
+                && (surface->texture->usage & D3DUSAGE_RENDERTARGET))) {
+        result = surface_unlock_renderable(surface);
     } else if (surface->shadow) {
         if (!surface->locked)
             result = D3DERR_INVALIDCALL;

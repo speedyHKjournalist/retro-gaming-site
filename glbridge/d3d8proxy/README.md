@@ -495,3 +495,15 @@ pixels, including partial/full writes and 4x4 resize after Reset. XP CPU replies
 explicitly inject analytic expected images; only GPU replay establishes pixels.
 Additional-chain/depth/other target locks and other GPU formats remain open.
 See `../deployments/d3d-webgpu-review-4K16.json`.
+
+Stage 4K17 extends core9 renderable locks to explicitly lockable standalone RTs
+and additional backbuffers. The common upload bridge addresses their texture
+storage; writable unlock invalidates cached Clear/ColorFill mirrors. Texture
+level lock tracking also blocks Reset for a locked bound target with zero
+public references. Copy readback rejects locked source/destination storage.
+Existing public8 target locks remain the old/current control.
+XP validates five modes, ten targets, four Reset recoveries and 46 readbacks.
+Both GPUs independently verify 2944 pixels; XP CPU replies explicitly inject
+analytic images. Additional Present is excluded: replay has no window link
+and refuses five presentation chains while exercising real target textures.
+See `../deployments/d3d-webgpu-review-4K17.json`.

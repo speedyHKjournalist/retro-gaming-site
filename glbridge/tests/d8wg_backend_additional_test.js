@@ -46,7 +46,7 @@ typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSample
 /* Logical PP provider;real packed SDK8/9 bridge is independently tested. */
 ${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DDevice${api},IDirect3DSwapChain${api},IDirect3DSurface${api};
-typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer;LONG refcount,binding_refs;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
+typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer,lockable_render_target;LONG refcount,binding_refs;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
 struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Chain*next_device_chain;};
 struct Device{Interface iface;unsigned refs,pins;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height,Format;}display_mode;struct{HWND hFocusWindow;}creation;UINT additional_swap_chain_count;Chain*additional_swap_chains;};
 typedef Chain D${api}SwapChain;typedef Device D${api}Device;typedef Surface D${api}Surface;
@@ -84,8 +84,8 @@ ${[...(api===8&&source.includes("static void swapchain_destroy_storage(")?["swap
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 additional parameters API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){unsigned checks=0,cases=0;const UINT counts[]={0,1,3};Device d={.refs=1,.handle=77,.present={.SwapEffect=1,.Windowed=1},.display_mode={128,96,22},.creation={.hFocusWindow=(void*)(uintptr_t)0x44}};
 for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=0;h<2;h++)for(unsigned n=0;n<3;n++){
- D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=w?80:0,.BackBufferHeight=h?72:0,.BackBufferFormat=22,.BackBufferCount=counts[n],.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL},input=p;UINT width=w?80:window?96:128,height=h?72:window?80:96;Interface*out=(void*)(uintptr_t)1;
- ${api===8?'unsigned before_core=core_parameter_calls;':''}CHECK(CREATE(&d,&p,&out)==D3D_OK&&out${api===8?'&&core_parameter_calls==before_core+1':''});Chain*c=(Chain*)out;
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=w?80:0,.BackBufferHeight=h?72:0,.BackBufferFormat=22,.BackBufferCount=counts[n],.Flags=n&1,.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL},input=p;UINT width=w?80:window?96:128,height=h?72:window?80:96;Interface*out=(void*)(uintptr_t)1;
+ ${api===8?'unsigned before_core=core_parameter_calls;':''}CHECK(CREATE(&d,&p,&out)==D3D_OK&&out${api===8?'&&core_parameter_calls==before_core+1':''});Chain*c=(Chain*)out;${api===9?'CHECK(((Surface*)c->back_buffer)->lockable_render_target==!!(p.Flags&1));':''}
  CHECK(c->present.BackBufferWidth==width&&c->present.BackBufferHeight==height&&c->present.BackBufferCount==(counts[n]?counts[n]:1)&&c->present.BackBufferFormat==22&&c->present.hDeviceWindow==(window?(void*)(uintptr_t)0x55:d.creation.hFocusWindow));
  input.BackBufferCount=counts[n]?counts[n]:1;CHECK(!memcmp(&p,&input,sizeof(p)));
  CHECK(d.refs==2&&d.pins==1&&${api===8?'d.additional_swap_chain_count==1&&((Surface*)c->back_buffer)->additional_back_buffer&&((Surface*)c->back_buffer)->texture->swap_chain==c':'d.additional_swap_chains==c&&((Surface*)c->back_buffer)->swap_chain==c&&!((Surface*)c->back_buffer)->refcount'});
@@ -93,7 +93,7 @@ for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=
 }
 ${api===8?`{
  D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=32,.BackBufferHeight=24,.BackBufferFormat=22,.BackBufferCount=1,.MultiSampleType=4,.Flags=1},input=p;Interface*out=NULL;
- CHECK(!CREATE(&d,&p,&out)&&out&&last_ms==4&&!last_lockable);Chain*c=(Chain*)out;
+ CHECK(!CREATE(&d,&p,&out)&&out&&last_ms==4&&!last_lockable);Chain*c=(Chain*)out;${api===9?'CHECK(((Surface*)c->back_buffer)->lockable_render_target==!!(p.Flags&1));':''}
  CHECK(c->present.MultiSampleType==4&&c->present.Flags==1&&!memcmp(&p,&input,sizeof(p)));
  CHECK(d.refs==2&&d.pins==1&&d.additional_swap_chain_count==1);
  CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins&&!d.additional_swap_chain_count);cases++;
@@ -106,7 +106,7 @@ fail_at=fail_emit=0;D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBuff
 CHECK(CREATE(&d,&p,&out)==D3DERR_INVALIDCALL&&!out&&allocations==before&&!memcmp(&p,&input,sizeof(p))&&d.refs==1);
 ${api===9?`{
  D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=32,.BackBufferHeight=24,.BackBufferFormat=22,.BackBufferCount=1,.MultiSampleType=4},input=p;Interface*out=NULL;
- CHECK(!CREATE(&d,&p,&out)&&out&&last_ms==4);Chain*c=(Chain*)out;
+ CHECK(!CREATE(&d,&p,&out)&&out&&last_ms==4);Chain*c=(Chain*)out;${api===9?'CHECK(((Surface*)c->back_buffer)->lockable_render_target==!!(p.Flags&1));':''}
  CHECK(c->present.MultiSampleType==4&&!c->present.MultiSampleQuality&&!memcmp(&p,&input,sizeof(p)));
  CHECK(d.refs==2&&d.pins==1&&d.additional_swap_chains==c);
  CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins&&!d.additional_swap_chains);cases++;
@@ -116,7 +116,7 @@ ${api===9?`{
 for(UINT format=21;format<=26;format++)for(UINT window=0;window<4;window++)for(UINT sample=0;sample<2;sample++){
  empty_client=window==3;d.display_mode.Format=format;d.present.Windowed=window==2?0:1;d.creation.hFocusWindow=window==0?NULL:(void*)(uintptr_t)0x44;observed_window=window==0?NULL:d.creation.hFocusWindow;
  D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=0,.MultiSampleType=sample?4:0,.Flags=sample?1:0},expected=p;expected.BackBufferCount=1;Interface*out=NULL;UINT queries=desktop_queries;
- CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;
+ CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;${api===9?'CHECK(((Surface*)c->back_buffer)->lockable_render_target==!!(p.Flags&1));':''}
  CHECK(c->present.BackBufferWidth==128&&c->present.BackBufferHeight==96&&c->present.BackBufferCount==1&&c->present.BackBufferFormat==format&&c->present.MultiSampleType==(sample?4u:0u)&&c->present.Flags==(sample?1u:0u)&&!c->present.MultiSampleQuality&&c->present.hDeviceWindow==d.creation.hFocusWindow);
  CHECK(!memcmp(&p,&expected,sizeof(p))&&desktop_queries==queries&&last_texture_format==format&&last_ms==(sample?4u:0u));CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins&&!d.additional_swap_chains);cases++;
 }
