@@ -16086,6 +16086,33 @@ HRESULT WINAPI d9wg_d3d9_core_set_fvf8(IDirect3DDevice9 *iface, DWORD fvf)
             decl ? &decl->iface : NULL);
 }
 
+/* Backend for an already resolved8 DWORD shader handle. Validate both
+ * owners before either setter changes state; public raw-handle queries and
+ * deletion remain frontend responsibilities. NULL/NULL is the8 zero bind. */
+HRESULT WINAPI d9wg_d3d9_core_set_vertex_shader8(IDirect3DDevice9 *iface,
+        IDirect3DVertexDeclaration9 *layout_iface,
+        IDirect3DVertexShader9 *shader_iface)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    if (!layout_iface)
+        return shader_iface ? D3DERR_INVALIDCALL
+                : d9wg_d3d9_core_set_fvf8(iface, 0);
+    D9Device *device = device_from_iface(iface);
+    D9VertexDeclaration *layout = decl_from_iface(layout_iface);
+    D9Shader *shader = shader_iface ? vertex_shader_from_iface(shader_iface) : NULL;
+    if (layout_iface->lpVtbl != &g_decl_vtbl || layout->device != device
+            || (shader_iface && (shader_iface->lpVtbl != &g_vertex_shader_vtbl
+                || shader->device != device)))
+        return D3DERR_INVALIDCALL;
+    if (!device->recording_result && device->vertex_declaration == layout
+            && device->vertex_shader == shader)
+        return D3D_OK;
+    HRESULT hr = IDirect3DDevice9_SetVertexDeclaration(iface, layout_iface);
+    if (FAILED(hr)) return hr;
+    return IDirect3DDevice9_SetVertexShader(iface, shader_iface);
+}
+
 /* Raw8 GetDeclaration/GetFunction and DWORD handle ownership belong to
  * the frontend. Returned shader storage includes injected local DEFs and
  * END, while this entry validates the original unexpanded8 input bound. */

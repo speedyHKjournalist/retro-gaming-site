@@ -1278,3 +1278,24 @@ five Reset. Both GPUs verify20complete images/1,280pixels with zero error,
 XP CPU replies are explicit analytic injection. Full public8 wrappers,
 raw handle policy and ProcessVertices destination8 FVF remain open.
 Evidence: `../deployments/d3d-webgpu-review-4K32.json`.
+
+
+### Review 4K33: core8 program/declaration pair binding
+
+`d9wg_d3d9_core_set_vertex_shader8` (stdcall12) binds a resolved8 shader handle
+as real9 declaration/VS objects. Both types and device owners are validated
+before either binding changes. NULL VS permits declaration-only; NULL/NULL
+uses8 zero clearing. A live duplicate is a no-op while a recorded duplicate
+still captures both slots. Actual9 setter publication order is retained on
+transport failure; invalid-object prevalidation changes neither slot.
+
+Native coverage is1,036cases/33,440checks,19strict semantic mutants andtwo
+ASAN families. Independent declaration-only/program-only changes,public-zero
+revival,record/apply/clear anddevice-first/last-view/last-block cleanup pass.
+XP compares accurate4K32old/current8,ordinary9 andcoreSDK120/220:duplicate
+binding recording,red-to-green switch andrecorded red restore,Capture ofgreen
+andReset restore,localDEF/APIbank isolation andfinalrefs0. BothGPUs verify
+20full images/1,280pixels withzeroerror. PS1.0-1.4 metadata remainseparate from
+numerical drawing. VMCPUreplies areexplicit analytic injection;fullraw8
+handle/query/stateblock wrappers andProcessVertices destination8FVF remainopen.
+Evidence: `../deployments/d3d-webgpu-review-4K33.json`.
