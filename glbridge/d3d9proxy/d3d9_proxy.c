@@ -896,6 +896,7 @@ typedef struct D9StreamBinding {
 struct D9StateBlock {
     IDirect3DStateBlock9 iface;
     LONG refcount;
+    BOOL device_parent_ref; /* false until a recorded block is published */
     D9Device *device;
 
     BOOL has_render_state[D9_MAX_RENDER_STATES];
@@ -4437,9 +4438,11 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
         TRACE_MARK_EXIT("Device.Release", (HRESULT)refs, NULL);
         return refs;
     }
-    if ((LONG)refs == InterlockedCompareExchange(
-            &device->child_parent_refs, 0, 0)) {
-        TRACE("Device.Release cycle-break object=%08lX refs=%lu child_refs=%ld",
+    /* Resource public refs keep this complete state alive, even after the
+     * application's last direct device reference is gone. All internal live
+     * and recorded bindings retain storage without a device parent pin. */
+    if (!refs) {
+        TRACE("Device.Release final-state object=%08lX refs=%lu child_refs=%ld",
                 (DWORD)(uintptr_t)iface, refs,
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         device->releasing_owned_refs = TRUE;
@@ -12119,7 +12122,7 @@ static void state_block_mark_all(struct D9StateBlock *block)
     block->has_indices = TRUE;
 }
 
-static struct D9StateBlock *state_block_alloc(D9Device *device)
+static struct D9StateBlock *state_block_alloc(D9Device *device, BOOL parent_ref)
 {
     struct D9StateBlock *block = (struct D9StateBlock *)HeapAlloc(
             GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*block));
@@ -12128,7 +12131,8 @@ static struct D9StateBlock *state_block_alloc(D9Device *device)
     block->iface.lpVtbl = &g_state_block_vtbl;
     block->refcount = 1;
     block->device = device;
-    device_child_add_ref(device);
+    block->device_parent_ref = parent_ref;
+    if (parent_ref) device_child_add_ref(device);
     block->next_device_resource = device->state_blocks;
     device->state_blocks = block;
     return block;
@@ -12297,8 +12301,9 @@ static ULONG WINAPI state_block_release(IDirect3DStateBlock9 *iface)
         state_block_release_references(block);
         d9wg_light_free(&block->extra_lights);
         D9Device *device = block->device;
+        BOOL parent_ref = block->device_parent_ref;
         HeapFree(GetProcessHeap(), 0, block);
-        device_child_release(device);
+        if (parent_ref) device_child_release(device);
     }
     return refs;
 }
@@ -12354,7 +12359,7 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
     if (type != D3DSBT_ALL && type != D3DSBT_PIXELSTATE
             && type != D3DSBT_VERTEXSTATE)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    block = state_block_alloc(device);
+    block = state_block_alloc(device, TRUE);
     if (!block)
         return TRACE_REFUSE(E_OUTOFMEMORY);
     if (type == D3DSBT_ALL) state_block_mark_all(block);
@@ -12370,7 +12375,7 @@ static HRESULT WINAPI device_begin_state_block(IDirect3DDevice9 *iface)
 {
     D9Device *device = device_from_iface(iface);
     if (device->recording_result) return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    D9StateBlock *block = state_block_alloc(device);
+    D9StateBlock *block = state_block_alloc(device, FALSE);
     if (!block) return TRACE_REFUSE(E_OUTOFMEMORY);
     device->recording_result = block;
     return D3D_OK;
@@ -12383,6 +12388,8 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice9 *iface,
     D9StateBlock *block = device->recording_result;
     if (!block || !block_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     device->recording_result = NULL;
+    block->device_parent_ref = TRUE;
+    device_child_add_ref(device);
     *block_out = &block->iface;
     return D3D_OK;
 }

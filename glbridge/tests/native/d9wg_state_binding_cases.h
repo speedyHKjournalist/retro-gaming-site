@@ -40,13 +40,13 @@ static int state_binding_cases(void)
     for (UINT round = 0; round < 32; round++) for (UINT pool = 0; pool < 4; pool++) for (UINT order = 0; order < 4; order++) {
         Parent parent = {0};D9Device *device = new_device(&parent);StateGroup group = new_state_group(device,pool);
         UINT old_destroys = destroys;
-        CHECK(!device_begin_state_block(&device->iface) && device->refcount == 10);
+        CHECK(!device_begin_state_block(&device->iface) && device->refcount == 9);
         CHECK(!bind_state_group(device,group) && !state_group_refs(group,1,1));
         CHECK(!bind_state_group(device,group) && !state_group_refs(group,1,1));
         CHECK(!device_set_texture(&device->iface,0,&group.cube->iface) && !device_set_texture(&device->iface,0,&group.volume->iface) && !device_set_texture(&device->iface,0,&group.texture->iface));
         CHECK(!device_set_fvf(&device->iface,2) && !group.decl->binding_refs && !device_set_vertex_declaration(&device->iface,&group.decl->iface));
         CHECK(!state_group_refs(group,1,1) && !device->textures[0] && !device->vertex_shader && !device->vertex_declaration && !device->streams[0].buffer && !device->index_buffer);
-        CHECK(!release_state_group(group) && device->refcount == 2 && device->child_parent_refs == 1 && !device_has_reset_blockers(device));
+        CHECK(!release_state_group(group) && device->refcount == 1 && !device->child_parent_refs && !device_has_reset_blockers(device));
         Interface *out = NULL;CHECK(!device_end_state_block(&device->iface,&out));D9StateBlock *block = (D9StateBlock*)out;
         CHECK(block && block == device->state_blocks && !device->recording_result);
         CHECK(!state_block_apply_method(out) && !state_group_refs(group,0,2));
