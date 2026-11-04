@@ -380,3 +380,9 @@ are the XP byte-comparison baseline, with native delegation/error/copy guards
 and independent SwiftShader/Metal replay. See review stage 4K4 and deployment
 `../deployments/d3d-webgpu-review-4K4.json`. Adapter enumeration/format/PP and
 D3D8 device/resource wrapping continue in following phases.
+
+Stage 4K5 also moves the D3D8 adapter mode count and nine-entry list into the
+private API8-profile core. Its resolution-major X1R5G5B5/R5G6B5/X8R8G8B8
+ordering stays intact; ordinary D3D9 still enumerates real driver modes by
+format. Previous-C native comparisons, old-DLL XP comparisons and both GPU
+backends cover the move. See `../deployments/d3d-webgpu-review-4K5.json`.

@@ -31,4 +31,9 @@ HRESULT WINAPI d9wg_d3d9_core_adapter_identifier8(struct IDirect3D9 *factory,
         UINT adapter, DWORD flags, void *out, UINT bytes);
 HRESULT WINAPI d9wg_d3d9_core_adapter_display_mode(struct IDirect3D9 *factory,
         UINT adapter, void *out);
+/* Only private API8-profile factories accept UNKNOWN as the legacy flattened
+ * list selector. This keeps ordinary D3D9 per-format enumeration unchanged. */
+UINT WINAPI d9wg_d3d9_core_adapter_mode_count8(struct IDirect3D9 *factory, UINT adapter);
+HRESULT WINAPI d9wg_d3d9_core_enum_adapter_modes8(struct IDirect3D9 *factory,
+        UINT adapter, UINT index, void *out);
 #endif

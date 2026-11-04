@@ -3958,11 +3958,38 @@ static UINT enumerate_adapter_modes(D3DFORMAT format, UINT wanted,
     return out ? 0 : matched;
 }
 
+/* Private D3D8 factories expose the legacy flattened list through format
+ * UNKNOWN. Ordinary D3D9 factories retain driver-enumerated, filtered modes. */
+static UINT enumerate_adapter_modes8(UINT index, D3DDISPLAYMODE *mode)
+{
+    static const struct {
+        UINT width;
+        UINT height;
+        D3DFORMAT format;
+    } modes[] = {
+        { 640, 480, D3DFMT_X1R5G5B5 },
+        { 640, 480, D3DFMT_R5G6B5 },
+        { 640, 480, D3DFMT_X8R8G8B8 },
+        { 800, 600, D3DFMT_X1R5G5B5 },
+        { 800, 600, D3DFMT_R5G6B5 },
+        { 800, 600, D3DFMT_X8R8G8B8 },
+        { 1024, 768, D3DFMT_X1R5G5B5 },
+        { 1024, 768, D3DFMT_R5G6B5 },
+        { 1024, 768, D3DFMT_X8R8G8B8 }
+    };
+    const UINT count = sizeof(modes) / sizeof(modes[0]);
+    if (!mode) return count;
+    if (index >= count) return 0;
+    fill_display_mode(mode, modes[index].width, modes[index].height, modes[index].format);
+    return 1;
+}
+
 static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D9 *iface, UINT adapter,
         D3DFORMAT format)
 {
     UINT count;
-    (void)iface;
+    if (d3d_from_iface(iface)->compatibility_api == 8)
+        return adapter || format != D3DFMT_UNKNOWN ? 0 : enumerate_adapter_modes8(0, NULL);
 
     if (adapter || (format != D3DFMT_X8R8G8B8 && format != D3DFMT_R5G6B5)) {
         /* A zero here empties the app's video-mode list for that format, which
@@ -3980,7 +4007,12 @@ static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D9 *iface, UINT adapter,
 static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D9 *iface, UINT adapter,
         D3DFORMAT format, UINT index, D3DDISPLAYMODE *mode)
 {
-    (void)iface;
+    if (d3d_from_iface(iface)->compatibility_api == 8) {
+        if (adapter || !mode || format != D3DFMT_UNKNOWN
+                || !enumerate_adapter_modes8(index, mode))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
+    }
 
     if (adapter || !mode || (format != D3DFMT_X8R8G8B8
             && format != D3DFMT_R5G6B5)
@@ -14817,6 +14849,23 @@ HRESULT WINAPI d9wg_d3d9_core_adapter_display_mode(IDirect3D9 *factory,
     HRESULT result;
     if (!out) return D3DERR_INVALIDCALL;
     result = IDirect3D9_GetAdapterDisplayMode(factory, adapter, &mode);
+    if (SUCCEEDED(result)) CopyMemory(out, &mode, sizeof(mode));
+    return result;
+}
+
+UINT WINAPI d9wg_d3d9_core_adapter_mode_count8(IDirect3D9 *factory, UINT adapter)
+{
+    return IDirect3D9_GetAdapterModeCount(factory, adapter, D3DFMT_UNKNOWN);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_enum_adapter_modes8(IDirect3D9 *factory,
+        UINT adapter, UINT index, void *out)
+{
+    _Static_assert(sizeof(D3DDISPLAYMODE) == 16, "shared enumerated mode size");
+    D3DDISPLAYMODE mode;
+    HRESULT result;
+    if (!out) return D3DERR_INVALIDCALL;
+    result = IDirect3D9_EnumAdapterModes(factory, adapter, D3DFMT_UNKNOWN, index, &mode);
     if (SUCCEEDED(result)) CopyMemory(out, &mode, sizeof(mode));
     return result;
 }
