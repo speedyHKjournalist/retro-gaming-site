@@ -51,6 +51,7 @@
 #include "../runtime/d9wg_depth_surface_layout8.h"
 #include "../runtime/d9wg_format_queries.h"
 #include "../runtime/d9wg_state_defaults.h"
+#include "../runtime/d9wg_state_bridge8.h"
 #include "../runtime/d9wg_fvf.h"
 #include "../runtime/d9wg_math.h"
 #define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL9
@@ -15607,6 +15608,37 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_CreateDepthStencilSurface(iface, width, height,
             (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
             FALSE, out, NULL);
+}
+
+/* These entries translate backend state only. The public8 wrapper retains
+ * raw API8 Get/state-block bookkeeping before delegating to these methods. */
+HRESULT WINAPI d9wg_d3d9_core_set_render_state8(IDirect3DDevice9 *iface,
+        UINT state, DWORD value)
+{
+    D9WGState8 translated;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || state >= D9WG_RENDER_STATES8)
+        return D3DERR_INVALIDCALL;
+    translated = d9wg_render_state8(state, value);
+    if (translated.kind == D9WG_STATE8_DROP) return D3D_OK;
+    return IDirect3DDevice9_SetRenderState(iface,
+            (D3DRENDERSTATETYPE)translated.state, translated.value);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_set_texture_stage_state8(IDirect3DDevice9 *iface,
+        UINT stage, UINT state, DWORD value)
+{
+    D9WGState8 translated;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || stage >= D9WG_TEXTURE_STAGES8
+            || state >= D9WG_TEXTURE_STAGE_STATES8)
+        return D3DERR_INVALIDCALL;
+    translated = d9wg_texture_stage_state8(state, value);
+    if (translated.kind == D9WG_STATE8_SAMPLER)
+        return IDirect3DDevice9_SetSamplerState(iface, stage,
+                (D3DSAMPLERSTATETYPE)translated.state, translated.value);
+    return IDirect3DDevice9_SetTextureStageState(iface, stage,
+            (D3DTEXTURESTAGESTATETYPE)translated.state, translated.value);
 }
 
 /* Buffer creation/lock/descriptor contracts already agree between the

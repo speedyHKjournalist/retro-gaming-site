@@ -20,6 +20,8 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
+const {spawnSync} = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const read = relative => fs.readFileSync(/^(gl-webgpu|d3d8-webgpu|d3d9-webgpu)\//.test(relative) ? require("./host_paths.js").hostPath(relative) : path.join(root, relative), "utf8");
@@ -100,13 +102,6 @@ for (const match of guest.matchAll(/\b(D9WG[A-Z]\w+)\b/g)) {
 
 // ---- (3) the mapping tables agree with the executor's D3D9 constants -----
 
-function bridgeNumber(name) {
-    const match = bridge.match(new RegExp("#define\\s+" + name +
-        "\\s+(0x[0-9A-Fa-f]+|\\d+)u?"));
-    assert.ok(match, "d3d8_protocol.h must define " + name);
-    return Number.parseInt(match[1], 0);
-}
-
 function executorNumber(name) {
     const match = executor.match(new RegExp("const\\s+" + name +
         "\\s*=\\s*(0x[0-9A-Fa-f]+|\\d+)"));
@@ -114,69 +109,46 @@ function executorNumber(name) {
     return Number.parseInt(match[1], 0);
 }
 
-// D3D8 addressed samplers through SetTextureStageState; D3D9 split them out.
-// If these drift, filtering and addressing silently land on the wrong state.
-for (const [bridgeName, executorName] of [
-    ["D3D9SAMP_ADDRESSU", "D3DSAMP_ADDRESSU"],
-    ["D3D9SAMP_ADDRESSV", "D3DSAMP_ADDRESSV"],
-    ["D3D9SAMP_ADDRESSW", "D3DSAMP_ADDRESSW"],
-    ["D3D9SAMP_BORDERCOLOR", "D3DSAMP_BORDERCOLOR"],
-    ["D3D9SAMP_MAGFILTER", "D3DSAMP_MAGFILTER"],
-    ["D3D9SAMP_MINFILTER", "D3DSAMP_MINFILTER"],
-    ["D3D9SAMP_MIPFILTER", "D3DSAMP_MIPFILTER"],
-    ["D3D9SAMP_MAXANISOTROPY", "D3DSAMP_MAXANISOTROPY"],
-]) {
-    assert.equal(bridgeNumber(bridgeName), executorNumber(executorName),
-        bridgeName + " must match the executor's " + executorName);
+// Execute the actual shared C mapping; source placement and switch formatting
+// do not define the compatibility contract. The full native state suite also
+// checks SDK enums, raw values, frontend bookkeeping and backend dispatch.
+const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "d8wg-protocol-states-"));
+let stateRows;
+try {
+    const source = stateDirectory + "/states.c", binary = stateDirectory + "/states";
+    fs.writeFileSync(source, `#include <stdio.h>
+#include "${root}/runtime/d9wg_state_bridge8.h"
+int main(void) {
+    for (unsigned n=0;n<256;n++) {D9WGState8 s=d9wg_render_state8(n,16);printf("R %u %u %u\\n",n,s.kind,s.state);}
+    for (unsigned n=0;n<32;n++) {D9WGState8 s=d9wg_texture_stage_state8(n,16);printf("T %u %u %u\\n",n,s.kind,s.state);}
+    return 0;
 }
-
-assert.equal(bridgeNumber("D3D9RS_DEPTHBIAS"),
-    executorNumber("D3DRS_DEPTHBIAS"),
-    "D3DRS_ZBIAS is translated to DEPTHBIAS; the target must match");
-
-// The sampler split must be exhaustive in both directions: exactly the ten
-// D3D8 stage states that became sampler states, and no others.
-const samplerSplit = bridge.match(
-    /d3d8_stage_state_to_sampler_state\(unsigned state\)\s*\{([\s\S]*?)\n\}/);
-assert.ok(samplerSplit, "d3d8_protocol.h must define the sampler split");
-const mappedStageStates = [...samplerSplit[1]
-    .matchAll(/case (D3D8TSS_\w+): return (D3D9SAMP_\w+);/g)];
-assert.equal(mappedStageStates.length, 10,
-    "D3D8 moved exactly ten texture stage states into D3D9 sampler state");
-assert.equal(new Set(mappedStageStates.map(m => m[2])).size, 10,
-    "each D3D8 stage state must map to a distinct sampler state");
-
-// ---- (4) dropped render states really are unimplemented ------------------
-
-// The executor lists the render states it tracks; a state the guest drops must
-// not appear there, or dropping it would be discarding something honoured.
-const droppedStates = [...bridge.matchAll(/#define (D3D8RS_\w+) (\d+)u/g)]
-    .map(m => ({ name: m[1], value: Number.parseInt(m[2], 10) }));
-assert.ok(droppedStates.length >= 8,
-    "expected the removed-render-state table to be present");
-
-const dropSwitch = guest.match(
-    /static BOOL emit_render_state\(D8Device \*device[\s\S]*?\n\}/);
-assert.ok(dropSwitch, "the D3D8 guest must translate render states");
-const droppedNames = new Set([...dropSwitch[0]
-    .matchAll(/case (D3D8RS_\w+):\s*(?:\/\*[^\n]*\*\/\s*)?\n/g)].map(m => m[1]));
-// ZBIAS is translated, not dropped, so it must not be in the fall-through set.
-assert.ok(!droppedNames.has("D3D8RS_ZBIAS"),
-    "D3DRS_ZBIAS is translated to DEPTHBIAS, not dropped");
-assert.ok(droppedNames.size >= 7,
-    "expected the deleted-in-D3D9 render states to be dropped explicitly");
-
+`);
+    const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", source, "-o", binary], {encoding: "utf8"});
+    assert.equal(build.status, 0, build.stderr);
+    const run = spawnSync(binary, [], {encoding: "utf8", timeout: 10000});
+    assert.equal(run.status, 0, run.stderr);
+    stateRows = run.stdout.trim().split("\n").map(line => line.split(" "));
+} finally {fs.rmSync(stateDirectory, {recursive: true, force: true});}
+const renderRows = stateRows.filter(r => r[0] === "R").map(r => r.slice(1).map(Number));
+const textureRows = stateRows.filter(r => r[0] === "T").map(r => r.slice(1).map(Number));
+assert.equal(renderRows.length, 256);assert.equal(textureRows.length, 32);
+for (const [stageState, executorName] of [[13,"D3DSAMP_ADDRESSU"], [14,"D3DSAMP_ADDRESSV"], [25,"D3DSAMP_ADDRESSW"], [15,"D3DSAMP_BORDERCOLOR"], [16,"D3DSAMP_MAGFILTER"], [17,"D3DSAMP_MINFILTER"], [18,"D3DSAMP_MIPFILTER"], [21,"D3DSAMP_MAXANISOTROPY"]]) {
+    const row = textureRows[stageState];assert.equal(row[1], 3);
+    assert.equal(row[2], executorNumber(executorName));
+}
+assert.equal(renderRows[47][1], 1);
+assert.equal(renderRows[47][2], executorNumber("D3DRS_DEPTHBIAS"));
+const mappedStageStates = textureRows.filter(r => r[1] === 3);
+assert.deepEqual(mappedStageStates.map(r => r[0]), [13,14,15,16,17,18,19,20,21,25]);
+assert.equal(new Set(mappedStageStates.map(r => r[2])).size, 10);
+const droppedStates = renderRows.filter(r => r[1] === 0).map(r => r[0]);
+assert.deepEqual(droppedStates, [10,30,40,153,164,172,173]);
 const executorRenderStates = new Set(
     [...executor.matchAll(/const\s+(D3DRS_\w+)\s*=\s*(\d+)/g)]
         .map(m => Number.parseInt(m[2], 10)));
-for (const name of droppedNames) {
-    const entry = droppedStates.find(item => item.name === name);
-    assert.ok(entry, name + " is dropped but not declared in d3d8_protocol.h");
-    assert.ok(!executorRenderStates.has(entry.value),
-        name + " (" + entry.value + ") is dropped by the D3D8 guest but the " +
-        "executor tracks that render state number -- dropping it discards " +
-        "behaviour the host implements");
-}
+for (const state of droppedStates) assert.ok(!executorRenderStates.has(state),
+    "dropped API8 render state " + state + " is tracked by the executor");
 
 // ---- every D3D8 format is accounted for, on both sides -----------------
 //

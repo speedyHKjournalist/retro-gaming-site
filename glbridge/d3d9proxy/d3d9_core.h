@@ -83,6 +83,12 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* Backend-state translation only: caller owns raw8 Get/state-block metadata.
+ * Deleted states have no backend effect; ZBIAS and sampler TSS are mapped. */
+HRESULT WINAPI d9wg_d3d9_core_set_render_state8(struct IDirect3DDevice9 *device,
+        UINT state, DWORD value);
+HRESULT WINAPI d9wg_d3d9_core_set_texture_stage_state8(struct IDirect3DDevice9 *device,
+        UINT stage, UINT state, DWORD value);
 /* API8 buffer creation with core lifetime/lock/descriptor implementation. */
 HRESULT WINAPI d9wg_d3d9_core_vertex_buffer8(struct IDirect3DDevice9 *device,
         UINT length, DWORD usage, DWORD fvf, UINT pool,

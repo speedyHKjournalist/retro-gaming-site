@@ -1,0 +1,7 @@
+LIBRARY core8
+EXPORTS
+    Core8CreateFactory=Core8CreateFactory@4
+    Core8CreateDevice=Core8CreateDevice@28
+    Core8Reset=Core8Reset@8
+    Core8RenderState=Core8RenderState@12
+    Core8TextureStageState=Core8TextureStageState@16

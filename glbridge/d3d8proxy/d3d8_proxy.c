@@ -79,9 +79,9 @@ _Static_assert(D3DUSAGE_DYNAMIC == D9WG_BUFFER_USAGE_DYNAMIC, "dynamic buffer us
 #define D8WG_TRACE_ERROR(result) (result)
 #define D8WG_TRACE(...) ((void)0)
 #endif
-#define D8WG_MAX_RENDER_STATES 256u
-#define D8WG_MAX_TEXTURE_STAGES 8u
-#define D8WG_MAX_TEXTURE_STAGE_STATES 32u
+#define D8WG_MAX_RENDER_STATES D9WG_RENDER_STATES8
+#define D8WG_MAX_TEXTURE_STAGES D9WG_TEXTURE_STAGES8
+#define D8WG_MAX_TEXTURE_STAGE_STATES D9WG_TEXTURE_STAGE_STATES8
 #define D8WG_MAX_STREAMS 16u
 #define D8WG_MAX_LIGHTS 8u
 #define D8WG_TRANSFORM_VIEW_SLOT 0u
@@ -2958,36 +2958,13 @@ static HRESULT WINAPI device_get_viewport(IDirect3DDevice8 *iface,
 static BOOL emit_render_state(D8Device *device, D3DRENDERSTATETYPE state,
         DWORD value)
 {
+    D9WGState8 translated = d9wg_render_state8((UINT)state, value);
     D9WGSetRenderState command;
-
+    if (translated.kind == D9WG_STATE8_DROP) return TRUE;
     command.device_handle = device->handle;
+    command.state = translated.state;
+    command.value = translated.value;
     command.reserved = 0;
-    switch ((UINT)state) {
-    case D3D8RS_LINEPATTERN:              /* no D3D9 equivalent */
-    case D3D8RS_ZVISIBLE:                 /* never implemented by any driver */
-    case D3D8RS_EDGEANTIALIAS:            /* superseded by multisampling */
-    case D3D8RS_SOFTWAREVERTEXPROCESSING: /* a device method in D3D9 */
-    case D3D8RS_PATCHSEGMENTS:            /* N-patch tessellation, see fill_caps */
-    case D3D8RS_POSITIONORDER:
-    case D3D8RS_NORMALORDER:
-        return TRUE;
-    case D3D8RS_ZBIAS: {
-        /*
-         * D3D8: an integer 0..16 pulling the fragment towards the viewer.
-         * D3D9: a float added to the depth value, so the same intent is a
-         * negative bias. The host reads this state as raw float bits.
-         */
-        float bias = (float)(value > 16u ? 16u : value)
-                * D3D8_ZBIAS_TO_DEPTHBIAS_STEP;
-        command.state = D3D9RS_DEPTHBIAS;
-        CopyMemory(&command.value, &bias, sizeof(command.value));
-        break;
-    }
-    default:
-        command.state = (uint32_t)state;
-        command.value = value;
-        break;
-    }
     return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
 }
 
@@ -3003,14 +2980,14 @@ static BOOL emit_render_state(D8Device *device, D3DRENDERSTATETYPE state,
 static BOOL emit_texture_stage_state(D8Device *device, DWORD stage,
         D3DTEXTURESTAGESTATETYPE state, DWORD value)
 {
-    unsigned sampler_state = d3d8_stage_state_to_sampler_state((unsigned)state);
+    D9WGState8 translated = d9wg_texture_stage_state8((UINT)state, value);
 
-    if (sampler_state) {
+    if (translated.kind == D9WG_STATE8_SAMPLER) {
         D9WGSetSamplerState command;
         command.device_handle = device->handle;
         command.sampler = stage;
-        command.state = sampler_state;
-        command.value = value;
+        command.state = translated.state;
+        command.value = translated.value;
         return emit_command(D9WG_OP_SET_SAMPLER_STATE, &command,
                 sizeof(command));
     }
@@ -3018,8 +2995,8 @@ static BOOL emit_texture_stage_state(D8Device *device, DWORD stage,
         D9WGSetTextureStageState command;
         command.device_handle = device->handle;
         command.stage = stage;
-        command.state = (uint32_t)state;
-        command.value = value;
+        command.state = translated.state;
+        command.value = translated.value;
         return emit_command(D9WG_OP_SET_TEXTURE_STAGE_STATE, &command,
                 sizeof(command));
     }

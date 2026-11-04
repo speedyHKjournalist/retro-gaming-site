@@ -607,3 +607,23 @@ capture withdecimal44 metadata. Both GPUs match20images/1280pixels through
 injection. This preserves existing proxy validation,including knownnative
 pool/FVF-length gaps;fullpublic8wrapping remains open. Evidence:
 `../deployments/d3d-webgpu-review-4K25.json`.
+
+Stage 4K26 shares API8 render/TSS translation through
+`runtime/d9wg_state_bridge8.h`. Public8 emitters and private core8 state
+setters use the same seven-state drop policy, ZBIAS conversion and ten
+sampler relocations. Private setters have 12/16-byte stdcall ABIs and reuse
+actual core9 filtering and state-block recording. The embedding frontend
+must retain raw API8 getters, deleted states and unclamped ZBIAS metadata;
+these entries do not implement a complete public8 device wrapper.
+
+Native C comparisons cover 740360 cases and 1533458 checks, including
+frozen old8 emitters/setters, ordinary9 setters, actual translated core9
+recording, failure order and SDK enum values. All 35 effective mutations,
+two historical setter controls and ASAN pass. The XP probe covers five
+profiles, 400 sampler configurations, state-block Apply/Capture and Reset.
+It waits for asynchronous window workers to unload all four DLLs before
+process exit. The frozen trace checks every state packet against an
+independent operation plan. This is state/API evidence with no new pixel
+claim; ZBIAS precision remains a local compatibility approximation. See
+`../deployments/d3d-webgpu-review-4K26.json` for results and preserved probe
+corrections. Full public8 wrapping and later review stages remain open.
