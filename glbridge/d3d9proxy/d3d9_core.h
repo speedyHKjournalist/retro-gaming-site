@@ -70,6 +70,11 @@ HRESULT WINAPI d9wg_d3d9_core_additional8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample, BOOL lockable,
         struct IDirect3DSurface9 **out);
+/* Legacy depth creation keeps its six-format/sample/output policy, then
+ * uses the core8192 storage bound. Discard is false to preserve contents. */
+HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
+        UINT width, UINT height, UINT format, UINT multisample,
+        struct IDirect3DSurface9 **out);
 /* Body starts after version token;success count excludes END. Version/handle
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,

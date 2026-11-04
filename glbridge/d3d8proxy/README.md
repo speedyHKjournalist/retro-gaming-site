@@ -517,3 +517,14 @@ XP exercises13 guarded failures and the new constructor with the retained
 46-image/2944-pixel contract, independently verified by both GPU backends.
 CPU replies are analytic injection; additional Present and full public8 device
 or resource wrapping are excluded. See `../deployments/d3d-webgpu-review-4K18.json`.
+
+Stage 4K19 adds the private SDK8-callable depth-surface constructor with the
+legacy six-format/sample and early-output rules. It reuses core8192 storage
+bounds and forwards zero quality, discard=false and no shared handle.
+A separate SDK8 consumer verifies the24-byte private ABI. Native comparison
+covers70275 cases,14 strict runtime mutants andASAN. XP tests old/current8,
+ordinary9 andcore8SDK120/220:depth retention after rebind,depth-only clear,
+and a half-screen stencil mask,plusmetadata/identity/lock refusal andReset.
+Both GPUs independently match20images/1280pixels; CPU replies are analytic
+injection. MSAA4 depth metadata/storage is tested,not physical coverage or
+precision. Public8wrapping remains pending. See `../deployments/d3d-webgpu-review-4K19.json`.
