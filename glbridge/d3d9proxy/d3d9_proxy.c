@@ -15712,6 +15712,87 @@ HRESULT WINAPI d9wg_d3d9_core_get_front_buffer8(IDirect3DDevice9 *iface,
     return d9wg_front_buffer8_common(device_from_iface(iface), destination);
 }
 
+/* CopyRects can address a texture mip, a cube face or the implicit buffer.
+ * CPU images deliberately have no GPU identity. */
+static BOOL copy_location8(D9Surface *surface, uint32_t *handle,
+        uint32_t *level, uint32_t *face)
+{
+    *handle = *level = *face = 0;
+    if (surface->texture) {
+        *handle = surface->texture->handle;
+        *level = surface->level;
+        return TRUE;
+    }
+    if (surface->cube_texture) {
+        *handle = surface->cube_texture->handle;
+        *level = surface->level;
+        *face = surface->cube_face;
+        return TRUE;
+    }
+    return surface->swap_chain != NULL;
+}
+
+static HRESULT refresh_copy8(D9Surface *surface)
+{
+    D3DSURFACE_DESC desc;
+    D9TextureLevel *level = surface_texture_level(surface);
+    if (FAILED(surface_get_desc(&surface->iface, &desc)))
+        return D3DERR_INVALIDCALL;
+    if (!surface->swap_chain && (desc.Pool != D3DPOOL_DEFAULT
+            || (!(desc.Usage & D3DUSAGE_RENDERTARGET)
+                && !(level && !level->shadow_valid))))
+        return D3D_OK;
+    UINT pitch;
+    BYTE *pixels = front_pixels8(surface, &pitch);
+    D9WGReadbackSurface request = {0};
+    D9WGReadbackDiagnostic detail;
+    UINT bw, bh, pixel_bytes;
+    if (!pixels || !copy_location8(surface, &request.texture_handle,
+                &request.level, &request.face)
+            || !front_layout8(desc.Format, &bw, &bh, &pixel_bytes)
+            || bw != 1 || bh != 1)
+        return D3DERR_INVALIDCALL;
+    request.device_handle = surface->device->handle;
+    request.format = desc.Format;
+    request.width = desc.Width;
+    request.height = desc.Height;
+    request.destination_pitch = pitch;
+    int result = d9wg_surface_readback(g_process, &request,
+            desc.Width * pixel_bytes, desc.Height, pixels,
+            level ? level->byte_count : surface->byte_count,
+            submit_readback_batch_locked, &detail);
+    if (!result && level) level->shadow_valid = TRUE;
+    return !result ? D3D_OK : result == D9WG_READBACK_INVALID
+            ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR;
+}
+
+#define D9WG_RECT_DEVICE D9Device
+#define D9WG_RECT_SURFACE D9Surface
+#define D9WG_RECT_LEVEL D9TextureLevel
+#define D9WG_RECT_IFACE IDirect3DSurface9
+#define D9WG_RECT_DESC D3DSURFACE_DESC
+#define D9WG_RECT_TRACE TRACE_REFUSE
+#define D9WG_RECT_OWNER(s) ((s)->device)
+#define D9WG_RECT_GET_DESC surface_get_desc
+#define D9WG_RECT_LAYOUT front_layout8
+#define D9WG_RECT_LOCATION copy_location8
+#define D9WG_RECT_REFRESH refresh_copy8
+#define D9WG_RECT_PIXELS front_pixels8
+#define D9WG_RECT_UPLOAD upload_front8
+#define D9WG_RECT_DEPTH(s) ((s)->auto_depth_stencil)
+#define D9WG_RECT_DIRTY(level,value) ((level)->shadow_valid = !(value))
+#include "../runtime/d9wg_copy_rects_bridge8.h"
+
+HRESULT WINAPI d9wg_d3d9_core_copy_rects8(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *source, const RECT *rects, UINT count,
+        IDirect3DSurface9 *destination, const POINT *points)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return d9wg_copy_rects8_common(device_from_iface(iface), source,
+            rects, count, destination, points);
+}
+
 /* Same core9 mip/cube/volume copy machinery, now with the shared8/9 pool
  * rule. Ownership/type/format/lock/preflight validation stays in the core. */
 HRESULT WINAPI d9wg_d3d9_core_update_texture8(IDirect3DDevice9 *iface,

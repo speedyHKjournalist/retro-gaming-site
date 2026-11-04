@@ -88,6 +88,10 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
  * format rules and texture-view uploads; ordinary9 front rules stay separate. */
 HRESULT WINAPI d9wg_d3d9_core_get_front_buffer8(struct IDirect3DDevice9 *device,
         struct IDirect3DSurface9 *destination);
+/* Ordered API8 rectangles with legacy CPU/GPU pool and overlap rules. */
+HRESULT WINAPI d9wg_d3d9_core_copy_rects8(struct IDirect3DDevice9 *device,
+        struct IDirect3DSurface9 *source, const RECT *rects, UINT count,
+        struct IDirect3DSurface9 *destination, const POINT *points);
 /* Core8 textures use the same native SYSTEMMEM -> DEFAULT copy policy and
  * actual core9 mip/face/volume preflight, shadow updates and uploads. */
 HRESULT WINAPI d9wg_d3d9_core_update_texture8(struct IDirect3DDevice9 *device,

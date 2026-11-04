@@ -666,3 +666,21 @@ including2D/cube copied centers and retained borders, with maps empty before
 SessionEnd cleanup and owner release. Native desktop/window offsets/Present
 timing and complete public8 wrapping remain open. Evidence:
 `../deployments/d3d-webgpu-review-4K28.json`.
+
+
+### Review 4K29: shared API8 CopyRects
+
+API8 CopyRects now uses one shared legacy algorithm for public8 and private core8
+(`d9wg_d3d9_core_copy_rects8`, stdcall24). The adapters preserve ordered partial
+success, zero-count pointer behavior, optional points, CPU overlap snapshots,
+GPU mip/cube-face identity, padding and shadow validity. Ordinary9 surface APIs
+retain their existing contracts. Public8 device/resource wrapping remains open.
+
+Actual frozen8/native comparison covers 77,766 cases / 316,230 checks, 22 strict
+semantic mutants, two sanitizer families and retained61/29 surface checks. The
+four-mode XP probe checks1,148 local DWORDs and fourReset operations. SwiftShader
+and Metal each verify20 full images /1,084 pixels with zero error,16uploads/528bytes
+and20blits; noDraw/Present. CPU replies in XP are explicit analytic injection.
+This phase publishes exact accepted public8 and same-source built9 retail DLLs;
+it does not claim a new ordinary9 SDK execution. Evidence:
+`../deployments/d3d-webgpu-review-4K29.json`.
