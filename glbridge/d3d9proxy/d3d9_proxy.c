@@ -975,6 +975,7 @@ struct D9StateBlock {
 struct D9Direct3D {
     IDirect3D9 iface;
     LONG refcount;
+    UINT compatibility_api;
 };
 
 /*
@@ -3778,6 +3779,32 @@ static UINT WINAPI d3d_get_adapter_count(IDirect3D9 *iface)
     return 1;
 }
 
+static void fill_adapter_identifier8(D3DADAPTER_IDENTIFIER9 *identifier, DWORD flags)
+{
+    lstrcpynA(identifier->Driver, "d3d8-webgpu", sizeof(identifier->Driver));
+    lstrcpynA(identifier->Description,
+            "v86 Direct3D 8 WebGPU Adapter", sizeof(identifier->Description));
+    identifier->VendorId = 0x1234;
+    identifier->DeviceId = 0x5686;
+    identifier->SubSysId = 0x56861234;
+    identifier->Revision = 1;
+    identifier->DriverVersion.HighPart = (6 << 16) | 14;
+    identifier->DriverVersion.LowPart = (10 << 16) | 6764;
+    identifier->DeviceIdentifier.Data1 = 0xD8E60000u | identifier->DeviceId;
+    identifier->DeviceIdentifier.Data2 = (WORD)identifier->VendorId;
+    identifier->DeviceIdentifier.Data3 = (WORD)identifier->DeviceId;
+    identifier->DeviceIdentifier.Data4[0] = 0x9A;
+    identifier->DeviceIdentifier.Data4[1] = 0xB1;
+    identifier->DeviceIdentifier.Data4[2] = 0xC2;
+    identifier->DeviceIdentifier.Data4[3] = 0xD3;
+    identifier->DeviceIdentifier.Data4[4] = 0xE4;
+    identifier->DeviceIdentifier.Data4[5] = 0xF5;
+    identifier->DeviceIdentifier.Data4[6] = 0x06;
+    identifier->DeviceIdentifier.Data4[7] = 0x17;
+    /* The same bit means NO_WHQL in D3D8 and WHQL_LEVEL in D3D9. */
+    identifier->WHQLLevel = (flags & D3DENUM_WHQL_LEVEL) ? 0 : 1;
+}
+
 static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D9 *iface,
         UINT adapter, DWORD flags, D3DADAPTER_IDENTIFIER9 *identifier)
 {
@@ -3798,6 +3825,10 @@ static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D9 *iface,
      */
     lstrcpynA(identifier->DeviceName, "\\\\.\\DISPLAY1",
             sizeof(identifier->DeviceName));
+    if (d3d_from_iface(iface)->compatibility_api == 8) {
+        fill_adapter_identifier8(identifier, flags);
+        return D3D_OK;
+    }
 #if D9_ADAPTER_IDENTITY == D9_ADAPTER_GEFORCEFX_5200
     /* NV34. The entry-level card of the first NVIDIA generation with
      * vs_2_0/ps_2_0, matching the shader model fill_caps() reports from M2
@@ -14670,7 +14701,7 @@ static IDirect3DSurface9Vtbl g_surface_vtbl = {
 #define D3D_SDK_VERSION_9C      32u
 #define D3D_SDK_VERSION_DEBUG_BIT 0x80000000u
 
-static IDirect3D9 *d3d_create_root(UINT sdk_version, BOOL publish_hello)
+static IDirect3D9 *d3d_create_root(UINT sdk_version, BOOL publish_hello, UINT compatibility_api)
 {
     D9Direct3D *d3d;
     BOOL transport_ready;
@@ -14704,6 +14735,7 @@ static IDirect3D9 *d3d_create_root(UINT sdk_version, BOOL publish_hello)
     }
     d3d->iface.lpVtbl = &g_d3d_vtbl;
     d3d->refcount = 1;
+    d3d->compatibility_api = compatibility_api;
     if (publish_hello) emit_hello_once();
     TRACE("OK Direct3DCreate9 object=%08lX", (DWORD)(uintptr_t)&d3d->iface);
     return &d3d->iface;
@@ -14711,7 +14743,7 @@ static IDirect3D9 *d3d_create_root(UINT sdk_version, BOOL publish_hello)
 
 IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
 {
-    return d3d_create_root(sdk_version, TRUE);
+    return d3d_create_root(sdk_version, TRUE, 9);
 }
 
 #ifdef D9WG_STATIC_CORE
@@ -14732,7 +14764,7 @@ void WINAPI d9wg_d3d9_core_caps8(void *caps8)
 
 IDirect3D9 *WINAPI d9wg_d3d9_core_create8(void)
 {
-    return d3d_create_root(D3D_SDK_VERSION_9C, FALSE);
+    return d3d_create_root(D3D_SDK_VERSION_9C, FALSE, 8);
 }
 
 D9WGProcess *WINAPI d9wg_d3d9_core_process(void)
@@ -14754,6 +14786,41 @@ HMONITOR WINAPI d9wg_d3d9_core_adapter_monitor(IDirect3D9 *factory, UINT adapter
 {
     return IDirect3D9_GetAdapterMonitor(factory, adapter);
 }
+
+HRESULT WINAPI d9wg_d3d9_core_register_software(IDirect3D9 *factory, void *initialize)
+{
+    return IDirect3D9_RegisterSoftwareDevice(factory, initialize);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_adapter_identifier8(IDirect3D9 *factory,
+        UINT adapter, DWORD flags, void *out, UINT bytes)
+{
+    _Static_assert(__builtin_offsetof(D3DADAPTER_IDENTIFIER9, DriverVersion) == 1056,
+            "D3D9 adapter identity version offset");
+    _Static_assert(sizeof(D3DADAPTER_IDENTIFIER9) == 1100, "D3D9 identity size");
+    D3DADAPTER_IDENTIFIER9 identifier;
+    HRESULT result;
+    if (!out || bytes != D9WG_D3D8_IDENTIFIER_BYTES) return D3DERR_INVALIDCALL;
+    result = IDirect3D9_GetAdapterIdentifier(factory, adapter, flags, &identifier);
+    if (FAILED(result)) return result;
+    CopyMemory(out, identifier.Driver, 1024);
+    CopyMemory((BYTE *)out + 1024, &identifier.DriverVersion,
+            D9WG_D3D8_IDENTIFIER_BYTES - 1024);
+    return result;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_adapter_display_mode(IDirect3D9 *factory,
+        UINT adapter, void *out)
+{
+    _Static_assert(sizeof(D3DDISPLAYMODE) == 16, "shared adapter mode size");
+    D3DDISPLAYMODE mode;
+    HRESULT result;
+    if (!out) return D3DERR_INVALIDCALL;
+    result = IDirect3D9_GetAdapterDisplayMode(factory, adapter, &mode);
+    if (SUCCEEDED(result)) CopyMemory(out, &mode, sizeof(mode));
+    return result;
+}
+
 #endif
 
 /*

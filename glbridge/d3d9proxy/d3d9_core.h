@@ -8,6 +8,8 @@ struct IDirect3D9;
 struct D9WGProcess;
 #define D9WG_D3D8_CAPS_BYTES 212u
 #define D9WG_D3D8_RASTER_ZBIAS 0x00004000u
+#define D9WG_D3D8_IDENTIFIER_BYTES 1068u
+#define D9WG_D3D8_NO_WHQL_LEVEL 2u
 /* One attach/detach pair per embedding frontend module, called from that
  * module's loader entry. Release all owned COM objects before explicit
  * detach. The common runtime coordinates one owner with other frontends. */
@@ -24,4 +26,9 @@ struct D9WGProcess *WINAPI d9wg_d3d9_core_process(void);
 ULONG WINAPI d9wg_d3d9_core_root_release(struct IDirect3D9 *factory);
 UINT WINAPI d9wg_d3d9_core_adapter_count(struct IDirect3D9 *factory);
 HMONITOR WINAPI d9wg_d3d9_core_adapter_monitor(struct IDirect3D9 *factory, UINT adapter);
+HRESULT WINAPI d9wg_d3d9_core_register_software(struct IDirect3D9 *factory, void *initialize);
+HRESULT WINAPI d9wg_d3d9_core_adapter_identifier8(struct IDirect3D9 *factory,
+        UINT adapter, DWORD flags, void *out, UINT bytes);
+HRESULT WINAPI d9wg_d3d9_core_adapter_display_mode(struct IDirect3D9 *factory,
+        UINT adapter, void *out);
 #endif

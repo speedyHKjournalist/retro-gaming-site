@@ -3,7 +3,7 @@ const assert = require("node:assert/strict"), fs = require("node:fs"), path = re
 const {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-display-mode-"));
 function extract(source, name) {
-    const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{").exec(source); assert(m, name);
+    const m = new RegExp("^[^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{", "m").exec(source); assert(m, name);
     let end = source.indexOf("{", m.index) + 1, depth = 1;
     for (; depth; end++) { if (source[end] === "{") depth++; if (source[end] === "}") depth--; }
     return source.slice(m.index, end);
@@ -18,7 +18,7 @@ try {
 typedef uint32_t UINT,DWORD;typedef int32_t HRESULT;typedef int BOOL,D3DFORMAT;
 typedef struct{UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmDisplayFrequency;UINT reserved[4];}DEVMODEA;
 typedef struct{UINT Width,Height,RefreshRate;D3DFORMAT Format;}D3DDISPLAYMODE;
-typedef struct{int value;}Interface;typedef struct{Interface iface;}Factory;
+typedef struct{int value;}Interface;typedef struct{Interface iface;Interface*backend;}Factory;
 typedef struct{Factory*parent;struct{UINT AdapterOrdinal;}creation;D3DDISPLAYMODE display_mode;}Device;
 typedef struct{Device*device;UINT handle;}Chain;
 typedef Factory D${api}Direct3D;typedef Interface IDirect3D${api};typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};
@@ -40,10 +40,17 @@ static BOOL EnumDisplaySettingsA(const char*name,UINT index,DEVMODEA*out){assert
 #include "${process.env.D9WG_DISPLAY_HEADER || root + "/runtime/d9wg_display_mode.h"}"
 static Device*device_from_iface(Device*d){return d;}
 ${api === 9 ? "static Chain*swap_chain_from_iface(Chain*c){return c;}" : ""}
-${["fill_display_mode", "d3d_get_adapter_display_mode", "device_get_display_mode", ...(api === 9 ? ["swap_chain_get_display_mode"] : [])].map(n => extract(source, n)).join("\n")}
+${extract(source,"fill_display_mode")}
+${api === 8 ? (()=>{const backend=fs.readFileSync(process.env.D9WG_DISPLAY_FRONTEND||root+"/d3d9proxy/d3d9_proxy.c","utf8");return `typedef Interface IDirect3D9;
+static Factory*d3d_from_iface(Interface*p){return (Factory*)p;}
+#define CopyMemory(p,q,n) memcpy(p,q,n)
+#define IDirect3D9_GetAdapterDisplayMode backend_adapter_display_mode
+${extract(backend,"d3d_get_adapter_display_mode").replace(/\bd3d_get_adapter_display_mode\b/g,"backend_adapter_display_mode")}
+${extract(backend,"d9wg_d3d9_core_adapter_display_mode")}`;})() : ""}
+${["d3d_get_adapter_display_mode", "device_get_display_mode", ...(api === 9 ? ["swap_chain_get_display_mode"] : [])].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Display mode API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 static HRESULT query(unsigned method,Factory*f,Device*d,Chain*c,D3DDISPLAYMODE*out){(void)c;return method==0?d3d_get_adapter_display_mode(&f->iface,0,out):method==1?device_get_display_mode(d,${api === 9 ? "0," : ""}out):${api === 9 ? "swap_chain_get_display_mode(c,out)" : "D3DERR_INVALIDCALL"};}
-int main(void){unsigned checks=0;Factory parent={0};Device device={.parent=&parent,.display_mode={37,29,123,99}},before=device;Chain chain={&device,123},implicit={&device,0};
+int main(void){unsigned checks=0;Factory parent={0};parent.backend=&parent.iface;Device device={.parent=&parent,.display_mode={37,29,123,99}},before=device;Chain chain={&device,123},implicit={&device,0};
 struct Profile{UINT w,h,bits,hz,expected_hz,format,fail;}profiles[]={
  {800,600,32,60,60,22,0},{640,480,16,75,75,23,0},{1024,768,32,120,120,22,0},{1280,960,24,1,60,22,0},{8192,8192,32,0,60,22,0},{1920,1080,32,59,59,22,0},
  {1920,1080,32,144,60,22,1},{0,600,32,85,60,22,0},{800,0,16,85,60,22,0}};

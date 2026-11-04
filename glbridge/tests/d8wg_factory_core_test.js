@@ -24,7 +24,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;
 #define E_NOINTERFACE (-2)
 #define S_OK 0
 typedef struct{const void*lpVtbl;}Interface;typedef Interface IDirect3D8,IDirect3D9;
-typedef struct{Interface iface;LONG refcount;}D9Direct3D;
+typedef struct{Interface iface;LONG refcount;UINT compatibility_api;}D9Direct3D;
 typedef struct{Interface iface;LONG refcount;IDirect3D9*backend;}D8Direct3D;
 static int g_d8_vtbl,g_d9_vtbl,IID_IUnknown,IID_IDirect3D8,g_transport_lock;
 static UINT checks,live,allocations,fail_allocation,transport_calls,backend_releases,adapter_calls,monitor_calls,hello_eight,hello_nine,adapter_value;
@@ -47,6 +47,7 @@ static HMONITOR backend_adapter_monitor(Interface*p,UINT adapter){assert(p&&p->l
 #define IDirect3D9_GetAdapterCount backend_adapter_count
 #define IDirect3D9_GetAdapterMonitor backend_adapter_monitor
 ${["d9wg_d3d9_core_create8","d9wg_d3d9_core_root_release","d9wg_d3d9_core_adapter_count","d9wg_d3d9_core_adapter_monitor"].map(n=>extract(nine,n)).join("\n")}
+${extract(nine,"Direct3DCreate9")}
 ${extract(eight,"d3d_add_ref")}
 #define IDirect3D8_AddRef d3d_add_ref
 ${["d3d_query_interface","d3d_release","d3d_get_adapter_count","d3d_get_adapter_monitor","Direct3DCreate8"].map(n=>extract(eight,n).replace(/g_d3d_vtbl/g,"g_d8_vtbl")).join("\n")}
@@ -57,7 +58,7 @@ int main(void){
  for(UINT round=0;round<64;round++)for(UINT sdk=0;sdk<2;sdk++)for(UINT order=0;order<4;order++){
   UINT old_backend_releases=backend_releases,old_hello=hello_eight,old_adapter=adapter_calls,old_monitor=monitor_calls;adapter_value=7+round;
   Interface*iface=Direct3DCreate8(sdk?220:120);CHECK(iface&&iface->lpVtbl==&g_d8_vtbl);D8Direct3D*wrapper=(void*)iface;IDirect3D9*backend=wrapper->backend;
-  CHECK(backend&&backend->lpVtbl==&g_d9_vtbl&&((D9Direct3D*)backend)->refcount==1&&wrapper->refcount==1&&live==2&&!hello_nine&&hello_eight==old_hello+1);
+  CHECK(backend&&backend->lpVtbl==&g_d9_vtbl&&((D9Direct3D*)backend)->refcount==1&&((D9Direct3D*)backend)->compatibility_api==8&&wrapper->refcount==1&&live==2&&!hello_nine&&hello_eight==old_hello+1);
   for(UINT cycle=0;cycle<32;cycle++){
    CHECK(d3d_get_adapter_count(iface)==adapter_value&&d3d_get_adapter_monitor(iface,0)==(void*)(uintptr_t)0x1234&&!d3d_get_adapter_monitor(iface,0xffffffffu));
    void*view=NULL;CHECK(!d3d_query_interface(iface,&IID_IUnknown,&view)&&view==iface&&wrapper->refcount==2);CHECK(d3d_release(view)==1);
@@ -75,6 +76,7 @@ int main(void){
  CHECK(!Direct3DCreate8(0)&&!Direct3DCreate8(32)&&!Direct3DCreate8(120|0x80000000u)&&allocations==old_allocations&&transport_calls==old_transport);
  fail_allocation=allocations+1;CHECK(!Direct3DCreate8(120)&&!live&&transport_calls==old_transport);fail_allocation=allocations+2;CHECK(!Direct3DCreate8(220)&&!live&&transport_calls==old_transport+1);fail_allocation=0;
  transport_ok=FALSE;CHECK(!Direct3DCreate8(220)&&!live&&hello_eight==old_hello&&!hello_nine);transport_ok=TRUE;
+ IDirect3D9*normal=Direct3DCreate9(32);CHECK(normal&&((D9Direct3D*)normal)->compatibility_api==9&&hello_nine==1&&live==1);CHECK(!backend_release(normal)&&!live);
  printf("PASS actual D3D8 factory/core C: %u checks, %u SDK/owner profiles, %u delegated query/identity rounds; one backend reference per wrapper, zero backend Hello, exact public identity, final-parent lifetime and atomic allocation/transport failures\\n",checks,profiles,queries);return 0;
 }
 `;

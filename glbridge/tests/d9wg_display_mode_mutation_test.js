@@ -41,6 +41,11 @@ try {
             ["device adapter ordinal ignored", "device_get_display_mode", "device->creation.AdapterOrdinal, mode)", "0, mode)"],
             ["device returns cached buffer mode", "device_get_display_mode", api === 8 ? "return d3d_get_adapter_display_mode(&device->parent->iface,\n        device->creation.AdapterOrdinal, mode);" : "HRESULT result = d3d_get_adapter_display_mode(&device->parent->iface,\n        device->creation.AdapterOrdinal, mode);", api === 8 ? "*mode = device->display_mode; return D3D_OK;" : "HRESULT result = D3D_OK; *mode = device->display_mode;"],
         ];
+        if(api===8){changes.splice(0,3,
+            ["wrapper dimensions fixed","d3d_get_adapter_display_mode","return d9wg_d3d9_core_adapter_display_mode(d3d_from_iface(iface)->backend, adapter, mode);","HRESULT r=d9wg_d3d9_core_adapter_display_mode(d3d_from_iface(iface)->backend,adapter,mode);if(SUCCEEDED(r))mode->Width=1024;return r;"],
+            ["wrapper refresh lost","d3d_get_adapter_display_mode","return d9wg_d3d9_core_adapter_display_mode(d3d_from_iface(iface)->backend, adapter, mode);","HRESULT r=d9wg_d3d9_core_adapter_display_mode(d3d_from_iface(iface)->backend,adapter,mode);if(SUCCEEDED(r))mode->RefreshRate=60;return r;"],
+            ["wrapper adapter ignored","d3d_get_adapter_display_mode","->backend, adapter, mode","->backend, adapter & 0u, mode"]
+        );}
         if (api === 9) changes.push(
             ["chain adapter ordinal ignored", "swap_chain_get_display_mode", "swap_chain->device->creation.AdapterOrdinal, mode)", "0, mode)"],
             ["chain returns cached buffer mode", "swap_chain_get_display_mode", "HRESULT result = d3d_get_adapter_display_mode(&swap_chain->device->parent->iface,\n        swap_chain->device->creation.AdapterOrdinal, mode);", "HRESULT result = D3D_OK; *mode = swap_chain->device->display_mode;"],

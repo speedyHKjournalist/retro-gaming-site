@@ -917,3 +917,13 @@ idempotent state report can retry. Actual XP move/resize, foreground, hide/show
 and no-surface observations pass, with the original command stream also
 replayed on SwiftShader and Metal. Win32 capture/event code and per-Present
 probe reuse continue in the following refactor step.
+
+Adapter identity, current display mode and software-device registration now use
+an API-specific factory profile in the private D3D9 core. D3D8 retains its
+legacy identifier and WHQL policy; its 1068-byte SDK layout is converted from
+the 1100-byte D3D9 identifier by skipping DeviceName. Normal D3D9 identities
+remain byte-identical across all four build configurations. Old accepted DLLs
+are the XP byte-comparison baseline, with native delegation/error/copy guards
+and independent SwiftShader/Metal replay. See review stage 4K4 and deployment
+`../deployments/d3d-webgpu-review-4K4.json`. Adapter enumeration/format/PP and
+D3D8 device/resource wrapping continue in following phases.
