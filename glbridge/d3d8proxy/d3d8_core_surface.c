@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <initguid.h>
 #include "d3d8_core_surface.h"
+#include "d3d8_core_view.h"
 
 typedef struct D8CoreSurface {
     IDirect3DSurface8 iface;
@@ -17,37 +18,21 @@ static IDirect3DSurface8Vtbl g_core_surface8_vtbl;
 
 static BOOL core_surface8_guid(REFIID a, REFIID b)
 {
-    UINT i;
-    if (!a || !b || a->Data1 != b->Data1 || a->Data2 != b->Data2
-            || a->Data3 != b->Data3) return FALSE;
-    for (i = 0; i < 8; ++i) if (a->Data4[i] != b->Data4[i]) return FALSE;
-    return TRUE;
+    return d8wg_core_guid8(a, b);
 }
 static ULONG WINAPI core_surface8_add_ref(IDirect3DSurface8 *iface)
 {
     D8CoreSurface *surface = (D8CoreSurface *)iface;
     if (surface->container_refcount) return IUnknown_AddRef(surface->container);
-    ULONG refs = (ULONG)InterlockedIncrement(&surface->refcount);
-    if (refs == 1) {
-        IUnknown_AddRef((IUnknown *)surface->backend);
-        IDirect3DDevice8_AddRef(surface->device);
-    }
-    return refs;
+    return d8wg_core_view_add8(&surface->refcount,
+            (IUnknown *)surface->backend, surface->device);
 }
 static ULONG WINAPI core_surface8_release(IDirect3DSurface8 *iface)
 {
     D8CoreSurface *surface = (D8CoreSurface *)iface;
     if (surface->container_refcount) return IUnknown_Release(surface->container);
-    if (!InterlockedCompareExchange(&surface->refcount, 0, 0)) return 0;
-    ULONG refs = (ULONG)InterlockedDecrement(&surface->refcount);
-    if (!refs) {
-        IDirect3DDevice8 *device = surface->device;
-        IUnknown *backend = (IUnknown *)surface->backend;
-        /* Either release can retire this weak wrapper. Use saved locals. */
-        IUnknown_Release(backend);
-        IDirect3DDevice8_Release(device);
-    }
-    return refs;
+    return d8wg_core_view_release8(&surface->refcount,
+            (IUnknown *)surface->backend, surface->device);
 }
 static HRESULT WINAPI core_surface8_query(IDirect3DSurface8 *iface,
         REFIID iid, void **out)

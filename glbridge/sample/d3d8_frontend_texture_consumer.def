@@ -1,0 +1,26 @@
+LIBRARY core8
+EXPORTS
+    Core8CreateFactory=Core8CreateFactory@4
+    Core8CreateDevice=Core8CreateDevice@28
+    Core8Reset=Core8Reset@8
+    Core8ImageSurface=Core8ImageSurface@20
+    Core8Texture=Core8Texture@32
+    Core8CubeTexture=Core8CubeTexture@28
+    Core8VertexShader=Core8VertexShader@20
+    Core8PixelShader=Core8PixelShader@12
+    Core8BindPair=Core8BindPair@12
+    Core8Record=Core8Record@16
+    Core8State=Core8State@12
+    Core8Stage=Core8Stage@16
+    Core8TokenCreate=Core8TokenCreate@16
+    Core8TokenCapture=Core8TokenCapture@16
+    Core8TokenApply=Core8TokenApply@8
+    Core8TokenDelete=Core8TokenDelete@8
+    Core8TokenBegin=Core8TokenBegin@4
+    Core8TokenEnd=Core8TokenEnd@8
+    Core8ViewGet=Core8ViewGet@8
+    Core8ViewAttach=Core8ViewAttach@12
+    Core8WrapSurface=Core8WrapSurface@20
+    Core8SetFVF=Core8SetFVF@8
+    Core8WrapTexture=Core8WrapTexture@12
+    Core8TextureBackend=Core8TextureBackend@4

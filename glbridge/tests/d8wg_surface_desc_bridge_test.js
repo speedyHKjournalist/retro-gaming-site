@@ -28,6 +28,7 @@ static HRESULT IDirect3DSurface9_GetDesc(IDirect3DSurface9*s,D3DSURFACE_DESC*out
 static BOOL legacy_depth(D3DFORMAT f){return f==D3DFMT_D16||f==D3DFMT_D32||f==D3DFMT_D15S1||f==D3DFMT_D24S8||f==D3DFMT_D24X8||f==D3DFMT_D24X4S4;}
 static BOOL supported_depth_stencil_format(D3DFORMAT f){return legacy_depth(f)||f==D3DFMT_D16_LOCKABLE;}
 ${extract(source,'supported_depth_stencil_format8')}
+${extract(source,'core_pack_surface_desc8')}
 ${extract(source,'d9wg_d3d9_core_surface_desc8')}
 static UINT checks,cases;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Surface desc bridge line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)

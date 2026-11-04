@@ -1,8 +1,19 @@
 "use strict";
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'surface8-adapter-mut-')),source=fs.readFileSync(root+'/d3d8proxy/d3d8_core_surface.c','utf8');
 const plan=[
- ["GUID trailing byte ignored","core_surface8_guid","i < 8","i < 7"],
- ["cached wrong class accepted","d8wg_core_wrap_surface8","view->iface.lpVtbl != &g_core_surface8_vtbl","FALSE"],
+  [
+    "GUID trailing byte ignored",
+    "d8wg_core_guid8",
+    "i < 8",
+    "i < 7",
+    "common"
+  ],
+  [
+    "cached wrong class accepted",
+    "d8wg_core_wrap_surface8",
+    "view->iface.lpVtbl != &g_core_surface8_vtbl",
+    "FALSE"
+  ],
   [
     "coupled AddRef result",
     "core_surface8_add_ref",
@@ -17,33 +28,38 @@ const plan=[
   ],
   [
     "own core pin omitted",
-    "core_surface8_add_ref",
-    "        IUnknown_AddRef((IUnknown *)surface->backend);",
-    "        /* lost core pin */"
+    "d8wg_core_view_add8",
+    "        IUnknown_AddRef(backend);",
+    "        (void)backend;",
+    "common"
   ],
   [
     "own device pin omitted",
-    "core_surface8_add_ref",
-    "        IDirect3DDevice8_AddRef(surface->device);",
-    "        /* lost device pin */"
+    "d8wg_core_view_add8",
+    "        IDirect3DDevice8_AddRef(device);",
+    "        (void)device;",
+    "common"
   ],
   [
     "own repeated AddRef pins core",
-    "core_surface8_add_ref",
+    "d8wg_core_view_add8",
     "    if (refs == 1) {",
-    "    if (refs >= 1) {"
+    "    if (refs >= 1) {",
+    "common"
   ],
   [
     "release backend lost",
-    "core_surface8_release",
+    "d8wg_core_view_release8",
     "        IUnknown_Release(backend);",
-    "        (void)backend;"
+    "        (void)backend;",
+    "common"
   ],
   [
     "release device lost",
-    "core_surface8_release",
+    "d8wg_core_view_release8",
     "        IDirect3DDevice8_Release(device);",
-    "        (void)device;"
+    "        (void)device;",
+    "common"
   ],
   [
     "QI output not cleared",
@@ -196,5 +212,6 @@ const plan=[
     "    view = NULL;"
   ]
 ];
+const common=fs.readFileSync(root+'/d3d8proxy/d3d8_core_view.h','utf8');
 function span(s,n){const m=new RegExp('^[A-Za-z_][^;{}\\n]*?\\b'+n+'\\([^;]*?\\)\\s*\\{','m').exec(s);assert(m,n);let e=s.indexOf('{',m.index)+1,d=1;for(;d;e++){if(s[e]==='{')d++;if(s[e]==='}')d--;}return[m.index,e];}
-try{let killed=0;for(const[name,fn,from,to]of plan){const[a,b]=span(source,fn),body=source.slice(a,b);assert(body.includes(from),name);const candidate=source.slice(0,a)+body.replace(from,to)+source.slice(b),file=dir+'/candidate.c';fs.writeFileSync(file,candidate);const r=spawnSync(process.execPath,[__dirname+'/d8wg_surface_adapter_test.js'],{encoding:'utf8',timeout:60000,env:{...process.env,D8WG_SURFACE_ADAPTER_SOURCE:file}});assert(!r.error,name+': '+r.error);assert.notEqual(r.status,0,name+' survived');const out=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(out),name+' compiler failure: '+out);assert(/Surface8 adapter line \d+:|Assertion failed: \([^\n]*\), function \w+, file adapter\.c, line \d+\.|adapter\.c:\d+:[^\n]*Assertion[^\n]*failed/.test(out),name+' must fail actual C semantic assertion: '+out);killed++;}console.log('PASS SDK8 surface adapter mutations: '+killed+'/'+plan.length+' strictly compiled then failed actual C assertions');}finally{fs.rmSync(dir,{recursive:true,force:true});}
+try{let killed=0;for(const[name,fn,from,to,kind]of plan){const input=kind?common:source;const[a,b]=span(input,fn),body=input.slice(a,b);assert(body.includes(from),name);const candidate=input.slice(0,a)+body.replace(from,to)+input.slice(b),file=dir+'/candidate.c';fs.writeFileSync(file,candidate);const r=spawnSync(process.execPath,[__dirname+'/d8wg_surface_adapter_test.js'],{encoding:'utf8',timeout:60000,env:{...process.env,...(kind?{D8WG_CORE_VIEW_SOURCE:file}:{D8WG_SURFACE_ADAPTER_SOURCE:file})}});assert(!r.error,name+': '+r.error);assert.notEqual(r.status,0,name+' survived');const out=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(out),name+' compiler failure: '+out);assert(/Surface8 adapter line \d+:|Assertion failed: \([^\n]*\), function \w+, file adapter\.c, line \d+\.|adapter\.c:\d+:[^\n]*Assertion[^\n]*failed/.test(out),name+' must fail actual C semantic assertion: '+out);killed++;}console.log('PASS SDK8 surface adapter mutations: '+killed+'/'+plan.length+' strictly compiled then failed actual C assertions');}finally{fs.rmSync(dir,{recursive:true,force:true});}

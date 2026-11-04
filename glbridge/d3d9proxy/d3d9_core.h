@@ -160,6 +160,24 @@ typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *devic
 HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot,
         struct IDirect3DStateBlock9 **out);
+typedef struct D9WGTextureMethods8 {
+    HRESULT (WINAPI *set_private_data)(struct IDirect3DTexture9 *, const GUID *, const void *, DWORD, DWORD);
+    HRESULT (WINAPI *get_private_data)(struct IDirect3DTexture9 *, const GUID *, void *, DWORD *);
+    HRESULT (WINAPI *free_private_data)(struct IDirect3DTexture9 *, const GUID *);
+    DWORD (WINAPI *set_priority)(struct IDirect3DTexture9 *, DWORD);
+    DWORD (WINAPI *get_priority)(struct IDirect3DTexture9 *);
+    void (WINAPI *preload)(struct IDirect3DTexture9 *);
+    UINT (WINAPI *get_type)(struct IDirect3DTexture9 *);
+    DWORD (WINAPI *set_lod)(struct IDirect3DTexture9 *, DWORD);
+    DWORD (WINAPI *get_lod)(struct IDirect3DTexture9 *);
+    DWORD (WINAPI *get_level_count)(struct IDirect3DTexture9 *);
+    HRESULT (WINAPI *get_level_desc)(struct IDirect3DTexture9 *, UINT, void *, UINT);
+    HRESULT (WINAPI *get_surface_level)(struct IDirect3DTexture9 *, UINT, struct IDirect3DSurface9 **);
+    HRESULT (WINAPI *lock_rect)(struct IDirect3DTexture9 *, UINT, void *, const RECT *, DWORD);
+    HRESULT (WINAPI *unlock_rect)(struct IDirect3DTexture9 *, UINT);
+    HRESULT (WINAPI *add_dirty_rect)(struct IDirect3DTexture9 *, const RECT *);
+} D9WGTextureMethods8;
+const D9WGTextureMethods8 *WINAPI d9wg_d3d9_core_texture_methods8(struct IDirect3DTexture9 *texture);
 /* The SDK8 adapter uses this typed boundary without including SDK9 headers.
  * Its resource pointer must already belong to this8-profile core. */
 typedef struct D9WGSurfaceMethods8 {

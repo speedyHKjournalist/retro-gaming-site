@@ -1,11 +1,11 @@
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Surface8 adapter line %u: %s\n",__LINE__,#v);return 1;}checks++;}while(0)
-typedef struct Backend {struct IDirect3DSurface9 iface;LONG refs,private_refs;BOOL profile,alive;void*view,*entry;D9WGCoreViewRetire8 retire;UINT destroys,calls[6];REFGUID guid;const void*input;void*output;DWORD size,flags;DWORD*size_out;const RECT*rect;HRESULT result;BOOL fail_get;UINT race;}Backend;
+typedef struct Backend {struct IDirect3DSurface9 iface;struct Backend*coupled,*children,*next_child;UINT kind,subresource_index;LONG refs,private_refs;BOOL profile,alive;void*view,*entry;D9WGCoreViewRetire8 retire;UINT destroys,calls[6];REFGUID guid;const void*input;void*output;DWORD size,flags;DWORD*size_out;const RECT*rect;HRESULT result;BOOL fail_get;UINT race;}Backend;
 typedef struct Parent8 {IUnknown iface;LONG refs;Backend*backend;struct Parent8*device;UINT add_calls,release_calls;BOOL is_texture;}Parent8;
 static const IUnknownVtbl backend_vtbl,parent_vtbl;
 static Backend*backend(IUnknown*p){return (Backend*)p;}
-static void backend_retire(Backend*b){if(b->refs||b->private_refs)return;b->alive=FALSE;b->destroys++;void*view=b->view,*entry=b->entry;D9WGCoreViewRetire8 retire=b->retire;b->view=NULL;b->entry=NULL;if(retire)retire(view);HeapFree(NULL,0,entry);}
-static ULONG backend_add(IUnknown*p){Backend*b=backend(p);assert(b->alive);return ++b->refs;}
-static ULONG backend_release(IUnknown*p){Backend*b=backend(p);assert(b->alive&&b->refs>0);ULONG result=--b->refs;backend_retire(b);return result;}
+static void backend_retire(Backend*b){if(b->refs||b->private_refs)return;b->alive=FALSE;b->destroys++;for(Backend*child=b->children;child;child=child->next_child){child->alive=FALSE;child->destroys++;void*cv=child->view,*ce=child->entry;D9WGCoreViewRetire8 cr=child->retire;child->view=NULL;child->entry=NULL;if(cr)cr(cv);HeapFree(NULL,0,ce);}void*view=b->view,*entry=b->entry;D9WGCoreViewRetire8 retire=b->retire;b->view=NULL;b->entry=NULL;if(retire)retire(view);HeapFree(NULL,0,entry);}
+static ULONG backend_add(IUnknown*p){Backend*b=backend(p);assert(b->alive);if(b->coupled)return backend_add((IUnknown*)b->coupled);return ++b->refs;}
+static ULONG backend_release(IUnknown*p){Backend*b=backend(p);assert(b->alive);if(b->coupled)return backend_release((IUnknown*)b->coupled);assert(b->refs>0);ULONG result=--b->refs;backend_retire(b);return result;}
 static HRESULT backend_query(IUnknown*p,REFIID iid,void**out){(void)iid;if(!out)return E_POINTER;*out=p;backend_add(p);return 0;}
 static const IUnknownVtbl backend_vtbl={backend_query,backend_add,backend_release};
 static ULONG parent_add(IUnknown*p){Parent8*x=(Parent8*)p;x->add_calls++;ULONG result=++x->refs;if(result==1&&x->backend){backend_add((IUnknown*)x->backend);if(x->device)IUnknown_AddRef(&x->device->iface);}return result;}
@@ -17,13 +17,18 @@ static Parent8 new_parent(void){Parent8 p={0};p.iface.lpVtbl=&parent_vtbl;p.refs
 static HRESULT mock_set(struct IDirect3DSurface9*p,const GUID*g,const void*data,DWORD size,DWORD flags){Backend*b=(Backend*)p;b->calls[0]++;b->guid=g;b->input=data;b->size=size;b->flags=flags;return b->result;}
 static HRESULT mock_get(struct IDirect3DSurface9*p,const GUID*g,void*data,DWORD*size){Backend*b=(Backend*)p;b->calls[1]++;b->guid=g;b->output=data;b->size_out=size;return b->result;}
 static HRESULT mock_free(struct IDirect3DSurface9*p,const GUID*g){Backend*b=(Backend*)p;b->calls[2]++;b->guid=g;return b->result;}
-static HRESULT mock_desc(struct IDirect3DSurface9*p,void*out,UINT bytes){Backend*b=(Backend*)p;b->calls[3]++;b->output=out;b->size=bytes;if(!out||bytes!=32)return D3DERR_INVALIDCALL;if(b->result)return b->result;for(UINT i=0;i<8;i++)((DWORD*)out)[i]=0x12340000u+i;return 0;}
+static HRESULT mock_desc(struct IDirect3DSurface9*p,void*out,UINT bytes){Backend*b=(Backend*)p;b->calls[3]++;b->output=out;b->size=bytes;if(!out||bytes!=32)return D3DERR_INVALIDCALL;if(b->result)return b->result;if(b->coupled){UINT level=b->subresource_index;DWORD words[]={21,1,0,1,256u>>(level*2),0,8u>>level,8u>>level};memcpy(out,words,32);}else for(UINT i=0;i<8;i++)((DWORD*)out)[i]=0x12340000u+i;return 0;}
 static HRESULT mock_lock(struct IDirect3DSurface9*p,void*out,const RECT*rect,DWORD flags){Backend*b=(Backend*)p;b->calls[4]++;b->output=out;b->rect=rect;b->flags=flags;return b->result;}
 static HRESULT mock_unlock(struct IDirect3DSurface9*p){Backend*b=(Backend*)p;b->calls[5]++;return b->result;}
 static const D9WGSurfaceMethods8 mock_methods={mock_set,mock_get,mock_free,mock_desc,mock_lock,mock_unlock};
-static const D9WGSurfaceMethods8*d9wg_d3d9_core_surface_methods8(struct IDirect3DSurface9*p){Backend*b=(Backend*)p;return p&&p->lpVtbl==&backend_vtbl&&b->profile?&mock_methods:NULL;}
+static const D9WGSurfaceMethods8*d9wg_d3d9_core_surface_methods8(struct IDirect3DSurface9*p){Backend*b=(Backend*)p;return p&&p->lpVtbl==&backend_vtbl&&b->profile&&!b->kind?&mock_methods:NULL;}
 static HRESULT d9wg_d3d9_core_get_view8(IUnknown*p,void**out){Backend*b=(Backend*)p;*out=NULL;if(b->fail_get)return -77;*out=b->view;return 0;}
-static HRESULT d9wg_d3d9_core_attach_view8(IUnknown*p,void*view,D9WGCoreViewRetire8 retire){Backend*b=(Backend*)p;if(b->view)return D3DERR_INVALIDCALL;if(b->race){UINT mode=b->race;b->race=0;if(mode==2)return D3DERR_INVALIDCALL;D8CoreSurface*winner=HeapAlloc(NULL,8,sizeof(*winner));assert(winner);*winner=*(D8CoreSurface*)view;b->entry=HeapAlloc(NULL,8,8);assert(b->entry);b->view=winner;b->retire=retire;backend_add(p);return D3DERR_INVALIDCALL;}void*entry=HeapAlloc(NULL,8,8);if(!entry)return E_OUTOFMEMORY;b->entry=entry;b->view=view;b->retire=retire;return 0;}
+static HRESULT d9wg_d3d9_core_attach_view8(IUnknown*p,void*view,D9WGCoreViewRetire8 retire){Backend*b=(Backend*)p;if(b->view)return D3DERR_INVALIDCALL;if(b->race){UINT mode=b->race;b->race=0;if(mode==2)return D3DERR_INVALIDCALL;
+#ifdef D8WG_NATIVE_TEXTURE_ADAPTER
+if(b->kind){D8CoreTexture*winner=HeapAlloc(NULL,8,sizeof(*winner));assert(winner);*winner=*(D8CoreTexture*)view;b->view=winner;}else
+#endif
+{D8CoreSurface*winner=HeapAlloc(NULL,8,sizeof(*winner));assert(winner);*winner=*(D8CoreSurface*)view;b->view=winner;}
+b->entry=HeapAlloc(NULL,8,8);assert(b->entry);b->retire=retire;backend_add(p);return D3DERR_INVALIDCALL;}void*entry=HeapAlloc(NULL,8,8);if(!entry)return E_OUTOFMEMORY;b->entry=entry;b->view=view;b->retire=retire;return 0;}
 static int forwarding(IDirect3DSurface8*s,Backend*b,Parent8*device,Parent8*container){
     void*out=(void*)99;LONG refs=((D8CoreSurface*)s)->container_refcount?container->refs:((D8CoreSurface*)s)->refcount;
     CHECK(s->lpVtbl->QueryInterface(s,NULL,&out)==E_NOINTERFACE&&!out&&s->lpVtbl->QueryInterface(s,&bad_iid,&out)==E_NOINTERFACE&&!out&&s->lpVtbl->QueryInterface(s,&IID_IUnknown,NULL)==E_POINTER);

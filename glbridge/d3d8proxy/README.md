@@ -930,3 +930,28 @@ onbothGPUs. Wire catches17,108corruptions,including sixuploads/384bytes. Cube
 green isCPU/upload coverage,not sampled here. CPUframebuffer replies remain
 analytic injection,separate fromactualCPUshadow checks andGPU images.
 Evidence:`../deployments/d3d-webgpu-review-4K40.json`.
+
+
+### Review 4K41: real SDK8 Texture8 and Surface8 container integration
+
+`d3d8_core_texture.c` implements all19 Texture8 methods andreturns actual
+Surface8 children whose container is the real Texture8. Both interfaces share
+core lock state, coupled refs andweak identity caching. Common GUID/own-ref
+helpers are shared withSurface8. A typed15-method core9 boundary forwards the
+operations;surface/texture descriptions reuse the existing eight-DWORD pack.
+657oldcore9 functions andten storage structs match;the factored surface desc
+reconstructs exactly. Wholeold8/runtime policies remain unchanged. The public
+factory is notyet switched;Device8/Cube8 parents remain IUnknown fixtures.
+
+Native:54,048checks/1,036cases,43strict mutants andASAN;retainedSurface8
+54,571checks/34mutants/ASAN. A surviving wrongmip mutant led to anindependent
+child-surface dimension check. Legacy4K22 names were restored exactly andthe
+new capture uses frontend_texture. SDK8/XP:106s/36batches,7devices/7Reset,
+2realTexture8/16Surface8views,fourmips,cross-interface locks,private/priority/
+LOD/dirty/QI/publiczero/Reset/final0,352actualCPUshadow DWORDs.
+
+24fullimages/1,536pixels zeroerror onbothGPUs;8uploads/1,280bytes and18,046
+wire corruptions. CPUframebuffer replies areanalytic;actualCPUshadow andGPU
+checks areseparate. 376guest/87core regressions,32EXEs/fourstrictDLLs/site2/
+scopedlint0. ExactXPaccepted retail DLLs andsame-source diagnostics published.
+Evidence:`../deployments/d3d-webgpu-review-4K41.json`.

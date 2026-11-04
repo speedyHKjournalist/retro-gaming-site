@@ -16118,12 +16118,28 @@ const D9WGSurfaceMethods8 *WINAPI d9wg_d3d9_core_surface_methods8(
 /* Equal sizeof does not make these SDK descriptors interchangeable: API8
  * has Size at word4 and samples at word5; API9 puts samples/quality there.
  * Stage the complete eight-word result so failure never partly writes it. */
+static HRESULT core_pack_surface_desc8(const D3DSURFACE_DESC *desc, void *out)
+{
+    UINT pitch, rows, size = 0;
+    if (desc->Usage & D3DUSAGE_DEPTHSTENCIL) {
+        if (!d9wg_depth_surface_layout8(desc->Format, desc->Width,
+                desc->Height, &pitch, &size))
+            return D3DERR_INVALIDCALL;
+    } else if (!d9wg_texture_level_layout(8u, desc->Format,
+            desc->Width, desc->Height, &pitch, &rows, &size))
+        return D3DERR_INVALIDCALL;
+    DWORD packed[8] = {(DWORD)desc->Format, (DWORD)desc->Type, desc->Usage,
+            (DWORD)desc->Pool, size, (DWORD)desc->MultiSampleType,
+            desc->Width, desc->Height};
+    CopyMemory(out, packed, sizeof(packed));
+    return D3D_OK;
+}
+
 HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
         void *out, UINT bytes)
 {
     D9Surface *surface;
     D3DSURFACE_DESC desc;
-    UINT pitch, rows, size = 0;
     if (!iface || iface->lpVtbl != &g_surface_vtbl || !out
             || bytes != D9WG_D3D8_SURFACE_DESC_BYTES)
         return D3DERR_INVALIDCALL;
@@ -16132,18 +16148,38 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
         return D3DERR_INVALIDCALL;
     HRESULT hr = IDirect3DSurface9_GetDesc(iface, &desc);
     if (FAILED(hr)) return hr;
-    if (desc.Usage & D3DUSAGE_DEPTHSTENCIL) {
-        if (!d9wg_depth_surface_layout8(desc.Format, desc.Width,
-                desc.Height, &pitch, &size))
-            return D3DERR_INVALIDCALL;
-    } else if (!d9wg_texture_level_layout(8u, desc.Format,
-            desc.Width, desc.Height, &pitch, &rows, &size))
-        return D3DERR_INVALIDCALL;
-    DWORD packed[8] = {(DWORD)desc.Format, (DWORD)desc.Type, desc.Usage,
-            (DWORD)desc.Pool, size, (DWORD)desc.MultiSampleType,
-            desc.Width, desc.Height};
-    CopyMemory(out, packed, sizeof(packed));
-    return D3D_OK;
+    return core_pack_surface_desc8(&desc, out);
+}
+
+static UINT WINAPI core_texture_type8(IDirect3DTexture9 *texture)
+{
+    return (UINT)IDirect3DTexture9_GetType(texture);
+}
+static HRESULT WINAPI core_texture_lock8(IDirect3DTexture9 *texture, UINT level,
+        void *locked, const RECT *rect, DWORD flags)
+{
+    return IDirect3DTexture9_LockRect(texture, level, (D3DLOCKED_RECT *)locked, rect, flags);
+}
+static HRESULT WINAPI core_texture_desc8(IDirect3DTexture9 *texture, UINT level,
+        void *out, UINT bytes)
+{
+    if (!out || bytes != D9WG_D3D8_SURFACE_DESC_BYTES) return D3DERR_INVALIDCALL;
+    D3DSURFACE_DESC desc;
+    HRESULT hr = IDirect3DTexture9_GetLevelDesc(texture, level, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_surface_desc8(&desc, out);
+}
+const D9WGTextureMethods8 *WINAPI d9wg_d3d9_core_texture_methods8(IDirect3DTexture9 *texture)
+{
+    static const D9WGTextureMethods8 methods = {
+        texture_set_private_data, texture_get_private_data, texture_free_private_data,
+        texture_set_priority, texture_get_priority, texture_preload, core_texture_type8,
+        texture_set_lod, texture_get_lod, texture_get_level_count, core_texture_desc8,
+        texture_get_surface_level, core_texture_lock8, texture_unlock_rect, texture_add_dirty_rect
+    };
+    if (!texture || texture->lpVtbl != &g_texture_vtbl
+            || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
 }
 
 /* Only the layout object is published here. Raw8 declaration/function and
