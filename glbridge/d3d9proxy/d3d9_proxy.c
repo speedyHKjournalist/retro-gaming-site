@@ -16029,11 +16029,25 @@ HRESULT WINAPI d9wg_d3d9_core_volume_texture8(IDirect3DDevice9 *iface,
             height, depth, levels, usage, (D3DFORMAT)format, (D3DPOOL)pool, 8u, out);
 }
 
+static HRESULT core_pack_volume_desc8(const D3DVOLUME_DESC *desc, void *out)
+{
+    UINT pitch, rows, slice;
+    if (!desc->Width || !desc->Height || !desc->Depth
+            || !supported_volume_texture_format8(desc->Format)
+            || !d9wg_texture_level_layout(8u, desc->Format, desc->Width, desc->Height,
+                &pitch, &rows, &slice)
+            || (uint64_t)slice * desc->Depth > UINT32_MAX)
+        return D3DERR_INVALIDCALL;
+    const UINT packed[8] = {desc->Format, desc->Type, desc->Usage, desc->Pool,
+        slice * desc->Depth, desc->Width, desc->Height, desc->Depth};
+    CopyMemory(out, packed, sizeof(packed));
+    return D3D_OK;
+}
+
 HRESULT WINAPI d9wg_d3d9_core_volume_desc8(IDirect3DVolume9 *iface,
         void *out, UINT bytes)
 {
     D3DVOLUME_DESC desc;
-    UINT pitch, rows, slice;
     if (!iface || iface->lpVtbl != &g_volume_vtbl || !out
             || bytes != D9WG_D3D8_VOLUME_DESC_BYTES)
         return D3DERR_INVALIDCALL;
@@ -16043,16 +16057,7 @@ HRESULT WINAPI d9wg_d3d9_core_volume_desc8(IDirect3DVolume9 *iface,
         return D3DERR_INVALIDCALL;
     HRESULT hr = IDirect3DVolume9_GetDesc(iface, &desc);
     if (FAILED(hr)) return hr;
-    if (!desc.Width || !desc.Height || !desc.Depth
-            || !supported_volume_texture_format8(desc.Format)
-            || !d9wg_texture_level_layout(8u, desc.Format, desc.Width, desc.Height,
-                &pitch, &rows, &slice)
-            || (uint64_t)slice * desc.Depth > UINT32_MAX)
-        return D3DERR_INVALIDCALL;
-    const UINT packed[8] = {desc.Format, desc.Type, desc.Usage, desc.Pool,
-        slice * desc.Depth, desc.Width, desc.Height, desc.Depth};
-    CopyMemory(out, packed, sizeof(packed));
-    return D3D_OK;
+    return core_pack_volume_desc8(&desc, out);
 }
 
 /* Private API8 cube creation;ordinary cube CPU lock/upload uses its owning
@@ -16179,6 +16184,57 @@ const D9WGTextureMethods8 *WINAPI d9wg_d3d9_core_texture_methods8(IDirect3DTextu
     };
     if (!texture || texture->lpVtbl != &g_texture_vtbl
             || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
+}
+
+static UINT WINAPI core_volume_texture_type8(IDirect3DVolumeTexture9 *texture)
+{
+    return (UINT)IDirect3DVolumeTexture9_GetType(texture);
+}
+static HRESULT WINAPI core_volume_texture_lock8(IDirect3DVolumeTexture9 *texture, UINT level,
+        void *locked, const void *rect, DWORD flags)
+{
+    return IDirect3DVolumeTexture9_LockBox(texture, level, (D3DLOCKED_BOX *)locked, (const D3DBOX *)rect, flags);
+}
+static HRESULT WINAPI core_volume_texture_desc8(IDirect3DVolumeTexture9 *texture, UINT level,
+        void *out, UINT bytes)
+{
+    if (!out || bytes != D9WG_D3D8_VOLUME_DESC_BYTES) return D3DERR_INVALIDCALL;
+    D3DVOLUME_DESC desc;
+    HRESULT hr = IDirect3DVolumeTexture9_GetLevelDesc(texture, level, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_volume_desc8(&desc, out);
+}
+static HRESULT WINAPI core_volume_texture_dirty8(IDirect3DVolumeTexture9 *texture, const void *box)
+{
+    return IDirect3DVolumeTexture9_AddDirtyBox(texture, (const D3DBOX *)box);
+}
+const D9WGVolumeTextureMethods8 *WINAPI d9wg_d3d9_core_volume_texture_methods8(IDirect3DVolumeTexture9 *texture)
+{
+    static const D9WGVolumeTextureMethods8 methods = {
+        volume_texture_set_private_data, volume_texture_get_private_data, volume_texture_free_private_data,
+        volume_texture_set_priority, volume_texture_get_priority, volume_texture_preload, core_volume_texture_type8,
+        volume_texture_set_lod, volume_texture_get_lod, volume_texture_get_level_count, core_volume_texture_desc8,
+        volume_texture_get_volume_level, core_volume_texture_lock8, volume_texture_unlock_box, core_volume_texture_dirty8
+    };
+    if (!texture || texture->lpVtbl != &g_volume_texture_vtbl
+            || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
+}
+
+static HRESULT WINAPI core_volume_lock8(IDirect3DVolume9 *volume,
+        void *locked, const void *box, DWORD flags)
+{
+    return IDirect3DVolume9_LockBox(volume, (D3DLOCKED_BOX *)locked, (const D3DBOX *)box, flags);
+}
+const D9WGVolumeMethods8 *WINAPI d9wg_d3d9_core_volume_methods8(IDirect3DVolume9 *volume)
+{
+    static const D9WGVolumeMethods8 methods = {
+        volume_set_private_data, volume_get_private_data, volume_free_private_data,
+        d9wg_d3d9_core_volume_desc8, core_volume_lock8, volume_unlock_box
+    };
+    if (!volume || volume->lpVtbl != &g_volume_vtbl
+            || !core_view_device8((IUnknown *)volume)) return NULL;
     return &methods;
 }
 

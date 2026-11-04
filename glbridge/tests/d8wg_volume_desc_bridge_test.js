@@ -27,7 +27,7 @@ typedef struct{const void*lpVtbl;}IDirect3DVolume9;typedef struct{UINT api;}Devi
 static const int g_volume_vtbl=1;static UINT calls;static HRESULT provider_error;static D3DVOLUME_DESC provider_desc;
 static D9Volume*volume_from_iface(IDirect3DVolume9*v){return(D9Volume*)v;}static UINT device_compatibility_api(Device*d){return d->api;}
 static HRESULT IDirect3DVolume9_GetDesc(IDirect3DVolume9*v,D3DVOLUME_DESC*out){assert(v&&out);calls++;*out=provider_desc;return provider_error;}
-${['supported_format8','supported_volume_texture_format8','d9wg_d3d9_core_volume_desc8'].map(extract).join('\n')}
+${['supported_format8','supported_volume_texture_format8','core_pack_volume_desc8','d9wg_d3d9_core_volume_desc8'].map(extract).join('\n')}
 static UINT checks,cases;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Volume desc bridge case %u line %u: %s\\n",cases,__LINE__,#v);return 1;}checks++;}while(0)
 static BOOL oracle(UINT f,UINT w,UINT h,UINT depth,UINT*bytes){const D9WGFormatLayout*q=d9wg_find_format(f);if(!w||!h||!depth||!q||!(q->apis&2u)||q->block_height>1)return 0;__uint128_t n=(((__uint128_t)w+q->block_width-1)/q->block_width)*q->block_bytes*h*depth;if(n>UINT32_MAX)return 0;*bytes=(UINT)n;return 1;}

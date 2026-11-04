@@ -1,13 +1,16 @@
 "use strict";
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'surface8-adapter-'));
+const volumeMode=process.env.D8WG_TEST_VOLUME_ADAPTER==="1";
 const cubeMode=process.env.D8WG_TEST_CUBE_ADAPTER==="1";
 const textureMode=process.env.D8WG_TEST_TEXTURE_ADAPTER==="1";
-const resourceMode=textureMode||cubeMode,resourceName=cubeMode?"cube_texture":"texture",resourcePrefix=cubeMode?"CubeTexture":"Texture";
+const resourceMode=textureMode||cubeMode||volumeMode,resourceName=volumeMode?"volume_texture":cubeMode?"cube_texture":"texture",resourcePrefix=volumeMode?"VolumeTexture":cubeMode?"CubeTexture":"Texture";
 const common=fs.readFileSync(process.env.D8WG_CORE_VIEW_SOURCE||root+'/d3d8proxy/d3d8_core_view.h','utf8').replace(/^#include[^\n]*\n/gm,'');
 const source=fs.readFileSync(process.env.D8WG_SURFACE_ADAPTER_SOURCE||root+'/d3d8proxy/d3d8_core_surface.c','utf8').replace(/^#include[^\n]*\n/gm,''),header=fs.readFileSync(root+'/d3d9proxy/d3d9_core.h','utf8'),methods=header.match(/typedef struct D9WGSurfaceMethods8 \{[\s\S]*?\} D9WGSurfaceMethods8;/)[0];
 const textureMethods=resourceMode?header.match(new RegExp("typedef struct D9WG"+resourcePrefix+"Methods8 \\{[\\s\\S]*?\\} D9WG"+resourcePrefix+"Methods8;"))[0]:"";
+const volumeMethods=volumeMode?header.match(/typedef struct D9WGVolumeMethods8 \{[\s\S]*?\} D9WGVolumeMethods8;/)[0]:"";
+const volumeSource=volumeMode?fs.readFileSync(process.env.D8WG_VOLUME_ADAPTER_SOURCE||root+"/d3d8proxy/d3d8_core_volume.c","utf8").replace(/^#include[^\n]*\n/gm,""):"";
 const textureTypes=resourceMode?fs.readFileSync(root+'/tests/native/d8wg_'+resourceName+'_adapter_types.h','utf8'):"";
-const textureSource=resourceMode?fs.readFileSync((cubeMode?process.env.D8WG_CUBE_ADAPTER_SOURCE:process.env.D8WG_TEXTURE_ADAPTER_SOURCE)||root+'/d3d8proxy/d3d8_core_'+resourceName+'.c','utf8').replace(/^#include[^\n]*\n/gm,''):"";
+const textureSource=resourceMode?fs.readFileSync((volumeMode?process.env.D8WG_VOLUME_TEXTURE_ADAPTER_SOURCE:cubeMode?process.env.D8WG_CUBE_ADAPTER_SOURCE:process.env.D8WG_TEXTURE_ADAPTER_SOURCE)||root+'/d3d8proxy/d3d8_core_'+resourceName+'.c','utf8').replace(/^#include[^\n]*\n/gm,''):"";
 try{fs.writeFileSync(dir+'/adapter.c',`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,14 +54,18 @@ static UINT live,allocations,fail_allocation,checks;
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT flags,size_t bytes){(void)h;assert(flags==8&&bytes);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,bytes);assert(p);live++;return p;}static void HeapFree(void*h,UINT flags,void*p){(void)h;assert(!flags);if(p){assert(live);live--;free(p);}}
 ${methods}
 ${resourceMode?"struct IDirect3D"+resourcePrefix+"9{const IUnknownVtbl*lpVtbl;};":""}
-${textureMethods}
+${resourceMode?"typedef struct D9WG"+resourcePrefix+"Methods8 D9WG"+resourcePrefix+"Methods8;":""}
 ${textureTypes}
+${textureMethods}
+${volumeMethods}
+${volumeMode?"static const D9WGVolumeMethods8*d9wg_d3d9_core_volume_methods8(struct IDirect3DVolume9*);":""}
 typedef void(*D9WGCoreViewRetire8)(void*);
 static const D9WGSurfaceMethods8*d9wg_d3d9_core_surface_methods8(struct IDirect3DSurface9*);
 static HRESULT d9wg_d3d9_core_get_view8(IUnknown*,void**);
 static HRESULT d9wg_d3d9_core_attach_view8(IUnknown*,void*,D9WGCoreViewRetire8);
 ${common}
 ${source}
+${volumeSource}
 ${textureSource}
 ${resourceMode?'#define main retained_surface_main':""}
 #include "tests/native/d8wg_surface_adapter_cases.h"

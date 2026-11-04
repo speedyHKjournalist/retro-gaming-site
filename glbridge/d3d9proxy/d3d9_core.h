@@ -196,6 +196,36 @@ typedef struct D9WGCubeTextureMethods8 {
     HRESULT (WINAPI *add_dirty_rect)(struct IDirect3DCubeTexture9 *, UINT, const RECT *);
 } D9WGCubeTextureMethods8;
 const D9WGCubeTextureMethods8 *WINAPI d9wg_d3d9_core_cube_texture_methods8(struct IDirect3DCubeTexture9 *texture);
+typedef struct D9WGVolumeTextureMethods8 {
+    HRESULT (WINAPI *set_private_data)(struct IDirect3DVolumeTexture9 *, const GUID *, const void *, DWORD, DWORD);
+    HRESULT (WINAPI *get_private_data)(struct IDirect3DVolumeTexture9 *, const GUID *, void *, DWORD *);
+    HRESULT (WINAPI *free_private_data)(struct IDirect3DVolumeTexture9 *, const GUID *);
+    DWORD (WINAPI *set_priority)(struct IDirect3DVolumeTexture9 *, DWORD);
+    DWORD (WINAPI *get_priority)(struct IDirect3DVolumeTexture9 *);
+    void (WINAPI *preload)(struct IDirect3DVolumeTexture9 *);
+    UINT (WINAPI *get_type)(struct IDirect3DVolumeTexture9 *);
+    DWORD (WINAPI *set_lod)(struct IDirect3DVolumeTexture9 *, DWORD);
+    DWORD (WINAPI *get_lod)(struct IDirect3DVolumeTexture9 *);
+    DWORD (WINAPI *get_level_count)(struct IDirect3DVolumeTexture9 *);
+    HRESULT (WINAPI *get_level_desc)(struct IDirect3DVolumeTexture9 *, UINT, void *, UINT);
+    HRESULT (WINAPI *get_volume_level)(struct IDirect3DVolumeTexture9 *, UINT, struct IDirect3DVolume9 **);
+    HRESULT (WINAPI *lock_box)(struct IDirect3DVolumeTexture9 *, UINT, void *, const void *, DWORD);
+    HRESULT (WINAPI *unlock_box)(struct IDirect3DVolumeTexture9 *, UINT);
+    HRESULT (WINAPI *add_dirty_box)(struct IDirect3DVolumeTexture9 *, const void *);
+} D9WGVolumeTextureMethods8;
+const D9WGVolumeTextureMethods8 *WINAPI d9wg_d3d9_core_volume_texture_methods8(struct IDirect3DVolumeTexture9 *texture);
+typedef struct D9WGVolumeMethods8 {
+    HRESULT (WINAPI *set_private_data)(struct IDirect3DVolume9 *, const GUID *,
+            const void *, DWORD, DWORD);
+    HRESULT (WINAPI *get_private_data)(struct IDirect3DVolume9 *, const GUID *,
+            void *, DWORD *);
+    HRESULT (WINAPI *free_private_data)(struct IDirect3DVolume9 *, const GUID *);
+    HRESULT (WINAPI *get_desc)(struct IDirect3DVolume9 *, void *, UINT);
+    HRESULT (WINAPI *lock_box)(struct IDirect3DVolume9 *, void *, const void *, DWORD);
+    HRESULT (WINAPI *unlock_box)(struct IDirect3DVolume9 *);
+} D9WGVolumeMethods8;
+const D9WGVolumeMethods8 *WINAPI d9wg_d3d9_core_volume_methods8(
+        struct IDirect3DVolume9 *surface);
 /* The SDK8 adapter uses this typed boundary without including SDK9 headers.
  * Its resource pointer must already belong to this8-profile core. */
 typedef struct D9WGSurfaceMethods8 {

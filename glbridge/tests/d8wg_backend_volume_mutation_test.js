@@ -28,10 +28,10 @@ const cases=[
  ["slice pitch","volume_texture_lock_box","locked->SlicePitch = (INT)level_data->slice_pitch;","locked->SlicePitch = (INT)level_data->row_pitch;","lock"],
  ["upload failure","volume_texture_unlock_box","return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;","return result ? D3D_OK : D3D_OK;","lock"],
  ["descriptor size guard","d9wg_d3d9_core_volume_desc8","bytes != D9WG_D3D8_VOLUME_DESC_BYTES","bytes == 0u","desc"],
- ["descriptor depth factor","d9wg_d3d9_core_volume_desc8","slice * desc.Depth, desc.Width","slice, desc.Width","desc"],
- ["descriptor overflow","d9wg_d3d9_core_volume_desc8","(uint64_t)slice * desc.Depth > UINT32_MAX","((uint64_t)slice * desc.Depth > UINT32_MAX && 0)","desc"],
+ ["descriptor depth factor","core_pack_volume_desc8","slice * desc->Depth, desc->Width","slice, desc->Width","desc"],
+ ["descriptor overflow","core_pack_volume_desc8","(uint64_t)slice * desc->Depth > UINT32_MAX","((uint64_t)slice * desc->Depth > UINT32_MAX && 0)","desc"],
  ["descriptor provider error","d9wg_d3d9_core_volume_desc8","if (FAILED(hr)) return hr;","if (FAILED(hr)) return D3DERR_INVALIDCALL;","desc"],
- ["descriptor width","d9wg_d3d9_core_volume_desc8","!desc.Width ||","(!desc.Width && 0) ||","desc"],
+ ["descriptor width","core_pack_volume_desc8","!desc->Width ||","(!desc->Width && 0) ||","desc"],
  ["view level identity","volume_texture_get_volume_level","texture->levels[level].level_volume","texture->levels[0].level_volume","view"],
  ["view public ref","volume_texture_get_volume_level","IDirect3DVolume9_AddRef(*out);","(void)out;","view"],
  ["view output versioning","volume_texture_get_volume_level","device_compatibility_api(texture->device) == 8u","device_compatibility_api(texture->device) <= 9u","view"]

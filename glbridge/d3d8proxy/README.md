@@ -978,3 +978,30 @@ fromactualCPUshadow andGPUchecks. CubeAddDirtyRect retains the current core9
 no-op policy. 378guest/88core regressions,32EXEs/fourstrictDLLs/site2/scopedlint0.
 ExactXPaccepted retail DLLs andsame-source diagnostics published.
 Evidence:`../deployments/d3d-webgpu-review-4K42.json`.
+
+
+### Review 4K43: real SDK8 VolumeTexture8 and Volume8 containers
+
+The 19-method VolumeTexture8 and 11-method Volume8 adapters share real core9
+storage, locks, private data and weak identity caching. Volume8 references belong
+to its real frontend VolumeTexture8 container. SDK-neutral typed 15/6-method
+tables keep box and output casts inside core9. The shared descriptor pack
+reconstructs the old volume_desc8 exactly. All 669 other core9 functions, ten
+storage structs and nine complete old frontend/runtime files match the baseline.
+
+Native validation: 66,667 checks / 790 cases, 70 strict semantic mutants and
+ASAN. The backend is an explicit COM/metadata shim. Retained volume descriptor
+and core mutation suites pass. A stale-output mutant exposed an ineffective
+NULL input in the test; a non-NULL sentinel now detects it. A standalone consumer
+also caught a Direct3D SDK dependency in the header, corrected before acceptance.
+
+The third XP run is the accepted capture: 136 seconds / 64 batches, eleven
+devices and Resets, four 3D mips, real parent/child identity, shared and independent
+locks, row/slice pitch, private data, public-zero revival and final cleanup.
+New Device8 parents remain IUnknown fixtures; default factory integration is open.
+48 full images / 3,072 pixels match on both GPUs; 44 uploads / 7,168 bytes,
+35317 wire corruptions and 1,824 actual CPU shadow DWORDs are checked.
+Analytic framebuffer replies are separate from CPU shadow and actual GPU checks.
+381 guest / 89 core regressions, 32 EXEs, four strict DLLs, two site tests and
+scoped lint pass. Exact accepted XP retail and same-source diagnostics published.
+Evidence: `../deployments/d3d-webgpu-review-4K43.json`.
