@@ -35,8 +35,10 @@ fi
 
 runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/d9wg-link.XXXXXX")
 trap 'rm -rf "$runtime_dir"' EXIT HUP INT TERM
-runtime_archive="$runtime_dir/libd9wg_runtime.a"
-CC="$compiler" sh "$script_dir/../runtime/build.sh" "$runtime_archive"
+core_archive="$runtime_dir/libd9wg_d3d9.a"
+core_mode=--static
+if [ "$mode" = diagnostic ]; then core_mode=--static-diagnostic; fi
+CC="$compiler" sh "$script_dir/../d3d9proxy/build.sh" "$core_mode" "$core_archive"
 
 # The guest has no C runtime to resolve such an import against.
 check_imports() {
@@ -58,7 +60,7 @@ build_dll() {
         -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at \
         -o "$output" \
         "$script_dir/d3d8_proxy.c" "$script_dir/d3d8.def" \
-        "$runtime_archive" -luser32 -lgdi32 -lkernel32
+        "$core_archive" -luser32 -lgdi32 -lkernel32
     check_imports "$output"
 }
 

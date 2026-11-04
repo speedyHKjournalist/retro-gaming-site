@@ -17,6 +17,7 @@
 #include <initguid.h>
 #include <d3d8.h>
 #include <stdint.h>
+#include "../d3d9proxy/d3d9_core.h"
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
 #include "../runtime/d9wg_present_parameters.h"
@@ -221,6 +222,7 @@ struct D8StateBlock {
 struct D8Direct3D {
     IDirect3D8 iface;
     LONG refcount;
+    struct IDirect3D9 *backend;
 };
 
 struct D8Device {
@@ -682,10 +684,7 @@ static uint32_t batch_capacity(void)
     return d9wg_transport_capacity(g_process);
 }
 
-static void close_transport_locked(void)
-{
-    d9wg_transport_close(g_process);
-}
+
 
 static BOOL open_transport_locked(void)
 {
@@ -2101,8 +2100,10 @@ static ULONG WINAPI d3d_release(IDirect3D8 *iface)
 {
     D8Direct3D *d3d = d3d_from_iface(iface);
     ULONG refs = (ULONG)InterlockedDecrement(&d3d->refcount);
-    if (!refs)
+    if (!refs) {
+        d9wg_d3d9_core_root_release(d3d->backend);
         HeapFree(GetProcessHeap(), 0, d3d);
+    }
     return refs;
 }
 
@@ -2116,8 +2117,7 @@ static HRESULT WINAPI d3d_register_software_device(IDirect3D8 *iface,
 
 static UINT WINAPI d3d_get_adapter_count(IDirect3D8 *iface)
 {
-    (void)iface;
-    return 1;
+    return d9wg_d3d9_core_adapter_count(d3d_from_iface(iface)->backend);
 }
 
 static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D8 *iface,
@@ -2421,13 +2421,9 @@ static HRESULT WINAPI d3d_get_device_caps(IDirect3D8 *iface, UINT adapter,
     return D3D_OK;
 }
 
-static HMONITOR WINAPI d3d_get_adapter_monitor(IDirect3D8 *iface,
-        UINT adapter)
+static HMONITOR WINAPI d3d_get_adapter_monitor(IDirect3D8 *iface, UINT adapter)
 {
-    (void)iface;
-    if (adapter)
-        return NULL;
-    return MonitorFromWindow(NULL, MONITOR_DEFAULTTOPRIMARY);
+    return d9wg_d3d9_core_adapter_monitor(d3d_from_iface(iface)->backend, adapter);
 }
 
 static void device_init_states(D8Device *device)
@@ -8918,7 +8914,6 @@ static IDirect3DSwapChain8Vtbl g_swapchain_vtbl = {
 IDirect3D8 *WINAPI Direct3DCreate8(UINT sdk_version)
 {
     D8Direct3D *d3d;
-    BOOL transport_ready;
 
     D8WG_TRACE("CALL Direct3DCreate8 sdk=%lu", sdk_version);
     if (sdk_version != D3D_SDK_VERSION_DX80
@@ -8927,19 +8922,17 @@ IDirect3D8 *WINAPI Direct3DCreate8(UINT sdk_version)
                 sdk_version, D3D_SDK_VERSION_DX80, D3D_SDK_VERSION_DX81);
         return NULL;
     }
-    EnterCriticalSection(&g_transport_lock);
-    transport_ready = open_transport_locked();
-    LeaveCriticalSection(&g_transport_lock);
-    if (!transport_ready) {
-        D8WG_TRACE("FAIL Direct3DCreate8 transport unavailable");
-        return NULL;
-    }
-
     d3d = (D8Direct3D *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*d3d));
     if (!d3d) {
         D8WG_TRACE("FAIL Direct3DCreate8 allocation win32_last=%lu",
                 GetLastError());
+        return NULL;
+    }
+    d3d->backend = d9wg_d3d9_core_create8();
+    if (!d3d->backend) {
+        D8WG_TRACE("FAIL Direct3DCreate8 backend factory unavailable");
+        HeapFree(GetProcessHeap(), 0, d3d);
         return NULL;
     }
     d3d->iface.lpVtbl = &g_d3d_vtbl;
@@ -8988,44 +8981,25 @@ void WINAPI DebugSetMute(void)
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
     if (reason == DLL_PROCESS_DETACH && (reserved || !g_process))
-        return TRUE; /* OS handle cleanup ends a terminating process owner. */
+        return d9wg_d3d9_core_module(instance, reason, reserved);
 
-#ifdef D8WG_DIAGNOSTIC_TRACE
-    DWORD pending_commands;
-#else
-    (void)reserved;
-#endif
     if (reason == DLL_PROCESS_ATTACH) {
-        g_process = d9wg_process_attach();
-        if (!g_process) return FALSE;
-        DisableThreadLibraryCalls(instance);
+        if (!d9wg_d3d9_core_module(instance, reason, reserved)) return FALSE;
+        /* Borrow the core's attachment: this DLL remains one frontend owner. */
+        g_process = d9wg_d3d9_core_process();
 #ifdef D8WG_DIAGNOSTIC_TRACE
         v86wg_diagnostic_process_attach(instance);
 #endif
     } else if (reason == DLL_PROCESS_DETACH) {
 #ifdef D8WG_DIAGNOSTIC_TRACE
-        pending_commands = g_command_count;
+        DWORD pending_commands = g_command_count;
 #endif
-        EnterCriticalSection(&g_transport_lock);
-        /* the host releases what this process left alive (review S1-10) */
-        if (g_process->references == 1 && g_dma_buffer) {
-            D9WGSessionEnd end;
-            uint8_t *destination;
-            end.session_id_low = g_session_id_low;
-            end.session_id_high = g_session_id_high;
-            if (reserve_command_locked(D9WG_OP_SESSION_END, sizeof(end), 0, NULL,
-                    &destination, NULL))
-                CopyMemory(destination, &end, sizeof(end));
-        }
-        if (g_command_count)
-            submit_batch_locked(FALSE);
-        if (g_process->references == 1) close_transport_locked();
-        LeaveCriticalSection(&g_transport_lock);
-        d9wg_process_release(g_process);
+        BOOL result = d9wg_d3d9_core_module(instance, reason, reserved);
         g_process = NULL;
 #ifdef D8WG_DIAGNOSTIC_TRACE
         v86wg_diagnostic_process_detach(reserved, pending_commands);
 #endif
+        return result;
     }
     return TRUE;
 }

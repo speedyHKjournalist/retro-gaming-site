@@ -14664,7 +14664,7 @@ static IDirect3DSurface9Vtbl g_surface_vtbl = {
 #define D3D_SDK_VERSION_9C      32u
 #define D3D_SDK_VERSION_DEBUG_BIT 0x80000000u
 
-IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
+static IDirect3D9 *d3d_create_root(UINT sdk_version, BOOL publish_hello)
 {
     D9Direct3D *d3d;
     BOOL transport_ready;
@@ -14698,10 +14698,44 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
     }
     d3d->iface.lpVtbl = &g_d3d_vtbl;
     d3d->refcount = 1;
-    emit_hello_once();
+    if (publish_hello) emit_hello_once();
     TRACE("OK Direct3DCreate9 object=%08lX", (DWORD)(uintptr_t)&d3d->iface);
     return &d3d->iface;
 }
+
+IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
+{
+    return d3d_create_root(sdk_version, TRUE);
+}
+
+#ifdef D9WG_STATIC_CORE
+/* The D3D8 wrapper publishes its own compatibility profile. Creating its
+ * backend factory must not insert a D3D9 HELLO into the shared stream. */
+IDirect3D9 *WINAPI d9wg_d3d9_core_create8(void)
+{
+    return d3d_create_root(D3D_SDK_VERSION_9C, FALSE);
+}
+
+D9WGProcess *WINAPI d9wg_d3d9_core_process(void)
+{
+    return g_process;
+}
+
+ULONG WINAPI d9wg_d3d9_core_root_release(IDirect3D9 *factory)
+{
+    return IDirect3D9_Release(factory);
+}
+
+UINT WINAPI d9wg_d3d9_core_adapter_count(IDirect3D9 *factory)
+{
+    return IDirect3D9_GetAdapterCount(factory);
+}
+
+HMONITOR WINAPI d9wg_d3d9_core_adapter_monitor(IDirect3D9 *factory, UINT adapter)
+{
+    return IDirect3D9_GetAdapterMonitor(factory, adapter);
+}
+#endif
 
 /*
  * Secondary d3d9.dll exports. A title that statically imports any of these

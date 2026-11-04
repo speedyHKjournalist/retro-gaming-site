@@ -12,7 +12,7 @@ try {
     fs.copyFileSync(path.join(__dirname, "native/windows.h"), path.join(directory, "windows.h"));
     const modules = [];
     for (const api of ["d3d9", "d3d8", "ddraw"]) {
-        const source = fs.readFileSync(path.join(root, api + "proxy/" + api + "_proxy.c"), "utf8");
+        const source = fs.readFileSync(api === "d3d8" && process.env.D8WG_OWNER_SOURCE || path.join(root, api + "proxy/" + api + "_proxy.c"), "utf8");
         const input = path.join(directory, api + ".c");modules.push(input);
         fs.writeFileSync(input, `
 #include <assert.h>
@@ -24,7 +24,7 @@ try {
 #define TRACE_FLUSH() ((void)0)
 #define DDWG_TRACE_CHECKPOINT(...) ((void)0)
 extern unsigned submits,transport_closes,session_ends;
-${api === "d3d9" ? "static HINSTANCE g_module_instance;" : ""}
+${api !== "ddraw" ? "static HINSTANCE g_module_instance;" : ""}
 ${api === "ddraw" ? `static HINSTANCE g_instance;static CRITICAL_SECTION g_object_lock;
 typedef struct DDrawObject {struct DDrawObject *next;} DDrawObject;static DDrawObject *g_objects;
 static void emit_window_state_not_showing(DDrawObject *object){(void)object;}
@@ -40,9 +40,11 @@ ${definition(source, "static void emit_session_end(")}` : `static BOOL reserve_c
 }`}
 static BOOL submit_batch_locked(BOOL present){(void)present;assert(g_transport_lock.held);submits++;g_command_count=0;g_batch_bytes=sizeof(D9WGBatchHeader);return TRUE;}
 static void close_transport_locked(void){assert(g_transport_lock.held&&g_process->references==1);transport_closes++;g_transport=INVALID_HANDLE_VALUE;g_dma_buffer=NULL;}
+${api === "d3d8" ? "static D9WGProcess *backend_process;\n" + definition(fs.readFileSync(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8"), "BOOL WINAPI DllMain(").replace(/\bg_process\b/g,"backend_process").replace(/\bDllMain\b/,"d9wg_d3d9_core_module") + "\n" + definition(fs.readFileSync(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8"),"D9WGProcess *WINAPI d9wg_d3d9_core_process(").replace(/\bg_process\b/g,"backend_process") : ""}
 ${definition(source, "static uint32_t allocate_handle(")}
 #define DllMain ${api}_entry
 ${definition(source, "BOOL WINAPI DllMain(")}
+${api === "d3d8" ? "D9WGProcess *d3d8_backend_state(void){return backend_process;}" : ""}
 D9WGProcess *${api}_state(void){return g_process;}
 uint32_t ${api}_allocate(void){return allocate_handle();}
 void ${api}_append(uint32_t bytes){EnterCriticalSection(&g_transport_lock);g_batch_bytes+=bytes;g_command_count++;LeaveCriticalSection(&g_transport_lock);}
@@ -90,11 +92,12 @@ BOOL UnmapViewOfFile(const void *address){for(unsigned i=0;i<64;i++)if(views[i].
 BOOL CloseHandle(HANDLE handle){Mapping *mapping=handle;assert(mapping->handles);mapping->handles--;retire(mapping);return TRUE;}
 #define FRONTEND(name) BOOL name##_entry(HINSTANCE,DWORD,LPVOID);D9WGProcess *name##_state(void);uint32_t name##_allocate(void);void name##_append(uint32_t);
 FRONTEND(d3d9) FRONTEND(d3d8) FRONTEND(ddraw)
+D9WGProcess *d3d8_backend_state(void);
 int main(void){
  assert(d3d9_entry((void*)1,DLL_PROCESS_ATTACH,NULL));D9WGProcess *owner=d3d9_state();
  assert(owner->references==1&&owner->transport==INVALID_HANDLE_VALUE);owner->transport=(HANDLE)7;owner->dma_buffer=(uint8_t*)8;owner->batch_bytes=32;
  uint32_t first=d3d9_allocate();d3d9_append(16);uint32_t low=owner->session_id_low,high=owner->session_id_high;
- assert(d3d8_entry((void*)2,DLL_PROCESS_ATTACH,NULL));assert(d3d8_state()==owner&&owner->batch_bytes==48);
+ assert(d3d8_entry((void*)2,DLL_PROCESS_ATTACH,NULL));assert(d3d8_state()==owner&&d3d8_backend_state()==owner&&owner->batch_bytes==48);
  uint32_t second=d3d8_allocate();d3d8_append(24);
  assert(ddraw_entry((void*)3,DLL_PROCESS_ATTACH,NULL));assert(ddraw_state()==owner&&owner->references==3);
  uint32_t third=ddraw_allocate();ddraw_append(32);
@@ -115,9 +118,9 @@ int main(void){
  D9WGProcess *one=d9wg_process_attach();pid++;D9WGProcess *two=d9wg_process_attach();assert(one!=two&&one->process_id!=two->process_id);d9wg_process_release(two);d9wg_process_release(one);pid--;
  // Process termination may leave another thread holding the lock. Actual
  // DllMain bodies must defer to OS handle cleanup without trying to enter it.
- assert(d3d9_entry(0,DLL_PROCESS_ATTACH,NULL));assert(ddraw_entry(0,DLL_PROCESS_ATTACH,NULL));owner=d3d9_state();owner->transport_lock.held=1;
- unsigned before=transport_closes;assert(d3d9_entry(0,DLL_PROCESS_DETACH,(void*)1));assert(ddraw_entry(0,DLL_PROCESS_DETACH,(void*)1));assert(transport_closes==before&&owner->references==2);
- owner->transport_lock.held=0;d9wg_process_release(owner);d9wg_process_release(owner);
+ assert(d3d9_entry(0,DLL_PROCESS_ATTACH,NULL));assert(ddraw_entry(0,DLL_PROCESS_ATTACH,NULL));assert(d3d8_entry(0,DLL_PROCESS_ATTACH,NULL));owner=d3d9_state();owner->transport_lock.held=1;
+ unsigned before=transport_closes;assert(d3d9_entry(0,DLL_PROCESS_DETACH,(void*)1));assert(ddraw_entry(0,DLL_PROCESS_DETACH,(void*)1));assert(d3d8_entry(0,DLL_PROCESS_DETACH,(void*)1));assert(transport_closes==before&&owner->references==3);
+ owner->transport_lock.held=0;d9wg_process_release(owner);d9wg_process_release(owner);d9wg_process_release(owner);
  assert(mappings_created==mappings_destroyed);
  puts("PASS actual C DLL entries: one process owner, canonical mapping survives creator unload, shared cursor/namespace/session, last-owner cleanup, failed attach and termination paths");return 0;
 }
