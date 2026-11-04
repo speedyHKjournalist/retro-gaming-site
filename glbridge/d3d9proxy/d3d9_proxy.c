@@ -14999,6 +14999,33 @@ HRESULT WINAPI d9wg_d3d9_core_check_format8(IDirect3D9 *factory, UINT adapter,
             (D3DFORMAT)display, usage, (D3DRESOURCETYPE)resource_type, (D3DFORMAT)format);
 }
 
+/* This is a layout conversion for the API8 compatibility path. Version8
+ * swap/interval/flag values stay intact; it is not ordinary9 CreateDevice
+ * validation. All input is staged before output, including in-place callers. */
+void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *requested8,
+        UINT width, UINT height, UINT format, HWND window)
+{
+    _Static_assert(sizeof(D3DPRESENT_PARAMETERS) == 56, "D3D9 parameter size");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, MultiSampleQuality) == 20,
+            "D3D9 quality offset");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, SwapEffect) == 24,
+            "D3D9 parameter tail offset");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, hDeviceWindow) == 28,
+            "D3D9 parameter window offset");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, PresentationInterval) == 52,
+            "D3D9 parameter interval offset");
+    D3DPRESENT_PARAMETERS requested, effective;
+    CopyMemory(&requested, requested8, 20);
+    requested.MultiSampleQuality = 0;
+    CopyMemory((BYTE *)&requested + 24, (const BYTE *)requested8 + 20,
+            D9WG_D3D8_PARAMETERS_BYTES - 20);
+    d9wg_present_parameters_effective(&effective, &requested,
+            width, height, format, window);
+    CopyMemory(out8, &effective, 20);
+    CopyMemory((BYTE *)out8 + 20, (const BYTE *)&effective + 24,
+            D9WG_D3D8_PARAMETERS_BYTES - 20);
+}
+
 #endif
 
 /*

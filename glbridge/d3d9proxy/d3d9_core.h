@@ -9,6 +9,7 @@ struct D9WGProcess;
 #define D9WG_D3D8_CAPS_BYTES 212u
 #define D9WG_D3D8_RASTER_ZBIAS 0x00004000u
 #define D9WG_D3D8_IDENTIFIER_BYTES 1068u
+#define D9WG_D3D8_PARAMETERS_BYTES 52u
 #define D9WG_D3D8_NO_WHQL_LEVEL 2u
 /* One attach/detach pair per embedding frontend module, called from that
  * module's loader entry. Release all owned COM objects before explicit
@@ -44,4 +45,8 @@ HRESULT WINAPI d9wg_d3d9_core_check_depth(struct IDirect3D9 *factory, UINT adapt
         UINT type, UINT display, UINT render, UINT depth);
 HRESULT WINAPI d9wg_d3d9_core_check_format8(struct IDirect3D9 *factory, UINT adapter,
         UINT type, UINT display, DWORD usage, UINT resource_type, UINT format);
+/* Internal non-null52-byte inputs/outputs; preserves API8 metadata, stages
+ * in-place input, and computes effective storage through SDK9 layout. */
+void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *requested8,
+        UINT width, UINT height, UINT format, HWND window);
 #endif

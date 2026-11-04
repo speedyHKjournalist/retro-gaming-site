@@ -43,6 +43,9 @@ typedef struct{int left,top,right,bottom;}RECT;typedef struct{int x,y;}POINT;
 #define ZeroMemory(p,n) memset(p,0,n)
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat,BackBufferFormat;DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect,Flags,FullScreen_RefreshRateInHz;BOOL Windowed,EnableAutoDepthStencil;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "${process.env.D9WG_GEOMETRY_POLICY || root + "/runtime/d9wg_present_parameters.h"}"
+/* Logical constructor fixture uses its own PP layout. The actual packed
+ * SDK8/9 ABI is exercised separately by d8wg_parameters_core_test. */
+${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 typedef struct{void*lpVtbl;}Interface;typedef struct{Interface iface;unsigned refs;}Factory;
 typedef struct{UINT Width,Height,Format,RefreshRate;}Mode;
 typedef struct Device{Interface iface;unsigned refcount;Factory*parent;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT AdapterOrdinal;D3DDEVTYPE DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;}creation;Mode display_mode;struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}viewport;RECT scissor_rect;BOOL depth_surface_enabled;BYTE*front_shadow;UINT front_shadow_pitch;int palettes,material,render_states[4];struct{Interface iface;struct Device*device;}implicit_swap_chain;}Device;
@@ -77,11 +80,11 @@ static BOOL emit_surface_update_and_flush(Device*d,HWND w,BOOL hidden,BOOL force
 static BOOL emit_window_state(Device*d,HWND w){assert(d==active&&w==observed_window);return 1;}
 ${extract(source, "d3d_create_device")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Present geometry API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){unsigned checks=0,cases=0;Factory factory={.refs=1};const UINT widths[]={0,64,256},heights[]={0,48,128},counts[]={0,1,3};const int clients[][2]={{160,120},{257,93},{0,0}};const DWORD behavior=D3DCREATE_SOFTWARE_VERTEXPROCESSING|D3DCREATE_FPU_PRESERVE;
+int main(void){unsigned checks=0,cases=0;${api===8?'(void)&d9wg_d3d9_core_parameters_effective8;':''}Factory factory={.refs=1};const UINT widths[]={0,64,256},heights[]={0,48,128},counts[]={0,1,3};const int clients[][2]={{160,120},{257,93},{0,0}};const DWORD behavior=D3DCREATE_SOFTWARE_VERTEXPROCESSING|D3DCREATE_FPU_PRESERVE;
 for(unsigned w=0;w<3;w++)for(unsigned h=0;h<3;h++)for(unsigned c=0;c<3;c++)for(unsigned window=0;window<2;window++)for(unsigned count=0;count<3;count++){
  client_width=clients[c][0];client_height=clients[c][1];D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=widths[w],.BackBufferHeight=heights[h],.BackBufferCount=counts[count],.BackBufferFormat=22,.EnableAutoDepthStencil=1,.AutoDepthStencilFormat=75,.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL};D3DPRESENT_PARAMETERS input=p;
- UINT ew=widths[w]?widths[w]:client_width?(UINT)client_width:640,eh=heights[h]?heights[h]:client_height?(UINT)client_height:480;HWND selected=window?p.hDeviceWindow:(void*)(uintptr_t)0x44;Interface*out=(void*)(uintptr_t)1;unsigned before_emits=emits;
- CHECK(!d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)&&out&&out==&active->iface);Device*d=(Device*)out;
+ UINT ew=widths[w]?widths[w]:client_width?(UINT)client_width:640,eh=heights[h]?heights[h]:client_height?(UINT)client_height:480;HWND selected=window?p.hDeviceWindow:(void*)(uintptr_t)0x44;Interface*out=(void*)(uintptr_t)1;unsigned before_emits=emits;${api===8?'unsigned before_core=core_parameter_calls;':''}
+ CHECK(!d3d_create_device(&factory.iface,0,1,(void*)(uintptr_t)0x44,behavior,&p,&out)&&out&&out==&active->iface${api===8?'&&core_parameter_calls==before_core+1':''});Device*d=(Device*)out;
  CHECK(d->display_mode.Width==ew&&d->display_mode.Height==eh&&d->viewport.Width==ew&&d->viewport.Height==eh&&d->viewport.MinZ==0&&d->viewport.MaxZ==1);
  CHECK(d->present.BackBufferWidth==ew&&d->present.BackBufferHeight==eh&&d->present.BackBufferCount==(counts[count]?counts[count]:1)&&d->present.hDeviceWindow==selected&&observed_window==selected);
  CHECK(emits==before_emits+1&&factory.refs==2);

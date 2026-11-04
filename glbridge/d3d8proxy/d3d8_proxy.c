@@ -2493,6 +2493,14 @@ static BOOL emit_device_state_after_reset(D8Device *device)
                 device, 0, &device->ps_constants[0][0], D8WG_MAX_PS_CONSTANTS);
 }
 
+_Static_assert(sizeof(D3DPRESENT_PARAMETERS) == D9WG_D3D8_PARAMETERS_BYTES,
+        "D3D8 presentation parameter size");
+_Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, SwapEffect) == 20,
+        "D3D8 parameter tail offset");
+_Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, hDeviceWindow) == 24,
+        "D3D8 parameter window offset");
+_Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, FullScreen_PresentationInterval) == 48,
+        "D3D8 parameter interval offset");
 static HRESULT WINAPI d3d_create_device(IDirect3D8* iface, UINT adapter,
     D3DDEVTYPE type, HWND focus_window, DWORD behavior,
     D3DPRESENT_PARAMETERS* parameters, IDirect3DDevice8** device_out)
@@ -2574,7 +2582,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D8* iface, UINT adapter,
         parameters->BackBufferFormat == D3DFMT_UNKNOWN
             ? D3DFMT_X8R8G8B8
             : parameters->BackBufferFormat);
-    d9wg_present_parameters_effective(&device->present, parameters,
+    d9wg_d3d9_core_parameters_effective8(&device->present, parameters,
         width, height, device->display_mode.Format, window);
     device->viewport.X = 0;
     device->viewport.Y = 0;

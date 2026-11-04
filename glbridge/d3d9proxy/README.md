@@ -947,3 +947,10 @@ ordinary D3D9 query/autogen/host-capability behavior stays unchanged.
 Native prior-C comparisons and old-DLL XP comparisons cover the move. XP
 uses an explicit simulated capability response0; real pixels are separately
 replayed on SwiftShader/Metal. See `../deployments/d3d-webgpu-review-4K7.json`.
+
+Stage 4K8 routes D3D8 CreateDevice effective parameter storage through a
+checked52-byte PP8 to56-byte PP9 layout bridge and the common SDK9 helper.
+Quality is zero;legacy8 swap/interval/flag values and caller publication stay
+intact. Native alias/guard/provider tests and real SDK120/220 zero-parameter
+constructors cover the path. Reset/additional-chain normalization remains for
+the next step. See `../deployments/d3d-webgpu-review-4K8.json`.
