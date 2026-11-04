@@ -7,6 +7,7 @@
 struct IDirect3D9;
 struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
+struct IDirect3DSurface9;
 struct D9WGProcess;
 #define D9WG_D3D8_SHADER_TOKENS 8192u
 #define D9WG_D3D8_CAPS_BYTES 212u
@@ -63,6 +64,12 @@ HRESULT WINAPI d9wg_d3d9_core_reset8(struct IDirect3DDevice9 *device,
 /* Immutable52-byte API8 additional-chain construction/metadata bridge. */
 HRESULT WINAPI d9wg_d3d9_core_additional8(struct IDirect3DDevice9 *device,
         const void *parameters8, struct IDirect3DSwapChain9 **out);
+/* Private standalone API8 target; preserves the legacy4096 size ceiling,
+ * six-format policy, single/4x sample policy and early failure output rules.
+ * The returned surface is a real core9 object, owned by the embedding wrapper. */
+HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
+        UINT width, UINT height, UINT format, UINT multisample, BOOL lockable,
+        struct IDirect3DSurface9 **out);
 /* Body starts after version token;success count excludes END. Version/handle
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,

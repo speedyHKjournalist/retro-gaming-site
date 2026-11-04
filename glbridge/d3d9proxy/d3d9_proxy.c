@@ -15473,6 +15473,28 @@ HRESULT WINAPI d9wg_d3d9_core_additional8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_CreateAdditionalSwapChain(iface, &parameters, out);
 }
 
+/* Public8 CreateRenderTarget validates samples/lockability before clearing
+ * the caller's output, then applies its texture constructor's4096 ceiling.
+ * Keep that adapter policy outside the ordinary9 constructor and reuse its
+ * actual target storage, lock permission and lifetime implementation. */
+HRESULT WINAPI d9wg_d3d9_core_render_target8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT format, UINT multisample, BOOL lockable,
+        IDirect3DSurface9 **out)
+{
+    if (!out || (multisample != D3DMULTISAMPLE_NONE
+                && multisample != D3DMULTISAMPLE_4_SAMPLES)
+            || (lockable && multisample != D3DMULTISAMPLE_NONE))
+        return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8
+            || !width || !height || width > 4096 || height > 4096
+            || !supported_render_target_format8((D3DFORMAT)format))
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateRenderTarget(iface, width, height,
+            (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
+            lockable, out, NULL);
+}
+
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,
         BOOL is_pixel, UINT minor, UINT *body_count)
 {

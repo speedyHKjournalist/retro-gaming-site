@@ -507,3 +507,13 @@ Both GPUs independently verify 2944 pixels; XP CPU replies explicitly inject
 analytic images. Additional Present is excluded: replay has no window link
 and refuses five presentation chains while exercising real target textures.
 See `../deployments/d3d-webgpu-review-4K17.json`.
+
+Stage 4K18 adds the private SDK8-callable standalone render-target constructor.
+It preserves public8's4096 limit, six formats, sample/lockability and output
+failure ordering, then uses actual core9 storage and lock/lifetime handling.
+The SDKs remain in separate translation units; the private stdcall ABI is28bytes.
+Native validation compares the frozen public8 method across421635 cases.
+XP exercises13 guarded failures and the new constructor with the retained
+46-image/2944-pixel contract, independently verified by both GPU backends.
+CPU replies are analytic injection; additional Present and full public8 device
+or resource wrapping are excluded. See `../deployments/d3d-webgpu-review-4K18.json`.
