@@ -87,12 +87,12 @@ static int shader_binding_cases(void)
             device_clear_bindings(device);CHECK(live == 1 && destroys == old_destroys + 3);
             CHECK(!device_release(&device->iface) && !live && !parent.refs);
         } else {
-            CHECK(!device_set_fvf(&device->iface, 2) && !device->vertex_declaration && device->fvf == 2 && destroys == old_destroys + 1);
+            CHECK(!device_set_fvf(&device->iface, 2) && device->vertex_declaration && device->vertex_declaration->fvf == 2 && device->vertex_declaration->fvf_cache_ref && !device->vertex_declaration->refcount && device->vertex_declaration->binding_refs == 2 && device->fvf == 2 && destroys == old_destroys + 1);
             DWORD fvf = 0;CHECK(!device_get_fvf(&device->iface, &fvf) && fvf == 2);
             CHECK(decl_add_ref(new_declaration(device) ? &device->vertex_declarations->iface : NULL) == 2);
             D9VertexDeclaration *unbound = device->vertex_declarations;
             CHECK(decl_release(&unbound->iface) == 1);
-            CHECK(device_release(&device->iface) == 1 && !decl_release(&unbound->iface) && !live && !parent.refs && destroys == old_destroys + 4);
+            CHECK(device_release(&device->iface) == 1 && !decl_release(&unbound->iface) && !live && !parent.refs && destroys == old_destroys + 5);
         }
         profiles++;
     }

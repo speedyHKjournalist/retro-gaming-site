@@ -17,6 +17,7 @@ typedef int BOOL,WINBOOL,HRESULT;typedef uint32_t UINT,DWORD;
 #define TRUE 1
 #define FALSE 0
 #define D3D_OK 0
+#define FAILED(v) ((v)<0)
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
@@ -42,7 +43,7 @@ static void light_free(void *p){frees++;free(p);}
 typedef struct Interface {const void *lpVtbl;} Interface;
 ${interfaces}
 typedef struct D9Device D9Device;
-typedef struct Object {Interface iface;D9Device *device;uint32_t handle;UINT length;int refs;} Object;
+typedef struct Object {Interface iface;D9Device *device;uint32_t handle;UINT length;int refs;DWORD fvf;} Object;
 typedef Object D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuffer,D9VertexDeclaration;
 typedef struct D9Shader {union {Interface vertex,pixel;} iface;D9Device *device;uint32_t handle;UINT length;int refs;} D9Shader;
 typedef struct D9StreamBinding {D9VertexBuffer *buffer;UINT stride,offset;DWORD frequency;} D9StreamBinding;
@@ -84,12 +85,16 @@ static BOOL emit_command(uint32_t op,const void *p,uint32_t n){(void)op;(void)p;
 static HRESULT emit_set_shader(D9Device *d,D9Shader *s,BOOL pixel){(void)d;(void)s;(void)pixel;emissions++;return D3D_OK;}
 static BOOL emit_set_fvf(D9Device *d,DWORD fvf,const D9WGVertexElement *elements,UINT count){(void)d;(void)fvf;(void)elements;(void)count;emissions++;return TRUE;}
 static BOOL fvf_to_declaration(DWORD fvf,D9WGVertexElement *elements,UINT *count){if(fvf!=2)return FALSE;memset(elements,0,sizeof(*elements));*count=1;return TRUE;}
+/* Backend cache construction stub; complete cache storage/pins are checked
+ * by the native graph suite and XP. This registry separately observes holds. */
+static D9VertexDeclaration cached_fvf;
+static HRESULT device_fvf_declaration(D9Device*d,DWORD f,const D9WGVertexElement*w,UINT n,D9VertexDeclaration**out){(void)w;assert(f==2&&n==1);if(!cached_fvf.device){cached_fvf.iface.lpVtbl=&g_decl_vtbl;cached_fvf.device=d;cached_fvf.handle=99;cached_fvf.fvf=f;registry[registry_count].iface=&cached_fvf.iface;registry[registry_count].refs=&cached_fvf.refs;registry[registry_count++].binding_refs=1;}*out=&cached_fvf;return 0;}
 static D9StateBlock recording;
 static unsigned device_pins;
 static void device_child_add_ref(D9Device*d){(void)d;device_pins++;}
 static D9StateBlock *state_block_alloc(D9Device *d,BOOL parent_ref){assert(!parent_ref);if(fail_alloc)return NULL;memset(&recording,0,sizeof(recording));recording.device=d;return &recording;}
 ${names.map(extract).join('\n')}
-static Object *make(Object *o,D9Device *d,const void *vtbl,uint32_t handle){*o=(Object){{vtbl},d,handle,64,1};registry[registry_count].iface=&o->iface;registry[registry_count++].refs=&o->refs;return o;}
+static Object *make(Object *o,D9Device *d,const void *vtbl,uint32_t handle){*o=(Object){.iface={vtbl},.device=d,.handle=handle,.length=64,.refs=1};registry[registry_count].iface=&o->iface;registry[registry_count++].refs=&o->refs;return o;}
 static void make_shader(D9Shader *s,D9Device *d,const void *vtbl,uint32_t handle){memset(s,0,sizeof(*s));s->iface.vertex.lpVtbl=vtbl;s->device=d;s->handle=handle;s->length=64;s->refs=1;registry[registry_count].iface=&s->iface;registry[registry_count++].refs=&s->refs;}
 static int refcount(void *p){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==p)return *registry[i].refs;abort();}
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"D3D9 object recording line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
@@ -106,6 +111,6 @@ int main(void){D9Device device={0};Object old_vb,new_vb,old_ib,new_ib,old_decl,n
   * adds private live holds; snapshot release and unbind then retire storage. */
  void *recorded[]={&new_vb,&new_ib,&new_decl,&new_vs,&new_ps,&texture,&cube,&volume};for(unsigned i=0;i<8;++i)CHECK(release(recorded[i])==0&&binding_refs(recorded[i])==1);
  CHECK(device_set_stream_source(&device,1,&new_vb.iface,4,12)==0&&device_set_indices(&device,&new_ib.iface)==0&&device_set_vertex_shader(&device,&new_vs.iface.vertex)==0&&device_set_pixel_shader(&device,&new_ps.iface.pixel)==0&&device_set_vertex_declaration(&device,&new_decl.iface)==0);CHECK(device_set_texture(&device,0,&texture.iface)==0&&device_set_texture(&device,1,&cube.iface)==0&&device_set_texture(&device,260,&volume.iface)==0);state_block_release_references(&recording);d9wg_light_free(&recording.extra_lights);CHECK(device_set_stream_source(&device,1,NULL,0,0)==0&&device_set_indices(&device,NULL)==0&&device_set_vertex_shader(&device,NULL)==0&&device_set_pixel_shader(&device,NULL)==0&&device_set_vertex_declaration(&device,NULL)==0);CHECK(device_set_texture(&device,0,NULL)==0&&device_set_texture(&device,1,NULL)==0&&device_set_texture(&device,260,NULL)==0);for(unsigned i=0;i<8;++i)CHECK(refcount(recorded[i])==0&&binding_refs(recorded[i])==0);
- void *original[]={&old_vb,&old_ib,&old_decl,&old_vs,&old_ps};for(unsigned i=0;i<5;++i)CHECK(release(original[i])==0);d9wg_light_free(&device.extra_lights);CHECK(allocations==frees);fail_alloc=1;CHECK(device_begin_state_block(&device)==-3&&!device.recording_result);return 0;}
+ void *original[]={&old_vb,&old_ib,&old_decl,&old_vs,&old_ps};for(unsigned i=0;i<5;++i)CHECK(release(original[i])==0);d9wg_light_free(&device.extra_lights);release_storage(&cached_fvf.iface);CHECK(!cached_fvf.refs&&!binding_refs(&cached_fvf.iface));CHECK(allocations==frees);fail_alloc=1;CHECK(device_begin_state_block(&device)==-3&&!device.recording_result);return 0;}
 `;
 const directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-record-objects-"));try{const input=path.join(directory,"objects.c"),binary=path.join(directory,"objects");fs.writeFileSync(input,code);const built=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",input,"-o",binary],{encoding:"utf8"});assert.equal(built.status,0,built.stderr||String(built.error));const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr||String(run.error));console.log("PASS actual D3D9 object C recording: live queries, separate public/private VB/IB/texture/shader/declaration refs, kind replacement, sparse default lights, atomic OOM, Begin/End isolation and final release");}finally{fs.rmSync(directory,{recursive:true,force:true});}

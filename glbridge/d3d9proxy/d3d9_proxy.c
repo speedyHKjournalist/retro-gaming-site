@@ -1274,6 +1274,8 @@ struct D9VertexDeclaration {
     D9Device *device;
     uint32_t handle;
     UINT element_count;
+    DWORD fvf;                 /* nonzero only for an FVF-converted declaration */
+    BOOL fvf_cache_ref;         /* device cache owns one private storage hold */
     D3DVERTEXELEMENT9 elements[D3DMAXDECLLENGTH];
     D9VertexDeclaration *next_device_resource;
 };
@@ -1447,6 +1449,21 @@ static void decl_binding_release(D9VertexDeclaration *object)
     if (!InterlockedDecrement(&object->binding_refs)
             && !InterlockedCompareExchange(&object->refcount, 0, 0))
         decl_destroy_storage(object);
+}
+
+/* Clear only cache holds: public views and captured bindings retain storage.
+ * Detach each cache ownership flag before its private release. */
+static void device_clear_fvf_cache(D9Device *device)
+{
+    D9VertexDeclaration *decl = device->vertex_declarations;
+    while (decl) {
+        D9VertexDeclaration *next = decl->next_device_resource;
+        if (decl->fvf_cache_ref) {
+            decl->fvf_cache_ref = FALSE;
+            decl_binding_release(decl);
+        }
+        decl = next;
+    }
 }
 
 static void shader_destroy_storage(D9Shader *object);
@@ -3574,6 +3591,7 @@ static void device_release_owned_references(D9Device *device)
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
     device_cancel_recording(device);
     device_clear_bindings(device);
+    device_clear_fvf_cache(device);
     TRACE("LEAVE Device.ReleaseOwnedReferences device=%08lX refs=%ld child_refs=%ld",
             device->handle,
             InterlockedCompareExchange(&device->refcount, 0, 0),
@@ -6848,6 +6866,44 @@ static HRESULT WINAPI device_create_vertex_declaration(
     return D3D_OK;
 }
 
+/* Converted declarations are cached by exact FVF for the device lifetime.
+ * A cache entry starts publicly at zero and never adds a device parent pin. */
+static HRESULT device_fvf_declaration(D9Device *device, DWORD fvf,
+        const D9WGVertexElement *wire, UINT count, D9VertexDeclaration **out)
+{
+    D9VertexDeclaration *decl;
+    *out = NULL;
+    for (decl = device->vertex_declarations; decl; decl = decl->next_device_resource) {
+        if (decl->fvf != fvf) continue;
+        if (!decl->fvf_cache_ref) {
+            decl_binding_add_ref(decl);
+            decl->fvf_cache_ref = TRUE;
+        }
+        *out = decl;
+        return D3D_OK;
+    }
+    decl = (D9VertexDeclaration *)HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, sizeof(*decl));
+    if (!decl) return E_OUTOFMEMORY;
+    decl->iface.lpVtbl = &g_decl_vtbl;
+    decl->device = device;
+    decl->handle = allocate_handle();
+    decl->element_count = count;
+    decl->fvf = fvf;
+    decl->fvf_cache_ref = TRUE;
+    decl->binding_refs = 1;
+    /* SDK and protocol elements share the WORD/WORD/BYTE/BYTE/BYTE/BYTE ABI. */
+    CopyMemory(decl->elements, wire, count * sizeof(D3DVERTEXELEMENT9));
+    if (!emit_vertex_declaration_create(device, decl->handle, wire, count)) {
+        HeapFree(GetProcessHeap(), 0, decl);
+        return D3DERR_DRIVERINTERNALERROR;
+    }
+    decl->next_device_resource = device->vertex_declarations;
+    device->vertex_declarations = decl;
+    *out = decl;
+    return D3D_OK;
+}
+
 static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
         IDirect3DVertexDeclaration9 *decl_iface)
 {
@@ -6862,14 +6918,14 @@ static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
         D9VertexDeclaration *old = block->vertex_declaration;
         if (decl) decl_binding_add_ref(decl);
         block->has_vertex_format = TRUE;block->vertex_declaration = decl;
-        block->fvf = 0;
+        block->fvf = decl ? decl->fvf : 0;
         if (old) decl_binding_release(old);
         return D3D_OK;
     }
     D9VertexDeclaration *old_decl = device->vertex_declaration;
     if (decl) decl_binding_add_ref(decl);
     device->vertex_declaration = decl;
-    device->fvf = 0;
+    device->fvf = decl ? decl->fvf : 0;
     if (old_decl) decl_binding_release(old_decl);
     command.device_handle = device->handle;
     command.declaration_handle = decl ? decl->handle : 0;
@@ -6896,7 +6952,11 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
     D9Device *device = device_from_iface(iface);
     D9WGVertexElement wire[D3DMAXDECLLENGTH];
     UINT count;
+    D9VertexDeclaration *decl;
+    HRESULT result;
 
+    /* Native treats zero as a successful no-op, including while recording. */
+    if (!fvf) return D3D_OK;
     if (!fvf_to_declaration(fvf, wire, &count)) {
         /* Worse than a plain refusal: nothing here clears the declaration
          * already in force, so the app's next draw is laid out by the
@@ -6908,15 +6968,19 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
                 fvf);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    result = device_fvf_declaration(device, fvf, wire, count, &decl);
+    if (FAILED(result)) return TRACE_REFUSE(result);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
         D9VertexDeclaration *old = block->vertex_declaration;
-        block->has_vertex_format = TRUE;block->vertex_declaration = NULL;block->fvf = fvf;
+        decl_binding_add_ref(decl);
+        block->has_vertex_format = TRUE;block->vertex_declaration = decl;block->fvf = fvf;
         if (old) decl_binding_release(old);
         return D3D_OK;
     }
     D9VertexDeclaration *old_decl = device->vertex_declaration;
-    device->vertex_declaration = NULL;
+    decl_binding_add_ref(decl);
+    device->vertex_declaration = decl;
     device->fvf = fvf;
     if (old_decl) decl_binding_release(old_decl);
     return emit_set_fvf(device, fvf, wire, count)
@@ -12152,8 +12216,9 @@ static struct D9StateBlock *state_block_alloc(D9Device *device, BOOL parent_ref)
     return block;
 }
 
-/* Replays every captured entry through the public setters, so a state block can
- * never apply a state by a route the app's own equivalent call would not take. */
+/* Replay ordinary state through public setters. Streams use their shared
+ * internal setter to restore exact captured NULL metadata without the public
+ * wrapper substituting the current live offset/stride. */
 static HRESULT state_block_apply(struct D9StateBlock *block)
 {
     D9Device *device = block->device;

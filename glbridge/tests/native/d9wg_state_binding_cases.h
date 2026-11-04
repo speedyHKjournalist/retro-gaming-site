@@ -65,7 +65,7 @@ static int state_binding_cases(void)
             CHECK(!state_block_release(out) && destroys == old_destroys + 8 && device->refcount == 1 && !device->state_blocks);
             CHECK(!device_release(&device->iface) && !live && !parent.refs);
         } else if (order == 1) {
-            CHECK(device_release(&device->iface) == 1 && !state_block_release(out) && !live && !parent.refs && destroys == old_destroys + 8);
+            CHECK(device_release(&device->iface) == 1 && !state_block_release(out) && !live && !parent.refs && destroys == old_destroys + 9);
         } else if (order == 2) {
             CHECK(!state_block_capture_method(out) && destroys == old_destroys + 8 && !block->textures[0] && !block->cube_textures[1] && !block->volume_textures[2] && !block->vertex_shader && !block->pixel_shader && !block->vertex_declaration && !block->streams[0].buffer && !block->index_buffer);
             CHECK(!state_block_apply_method(out) && !state_block_release(out) && device->refcount == 1);
@@ -74,7 +74,7 @@ static int state_binding_cases(void)
             StateGroup replacement = new_state_group(device,pool);CHECK(!bind_state_group(device,replacement) && !release_state_group(replacement));
             CHECK(!state_block_capture_method(out) && destroys == old_destroys + 8 && !state_group_refs(replacement,0,2));
             CHECK(!state_block_release(out) && !state_group_refs(replacement,0,1));
-            CHECK(!device_release(&device->iface) && !live && !parent.refs && destroys == old_destroys + 16);
+            CHECK(!device_release(&device->iface) && !live && !parent.refs && destroys == old_destroys + 17);
         }
         profiles++;
     }
