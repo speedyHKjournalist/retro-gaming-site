@@ -1256,3 +1256,25 @@ coreSDK120/220 withfiveReset,35shaders/15declarations/60handles. BothGPUs verify
 Reset. PS1.0-1.4 arecreated/queried/released without numerical drawing claims.
 XP CPU replies are explicit analytic injection. Evidence:
 `../deployments/d3d-webgpu-review-4K31.json`.
+
+
+### Review 4K32: core8 FVF binding and declaration cache
+
+`d9wg_d3d9_core_set_fvf8` (stdcall8) decodes the8 dialect, clears the VS,
+and clears both VS/layout on zero. Actual9 user declarations carry a private
+legacy8 cache key and fvfassociation0, so state blocks preserve elements
+without re-decoding8 values as9. Cache references are private, preserve
+public-zero object lifetime without an extra parent pin, and can be regained
+after cache teardown. Ordinary9 methods and zero no-op behavior remain intact.
+The8 frontend retains its raw DWORD FVF/handle Get shadow and error policy;
+internal9 GetFVF=0 deliberately describes the real converted layout.
+
+Native verification covers40,970cases/622,117checks,19strict semantic mutants
+and two ASAN families. XP compares accurate4K31old/current8,ordinary9 reference
+and coreSDK120/220:bit14 raw0x4042 versus normalized9 0x42,VS-to-FFP switch,
+zero draw refusal,state-block restore and retained cache identity through
+five Reset. Both GPUs verify20complete images/1,280pixels with zero error,
+5programmable+15FFP draws and empty maps before SessionEnd/owner cleanup.
+XP CPU replies are explicit analytic injection. Full public8 wrappers,
+raw handle policy and ProcessVertices destination8 FVF remain open.
+Evidence: `../deployments/d3d-webgpu-review-4K32.json`.

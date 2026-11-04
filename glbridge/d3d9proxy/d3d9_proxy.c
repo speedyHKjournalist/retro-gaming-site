@@ -1296,6 +1296,7 @@ struct D9VertexDeclaration {
     uint32_t handle;
     UINT element_count;
     DWORD fvf;                 /* native association, also for POSITION-only user views */
+    DWORD legacy_fvf8;         /* private8 cache key; never interpreted as an API9 FVF */
     BOOL fvf_converted;         /* cache origin is distinct from an associated user FVF */
     BOOL fvf_cache_ref;         /* device cache owns one private storage hold */
     D3DVERTEXELEMENT9 elements[D3DMAXDECLLENGTH];
@@ -16017,6 +16018,72 @@ HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(IDirect3DDevice9 *iface,
     }
     elements[count] = (D3DVERTEXELEMENT9)D3DDECL_END();
     return IDirect3DDevice9_CreateVertexDeclaration(iface, elements, out);
+}
+
+/* API8 FVFs must not enter the ordinary9 exact-FVF cache: XYZW and
+ * LASTBETA_D3DCOLOR have different meanings. Keep a real9 user-layout object
+ * with an8-only key and fvfassociation zero. State-block replay then binds its
+ * actual elements instead of decoding the original8 number as an API9 FVF. */
+static HRESULT fvf8_declaration(D9Device *device, DWORD fvf,
+        const D9WGVertexElement *wire, UINT count, D9VertexDeclaration **out)
+{
+    *out = NULL;
+    for (D9VertexDeclaration *decl = device->vertex_declarations; decl;
+            decl = decl->next_device_resource) {
+        if (decl->legacy_fvf8 != fvf) continue;
+        if (!decl->fvf_cache_ref) {
+            decl_binding_add_ref(decl);
+            decl->fvf_cache_ref = TRUE;
+        }
+        *out = decl;
+        return D3D_OK;
+    }
+    D3DVERTEXELEMENT9 elements[33];
+    for (UINT i = 0; i < count; ++i) {
+        const D9WGVertexElement *e = &wire[i];
+        elements[i] = (D3DVERTEXELEMENT9){e->stream, e->offset, e->type,
+            e->method, e->usage, e->usage_index};
+    }
+    elements[count] = (D3DVERTEXELEMENT9)D3DDECL_END();
+    IDirect3DVertexDeclaration9 *iface = NULL;
+    HRESULT hr = IDirect3DDevice9_CreateVertexDeclaration(&device->iface,
+            elements, &iface);
+    if (FAILED(hr)) return hr;
+    D9VertexDeclaration *decl = decl_from_iface(iface);
+    decl->legacy_fvf8 = fvf;
+    decl->fvf = 0;
+    decl_binding_add_ref(decl);
+    decl->fvf_cache_ref = TRUE;
+    /* Cache is private storage ownership, not a public device parent pin. */
+    IDirect3DVertexDeclaration9_Release(iface);
+    *out = decl;
+    return D3D_OK;
+}
+
+/* Backend binding only. Frontend8 retains the raw FVF-vs-DWORD-handle Get
+ * shadow and its public error publication. Zero clears both shader/layout;
+ * ordinary9 SetFVF(0) keeps its native successful-no-op contract. */
+HRESULT WINAPI d9wg_d3d9_core_set_fvf8(IDirect3DDevice9 *iface, DWORD fvf)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9VertexDeclaration *decl = NULL;
+    if (fvf) {
+        D9WGVertexElement wire[32];
+        UINT count;
+        if (!d9wg_fvf_decode(D9WG_FVF_D3D8, fvf, wire, 32, &count, NULL))
+            return D3DERR_INVALIDCALL;
+        HRESULT hr = fvf8_declaration(device, fvf, wire, count, &decl);
+        if (FAILED(hr)) return hr;
+    }
+    if (!device->recording_result && !device->vertex_shader
+            && device->vertex_declaration == decl)
+        return D3D_OK;
+    HRESULT hr = IDirect3DDevice9_SetVertexShader(iface, NULL);
+    if (FAILED(hr)) return hr;
+    return IDirect3DDevice9_SetVertexDeclaration(iface,
+            decl ? &decl->iface : NULL);
 }
 
 /* Raw8 GetDeclaration/GetFunction and DWORD handle ownership belong to
