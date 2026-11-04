@@ -647,3 +647,22 @@ GPU readbacks or injected CPU responses. Retained copy replay separately
 covers84 frames/252 sampled color probes onboth GPUs, rather than claiming
 full-frame pixel coverage. Evidence:
 `../deployments/d3d-webgpu-review-4K27.json`.
+
+Stage 4K28 moves API8 GetFrontBuffer into a shared SDK-bound algorithm and
+adds private core8 front readback (@8). Larger targets preserve their outer
+pixels, X8 and texture/cube views retain existing8 behavior, and actual9
+storage/readback/upload adapters handle core objects. Six ordinary9 methods
+remain byte-identical; ordinary9 front validation keeps its stricter rules.
+The shared algorithm exactly matches the mechanically rebound old8 body.
+
+Native tests cover28835 cases/133300 checks,25 mutations,two ASAN families,
+the retained61 API8 surface cases/29 strictly classified mutations and43
+ordinary9 readback cases. An old strict9-body control demonstrates why it
+cannot replace8 policy. The SDK8/9 probe passes35 cases acrossfive modes,
+including4095 local DWORD checks andReset8x8->5x3. CPU readback replies are
+explicit analytic injection; A8 source alpha stays0 before API8 makes the
+copied image opaque. Both GPUs independently match49images/2940pixels,
+including2D/cube copied centers and retained borders, with maps empty before
+SessionEnd cleanup and owner release. Native desktop/window offsets/Present
+timing and complete public8 wrapping remain open. Evidence:
+`../deployments/d3d-webgpu-review-4K28.json`.

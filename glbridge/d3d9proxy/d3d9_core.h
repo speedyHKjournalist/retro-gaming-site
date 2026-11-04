@@ -84,6 +84,10 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* API8 front readback keeps its larger-target/exterior-preservation policy,
+ * format rules and texture-view uploads; ordinary9 front rules stay separate. */
+HRESULT WINAPI d9wg_d3d9_core_get_front_buffer8(struct IDirect3DDevice9 *device,
+        struct IDirect3DSurface9 *destination);
 /* Core8 textures use the same native SYSTEMMEM -> DEFAULT copy policy and
  * actual core9 mip/face/volume preflight, shadow updates and uploads. */
 HRESULT WINAPI d9wg_d3d9_core_update_texture8(struct IDirect3DDevice9 *device,

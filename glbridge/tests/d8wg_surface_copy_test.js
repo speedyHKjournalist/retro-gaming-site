@@ -1,6 +1,7 @@
 "use strict";
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-surfaces-")),source=fs.readFileSync(process.env.D8WG_SURFACE_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8");
 function extract(name){const m=new RegExp("static [^;{}]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
+const frontAdapter=(source.match(/#define D9WG_FRONT_DEVICE D8Device[\s\S]*?#include "\.\.\/runtime\/d9wg_front_buffer_bridge8.h"/)||[""])[0].replace('../runtime/d9wg_front_buffer_bridge8.h',process.env.D8WG_FRONT_BRIDGE_HEADER||root+'/runtime/d9wg_front_buffer_bridge8.h');
 try{fs.writeFileSync(dir+"/surface.c",`#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +36,11 @@ typedef struct{Iface iface;D8Texture*texture;D8CubeTexture*cube;UINT face;D8Devi
 #define D8WG_TRACE(...) ((void)0)
 #define FAILED(x) ((x)<0)
 #define SUCCEEDED(x) ((x)>=0)
-#define CopyMemory memcpy
+/* Observe the caller-owned destination during invalid-rectangle probes so
+ * a bounds regression fails a C assertion before any invalid memory write. */
+static BYTE*copy_guard_begin;static size_t copy_guard_size;
+static void observed_copy(void*to,const void*from,size_t n){if(copy_guard_begin){uintptr_t p=(uintptr_t)to,b=(uintptr_t)copy_guard_begin;if(p<b||p-b>copy_guard_size||n>copy_guard_size-(p-b)){fprintf(stderr,"D8 surface line %u: copy exceeds observed destination\\n",__LINE__);exit(1);}}memcpy(to,from,n);}
+#define CopyMemory observed_copy
 #define GetProcessHeap() NULL
 static unsigned g_surface_vtbl,emissions,updates,blits,reads,creates,destroys,allocations,frees,fail_alloc,fail_emit,read_error;
 static D9WGProcess process,*g_process=&process;static D8Device*active;
@@ -67,7 +72,7 @@ static BOOL emit_command(uint16_t op,const void*bytes,UINT size){if(!step())retu
 static BOOL emit_texture_rows(const D9WGTextureRows*r){if(!step())return FALSE;UINT w,h;BYTE*dst=gpu_pixels(r->resource_handle,r->level,r->z,&w,&h);assert(r->x+r->width<=w&&r->y+r->height<=h&&r->block_height==1&&r->row_count==r->height&&r->row_bytes==r->width*4);for(UINT y=0;y<r->height;y++)memcpy(dst+((r->y+y)*w+r->x)*4,r->source+y*r->source_pitch,r->row_bytes);updates++;return TRUE;}
 BOOL d9wg_transport_submit(D9WGProcess*p,BOOL present){assert(p==g_process&&!present);return !read_error;}
 int d9wg_surface_readback(D9WGProcess*p,const D9WGReadbackSurface*q,uint32_t row_bytes,uint32_t rows,uint8_t*destination,uint32_t bytes,BOOL(*flush)(BOOL),D9WGReadbackDiagnostic*detail){assert(p==g_process&&q->device_handle==active->handle&&!q->first_row&&!q->row_count&&!q->request_id&&!q->response_offset);assert(q->format==21||q->format==22);UINT w,h;BYTE*src=gpu_pixels(q->texture_handle,q->level,q->face,&w,&h);assert(q->width==w&&q->height==h&&row_bytes==w*4&&rows==h&&q->destination_pitch>=row_bytes&&bytes>=rows*q->destination_pitch);reads++;memset(detail,0,sizeof(*detail));if(read_error)return read_error;assert(flush(FALSE));for(UINT y=0;y<rows;y++)memcpy(destination+y*q->destination_pitch,src+y*w*4,row_bytes);return 0;}
-${["cube_level","emit_level_update","surface_texture_level","surface_device","surface_gpu_location","surface_pixels","submit_readback_batch_locked","readback_surface_pixels","refresh_surface_pixels","lock_texture_level","unlock_texture_level","lock_surface_texture_level","texture_lock_level","texture_unlock_level","cube_lock_face","cube_unlock_face","upload_backbuffer_rect","upload_surface_rect","copy_surface_rect","device_copy_rects","device_get_front_buffer"].map(extract).join("\n")}
+${["cube_level","emit_level_update","surface_texture_level","surface_device","surface_gpu_location","surface_pixels","submit_readback_batch_locked","readback_surface_pixels","refresh_surface_pixels","lock_texture_level","unlock_texture_level","lock_surface_texture_level","texture_lock_level","texture_unlock_level","cube_lock_face","cube_unlock_face","upload_backbuffer_rect","upload_surface_rect","copy_surface_rect","device_copy_rects","device_get_front_buffer"].map(name=>(name==="device_get_front_buffer"?frontAdapter+"\n":"")+extract(name)).join("\n")}
 static HRESULT call_copy(D8Device*d,D8Surface*s,const RECT*r,UINT n,D8Surface*t,const POINT*p){return device_copy_rects(d,s?&s->iface:NULL,r,n,t?&t->iface:NULL,p);}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"D8 surface line %u: %s reads=%u emits=%u\\n",__LINE__,#v,reads,emissions);return 1;}}while(0)
 static void reset_events(void){emissions=updates=blits=reads=creates=destroys=0;read_error=fail_emit=fail_alloc=0;}
@@ -89,7 +94,7 @@ int main(void){D8Device device={.handle=7,.front_shadow_pitch=16,.display_mode={
  image.shadow=cpu_a;pattern(cpu_a,64,29);memcpy(source_before,cpu_a,64);memcpy(before,cpu_a,64);expected_copy(expected,before,4,source_before,4,&r,&pt);reset_events();CHECK(!call_copy(&device,&image,&r,1,&image,&pt)&&!memcmp(cpu_a,expected,64));cases++;pattern(cpu_a,64,29);memcpy(before,cpu_a,64);reset_events();fail_alloc=1;CHECK(call_copy(&device,&image,&r,1,&image,&pt)==-3&&!memcmp(cpu_a,before,64)&&!emissions);cases++;
  /* An omitted point means origin; zero count with unused pointers is a no-op. */
  reset_events();POINT zero={0,0};memcpy(before,cpu_b,64);expected_copy(expected,before,4,cpu_a,4,&r,&zero);D8Surface image2=image;image2.shadow=cpu_b;CHECK(!call_copy(&device,&image,&r,1,&image2,NULL)&&!memcmp(cpu_b,expected,64));CHECK(!call_copy(&device,&image,&r,0,&image2,&pt)&&!emissions);cases++;
- for(unsigned bad=0;bad<12;bad++){reset_events();RECT q=r;POINT p=pt;UINT format=image2.desc.Format,usage=image2.desc.Usage;D8Device*owner=image2.device;if(bad==0)q.left=-1;if(bad==1)q.right=5;if(bad==2)q.bottom=q.top;if(bad==3)p.x=-1;if(bad==4)p.y=INT32_MAX;if(bad==5)p.x=INT32_MAX;if(bad==6)image2.desc.Format=22;if(bad==7)image2.desc.Usage=2;if(bad==8)image.locked=TRUE;if(bad==9)image2.locked=TRUE;if(bad==10)image2.device=&foreign;if(bad==11)image2.iface.lpVtbl=NULL;CHECK(call_copy(&device,&image,&q,1,&image2,&p)==-1&&!reads&&!emissions);image2.desc.Format=format;image2.desc.Usage=usage;image2.device=owner;image.locked=image2.locked=FALSE;image2.iface.lpVtbl=&g_surface_vtbl;cases++;}
+ for(unsigned bad=0;bad<12;bad++){reset_events();RECT q=r;POINT p=pt;UINT format=image2.desc.Format,usage=image2.desc.Usage;D8Device*owner=image2.device;if(bad==0)q.left=-1;if(bad==1)q.right=5;if(bad==2)q.bottom=q.top;if(bad==3)p.x=-1;if(bad==4)p.y=INT32_MAX;if(bad==5)p.x=INT32_MAX;if(bad==6)image2.desc.Format=22;if(bad==7)image2.desc.Usage=2;if(bad==8)image.locked=TRUE;if(bad==9)image2.locked=TRUE;if(bad==10)image2.device=&foreign;if(bad==11)image2.iface.lpVtbl=NULL;copy_guard_begin=image2.shadow;copy_guard_size=64;CHECK(call_copy(&device,&image,&q,1,&image2,&p)==-1&&!reads&&!emissions);copy_guard_begin=NULL;image2.desc.Format=format;image2.desc.Usage=usage;image2.device=owner;image.locked=image2.locked=FALSE;image2.iface.lpVtbl=&g_surface_vtbl;cases++;}
  /* CPU-accessible pools retain authoritative bytes after failed GPU uploads. */
  reset_events();ta.pool=2;la[0].gpu_dirty=TRUE;pattern(cpu_a,64,193);memcpy(before,cpu_a,64);CHECK(!texture_lock_level(&ta,0,&lock,NULL,16)&&!reads&&!memcmp(cpu_a,before,64));CHECK(!texture_unlock_level(&ta,0));ta.pool=0;cases++;
  /* GetFrontBuffer uses real bytes and forces opaque ARGB, never Clear's mirror. */

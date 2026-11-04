@@ -15608,6 +15608,110 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
             FALSE, out, NULL);
 }
 
+/* API8 front readback binds the shared algorithm to actual core9 objects.
+ * Backbuffer/standalone storage belongs to its cached surface; texture views
+ * use their parent's level shadow. No temporary COM resource is introduced. */
+static BYTE *front_pixels8(D9Surface *surface, UINT *pitch)
+{
+    *pitch = 0;
+    D9TextureLevel *level = surface_texture_level(surface);
+    if (level) {
+        if (!level->shadow) {
+            if (!level->byte_count && !d9wg_texture_level_layout(8u,
+                    surface->format, level->width, level->height,
+                    &level->row_pitch, &level->row_count, &level->byte_count))
+                return NULL;
+            level->shadow = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                    level->byte_count);
+        }
+        *pitch = level->row_pitch;
+        return level->shadow;
+    }
+    if (!surface->shadow) {
+        UINT rows, bytes, row_pitch;
+        if (!d9wg_texture_level_layout(8u, surface->format, surface->width,
+                surface->height, &row_pitch, &rows, &bytes)) return NULL;
+        surface->shadow = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+        if (!surface->shadow) return NULL;
+        surface->row_pitch = row_pitch;
+        surface->byte_count = bytes;
+    }
+    *pitch = surface->row_pitch;
+    return surface->shadow;
+}
+
+static BOOL front_layout8(D3DFORMAT format, UINT *bw, UINT *bh, UINT *bytes)
+{
+    return d9wg_format_layout(8u, format, bw, bh, bytes);
+}
+
+static HRESULT readback_front8(D9Surface *surface, D3DFORMAT format,
+        BYTE *pixels, UINT pitch, UINT bytes)
+{
+    D9WGReadbackSurface request = {0};
+    D9WGReadbackDiagnostic detail;
+    UINT bw, bh, pixel_bytes;
+    if (!front_layout8(format, &bw, &bh, &pixel_bytes) || bw != 1 || bh != 1)
+        return D3DERR_INVALIDCALL;
+    request.device_handle = surface->device->handle;
+    request.texture_handle = surface->texture ? surface->texture->handle : 0;
+    request.level = surface->level;
+    request.format = format;
+    request.width = surface->width;
+    request.height = surface->height;
+    request.destination_pitch = pitch;
+    int result = d9wg_surface_readback(g_process, &request,
+            surface->width * pixel_bytes, surface->height, pixels, bytes,
+            submit_readback_batch_locked, &detail);
+    return !result ? D3D_OK : result == D9WG_READBACK_INVALID
+            ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR;
+}
+
+static BOOL upload_front8(D9Surface *surface, D3DFORMAT format,
+        const RECT *area, const BYTE *pixels, UINT pitch, UINT pixel_bytes)
+{
+    if (surface->texture)
+        return emit_texture_update(surface->texture, surface->level, area);
+    if (surface->cube_texture)
+        return emit_cube_texture_update(surface->cube_texture,
+                surface->cube_face, surface->level, area);
+    if (surface->swap_chain) {
+        const D9WGSurfaceLockRect r = {area->left, area->top, area->right, area->bottom};
+        return d9wg_renderable_upload(surface->device->handle, allocate_handle(),
+                format, 0, 0, 0, &r, pixels + area->top * pitch
+                    + area->left * pixel_bytes, pitch, pixel_bytes,
+                emit_command, emit_texture_rows);
+    }
+    return TRUE;
+}
+
+#define D9WG_FRONT_DEVICE D9Device
+#define D9WG_FRONT_IFACE IDirect3DSurface9
+#define D9WG_FRONT_SURFACE D9Surface
+#define D9WG_FRONT_LEVEL D9TextureLevel
+#define D9WG_FRONT_DESC D3DSURFACE_DESC
+#define D9WG_FRONT_TRACE TRACE_REFUSE
+#define D9WG_FRONT_OWNER(s) ((s)->device)
+#define D9WG_FRONT_GET_DESC surface_get_desc
+#define D9WG_FRONT_LAYOUT front_layout8
+#define D9WG_FRONT_PIXELS front_pixels8
+#define D9WG_FRONT_READ readback_front8
+#define D9WG_FRONT_UPLOAD upload_front8
+#define D9WG_FRONT_DEPTH(s) ((s)->auto_depth_stencil || ((s)->texture && ((s)->texture->usage & D3DUSAGE_DEPTHSTENCIL)))
+#define D9WG_FRONT_SOURCE(d,out) IDirect3DDevice9_GetBackBuffer(&(d)->iface, 0, 0, D3DBACKBUFFER_TYPE_MONO, (out))
+#define D9WG_FRONT_SOURCE_BYTES(s,desc) ((s)->byte_count)
+#define D9WG_FRONT_DIRTY(level,value) ((level)->shadow_valid = !(value))
+#define D9WG_FRONT_RELEASE IDirect3DSurface9_Release
+#include "../runtime/d9wg_front_buffer_bridge8.h"
+
+HRESULT WINAPI d9wg_d3d9_core_get_front_buffer8(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *destination)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return d9wg_front_buffer8_common(device_from_iface(iface), destination);
+}
+
 /* Same core9 mip/cube/volume copy machinery, now with the shared8/9 pool
  * rule. Ownership/type/format/lock/preflight validation stays in the core. */
 HRESULT WINAPI d9wg_d3d9_core_update_texture8(IDirect3DDevice9 *iface,
