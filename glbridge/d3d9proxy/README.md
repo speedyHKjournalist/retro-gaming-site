@@ -1085,3 +1085,16 @@ zero errors; CPU replies are explicit analytic injection. Native checks include
 31 strict runtime mutations,four actual old-function controls andfive ASAN
 families. Public8 wrapping remains pending. Evidence:
 `../deployments/d3d-webgpu-review-4K21.json`.
+
+Stage 4K22 adds the private32-byte stdcall API8 2D texture creation boundary.
+A shared constructor retains8's4096 bound/format/pool/mip/output policy and
+ordinary9's8192/autogen policy. Ordinary CPU texture locks and uploads select
+the owning device API,including8-only65; ordinary9 continues to refuse65.
+Actual frozen8/9 constructors and create emitters cover2945283 cases,with
+41760 lock/upload cases,23 strict runtime mutants,three historical controls
+andtwo ASAN families. XP old/current8,ordinary9,core8SDK120/220 validateCPU65,
+four-level21 storage/surface views,partial uploads andBC1. Both GPUs match
+20images/1280pixels from43uploads and20sample draws. CPU GPUreadback replies
+are explicit analytic injection. Renderable texture readback,fullpublic8
+wrapping andnative alignment/format conformance remain pending. Evidence:
+`../deployments/d3d-webgpu-review-4K22.json`.

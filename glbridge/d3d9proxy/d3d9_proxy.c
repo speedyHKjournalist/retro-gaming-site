@@ -2417,12 +2417,12 @@ static UINT full_mip_level_count(UINT width, UINT height)
     return levels;
 }
 
-static BOOL emit_level_update(uint32_t handle, D3DFORMAT format,
+static BOOL emit_level_update_api(UINT api, uint32_t handle, D3DFORMAT format,
         const D9TextureLevel *level_data, UINT level, UINT z, const RECT *rect)
 {
     D9WGTextureRows rows;
     UINT block_width, block_height, block_bytes;
-    if (!texture_format_layout(format, &block_width, &block_height, &block_bytes))
+    if (!d9wg_format_layout(api, format, &block_width, &block_height, &block_bytes))
         return FALSE;
     ZeroMemory(&rows, sizeof(rows));
     rows.resource_handle = handle;rows.level = level;rows.z = z;
@@ -2440,9 +2440,15 @@ static BOOL emit_level_update(uint32_t handle, D3DFORMAT format,
     return emit_texture_rows(&rows);
 }
 
+static BOOL emit_level_update(uint32_t handle, D3DFORMAT format,
+        const D9TextureLevel *level_data, UINT level, UINT z, const RECT *rect)
+{
+    return emit_level_update_api(9u, handle, format, level_data, level, z, rect);
+}
+
 static BOOL emit_texture_update(D9Texture *texture, UINT level, const RECT *rect)
 {
-    return emit_level_update(texture->handle, texture->format, &texture->levels[level], level, 0, rect);
+    return emit_level_update_api(device_compatibility_api(texture->device), texture->handle, texture->format, &texture->levels[level], level, 0, rect);
 }
 
 static BOOL primitive_element_count(D3DPRIMITIVETYPE type,
@@ -2627,7 +2633,8 @@ static BOOL emit_texture_create(D9Device *device, D9Texture *texture)
     command.multisample_type = texture->multisample;
     command.multisample_quality = texture->multisample_quality;
     if (!emit_command(D9WG_OP_CREATE_TEXTURE_2D, &command, sizeof(command))) return FALSE;
-    return !(texture->usage & D3DUSAGE_AUTOGENMIPMAP)
+    return device_compatibility_api(device) == 8u
+        || !(texture->usage & D3DUSAGE_AUTOGENMIPMAP)
         || emit_generate_mips(device, texture->handle, texture->autogen_filter, TRUE);
 }
 
@@ -6596,11 +6603,10 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
+static HRESULT create_texture_object(D9Device *device,
         UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
-        D3DPOOL pool, IDirect3DTexture9 **texture_out, HANDLE *shared_handle)
+        D3DPOOL pool, UINT api, IDirect3DTexture9 **texture_out)
 {
-    D9Device *device = device_from_iface(iface);
     D9Texture *texture;
     UINT full_levels;
     UINT level;
@@ -6609,7 +6615,6 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
     BOOL is_depth = (usage & D3DUSAGE_DEPTHSTENCIL) != 0;
-    (void)shared_handle;
 
     TRACE("CALL CreateTexture %lux%lu levels=%lu usage=%08lX "
             "format=%08lX pool=%lu", width, height, levels, usage,
@@ -6621,32 +6626,43 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     *texture_out = NULL;
-    /*
-     * D3DUSAGE_AUTOGENMIPMAP: the sublevels exist but only level 0 is the
-     * app's. D3D9 reports GetLevelCount() == 1 for such a texture and hands out
-     * no surface below the top, because the driver owns the rest -- so one
-     * visible level here is not a simplification, it is the documented shape.
-     *
-     * The flag stays on `usage` rather than being stripped: it is what tells
-     * the host to allocate the full chain behind that single visible level and
-     * to refill it whenever level 0 changes. It is masked out only for the
-     * capability predicate, which answers which resources can exist and has no
-     * opinion on how their mips get filled.
-     */
-    if (!d9wg_autogen_creation_valid(levels, usage, pool))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (usage & D3DUSAGE_AUTOGENMIPMAP)
-        levels = 1;
-    if (!width || !height || width > 8192 || height > 8192
-            || !texture_create_supported(D3DRTYPE_TEXTURE,
-                    usage & ~(DWORD)D3DUSAGE_AUTOGENMIPMAP, format, pool)) {
+    if (api == 8u) {
+        if (!width || !height || width > 4096 || height > 4096
+                || !supported_format8(format, FALSE)
+                || (usage & D3DUSAGE_DEPTHSTENCIL)
+                || ((usage & D3DUSAGE_RENDERTARGET)
+                    && (pool != D3DPOOL_DEFAULT || levels != 1
+                        || !supported_render_target_format8(format)))
+                || pool > D3DPOOL_SCRATCH)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    } else {
+        /*
+         * D3DUSAGE_AUTOGENMIPMAP: the sublevels exist but only level 0 is the
+         * app's. D3D9 reports GetLevelCount() == 1 for such a texture and hands out
+         * no surface below the top, because the driver owns the rest -- so one
+         * visible level here is not a simplification, it is the documented shape.
+         *
+         * The flag stays on `usage` rather than being stripped: it is what tells
+         * the host to allocate the full chain behind that single visible level and
+         * to refill it whenever level 0 changes. It is masked out only for the
+         * capability predicate, which answers which resources can exist and has no
+         * opinion on how their mips get filled.
+         */
+        if (!d9wg_autogen_creation_valid(levels, usage, pool))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (usage & D3DUSAGE_AUTOGENMIPMAP)
+            levels = 1;
+        if (!width || !height || width > 8192 || height > 8192
+                || !texture_create_supported(D3DRTYPE_TEXTURE,
+                        usage & ~(DWORD)D3DUSAGE_AUTOGENMIPMAP, format, pool)) {
 
-        TRACE("FAIL CreateTexture invalid arguments -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateTexture refused: %lux%lu levels=%lu usage=%08lX "
-                "format=%08lX pool=%lu", width, height, levels, usage,
-                (DWORD)format, (DWORD)pool);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+            TRACE("FAIL CreateTexture invalid arguments -> %08lX",
+                    (DWORD)D3DERR_INVALIDCALL);
+            HOSTLOG_FAILED("CreateTexture refused: %lux%lu levels=%lu usage=%08lX "
+                    "format=%08lX pool=%lu", width, height, levels, usage,
+                    (DWORD)format, (DWORD)pool);
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
     }
     full_levels = full_mip_level_count(width, height);
     if (!levels) levels = full_levels;
@@ -6671,7 +6687,7 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
                 levels, (DWORD)E_OUTOFMEMORY);
         return TRACE_REFUSE(E_OUTOFMEMORY);
     }
-    if (usage & D3DUSAGE_AUTOGENMIPMAP)
+    if (api == 9u && (usage & D3DUSAGE_AUTOGENMIPMAP))
         texture->autogen_filter = (D3DTEXTUREFILTERTYPE)d9wg_autogen_default_filter(format,
                 (d9wg_format_query_info(format) & 4u) ? runtime_host_features() : 0);
     texture->iface.lpVtbl = &g_texture_vtbl;
@@ -6692,14 +6708,14 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
         D9TextureLevel *level_data = &texture->levels[level];
         level_data->width = level_width;
         level_data->height = level_height;
-        if (!is_depth && !texture_level_layout(format, level_width, level_height,
+        if (!is_depth && !d9wg_texture_level_layout(api, format, level_width, level_height,
                 &level_data->row_pitch, &level_data->row_count,
                 &level_data->byte_count))
             goto allocation_failed;
         /* Targets are not directly lockable.  A render target can acquire a
          * lazy CPU mirror later when Clear/ColorFill gives us exact contents;
          * texture_lock_level() therefore rejects the usage flags explicitly. */
-        if (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) {
+        if (api == 9u && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
             if (level_width > 1) level_width >>= 1;
             if (level_height > 1) level_height >>= 1;
             continue;
@@ -6752,6 +6768,15 @@ allocation_failed:
             "format=%08lX pool=%lu hr=%08lX", width, height, levels, usage,
             (DWORD)format, (DWORD)pool, (DWORD)failure);
     return failure;
+}
+
+static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
+        D3DPOOL pool, IDirect3DTexture9 **texture_out, HANDLE *shared_handle)
+{
+    (void)shared_handle;
+    return create_texture_object(device_from_iface(iface), width, height,
+            levels, usage, format, pool, 9u, texture_out);
 }
 
 /* Internal updates restore exact captured metadata, including NULL buffers.
@@ -13349,7 +13374,8 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
             || area.bottom <= area.top
             || (UINT)area.right > level_data->width
             || (UINT)area.bottom > level_data->height
-            || !texture_format_layout(texture->format, &block_width,
+            || !d9wg_format_layout(device_compatibility_api(texture->device),
+                    texture->format, &block_width,
                     &block_height, &block_bytes))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (block_width > 1
@@ -15503,6 +15529,20 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_CreateDepthStencilSurface(iface, width, height,
             (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
             FALSE, out, NULL);
+}
+
+/* API8 creation policy with actual common core texture storage/lifetime.
+ * Returned SDK9 object stays private; public8 resource wrappers follow later. */
+HRESULT WINAPI d9wg_d3d9_core_texture8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT levels, DWORD usage, UINT format,
+        UINT pool, IDirect3DTexture9 **out)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u) {
+        if (out) *out = NULL;
+        return D3DERR_INVALIDCALL;
+    }
+    return create_texture_object(device_from_iface(iface), width, height,
+            levels, usage, (D3DFORMAT)format, (D3DPOOL)pool, 8u, out);
 }
 
 HRESULT WINAPI d9wg_d3d9_core_image_surface8(IDirect3DDevice9 *iface,

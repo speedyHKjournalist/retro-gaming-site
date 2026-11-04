@@ -16,7 +16,7 @@ try {
         const relative = api + "proxy/" + api + "_proxy.c";
         const source = process.env.D9WG_TEXTURE_BASELINE ? execFileSync("git", ["show", "833bc0e:glbridge/" + relative], { cwd: path.dirname(root), encoding: "utf8" })
             : fs.readFileSync(path.join(root, relative), "utf8");
-        const frontend = definition(source, api === "ddraw" ? "emit_surface_upload" : "emit_level_update") +
+        const frontend = (api === "d3d9" ? definition(source, "emit_level_update_api") + "\n" : "") + definition(source, api === "ddraw" ? "emit_surface_upload" : "emit_level_update") +
             (api === "d3d9" ? "\n" + definition(source, "emit_cube_texture_update") + "\n" + definition(source, "emit_volume_texture_update") :
                 api === "d3d8" ? "\n" + definition(source, "emit_volume_level_update") : "");
         const code = `
@@ -27,6 +27,7 @@ try {
 #include <string.h>
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_runtime.h"
+#include "runtime/d9wg_format_layouts.h"
 typedef uint32_t UINT,D3DFORMAT;typedef int32_t LONG;typedef int BOOL;
 typedef struct {LONG left,top,right,bottom;} RECT;
 typedef struct {uint8_t *shadow;UINT row_pitch,slice_pitch,depth,byte_count;} D8TextureLevel,D9TextureLevel;
@@ -108,6 +109,7 @@ ${api === "ddraw" ? "" : `static void volume_case(void){
  flush();assert(rows_done==4&&records==4&&lock_sessions==1&&!g_transport_lock);
 }`}
 int main(void){
+ ${api === "d3d9" ? "(void)&texture_format_layout;" : ""}
  (void)emit_buffer_update;(void)emit_texture_rows;
  run_case(2048,2048,FALSE,FALSE,0,0,FALSE);
  run_case(2048,2048,FALSE,FALSE,2,5,FALSE);
