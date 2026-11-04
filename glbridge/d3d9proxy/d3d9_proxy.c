@@ -6695,6 +6695,17 @@ static void clear_indices_after_indexed_up(D9Device *device)
     if (old) ib_binding_release(old);
 }
 
+/* The missing-declaration failure detaches storage without the successful
+ * UP path's zeroing of stream metadata. This modifies live state even during
+ * recording, just like successful UP; internal patch draws never use it. */
+static void clear_bindings_after_up_missing_format(D9Device *device, BOOL indexed)
+{
+    D9VertexBuffer *old = device->streams[0].buffer;
+    device->streams[0].buffer = NULL;
+    if (old) vb_binding_release(old);
+    if (indexed) clear_indices_after_indexed_up(device);
+}
+
 static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT primitive_count,
         const void *vertex_data, UINT stride)
@@ -6705,11 +6716,16 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
     UINT vertex_bytes;
     BOOL result;
 
-    if (!vertex_data || !stride || !device_has_vertex_format(device)
+    if (!vertex_data || !stride
             || !primitive_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count)
             || !multiply_u32(vertex_count, stride, &vertex_bytes)) {
+        TRACE_FRAME_REJECT();
+        return D3DERR_INVALIDCALL;
+    }
+    if (!device_has_vertex_format(device)) {
+        clear_bindings_after_up_missing_format(device, FALSE);
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
@@ -6741,14 +6757,14 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
 
 /*
  * The draw of DrawIndexedPrimitiveUP, without the API's side effect of
- * unbinding stream 0 and the index buffer: patch tessellation draws through
+ * unbinding stream 0 and the index buffer (including missing-format failure): patch tessellation draws through
  * here, and must leave the application's bindings alone (review S2-28: every
  * draw after a DrawRectPatch/DrawTriPatch was refused for want of stream 0).
  */
 static HRESULT draw_indexed_up(D9Device *device, D3DPRIMITIVETYPE primitive_type,
         UINT min_vertex_index, UINT vertex_count, UINT primitive_count,
         const void *index_data, D3DFORMAT index_format,
-        const void *vertex_data, UINT stride, BOOL track_status)
+        const void *vertex_data, UINT stride, BOOL track_status, BOOL public_up)
 {
     D9WGDrawIndexedPrimitiveUP command;
     UINT index_count;
@@ -6757,7 +6773,7 @@ static HRESULT draw_indexed_up(D9Device *device, D3DPRIMITIVETYPE primitive_type
     BOOL result;
 
     if (!index_data || !vertex_data || !stride
-            || !device_has_vertex_format(device) || !primitive_count
+            || !primitive_count
             || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count)) {
@@ -6775,6 +6791,11 @@ static HRESULT draw_indexed_up(D9Device *device, D3DPRIMITIVETYPE primitive_type
     ZeroMemory(&command, sizeof(command));
     if (!multiply_u32(index_count, index_size, &command.index_bytes)
             || !multiply_u32(vertex_elements, stride, &command.vertex_bytes)) {
+        TRACE_FRAME_REJECT();
+        return D3DERR_INVALIDCALL;
+    }
+    if (!device_has_vertex_format(device)) {
+        if (public_up) clear_bindings_after_up_missing_format(device, TRUE);
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
@@ -6815,7 +6836,7 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
     D9Device *device = device_from_iface(iface);
     HRESULT result = draw_indexed_up(device, primitive_type, min_vertex_index,
             vertex_count, primitive_count, index_data, index_format,
-            vertex_data, stride, TRUE);
+            vertex_data, stride, TRUE, TRUE);
     if (result == D3D_OK) {
         clear_stream_zero_after_up(device);
         clear_indices_after_indexed_up(device);
@@ -10146,7 +10167,7 @@ static HRESULT d9_draw_npatch(IDirect3DDevice9 *iface, D9Device *device,
 
     result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             total_points, total_indices / 3u, out_indices, D3DFMT_INDEX16,
-            vertices, format.stride, TRUE);
+            vertices, format.stride, TRUE, FALSE);
     HeapFree(GetProcessHeap(), 0, vertices);
     HeapFree(GetProcessHeap(), 0, out_indices);
     HeapFree(GetProcessHeap(), 0, corners);
@@ -10300,7 +10321,7 @@ static HRESULT WINAPI device_draw_rect_patch(IDirect3DDevice9 *iface,
     index = segment_count * segment_count * 2u;
     result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             grid * grid, index, indices, D3DFMT_INDEX16, vertices,
-            format.stride, FALSE);
+            format.stride, FALSE, FALSE);
 
     HeapFree(GetProcessHeap(), 0, vertices);
     HeapFree(GetProcessHeap(), 0, indices);
@@ -10472,7 +10493,7 @@ static HRESULT WINAPI device_draw_tri_patch(IDirect3DDevice9 *iface,
     triangles = segment_count * segment_count * 2u;
     result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             grid * grid, triangles, indices, D3DFMT_INDEX16, vertices,
-            format.stride, FALSE);
+            format.stride, FALSE, FALSE);
 
     HeapFree(GetProcessHeap(), 0, vertices);
     HeapFree(GetProcessHeap(), 0, indices);
