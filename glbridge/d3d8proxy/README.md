@@ -627,3 +627,23 @@ independent operation plan. This is state/API evidence with no new pixel
 claim; ZBIAS precision remains a local compatibility approximation. See
 `../deployments/d3d-webgpu-review-4K26.json` for results and preserved probe
 corrections. Full public8 wrapping and later review stages remain open.
+
+Stage 4K27 fixes UpdateTexture pool validation in public8 and shares the
+SYSTEMMEM -> DEFAULT predicate with allthree core9 texture paths. Wine's
+Windows test_update_texture_pool covers the2D/volume rule; cube uses the
+same base-texture contract and existing9 rule. Private core8 UpdateTexture
+has a12-byte stdcall ABI and calls actual9 mip/face/volume copy machinery.
+Full public8 object wrapping remains separate.
+
+Native checks cover221186 cases/663614 assertions, with17 strict runtime
+mutations,three actual old8 wrong-pool controls andtwo ASAN families.
+Existing copy tests retain42 cases perAPI and25 mutations with explicit
+compiler-failure rejection. First XP run passes240 pool cases/640 local
+DWORD checks acrossfive modes,480textures andallcube faces. The actual
+old8 DLL reproduces45 wrong-pool successes;four current profiles each
+reject45 invalid pairs without changing destination bytes. The frozen
+wire model verifies1440 uploads and6205 corruptions. This probe has no
+GPU readbacks or injected CPU responses. Retained copy replay separately
+covers84 frames/252 sampled color probes onboth GPUs, rather than claiming
+full-frame pixel coverage. Evidence:
+`../deployments/d3d-webgpu-review-4K27.json`.

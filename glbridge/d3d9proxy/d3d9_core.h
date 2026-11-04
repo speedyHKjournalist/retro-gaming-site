@@ -8,6 +8,7 @@ struct IDirect3D9;
 struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
 struct IDirect3DSurface9;
+struct IDirect3DBaseTexture9;
 struct IDirect3DTexture9;
 struct IDirect3DCubeTexture9;
 struct IDirect3DVolumeTexture9;
@@ -83,6 +84,10 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* Core8 textures use the same native SYSTEMMEM -> DEFAULT copy policy and
+ * actual core9 mip/face/volume preflight, shadow updates and uploads. */
+HRESULT WINAPI d9wg_d3d9_core_update_texture8(struct IDirect3DDevice9 *device,
+        struct IDirect3DBaseTexture9 *source, struct IDirect3DBaseTexture9 *destination);
 /* Backend-state translation only: caller owns raw8 Get/state-block metadata.
  * Deleted states have no backend effect; ZBIAS and sampler TSS are mapped. */
 HRESULT WINAPI d9wg_d3d9_core_set_render_state8(struct IDirect3DDevice9 *device,

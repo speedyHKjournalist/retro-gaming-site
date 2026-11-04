@@ -60,9 +60,7 @@ int main(void)
     source.levels[2].locked=TRUE;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.levels[2].locked=FALSE;source.levels[0].locked=TRUE;CHECK(call_update(&device,&source,&destination)==0&&emits==24);source.levels[0].locked=FALSE;clear_events();
     source.device=&foreign;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.device=&device;destination.format=22;CHECK(call_update(&device,&source,&destination)==-1&&!emits);destination.format=21;
     CHECK(call_update(&device,NULL,&destination)==-1);destination.iface.lpVtbl=&g_texture_vtbl;CHECK(call_update(&device,&source,&destination)==-1);destination.iface.lpVtbl=&G_CUBE_VTBL;
-#if API == 9
     source.pool=1;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.pool=2;
-#endif
     for(unsigned i=0;i<24;++i)memset(destination.levels[i].shadow,0x3c,destination.levels[i].byte_count);
     fail_emit=2;CHECK(call_update(&device,&source,&destination)==-2&&emits==2);
     for(unsigned i=0;i<24;++i)if(i<2)CHECK(!memcmp(destination.levels[i].shadow,source.levels[2+i].shadow,destination.levels[i].byte_count));else for(UINT b=0;b<destination.levels[i].byte_count;++b)CHECK(destination.levels[i].shadow[b]==0x3c);

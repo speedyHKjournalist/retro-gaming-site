@@ -1,6 +1,7 @@
 #ifndef D9WG_TEXTURE_COPY_BRIDGE_H
 #define D9WG_TEXTURE_COPY_BRIDGE_H
 #include "d9wg_runtime.h"
+#include "d9wg_texture_copy_policy.h"
 
 enum { D9WG_COPY_2D, D9WG_COPY_CUBE, D9WG_COPY_VOLUME };
 typedef struct D9WGTextureCopyContext {

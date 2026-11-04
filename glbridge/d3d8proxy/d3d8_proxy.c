@@ -4957,7 +4957,8 @@ static HRESULT update_cube_texture(D8Device *device,
     D8CubeTexture *source = (D8CubeTexture *)source_iface;
     D8CubeTexture *destination = (D8CubeTexture *)destination_iface;
     if (source->iface.lpVtbl != &g_cube_texture_vtbl || destination->iface.lpVtbl != &g_cube_texture_vtbl ||
-            source->device != device || destination->device != device || source->format != destination->format)
+            source->device != device || destination->device != device || source->format != destination->format
+            || !d9wg_texture_copy_pools(source->pool, destination->pool))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return D8WG_TRACE_ERROR(d9wg_update_texture_common(destination, D9WG_COPY_CUBE,
             source->levels, (D9WGTextureCopyExtent){source->edge_length, source->edge_length, 1, source->level_count},
@@ -4970,7 +4971,8 @@ static HRESULT update_volume_texture(D8Device *device,
     D8VolumeTexture *source = (D8VolumeTexture *)source_iface;
     D8VolumeTexture *destination = (D8VolumeTexture *)destination_iface;
     if (source->iface.lpVtbl != &g_volume_texture_vtbl || destination->iface.lpVtbl != &g_volume_texture_vtbl ||
-            source->device != device || destination->device != device || source->format != destination->format)
+            source->device != device || destination->device != device || source->format != destination->format
+            || !d9wg_texture_copy_pools(source->pool, destination->pool))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return D8WG_TRACE_ERROR(d9wg_update_texture_common(destination, D9WG_COPY_VOLUME,
             source->levels, (D9WGTextureCopyExtent){source->width, source->height, source->depth, source->level_count},
@@ -5009,7 +5011,8 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice8 *iface,
     if (source->iface.lpVtbl != &g_texture_vtbl
             || destination->iface.lpVtbl != &g_texture_vtbl
             || source->device != device || destination->device != device
-            || source->format != destination->format)
+            || source->format != destination->format
+            || !d9wg_texture_copy_pools(source->pool, destination->pool))
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     return D8WG_TRACE_ERROR(d9wg_update_texture_common(destination, D9WG_COPY_2D,
             source->levels, (D9WGTextureCopyExtent){source->width, source->height, 1, source->level_count},

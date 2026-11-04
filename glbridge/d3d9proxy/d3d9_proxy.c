@@ -8959,8 +8959,7 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (source->iface.lpVtbl == (const void *)&g_volume_texture_vtbl) {
         D9VolumeTexture *from = (D9VolumeTexture *)src_iface, *to = (D9VolumeTexture *)dst_iface;
-        if (from->device != device || to->device != device || from->pool != D3DPOOL_SYSTEMMEM ||
-                to->pool != D3DPOOL_DEFAULT || from->format != to->format)
+        if (from->device != device || to->device != device || !d9wg_texture_copy_pools(from->pool, to->pool) || from->format != to->format)
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         return TRACE_REFUSE(d9wg_update_texture_common(to, D9WG_COPY_VOLUME,
                 from->levels, (D9WGTextureCopyExtent){from->width, from->height, from->depth, from->level_count},
@@ -8968,15 +8967,14 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
     }
     if (source->iface.lpVtbl == (const void *)&g_cube_vtbl) {
         D9CubeTexture *from = (D9CubeTexture *)src_iface, *to = (D9CubeTexture *)dst_iface;
-        if (from->device != device || to->device != device || from->pool != D3DPOOL_SYSTEMMEM ||
-                to->pool != D3DPOOL_DEFAULT || from->format != to->format)
+        if (from->device != device || to->device != device || !d9wg_texture_copy_pools(from->pool, to->pool) || from->format != to->format)
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         return TRACE_REFUSE(d9wg_update_texture_common(to, D9WG_COPY_CUBE,
                 from->levels, (D9WGTextureCopyExtent){from->edge_length, from->edge_length, 1, from->level_count},
                 to->levels, (D9WGTextureCopyExtent){to->edge_length, to->edge_length, 1, to->level_count}));
     }
     if (source->iface.lpVtbl != &g_texture_vtbl || source->device != device || destination->device != device ||
-            source->pool != D3DPOOL_SYSTEMMEM || destination->pool != D3DPOOL_DEFAULT || source->format != destination->format)
+            !d9wg_texture_copy_pools(source->pool, destination->pool) || source->format != destination->format)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     return TRACE_REFUSE(d9wg_update_texture_common(destination, D9WG_COPY_2D,
             source->levels, (D9WGTextureCopyExtent){source->width, source->height, 1, source->level_count},
@@ -15608,6 +15606,16 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_CreateDepthStencilSurface(iface, width, height,
             (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
             FALSE, out, NULL);
+}
+
+/* Same core9 mip/cube/volume copy machinery, now with the shared8/9 pool
+ * rule. Ownership/type/format/lock/preflight validation stays in the core. */
+HRESULT WINAPI d9wg_d3d9_core_update_texture8(IDirect3DDevice9 *iface,
+        IDirect3DBaseTexture9 *source, IDirect3DBaseTexture9 *destination)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_UpdateTexture(iface, source, destination);
 }
 
 /* These entries translate backend state only. The public8 wrapper retains
