@@ -1,6 +1,7 @@
 "use strict";
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-surface-mut-")),source=fs.readFileSync(root+"/d3d8proxy/d3d8_proxy.c","utf8");
-function span(name){const m=new RegExp("static [^;{}]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return[m.index,end];}
+const shared=fs.readFileSync(root+"/runtime/d9wg_backbuffer_upload.h","utf8");
+function span(source,name){const m=new RegExp("static [^;{}]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return[m.index,end];}
 const mutations=[
  ["destination overflow guard removed","copy_surface_rect","(UINT)point.x > to.Width || ",""],
  ["valid destination edge refused","copy_surface_rect","(UINT)(area.bottom - area.top) > to.Height - (UINT)point.y","(UINT)(area.bottom - area.top) >= to.Height - (UINT)point.y"],
@@ -19,9 +20,9 @@ const mutations=[
  ["failed lock remains active","lock_surface_texture_level","level->locked = FALSE;","level->locked = TRUE;"],
  ["failed lock overwrites caller output","lock_surface_texture_level","level->locked = FALSE;","*out = locked; level->locked = FALSE;"],
  ["mandatory submission failure masked","submit_readback_batch_locked","return d9wg_transport_submit(g_process, present);","(void)present; return TRUE;"],
- ["transient back-buffer destination offset","upload_backbuffer_rect","copy.destination_top = area->top;","copy.destination_top = 0;"],
- ["transient upload ignores source stride","upload_backbuffer_rect","rows.source_pitch = pitch;","rows.source_pitch = ((void)pitch, rows.row_bytes);"],
- ["transient texture cleanup opcode","upload_backbuffer_rect","D9WG_OP_DESTROY_RESOURCE","D9WG_OP_SET_TEXTURE"],
+ ["transient back-buffer destination offset","d9wg_backbuffer_upload","copy.destination_top = area->top;","copy.destination_top = 0;"],
+ ["transient upload ignores source stride","d9wg_backbuffer_upload","rows.source_pitch = pitch;","rows.source_pitch = ((void)pitch, rows.row_bytes);"],
+ ["transient texture cleanup opcode","d9wg_backbuffer_upload","D9WG_OP_DESTROY_RESOURCE","D9WG_OP_SET_TEXTURE"],
  ["CPU upload omits rectangle origin","upload_surface_rect","pixels + area->top * pitch + area->left * pixel_bytes","pixels"],
  ["overlap uses live source","copy_surface_rect","if (input == output)","if (0)"],
  ["copy loses last byte","copy_surface_rect","UINT row_bytes = (area.right - area.left) * pixel_bytes","UINT row_bytes = (area.right - area.left) * pixel_bytes - 1"],
@@ -32,4 +33,4 @@ const mutations=[
  ["readonly Unlock uploads","unlock_texture_level","if (!(level_data->lock_flags & D3DLOCK_READONLY))","if (1)"],
  ["partial upload clears unknown pixels","copy_surface_rect","if (to_level && target.left == 0 && target.top == 0 && (UINT)target.right == to.Width && (UINT)target.bottom == to.Height)","if (to_level)"],
 ];
-try{let killed=0;for(const[name,fn,old,replacement]of mutations){const[a,b]=span(fn),body=source.slice(a,b);assert(body.includes(old),name+" source match");const file=dir+"/candidate.c";fs.writeFileSync(file,source.slice(0,a)+body.replace(old,replacement)+source.slice(b));const r=spawnSync(process.execPath,[__dirname+"/d8wg_surface_copy_test.js"],{encoding:"utf8",timeout:20000,env:{...process.env,D8WG_SURFACE_SOURCE:file}});assert(!r.error,name+": "+r.error);assert.notEqual(r.status,0,name+" survived");const output=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(output),name+" failed compile: "+output);assert(/D8 surface line|Assertion|signal=/.test(output),name+" no runtime failure");killed++;}console.log("PASS D3D8 surface mutations: "+killed+"/"+mutations.length+"; GPU identity, mirrors, exact CPU staging and overlap, lock/output/error semantics, CPU pools, bounds and opaque front readback");}finally{fs.rmSync(dir,{recursive:true,force:true});}
+try{let killed=0;for(const[name,fn,old,replacement]of mutations){const isShared=fn==="d9wg_backbuffer_upload",original=isShared?shared:source;const[a,b]=span(original,fn),body=original.slice(a,b);assert(body.includes(old),name+" source match");const file=dir+"/candidate.c";let candidate=original.slice(0,a)+body.replace(old,replacement)+original.slice(b);if(isShared)candidate=candidate.replace(/#include "([^"]+)"/g,(_,p)=>'#include "'+path.resolve(root,"runtime",p)+'"');fs.writeFileSync(file,candidate);const r=spawnSync(process.execPath,[__dirname+"/d8wg_surface_copy_test.js"],{encoding:"utf8",timeout:20000,env:{...process.env,[isShared?"D8WG_SURFACE_UPLOAD_HEADER":"D8WG_SURFACE_SOURCE"]:file}});assert(!r.error,name+": "+r.error);assert.notEqual(r.status,0,name+" survived");const output=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(output),name+" failed compile: "+output);assert(/D8 surface line|Assertion|signal=/.test(output),name+" no runtime failure");killed++;}console.log("PASS D3D8 surface mutations: "+killed+"/"+mutations.length+"; GPU identity, mirrors, exact CPU staging and overlap, lock/output/error semantics, CPU pools, bounds and opaque front readback");}finally{fs.rmSync(dir,{recursive:true,force:true});}

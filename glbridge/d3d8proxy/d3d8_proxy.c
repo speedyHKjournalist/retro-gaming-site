@@ -28,6 +28,8 @@
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
+#include "../runtime/d9wg_surface_lock.h"
+#include "../runtime/d9wg_backbuffer_upload.h"
 #include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_state_defaults.h"
 #include "../runtime/d9wg_fvf.h"
@@ -535,6 +537,8 @@ static IDirect3DSwapChain8Vtbl g_swapchain_vtbl;
 static HRESULT readback_surface_pixels(D8Surface *surface, D3DFORMAT format,
         BYTE *destination, UINT pitch, UINT bytes);
 static HRESULT refresh_surface_pixels(D8Surface *surface);
+static BOOL upload_backbuffer_rect(D8Surface *surface, D3DFORMAT format,
+        const RECT *area, const BYTE *pixels, UINT pitch, UINT pixel_bytes);
 static void state_block_release_references(D8StateBlock *block);
 static HRESULT WINAPI device_set_vs_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
 static HRESULT WINAPI device_set_ps_constant(IDirect3DDevice8 *iface, DWORD reg, const void *data, DWORD count);
@@ -4782,8 +4786,32 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface8 *iface,
         return cube_lock_face(surface->cube,
                 (D3DCUBEMAP_FACES)surface->face, surface->level,
                 locked_rect, rect, flags);
+    if (surface->backbuffer) {
+        D8Device *device = surface->device;
+        D9WGSurfaceLockPlan plan;
+        D9WGSurfaceLockRect requested;
+        UINT bw, bh, bytes;
+        if (rect) requested = (D9WGSurfaceLockRect){rect->left, rect->top, rect->right, rect->bottom};
+        if (!locked_rect || !device->front_shadow
+                || !texture_format_layout(surface->desc.Format, &bw, &bh, &bytes)
+                || bw != 1 || bh != 1
+                || !d9wg_surface_lock_plan(surface->desc.Width, surface->desc.Height,
+                    device->front_shadow_pitch, bytes, surface->desc.MultiSampleType,
+                    !!(device->present.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER),
+                    surface->locked, rect ? &requested : NULL, flags, &plan))
+            return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+        HRESULT result = readback_surface_pixels(surface, surface->desc.Format,
+                device->front_shadow, device->front_shadow_pitch, surface->desc.Size);
+        if (FAILED(result)) return D8WG_TRACE_ERROR(result);
+        surface->lock_rect = (RECT){plan.area.left, plan.area.top, plan.area.right, plan.area.bottom};
+        surface->lock_flags = flags;
+        surface->locked = TRUE;
+        locked_rect->Pitch = device->front_shadow_pitch;
+        locked_rect->pBits = device->front_shadow + plan.offset;
+        return D3D_OK;
+    }
     if (!locked_rect || !surface->shadow || surface->locked
-            || surface->backbuffer || surface->depth_stencil)
+            || surface->depth_stencil)
         return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
     if (rect) area = *rect;
     else SetRect(&area, 0, 0, (int)surface->desc.Width,
@@ -4811,10 +4839,20 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface8 *iface)
         return cube_unlock_face(surface->cube,
                 (D3DCUBEMAP_FACES)surface->face, surface->level);
     if (!surface->locked) return D8WG_TRACE_ERROR(D3DERR_INVALIDCALL);
+    BOOL uploaded = TRUE;
+    if (surface->backbuffer && !(surface->lock_flags & D3DLOCK_READONLY)) {
+        UINT bw, bh, bytes;
+        uploaded = texture_format_layout(surface->desc.Format, &bw, &bh, &bytes)
+                && upload_backbuffer_rect(surface, surface->desc.Format,
+                    &surface->lock_rect, surface->device->front_shadow
+                        + surface->lock_rect.top * surface->device->front_shadow_pitch
+                        + surface->lock_rect.left * bytes,
+                    surface->device->front_shadow_pitch, bytes);
+    }
     surface->locked = FALSE;
     surface->lock_flags = 0;
     ZeroMemory(&surface->lock_rect, sizeof(surface->lock_rect));
-    return D3D_OK;
+    return D8WG_TRACE_ERROR(uploaded ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 static HRESULT WINAPI device_get_texture(IDirect3DDevice8 *iface,
@@ -5175,49 +5213,9 @@ static HRESULT refresh_surface_pixels(D8Surface* surface)
 static BOOL upload_backbuffer_rect(D8Surface* surface, D3DFORMAT format,
     const RECT* area, const BYTE* pixels, UINT pitch, UINT pixel_bytes)
 {
-    D8Device* device = surface_device(surface);
-    D9WGCreateTexture2D create;
-    D9WGTextureRows rows;
-    D9WGStretchRect copy;
-    D9WGDestroyResource destroy;
-    ZeroMemory(&create, sizeof(create));
-    create.device_handle = device->handle;
-    create.resource_handle = allocate_handle();
-    create.width = area->right - area->left;
-    create.height = area->bottom - area->top;
-    create.level_count = 1;
-    create.format = format;
-    create.pool = D3DPOOL_DEFAULT;
-    if (!emit_command(D9WG_OP_CREATE_TEXTURE_2D, &create, sizeof(create)))
-        return FALSE;
-    ZeroMemory(&rows, sizeof(rows));
-    rows.resource_handle = create.resource_handle;
-    rows.width = create.width;
-    rows.height = create.height;
-    rows.block_height = 1;
-    rows.row_count = create.height;
-    rows.row_bytes = create.width * pixel_bytes;
-    rows.source_pitch = pitch;
-    rows.source = pixels;
-    BOOL result = emit_texture_rows(&rows);
-    if (result) {
-        ZeroMemory(&copy, sizeof(copy));
-        copy.device_handle = device->handle;
-        copy.source_texture_handle = create.resource_handle;
-        copy.source_right = create.width;
-        copy.source_bottom = create.height;
-        copy.destination_left = area->left;
-        copy.destination_top = area->top;
-        copy.destination_right = area->right;
-        copy.destination_bottom = area->bottom;
-        copy.filter_point = 1;
-        result = emit_command(D9WG_OP_STRETCH_RECT, &copy, sizeof(copy));
-    }
-    destroy.resource_handle = create.resource_handle;
-    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
-    if (!emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy)))
-        result = FALSE;
-    return result;
+    const D9WGSurfaceLockRect rect = {area->left, area->top, area->right, area->bottom};
+    return d9wg_backbuffer_upload(surface_device(surface)->handle, allocate_handle(),
+            format, &rect, pixels, pitch, pixel_bytes, emit_command, emit_texture_rows);
 }
 
 static BOOL upload_surface_rect(D8Surface* surface, D3DFORMAT format,

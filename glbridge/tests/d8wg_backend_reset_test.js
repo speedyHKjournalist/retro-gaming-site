@@ -65,7 +65,7 @@ typedef struct {
 ${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 typedef struct {UINT Width,Height,Format,RefreshRate;} Mode;
 typedef struct {UINT Width,Height,Format,MultiSampleType,Size;} Desc;
-typedef struct {Desc desc;UINT row_pitch,width,height,format,multisample,multisample_quality;} Surface;
+typedef struct {Desc desc;void*shadow;UINT byte_count,row_pitch,width,height,format,multisample,multisample_quality;} Surface;
 typedef struct Device Device;
 typedef struct Block {int iface;Device*device;unsigned*references,*finalized;} Block;
 typedef Block D${api}StateBlock;
@@ -196,6 +196,7 @@ for(unsigned g=0;g<5;g++){
  kind=200+g;Surface back={0},depth={0};d=(Device){.handle=77,.creation={.hFocusWindow=(void*)(uintptr_t)0x55},.display_mode={80,72,22,60},.implicit_back_buffer=&back,.implicit_depth_stencil=&depth};active=&d;
  D3DPRESENT_PARAMETERS p=base;p.hDeviceWindow=NULL;p.BackBufferCount=0;p.BackBufferWidth=g==1?80:0;p.BackBufferHeight=g==2?72:0;D3DPRESENT_PARAMETERS input=p;
  UINT width=g==1?80:64,height=g==2?72:64;
+ ${api===9?'back.shadow=HeapAlloc(NULL,HEAP_ZERO_MEMORY,128);back.row_pitch=16;back.byte_count=128;':''}
  fail_state_emit=g==3;fail_window_mode=g==4;
  CHECK(device_reset(&d,&p)==(g==3?D3DERR_DRIVERINTERNALERROR:g==4?D3DERR_INVALIDCALL:D3D_OK));
  if(g>=3){CHECK(!memcmp(&p,&input,sizeof(p))&&d.reset_state.required);fail_state_emit=fail_window_mode=0;CHECK(device_reset(&d,&p)==D3D_OK);}
@@ -203,6 +204,7 @@ for(unsigned g=0;g<5;g++){
  CHECK(!memcmp(&p,&input,sizeof(p)));
  CHECK(d.present.BackBufferWidth==width&&d.present.BackBufferHeight==height&&d.present.BackBufferCount==1&&d.present.hDeviceWindow==d.creation.hFocusWindow);
  CHECK(d.viewport.Width==width&&d.viewport.Height==height&&!d.reset_state.required);
+ ${api===9?'CHECK(!back.shadow&&!back.row_pitch&&!back.byte_count);':''}
  ${api===8?'CHECK(back.desc.Width==width&&back.desc.Height==height&&back.desc.Size==width*height*4&&depth.desc.Width==width&&depth.desc.Height==height);HeapFree(NULL,0,d.front_shadow);':'CHECK(back.width==width&&back.height==height&&depth.width==width&&depth.height==height);'}
  CHECK(!live);
 }

@@ -45,6 +45,8 @@
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
 #include "../runtime/d9wg_surface_readback.h"
+#include "../runtime/d9wg_surface_lock.h"
+#include "../runtime/d9wg_backbuffer_upload.h"
 #include "../runtime/d9wg_format_layouts.h"
 #include "../runtime/d9wg_format_queries.h"
 #include "../runtime/d9wg_state_defaults.h"
@@ -1360,6 +1362,8 @@ struct D9Surface {
     UINT row_pitch;
     UINT byte_count;
     BOOL locked;
+    RECT lock_rect;
+    DWORD lock_flags;
     /* TRUE for the surface GetDepthStencilSurface hands back for the device's
      * implicit auto depth-stencil. It has no texture and no pixels; its only
      * job is to be passed back to SetDepthStencilSurface, which is how an app
@@ -5619,6 +5623,12 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
      * app keeps the same pointers across it -- so the cached objects have to
      * pick up the new geometry here or GetDesc keeps reporting the old size. */
     if (device->implicit_back_buffer) {
+        /* A cached object survives Reset, but its CPU lock storage does not. */
+        if (device->implicit_back_buffer->shadow)
+            HeapFree(GetProcessHeap(), 0, device->implicit_back_buffer->shadow);
+        device->implicit_back_buffer->shadow = NULL;
+        device->implicit_back_buffer->row_pitch = 0;
+        device->implicit_back_buffer->byte_count = 0;
         device->implicit_back_buffer->width = device->display_mode.Width;
         device->implicit_back_buffer->height = device->display_mode.Height;
         device->implicit_back_buffer->format = device->display_mode.Format;
@@ -8166,8 +8176,8 @@ static HRESULT WINAPI device_get_swap_chain(IDirect3DDevice9 *iface,
 /* War3 testing confirmed that engines can gate an entire render branch on
  * this succeeding even when they never read pixels back from the result.
  * StretchRect and GetRenderTargetData both understand the implicit back
- * buffer; LockRect remains invalid because a default-pool render target is not
- * a lockable surface in D3D9. */
+ * buffer. Explicit LOCKABLE_BACKBUFFER permits linear non-MSAA locks; other
+ * default-pool backbuffers keep returning INVALIDCALL. */
 static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
         UINT swapchain, UINT index, D3DBACKBUFFER_TYPE type,
         IDirect3DSurface9 **out)
@@ -14266,9 +14276,74 @@ static HRESULT WINAPI surface_get_desc(IDirect3DSurface9 *iface,
  * either route and the UPDATE_TEXTURE emitted on unlock is identical.
  *
  * A standalone system-memory surface locks its own shadow. A default-pool
- * render target/back buffer remains non-lockable; callers use the implemented
- * GetRenderTargetData path to transfer its GPU contents first.
+ * render target remains non-lockable. An implicit backbuffer with the explicit
+ * lockable flag uses the shared GPU readback/writeback adapter below.
  */
+/* Implicit lockable backbuffers share the same pure bounds and upload bridge
+ * as API8. Read every successful lock from GPU; only the published lock rect
+ * is written back, and READONLY never emits an upload. */
+static HRESULT surface_lock_backbuffer(D9Surface *surface,
+        D3DLOCKED_RECT *out, const RECT *rect, DWORD flags)
+{
+    D9WGSurfaceLockPlan plan;
+    D9WGSurfaceLockRect requested;
+    UINT bw, bh, pixel_bytes, pitch, rows, bytes;
+    if (rect) requested = (D9WGSurfaceLockRect){rect->left, rect->top, rect->right, rect->bottom};
+    if (!out || !texture_format_layout(surface->format, &bw, &bh, &pixel_bytes)
+            || bw != 1 || bh != 1
+            || !texture_level_layout(surface->format, surface->width, surface->height,
+                &pitch, &rows, &bytes) || rows != surface->height
+            || !d9wg_surface_lock_plan(surface->width, surface->height, pitch,
+                pixel_bytes, surface->multisample,
+                !!(surface->device->present.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER),
+                surface->locked, rect ? &requested : NULL, flags, &plan))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!surface->shadow) {
+        surface->shadow = HeapAlloc(GetProcessHeap(), 0, bytes);
+        if (!surface->shadow) return TRACE_REFUSE(E_OUTOFMEMORY);
+        surface->row_pitch = pitch;
+        surface->byte_count = bytes;
+    }
+    D9WGReadbackSurface request = {0};
+    D9WGReadbackDiagnostic detail;
+    request.device_handle = surface->device->handle;
+    request.format = surface->format;
+    request.width = surface->width;
+    request.height = surface->height;
+    request.destination_pitch = pitch;
+    int result = d9wg_surface_readback(g_process, &request,
+            surface->width * pixel_bytes, surface->height, surface->shadow,
+            surface->byte_count, submit_readback_batch_locked, &detail);
+    if (result) return TRACE_REFUSE(result == D9WG_READBACK_INVALID
+            ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
+    surface->lock_rect = (RECT){plan.area.left, plan.area.top, plan.area.right, plan.area.bottom};
+    surface->lock_flags = flags;
+    surface->locked = TRUE;
+    out->Pitch = pitch;
+    out->pBits = surface->shadow + plan.offset;
+    return D3D_OK;
+}
+
+static HRESULT surface_unlock_backbuffer(D9Surface *surface)
+{
+    if (!surface->locked) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    BOOL uploaded = TRUE;
+    if (!(surface->lock_flags & D3DLOCK_READONLY)) {
+        UINT bw, bh, pixel_bytes;
+        const RECT *r = &surface->lock_rect;
+        const D9WGSurfaceLockRect area = {r->left, r->top, r->right, r->bottom};
+        uploaded = texture_format_layout(surface->format, &bw, &bh, &pixel_bytes)
+                && d9wg_backbuffer_upload(surface->device->handle, allocate_handle(),
+                    surface->format, &area, surface->shadow
+                        + r->top * surface->row_pitch + r->left * pixel_bytes,
+                    surface->row_pitch, pixel_bytes, emit_command, emit_texture_rows);
+    }
+    surface->locked = FALSE;
+    surface->lock_flags = 0;
+    ZeroMemory(&surface->lock_rect, sizeof(surface->lock_rect));
+    return uploaded ? D3D_OK : TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+}
+
 static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
         D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
 {
@@ -14284,6 +14359,10 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked, (DWORD)(uintptr_t)rect, flags);
 
+    if (surface->swap_chain && !surface->texture) {
+        result = surface_lock_backbuffer(surface, locked_rect, rect, flags);
+        goto done;
+    }
     if (surface->shadow) {
         /* A standalone CPU surface. The whole surface is handed over
          * regardless of `rect`: there is no upload to narrow, so a sub-rect
@@ -14351,7 +14430,9 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
             (DWORD)(uintptr_t)surface->texture,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked);
-    if (surface->shadow) {
+    if (surface->swap_chain && !surface->texture) {
+        result = surface_unlock_backbuffer(surface);
+    } else if (surface->shadow) {
         if (!surface->locked)
             result = D3DERR_INVALIDCALL;
         else {

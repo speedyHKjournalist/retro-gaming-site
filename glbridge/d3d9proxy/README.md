@@ -1013,3 +1013,17 @@ adjacent float32 values,including alpha. Coissue,NaN arithmetic and the full
 numeric differential corpus remain separate work. The shipped ordinary9 DLL
 inherits its accepted version; only the accepted current8 DLL is published.
 See `../deployments/d3d-webgpu-review-4K15.json`.
+
+Stage 4K16 implements explicit lockable implicit backbuffers in public8 and
+core9, including private API8-profile core devices. A common pure planner
+checks geometry/pitch/range and a common upload bridge sends only the locked
+region. Successful locks refresh from GPU before publishing state; READONLY
+unlock emits no upload. Non-lockable/MSAA/repeated/invalid locks still fail.
+Core9 lazily owns CPU lock storage and releases it on successful Reset so
+cached surfaces safely pick up new geometry. Other surface dispatch is retained.
+XP compares accepted 4K15 baseline8/9 refusals with public8 SDK120/220,
+ordinary9 and privatecore8. Both GPUs independently compare 27 images/1536
+pixels, including partial/full writes and 4x4 resize after Reset. XP CPU replies
+explicitly inject analytic expected images; only GPU replay establishes pixels.
+Additional-chain/depth/other target locks and other GPU formats remain open.
+See `../deployments/d3d-webgpu-review-4K16.json`.

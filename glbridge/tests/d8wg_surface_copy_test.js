@@ -7,6 +7,7 @@ try{fs.writeFileSync(dir+"/surface.c",`#include <stdio.h>
 #include <assert.h>
 #include "runtime/d9wg_surface_readback.h"
 #include "runtime/d9wg_runtime.h"
+#include "${process.env.D8WG_SURFACE_UPLOAD_HEADER||root+'/runtime/d9wg_backbuffer_upload.h'}"
 typedef int HRESULT,D3DFORMAT,D3DPOOL;typedef uint8_t BYTE;typedef int32_t INT;typedef UINT D3DCUBEMAP_FACES;
 typedef struct{int32_t left,top,right,bottom;}RECT;typedef struct{int32_t x,y;}POINT;
 typedef struct{INT Pitch;void*pBits;}D3DLOCKED_RECT;
