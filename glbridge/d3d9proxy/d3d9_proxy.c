@@ -6710,6 +6710,9 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT primitive_count,
         const void *vertex_data, UINT stride)
 {
+    /* A nonzero stride makes a zero-primitive public UP a no-op before
+     * format/data validation and before either successful/failure unbinding. */
+    if (stride && !primitive_count) return D3D_OK;
     D9Device *device = device_from_iface(iface);
     D9WGDrawPrimitiveUP command;
     UINT vertex_count;
@@ -6833,6 +6836,9 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
         const void *index_data, D3DFORMAT index_format,
         const void *vertex_data, UINT stride)
 {
+    /* A nonzero stride makes a zero-primitive public UP a no-op before
+     * format/data validation and before either successful/failure unbinding. */
+    if (stride && !primitive_count) return D3D_OK;
     D9Device *device = device_from_iface(iface);
     HRESULT result = draw_indexed_up(device, primitive_type, min_vertex_index,
             vertex_count, primitive_count, index_data, index_format,
