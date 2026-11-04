@@ -35,6 +35,7 @@
 #include <d3d9.h>
 #include "d3d9_core.h"
 #include "../runtime/d9wg_declaration8.h"
+#include "../runtime/d9wg_shader8_local_defs.h"
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
@@ -7539,48 +7540,15 @@ static D9Shader *pixel_shader_from_iface(IDirect3DPixelShader9 *iface)
     return (D9Shader *)iface;
 }
 
-static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
-        BOOL want_pixel, D9Shader **shader_out)
+/* All bytecode entering here has already been validated. This single
+ * allocation/emission path also stores8 programs expanded with local DEFs;
+ * their original8192-token limit is checked before the trusted expansion. */
+static HRESULT create_shader_object(D9Device *device, const DWORD *bytecode,
+        UINT token_count, BOOL want_pixel, D9Shader **shader_out)
 {
     D9Shader *shader;
-    UINT token_count = 0;
-    BOOL is_pixel = FALSE;
     uint32_t code_bytes;
-
     *shader_out = NULL;
-    if (!bytecode) {
-        TRACE("FAIL CreateShader want_pixel=%lu bytecode=NULL -> %08lX",
-                (DWORD)want_pixel, (DWORD)D3DERR_INVALIDCALL);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    BOOL valid;
-    if (device_compatibility_api(device) == 8) {
-        const DWORD version = bytecode[0];
-        const UINT minor = version & 0xffu;
-        UINT body_count = 0;
-        valid = (version >> 16) == (want_pixel ? 0xffffu : 0xfffeu)
-                && ((version >> 8) & 0xffu) == 1u
-                && minor <= (want_pixel ? 4u : 1u)
-                && shader8_validate_body(bytecode + 1, D9WG_D3D8_SHADER_TOKENS,
-                        want_pixel, minor, &body_count);
-        if (valid) {
-            token_count = body_count + 2u; /* version and END */
-            is_pixel = want_pixel;
-        }
-    } else {
-        valid = shader_token_count(bytecode, &token_count, &is_pixel);
-    }
-    if (!valid || is_pixel != want_pixel) {
-        /* Rejected before anything is emitted, so without this line the call
-         * leaves no record whatsoever: no CMD, no OK, no FAIL. An app whose
-         * shader is turned down here sees only D3DERR_INVALIDCALL, and the
-         * trace shows only the gap where the shader should have been. */
-        TRACE("FAIL CreateShader version=%08lX want_pixel=%lu is_pixel=%lu "
-                "tokens=%lu -> %08lX", bytecode[0], (DWORD)want_pixel,
-                (DWORD)is_pixel, token_count, (DWORD)D3DERR_INVALIDCALL);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-
     code_bytes = (uint32_t)token_count * 4u;
     shader = (D9Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*shader));
@@ -7623,6 +7591,50 @@ static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
             "hash=%08lX%08lX", shader->code[0], (DWORD)want_pixel, token_count,
             shader->handle, shader->hash_high, shader->hash_low);
     return D3D_OK;
+}
+
+static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
+        BOOL want_pixel, D9Shader **shader_out)
+{
+    UINT token_count = 0;
+    BOOL is_pixel = FALSE;
+
+    *shader_out = NULL;
+    if (!bytecode) {
+        TRACE("FAIL CreateShader want_pixel=%lu bytecode=NULL -> %08lX",
+                (DWORD)want_pixel, (DWORD)D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+    BOOL valid;
+    if (device_compatibility_api(device) == 8) {
+        const DWORD version = bytecode[0];
+        const UINT minor = version & 0xffu;
+        UINT body_count = 0;
+        valid = (version >> 16) == (want_pixel ? 0xffffu : 0xfffeu)
+                && ((version >> 8) & 0xffu) == 1u
+                && minor <= (want_pixel ? 4u : 1u)
+                && shader8_validate_body(bytecode + 1, D9WG_D3D8_SHADER_TOKENS,
+                        want_pixel, minor, &body_count);
+        if (valid) {
+            token_count = body_count + 2u; /* version and END */
+            is_pixel = want_pixel;
+        }
+    } else {
+        valid = shader_token_count(bytecode, &token_count, &is_pixel);
+    }
+    if (!valid || is_pixel != want_pixel) {
+        /* Rejected before anything is emitted, so without this line the call
+         * leaves no record whatsoever: no CMD, no OK, no FAIL. An app whose
+         * shader is turned down here sees only D3DERR_INVALIDCALL, and the
+         * trace shows only the gap where the shader should have been. */
+        TRACE("FAIL CreateShader version=%08lX want_pixel=%lu is_pixel=%lu "
+                "tokens=%lu -> %08lX", bytecode[0], (DWORD)want_pixel,
+                (DWORD)is_pixel, token_count, (DWORD)D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+
+    return create_shader_object(device, bytecode, token_count,
+            want_pixel, shader_out);
 }
 
 static void shader_destroy_storage(D9Shader *shader)
@@ -16005,6 +16017,71 @@ HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(IDirect3DDevice9 *iface,
     }
     elements[count] = (D3DVERTEXELEMENT9)D3DDECL_END();
     return IDirect3DDevice9_CreateVertexDeclaration(iface, elements, out);
+}
+
+/* Raw8 GetDeclaration/GetFunction and DWORD handle ownership belong to
+ * the frontend. Returned shader storage includes injected local DEFs and
+ * END, while this entry validates the original unexpanded8 input bound. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_shader8(IDirect3DDevice9 *iface,
+        const DWORD *declaration, const DWORD *function,
+        IDirect3DVertexDeclaration9 **layout_out,
+        IDirect3DVertexShader9 **shader_out)
+{
+    if (layout_out) *layout_out = NULL;
+    if (shader_out) *shader_out = NULL;
+    if (!layout_out || !shader_out || !iface || !declaration
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    UINT body = 0;
+    if (function && ((function[0] >> 16) != 0xfffeu
+            || ((function[0] >> 8) & 0xffu) != 1u
+            || (function[0] & 0xffu) > 1u
+            || !shader8_validate_body(function + 1, D9WG_D3D8_SHADER_TOKENS,
+                FALSE, function[0] & 0xffu, &body)))
+        return D3DERR_INVALIDCALL;
+    UINT tokens, elements, vectors;
+    D9WGVertexElement wire[32];
+    DWORD constants[96 * 4];
+    BYTE mask[96];
+    if (!d9wg_declaration8_validate(declaration, D9WG_D3D8_SHADER_TOKENS, &tokens)
+            || !d9wg_declaration8_elements(declaration, tokens, wire, 32,
+                &elements, constants, 96, mask, &vectors))
+        return D3DERR_INVALIDCALL;
+    IDirect3DVertexDeclaration9 *layout = NULL;
+    HRESULT hr = d9wg_d3d9_core_vertex_declaration8(iface, declaration,
+            function == NULL, &layout);
+    if (FAILED(hr)) return hr;
+    if (function) {
+        UINT count = body + 2u + vectors * 6u;
+        DWORD *expanded = HeapAlloc(GetProcessHeap(), 0, count * sizeof(DWORD));
+        if (!expanded) {
+            IDirect3DVertexDeclaration9_Release(layout);
+            return E_OUTOFMEMORY;
+        }
+        d9wg_shader8_build_local_defs(expanded, function, body + 2u,
+                constants, mask, 96);
+        D9Shader *shader = NULL;
+        hr = create_shader_object(device_from_iface(iface), expanded,
+                count, FALSE, &shader);
+        HeapFree(GetProcessHeap(), 0, expanded);
+        if (FAILED(hr)) {
+            IDirect3DVertexDeclaration9_Release(layout);
+            return hr;
+        }
+        *shader_out = &shader->iface.vertex;
+    }
+    *layout_out = layout;
+    return D3D_OK;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_pixel_shader8(IDirect3DDevice9 *iface,
+        const DWORD *function, IDirect3DPixelShader9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreatePixelShader(iface, function, out);
 }
 
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,

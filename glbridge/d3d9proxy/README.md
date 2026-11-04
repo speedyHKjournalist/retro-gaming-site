@@ -1235,3 +1235,24 @@ images /640pixels, two offset input streams, red-to-green afterReset, withzero
 error. XP CPU replies are explicitly analytic injection. Complete shader/handle
 wrapping and the8-vs9 NULL-stream metadata difference remain adapter work.
 Evidence: `../deployments/d3d-webgpu-review-4K30.json`.
+
+
+### Review 4K31: shared local DEFs and core8 shader objects
+
+The8 emitter and private core8 now share local DEF byte construction.
+`d9wg_d3d9_core_vertex_shader8` (stdcall20) returns real9 declaration/VS pairs;
+NULL function creates only a declaration. `d9wg_d3d9_core_pixel_shader8`
+(stdcall12) creates real9 PS objects. Original8 version/body/8192 validation
+precedes trusted DEF expansion. Ordinary9 validation and the one extracted
+allocation/publication body preserve the old factory behavior. Pair failures
+clear outputs and release temporary storage, declaration and parent pins.
+
+Public8 queries retain original bytes; private9 GetFunction exposes expanded
+DEFs plus END. The8 frontend still owns raw-query/handle semantics. Native pair
+coverage is478cases/1,012checks,22strict C mutants andtwo sanitizers;retained
+constant andordinary9 comparison suites pass. XP runsold/current8,ordinary9,
+coreSDK120/220 withfiveReset,35shaders/15declarations/60handles. BothGPUs verify
+20complete images/1,280pixels:localred survivesAPIoverride,localgreen survives
+Reset. PS1.0-1.4 arecreated/queried/released without numerical drawing claims.
+XP CPU replies are explicit analytic injection. Evidence:
+`../deployments/d3d-webgpu-review-4K31.json`.

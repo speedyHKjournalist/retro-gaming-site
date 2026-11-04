@@ -7,6 +7,8 @@
 struct IDirect3D9;
 struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
+struct IDirect3DVertexShader9;
+struct IDirect3DPixelShader9;
 struct IDirect3DVertexDeclaration9;
 struct IDirect3DSurface9;
 struct IDirect3DBaseTexture9;
@@ -138,6 +140,14 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(struct IDirect3DSurface9 *surface,
 HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(struct IDirect3DDevice9 *device,
         const DWORD *tokens, BOOL declaration_only,
         struct IDirect3DVertexDeclaration9 **out);
+/* Real core8 shader objects. VS pairs8 declaration with its local DEFs;
+ * frontend retains original8 function/declaration bytes for public queries. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_shader8(struct IDirect3DDevice9 *device,
+        const DWORD *declaration, const DWORD *function,
+        struct IDirect3DVertexDeclaration9 **layout,
+        struct IDirect3DVertexShader9 **shader);
+HRESULT WINAPI d9wg_d3d9_core_pixel_shader8(struct IDirect3DDevice9 *device,
+        const DWORD *function, struct IDirect3DPixelShader9 **shader);
 /* Body starts after version token;success count excludes END. Version/handle
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,

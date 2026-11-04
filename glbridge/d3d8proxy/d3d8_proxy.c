@@ -50,6 +50,7 @@
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d8_protocol.h"
 #include "../runtime/d9wg_declaration8.h"
+#include "../runtime/d9wg_shader8_local_defs.h"
 #include "../runtime/d9wg_window_probe.h"
 #include "../runtime/d9wg_window_watch.h"
 #include "../runtime/d9wg_buffer_lock.h"
@@ -951,17 +952,9 @@ static BOOL emit_create_vertex_shader(D8Device* device, D8Shader* shader)
         command.device_handle = device->handle;
         command.resource_handle = shader->handle;
         DWORD *code = (DWORD *)code_blob;
-        UINT at = 1;
-        code[0] = shader->code_tokens[0];
-        for (UINT reg = 0; reg < D8WG_MAX_VS_CONSTANTS; ++reg) {
-            if (!shader->const_mask[reg]) continue;
-            code[at++] = 0x00000051u; /* SM1 DEF */
-            code[at++] = 0xa00f0000u | reg; /* cN.xyzw */
-            CopyMemory(code + at, shader->const_data + reg * 4u, 16);
-            at += 4;
-        }
-        CopyMemory(code + at, shader->code_tokens + 1,
-                (shader->code_token_count - 1u) * sizeof(DWORD));
+        d9wg_shader8_build_local_defs(code, shader->code_tokens,
+                shader->code_token_count, shader->const_data,
+                shader->const_mask, D8WG_MAX_VS_CONSTANTS);
         shader_bytecode_hash(code, wire_tokens, &shader->hash_low,
                 &shader->hash_high);
         command.instruction_token_count = wire_tokens;
