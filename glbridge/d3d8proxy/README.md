@@ -579,3 +579,17 @@ surface writes andBC1. Both GPUs independently match45images/2880pixels from
 CPU GPUreadback replies are explicit analytic injection. Renderable cube
 readback,fullpublic8wrapping andnative alignment/fullformat conformance remain
 pending. Evidence: `../deployments/d3d-webgpu-review-4K23.json`.
+
+Stage 4K24 adds private API8 volume creation@36 andSDK8 descriptor@12.
+Shared storage retains2048/legacy8 policy andordinary9 creation behavior,
+including eager9/lazy8 level views andallocation-failure order. Ordinary CPU
+box locking andslice uploads use the device API,including8-only65 and8s
+sub-box alignment. SDK8 descriptors insertSize into32bytes instead ofcopying
+SDK9s28bytes. Existing Usage passthrough is retained,not a native conformance
+claim. Native coverage:2945283 constructors,169128 box/upload cases,26433
+SDK descriptors,320 view cases,33 strict mutants,three historical controls,
+four ASAN families. XP validatesfour slices/threemips/child-view box writes;
+both GPUs match30images/1920pixels from56uploads. CPU GPUreadback replies
+are explicit analytic injection. Native alignment/fullflags/formats/filtering
+andfullpublic8wrapping remain open. Evidence:
+`../deployments/d3d-webgpu-review-4K24.json`.

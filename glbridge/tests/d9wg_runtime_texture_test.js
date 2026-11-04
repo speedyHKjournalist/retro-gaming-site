@@ -31,8 +31,10 @@ try {
 typedef uint32_t UINT,D3DFORMAT;typedef int32_t LONG;typedef int BOOL;
 typedef struct {LONG left,top,right,bottom;} RECT;
 typedef struct {uint8_t *shadow;UINT row_pitch,slice_pitch,depth,byte_count;} D8TextureLevel,D9TextureLevel;
-typedef struct {UINT handle,format;D8TextureLevel levels[4];} D8VolumeTexture,D9VolumeTexture;
+typedef struct {UINT handle,format;D8TextureLevel levels[4];} D8VolumeTexture;
+typedef struct D9VolumeTexture D9VolumeTexture;
 typedef struct {UINT api;} Device;
+struct D9VolumeTexture{UINT handle,format;D8TextureLevel levels[4];Device*device;};
 typedef struct {UINT handle,format,level_count;D9TextureLevel levels[24];Device*device;} D9CubeTexture;
 ${api === "d3d9" ? "static Device cube_device={9};static UINT device_compatibility_api(Device*d){return d->api;}" : ""}
 typedef struct {UINT Left,Top,Right,Bottom,Front,Back;} D3DBOX;
@@ -106,7 +108,7 @@ ${api === "ddraw" ? "" : `static void volume_case(void){
  logical_width=logical_height=7;origin_x=origin_y=4;level=2;z=1;block_height=4;row_count=2;row_bytes=16;source_pitch=40;source_slice_pitch=120;
  uint8_t shadow[360];for(UINT i=0;i<sizeof(shadow);i++)shadow[i]=(uint8_t)(i*31u+(i>>4));expected=shadow+source_slice_pitch+source_pitch+8;
  capacity=sizeof(D9WGBatchHeader)+D9WG_ALIGN8(sizeof(D9WGCommandHeader)+sizeof(D9WGUpdateTexture)+row_bytes);used=sizeof(D9WGBatchHeader);records=rows_done=lock_sessions=0;
- ${api === "d3d9" ? "D9" : "D8"}VolumeTexture volume={.handle=77,.format=0x31545844u};volume.levels[level]=(D8TextureLevel){.shadow=shadow,.row_pitch=source_pitch,.slice_pitch=source_slice_pitch};
+ ${api === "d3d9" ? "D9" : "D8"}VolumeTexture volume={${api === "d3d9" ? ".device=&cube_device," : ""}.handle=77,.format=0x31545844u};volume.levels[level]=(D8TextureLevel){.shadow=shadow,.row_pitch=source_pitch,.slice_pitch=source_slice_pitch};
  ${api === "d3d9" ? "D3DBOX box={4,4,11,11,1,3};assert(emit_volume_texture_update(&volume,level,&box));" : "RECT rect={4,4,11,11};assert(emit_volume_level_update(&volume,level,&rect,1,2));"}
  flush();assert(rows_done==4&&records==4&&lock_sessions==1&&!g_transport_lock);
 }`}

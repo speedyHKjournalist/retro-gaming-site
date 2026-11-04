@@ -173,7 +173,7 @@ static D9Device*active_device;
 static UINT live,allocations,fail_allocation,fail_emit,fail_layout,handles,creates,destroys,device_destroys,checks;
 static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Surface*surface_from_iface(Interface*p){return (D9Surface*)p;}static D9Texture*texture_from_iface(Interface*p){return (D9Texture*)p;}
 ${textureBindings?"static D9CubeTexture*cube_from_iface(Interface*p){return (D9CubeTexture*)p;}\nstatic D9VolumeTexture*volume_texture_from_iface(Interface*p){return (D9VolumeTexture*)p;}":""}
-${volumeBindings?"static D9Volume*volume_from_iface(Interface*p){return (D9Volume*)p;}":""}
+${volumeBindings?"static int g_volume_vtbl;static UINT device_compatibility_api(D9Device*d){(void)d;return 9;}\nstatic D9Volume*volume_from_iface(Interface*p){return (D9Volume*)p;}":""}
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==8&&n);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;assert(!f);if(p){assert(live);live--;free(p);}}
 static void d9wg_vertex_windows_clip_release(void*p,void*context){(void)context;HeapFree(NULL,0,p);}

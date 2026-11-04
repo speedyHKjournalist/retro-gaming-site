@@ -19,7 +19,7 @@ const cases = [
     ["GetTexture fails to revive", "device_get_texture", "if (*texture_out)", "if (FALSE && *texture_out)"],
     ["level query adds duplicate public ref", "volume_texture_get_volume_level", "IDirect3DVolume9_AddRef(*out);", "IDirect3DVolume9_AddRef(*out);IDirect3DVolume9_AddRef(*out);"],
     ["device cleanup uses public release", "device_clear_bindings", "if (volume) volume_texture_binding_release(volume);", "if (volume) IDirect3DVolumeTexture9_Release(&volume->iface);"],
-    ["cached volume level aliases zero", "volume_texture_get_volume_level", "&texture->levels[level].level_volume->iface", "&texture->levels[0].level_volume->iface"],
+    ["cached volume level aliases zero", "volume_texture_get_volume_level", "D9Volume *volume = texture->levels[level].level_volume;", "D9Volume *volume = texture->levels[0].level_volume;"],
     ["cached volume views leaked", "volume_texture_destroy_storage", "HeapFree(GetProcessHeap(), 0, texture->levels[level].level_volume);", "(void)texture->levels[level].level_volume;"],
     ["public-zero cleanup omitted", "volume_texture_release", "if (!refs) {", "if (FALSE && !refs) {"],
 ];

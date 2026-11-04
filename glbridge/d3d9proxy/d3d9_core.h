@@ -10,6 +10,8 @@ struct IDirect3DSwapChain9;
 struct IDirect3DSurface9;
 struct IDirect3DTexture9;
 struct IDirect3DCubeTexture9;
+struct IDirect3DVolumeTexture9;
+struct IDirect3DVolume9;
 struct D9WGProcess;
 #define D9WG_D3D8_SHADER_TOKENS 8192u
 #define D9WG_D3D8_CAPS_BYTES 212u
@@ -17,6 +19,7 @@ struct D9WGProcess;
 #define D9WG_D3D8_IDENTIFIER_BYTES 1068u
 #define D9WG_D3D8_PARAMETERS_BYTES 52u
 #define D9WG_D3D8_SURFACE_DESC_BYTES 32u
+#define D9WG_D3D8_VOLUME_DESC_BYTES 32u
 #define D9WG_D3D8_NO_WHQL_LEVEL 2u
 /* One attach/detach pair per embedding frontend module, called from that
  * module's loader entry. Release all owned COM objects before explicit
@@ -78,6 +81,12 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(struct IDirect3DDevice9 *device,
 HRESULT WINAPI d9wg_d3d9_core_depth_surface8(struct IDirect3DDevice9 *device,
         UINT width, UINT height, UINT format, UINT multisample,
         struct IDirect3DSurface9 **out);
+/* API8 3D creation policy;32-byte volume descriptor adds legacy Size. */
+HRESULT WINAPI d9wg_d3d9_core_volume_texture8(struct IDirect3DDevice9 *device,
+        UINT width, UINT height, UINT depth, UINT levels, DWORD usage,
+        UINT format, UINT pool, struct IDirect3DVolumeTexture9 **out);
+HRESULT WINAPI d9wg_d3d9_core_volume_desc8(struct IDirect3DVolume9 *volume,
+        void *out, UINT bytes);
 /* API8 cube creation: six face-major mip chains,4096/legacy policy. */
 HRESULT WINAPI d9wg_d3d9_core_cube_texture8(struct IDirect3DDevice9 *device,
         UINT edge, UINT levels, DWORD usage, UINT format, UINT pool,
