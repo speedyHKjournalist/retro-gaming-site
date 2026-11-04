@@ -4043,16 +4043,37 @@ static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D9* iface,
     return D3D_OK;
 }
 
+/* Version8 query policy is a restriction of the common implemented formats.
+ * Legacy device/resource code still calls its local predicates until wrapped. */
+static BOOL supported_render_target_format8(D3DFORMAT format)
+{
+    return (format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8
+            || format == D3DFMT_R5G6B5 || format == D3DFMT_X1R5G5B5
+            || format == D3DFMT_A1R5G5B5 || format == D3DFMT_A4R4G4B4)
+            && supported_render_target_format(format);
+}
+
+static BOOL supported_depth_stencil_format8(D3DFORMAT format)
+{
+    return (format == D3DFMT_D16 || format == D3DFMT_D24S8
+            || format == D3DFMT_D32 || format == D3DFMT_D15S1
+            || format == D3DFMT_D24X8 || format == D3DFMT_D24X4S4)
+            && supported_depth_stencil_format(format);
+}
+
 static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
         D3DDEVTYPE type, D3DFORMAT display_format,
         D3DFORMAT backbuffer_format, WINBOOL windowed)
 {
     BOOL ok;
-    (void)iface; (void)windowed;
+    BOOL legacy8 = d3d_from_iface(iface)->compatibility_api == 8;
+    (void)windowed;
     ok = !adapter && type == D3DDEVTYPE_HAL
             && (display_format == D3DFMT_X8R8G8B8
-                || display_format == D3DFMT_R5G6B5)
-            && supported_backbuffer_format(backbuffer_format);
+                || display_format == D3DFMT_R5G6B5
+                || (legacy8 && display_format == D3DFMT_X1R5G5B5))
+            && (legacy8 ? supported_render_target_format8(backbuffer_format)
+                : supported_backbuffer_format(backbuffer_format));
 
     TRACE("OK CheckDeviceType adapter=%lu type=%lu display=%08lX backbuffer=%08lX "
             "windowed=%lu -> %08lX", adapter, (DWORD)type,
@@ -4164,9 +4185,12 @@ static HRESULT WINAPI d3d_check_multisample(IDirect3D9 *iface, UINT adapter,
         D3DMULTISAMPLE_TYPE multisample, DWORD *quality_levels)
 {
     BOOL ok;
-    (void)iface; (void)windowed;
+    (void)windowed;
     ok = !adapter && type == D3DDEVTYPE_HAL
-            && supported_multisample(format, multisample);
+            /* Version8 ignores the queried format; use a common colour format to
+             * keep its sample-count policy without imposing D3D9 format checks. */
+            && supported_multisample(d3d_from_iface(iface)->compatibility_api == 8
+                    ? D3DFMT_A8R8G8B8 : format, multisample);
     if (quality_levels) *quality_levels = ok ? 1u : 0u;
 
     TRACE("OK CheckDeviceMultiSampleType adapter=%lu type=%lu format=%08lX "
@@ -4180,9 +4204,11 @@ static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D9 *iface,
         D3DFORMAT render_format, D3DFORMAT depth_format)
 {
     BOOL ok;
-    (void)iface; (void)adapter_format; (void)render_format;
+    (void)adapter_format; (void)render_format;
     ok = !adapter && type == D3DDEVTYPE_HAL
-            && supported_depth_stencil_format(depth_format);
+            && (d3d_from_iface(iface)->compatibility_api == 8
+                    ? supported_depth_stencil_format8(depth_format)
+                    : supported_depth_stencil_format(depth_format));
 
     TRACE("OK CheckDepthStencilMatch adapter=%lu type=%lu adapter_fmt=%08lX "
             "render_fmt=%08lX depth_fmt=%08lX -> %08lX", adapter, (DWORD)type,
@@ -14868,6 +14894,27 @@ HRESULT WINAPI d9wg_d3d9_core_enum_adapter_modes8(IDirect3D9 *factory,
     result = IDirect3D9_EnumAdapterModes(factory, adapter, D3DFMT_UNKNOWN, index, &mode);
     if (SUCCEEDED(result)) CopyMemory(out, &mode, sizeof(mode));
     return result;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_type(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, UINT backbuffer, BOOL windowed)
+{
+    return IDirect3D9_CheckDeviceType(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)display, (D3DFORMAT)backbuffer, windowed);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_multisample8(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT format, BOOL windowed, UINT multisample)
+{
+    return IDirect3D9_CheckDeviceMultiSampleType(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)format, windowed, (D3DMULTISAMPLE_TYPE)multisample, NULL);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_depth(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, UINT render, UINT depth)
+{
+    return IDirect3D9_CheckDepthStencilMatch(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)display, (D3DFORMAT)render, (D3DFORMAT)depth);
 }
 
 #endif

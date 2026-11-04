@@ -933,3 +933,10 @@ private API8-profile core. Its resolution-major X1R5G5B5/R5G6B5/X8R8G8B8
 ordering stays intact; ordinary D3D9 still enumerates real driver modes by
 format. Previous-C native comparisons, old-DLL XP comparisons and both GPU
 backends cover the move. See `../deployments/d3d-webgpu-review-4K5.json`.
+
+Stage 4K6 delegates D3D8 device-type, multisample and depth-match queries to
+the private core factory. Its legacy format restrictions filter common
+predicates, while ordinary D3D9 query and quality results stay unchanged.
+Native current/prior-C matrix checks and old-DLL XP comparisons cover both
+APIs. See `../deployments/d3d-webgpu-review-4K6.json`. The legacy D3D8
+creation predicates remain until device/resource objects are wrapped.

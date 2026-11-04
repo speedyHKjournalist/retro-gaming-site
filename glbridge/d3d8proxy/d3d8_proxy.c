@@ -2145,16 +2145,8 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D8 *iface, UINT adapter,
         D3DDEVTYPE type, D3DFORMAT display_format,
         D3DFORMAT backbuffer_format, WINBOOL windowed)
 {
-    (void)iface;
-    (void)windowed;
-    if (adapter || type != D3DDEVTYPE_HAL)
-        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
-    if ((display_format != D3DFMT_X8R8G8B8
-            && display_format != D3DFMT_R5G6B5
-            && display_format != D3DFMT_X1R5G5B5)
-            || !supported_backbuffer_format(backbuffer_format))
-        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
-    return D3D_OK;
+    return d9wg_d3d9_core_check_type(d3d_from_iface(iface)->backend, adapter,
+            type, display_format, backbuffer_format, windowed);
 }
 
 /*
@@ -2254,25 +2246,16 @@ static HRESULT WINAPI d3d_check_multisample(IDirect3D8 *iface, UINT adapter,
         D3DDEVTYPE type, D3DFORMAT format, WINBOOL windowed,
         D3DMULTISAMPLE_TYPE multisample)
 {
-    (void)iface;
-    (void)format;
-    (void)windowed;
-    return !adapter && type == D3DDEVTYPE_HAL
-            && supported_multisample_type(multisample)
-            ? D3D_OK : D3DERR_NOTAVAILABLE;
+    return d9wg_d3d9_core_check_multisample8(d3d_from_iface(iface)->backend,
+            adapter, type, format, windowed, multisample);
 }
 
 static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D8 *iface,
         UINT adapter, D3DDEVTYPE type, D3DFORMAT adapter_format,
         D3DFORMAT render_format, D3DFORMAT depth_format)
 {
-    (void)iface;
-    (void)adapter_format;
-    (void)render_format;
-    if (adapter || type != D3DDEVTYPE_HAL)
-        return D8WG_TRACE_ERROR(D3DERR_NOTAVAILABLE);
-    return supported_depth_stencil_format(depth_format)
-            ? D3D_OK : D3DERR_NOTAVAILABLE;
+    return d9wg_d3d9_core_check_depth(d3d_from_iface(iface)->backend,
+            adapter, type, adapter_format, render_format, depth_format);
 }
 
 static HRESULT WINAPI d3d_get_device_caps(IDirect3D8 *iface, UINT adapter,

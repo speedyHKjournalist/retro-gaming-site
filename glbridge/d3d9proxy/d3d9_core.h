@@ -36,4 +36,10 @@ HRESULT WINAPI d9wg_d3d9_core_adapter_display_mode(struct IDirect3D9 *factory,
 UINT WINAPI d9wg_d3d9_core_adapter_mode_count8(struct IDirect3D9 *factory, UINT adapter);
 HRESULT WINAPI d9wg_d3d9_core_enum_adapter_modes8(struct IDirect3D9 *factory,
         UINT adapter, UINT index, void *out);
+HRESULT WINAPI d9wg_d3d9_core_check_type(struct IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, UINT backbuffer, BOOL windowed);
+HRESULT WINAPI d9wg_d3d9_core_check_multisample8(struct IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT format, BOOL windowed, UINT multisample);
+HRESULT WINAPI d9wg_d3d9_core_check_depth(struct IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, UINT render, UINT depth);
 #endif
