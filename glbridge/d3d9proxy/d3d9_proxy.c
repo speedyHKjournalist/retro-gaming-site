@@ -917,7 +917,8 @@ typedef struct D9StreamBinding {
 struct D9StateBlock {
     IDirect3DStateBlock9 iface;
     LONG refcount;
-    BOOL device_parent_ref; /* false until a recorded block is published */
+    BOOL device_parent_ref; /* false for recording and device-owned8 tokens */
+    DWORD handle8; /* zero for ordinary9 COM blocks; never a protocol resource */
     D9Device *device;
 
     BOOL has_render_state[D9_MAX_RENDER_STATES];
@@ -1589,6 +1590,7 @@ static IDirect3DPixelShader9Vtbl g_pixel_shader_vtbl;
 static void device_clear_bindings(D9Device *device);
 static BOOL device_has_reset_blockers(D9Device *device);
 static void device_release_owned_references(D9Device *device);
+static void device_clear_state_block_handles8(D9Device *device);
 static BOOL emit_device_state_after_reset(D9Device *device);
 static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture);
 static BOOL emit_cube_texture_update(D9CubeTexture *texture, UINT face,
@@ -3864,6 +3866,7 @@ static void device_release_owned_references(D9Device *device)
             InterlockedCompareExchange(&device->refcount, 0, 0),
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
     device_cancel_recording(device);
+    device_clear_state_block_handles8(device);
     device_clear_bindings(device);
     device_clear_fvf_cache(device);
     TRACE("LEAVE Device.ReleaseOwnedReferences device=%08lX refs=%ld child_refs=%ld",
@@ -13127,6 +13130,19 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
+/* Device-owned8 tokens keep block storage, not a public device reference.
+ * Detach each token before resource finalizers can re-enter this device. */
+static void device_clear_state_block_handles8(D9Device *device)
+{
+    for (;;) {
+        D9StateBlock *block = device->state_blocks;
+        while (block && !block->handle8) block = block->next_device_resource;
+        if (!block) break;
+        block->handle8 = 0;
+        IDirect3DStateBlock9_Release(&block->iface);
+    }
+}
+
 /* ---- IDirect3DVertexBuffer9 ---- */
 
 static HRESULT WINAPI vb_query_interface(IDirect3DVertexBuffer9 *iface,
@@ -16137,6 +16153,104 @@ HRESULT WINAPI d9wg_d3d9_core_record_state_block8(IDirect3DDevice9 *iface,
     if (SUCCEEDED(hr)) hr = IDirect3DDevice9_EndStateBlock(iface, out);
     if (FAILED(hr)) device_cancel_recording(device_from_iface(iface));
     return hr;
+}
+
+/* A token belongs to one compatibility8 device and is never exposed as a
+ * public9 COM block. Temporary operation references also retain only storage. */
+static D9StateBlock *state_block_handle8(D9Device *device, DWORD token)
+{
+    if (!token || device_compatibility_api(device) != 8u
+            || device->releasing_owned_refs)
+        return NULL;
+    D9StateBlock *block = device->state_blocks;
+    while (block && block->handle8 != token) block = block->next_device_resource;
+    return block;
+}
+
+static void state_block_adopt_handle8(D9StateBlock *block, DWORD token)
+{
+    block->handle8 = token;
+    block->device_parent_ref = FALSE;
+    device_child_release(block->device);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(IDirect3DDevice9 *iface,
+        D9WGStateBlockRecorder8 recorder, const void *snapshot, DWORD *out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = 0;
+    if (!iface || !recorder
+            || device_compatibility_api(device_from_iface(iface)) != 8u
+            || device_from_iface(iface)->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    IDirect3DStateBlock9 *created = NULL;
+    IDirect3DDevice9_AddRef(iface);
+    HRESULT hr = d9wg_d3d9_core_record_state_block8(iface, recorder, snapshot, &created);
+    if (SUCCEEDED(hr)) {
+        DWORD token;
+        do { token = allocate_handle(); }
+        while (state_block_handle8(device_from_iface(iface), token));
+        state_block_adopt_handle8(state_block_from_iface(created), token);
+        *out = token;
+    }
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_apply_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD token)
+{
+    if (!iface) return D3DERR_INVALIDCALL;
+    D9StateBlock *block = state_block_handle8(device_from_iface(iface), token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    IDirect3DStateBlock9_AddRef(&block->iface);
+    HRESULT hr = IDirect3DStateBlock9_Apply(&block->iface);
+    IDirect3DStateBlock9_Release(&block->iface);
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+/* Frontend Capture supplies a newly selected raw8 snapshot. Rebuild first;
+ * callback failure leaves the old token/value untouched. A reentrant deletion
+ * or replacement wins over this call, so a retired token cannot be revived. */
+HRESULT WINAPI d9wg_d3d9_core_capture_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD token, D9WGStateBlockRecorder8 recorder, const void *snapshot)
+{
+    if (!iface || !recorder) return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9StateBlock *block = state_block_handle8(device, token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DStateBlock9 *created = NULL;
+    IDirect3DDevice9_AddRef(iface);
+    IDirect3DStateBlock9_AddRef(&block->iface);
+    HRESULT hr = d9wg_d3d9_core_record_state_block8(iface, recorder, snapshot, &created);
+    if (SUCCEEDED(hr)) {
+        if (state_block_handle8(device, token) != block) {
+            IDirect3DStateBlock9_Release(created);
+            hr = D3DERR_INVALIDCALL;
+        } else {
+            block->handle8 = 0;
+            state_block_adopt_handle8(state_block_from_iface(created), token);
+            IDirect3DStateBlock9_Release(&block->iface); /* token ownership */
+        }
+    }
+    IDirect3DStateBlock9_Release(&block->iface); /* operation storage pin */
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_delete_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD token)
+{
+    if (!iface) return D3DERR_INVALIDCALL;
+    D9StateBlock *block = state_block_handle8(device_from_iface(iface), token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    block->handle8 = 0;
+    IDirect3DStateBlock9_Release(&block->iface);
+    IDirect3DDevice9_Release(iface);
+    return D3D_OK;
 }
 
 /* D3D8 keeps the unsigned BaseVertexIndex with its index binding. The

@@ -832,3 +832,27 @@ BothGPUs verify20complete images/1,280pixels zeroerror. Framebuffer CPU
 replies areexplicit analytic injection,separate from actualCPUvertex results
 andGPU images. Evidence:`../deployments/d3d-webgpu-review-4K36.json`.
 Fullpublic8 DWORD state-block ownership/predefined scopes andwrappers remain.
+
+
+### Review 4K37: device-owned8 DWORD state-block tokens
+
+Private create/capture/apply/delete entries (stdcall16/16/8/8) map DWORD tokens
+to real9 state blocks built by the synchronous frontend recorder. Tokens hold
+block storage without a device parent pin, and final device release drains
+them. Capture replaces a prepared snapshot behind the same DWORD; failure
+preserves the original. Operation pins protect reentrant deletion, and a token
+retired during Capture cannot be resurrected. Resource finalizers run after
+detachment; token operations are refused during final device cleanup.
+
+Native:19,161checks/1,117cases,25strict semantic mutants andtwoASAN families.
+Eight resource families,ordinary9 coexistence,public-zero/device-first cleanup,
+cross-device/profile/stale tokens,collision skip,actual texture private-data
+callbacks,Apply-time deletion anddevice revival are covered. Source audit
+preserves640 existing9 functions;owned cleanup adds only the drain call and
+state-block storage adds one zero-initialized DWORD. Wholepublic8 unchanged.
+XP:accurate4K36old/current8/ordinary9/coreSDK120/220,5devices/5Reset,token
+Capture failure/stable replacement/deletion andunreleased empty-token cleanup.
+Independentwire catches11,753corruptions. DualGPU:20fullimages/1,280pixels
+zeroerror. CPUframebuffer replies areexplicit analytic injection. Public8
+wrappers/raw scopes/Get metadata still need frontend integration. Evidence:
+`../deployments/d3d-webgpu-review-4K37.json`.

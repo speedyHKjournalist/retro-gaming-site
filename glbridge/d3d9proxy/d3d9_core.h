@@ -159,6 +159,18 @@ typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *devic
 HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot,
         struct IDirect3DStateBlock9 **out);
+/* Device-owned DWORD state blocks: no public9 block/device parent pin.
+ * Raw8 scopes and Get metadata remain frontend-owned. Capture rebuilds the
+ * mapped snapshot behind the same token; failed rebuild preserves it. */
+HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(struct IDirect3DDevice9 *device,
+        D9WGStateBlockRecorder8 recorder, const void *snapshot, DWORD *out);
+HRESULT WINAPI d9wg_d3d9_core_capture_state_block_handle8(struct IDirect3DDevice9 *device,
+        DWORD token, D9WGStateBlockRecorder8 recorder, const void *snapshot);
+HRESULT WINAPI d9wg_d3d9_core_apply_state_block_handle8(struct IDirect3DDevice9 *device,
+        DWORD token);
+HRESULT WINAPI d9wg_d3d9_core_delete_state_block_handle8(struct IDirect3DDevice9 *device,
+        DWORD token);
+
 /* Raw8 BaseVertexIndex stays with the frontend index binding/Get shadow.
  * This backend entry preserves its bits in core9 per-draw signed storage. */
 HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(struct IDirect3DDevice9 *device,

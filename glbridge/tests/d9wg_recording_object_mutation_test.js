@@ -12,9 +12,16 @@ const cases=[
  ["recorded low light appears live","block->has_light[index] = TRUE;block->lights[index] = *light;","block->has_light[index] = TRUE;block->lights[index] = *light;device->lights[index] = *light;device->light_set[index] = TRUE;"],
  ["recorded default light is empty","d9wg_light_default(&entry->light);entry->light_mask = TRUE;","memset(&entry->light,0,sizeof(entry->light));entry->light_mask = TRUE;"],
  ["invalid End cancels recording","if (!block || !block_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);","if (!block || !block_out) {device->recording_result = NULL;return TRACE_REFUSE(D3DERR_INVALIDCALL);}"],
- ["End releases captured objects early","    *block_out = &block->iface;\n    return D3D_OK;\n}\n\n/* ---- IDirect3DVertexBuffer9","    state_block_release_references(block);\n    *block_out = &block->iface;\n    return D3D_OK;\n}\n\n/* ---- IDirect3DVertexBuffer9"]
+ ["End releases captured objects early","    *block_out = &block->iface;\n    return D3D_OK;","    state_block_release_references(block);\n    *block_out = &block->iface;\n    return D3D_OK;"]
 ];
 try{for(const [label,before,after] of cases){assert(source.includes(before),label);let subject=source;
+if(label==="End releases captured objects early"){
+ const m=/static HRESULT WINAPI device_end_state_block\(/.exec(source);assert(m,label);
+ let end=source.indexOf("{",m.index)+1,depth=1;
+ for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}
+ const body=source.slice(m.index,end);assert(body.includes(before),label);
+ subject=source.slice(0,m.index)+body.replace(before,after)+source.slice(end);
+}
 const recordedSetters={"recorded VB is not retained":"device_set_stream_source","recorded cube is not retained":"device_set_texture","recorded VS is not retained":"device_set_vertex_shader","recorded PS is not retained":"device_set_pixel_shader","recorded declaration is not retained":"device_set_vertex_declaration"};
-if(recordedSetters[label]){const match=new RegExp("static HRESULT WINAPI "+recordedSetters[label]+"\\(").exec(source);assert(match,label);const at=source.indexOf("    if (device->recording_result) {",match.index);assert(at>=0,label);subject=source.slice(0,at)+source.slice(at).replace(before,after);}else subject=source.replace(before,after);
+if(recordedSetters[label]){const match=new RegExp("static HRESULT WINAPI "+recordedSetters[label]+"\\(").exec(source);assert(match,label);const at=source.indexOf("    if (device->recording_result) {",match.index);assert(at>=0,label);subject=source.slice(0,at)+source.slice(at).replace(before,after);}else if(label!=="End releases captured objects early")subject=source.replace(before,after);
 const file=path.join(directory,"objects.c");fs.writeFileSync(file,subject);const run=spawnSync(process.execPath,[path.join(__dirname,"d9wg_recording_object_test.js")],{env:{...process.env,D9WG_RECORD_OBJECT_SOURCE:file},encoding:"utf8"});assert.notEqual(run.status,0,"survived "+label);assert.match(run.stderr,/D3D9 object recording line|Assertion.*failed|Assertion failed/,"runtime assertion required: "+label);}console.log("PASS D3D9 object recording mutations: 11/11; COM ownership, live isolation, sparse defaults, invalid End retention and completed block lifetime");}finally{fs.rmSync(directory,{recursive:true,force:true});}
