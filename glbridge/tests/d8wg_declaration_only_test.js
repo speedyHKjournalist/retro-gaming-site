@@ -9,7 +9,7 @@ const code=`#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include "${process.env.D8WG_DECL_ONLY_PROTOCOL||path.join(root,'d3d8proxy/d3d8_protocol.h')}"
-typedef uint32_t DWORD,UINT;typedef int BOOL,HRESULT;
+typedef uint32_t DWORD,UINT;typedef unsigned char BYTE;typedef int BOOL,HRESULT;
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
@@ -25,6 +25,9 @@ typedef uint32_t DWORD,UINT;typedef int BOOL,HRESULT;
 #define D8WG_MAX_STREAMS 16
 #define D3DVSD_TOKENTYPESHIFT 29
 #define D3DVSD_TOKEN_END 7
+#define D3DVSD_TOKEN_CONSTMEM 4
+#define D3DVSD_CONSTCOUNTMASK D3D8VSD_CONSTCOUNTMASK
+#define D3DVSD_CONSTCOUNTSHIFT D3D8VSD_CONSTCOUNTSHIFT
 #define D3DSHADER_VERSION_MINOR(v) ((v)&255)
 #define D3DSHADER_VERSION_MAJOR(v) (((v)>>8)&255)
 #define CopyMemory memcpy
@@ -47,12 +50,10 @@ typedef D8Device IDirect3DDevice8;
 static D8Device *device_from_iface(D8Device *p){return p;}
 static uint8_t wire[65536];static uint32_t wire_at=8,ops[128],offsets[128],wire_count;static int g_transport_lock;
 static uint8_t *batch_base(void){return wire;}
-static BOOL reserve_command_locked(uint32_t op,uint32_t size,uint32_t bytes,void *unused,uint8_t **payload,uint8_t **data){(void)unused;if(wire_count==128||wire_at+size+bytes>65536)abort();ops[wire_count]=op;offsets[wire_count++]=wire_at;*payload=wire+wire_at;*data=*payload+size;memset(*payload,0,size+bytes);wire_at+=size+bytes;return TRUE;}
+static BOOL reserve_command_locked(uint32_t op,uint32_t size,uint32_t bytes,void *unused,uint8_t **payload,uint8_t **data){(void)unused;if(op==D9WG_OP_CREATE_VERTEX_SHADER&&!bytes)return FALSE;if(wire_count==128||wire_at+size+bytes>65536)abort();ops[wire_count]=op;offsets[wire_count++]=wire_at;*payload=wire+wire_at;*data=*payload+size;memset(*payload,0,size+bytes);wire_at+=size+bytes;return TRUE;}
 static BOOL emit_command(uint32_t op,const void *p,uint32_t size){uint8_t *payload,*data;if(!reserve_command_locked(op,size,0,NULL,&payload,&data))return FALSE;memcpy(payload,p,size);return TRUE;}
 static BOOL emit_set_shader(uint32_t op,D8Device *device,uint32_t handle){D9WGSetShader p={device->handle,handle};return emit_command(op,&p,sizeof(p));}
 static BOOL emit_set_fvf(D8Device *device,uint32_t fvf){D9WGSetFVF p={device->handle,fvf,0,0};return emit_command(D9WG_OP_SET_FVF,&p,sizeof(p));}
-static unsigned const_start,const_count;static float const_values[4];
-static BOOL emit_set_shader_constant(uint32_t op,D8Device *d,UINT start,const float *data,UINT count){(void)d;if(op!=D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F||count!=1)abort();const_start=start;const_count=count;memcpy(const_values,data,16);return TRUE;}
 static BOOL validate_shader_body(const DWORD *p,UINT maximum,BOOL pixel,UINT minor,UINT *count){(void)p;(void)maximum;(void)pixel;(void)minor;(void)count;abort();}
 static void shader_bytecode_hash(const DWORD *p,UINT n,uint32_t *low,uint32_t *high){(void)p;(void)n;(void)low;(void)high;abort();}
 static DWORD allocate_shader_handle(void){static DWORD next=1;DWORD handle=next;next+=2;return handle;}
@@ -75,7 +76,7 @@ int main(void){
  CHECK(device_bind_vertex_shader(&device,b,recorded.state.vertex_shader_ref)==0&&second->state_refs==2);shader_assign(&recorded.state.vertex_shader_ref,NULL);CHECK(second->state_refs==1);CHECK(device_delete_vertex_shader(&device,a)==0&&device_set_vertex_shader(&device,0)==0&&!device.vertex_shaders);
  for(unsigned i=0;i<wire_count;++i){CHECK(ops[i]!=D9WG_OP_CREATE_VERTEX_SHADER);if(ops[i]==D9WG_OP_DESTROY_RESOURCE)CHECK(((D9WGDestroyResource*)(wire+offsets[i]))->resource_kind==D9WG_RESOURCE_VERTEX_DECLARATION);}
  const DWORD constants[]={0x20000000,0x40020000,0x82000003,0x3e800000,0x3f000000,0x3f400000,0x3f800000,0xffffffff};
- CHECK(device_create_vertex_shader(&device,constants,NULL,&a,0)==0&&device_set_vertex_shader(&device,a)==0&&const_start==3&&const_count==1&&const_values[0]==.25f&&const_values[3]==1&&device_delete_vertex_shader(&device,a)==0);
+ CHECK(device_create_vertex_shader(&device,constants,NULL,&a,0)==0&&device_set_vertex_shader(&device,a)==0&&device.vertex_shader_ref->const_vector_count==1&&device.vertex_shader_ref->const_mask[3]&&device.vertex_shader_ref->const_data[12]==0x3e800000&&device.vertex_shader_ref->const_data[15]==0x3f800000&&device_delete_vertex_shader(&device,a)==0);
  const DWORD bad_normal[]={0x20000000,0x40020000,0x40010003,0xffffffff},bad_constants[]={0x20000000,0x40020000,0x82000060,0,0,0,0,0xffffffff};
  CHECK(device_create_vertex_shader(&device,bad_normal,NULL,&a,0)==D3DERR_INVALIDCALL&&a==0&&!device.vertex_shaders);CHECK(device_create_vertex_shader(&device,bad_constants,NULL,&a,0)==D3DERR_INVALIDCALL&&a==0);
  for(unsigned failure=1;failure<=2;++failure){fail_at=attempts+failure;before=wire_count;CHECK(device_create_vertex_shader(&device,declaration,NULL,&a,0)==E_OUTOFMEMORY&&a==0&&!device.vertex_shaders&&wire_count==before);fail_at=0;}

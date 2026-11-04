@@ -454,3 +454,18 @@ programmable draws. SwiftShader and Metal each verify five frames/320 pixels;
 all 22 shader resources retire before fallback cleanup. Public8 device/resource/
 handle wrapping and numeric shader differential testing remain open.
 See `../deployments/d3d-webgpu-review-4K13.json`.
+
+Stage 4K14 preserves all D3DVSD_CONST blocks as shader-local DEF instructions
+in private wire code. Literal data cannot terminate the declaration scan;
+original public function/declaration queries remain unchanged. Binding no
+longer uploads declaration values into device constants, so local precedence
+survives API writes, shader switches, retained state blocks and Reset. Fixed
+NULL-function declarations keep their layout without a shader/local upload.
+Native checks cover bounds, holes, deterministic last-block overlap handling,
+bit patterns, byte/hash contracts and API-bank isolation. Native HAL overlap
+precedence and NaN arithmetic are not established by these checks.
+XP SDK120/220 compares accepted 4K13 and current DLLs. Both GPU backends verify
+14 frames/896 pixels, including the old lost-block regression and current
+red/green/gap/overwrite/state-block/Reset results. Direct public8 backbuffer
+LockRect remains open; the probe uses existing CopyRects to CPU surfaces.
+See `../deployments/d3d-webgpu-review-4K14.json`.

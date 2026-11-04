@@ -470,10 +470,11 @@ struct D8Shader {
      * every D3D8 shader to the first one compiled in the session. */
     uint32_t hash_low;
     uint32_t hash_high;
-    /* D3DVSD_CONST payload. D3D8 applies it when the shader is set, not when
-     * it is created, so it is replayed by device_set_vertex_shader(). */
-    UINT const_start;
+    /* Declaration constants are shader-local, not device/API constant state.
+     * Keep every addressed vector; emit them as DEFs in the private wire code.
+     * GetVertexShaderFunction still returns the original application code. */
     UINT const_vector_count;
+    BYTE const_mask[D8WG_MAX_VS_CONSTANTS];
     DWORD const_data[D8WG_MAX_VS_CONSTANTS * 4u];
 };
 
@@ -833,7 +834,14 @@ static BOOL validate_vertex_declaration(const DWORD *tokens, UINT max_tokens,
         token_type = (token >> D3DVSD_TOKENTYPESHIFT) & 0x7u;
         if (token_type > (DWORD)D3DVSD_TOKEN_END)
             return FALSE;
-        ++offset;
+        /* Literal DWORDs may themselves equal END or resemble declaration
+         * tokens. They are data, so only inspect the next token after them. */
+        UINT words = token_type == D3DVSD_TOKEN_CONSTMEM
+                ? 1u + ((token & D3DVSD_CONSTCOUNTMASK)
+                        >> D3DVSD_CONSTCOUNTSHIFT) * 4u : 1u;
+        if (words > max_tokens - offset)
+            return FALSE;
+        offset += words;
     }
     return FALSE;
 }
@@ -874,7 +882,7 @@ static void free_shader_list(D8Shader *list)
  */
 static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
         D9WGVertexElement *elements, UINT max_elements, UINT *element_count,
-        DWORD *const_data, UINT max_const_vectors, UINT *const_start,
+        DWORD *const_data, UINT max_const_vectors, BYTE *const_mask,
         UINT *const_vector_count)
 {
     UINT offsets[D8WG_MAX_STREAMS];
@@ -884,7 +892,7 @@ static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
 
     ZeroMemory(offsets, sizeof(offsets));
     *element_count = 0;
-    *const_start = 0;
+    ZeroMemory(const_mask, max_const_vectors * sizeof(*const_mask));
     *const_vector_count = 0;
 
     for (i = 0; i < token_count; ++i) {
@@ -935,9 +943,9 @@ static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
             break;
         case D3D8VSD_TOKEN_CONSTMEM: {
             /*
-             * D3DVSD_CONST embeds constant data in the declaration. D3D8 loads
-             * it when the shader is *set*, not when it is created, so it is
-             * captured here and replayed by device_set_vertex_shader().
+             * Each block contributes shader-local constants. Keep disjoint
+             * ranges and holes separately so no device constant is overwritten.
+             * A repeated register takes the last declaration block's value.
              */
             UINT vectors = (token & D3D8VSD_CONSTCOUNTMASK)
                     >> D3D8VSD_CONSTCOUNTSHIFT;
@@ -947,9 +955,13 @@ static BOOL declaration_to_elements(const DWORD *tokens, UINT token_count,
                     (token & D3D8VSD_CONSTADDRESSMASK) > max_const_vectors - vectors
                     || i + dwords >= token_count)
                 return FALSE;
-            *const_start = token & D3D8VSD_CONSTADDRESSMASK;
-            *const_vector_count = vectors;
-            CopyMemory(const_data, &tokens[i + 1], dwords * sizeof(DWORD));
+            UINT start = token & D3D8VSD_CONSTADDRESSMASK;
+            for (UINT reg = start; reg < start + vectors; ++reg) {
+                if (!const_mask[reg]) ++*const_vector_count;
+                const_mask[reg] = TRUE;
+            }
+            CopyMemory(const_data + start * 4u, &tokens[i + 1],
+                    dwords * sizeof(DWORD));
             i += dwords;
             break;
         }
@@ -1014,7 +1026,8 @@ static BOOL emit_create_vertex_shader(D8Device* device, D8Shader* shader)
     uint8_t* payload;
     uint8_t* element_blob;
     uint8_t* code_blob;
-    UINT code_bytes = shader->code_token_count * (UINT)sizeof(DWORD);
+    UINT wire_tokens = shader->code_token_count + shader->const_vector_count * 6u;
+    UINT code_bytes = wire_tokens * (UINT)sizeof(DWORD);
     UINT element_bytes;
     BOOL result;
 
@@ -1038,13 +1051,25 @@ static BOOL emit_create_vertex_shader(D8Device* device, D8Shader* shader)
     if (result && !shader->declaration_only) {
         command.device_handle = device->handle;
         command.resource_handle = shader->handle;
-        command.instruction_token_count = shader->code_token_count;
+        DWORD *code = (DWORD *)code_blob;
+        UINT at = 1;
+        code[0] = shader->code_tokens[0];
+        for (UINT reg = 0; reg < D8WG_MAX_VS_CONSTANTS; ++reg) {
+            if (!shader->const_mask[reg]) continue;
+            code[at++] = 0x00000051u; /* SM1 DEF */
+            code[at++] = 0xa00f0000u | reg; /* cN.xyzw */
+            CopyMemory(code + at, shader->const_data + reg * 4u, 16);
+            at += 4;
+        }
+        CopyMemory(code + at, shader->code_tokens + 1,
+                (shader->code_token_count - 1u) * sizeof(DWORD));
+        shader_bytecode_hash(code, wire_tokens, &shader->hash_low,
+                &shader->hash_high);
+        command.instruction_token_count = wire_tokens;
         command.code_offset = (uint32_t)(code_blob - batch_base());
         command.bytecode_hash_low = shader->hash_low;
         command.bytecode_hash_high = shader->hash_high;
         CopyMemory(payload, &command, sizeof(command));
-        if (code_bytes)
-            CopyMemory(code_blob, shader->code_tokens, code_bytes);
     }
     LeaveCriticalSection(&g_transport_lock);
     return result;
@@ -3241,13 +3266,10 @@ static HRESULT WINAPI device_get_indices(IDirect3DDevice8 *iface,
 }
 
 /*
- * Binds a D3D8 vertex shader: its declaration, its code, and any constants
- * D3DVSD_CONST embedded in the declaration.
- *
- * D3D8 applies declaration constants when the shader is set rather than when
- * it is created, so they are replayed here on every bind. That is what makes
- * a shader whose declaration seeds c0..cN behave the same on the second bind
- * as on the first, even after another shader has overwritten those registers.
+ * Bind the D3D8 declaration/code pair. Declaration constants are local DEFs
+ * in the private code, so binding never changes the device constant bank.
+ * This also preserves local precedence after SetVertexShaderConstant, shader
+ * switches, state-block replay and Reset without an extra constant upload.
  */
 static BOOL emit_bind_vertex_shader(D8Device *device, D8Shader *shader)
 {
@@ -3261,12 +3283,6 @@ static BOOL emit_bind_vertex_shader(D8Device *device, D8Shader *shader)
             sizeof(declaration)))
         return FALSE;
     if (!emit_set_shader(D9WG_OP_SET_VERTEX_SHADER, device, shader->declaration_only ? 0 : shader->handle))
-        return FALSE;
-    if (shader->const_vector_count
-            && !emit_set_shader_constant(D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
-                    device, shader->const_start,
-                    (const float *)shader->const_data,
-                    shader->const_vector_count))
         return FALSE;
     return TRUE;
 }
@@ -6875,7 +6891,7 @@ static HRESULT WINAPI device_create_vertex_shader(IDirect3DDevice8* iface,
     BOOL declaration_valid = declaration_to_elements(entry->declaration_tokens,
         entry->declaration_token_count, entry->elements, D8WG_MAX_VERTEX_ELEMENTS,
         &entry->element_count, entry->const_data, D8WG_MAX_VS_CONSTANTS,
-        &entry->const_start, &entry->const_vector_count);
+        entry->const_mask, &entry->const_vector_count);
     if (declaration_valid && entry->declaration_only) {
         for (UINT i = 0; i < entry->element_count; ++i) {
             const D9WGVertexElement* element = entry->elements + i;

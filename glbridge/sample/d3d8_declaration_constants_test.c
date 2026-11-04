@@ -1,0 +1,38 @@
+/* D3D8 declaration-local constants, original public bytes and lifecycle. */
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#include <windows.h>
+#include <initguid.h>
+#include <d3d8.h>
+static HANDLE logfile;static HWND window;static char directory[MAX_PATH];static UINT frame;
+static void report(const char*s){DWORD n;WriteFile(logfile,s,lstrlenA(s),&n,NULL);WriteFile(logfile,"\r\n",2,&n,NULL);FlushFileBuffers(logfile);}
+static void check(BOOL ok,const char*s){if(!ok){report(s);ExitProcess(1);}}
+static void expect(HRESULT hr,const char*s){if(FAILED(hr)){char line[160];wsprintfA(line,"%s hr=%08lX",s,(DWORD)hr);report(line);ExitProcess(1);}}
+static BOOL equal(const void*a,const void*b,UINT n){const volatile BYTE*x=a,*y=b;for(UINT i=0;i<n;i++)if(x[i]!=y[i])return FALSE;return TRUE;}
+static void setup(IDirect3DDevice8*d){expect(IDirect3DDevice8_SetRenderState(d,D3DRS_ZENABLE,FALSE),"FAIL Z");expect(IDirect3DDevice8_SetRenderState(d,D3DRS_LIGHTING,FALSE),"FAIL lighting");expect(IDirect3DDevice8_SetRenderState(d,D3DRS_CULLMODE,D3DCULL_NONE),"FAIL cull");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_COLOROP,D3DTOP_SELECTARG2),"FAIL color op");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_COLORARG2,D3DTA_DIFFUSE),"FAIL color arg");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_ALPHAOP,D3DTOP_SELECTARG2),"FAIL alpha op");expect(IDirect3DDevice8_SetTextureStageState(d,0,D3DTSS_ALPHAARG2,D3DTA_DIFFUSE),"FAIL alpha arg");}
+static void draw(IDirect3DDevice8*d,UINT module,UINT sdk,UINT step,DWORD color)
+{
+ const float v[6][4]={{-1.25f,1.25f,.5f,1},{1.25f,1.25f,.5f,1},{-1.25f,-1.25f,.5f,1},{-1.25f,-1.25f,.5f,1},{1.25f,1.25f,.5f,1},{1.25f,-1.25f,.5f,1}};
+ expect(IDirect3DDevice8_BeginScene(d),"FAIL begin");expect(IDirect3DDevice8_DrawPrimitiveUP(d,D3DPT_TRIANGLELIST,2,v,16),"FAIL draw");expect(IDirect3DDevice8_EndScene(d),"FAIL end");IDirect3DSurface8*back=NULL;expect(IDirect3DDevice8_GetBackBuffer(d,0,D3DBACKBUFFER_TYPE_MONO,&back),"FAIL back");IDirect3DSurface8*cpu=NULL;expect(IDirect3DDevice8_CreateImageSurface(d,8,8,D3DFMT_A8R8G8B8,&cpu),"FAIL CPU surface");expect(IDirect3DDevice8_CopyRects(d,back,NULL,0,cpu,NULL),"FAIL transport readback");D3DLOCKED_RECT lock;expect(IDirect3DSurface8_LockRect(cpu,&lock,NULL,D3DLOCK_READONLY),"FAIL CPU lock");expect(IDirect3DSurface8_UnlockRect(cpu),"FAIL CPU unlock");check(!IDirect3DSurface8_Release(cpu)&&!IDirect3DSurface8_Release(back),"FAIL surface refs");char line[180];wsprintfA(line,"CONST8 FRAME index=%u module=%u sdk=%u step=%u color=%08lX readback=1",frame++,module,sdk,step,color);report(line);
+}
+static DWORD shader(IDirect3DDevice8*d,UINT reg,BOOL literal_end,BOOL fixed)
+{
+ DWORD decl[]={D3DVSD_STREAM(0),D3DVSD_REG(0,D3DVSDT_FLOAT4),D3DVSD_CONST(2,1),0x3f800000,0,0,0x3f800000,D3DVSD_CONST(8,1),0,0x3f800000,0,0x3f800000,D3DVSD_CONST(95,1),0,0,0,0x3f800000,D3DVSD_END()};if(literal_end)decl[13]=0xffffffff;const DWORD code[]={0xfffe0101,1,0xc00f0000,0x90e40000,1,0xd00f0000,0xa0e40000u|reg,0xffff};DWORD h=0;expect(IDirect3DDevice8_CreateVertexShader(d,decl,fixed?NULL:code,&h,0),"FAIL create local shader");check(h!=0,"FAIL handle");DWORD bytes=0,out[32];expect(IDirect3DDevice8_GetVertexShaderDeclaration(d,h,NULL,&bytes),"FAIL decl size");check(bytes==sizeof(decl),"FAIL decl bytes");expect(IDirect3DDevice8_GetVertexShaderDeclaration(d,h,out,&bytes),"FAIL decl query");check(equal(out,decl,sizeof(decl)),"FAIL original declaration");bytes=sizeof(out);out[0]=0xcccccccc;expect(IDirect3DDevice8_GetVertexShaderFunction(d,h,out,&bytes),"FAIL function query");check(bytes==(fixed?0:sizeof(code))&&(fixed?out[0]==0xcccccccc:equal(out,code,bytes)),"FAIL original function");return h;
+}
+static void bank(IDirect3DDevice8*d,const float*expected){float actual[4];expect(IDirect3DDevice8_GetVertexShaderConstant(d,2,actual,1),"FAIL get bank");check(equal(actual,expected,16),"FAIL local constant polluted API bank");}
+void WINAPI WinMainCRTStartup(void)
+{
+ GetModuleFileNameA(NULL,directory,sizeof(directory));UINT at=lstrlenA(directory);while(at&&directory[at-1]!='\\')at--;directory[at]=0;char path[MAX_PATH];lstrcpyA(path,directory);lstrcatA(path,"CONST8.TXT");logfile=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);check(logfile!=INVALID_HANDLE_VALUE,"FAIL log");window=CreateWindowExA(0,"STATIC","Declaration local constants",WS_POPUP|WS_VISIBLE,0,0,8,8,NULL,NULL,GetModuleHandleA(NULL),NULL);check(window!=NULL,"FAIL window");
+ HMODULE modules[2];for(UINT m=0;m<2;m++){lstrcpyA(path,directory);lstrcatA(path,m?"D3D8.DLL":"BASE8.DLL");modules[m]=LoadLibraryA(path);check(modules[m]!=NULL,"FAIL module load");}
+ for(UINT module=0;module<2;module++)for(UINT sdk=120;sdk<=220;sdk+=100){
+  IDirect3D8*(WINAPI*make)(UINT)=(void*)GetProcAddress(modules[module],"Direct3DCreate8");check(make!=NULL,"FAIL export");IDirect3D8*root=make(sdk);check(root!=NULL,"FAIL factory");D3DPRESENT_PARAMETERS pp;ZeroMemory(&pp,sizeof(pp));pp.BackBufferWidth=pp.BackBufferHeight=8;pp.BackBufferFormat=D3DFMT_A8R8G8B8;pp.BackBufferCount=1;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.hDeviceWindow=window;pp.Windowed=TRUE;IDirect3DDevice8*d=NULL;expect(IDirect3D8_CreateDevice(root,0,D3DDEVTYPE_HAL,window,D3DCREATE_SOFTWARE_VERTEXPROCESSING,&pp,&d),"FAIL create device");check(IDirect3D8_Release(root)==1,"FAIL early root release");setup(d);
+  float constants[96][4];for(UINT i=0;i<96;i++){constants[i][0]=constants[i][1]=0;constants[i][2]=constants[i][3]=1;}expect(IDirect3DDevice8_SetVertexShaderConstant(d,0,constants,96),"FAIL initial bank");DWORD red=shader(d,2,module,FALSE);expect(IDirect3DDevice8_SetVertexShader(d,red),"FAIL bind red");bank(d,constants[2]);draw(d,module,sdk,0,module?0xffff0000:0xff0000ff);
+  if(module){
+   DWORD green=shader(d,8,TRUE,FALSE),gap=shader(d,4,TRUE,FALSE),fixed=shader(d,0,TRUE,TRUE);expect(IDirect3DDevice8_SetVertexShader(d,fixed),"FAIL fixed bind");bank(d,constants[2]);expect(IDirect3DDevice8_DeleteVertexShader(d,fixed),"FAIL fixed delete");expect(IDirect3DDevice8_SetVertexShader(d,green),"FAIL green bind");draw(d,module,sdk,1,0xff00ff00);DWORD block=0;expect(IDirect3DDevice8_CreateStateBlock(d,D3DSBT_VERTEXSTATE,&block),"FAIL state block");expect(IDirect3DDevice8_SetVertexShader(d,gap),"FAIL gap bind");draw(d,module,sdk,2,0xff0000ff);constants[2][0]=constants[2][1]=1;constants[2][2]=0;expect(IDirect3DDevice8_SetVertexShaderConstant(d,2,constants[2],1),"FAIL overwrite API bank");expect(IDirect3DDevice8_SetVertexShader(d,red),"FAIL red rebind");bank(d,constants[2]);draw(d,module,sdk,3,0xffff0000);
+   expect(IDirect3DDevice8_DeleteVertexShader(d,green),"FAIL retained green delete");expect(IDirect3DDevice8_ApplyStateBlock(d,block),"FAIL retained shader apply");draw(d,module,sdk,4,0xff00ff00);expect(IDirect3DDevice8_DeleteStateBlock(d,block),"FAIL block delete");expect(IDirect3DDevice8_SetVertexShader(d,red),"FAIL restore red");expect(IDirect3DDevice8_Reset(d,&pp),"FAIL Reset");setup(d);expect(IDirect3DDevice8_SetVertexShader(d,red),"FAIL red after Reset");draw(d,module,sdk,5,0xffff0000);expect(IDirect3DDevice8_DeleteVertexShader(d,gap),"FAIL gap delete");
+   char line[200];wsprintfA(line,"CONST8 CHECK sdk=%u shaders=3 fixed=1 originalQueries=8 literalEnd=1 localPrecedence=1 apiIsolation=1 retainedState=1 reset=1",sdk);report(line);
+  }
+  expect(IDirect3DDevice8_DeleteVertexShader(d,red),"FAIL red delete");check(!IDirect3DDevice8_Release(d),"FAIL device final refs");
+ }
+ check(FreeLibrary(modules[0])&&FreeLibrary(modules[1]),"FAIL unloads");report("PASS D3D8 declaration constants frames=14 devices=4 resets=2 finalRefs=0");DestroyWindow(window);CloseHandle(logfile);ExitProcess(0);
+}
