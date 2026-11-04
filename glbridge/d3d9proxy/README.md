@@ -1320,3 +1320,25 @@ bases are native metadata/range tests;GPU images use valid+1/-1/0 geometry.
 VMCPUreplies areexplicit analytic injection. Evidence:
 `../deployments/d3d-webgpu-review-4K34.json`. Fullraw8 state-block/wrappers
 andProcessVertices destination8FVF remainopen.
+
+
+### Review 4K35: real9 blocks from frontend8 snapshots
+
+`d9wg_d3d9_core_record_state_block8` (stdcall16) runs a synchronous frontend
+recorder through actual9 Begin/End. The frontend selects its raw8 snapshot
+and uses translated recordable setters. Failure cancels the new recording;
+failed Begin preserves an existing recording. Published blocks own values
+and real object references without retaining the callback/context. Frontend8
+keeps raw scopes,DWORD/Get metadata andCapture replacement policy.
+
+Native coverage is1,037cases/19,488checks,15strict semantic mutants andtwo
+ASAN families:detached/rebuilt snapshots,public-zero/device-first/last-view/
+last-block cleanup,allocation/callback errors andcoldFVF cache ownership.
+XP compares accurate4K34old/current8,normalized9 reference andcoreSDK120/220:
+red remainslive whilegreen isrecorded,abort preserveslive,Apply turns green,
+rebuiltCapture survivesReset;raw8 ZBIAS111/POSITIONORDER versusmapped9 bias
+andADDRESSU sampler queries pass. Old8/reference abandonment explicitly uses
+End/Delete orEnd/Release;private8 callbackfailure usesactualcancel. BothGPUs
+verify20complete images/1,280pixels zeroerror. CPU replies areexplicit analytic
+injection;fullpublic8 DWORD/predefined-scope wrappers remainopen. Evidence:
+`../deployments/d3d-webgpu-review-4K35.json`.

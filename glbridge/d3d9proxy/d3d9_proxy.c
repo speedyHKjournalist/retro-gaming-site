@@ -16086,6 +16086,26 @@ HRESULT WINAPI d9wg_d3d9_core_set_fvf8(IDirect3DDevice9 *iface, DWORD fvf)
             decl ? &decl->iface : NULL);
 }
 
+/* Build the mapped core portion from an already selected8 snapshot. This
+ * reuses actual9 recording instead of interpreting8 masks as9 predefined
+ * scopes. The frontend owns raw8 shadow fields and DWORD publication. */
+HRESULT WINAPI d9wg_d3d9_core_record_state_block8(IDirect3DDevice9 *iface,
+        D9WGStateBlockRecorder8 recorder, const void *snapshot,
+        IDirect3DStateBlock9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || !recorder
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    HRESULT hr = IDirect3DDevice9_BeginStateBlock(iface);
+    if (FAILED(hr)) return hr;
+    hr = recorder(iface, snapshot);
+    if (SUCCEEDED(hr)) hr = IDirect3DDevice9_EndStateBlock(iface, out);
+    if (FAILED(hr)) device_cancel_recording(device_from_iface(iface));
+    return hr;
+}
+
 /* D3D8 keeps the unsigned BaseVertexIndex with its index binding. The
  * frontend passes that raw DWORD on every indexed draw; core9 consumes the
  * same bits as a signed per-draw base, without changing SetIndices state. */

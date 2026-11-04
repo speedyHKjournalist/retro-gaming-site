@@ -9,6 +9,7 @@ struct IDirect3DDevice9;
 struct IDirect3DSwapChain9;
 struct IDirect3DVertexShader9;
 struct IDirect3DPixelShader9;
+struct IDirect3DStateBlock9;
 struct IDirect3DVertexDeclaration9;
 struct IDirect3DSurface9;
 struct IDirect3DBaseTexture9;
@@ -144,6 +145,15 @@ HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(struct IDirect3DDevice9 *devic
  * layout too. Raw8 GetVertexShader/FVF-vs-handle state stays in the frontend.
  * Internal9 GetFVF iszero because the actual converted layout is authoritative. */
 HRESULT WINAPI d9wg_d3d9_core_set_fvf8(struct IDirect3DDevice9 *device, DWORD fvf);
+/* Frontend8 supplies its selected raw snapshot through recordable translated
+ * setters on this device. The callback/context are used only during this call;
+ * the published real9 block retains values/objects, never frontend pointers.
+ * Raw8 masks/handles/Get metadata and Capture rebuild policy stay frontend-owned. */
+typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *device,
+        const void *snapshot);
+HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
+        D9WGStateBlockRecorder8 recorder, const void *snapshot,
+        struct IDirect3DStateBlock9 **out);
 /* Raw8 BaseVertexIndex stays with the frontend index binding/Get shadow.
  * This backend entry preserves its bits in core9 per-draw signed storage. */
 HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(struct IDirect3DDevice9 *device,
