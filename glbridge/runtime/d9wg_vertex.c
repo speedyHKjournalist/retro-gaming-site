@@ -339,6 +339,38 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
     return 1;
 }
 
+static uint32_t screen_float_order(uint32_t bits)
+{ return bits & 0x80000000u ? ~bits : bits ^ 0x80000000u; }
+
+static int screen_inside_limits(const D9WGProcessViewport *viewport, uint32_t *limits)
+{
+    /* A one-pixel inset, in this bounded viewport range, is much wider than
+     * the rounding error of the ordinary screen-to-clip conversion. Only
+     * classify its strict interior here; all edges and exceptional values
+     * keep the original floating-point path. */
+    if (!(viewport->x >= -1048576.0f && viewport->x <= 1048576.0f &&
+          viewport->y >= -1048576.0f && viewport->y <= 1048576.0f &&
+          viewport->width > 2.0f && viewport->width <= 1048576.0f &&
+          viewport->height > 2.0f && viewport->height <= 1048576.0f)) return 0;
+    float edges[4] = {viewport->x + 1.0f, viewport->x + viewport->width - 1.0f,
+        viewport->y + 1.0f, viewport->y + viewport->height - 1.0f};
+    for (unsigned i = 0; i < 4; ++i) {
+        uint32_t bits;__builtin_memcpy(&bits, edges + i, 4);limits[i] = screen_float_order(bits);
+    }
+    return 1;
+}
+
+static __inline int screen_position_inside(const void *position, const uint32_t *limits)
+{
+    uint32_t words[4];__builtin_memcpy(words, position, 16);
+    uint32_t x = screen_float_order(words[0]), y = screen_float_order(words[1]);
+    /* Positive finite reciprocal W in [2^-64, 2^64] keeps W and all
+     * products finite. For 0 <= Z <= 1, rounding cannot move Z*W outside
+     * [0,W]. Signed zero, NaN, infinities and other W ranges fall back. */
+    return x > limits[0] && x < limits[1] && y > limits[2] && y < limits[3] &&
+        words[2] <= 0x3f800000u && words[3] >= 0x1f800000u && words[3] <= 0x5f800000u;
+}
+
 int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,
         const void *world_view_projection, const D9WGVertexState *state, D9WGClipStatus *status)
 {
@@ -355,23 +387,39 @@ int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,
     /* Validate the submitted indices, then process the entire declared vertex
      * range. Native software vertex processing includes unreferenced vertices
      * in ClipStatus, not just vertices selected by the index list. */
-    for (uint32_t i = 0; i < s->count; ++i) {
-        uint32_t at;if (!d9wg_clip_vertex_offset(s, i, &at)) return 0;
-    }
     D9WGClipDrawSource range = *s;range.indices = 0;
     uint32_t begin = s->indices ? s->min_vertex : 0;
     uint32_t end = s->indices ? s->vertex_count : s->count;
     if (begin >= end) return 0;
-    uint32_t at;
-    if (!d9wg_clip_vertex_offset(&range, begin, &at) || !d9wg_clip_vertex_offset(&range, end - 1u, &at)) return 0;
+    uint32_t at, first;
+    if (!d9wg_clip_vertex_offset(&range, begin, &first) || !d9wg_clip_vertex_offset(&range, end - 1u, &at)) return 0;
+    /* For an ordinary contiguous stream, valid range endpoints prove that
+     * every in-range index addresses valid bytes. Avoid repeating 64-bit
+     * address arithmetic for every index and again for every vertex. */
+    if (s->stream_layout) {
+        for (uint32_t i = 0; i < s->count; ++i)
+            if (!d9wg_clip_vertex_offset(s, i, &at)) return 0;
+    } else if (s->indices) {
+        for (uint32_t i = 0; i < s->count; ++i) {
+            uint32_t index = d9wg_clip_read_index(s, i);
+            if (index < s->min_vertex || index >= s->vertex_count) return 0;
+        }
+    }
     if (blend) for (uint32_t i = begin; i < end; ++i) {
         uint32_t indices[4];if (!d9wg_clip_vertex_offset(&range, i, &at) ||
                 !d9wg_blend_indices(blend, s->layout, s->vertices + at, indices)) return 0;
     }
     D9WGClipStatus result = *status;
+    uint32_t interior[4];
+    int screen_interior = s->layout->position_transformed && s->layout->position_type == 3 &&
+        screen_inside_limits(&s->viewport, interior);
     for (uint32_t i = begin; i < end; ++i) {
-        uint32_t offset;if (!d9wg_clip_vertex_offset(&range, i, &offset)) return 0;
+        uint32_t offset = first + (i - begin)*s->stride;
+        if (s->stream_layout && !d9wg_clip_vertex_offset(&range, i, &offset)) return 0;
         const uint8_t *input = s->vertices + offset;
+        if (screen_interior && screen_position_inside(input + s->layout->position, interior)) {
+            result.clip_intersection = 0;continue;
+        }
         float position[4] = {0,0,0,1}, clip[4], world[4];
         d9wg_decl_read(s->layout->position_type, input + s->layout->position, position);
         if (s->layout->position_transformed) d9wg_clip_unproject(position, &s->viewport, clip);

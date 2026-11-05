@@ -47,6 +47,7 @@
 #include "../runtime/d9wg_light_state.h"
 #include "../runtime/d9wg_vertex.h"
 #include "../runtime/d9wg_vertex_windows.h"
+#include "../runtime/d9wg_screen_clip_cache.h"
 #include "../runtime/d9wg_transport.h"
 #include "../runtime/d9wg_process_aliases.h"
 #include <stddef.h>

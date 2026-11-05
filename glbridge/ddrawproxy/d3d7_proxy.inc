@@ -81,6 +81,7 @@ struct D3D7Device {
     D9WGLightState *extra_lights;
     float clip_planes[D3D7_MAX_CLIP_PLANES][4];
     D9WGClipLegacyStatus clip_status;
+    D9WGScreenClipCache screen_clip_cache;
     D3D7StateBlock *state_blocks;
     D3D7StateBlock *recording_state_block;
     DWORD next_state_block_handle;
@@ -477,7 +478,7 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     return result;
 }
 
-static BOOL d3d7_draw_clip_status(D3D7Device *device, DWORD fvf,
+static BOOL d3d7_draw_clip_status_locked(D3D7Device *device, DWORD fvf,
         const void *vertices, uint32_t vertex_count, const WORD *indices, uint32_t index_count,
         BOOL screen, D9WGClipLegacyStatus *status)
 {
@@ -495,12 +496,55 @@ static BOOL d3d7_draw_clip_status(D3D7Device *device, DWORD fvf,
     source.status_screen = screen;
     source.viewport = (D9WGProcessViewport){(float)device->viewport.dwX,(float)device->viewport.dwY,
             (float)device->viewport.dwWidth,(float)device->viewport.dwHeight,device->viewport.dvMinZ,device->viewport.dvMaxZ};
-    D9WGClipStatus combined = {status->status & 0xfffu, status->status >> 12 & 0xfffu};
+    BOOL cacheable = layout.position_transformed && layout.position_type == 3 && layout.position == 0 &&
+        vertex_count && vertex_count <= 65536u && (!indices || index_count);
+    D9WGScreenClipCache *cache = &device->screen_clip_cache;
+    if (cacheable) {
+        /* A cache hit must still reject new, invalid indices. Unreferenced
+         * vertices remain part of the exact position comparison. */
+        if (indices) for (uint32_t i = 0; i < index_count; ++i)
+            if (indices[i] >= vertex_count) return FALSE;
+        if (d9wg_screen_clip_matches(cache, vertices, layout.stride, vertex_count, &source.viewport)) {
+            status->status = (status->status & 0xff000000u) |
+                ((status->status & 0xfffu) | cache->status.clip_union) |
+                (((status->status >> 12 & 0xfffu) & cache->status.clip_intersection) << 12);
+            return TRUE;
+        }
+    }
+    D9WGClipStatus combined = {0, 0xffffffffu};
     BOOL result = d9wg_vertex_windows_clip_status(&source, device->render_states,
             &device->transforms[D3DTRANSFORMSTATE_WORLD], 4, 2,
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &device->transforms[D3DTRANSFORMSTATE_PROJECTION],
             device->clip_planes, &combined) == 0;
-    if (result) status->status = (status->status & 0xff000000u) | combined.clip_union | (combined.clip_intersection << 12);
+    if (result) {
+        status->status = (status->status & 0xff000000u) |
+            ((status->status & 0xfffu) | combined.clip_union) |
+            (((status->status >> 12 & 0xfffu) & combined.clip_intersection) << 12);
+        if (cacheable) {
+            uint32_t bytes = vertex_count*16u;
+            if (cache->capacity < bytes) {
+                uint8_t *replacement = HeapAlloc(GetProcessHeap(), 0, bytes);
+                if (replacement) {
+                    heap_free(cache->positions);cache->positions = replacement;
+                    cache->capacity = bytes;cache->valid = 0;
+                }
+            }
+            d9wg_screen_clip_store(cache, vertices, layout.stride, vertex_count, &source.viewport, &combined);
+        }
+    }
+    return result;
+}
+
+static BOOL d3d7_draw_clip_status(D3D7Device *device, DWORD fvf,
+        const void *vertices, uint32_t vertex_count, const WORD *indices, uint32_t index_count,
+        BOOL screen, D9WGClipLegacyStatus *status)
+{
+    /* The position snapshot is mutable device state; concurrent draws must
+     * not replace or read its allocation while another draw updates it. */
+    EnterCriticalSection(&g_transport_lock);
+    BOOL result = d3d7_draw_clip_status_locked(device, fvf, vertices, vertex_count,
+            indices, index_count, screen, status);
+    LeaveCriticalSection(&g_transport_lock);
     return result;
 }
 
@@ -551,6 +595,7 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
     UINT primitive_count;
     UINT stride;
     UINT extra_bytes;
+    UINT first_vertex, last_vertex;
     uint8_t *payload;
     uint8_t *blob;
     BOOL result;
@@ -565,10 +610,20 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
             !d3d7_multiply_u32(vertex_count, stride, &command.vertex_bytes) ||
             command.index_bytes > 0xffffffffu - command.vertex_bytes)
         return FALSE;
+    first_vertex = last_vertex = indices[0];
+    for (UINT i = 0; i < index_count; ++i) {
+        UINT index = indices[i];
+        if (index >= vertex_count) return FALSE;
+        if (index < first_vertex) first_vertex = index;
+        if (index > last_vertex) last_vertex = index;
+    }
+    /* Rasterization consumes only indexed vertices. ClipStatus below still
+     * processes the complete caller-declared range, including unused data. */
+    command.vertex_bytes = (last_vertex - first_vertex + 1u)*stride;
     extra_bytes = command.index_bytes + command.vertex_bytes;
     command.device_handle = device->owner->device_handle;
     command.primitive_type = primitive_type;
-    command.vertex_count = vertex_count;
+    command.vertex_count = last_vertex - first_vertex + 1u;
     command.primitive_count = primitive_count;
     command.index_format = 101u; /* D3DFMT_INDEX16 */
     command.stride = stride;
@@ -583,8 +638,12 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
         command.vertex_data_offset = command.index_data_offset +
                 command.index_bytes;
         CopyMemory(payload, &command, sizeof(command));
-        CopyMemory(blob, indices, command.index_bytes);
-        CopyMemory(blob + command.index_bytes, vertices, command.vertex_bytes);
+        if (!first_vertex) CopyMemory(blob, indices, command.index_bytes);
+        else for (UINT i = 0; i < index_count; ++i) {
+            WORD relative = (WORD)(indices[i] - first_vertex);
+            CopyMemory(blob + i*sizeof(WORD), &relative, sizeof(relative));
+        }
+        CopyMemory(blob + command.index_bytes, (const BYTE *)vertices + first_vertex*stride, command.vertex_bytes);
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result) device->clip_status = next_status;
@@ -1446,6 +1505,7 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
         }
         d3d7_state_block_destroy(device->recording_state_block);
         d3d_legacy_device_cleanup(device);
+        heap_free(device->screen_clip_cache.positions);
         d9wg_light_free(&device->extra_lights);
         heap_free(device);
         ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
