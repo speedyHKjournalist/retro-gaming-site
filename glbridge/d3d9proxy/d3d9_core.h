@@ -160,6 +160,13 @@ typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *devic
 HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot,
         struct IDirect3DStateBlock9 **out);
+typedef struct D9WGSwapChainMethods8 {
+    HRESULT (WINAPI *present)(struct IDirect3DSwapChain9 *, const RECT *, const RECT *, HWND, const RGNDATA *);
+    HRESULT (WINAPI *get_back_buffer)(struct IDirect3DSwapChain9 *, UINT, UINT, struct IDirect3DSurface9 **);
+} D9WGSwapChainMethods8;
+/* Only additional chains with real8-profile storage are accepted. */
+const D9WGSwapChainMethods8 *WINAPI d9wg_d3d9_core_swap_chain_methods8(
+        struct IDirect3DSwapChain9 *chain);
 typedef struct D9WGBufferMethods8 {
     HRESULT (WINAPI *set_private_data)(struct IUnknown *, const GUID *, const void *, DWORD, DWORD);
     HRESULT (WINAPI *get_private_data)(struct IUnknown *, const GUID *, void *, DWORD *);

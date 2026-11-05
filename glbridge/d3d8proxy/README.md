@@ -1030,3 +1030,31 @@ draws; indexedDrawCalls=6 is separate. 383 guest / 90 core regressions, 32 EXEs,
 four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
 DLLs and same-source diagnostics are published.
 Evidence: `../deployments/d3d-webgpu-review-4K44.json`.
+
+
+### Review 4K45: real SDK8 SwapChain8 and Surface8 backbuffers
+
+The five-method SwapChain8 adapter uses a typed two-method core9 boundary.
+Backbuffers are real Surface8 views with independent references and frontend
+Device8 containers. Invalid getter indices preserve caller output. Weak chain
+metadata remains valid while backbuffer storage is retained. The entire old
+core9 source/header reconstructs exactly after removing the new bridge blocks;
+twelve other frontend/runtime files match. The build adds one adapter source.
+
+Native: 8,482 checks / 269 cases, 28 strict mutants and ASAN. The backend is an
+explicit COM/metadata shim. Accepted second XP run: 133 seconds / 92 batches,
+fifteen devices and Resets, real chain/backbuffer identity, independent counts,
+error output, public-zero revival, release-before-Reset and final cleanup.
+Device8 parents remain IUnknown fixtures; the public factory remains open.
+
+Renderable locks read GPU storage, including before writes. The first probe
+omitted these replies and failed; the corrected reference includes pre-write,
+readonly and post-Present images. 68 full images / 3,776 pixels match on both
+GPUs. Four additional Presents execute without drops; separate canvas output
+pixels are not read. 64 new CPU checks happen before upload; readonly checks
+consume analytic GPU replies and are reported separately. Existing crop/dirty
+region policy and native HAL differences remain outside this adapter change.
+45686 wire corruptions, 385 guest / 91 core regressions, 32 EXEs,
+four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
+DLLs and same-source diagnostics published.
+Evidence: `../deployments/d3d-webgpu-review-4K45.json`.

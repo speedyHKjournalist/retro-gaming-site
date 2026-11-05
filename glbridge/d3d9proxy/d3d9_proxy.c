@@ -16156,6 +16156,26 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
     return core_pack_surface_desc8(&desc, out);
 }
 
+static HRESULT WINAPI core_swap_chain_present8(IDirect3DSwapChain9 *chain,
+        const RECT *source, const RECT *destination, HWND window, const RGNDATA *dirty)
+{
+    return IDirect3DSwapChain9_Present(chain, source, destination, window, dirty, 0u);
+}
+static HRESULT WINAPI core_swap_chain_back_buffer8(IDirect3DSwapChain9 *chain,
+        UINT index, UINT type, IDirect3DSurface9 **out)
+{
+    return IDirect3DSwapChain9_GetBackBuffer(chain, index, (D3DBACKBUFFER_TYPE)type, out);
+}
+const D9WGSwapChainMethods8 *WINAPI d9wg_d3d9_core_swap_chain_methods8(IDirect3DSwapChain9 *chain)
+{
+    static const D9WGSwapChainMethods8 methods = {
+        core_swap_chain_present8, core_swap_chain_back_buffer8
+    };
+    if (!chain || chain->lpVtbl != &g_swap_chain_vtbl
+            || !core_view_device8((IUnknown *)chain)) return NULL;
+    return &methods;
+}
+
 /* Identical SDK8/9 buffer descriptor layouts and the existing lock/private-data
  * policy are owned by the real9 implementations. Only ABI signatures differ. */
 #define D9WG_BUFFER_METHODS8(P, Type, Descriptor) \
