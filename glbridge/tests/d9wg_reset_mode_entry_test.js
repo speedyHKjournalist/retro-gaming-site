@@ -20,7 +20,7 @@ try {
 typedef int BOOL;typedef uint32_t UINT,DWORD,LONG;typedef struct Window*HWND;
 struct Window{BOOL live,iconic;LONG style,exstyle;unsigned guarded,x,y,width,height,thread;};
 typedef struct{UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields;}DEVMODEA;
-typedef struct{struct{BOOL Windowed;}present;struct{UINT Width,Height;}display_mode;struct{HWND hFocusWindow;}creation;BOOL display_mode_changed;HWND styled_window;LONG saved_window_style,saved_window_exstyle;DWORD last_foreground_claim;}D9Device;typedef D9Device D8Device;
+typedef struct{struct{BOOL Windowed;}present;struct{UINT Width,Height;}display_mode;struct{HWND hFocusWindow;}creation;BOOL display_mode_changed;HWND styled_window;LONG saved_window_style,saved_window_exstyle;DWORD last_foreground_claim;void*exclusive_window;int reset_state;}D9Device;typedef D9Device D8Device;
 typedef struct{HWND window;}D9WGWindowResetScope;
 #define TRUE 1
 #define FALSE 0
@@ -79,6 +79,11 @@ static DWORD GetTickCount(void){return 1234;}
 static BOOL d9wg_window_reset_begin(D9WGWindowResetScope*s,HWND w){*s=(D9WGWindowResetScope){0};guard_calls++;if(guard_calls==fail_guard_at)return 0;if(w){if(!IsWindow(w))return 0;assert(!w->guarded);w->guarded++;s->window=w;}return 1;}
 static void d9wg_window_reset_end(D9WGWindowResetScope*s){end_calls++;if(s->window){assert(s->window->guarded==1);s->window->guarded--;s->window=NULL;}}
 #include "${process.env.D9WG_WINDOW_MODE_HEADER || root + "/runtime/d9wg_window_mode.h"}"
+/* Ordinary9 retains its existing mode policy; API8 exclusive routing is
+ * exercised by d9wg_exclusive_window_test and live XP window-runtime. */
+static UINT device_compatibility_api(const D9Device*d){(void)d;return 9;}
+static void d9wg_exclusive_window_leave(void **s){(void)s;assert(0);}
+static BOOL d9wg_exclusive_window_enter(void**s,HWND f,HWND w,UINT x,UINT y,void*state){(void)s;(void)f;(void)w;(void)x;(void)y;(void)state;assert(0);return 0;}
 ${["window_mode_bindings", "restore_display_mode", "reset_window_mode"].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Reset mode entry line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){unsigned checks=0;LONG style=WS_CAPTION|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU,exstyle=WS_EX_CLIENTEDGE|WS_EX_WINDOWEDGE|WS_EX_DLGMODALFRAME|WS_EX_STATICEDGE;

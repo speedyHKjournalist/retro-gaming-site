@@ -43,6 +43,7 @@
 #include "../runtime/d9wg_display_mode.h"
 #include "../runtime/d9wg_window_reset.h"
 #include "../runtime/d9wg_window_mode.h"
+#include "../runtime/d9wg_exclusive_window.h"
 #include "../runtime/d9wg_private_data.h"
 #include "../runtime/d9wg_present_pacing.h"
 #include "../runtime/d9wg_cursor.h"
@@ -1120,6 +1121,7 @@ struct D9Device {
     /* Rate limiting for maintain_fullscreen_foreground(). */
     DWORD last_foreground_claim;
     DWORD foreground_claims;
+    D9WGExclusiveWindow *exclusive_window;
     /* The window emit_window_state() last reported, which the window-event
      * hook reports again when anything on the screen changes. */
     HWND state_window;
@@ -5411,7 +5413,8 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
 {
     DWORD now;
 
-    if (device->present.Windowed || !window || !(probe->state.flags & D9WG_WINDOW_IS_WINDOW))
+    if (device_compatibility_api(device) == 8u || device->present.Windowed
+            || !window || !(probe->state.flags & D9WG_WINDOW_IS_WINDOW))
         return FALSE;
     if ((probe->state.flags & D9WG_WINDOW_FOREGROUND) != 0)
         return FALSE;
@@ -5445,12 +5448,25 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
  * does not leave the guest desktop stuck at the game's resolution. */
 static BOOL restore_display_mode(D9Device* device)
 {
+    if (device_compatibility_api(device) == 8u) {
+        d9wg_exclusive_window_leave(&device->exclusive_window);
+        return TRUE;
+    }
     D9WGWindowModeBindings bindings = window_mode_bindings(device);
     return d9wg_window_mode_restore(&bindings);
 }
 
 static BOOL reset_window_mode(D9Device* device, HWND window)
 {
+    if (device_compatibility_api(device) == 8u) {
+        if (device->present.Windowed) {
+            d9wg_exclusive_window_leave(&device->exclusive_window);
+            return TRUE;
+        }
+        return d9wg_exclusive_window_enter(&device->exclusive_window,
+            device->creation.hFocusWindow, window, device->display_mode.Width,
+            device->display_mode.Height, &device->reset_state);
+    }
     D9WGWindowModeBindings bindings = window_mode_bindings(device);
     return d9wg_window_mode_apply(&bindings, device->present.Windowed, window,
         device->creation.hFocusWindow, device->display_mode.Width, device->display_mode.Height);
@@ -5711,6 +5727,8 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     D3DFORMAT backbuffer_format;
 
     d9wg_reset_begin(&device->reset_state);
+    if (device->reset_state.lost && parameters && !parameters->Windowed)
+        return TRACE_REFUSE(D3DERR_DEVICELOST);
     /* Reset was completely untraced, which left a hole exactly where one is
      * least affordable: a title that resets to apply its saved video settings
      * does so once, early, and everything after depends on it having worked.

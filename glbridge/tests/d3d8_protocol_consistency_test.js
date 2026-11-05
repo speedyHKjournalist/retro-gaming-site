@@ -94,7 +94,7 @@ const protocolStructs = new Set(
         .concat([...protocol.matchAll(/typedef D9WG\w+ (D9WG\w+);/g)]
             .map(m => m[1])));
 const runtimeHeaders = read("d3d9proxy/d3d9_core.h") + "\n" + fs.readdirSync(path.join(root, "runtime")).filter(name => name.endsWith(".h")).map(name => read("runtime/" + name)).join("\n");
-const runtimeStructs = new Set([...runtimeHeaders.matchAll(/typedef struct (D9WG\w+) \{/g)].map(m => m[1]));
+const runtimeStructs = new Set([...runtimeHeaders.matchAll(/typedef struct (D9WG\w+) (?:\{|\1;)/g)].map(m => m[1]));
 for (const match of guest.matchAll(/typedef\s+[^;{}]+?\b(D9WG\w+)\s*[;[]/g)) runtimeStructs.add(match[1]);
 for (const match of runtimeHeaders.matchAll(/typedef\s+[^;{}]+?\(\s*(?:WINAPI\s+)?\*\s*(D9WG\w+)\s*\)/g)) runtimeStructs.add(match[1]);
 for (const match of guest.matchAll(/\b(D9WG[A-Z]\w+)\b/g)) {
@@ -272,10 +272,8 @@ for (const match of pipeline.matchAll(
         Number(match[2]) + Number(match[3]));
 }
 assert.ok(hostOperands.size > 40, "failed to parse the host operand table");
-const hostRefused = new Set(
-    [...(pipeline.match(/const UNSUPPORTED_OPS = new Set\(\[[\s\S]*?\]\)/) ||
-        [""])[0].matchAll(/OP\.(\w+)/g)].map(match => match[1].toUpperCase()));
-assert.ok(hostRefused.size >= 3, "failed to parse the host's refused opcodes");
+// Stage5 implements the formerly refused SM1 texture/depth instructions.
+// Require all public SM1 opcodes below; there is no refusal-list exemption.
 
 // Instructions whose operand count is model-dependent on both sides; the
 // guest spells that as a conditional rather than a literal, so compare only
@@ -300,9 +298,6 @@ for (const [name, words] of guestOpcodes) {
     assert.ok(hostOperands.has(name) || HOST_INLINE_SHAPES.has(name),
         "the D3D8 guest accepts " + name + " but the host translator has no " +
         "operand shape for it, so the shader decodes into nonsense");
-    assert.ok(!hostRefused.has(name),
-        "the D3D8 guest accepts " + name + " but the host refuses it; the " +
-        "shader would be created and then silently skipped at draw time");
     if (words !== null && !MODEL_DEPENDENT.has(name) &&
             hostOperands.has(name))
         assert.equal(words, hostOperands.get(name),
@@ -321,7 +316,6 @@ const D3D8_SM1_OPCODES = [
     "CND", "DEF", "TEXREG2RGB", "TEXDP3TEX", "TEXDP3", "CMP", "PHASE",
 ].map(name => name.toUpperCase());
 for (const name of D3D8_SM1_OPCODES) {
-    if (hostRefused.has(name)) continue;
     assert.ok(guestOpcodes.has(name),
         "the host translates " + name + " but the D3D8 guest validator " +
         "refuses it, so no shader containing one can ever be created");

@@ -19,6 +19,7 @@ try{for(const api of (process.env.D9WG_WINDOW_PRESENT_ONLY_API?[Number(process.e
 typedef struct{uint32_t device_handle,hwnd;int32_t x,y;uint32_t width,height;}D8ClientArea;
 typedef struct{uint32_t handle;struct{BOOL Windowed;HWND hDeviceWindow;}present;struct{HWND hFocusWindow;}creation;struct{uint32_t Width,Height;}display_mode;D9WGWindowCache window_cache;HWND state_window,tracked_window;void *app_cursor;BOOL cursor_visible;D9WGCursorState app_cursor_state;DWORD foreground_claims,last_foreground_claim;}D9Device;
 typedef D9Device D8Device;
+static UINT profile=9;static UINT device_compatibility_api(const D9Device*d){(void)d;return profile;}
 typedef struct DDSurface{struct DDSurface *next;BOOL overlay_visible,external_memory;struct{BOOL gpu_dirty;}*memory;}DDSurface;
 typedef struct{BOOL device_created;uint32_t device_handle;DDSurface *primary,*surfaces;HWND window;uint32_t cooperative_flags,mode_width,mode_height;BOOL guest_mode_changed;D9WGWindowCache window_cache;}DDrawObject;
 static CRITICAL_SECTION g_transport_lock;static D9WGPresent present_packet;static D9WGWindowStateWithRegion state_packet;static uint8_t payload[sizeof(state_packet)];static unsigned state_count,present_count,submitted,claims,restores,retries;static uint32_t pending_op,pending_bytes;static D9Device *active_device;static DDrawObject *active_object;static int inject_event,deferred_event;static int32_t last_placement_x,last_placement_y;static int fail_reserve,fail_submit,fail_emit;
@@ -53,6 +54,7 @@ int main(void){
  ${api===7?`window_mock_reset();o.cooperative_flags=DDSCL_FULLSCREEN;o.guest_mode_changed=1;CHECK(emit_present_and_flush(&o));CHECK(calls.client==1&&calls.origin==1&&present_packet.x==0&&present_packet.y==0&&present_packet.width==640&&present_packet.height==480&&state_packet.state.window_x==0&&state_packet.state.window_y==0);`:""}
  window_mock_reset();d.present.Windowed=1;o.cooperative_flags=0;o.guest_mode_changed=0;inject_event=1;CHECK(emit_present_and_flush(${api===7?"&o":"&d"}${api===7?"":",0"}));if(deferred_event){deferred_event=0;deliver_event();}CHECK(last_placement_x==90&&last_placement_y==100&&!g_transport_lock.held);
  ${api===7?"fail_emit=1;":"fail_reserve=1;"}CHECK(!emit_present_and_flush(${api===7?"&o":"&d"}${api===7?"":",0"})&&!g_transport_lock.held);fail_submit=1;CHECK(!emit_present_and_flush(${api===7?"&o":"&d"}${api===7?"":",0"})&&!g_transport_lock.held);
+ ${api===9?`window_mock_reset();profile=8;d.present.Windowed=0;d.foreground_claims=0;fixture.foreground=2;fixture.iconic=1;unsigned previous_claims=claims,previous_restores=restores;CHECK(emit_present_and_flush(&d,0));CHECK(claims==previous_claims&&restores==previous_restores&&calls.client==1);`:""}
  puts("PASS actual API ${api} Present: single Win32 capture, shared geometry/state observations explicit fullscreen/reclaim policy, event/Present ordering and failure unlocks");return 0;}
 `;
  const input=dir+"/"+folder+".c",bin=dir+"/"+folder;fs.writeFileSync(input,code);

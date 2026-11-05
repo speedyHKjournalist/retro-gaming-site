@@ -28,8 +28,8 @@ try {
         ["successful Reset stays lost", "state->required = 0;", "state->required = 1;"],
         ["cooperative query always ready", "state->required ? (int32_t)UINT32_C(0x88760869) : 0", "state->required ? 0 : 0"],
         ["cooperative query uses DEVICELOST", "UINT32_C(0x88760869)", "UINT32_C(0x88760868)"],
-        ["Present ignores loss", "state->required ? (int32_t)UINT32_C(0x88760868) : 0", "state->required ? 0 : 0"],
-        ["Present returns DEVICENOTRESET", "UINT32_C(0x88760868)", "UINT32_C(0x88760869)"],
+        ["Present ignores loss", "state->required || state->lost ? (int32_t)UINT32_C(0x88760868) : 0", "state->required || state->lost ? 0 : 0"],
+        ["Present returns DEVICENOTRESET", "state->required || state->lost ? (int32_t)UINT32_C(0x88760868) : 0", "state->required || state->lost ? (int32_t)UINT32_C(0x88760869) : 0"],
     ]) {
         assert(policy.includes(old), name);
         const file = dir + "/policy.h";
