@@ -1196,3 +1196,43 @@ shadow words remain covered. Canvas outputs are not separately read back.
 95 core suites, 32 EXEs/four DLLs, 21-member static core/isolated SDK8 layout,
 two site tests and scoped lint pass. Exact accepted retail and same-source
 diagnostic binaries published. See review evidence stage4k49-validation.json.
+
+
+### Review 4K50: paired targets and borrowed surface ownership
+
+The private API8 pair setter preflights both surfaces, ownership, usage, size
+and sample type before mutation. It publishes both CPU bindings before the
+first transport attempt, then color/depth/live viewport in legacy8 order.
+NULL color preserves the target and viewport; NULL depth unbinds depth.
+Matching viewport updates are suppressed; target side effects remain live
+while explicit state recording is active. Actual9 setters share the private
+slot replacement and live publication helpers with unchanged9 policy.
+
+Borrowed surface ownership reports texture/cube children or Device8 containers
+for standalone targets and implicit/additional surfaces. The real Surface8
+backend selector checks its class and takes no references. Full Device8 and
+factory integration remain pending. Old core/source/header and Surface8
+source/header reconstruct exactly: 745 of 748 old core functions unchanged,
+five new core functions and one frontend selector, all storage layouts and
+sixteen other complete files unchanged.
+
+Native pair/owner: 36,400 checks / 4,135 cases, 25 strict assertion mutants and
+ASAN. Real Surface8 adapter: 55,595 checks / 1,037 cases, four new selector
+mutants and ASAN. Retained binding23/owner8/scalar10 mutants pass. Accepted
+third actual XP: 128 seconds / 118 batches, 21 devices/Resets, 172 handles,
+27 declarations and 43 shaders. Real SDK8 texture/cube/standalone containers,
+20 pair bindings/four invalid-depth pairs, cache recovery, balanced references,
+NULL state and live/recorded viewport behavior are covered. Earlier helper-name,
+9-only cube readback route and full-clear reference mistakes were corrected;
+failed attempts retained. The final cube scene explicitly zeros the whole face
+then checks the center2x2 viewport clear, using existing shared8 CopyRects.
+
+Both GPUs match 84 full images / 4,224 pixels with empty maps, four primary and
+four additional Presents, no drops/errors, 1,529 commands (+128), 42 textures
+and 56 draws. 1,218 selected corruptions cover all new command payload words,
+framing, SDK summaries and retained opcode samples. 395 guest suites and one
+new core fixture pass; prior95 complete core tests/fixtures and host code are
+unchanged, so their stage49 baseline is inherited rather than claimed as96
+fresh runs. 32 EXEs/four DLLs/static21/isolatedSDK8, site2 and scoped lint pass.
+Exact accepted retail and same-source diagnostic binaries published. Full97
+Device8/child refs/rawshader+block metadata/defaultfactory remain next.

@@ -64,6 +64,9 @@ int main(void){UINT cases=0;for(UINT round=0;round<128;round++)for(UINT order=0;
     if(coupled){device.refs++;backend_add((IUnknown*)&b);}/* frontend texture plus owned surface getter */
     IUnknown*parent=coupled?&container.iface:&device.iface;IDirect3DSurface8*s=NULL;
     CHECK(!d8wg_core_wrap_surface8(&b.iface,(IDirect3DDevice8*)&device.iface,parent,coupled,&s)&&s&&b.refs==1&&device.refs==2&&live==2);
+#ifdef D8WG_HAS_SURFACE_BACKEND8
+    {IDirect3DSurface8Vtbl foreign_vtbl={0};IDirect3DSurface8 bare={&foreign_vtbl};D8CoreSurface foreign={.iface={&foreign_vtbl},.backend=&b.iface};CHECK(d8wg_core_surface_backend8(s)==&b.iface&&!d8wg_core_surface_backend8(NULL)&&!d8wg_core_surface_backend8(&bare)&&!d8wg_core_surface_backend8(&foreign.iface)&&b.refs==1&&device.refs==2&&live==2);}
+#endif
     CHECK(!forwarding(s,&b,&device,coupled?&container:&device));
     backend_add((IUnknown*)&b);UINT cached_allocations=allocations;fail_allocation=allocations+1;IDirect3DSurface8*again=NULL;CHECK(!d8wg_core_wrap_surface8(&b.iface,(IDirect3DDevice8*)&device.iface,parent,coupled,&again)&&again==s&&b.refs==1&&device.refs==2&&live==2&&allocations==cached_allocations);fail_allocation=0;
     CHECK(s->lpVtbl->Release(again)==(coupled?2u:1u));

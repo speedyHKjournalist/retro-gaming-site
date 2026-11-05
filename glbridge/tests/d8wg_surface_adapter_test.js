@@ -82,6 +82,7 @@ ${volumeSource}
 ${textureSource}
 ${bufferSource}
 ${swapSource}
+${source.includes("d8wg_core_surface_backend8(")?"#define D8WG_HAS_SURFACE_BACKEND8 1":""}
 ${combinedMode?'#define main retained_surface_main':""}
 #include "tests/native/d8wg_surface_adapter_cases.h"
 ${combinedMode?'#undef main\n#include "tests/native/d8wg_'+(swapMode?'swap_chain':bufferMode?'buffer':resourceName)+'_adapter_cases.h"':""}

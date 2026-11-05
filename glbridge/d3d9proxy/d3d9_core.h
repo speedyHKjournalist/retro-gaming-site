@@ -406,4 +406,17 @@ typedef struct D9WGDeviceMethods8 {
 } D9WGDeviceMethods8;
 const D9WGDeviceMethods8 *WINAPI d9wg_d3d9_core_device_methods8(
         struct IDirect3DDevice9 *device);
+/* Legacy8 SetRenderTarget preflights the color/depth pair before any mutation.
+ * NULL color preserves the live color and viewport; NULL depth unbinds depth.
+ * Non-NULL color resets the live viewport, even during state-block recording.
+ * Binding storage is shared with9; failures retain the committed prefix. */
+HRESULT WINAPI d9wg_d3d9_core_set_render_target8(struct IDirect3DDevice9 *device,
+        struct IDirect3DSurface9 *color, struct IDirect3DSurface9 *depth);
+/* Borrowed parent for wrapping a held public surface: kind0=device,
+ * kind3=texture child,kind4=cube child. Standalone target storage and swap
+ * surfaces use the Device8 container. No references are changed; the caller
+ * must keep the surface public reference alive while using this result.
+ * With valid output pointers, rejected input clears both outputs. */
+HRESULT WINAPI d9wg_d3d9_core_surface_owner8(struct IDirect3DSurface9 *surface,
+        struct IUnknown **owner, UINT *kind);
 #endif

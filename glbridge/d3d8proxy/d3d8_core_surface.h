@@ -10,4 +10,6 @@
 HRESULT WINAPI d8wg_core_wrap_surface8(struct IDirect3DSurface9 *owned_surface,
         IDirect3DDevice8 *device, IUnknown *container, BOOL container_refcount,
         IDirect3DSurface8 **out);
+/* Borrowed while a public view/container reference keeps storage alive. */
+struct IDirect3DSurface9 *WINAPI d8wg_core_surface_backend8(IDirect3DSurface8 *surface);
 #endif

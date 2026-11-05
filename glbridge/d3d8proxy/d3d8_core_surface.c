@@ -167,3 +167,10 @@ done:
     if (owned) IUnknown_Release((IUnknown *)owned);
     return hr;
 }
+
+/* Borrowed while the public view or its coupled container is retained. */
+struct IDirect3DSurface9 *WINAPI d8wg_core_surface_backend8(IDirect3DSurface8 *iface)
+{
+    return iface && iface->lpVtbl == &g_core_surface8_vtbl
+            ? ((D8CoreSurface *)iface)->backend : NULL;
+}

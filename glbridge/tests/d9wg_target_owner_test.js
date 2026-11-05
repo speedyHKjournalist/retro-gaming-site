@@ -40,7 +40,7 @@ static void SetRect(RECT*r,int l,int t,int right,int b){*r=(RECT){l,t,right,b};}
 static HRESULT IDirect3DDevice9_SetViewport(Interface*p,const D3DVIEWPORT9*v){viewport_calls++;device_from_iface(p)->viewport=*v;return 0;}
 static HRESULT IDirect3DDevice9_SetScissorRect(Interface*p,const RECT*r){scissor_calls++;device_from_iface(p)->scissor=*r;return 0;}
 static BOOL emit_command(UINT op,const void*p,UINT n){assert(op==D9WG_OP_SET_RENDER_TARGET&&n==sizeof(last));last=*(const D9WGSetRenderTarget*)p;commands++;return 1;}
-${["surface_target_handle", "device_set_render_target"].map(n => extract(source, n)).join("\n")}
+${["surface_target_handle", ...(source.includes("static void device_replace_render_target_surface(")?["device_replace_render_target_surface"]:[]), "device_set_render_target"].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Target owner line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){D9Device foreign={.handle=8};Texture texture={21,1},cube={22,1},depth={23,2};
 for(unsigned cycle=0;cycle<32;cycle++)for(unsigned kind=0;kind<9;kind++)for(unsigned slot=0;slot<4;slot++){

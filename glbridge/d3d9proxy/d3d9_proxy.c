@@ -6156,6 +6156,30 @@ static HRESULT WINAPI device_get_transform(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
+static HRESULT device_set_live_viewport(D9Device *device,
+        const D3DVIEWPORT9 *viewport, BOOL suppress_equal)
+{
+    D9WGSetViewport command;
+    if (suppress_equal && device->viewport.X == viewport->X
+            && device->viewport.Y == viewport->Y
+            && device->viewport.Width == viewport->Width
+            && device->viewport.Height == viewport->Height
+            && device->viewport.MinZ == viewport->MinZ
+            && device->viewport.MaxZ == viewport->MaxZ)
+        return D3D_OK;
+    device->viewport = *viewport;
+    command.device_handle = device->handle;
+    command.x = viewport->X;
+    command.y = viewport->Y;
+    command.width = viewport->Width;
+    command.height = viewport->Height;
+    command.min_z = viewport->MinZ;
+    command.max_z = viewport->MaxZ;
+    command.reserved = 0;
+    return emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command))
+            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+
 static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
         const D3DVIEWPORT9 *viewport)
 {
@@ -6163,7 +6187,6 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
     D9Surface *target = device->render_target_surfaces[0];
     UINT target_width = target ? target->width : device->display_mode.Width;
     UINT target_height = target ? target->height : device->display_mode.Height;
-    D9WGSetViewport command;
     if (!viewport || !viewport->Width || !viewport->Height) {
         TRACE("REJECT SetViewport empty viewport=%08lX",
                 (DWORD)(uintptr_t)viewport);
@@ -6201,17 +6224,7 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
             (LONG)(viewport->MinZ * 1000.0f),
             (LONG)(viewport->MaxZ * 1000.0f));
     if (state_block_record_viewport(device, viewport)) return D3D_OK;
-    device->viewport = *viewport;
-    command.device_handle = device->handle;
-    command.x = viewport->X;
-    command.y = viewport->Y;
-    command.width = viewport->Width;
-    command.height = viewport->Height;
-    command.min_z = viewport->MinZ;
-    command.max_z = viewport->MaxZ;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return device_set_live_viewport(device, viewport, FALSE);
 }
 
 static HRESULT WINAPI device_get_viewport(IDirect3DDevice9 *iface,
@@ -11453,12 +11466,35 @@ static BOOL surface_target_handle(D9Surface *surface, uint32_t *handle_out,
     return TRUE;
 }
 
+static void device_replace_render_target_surface(D9Device *device,
+        UINT index, D9Surface *surface)
+{
+    D9Surface *old_surface;
+    old_surface = device->render_target_surfaces[index];
+    TRACE("CALL SetRenderTarget index=%lu old=%08lX new=%08lX same=%lu "
+            "old_refs=%ld new_refs=%ld", index,
+            (DWORD)(uintptr_t)old_surface, (DWORD)(uintptr_t)surface,
+            old_surface == surface,
+            old_surface ? InterlockedCompareExchange(&old_surface->refcount,
+                    0, 0) : 0,
+            surface ? InterlockedCompareExchange(&surface->refcount, 0, 0)
+                    : 0);
+    /* Take the new reference before dropping the old one.  Apart from being
+     * the usual COM replacement discipline, this keeps same-object rebinding
+     * safe even when the caller is holding only a borrowed alias. */
+    if (surface)
+        surface_binding_add_ref(surface);
+    device->render_target_surfaces[index] = surface;
+    if (old_surface)
+        surface_binding_release(old_surface);
+
+}
+
 static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
         DWORD index, IDirect3DSurface9 *surface_iface)
 {
     D9Device *device = device_from_iface(iface);
     D9Surface *surface = surface_iface ? surface_from_iface(surface_iface) : NULL;
-    D9Surface *old_surface;
     D9WGSetRenderTarget command;
     uint32_t handle = 0;
     uint32_t level = 0;
@@ -11483,23 +11519,7 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
             && !(surface->cube_texture->usage & D3DUSAGE_RENDERTARGET))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
-    old_surface = device->render_target_surfaces[index];
-    TRACE("CALL SetRenderTarget index=%lu old=%08lX new=%08lX same=%lu "
-            "old_refs=%ld new_refs=%ld", index,
-            (DWORD)(uintptr_t)old_surface, (DWORD)(uintptr_t)surface,
-            old_surface == surface,
-            old_surface ? InterlockedCompareExchange(&old_surface->refcount,
-                    0, 0) : 0,
-            surface ? InterlockedCompareExchange(&surface->refcount, 0, 0)
-                    : 0);
-    /* Take the new reference before dropping the old one.  Apart from being
-     * the usual COM replacement discipline, this keeps same-object rebinding
-     * safe even when the caller is holding only a borrowed alias. */
-    if (surface)
-        surface_binding_add_ref(surface);
-    device->render_target_surfaces[index] = surface;
-    if (old_surface)
-        surface_binding_release(old_surface);
+    device_replace_render_target_surface(device, (UINT)index, surface);
 
     command.device_handle = device->handle;
     command.target_index = index;
@@ -11554,25 +11574,10 @@ static HRESULT WINAPI device_get_render_target(IDirect3DDevice9 *iface,
             D3DBACKBUFFER_TYPE_MONO, surface_out);
 }
 
-static HRESULT WINAPI device_set_depth_stencil_surface(IDirect3DDevice9 *iface,
-        IDirect3DSurface9 *surface_iface)
+static void device_replace_depth_stencil_surface(D9Device *device,
+        D9Surface *surface)
 {
-    D9Device *device = device_from_iface(iface);
-    D9Surface *surface = surface_iface ? surface_from_iface(surface_iface) : NULL;
     D9Surface *old_surface;
-    D9WGSetDepthStencilSurfaceLevel command;
-    uint32_t handle = 0;
-    uint32_t level = 0;
-
-    if (surface && surface->auto_depth_stencil) {
-        handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
-    } else if (surface_iface) {
-        uint32_t face = 0;
-        if (!surface_target_handle(surface, &handle, &level, &face)
-                || face || !surface->texture
-                || !(surface->texture->usage & D3DUSAGE_DEPTHSTENCIL))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
     old_surface = device->depth_stencil_surface;
     TRACE("CALL SetDepthStencilSurface old=%08lX new=%08lX same=%lu "
             "old_refs=%ld new_refs=%ld", (DWORD)(uintptr_t)old_surface,
@@ -11586,12 +11591,33 @@ static HRESULT WINAPI device_set_depth_stencil_surface(IDirect3DDevice9 *iface,
     device->depth_stencil_surface = surface;
     if (old_surface)
         surface_binding_release(old_surface);
+    device->depth_stencil_unbound = surface ? FALSE : TRUE;
+}
+
+static HRESULT WINAPI device_set_depth_stencil_surface(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *surface_iface)
+{
+    D9Device *device = device_from_iface(iface);
+    D9Surface *surface = surface_iface ? surface_from_iface(surface_iface) : NULL;
+    D9WGSetDepthStencilSurfaceLevel command;
+    uint32_t handle = 0;
+    uint32_t level = 0;
+
+    if (surface && surface->auto_depth_stencil) {
+        handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+    } else if (surface_iface) {
+        uint32_t face = 0;
+        if (!surface_target_handle(surface, &handle, &level, &face)
+                || face || !surface->texture
+                || !(surface->texture->usage & D3DUSAGE_DEPTHSTENCIL))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+    device_replace_depth_stencil_surface(device, surface);
     command.device_handle = device->handle;
     command.depth_texture_handle = handle;
     command.depth_level = level;
     command.width = surface ? surface->width : 0u;
     command.height = surface ? surface->height : 0u;
-    device->depth_stencil_unbound = surface ? FALSE : TRUE;
     return emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &command,
             sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -17050,6 +17076,95 @@ const D9WGDeviceMethods8 *WINAPI d9wg_d3d9_core_device_methods8(
         return NULL;
     return &g_core_device_methods8;
 }
+
+/* Legacy8 paired targets and borrowed surface containers. */
+HRESULT WINAPI d9wg_d3d9_core_set_render_target8(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *color_iface, IDirect3DSurface9 *depth_iface)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9Surface *color = color_iface ? surface_from_iface(color_iface) : NULL;
+    D9Surface *depth = depth_iface ? surface_from_iface(depth_iface) : NULL;
+    D9Surface *current = device->render_target_surfaces[0];
+    UINT width = current ? current->width : device->display_mode.Width;
+    UINT height = current ? current->height : device->display_mode.Height;
+    D3DMULTISAMPLE_TYPE samples = current ? current->multisample
+            : device->present.MultiSampleType;
+    D9WGSetRenderTarget color_command;
+    D9WGSetDepthStencilSurfaceLevel depth_command;
+    D3DSURFACE_DESC desc;
+    ZeroMemory(&color_command, sizeof(color_command));
+    ZeroMemory(&depth_command, sizeof(depth_command));
+    color_command.device_handle = depth_command.device_handle = device->handle;
+    if (color) {
+        if (color_iface->lpVtbl != &g_surface_vtbl || color->device != device
+                || FAILED(surface_get_desc(color_iface, &desc))
+                || desc.Pool != D3DPOOL_DEFAULT
+                || !(desc.Usage & D3DUSAGE_RENDERTARGET)
+                || (desc.Usage & D3DUSAGE_DEPTHSTENCIL)
+                || !surface_target_handle(color, &color_command.color_texture_handle,
+                        &color_command.color_level, &color_command.color_face))
+            return D3DERR_INVALIDCALL;
+        width = desc.Width;
+        height = desc.Height;
+        samples = desc.MultiSampleType;
+    }
+    if (depth) {
+        if (depth_iface->lpVtbl != &g_surface_vtbl || depth->device != device
+                || depth->cube_texture
+                || FAILED(surface_get_desc(depth_iface, &desc))
+                || !(desc.Usage & D3DUSAGE_DEPTHSTENCIL)
+                || desc.Width < width || desc.Height < height
+                || desc.MultiSampleType != samples)
+            return D3DERR_INVALIDCALL;
+        if (depth->auto_depth_stencil)
+            depth_command.depth_texture_handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+        else {
+            uint32_t face;
+            if (!depth->texture || !surface_target_handle(depth,
+                    &depth_command.depth_texture_handle,
+                    &depth_command.depth_level, &face) || face)
+                return D3DERR_INVALIDCALL;
+        }
+        depth_command.width = desc.Width;
+        depth_command.height = desc.Height;
+    }
+    /* Legacy8 publishes both bindings before the first transport attempt. */
+    if (color) device_replace_render_target_surface(device, 0, color);
+    device_replace_depth_stencil_surface(device, depth);
+    if (color && !emit_command(D9WG_OP_SET_RENDER_TARGET,
+            &color_command, sizeof(color_command)))
+        return D3DERR_DRIVERINTERNALERROR;
+    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL,
+            &depth_command, sizeof(depth_command)))
+        return D3DERR_DRIVERINTERNALERROR;
+    if (!color) return D3D_OK;
+    D3DVIEWPORT9 viewport = {0, 0, width, height, 0.0f, 1.0f};
+    return device_set_live_viewport(device, &viewport, TRUE);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_surface_owner8(IDirect3DSurface9 *iface,
+        IUnknown **owner, UINT *kind)
+{
+    if (!owner || !kind) return D3DERR_INVALIDCALL;
+    *owner = NULL;
+    *kind = 0;
+    if (!iface || iface->lpVtbl != &g_surface_vtbl
+            || !core_view_device8((IUnknown *)iface))
+        return D3DERR_INVALIDCALL;
+    D9Surface *surface = surface_from_iface(iface);
+    if (surface->cube_texture) {
+        *owner = (IUnknown *)&surface->cube_texture->iface;
+        *kind = 4;
+    } else if (surface->texture_child && surface->texture) {
+        *owner = (IUnknown *)&surface->texture->iface;
+        *kind = 3;
+    } else *owner = (IUnknown *)&surface->device->iface;
+    return D3D_OK;
+}
+
 
 /* A frontend8 last-direct-reference boundary may precede core public zero
  * while application-owned resources still pin the device. Use the same
