@@ -13,7 +13,14 @@ static void expect(HRESULT hr,const char*s){if(FAILED(hr)){char line[180];wsprin
 void factory_core9_open(const char*directory,HWND window);void factory_core9_draw(DWORD color);void factory_core9_close(void);
 static void caps_compare(const D3DCAPS8*actual)
 {
-    D3DCAPS8 expected;expect(IDirect3D8_GetDeviceCaps(baseline_root,0,D3DDEVTYPE_HAL,&expected),"FAIL baseline caps");const BYTE*a=(const BYTE*)actual,*b=(const BYTE*)&expected;
+    D3DCAPS8 expected;expect(IDirect3D8_GetDeviceCaps(baseline_root,0,D3DDEVTYPE_HAL,&expected),"FAIL baseline caps");
+    /* The four modulate/add operations were omitted by the old API8 mask;
+     * stage 6 validates them with the original Wine texop pixel checks. */
+    expected.TextureOpCaps |= D3DTEXOPCAPS_MODULATEALPHA_ADDCOLOR
+            | D3DTEXOPCAPS_MODULATECOLOR_ADDALPHA
+            | D3DTEXOPCAPS_MODULATEINVALPHA_ADDCOLOR
+            | D3DTEXOPCAPS_MODULATEINVCOLOR_ADDALPHA;
+    const BYTE*a=(const BYTE*)actual,*b=(const BYTE*)&expected;
     for(UINT i=0;i<sizeof(expected);i++){if(a[i]!=b[i]){char line[180];wsprintfA(line,"FAIL caps byte=%u old=%u new=%u",i,b[i],a[i]);report(line);ExitProcess(1);}}caps_queries++;
 }
 static void baseline_open(void)

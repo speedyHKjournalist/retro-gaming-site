@@ -6148,8 +6148,13 @@ static HRESULT WINAPI device_clear(IDirect3DDevice9 *iface, DWORD rect_count,
     uint32_t rect_bytes;
     BOOL result;
 
-    if (rect_count && !rects)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* Native D3D8/9 use the pointer to select rectangle mode. A non-null
+     * list with zero entries clears nothing; a null list clears the viewport
+     * even when its count is nonzero (Wine visual clear_test). */
+    if (!rects)
+        rect_count = 0;
+    else if (!rect_count)
+        return D3D_OK;
     if (!(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect_count > 0xFFFFFFFFu / sizeof(*rects))

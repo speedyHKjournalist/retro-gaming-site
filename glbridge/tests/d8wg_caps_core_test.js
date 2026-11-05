@@ -53,6 +53,10 @@ int main(void){
  for(UINT round=0;round<32;round++)for(UINT p=0;p<3;p++)for(permissive=0;permissive<2;permissive++){
   profile=profiles[p];injection=0;D3DCAPS9 before9,current9;caps9_before(&before9);fill_caps(&current9);CHECK(!memcmp(&before9,&current9,sizeof(before9)));
   D3DCAPS8 before8;caps8_before(&before8);
+  /* Stage 6 Wine texop_test validates the four existing host modulate/add
+   * operations that the old API8 mask omitted. Keep the retired fixture
+   * unchanged and make the intentional capability increase explicit. */
+  before8.TextureOpCaps |= 0x001e0000u;
   UINT saved_profile=profile,saved_permissive=permissive;D3DCAPS9 raw_expected;profile=0;permissive=0;caps9_before(&raw_expected);profile=saved_profile;permissive=saved_permissive;
   if(raw_expected.RasterCaps&0x04000000u)raw_expected.RasterCaps|=0x00004000u;
   struct{uint32_t before[4];D3DCAPS8 caps;uint32_t after[32];}raw;memset(&raw,0xa5,sizeof(raw));UINT raw_calls=backend_calls;d9wg_d3d9_core_caps8(&raw.caps);
@@ -76,7 +80,7 @@ int main(void){
   }
  }
  injection=0;UINT calls=backend_calls;D3DCAPS8 caps;memset(&caps,0xa5,sizeof(caps));CHECK(d3d_get_device_caps(NULL,1,1,&caps)==(HRESULT)0x8876086cu&&backend_calls==calls);CHECK(d3d_get_device_caps(NULL,0,2,&caps)==(HRESULT)0x8876086cu&&backend_calls==calls);CHECK(d3d_get_device_caps(NULL,0,1,NULL)==(HRESULT)0x8876086cu&&device_get_caps(NULL,NULL)==(HRESULT)0x8876086cu&&backend_calls==calls);
- printf("PASS actual D3D8 caps/core C: %u checks, %u profile/provider cases, %u prior D3D8 words; all53 prefix fields, unchanged full D3D9 profiles, precise212-byte copy, backend propagation, version masks/limits and API guards\\n",checks,cases,words);return 0;
+ printf("PASS actual D3D8 caps/core C: %u checks, %u profile/provider cases, %u D3D8 baseline words plus four stage6 texops; all53 prefix fields, unchanged full D3D9 profiles, precise212-byte copy, backend propagation, version masks/limits and API guards\\n",checks,cases,words);return 0;
 }
 `;
     fs.writeFileSync(dir+"/caps.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/caps.c","-o",dir+"/caps"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/caps",[],{encoding:"utf8",timeout:10000});assert.equal(r.status,0,r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);
