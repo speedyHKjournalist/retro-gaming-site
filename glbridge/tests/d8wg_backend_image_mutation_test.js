@@ -11,11 +11,11 @@ const cases=[
     "D3DPOOL_SYSTEMMEM, 9u, out"
   ],
   [
-    "compressed images accepted",
+    "compressed images rejected",
     "image",
     "d9wg_d3d9_core_image_surface8",
-    "supported_format8((D3DFORMAT)format, TRUE)",
-    "supported_format8((D3DFORMAT)format, FALSE)"
+    "supported_format8((D3DFORMAT)format, FALSE)",
+    "supported_format8((D3DFORMAT)format, TRUE)"
   ],
   [
     "API8 width bound removed",

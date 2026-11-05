@@ -17,6 +17,7 @@ typedef int BOOL,WINBOOL,HRESULT;typedef uint32_t UINT,DWORD;
 #define TRUE 1
 #define FALSE 0
 #define D3D_OK 0
+#define D3DPOOL_SCRATCH 3
 #define FAILED(v) ((v)<0)
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
@@ -43,7 +44,7 @@ static void light_free(void *p){frees++;free(p);}
 typedef struct Interface {const void *lpVtbl;} Interface;
 ${interfaces}
 typedef struct D9Device D9Device;
-typedef struct Object {Interface iface;D9Device *device;uint32_t handle;UINT length;int refs;DWORD fvf;} Object;
+typedef struct Object {Interface iface;D9Device *device;uint32_t handle;UINT length;int refs;DWORD fvf;UINT pool;} Object;
 typedef Object D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuffer,D9VertexDeclaration;
 typedef struct D9Shader {union {Interface vertex,pixel;} iface;D9Device *device;uint32_t handle;UINT length;int refs;} D9Shader;
 typedef struct D9StreamBinding {D9VertexBuffer *buffer;UINT stride,offset;DWORD frequency;} D9StreamBinding;
@@ -76,6 +77,7 @@ static void texture_binding_release(D9Texture*t){release_storage(&t->iface);}
 
 ${['VertexBuffer','IndexBuffer','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','BaseTexture'].map(n=>'#define IDirect3D'+n+'9_AddRef(p) addref(p)\n#define IDirect3D'+n+'9_Release(p) release(p)').join('\n')}
 static D9Device *device_from_iface(D9Device *p){return p;}
+static UINT device_compatibility_api(D9Device*d){(void)d;return 9;}
 static D9VertexBuffer *vb_from_iface(Interface *p){return (void*)p;}
 static D9IndexBuffer *ib_from_iface(Interface *p){return (void*)p;}
 static D9VertexDeclaration *decl_from_iface(Interface *p){return (void*)p;}

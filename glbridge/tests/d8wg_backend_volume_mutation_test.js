@@ -2,6 +2,9 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"backend8-volume-mut-"));
 function body(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return[m.index,b,s.slice(m.index,b)];}
 const cases=[
+ ["scratch create stays CPU","emit_volume_texture_create","texture->pool == D3DPOOL_SCRATCH","texture->pool == 99u"],
+ ["scratch upload stays CPU","emit_volume_texture_update","texture->pool == D3DPOOL_SCRATCH","texture->pool == 99u","lock"],
+ ["default volume lockability","volume_texture_lock_box","texture->pool == D3DPOOL_DEFAULT","texture->pool == 99u","lock"],
  ["creation mip metadata","emit_volume_texture_create","command.level_count = texture->level_count;","command.level_count = 1;"],
  ["creation depth metadata","emit_volume_texture_create","command.depth = texture->depth;","command.depth = 1;"],
  ["profile","d9wg_d3d9_core_volume_texture8","!= 8u","!= 9u"],
@@ -17,13 +20,13 @@ const cases=[
  ["lazy8 view allocation","create_volume_texture_object","if (api == 9u)","if (api >= 8u)"],
  ["API8 shadow OOM","create_volume_texture_object","if (api == 8u && !level_data->shadow)","if (api == 8u && !level_data->shadow && 0)"],
  ["lock API","volume_texture_lock_box","device_compatibility_api(texture->device),","9u,","lock"],
- ["upload API","emit_volume_texture_update","device_compatibility_api(texture->device) == 8u","device_compatibility_api(texture->device) == 7u","lock"],
+ ["upload API","emit_volume_texture_update","device_compatibility_api(texture->device) == 8u)","device_compatibility_api(texture->device) == 7u)","lock"],
  ["read only","volume_texture_unlock_box","if (!(level_data->lock_flags & D3DLOCK_READONLY))","if (1)","lock"],
  ["unlock cleanup","volume_texture_unlock_box","level_data->locked = FALSE;","level_data->locked = TRUE;","lock"],
  ["slice source","emit_volume_texture_update","z * level_data->slice_pitch","0u * level_data->slice_pitch","lock"],
  ["slice selector","emit_volume_texture_update","&slice, level, z, &rect","&slice, level, 0, &rect","lock"],
- ["API8 box alignment","volume_texture_lock_box","device_compatibility_api(texture->device) == 8u","device_compatibility_api(texture->device) == 7u","lock"],
- ["ordinary9 box alignment","volume_texture_lock_box","device_compatibility_api(texture->device) == 8u","device_compatibility_api(texture->device) <= 9u","lock"],
+ ["API8 box alignment","volume_texture_lock_box","device_compatibility_api(texture->device) == 8u\n            && ((area.Right","device_compatibility_api(texture->device) == 7u\n            && ((area.Right","lock"],
+ ["ordinary9 box alignment","volume_texture_lock_box","device_compatibility_api(texture->device) == 8u\n            && ((area.Right","device_compatibility_api(texture->device) <= 9u\n            && ((area.Right","lock"],
  ["box front offset","volume_texture_lock_box","area.Front * level_data->slice_pitch","0u * level_data->slice_pitch","lock"],
  ["slice pitch","volume_texture_lock_box","locked->SlicePitch = (INT)level_data->slice_pitch;","locked->SlicePitch = (INT)level_data->row_pitch;","lock"],
  ["upload failure","volume_texture_unlock_box","return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;","return result ? D3D_OK : D3D_OK;","lock"],

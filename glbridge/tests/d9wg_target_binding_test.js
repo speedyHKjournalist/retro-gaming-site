@@ -65,6 +65,7 @@ typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESU
 #define TRUE 1
 #define FALSE 0
 #define D3D_OK 0
+#define D3DPOOL_SCRATCH 3
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
@@ -190,7 +191,8 @@ ${legacyProgramBindings?"static UINT pair_submissions,pair_fail_submission;":""}
 static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Surface*surface_from_iface(Interface*p){return (D9Surface*)p;}static D9Texture*texture_from_iface(Interface*p){return (D9Texture*)p;}
 ${textureBindings?"static D9CubeTexture*cube_from_iface(Interface*p){return (D9CubeTexture*)p;}\nstatic D9VolumeTexture*volume_texture_from_iface(Interface*p){return (D9VolumeTexture*)p;}":""}
 ${legacyFvfBindings?"static UINT active_compatibility_api=9;":""}
-${volumeBindings?"static int g_volume_vtbl;static UINT device_compatibility_api(D9Device*d){(void)d;return "+(legacyFvfBindings?"active_compatibility_api":"9")+";}\nstatic D9Volume*volume_from_iface(Interface*p){return (D9Volume*)p;}":""}
+${"static UINT device_compatibility_api(D9Device*d){(void)d;return "+(legacyFvfBindings?"active_compatibility_api":"9")+";}"}
+${volumeBindings?"static int g_volume_vtbl;static D9Volume*volume_from_iface(Interface*p){return (D9Volume*)p;}":""}
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==8&&n);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;assert(!f);if(p){assert(live);live--;free(p);}}
 static void d9wg_vertex_windows_clip_release(void*p,void*context){(void)context;HeapFree(NULL,0,p);}

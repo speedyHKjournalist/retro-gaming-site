@@ -15,6 +15,7 @@ try{for(const api of[8,9]){const source=readComparisonSource(process.env['D'+api
 typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REFGUID;typedef int BOOL;
 #define WINAPI
 #define D3D_OK 0
+#define D3DPOOL_SCRATCH 3
 #define D3DERR_NOTFOUND ((HRESULT)0x88760866u)
 #define D3DERR_MOREDATA ((HRESULT)0x88760867u)
 #define E_OUTOFMEMORY ((HRESULT)0x8007000eu)
@@ -25,9 +26,10 @@ typedef uint32_t DWORD,ULONG,UINT;typedef int32_t HRESULT;typedef const void*REF
 typedef struct Texture Texture;typedef struct View View;typedef struct{void*lpVtbl;}Interface;
 typedef struct{Texture*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;unsigned refs;}Device;
 typedef struct{D9WGPrivateStore private_data;View*level_surface;View*level_volume;void*shadow;}Level;
-struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount,binding_refs;uint32_t handle,level_count;int private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;Level*levels;};
+struct Texture{Interface iface;Device*device;Texture*next_device_resource;int32_t refcount,binding_refs;uint32_t handle,level_count,pool;int private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;Level*levels;};
 struct View{Interface iface;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;int texture_child;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;};
 typedef Device D${api}Device;
+${api===9?"static unsigned compatibility_api=9;static unsigned device_compatibility_api(Device*d){(void)d;return compatibility_api;}":""}
 typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3DTexture${api},IDirect3DCubeTexture${api},IDirect3DVolumeTexture${api};
 typedef View D${api}Surface,D${api}Volume,IDirect3DSurface${api},IDirect3DVolume${api};
 static Texture*texture_from_iface(Texture*t){return t;}static Texture*cube_from_iface(Texture*t){return t;}static Texture*volume_texture_from_iface(Texture*t){return t;}static View*surface_from_iface(View*v){return v;}static View*volume_from_iface(View*v){return v;}
@@ -55,6 +57,7 @@ for(unsigned i=0;i<count;i++){View v={.texture=kind==1?NULL:t,.cube=kind==1?t:NU
 size=4;out=0xdeadbeef;CHECK(cg(&v,key,&out,&size)==D3DERR_NOTFOUND&&out==0xdeadbeef&&size==4);value=0x33445500+i;CHECK(!cs(&v,key,&value,4,0));CHECK(!cs(&v,object_key,&object,sizeof(void*),1)&&object.refs==3+i);View duplicate=v;size=1;CHECK(!cg(&duplicate,key,NULL,&size)&&size==4);size=3;CHECK(cg(&duplicate,key,&out,&size)==D3DERR_MOREDATA&&size==4&&out==0xdeadbeef);size=4;CHECK(!cg(&duplicate,key,&out,&size)&&out==value);IUnknown*pointer=NULL;size=sizeof(pointer);CHECK(!cg(&duplicate,object_key,&pointer,&size)&&pointer==&object&&object.refs==4+i);IUnknown_Release(pointer);CHECK(!cf(&v,key)&&cf(&v,key)==D3DERR_NOTFOUND);CHECK(!cs(&v,key,&value,4,0));cases++;}
 size=4;CHECK(!get[kind](t,key,&out,&size)&&out==0x10203040);CHECK(!drop[kind](t,key)&&drop[kind](t,key)==D3DERR_NOTFOUND);for(unsigned i=0;i<count;i++){View v={.texture=kind==1?NULL:t,.cube=kind==1?t:NULL,.cube_texture=kind==1?t:NULL,.level=i%2,.face=i/2,.cube_face=i/2,.texture_child=kind==0};size=4;CHECK(!(kind==2?volume_get_private_data(&v,key,&out,&size):surface_get_private_data(&v,key,&out,&size))&&out==0x33445500+i);}cases++;
 object.check_destroy=1;CHECK(release_texture[kind](t)==1&&object.refs==2+count&&destroys==kind);CHECK(!release_texture[kind](t)&&object.refs==1&&device.refs==1&&destroys==kind+1&&!allocated);cases++;}
+${api===9?`compatibility_api=8;Texture*scratch=HeapAlloc(NULL,0,sizeof(*scratch));scratch->device=&device;scratch->refcount=1;scratch->pool=3;scratch->level_count=1;scratch->handle=0x1234;scratch->levels=HeapAlloc(NULL,0,sizeof(Level));scratch->levels[0].shadow=HeapAlloc(NULL,0,16);scratch->levels[0].level_volume=HeapAlloc(NULL,0,sizeof(View));device.refs=2;device.volume_textures=scratch;CHECK(!volume_texture_release(scratch)&&!allocated&&destroys==3&&device.refs==1&&!device.volume_textures);compatibility_api=9;cases++;`:""}
 View unsupported={0};DWORD size=4,out=0xdeadbeef;CHECK(!surface_set_private_data(&unsupported,key,&out,4,0)&&!surface_get_private_data(&unsupported,key,&out,&size)&&out==0xdeadbeef&&size==4&&!surface_free_private_data(&unsupported,key)&&!allocated);cases++;
 printf("PASS actual API ${api} texture private data: %u parent/2D/cube-face-mip/volume-level isolation, duplicate views, refs and actual final teardown cases\\n",cases);return 0;}
 `);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/entry.c',root+'/runtime/d9wg_private_data.c','-o',dir+'/entry'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/entry',[],{encoding:'utf8',timeout:20000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}
