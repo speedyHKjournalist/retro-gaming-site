@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "9335ee9a77fb7cc808d2";
+globalThis.V86GL_BUILD_REVISION = "94631fcb923bae8aab2a";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -1045,8 +1045,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             case REG_TEMP:
                 this.temps.add(source.index);
                 return "r" + source.index;
-            case REG_CONST:
-                return "d9c.f[" + this.constantIndexExpression(source, 0) + "]";
+            case REG_CONST: {
+                const value = "d9c.f[" + this.constantIndexExpression(source, 0) + "]";
+                // SM1 pixel constants have the hardware range [-1, 1]. Apply
+                // this before source swizzles/modifiers, including DEF values.
+                return this.kind === "pixel" && this.major === 1
+                    ? "clamp(" + value + ", vec4<f32>(-1.0), vec4<f32>(1.0))" : value;
+            }
             case REG_CONST2:
                 return "d9c.f[" + this.constantIndexExpression(source, 1) + "]";
             case REG_CONST3:
@@ -1440,13 +1445,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 return;
             case OP.MOV:
                 // vs_1_1 predates MOVA. Its only legal way to load a0.x is
-                // `mov a0.x, src`, which performs the same round-to-nearest
-                // float-to-integer conversion MOVA performs in later models.
+                // `mov a0.x, src`. Windows floors this value (Wine visual.c
+                // test_mova); MOVA in later models uses nearest rounding.
                 // Keep the float mirror for masked assignment, then update
                 // the integer register relative c[a0.x + n] reads.
                 if (this.kind === "vertex" && this.major === 1 &&
                         dest.type === REG_ADDR) {
-                    this.store(dest, "round(" + s(0) + ")");
+                    this.store(dest, "floor(" + s(0) + ")");
                     this.emit("a0 = vec4<i32>(a0f);");
                 } else {
                     this.store(dest, s(0));
@@ -1490,7 +1495,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 return;
             case OP.LOGP: this.store(dest, "vec4<f32>(d9_log(" + scalar(0) + "))"); return;
             case OP.POW:
-                this.store(dest, "vec4<f32>(pow(abs(" + scalar(0) + "), " +
+                this.store(dest, "vec4<f32>(d9_pow(" + scalar(0) + ", " +
                     scalar(1) + "))");
                 return;
             case OP.DP3:
@@ -1787,23 +1792,27 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             case OP.LOOP: {
                 const counter = this.fresh("loop");
                 const register = sources[1].index;
+                const saved = this.fresh("saved_aL");
                 this.usesLoopCounter = true;
                 this.maxIntConst = Math.max(this.maxIntConst, register);
+                this.emit("let " + saved + " = aL;");
                 this.emit("aL = d9c.i[" + register + "].y;");
                 this.emit("for (var " + counter + " = 0; " + counter + " < d9c.i[" +
                     register + "].x; " + counter + " = " + counter + " + 1) {");
                 this.enter(false);
                 this.emit("// aL advances at the bottom of the body");
                 this.pendingLoopStep = this.pendingLoopStep || [];
-                this.pendingLoopStep.push(register);
+                this.pendingLoopStep.push({ register, saved });
                 return;
             }
             case OP.ENDLOOP: {
-                const register = this.pendingLoopStep && this.pendingLoopStep.pop();
-                if (register !== undefined)
-                    this.emit("aL = aL + d9c.i[" + register + "].z;");
+                const loop = this.pendingLoopStep && this.pendingLoopStep.pop();
+                if (loop)
+                    this.emit("aL = aL + d9c.i[" + loop.register + "].z;");
                 this.leave();
                 this.emit("}");
+                // This also runs after BREAK, restoring the enclosing loop.
+                if (loop) this.emit("aL = " + loop.saved + ";");
                 return;
             }
             case OP.BREAK: this.emit("break;"); return;
@@ -1819,12 +1828,20 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 return;
             }
             case OP.CALL:
-                this.emit("d9_sub" + sources[0].index + "();");
+            case OP.CALLNZ: {
+                // RET inside a callee's loop bypasses that loop's epilogue.
+                // The calling loop's aL must survive even that early return.
+                this.usesLoopCounter = true;
+                const saved = this.fresh("call_aL");
+                this.emit("let " + saved + " = aL;");
+                if (opcode === OP.CALL)
+                    this.emit("d9_sub" + sources[0].index + "();");
+                else
+                    this.emit("if (" + this.booleanSource(sources[1]) + ") { d9_sub" +
+                        sources[0].index + "(); }");
+                this.emit("aL = " + saved + ";");
                 return;
-            case OP.CALLNZ:
-                this.emit("if (" + this.booleanSource(sources[1]) + ") { d9_sub" +
-                    sources[0].index + "(); }");
-                return;
+            }
             case OP.RET:
                 this.emit("return;");
                 return;
@@ -2407,6 +2424,11 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 "select(inverseSqrt(a), " + FLOAT_MAX + ", a == 0.0); }");
             out.push("fn d9_log(v: f32) -> f32 { let a = abs(v); return " +
                 "select(log2(a), -" + FLOAT_MAX + ", a == 0.0); }");
+            out.push("fn d9_pow(x: f32, y: f32) -> f32 {");
+            out.push("    if (y == 0.0) { return 1.0; }");
+            out.push("    if (x == 0.0 && y > 0.0) { return 0.0; }");
+            out.push("    return pow(abs(x), y);");
+            out.push("}");
             out.push("fn d9_normalize(v: vec3<f32>) -> vec3<f32> { let l = " +
                 "dot(v, v); return select(v * inverseSqrt(l), vec3<f32>(0.0), l == 0.0); }");
             out.push("fn d9_lit(s: vec4<f32>) -> vec4<f32> {");
@@ -67674,7 +67696,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (samples > LIMITS3.MAX_SAMPLES || samples > 0 && info && (info.kind === "int" || info.kind === "uint")) return fail2(c, GL2.INVALID_OPERATION);
       const rb = c.group.renderbuffers.get(c.renderbuffer);
       if (!rb) return fail2(c, GL2.INVALID_OPERATION);
-      Object.assign(rb, { width, height, format, image: 0, samples: samples ? LIMITS3.MAX_SAMPLES : 0 });
+      Object.assign(rb, { width, height, format, image: 0, color_buffer: 0, samples: samples ? LIMITS3.MAX_SAMPLES : 0 });
       return void 0;
     }
     function attachment_parameter(c, fb, attachment, pname) {
@@ -71103,7 +71125,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (!size) return fail(c, GL.INVALID_VALUE);
       const rb = c.group.renderbuffers.get(c.renderbuffer);
       if (!rb) return fail(c, GL.INVALID_OPERATION);
-      Object.assign(rb, { width: size.width, height: size.height, format: size.format === GL.RGB ? GL.RGB8_OES : GL.RGBA8_OES, image });
+      Object.assign(rb, { width: size.width, height: size.height, format: size.format === GL.RGB ? GL.RGB8_OES : GL.RGBA8_OES, image, color_buffer: 0 });
     },
     // ---- buffers
     "glGenBuffers": gen("buffer", (c) => c.group.buffers),
@@ -71179,7 +71201,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (width < 0 || height < 0 || width > MAX_SIZE || height > MAX_SIZE) return fail(c, GL.INVALID_VALUE);
       const rb = c.group.renderbuffers.get(c.renderbuffer);
       if (!rb) return fail(c, GL.INVALID_OPERATION);
-      Object.assign(rb, { width, height, format, image: 0 });
+      Object.assign(rb, { width, height, format, image: 0, color_buffer: 0 });
     },
     "glGetRenderbufferParameteriv": (shadow, c, [target, pname, params]) => {
       query(shadow);
@@ -71792,7 +71814,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     }
     const rb = c.group.renderbuffers.get(c.renderbuffer);
     if (!rb) return false;
-    Object.assign(rb, { width: cb.width, height: cb.height, format: format === GL.RGB ? GL.RGB8_OES : GL.RGBA8_OES, image: 0 });
+    Object.assign(rb, { width: cb.width, height: cb.height, format: format === GL.RGB ? GL.RGB8_OES : GL.RGBA8_OES, image: 0, color_buffer, samples: 0 });
     return true;
   };
   GLESShadow.prototype.program_in_use = function(name) {
@@ -72750,6 +72772,18 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     });
     GLES_RANGES.push({ api, first: base, last: base + commands.length - 1 });
   }
+  var IOSURFACE_ACQUIRE = 1983395328;
+  var IOSURFACE_COMMANDS = [
+    ["v86AcquireIOSurface", [["id", "u32"], ["width", "u32"], ["height", "u32"], ["fourcc", "u32"]]],
+    ["v86IOSurfaceIsCurrent", [["handle", "u32"], ["seed", "u32"]]],
+    ["v86UploadIOSurface", [["handle", "u32"], ["seed", "u32"], ["pixels", "ptr", "in"]]]
+  ];
+  IOSURFACE_COMMANDS.forEach(([name, params], i) => {
+    const command = { api: "rc", opcode: IOSURFACE_ACQUIRE + i, name, ret: "u32", params, flags: [] };
+    BY_OPCODE.set(command.opcode, command);
+    BY_NAME.set(name, command);
+  });
+  GLES_RANGES.push({ api: "v86", first: IOSURFACE_ACQUIRE, last: IOSURFACE_ACQUIRE + IOSURFACE_COMMANDS.length - 1 });
   function command_of_opcode(opcode) {
     return BY_OPCODE.get(opcode) || null;
   }
@@ -74874,7 +74908,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     },
     /** A renderbuffer's texture, of its format and samples */
     make_renderbuffer3(rb) {
-      if (!rb.width || !rb.height || rb.image) return;
+      if (!rb.width || !rb.height || rb.image || rb.color_buffer) return;
       const info = format_info(rb.format);
       const format = info ? info.webgpu : RENDERBUFFER_WEBGPU[rb.format] || COLOR_FORMAT;
       if (!RENDERABLE.has(format)) return void this.note3("a renderbuffer of a format WebGPU draws no " + format);
@@ -75014,6 +75048,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (a.type === GL3.RENDERBUFFER) {
         const rb = c.group.renderbuffers.get(a.name);
         if (rb && rb.image) return color_buffer(this.image_texture(rb.image));
+        if (rb && rb.color_buffer) return color_buffer(this.color_buffer_texture(rb.color_buffer));
         if (!rb || !rb.gpu) return null;
         return {
           texture: rb.gpu.texture,
@@ -77526,7 +77561,12 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       }
       case "COLOR_BUFFER_BIND": {
         const conn = this.conns.get(record.conn);
-        if (conn) this.shadow.bind_color_buffer(conn.context, record.color_buffer, !!record.texture);
+        this.end_pass();
+        if (conn && this.shadow.bind_color_buffer(conn.context, record.color_buffer, !!record.texture) && !record.texture) {
+          const c = this.shadow.contexts.get(conn.context), rb = c.group.renderbuffers.get(c.renderbuffer);
+          if (rb.gpu) this.staging.push(rb.gpu);
+          rb.gpu = null;
+        }
         return void 0;
       }
       case "IMAGE_CREATE":
@@ -77787,6 +77827,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (a.type === GL.RENDERBUFFER) {
         const rb = c.group.renderbuffers.get(a.name);
         if (rb && rb.image) return this.image_texture(rb.image);
+        if (rb && rb.color_buffer) return this.color_buffer_texture(rb.color_buffer);
         return rb && rb.gpu ? { texture: rb.gpu.texture, format: rb.gpu.format, layer: 0, level: 0 } : null;
       }
       const texture = c.group.textures.get(a.name);
@@ -78728,7 +78769,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     for (const group of this.shadow.groups.values()) {
       for (const rb of group.renderbuffers.values()) {
         rb.gpu = null;
-        if (!rb.width || !rb.height || rb.image) continue;
+        if (!rb.width || !rb.height || rb.image || rb.color_buffer) continue;
         if (rb.saved3) {
           this.restore_renderbuffer3(rb);
           continue;
