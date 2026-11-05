@@ -1273,3 +1273,22 @@ Device8 comparisons are explicitly separated from live Root8/adapter/core tests.
 The exact accepted retail DLL and a same-source diagnostic DLL are published.
 See deployment evidence 4L2. This does not close all phase 4 compatibility,
 software vertex processing, native HAL/game acceptance, or phase 5 shader work.
+
+
+### 2026-11-05: fallible shared stateblock replay (review 4L3)
+
+The common replay engine stops at the first failed setter and returns its exact
+HRESULT. Device8 applies its raw states and retained shader objects at the shared
+replay boundaries, so partial failure leaves queries consistent with accepted
+updates. Apply retains a detached raw snapshot and a device pin across reentrant
+block deletion; the core continues to own resource snapshot references.
+
+Native providers exercise 352 core failure positions and 400 raw8/lifetime
+scenarios, including ASAN. All 38 mutations require a compiled C runtime failure.
+401 guest suites pass. Public8 XP calls all 97 methods / 2,815 checks; ordinary9
+XP covers 65 captures, 528 getter queries and two Reset operations. Both captures
+produce 33 images / 1,728 pixels with zero error on SwiftShader and Metal.
+The updated9 probe checks recording versus completed-block device pins, and its
+wire model explicitly tracks the private FVF cache. See deployment evidence4L3.
+Failure injection is native with controlled providers; XP validates real COM
+objects in normal execution, without claiming Windows HAL failure-order identity.

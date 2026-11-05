@@ -13060,28 +13060,34 @@ static struct D9StateBlock *state_block_alloc(D9Device *device, BOOL parent_ref)
 /* Replay ordinary state through public setters. Streams use their shared
  * internal setter to restore exact captured NULL metadata without the public
  * wrapper substituting the current live offset/stride. */
-static HRESULT state_block_apply(struct D9StateBlock *block)
+static HRESULT state_block_apply_shared(struct D9StateBlock *block,
+        D9WGStateBlockApply8 apply8, void *context)
 {
     D9Device *device = block->device;
     IDirect3DDevice9 *iface = &device->iface;
     UINT index, stage, slot;
+    HRESULT result;
+#define APPLY_STATE(call) do { result = (call); if (FAILED(result)) return result; } while (0)
 
     if (block->has_palette) {
         HRESULT hr = device_set_current_texture_palette(iface, block->current_palette);
         if (FAILED(hr)) return hr;
     }
-    for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
+    if (apply8) APPLY_STATE(apply8(context, D9WG_APPLY8_RENDER, 0, D3D_OK));
+    else for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
         if (block->has_render_state[index])
-            IDirect3DDevice9_SetRenderState(iface, (D3DRENDERSTATETYPE)index,
-                    block->render_states[index]);
+            APPLY_STATE(IDirect3DDevice9_SetRenderState(iface, (D3DRENDERSTATETYPE)index,
+                    block->render_states[index]));
     }
     for (stage = 0; stage < D9_MAX_TEXTURE_BINDINGS; ++stage) {
-        if (stage < D9_MAX_TEXTURE_STAGES) {
+        if (apply8 && stage < D9_MAX_TEXTURE_STAGES)
+            APPLY_STATE(apply8(context, D9WG_APPLY8_TEXTURE_STAGE, stage, D3D_OK));
+        else if (!apply8 && stage < D9_MAX_TEXTURE_STAGES) {
             for (index = 0; index < D9_MAX_TEXTURE_STAGE_STATES; ++index) {
                 if (block->has_texture_stage_state[stage][index])
-                    IDirect3DDevice9_SetTextureStageState(iface, stage,
+                    APPLY_STATE(IDirect3DDevice9_SetTextureStageState(iface, stage,
                             (D3DTEXTURESTAGESTATETYPE)index,
-                            block->texture_stage_states[stage][index]);
+                            block->texture_stage_states[stage][index]));
             }
         }
         if (block->has_texture[stage]) {
@@ -13092,101 +13098,112 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
                 texture = (IDirect3DBaseTexture9 *)&block->cube_textures[stage]->iface;
             else if (block->volume_textures[stage])
                 texture = (IDirect3DBaseTexture9 *)&block->volume_textures[stage]->iface;
-            IDirect3DDevice9_SetTexture(iface, texture_binding_stage(stage),
-                    texture);
+            APPLY_STATE(IDirect3DDevice9_SetTexture(iface, texture_binding_stage(stage),
+                    texture));
         }
     }
-    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
+    if (!apply8) for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
         for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index) {
             if (block->has_sampler_state[slot][index])
-                IDirect3DDevice9_SetSamplerState(iface,
+                APPLY_STATE(IDirect3DDevice9_SetSamplerState(iface,
                         sampler_state_index(slot),
                         (D3DSAMPLERSTATETYPE)index,
-                        block->sampler_states[slot][index]);
+                        block->sampler_states[slot][index]));
         }
     }
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
         if (block->has_transform[index])
-            IDirect3DDevice9_SetTransform(iface,
+            APPLY_STATE(IDirect3DDevice9_SetTransform(iface,
                     (D3DTRANSFORMSTATETYPE)d9wg_state_block_transform_state(index),
-                    (const D3DMATRIX *)block->transforms[index]);
+                    (const D3DMATRIX *)block->transforms[index]));
     }
     if (block->has_material)
-        IDirect3DDevice9_SetMaterial(iface, &block->material);
+        APPLY_STATE(IDirect3DDevice9_SetMaterial(iface, &block->material));
     for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
-        if (block->has_clip_plane[index]) IDirect3DDevice9_SetClipPlane(iface, index, block->clip_planes[index]);
-    if (block->has_npatch_mode) IDirect3DDevice9_SetNPatchMode(iface, block->npatch_segments);
+        if (block->has_clip_plane[index]) APPLY_STATE(IDirect3DDevice9_SetClipPlane(iface, index, block->clip_planes[index]));
+    if (block->has_npatch_mode) APPLY_STATE(IDirect3DDevice9_SetNPatchMode(iface, block->npatch_segments));
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index])
-            IDirect3DDevice9_SetLight(iface, index, &block->lights[index]);
+            APPLY_STATE(IDirect3DDevice9_SetLight(iface, index, &block->lights[index]));
         if (block->has_light_enable[index])
-            IDirect3DDevice9_LightEnable(iface, index,
-                    block->light_enabled[index]);
+            APPLY_STATE(IDirect3DDevice9_LightEnable(iface, index,
+                    block->light_enabled[index]));
     }
     for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
-        if (entry->light_mask && entry->set) IDirect3DDevice9_SetLight(iface, entry->index, &entry->light);
-        if (entry->enable_mask) IDirect3DDevice9_LightEnable(iface, entry->index, entry->enabled);
+        if (entry->light_mask && entry->set) APPLY_STATE(IDirect3DDevice9_SetLight(iface, entry->index, &entry->light));
+        if (entry->enable_mask) APPLY_STATE(IDirect3DDevice9_LightEnable(iface, entry->index, entry->enabled));
     }
     if (block->has_viewport)
-        IDirect3DDevice9_SetViewport(iface, &block->viewport);
+        APPLY_STATE(IDirect3DDevice9_SetViewport(iface, &block->viewport));
     if (block->has_scissor)
-        IDirect3DDevice9_SetScissorRect(iface, &block->scissor_rect);
-    if (block->has_vertex_shader)
-        IDirect3DDevice9_SetVertexShader(iface, block->vertex_shader
-                ? &block->vertex_shader->iface.vertex : NULL);
-    if (block->has_pixel_shader)
-        IDirect3DDevice9_SetPixelShader(iface, block->pixel_shader
-                ? &block->pixel_shader->iface.pixel : NULL);
+        APPLY_STATE(IDirect3DDevice9_SetScissorRect(iface, &block->scissor_rect));
+    if (apply8) APPLY_STATE(apply8(context, D9WG_APPLY8_VERTEX, 0, D3D_OK));
+    else if (block->has_vertex_shader)
+        APPLY_STATE(IDirect3DDevice9_SetVertexShader(iface, block->vertex_shader
+                ? &block->vertex_shader->iface.vertex : NULL));
+    if (apply8) APPLY_STATE(apply8(context, D9WG_APPLY8_PIXEL, 0, D3D_OK));
+    else if (block->has_pixel_shader)
+        APPLY_STATE(IDirect3DDevice9_SetPixelShader(iface, block->pixel_shader
+                ? &block->pixel_shader->iface.pixel : NULL));
     for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
         if (block->has_vs_const_f[index])
-            IDirect3DDevice9_SetVertexShaderConstantF(iface, index,
-                    block->vs_const_f[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantF(iface, index,
+                    block->vs_const_f[index], 1));
     }
     for (index = 0; index < D9_MAX_PS_CONST_F; ++index) {
         if (block->has_ps_const_f[index])
-            IDirect3DDevice9_SetPixelShaderConstantF(iface, index,
-                    block->ps_const_f[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantF(iface, index,
+                    block->ps_const_f[index], 1));
     }
     for (index = 0; index < D9_MAX_CONST_I; ++index) {
         if (block->has_vs_const_i[index])
-            IDirect3DDevice9_SetVertexShaderConstantI(iface, index,
-                    block->vs_const_i[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantI(iface, index,
+                    block->vs_const_i[index], 1));
         if (block->has_ps_const_i[index])
-            IDirect3DDevice9_SetPixelShaderConstantI(iface, index,
-                    block->ps_const_i[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantI(iface, index,
+                    block->ps_const_i[index], 1));
     }
     for (index = 0; index < D9_MAX_CONST_B; ++index) {
         if (block->has_vs_const_b[index])
-            IDirect3DDevice9_SetVertexShaderConstantB(iface, index,
-                    &block->vs_const_b[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantB(iface, index,
+                    &block->vs_const_b[index], 1));
         if (block->has_ps_const_b[index])
-            IDirect3DDevice9_SetPixelShaderConstantB(iface, index,
-                    &block->ps_const_b[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantB(iface, index,
+                    &block->ps_const_b[index], 1));
     }
-    if (block->has_vertex_format) {
+    if (!apply8 && block->has_vertex_format) {
         /* A declaration and an FVF are mutually exclusive in D3D9: whichever
          * the device last had is the one to restore, and restoring both would
          * leave the loser silently overriding the winner. */
         if (block->vertex_declaration)
-            IDirect3DDevice9_SetVertexDeclaration(iface,
-                    &block->vertex_declaration->iface);
+            APPLY_STATE(IDirect3DDevice9_SetVertexDeclaration(iface,
+                    &block->vertex_declaration->iface));
         else if (block->fvf)
-            IDirect3DDevice9_SetFVF(iface, block->fvf);
+            APPLY_STATE(IDirect3DDevice9_SetFVF(iface, block->fvf));
         else
-            IDirect3DDevice9_SetVertexDeclaration(iface, NULL);
+            APPLY_STATE(IDirect3DDevice9_SetVertexDeclaration(iface, NULL));
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
-            device_set_stream_binding(device, index,
+            APPLY_STATE(device_set_stream_binding(device, index,
                     block->streams[index].buffer,
-                    block->streams[index].offset, block->streams[index].stride);
+                    block->streams[index].offset, block->streams[index].stride));
         }
-        if (block->has_stream_frequency[index]) IDirect3DDevice9_SetStreamSourceFreq(iface, index, block->streams[index].frequency);
+        if (block->has_stream_frequency[index]) APPLY_STATE(IDirect3DDevice9_SetStreamSourceFreq(iface, index, block->streams[index].frequency));
     }
-    if (block->has_indices)
-        IDirect3DDevice9_SetIndices(iface, block->index_buffer
+    if (block->has_indices) {
+        result = IDirect3DDevice9_SetIndices(iface, block->index_buffer
                 ? &block->index_buffer->iface : NULL);
+        if (apply8) result = apply8(context, D9WG_APPLY8_INDICES, 0, result);
+        if (FAILED(result)) return result;
+    }
+#undef APPLY_STATE
     return D3D_OK;
+}
+
+static HRESULT state_block_apply(struct D9StateBlock *block)
+{
+    return state_block_apply_shared(block, NULL, NULL);
 }
 
 static HRESULT WINAPI state_block_query_interface(IDirect3DStateBlock9 *iface,
@@ -16652,6 +16669,23 @@ HRESULT WINAPI d9wg_d3d9_core_apply_state_block_handle8(IDirect3DDevice9 *iface,
     IDirect3DDevice9_AddRef(iface);
     IDirect3DStateBlock9_AddRef(&block->iface);
     HRESULT hr = IDirect3DStateBlock9_Apply(&block->iface);
+    IDirect3DStateBlock9_Release(&block->iface);
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_apply_state_block_frontend8(IDirect3DDevice9 *iface,
+        DWORD token, D9WGStateBlockApply8 apply, void *context)
+{
+    if (!iface || !apply) return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8 || device->recording_result)
+        return D3DERR_INVALIDCALL;
+    D9StateBlock *block = state_block_handle8(device, token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    IDirect3DStateBlock9_AddRef(&block->iface);
+    HRESULT hr = state_block_apply_shared(block, apply, context);
     IDirect3DStateBlock9_Release(&block->iface);
     IDirect3DDevice9_Release(iface);
     return hr;

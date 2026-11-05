@@ -311,6 +311,17 @@ HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(struct IDirect3DDevice9
         D9WGStateBlockRecorder8 recorder, const void *snapshot, DWORD *out);
 HRESULT WINAPI d9wg_d3d9_core_capture_state_block_handle8(struct IDirect3DDevice9 *device,
         DWORD token, D9WGStateBlockRecorder8 recorder, const void *snapshot);
+/* API8 owns raw states and shader handles. The common block owns resources.
+ * Interceptors execute raw setters at the matching shared replay boundary;
+ * INDICES observes the actual setter result, including committed emit failure. */
+enum D9WGStateBlockApplyGroup8 {
+    D9WG_APPLY8_RENDER, D9WG_APPLY8_TEXTURE_STAGE, D9WG_APPLY8_VERTEX,
+    D9WG_APPLY8_PIXEL, D9WG_APPLY8_INDICES
+};
+typedef HRESULT (WINAPI *D9WGStateBlockApply8)(void *context, UINT group,
+        UINT index, HRESULT result);
+HRESULT WINAPI d9wg_d3d9_core_apply_state_block_frontend8(struct IDirect3DDevice9 *device,
+        DWORD token, D9WGStateBlockApply8 apply, void *context);
 HRESULT WINAPI d9wg_d3d9_core_apply_state_block_handle8(struct IDirect3DDevice9 *device,
         DWORD token);
 HRESULT WINAPI d9wg_d3d9_core_delete_state_block_handle8(struct IDirect3DDevice9 *device,

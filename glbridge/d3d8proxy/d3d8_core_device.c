@@ -1045,22 +1045,64 @@ static HRESULT WINAPI core_device8_CaptureStateBlock(IDirect3DDevice8 *iface, DW
     *core_block8_link(device, token) = replacement;
     core_block8_free(block); return D3D_OK;
 }
+typedef struct D8CoreApplyContext {
+    D8CoreDevice *device;
+    const D8CoreRawState *raw;
+} D8CoreApplyContext;
+static HRESULT WINAPI core_block8_apply_raw(void *context, UINT group,
+        UINT index, HRESULT result)
+{
+    D8CoreApplyContext *apply = context;
+    D8CoreDevice *device = apply->device;
+    const D8CoreRawState *raw = apply->raw;
+    HRESULT hr;
+    switch (group) {
+    case D9WG_APPLY8_RENDER:
+        for (UINT i = 0; i < 256; ++i) if (raw->render_mask[i]) {
+            hr = core_device8_SetRenderState(&device->iface, (D3DRENDERSTATETYPE)i, raw->render[i]);
+            if (FAILED(hr)) return hr;
+        }
+        break;
+    case D9WG_APPLY8_TEXTURE_STAGE:
+        for (UINT i = 0; i < D9WG_TEXTURE_STAGE_STATES8; ++i) if (raw->texture_mask[index][i]) {
+            hr = core_device8_SetTextureStageState(&device->iface, index,
+                    (D3DTEXTURESTAGESTATETYPE)i, raw->texture[index][i]);
+            if (FAILED(hr)) return hr;
+        }
+        break;
+    case D9WG_APPLY8_VERTEX:
+        if (raw->vertex_mask) return core_shader8_bind(device, FALSE, raw->vertex, raw->vs);
+        break;
+    case D9WG_APPLY8_PIXEL:
+        if (raw->pixel_mask) return core_shader8_bind(device, TRUE, raw->pixel, raw->ps);
+        break;
+    case D9WG_APPLY8_INDICES:
+        if (raw->indices_mask && (SUCCEEDED(result) || result == D3DERR_DRIVERINTERNALERROR))
+            device->live.base = raw->base;
+        break;
+    default:
+        return D3DERR_INVALIDCALL;
+    }
+    return result;
+}
 static HRESULT WINAPI core_device8_ApplyStateBlock(IDirect3DDevice8 *iface, DWORD token)
 {
     D8CoreDevice *device = core_device8(iface);
     D8CoreBlock *block = *core_block8_link(device, token);
     if (device->recording || !block) return D3DERR_INVALIDCALL;
-    HRESULT hr = d9wg_d3d9_core_apply_state_block_handle8(device->backend, token);
-    if (FAILED(hr)) return hr;
-    const D8CoreRawState *src = &block->raw;
-    D8CoreRawState *dst = &device->live;
-    for (UINT i = 0; i < 256; ++i) if (src->render_mask[i]) dst->render[i] = src->render[i];
-    for (UINT s = 0; s < 8; ++s)
-        for (UINT i = 0; i < D9WG_TEXTURE_STAGE_STATES8; ++i) if (src->texture_mask[s][i]) dst->texture[s][i] = src->texture[s][i];
-    if (src->vertex_mask) { dst->vertex = src->vertex; core_shader8_assign(&dst->vs, src->vs); }
-    if (src->pixel_mask) { dst->pixel = src->pixel; core_shader8_assign(&dst->ps, src->ps); }
-    if (src->indices_mask) dst->base = src->base;
-    return D3D_OK;
+    /* Resource setters may release private-data objects and reenter the
+     * frontend. Retain a detached raw snapshot and the public device while
+     * the common core independently pins its actual resource snapshot. */
+    D8CoreRawState raw = block->raw;
+    raw.vs = raw.ps = NULL;
+    core_raw8_capture(&raw, &block->raw);
+    D8CoreApplyContext context = {device, &raw};
+    core_device8_AddRef(iface);
+    HRESULT hr = d9wg_d3d9_core_apply_state_block_frontend8(device->backend,
+            token, core_block8_apply_raw, &context);
+    core_raw8_release(&raw);
+    core_device8_Release(iface);
+    return hr;
 }
 static HRESULT WINAPI core_device8_DeleteStateBlock(IDirect3DDevice8 *iface, DWORD token)
 {
