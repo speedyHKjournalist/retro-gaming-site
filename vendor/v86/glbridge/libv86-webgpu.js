@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "3cda04417fadd87ee619";
+globalThis.V86GL_BUILD_REVISION = "6018289b1abb163f6620";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -951,6 +951,12 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         throw new Error("Unsupported D3D texture sample swizzle " + swizzle);
     }
 
+    const PROGRAM_MAPS = ["usedInputs", "outputSemantics", "samplers", "floatDefaults", "intDefaults", "boolDefaults"];
+    const PROGRAM_SETS = ["temps", "writtenVaryings", "psTexcoordInputs", "bumpStages", "psColorInputs", "colorOutputs"];
+    const PROGRAM_VALUES = ["outputDeclarations", "inputDeclarations", "usesAddress", "usesLoopCounter", "usesPredicate",
+        "usesPointSize", "usesDepthOutput", "usesFragPosition", "usesFrontFacing", "usesRelativeConstants", "usesRelativeInputs",
+        "maxFloatConst", "maxIntConst", "maxBoolConst", "temporaryId", "warnings"];
+
     class Translator {
         constructor(parsed, options) {
             this.parsed = parsed;
@@ -1032,6 +1038,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             this.levelZeroSamples = 0;
             this.temporaryId = 0;
             this.warnings = [];
+            this.sampleOperations = [];
+            this.sampleOperationKeys = new Map();
         }
 
         emit(text) {
@@ -1388,7 +1396,21 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             this.emitBlock(routines.main);
             const mainBody = this.lines;
 
-            return this.assemble(routines, bodies, mainBody);
+            return this.prepareProgram(routines, bodies, mainBody);
+        }
+
+        prepareProgram(routines, bodies, mainBody) {
+            // Plain data survives worker structured cloning and JSON cache
+            // persistence. Instruction operands are deliberately absent: a
+            // specialization cannot walk or retranslate the bytecode body.
+            const maps = {}, sets = {}, values = {};
+            for (const name of PROGRAM_MAPS) maps[name] = Array.from(this[name]);
+            for (const name of PROGRAM_SETS) sets[name] = Array.from(this[name]);
+            for (const name of PROGRAM_VALUES) values[name] = this[name];
+            return {version: 1, kind: this.kind, major: this.major, minor: this.minor,
+                maps, sets, values, sampleOperations: this.sampleOperations,
+                subroutines: routines.subroutines.map(routine => ({label: routine.label})),
+                bodies: Array.from(bodies), mainBody};
         }
 
         declare(instruction) {
@@ -2050,6 +2072,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         // depth sampler, where z is the comparison reference and so has to be
         // carried out alongside the uv rather than dropped with the rest.
         coordinateFor(index, expression, projected) {
+            if (this.preparing) return {rawExpression: expression, projected};
             const type = this.samplers.get(index) || "2d";
             const arity = type === "cube" ? 3 : (type === "3d" ? 3 : 2);
             const name = this.fresh("uv");
@@ -2075,6 +2098,26 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         }
 
         sampleExpression(index, coordinate, options) {
+            if (this.preparing) {
+                const params = [], args = [coordinate.rawExpression ||
+                    "vec4<f32>(" + coordinate.coord + ", 0.0, 1.0)"];
+                const dimension = (this.samplers.get(index) || "2d") === "2d" ? 2 : 3;
+                for (const name of ["lod", "bias", "ddx", "ddy"]) {
+                    if (!options || options[name] === undefined) continue;
+                    params.push({name, type: name === "ddx" || name === "ddy" ? "vec" + dimension + "<f32>" : "f32"});
+                    args.push(options[name]);
+                }
+                const operation = {index, projected: coordinate.projected || false, params,
+                    explicitLod: !!(options && options.explicitLod), gradients: !!(options && options.gradients)};
+                const key = JSON.stringify(operation);
+                let id = this.sampleOperationKeys.get(key);
+                if (id === undefined) {
+                    id = this.sampleOperations.length;
+                    this.sampleOperationKeys.set(key, id);
+                    this.sampleOperations.push({...operation, uses: 1});
+                } else ++this.sampleOperations[id].uses;
+                return "d9_sample" + id + "(" + args.join(", ") + ")";
+            }
             const raw = this.rawSampleExpression(index, coordinate, options);
             return sampleSwizzleExpression(raw, this.options.samplerSwizzles && this.options.samplerSwizzles[index]);
         }
@@ -2224,7 +2267,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     this.samplers.set(index, this.legacySamplerType(index));
                 this.psTexcoordInputs.add(index);
                 coordinateExpression = "t" + index;
-                projected = (this.options.legacyProjection || {})[index] || false;
+                projected = "legacy";
             } else if (this.kind === "pixel" && this.major === 1) {
                 // ps_1_4 `texld r#, t#`: sampler comes from the destination.
                 index = dest.index;
@@ -2421,6 +2464,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 out.push("    return d9_inputs[index];");
                 out.push("}");
             }
+            this.assembleSampleHelpers(out);
             for (const routine of routines.subroutines) {
                 out.push("fn d9_sub" + routine.label + "() {");
                 out.push(...bodies.get(routine.label));
@@ -2438,6 +2482,25 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 
             const reflection = this.reflect(floatCount, intCount, boolVectors);
             return { wgsl: out.join("\n") + "\n", reflection };
+        }
+
+        assembleSampleHelpers(out) {
+            for (const [id, operation] of this.sampleOperations.entries()) {
+                const {index, params, explicitLod, gradients} = operation;
+                const projected = operation.projected === "legacy"
+                    ? (this.options.legacyProjection || {})[index] || false : operation.projected;
+                const options = {explicitLod, gradients};
+                for (const parameter of params) options[parameter.name] = "sample_" + parameter.name;
+                this.lines = [];
+                this.indent = 4;
+                const coordinate = this.coordinateFor(index, "sample_coord", projected);
+                const before = this.levelZeroSamples;
+                const value = this.sampleExpression(index, coordinate, options);
+                this.levelZeroSamples += (this.levelZeroSamples - before) * (operation.uses - 1);
+                out.push("fn d9_sample" + id + "(sample_coord: vec4<f32>" +
+                    params.map(parameter => ", sample_" + parameter.name + ": " + parameter.type).join("") + ") -> vec4<f32> {");
+                out.push(...this.lines, "    return " + value + ";", "}", "");
+            }
         }
 
         assembleVertexEntry(out) {
@@ -2845,15 +2908,42 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         }
     }
 
+    function isPreparedProgram(program) {
+        return !!program && program.version === 1 && !!program.maps && !!program.sets && !!program.values &&
+            PROGRAM_MAPS.every(name => Array.isArray(program.maps[name])) &&
+            PROGRAM_SETS.every(name => Array.isArray(program.sets[name])) &&
+            [program.mainBody, program.bodies, program.subroutines, program.sampleOperations].every(Array.isArray);
+    }
+
+    function specializeShader(base, options) {
+        try {
+            if (!base || !base.ok) return base || {ok: false, error: "missing translated shader"};
+            const program = base.program;
+            if (!isPreparedProgram(program)) throw new Error("missing prepared shader body");
+            const translator = new Translator(program, options);
+            for (const name of PROGRAM_MAPS) translator[name] = new Map(program.maps[name]);
+            for (const name of PROGRAM_SETS) translator[name] = new Set(program.sets[name]);
+            for (const name of PROGRAM_VALUES) translator[name] = Array.isArray(program.values[name])
+                ? program.values[name].slice() : program.values[name];
+            translator.sampleOperations = program.sampleOperations;
+            if (program.kind === "pixel" && program.major === 1)
+                for (const index of translator.samplers.keys()) translator.samplers.set(index, translator.legacySamplerType(index));
+            const result = translator.assemble({subroutines: program.subroutines}, new Map(program.bodies), program.mainBody);
+            return {ok: true, wgsl: result.wgsl, reflection: result.reflection, program};
+        } catch (error) {
+            return {ok: false, error: error && error.message ? error.message : String(error)};
+        }
+    }
+
     function compileShader(tokens, options) {
         try {
             const parsed = parseShader(tokens);
-            const translator = new Translator(parsed, options);
-            const result = translator.translate();
-            return { ok: true, wgsl: result.wgsl, reflection: result.reflection };
+            const translator = new Translator(parsed);
+            translator.preparing = true;
+            const program = translator.translate();
+            return specializeShader({ok: true, program}, options);
         } catch (error) {
-            return { ok: false, error: error && error.message ? error.message :
-                String(error) };
+            return {ok: false, error: error && error.message ? error.message : String(error)};
         }
     }
 
@@ -2999,7 +3089,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 if (!item || typeof item.key !== "string" || !item.result) continue;
                 const result = item.result;
                 if (result.ok && (typeof result.wgsl !== "string" ||
-                        !result.reflection)) continue;
+                        !result.reflection || !isPreparedProgram(result.program))) continue;
                 if (!result.ok && typeof result.error !== "string") continue;
                 if (this.entries.has(item.key)) continue;
                 this.entries.set(item.key, result);
@@ -3013,7 +3103,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     }
 
     const api = {
-        compileShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression, linkShaderSemantics,
+        compileShader, specializeShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression, linkShaderSemantics,
         vertexInputConversion, vertexInputType, vertexInputValue, vertexInputHelpers,
         TRANSLATOR_REVISION,
         VARYING_COLOR0, VARYING_COLOR1, VARYING_TEXCOORD0, VARYING_FOG,
@@ -7230,7 +7320,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     if (workerCompile) {
                         try {
                             translated = await workerCompile;
-                            if (!translated || typeof translated.ok !== "boolean")
+                            if (!translated || typeof translated.ok !== "boolean" ||
+                                    (translated.ok && (!translated.program || translated.program.version !== 1)))
                                 throw new Error("shader worker returned an invalid result");
                             ++this.stats.shaderWorkerCompiles;
                             const ended = typeof performance !== "undefined" && performance.now
@@ -16471,7 +16562,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                         flatShading || fogBlend) {
                     variant = psResource.variants.get(pixelVariantKey);
                     if (!variant) {
-                        variant = shaderPipeline.compileShader(psResource.tokens, {
+                        variant = shaderPipeline.specializeShader(psResource.translated, {
                             alphaTestDiscard: alphaTestDiscard(alphaTest,
                                 "result.color0.a", "d9c.alpha_test.x"),
                             alphaTestUniform: alphaTest.enabled,
@@ -16640,7 +16731,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 let variant = vsResource.variants.get(variantKey);
                 if (!variant) {
                     variant = needsVariant
-                        ? shaderPipeline.compileShader(vsResource.tokens,
+                        ? shaderPipeline.specializeShader(vsResource.translated,
                             { bgraInputLocations: bgra, inputConversions, samplerSwizzles: vertexSwizzles,
                               pointExpansion: !!drawOptions.pointExpansion,
                               pointSprite: !!drawOptions.pointSprite,
