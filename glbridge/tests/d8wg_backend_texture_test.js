@@ -18,6 +18,7 @@ typedef struct Texture Texture,D8Texture,D9Texture;
 struct Device{UINT api,pins;Texture*texture_resources;UINT handle;};
 struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;BYTE*mip_storage;Texture*next_device_resource;};
 #define WINAPI
+#define D9FMT_NULL 0x4c4c554eu
 #define D3D_OK 0
 #define D3DFMT_UNKNOWN 0
 #define D3DUSAGE_DYNAMIC 512

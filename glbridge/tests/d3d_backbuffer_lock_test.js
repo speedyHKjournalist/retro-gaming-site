@@ -20,7 +20,9 @@ typedef struct Device{UINT handle;BYTE*front_shadow;UINT front_shadow_pitch;stru
 typedef struct Surface{Iface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;UINT face,cube_face,level;void*swap_chain;struct{UINT Format,Pool,Usage,Size,MultiSampleType,Width,Height;}desc;UINT width,height,format,multisample,row_pitch,byte_count;BYTE*shadow;BOOL locked,backbuffer,depth_stencil,lockable_render_target,texture_child;RECT lock_rect;DWORD lock_flags;}Surface,D8Surface,D9Surface;
 typedef struct Device Device;typedef struct Surface Surface;typedef Iface IDirect3DSurface8,IDirect3DSurface9;
 #define WINAPI
+#define D9FMT_NULL 0x4c4c554eu
 #define D3D_OK 0
+#define D3DFMT_A8R8G8B8 21
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
@@ -96,7 +98,22 @@ int main(void){(void)&device_compatibility_api;(void)&surface_lock_renderable;(v
  Surface cpu={.device=&d,.width=width,.height=height,.format=21,.shadow=front,.row_pitch=32,.desc={.Width=width,.Height=height},.locked=FALSE};CHECK(!lock(8,&cpu,&out,NULL,16)&&!unlock(8,&cpu)&&!lock(9,&cpu,&out,NULL,16)&&!unlock(9,&cpu)&&!reads&&!emits);Texture texture={0};cpu.shadow=NULL;cpu.texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-11&&unlock(8,&cpu)==-21&&lock(9,&cpu,&out,NULL,0)==-11&&unlock(9,&cpu)==-21);cpu.texture=NULL;cpu.cube=cpu.cube_texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-12&&unlock(8,&cpu)==-22&&lock(9,&cpu,&out,NULL,0)==-12&&unlock(9,&cpu)==-22);CHECK(allocations==frees);
  for(UINT api=8;api<=9;api++){Device profile={.compatibility_api=api};Surface image={.device=&profile,.width=3,.height=2,.format=65,.row_pitch=16,.shadow=front};RECT part={1,0,3,2};memset(front,0,sizeof(front));out=(D3DLOCKED_RECT){123,(void*)99};events();HRESULT hr=lock(9,&image,&out,&part,0);if(api==8){CHECK(!hr&&out.Pitch==16&&out.pBits==front+4&&image.locked);memset(out.pBits,0x73,8);memset((BYTE*)out.pBits+16,0x45,8);CHECK(!unlock(9,&image)&&!image.locked&&!reads&&!emits);CHECK(!lock(9,&image,&out,NULL,16)&&out.pBits==front&&out.Pitch==16&&front[4]==0x73&&front[20]==0x45&&!unlock(9,&image));}else CHECK(hr==-1&&!image.locked&&out.Pitch==123&&out.pBits==(void*)99);CHECK(!reads&&!emits);}
 
- printf("PASS actual8/9 renderable locks: %u checks,%u pureplans,%u adapter scenarios;six formats/padded pitches/partial writes,real shared upload bytes,readonly GPU refresh,no-upload,output guards,MSAA/flags/doublelock,readback/OOM/emission failure cleanup andCPU/texture/cube dispatch;standalone/additional targets,target flags/identity,level lock Reset tracking andstale-mirror invalidation\\n",checks,plans,cases);return 0;
+ /* NULL targets expose a bounded scratch lock, with no readable color or GPU
+  * transfer. Exercise actual dispatch, readonly/write, OOM and lock lifetime. */
+ for(UINT ro=0;ro<2;ro++)for(UINT sub=0;sub<2;sub++){
+  events();padding=0;D9TextureLevel level={0};Texture tex={.handle=777,.usage=1,.levels=&level};
+  Surface target={.device=&d,.texture=&tex,.width=8,.height=6,.format=D9FMT_NULL,.lockable_render_target=TRUE};
+  RECT area={2,1,6,4};out=(D3DLOCKED_RECT){123,(void*)99};fail_alloc=1;
+  CHECK(lock(9,&target,&out,NULL,ro?16:0)==-3&&!target.shadow&&!target.locked&&!level.locked&&!reads&&!emits);
+  CHECK(!lock(9,&target,&out,sub?&area:NULL,ro?16:0)&&out.Pitch==32&&out.pBits==target.shadow+(sub?40:0)&&target.locked&&level.locked&&!reads&&!emits);
+  memset(out.pBits,0x57,sub?16:32);CHECK(lock(9,&target,&out,NULL,0)==-1&&!reads&&!emits);
+  CHECK(!unlock(9,&target)&&!target.locked&&!level.locked&&!reads&&!emits);
+  CHECK(unlock(9,&target)==-1);target.lockable_render_target=FALSE;CHECK(lock(9,&target,&out,NULL,0)==-1);
+  target.lockable_render_target=TRUE;RECT bad={-1,0,8,6};CHECK(lock(9,&target,&out,&bad,0)==-1&&!reads&&!emits);
+  HeapFree(NULL,0,target.shadow);cases++;
+ }
+ CHECK(allocations==frees);
+ printf("PASS actual8/9 renderable locks: %u checks,%u pureplans,%u adapter scenarios;six formats/padded pitches/partial writes,real shared upload bytes,readonly GPU refresh,no-upload,output guards,MSAA/flags/doublelock,readback/OOM/emission failure cleanup andCPU/texture/cube dispatch;standalone/additional targets,target flags/identity,level lock Reset tracking,stale-mirror invalidation andNULL scratch mapping\\n",checks,plans,cases);return 0;
 }
 `;
 fs.writeFileSync(dir+"/lock.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-I",root+"/tests/native","-I",root,dir+"/lock.c","-o",dir+"/lock"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/lock",[],{encoding:"utf8",timeout:30000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);

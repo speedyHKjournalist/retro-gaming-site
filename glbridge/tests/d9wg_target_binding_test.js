@@ -62,6 +62,7 @@ typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESU
 #define SUCCEEDED(v) ((v)>=0)
 #define FAILED(v) ((v)<0)
 #define WINAPI
+#define D9FMT_NULL 0x4c4c554eu
 #define TRUE 1
 #define FALSE 0
 #define D3D_OK 0

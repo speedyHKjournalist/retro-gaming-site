@@ -7017,7 +7017,8 @@ static HRESULT create_texture_object(D9Device *device,
         D9TextureLevel *level_data = &texture->levels[level];
         level_data->width = level_width;
         level_data->height = level_height;
-        if (!is_depth && !d9wg_texture_level_layout(api, format, level_width, level_height,
+        if (!is_depth && format != D9FMT_NULL
+                && !d9wg_texture_level_layout(api, format, level_width, level_height,
                 &level_data->row_pitch, &level_data->row_count,
                 &level_data->byte_count))
             goto allocation_failed;
@@ -11618,7 +11619,7 @@ static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
     texture->multisample_quality = multisample_quality;
     texture->levels[0].width = width;
     texture->levels[0].height = height;
-    if (!(usage & D3DUSAGE_DEPTHSTENCIL)
+    if (!(usage & D3DUSAGE_DEPTHSTENCIL) && format != D9FMT_NULL
             && !texture_level_layout(format, width, height,
             &texture->levels[0].row_pitch, &texture->levels[0].row_count,
             &texture->levels[0].byte_count)) {
@@ -14970,10 +14971,16 @@ static HRESULT surface_lock_renderable(D9Surface *surface,
     D9WGSurfaceLockPlan plan;
     D9WGSurfaceLockRect requested;
     UINT bw, bh, pixel_bytes, pitch, rows, bytes;
+    /* NULL targets have no observable color storage. Native still permits a
+     * lockable standalone NULL surface to be mapped. Give that mapping owned
+     * scratch bytes and normal bounds/lifetime rules; there is deliberately no
+     * GPU color read or write. The scratch layout is private, not a format cap. */
+    BOOL null_target = surface->format == D9FMT_NULL;
+    D3DFORMAT lock_format = null_target ? D3DFMT_A8R8G8B8 : surface->format;
     if (rect) requested = (D9WGSurfaceLockRect){rect->left, rect->top, rect->right, rect->bottom};
-    if (!out || !texture_format_layout(surface->format, &bw, &bh, &pixel_bytes)
+    if (!out || !texture_format_layout(lock_format, &bw, &bh, &pixel_bytes)
             || bw != 1 || bh != 1
-            || !texture_level_layout(surface->format, surface->width, surface->height,
+            || !texture_level_layout(lock_format, surface->width, surface->height,
                 &pitch, &rows, &bytes) || rows != surface->height
             || !d9wg_surface_lock_plan(surface->width, surface->height, pitch,
                 pixel_bytes, surface->multisample,
@@ -14997,7 +15004,7 @@ static HRESULT surface_lock_renderable(D9Surface *surface,
     request.width = surface->width;
     request.height = surface->height;
     request.destination_pitch = pitch;
-    int result = d9wg_surface_readback(g_process, &request,
+    int result = null_target ? 0 : d9wg_surface_readback(g_process, &request,
             surface->width * pixel_bytes, surface->height, surface->shadow,
             surface->byte_count, submit_readback_batch_locked, &detail);
     if (result) return TRACE_REFUSE(result == D9WG_READBACK_INVALID
@@ -15015,7 +15022,7 @@ static HRESULT surface_unlock_renderable(D9Surface *surface)
 {
     if (!surface->locked) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     BOOL uploaded = TRUE;
-    if (!(surface->lock_flags & D3DLOCK_READONLY)) {
+    if (!(surface->lock_flags & D3DLOCK_READONLY) && surface->format != D9FMT_NULL) {
         UINT bw, bh, pixel_bytes;
         const RECT *r = &surface->lock_rect;
         const D9WGSurfaceLockRect area = {r->left, r->top, r->right, r->bottom};

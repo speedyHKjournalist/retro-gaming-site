@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "560cc857c38792ddb3bd";
+globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -5394,6 +5394,79 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         return compressed ? Math.ceil(size / 4) * 4 : size;
     }
 
+    // Native ATI1/ATI2 textures permit edges outside a whole 4x4 block;
+    // WebGPU BC texture base dimensions do not. Decode only those resources
+    // into RGBA8 so their logical dimensions, UVs and mip sizes stay exact.
+    // Endpoint/index rules: Microsoft's "Block Compression (Direct3D 10)".
+    function atiNeedsExpansion(format, width, height) {
+        return (format === D3DFMT_ATI1N || format === D3DFMT_ATI2N)
+            && !!((width | height) & 3);
+    }
+
+    function bcNeedsExpansion(format, width, height) {
+        return isCompressedFormat(format) && !!((width | height) & 3);
+    }
+
+    function expandATIBlocks(format, source, width, height, depth, rowPitch, slicePitch) {
+        const channels = format === D3DFMT_ATI1N ? 1 : format === D3DFMT_ATI2N ? 2 : 0;
+        const blockBytes = channels * 8, rows = Math.ceil(height / 4), columns = Math.ceil(width / 4);
+        if (!channels || width < 1 || height < 1 || depth < 1 || rowPitch < columns * blockBytes
+                || slicePitch < rowPitch * rows
+                || source.length < (depth - 1) * slicePitch + (rows - 1) * rowPitch + columns * blockBytes)
+            throw new Error("Invalid ATI block upload extent");
+        const output = new Uint8Array(width * height * depth * 4);
+        const values = new Uint8Array(8);
+        for (let z = 0; z < depth; ++z) for (let by = 0; by < rows; ++by)
+            for (let bx = 0; bx < columns; ++bx) for (let channel = 0; channel < channels; ++channel) {
+                const at = z * slicePitch + by * rowPitch + bx * blockBytes + channel * 8;
+                values[0] = source[at]; values[1] = source[at + 1];
+                const denominator = values[0] > values[1] ? 7 : 5;
+                for (let i = 1; i < denominator; ++i)
+                    values[i + 1] = Math.round(((denominator - i) * values[0] + i * values[1]) / denominator);
+                if (denominator === 5) { values[6] = 0; values[7] = 255; }
+                for (let y = 0; y < 4 && by * 4 + y < height; ++y)
+                    for (let x = 0; x < 4 && bx * 4 + x < width; ++x) {
+                        const bit = (y * 4 + x) * 3, byte = at + 2 + (bit >> 3);
+                        const bits = source[byte] | ((byte + 1 < at + 8 ? source[byte + 1] : 0) << 8);
+                        const to = ((z * height + by * 4 + y) * width + bx * 4 + x) * 4;
+                        output[to + channel] = values[(bits >> (bit & 7)) & 7];
+                        output[to + 3] = 255;
+                    }
+            }
+        return output;
+    }
+
+    function expandBCBlocks(format, source, width, height, depth, rowPitch, slicePitch) {
+        if (format === D3DFMT_ATI1N || format === D3DFMT_ATI2N)
+            return expandATIBlocks(format, source, width, height, depth, rowPitch, slicePitch);
+        const dxt = [D3DFMT_DXT1,D3DFMT_DXT2,D3DFMT_DXT3,D3DFMT_DXT4,D3DFMT_DXT5].indexOf(format) + 1;
+        const blockBytes=dxt===1?8:16,columns=Math.ceil(width/4),rows=Math.ceil(height/4);
+        if (!dxt || width<1 || height<1 || depth<1 || rowPitch<columns*blockBytes || slicePitch<rowPitch*rows
+                || source.length<(depth-1)*slicePitch+(rows-1)*rowPitch+columns*blockBytes)
+            throw new Error("Invalid DXT block upload extent");
+        const output=new Uint8Array(width*height*depth*4);
+        for(let z=0;z<depth;z++)for(let by=0;by<rows;by++)for(let bx=0;bx<columns;bx++) {
+            const at=z*slicePitch+by*rowPitch+bx*blockBytes,color=at+(dxt===1?0:8);
+            const a=source[color]|source[color+1]<<8,b=source[color+2]|source[color+3]<<8;
+            // Bit replication, matching the packed-format expansion path.
+            const unpack=v=>[(v>>11<<3)|(v>>13),(((v>>5)&63)<<2)|((v>>9)&3),((v&31)<<3)|((v>>2)&7),255];
+            const palette=[unpack(a),unpack(b)];
+            if(a>b||dxt!==1) {
+                palette.push(palette[0].map((v,c)=>c===3?255:Math.round((2*v+palette[1][c])/3)),
+                    palette[0].map((v,c)=>c===3?255:Math.round((v+2*palette[1][c])/3)));
+            } else palette.push(palette[0].map((v,c)=>c===3?255:Math.floor((v+palette[1][c])/2)),[0,0,0,0]);
+            const selectors=(source[color+4]|source[color+5]<<8|source[color+6]<<16|source[color+7]<<24)>>>0;
+            const alpha=dxt>=4?expandATIBlocks(D3DFMT_ATI1N,source.subarray(at,at+8),4,4,1,8,8):null;
+            for(let y=0;y<4&&by*4+y<height;y++)for(let x=0;x<4&&bx*4+x<width;x++) {
+                const texel=y*4+x,to=((z*height+by*4+y)*width+bx*4+x)*4;
+                output.set(palette[(selectors>>>(texel*2))&3],to);
+                if(dxt===2||dxt===3)output[to+3]=((source[at+(texel>>1)]>>((texel&1)*4))&15)*17;
+                else if(alpha)output[to+3]=alpha[texel*4];
+            }
+        }
+        return output;
+    }
+
     function isFourCCDepthFormat(format) {
         return format === D3DFMT_DF16 || format === D3DFMT_DF24 ||
             format === D3DFMT_INTZ;
@@ -6223,6 +6296,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         isCompressedFormat,
         compressedBlockBytes,
         blockAlignedCopyExtent,
+        atiNeedsExpansion,
+        expandATIBlocks,
+        bcNeedsExpansion,
+        expandBCBlocks,
         isFourCCDepthFormat,
         isPalettizedFormat,
         isPackedPairFormat,
@@ -6350,7 +6427,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             D9WG_USAGE_DDRAW_INDEXED, isPalettizedFormat, sampleCountForD3D, D3DUSAGE_AUTOGENMIPMAP, fullMipLevelCount, autoGenMipsSupported, autoGenDefaultFilter,
             DEPTH_FORMAT, formatToGPU, isRenderableGPUFormat, srgbSiblingOf, TEXTURE_USAGE_RENDER_ATTACHMENT,
             TEXTURE_USAGE_TEXTURE_BINDING, TEXTURE_USAGE_COPY_DST, TEXTURE_USAGE_COPY_SRC, isCompressedFormat, RESOURCE_TEXTURE_2D,
-            gpuBytesPerTexel, expandRowToGPU, blockAlignedCopyExtent, RESOURCE_TEXTURE_CUBE, RESOURCE_TEXTURE_VOLUME,
+            gpuBytesPerTexel, expandRowToGPU, blockAlignedCopyExtent, bcNeedsExpansion, expandBCBlocks, RESOURCE_TEXTURE_CUBE, RESOURCE_TEXTURE_VOLUME,
             RESOURCE_VERTEX_DECLARATION, D9WGStreamError, shaderPipeline, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER, BUFFER_USAGE_UNIFORM, PALETTE_ENTRIES, PALETTE_BYTES
         } = dependencies;
         return {
@@ -6669,8 +6746,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     autoGenMipsSupported(3, format);
                 if (wantsAutoMips)
                     levelCount = autoGenerateMips ? fullMipLevelCount(width, height) : 1;
+                const bcExpanded = bcNeedsExpansion(format, width, height);
                 const gpuFormat = isDepth ? DEPTH_FORMAT
-                    : (ddIndexed ? "r8uint" : formatToGPU(format));
+                    : (ddIndexed ? "r8uint" : bcExpanded ? "rgba8unorm" : formatToGPU(format));
                 if (!gpuFormat) {
                     console.warn("[d3d9-webgpu] unsupported texture format", format);
                     return;
@@ -6747,10 +6825,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 this.resources.set(handle, {
                     kind: RESOURCE_TEXTURE_2D, textureType: "2d",
                     deviceHandle: view.getUint32(offset + D9WG.F.CreateTexture2D.device_handle, true),
-                    gpuTexture, msaaTexture, gpuFormat, srgbFormat, format, usage,
+                    gpuTexture, msaaTexture, gpuFormat, srgbFormat, format, usage, bcExpanded,
                     width, height, sampleCount,
                     multisampleType, multisampleQuality,
-                    gpuBytesPerTexel: ddIndexed ? 1 : gpuBytesPerTexel(format),
+                    gpuBytesPerTexel: ddIndexed ? 1 : bcExpanded ? 4 : gpuBytesPerTexel(format),
                     ddIndexed,
                     textureDescriptor,
                     levelCount: Math.max(1, levelCount),
@@ -6821,7 +6899,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 const resource = this.resources.get(handle);
                 if (!resource || !resource.gpuTexture) return;
                 const source = new Uint8Array(bytes.buffer, bytes.byteOffset + dataOffset, dataBytes);
-                const compressed = isCompressedFormat(resource.format);
+                const compressed = isCompressedFormat(resource.format) && !resource.bcExpanded;
                 let payload = source;
                 let bytesPerRow = rowPitch;
                 if (resource.ddIndexed) {
@@ -6860,7 +6938,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                         source: source.slice(),
                     });
                 }
-                if (!compressed) {
+                if (resource.bcExpanded) {
+                    payload = expandBCBlocks(resource.format, source, width, height, depth, rowPitch, slicePitch);
+                    bytesPerRow = width * 4;
+                } else if (!compressed) {
                     const gpuBpp = resource.gpuBytesPerTexel;
                     // Expand to the tightly packed WebGPU representation chosen
                     // by formatToGPU(): RGBA8 UNORM/SNORM or RGBA16F.
@@ -6912,7 +6993,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 const usage = view.getUint32(offset + D9WG.F.CreateTextureCube.usage, true);
                 const ddIndexed = (usage & D9WG_USAGE_DDRAW_INDEXED) !== 0 &&
                     isPalettizedFormat(format);
-                const gpuFormat = ddIndexed ? "r8uint" : formatToGPU(format);
+                const bcExpanded = bcNeedsExpansion(format, edge, edge);
+                const gpuFormat = ddIndexed ? "r8uint" : bcExpanded ? "rgba8unorm" : formatToGPU(format);
                 if (!gpuFormat) {
                     console.warn("[d3d9-webgpu] unsupported cube texture format", format);
                     return;
@@ -6944,9 +7026,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 this.resources.set(handle, {
                     kind: RESOURCE_TEXTURE_CUBE, textureType: "cube",
                     deviceHandle: view.getUint32(offset + D9WG.F.CreateTextureCube.device_handle, true),
-                    gpuTexture, gpuFormat, srgbFormat,
+                    gpuTexture, gpuFormat, srgbFormat, bcExpanded,
                     format, usage, width: edge, height: edge, layerCount: 6,
-                    gpuBytesPerTexel: ddIndexed ? 1 : gpuBytesPerTexel(format),
+                    gpuBytesPerTexel: ddIndexed ? 1 : bcExpanded ? 4 : gpuBytesPerTexel(format),
                     ddIndexed,
                     textureDescriptor,
                     levelCount: textureDescriptor.mipLevelCount,
@@ -9870,6 +9952,7 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                 back.compare, back.failOp, back.depthFailOp, back.passOp,
                 state.stencilReadMask, state.stencilWriteMask,
                 state.extraWriteMasks.join("."), state.colorFormats.join("."),
+                state.opaqueTargetMask || 0,
                 state.sampleCount, state.sampleMask, state.alphaToCoverage].join("|");
         }
         return {
@@ -10034,6 +10117,7 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                     // them positionally, so an MRT pass needs the whole list baked
                     // into the pipeline and therefore into its cache key.
                     colorFormats: targets ? targets.formats : [this.format],
+                    opaqueTargetMask: targets ? targets.opaqueTargetMask : 0,
                     // WebGPU takes the sample count on the pipeline as well as on
                     // the attachments, and the two must agree; without this the
                     // pipeline defaulted to 1 and every draw into a multisampled
@@ -10237,12 +10321,21 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                                 : pipelineState.extraWriteMasks[index - 1] };
                         if (pipelineState.blendEnabled &&
                                 isBlendableGPUFormat(format, this.deviceFeatures)) {
+                            // A8 and X8 can share a physical RGBA texture format.
+                            // Read destination-alpha factors from the logical D3D
+                            // target, independently for every MRT attachment.
+                            const opaque = (pipelineState.opaqueTargetMask & (1 << index)) !== 0;
+                            const factor = (value, alpha = false) => !opaque ? value
+                                : value === "dst-alpha" ? "one"
+                                : value === "one-minus-dst-alpha" ? "zero"
+                                : value === "src-alpha-saturated" ? (alpha ? "one" : "zero")
+                                : value;
                             target.blend = {
-                                color: { srcFactor: pipelineState.srcFactor,
-                                         dstFactor: pipelineState.dstFactor,
+                                color: { srcFactor: factor(pipelineState.srcFactor),
+                                         dstFactor: factor(pipelineState.dstFactor),
                                          operation: pipelineState.blendOp },
-                                alpha: { srcFactor: pipelineState.alphaSrcFactor,
-                                         dstFactor: pipelineState.alphaDstFactor,
+                                alpha: { srcFactor: factor(pipelineState.alphaSrcFactor, true),
+                                         dstFactor: factor(pipelineState.alphaDstFactor, true),
                                          operation: pipelineState.alphaBlendOp },
                             };
                         } else if (pipelineState.blendEnabled &&
@@ -12031,12 +12124,13 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
         (typeof require === "function" ? require("./d9wg_wire.js") : null);
     if (!wire) throw new Error("d3d9_executor.js requires d9wg_wire.js to be loaded first");
     const { D9WGStreamError } = wire;
+    const OPAQUE_COLOR_FORMATS = new Set([20, 22, 23, 24, 27, 30, 33]);
     const formats = global.D9WGFormats ||
         (typeof require === "function" ? require("./d9wg_formats.js") : null);
     if (!formats) throw new Error("d3d9_executor.js requires d9wg_formats.js to be loaded first");
     const {
         D3DFMT_A8R8G8B8, D3DFMT_INDEX32, srgbSiblingOf, isCompressedFormat, compressedBlockBytes,
-        blockAlignedCopyExtent, isFourCCDepthFormat, isPalettizedFormat, gpuBytesPerTexel, fullMipLevelCount, autoGenMipsSupported, autoGenDefaultFilter,
+        blockAlignedCopyExtent, bcNeedsExpansion, expandBCBlocks, isFourCCDepthFormat, isPalettizedFormat, gpuBytesPerTexel, fullMipLevelCount, autoGenMipsSupported, autoGenDefaultFilter,
         isRenderableGPUFormat, isFloat32GPUFormat, isBlendableGPUFormat, formatToGPU, d3dBytesPerTexel,
         packGPUReadbackRow, expandRowToGPU, samplingSwizzle
     } = formats;
@@ -14069,6 +14163,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 noSurface: false, sessionKey: this.sessionKey };
             state.backBufferWidth = width;
             state.backBufferHeight = height;
+            state.backBufferD3DFormat = view.getUint32(offset + D9WG.F.CreateDevice.backbuffer_format, true);
             this.configureBackBufferMSAA(state, width, height,
                 multisampleType, multisampleQuality);
             this.ensureDepthTarget(state, width, height, enableAutoDepth !== 0);
@@ -14117,6 +14212,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 noSurface: false, sessionKey: this.sessionKey };
             state.backBufferWidth = width;
             state.backBufferHeight = height;
+            state.backBufferD3DFormat = view.getUint32(offset + D9WG.F.ResetDevice.backbuffer_format, true);
             this.configureBackBufferMSAA(state, width, height,
                 multisampleType, multisampleQuality);
             this.ensureDepthTarget(state, width, height, enableAutoDepth !== 0);
@@ -15106,6 +15202,11 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             return { key: key + "x" + sampleCount, colors, depthView, width,
                 height, substituteDepth,
                 hasDepth: !!depthView, sampleCount,
+                // Packed RGB/XRGB targets use RGBA storage on WebGPU, but
+                // their destination alpha is still logically one for blending.
+                opaqueTargetMask: colors.reduce((mask, color, index) => mask |
+                    (color && OPAQUE_COLOR_FORMATS.has(color.resource
+                        ? color.resource.format : state.backBufferD3DFormat) ? 1 << index : 0), 0),
                 formats: colors.map(color => color ? color.format : null) };
         }
 
@@ -18592,7 +18693,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         D9WG_USAGE_DDRAW_INDEXED, isPalettizedFormat, sampleCountForD3D, D3DUSAGE_AUTOGENMIPMAP, fullMipLevelCount, autoGenMipsSupported, autoGenDefaultFilter,
         DEPTH_FORMAT, formatToGPU, isRenderableGPUFormat, srgbSiblingOf, TEXTURE_USAGE_RENDER_ATTACHMENT,
         TEXTURE_USAGE_TEXTURE_BINDING, TEXTURE_USAGE_COPY_DST, TEXTURE_USAGE_COPY_SRC, isCompressedFormat, RESOURCE_TEXTURE_2D,
-        gpuBytesPerTexel, expandRowToGPU, blockAlignedCopyExtent, RESOURCE_TEXTURE_CUBE, RESOURCE_TEXTURE_VOLUME,
+        gpuBytesPerTexel, expandRowToGPU, blockAlignedCopyExtent, bcNeedsExpansion, expandBCBlocks, RESOURCE_TEXTURE_CUBE, RESOURCE_TEXTURE_VOLUME,
         RESOURCE_VERTEX_DECLARATION, D9WGStreamError, shaderPipeline, RESOURCE_VERTEX_SHADER, RESOURCE_PIXEL_SHADER,
         BUFFER_USAGE_UNIFORM, PALETTE_ENTRIES: surfaceFactory.PALETTE_ENTRIES, PALETTE_BYTES: surfaceFactory.PALETTE_BYTES
     });

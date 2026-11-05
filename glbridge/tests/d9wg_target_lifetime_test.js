@@ -19,6 +19,7 @@ try {
 #include "runtime/d9wg_private_data.h"
 typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESULT;typedef int BOOL,D3DFORMAT,D3DPOOL;typedef uint8_t BYTE;
 #define WINAPI
+#define D9FMT_NULL 0x4c4c554eu
 #define TRUE 1
 #define FALSE 0
 #define D3D_OK 0
@@ -73,9 +74,9 @@ static BOOL emit_command(UINT op,const void*p,UINT n){assert(op==D9WG_OP_DESTROY
 ${["swap_chain_buffers_referenced","swap_chain_destroy_cached_buffers","swap_chain_cached_private_data","device_add_ref", "device_child_add_ref", "device_child_release", "device_release", "surface_is_implicit", "cube_destroy_storage", "cube_binding_add_ref", "cube_binding_release", "texture_destroy_storage", "texture_binding_add_ref", "texture_binding_release", "texture_release", "surface_uses_private_bindings", "surface_binding_add_ref", "surface_binding_release", "surface_destroy_storage", "surface_add_ref", "surface_release", "create_target_texture"].map(n => extract(source, n)).join("\n")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Target lifetime line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 static D9Device*new_device(Parent*p){D9Device*d=HeapAlloc(NULL,8,sizeof(*d));d->refcount=1;d->handle=7;d->parent=p;p->refs=1;active_device=d;return d;}
-int main(void){unsigned cases=0;const UINT usages[]={1,1,2,2,0},samples[]={0,4,0,4,0};
-for(UINT profile=0;profile<5;profile++){
- Parent parent={0};D9Device*d=new_device(&parent);UINT usage=usages[profile],sample=samples[profile];D3DFORMAT format=usage==2?75:22;
+int main(void){unsigned cases=0;const UINT usages[]={1,1,2,2,0,1},samples[]={0,4,0,4,0,0};
+for(UINT profile=0;profile<6;profile++){
+ Parent parent={0};D9Device*d=new_device(&parent);UINT usage=usages[profile],sample=samples[profile];D3DFORMAT format=profile==5?D9FMT_NULL:usage==2?75:22;
  for(UINT cycle=0;cycle<64;cycle++){
   Interface*out=(void*)(uintptr_t)1;UINT before=creates,old_destroys=destroys;
   CHECK(!create_target_texture(d,32,24,format,usage,sample,0,&out)&&out);D9Surface*s=(D9Surface*)out;
@@ -99,7 +100,7 @@ for(UINT profile=0;profile<5;profile++){
  }
 }
 Parent parent={0};D9Device*d=new_device(&parent);Interface*out=(void*)(uintptr_t)1;CHECK(create_target_texture(d,1,1,22,1,0,0,NULL)==D3DERR_INVALIDCALL);CHECK(create_target_texture(d,0,1,22,1,0,0,&out)==D3DERR_INVALIDCALL&&!out&&live==1);fail_layout=1;CHECK(create_target_texture(d,1,1,22,1,0,0,&out)==D3DERR_INVALIDCALL&&!out&&live==1&&!d->child_parent_refs);fail_layout=0;CHECK(!device_release(&d->iface)&&!live&&!parent.refs);
-printf("PASS actual D3D9 target lifetime: %u checks, %u lifetime/failure groups; five RT/depth/offscreen sample profiles, one public device pin, private storage without a pin, exact AddRef/Release, allocation/emit cleanup and device-first/binding-only teardown\\n",checks,cases);return 0;}
+printf("PASS actual D3D9 target lifetime: %u checks, %u lifetime/failure groups; six RT/depth/offscreen/NULL sample profiles, one public device pin, private storage without a pin, exact AddRef/Release, allocation/emit cleanup and device-first/binding-only teardown\\n",checks,cases);return 0;}
 `);
     const b = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-I", root, dir + "/target.c", root + "/runtime/d9wg_private_data.c", "-o", dir + "/target"], {encoding: "utf8"}); assert.equal(b.status, 0, b.stderr);
     const r = spawnSync(dir + "/target", [], {encoding: "utf8", timeout: 10000}); assert.equal(r.status, 0, r.stderr + " signal=" + r.signal); process.stdout.write(r.stdout);
