@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "fd0a2a95df0b43356bd8";
+globalThis.V86GL_BUILD_REVISION = "3cda04417fadd87ee619";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -498,9 +498,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 // to keep alive, no LGPL redistribution obligation (plan section 25 flags
 // this as unresolved for vkd3d), and a translator that is unit-testable
 // directly in Node. What it costs: correctness rests on this file's own test
-// suite instead of Wine's decades of game coverage, and the few ps_1_x
-// texture-addressing forms with no honest translation are refused (see
-// UNSUPPORTED_OPS) rather than approximated. compileShader() is the seam: it takes raw
+// suite instead of Wine's decades of game coverage. compileShader() takes raw
 // bytecode and returns WGSL + reflection, so swapping in a WASM backend later
 // changes only this file.
 //
@@ -594,22 +592,6 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         for (const key of Object.keys(OP)) names[OP[key]] = key.toLowerCase();
         return names;
     })();
-
-    // What remains of the ps_1_x texture-addressing family after the bump and
-    // matrix forms were implemented (see the TEXBEM/TEXM3x*/BEM cases in
-    // emit()).
-    //
-    // These three are the ones with no honest translation. TEXDEPTH and
-    // TEXM3x2DEPTH replace the fragment's depth from a texture-addressing
-    // result, which needs a frag_depth output the surrounding pipeline is not
-    // built for; TEXM3x3 is the Radeon-era variant that writes a 3x3 result
-    // without sampling, and nothing that reaches this translator emits it.
-    // Refusing keeps the "no pretending" discipline: the shader is marked
-    // unusable and draws that bind it are counted and skipped, rather than
-    // silently rendering something wrong.
-    const UNSUPPORTED_OPS = new Set([
-        OP.TEXM3x2DEPTH, OP.TEXM3x3, OP.TEXDEPTH,
-    ]);
 
     // Operand shape per opcode: [destCount, sourceCount]. SM2.0+ instruction
     // tokens also carry a length field, which parseShader() uses as the
@@ -1381,10 +1363,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     this.intDefaults.set(instruction.dest.index, instruction.literals);
                 else if (instruction.opcode === OP.DEFB)
                     this.boolDefaults.set(instruction.dest.index, instruction.literals[0]);
-                else if (UNSUPPORTED_OPS.has(instruction.opcode))
-                    throw new Error("unsupported instruction '" +
-                        (OP_NAMES[instruction.opcode] || instruction.opcode) +
-                        "' (ps_1_x bump-environment/matrix texture addressing)");
+
             }
             for (const [register, literals] of this.floatDefaults)
                 this.maxFloatConst = Math.max(this.maxFloatConst, register);
@@ -1699,6 +1678,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 }
                 return;
             }
+            case OP.TEXDEPTH: {
+                if (this.kind !== "pixel" || this.major !== 1 || this.minor !== 4 || dest.type !== REG_TEMP || dest.index !== 5)
+                    throw new Error("texdepth requires ps_1_4 r5");
+                this.temps.add(5);
+                this.emitLegacyDepth("r5.x", "r5.y");
+                return;
+            }
             case OP.TEX: this.textureLoad(instruction); return;
             case OP.TEXLDL: this.textureLoad(instruction, { explicitLod: true }); return;
             case OP.TEXLDD: this.textureLoad(instruction, { gradients: true }); return;
@@ -1805,6 +1791,25 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 this.matrixRows.push(row);
                 return;
             }
+            case OP.TEXM3x2DEPTH: {
+                if (this.kind !== "pixel" || this.major !== 1 || this.minor !== 3)
+                    throw new Error("texm3x2depth requires ps_1_3");
+                this.psTexcoordInputs.add(dest.index);
+                const last = this.fresh("m3depth");
+                this.emit("let " + last + " = dot(t" + dest.index + ".xyz, (" + s(0) + ").xyz);");
+                const rows = this.takeMatrixRows(1, last);
+                this.emitLegacyDepth(rows[0], rows[1]);
+                return;
+            }
+            case OP.TEXM3x3: {
+                if (this.kind !== "pixel" || this.major !== 1 || this.minor < 2 || this.minor > 3)
+                    throw new Error("texm3x3 requires ps_1_2 or ps_1_3");
+                this.psTexcoordInputs.add(dest.index);
+                const last = this.fresh("m3row");
+                this.emit("let " + last + " = dot(t" + dest.index + ".xyz, (" + s(0) + ").xyz);");
+                this.store(dest, "vec4<f32>(" + this.takeMatrixRows(2, last).join(", ") + ", 1.0)");
+                return;
+            }
             case OP.TEXM3x2TEX: {
                 const index = dest.index;
                 if (!this.samplers.has(index)) this.samplers.set(index, "2d");
@@ -1823,10 +1828,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             case OP.TEXM3x3SPEC:
             case OP.TEXM3x3VSPEC: {
                 const index = dest.index;
-                // The 3x3 forms address a cube map or a volume; both take a
-                // three-component coordinate, and a cube is what environment
-                // mapping actually binds.
-                if (!this.samplers.has(index)) this.samplers.set(index, "cube");
+                // These forms also accept 2D textures. Bindings decide the
+                // dimension; three computed coordinates do not imply a cube.
+                if (!this.samplers.has(index)) this.samplers.set(index, this.legacySamplerType(index));
                 this.psTexcoordInputs.add(index);
                 const last = this.fresh("m3row");
                 this.emit("let " + last + " = dot(t" + index + ".xyz, (" +
@@ -1851,7 +1855,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     coord = reflected;
                 }
                 this.store(dest, this.sampleExpression(index,
-                    { coord, ref: null }, {}));
+                    this.coordinateFor(index, "vec4<f32>(" + coord + ", 1.0)", false), {}));
                 return;
             }
             case OP.TEXREG2AR:
@@ -2022,9 +2026,6 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         //  - Only 2D. A cube or volume depth texture cannot be created here at
         //    all (the protocol's render target binding carries no face index),
         //    so a request for one is a caller bug, not a shader to translate.
-        //  - Not ps_1_x. Its texreg2* forms build coordinates out of a
-        //    previously sampled register and have no z to compare against, and
-        //    hardware shadow maps postdate that shader model entirely.
         //  - Pixel stage only. vs_3_0 vertex texture fetch on a shadow map is
         //    legal in principle but has no caller, and supporting it would mean
         //    a second binding-type path through the vertex sampler layout.
@@ -2035,7 +2036,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         // validation error that takes down the whole submit, not one draw.
         isDepthSampler(index) {
             return this.requestedDepthSamplers.has(index)
-                && this.kind === "pixel" && this.major >= 2
+                && this.kind === "pixel"
                 && (this.samplers.get(index) || "2d") === "2d";
         }
 
@@ -2062,8 +2063,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // the non-projected and non-depth forms have to keep producing
             // exactly the expression they produced before, and `a / b * c` does
             // not reassociate to `a * (c / b)` in floating point.
-            const project = value => "(" + value + " / max(abs(" + name +
-                ".w), 1e-8) * sign(" + name + ".w + 1e-20))";
+            const component = typeof projected === "string" ? projected : "w";
+            const divisor = name + "." + component;
+            const project = value => "(" + value + " / select(-max(abs(" + divisor +
+                "), 1e-8), max(abs(" + divisor + "), 1e-8), " + divisor + " >= 0.0))";
             if (projected)
                 return { coord: project(name + "." + swizzle),
                     ref: wantsDepth ? project(name + ".z") : null };
@@ -2080,9 +2083,9 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             const texture = "d9_tex" + index;
             const sampler = "d9_smp" + index;
             const coord = this.mirrorOnceCoord(index, coordinate.coord);
-            if (coordinate.ref !== null && coordinate.ref !== undefined)
+            if (this.isDepthSampler(index) && !this.isDepthFetchSampler(index))
                 return this.compareExpression(texture, sampler, coord,
-                    coordinate.ref, options);
+                    coordinate.ref === null || coordinate.ref === undefined ? "0.0" : coordinate.ref, options);
             if (this.isDepthFetchSampler(index))
                 return this.depthFetchExpression(texture, sampler, coord,
                     options);
@@ -2191,6 +2194,14 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             return rows;
         }
 
+        emitLegacyDepth(numerator, denominator) {
+            this.usesDepthOutput = true;
+            // Both legacy depth instructions define a zero divisor as 1.
+            // D3D leaves out-of-range quotients undefined; clamp defensively.
+            this.emit("o_depthv.x = clamp(select(" + numerator + " / " + denominator +
+                ", 1.0, " + denominator + " == 0.0), 0.0, 1.0);");
+        }
+
         legacySamplerType(index) {
             // ps_1_x tex/texld have no sampler declaration. SetTexture selects
             // the dimension at draw time; default to 2D only for the base
@@ -2202,7 +2213,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         textureLoad(instruction, options) {
             const dest = instruction.dest;
             const sources = instruction.sources;
-            const projected = (instruction.control & 0x1) !== 0;
+            let projected = (instruction.control & 0x1) !== 0;
             const biased = (instruction.control & 0x2) !== 0;
             let index, coordinateExpression;
             if (this.kind === "pixel" && this.major === 1 && this.minor < 4) {
@@ -2213,6 +2224,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     this.samplers.set(index, this.legacySamplerType(index));
                 this.psTexcoordInputs.add(index);
                 coordinateExpression = "t" + index;
+                projected = (this.options.legacyProjection || {})[index] || false;
             } else if (this.kind === "pixel" && this.major === 1) {
                 // ps_1_4 `texld r#, t#`: sampler comes from the destination.
                 index = dest.index;
@@ -2248,12 +2260,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             const dest = instruction.dest;
             const index = dest.index;
             if (!this.samplers.has(index))
-                this.samplers.set(index, components.length === 3 ? "3d" : "2d");
-            // ps_1_x only, and isDepthSampler() excludes ps_1_x, so this form
-            // never carries a comparison reference.
-            const coordinate = { coord: "(" +
-                this.sourceExpression(instruction.sources[0]) + ")." + components,
-                ref: null };
+                this.samplers.set(index, this.legacySamplerType(index));
+            const value = "(" + this.sourceExpression(instruction.sources[0]) + ")." + components;
+            const coordinate = this.coordinateFor(index, "vec4<f32>(" + value +
+                (components.length === 3 ? ", 1.0)" : ", 0.0, 1.0)"), false);
             this.store(dest, this.sampleExpression(index, coordinate, {}));
         }
 
@@ -2675,6 +2685,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 inputs.push({ register, usage: semantic.usage,
                     usageIndex: semantic.usageIndex, location: register });
             }
+            // Coordinates may be read by texcoord/matrix/depth arithmetic
+            // without any texture sample. The fixed vertex stage still must
+            // export them; sampler count is not an input-usage description.
+            if (this.kind === "pixel" && this.major < 3)
+                for (const register of this.psTexcoordInputs)
+                    inputs.push({register, usage: DECLUSAGE_TEXCOORD, usageIndex: register,
+                        location: VARYING_TEXCOORD0 + register});
             inputs.sort((a, b) => a.register - b.register);
             const samplerBindingBase = this.kind === "vertex" ? 34 : 2;
             const samplers = Array.from(this.samplers.entries())
@@ -16379,8 +16396,16 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 // SM2+ dcl_* types remain authoritative and are checked below.
                 const legacySamplerTypes = {};
                 let legacySamplerKey = "";
+                const legacyProjection = {};
+                let legacyProjectionKey = "";
                 if (variant.reflection.version.major === 1) {
                     for (const sampler of variant.reflection.samplers) {
+                        const flags = state.textureStageStates.get(sampler.index * 64 + D3DTSS_TEXTURETRANSFORMFLAGS) || 0;
+                        if (variant.reflection.version.minor < 4 && (flags & D3DTTFF_PROJECTED)) {
+                            const count = flags & 0xff;
+                            legacyProjection[sampler.index] = ["w", "x", "y", "z", "w"][count] || "w";
+                            legacyProjectionKey += "_q" + sampler.index + legacyProjection[sampler.index];
+                        }
                         const texture = this.resources.get(state.textures.get(sampler.index));
                         const type = texture && (texture.textureType || "2d");
                         if (type && type !== sampler.type) {
@@ -16439,10 +16464,10 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                 const fogBlend = ffp.fogBlendSource({ fogMode, tableFog }, "d9c", "result.color0");
                 const fogKey = fogBlend ? "_fog" + fogMode + (tableFog ? "t" : "v") : "";
                 const pixelVariantKey = semanticKey + fogKey + alphaTestKey + clipKey + depthKey +
-                    lodBiasKey + mirrorOnceKey + legacySamplerKey + swizzleKey +
+                    lodBiasKey + mirrorOnceKey + legacySamplerKey + legacyProjectionKey + swizzleKey +
                     (flatShading ? "_flat" : "");
                 if (semanticLink || alphaTest.enabled || clipPlaneCount || depthSamplers.length
-                        || lodBiasKey || mirrorOnceKey || legacySamplerKey || swizzleKey ||
+                        || lodBiasKey || mirrorOnceKey || legacySamplerKey || legacyProjectionKey || swizzleKey ||
                         flatShading || fogBlend) {
                     variant = psResource.variants.get(pixelVariantKey);
                     if (!variant) {
@@ -16455,7 +16480,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                             depthFetchSamplers,
                             samplerLodBiasUniform, samplerSwizzles,
                             samplerMirrorOnce,
-                            legacySamplerTypes,
+                            legacySamplerTypes, legacyProjection,
                             flatShading, fogBlend, semanticLink,
                         });
                         psResource.variants.set(pixelVariantKey, variant);
