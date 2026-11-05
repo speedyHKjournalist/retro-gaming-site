@@ -1,0 +1,83 @@
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#include <stdint.h>
+#include <windows.h>
+#include <d3d8.h>
+#include "../d3d8proxy/d3d8_core_surface.h"
+#include "../d3d8proxy/d3d8_core_texture.h"
+void sc_check(BOOL,const char*);void sc_report(const char*);
+HRESULT WINAPI ta9_level(struct IDirect3DTexture9*,struct IDirect3DSurface9**);
+HRESULT WINAPI ta9_cube_level(struct IDirect3DCubeTexture9*,struct IDirect3DSurface9**);
+HRESULT WINAPI ta9_back(struct IDirect3DDevice9*,struct IDirect3DSurface9**);
+HRESULT WINAPI ta9_depth(struct IDirect3DDevice9*,struct IDirect3DSurface9**);
+HRESULT WINAPI ta9_rt(struct IDirect3DDevice9*,struct IDirect3DSurface9**);
+HRESULT WINAPI ta9_chain(struct IDirect3DDevice9*,HWND,struct IDirect3DSwapChain9**,struct IDirect3DSurface9**);
+void WINAPI ta9_draw(HMODULE,struct IDirect3DDevice9*,struct IDirect3DTexture9*,DWORD);
+void WINAPI ta9_unbind(struct IDirect3DDevice9*);
+static void ta_hr(HRESULT h,const char*m){sc_check(h==D3D_OK,m);}
+static BOOL ta_guid(REFIID a,REFIID b){if(!a||!b||a->Data1!=b->Data1||a->Data2!=b->Data2||a->Data3!=b->Data3)return FALSE;for(UINT i=0;i<8;i++)if(a->Data4[i]!=b->Data4[i])return FALSE;return TRUE;}
+/* Parent8 is an explicit IUnknown reference-policy fixture. Surface methods
+ * execute the real SDK8 vtable;full Device8/Texture8 adapters are not supplied. */
+typedef struct SAParent {IUnknown iface;LONG refs;IUnknown*backend;struct SAParent*device;UINT kind;}SAParent;
+static ULONG WINAPI ta_parent_add(IUnknown*iface){SAParent*p=(SAParent*)iface;ULONG refs=(ULONG)InterlockedIncrement(&p->refs);if(refs==1){IUnknown_AddRef(p->backend);if(p->device)IUnknown_AddRef(&p->device->iface);}return refs;}
+static ULONG WINAPI ta_parent_release(IUnknown*iface){SAParent*p=(SAParent*)iface;sc_check(p->refs>0,"FAIL surface frontend parent underflow");ULONG refs=(ULONG)InterlockedDecrement(&p->refs);if(!refs&&p->backend){IUnknown_Release(p->backend);if(p->device)IUnknown_Release(&p->device->iface);}return refs;}
+static HRESULT WINAPI ta_parent_query(IUnknown*iface,REFIID iid,void**out){SAParent*p=(SAParent*)iface;if(!out)return E_POINTER;*out=NULL;if(!ta_guid(iid,&IID_IUnknown)&&!ta_guid(iid,p->kind==1?&IID_IDirect3DTexture8:p->kind==2?&IID_IDirect3DCubeTexture8:&IID_IDirect3DDevice8))return E_NOINTERFACE;*out=iface;ta_parent_add(iface);return S_OK;}
+static IUnknownVtbl ta_parent_vtbl={ta_parent_query,ta_parent_add,ta_parent_release};
+static SAParent ta_parent(IUnknown*backend,SAParent*device,UINT kind){SAParent p;p.iface.lpVtbl=&ta_parent_vtbl;p.refs=1;p.backend=backend;p.device=device;p.kind=kind;if(device)IUnknown_AddRef(&device->iface);return p;}
+static HRESULT(WINAPI*ta_wrap)(struct IDirect3DSurface9*,IDirect3DDevice8*,IUnknown*,BOOL,IDirect3DSurface8**);
+static const GUID ta_tag={0x78563412,0x1234,0x5678,{1,2,3,4,5,6,7,8}};
+static void ta_identity(IDirect3DSurface8*s,SAParent*d,SAParent*container){void*out=(void*)99;ta_hr(IDirect3DSurface8_QueryInterface(s,&IID_IUnknown,&out),"FAIL surface QI8");sc_check(out==s,"FAIL surface IUnknown identity");IUnknown_Release((IUnknown*)out);out=(void*)99;sc_check(IDirect3DSurface8_QueryInterface(s,&ta_tag,&out)==E_NOINTERFACE&&!out,"FAIL surface invalid QI");sc_check(IDirect3DSurface8_QueryInterface(s,&IID_IUnknown,NULL)==E_POINTER,"FAIL surface QI output");IDirect3DDevice8*device=NULL;sc_check(IDirect3DSurface8_GetDevice(s,NULL)==D3DERR_INVALIDCALL,"FAIL surface device output");ta_hr(IDirect3DSurface8_GetDevice(s,&device),"FAIL surface GetDevice8");sc_check((IUnknown*)device==&d->iface,"FAIL surface frontend device");IUnknown_Release((IUnknown*)device);out=NULL;ta_hr(IDirect3DSurface8_GetContainer(s,&IID_IUnknown,&out),"FAIL surface GetContainer8");sc_check(out==&container->iface,"FAIL frontend container identity");IUnknown_Release((IUnknown*)out);sc_check(IDirect3DSurface8_GetContainer(s,&IID_IUnknown,NULL)==E_POINTER,"FAIL surface container output");}
+static void ta_desc(IDirect3DSurface8*s,UINT w,UINT h,DWORD format,DWORD pool,DWORD usage,UINT bytes){D3DSURFACE_DESC desc;ta_hr(IDirect3DSurface8_GetDesc(s,&desc),"FAIL surface desc8");sc_check(desc.Width==w&&desc.Height==h&&(DWORD)desc.Format==format&&(DWORD)desc.Pool==pool&&desc.Usage==usage&&desc.Size==bytes&&desc.MultiSampleType==D3DMULTISAMPLE_NONE,"FAIL eight-word surface descriptor");sc_check(IDirect3DSurface8_GetDesc(s,NULL)==D3DERR_INVALIDCALL,"FAIL surface null descriptor");}
+static void ta_private(IDirect3DSurface8*s){DWORD values[3]={0x12345678u,0x87654321u,0xabcdef01u},got[3]={0};ta_hr(IDirect3DSurface8_SetPrivateData(s,&ta_tag,values,sizeof(values),0),"FAIL surface SetPrivateData8");DWORD size=4;sc_check(IDirect3DSurface8_GetPrivateData(s,&ta_tag,got,&size)==D3DERR_MOREDATA&&size==sizeof(values),"FAIL surface private MoreData8");size=sizeof(got);ta_hr(IDirect3DSurface8_GetPrivateData(s,&ta_tag,got,&size),"FAIL surface GetPrivateData8");sc_check(size==sizeof(values)&&got[0]==values[0]&&got[1]==values[1]&&got[2]==values[2],"FAIL surface private bytes8");ta_hr(IDirect3DSurface8_FreePrivateData(s,&ta_tag),"FAIL surface FreePrivateData8");size=sizeof(got);sc_check(IDirect3DSurface8_GetPrivateData(s,&ta_tag,got,&size)==D3DERR_NOTFOUND,"FAIL surface private deletion8");}
+static UINT ta_words;
+static void ta_pixels(IDirect3DSurface8*s,UINT width,UINT height,DWORD color){D3DLOCKED_RECT lock;ta_hr(IDirect3DSurface8_LockRect(s,&lock,NULL,0),"FAIL surface LockRect8");sc_check(lock.Pitch==(INT)(width*4),"FAIL surface pitch8");for(UINT y=0;y<height;y++)for(UINT x=0;x<width;x++)((DWORD*)((BYTE*)lock.pBits+y*lock.Pitch))[x]=color;sc_check(IDirect3DSurface8_LockRect(s,&lock,NULL,0)==D3DERR_INVALIDCALL,"FAIL surface double lock8");ta_hr(IDirect3DSurface8_UnlockRect(s),"FAIL surface UnlockRect8");sc_check(IDirect3DSurface8_UnlockRect(s)==D3DERR_INVALIDCALL,"FAIL surface double unlock8");ta_hr(IDirect3DSurface8_LockRect(s,&lock,NULL,D3DLOCK_READONLY),"FAIL surface readonly8");for(UINT y=0;y<height;y++)for(UINT x=0;x<width;x++){sc_check(((DWORD*)((BYTE*)lock.pBits+y*lock.Pitch))[x]==color,"FAIL actual surface CPU bytes8");ta_words++;}ta_hr(IDirect3DSurface8_UnlockRect(s),"FAIL surface readonly unlock8");}
+void ta_probe(HMODULE module,HWND window,UINT sdk){
+    ta_words=0;
+    ta_wrap=(void*)(uintptr_t)GetProcAddress(module,"Core8WrapSurface");sc_check(ta_wrap!=NULL,"FAIL actual surface adapter export");
+    struct IDirect3D9*(WINAPI*factory)(UINT)=(void*)(uintptr_t)GetProcAddress(module,"Core8CreateFactory");
+    HRESULT(WINAPI*create)(struct IDirect3D9*,UINT,UINT,HWND,DWORD,const D3DPRESENT_PARAMETERS*,struct IDirect3DDevice9**)=(void*)(uintptr_t)GetProcAddress(module,"Core8CreateDevice");
+    HRESULT(WINAPI*reset)(struct IDirect3DDevice9*,const D3DPRESENT_PARAMETERS*)=(void*)(uintptr_t)GetProcAddress(module,"Core8Reset");
+    HRESULT(WINAPI*image)(struct IDirect3DDevice9*,UINT,UINT,UINT,struct IDirect3DSurface9**)=(void*)(uintptr_t)GetProcAddress(module,"Core8ImageSurface");
+    HRESULT(WINAPI*texture)(struct IDirect3DDevice9*,UINT,UINT,UINT,DWORD,UINT,UINT,struct IDirect3DTexture9**)=(void*)(uintptr_t)GetProcAddress(module,"Core8Texture");
+    HRESULT(WINAPI*cube)(struct IDirect3DDevice9*,UINT,UINT,DWORD,UINT,UINT,struct IDirect3DCubeTexture9**)=(void*)(uintptr_t)GetProcAddress(module,"Core8CubeTexture");
+    sc_check(factory&&create&&reset&&image&&texture&&cube,"FAIL surface constructors");struct IDirect3D9*root=factory(sdk);sc_check(root!=NULL,"FAIL surface root");D3DPRESENT_PARAMETERS pp;ZeroMemory(&pp,sizeof(pp));pp.BackBufferWidth=pp.BackBufferHeight=8;pp.BackBufferFormat=21;pp.BackBufferCount=1;pp.SwapEffect=1;pp.hDeviceWindow=window;pp.Windowed=TRUE;pp.EnableAutoDepthStencil=TRUE;pp.AutoDepthStencilFormat=80;
+    struct IDirect3DDevice9*d=NULL;ta_hr(create(root,0,1,window,32,&pp,&d),"FAIL surface device");sc_check(IUnknown_Release((IUnknown*)root)==1,"FAIL surface root count");SAParent device=ta_parent((IUnknown*)d,NULL,0);
+    struct IDirect3DSurface9*raw=NULL;IDirect3DSurface8*cpu=NULL,*level=NULL,*face=NULL,*back=NULL,*depth=NULL,*target=NULL,*chainback=NULL;
+    ta_hr(image(d,4,4,21,&raw),"FAIL surface image core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&cpu),"FAIL own surface wrapper");ta_identity(cpu,&device,&device);ta_desc(cpu,4,4,21,2,0,64);ta_private(cpu);ta_pixels(cpu,4,4,0xff00ffffu);
+    struct IDirect3DTexture9*t=NULL;struct IDirect3DCubeTexture9*c=NULL;
+    HRESULT(WINAPI*wrap_texture)(struct IDirect3DTexture9*,IDirect3DDevice8*,IDirect3DTexture8**)=(void*)(uintptr_t)GetProcAddress(module,"Core8WrapTexture");
+    struct IDirect3DTexture9*(WINAPI*frontend_texture)(IDirect3DTexture8*)=(void*)(uintptr_t)GetProcAddress(module,"Core8TextureBackend");
+    sc_check(wrap_texture&&frontend_texture,"FAIL actual Texture8 exports");
+    ta_hr(texture(d,8,8,0,0,21,1,&t),"FAIL real Texture8 backend");IDirect3DTexture8*texture8=NULL;
+    ta_hr(wrap_texture(t,(IDirect3DDevice8*)&device.iface,&texture8),"FAIL real Texture8 wrapper");sc_check(frontend_texture(texture8)==t,"FAIL Texture8 backend identity");
+    const GUID*queries[]={&IID_IUnknown,&IID_IDirect3DResource8,&IID_IDirect3DBaseTexture8,&IID_IDirect3DTexture8};
+    for(UINT i=0;i<4;i++){void*view=NULL;ta_hr(IDirect3DTexture8_QueryInterface(texture8,queries[i],&view),"FAIL Texture8 QI");sc_check(view==texture8&&IUnknown_Release((IUnknown*)view)==1,"FAIL Texture8 QI refs");}
+    sc_check(IDirect3DTexture8_GetType(texture8)==D3DRTYPE_TEXTURE&&IDirect3DTexture8_GetLevelCount(texture8)==4,"FAIL Texture8 type/levels");
+    sc_check(!IDirect3DTexture8_SetPriority(texture8,0x81234567u)&&IDirect3DTexture8_GetPriority(texture8)==0x81234567u,"FAIL Texture8 priority");
+    sc_check(!IDirect3DTexture8_SetLOD(texture8,0xffffffffu)&&IDirect3DTexture8_GetLOD(texture8)==3&&IDirect3DTexture8_SetLOD(texture8,0)==3&&!IDirect3DTexture8_GetLOD(texture8),"FAIL Texture8 LOD");IDirect3DTexture8_PreLoad(texture8);
+    for(UINT i=0;i<4;i++){D3DSURFACE_DESC desc;ta_hr(IDirect3DTexture8_GetLevelDesc(texture8,i,&desc),"FAIL Texture8 level desc");sc_check(desc.Width==(8u>>i)&&desc.Height==(8u>>i)&&desc.Size==(256u>>(i*2))&&desc.Format==21&&desc.Pool==1,"FAIL Texture8 desc words");}
+    DWORD private_value=0xaabbccddu,private_out=0,private_size=4;ta_hr(IDirect3DTexture8_SetPrivateData(texture8,&ta_tag,&private_value,4,0),"FAIL Texture8 private set");ta_hr(IDirect3DTexture8_GetPrivateData(texture8,&ta_tag,&private_out,&private_size),"FAIL Texture8 private get");sc_check(private_out==private_value&&private_size==4,"FAIL Texture8 private bytes");ta_hr(IDirect3DTexture8_FreePrivateData(texture8,&ta_tag),"FAIL Texture8 private free");
+    IDirect3DSurface8*bad=(void*)99;sc_check(IDirect3DTexture8_GetSurfaceLevel(texture8,4,&bad)==D3DERR_INVALIDCALL&&!bad&&IDirect3DTexture8_GetSurfaceLevel(texture8,0,NULL)==D3DERR_INVALIDCALL,"FAIL Texture8 invalid level/output");
+    ta_hr(IDirect3DTexture8_GetSurfaceLevel(texture8,0,&level),"FAIL real Surface8 from Texture8");sc_check(IDirect3DTexture8_AddRef(texture8)==3&&IDirect3DTexture8_Release(texture8)==2,"FAIL Texture8 coupled refs");
+    IDirect3DDevice8*owner8=NULL;ta_hr(IDirect3DTexture8_GetDevice(texture8,&owner8),"FAIL Texture8 GetDevice");sc_check((IUnknown*)owner8==&device.iface,"FAIL Texture8 frontend device");IUnknown_Release((IUnknown*)owner8);
+    void*container8=NULL;ta_hr(IDirect3DSurface8_GetContainer(level,&IID_IDirect3DTexture8,&container8),"FAIL real Texture8 container");sc_check(container8==texture8&&IDirect3DTexture8_Release((IDirect3DTexture8*)container8)==2,"FAIL real container identity/count");
+    ta_desc(level,8,8,21,1,0,256);ta_private(level);ta_pixels(level,8,8,0xffff0000u);
+    IDirect3DSurface8*mip=NULL;ta_hr(IDirect3DTexture8_GetSurfaceLevel(texture8,1,&mip),"FAIL Texture8 mip surface");ta_desc(mip,4,4,21,1,0,64);
+    D3DLOCKED_RECT mip_lock;ta_hr(IDirect3DTexture8_LockRect(texture8,1,&mip_lock,NULL,0),"FAIL Texture8 direct LockRect");sc_check(mip_lock.Pitch==16,"FAIL Texture8 direct pitch");for(UINT y=0;y<4;y++)for(UINT x=0;x<4;x++)((DWORD*)((BYTE*)mip_lock.pBits+y*mip_lock.Pitch))[x]=0xff00ff00u;
+    sc_check(IDirect3DSurface8_LockRect(mip,&mip_lock,NULL,0)==D3DERR_INVALIDCALL,"FAIL shared texture/surface lock");ta_hr(IDirect3DTexture8_UnlockRect(texture8,1),"FAIL Texture8 direct UnlockRect");
+    ta_hr(IDirect3DSurface8_LockRect(mip,&mip_lock,NULL,D3DLOCK_READONLY),"FAIL Surface8 shared mip read");for(UINT y=0;y<4;y++)for(UINT x=0;x<4;x++){sc_check(((DWORD*)((BYTE*)mip_lock.pBits+y*mip_lock.Pitch))[x]==0xff00ff00u,"FAIL shared mip data");ta_words++;}ta_hr(IDirect3DSurface8_UnlockRect(mip),"FAIL shared mip read unlock");sc_check(IDirect3DSurface8_Release(mip)==2,"FAIL mip parent count");
+    RECT dirty={0,0,4,4},invalid_dirty={-1,0,1,1};ta_hr(IDirect3DTexture8_AddDirtyRect(texture8,&dirty),"FAIL Texture8 AddDirtyRect");ta_hr(IDirect3DTexture8_AddDirtyRect(texture8,NULL),"FAIL Texture8 full dirty");sc_check(IDirect3DTexture8_AddDirtyRect(texture8,&invalid_dirty)==D3DERR_INVALIDCALL,"FAIL Texture8 invalid dirty");
+    ta_hr(cube(d,4,1,0,21,1,&c),"FAIL cube surface core");SAParent cube_parent=ta_parent((IUnknown*)c,&device,2);ta_hr(ta9_cube_level(c,&raw),"FAIL cube surface level core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&cube_parent.iface,TRUE,&face),"FAIL cube coupled wrapper");ta_identity(face,&device,&cube_parent);ta_desc(face,4,4,21,1,0,64);ta_pixels(face,4,4,0xff00ff00u);sc_check(IDirect3DSurface8_Release(face)==1&&!IUnknown_Release(&cube_parent.iface),"FAIL cube parent counts8");
+    ta_hr(ta9_back(d,&raw),"FAIL implicit back core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&back),"FAIL implicit back wrapper");ta_identity(back,&device,&device);ta_desc(back,8,8,21,0,1,256);sc_check(!IDirect3DSurface8_Release(back),"FAIL implicit back zero8");
+    ta_hr(ta9_depth(d,&raw),"FAIL implicit depth core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&depth),"FAIL implicit depth wrapper");ta_identity(depth,&device,&device);ta_desc(depth,8,8,80,0,2,128);sc_check(!IDirect3DSurface8_Release(depth),"FAIL implicit depth zero8");
+    ta_hr(ta9_rt(d,&raw),"FAIL standalone RT core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&target),"FAIL standalone RT wrapper");ta_identity(target,&device,&device);ta_desc(target,4,4,21,0,1,64);sc_check(!IDirect3DSurface8_Release(target),"FAIL standalone RT release8");
+    struct IDirect3DSwapChain9*chain=NULL;ta_hr(ta9_chain(d,window,&chain,&raw),"FAIL chain back core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&chainback),"FAIL chain back wrapper");ta_identity(chainback,&device,&device);ta_desc(chainback,4,4,21,0,1,64);sc_check(!IDirect3DSurface8_Release(chainback)&&!IUnknown_Release((IUnknown*)chain),"FAIL chain back count8");
+    ta9_draw(module,d,t,0xffff0000u);IDirect3DSurface8*original=level;sc_check(IDirect3DTexture8_Release(texture8)==1&&!IDirect3DSurface8_Release(level),"FAIL coupled public zero8");
+    IUnknown_AddRef((IUnknown*)t);IDirect3DTexture8*revived_texture=NULL;ta_hr(wrap_texture(t,(IDirect3DDevice8*)&device.iface,&revived_texture),"FAIL real Texture8 public-zero revival");sc_check(revived_texture==texture8,"FAIL cached Texture8 identity");
+    ta_hr(IDirect3DTexture8_GetSurfaceLevel(revived_texture,0,&level),"FAIL real Surface8 public-zero revival");sc_check(level==original&&IDirect3DTexture8_Release(revived_texture)==1,"FAIL cached real Texture8 parent count");
+    ta_hr(reset(d,&pp),"FAIL surface Reset");ta_desc(level,8,8,21,1,0,256);ta_pixels(level,8,8,0xff0000ffu);ta9_draw(module,d,t,0xff0000ffu);
+    ta_hr(ta9_back(d,&raw),"FAIL postReset back core");IDirect3DSurface8*again=NULL;ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&again),"FAIL postReset cached back");sc_check(again==back&&!IDirect3DSurface8_Release(again),"FAIL postReset back identity8");
+    ta_hr(ta9_depth(d,&raw),"FAIL postReset depth core");ta_hr(ta_wrap(raw,(IDirect3DDevice8*)&device.iface,&device.iface,FALSE,&again),"FAIL postReset cached depth");sc_check(again==depth&&!IDirect3DSurface8_Release(again),"FAIL postReset depth identity8");
+    ta9_unbind(d);sc_check(!IDirect3DSurface8_Release(level)&&!IDirect3DSurface8_Release(cpu)&&device.refs==1,"FAIL surface final frontend counts8");sc_check(!IUnknown_Release(&device.iface),"FAIL surface device final refs8");
+    sc_check(ta_words==176,"FAIL actual Texture8 CPU word count");char line[220];wsprintfA(line,"TEXTURECORE CHECK sdk=%u textureMethods=19 realContainer=1 surfaceMethods=11 mipLevels=4 crossLock=1 publicZero=1 reset=1 CPUWords=176 drawnImages=2 finalRefs=0",sdk);sc_report(line);
+}

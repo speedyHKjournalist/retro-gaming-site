@@ -16641,6 +16641,51 @@ HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(IDirect3DDevice9 *iface,
             primitive_count);
 }
 
+/* A raw8 DWORD handle owns storage, not a public9 resource/device pin.
+ * The frontend pairs these holds, drops constructor COM refs separately,
+ * and releases the holds during its device metadata retirement callback. */
+static HRESULT shader_storage_reference8(IDirect3DDevice9 *iface,
+        IUnknown *object, BOOL retain)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl || !object)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8u) return D3DERR_INVALIDCALL;
+    const void *vtbl = object->lpVtbl;
+    if (vtbl == &g_decl_vtbl) {
+        D9VertexDeclaration *decl = (D9VertexDeclaration *)object;
+        if (decl->device != device || (!retain
+                && !InterlockedCompareExchange(&decl->binding_refs, 0, 0)))
+            return D3DERR_INVALIDCALL;
+        if (retain) decl_binding_add_ref(decl);
+        else decl_binding_release(decl);
+        return D3D_OK;
+    }
+    if (vtbl == &g_vertex_shader_vtbl
+            || vtbl == &g_pixel_shader_vtbl) {
+        D9Shader *shader = (D9Shader *)object;
+        if (shader->device != device || (!retain
+                && !InterlockedCompareExchange(&shader->binding_refs, 0, 0)))
+            return D3DERR_INVALIDCALL;
+        if (retain) shader_binding_add_ref(shader);
+        else shader_binding_release(shader);
+        return D3D_OK;
+    }
+    return D3DERR_INVALIDCALL;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_shader_storage_add_ref8(IDirect3DDevice9 *device,
+        IUnknown *object)
+{
+    return shader_storage_reference8(device, object, TRUE);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_shader_storage_release8(IDirect3DDevice9 *device,
+        IUnknown *object)
+{
+    return shader_storage_reference8(device, object, FALSE);
+}
+
 /* Backend for an already resolved8 DWORD shader handle. Validate both
  * owners before either setter changes state; public raw-handle queries and
  * deletion remain frontend responsibilities. NULL/NULL is the8 zero bind. */

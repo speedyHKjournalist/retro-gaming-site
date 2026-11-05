@@ -142,6 +142,16 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(struct IDirect3DSurface9 *surface,
 HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(struct IDirect3DDevice9 *device,
         const DWORD *tokens, BOOL declaration_only,
         struct IDirect3DVertexDeclaration9 **out);
+/* Balanced frontend raw8-handle storage holds for actual declaration/VS/PS.
+ * These calls borrow their inputs and do not change public COM/device refs.
+ * After retaining storage, the frontend drops constructor COM refs separately.
+ * Keep the device/storage alive during each call; release all owned holds in
+ * the device metadata retire callback, while its core device/factory are valid.
+ * A release requires a private hold; other owners' binding refs are not owned. */
+HRESULT WINAPI d9wg_d3d9_core_shader_storage_add_ref8(struct IDirect3DDevice9 *device,
+        struct IUnknown *object);
+HRESULT WINAPI d9wg_d3d9_core_shader_storage_release8(struct IDirect3DDevice9 *device,
+        struct IUnknown *object);
 /* Backend8 FVF binding uses the8 dialect and clears the VS;zero clears the
  * layout too. Raw8 GetVertexShader/FVF-vs-handle state stays in the frontend.
  * Internal9 GetFVF iszero because the actual converted layout is authoritative. */

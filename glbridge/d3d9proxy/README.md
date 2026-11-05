@@ -1625,3 +1625,38 @@ run with an 1800-second deadline replace that attempt. 387 guest / 92 core regre
 four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
 DLLs and same-source diagnostics published.
 Evidence: `../deployments/d3d-webgpu-review-4K46.json`.
+
+
+### Review 4K47: private shader storage for frontend8 handle metadata
+
+Two private SDK-neutral stdcall helpers retain/release actual declaration, VS
+and PS storage on profile8 devices. They borrow inputs and use existing binding
+references; public COM/device references do not change. The frontend drops
+constructor COM references separately after a successful hold, and releases
+its balanced holds in the device metadata retirement callback while the core
+device and factory remain valid. The complete previous core source/header
+reconstruct exactly after removing the bridge: 682 existing functions, macros
+and storage layouts unchanged; seventeen frontend/runtime/build files match.
+
+Native: 10,008 checks / 525 cases, 17 strictly compiled assertion mutants and
+ASAN. Actual first XP: 130 seconds / 97 batches, nineteen devices and Resets,
+136 handles, 27 declarations and 43 shaders. Twelve new real core objects
+survive public-zero cloning/getter revival, Reset, byte-exact metadata queries
+and transient/retained device revival by private-data finalizers. All twelve
+resource destroys follow their DeviceDestroy and precede SessionEnd; GPU
+resource tables are empty before fallback cleanup. Frontend devices and raw8
+handle metadata remain explicit fixtures; full Device8/handle tables are open.
+
+Both GPUs match 68 images / 3,776 pixels with 43 shader translations. No new
+draws or CPU shadow writes; all previous resource rendering remains covered.
+The first full guest run exposed a scheduling-dependent old GUID-collision
+mutation test. Sixteen deterministic GUID coexistence cases now cover every
+byte; 30 private-data cases / 8,000 concurrent iterations, 19 strictly compiled
+C assertion mutants and ASAN pass before a fresh full guest run.
+9,125 corruption cases cover new shader/Reset fields and payload words, with
+retained-prefix sampling plus complete old fixtures in the regression suite.
+389 guest / 93 core regressions, 32 EXEs, four strict DLLs, two site tests and
+scoped lint pass. Exact XP-accepted retail DLLs and same-source diagnostics
+published. First SDK compilation caught incompatible vtable pointer types;
+using opaque table addresses corrected it without relaxing strict flags.
+Evidence: `../deployments/d3d-webgpu-review-4K47.json`.
