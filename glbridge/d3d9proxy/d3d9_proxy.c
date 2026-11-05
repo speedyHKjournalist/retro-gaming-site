@@ -16156,6 +16156,50 @@ HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
     return core_pack_surface_desc8(&desc, out);
 }
 
+/* Identical SDK8/9 buffer descriptor layouts and the existing lock/private-data
+ * policy are owned by the real9 implementations. Only ABI signatures differ. */
+#define D9WG_BUFFER_METHODS8(P, Type, Descriptor) \
+static HRESULT WINAPI core_##P##8_set_private(IUnknown *p, const GUID *id, const void *data, DWORD size, DWORD flags) \
+{ return P##_set_private_data((Type *)p, id, data, size, flags); } \
+static HRESULT WINAPI core_##P##8_get_private(IUnknown *p, const GUID *id, void *data, DWORD *size) \
+{ return P##_get_private_data((Type *)p, id, data, size); } \
+static HRESULT WINAPI core_##P##8_free_private(IUnknown *p, const GUID *id) \
+{ return P##_free_private_data((Type *)p, id); } \
+static DWORD WINAPI core_##P##8_set_priority(IUnknown *p, DWORD value) \
+{ return P##_set_priority((Type *)p, value); } \
+static DWORD WINAPI core_##P##8_get_priority(IUnknown *p) \
+{ return P##_get_priority((Type *)p); } \
+static void WINAPI core_##P##8_preload(IUnknown *p) \
+{ P##_preload((Type *)p); } \
+static UINT WINAPI core_##P##8_get_type(IUnknown *p) \
+{ return (UINT)P##_get_type((Type *)p); } \
+static HRESULT WINAPI core_##P##8_lock(IUnknown *p, UINT offset, UINT size, void *out, DWORD flags) \
+{ return P##_lock((Type *)p, offset, size, (void **)out, flags); } \
+static HRESULT WINAPI core_##P##8_unlock(IUnknown *p) \
+{ return P##_unlock((Type *)p); } \
+static HRESULT WINAPI core_##P##8_get_desc(IUnknown *p, void *out, UINT bytes) \
+{ if (!out || bytes != sizeof(Descriptor)) return D3DERR_INVALIDCALL; return P##_get_desc((Type *)p, (Descriptor *)out); }
+D9WG_BUFFER_METHODS8(vb, IDirect3DVertexBuffer9, D3DVERTEXBUFFER_DESC)
+D9WG_BUFFER_METHODS8(ib, IDirect3DIndexBuffer9, D3DINDEXBUFFER_DESC)
+#undef D9WG_BUFFER_METHODS8
+#define D9WG_BUFFER_TABLE8(P) \
+    core_##P##8_set_private, core_##P##8_get_private, core_##P##8_free_private, \
+    core_##P##8_set_priority, core_##P##8_get_priority, core_##P##8_preload, \
+    core_##P##8_get_type, core_##P##8_lock, core_##P##8_unlock, core_##P##8_get_desc
+const D9WGBufferMethods8 *WINAPI d9wg_d3d9_core_buffer_methods8(
+        IUnknown *buffer, UINT expected_type)
+{
+    static const D9WGBufferMethods8 vertex_methods = {D9WG_BUFFER_TABLE8(vb)};
+    static const D9WGBufferMethods8 index_methods = {D9WG_BUFFER_TABLE8(ib)};
+    if (!buffer || !core_view_device8(buffer)) return NULL;
+    if (expected_type == 6u && buffer->lpVtbl == (const IUnknownVtbl *)&g_vb_vtbl)
+        return &vertex_methods;
+    if (expected_type == 7u && buffer->lpVtbl == (const IUnknownVtbl *)&g_ib_vtbl)
+        return &index_methods;
+    return NULL;
+}
+#undef D9WG_BUFFER_TABLE8
+
 static UINT WINAPI core_texture_type8(IDirect3DTexture9 *texture)
 {
     return (UINT)IDirect3DTexture9_GetType(texture);

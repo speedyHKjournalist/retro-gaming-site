@@ -1,9 +1,14 @@
 "use strict";
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'surface8-adapter-'));
+const bufferMode=process.env.D8WG_TEST_BUFFER_ADAPTER==="1";
 const volumeMode=process.env.D8WG_TEST_VOLUME_ADAPTER==="1";
 const cubeMode=process.env.D8WG_TEST_CUBE_ADAPTER==="1";
 const textureMode=process.env.D8WG_TEST_TEXTURE_ADAPTER==="1";
 const resourceMode=textureMode||cubeMode||volumeMode,resourceName=volumeMode?"volume_texture":cubeMode?"cube_texture":"texture",resourcePrefix=volumeMode?"VolumeTexture":cubeMode?"CubeTexture":"Texture";
+const combinedMode=resourceMode||bufferMode;
+const bufferMethods=bufferMode?fs.readFileSync(root+"/d3d9proxy/d3d9_core.h","utf8").match(/typedef struct D9WGBufferMethods8 \{[\s\S]*?\} D9WGBufferMethods8;/)[0]:"";
+const bufferTypes=bufferMode?fs.readFileSync(root+"/tests/native/d8wg_buffer_adapter_types.h","utf8"):"";
+const bufferSource=bufferMode?fs.readFileSync(process.env.D8WG_BUFFER_ADAPTER_SOURCE||root+"/d3d8proxy/d3d8_core_buffer.c","utf8").replace(/^#include[^\n]*\n/gm,""):"";
 const common=fs.readFileSync(process.env.D8WG_CORE_VIEW_SOURCE||root+'/d3d8proxy/d3d8_core_view.h','utf8').replace(/^#include[^\n]*\n/gm,'');
 const source=fs.readFileSync(process.env.D8WG_SURFACE_ADAPTER_SOURCE||root+'/d3d8proxy/d3d8_core_surface.c','utf8').replace(/^#include[^\n]*\n/gm,''),header=fs.readFileSync(root+'/d3d9proxy/d3d9_core.h','utf8'),methods=header.match(/typedef struct D9WGSurfaceMethods8 \{[\s\S]*?\} D9WGSurfaceMethods8;/)[0];
 const textureMethods=resourceMode?header.match(new RegExp("typedef struct D9WG"+resourcePrefix+"Methods8 \\{[\\s\\S]*?\\} D9WG"+resourcePrefix+"Methods8;"))[0]:"";
@@ -58,6 +63,8 @@ ${resourceMode?"typedef struct D9WG"+resourcePrefix+"Methods8 D9WG"+resourcePref
 ${textureTypes}
 ${textureMethods}
 ${volumeMethods}
+${bufferMethods}
+${bufferTypes}
 ${volumeMode?"static const D9WGVolumeMethods8*d9wg_d3d9_core_volume_methods8(struct IDirect3DVolume9*);":""}
 typedef void(*D9WGCoreViewRetire8)(void*);
 static const D9WGSurfaceMethods8*d9wg_d3d9_core_surface_methods8(struct IDirect3DSurface9*);
@@ -67,7 +74,8 @@ ${common}
 ${source}
 ${volumeSource}
 ${textureSource}
-${resourceMode?'#define main retained_surface_main':""}
+${bufferSource}
+${combinedMode?'#define main retained_surface_main':""}
 #include "tests/native/d8wg_surface_adapter_cases.h"
-${resourceMode?'#undef main\n#include "tests/native/d8wg_'+resourceName+'_adapter_cases.h"':""}
+${combinedMode?'#undef main\n#include "tests/native/d8wg_'+(bufferMode?'buffer':resourceName)+'_adapter_cases.h"':""}
 `);const build=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/adapter.c','-o',dir+'/adapter'],{encoding:'utf8'});assert.equal(build.status,0,build.stderr);const run=spawnSync(dir+'/adapter',[],{encoding:'utf8',timeout:30000});assert.equal(run.status,0,run.stderr+' signal='+run.signal);process.stdout.write(run.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

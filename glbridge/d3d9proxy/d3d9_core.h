@@ -160,6 +160,21 @@ typedef HRESULT (WINAPI *D9WGStateBlockRecorder8)(struct IDirect3DDevice9 *devic
 HRESULT WINAPI d9wg_d3d9_core_record_state_block8(struct IDirect3DDevice9 *device,
         D9WGStateBlockRecorder8 recorder, const void *snapshot,
         struct IDirect3DStateBlock9 **out);
+typedef struct D9WGBufferMethods8 {
+    HRESULT (WINAPI *set_private_data)(struct IUnknown *, const GUID *, const void *, DWORD, DWORD);
+    HRESULT (WINAPI *get_private_data)(struct IUnknown *, const GUID *, void *, DWORD *);
+    HRESULT (WINAPI *free_private_data)(struct IUnknown *, const GUID *);
+    DWORD (WINAPI *set_priority)(struct IUnknown *, DWORD);
+    DWORD (WINAPI *get_priority)(struct IUnknown *);
+    void (WINAPI *preload)(struct IUnknown *);
+    UINT (WINAPI *get_type)(struct IUnknown *);
+    HRESULT (WINAPI *lock)(struct IUnknown *, UINT, UINT, void *, DWORD);
+    HRESULT (WINAPI *unlock)(struct IUnknown *);
+    HRESULT (WINAPI *get_desc)(struct IUnknown *, void *, UINT);
+} D9WGBufferMethods8;
+/* expected_type is SDK resource type6 (vertex) or7 (index). */
+const D9WGBufferMethods8 *WINAPI d9wg_d3d9_core_buffer_methods8(
+        struct IUnknown *buffer, UINT expected_type);
 typedef struct D9WGTextureMethods8 {
     HRESULT (WINAPI *set_private_data)(struct IDirect3DTexture9 *, const GUID *, const void *, DWORD, DWORD);
     HRESULT (WINAPI *get_private_data)(struct IDirect3DTexture9 *, const GUID *, void *, DWORD *);

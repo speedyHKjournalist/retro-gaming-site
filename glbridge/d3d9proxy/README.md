@@ -1537,3 +1537,28 @@ Analytic framebuffer replies are separate from CPU shadow and actual GPU checks.
 381 guest / 89 core regressions, 32 EXEs, four strict DLLs, two site tests and
 scoped lint pass. Exact accepted XP retail and same-source diagnostics published.
 Evidence: `../deployments/d3d-webgpu-review-4K43.json`.
+
+
+### Review 4K44: shared real SDK8 VB8/IB8 adapters
+
+`d3d8_core_buffer.c` supplies both real 14-method SDK8 interfaces with one shared
+constructor, identity, cache and reference policy. Typed thunks forward through a
+SDK-neutral ten-method core9 table. Existing VB/IB operations own private data,
+priority, locks and 24/20-byte descriptors. All 678 existing core9 functions, ten
+storage structs and eleven complete frontend/runtime files match the baseline.
+The public8 build adds one source; default factory integration remains open.
+
+Native validation: 24,373 checks / 536 cases, 36 strict semantic mutants and
+ASAN. The backend is an explicit COM/metadata shim. First XP run: 125 seconds /
+74 batches, thirteen devices and Resets, two actual VB8 and four IB8 interfaces,
+16/32-bit indices, private data, descriptors, shared refs, public-zero revival,
+Reset and final cleanup. New Device8 parents remain IUnknown fixtures.
+
+SDK8 buffer writes feed SDK9 reference draws: 56 full images / 3,584 pixels match
+on both GPUs. Eight buffer updates / 552 bytes and 40,748 wire corruptions check
+the complete vertex/index payloads. CPU shadow checks total 1,962 DWORDs;
+analytic framebuffer replies are separate. Host drawCalls=50 counts nonindexed
+draws; indexedDrawCalls=6 is separate. 383 guest / 90 core regressions, 32 EXEs,
+four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
+DLLs and same-source diagnostics are published.
+Evidence: `../deployments/d3d-webgpu-review-4K44.json`.
