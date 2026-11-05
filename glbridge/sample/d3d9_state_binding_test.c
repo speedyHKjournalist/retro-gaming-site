@@ -12,7 +12,11 @@ static void expect(HRESULT hr,const char*s){if(FAILED(hr)){char line[180];wsprin
 static ULONG refs(IUnknown*p){IUnknown_AddRef(p);return IUnknown_Release(p);}
 static void capture(IDirect3DDevice9*d,IDirect3DSurface9*cpu,UINT step,DWORD color)
 {
-    IDirect3DSurface9*target=NULL;expect(IDirect3DDevice9_GetRenderTarget(d,0,&target),"FAIL capture target");expect(IDirect3DDevice9_GetRenderTargetData(d,target,cpu),"FAIL actual readback request");IDirect3DSurface9_Release(target);D3DLOCKED_RECT lock;expect(IDirect3DSurface9_LockRect(cpu,&lock,NULL,D3DLOCK_READONLY),"FAIL CPU readback access");expect(IDirect3DSurface9_UnlockRect(cpu),"FAIL CPU unlock");char line[180];wsprintfA(line,"STATE FRAME step=%u color=%08lX readback=1",step,color);report(line);
+    IDirect3DSurface9*target=NULL;expect(IDirect3DDevice9_GetRenderTarget(d,0,&target),"FAIL capture target");expect(IDirect3DDevice9_GetRenderTargetData(d,target,cpu),"FAIL actual readback request");IDirect3DSurface9_Release(target);D3DLOCKED_RECT lock;expect(IDirect3DSurface9_LockRect(cpu,&lock,NULL,D3DLOCK_READONLY),"FAIL CPU readback access");for(UINT y=0;y<8;y++)for(UINT x=0;x<8;x++) {
+        DWORD actual=((const DWORD*)((const BYTE*)lock.pBits+y*lock.Pitch))[x];
+        if(actual!=color){char error[180];wsprintfA(error,"FAIL GPU pixel step=%u x=%u y=%u expected=%08lX actual=%08lX",step,x,y,color,actual);report(error);ExitProcess(1);}
+    }
+    expect(IDirect3DSurface9_UnlockRect(cpu),"FAIL CPU unlock");char line[180];wsprintfA(line,"STATE FRAME step=%u color=%08lX readback=1",step,color);report(line);
 }
 
 typedef struct Vertex{float x,y,z,w;DWORD color;}Vertex;

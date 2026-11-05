@@ -44,3 +44,32 @@ diagnostics. VGA alignment,
 graphics lifecycle, and graphics state hooks are owned by v86. See
 `../v86/docs/glbridge.md` (from the site root) for embedding details and the
 existing D9WG snapshot limitation.
+
+### Live XP pixel acceptance (review 4L4)
+
+From the sibling v86 checkout, run:
+
+```sh
+node tests/glbridge/d3d_live_xp_matrix.mjs
+```
+
+This local macOS matrix requires Chrome, MinGW, and the installed-driver XP
+image. It runs D3D8's public 97-method device probe, D3D9 stateblock/Reset,
+and DirectDraw1/2/3/4/7 ROP/GDI/palette probes sequentially on SwiftShader and
+the default Metal adapter. Set `XP_IMAGE` for another compatible local image
+and `D3D_LIVE_MATRIX_OUT` for the result directory. Host disk images are opened
+read-only; guest writes stay in RAM overlays.
+
+The browser sends actual GPU readback bytes into the requesting XP DMA arena.
+The guest checks every pixel: 28 images / 1,408 pixels for D3D8, 5 / 320 for
+D3D9, and 30 / 1,920 for DirectDraw per backend. The asynchronous channel owns
+copies of command memory and applies backpressure; writes preserve the
+request's arena generation. Owner release waits for preceding GPU work, and
+the probes require resource cleanup before the host's fallback cleanup.
+Logs and GPU statistics accompany each run. A test failure is not a skip.
+
+The individual probes retain their explicit simulated-reply modes for wire
+fixture generation. Those modes do not count as live GPU acceptance. This
+batch changes test infrastructure and sample assertions; published DLLs,
+host renderer, protocol, and shader bundle retain their previous versions.
+See [4L4 evidence](deployments/d3d-webgpu-review-4L4.json).

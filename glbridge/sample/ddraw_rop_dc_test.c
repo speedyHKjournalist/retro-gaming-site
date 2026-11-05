@@ -27,7 +27,12 @@ static void raster(IDirectDrawSurface7*target,IDirectDrawSurface7*source,UINT ap
 }
 static void readback(IDirectDrawSurface7*target,UINT api,UINT step,DWORD color)
 {
-    DDSURFACEDESC2 d;ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);expect(IDirectDrawSurface7_Lock(target,NULL,&d,DDLOCK_READONLY|DDLOCK_WAIT,NULL),"FAIL readback");expect(IDirectDrawSurface7_Unlock(target,NULL),"FAIL readback unlock");char line[180];wsprintfA(line,"ROPDC FRAME api=%u step=%u color=%08lX readback=1",api,step,color);report(line);
+    DDSURFACEDESC2 d;ZeroMemory(&d,sizeof(d));d.dwSize=sizeof(d);expect(IDirectDrawSurface7_Lock(target,NULL,&d,DDLOCK_READONLY|DDLOCK_WAIT,NULL),"FAIL readback");for(UINT y=0;y<8;y++)for(UINT x=0;x<8;x++) {
+        DWORD expected=step==1&&(x<2||x>=6||y<2||y>=6)?0:color;
+        DWORD actual=((const DWORD*)((const BYTE*)d.lpSurface+y*d.lPitch))[x];
+        if(actual!=expected){char error[180];wsprintfA(error,"FAIL GPU pixel api=%u step=%u x=%u y=%u expected=%08lX actual=%08lX",api,step,x,y,expected,actual);report(error);ExitProcess(1);}
+    }
+    expect(IDirectDrawSurface7_Unlock(target,NULL),"FAIL readback unlock");char line[180];wsprintfA(line,"ROPDC FRAME api=%u step=%u color=%08lX readback=1",api,step,color);report(line);
 }
 static void context(IDirectDrawSurface7*surface,UINT api,PALETTEENTRY*entries)
 {
