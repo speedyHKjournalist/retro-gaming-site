@@ -78,6 +78,28 @@ static int state_binding_cases(void)
         }
         profiles++;
     }
+    /* Capture refreshes storage/stride while predefined blocks retain their
+     * creation offsets. Recorded blocks refresh offsets on every capture. */
+    for(UINT frozen=0;frozen<2;frozen++) {
+        Parent p={0};D9Device*d=new_device(&p);D9VertexBuffer*a=new_buffer(d,0,FALSE),*b=new_buffer(d,0,FALSE);
+        D9StateBlock*block=state_block_alloc(d,TRUE);CHECK(block);
+        for(UINT i=0;i<16;i++){CHECK(!device_set_stream_source(&d->iface,i,&a->iface,4*(i%4),8));block->has_stream[i]=TRUE;}
+        state_block_capture(block);block->freeze_stream_offsets=frozen;
+        for(UINT round=0;round<3;round++) {
+            for(UINT i=0;i<16;i++)CHECK(!device_set_stream_source(&d->iface,i,&b->iface,16+4*round,12+4*round));
+            CHECK(!state_block_capture_method(&block->iface));
+            device_clear_bindings(d);CHECK(!state_block_apply_method(&block->iface));
+            for(UINT i=0;i<16;i++) {
+                Interface*got=NULL;UINT offset=99,stride=99;
+                CHECK(!device_get_stream_source(&d->iface,i,&got,&offset,&stride));
+                CHECK(got==&b->iface&&offset==(frozen?4*(i%4):16+4*round)&&stride==12+4*round);
+                CHECK(vb_release(got)==1);
+            }
+        }
+        CHECK(!a->binding_refs&&b->binding_refs==32);device_clear_bindings(d);
+        CHECK(!state_block_release(&block->iface)&&!vb_release(&a->iface)&&!vb_release(&b->iface));
+        CHECK(!device_release(&d->iface)&&!live&&!p.refs);
+    }
     /* An unfinished recording owns private resources and is cancelled when
      * the device's last external reference is dropped. */
     Parent parent = {0};D9Device *device = new_device(&parent);StateGroup group = new_state_group(device,0);UINT old_destroys = destroys;

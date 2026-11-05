@@ -1292,3 +1292,28 @@ The updated9 probe checks recording versus completed-block device pins, and its
 wire model explicitly tracks the private FVF cache. See deployment evidence4L3.
 Failure injection is native with controlled providers; XP validates real COM
 objects in normal execution, without claiming Windows HAL failure-order identity.
+
+
+### 2026-11-05: upstream Wine stateblock acceptance (review 4L5)
+
+Unmodified Wine D3D8 and D3D9 stateblock suites are now pinned in the sibling
+v86 repository and run inside XP with Windows expectations and live GPU
+transport. Both SwiftShader and Metal runs pass all 9,283 D3D8 and 14,738
+D3D9 checks, with no failures, todos, flaky failures or skips. These suites
+exercise API state; they do not render pixel comparisons. Review 4L4 records
+the separate live pixel matrix.
+
+The first upstream run exposed16 D3D9 failures: recapturing a predefined
+stateblock replaced its creation-time stream offsets. The common core now
+retains those offsets while refreshing buffers/strides. Recorded blocks
+continue to recapture offsets. All16 stream slots, storage replacement,
+three recapture rounds, and the recorded/predefined distinction are checked
+in native code;37 runtime mutants and ASan/UBSan pass. The full401 guest
+suite regression and32 SDK sample builds pass.
+
+Run `node tests/glbridge/d3d_wine_stateblock_xp.mjs` in v86 (`GL_SWIFTSHADER=1`
+for software GPU). The runner checks upstream hashes, full completion and
+exit summaries, and zero resources before driver owner-release cleanup.
+See deployment evidence4L5. Published retail8/9 are the exact accepted Metal
+builds; diagnostics are rebuilt from the same source. The complete Wine
+device/visual/DirectDraw collection and game acceptance remain separate work.

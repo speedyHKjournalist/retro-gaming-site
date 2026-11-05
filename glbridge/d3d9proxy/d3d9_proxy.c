@@ -918,6 +918,7 @@ struct D9StateBlock {
     IDirect3DStateBlock9 iface;
     LONG refcount;
     BOOL device_parent_ref; /* false for recording and device-owned8 tokens */
+    BOOL freeze_stream_offsets; /* predefined blocks retain creation offsets on recapture */
     DWORD handle8; /* zero for ordinary9 COM blocks; never a protocol resource */
     D9Device *device;
 
@@ -12938,7 +12939,9 @@ static void state_block_capture(struct D9StateBlock *block)
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
+            UINT offset = block->streams[index].offset;
             block->streams[index] = device->streams[index];
+            if (block->freeze_stream_offsets) block->streams[index].offset = offset;
             if (block->streams[index].buffer)
                 vb_binding_add_ref(block->streams[index].buffer);
         }
@@ -13303,6 +13306,10 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
     else state_block_mark_vertex_states(block);
     if (block->light_allocation_failed) {IDirect3DStateBlock9_Release(&block->iface);return TRACE_REFUSE(E_OUTOFMEMORY);}
     state_block_capture(block);
+    /* Windows captures stream offsets once for CreateStateBlock; later Capture
+     * refreshes the buffer and stride only. Recorded blocks keep updating all
+     * three fields. Pinned Wine d3d9/tests/stateblock.c exercises all16 slots. */
+    block->freeze_stream_offsets = TRUE;
     *block_out = &block->iface;
     return D3D_OK;
 }
