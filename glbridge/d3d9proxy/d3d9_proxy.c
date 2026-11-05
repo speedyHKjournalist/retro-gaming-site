@@ -3914,7 +3914,9 @@ static BOOL device_has_reset_blockers(D9Device *device)
  */
 static BOOL device_is_pure(const D9Device *device)
 {
-    return (device->creation.BehaviorFlags & D3DCREATE_PUREDEVICE) != 0;
+    /* Legacy8 kept state queries readable for this creation hint. */
+    return device_compatibility_api(device) != 8u
+            && (device->creation.BehaviorFlags & D3DCREATE_PUREDEVICE) != 0;
 }
 
 #define PURE_DEVICE_REFUSE(device, name) \
@@ -7951,6 +7953,16 @@ static HRESULT WINAPI device_get_pixel_shader(IDirect3DDevice9 *iface,
  * sub-range is sent -- a 32-register bone palette where one bone moved
  * becomes one float4 on the wire, not 32.
  */
+/* Float4 setters expose the original API bytes through GetConstant. Compare
+ * object representations so signed zero and NaN payloads remain distinct. */
+static BOOL constant_vector_equal(const float *left, const float *right)
+{
+    const unsigned char *a = (const unsigned char *)left;
+    const unsigned char *b = (const unsigned char *)right;
+    for (UINT i = 0; i < 16u; ++i) if (a[i] != b[i]) return FALSE;
+    return TRUE;
+}
+
 static BOOL constant_range_valid(UINT start, UINT count, UINT capacity)
 {
     return count != 0 && start < capacity && count <= capacity - start;
@@ -7971,11 +7983,8 @@ static HRESULT set_constant_f(D9Device *device, BOOL is_pixel, UINT start,
     for (index = 0; index < count; ++index) {
         const float *source = data + index * 4;
         float *target = shadow[start + index];
-        if (target[0] == source[0] && target[1] == source[1]
-                && target[2] == source[2] && target[3] == source[3])
-            continue;
-        target[0] = source[0]; target[1] = source[1];
-        target[2] = source[2]; target[3] = source[3];
+        if (constant_vector_equal(target, source)) continue;
+        CopyMemory(target, source, 16u);
         if (index < first_dirty) first_dirty = index;
         last_dirty = index;
     }
@@ -16672,6 +16681,374 @@ HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,
             signed_base, min_vertex_index, vertex_count, start_index,
             primitive_count);
+}
+
+/* SDK-neutral Device8 backend operations; no frontend handles or SDK8 ABI. */
+static HRESULT WINAPI core_device_test_cooperative_level8(struct IDirect3DDevice9* iface)
+{
+    return device_test_cooperative_level(iface);
+}
+
+static UINT WINAPI core_device_get_available_texture_mem8(struct IDirect3DDevice9 * iface)
+{
+    (void)iface;
+    return 128u * 1024u * 1024u;
+}
+
+static HRESULT WINAPI core_device_resource_manager_discard_bytes8(struct IDirect3DDevice9 * iface, DWORD bytes)
+{
+    (void)bytes;
+    return device_evict_managed_resources(iface);
+}
+
+static HRESULT WINAPI core_device_get_display_mode8(struct IDirect3DDevice9* iface, void * mode)
+{
+    return device_get_display_mode(iface, 0, (D3DDISPLAYMODE*)mode);
+}
+
+static HRESULT WINAPI core_device_get_creation_parameters8(struct IDirect3DDevice9 * iface, void * parameters)
+{
+    return device_get_creation_parameters(iface, (D3DDEVICE_CREATION_PARAMETERS *)parameters);
+}
+
+static HRESULT WINAPI core_device_set_cursor_properties8(struct IDirect3DDevice9 * iface, UINT hotspot_x, UINT hotspot_y, struct IDirect3DSurface9 * bitmap)
+{
+    return device_set_cursor_properties(iface, hotspot_x, hotspot_y, bitmap);
+}
+
+static void WINAPI core_device_set_cursor_position8(struct IDirect3DDevice9 * iface, int x, int y, DWORD flags)
+{
+    device_set_cursor_position(iface, x, y, flags);
+}
+
+static BOOL WINAPI core_device_show_cursor8(struct IDirect3DDevice9 * iface, BOOL show)
+{
+    return device_show_cursor(iface, (WINBOOL)show);
+}
+
+static HRESULT WINAPI core_device_present8(struct IDirect3DDevice9* iface, const RECT* src_rect, const RECT* dst_rect, HWND override_window, const RGNDATA* dirty_region)
+{
+    return device_present(iface, src_rect, dst_rect, override_window, dirty_region);
+}
+
+static HRESULT WINAPI core_device_get_back_buffer8(struct IDirect3DDevice9 * iface, UINT index, UINT type, struct IDirect3DSurface9 ** out)
+{
+    return device_get_back_buffer(iface, 0, index, (D3DBACKBUFFER_TYPE)type, out);
+}
+
+static HRESULT WINAPI core_device_get_raster_status8(struct IDirect3DDevice9 * iface, void * status)
+{
+    return device_get_raster_status(iface, 0, (D3DRASTER_STATUS *)status);
+}
+
+static void WINAPI core_device_set_gamma_ramp8(struct IDirect3DDevice9 * iface, DWORD flags, const void * ramp)
+{
+    device_set_gamma_ramp(iface, 0, flags, (const D3DGAMMARAMP *)ramp);
+}
+
+static void WINAPI core_device_get_gamma_ramp8(struct IDirect3DDevice9 * iface, void * ramp)
+{
+    device_get_gamma_ramp(iface, 0, (D3DGAMMARAMP *)ramp);
+}
+
+static HRESULT WINAPI core_device_get_render_target8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 ** surface_out)
+{
+    return device_get_render_target(iface, 0, surface_out);
+}
+
+static HRESULT WINAPI core_device_get_depth_stencil_surface8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 ** surface_out)
+{
+    return device_get_depth_stencil_surface(iface, surface_out);
+}
+
+static HRESULT WINAPI core_device_set_render_target8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 * surface_iface)
+{
+    return device_set_render_target(iface, 0, surface_iface);
+}
+
+static HRESULT WINAPI core_device_set_depth_stencil_surface8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 * surface_iface)
+{
+    return device_set_depth_stencil_surface(iface, surface_iface);
+}
+
+static HRESULT WINAPI core_device_begin_scene8(struct IDirect3DDevice9 * iface)
+{
+    return device_begin_scene(iface);
+}
+
+static HRESULT WINAPI core_device_end_scene8(struct IDirect3DDevice9 * iface)
+{
+    return device_end_scene(iface);
+}
+
+static HRESULT WINAPI core_device_clear8(struct IDirect3DDevice9 * iface, DWORD rect_count, const void * rects, DWORD flags, DWORD color, float z, DWORD stencil)
+{
+    return device_clear(iface, rect_count, (const D3DRECT *)rects, flags, (D3DCOLOR)color, z, stencil);
+}
+
+static HRESULT WINAPI core_device_set_transform8(struct IDirect3DDevice9 * iface, UINT state, const void * matrix)
+{
+    return device_set_transform(iface, (D3DTRANSFORMSTATETYPE)state, (const D3DMATRIX *)matrix);
+}
+
+static HRESULT WINAPI core_device_get_transform8(struct IDirect3DDevice9 * iface, UINT state, void * matrix)
+{
+    return device_get_transform(iface, (D3DTRANSFORMSTATETYPE)state, (D3DMATRIX *)matrix);
+}
+
+static HRESULT WINAPI core_device_multiply_transform8(struct IDirect3DDevice9 * iface, UINT state, const void * matrix)
+{
+    return device_multiply_transform(iface, (D3DTRANSFORMSTATETYPE)state, (const D3DMATRIX *)matrix);
+}
+
+static HRESULT WINAPI core_device_set_viewport8(struct IDirect3DDevice9 * iface, const void * viewport)
+{
+    return device_set_viewport(iface, (const D3DVIEWPORT9 *)viewport);
+}
+
+static HRESULT WINAPI core_device_get_viewport8(struct IDirect3DDevice9 * iface, void * viewport)
+{
+    return device_get_viewport(iface, (D3DVIEWPORT9 *)viewport);
+}
+
+static HRESULT WINAPI core_device_set_material8(struct IDirect3DDevice9 * iface, const void * material)
+{
+    return device_set_material(iface, (const D3DMATERIAL9 *)material);
+}
+
+static HRESULT WINAPI core_device_get_material8(struct IDirect3DDevice9 * iface, void * material)
+{
+    return device_get_material(iface, (D3DMATERIAL9 *)material);
+}
+
+static HRESULT WINAPI core_device_set_light8(struct IDirect3DDevice9 * iface, DWORD index, const void * light)
+{
+    return device_set_light(iface, index, (const D3DLIGHT9 *)light);
+}
+
+static HRESULT WINAPI core_device_get_light8(struct IDirect3DDevice9 * iface, DWORD index, void * light)
+{
+    return device_get_light(iface, index, (D3DLIGHT9 *)light);
+}
+
+static HRESULT WINAPI core_device_light_enable8(struct IDirect3DDevice9 * iface, DWORD index, BOOL enable)
+{
+    return device_light_enable(iface, index, (WINBOOL)enable);
+}
+
+static HRESULT WINAPI core_device_get_light_enable8(struct IDirect3DDevice9 * iface, DWORD index, BOOL * enable)
+{
+    return device_get_light_enable(iface, index, (WINBOOL *)enable);
+}
+
+static HRESULT WINAPI core_device_set_clip_plane8(struct IDirect3DDevice9 * iface, DWORD index, const float * plane)
+{
+    return device_set_clip_plane(iface, index, plane);
+}
+
+static HRESULT WINAPI core_device_get_clip_plane8(struct IDirect3DDevice9 * iface, DWORD index, float * plane)
+{
+    return device_get_clip_plane(iface, index, plane);
+}
+
+static HRESULT WINAPI core_device_set_clip_status8(struct IDirect3DDevice9 * iface, const void * status)
+{
+    return device_set_clip_status(iface, (const D3DCLIPSTATUS9 *)status);
+}
+
+static HRESULT WINAPI core_device_get_clip_status8(struct IDirect3DDevice9 * iface, void * status)
+{
+    return device_get_clip_status(iface, (D3DCLIPSTATUS9 *)status);
+}
+
+static HRESULT WINAPI core_device_get_texture8(struct IDirect3DDevice9 * iface, DWORD stage, struct IDirect3DBaseTexture9 ** texture_out)
+{
+    if (stage >= 8u) return D3DERR_INVALIDCALL;
+    return device_get_texture(iface, stage, texture_out);
+}
+
+static HRESULT WINAPI core_device_set_texture8(struct IDirect3DDevice9 * iface, DWORD stage, struct IDirect3DBaseTexture9 * texture_iface)
+{
+    if (stage >= 8u) return D3DERR_INVALIDCALL;
+    return device_set_texture(iface, stage, texture_iface);
+}
+
+static HRESULT WINAPI core_device_validate_device8(struct IDirect3DDevice9 * iface, DWORD * passes)
+{
+    return device_validate_device(iface, passes);
+}
+
+static HRESULT WINAPI core_device_set_palette_entries8(struct IDirect3DDevice9 * iface, UINT index, const void * entries)
+{
+    return device_set_palette_entries(iface, index, (const PALETTEENTRY *)entries);
+}
+
+static HRESULT WINAPI core_device_get_palette_entries8(struct IDirect3DDevice9 * iface, UINT index, void * entries)
+{
+    return device_get_palette_entries(iface, index, (PALETTEENTRY *)entries);
+}
+
+static HRESULT WINAPI core_device_set_current_texture_palette8(struct IDirect3DDevice9 * iface, UINT index)
+{
+    return device_set_current_texture_palette(iface, index);
+}
+
+static HRESULT WINAPI core_device_get_current_texture_palette8(struct IDirect3DDevice9 * iface, UINT * index)
+{
+    return device_get_current_texture_palette(iface, index);
+}
+
+static HRESULT WINAPI core_device_draw_primitive8(struct IDirect3DDevice9 * iface, UINT primitive_type, UINT start_vertex, UINT primitive_count)
+{
+    return device_draw_primitive(iface, (D3DPRIMITIVETYPE)primitive_type, start_vertex, primitive_count);
+}
+
+static HRESULT WINAPI core_device_draw_primitive_up8(struct IDirect3DDevice9 * iface, UINT primitive_type, UINT primitive_count, const void * vertex_data, UINT stride)
+{
+    return device_draw_primitive_up(iface, (D3DPRIMITIVETYPE)primitive_type, primitive_count, vertex_data, stride);
+}
+
+static HRESULT WINAPI core_device_draw_indexed_primitive_up8(struct IDirect3DDevice9 * iface, UINT primitive_type, UINT min_vertex_index, UINT vertex_count, UINT primitive_count, const void * index_data, UINT index_format, const void * vertex_data, UINT stride)
+{
+    return device_draw_indexed_primitive_up(iface, (D3DPRIMITIVETYPE)primitive_type, min_vertex_index, vertex_count, primitive_count, index_data, (D3DFORMAT)index_format, vertex_data, stride);
+}
+
+static HRESULT WINAPI core_device_set_vertex_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, const float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 96u) return D3DERR_INVALIDCALL;
+    return device_set_vertex_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_get_vertex_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 96u) return D3DERR_INVALIDCALL;
+    return device_get_vertex_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_set_stream_source8(struct IDirect3DDevice9 * iface, UINT stream, struct IDirect3DVertexBuffer9 * buffer_iface, UINT stride)
+{
+    return device_set_stream_source(iface, stream, buffer_iface, 0, stride);
+}
+
+static HRESULT WINAPI core_device_get_stream_source8(struct IDirect3DDevice9 * iface, UINT stream, struct IDirect3DVertexBuffer9 ** buffer_out, UINT * stride_out)
+{
+    UINT ignored_offset;
+    return device_get_stream_source(iface, stream, buffer_out, &ignored_offset, stride_out);
+}
+
+static HRESULT WINAPI core_device_set_indices8(struct IDirect3DDevice9 * iface, struct IDirect3DIndexBuffer9 * buffer_iface)
+{
+    return device_set_indices(iface, buffer_iface);
+}
+
+static HRESULT WINAPI core_device_get_indices8(struct IDirect3DDevice9 * iface, struct IDirect3DIndexBuffer9 ** buffer_out)
+{
+    return device_get_indices(iface, buffer_out);
+}
+
+static HRESULT WINAPI core_device_set_pixel_shader8(struct IDirect3DDevice9 * iface, struct IDirect3DPixelShader9 * shader_iface)
+{
+    return device_set_pixel_shader(iface, shader_iface);
+}
+
+static HRESULT WINAPI core_device_set_pixel_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, const float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 8u) return D3DERR_INVALIDCALL;
+    return device_set_pixel_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_get_pixel_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 8u) return D3DERR_INVALIDCALL;
+    return device_get_pixel_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_draw_rect_patch8(struct IDirect3DDevice9 * iface, UINT handle, const float * segments, const void * info)
+{
+    return device_draw_rect_patch(iface, handle, segments, (const D3DRECTPATCH_INFO *)info);
+}
+
+static HRESULT WINAPI core_device_draw_tri_patch8(struct IDirect3DDevice9 * iface, UINT handle, const float * segments, const void * info)
+{
+    return device_draw_tri_patch(iface, handle, segments, (const D3DTRIPATCH_INFO *)info);
+}
+
+static HRESULT WINAPI core_device_delete_patch8(struct IDirect3DDevice9 * iface, UINT handle)
+{
+    return device_delete_patch(iface, handle);
+}
+
+static const D9WGDeviceMethods8 g_core_device_methods8 = {
+    .test_cooperative_level = core_device_test_cooperative_level8,
+    .get_available_texture_mem = core_device_get_available_texture_mem8,
+    .resource_manager_discard_bytes = core_device_resource_manager_discard_bytes8,
+    .get_display_mode = core_device_get_display_mode8,
+    .get_creation_parameters = core_device_get_creation_parameters8,
+    .set_cursor_properties = core_device_set_cursor_properties8,
+    .set_cursor_position = core_device_set_cursor_position8,
+    .show_cursor = core_device_show_cursor8,
+    .present = core_device_present8,
+    .get_back_buffer = core_device_get_back_buffer8,
+    .get_raster_status = core_device_get_raster_status8,
+    .set_gamma_ramp = core_device_set_gamma_ramp8,
+    .get_gamma_ramp = core_device_get_gamma_ramp8,
+    .get_render_target = core_device_get_render_target8,
+    .get_depth_stencil_surface = core_device_get_depth_stencil_surface8,
+    .set_render_target = core_device_set_render_target8,
+    .set_depth_stencil_surface = core_device_set_depth_stencil_surface8,
+    .begin_scene = core_device_begin_scene8,
+    .end_scene = core_device_end_scene8,
+    .clear = core_device_clear8,
+    .set_transform = core_device_set_transform8,
+    .get_transform = core_device_get_transform8,
+    .multiply_transform = core_device_multiply_transform8,
+    .set_viewport = core_device_set_viewport8,
+    .get_viewport = core_device_get_viewport8,
+    .set_material = core_device_set_material8,
+    .get_material = core_device_get_material8,
+    .set_light = core_device_set_light8,
+    .get_light = core_device_get_light8,
+    .light_enable = core_device_light_enable8,
+    .get_light_enable = core_device_get_light_enable8,
+    .set_clip_plane = core_device_set_clip_plane8,
+    .get_clip_plane = core_device_get_clip_plane8,
+    .set_clip_status = core_device_set_clip_status8,
+    .get_clip_status = core_device_get_clip_status8,
+    .get_texture = core_device_get_texture8,
+    .set_texture = core_device_set_texture8,
+    .validate_device = core_device_validate_device8,
+    .set_palette_entries = core_device_set_palette_entries8,
+    .get_palette_entries = core_device_get_palette_entries8,
+    .set_current_texture_palette = core_device_set_current_texture_palette8,
+    .get_current_texture_palette = core_device_get_current_texture_palette8,
+    .draw_primitive = core_device_draw_primitive8,
+    .draw_primitive_up = core_device_draw_primitive_up8,
+    .draw_indexed_primitive_up = core_device_draw_indexed_primitive_up8,
+    .set_vertex_shader_constant = core_device_set_vertex_shader_constant8,
+    .get_vertex_shader_constant = core_device_get_vertex_shader_constant8,
+    .set_stream_source = core_device_set_stream_source8,
+    .get_stream_source = core_device_get_stream_source8,
+    .set_indices = core_device_set_indices8,
+    .get_indices = core_device_get_indices8,
+    .set_pixel_shader = core_device_set_pixel_shader8,
+    .set_pixel_shader_constant = core_device_set_pixel_shader_constant8,
+    .get_pixel_shader_constant = core_device_get_pixel_shader_constant8,
+    .draw_rect_patch = core_device_draw_rect_patch8,
+    .draw_tri_patch = core_device_draw_tri_patch8,
+    .delete_patch = core_device_delete_patch8
+};
+
+const D9WGDeviceMethods8 *WINAPI d9wg_d3d9_core_device_methods8(
+        IDirect3DDevice9 *iface)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return NULL;
+    return &g_core_device_methods8;
 }
 
 /* A frontend8 last-direct-reference boundary may precede core public zero

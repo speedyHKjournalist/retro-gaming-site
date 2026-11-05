@@ -338,4 +338,72 @@ HRESULT WINAPI d9wg_d3d9_core_pixel_shader8(struct IDirect3DDevice9 *device,
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,
         BOOL is_pixel, UINT minor, UINT *body_count);
+
+/* Private backend dispatch for the Device8 facade. SDK8 struct bytes stay
+ * opaque here; only the SDK9 implementation casts to concrete SDK layouts.
+ * Extra9 swap/target indices and stream offsets are fixed to8 defaults.
+ * Raw8 handles/state scopes and paired-target policy stay with their adapters.
+ * Query the table once for a genuine8-profile device,then retain that device
+ * across calls. No public COM/device references are owned by this table. */
+typedef struct D9WGDeviceMethods8 {
+    HRESULT (WINAPI *test_cooperative_level)(struct IDirect3DDevice9*);
+    UINT (WINAPI *get_available_texture_mem)(struct IDirect3DDevice9 *);
+    HRESULT (WINAPI *resource_manager_discard_bytes)(struct IDirect3DDevice9 *, DWORD);
+    HRESULT (WINAPI *get_display_mode)(struct IDirect3DDevice9*, void *);
+    HRESULT (WINAPI *get_creation_parameters)(struct IDirect3DDevice9 *, void *);
+    HRESULT (WINAPI *set_cursor_properties)(struct IDirect3DDevice9 *, UINT, UINT, struct IDirect3DSurface9 *);
+    void (WINAPI *set_cursor_position)(struct IDirect3DDevice9 *, int, int, DWORD);
+    BOOL (WINAPI *show_cursor)(struct IDirect3DDevice9 *, BOOL);
+    HRESULT (WINAPI *present)(struct IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
+    HRESULT (WINAPI *get_back_buffer)(struct IDirect3DDevice9 *, UINT, UINT, struct IDirect3DSurface9 **);
+    HRESULT (WINAPI *get_raster_status)(struct IDirect3DDevice9 *, void *);
+    void (WINAPI *set_gamma_ramp)(struct IDirect3DDevice9 *, DWORD, const void *);
+    void (WINAPI *get_gamma_ramp)(struct IDirect3DDevice9 *, void *);
+    HRESULT (WINAPI *get_render_target)(struct IDirect3DDevice9 *, struct IDirect3DSurface9 **);
+    HRESULT (WINAPI *get_depth_stencil_surface)(struct IDirect3DDevice9 *, struct IDirect3DSurface9 **);
+    HRESULT (WINAPI *set_render_target)(struct IDirect3DDevice9 *, struct IDirect3DSurface9 *);
+    HRESULT (WINAPI *set_depth_stencil_surface)(struct IDirect3DDevice9 *, struct IDirect3DSurface9 *);
+    HRESULT (WINAPI *begin_scene)(struct IDirect3DDevice9 *);
+    HRESULT (WINAPI *end_scene)(struct IDirect3DDevice9 *);
+    HRESULT (WINAPI *clear)(struct IDirect3DDevice9 *, DWORD, const void *, DWORD, DWORD, float, DWORD);
+    HRESULT (WINAPI *set_transform)(struct IDirect3DDevice9 *, UINT, const void *);
+    HRESULT (WINAPI *get_transform)(struct IDirect3DDevice9 *, UINT, void *);
+    HRESULT (WINAPI *multiply_transform)(struct IDirect3DDevice9 *, UINT, const void *);
+    HRESULT (WINAPI *set_viewport)(struct IDirect3DDevice9 *, const void *);
+    HRESULT (WINAPI *get_viewport)(struct IDirect3DDevice9 *, void *);
+    HRESULT (WINAPI *set_material)(struct IDirect3DDevice9 *, const void *);
+    HRESULT (WINAPI *get_material)(struct IDirect3DDevice9 *, void *);
+    HRESULT (WINAPI *set_light)(struct IDirect3DDevice9 *, DWORD, const void *);
+    HRESULT (WINAPI *get_light)(struct IDirect3DDevice9 *, DWORD, void *);
+    HRESULT (WINAPI *light_enable)(struct IDirect3DDevice9 *, DWORD, BOOL);
+    HRESULT (WINAPI *get_light_enable)(struct IDirect3DDevice9 *, DWORD, BOOL *);
+    HRESULT (WINAPI *set_clip_plane)(struct IDirect3DDevice9 *, DWORD, const float *);
+    HRESULT (WINAPI *get_clip_plane)(struct IDirect3DDevice9 *, DWORD, float *);
+    HRESULT (WINAPI *set_clip_status)(struct IDirect3DDevice9 *, const void *);
+    HRESULT (WINAPI *get_clip_status)(struct IDirect3DDevice9 *, void *);
+    HRESULT (WINAPI *get_texture)(struct IDirect3DDevice9 *, DWORD, struct IDirect3DBaseTexture9 **);
+    HRESULT (WINAPI *set_texture)(struct IDirect3DDevice9 *, DWORD, struct IDirect3DBaseTexture9 *);
+    HRESULT (WINAPI *validate_device)(struct IDirect3DDevice9 *, DWORD *);
+    HRESULT (WINAPI *set_palette_entries)(struct IDirect3DDevice9 *, UINT, const void *);
+    HRESULT (WINAPI *get_palette_entries)(struct IDirect3DDevice9 *, UINT, void *);
+    HRESULT (WINAPI *set_current_texture_palette)(struct IDirect3DDevice9 *, UINT);
+    HRESULT (WINAPI *get_current_texture_palette)(struct IDirect3DDevice9 *, UINT *);
+    HRESULT (WINAPI *draw_primitive)(struct IDirect3DDevice9 *, UINT, UINT, UINT);
+    HRESULT (WINAPI *draw_primitive_up)(struct IDirect3DDevice9 *, UINT, UINT, const void *, UINT);
+    HRESULT (WINAPI *draw_indexed_primitive_up)(struct IDirect3DDevice9 *, UINT, UINT, UINT, UINT, const void *, UINT, const void *, UINT);
+    HRESULT (WINAPI *set_vertex_shader_constant)(struct IDirect3DDevice9 *, UINT, const float *, UINT);
+    HRESULT (WINAPI *get_vertex_shader_constant)(struct IDirect3DDevice9 *, UINT, float *, UINT);
+    HRESULT (WINAPI *set_stream_source)(struct IDirect3DDevice9 *, UINT, struct IDirect3DVertexBuffer9 *, UINT);
+    HRESULT (WINAPI *get_stream_source)(struct IDirect3DDevice9 *, UINT, struct IDirect3DVertexBuffer9 **, UINT *);
+    HRESULT (WINAPI *set_indices)(struct IDirect3DDevice9 *, struct IDirect3DIndexBuffer9 *);
+    HRESULT (WINAPI *get_indices)(struct IDirect3DDevice9 *, struct IDirect3DIndexBuffer9 **);
+    HRESULT (WINAPI *set_pixel_shader)(struct IDirect3DDevice9 *, struct IDirect3DPixelShader9 *);
+    HRESULT (WINAPI *set_pixel_shader_constant)(struct IDirect3DDevice9 *, UINT, const float *, UINT);
+    HRESULT (WINAPI *get_pixel_shader_constant)(struct IDirect3DDevice9 *, UINT, float *, UINT);
+    HRESULT (WINAPI *draw_rect_patch)(struct IDirect3DDevice9 *, UINT, const float *, const void *);
+    HRESULT (WINAPI *draw_tri_patch)(struct IDirect3DDevice9 *, UINT, const float *, const void *);
+    HRESULT (WINAPI *delete_patch)(struct IDirect3DDevice9 *, UINT);
+} D9WGDeviceMethods8;
+const D9WGDeviceMethods8 *WINAPI d9wg_d3d9_core_device_methods8(
+        struct IDirect3DDevice9 *device);
 #endif

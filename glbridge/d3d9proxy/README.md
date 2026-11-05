@@ -1695,3 +1695,36 @@ separately. 391 guest / 94 core regressions, 32 EXEs, four strict DLLs, private
 stdcall16/4 and isolated SDK8 ABI, two site tests and scoped lint pass. Exact
 XP-accepted retail DLLs and same-source diagnostics published.
 Evidence: `../deployments/d3d-webgpu-review-4K48.json`.
+
+
+### Review 4K49: typed Device8 backend dispatch and constant bytes
+
+The private SDK-neutral Device8 backend table has 57 strictly typed methods.
+It delegates actual core9 operations, fixes extra swap/target indices and stream
+offsets to zero, and accepts genuine profile8 devices only. Legacy8 memory,
+constant bounds, empty calls and readable PURE-hint getters remain distinct
+from ordinary9 policy. The common float4 setter now compares and copies object
+bytes, preserving signed zero, signaling/quiet NaN payloads, infinities and
+subnormals while suppressing identical updates. This is the typed backend
+boundary; the full 97-method public Device8 facade and default factory remain
+pending.
+
+Native: 56,505 checks / 5,686 cases, 25 strictly compiled assertion mutants and
+ASAN, plus retained scalar recording checks. Actual SDK8 clients exercise all
+57 slots in four normal/PURE contexts; two ordinary9 devices guard existing9
+behavior. The accepted third XP run took 131 seconds / 106 batches, with 21
+devices and Resets, 152 handles, 27 declarations and 43 shaders. Earlier strict
+indentation failure and two probe-expectation failures (unbound depth status,
+zero stride) were corrected and retained as failed attempts. Reset preserves
+and replays constant bytes and gamma. Old source/header reconstruct exactly:
+687 of 689 existing functions unchanged, 59 new thin/selector/byte-helper
+functions; seventeen whole old files and all storage layouts unchanged.
+
+SwiftShader and Metal match 72 full images / 4,032 pixels, with four primary and
+four additional Presents, zero drops/errors and empty maps before fallback.
+1,401 commands; 56 draws, 48 texture uploads / 7,424 bytes, and 2,026 prior CPU
+shadow words remain covered. Canvas outputs are not separately read back.
+23,849 selected semantic corruptions plus full retained fixtures, 393 guest /
+95 core suites, 32 EXEs/four DLLs, 21-member static core/isolated SDK8 layout,
+two site tests and scoped lint pass. Exact accepted retail and same-source
+diagnostic binaries published. See review evidence stage4k49-validation.json.
