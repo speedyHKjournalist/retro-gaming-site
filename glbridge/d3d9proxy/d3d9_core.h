@@ -314,6 +314,14 @@ HRESULT WINAPI d9wg_d3d9_core_apply_state_block_handle8(struct IDirect3DDevice9 
 HRESULT WINAPI d9wg_d3d9_core_delete_state_block_handle8(struct IDirect3DDevice9 *device,
         DWORD token);
 
+/* Record API8 common scopes into an active native recorder. An optional
+ * source token supplies incremental masks; raw8 fields stay frontend-owned. */
+HRESULT WINAPI d9wg_d3d9_core_record_common_state8(struct IDirect3DDevice9 *device,
+        UINT type, DWORD source_token);
+/* Reset epoch, native recording flag, and effective auto-depth policy. */
+HRESULT WINAPI d9wg_d3d9_core_device_state8(struct IDirect3DDevice9 *device,
+        UINT *epoch, BOOL *recording, BOOL *auto_depth);
+
 /* Raw8 BaseVertexIndex stays with the frontend index binding/Get shadow.
  * This backend entry preserves its bits in core9 per-draw signed storage. */
 HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(struct IDirect3DDevice9 *device,

@@ -77,6 +77,10 @@ static const D9WGSurfaceMethods8*d9wg_d3d9_core_surface_methods8(struct IDirect3
 static HRESULT d9wg_d3d9_core_get_view8(IUnknown*,void**);
 static HRESULT d9wg_d3d9_core_attach_view8(IUnknown*,void*,D9WGCoreViewRetire8);
 ${common}
+/* These harness parents intentionally implement only IUnknown. Actual Device8
+ * parent classification and child lifetime are covered by the device suite. */
+ULONG WINAPI d8wg_core_device_child_add8(IDirect3DDevice8 *p){return IDirect3DDevice8_AddRef(p);}
+ULONG WINAPI d8wg_core_device_child_release8(IDirect3DDevice8 *p){return IDirect3DDevice8_Release(p);}
 ${source}
 ${volumeSource}
 ${textureSource}

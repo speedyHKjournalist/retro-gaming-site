@@ -1236,3 +1236,22 @@ unchanged, so their stage49 baseline is inherited rather than claimed as96
 fresh runs. 32 EXEs/four DLLs/static21/isolatedSDK8, site2 and scoped lint pass.
 Exact accepted retail and same-source diagnostic binaries published. Full97
 Device8/child refs/rawshader+block metadata/defaultfactory remain next.
+
+### 2026-11-05: complete Device8 frontend (review 4L1)
+
+The private SDK8 frontend now supplies all 97 Device8 methods over the common
+core and existing cached resource adapters. It owns only API8 raw shader handles,
+state-block shadows and frontend reference bookkeeping. Common snapshots reuse
+the core capture engine with API8 scopes; Reset observes actual epoch and recorder
+changes even on failure. Device caps reuse the existing Root8 policy.
+
+Actual XP SDK120/220 normal/PURE probes call all 97 slots: 2,815 checks, four
+devices/four resets, deleted-shader snapshots and child GetDevice revival. Both
+SwiftShader and Metal pass 28 full images/1,408 pixels. All 398 guest suites,
+27 new C mutations, retained 34 surface mutations, native lifetime/scope ASAN,
+32 standard EXE builds and site checks pass. See deployment evidence 4L1.
+
+The public default factory still uses the previous backend. Switching that entry
+and retiring the duplicate implementation form the next functional batch. This
+is not a claim of complete native compatibility, shader differential validation
+or game/FPS acceptance.

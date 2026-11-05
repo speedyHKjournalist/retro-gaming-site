@@ -16692,6 +16692,79 @@ HRESULT WINAPI d9wg_d3d9_core_delete_state_block_handle8(IDirect3DDevice9 *iface
     return D3D_OK;
 }
 
+/* Record only the common part selected by an API8 scope. Render/TSS and raw
+ * shader handles are supplied by the SDK8 recorder, using its versioned lists.
+ * For incremental Capture, copy the existing masks into a detached recording;
+ * all values and storage references are then captured by the shared engine. */
+HRESULT WINAPI d9wg_d3d9_core_record_common_state8(IDirect3DDevice9 *iface,
+        UINT type, DWORD source_token)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl) return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9StateBlock *dst = device->recording_result;
+    if (device_compatibility_api(device) != 8 || !dst
+            || type > D3DSBT_VERTEXSTATE) return D3DERR_INVALIDCALL;
+    D9StateBlock *src = source_token ? state_block_handle8(device, source_token) : NULL;
+    if (source_token && !src) return D3DERR_INVALIDCALL;
+    if (src) {
+#define COPY_MASK(member) CopyMemory(&dst->member, &src->member, sizeof(dst->member))
+        COPY_MASK(has_render_state); COPY_MASK(has_texture_stage_state);
+        COPY_MASK(has_sampler_state); COPY_MASK(has_transform); COPY_MASK(has_texture);
+        COPY_MASK(has_palette); COPY_MASK(has_material); COPY_MASK(has_clip_plane);
+        COPY_MASK(has_light); COPY_MASK(has_light_enable); COPY_MASK(has_viewport);
+        COPY_MASK(has_vertex_shader); COPY_MASK(has_pixel_shader);
+        COPY_MASK(has_vs_const_f); COPY_MASK(has_ps_const_f);
+        COPY_MASK(has_vertex_format); COPY_MASK(has_stream); COPY_MASK(has_indices);
+#undef COPY_MASK
+        for (D9WGLightState *light = src->extra_lights; light; light = light->next) {
+            D9WGLightState *entry = d9wg_light_get(&dst->extra_lights, light->index, TRUE);
+            if (!entry) return E_OUTOFMEMORY;
+            entry->light_mask = light->light_mask;
+            entry->enable_mask = light->enable_mask;
+        }
+    }
+    if (type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE) {
+        for (UINT i = 0; i < 8; ++i) dst->has_ps_const_f[i] = TRUE;
+        dst->has_pixel_shader = TRUE;
+    }
+    if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {
+        for (UINT i = 0; i < 96; ++i) dst->has_vs_const_f[i] = TRUE;
+        dst->has_vertex_shader = dst->has_vertex_format = TRUE;
+        for (UINT i = 0; i < D9_MAX_LIGHTS; ++i)
+            dst->has_light[i] = dst->has_light_enable[i] = device_light_is_set(device, i);
+        for (D9WGLightState *light = device->extra_lights; light; light = light->next) {
+            if (!light->set) continue;
+            D9WGLightState *entry = d9wg_light_get(&dst->extra_lights, light->index, TRUE);
+            if (!entry) return E_OUTOFMEMORY;
+            entry->light_mask = entry->enable_mask = TRUE;
+        }
+    }
+    if (type == D3DSBT_ALL) {
+        for (UINT i = 0; i < 8; ++i) dst->has_texture[i] = TRUE;
+        for (UINT i = 0; i < 16; ++i) dst->has_stream[i] = TRUE;
+        for (UINT i = 0; i < D9_STATE_BLOCK_TRANSFORMS; ++i) dst->has_transform[i] = TRUE;
+        for (UINT i = 0; i < 6; ++i) dst->has_clip_plane[i] = TRUE;
+        dst->has_palette = dst->has_material = dst->has_viewport = dst->has_indices = TRUE;
+    }
+    state_block_capture(dst);
+    return D3D_OK;
+}
+
+/* Observe actual Reset commit/cancel boundaries even when a later transport
+ * operation fails. No public structure or wire command is added. */
+HRESULT WINAPI d9wg_d3d9_core_device_state8(IDirect3DDevice9 *iface,
+        UINT *epoch, BOOL *recording, BOOL *auto_depth)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl || !epoch || !recording || !auto_depth)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8) return D3DERR_INVALIDCALL;
+    *epoch = device->reset_epoch;
+    *recording = device->recording_result != NULL;
+    *auto_depth = device->present.EnableAutoDepthStencil;
+    return D3D_OK;
+}
+
 /* D3D8 keeps the unsigned BaseVertexIndex with its index binding. The
  * frontend passes that raw DWORD on every indexed draw; core9 consumes the
  * same bits as a signed per-draw base, without changing SetIndices state. */

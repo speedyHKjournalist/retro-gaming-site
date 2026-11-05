@@ -36,7 +36,7 @@ const plan=[
   [
     "own device pin omitted",
     "d8wg_core_view_add8",
-    "        IDirect3DDevice8_AddRef(device);",
+    "        d8wg_core_device_child_add8(device);",
     "        (void)device;",
     "common"
   ],
@@ -57,7 +57,7 @@ const plan=[
   [
     "release device lost",
     "d8wg_core_view_release8",
-    "        IDirect3DDevice8_Release(device);",
+    "        d8wg_core_device_child_release8(device);",
     "        (void)device;",
     "common"
   ],

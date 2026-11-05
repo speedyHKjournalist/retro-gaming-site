@@ -59,7 +59,7 @@ build_dll() {
         -Wall -Wextra -Werror \
         -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at \
         -o "$output" \
-        "$script_dir/d3d8_proxy.c" "$script_dir/d3d8_core_surface.c" "$script_dir/d3d8_core_texture.c" "$script_dir/d3d8_core_cube_texture.c" "$script_dir/d3d8_core_volume.c" "$script_dir/d3d8_core_volume_texture.c" "$script_dir/d3d8_core_buffer.c" "$script_dir/d3d8_core_swap_chain.c" "$script_dir/d3d8.def" \
+        "$script_dir/d3d8_proxy.c" "$script_dir/d3d8_core_device.c" "$script_dir/d3d8_core_surface.c" "$script_dir/d3d8_core_texture.c" "$script_dir/d3d8_core_cube_texture.c" "$script_dir/d3d8_core_volume.c" "$script_dir/d3d8_core_volume_texture.c" "$script_dir/d3d8_core_buffer.c" "$script_dir/d3d8_core_swap_chain.c" "$script_dir/d3d8.def" \
         "$core_archive" -luser32 -lgdi32 -lkernel32
     check_imports "$output"
 }

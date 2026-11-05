@@ -1,6 +1,8 @@
 #ifndef D8WG_CORE_VIEW_H
 #define D8WG_CORE_VIEW_H
 #include <d3d8.h>
+ULONG WINAPI d8wg_core_device_child_add8(IDirect3DDevice8 *device);
+ULONG WINAPI d8wg_core_device_child_release8(IDirect3DDevice8 *device);
 static inline BOOL d8wg_core_guid8(REFIID a, REFIID b)
 {
     UINT i;
@@ -17,7 +19,7 @@ static inline ULONG d8wg_core_view_add8(LONG *count, IUnknown *backend,
     ULONG refs = (ULONG)InterlockedIncrement(count);
     if (refs == 1) {
         IUnknown_AddRef(backend);
-        IDirect3DDevice8_AddRef(device);
+        d8wg_core_device_child_add8(device);
     }
     return refs;
 }
@@ -28,7 +30,7 @@ static inline ULONG d8wg_core_view_release8(LONG *count, IUnknown *backend,
     ULONG refs = (ULONG)InterlockedDecrement(count);
     if (!refs) {
         IUnknown_Release(backend);
-        IDirect3DDevice8_Release(device);
+        d8wg_core_device_child_release8(device);
     }
     return refs;
 }
