@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "895589dae30ca08739ae";
+globalThis.V86GL_BUILD_REVISION = "f85e1b4608acc142f6c0";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -1760,12 +1760,13 @@ globalThis.V86GL_BUILD_REVISION = "895589dae30ca08739ae";
                 if (this.usesPointSize)
                     out.push("var<private> o_pointsize: vec4<f32> = vec4<f32>(1.0);");
                 for (let slot = 0; slot < VARYING_COUNT; ++slot) {
-                    // D3D9's oFog factor defaults to one (no fog) when a
-                    // vertex shader does not write it. Initialising it to
-                    // zero makes a fixed-function pixel fog blend replace the
-                    // entire textured draw with the fog colour.
+                    // Legacy diffuse defaults to white. The legacy fog
+                    // epilogue below substitutes specular alpha if oFog was
+                    // not written; SM3 keeps its separate default varying.
                     const initialValue = slot === VARYING_FOG
-                        ? "vec4<f32>(1.0, 0.0, 0.0, 0.0)" : "vec4<f32>(0.0)";
+                        ? "vec4<f32>(1.0, 0.0, 0.0, 0.0)"
+                        : slot === VARYING_COLOR0 && this.major < 3
+                            ? "vec4<f32>(1.0)" : "vec4<f32>(0.0)";
                     out.push("var<private> o_varying" + slot +
                         ": vec4<f32> = " + initialValue + ";");
                 }
@@ -1873,8 +1874,17 @@ globalThis.V86GL_BUILD_REVISION = "895589dae30ca08739ae";
             out.push("        o_position.x + o_position.w / d9c.viewport.x,");
             out.push("        o_position.y - o_position.w / d9c.viewport.y,");
             out.push("        o_position.zw);");
-            for (let slot = 0; slot < VARYING_COUNT; ++slot)
-                out.push("    result.varying" + slot + " = o_varying" + slot + ";");
+            // Legacy colour outputs are saturated before interpolation. A VS3
+            // linked to a legacy pixel stage uses the same rasterizer rule.
+            const clampColors = this.major < 3 || this.options.legacyColorClamp;
+            for (let slot = 0; slot < VARYING_COUNT; ++slot) {
+                let value = "o_varying" + slot;
+                if (clampColors && (slot === VARYING_COLOR0 || slot === VARYING_COLOR1))
+                    value = "clamp(" + value + ", vec4<f32>(0.0), vec4<f32>(1.0))";
+                if (this.major < 3 && slot === VARYING_FOG && !this.writtenVaryings.has(slot))
+                    value = "vec4<f32>(clamp(o_varying1.a, 0.0, 1.0), 0.0, 0.0, 0.0)";
+                out.push("    result.varying" + slot + " = " + value + ";");
+            }
             for (let group = 0; group < Math.ceil(clipPlaneCount / 4); ++group)
                 out.push("    result.clip" + group + " = vec4<f32>(1.0);");
             for (let plane = 0; plane < clipPlaneCount; ++plane)
