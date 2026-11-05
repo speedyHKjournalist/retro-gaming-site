@@ -19,11 +19,11 @@ typedef uint32_t UINT;typedef int32_t LONG;typedef int BOOL;
 #define D9_MAX_RENDER_TARGETS 4
 typedef struct{void*lpVtbl;}Interface;typedef struct{BOOL locked;}Level;typedef struct Resource Resource;typedef struct Surface Surface;
 struct Resource{Interface iface;LONG refcount;UINT pool,level_count;BOOL locked;Level*levels;Resource*next_device_resource;};
-typedef struct Chain{LONG refcount;UINT handle;struct Chain*next_device_chain;}D9SwapChain;
+typedef struct Chain{LONG refcount;UINT handle;struct Chain*next_device_chain;void*cached_buffers[4];}D9SwapChain;
 struct Surface{D9SwapChain*swap_chain;LONG refcount;BOOL locked,texture_child,auto_depth_stencil;Resource*texture,*cube_texture;};
 typedef struct{Resource*buffer;}Stream;
 
-typedef struct{BOOL in_scene;void*recording_state_block,*recording_result;D9SwapChain*additional_swap_chains;UINT additional_swap_chain_count,implicit_surface_count;Resource*vertex_buffers,*index_buffers,*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;Stream streams[16];Resource*index_buffer,*textures[20],*cube_bindings[20],*volume_bindings[20];Resource*render_target_texture,*render_target_cube;Surface*depth_surface,*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;}Device;
+typedef struct{BOOL in_scene;void*recording_state_block,*recording_result;D9SwapChain implicit_swap_chain,*additional_swap_chains;UINT additional_swap_chain_count,implicit_surface_count;Resource*vertex_buffers,*index_buffers,*texture_resources,*cube_resources,*cube_textures,*volume_resources,*volume_textures;Stream streams[16];Resource*index_buffer,*textures[20],*cube_bindings[20],*volume_bindings[20];Resource*render_target_texture,*render_target_cube;Surface*depth_surface,*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;}Device;
 typedef Device D${api}Device;typedef Resource D${api}VertexBuffer,D${api}IndexBuffer,D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture;typedef Surface D${api}Surface;
 static LONG InterlockedCompareExchange(LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}
 ${['reset_buffer_owned_refs',...(api===9?['surface_uses_private_bindings','reset_bound_surface','reset_surface_owned_refs']:[]),'reset_texture_owned_refs','device_has_reset_blockers'].map(n=>extract(source,n)).join('\n')}

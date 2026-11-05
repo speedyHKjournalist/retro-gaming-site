@@ -18,6 +18,10 @@ try {
 #include "d3d9proxy/d3d9_protocol.h"
 typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef const int*REFIID;
 #define WINAPI
+#ifndef TRUE
+#define TRUE 1
+#define FALSE 0
+#endif
 #define D3D_OK 0
 #define S_OK 0
 #define E_POINTER (-1)
@@ -28,7 +32,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;
 #define TRACE_MARK_EXIT(...)
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DSwapChain9,IDirect3DDevice9;
 typedef struct Device Device;typedef struct Chain Chain;typedef struct Surface{Interface iface;Device*device;LONG refcount,binding_refs;Chain*swap_chain;}Surface;typedef Surface D9Surface;
-struct Chain{Interface iface;LONG refcount;Device*device;UINT handle;Chain*next_device_chain;Surface*back_buffer;};
+struct Chain{Interface iface;LONG refcount;Device*device;UINT handle;Chain*next_device_chain;Surface*back_buffer,*cached_buffers[4];};
 struct Device{Interface iface;LONG refcount,child_parent_refs;UINT handle;Chain implicit_swap_chain,*additional_swap_chains;};
 typedef Chain D9SwapChain;typedef Device D9Device;
 static const int unknown_id=0,IID_IDirect3DSwapChain9=1,bad_iid=99;
@@ -47,7 +51,7 @@ static ULONG device_release(Interface*p){Device*d=device_from_iface(p);assert(d-
 ${["device_child_add_ref", "device_child_release"].map(n => extract(source, n)).join("\n")}
 static void surface_destroy_storage(Surface*s){assert(!s->refcount&&!s->binding_refs);surface_destroys++;HeapFree(GetProcessHeap(),0,s);}
 static BOOL emit_command(UINT op,const void*p,UINT n){const D9WGDestroySwapChain*q=p;assert(op==D9WG_OP_DESTROY_SWAP_CHAIN&&n==sizeof(*q)&&q->device_handle==77&&q->swap_chain_handle>=100&&q->swap_chain_handle<=102);assert(!retired[q->swap_chain_handle-100]++);chain_destroys++;return 1;}
-${["swap_chain_destroy_storage", "swap_chain_add_ref", "swap_chain_release"].map(n => extract(source, n)).join("\n")}
+${["swap_chain_buffers_referenced", "swap_chain_destroy_cached_buffers", "swap_chain_destroy_storage", "swap_chain_add_ref", "swap_chain_release"].map(n => extract(source, n)).join("\n")}
 #define IDirect3DSwapChain9_AddRef swap_chain_add_ref
 ${["device_get_swap_chain", "swap_chain_query_interface", "swap_chain_get_device"].map(n => extract(source, n)).join("\n")}
 static Device*new_device(void){Device*d=allocate(sizeof(*d));d->refcount=1;d->handle=77;d->implicit_swap_chain.device=d;return d;}
@@ -82,6 +86,17 @@ CHECK(!device_release(&d->iface)&&!live&&device_destroys==1);
 /* Last remaining child release may destroy the device and embedded chain. */
 d=new_device();CHECK(!device_get_swap_chain(&d->iface,0,&a));CHECK(device_release(&d->iface)==1&&live==1);CHECK(!swap_chain_release(a)&&!live&&device_destroys==2);
 d=new_device();Chain*c=new_chain(d,0);retired[0]=0;CHECK(device_release(&d->iface)==1);CHECK(!swap_chain_release(&c->iface)&&!live&&device_destroys==3&&chain_destroys==4&&surface_destroys==4);
+/* Every cached buffer can keep a public-zero chain alive, including bindings. */
+for(UINT slot=0;slot<4;slot++)for(UINT binding=0;binding<2;binding++){
+ d=new_device();Chain*c=new_chain(d,0);retired[0]=0;
+ Surface*s=allocate(sizeof(*s));*s=(Surface){.device=d,.swap_chain=c};c->cached_buffers[slot]=s;
+ if(binding)s->binding_refs=1;else s->refcount=1;
+ CHECK(swap_chain_buffers_referenced(c));CHECK(!swap_chain_release(&c->iface)&&d->additional_swap_chains==c);
+ CHECK(swap_chain_add_ref(&c->iface)==1&&d->refcount==2);
+ s->binding_refs=s->refcount=0;CHECK(!swap_chain_buffers_referenced(c));
+ CHECK(!swap_chain_release(&c->iface)&&!d->additional_swap_chains&&live==1);
+ CHECK(!device_release(&d->iface)&&!live);
+}
 printf("PASS actual D3D9 swap-chain lifetime: %u checks, 128 implicit revivals, stable device pins, three additional chains, exact unlink/destruction and last-child device teardown\\n",checks);return 0;}
 `);
     const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-I", root, dir + "/chain.c", "-o", dir + "/chain"], {encoding: "utf8"}); assert.equal(build.status, 0, build.stderr);

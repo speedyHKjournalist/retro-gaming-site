@@ -1008,6 +1008,9 @@ struct D9SwapChain {
     HWND window;
     D3DPRESENT_PARAMETERS present;
     IDirect3DSurface9 *back_buffer;
+    /* Public buffers 1/2, then the preserved front and temporary FLIP image.
+     * Cached surfaces have no public/device reference while unused. */
+    D9Surface *cached_buffers[4];
     D9SwapChain *next_device_chain;
     D9WGPresentClock present_clock;
     D9WGPresentPacing present_pacing;
@@ -1512,6 +1515,24 @@ static void shader_binding_release(D9Shader *object)
 
 static void surface_destroy_storage(D9Surface *surface);
 static void swap_chain_destroy_storage(D9SwapChain *chain);
+static HRESULT swap_chain_cached_buffer(D9SwapChain *chain, UINT index, IDirect3DSurface9 **out);
+static HRESULT swap_chain_prepare_buffers(D9SwapChain *chain);
+static HRESULT swap_chain_advance_buffers(D9SwapChain *chain);
+static void swap_chain_destroy_cached_buffers(D9SwapChain *chain);
+static BOOL swap_chain_cached_private_data(D9SwapChain *chain, BOOL clear);
+
+static BOOL swap_chain_buffers_referenced(D9SwapChain *chain)
+{
+    for (UINT i = 0; i < 5; ++i) {
+        D9Surface *surface = i ? chain->cached_buffers[i - 1]
+                : (D9Surface *)chain->back_buffer;
+        if (surface && (InterlockedCompareExchange(&surface->refcount, 0, 0)
+                || InterlockedCompareExchange(&surface->binding_refs, 0, 0)))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 
 static BOOL surface_uses_private_bindings(const D9Surface *surface)
 {
@@ -1549,7 +1570,8 @@ static void surface_binding_release(D9Surface *surface)
             && !surface_is_implicit(surface)) {
         if (surface->swap_chain) {
             D9SwapChain *chain = surface->swap_chain;
-            if (!InterlockedCompareExchange(&chain->refcount, 0, 0))
+            if (!InterlockedCompareExchange(&chain->refcount, 0, 0)
+                    && !swap_chain_buffers_referenced(chain))
                 swap_chain_destroy_storage(chain);
         } else {
             surface_destroy_storage(surface);
@@ -3810,6 +3832,12 @@ static UINT reset_surface_owned_refs(D9Device *device, D9Surface *surface)
 static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT kind)
 {
     UINT refs = 0;
+    if (kind == D9WG_RESOURCE_TEXTURE_2D)
+        for (UINT i = 0; i < 4; ++i) {
+            D9Surface *surface = device->implicit_swap_chain.cached_buffers[i];
+            if (surface && surface->texture && &surface->texture->iface == iface)
+                return InterlockedCompareExchange(&surface->refcount, 0, 0) ? 0u : 1u;
+        }
     for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i) {
         D9Surface *surface = reset_bound_surface(device, i);
         if (!surface)
@@ -5061,16 +5089,21 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
          * temporary pin. Reentrant insertion is drained; retaining the device
          * leaves subsequent stores intact until its next final Release. */
         while (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
-                && ((device->implicit_back_buffer
+                && (swap_chain_cached_private_data(&device->implicit_swap_chain, FALSE)
+                    || (device->implicit_back_buffer
                         && device->implicit_back_buffer->private_data.head)
                     || (device->implicit_depth_stencil
                         && device->implicit_depth_stencil->private_data.head))) {
-            if (device->implicit_back_buffer)
+            swap_chain_cached_private_data(&device->implicit_swap_chain, TRUE);
+            if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                    && device->implicit_back_buffer)
                 d9wg_private_clear(&device->implicit_back_buffer->private_data, &d9wg_private_ops);
             if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
                     && device->implicit_depth_stencil)
                 d9wg_private_clear(&device->implicit_depth_stencil->private_data, &d9wg_private_ops);
         }
+        if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1)
+            swap_chain_destroy_cached_buffers(&device->implicit_swap_chain);
         refs = (ULONG)InterlockedDecrement(&device->refcount);
         device->releasing_owned_refs = FALSE;
     }
@@ -5779,6 +5812,7 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
     device->in_scene = FALSE;
     device->handle = reset.new_device_handle;
     device_clear_bindings(device);
+    swap_chain_destroy_cached_buffers(&device->implicit_swap_chain);
     ++device->reset_epoch;
     d9wg_present_parameters_effective(&device->present, parameters,
         reset.width, reset.height, reset.backbuffer_format, window);
@@ -5992,7 +6026,13 @@ static HRESULT WINAPI device_present(IDirect3DDevice9* iface,
             trace_memory_state("present");
     }
 #endif
+    status = swap_chain_prepare_buffers(&device_from_iface(iface)->implicit_swap_chain);
+    if (FAILED(status)) return status;
     ok = emit_present_and_flush(device_from_iface(iface), override_window);
+    if (ok) {
+        status = swap_chain_advance_buffers(&device_from_iface(iface)->implicit_swap_chain);
+        if (FAILED(status)) return status;
+    }
     /* After the flush, so the frame is on its way to the host while this
      * thread is parked rather than before it. */
     if (ok) {
@@ -8420,12 +8460,14 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
     }
     *out = NULL;
     (void)type;
-    if (swapchain || index) {
+    if (swapchain || index >= device->present.BackBufferCount) {
         TRACE("FAIL GetBackBuffer chain=%lu index=%lu type=%lu -> %08lX",
                 swapchain, index, (DWORD)type, (DWORD)D3DERR_INVALIDCALL);
         TRACE_MARK_EXIT("Device.GetBackBuffer", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
+    if (index)
+        return swap_chain_cached_buffer(&device->implicit_swap_chain, index, out);
     /* One object per device, handed out again on every call: an app that
      * caches the pointer -- RenderWare caches both this and the auto
      * depth-stencil -- must see the same surface it saw the first time. */
@@ -8469,6 +8511,118 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
     TRACE_MARK_EXIT("Device.GetBackBuffer", D3D_OK, *out);
     return D3D_OK;
 }
+/* The public surface identities stay fixed. GPU copies implement the ordered
+ * buffers, so an already-bound target keeps addressing its original index. */
+static HRESULT swap_chain_cached_buffer(D9SwapChain *chain, UINT index,
+        IDirect3DSurface9 **out)
+{
+    D9Device *device = chain->device;
+    if (!out || index > 4) return D3DERR_INVALIDCALL;
+    if (!index) {
+        if (!chain->handle)
+            return device_get_back_buffer(&device->iface, 0, 0, D3DBACKBUFFER_TYPE_MONO, out);
+        *out = chain->back_buffer;
+        IDirect3DSurface9_AddRef(*out);
+        return D3D_OK;
+    }
+    D9Surface *surface = chain->cached_buffers[index - 1];
+    if (!surface) {
+        const D3DPRESENT_PARAMETERS *pp = chain->handle ? &chain->present : &device->present;
+        IDirect3DSurface9 *owned = NULL;
+        HRESULT hr = create_target_texture(device, pp->BackBufferWidth, pp->BackBufferHeight,
+                pp->BackBufferFormat, D3DUSAGE_RENDERTARGET, pp->MultiSampleType,
+                pp->MultiSampleQuality, &owned);
+        if (FAILED(hr)) { *out = NULL; return hr; }
+        surface = surface_from_iface(owned);
+        surface->swap_chain = chain;
+        surface->lockable_render_target = !!(pp->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER);
+        chain->cached_buffers[index - 1] = surface;
+        *out = owned; /* Constructor's public/device reference is the result. */
+        return D3D_OK;
+    }
+    *out = &surface->iface;
+    IDirect3DSurface9_AddRef(*out);
+    return D3D_OK;
+}
+
+static BOOL swap_chain_cached_private_data(D9SwapChain *chain, BOOL clear)
+{
+    BOOL found = FALSE;
+    for (UINT i = 0; i < 4; ++i) {
+        D9Surface *surface = chain->cached_buffers[i];
+        if (surface && surface->private_data.head) {
+            found = TRUE;
+            if (clear && InterlockedCompareExchange(&chain->device->refcount, 0, 0) == 1)
+                d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
+        }
+    }
+    return found;
+}
+
+static void swap_chain_destroy_cached_buffers(D9SwapChain *chain)
+{
+    for (UINT i = 0; i < 4; ++i) {
+        D9Surface *surface = chain->cached_buffers[i];
+        if (!surface) continue;
+        chain->cached_buffers[i] = NULL;
+        surface->swap_chain = NULL;
+        surface_destroy_storage(surface);
+    }
+}
+
+static HRESULT swap_chain_copy_buffer(D9SwapChain *chain, UINT from, UINT to)
+{
+    IDirect3DSurface9 *source = NULL, *destination = NULL;
+    HRESULT hr = swap_chain_cached_buffer(chain, from, &source);
+    if (FAILED(hr)) return hr;
+    hr = swap_chain_cached_buffer(chain, to, &destination);
+    if (SUCCEEDED(hr)) {
+        hr = IDirect3DDevice9_StretchRect(&chain->device->iface, source, NULL,
+                destination, NULL, D3DTEXF_NONE);
+        IDirect3DSurface9_Release(destination);
+    }
+    IDirect3DSurface9_Release(source);
+    return hr;
+}
+
+static HRESULT swap_chain_prepare_buffers(D9SwapChain *chain)
+{
+    const D3DPRESENT_PARAMETERS *pp = chain->handle ? &chain->present : &chain->device->present;
+    if (pp->SwapEffect != D3DSWAPEFFECT_FLIP && pp->SwapEffect != D3DSWAPEFFECT_DISCARD)
+        return D3D_OK;
+    UINT count = pp->BackBufferCount;
+    /* Prepare storage before presentation; allocation failure must not rotate
+     * a partly available chain. Hidden buffers are needed only for FLIP. */
+    for (UINT i = 1; i < (pp->SwapEffect == D3DSWAPEFFECT_FLIP ? 5u : count); ++i) {
+        if (i < 3 && i >= count) continue;
+        IDirect3DSurface9 *surface;
+        HRESULT hr = swap_chain_cached_buffer(chain, i, &surface);
+        if (FAILED(hr)) return hr;
+        IDirect3DSurface9_Release(surface);
+    }
+    return pp->SwapEffect == D3DSWAPEFFECT_FLIP ? swap_chain_copy_buffer(chain, 0, 4) : D3D_OK;
+}
+
+static HRESULT swap_chain_advance_buffers(D9SwapChain *chain)
+{
+    const D3DPRESENT_PARAMETERS *pp = chain->handle ? &chain->present : &chain->device->present;
+    if (pp->SwapEffect != D3DSWAPEFFECT_FLIP && pp->SwapEffect != D3DSWAPEFFECT_DISCARD)
+        return D3D_OK;
+    UINT count = pp->BackBufferCount;
+    for (UINT i = 1; i < count; ++i) {
+        HRESULT hr = swap_chain_copy_buffer(chain, i, i - 1);
+        if (FAILED(hr)) return hr;
+    }
+    if (pp->SwapEffect == D3DSWAPEFFECT_FLIP) {
+        HRESULT hr = swap_chain_copy_buffer(chain, 3, count - 1);
+        if (FAILED(hr)) return hr;
+        return swap_chain_copy_buffer(chain, 4, 3);
+    }
+    /* DISCARD leaves the final buffer undefined; its allocation can be reused. */
+    return D3D_OK;
+}
+
+
 static HRESULT WINAPI device_get_raster_status(IDirect3DDevice9 *iface,
         UINT swapchain, D3DRASTER_STATUS *status)
 {
@@ -11488,7 +11642,10 @@ static BOOL surface_target_handle(D9Surface *surface, uint32_t *handle_out,
 {
     if (!surface)
         return FALSE;
-    if (surface->shadow)
+    /* Renderable locks also allocate a CPU readback shadow; that cache does
+     * not remove the original GPU resource or implicit backbuffer. */
+    if (surface->shadow && !surface->texture && !surface->cube_texture
+            && !surface->swap_chain)
         return FALSE; /* CPU-only offscreen surface: never a GPU target */
     if (surface->cube_texture) {
         *handle_out = surface->cube_texture->handle;
@@ -14460,7 +14617,7 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
             D9Device *device = surface->device;
             D9SwapChain *chain = surface->swap_chain;
             if (!InterlockedCompareExchange(&chain->refcount, 0, 0)
-                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))
+                    && !swap_chain_buffers_referenced(chain))
                 swap_chain_destroy_storage(chain);
             device_child_release(device);
         }
@@ -15116,6 +15273,7 @@ static void swap_chain_destroy_storage(D9SwapChain *chain)
     destroy.swap_chain_handle = chain->handle;
     emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
     chain->back_buffer = NULL;
+    swap_chain_destroy_cached_buffers(chain);
     surface->swap_chain = NULL;
     /* Public pins belong to the actual chain/surface Release caller;
      * binding-only destruction runs under the pending device pin. */
@@ -15153,9 +15311,7 @@ static ULONG WINAPI swap_chain_release(IDirect3DSwapChain9 *iface)
     if (swap_chain->handle) {
         refs = (ULONG)InterlockedDecrement(&swap_chain->refcount);
         if (!refs) {
-            D9Surface *surface = surface_from_iface(swap_chain->back_buffer);
-            if (!InterlockedCompareExchange(&surface->refcount, 0, 0)
-                    && !InterlockedCompareExchange(&surface->binding_refs, 0, 0))
+            if (!swap_chain_buffers_referenced(swap_chain))
                 swap_chain_destroy_storage(swap_chain);
             device_child_release(device);
         }
@@ -15202,11 +15358,15 @@ static HRESULT WINAPI swap_chain_present(IDirect3DSwapChain9* iface,
     if (nonblocking && !d9wg_prepare_present(clock, &candidate, interval, device->display_mode.RefreshRate)) {
         result = D3DERR_WASSTILLDRAWING;
     } else if (swap_chain->handle || nonblocking) {
+        result = swap_chain_prepare_buffers(swap_chain);
+        if (FAILED(result)) return result;
         BOOL ok = swap_chain->handle
             ? emit_present_swap_chain_and_flush(swap_chain, override_window)
             : emit_present_and_flush(device, override_window);
         result = ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
         if (ok) {
+            result = swap_chain_advance_buffers(swap_chain);
+            if (FAILED(result)) return result;
             if (nonblocking)
                 *pacing = candidate;
             else
@@ -15258,8 +15418,12 @@ static HRESULT WINAPI swap_chain_get_back_buffer(IDirect3DSwapChain9 *iface,
     TRACE_MARK_ENTER("SwapChain.GetBackBuffer");
     /* Unlike Device.GetBackBuffer, a bad chain index preserves the output.
      * Native ignores the stereo selector for both chain kinds. */
-    if (!out || index) {
+    UINT count = swap_chain->handle ? swap_chain->present.BackBufferCount
+            : swap_chain->device->present.BackBufferCount;
+    if (!out || index >= count) {
         result = D3DERR_INVALIDCALL;
+    } else if (index) {
+        result = swap_chain_cached_buffer(swap_chain, index, out);
     } else if (swap_chain->handle) {
         *out = swap_chain->back_buffer;
         IDirect3DSurface9_AddRef(*out);

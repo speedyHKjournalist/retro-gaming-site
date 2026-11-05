@@ -51,6 +51,7 @@ int main(void){
   D9Surface color={.iface={&g_surface_vtbl,11},.device=&d,.width=width,.height=height,.multisample=samples,.private_refs=1},depth={.iface={&g_surface_vtbl,13},.device=&d,.texture=&depth_texture,.width=width+seed%2,.height=height+seed%3,.multisample=samples,.private_refs=1};
   if(kind==0){color.texture=&texture;color.texture_child=TRUE;color.level=seed%4;}else if(kind==1){color.cube_texture=&cube;color.cube_face=seed%6;color.level=seed%4;}else if(kind==2)color.texture=&texture;else color.swap_chain=&d;
   if(seed&2u){depth.texture=NULL;depth.auto_depth_stencil=TRUE;}else if(seed&8u){depth.texture_child=TRUE;depth.level=seed%3;}
+  if(seed&16u){color.shadow=&d;if(depth.texture)depth.shadow=&d;}
   d.render_target_surfaces[0]=&color;d.depth_stencil_surface=&depth;
   if(seed&4u)d.viewport=(D3DVIEWPORT9){0,0,width,height,0,1};const D3DVIEWPORT9 prior=d.viewport;
   D9Device before=d;D9Surface before_color=color,before_depth=depth;UINT depth_handle=depth.auto_depth_stencil?0xffffffffu:22u;
@@ -64,7 +65,7 @@ int main(void){
  }
  for(UINT bad=0;bad<17;bad++)for(UINT null_color=0;null_color<2;null_color++){
   D9Device d=make_device(),foreign=make_device();D9Texture t={.usage=1},z={.usage=2};D9Surface color={.iface={&g_surface_vtbl,1},.device=&d,.texture=&t,.width=128,.height=96,.private_refs=1},depth={.iface={&g_surface_vtbl,1},.device=&d,.texture=&z,.width=128,.height=96,.private_refs=1};d.render_target_surfaces[0]=&color;d.depth_stencil_surface=&depth;
-  if(bad==0)d.profile=9;if(bad==1)d.iface.lpVtbl=&bad_vtbl;if(bad==2)depth.iface.lpVtbl=&bad_vtbl;if(bad==3)depth.device=&foreign;if(bad==4)z.usage=0;if(bad==5)depth.width--;if(bad==6)depth.height--;if(bad==7)depth.multisample=2;if(bad==8)depth.cube_texture=&z;if(bad==9)depth.shadow=&z;if(bad==10)depth.texture=NULL;
+  if(bad==0)d.profile=9;if(bad==1)d.iface.lpVtbl=&bad_vtbl;if(bad==2)depth.iface.lpVtbl=&bad_vtbl;if(bad==3)depth.device=&foreign;if(bad==4)z.usage=0;if(bad==5)depth.width--;if(bad==6)depth.height--;if(bad==7)depth.multisample=2;if(bad==8)depth.cube_texture=&z;if(bad==9){depth.shadow=&z;depth.texture=NULL;}if(bad==10)depth.texture=NULL;
   if(bad>=11){if(null_color)continue;if(bad==11)color.iface.lpVtbl=&bad_vtbl;if(bad==12)color.device=&foreign;if(bad==13)t.pool=2;if(bad==14)t.usage=2;if(bad==15)t.usage=0;if(bad==16)t.usage=3;}
   D9Device before=d;D9Surface c=color,p=depth;reset_events(&d,&color,&depth,0);CHECK(d9wg_d3d9_core_set_render_target8(&d.iface,null_color?NULL:&color.iface,&depth.iface)==D3DERR_INVALIDCALL&&!count&&!memcmp(&d,&before,sizeof(d))&&!memcmp(&color,&c,sizeof(color))&&!memcmp(&depth,&p,sizeof(depth)));cases++;
  }

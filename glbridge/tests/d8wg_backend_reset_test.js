@@ -33,6 +33,7 @@ try {
 typedef uint32_t UINT,DWORD; typedef int32_t HRESULT; typedef int BOOL,D3DFORMAT; typedef uint8_t BYTE;
 typedef void* HWND; typedef struct {int left,top,right,bottom;} RECT; typedef struct {int x,y;} POINT; typedef RECT RGNDATA;
 #define WINAPI
+#define FAILED(hr) ((hr)<0)
 #define TRUE 1
 #define FALSE 0
 #define D3D_OK 0
@@ -72,6 +73,7 @@ typedef struct Device Device;
 typedef struct Block {int iface;Device*device;unsigned*references,*finalized;} Block;
 typedef Block D${api}StateBlock;
 struct Device {
+ int implicit_swap_chain;
  Block *recording_state_block,*recording_result; unsigned recorded_refs;
  int iface; D9WGResetState reset_state; D9WGPresentClock present_clock; D9WGPresentPacing present_pacing;
  UINT handle,reset_epoch; BOOL blocked,in_scene; struct {HWND hFocusWindow;UINT BehaviorFlags;} creation;
@@ -125,6 +127,7 @@ static BOOL emit_present_and_flush(Device*d,HWND w){(void)w;assert(d==active&&!d
 static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND w){return emit_present_and_flush(c->device,w);}
 static void d9wg_throttle_present(D9WGPresentClock*c,D9WGPresentPacing*p,UINT i,UINT hz){(void)c;(void)i;(void)hz;paces++;p->deadline++;}
 ${api === 9 ? "static BOOL d9wg_prepare_present(D9WGPresentClock*c,D9WGPresentPacing*p,UINT i,UINT hz){(void)c;(void)i;(void)hz;prepares++;p->deadline++;return !busy;}" : ""}
+${api===9?'static void swap_chain_destroy_cached_buffers(void*p){(void)p;}static HRESULT swap_chain_prepare_buffers(void*p){(void)p;return 0;}static HRESULT swap_chain_advance_buffers(void*p){(void)p;return 0;}':''}
 ${functions.map(name => extract(source, name).replace(/&device->iface/g, "device")).join("\n")}
 #define PRESENT(c,f) ${api === 8 ? "swapchain_present(c,NULL,NULL,NULL,NULL)" : "swap_chain_present(c,NULL,NULL,NULL,NULL,f)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 Reset status API ${api} case %u line %u: %s\\n",kind,__LINE__,#v);return 1;}checks++;}while(0)

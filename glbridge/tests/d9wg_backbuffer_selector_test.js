@@ -30,17 +30,18 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int D3DBA
 #define TRACE_MARK_EXIT(...)
 typedef struct {unsigned unused;}Store;typedef struct {LONG refs;Store store;}Owner;
 typedef struct Surface{unsigned refs;Store*private_data_owner;Owner*retained_private_data;}Surface;
-typedef struct {int iface;Surface implicit;}Device;
-typedef struct {Device*device;UINT handle;Surface*back_buffer;int present;Owner*private_data_owner;}Chain;
+typedef struct {int iface;Surface implicit;struct{UINT BackBufferCount;}present;}Device;
+typedef struct {Device*device;UINT handle;Surface*back_buffer;struct{UINT BackBufferCount;}present;Owner*private_data_owner;}Chain;
 typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};typedef Surface D${api}Surface,IDirect3DSurface${api};
 static unsigned calls,allocations,live,fail_alloc;static D3DBACKBUFFER_TYPE forwarded_type;
 ${api===8?`static void IDirect3DSurface8_AddRef(Surface*s){assert(s);s->refs++;}`:`static Chain*swap_chain_from_iface(Chain*c){return c;}
 static void IDirect3DSurface9_AddRef(Surface*s){assert(s);s->refs++;}
 static HRESULT device_get_back_buffer(int*iface,UINT chain,UINT index,D3DBACKBUFFER_TYPE type,Surface**out){Device*d=(Device*)iface;assert(!chain&&out);calls++;forwarded_type=type;*out=NULL;if(index)return D3DERR_INVALIDCALL;*out=&d->implicit;IDirect3DSurface9_AddRef(*out);return D3D_OK;}`}
+${api===9?'static HRESULT swap_chain_cached_buffer(Chain*c,UINT i,Surface**out){(void)c;(void)i;(void)out;assert(0);return D3DERR_INVALIDCALL;}':''}
 ${extract(source, api===8?"swapchain_get_backbuffer":"swap_chain_get_back_buffer")}
 #define GET(c,i,t,o) ${api===8?"swapchain_get_backbuffer(c,i,t,o)":"swap_chain_get_back_buffer(c,i,t,o)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backbuffer selector API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){unsigned checks=0;Device d={0};Owner owner={.refs=1};Surface backing={.refs=1};Chain c={.device=&d,.handle=77,.back_buffer=&backing,.present=96,.private_data_owner=&owner};
+int main(void){unsigned checks=0;Device d={.present={1}};Owner owner={.refs=1};Surface backing={.refs=1};Chain c={.device=&d,.handle=77,.back_buffer=&backing,.present={1},.private_data_owner=&owner};
 const uint32_t types[]={0,1,2,0xdeadbeef,0xffffffff};const UINT indices[]={1,2,3,0xffffffff};
 for(unsigned route=0;route<${api===8?1:2};route++){
  c.handle=route?0:77;

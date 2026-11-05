@@ -61,11 +61,12 @@ for(unsigned cycle=0;cycle<32;cycle++)for(unsigned kind=0;kind<9;kind++)for(unsi
 }
 /* The foreign-vtable guard must not read beyond a bare interface. */
 {D9Device d={.handle=7};Interface bare={&bad_vtbl,11};CHECK(device_set_render_target(&d.iface,0,&bare)==D3DERR_INVALIDCALL&&bare.refs==11);cases++;}
-for(unsigned kind=0;kind<4;kind++)for(unsigned slot=0;slot<4;slot++){
+for(unsigned shadow=0;shadow<2;shadow++)for(unsigned kind=0;kind<4;kind++)for(unsigned slot=0;slot<4;slot++){
  D9Surface old={.iface={&g_surface_vtbl,3}};D9Device d={.handle=7,.viewport={5,6,20,18,.1f,.9f},.scissor={7,8,12,14}};d.render_target_surfaces[slot]=&old;
  D9Surface s={.iface={&g_surface_vtbl,11},.device=&d,.texture=&texture,.level=2,.width=32,.height=24};
  if(kind==1){s.texture=NULL;s.cube_texture=&cube;s.cube_face=5;}
  if(kind==2){s.texture=NULL;s.level=0;}
+ if(shadow){s.shadow=&old;if(kind==2)s.swap_chain=(void*)&old;}
  D3DVIEWPORT9 old_v=d.viewport;RECT old_r=d.scissor;unsigned c=commands,v=viewport_calls,r=scissor_calls;
  CHECK(!device_set_render_target(&d.iface,slot,&s.iface)&&d.render_target_surfaces[slot]==&s&&s.iface.refs==12&&old.iface.refs==2);
  CHECK(commands==c+1&&last.device_handle==7&&last.target_index==slot&&last.color_texture_handle==(kind==1?22u:kind==2?0u:21u)&&last.color_level==(kind==2?0u:2u)&&last.color_face==(kind==1?5u:0u));

@@ -44,7 +44,7 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 #define TRACE_REGISTER_RANGE(...)
 #define ZeroMemory(p,n) memset(p,0,n)
 typedef struct Interface Interface;typedef struct Vtable{ULONG(*AddRef)(Interface*);ULONG(*Release)(Interface*);}Vtable;struct Interface{const Vtable*lpVtbl;};
-typedef struct FakeChain{Interface iface;UINT handle;LONG refcount;struct FakeChain*next_device_chain;}FakeChain;typedef FakeChain D9SwapChain;
+typedef struct FakeChain{Interface iface;UINT handle;LONG refcount;struct FakeChain*next_device_chain;struct Device*device;struct Surface*back_buffer,*cached_buffers[4];}FakeChain;typedef FakeChain D9SwapChain;
 ${api===9?"static void swap_chain_destroy_storage(FakeChain*p){(void)p;assert(0);}":""}
 typedef Interface IDirect3DDevice${api},IDirect3DSurface${api};typedef struct Device Device;typedef struct Surface Surface;typedef struct Texture Texture;
 typedef struct{unsigned locked;}Level;
@@ -99,14 +99,15 @@ static const int IID_IDirect3DSwapChain9=1,IID_IDirect3DResource9=2,IID_IDirect3
 static BOOL iid_is_unknown(REFIID p){return p&&!*p;}static BOOL guid_equal(REFIID a,REFIID b){return a&&b&&*a==*b;}
 #define IDirect3DSwapChain9_AddRef(p) ((void)(p),0u)
 `:''}
-${['surface_is_implicit','device_add_ref','device_release','device_child_add_ref','device_child_release','surface_add_ref',...(api===9?['surface_uses_private_bindings','surface_destroy_storage','reset_bound_surface','reset_surface_owned_refs']:[]),'surface_binding_add_ref','surface_binding_release','surface_release',api===8?'device_get_backbuffer':'device_get_back_buffer'].map(n=>extract(source,n)).join('\n')}
+${api===9?'static HRESULT swap_chain_cached_buffer(FakeChain*c,UINT i,Interface**out){(void)c;(void)i;(void)out;assert(0);return D3DERR_INVALIDCALL;}':''}
+${[...(api===9?['swap_chain_buffers_referenced','swap_chain_destroy_cached_buffers','swap_chain_cached_private_data']:[]),'surface_is_implicit','device_add_ref','device_release','device_child_add_ref','device_child_release','surface_add_ref',...(api===9?['surface_uses_private_bindings','surface_destroy_storage','reset_bound_surface','reset_surface_owned_refs']:[]),'surface_binding_add_ref','surface_binding_release','surface_release',api===8?'device_get_backbuffer':'device_get_back_buffer'].map(n=>extract(source,n)).join('\n')}
 ${api===9?'#define IDirect3DDevice9_GetBackBuffer device_get_back_buffer':''}
 ${[api===8?'device_get_depth_surface':'device_get_depth_stencil_surface','device_get_render_target',...(api===9?['surface_get_container']:[])].map(n=>extract(source,n)).join('\n')}
 #define BACK(d,t,o) ${api===8?'device_get_backbuffer(&(d)->iface,0,t,o)':'device_get_back_buffer(&(d)->iface,0,0,t,o)'}
 #define DEPTH(d,o) ${api===8?'device_get_depth_surface(&(d)->iface,o)':'device_get_depth_stencil_surface(&(d)->iface,o)'}
 #define TARGET(d,o) ${api===8?'device_get_render_target(&(d)->iface,o)':'device_get_render_target(&(d)->iface,0,o)'}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Implicit identity API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
-int main(void){(void)g_transport_lock;unsigned cases=0;Parent parent={0};Vtable device_vtable={device_add_ref,device_release};g_surface_vtbl=(Vtable){surface_add_ref,surface_release};Device*d=HeapAlloc(NULL,0,sizeof(*d));d->iface.lpVtbl=&device_vtable;d->refcount=1;d->parent=&parent;d->handle=0x9000;d->display_mode=(Mode){64,64,22};d->present=(Parameters){.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.MultiSampleType=4};d->depth_surface_enabled=1;
+int main(void){(void)g_transport_lock;unsigned cases=0;Parent parent={0};Vtable device_vtable={device_add_ref,device_release};g_surface_vtbl=(Vtable){surface_add_ref,surface_release};Device*d=HeapAlloc(NULL,0,sizeof(*d));d->iface.lpVtbl=&device_vtable;d->refcount=1;d->parent=&parent;d->handle=0x9000;d->display_mode=(Mode){64,64,22};d->present=(Parameters){.BackBufferCount=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.MultiSampleType=4};d->depth_surface_enabled=1;
 Interface*out=(void*)(uintptr_t)1;unsigned before=allocations;CHECK(BACK(d,0,NULL)==-1&&DEPTH(d,NULL)==-1&&TARGET(d,NULL)==-1&&allocations==before&&d->refcount==1);cases++;
 for(unsigned kind=0;kind<2;kind++){fail_at=allocations+1;out=(void*)(uintptr_t)1;CHECK((kind?DEPTH(d,&out):BACK(d,0,&out))==-2&&!out&&d->refcount==1&&!d->child_parent_refs);fail_at=0;cases++;
 Interface*a=NULL,*b=NULL;CHECK(!(kind?DEPTH(d,&a):BACK(d,0,&a))&&a&&d->refcount==2&&d->child_parent_refs==1);before=allocations;CHECK(!(kind?DEPTH(d,&b):BACK(d,0,&b))&&a==b&&d->refcount==2&&d->child_parent_refs==1&&allocations==before);cases++;

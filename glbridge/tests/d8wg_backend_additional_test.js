@@ -23,6 +23,10 @@ try {
 #include "runtime/d9wg_present_pacing.h"
 typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,D3DFORMAT;typedef void*HWND;typedef struct{int left,top,right,bottom;}RECT;typedef struct{int x,y;}POINT;
 #define WINAPI
+#ifndef TRUE
+#define TRUE 1
+#define FALSE 0
+#endif
 #define TRUE 1
 #define ZeroMemory(p,n) memset(p,0,n)
 #define D3D_OK 0
@@ -51,7 +55,7 @@ typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSample
 ${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 typedef struct{void*lpVtbl;}Interface;typedef Interface IDirect3DDevice${api},IDirect3DSwapChain${api},IDirect3DSurface${api};
 typedef struct Device Device;typedef struct Chain Chain;typedef struct{Interface iface;UINT handle;BOOL private_back_buffer;Chain*swap_chain;}Texture;typedef struct{Interface iface;Device*device;Texture*texture;BOOL additional_back_buffer,lockable_render_target;LONG refcount,binding_refs;Chain*swap_chain;UINT width,height;}Surface;typedef struct{LONG refs;unsigned store;}Owner;
-struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Chain*next_device_chain;};
+struct Chain{Interface iface;LONG refcount;Device*device;D3DPRESENT_PARAMETERS present;Owner*private_data_owner;UINT handle;HWND window;Interface*back_buffer;Surface*cached_buffers[4];Chain*next_device_chain;};
 struct Device{Interface iface;unsigned refs,pins;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT Width,Height,Format;}display_mode;struct{HWND hFocusWindow;}creation;UINT additional_swap_chain_count;Chain*additional_swap_chains;};
 typedef Chain D${api}SwapChain;typedef Device D${api}Device;typedef Surface D${api}Surface;
 static unsigned allocations,live,fail_at,fail_emit,emits,destroys,empty_client;static UINT next_handle=100;static int g_chain_vtbl;static HWND observed_window;static Texture backing_texture={.handle=99};static Surface*latest_surface;static UINT last_texture_format,last_ms;static BOOL last_lockable;
@@ -82,7 +86,7 @@ static void ClientToScreen(HWND w,POINT*p){assert(w==observed_window);*p=(POINT)
 static UINT allocate_handle(void){return next_handle++;}
 static BOOL emit_command(UINT op,const void*p,UINT n){if(op==D9WG_OP_CREATE_SWAP_CHAIN){const D9WGCreateSwapChain*c=p;assert(n==sizeof(*c)&&c->device_handle==77&&c->back_buffer_handle==99&&c->hwnd==(uint32_t)(uintptr_t)observed_window&&c->width==latest_surface->width&&c->height==latest_surface->height&&c->x==(observed_window?30:0)&&c->y==(observed_window?40:0));emits++;return !fail_emit;}const D9WGDestroySwapChain*c=p;assert(op==D9WG_OP_DESTROY_SWAP_CHAIN&&n==sizeof(*c)&&c->device_handle==77);destroys++;return 1;}
 ${api===8&&!source.includes("static void swapchain_destroy_storage(")?"static void swapchain_destroy_storage(Chain*c){(void)c;assert(0);}":""}
-${[...(api===8&&source.includes("static void swapchain_destroy_storage(")?["swapchain_destroy_storage"]:[]),api===8?"device_create_swapchain":"device_create_additional_swap_chain",...(api===9&&source.includes("static void swap_chain_destroy_storage(")?["swap_chain_destroy_storage"]:[]),api===8?"swapchain_release":"swap_chain_release"].map(n=>extract(source,n)).join("\n")}
+${[...(api===8&&source.includes("static void swapchain_destroy_storage(")?["swapchain_destroy_storage"]:[]),api===8?"device_create_swapchain":"device_create_additional_swap_chain",...(api===9?["swap_chain_buffers_referenced","swap_chain_destroy_cached_buffers"]:[]),...(api===9&&source.includes("static void swap_chain_destroy_storage(")?["swap_chain_destroy_storage"]:[]),api===8?"swapchain_release":"swap_chain_release"].map(n=>extract(source,n)).join("\n")}
 #define CREATE(d,p,o) ${api===8?"device_create_swapchain(&(d)->iface,p,o)":"device_create_additional_swap_chain(&(d)->iface,p,o)"}
 #define RELEASE(c) ${api===8?"swapchain_release(c)":"swap_chain_release(c)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 additional parameters API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)

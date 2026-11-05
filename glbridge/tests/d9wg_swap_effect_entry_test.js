@@ -39,7 +39,7 @@ ${api===9?'static UINT d9wg_display_mode_backbuffer_format(UINT f){return f?f:22
 ${api===8?'static BOOL supported_multisample_type(UINT type){return !type||type==4;}':''}
 ${prefix('d3d_create_device',api===8?'    if (!supported_multisample_type(parameters->MultiSampleType))':'    backbuffer_format = ')}
 ${prefix('device_reset',api===8?'    if (parameters->EnableAutoDepthStencil':'    if (!supported_multisample(')}
-${prefix(chain,api===8?'    if (parameters->BackBufferFormat != D3DFMT_UNKNOWN':'    if (!params->Windowed || (api == 9 && !device->present.Windowed))')}
+${prefix(chain,api===8?'    if (parameters->BackBufferFormat != D3DFMT_UNKNOWN':'    if (!params->Windowed || !device->present.Windowed)')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Parameter preflight API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){Factory factory={123,9};Device device={.magic=456,.present={1}},before_device=device;unsigned cases=0,checks=0;
 /* Expectations transcribed from the pinned Windows swap-effect tests, not the helper. */

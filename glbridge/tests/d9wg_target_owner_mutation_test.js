@@ -12,6 +12,7 @@ try {
     const source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"); let killed = 0;
     for (const [label, name, old, replacement] of [
         ["foreign owner accepted", "device_set_render_target", "surface->device != device", "0"],
+        ["readback shadow loses GPU identity", "surface_target_handle", "surface->shadow && !surface->texture && !surface->cube_texture\n            && !surface->swap_chain", "surface->shadow"],
         ["local owner rejected", "device_set_render_target", "surface->device != device", "surface->device == device"],
         ["foreign vtable accepted", "device_set_render_target", "surface_iface->lpVtbl != &g_surface_vtbl", "0"],
         ["guard accepts either valid field", "device_set_render_target", "|| surface->device != device", "&& surface->device != device"],
@@ -24,5 +25,5 @@ try {
         const r = spawnSync(process.execPath, [__dirname + "/d9wg_target_owner_test.js"], {encoding: "utf8", timeout: 30000, env: {...process.env, D9WG_TARGET_OWNER_SOURCE: file}}), output = r.stdout + r.stderr;
         assert(!r.error, label); assert.notEqual(r.status, 0, label + " survived"); assert(!/error:|undefined reference|Undefined symbols/.test(output), label + " compiler failure: " + output); assert(/Target owner|signal=/.test(output), output); killed++;
     }
-    console.log("PASS D3D9 target-owner mutations: " + killed + "/8; foreign ownership/vtable, local controls, reference/slot rejection atomicity and failure HRESULT");
+    console.log("PASS D3D9 target-owner mutations: " + killed + "/9; foreign ownership/vtable, local controls, reference/slot rejection atomicity and failure HRESULT");
 } finally {fs.rmSync(dir, {recursive: true, force: true});}

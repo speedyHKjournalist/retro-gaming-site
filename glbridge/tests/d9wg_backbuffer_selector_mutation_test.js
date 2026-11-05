@@ -20,9 +20,9 @@ try {
             ['index ignored','if (!surface_out || index)','(void)index; if (!surface_out)'],
             ['successful view loses reference','IDirect3DSurface8_AddRef(*surface_out);','(void)IDirect3DSurface8_AddRef;'],
         ]:[
-            ['stereo rejected','if (!out || index)','if (!out || index || type != D3DBACKBUFFER_TYPE_MONO)'],
-            ['bad index clears output','    if (!out || index)','    if(out) *out = NULL;\n    if (!out || index)'],
-            ['implicit bad index forwarded','if (!out || index)','if (!out || (index && swap_chain->handle))'],
+            ['stereo rejected','if (!out || index >= count)','if (!out || index >= count || type != D3DBACKBUFFER_TYPE_MONO)'],
+            ['bad index clears output','    if (!out || index >= count)','    if(out) *out = NULL;\n    if (!out || index >= count)'],
+            ['implicit bad index forwarded','if (!out || index >= count)','if (!out || (index >= count && swap_chain->handle))'],
             ['successful surface loses reference','IDirect3DSurface9_AddRef(*out);','(void)IDirect3DSurface9_AddRef;'],
         ];
         for (const [label,old,replacement] of changes) {

@@ -10,6 +10,7 @@ function mutate(s, name, old, replacement, last) {
 try {
     const source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"); let killed = 0;
     for (const [label, fn, old, replacement, last = false] of [
+        ["unused spare blocks Reset", "reset_texture_owned_refs", "return InterlockedCompareExchange(&surface->refcount, 0, 0) ? 0u : 1u;", "return 0u;"],
         ["private binding not retained", "surface_binding_add_ref", "InterlockedIncrement(&surface->binding_refs);", "IDirect3DSurface9_AddRef(&surface->iface);"] ,
         ["private binding not released", "surface_binding_release", "!InterlockedDecrement(&surface->binding_refs)", "0"] ,
         ["storage freed with public references", "surface_binding_release", "&& !InterlockedCompareExchange(&surface->refcount, 0, 0)", "&& 1"] ,
@@ -38,5 +39,5 @@ try {
         const r = spawnSync(process.execPath, [__dirname + "/d9wg_target_binding_test.js"], {encoding: "utf8", timeout: 30000, env: {...process.env, D9WG_TARGET_BINDING_SOURCE: file}}), output = r.stdout + r.stderr;
         assert(!r.error, label); assert.notEqual(r.status, 0, label + " survived"); assert(!/error:|undefined reference|Undefined symbols/.test(output), label + " compiler failure: " + output); assert(/Target binding|Assertion|signal=/.test(output), output); killed++;
     }
-    console.log("PASS D3D9 target-binding mutations: " + killed + "/23; balanced public-only release markers, internal/public counts, zero revival and parent pins, Reset blockers, safe final cleanup, target classes and same-object binding order");
+    console.log("PASS D3D9 target-binding mutations: " + killed + "/24; balanced public-only release markers, internal/public counts, zero revival and parent pins, Reset blockers, safe final cleanup, target classes and same-object binding order");
 } finally {fs.rmSync(dir, {recursive: true, force: true});}

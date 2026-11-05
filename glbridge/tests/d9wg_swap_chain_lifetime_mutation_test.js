@@ -11,6 +11,8 @@ function mutate(s, name, old, replacement) {
 try {
     const source = fs.readFileSync(root + "/d3d9proxy/d3d9_proxy.c", "utf8"); let killed = 0;
     for (const [label, fn, old, replacement] of [
+        ["spare buffers ignored", "swap_chain_buffers_referenced", "i < 5", "i < 1"],
+        ["cached storage leaked", "swap_chain_destroy_cached_buffers", "surface_destroy_storage(surface);", "(void)surface;"],
         ["implicit pin per public ref", "swap_chain_add_ref", "refs == 1", "refs >= 1"],
         ["additional AddRef leaks device", "swap_chain_add_ref", "refs == 1", "swap_chain->handle || refs == 1"],
         ["implicit has no pin", "swap_chain_add_ref", "refs == 1", "swap_chain->handle && refs == 1"],
@@ -31,5 +33,5 @@ try {
         assert(!r.error, label + ": " + r.error); assert.notEqual(r.status, 0, label + " survived");
         assert(!/error:|undefined reference|Undefined symbols/.test(out), label + " compile failure: " + out); assert(/Swap-chain lifetime|Private surface|Assertion|signal=/.test(out)); killed++;
     }
-    console.log("PASS swap-chain lifetime mutations: " + killed + "/14; pin edges, additional ref balance, zero Release, unlink, backing cleanup and public identity/parent routes");
+    console.log("PASS swap-chain lifetime mutations: " + killed + "/16; pin edges, additional ref balance, zero Release, unlink, backing cleanup and public identity/parent routes");
 } finally {fs.rmSync(dir, {recursive: true, force: true});}

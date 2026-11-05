@@ -53,14 +53,15 @@ typedef struct{HWND hDeviceWindow;BOOL Windowed;UINT FullScreen_PresentationInte
 ${api===8?'static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 
 typedef struct{Interface iface;}Parent;
-struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources,*cube_textures,*render_target_texture;View*render_target_surface,*render_target_surface_2,*depth_surface;D9SwapChain*additional_swap_chains;};
+struct D9SwapChain{Interface iface;LONG refcount,binding_refs;Device*device;UINT handle;View*back_buffer,*cached_buffers[4];D9SwapChain*next_device_chain;};
+struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources,*cube_textures,*render_target_texture;View*render_target_surface,*render_target_surface_2,*depth_surface;D9SwapChain implicit_swap_chain,*additional_swap_chains;};
 typedef struct{D9WGPrivateStore private_data;View*level_surface;void*shadow;}Level;typedef Level D8TextureLevel;
 struct Texture{Interface iface;Level*levels;unsigned level_count,usage;LONG refcount,binding_refs;Device*device;Texture*next_device_resource;UINT handle;BOOL private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;};
 typedef struct D8PrivateDataOwner{LONG refs;D9WGPrivateStore store;}D8PrivateDataOwner;
 struct View{Interface iface;LONG refcount,binding_refs;Device*device;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;BOOL texture_child,reset_blocker,implicit,depth_stencil,additional_back_buffer,device_pin_transferred,device_container;D9SwapChain*swap_chain;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;D8PrivateDataOwner*retained_private_data;void*shadow,*dc,*dc_previous,*dib;struct{UINT MultiSampleType;}desc;};
 typedef struct{Interface iface;LONG refcount;D8PrivateDataOwner*private_data_owner;Device*device;D3DPRESENT_PARAMETERS present;UINT handle;View*back_buffer;}D8SwapChain;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Texture D${api}Texture,D${api}CubeTexture;typedef View D${api}Surface,IDirect3DSurface${api};typedef Interface IDirect3DSwapChain8,IDirect3DSwapChain9;
-struct D9SwapChain{Interface iface;LONG refcount,binding_refs;Device*device;UINT handle;View*back_buffer;D9SwapChain*next_device_chain;};
+
 static Device*device_from_iface(Device*d){return d;}static View*surface_from_iface(View*v){return v;}
 ${api===8?"static Device* target_device;static BOOL target_pin_guard;":""}
 static unsigned allocated,held,allocation_calls,fail_nth,fail_create,parent_refs=1;static int g_transport_lock;
@@ -123,7 +124,7 @@ static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void
 static unsigned g_command_count;
 static int emit_command(uint16_t op,const void*p,uint32_t size){if(op==D9WG_OP_DESTROY_SWAP_CHAIN){const D9WGDestroySwapChain*c=p;assert(size==sizeof(*c)&&c->device_handle==0x9000);return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;assert(c->resource_kind==3||(c->resource_handle==0x9000&&!c->resource_kind));return 1;}
 static BOOL submit_batch_locked(BOOL present){(void)present;return 1;}
-${["texture_add_ref","cube_destroy_storage","cube_binding_add_ref","cube_binding_release","texture_destroy_storage","texture_binding_add_ref","texture_binding_release","texture_release","swap_chain_destroy_storage","swap_chain_add_ref","swap_chain_release"].map(n=>extract(source,n)).join("\n")}`}
+${["swap_chain_buffers_referenced","swap_chain_destroy_cached_buffers","swap_chain_cached_private_data","texture_add_ref","cube_destroy_storage","cube_binding_add_ref","cube_binding_release","texture_destroy_storage","texture_binding_add_ref","texture_binding_release","texture_release","swap_chain_destroy_storage","swap_chain_add_ref","swap_chain_release"].map(n=>extract(source,n)).join("\n")}`}
 ${['surface_private_store','surface_set_private_data','surface_get_private_data','surface_free_private_data',...(api===9?['surface_uses_private_bindings']:[]),'surface_binding_add_ref','surface_binding_release','surface_add_ref',...(api===9?['surface_destroy_storage']:[]),'surface_release','device_release'].map(n=>extract(source,n)).join('\n')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Private surface API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){(void)fail_create;unsigned cases=0;Parent parent={0};Device*d=HeapAlloc(NULL,0,sizeof(*d));d->refcount=1;d->parent=&parent;d->handle=0x9000;d->display_mode=(Mode){64,64,22};d->present=(D3DPRESENT_PARAMETERS){.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferFormat=22};const uint8_t key[16]={1},object_key[16]={2};DWORD data=0x10203040,size,out=0;IUnknown object={.refs=1};
@@ -320,6 +321,20 @@ for(unsigned order=0;order<5;order++){
  else CHECK(!device_release(d));
  callback_device=NULL;unsigned expected_callbacks=order==4?3:2;CHECK(callback_calls==old_callbacks+expected_callbacks&&!owners[0].refs&&!owners[1].refs&&(order!=4||!owners[2].refs)&&!parent_refs&&!allocated);implicit_callbacks+=expected_callbacks;
 }
+${api===9?`for(unsigned slot=0;slot<4;slot++)for(unsigned order=0;order<5;order++){
+ parent_refs=1;d=HeapAlloc(NULL,0,sizeof(*d));d->refcount=1;d->parent=&parent;d->handle=0x9000;d->implicit_swap_chain.device=d;
+ View*v=HeapAlloc(NULL,0,sizeof(*v));v->device=d;v->implicit=1;v->swap_chain=&d->implicit_swap_chain;d->implicit_swap_chain.cached_buffers[slot]=v;
+ IUnknown owner={1},readded={1};CHECK(!surface_set_private_data(v,object_key,&owner,sizeof(void*),1));CHECK(IUnknown_Release(&owner)==1);
+ unsigned before=callback_calls;callback_device=d;callback_keep_device=order==3;
+ if(order==1){d->render_target_surface=v;surface_binding_add_ref(v);}
+ if(order==4){callback_readd_store=&v->private_data;callback_readd_object=&readded;}
+ if(order==2){CHECK(surface_add_ref(v)==1&&d->refcount==2);CHECK(device_release(d)==1&&callback_calls==before);CHECK(!surface_release(v));}
+ else if(order==3){CHECK(device_release(d)==1&&callback_calls==before+1&&!owner.refs&&parent_refs==1&&allocated==2);CHECK(!device_release(d));}
+ else CHECK(!device_release(d));
+ callback_device=NULL;CHECK(!owner.refs&&!allocated&&!parent_refs&&callback_calls==before+(order==4?2:1));
+ if(order==4)CHECK(!readded.refs);implicit_callbacks+=order==4?2:1;
+}
+`:""}
 printf("PASS actual API ${api} implicit private callbacks: %u exact finalizers; empty/owned-bound/last-public/retained-parent/reentrant-insertion orders, protected queries, deferred stores and complete cache cleanup\\n",implicit_callbacks);
 printf("PASS actual API ${api} surface private data: %u standalone/implicit/store lifetime, final device cleanup${api===8?', cached chain surfaces, retained texture-level stores, early chain release and allocation failures':''} cases\\n",cases);return 0;}
 `);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-I',root,dir+'/entry.c',root+'/runtime/d9wg_private_data.c',root+'/runtime/d9wg_present_pacing.c','-o',dir+'/entry'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/entry',[],{encoding:'utf8',timeout:20000});assert.equal(r.status,0,r.stderr+' signal='+r.signal);process.stdout.write(r.stdout);}}finally{fs.rmSync(dir,{recursive:true,force:true});}

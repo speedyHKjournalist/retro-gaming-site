@@ -11,6 +11,7 @@ try{for(const api of[8,9]){const source=readComparisonSource(process.env['D'+api
 #include "runtime/d9wg_reset.h"
 typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef void*HWND;typedef struct{int unused;}RECT,RGNDATA;typedef struct{int64_t QuadPart;}LARGE_INTEGER;
 #define WINAPI
+#define FAILED(hr) ((hr)<0)
 #define D3D_OK 0
 #define D3DERR_DRIVERINTERNALERROR (-1)
 #define D3DERR_WASSTILLDRAWING (-2)
@@ -22,7 +23,7 @@ typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef voi
 #define TRACE_MARK_EXIT(...)
 #define SUCCEEDED(hr) ((hr)>=0)
 typedef struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;HWND hDeviceWindow;}Parameters;
-typedef struct{D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Parameters present;struct{DWORD RefreshRate;}display_mode;int iface;}Device;
+typedef struct{int implicit_swap_chain;D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Parameters present;struct{DWORD RefreshRate;}display_mode;int iface;}Device;
 typedef struct{D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Device*device;Parameters present;DWORD handle;}Chain;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};
 static unsigned mode,locked,emits,fail_emit,env_reads,qpc_reads,sleeps,device_emits,chain_emits;static uint64_t time_us;static HWND last_window;
@@ -37,6 +38,7 @@ ${api===9?'static Chain*swap_chain_from_iface(Chain*c){return c;}':''}
 static BOOL emit_present_and_flush(Device*d,HWND window){(void)d;assert(!locked);locked=1;emits++;device_emits++;last_window=window;locked=0;return !fail_emit;}
 static BOOL emit_present_swap_chain_and_flush(Chain*c,HWND window){assert(c->handle&&!locked);locked=1;emits++;chain_emits++;last_window=window;locked=0;return !fail_emit;}
 #include "${process.env.D9WG_CHAIN_BRIDGE||root+'/runtime/d9wg_present_pacing_bridge.h'}"
+${api===9?'static HRESULT swap_chain_prepare_buffers(void*p){(void)p;return 0;}static HRESULT swap_chain_advance_buffers(void*p){(void)p;return 0;}':''}
 ${extract(source,'device_present').replace(/&device->iface/g,'device').replace(/&swap_chain->device->iface/g,'swap_chain->device')}
 ${extract(source,api===8?'swapchain_present':'swap_chain_present').replace(/&device->iface/g,'device').replace(/&swap_chain->device->iface/g,'swap_chain->device')}
 #define PRESENT(c,flags,window) ${api===8?'swapchain_present(c,NULL,NULL,window,NULL)':'swap_chain_present(c,NULL,NULL,window,NULL,flags)'}
