@@ -4,9 +4,9 @@ const root=path.resolve(__dirname,".."),nine=fs.readFileSync(process.env.D8WG_SH
 function extract(source,name){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end).replace(/__attribute__\s*\(\(__stdcall__\)\)/g,"");}
 // S2-41 contract delta to the frozen legacy oracle: CND is legal in ps_1_4.
 function legacyCnd14(source){const before="if (!is_pixel_shader || minor > 3u) return FALSE;";assert.equal(source.split(before).length,2);return source.replace(before,"if (!is_pixel_shader || minor > 4u) return FALSE;");}
-function preprocess(api,body){const file=dir+"/sdk"+api+".c";fs.writeFileSync(file,`#include <d3d${api}.h>\n#include "${root}/d3d9proxy/d3d9_core.h"\n#define TRACE(...)\n#define D8WG_TRACE(...)\n`+body.replace(/\bWINAPI\b/g,""));const p=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P",file],{encoding:"utf8",maxBuffer:16<<20});assert.equal(p.status,0,p.stderr);return p.stdout;}
+function preprocess(api,body){const file=dir+"/sdk"+api+".c";fs.writeFileSync(file,`#include <d3d${api}.h>\n#include "${root}/d3d9proxy/d3d9_core.h"\n#include "${root}/runtime/d9wg_declaration8.h"\n#define TRACE(...)\n#define D8WG_TRACE(...)\n`+body.replace(/\bWINAPI\b/g,""));const p=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P",file],{encoding:"utf8",maxBuffer:16<<20});assert.equal(p.status,0,p.stderr);return p.stdout;}
 try{
- const old8=legacyCnd14(fs.readFileSync(root+"/tests/fixtures/d3d8_shader_validation_before_core.c","utf8")),create8=["vertex","pixel"].map(k=>fs.readFileSync(root+"/tests/fixtures/d3d8_device_create_"+k+"_shader_before_validation_core.c","utf8")).join("\n"),old9=fs.readFileSync(root+"/tests/fixtures/d3d9_shader_create_before_validation8.c","utf8"),names=["shader8_regtype_valid","shader8_opcode_supported","shader8_validate_body","shader_token_count","shader_bytecode_hash","create_shader_object","create_shader","device_create_vertex_shader","device_create_pixel_shader"];
+ const old8=legacyCnd14(fs.readFileSync(root+"/tests/fixtures/d3d8_shader_validation_before_core.c","utf8")),create8=["vertex","pixel"].map(k=>fs.readFileSync(root+"/tests/fixtures/d3d8_device_create_"+k+"_shader_before_validation_core.c","utf8")).join("\n"),old9=fs.readFileSync(root+"/tests/fixtures/d3d9_shader_create_before_validation8.c","utf8"),names=["shader8_regtype_valid","shader8_opcode_supported","shader8_validate_body","shader8_inputs_declared","shader_token_count","shader_bytecode_hash","create_shader_object","create_shader","device_create_vertex_shader","device_create_pixel_shader"];
  const sdk8=preprocess(8,"#define D8WG_TRACE_ERROR(v) (v)\n"+old8+create8),sdk9=preprocess(9,"#define TRACE_REFUSE(v) (v)\n#define D9_SIO_OPCODE_MASK 0xffffu\n#define D9_SIO_COMMENT 0xfffeu\n#define D9_SIO_END 0xffffu\n#define D9_SIO_DEF 81u\n#define D9_SIO_DEFI 48u\n#define D9_SIO_DEFB 47u\n"+names.map(n=>extract(nine,n)).join("\n")+old9.replace(/\bcreate_shader\b/g,"create_before9"));
  function enumeration(s,n){const m=s.match(new RegExp("typedef enum _"+n+"\\s*\\{[\\s\\S]*?\\}\\s*"+n+"\\s*;"));assert(m,n);return m[0];}
  const reg8=s=>s.replace(/\b(D3DSPR_\w+|_D3DSHADER_PARAM_REGISTER_TYPE|D3DSHADER_PARAM_REGISTER_TYPE)\b/g,"before8_$1"),before=s=>reg8(s).replace(/\b(shader_regtype_valid|shader_opcode_supported|validate_shader_body)\b/g,"before8_$1");
@@ -57,7 +57,7 @@ static UINT release_decl(IDirect3DVertexDeclaration9*c){assert(c&&c->refs==1&&de
 #define IDirect3DVertexDeclaration9_Release release_decl
 #define IDirect3DDevice9_CreatePixelShader device_create_pixel_shader
 ${["shader_regtype_valid","shader_opcode_supported","validate_shader_body"].map(n=>before(extract(sdk8,n))).join("\n")}
-${["shader8_regtype_valid","shader8_opcode_supported","shader8_validate_body","shader_token_count","shader_bytecode_hash"].map(n=>extract(sdk9,n)).join("\n")}
+${["shader8_regtype_valid","shader8_opcode_supported","shader8_validate_body","shader8_inputs_declared","shader_token_count","shader_bytecode_hash"].map(n=>extract(sdk9,n)).join("\n")}
 ${prefix("device_create_vertex_shader")}
 ${prefix("device_create_pixel_shader")}
 ${["create_shader_object","create_shader","create_before9","device_create_vertex_shader","device_create_pixel_shader"].map(n=>extract(sdk9,n)).join("\n")}
@@ -76,6 +76,18 @@ for(UINT api=8;api<=9;api++)for(UINT kind=0;kind<6;kind++)for(UINT declaration_k
  expected_count=expected_defs(golden,function,8,declaration_kind==1);expected_input=golden;D9Device d={.api=api,.refs=1};IDirect3DVertexDeclaration9*layout=(void*)(uintptr_t)77;IDirect3DVertexShader9*vs=(void*)(uintptr_t)77;reset_counters();fail_at=fault>=1&&fault<=4?fault:0;fail_decl_emit=fault==5;fail_emit=fault==6;BOOL valid=api==8&&(kind<=2)&&(declaration_kind<=2)&&!(kind==0&&declaration_kind==2);HRESULT expected=!valid?D3DERR_INVALIDCALL:fail_at==1?E_OUTOFMEMORY:fail_decl_emit?D3DERR_DRIVERINTERNALERROR:kind&&fail_at>=2&&fail_at<=4?E_OUTOFMEMORY:kind&&fail_emit?D3DERR_DRIVERINTERNALERROR:0;
  HRESULT hr=d9wg_d3d9_core_vertex_shader8(&d,decl,kind?function:NULL,&layout,&vs);CHECK(hr==expected&&!memcmp(decl_before,decl,decl_bytes));if(hr){CHECK(!layout&&!vs&&d.refs==1&&!d.shaders&&!live&&!decl_live&&!shader_live&&child_adds==child_releases);}else{CHECK(!kind||d.shaders);CHECK(layout&&layout->device==&d&&layout->refs==1&&vs==(kind?&d.shaders->iface.vertex:NULL));CHECK(d.refs==(kind?3u:2u)&&decl_live==1&&shader_live==(UINT)(kind!=0));D9Shader*s=kind?d.shaders:NULL;if(s){CHECK(!s->is_pixel&&s->token_count==expected_count&&!memcmp(s->code,golden,expected_count*4)&&s->iface.vertex.lpVtbl==&g_vertex_shader_vtbl);}retire_pair(&d,s,layout);CHECK(d.refs==1&&!live&&!decl_live&&!shader_live&&child_adds==child_releases);}cases++;
 }
+/* A declaration supplies only v0: every other source input must fail
+ * before creating either object, including with allocation failures armed. */
+for(UINT input=1;input<16;input++){
+ DWORD code[]={0xfffe0101u,1u,0xc00f0000u,0x90e40000u|input,0xffffu};
+ D9Device d={.api=8,.refs=1};IDirect3DVertexDeclaration9*c=(void*)(uintptr_t)77;IDirect3DVertexShader9*s=(void*)(uintptr_t)77;
+ reset_counters();fail_at=1;fail_emit=fail_decl_emit=0;
+ CHECK(d9wg_d3d9_core_vertex_shader8(&d,base,code,&c,&s)==D3DERR_INVALIDCALL);
+ CHECK(!c&&!s&&!attempts&&!live&&d.refs==1);cases++;
+}
+/* Input-looking words inside comments and DEF literals are not reads. */
+{const DWORD words[]={0x0002fffeu,0x90e40001u,0x90e4001fu,81u,0xa00f0000u,0x90e40002u,0xffffffffu,0xffffu,0u};
+ CHECK(shader8_inputs_declared(base,3,words,9,1));cases++;}
 /* NativecorePS8: fiveSM1.x versions,wrongprofile/kind/version/body andeach allocation/emit failure. */
 for(UINT api=8;api<=9;api++)for(UINT minor=0;minor<6;minor++)for(UINT fault=0;fault<4;fault++){DWORD ps[]={0xffff0100u|minor,1,0x800f0000u,0x90e40000u,0xffffu};expected_input=ps;expected_count=5;D9Device d={.api=api,.refs=1};IDirect3DPixelShader9*out=(void*)(uintptr_t)77;reset_counters();fail_at=fault<2?fault+1:0;fail_emit=fault==2;fail_decl_emit=0;HRESULT expected=api!=8||minor>4?D3DERR_INVALIDCALL:fault<2?E_OUTOFMEMORY:fault==2?D3DERR_DRIVERINTERNALERROR:0;CHECK(d9wg_d3d9_core_pixel_shader8(&d,ps,&out)==expected);if(expected)CHECK(!out&&d.refs==1&&!live&&!d.shaders&&!shader_live);else{CHECK(out==&d.shaders->iface.pixel&&d.shaders->is_pixel);retire_pair(&d,d.shaders,NULL);CHECK(d.refs==1&&!live&&!shader_live);}cases++;}
 /* The original8 program limit is checked beforethe18trustedDEF words areinserted. */

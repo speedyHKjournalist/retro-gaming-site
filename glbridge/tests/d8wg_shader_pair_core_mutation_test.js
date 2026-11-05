@@ -1,6 +1,7 @@
 "use strict";
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'shader8-pair-mut-')),core=fs.readFileSync(root+'/d3d9proxy/d3d9_proxy.c','utf8'),defs=fs.readFileSync(root+'/runtime/d9wg_shader8_local_defs.h','utf8');
 const plan=[
+ ['missing vertex input accepted','shader8_inputs_declared','if (reg >= 32u || !(declared & (1u << reg))) return FALSE;','if (reg >= 32u || declared == 0xffffffffu) return FALSE;'],
  ['pair profile','d9wg_d3d9_core_vertex_shader8','device_compatibility_api(device_from_iface(iface)) != 8u','device_compatibility_api(device_from_iface(iface)) != 9u'],
  ['layout failure output','d9wg_d3d9_core_vertex_shader8','if (layout_out) *layout_out = NULL;','/* layout output not cleared */'],
  ['shader failure output','d9wg_d3d9_core_vertex_shader8','if (shader_out) *shader_out = NULL;','/* shader output not cleared */'],

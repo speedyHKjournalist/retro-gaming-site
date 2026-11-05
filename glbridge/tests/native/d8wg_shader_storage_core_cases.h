@@ -9,7 +9,8 @@ static HRESULT WINAPI storage8_record(Interface*iface,const void*context){
 }
 static void WINAPI storage8_retired(void*p){
  Storage8Context*x=p;D9Device*d=x->device;
- if(x->retired++||device_destroys!=x->destroy_before+1||d->refcount||d->child_parent_refs||d->parent->refs!=1||d->state_blocks||d->vertex_shader||d->pixel_shader||d->vertex_declaration||x->decl->refcount||x->vs->refcount||x->ps->refcount||x->decl->binding_refs!=1||x->vs->binding_refs!=1||x->ps->binding_refs!=1)storage8_errors++;
+ /* Frontend-held shader resources retire before device destruction/flush. */
+ if(x->retired++||device_destroys!=x->destroy_before||d->refcount||d->child_parent_refs||d->parent->refs!=1||d->state_blocks||d->vertex_shader||d->pixel_shader||d->vertex_declaration||x->decl->refcount||x->vs->refcount||x->ps->refcount||x->decl->binding_refs!=1||x->vs->binding_refs!=1||x->ps->binding_refs!=1)storage8_errors++;
  UINT before=destroys;shader_storage_retiring=TRUE;
  if(STORAGE_RELEASE(&d->iface,&x->decl->iface)||STORAGE_RELEASE(&d->iface,&x->vs->iface.vertex)||STORAGE_RELEASE(&d->iface,&x->ps->iface.pixel))storage8_errors++;
  shader_storage_retiring=FALSE;
@@ -40,7 +41,7 @@ static int shader_storage8_core_cases(void){
   if(order==3){D9Surface*bb=HeapAlloc(NULL,8,sizeof(*bb));bb->iface.lpVtbl=&g_surface_vtbl;bb->device=d;bb->backbuffer=TRUE;d->implicit_back_buffer=bb;BYTE tag[16]={47,1};CHECK(!d9wg_private_set(&bb->private_data,tag,&private_data,sizeof(void*),D9WG_PRIVATE_IUNKNOWN,&d9wg_private_ops)&&private_data.refs==1);storage8_finalizing=&meta;device_view_finalizer_hook=storage8_finalizer;}
   CHECK(device_release(&d->iface)==(order==3?1u:0u));
   if(order==3){CHECK(!meta.retired&&meta.finalizers==1&&!storage8_errors&&private_data.calls==1&&!private_data.refs&&d->refcount==1&&!d->child_parent_refs&&decl->binding_refs==1&&vs->binding_refs==1&&ps->binding_refs==1);CHECK(!storage8_record(&d->iface,&meta)&&!device_release(&d->iface));device_view_finalizer_hook=NULL;storage8_finalizing=NULL;}
-  CHECK(meta.retired==1&&!storage8_errors&&!live&&!parent.refs&&!g_core_views8&&!view_lock_depth);cases++;
+  CHECK(meta.retired==1&&!storage8_errors&&!live&&!parent.refs&&!g_core_views8&&!view_lock_depth&&!g_command_count);cases++;
  }
  Parent parent={0};D9Device*d=new_device(&parent);D9VertexDeclaration*decl=new_declaration(d);D9Shader*vs=new_shader(d,FALSE),*ps=new_shader(d,TRUE);Interface*objects[3]={&decl->iface,&vs->iface.vertex,&ps->iface.pixel};int alien;Interface bad={.lpVtbl=&alien};D9Device foreign={0};foreign.iface.lpVtbl=&g_device_vtbl;
 #define STORAGE_REJECT(dev,obj) do{UINT n=allocations,commands=pair_submissions;LONG refs=d->refcount,pins=d->child_parent_refs;CHECK(STORAGE_ADD(dev,obj)==D3DERR_INVALIDCALL&&STORAGE_RELEASE(dev,obj)==D3DERR_INVALIDCALL);CHECK(allocations==n&&pair_submissions==commands&&d->refcount==refs&&d->child_parent_refs==pins&&decl->refcount==1&&vs->refcount==1&&ps->refcount==1&&!decl->binding_refs&&!vs->binding_refs&&!ps->binding_refs);cases++;}while(0)

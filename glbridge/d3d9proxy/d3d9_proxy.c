@@ -5128,11 +5128,6 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
         restore_display_mode(device);
         destroy.resource_handle = device->handle;
         destroy.resource_kind = 0;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        EnterCriticalSection(&g_transport_lock);
-        if (g_command_count)
-            submit_batch_locked(FALSE);
-        LeaveCriticalSection(&g_transport_lock);
         TRACE("LEAVE Device.Release free object=%08lX refs=0 child_refs=%ld",
                 (DWORD)(uintptr_t)iface,
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
@@ -5153,6 +5148,15 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
         /* Frontend Device8 metadata outlives every implicit surface view.
          * Private-data finalizers and any resurrection already ran above. */
         core_view_retire8(device);
+        /* Raw8 shader handles own private storage until metadata retirement.
+         * Their final releases enqueue resource destruction above. Submit only
+         * after those commands, or the last shader survives until owner cleanup
+         * when no later device operation happens to flush the queue. */
+        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+        EnterCriticalSection(&g_transport_lock);
+        if (g_command_count)
+            submit_batch_locked(FALSE);
+        LeaveCriticalSection(&g_transport_lock);
         /* Registry queries in retirement callbacks still inspect the parent
          * compatibility profile. Keep that factory alive through every view. */
         IDirect3D9_Release(&device->parent->iface);
@@ -17720,6 +17724,42 @@ HRESULT WINAPI d9wg_d3d9_core_set_vertex_shader8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_SetVertexShader(iface, shader_iface);
 }
 
+/* Both streams have already passed their bounded parsers. Native API8
+ * rejects a vertex program that reads inputs absent from its declaration;
+ * API9 creates the two objects independently and must not inherit this rule.
+ * Skip declaration constants, comments and shader DEF literals explicitly. */
+static BOOL shader8_inputs_declared(const DWORD *declaration, UINT decl_words,
+        const DWORD *body, UINT body_words, UINT minor)
+{
+    DWORD declared = 0;
+    for (UINT i = 0; i < decl_words; ++i) {
+        DWORD token = declaration[i];
+        UINT type = (token & D3D8VSD_TOKENTYPEMASK) >> D3D8VSD_TOKENTYPESHIFT;
+        if (type == D3D8VSD_TOKEN_CONSTMEM) {
+            i += ((token & D3D8VSD_CONSTCOUNTMASK) >> D3D8VSD_CONSTCOUNTSHIFT) * 4u;
+        } else if (type == D3D8VSD_TOKEN_STREAMDATA && !(token & D3D8VSD_SKIPFLAG)) {
+            UINT reg = token & D3D8VSD_VERTEXREGMASK;
+            if (reg < 32u) declared |= 1u << reg;
+        }
+    }
+    for (UINT i = 0; i < body_words;) {
+        UINT opcode = body[i] & D3DSI_OPCODE_MASK, operands;
+        if (opcode == D3DSIO_COMMENT) {
+            i += 1u + ((body[i] & D3DSI_COMMENTSIZE_MASK) >> D3DSI_COMMENTSIZE_SHIFT);
+            continue;
+        }
+        if (!shader8_opcode_supported((WORD)opcode, FALSE, minor, &operands)) return FALSE;
+        if (opcode != D3DSIO_DEF) for (UINT source = 1; source < operands; ++source) {
+            DWORD token = body[i + 1u + source];
+            if ((token & D3DSP_REGTYPE_MASK) != (D3DSPR_INPUT << D3DSP_REGTYPE_SHIFT)) continue;
+            UINT reg = token & D3DSP_REGNUM_MASK;
+            if (reg >= 32u || !(declared & (1u << reg))) return FALSE;
+        }
+        i += operands + 1u;
+    }
+    return TRUE;
+}
+
 /* Raw8 GetDeclaration/GetFunction and DWORD handle ownership belong to
  * the frontend. Returned shader storage includes injected local DEFs and
  * END, while this entry validates the original unexpanded8 input bound. */
@@ -17748,6 +17788,8 @@ HRESULT WINAPI d9wg_d3d9_core_vertex_shader8(IDirect3DDevice9 *iface,
             || !d9wg_declaration8_elements(declaration, tokens, wire, 32,
                 &elements, constants, 96, mask, &vectors))
         return D3DERR_INVALIDCALL;
+    if (function && !shader8_inputs_declared(declaration, tokens, function + 1,
+            body, function[0] & 0xffu)) return D3DERR_INVALIDCALL;
     IDirect3DVertexDeclaration9 *layout = NULL;
     HRESULT hr = d9wg_d3d9_core_vertex_declaration8(iface, declaration,
             function == NULL, &layout);
