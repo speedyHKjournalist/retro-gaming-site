@@ -42,6 +42,7 @@ typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3D
 static const int g_texture_vtbl=1,${api===8?"g_cube_texture_vtbl":"g_cube_vtbl"}=2,g_volume_texture_vtbl=3;
 #define G_CUBE_VTBL ${api===8?"g_cube_texture_vtbl":"g_cube_vtbl"}
 static Device *device_from_iface(Device*p){return p;}
+${api===9?"static UINT device_compatibility_api(Device*d){return d->marker==8?8:9;}":""}
 static Texture *current_source,*current_destination;static UINT current_kind,skip,copied;static unsigned emits,fail_emit,event_error;
 static struct{UINT layer,level,size;BYTE *data;}events[192];
 static int emit_level(Texture*t,UINT kind,UINT layer,UINT level,const RECT*rect,UINT front,UINT depth){
@@ -61,5 +62,5 @@ static HRESULT call_update(Device*d,Texture*s,Texture*t){return device_update_te
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"texture copy SDK line %u API=${api}: %s event=%u\\n",__LINE__,#v,event_error);return 1;}}while(0)
 #include "tests/native/d9wg_texture_copy_cases.h"
 `;
- fs.writeFileSync(dir+"/copy.c",code);const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-I",root,"-I",root+"/runtime",dir+"/copy.c",process.env.D9WG_TEXTURE_COPY_RUNTIME_SOURCE||root+"/runtime/d9wg_runtime.c","-o",dir+"/copy"],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(dir+"/copy",[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);
+ fs.writeFileSync(dir+"/copy.c",code);const build=spawnSync(process.env.HOST_CC||"cc",[...(process.env.D9WG_SANITIZE?["-fsanitize=address,undefined","-fno-omit-frame-pointer"]:[]),"-std=c11","-Os","-Wall","-Wextra","-Werror","-I",root,"-I",root+"/runtime",dir+"/copy.c",process.env.D9WG_TEXTURE_COPY_RUNTIME_SOURCE||root+"/runtime/d9wg_runtime.c","-o",dir+"/copy"],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(dir+"/copy",[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);
 }}finally{fs.rmSync(dir,{recursive:true,force:true});}

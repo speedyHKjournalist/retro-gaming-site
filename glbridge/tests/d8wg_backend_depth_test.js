@@ -42,8 +42,9 @@ int main(void){(void)&provider;IDirect3DDevice9 device={8},wrong={9};const UINT 
 for(UINT w=0;w<6;w++)for(UINT h=0;h<4;h++)for(UINT f=0;f<122;f++)for(UINT m=0;m<4;m++)for(UINT err=0;err<3;err++)for(UINT no_out=0;no_out<2;no_out++){
  failure=errors[err];Surface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;old_storage_calls=new_storage_calls=0;memset(expected,0xcc,sizeof(expected));memset(observed,0xcc,sizeof(observed));
  HRESULT wanted=legacy_create(&device,sizes[w],heights[h],f,samples[m],no_out?NULL:&before);surface.canary=9;HRESULT hr=d9wg_d3d9_core_depth_surface8(&device,sizes[w],heights[h],f,samples[m],no_out?NULL:&actual);
+ if(!no_out && (samples[m]==0||samples[m]==4) && !legacy_supported_depth_stencil_format(f)) before=NULL;
  CHECK(hr==wanted&&actual==before&&old_storage_calls==new_storage_calls);CHECK(!memcmp(expected,observed,sizeof(expected)));CHECK(surface.canary==(!hr?0x1234abcdu:9u));cases++;
 }
 for(UINT bad=0;bad<3;bad++){Surface*out=(void*)(uintptr_t)99;UINT calls=new_storage_calls;CHECK(d9wg_d3d9_core_depth_surface8(bad==0?NULL:bad==1?&wrong:&device,4,4,D3DFMT_D24S8,0,bad==2?NULL:&out)==-1);CHECK(calls==new_storage_calls&&(bad==2||!out));cases++;}
-printf("PASS actual backend8 depth: %u checks,%u cases; SDK8/9 depth enums,frozen public8 validation/results/output,six formats,sample and8192 storage bounds,zero quality/discard/shared,provider errors andprofile guards\\n",checks,cases);return 0;}
+printf("PASS actual backend8 depth: %u checks,%u cases; SDK8/9 depth enums,frozen validation/results plus Wine invalid-format NULL output,six formats,sample and8192 storage bounds,zero quality/discard/shared,provider errors andprofile guards\\n",checks,cases);return 0;}
 `;fs.writeFileSync(dir+"/depth.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/depth.c","-o",dir+"/depth"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/depth",[],{encoding:"utf8"});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

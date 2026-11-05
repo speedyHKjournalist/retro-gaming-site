@@ -1,7 +1,7 @@
 "use strict";
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'texture8-adapter-mut-')),source=fs.readFileSync(root+'/d3d8proxy/d3d8_core_volume_texture.c','utf8');
 const plan=[
- ["borrowed getter wrong class","d8wg_core_volume_texture_backend8","texture->lpVtbl != &g_core_volume_texture8_vtbl","FALSE"],
+ ["borrowed getter wrong class","d8wg_core_volume_texture_backend8","((D8CoreVolumeTexture *)texture)->identity != &g_core_volume_texture8_vtbl","FALSE"],
  ["borrowed getter returns no backend","d8wg_core_volume_texture_backend8","return ((D8CoreVolumeTexture *)texture)->backend;","return NULL;"],
   [
     "QI stale output",
@@ -234,7 +234,7 @@ const plan=[
   [
     "Wrap wrong cached class accepted",
     "d8wg_core_wrap_volume_texture8",
-    "view->iface.lpVtbl != &g_core_volume_texture8_vtbl",
+    "view->identity != &g_core_volume_texture8_vtbl",
     "FALSE"
   ],
   [

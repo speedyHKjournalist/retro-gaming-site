@@ -6,7 +6,7 @@ const plan=[
  ["Unlock loses face","core_cube_texture8_unlock","texture->backend, (UINT)face, level);","texture->backend, ((UINT)face+1)%6, level);"],
  ["Dirty loses face","core_cube_texture8_add_dirty","texture->backend, (UINT)face, rect);","texture->backend, ((UINT)face+1)%6, rect);"],
 
- ["borrowed getter wrong class","d8wg_core_cube_texture_backend8","texture->lpVtbl != &g_core_cube_texture8_vtbl","FALSE"],
+ ["borrowed getter wrong class","d8wg_core_cube_texture_backend8","((D8CoreCubeTexture *)texture)->identity != &g_core_cube_texture8_vtbl","FALSE"],
  ["borrowed getter returns no backend","d8wg_core_cube_texture_backend8","return ((D8CoreCubeTexture *)texture)->backend;","return NULL;"],
   [
     "QI stale output",
@@ -245,7 +245,7 @@ const plan=[
   [
     "Wrap wrong cached class accepted",
     "d8wg_core_wrap_cube_texture8",
-    "view->iface.lpVtbl != &g_core_cube_texture8_vtbl",
+    "view->identity != &g_core_cube_texture8_vtbl",
     "FALSE"
   ],
   [

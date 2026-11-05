@@ -6,7 +6,7 @@ const cases=[
  ["additional rejects copy-vsync","d9wg_swap_effect_valid(api,","d9wg_swap_effect_valid(9,","device_create_additional_swap_chain","preflight"],
  ["additional rejects MSAA-lockable","d9wg_present_multisample_valid(api,","d9wg_present_multisample_valid(9,","device_create_additional_swap_chain","preflight"],
  ["additional omits8 format filter","if (api == 8 && params->BackBufferFormat != D3DFMT_UNKNOWN","if (0 && api == 8 && params->BackBufferFormat != D3DFMT_UNKNOWN","device_create_additional_swap_chain","preflight"],
- ["additional rejects8 fullscreen parent","(api == 9 && !device->present.Windowed)","!device->present.Windowed","device_create_additional_swap_chain","status"],
+ ["additional accepts8 fullscreen parent","!params->Windowed || !device->present.Windowed","!params->Windowed || (api == 9 && !device->present.Windowed)","device_create_additional_swap_chain","status"],
  ["additional rejects8 NULL window","if (api == 9 && !window)","if (!window)","device_create_additional_swap_chain","status"],
  ["additional UNKNOWN uses stale desktop","params->BackBufferFormat ? params->BackBufferFormat : device->display_mode.Format","params->BackBufferFormat ? params->BackBufferFormat : 22","device_create_additional_swap_chain","status"],
  ["additional loses client fallback","(UINT)(client.right - client.left), device->display_mode.Width);","(UINT)(client.right - client.left), 0);","device_create_additional_swap_chain","status"],

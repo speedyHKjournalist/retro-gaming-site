@@ -73,5 +73,37 @@ fail_emit=0;clear_events();free_texture(&source,1,FALSE);free_texture(&destinati
     CHECK(call_update(&device,&source,&destination)==-3&&!emits&&destination.levels[0].shadow&&!destination.levels[1].shadow);
     for(unsigned i=0;i<3;++i){CHECK(!destination.levels[i].shadow_valid);if(destination.levels[i].shadow)for(UINT b=0;b<destination.levels[i].byte_count;++b)CHECK(!destination.levels[i].shadow[b]);}fail_alloc=0;
     CHECK(call_update(&device,&source,&destination)==0);CHECK(inspect_texture(&source,&destination,0,1,3,TRUE)==0);clear_events();free_texture(&source,0,FALSE);free_texture(&destination,0,TRUE);
+#if API == 9
+    /* Actual common-core API8 path: locked containers do not veto updates;
+     * mismatched volume storage copies the in-bounds raw prefix only. */
+    device.marker=8;
+    for(UINT kind=0;kind<3;kind++)for(UINT shape=0;shape<(kind==2?3u:1u);shape++)
+    for(UINT locked=0;locked<4;locked++)for(UINT format=0;format<(kind==2?2u:1u);format++)
+    for(UINT lazy=0;lazy<2;lazy++)for(UINT failure=0;failure<3;failure++) {
+        if(failure==1&&!lazy)continue;
+        UINT base=kind==2?(2u<<shape):4u,first=base==8?1:0,count=3-first;
+        build_texture(&source,&device,kind,base,base,base,3,FALSE,TRUE);
+        build_texture(&destination,&device,kind,4,4,4,3,lazy,FALSE);
+        if(format)destination.format=22;
+        for(UINT l=0;l<3*(kind==1?6u:1u);l++){source.levels[l].locked=locked&1;destination.levels[l].locked=locked&2;}
+        current_source=&source;current_destination=&destination;current_kind=kind;skip=first;copied=count;clear_events();
+        fail_alloc=failure==1?attempts+1:0;fail_emit=failure==2?2:0;
+        HRESULT hr=call_update(&device,&source,&destination);
+        CHECK(hr==(failure==1?-3:failure==2?-2:0)&&!event_error);
+        UINT written=failure==1?0:failure==2?2:count*(kind==1?6:1);
+        CHECK(emits==written);
+        for(UINT layer=0;layer<(kind==1?6u:1u);layer++)for(UINT level=0;level<3;level++){
+            Level *to=destination.levels+layer*3+level;
+            BOOL changed=level<count && layer*count+level<written;
+            if(!to->shadow){CHECK(lazy&&!changed);continue;}
+            Level *from=source.levels+layer*3+first+(level<count?level:0);
+            UINT prefix=to->byte_count<from->byte_count?to->byte_count:from->byte_count;
+            for(UINT b=0;b<to->byte_count;b++)CHECK(to->shadow[b]==(changed&&b<prefix?from->shadow[b]:lazy?0:0x3c));
+            if(changed){CHECK(to->shadow_valid);CHECK(!memcmp(events[layer*count+level].data,to->shadow,to->byte_count));}
+        }
+        fail_alloc=fail_emit=0;clear_events();free_texture(&source,kind,FALSE);free_texture(&destination,kind,lazy);++tested;
+    }
+    device.marker=0;
+#endif
     CHECK(allocations==frees);printf("PASS actual API %u UpdateTexture: %u 2D/cube/volume mip-layout/lazy cases, independent face strides, truncated/missing mips, exact upload bytes, skipped locks, late invalid atomicity, OOM-before-copy, shadow validity and accepted transport prefixes\n",API,tested);return 0;
 }

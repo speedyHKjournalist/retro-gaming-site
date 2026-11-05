@@ -12,6 +12,7 @@ typedef struct D8CoreVolumeTexture {
     struct IDirect3DVolumeTexture9 *backend;
     const D9WGVolumeTextureMethods8 *methods;
     IDirect3DDevice8 *device;
+    const void *identity;
 } D8CoreVolumeTexture;
 static IDirect3DVolumeTexture8Vtbl g_core_volume_texture8_vtbl;
 static BOOL core_volume_texture8_guid(REFIID a, REFIID b)
@@ -163,6 +164,7 @@ HRESULT WINAPI d8wg_core_wrap_volume_texture8(struct IDirect3DVolumeTexture9 *ow
         view = (D8CoreVolumeTexture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*view));
         if (!view) { hr = E_OUTOFMEMORY; goto done; }
         view->iface.lpVtbl = &g_core_volume_texture8_vtbl;
+        view->identity = &g_core_volume_texture8_vtbl;
         view->backend = owned;
         view->methods = methods;
         view->device = device;
@@ -176,7 +178,7 @@ HRESULT WINAPI d8wg_core_wrap_volume_texture8(struct IDirect3DVolumeTexture9 *ow
             view = (D8CoreVolumeTexture *)cached;
         }
     }
-    if (view->iface.lpVtbl != &g_core_volume_texture8_vtbl || view->device != device) {
+    if (view->identity != &g_core_volume_texture8_vtbl || view->device != device) {
         hr = D3DERR_INVALIDCALL;
         goto done;
     }
@@ -190,6 +192,6 @@ done:
 
 struct IDirect3DVolumeTexture9 *WINAPI d8wg_core_volume_texture_backend8(IDirect3DVolumeTexture8 *texture)
 {
-    if (!texture || texture->lpVtbl != &g_core_volume_texture8_vtbl) return NULL;
+    if (!texture || ((D8CoreVolumeTexture *)texture)->identity != &g_core_volume_texture8_vtbl) return NULL;
     return ((D8CoreVolumeTexture *)texture)->backend;
 }

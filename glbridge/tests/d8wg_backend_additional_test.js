@@ -120,6 +120,7 @@ ${api===9?`{
 for(UINT format=21;format<=26;format++)for(UINT window=0;window<4;window++)for(UINT sample=0;sample<2;sample++){
  empty_client=window==3;d.display_mode.Format=format;d.present.Windowed=window==2?0:1;d.creation.hFocusWindow=window==0?NULL:(void*)(uintptr_t)0x44;observed_window=window==0?NULL:d.creation.hFocusWindow;
  D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=0,.MultiSampleType=sample?4:0,.Flags=sample?1:0},expected=p;expected.BackBufferCount=1;Interface*out=NULL;UINT queries=desktop_queries;
+ if(window==2){CHECK(CREATE(&d,&p,&out)==D3DERR_INVALIDCALL&&!out&&!live&&d.refs==1&&!d.pins&&!memcmp(&p,&(D3DPRESENT_PARAMETERS){.SwapEffect=1,.Windowed=1,.BackBufferFormat=0,.MultiSampleType=sample?4:0,.Flags=sample?1:0},sizeof(p)));cases++;continue;}
  CHECK(CREATE(&d,&p,&out)==D3D_OK&&out);Chain*c=(Chain*)out;${api===9?'CHECK(((Surface*)c->back_buffer)->lockable_render_target==!!(p.Flags&1));':''}
  CHECK(c->present.BackBufferWidth==128&&c->present.BackBufferHeight==96&&c->present.BackBufferCount==1&&c->present.BackBufferFormat==format&&c->present.MultiSampleType==(sample?4u:0u)&&c->present.Flags==(sample?1u:0u)&&!c->present.MultiSampleQuality&&c->present.hDeviceWindow==d.creation.hFocusWindow);
  CHECK(!memcmp(&p,&expected,sizeof(p))&&desktop_queries==queries&&last_texture_format==format&&last_ms==(sample?4u:0u));CHECK(!RELEASE(out)&&!live&&d.refs==1&&!d.pins&&!d.additional_swap_chains);cases++;
