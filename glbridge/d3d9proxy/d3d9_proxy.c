@@ -1226,6 +1226,7 @@ struct D9Texture {
     DWORD lod;
     D9WGPrivateStore private_data;
     D9TextureLevel *levels;
+    BYTE *mip_storage; /* API8 CPU pools: contiguous mip/face allocation. */
     D9Texture *next_device_resource;
     /* Private surface/backbuffer storage: its public owner holds the device pin. */
     BOOL private_back_buffer;
@@ -1250,6 +1251,7 @@ struct D9CubeTexture {
     DWORD lod;
     D9WGPrivateStore private_data;
     D9TextureLevel *levels; /* face * level_count + level */
+    BYTE *mip_storage; /* face-major, each face begins on a 16-byte boundary. */
     D9CubeTexture *next_device_resource;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
      * downsample with. Zero means it never said, which D3D9 reports as
@@ -1585,7 +1587,6 @@ static void surface_binding_release(D9Surface *surface)
 static BOOL state_block_record_render_state(D9Device *device, UINT state, DWORD value);
 static BOOL state_block_record_texture_stage_state(D9Device *device, UINT stage, UINT state, DWORD value);
 static BOOL state_block_record_sampler_state(D9Device *device, UINT sampler, UINT state, DWORD value);
-static const float *state_block_transform_source(D9Device *device, UINT state);
 static BOOL state_block_record_transform(D9Device *device, UINT state, const D3DMATRIX *matrix);
 static BOOL state_block_record_palette(D9Device *device, UINT index);
 static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material);
@@ -2308,6 +2309,7 @@ static BOOL supported_depth_stencil_format(D3DFORMAT format)
 }
 
 static BOOL supported_volume_texture_format(D3DFORMAT format);
+static BOOL supported_volume_texture_format8(D3DFORMAT format);
 static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
         D3DTEXTUREFILTERTYPE filter, BOOL defer_generation);
 /* N-patch tessellation, defined with the other higher-order primitive code far
@@ -4520,7 +4522,12 @@ static HRESULT WINAPI d3d_check_device_format8(IDirect3D9 *iface,
         DWORD usage, D3DRESOURCETYPE resource_type, D3DFORMAT format)
 {
     (void)iface;
-    (void)adapter_format;
+    if (adapter_format == D3DFMT_UNKNOWN
+            || resource_type == D3DRTYPE_VERTEXBUFFER
+            || resource_type == D3DRTYPE_INDEXBUFFER)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (adapter_format == D3DFMT_A8R8G8B8)
+        return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     if (adapter || type != D3DDEVTYPE_HAL)
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     if (resource_type == D3DRTYPE_TEXTURE
@@ -4710,7 +4717,7 @@ static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D9 *iface,
     (void)adapter_format; (void)render_format;
     ok = !adapter && type == D3DDEVTYPE_HAL
             && (d3d_from_iface(iface)->compatibility_api == 8
-                    ? supported_depth_stencil_format8(depth_format)
+                    ? (depth_format != D3DFMT_D32 && supported_depth_stencil_format8(depth_format))
                     : supported_depth_stencil_format(depth_format));
 
     TRACE("OK CheckDepthStencilMatch adapter=%lu type=%lu adapter_fmt=%08lX "
@@ -6006,6 +6013,11 @@ static HRESULT WINAPI device_present(IDirect3DDevice9* iface,
     const RGNDATA* dirty_region)
 {
     BOOL ok;
+    HWND window = override_window ? override_window
+            : device_from_iface(iface)->present.hDeviceWindow;
+    if (!window) window = device_from_iface(iface)->creation.hFocusWindow;
+    if (device_compatibility_api(device_from_iface(iface)) == 8u && !IsWindow(window))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     HRESULT status = d9wg_reset_present_result(&device_from_iface(iface)->reset_state);
     if (status != D3D_OK)
         return TRACE_REFUSE(status);
@@ -6169,21 +6181,28 @@ static HRESULT WINAPI device_clear(IDirect3DDevice9 *iface, DWORD rect_count,
     return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
-static HRESULT WINAPI device_set_transform(IDirect3DDevice9 *iface,
+/* MultiplyTransform updates primary state even during BeginStateBlock. */
+static HRESULT device_set_live_transform(D9Device *device,
         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
 {
-    D9Device *device = device_from_iface(iface);
-    uint32_t slot;
     D9WGSetTransform command;
-    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (state_block_record_transform(device, (UINT)state, matrix)) return D3D_OK;
     CopyMemory(device->transforms[state], matrix, sizeof(float) * 16);
     command.device_handle = device->handle;
     command.state = (uint32_t)state;
     CopyMemory(command.matrix, matrix, sizeof(command.matrix));
     return emit_command(D9WG_OP_SET_TRANSFORM, &command, sizeof(command))
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+
+static HRESULT WINAPI device_set_transform(IDirect3DDevice9 *iface,
+        D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
+{
+    D9Device *device = device_from_iface(iface);
+    uint32_t slot;
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (state_block_record_transform(device, (UINT)state, matrix)) return D3D_OK;
+    return device_set_live_transform(device, state, matrix);
 }
 
 static HRESULT WINAPI device_get_transform(IDirect3DDevice9 *iface,
@@ -6461,7 +6480,8 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
         } else if (vtbl == (const void *)&g_volume_texture_vtbl) {
             volume = (D9VolumeTexture *)texture_iface;
             if (volume->device != device
-                    || (device_compatibility_api(device) == 8u && volume->pool == D3DPOOL_SCRATCH))
+                    || (device_compatibility_api(device) == 8u && volume->pool == D3DPOOL_SCRATCH
+                        && !supported_volume_texture_format8(volume->format)))
                 return TRACE_REFUSE(D3DERR_INVALIDCALL);
             handle = volume->handle;
         } else {
@@ -6642,7 +6662,10 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *buffer_out = NULL;
-    if (!length || pool > D3DPOOL_SCRATCH) {
+    if (!length || pool > D3DPOOL_SCRATCH
+            || (device_compatibility_api(device) == 8u
+                && (pool == D3DPOOL_SCRATCH
+                    || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))) {
         TRACE("FAIL CreateVertexBuffer length=%lu usage=%08lX fvf=%08lX pool=%lu -> %08lX",
                 length, usage, fvf, (DWORD)pool, (DWORD)D3DERR_INVALIDCALL);
         HOSTLOG_FAILED("CreateVertexBuffer refused: length=%lu usage=%08lX "
@@ -6727,7 +6750,10 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *buffer_out = NULL;
-    if (!length || pool > D3DPOOL_SCRATCH) {
+    if (!length || pool > D3DPOOL_SCRATCH
+            || (device_compatibility_api(device) == 8u
+                && (pool == D3DPOOL_SCRATCH
+                    || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))) {
         TRACE("FAIL CreateIndexBuffer length=%lu usage=%08lX format=%08lX pool=%lu -> %08lX",
                 length, usage, (DWORD)format, (DWORD)pool,
                 (DWORD)D3DERR_INVALIDCALL);
@@ -6813,6 +6839,36 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
+/* CPU pool mip pointers are part of the D3D8 API contract. Reserve every
+ * face before assigning pointers, so overflow/allocation failure is atomic. */
+static BYTE *allocate_mip_shadows(D9TextureLevel *levels, UINT level_count, UINT faces)
+{
+    UINT face, level, bytes = 0, offset = 0;
+    BYTE *storage;
+    for (face = 0; face < faces; ++face) {
+        for (level = 0; level < level_count; ++level) {
+            UINT size = levels[face * level_count + level].byte_count;
+            if (size > UINT32_MAX - bytes) return NULL;
+            bytes += size;
+        }
+        if (bytes > UINT32_MAX - 15u) return NULL;
+        bytes = (bytes + 15u) & ~15u;
+    }
+    if (!bytes) return NULL;
+    storage = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    if (!storage) return NULL;
+    for (face = 0; face < faces; ++face) {
+        for (level = 0; level < level_count; ++level) {
+            D9TextureLevel *data = &levels[face * level_count + level];
+            data->shadow = storage + offset;
+            data->shadow_valid = TRUE;
+            offset += data->byte_count;
+        }
+        offset = (offset + 15u) & ~15u;
+    }
+    return storage;
+}
+
 static HRESULT create_texture_object(D9Device *device,
         UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
         D3DPOOL pool, UINT api, IDirect3DTexture9 **texture_out)
@@ -6835,9 +6891,13 @@ static HRESULT create_texture_object(D9Device *device,
                 (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    if (api == 8u && format == D3DFMT_UNKNOWN)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *texture_out = NULL;
     if (api == 8u) {
-        if (usage & D3DUSAGE_WRITEONLY)
+        if ((usage & D3DUSAGE_WRITEONLY)
+                || ((usage & D3DUSAGE_DYNAMIC)
+                    && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!width || !height || width > 4096 || height > 4096
                 || !supported_format8(format, FALSE)
@@ -6940,15 +7000,20 @@ static HRESULT create_texture_object(D9Device *device,
             if (level_height > 1) level_height >>= 1;
             continue;
         }
-        level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
-                HEAP_ZERO_MEMORY, level_data->byte_count);
-        if (!level_data->shadow)
-            goto allocation_failed;
-        level_data->shadow_valid = TRUE;
+        if (api != 8u || pool == D3DPOOL_DEFAULT) {
+            level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
+                    HEAP_ZERO_MEMORY, level_data->byte_count);
+            if (!level_data->shadow) goto allocation_failed;
+            level_data->shadow_valid = TRUE;
+        }
         if (level_width > 1) level_width >>= 1;
         if (level_height > 1) level_height >>= 1;
     }
 
+    if (api == 8u && pool != D3DPOOL_DEFAULT) {
+        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 1u);
+        if (!texture->mip_storage) goto allocation_failed;
+    }
     if (!emit_texture_create(device, texture)) {
         failure = D3DERR_DRIVERINTERNALERROR;
         goto allocation_failed;
@@ -6975,9 +7040,10 @@ static HRESULT create_texture_object(D9Device *device,
 
 allocation_failed:
     for (level = 0; level < levels; ++level) {
-        if (texture->levels[level].shadow)
+        if (!texture->mip_storage && texture->levels[level].shadow)
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
     }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
     device_child_release(device);
     HeapFree(GetProcessHeap(), 0, texture->levels);
     HeapFree(GetProcessHeap(), 0, texture);
@@ -8680,7 +8746,8 @@ static BOOL emit_volume_texture_create(D9Device *device,
         D9VolumeTexture *texture)
 {
     D9WGCreateTextureVolume command;
-    if (device_compatibility_api(device) == 8u && texture->pool == D3DPOOL_SCRATCH)
+    if (device_compatibility_api(device) == 8u && texture->pool == D3DPOOL_SCRATCH
+            && !supported_volume_texture_format8(texture->format))
         return TRUE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
@@ -8699,7 +8766,8 @@ static BOOL emit_volume_texture_create(D9Device *device,
 static BOOL emit_volume_texture_update(D9VolumeTexture *texture, UINT level,
         const D3DBOX *box)
 {
-    if (device_compatibility_api(texture->device) == 8u && texture->pool == D3DPOOL_SCRATCH)
+    if (device_compatibility_api(texture->device) == 8u && texture->pool == D3DPOOL_SCRATCH
+            && !supported_volume_texture_format8(texture->format))
         return TRUE;
     D9TextureLevel *level_data = &texture->levels[level];
     D9TextureLevel slice = *level_data;
@@ -8743,6 +8811,8 @@ static HRESULT create_volume_texture_object(D9Device *device,
             "format=%08lX pool=%lu", width, height, depth, levels, usage,
             (DWORD)format, (DWORD)pool);
     if (!out)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *out = NULL;
     if (api == 8u) {
@@ -8901,7 +8971,8 @@ static void volume_texture_destroy_storage(D9VolumeTexture *texture)
     d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
     destroy.resource_handle = texture->handle;
     destroy.resource_kind = D9WG_RESOURCE_TEXTURE_VOLUME;
-    if (device_compatibility_api(texture->device) != 8u || texture->pool != D3DPOOL_SCRATCH)
+    if (device_compatibility_api(texture->device) != 8u || texture->pool != D3DPOOL_SCRATCH
+            || supported_volume_texture_format8(texture->format))
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     for (level = 0; level < texture->level_count; ++level) {
         d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
@@ -9613,17 +9684,17 @@ static HRESULT WINAPI device_multiply_transform(IDirect3DDevice9 *iface,
     const float *source;
     if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    source = state_block_transform_source(device, (UINT)state);
+    source = device->transforms[state];
     for (row = 0; row < 4; ++row) {
         for (column = 0; column < 4; ++column) {
             float value = 0.0f;
             for (k = 0; k < 4; ++k)
-                value += source[row * 4 + k]
-                        * ((const float *)matrix)[k * 4 + column];
+                value += ((const float *)matrix)[row * 4 + k]
+                        * source[k * 4 + column];
             ((float *)&result)[row * 4 + column] = value;
         }
     }
-    return device_set_transform(iface, state, &result);
+    return device_set_live_transform(device, state, &result);
 }
 /*
  * SetMaterial/SetLight/LightEnable were emitted from M1 onwards but only
@@ -12421,9 +12492,13 @@ static HRESULT create_cube_texture_object(D9Device *device,
                 (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    if (api == 8u && format == D3DFMT_UNKNOWN)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *texture_out = NULL;
     if (api == 8u) {
-        if (usage & D3DUSAGE_WRITEONLY)
+        if ((usage & D3DUSAGE_WRITEONLY)
+                || ((usage & D3DUSAGE_DYNAMIC)
+                    && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!edge || edge > 4096 || !supported_format8(format, FALSE)
                 || (usage & D3DUSAGE_DEPTHSTENCIL)
@@ -12499,12 +12574,17 @@ static HRESULT create_cube_texture_object(D9Device *device,
                     &level_data->row_pitch, &level_data->row_count,
                     &level_data->byte_count))
                 goto allocation_failed;
-            level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
-                    HEAP_ZERO_MEMORY, level_data->byte_count);
-            if (!level_data->shadow)
-                goto allocation_failed;
+            if (api != 8u || pool == D3DPOOL_DEFAULT) {
+                level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
+                        HEAP_ZERO_MEMORY, level_data->byte_count);
+                if (!level_data->shadow) goto allocation_failed;
+            }
             if (size > 1) size >>= 1;
         }
+    }
+    if (api == 8u && pool != D3DPOOL_DEFAULT) {
+        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 6u);
+        if (!texture->mip_storage) goto allocation_failed;
     }
     if (!emit_cube_texture_create(device, texture)) {
         failure = D3DERR_DRIVERINTERNALERROR;
@@ -12521,9 +12601,10 @@ static HRESULT create_cube_texture_object(D9Device *device,
 
 allocation_failed:
     for (face = 0; face < total; ++face) {
-        if (texture->levels[face].shadow)
+        if (!texture->mip_storage && texture->levels[face].shadow)
             HeapFree(GetProcessHeap(), 0, texture->levels[face].shadow);
     }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
     device_child_release(device);
     HeapFree(GetProcessHeap(), 0, texture->levels);
     HeapFree(GetProcessHeap(), 0, texture);
@@ -12582,8 +12663,10 @@ static void cube_destroy_storage(D9CubeTexture *texture)
         core_view_retire8(texture->levels[index].level_surface);
         HeapFree(GetProcessHeap(), 0,
             texture->levels[index].level_surface);
-        HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
+        if (!texture->mip_storage)
+            HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
     }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
     HeapFree(GetProcessHeap(), 0, texture->levels);
     core_view_retire8(texture);
     HeapFree(GetProcessHeap(), 0, texture);
@@ -12758,7 +12841,10 @@ static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
 
     if (locked_rect && device_compatibility_api(texture->device) == 8u)
         ZeroMemory(locked_rect, sizeof(*locked_rect));
-    if (!locked_rect || (UINT)face >= 6u || level >= texture->level_count)
+    if (!locked_rect || (device_compatibility_api(texture->device) == 8u
+                && texture->pool == D3DPOOL_DEFAULT
+                && !(texture->usage & D3DUSAGE_DYNAMIC)
+                && (UINT)texture->format < 0x10000u) || (UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[(UINT)face * texture->level_count + level];
     if (level_data->locked)
@@ -12912,16 +12998,6 @@ static BOOL state_block_record_transform(D9Device *device, UINT state, const D3D
     block->has_transform[slot] = TRUE;CopyMemory(block->transforms[slot], matrix, 64);
     return TRUE;
 }
-
-static const float *state_block_transform_source(D9Device *device, UINT state)
-{
-    uint32_t slot;
-    D9StateBlock *block = device->recording_result;
-    if (block && d9wg_state_block_transform_slot(state, &slot) && block->has_transform[slot])
-        return block->transforms[slot];
-    return device->transforms[state];
-}
-
 
 
 static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material)
@@ -13892,7 +13968,10 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
     BOOL permissive = device_compatibility_api(texture->device) == 8u
             && texture->pool != D3DPOOL_DEFAULT;
 
-    if (!locked_rect || level >= texture->level_count
+    if (!locked_rect || (device_compatibility_api(texture->device) == 8u
+                && texture->pool == D3DPOOL_DEFAULT
+                && !(texture->usage & D3DUSAGE_DYNAMIC)
+                && (UINT)texture->format < 0x10000u) || level >= texture->level_count
             || (texture->usage & (D3DUSAGE_RENDERTARGET
                 | D3DUSAGE_DEPTHSTENCIL)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -13936,7 +14015,10 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
     D9TextureLevel *level_data;
     BOOL result = TRUE;
 
-    if (level >= texture->level_count)
+    if (level >= texture->level_count || (device_compatibility_api(texture->device) == 8u
+                && texture->pool == D3DPOOL_DEFAULT
+                && !(texture->usage & D3DUSAGE_DYNAMIC)
+                && (UINT)texture->format < 0x10000u))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
     if (!level_data->locked)
@@ -14001,8 +14083,10 @@ static void texture_destroy_storage(D9Texture *texture)
                 texture->levels[level].level_surface);
             texture->levels[level].level_surface = NULL;
         }
-        HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
+        if (!texture->mip_storage)
+            HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
     }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
     HeapFree(GetProcessHeap(), 0, texture->levels);
     core_view_retire8(texture);
     HeapFree(GetProcessHeap(), 0, texture);
@@ -16057,7 +16141,7 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(IDirect3DDevice9 *iface,
         UINT width, UINT height, UINT format, UINT multisample, BOOL lockable,
         IDirect3DSurface9 **out)
 {
-    if (!out || (multisample != D3DMULTISAMPLE_NONE
+    if (!out || format == D3DFMT_UNKNOWN || (multisample != D3DMULTISAMPLE_NONE
                 && multisample != D3DMULTISAMPLE_4_SAMPLES)
             || (lockable && multisample != D3DMULTISAMPLE_NONE))
         return D3DERR_INVALIDCALL;
@@ -16078,7 +16162,7 @@ HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
         UINT width, UINT height, UINT format, UINT multisample,
         IDirect3DSurface9 **out)
 {
-    if (!out || (multisample != D3DMULTISAMPLE_NONE
+    if (!out || format == D3DFMT_UNKNOWN || (multisample != D3DMULTISAMPLE_NONE
                 && multisample != D3DMULTISAMPLE_4_SAMPLES))
         return D3DERR_INVALIDCALL;
     *out = NULL;
@@ -17047,6 +17131,8 @@ HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(IDirect3DDevice9 *iface,
 {
     if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
         return D3DERR_INVALIDCALL;
+    if (!device_from_iface(iface)->streams[0].buffer)
+        return D3D_OK;
     INT signed_base;
     CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));
     return IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,

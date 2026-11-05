@@ -15,10 +15,11 @@ typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef voi
 #define FAILED(hr) ((hr)<0)
 #define D3D_OK 0
 #define D3DERR_DRIVERINTERNALERROR (-1)
+#define D3DERR_INVALIDCALL (-2)
 #define D8WG_TRACE_ERROR(v) (v)
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
-typedef struct{int implicit_swap_chain;D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;}present;struct{DWORD RefreshRate;}display_mode;}Device;
+typedef struct{struct{HWND window;}implicit_swap_chain;D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;HWND hDeviceWindow;}present;struct{HWND hFocusWindow;}creation;struct{DWORD RefreshRate;}display_mode;}Device;
 typedef Device D${api}Device,IDirect3DDevice${api};
 static unsigned mode,locked,emits,fail_emit,env_reads,qpf_reads,qpc_reads,tick_reads,sleeps;static uint64_t time_us;
 static LONG InterlockedCompareExchange(volatile LONG*p,LONG value,LONG compare){LONG old=*p;if(old==compare)*p=value;return old;}
@@ -31,6 +32,7 @@ static Device*device_from_iface(Device*d){return d;}
 static BOOL emit_present_and_flush(Device*d,HWND window){(void)d;assert(window==(void*)(uintptr_t)0x42&&!locked);locked=1;emits++;locked=0;return !fail_emit;}
 #include "${bridge}"
 ${api===9?'static HRESULT swap_chain_prepare_buffers(void*p){(void)p;return 0;}static HRESULT swap_chain_advance_buffers(void*p){(void)p;return 0;}':''}
+${api===9?'static unsigned device_compatibility_api(Device*d){(void)d;return 9;}static BOOL IsWindow(HWND w){return w!=NULL;}':''}
 ${extract(source,'device_present')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Present API ${api} mode %u line %u: %s\\n",mode,__LINE__,#v);return 1;}}while(0)
 int main(int argc,char**argv){CHECK(argc==2);mode=(unsigned)(argv[1][0]-'0');Device device={.display_mode={60}};unsigned cases=0;

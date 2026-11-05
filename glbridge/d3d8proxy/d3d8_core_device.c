@@ -446,7 +446,9 @@ static HRESULT WINAPI core_device8_DrawPrimitiveUP(IDirect3DDevice8 *iface, D3DP
 static HRESULT WINAPI core_device8_DrawIndexedPrimitiveUP(IDirect3DDevice8 *iface, D3DPRIMITIVETYPE primitive_type, UINT min_vertex_idx, UINT vertex_count, UINT primitive_count, const void *index_data, D3DFORMAT index_format, const void *data, UINT stride)
 {
     D8CoreDevice *device = core_device8(iface);
-    return device->methods->draw_indexed_primitive_up(device->backend, primitive_type, min_vertex_idx, vertex_count, primitive_count, index_data, index_format, data, stride);
+    HRESULT hr = device->methods->draw_indexed_primitive_up(device->backend, primitive_type, min_vertex_idx, vertex_count, primitive_count, index_data, index_format, data, stride);
+    if (SUCCEEDED(hr) && primitive_count) device->live.base = 0;
+    return hr;
 }
 
 static HRESULT WINAPI core_device8_SetVertexShaderConstant(IDirect3DDevice8 *iface, DWORD reg_idx, const void *data, DWORD count)
@@ -489,8 +491,9 @@ static HRESULT WINAPI core_device8_DrawTriPatch(IDirect3DDevice8 *iface, UINT ha
 
 static HRESULT WINAPI core_device8_GetInfo(IDirect3DDevice8 *iface, DWORD DevInfoID,void * pDevInfoStruct,DWORD DevInfoStructSize)
 {
-    (void)iface; (void)DevInfoID; (void)pDevInfoStruct; (void)DevInfoStructSize;
-    return D3DERR_NOTAVAILABLE;
+    (void)iface; (void)pDevInfoStruct; (void)DevInfoStructSize;
+    /* Retail runtime exposes no debug statistics. */
+    return DevInfoID < 4 ? E_FAIL : S_FALSE;
 }
 
 static HRESULT WINAPI core_device8_DeletePatch(IDirect3DDevice8 *iface, UINT Handle)

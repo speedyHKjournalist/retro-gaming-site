@@ -13,6 +13,8 @@ try{
 typedef uint8_t BYTE;typedef uint32_t UINT,DWORD;typedef int32_t HRESULT;typedef int BOOL;
 #define TRUE 1
 #define FALSE 0
+#define D3DERR_INVALIDCALL ((HRESULT)0x8876086cu)
+#define D3DERR_NOTAVAILABLE ((HRESULT)0x8876086au)
 #include "${root}/d3d9proxy/d3d9_protocol.h"
 #define d9wg_format_layout layout_actual
 #include "${root}/runtime/d9wg_format_layouts.h"
@@ -37,9 +39,15 @@ ${extract(sdk9,"d3d_check_device_format_before9")}
 int main(void){(void)&provider_format;(void)&d9wg_d3d9_core_check_format8;(void)&supported_depth_stencil_format8;(void)&supported_render_target_format8;IDirect3D9 b8={8},b9={9};IDirect3D8 r8={&b8};const UINT usages[]={0,1,2,3,8,16,512,513,514,515,1024,1025,1026,16384,32768,65536,131072,262144,524288,1048576,2097152,0x3f8000,0x20001,0x20002,0x40001,0xffffffffu,0x80000000u},adapters[]={0,1,UINT32_MAX},types[]={1,2,UINT32_MAX},resources[]={0,1,2,3,4,5,6,7,UINT32_MAX},extra[]={0,UINT32_MAX,0x4643502du,0x5a574152u,0x4c4c554eu};const UINT count=sizeof(d9wg_format_layouts)/sizeof(d9wg_format_layouts[0]),nu=sizeof(usages)/sizeof(usages[0]);
  for(UINT p=0;p<3;p++)for(UINT h=0;h<2;h++){profile=p==0?0:p==1?2:3;features=h?D9WG_HOST_FEATURE_MASK:0;
  for(UINT a=0;a<3;a++)for(UINT t=0;t<3;t++)for(UINT k=0;k<9;k++)for(UINT u=0;u<nu;u++)for(UINT i=0;i<count+5;i++){
-  D3DFORMAT format=i<count?d9wg_format_layouts[i].format:extra[i-count],display=(i%3==0)?22:(i%3==1)?24:(D3DFORMAT)UINT32_MAX;UINT c=backend_calls,hc=host_calls,v[]={adapters[a],types[t],display,usages[u],resources[k],format};HRESULT old=d3d_check_device_format_before8(&r8,adapters[a],types[t],display,usages[u],resources[k],format);CHECK(d3d_check_device_format(&r8,adapters[a],types[t],display,usages[u],resources[k],format)==old&&backend_calls==c+1&&host_calls==hc&&!memcmp(v,observed,sizeof(v)));
+  D3DFORMAT format=i<count?d9wg_format_layouts[i].format:extra[i-count],display=(i%3==0)?22:(i%3==1)?24:(D3DFORMAT)UINT32_MAX;UINT c=backend_calls,hc=host_calls,v[]={adapters[a],types[t],display,usages[u],resources[k],format};HRESULT old=resources[k]==6||resources[k]==7 ? D3DERR_INVALIDCALL : d3d_check_device_format_before8(&r8,adapters[a],types[t],display,usages[u],resources[k],format);CHECK(d3d_check_device_format(&r8,adapters[a],types[t],display,usages[u],resources[k],format)==old&&backend_calls==c+1&&host_calls==hc&&!memcmp(v,observed,sizeof(v)));
   UINT before=host_calls;HRESULT old9=d3d_check_device_format_before9(&b9,adapters[a],types[t],display,usages[u],resources[k],format);UINT calls=host_calls-before;before=host_calls;CHECK(check_actual9(&b9,adapters[a],types[t],display,usages[u],resources[k],format)==old9&&host_calls-before==calls);cases++;
  }}
+ /* Wine test_check_device_format: UNKNOWN is rejected before device type,
+  * ARGB display formats are unavailable, and buffer resource types invalid. */
+ for(UINT type=1;type<=3;type++)for(UINT kind=1;kind<=7;kind++) {
+  CHECK(d3d_check_device_format(&r8,0,type,0,0,kind,21)==D3DERR_INVALIDCALL);
+  CHECK(d3d_check_device_format(&r8,0,type,21,0,kind,22)==(kind>=6?D3DERR_INVALIDCALL:D3DERR_NOTAVAILABLE));
+ }
  injection=1;UINT c=layout_calls;CHECK(d3d_check_device_format(&r8,0,1,22,0,3,21)==(HRESULT)0x8876086au&&layout_calls==c+1);
  printf("PASS actual D3D8 format/core C: %u checks,%u resource/usage/format/profile cases,%u formats,27 usages,six shader/host configurations; actual prior8/9 results,all arguments,API8 layout/packed-surface/volume restrictions,host-feature query equivalence and observed shared-layout propagation\\n",checks,cases,count+5);return 0;
 }

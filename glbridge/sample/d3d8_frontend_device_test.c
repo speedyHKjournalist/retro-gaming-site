@@ -90,7 +90,7 @@ static void exercise(IDirect3D8 *root, struct IDirect3D9 *backend_root,
     HR(CALL(SetTextureStageState, 0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP)); HR(CALL(GetTextureStageState, 0, D3DTSS_ADDRESSU, &value)); CHECK(value == D3DTADDRESS_CLAMP);
     CHECK(CALL(SetTextureStageState, 0, (D3DTEXTURESTAGESTATETYPE)32, 0) == D3DERR_INVALIDCALL);
     DWORD passes; HR(CALL(ValidateDevice, &passes)); CHECK(passes > 0);
-    CHECK(CALL(GetInfo, 0, NULL, 0) == D3DERR_NOTAVAILABLE);
+    CHECK(CALL(GetInfo, 0, NULL, 0) == E_FAIL);
     for (UINT i = 0; i < 256; ++i) { palette[i].peRed = i; palette[i].peGreen = 255-i; palette[i].peBlue = 7; palette[i].peFlags = 255; }
     HR(CALL(SetPaletteEntries, 2, palette)); HR(CALL(GetPaletteEntries, 2, palette_copy)); CHECK(equal(palette, palette_copy, sizeof(palette)));
     UINT selected; HR(CALL(SetCurrentTexturePalette, 2)); HR(CALL(GetCurrentTexturePalette, &selected)); CHECK(selected == 2);

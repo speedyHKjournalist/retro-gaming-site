@@ -98,7 +98,7 @@ typedef struct{const void*lpVtbl;}Interface;typedef Interface IDirect3DDevice9,I
 ${snapshotBindings?"typedef HRESULT (*D9WGStateBlockRecorder8)(IDirect3DDevice9*,const void*);":""}
 typedef struct Device D9Device;typedef struct Surface D9Surface,D9Volume;typedef struct Texture D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuffer;typedef struct Chain{Interface iface;D9Device*device;LONG refcount;UINT handle;struct Chain*next_device_chain;D9Surface*back_buffer,*cached_buffers[4];}D9SwapChain;
 typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL shadow_valid,locked;D9WGPrivateStore private_data;D9Surface*level_surface,*level_volume;}D9TextureLevel;
-struct Texture{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,width,height,level_count,usage,length,fvf;BYTE*shadow;void*clips;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;D9TextureLevel*levels;D9Texture*next_device_resource;BOOL private_back_buffer;D9WGPrivateStore private_data;BOOL locked;};
+struct Texture{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,width,height,level_count,usage,length,fvf;BYTE*shadow;void*clips;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;D9TextureLevel*levels;void*mip_storage;D9Texture*next_device_resource;BOOL private_back_buffer;D9WGPrivateStore private_data;BOOL locked;};
 struct Surface{Interface iface;LONG refcount,binding_refs;D9Device*device;D9Texture*texture,*cube_texture;D9SwapChain*swap_chain;BOOL texture_child,auto_depth_stencil,backbuffer,device_pin_transferred,locked;UINT level,width,height,cube_face;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;BYTE*shadow;void*dc,*dc_previous,*dib;D9WGPrivateStore private_data;};
 typedef struct{Interface iface;LONG refs;}Parent;
 typedef struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}D3DVIEWPORT9;
@@ -193,6 +193,8 @@ ${textureBindings?"static D9CubeTexture*cube_from_iface(Interface*p){return (D9C
 ${legacyFvfBindings?"static UINT active_compatibility_api=9;":""}
 ${"static UINT device_compatibility_api(D9Device*d){(void)d;return "+(legacyFvfBindings?"active_compatibility_api":"9")+";}"}
 ${volumeBindings?"static int g_volume_vtbl;static D9Volume*volume_from_iface(Interface*p){return (D9Volume*)p;}":""}
+/* Lifecycle fixture: only ARGB8 has GPU volume storage. Format matrices run separately. */
+static BOOL supported_volume_texture_format8(D3DFORMAT format){return format==21;}
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==8&&n);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;assert(!f);if(p){assert(live);live--;free(p);}}
 static void d9wg_vertex_windows_clip_release(void*p,void*context){(void)context;HeapFree(NULL,0,p);}
