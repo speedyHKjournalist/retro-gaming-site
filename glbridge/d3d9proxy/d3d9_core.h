@@ -268,6 +268,10 @@ const D9WGSurfaceMethods8 *WINAPI d9wg_d3d9_core_surface_methods8(
  * runs exactly once,after resource private-data finalizers. Duplicate attach
  * leaves the existing view intact;retiring objects reject get/attach.
  * The callback releases only frontend metadata,not the dying core object. */
+/* Device9 objects with compatibility profile8 may also carry weak frontend
+ * metadata. Device retirement follows all implicit surface retire callbacks;
+ * private-data finalizers may revive the device before destruction commits.
+ * A retire callback only tears metadata down;it must not revive dying storage. */
 typedef void (WINAPI *D9WGCoreViewRetire8)(void *view);
 HRESULT WINAPI d9wg_d3d9_core_get_view8(struct IUnknown *object, void **out);
 HRESULT WINAPI d9wg_d3d9_core_attach_view8(struct IUnknown *object, void *view,

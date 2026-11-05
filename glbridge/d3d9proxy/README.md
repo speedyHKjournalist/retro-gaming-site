@@ -1590,3 +1590,38 @@ region policy and native HAL differences remain outside this adapter change.
 four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
 DLLs and same-source diagnostics published.
 Evidence: `../deployments/d3d-webgpu-review-4K45.json`.
+
+
+### Review 4K46: weak frontend device metadata
+
+The existing core8 weak-view registry now accepts profile8 Device9 objects.
+Device metadata retires after both implicit surface metadata callbacks and
+before device storage is freed. The parent factory stays alive throughout
+all callbacks. A source review caught its previous early release; the exact
+old ordering is now an assertion mutant. Final XP capture supersedes the first
+156-second capture. Existing private-data finalizers run first,
+under the core temporary reference, and may retain or transiently revive the
+device. Retirement callbacks only tear down metadata. No extra public pins.
+Only two production functions change; removing those edits reconstructs the
+entire previous core source exactly, including macros and storage layouts.
+680 of 682 extracted functions and fifteen frontend/runtime/build files match;
+the core header adds comments only. The public factory remains pending.
+
+Native: 7,560 checks / 772 cases, ten strictly compiled assertion mutants and
+ASAN; retained weak resource views: 112,181 checks / 35 mutants. Actual XP:
+192 seconds / 96 batches, nineteen devices and Resets, 124 handles. Four new
+SDK120/220 metadata lifecycles exercise logical-zero/backend-held identity,
+Reset, transient/retained finalizer revival and twelve ordered callbacks.
+The frontend device is explicitly an IUnknown-only fixture; implicit surface
+contexts are metadata only. Full Device8 integration is still pending.
+
+The existing resource workload retains 68 full images / 3,776 pixels, matching
+on both GPUs; four additional Presents complete without drops. Separate canvas
+pixels are not read. New metadata cases add no draw/readback. Analytic XP GPU
+replies and actual independent GPU replay remain distinct evidence.
+54257 semantic corruptions. The first parallel core run timed out
+at 500 seconds for this fixture; cached opcode lookups and a fresh complete
+run with an 1800-second deadline replace that attempt. 387 guest / 92 core regressions, 32 EXEs,
+four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
+DLLs and same-source diagnostics published.
+Evidence: `../deployments/d3d-webgpu-review-4K46.json`.

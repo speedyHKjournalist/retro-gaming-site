@@ -1792,7 +1792,8 @@ static D9Device *core_view_device8(IUnknown *object)
     if (!object) return NULL;
     const void *vtbl = object->lpVtbl;
     D9Device *device = NULL;
-    if (vtbl == &g_vb_vtbl) device = ((D9VertexBuffer *)object)->device;
+    if (vtbl == &g_device_vtbl) device = (D9Device *)object;
+    else if (vtbl == &g_vb_vtbl) device = ((D9VertexBuffer *)object)->device;
     else if (vtbl == &g_ib_vtbl) device = ((D9IndexBuffer *)object)->device;
     else if (vtbl == &g_texture_vtbl) device = ((D9Texture *)object)->device;
     else if (vtbl == &g_cube_vtbl) device = ((D9CubeTexture *)object)->device;
@@ -5056,7 +5057,6 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         TRACE_MARK_EXIT("Device.Release", 0, NULL);
         TRACE_FLUSH();
-        IDirect3D9_Release(&device->parent->iface);
         /* The implicit surfaces outlive every public reference to them by
          * design, so the device is what finally frees them. Reaching here means
          * their public counts are zero: each active surface pinned one device
@@ -5069,6 +5069,12 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
             core_view_retire8(device->implicit_depth_stencil);
             HeapFree(GetProcessHeap(), 0, device->implicit_depth_stencil);
         }
+        /* Frontend Device8 metadata outlives every implicit surface view.
+         * Private-data finalizers and any resurrection already ran above. */
+        core_view_retire8(device);
+        /* Registry queries in retirement callbacks still inspect the parent
+         * compatibility profile. Keep that factory alive through every view. */
+        IDirect3D9_Release(&device->parent->iface);
         HeapFree(GetProcessHeap(), 0, device);
         return 0;
     }

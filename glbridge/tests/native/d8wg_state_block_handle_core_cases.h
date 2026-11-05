@@ -19,6 +19,9 @@ static void token_private_release(void*ctx,void*p){
     x->created=0x1234;
     x->create_result=TOKEN_CREATE(&x->device->iface,snapshot8_record,NULL,&x->created);
     if(x->mode==2)device_add_ref(&x->device->iface);
+#ifdef D8WG_NATIVE_DEVICE_VIEWS8
+    if(device_view_finalizer_hook)device_view_finalizer_hook(x);
+#endif
 }
 static HRESULT WINAPI token8_group_record(Interface*iface,const void*context){
     StateGroup*g=(StateGroup*)context;return bind_state_group((D9Device*)iface,*g);
