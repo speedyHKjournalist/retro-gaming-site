@@ -2,6 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"backend8-texture-mut-"));
 function body(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return[m.index,b,s.slice(m.index,b)];}
 const cases=[
+ ["WRITEONLY rejected","create_texture_object","if (usage & D3DUSAGE_WRITEONLY)","if ((usage & D3DUSAGE_WRITEONLY) && 0)"],
  ["DXT top-level alignment", "create_texture_object", "block_width == 4u", "block_width == 400u"],
  ["creation mip metadata","emit_texture_create","command.level_count = texture->level_count;","command.level_count = 1;"],
  ["creation sample quality","emit_texture_create","command.multisample_quality = texture->multisample_quality;","command.multisample_quality = 4;"],
@@ -23,7 +24,9 @@ const cases=[
  ["upload API","emit_texture_update","device_compatibility_api(texture->device)","9u","lock"],
  ["read only","texture_unlock_level","if (!(level_data->lock_flags & D3DLOCK_READONLY))","if (1)","lock"],
  ["unlock cleanup","texture_unlock_level","level_data->locked = FALSE;","level_data->locked = TRUE;","lock"],
- ["subrect offset","texture_lock_level","+ block_y * level_data->row_pitch + block_x * block_bytes","+ block_y * level_data->row_pitch + block_x * block_bytes * 0u","lock"],
+ ["subrect offset","texture_lock_level","+ (int64_t)(area.left / (LONG)block_width) * block_bytes","+ (int64_t)(area.left / (LONG)block_width) * block_bytes * 0u","lock"],
+ ["CPU pool permission","texture_lock_level","&& texture->pool != D3DPOOL_DEFAULT","&& texture->pool == D3DPOOL_DEFAULT","lock"],
+ ["bounded upload","texture_lock_level","if (!valid_rect)","if (!valid_rect && 0)","lock"],
  ["row pitch","emit_level_update_api","rows.source_pitch = level_data->row_pitch;","rows.source_pitch = rows.row_bytes;","lock"],
  ["upload status","texture_unlock_level","return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;","return result ? D3D_OK : D3D_OK;","lock"]
 ];

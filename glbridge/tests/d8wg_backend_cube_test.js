@@ -31,6 +31,7 @@ struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,edge_length,l
 #define D3DPOOL_SCRATCH 3
 #define D3DUSAGE_RENDERTARGET 1
 #define D3DUSAGE_DEPTHSTENCIL 2
+#define D3DUSAGE_WRITEONLY 8
 #define D3DUSAGE_AUTOGENMIPMAP 0x400
 #define D3DMULTISAMPLE_NONE 0
 #define D3DRTYPE_CUBETEXTURE 5
@@ -69,12 +70,12 @@ static UINT checks,cases,api8cases,api9cases,levelchecks;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 cube case %u line %u: %s\\n",cases,__LINE__,#v);return 1;}checks++;}while(0)
 static void cleanup(Iface*i){Texture*t=(Texture*)i;for(UINT l=0;l<t->level_count*6;l++)if(t->levels[l].shadow)HeapFree(NULL,0,t->levels[l].shadow);t->device->pins--;t->device->cube_textures=NULL;HeapFree(NULL,0,t->levels);HeapFree(NULL,0,t);}
 static BOOL zeroes(const BYTE*p,UINT n){for(UINT i=0;i<n;i++)if(p[i])return FALSE;return TRUE;}
-int main(void){const UINT dims[]={0,1,3,4,4096,4097,8192,8193,UINT32_MAX},levels[]={0,1,2,32},usages[]={0,1,2,3,0x400,0x20000},pools[]={0,1,2,3,4};
-for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT x=0;x<sizeof(dims)/sizeof(*dims);x++)for(UINT l=0;l<4;l++)for(UINT u=0;u<6;u++)for(UINT p=0;p<5;p++)for(UINT fail=0;fail<10;fail++)for(UINT nullout=0;nullout<2;nullout++){
+int main(void){const UINT dims[]={0,1,3,4,4096,4097,8192,8193,UINT32_MAX},levels[]={0,1,2,32},usages[]={0,1,2,3,0x400,0x20000,8,9},pools[]={0,1,2,3,4};
+for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT x=0;x<sizeof(dims)/sizeof(*dims);x++)for(UINT l=0;l<4;l++)for(UINT u=0;u<8;u++)for(UINT p=0;p<5;p++)for(UINT fail=0;fail<10;fail++)for(UINT nullout=0;nullout<2;nullout++){
  UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==9?0:fail;transport_fail=fail==9;HRESULT wanted=api==8?old8_create(&before_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&before):old9_create(&before_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&before,NULL);
- /* Wine top-level DXT dimension rule supersedes the frozen permissive constructor. */
+ /* Wine top-level DXT dimension and texture WRITEONLY rules supersedes the frozen permissive constructor. */
  BOOL dxt=format==0x31545844u||format==0x32545844u||format==0x33545844u||format==0x34545844u||format==0x35545844u;
- if(dxt && (w%4)){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
+ if((dxt && (w%4)) || (api==8 && (usages[u]&8))){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
  UINT old_alloc=allocations,old_free=frees,old_creates=creates,old_handles=handles,args[10];memcpy(args,emitted,sizeof(args));
  allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));HRESULT hr=api==8?d9wg_d3d9_core_cube_texture8(&actual_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&actual):device_create_cube_texture(&actual_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&actual,NULL);
  CHECK(hr==wanted);CHECK(allocations==old_alloc&&frees==old_free&&creates==old_creates&&handles==old_handles&&!memcmp(args,emitted,sizeof(args)));CHECK(actual_device.pins==before_device.pins&&actual_device.pins==(!hr));

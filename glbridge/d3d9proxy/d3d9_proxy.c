@@ -6794,6 +6794,8 @@ static HRESULT create_texture_object(D9Device *device,
     }
     *texture_out = NULL;
     if (api == 8u) {
+        if (usage & D3DUSAGE_WRITEONLY)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!width || !height || width > 4096 || height > 4096
                 || !supported_format8(format, FALSE)
                 || (usage & D3DUSAGE_DEPTHSTENCIL)
@@ -12238,6 +12240,8 @@ static HRESULT create_cube_texture_object(D9Device *device,
     }
     *texture_out = NULL;
     if (api == 8u) {
+        if (usage & D3DUSAGE_WRITEONLY)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!edge || edge > 4096 || !supported_format8(format, FALSE)
                 || (usage & D3DUSAGE_DEPTHSTENCIL)
                 || ((usage & D3DUSAGE_RENDERTARGET)
@@ -12567,6 +12571,8 @@ static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
     RECT area;
     UINT block_width, block_height, block_bytes;
 
+    if (locked_rect && device_compatibility_api(texture->device) == 8u)
+        ZeroMemory(locked_rect, sizeof(*locked_rect));
     if (!locked_rect || (UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[(UINT)face * texture->level_count + level];
@@ -13693,8 +13699,9 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
     UINT block_width;
     UINT block_height;
     UINT block_bytes;
-    UINT block_x;
-    UINT block_y;
+    BOOL valid_rect;
+    BOOL permissive = device_compatibility_api(texture->device) == 8u
+            && texture->pool != D3DPOOL_DEFAULT;
 
     if (!locked_rect || level >= texture->level_count
             || (texture->usage & (D3DUSAGE_RENDERTARGET
@@ -13708,31 +13715,30 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
     } else {
         SetRect(&area, 0, 0, (int)level_data->width, (int)level_data->height);
     }
-    if (area.left < 0 || area.top < 0 || area.right <= area.left
-            || area.bottom <= area.top
-            || (UINT)area.right > level_data->width
-            || (UINT)area.bottom > level_data->height
-            || !d9wg_format_layout(device_compatibility_api(texture->device),
-                    texture->format, &block_width,
-                    &block_height, &block_bytes))
+    if (!d9wg_format_layout(device_compatibility_api(texture->device),
+            texture->format, &block_width, &block_height, &block_bytes))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (block_width > 1
-            && (((UINT)area.left % block_width)
-                || ((UINT)area.top % block_height)
-                || ((UINT)area.right != level_data->width
-                    && (UINT)area.right % block_width)
-                || ((UINT)area.bottom != level_data->height
-                    && (UINT)area.bottom % block_height)))
+    valid_rect = area.left >= 0 && area.top >= 0 && area.right > area.left
+            && area.bottom > area.top && (UINT)area.right <= level_data->width
+            && (UINT)area.bottom <= level_data->height
+            && !((UINT)area.left % block_width)
+            && !((UINT)area.top % block_height)
+            && ((UINT)area.right == level_data->width || !((UINT)area.right % block_width))
+            && ((UINT)area.bottom == level_data->height || !((UINT)area.bottom % block_height));
+    if (!valid_rect && !permissive)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-
-    block_x = (UINT)area.left / block_width;
-    block_y = (UINT)area.top / block_height;
+    /* D3D8 CPU-pool 2D locks expose raw offsets even outside the image.
+     * Preserve that API result without performing out-of-object C pointer
+     * arithmetic. Upload only owned storage, never the caller's unchecked ROI. */
     level_data->lock_rect = area;
+    if (!valid_rect)
+        SetRect(&level_data->lock_rect, 0, 0, level_data->width, level_data->height);
     level_data->lock_flags = flags;
     level_data->locked = TRUE;
     locked_rect->Pitch = (INT)level_data->row_pitch;
-    locked_rect->pBits = level_data->shadow
-            + block_y * level_data->row_pitch + block_x * block_bytes;
+    locked_rect->pBits = (void *)((uintptr_t)level_data->shadow
+            + (uintptr_t)((int64_t)(area.top / (LONG)block_height) * level_data->row_pitch
+                + (int64_t)(area.left / (LONG)block_width) * block_bytes));
     return D3D_OK;
 }
 
@@ -13745,7 +13751,8 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
     if (!level_data->locked)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return device_compatibility_api(texture->device) == 8u
+                ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_texture_update(texture, level, &level_data->lock_rect);
     level_data->locked = FALSE;
@@ -14737,6 +14744,11 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked, (DWORD)(uintptr_t)rect, flags);
 
+    /* Wine's D3D8 image/cube failures clear the output; 2D texture-level
+     * failures leave it untouched. Ordinary D3D9 retains its own policy. */
+    if (locked_rect && !surface->texture
+            && device_compatibility_api(surface->device) == 8u)
+        ZeroMemory(locked_rect, sizeof(*locked_rect));
     if ((surface->swap_chain && !surface->texture)
             || (surface->texture && !surface->texture_child
                 && (surface->texture->usage & D3DUSAGE_RENDERTARGET))) {
