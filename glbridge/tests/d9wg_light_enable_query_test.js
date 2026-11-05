@@ -1,10 +1,12 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),native=require(path.resolve(root,"../../v86/tests/glbridge/fixtures/d3d7_native_light_state.json"));assert(native.cases.some(c=>c.enabled===128));
 const header=process.env.D9WG_LIGHT_QUERY_HEADER||path.join(root,"runtime/d9wg_light_state.h"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-enable-queries-"));
 function extract(source,name){const m=new RegExp("static HRESULT WINAPI "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 try{for(const api of [7,8,9]){
- const source=fs.readFileSync(process.env['D'+api+'WG_LIGHT_QUERY_SOURCE']||path.join(root,api===7?'ddrawproxy/d3d7_proxy.inc':'d3d'+api+'proxy/d3d'+api+'_proxy.c'),'utf8'),name=api===7?'d3d7_device_GetLightEnable':'device_get_light_enable';
+ const source=readComparisonSource(process.env['D'+api+'WG_LIGHT_QUERY_SOURCE']||path.join(root,api===7?'ddrawproxy/d3d7_proxy.inc':'d3d'+api+'proxy/d3d'+api+'_proxy.c'),'utf8'),name=api===7?'d3d7_device_GetLightEnable':'device_get_light_enable';
  const code=`#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>

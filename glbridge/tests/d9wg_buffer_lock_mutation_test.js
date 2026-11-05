@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-buffer-lock-mutants-")),policy=fs.readFileSync(root+"/runtime/d9wg_buffer_lock.c","utf8");
+const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-buffer-lock-mutants-")),policy=readComparisonSource(root+"/runtime/d9wg_buffer_lock.c","utf8");
 const cases=[
  ["read-only access lost","return D9WG_BUFFER_LOCK_READONLY;","return 0;"],
  ["write-only hint conflict not normalized","&& !(usage & D9WG_BUFFER_USAGE_WRITEONLY) && !streaming)","&& !streaming)"],
@@ -17,7 +19,7 @@ function run(name,source,env,guard=false){const file=dir+"/mutated.c";fs.writeFi
 
 try{
  for(const [name,before,after]of cases){assert.equal(policy.split(before).length,2,name);run(name,policy.replace(before,after),file=>({D9WG_BUFFER_LOCK_POLICY_SOURCE:file}));}
- for(const api of [8,9]){const original=fs.readFileSync(root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8"),environment=file=>({D9WG_BUFFER_LOCK_API:String(api),D9WG_BUFFER_FRONTEND_SOURCE:file});for(const kind of ["vb","ib"]){const locked=method(original,kind+"_lock"),unlocked=method(original,kind+"_unlock");
+ for(const api of [8,9]){const original=readComparisonSource(root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8"),environment=file=>({D9WG_BUFFER_LOCK_API:String(api),D9WG_BUFFER_FRONTEND_SOURCE:file});for(const kind of ["vb","ib"]){const locked=method(original,kind+"_lock"),unlocked=method(original,kind+"_unlock");
   const sanitize="flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);";assert(locked.includes(sanitize));run("API "+api+" "+kind+" bypasses policy",original.replace(locked,locked.replace(sanitize,"flags &= UINT32_MAX;")),environment);
   run("API "+api+" "+kind+" clears full shadow on discard",original.replace(locked,locked.replace("    buffer->lock_flags = flags;","    buffer->lock_flags = flags;\n    if (flags & D3DLOCK_DISCARD) ZeroMemory(buffer->shadow, buffer->length);")),environment,true);
   const readonly="(buffer->lock_flags & D3DLOCK_READONLY)";assert(unlocked.includes(readonly));run("API "+api+" "+kind+" drops writable upload",original.replace(unlocked,unlocked.replace(readonly,"(1 || (buffer->lock_flags & D3DLOCK_READONLY))")),environment);

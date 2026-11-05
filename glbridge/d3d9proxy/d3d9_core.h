@@ -41,6 +41,8 @@ void WINAPI d9wg_d3d9_core_caps8(void *caps8);
  * wrapper. Its module borrows this process attachment, never adds a second
  * runtime attachment, and delegates final flush/release to core_module. */
 struct IDirect3D9 *WINAPI d9wg_d3d9_core_create8(void);
+/* Publish the legacy shader1.x hello through the shared process transport. */
+void WINAPI d9wg_d3d9_core_hello8(void);
 struct D9WGProcess *WINAPI d9wg_d3d9_core_process(void);
 ULONG WINAPI d9wg_d3d9_core_root_release(struct IDirect3D9 *factory);
 UINT WINAPI d9wg_d3d9_core_adapter_count(struct IDirect3D9 *factory);

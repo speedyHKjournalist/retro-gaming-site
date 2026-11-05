@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d8wg-additional-container-mut-"));
 function mutate(s, name, old, replacement) {
@@ -9,7 +11,7 @@ function mutate(s, name, old, replacement) {
     return s.slice(0, m.index) + body.replace(old, replacement) + s.slice(end);
 }
 try {
-    const source = fs.readFileSync(root + "/d3d8proxy/d3d8_proxy.c", "utf8"); let killed = 0;
+    const source = readComparisonSource(root + "/d3d8proxy/d3d8_proxy.c", "utf8"); let killed = 0;
     for (const [label, old, replacement] of [
         ["hidden texture exposed", "surface->texture && !surface->additional_back_buffer\n            && !surface->device_container", "surface->texture"],
         ["ordinary texture container lost", "surface->texture && !surface->additional_back_buffer\n            && !surface->device_container", "surface->texture && 0"],

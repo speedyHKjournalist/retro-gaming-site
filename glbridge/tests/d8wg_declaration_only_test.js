@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D8WG_DECL_ONLY_SOURCE||path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-declaration-only-"));
+const root=path.resolve(__dirname,".."),source=readComparisonSource(process.env.D8WG_DECL_ONLY_SOURCE||path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-declaration-only-"));
 function extract(name){const match=new RegExp("static (?:HRESULT(?: WINAPI)?|BOOL|void|D8Shader \\*) ?"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(match,name);let at=source.indexOf("{",match.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")++depth;if(source[at]==="}")--depth;}return source.slice(match.index,at);}
 const struct=/struct D8Shader \{[\s\S]*?\n\};/.exec(source);assert(struct);
 const names=["validate_vertex_declaration","declaration_to_elements","find_shader","emit_create_vertex_shader","emit_destroy_shader","shader_collect","shader_assign","emit_bind_vertex_shader","device_bind_vertex_shader","device_set_vertex_shader","device_get_vertex_shader","device_create_vertex_shader","device_delete_vertex_shader","device_get_vs_decl","device_get_vs_function"];

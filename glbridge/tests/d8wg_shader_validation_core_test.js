@@ -1,12 +1,14 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),eight=fs.readFileSync(process.env.D8WG_SHADER_VALIDATION_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),nine=fs.readFileSync(process.env.D8WG_SHADER_VALIDATION_BACKEND_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-backend-"));
+const root=path.resolve(__dirname,".."),eight=readComparisonSource(process.env.D8WG_SHADER_VALIDATION_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),nine=readComparisonSource(process.env.D8WG_SHADER_VALIDATION_BACKEND_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-backend-"));
 function extract(source,name){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end).replace(/__attribute__\s*\(\(__stdcall__\)\)/g,"");}
 // S2-41 contract delta to the frozen legacy oracle: CND is legal in ps_1_4.
 function legacyCnd14(source){const before="if (!is_pixel_shader || minor > 3u) return FALSE;";assert.equal(source.split(before).length,2);return source.replace(before,"if (!is_pixel_shader || minor > 4u) return FALSE;");}
 function preprocess(api,body){const file=dir+"/sdk"+api+".c";fs.writeFileSync(file,`#include <d3d${api}.h>\n#include "${root}/d3d9proxy/d3d9_core.h"\n#define TRACE(...)\n#define D8WG_TRACE(...)\n`+body.replace(/\bWINAPI\b/g,""));const p=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P",file],{encoding:"utf8",maxBuffer:16<<20});assert.equal(p.status,0,p.stderr);return p.stdout;}
 try{
- const sdk8=preprocess(8,legacyCnd14(fs.readFileSync(root+"/tests/fixtures/d3d8_shader_validation_before_core.c","utf8"))+extract(eight,"validate_shader_body").replace(/\bvalidate_shader_body\b/g,"frontend_validate")),names=["shader8_regtype_valid","shader8_opcode_supported","shader8_validate_body","d9wg_d3d9_core_validate_shader_body8"],sdk9=preprocess(9,names.map(n=>extract(nine,n)).join("\n"));
+ const sdk8=preprocess(8,legacyCnd14(readComparisonSource(root+"/tests/fixtures/d3d8_shader_validation_before_core.c","utf8"))+extract(eight,"validate_shader_body").replace(/\bvalidate_shader_body\b/g,"frontend_validate")),names=["shader8_regtype_valid","shader8_opcode_supported","shader8_validate_body","d9wg_d3d9_core_validate_shader_body8"],sdk9=preprocess(9,names.map(n=>extract(nine,n)).join("\n"));
  function enumeration(s,n){const m=s.match(new RegExp("typedef enum _"+n+"\\s*\\{[\\s\\S]*?\\}\\s*"+n+"\\s*;"));assert(m,n);return m[0];}
  const reg8=s=>s.replace(/\b(D3DSPR_\w+|_D3DSHADER_PARAM_REGISTER_TYPE|D3DSHADER_PARAM_REGISTER_TYPE)\b/g,"before8_$1"),before=s=>reg8(s).replace(/\b(shader_regtype_valid|shader_opcode_supported|validate_shader_body)\b/g,"before8_$1");
  const code=`#include <stdint.h>

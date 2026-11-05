@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
-const source=fs.readFileSync(path.join(__dirname,"../d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-shader-mutants-"));
+const source=readComparisonSource(path.join(__dirname,"../d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-shader-mutants-"));
 const cases=[
  ["empty FVF cannot unbind","if (fvf && !fvf_to_elements","if (!fvf_to_elements"],
  ["deleted public handles remain valid","shader->handle == handle && !shader->deleted","shader->handle == handle"],

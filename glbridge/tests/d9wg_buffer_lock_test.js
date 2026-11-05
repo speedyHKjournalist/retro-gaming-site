@@ -1,9 +1,11 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-buffer-lock-"));
 function extract(source,name){const m=source.match(new RegExp("static HRESULT WINAPI "+name+"\\([^;]*?\\)\\n\\{[\\s\\S]*?\\n}\\n"));assert(m,name);return m[0];}
 try{for(const api of [8,9]){
- const source=fs.readFileSync(process.env.D9WG_BUFFER_LOCK_API===String(api)?process.env.D9WG_BUFFER_FRONTEND_SOURCE:root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8");
+ const source=readComparisonSource(process.env.D9WG_BUFFER_LOCK_API===String(api)?process.env.D9WG_BUFFER_FRONTEND_SOURCE:root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8");
  const code=`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

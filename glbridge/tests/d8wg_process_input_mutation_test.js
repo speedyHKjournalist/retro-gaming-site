@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
-const source=fs.readFileSync(path.join(__dirname,"../d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-input-mutants-"));
+const source=readComparisonSource(path.join(__dirname,"../d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-input-mutants-"));
 const start=source.indexOf("static HRESULT d8_process_input("),end=source.indexOf("static int d8_clip_emit(",start);assert(start>=0&&end>start);const helper=source.slice(start,end);
 const cases=[
  ["programmable shader accepted as fixed input","all","!device->vertex_shader_ref->declaration_only)","0)"],

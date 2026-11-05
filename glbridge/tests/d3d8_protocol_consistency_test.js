@@ -26,7 +26,7 @@ const {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const read = relative => fs.readFileSync(/^(gl-webgpu|d3d8-webgpu|d3d9-webgpu)\//.test(relative) ? require("./host_paths.js").hostPath(relative) : path.join(root, relative), "utf8");
 
-const guest = read("d3d8proxy/d3d8_proxy.c") + "\n" + read("runtime/d9wg_upload_bridge.h") + "\n" + read("runtime/d9wg_transport.c");
+const guest = read("d3d8proxy/d3d8_proxy.c") + "\n" + read("d3d9proxy/d3d9_proxy.c") + "\n" + read("runtime/d9wg_upload_bridge.h") + "\n" + read("runtime/d9wg_transport.c");
 const bridge = read("d3d8proxy/d3d8_protocol.h") + "\n" + read("runtime/d9wg_declaration8_policy.h");
 const protocol = read("d3d9proxy/d3d9_protocol.h");
 const executor = read("d3d9-webgpu/d3d9_executor.js");
@@ -93,8 +93,10 @@ const protocolStructs = new Set(
     [...protocol.matchAll(/typedef struct (D9WG\w+) \{/g)].map(m => m[1])
         .concat([...protocol.matchAll(/typedef D9WG\w+ (D9WG\w+);/g)]
             .map(m => m[1])));
-const runtimeHeaders = fs.readdirSync(path.join(root, "runtime")).filter(name => name.endsWith(".h")).map(name => read("runtime/" + name)).join("\n");
+const runtimeHeaders = read("d3d9proxy/d3d9_core.h") + "\n" + fs.readdirSync(path.join(root, "runtime")).filter(name => name.endsWith(".h")).map(name => read("runtime/" + name)).join("\n");
 const runtimeStructs = new Set([...runtimeHeaders.matchAll(/typedef struct (D9WG\w+) \{/g)].map(m => m[1]));
+for (const match of guest.matchAll(/typedef\s+[^;{}]+?\b(D9WG\w+)\s*[;[]/g)) runtimeStructs.add(match[1]);
+for (const match of runtimeHeaders.matchAll(/typedef\s+[^;{}]+?\(\s*(?:WINAPI\s+)?\*\s*(D9WG\w+)\s*\)/g)) runtimeStructs.add(match[1]);
 for (const match of guest.matchAll(/\b(D9WG[A-Z]\w+)\b/g)) {
     assert.ok(protocolStructs.has(match[1]) || runtimeStructs.has(match[1]),
         "the D3D8 guest names " + match[1] + ", which is neither a D9WG payload nor a declared private runtime descriptor");
@@ -195,20 +197,19 @@ const cFunction = (source, name) => {
 const shaderHash = cFunction(guest, "shader_bytecode_hash");
 assert.match(shaderHash, /0x84222325u/,
     "the D3D8 guest must compute the protocol's FNV-1a shader hash");
-for (const name of ["emit_create_vertex_shader", "emit_create_pixel_shader"]) {
+for (const name of ["emit_shader_create"]) {
     const emitShader = cFunction(guest, name);
     assert.match(emitShader, /command\.bytecode_hash_low\s*=\s*shader->hash_low/,
         name + " leaves the low shader-cache key zero");
     assert.match(emitShader, /command\.bytecode_hash_high\s*=\s*shader->hash_high/,
         name + " leaves the high shader-cache key zero");
 }
-for (const name of ["device_create_vertex_shader", "device_create_pixel_shader"])
+for (const name of ["create_shader_object"])
     assert.match(cFunction(guest, name), /shader_bytecode_hash\(/,
         name + " never hashes the bytecode it uploads");
 
-const textureLayout = cFunction(guest, "texture_format_layout");
-assert.match(textureLayout, /d9wg_format_layout\(8,/,
-    "D3D8 storage layout must use the shared generated table");
+// API8 allocation/layout behavior is executed by d8wg_backend_texture_test
+// and the resource adapter tests against the shared core.
 for (const name of [...D3D8_TEXTURE_FORMATS, ...D3D8_PROBED_AS_TEXTURES]) {
     assert.ok(formats.formatLayout(formats["D3DFMT_" + name], 8),
         "D3DFMT_" + name + " has no shared D3D8 storage layout");
@@ -219,7 +220,7 @@ for (const name of [...D3D8_TEXTURE_FORMATS, ...D3D8_PROBED_AS_TEXTURES]) {
         "the D3D8 guest forwards " + name + " but the host cannot store it");
 }
 
-const depthFormats = cFunction(guest, "supported_depth_stencil_format");
+const depthFormats = cFunction(guest, "supported_depth_stencil_format8");
 for (const name of D3D8_DEPTH_FORMATS) {
     assert.ok(depthFormats.includes("D3DFMT_" + name),
         "D3DFMT_" + name + " is a D3D8 depth format the guest refuses; the " +
@@ -232,7 +233,7 @@ for (const name of D3D8_DELIBERATELY_ABSENT) {
 
 // A render target must be a format the host can both render to and pack back
 // for a lockable target, or GetRenderTargetData/CopyRects returns garbage.
-const renderTargets = cFunction(guest, "supported_render_target_format");
+const renderTargets = cFunction(guest, "supported_render_target_format8");
 for (const name of [...renderTargets.matchAll(/D3DFMT_(\w+)/g)].map(match => match[1])) {
     const format = formats["D3DFMT_" + name];
     assert.ok(formats.isRenderableGPUFormat(formats.formatToGPU(format)), name + " must be renderable");
@@ -242,52 +243,9 @@ for (const name of [...renderTargets.matchAll(/D3DFMT_(\w+)/g)].map(match => mat
         new Uint8Array(16), 0, 1, new Uint8Array(bytes), 0), name + " must pack a real readback row");
 }
 
-// D3D8 SetRenderTarget accepts a depth surface at least as large as the colour
-// target and resets the viewport to the target's full dimensions. 3DMark 2001
-// relies on both while entering its smaller advanced-pixel-shader target.
-const setRenderTarget = cFunction(guest, "device_set_render_target");
-assert.match(setRenderTarget,
-    /depth_width\s*<\s*render_target_width/,
-    "a larger depth surface must remain valid for a smaller render target");
-assert.match(setRenderTarget,
-    /depth_height\s*<\s*render_target_height/,
-    "only a depth surface smaller than the render target is invalid");
-assert.doesNotMatch(setRenderTarget,
-    /depth_(?:width|height)\s*!=/,
-    "SetRenderTarget must not require exact colour/depth dimensions");
-// Both dimensions have to come from the surface's own resource: a
-// texture-backed depth surface leaves `desc` zeroed, so reading it there made
-// every such bind look smaller than the target and get refused.
-assert.match(setRenderTarget,
-    /depth_width\s*=[\s\S]*?depth->texture->levels\[depth->level\]\.width/,
-    "the depth surface's size must come from its texture level when it has one");
-assert.match(setRenderTarget,
-    /viewport\.Width\s*=\s*render_target_width[\s\S]*?set_live_viewport/,
-    "SetRenderTarget must reset and emit the viewport for the new target");
-
-// A depth surface the app created has a host texture of its own and must be
-// bound by that handle. Aliasing every depth surface onto the device's auto
-// depth-stencil left an offscreen pass depth-testing against a buffer of the
-// wrong size, which the host answers by dropping depth testing for the pass --
-// nothing occludes anything.
-assert.match(setRenderTarget, /depth->texture->handle/,
-    "a depth surface backed by a texture must be bound by its own handle");
-assert.match(cFunction(guest, "device_create_depth_surface"),
-    /create_depth_stencil_texture\(/,
-    "CreateDepthStencilSurface must allocate a host depth resource");
-
-// ...and that reset has to survive its own validator. A viewport is clipped
-// against the bound colour target, which an app may make larger than the
-// display mode: 3DMark 2001's advanced pixel-shader test binds an offscreen
-// target bigger than its 800x600 backbuffer, and validating the viewport
-// against display_mode refused the very viewport SetRenderTarget installs --
-// reaching the app as "Could not set render target - D3DERR_INVALIDCALL".
-const setViewport = cFunction(guest, "device_set_viewport");
-assert.doesNotMatch(setViewport, /display_mode/,
-    "SetViewport must bound the viewport by the current render target, not " +
-    "by the display mode");
-assert.match(setViewport, /current_render_target_size\(/,
-    "SetViewport must ask for the bound render target's size");
+// Render/depth target size, resource identity and viewport semantics are
+// executed by d8wg_target_pair_core_test, d8wg_surface_adapter_test and their
+// mutation suites; the retired backend's source spelling is not a contract.
 
 // ---- the guest validator may not be narrower than the translator --------
 //

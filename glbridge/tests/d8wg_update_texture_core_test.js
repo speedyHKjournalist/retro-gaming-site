@@ -1,5 +1,7 @@
 "use strict";
-const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"update8-core-")),s8=fs.readFileSync(process.env.D8WG_UPDATE_SOURCE8||root+"/d3d8proxy/d3d8_proxy.c","utf8"),s9=fs.readFileSync(process.env.D8WG_UPDATE_SOURCE9||root+"/d3d9proxy/d3d9_proxy.c","utf8");
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"update8-core-")),s8=readComparisonSource(process.env.D8WG_UPDATE_SOURCE8||root+"/d3d8proxy/d3d8_proxy.c","utf8"),s9=readComparisonSource(process.env.D8WG_UPDATE_SOURCE9||root+"/d3d9proxy/d3d9_proxy.c","utf8");
 function extract(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return s.slice(m.index,b);}
 function family(s,names,prefix){let code=names.map(n=>extract(s,n)).join("\n");for(const n of names)code=code.replace(new RegExp("\\b"+n+"\\b","g"),prefix+n);return code;}
 try{for(const api of[8,9]){const sdk=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P","-x","c","-"],{input:'#include <d3d'+api+'.h>\n',encoding:'utf8',maxBuffer:16<<20});assert.equal(sdk.status,0,sdk.stderr);for(const[name,id]of Object.entries({D3DPOOL_DEFAULT:0,D3DPOOL_MANAGED:1,D3DPOOL_SYSTEMMEM:2,D3DPOOL_SCRATCH:3}))assert.equal(Number(new RegExp('\\b'+name+'\\s*=\\s*(\\d+)').exec(sdk.stdout)?.[1]),id,name);}
@@ -27,8 +29,8 @@ static Device*device_from_iface(Device*d){return d;}static UINT device_compatibi
 enum{D9WG_COPY_2D,D9WG_COPY_CUBE,D9WG_COPY_VOLUME};
 typedef struct{UINT calls,kind;void*texture;const void*source;void*destination;D9WGTextureCopyExtent from,to;}Capture;static Capture captured;static HRESULT injected;
 static HRESULT d9wg_update_texture_common(void*t,UINT kind,const void*s,D9WGTextureCopyExtent from,void*d,D9WGTextureCopyExtent to){captured=(Capture){.calls=captured.calls+1,.kind=kind,.texture=t,.source=s,.destination=d,.from=from,.to=to};return injected;}
-${family(fs.readFileSync(root+'/tests/fixtures/d3d8_update_before_core.c','utf8'),names8,'old8_')}
-${family(fs.readFileSync(root+'/tests/fixtures/d3d9_update_before_core.c','utf8'),['device_update_texture'],'old9_')}
+${family(readComparisonSource(root+'/tests/fixtures/d3d8_update_before_core.c','utf8'),names8,'old8_')}
+${family(readComparisonSource(root+'/tests/fixtures/d3d9_update_before_core.c','utf8'),['device_update_texture'],'old9_')}
 ${family(s8,names8,'now8_')}
 ${family(s9,['device_update_texture'],'now9_')}
 #define IDirect3DDevice9_UpdateTexture now9_device_update_texture

@@ -15616,6 +15616,13 @@ void WINAPI d9wg_d3d9_core_caps8(void *caps8)
     CopyMemory(caps8, &caps, D9WG_D3D8_CAPS_BYTES);
 }
 
+void WINAPI d9wg_d3d9_core_hello8(void)
+{
+    if (InterlockedCompareExchange((LONG *)&g_hello_emitted, TRUE, FALSE)) return;
+    D9WGHello hello = {32, 0, g_session_id_low, g_session_id_high};
+    emit_command(D9WG_OP_HELLO, &hello, sizeof(hello));
+}
+
 IDirect3D9 *WINAPI d9wg_d3d9_core_create8(void)
 {
     return d3d_create_root(D3D_SDK_VERSION_9C, FALSE, 8);

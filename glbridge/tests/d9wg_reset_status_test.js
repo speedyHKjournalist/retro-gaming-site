@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -18,7 +20,7 @@ function extract(source, name) {
 }
 try {
     for (const api of [8, 9]) {
-        const source = fs.readFileSync(process.env["D" + api + "WG_RESET_STATUS_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(process.env["D" + api + "WG_RESET_STATUS_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         const functions = ["device_cancel_recording", "device_reset", "device_begin_scene", "device_end_scene", "device_test_cooperative_level", "device_present", api === 8 ? "swapchain_present" : "swap_chain_present"];
         fs.writeFileSync(dir + "/status.c", `#include <stdint.h>
 #include <stdio.h>

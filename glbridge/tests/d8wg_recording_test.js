@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D8WG_RECORD_SOURCE||path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8");
+const root=path.resolve(__dirname,".."),source=readComparisonSource(process.env.D8WG_RECORD_SOURCE||path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8");
 function extract(name){const re=new RegExp("static (?:HRESULT WINAPI|BOOL|void) "+name+"\\([^;]*?\\)\\s*\\{");const match=re.exec(source);assert(match,name);const first=source.indexOf("{",match.index);let at=first+1,depth=1;for(;depth&&at<source.length;++at){if(source[at]==="{")depth++;if(source[at]==="}")depth--;}assert.equal(depth,0);return source.slice(match.index,at);}
 const names=["matrix_equal","matrix_multiply","bytes_equal","device_set_render_state","device_get_render_state","device_set_texture_stage_state","device_get_texture_stage_state","device_set_viewport","device_get_viewport","device_set_material","device_get_material","device_set_transform","device_get_transform","device_multiply_transform","device_set_vs_constant","device_get_vs_constant","device_set_ps_constant","device_get_ps_constant","device_set_clip_plane","device_get_clip_plane"];
 if(source.includes("static BOOL set_live_viewport("))names.splice(names.indexOf("device_set_viewport"),0,"set_live_viewport");

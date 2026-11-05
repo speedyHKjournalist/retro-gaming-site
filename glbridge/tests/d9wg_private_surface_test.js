@@ -1,8 +1,10 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-private-entry-"));
 function extract(source,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);if(!m&&name==='surface_binding_add_ref')return 'static void surface_binding_add_ref(D8Surface*s){IDirect3DSurface8_AddRef(&s->iface);}';if(!m&&name==='surface_binding_release')return 'static void surface_binding_release(D8Surface*s){IDirect3DSurface8_Release(&s->iface);}';assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
 const apis=process.env.D9WG_PRIVATE_API?[Number(process.env.D9WG_PRIVATE_API)]:[8,9];assert(apis.every(api=>api===8||api===9));
-try{for(const api of apis){const source=fs.readFileSync(process.env['D'+api+'WG_PRIVATE_SURFACE_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/entry.c',`#include <assert.h>
+try{for(const api of apis){const source=readComparisonSource(process.env['D'+api+'WG_PRIVATE_SURFACE_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/entry.c',`#include <assert.h>
 #include <stdint.h>
 /* No frontend views are attached in this isolated lifetime fixture. */
 #define core_view_retire8(object) ((void)(object))

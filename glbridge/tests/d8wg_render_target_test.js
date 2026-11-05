@@ -1,5 +1,7 @@
 "use strict";
-const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-target-")),source=fs.readFileSync(process.env.D8WG_TARGET_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8");
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
+const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-target-")),source=readComparisonSource(process.env.D8WG_TARGET_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8");
 function extract(name){const m=new RegExp("static [^;{}]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
 try{fs.writeFileSync(dir+"/target.c",`#include <stdio.h>
 #include <stdlib.h>

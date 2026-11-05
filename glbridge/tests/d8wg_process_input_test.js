@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D8WG_PROCESS_INPUT_SOURCE||path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-process-input-"));
+const root=path.resolve(__dirname,".."),source=readComparisonSource(process.env.D8WG_PROCESS_INPUT_SOURCE||path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-process-input-"));
 function extract(name){const m=new RegExp("static (?:BOOL|void|HRESULT) "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 const input=/typedef struct D8ProcessInput \{[\s\S]*?\} D8ProcessInput;/.exec(source);assert(input);
 const code=`#include <stdint.h>

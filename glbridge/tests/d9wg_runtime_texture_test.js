@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { spawnSync, execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, ".."), directory = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-texture-"));
@@ -15,7 +17,7 @@ try {
         if (process.env.D9WG_TEXTURE_BASELINE && api !== "d3d8") continue;
         const relative = api + "proxy/" + api + "_proxy.c";
         const source = process.env.D9WG_TEXTURE_BASELINE ? execFileSync("git", ["show", "833bc0e:glbridge/" + relative], { cwd: path.dirname(root), encoding: "utf8" })
-            : fs.readFileSync(path.join(root, relative), "utf8");
+            : readComparisonSource(path.join(root, relative), "utf8");
         const frontend = (api === "d3d9" ? definition(source, "emit_level_update_api") + "\n" : "") + definition(source, api === "ddraw" ? "emit_surface_upload" : "emit_level_update") +
             (api === "d3d9" ? "\n" + definition(source, "emit_cube_texture_update") + "\n" + definition(source, "emit_volume_texture_update") :
                 api === "d3d8" ? "\n" + definition(source, "emit_volume_level_update") : "");

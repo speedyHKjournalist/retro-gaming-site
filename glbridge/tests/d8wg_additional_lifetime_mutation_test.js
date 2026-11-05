@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d8wg-additional-lifetime-mut-"));
 function mutate(s, name, old, replacement) {
@@ -9,7 +11,7 @@ function mutate(s, name, old, replacement) {
     return s.slice(0, m.index) + body.replace(old, replacement) + s.slice(end);
 }
 try {
-    const source = fs.readFileSync(root + "/d3d8proxy/d3d8_proxy.c", "utf8"); let killed = 0;
+    const source = readComparisonSource(root + "/d3d8proxy/d3d8_proxy.c", "utf8"); let killed = 0;
     for (const [label, fn, old, replacement] of [
         ["storage pin not transferred", "device_create_swapchain", "surface->texture->private_back_buffer = TRUE;", "surface->texture->private_back_buffer = 0;"],
         ["internal surface reference exposed", "device_create_swapchain", "surface->refcount = 0;", "surface->refcount = 1;"],

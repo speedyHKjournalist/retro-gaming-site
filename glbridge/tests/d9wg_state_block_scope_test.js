@@ -1,10 +1,12 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const {testPath}=require("./host_paths.js"),reference=require(testPath("fixtures/d3d_state_block_scope_reference.json")),root=path.resolve(__dirname,"..");
 function extract(source,name){const match=new RegExp("static (?:void|BOOL) "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(match,name);let at=source.indexOf("{",match.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(match.index,at);}
 const directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-scope-"));
 try{for(const api of [8,9]){
- const ref=reference.apis[api],source=fs.readFileSync(process.env["D"+api+"WG_SCOPE_SOURCE"]||path.join(root,"d3d"+api+"proxy/d3d"+api+"_proxy.c"),"utf8"),header=process.env.D9WG_SCOPE_HEADER||path.join(root,"runtime/d9wg_state_block_scope.h");
+ const ref=reference.apis[api],source=readComparisonSource(process.env["D"+api+"WG_SCOPE_SOURCE"]||path.join(root,"d3d"+api+"proxy/d3d"+api+"_proxy.c"),"utf8"),header=process.env.D9WG_SCOPE_HEADER||path.join(root,"runtime/d9wg_state_block_scope.h");
  const old=api===9&&source.includes("static const WORD g_pixel_state_render_states[]");
  const oldArrays=old?["g_pixel_state_render_states","g_vertex_state_render_states","g_state_block_transforms"].map(name=>{const m=new RegExp("static const WORD "+name+"\\[\\] = \\{[\\s\\S]*?\\};").exec(source);assert(m,name);return m[0];}).join("\n"):"";
  const privateTypes=api===8?`

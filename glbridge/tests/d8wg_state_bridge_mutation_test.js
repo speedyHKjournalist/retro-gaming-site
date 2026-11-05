@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"state8-mut-"));
-const files={header:root+"/runtime/d9wg_state_bridge8.h",frontend:root+"/d3d8proxy/d3d8_proxy.c",backend:root+"/d3d9proxy/d3d9_proxy.c"},source=Object.fromEntries(Object.entries(files).map(([k,p])=>[k,fs.readFileSync(p,"utf8")]));
+const files={header:root+"/runtime/d9wg_state_bridge8.h",frontend:root+"/d3d8proxy/d3d8_proxy.c",backend:root+"/d3d9proxy/d3d9_proxy.c"},source=Object.fromEntries(Object.entries(files).map(([k,p])=>[k,readComparisonSource(p,"utf8")]));
 function body(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return[m.index,b,s.slice(m.index,b)];}
 const cases=[];
 for(const name of['LINEPATTERN','ZVISIBLE','EDGEANTIALIAS','SOFTWAREVERTEXPROCESSING','PATCHSEGMENTS','POSITIONORDER','NORMALORDER'])cases.push(["deleted "+name,"header","d9wg_render_state8","case D3D8RS_"+name+":","case 1024u + D3D8RS_"+name+":"]);

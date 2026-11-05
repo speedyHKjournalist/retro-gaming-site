@@ -1,17 +1,19 @@
 'use strict';
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'d9wg-chain-mutations-'));
 function run(name,test,env){const r=spawnSync(process.execPath,[__dirname+'/'+test],{encoding:'utf8',timeout:30000,env:{...process.env,...env}});assert(!r.error,name+': '+r.error);assert.notEqual(r.status,0,name+' survived');const output=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(output),name+' compile failure: '+output);assert(/nonblocking line|Chain pacing|Assertion|signal=/.test(output),name+' no runtime failure');}
 function span(s,name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(s);assert(m,name);let end=s.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(s[end]==='{')depth++;if(s[end]==='}')depth--;}return[m.index,end];}
-try{let killed=0;const runtime=fs.readFileSync(root+'/runtime/d9wg_present_pacing.c','utf8');for(const[name,old,replacement]of[
+try{let killed=0;const runtime=readComparisonSource(root+'/runtime/d9wg_present_pacing.c','utf8');for(const[name,old,replacement]of[
  ['busy accepted','if (present_step(&next, frames, refresh, now, hz, &maximum, &tolerance))\n        return 0;','if (present_step(&next, frames, refresh, now, hz, &maximum, &tolerance))\n        return 1;'],
  ['successful candidate discarded','    *state = next;','    (void)next;'],
  ['busy state modified','D9WGPresentPacing next = *state;','D9WGPresentPacing next = *state; state->fraction++;'],
 ]){assert(runtime.includes(old),name);const file=dir+'/runtime.c';fs.writeFileSync(file,runtime.replace(old,replacement));run(name,'d9wg_present_nonblocking_test.js',{D9WG_CHAIN_RUNTIME:file});killed++;}
-const bridge=fs.readFileSync(root+'/runtime/d9wg_present_pacing_bridge.h','utf8');for(const[name,old,replacement]of[
+const bridge=readComparisonSource(root+'/runtime/d9wg_present_pacing_bridge.h','utf8');for(const[name,old,replacement]of[
  ['nonblocking deadline ignored','return d9wg_present_try(candidate, frames, refresh, now, clock->hz);','(void)refresh; (void)now; return 1;'],
  ['nonblocking interval ignored','return d9wg_present_try(candidate, frames, refresh, now, clock->hz);','return d9wg_present_try(candidate, 0, refresh, now, clock->hz);'],
 ]){assert(bridge.includes(old),name);const file=dir+'/bridge.h';fs.writeFileSync(file,bridge.replace(old,replacement));run(name,'d9wg_swapchain_pacing_entry_test.js',{D9WG_CHAIN_BRIDGE:file});killed++;}
-for(const api of[8,9]){const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),[a,b]=span(source,api===8?'swapchain_present':'swap_chain_present'),body=source.slice(a,b),mutations=api===8?[
+for(const api of[8,9]){const source=readComparisonSource(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),[a,b]=span(source,api===8?'swapchain_present':'swap_chain_present'),body=source.slice(a,b),mutations=api===8?[
  ['successful chains unpaced','if (ok)','if (0 && ok)'],
  ['failed chains paced','if (ok)','if (1)'],
  ['shared device pacing','&chain->present_pacing','&chain->device->present_pacing'],

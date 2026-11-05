@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d3d-implicit-private-callback-mut-"));
 function mutate(s, name, old, replacement) {
@@ -11,7 +13,7 @@ function mutate(s, name, old, replacement) {
 try {
     let killed = 0;
     for (const api of [8,9]) {
-        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         const ref = "InterlockedCompareExchange(&device->refcount, 0, 0) == 1";
         const back = api === 8 ? "device->back_buffer_private_data" : "device->implicit_back_buffer->private_data";
         const depth = api === 8 ? "device->depth_surface_private_data" : "device->implicit_depth_stencil->private_data";

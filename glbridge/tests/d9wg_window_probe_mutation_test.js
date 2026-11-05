@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-window-probe-mutants-"));
 const cases=[
@@ -19,6 +21,6 @@ const cases=[
  ["D3D9 covered window steals foreground",9,"if ((probe->state.flags & D9WG_WINDOW_OCCLUDED) != 0)","if (0)"],
 ];
 try{for(const [name,kind,before,after,count=1]of cases){
- const file=kind==="probe"||kind==="geometry"?root+"/runtime/d9wg_window_"+kind+".c":root+"/"+(kind===7?"ddraw":"d3d"+kind)+"proxy/"+(kind===7?"ddraw":"d3d"+kind)+"_proxy.c",original=fs.readFileSync(file,"utf8");assert.equal(original.split(before).length,count+1,name);const mutant=dir+"/mutated.c";fs.writeFileSync(mutant,original.replaceAll(before,after));const env={...process.env,...(typeof kind==="number"?{D9WG_WINDOW_PRESENT_API:String(kind),D9WG_WINDOW_PRESENT_SOURCE:mutant}:{[kind==="probe"?"D9WG_WINDOW_PROBE_SOURCE":"D9WG_WINDOW_GEOMETRY_SOURCE"]:mutant})};const run=spawnSync(process.execPath,[path.join(__dirname,typeof kind==="number"?"d9wg_window_present_test.js":"d9wg_window_probe_test.js")],{env,encoding:"utf8"});assert.notEqual(run.status,0,"survived "+name);assert.match(run.stderr,/window (probe|present) line/,"native runtime assertion required: "+name);
+ const file=kind==="probe"||kind==="geometry"?root+"/runtime/d9wg_window_"+kind+".c":root+"/"+(kind===7?"ddraw":"d3d"+kind)+"proxy/"+(kind===7?"ddraw":"d3d"+kind)+"_proxy.c",original=readComparisonSource(file,"utf8");assert.equal(original.split(before).length,count+1,name);const mutant=dir+"/mutated.c";fs.writeFileSync(mutant,original.replaceAll(before,after));const env={...process.env,...(typeof kind==="number"?{D9WG_WINDOW_PRESENT_API:String(kind),D9WG_WINDOW_PRESENT_SOURCE:mutant}:{[kind==="probe"?"D9WG_WINDOW_PROBE_SOURCE":"D9WG_WINDOW_GEOMETRY_SOURCE"]:mutant})};const run=spawnSync(process.execPath,[path.join(__dirname,typeof kind==="number"?"d9wg_window_present_test.js":"d9wg_window_probe_test.js")],{env,encoding:"utf8"});assert.notEqual(run.status,0,"survived "+name);assert.match(run.stderr,/window (probe|present) line/,"native runtime assertion required: "+name);
 }}finally{fs.rmSync(dir,{recursive:true,force:true});}
 console.log("PASS shared Win32 window probe mutations: 17/17 query reuse, foreground, coordinate/region failures, three API geometry policies and fullscreen reclaim");

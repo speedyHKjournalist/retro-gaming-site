@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os");
 const {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-display-mut-"));
@@ -17,7 +19,7 @@ function run(label, env) {
 }
 try {
     let killed = 0;
-    const header = fs.readFileSync(root + "/runtime/d9wg_display_mode.h", "utf8");
+    const header = readComparisonSource(root + "/runtime/d9wg_display_mode.h", "utf8");
     for (const [label, old, replacement] of [
         ["live mode ignored", "if (EnumDisplaySettingsA(", "if (0 && EnumDisplaySettingsA("],
         ["invalid width accepted", "&& current.dmPelsWidth &&", "&& 1 &&"],
@@ -33,7 +35,7 @@ try {
         assert(header.includes(old), label); const file = dir + "/display.h"; fs.writeFileSync(file, header.replace(old, replacement)); run(label, {D9WG_DISPLAY_HEADER: file}); killed++;
     }
     for (const api of [8, 9]) {
-        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         const changes = [
             ["factory dimensions fixed", "d3d_get_adapter_display_mode", "fill_display_mode(mode, current.width, current.height,", "fill_display_mode(mode, 1024, 768,"],
             ["factory refresh lost", "d3d_get_adapter_display_mode", "mode->RefreshRate = current.refresh_rate;", ""],

@@ -1,9 +1,11 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-texture-copy-"));
 function extract(source,name){const m=new RegExp("static (?:BOOL|HRESULT)(?: WINAPI)? "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 try{for(const api of [8,9]){
- const source=fs.readFileSync(process.env.D9WG_TEXTURE_COPY_API===String(api)?process.env.D9WG_TEXTURE_COPY_FRONTEND_SOURCE:root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8"),adapter=source.match(new RegExp("#define D9WG_COPY_LEVEL D"+api+"TextureLevel[\\s\\S]*?#include \\\"\\.\\./runtime/d9wg_texture_copy_bridge.h\\\""));assert(adapter,"actual SDK adapter");
+ const source=readComparisonSource(process.env.D9WG_TEXTURE_COPY_API===String(api)?process.env.D9WG_TEXTURE_COPY_FRONTEND_SOURCE:root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8"),adapter=source.match(new RegExp("#define D9WG_COPY_LEVEL D"+api+"TextureLevel[\\s\\S]*?#include \\\"\\.\\./runtime/d9wg_texture_copy_bridge.h\\\""));assert(adapter,"actual SDK adapter");
  const code=`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

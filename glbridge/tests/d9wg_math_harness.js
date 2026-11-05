@@ -1,10 +1,12 @@
 "use strict";
-const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path");
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
+const assert = require("node:assert/strict"), path = require("node:path");
 const { createHash } = require("node:crypto");
-const root = path.resolve(__dirname, ".."), data = fs.readFileSync(path.join(__dirname, "fixtures/d9wg_math_baseline.json"));
+const root = path.resolve(__dirname, ".."), data = readComparisonSource(path.join(__dirname, "fixtures/d9wg_math_baseline.json"));
 assert.equal(createHash("sha256").update(data).digest("hex"), "387f4f0c2570f00a5cac1409519d2b85084c2b79cef70450d0c3cfa7e70e5607");
 const baseline = JSON.parse(data);
-const extra = fs.readFileSync(path.join(__dirname, "fixtures/d9wg_d3d7_multiply_baseline.json"));
+const extra = readComparisonSource(path.join(__dirname, "fixtures/d9wg_d3d7_multiply_baseline.json"));
 assert.equal(createHash("sha256").update(extra).digest("hex"), "c409cee9eb93eb3b5316559cb20e184ba72d47f242a50c8067acad10b7db6432");
 baseline.groups.d3d7.d3d7_multiply_matrix = JSON.parse(extra).function;
 function body(source, name) {
@@ -34,7 +36,7 @@ typedef union D3DMATRIX {
     for (const api of Object.keys(files)) {
         const oldNames = Object.keys(baseline.groups[api]);
         code += Object.values(baseline.groups[api]).join("\n").replace(new RegExp(oldNames.join("|"), "g"), name => "old_" + api + "_" + name) + "\n";
-        const candidate = fs.readFileSync(path.join(root, files[api]), "utf8");
+        const candidate = readComparisonSource(path.join(root, files[api]), "utf8");
         const aliases = { d9_transform_vector4: "d9wg_transform_vector4", transform_vector4: "d9wg_transform_vector4", d9_pack_color: "d9wg_pack_color", pack_color: "d9wg_pack_color", d3d7_pack_color: "d9wg_pack_color",
             d9_sqrt: "d9wg_sqrt_positive", float_sqrt: "d9wg_sqrt_positive", d3d7_sqrt: "d9wg_sqrt_positive" };
         code += names[api].map(name => {

@@ -1,7 +1,9 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-private-entry-"));
 function extract(source,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
-try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_COM_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),types=['Texture','CubeTexture','VolumeTexture'];const structures=types.map(type=>{const begin=source.indexOf('struct D'+api+type+' {'),end=source.indexOf('\n};',begin);assert(begin>=0&&end>begin);return source.slice(begin,end+3);}).join('\n');fs.writeFileSync(dir+'/layout.c',`#include <assert.h>
+try{for(const api of[8,9]){const source=readComparisonSource(process.env['D'+api+'WG_COM_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),types=['Texture','CubeTexture','VolumeTexture'];const structures=types.map(type=>{const begin=source.indexOf('struct D'+api+type+' {'),end=source.indexOf('\n};',begin);assert(begin>=0&&end>begin);return source.slice(begin,end+3);}).join('\n');fs.writeFileSync(dir+'/layout.c',`#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include "runtime/d9wg_private_data.h"

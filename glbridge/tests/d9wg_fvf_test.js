@@ -1,12 +1,14 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os");
 const { spawnSync } = require("node:child_process"), { createHash } = require("node:crypto");
-const root = path.resolve(__dirname, ".."), fixture = fs.readFileSync(path.join(__dirname, "fixtures/d9wg_fvf_baseline.json"));
+const root = path.resolve(__dirname, ".."), fixture = readComparisonSource(path.join(__dirname, "fixtures/d9wg_fvf_baseline.json"));
 const baseline = JSON.parse(fixture), directory = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-fvf-"));
-const wine = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/d9wg_fvf_wine_reference.json"), "utf8"));
+const wine = JSON.parse(readComparisonSource(path.join(__dirname, "fixtures/d9wg_fvf_wine_reference.json"), "utf8"));
 const frozen = (api, names) => baseline[api].join("\n").replace(new RegExp(names.join("|"), "g"), name => "old" + api + "_" + name);
 function actual(file, name) {
-    const source = fs.readFileSync(path.join(root, file), "utf8"), start = source.indexOf("static BOOL " + name + "(");
+    const source = readComparisonSource(path.join(root, file), "utf8"), start = source.indexOf("static BOOL " + name + "(");
     let end = source.indexOf("{", start) + 1, depth = 1;
     assert.ok(start > 0);
     for (; depth; end++) depth += (source[end] === "{") - (source[end] === "}");

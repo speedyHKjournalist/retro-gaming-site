@@ -1,10 +1,12 @@
 "use strict";
-const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"backend8-buffers-")),source=fs.readFileSync(process.env.D8WG_BACKEND_BUFFERS_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8");
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"backend8-buffers-")),source=readComparisonSource(process.env.D8WG_BACKEND_BUFFERS_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8");
 function extract(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return s.slice(m.index,b);}
 function sdk(api){const r=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P","-x","c","-"],{input:"#include <d3d"+api+".h>\n",encoding:"utf8",maxBuffer:16<<20});assert.equal(r.status,0,r.stderr);return r.stdout;}
 try{const e=sdk(8),n=sdk(9),desc=(s,kind,name)=>{const m=new RegExp("typedef struct _D3D"+kind+"BUFFER_DESC\\s*\\{[\\s\\S]*?\\}\\s*D3D"+kind+"BUFFER_DESC\\s*;").exec(s);assert(m);return m[0].replace("struct _D3D"+kind+"BUFFER_DESC","struct").replace(new RegExp("\\bD3D"+kind+"BUFFER_DESC\\b","g"),name);};
 for(const[name,value]of Object.entries({D3DFMT_VERTEXDATA:100,D3DFMT_INDEX16:101,D3DFMT_INDEX32:102,D3DRTYPE_VERTEXBUFFER:6,D3DRTYPE_INDEXBUFFER:7})){const pattern=new RegExp("\\b"+name+"\\s*=\\s*(\\d+)");assert.equal(Number(pattern.exec(e)?.[1]),value,name+" SDK8");assert.equal(Number(pattern.exec(n)?.[1]),value,name+" SDK9");}
-const old8=fs.readFileSync(root+"/tests/fixtures/d3d8_buffers_before_core.c","utf8"),old9=fs.readFileSync(root+"/tests/fixtures/d3d9_buffers_before_core.c","utf8"),source8=fs.readFileSync(root+"/d3d8proxy/d3d8_proxy.c","utf8");
+const old8=readComparisonSource(root+"/tests/fixtures/d3d8_buffers_before_core.c","utf8"),old9=readComparisonSource(root+"/tests/fixtures/d3d9_buffers_before_core.c","utf8"),source8=readComparisonSource(root+"/d3d8proxy/d3d8_proxy.c","utf8");
 const code=`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

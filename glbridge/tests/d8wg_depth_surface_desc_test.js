@@ -1,7 +1,9 @@
 "use strict";
-const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"depth-desc8-")),source=fs.readFileSync(process.env.D8WG_DEPTH_DESC_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8");
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"depth-desc8-")),source=readComparisonSource(process.env.D8WG_DEPTH_DESC_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8");
 function extract(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return s.slice(m.index,b);}
-try{const oldlevel=fs.readFileSync(root+'/tests/fixtures/d3d8_depth_level_desc_before_size.c','utf8'),oldsurface=extract(fs.readFileSync(root+'/tests/fixtures/d3d8_image_surface_before_core.c','utf8'),'create_standalone_surface');const code=`#include <stdint.h>
+try{const oldlevel=readComparisonSource(root+'/tests/fixtures/d3d8_depth_level_desc_before_size.c','utf8'),oldsurface=extract(readComparisonSource(root+'/tests/fixtures/d3d8_image_surface_before_core.c','utf8'),'create_standalone_surface');const code=`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

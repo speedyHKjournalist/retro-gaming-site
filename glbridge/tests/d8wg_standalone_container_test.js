@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d8wg-standalone-container-"));
 function extract(source, name) {
@@ -8,7 +10,7 @@ function extract(source, name) {
     return source.slice(m.index, end);
 }
 try {
-    const source = fs.readFileSync(process.env.D8WG_STANDALONE_CONTAINER_SOURCE || root + "/d3d8proxy/d3d8_proxy.c", "utf8");
+    const source = readComparisonSource(process.env.D8WG_STANDALONE_CONTAINER_SOURCE || root + "/d3d8proxy/d3d8_proxy.c", "utf8");
     fs.writeFileSync(dir + "/container.c", `#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>

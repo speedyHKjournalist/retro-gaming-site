@@ -1,7 +1,9 @@
 'use strict';
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'d9wg-reset-graph-'));
 function extract(s,name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(s);assert(m,name);let end=s.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(s[end]==='{')depth++;if(s[end]==='}')depth--;}return s.slice(m.index,end);}
-try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_RESET_FRONTEND']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/reset.c',`#include <stdint.h>
+try{for(const api of[8,9]){const source=readComparisonSource(process.env['D'+api+'WG_RESET_FRONTEND']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8');fs.writeFileSync(dir+'/reset.c',`#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "d3d9proxy/d3d9_protocol.h"

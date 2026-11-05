@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { spawnSync, execFileSync } = require("node:child_process");
@@ -13,7 +15,7 @@ try {
     for (const api of ["d3d9", "d3d8", "ddraw"]) {
         const relative = api + "proxy/" + api + "_proxy.c";
         const source = process.env.D9WG_UPLOAD_BASELINE ? execFileSync("git", ["show", "f7f1199:glbridge/" + relative], { cwd: path.dirname(root), encoding: "utf8" })
-            : fs.readFileSync(path.join(root, relative), "utf8");
+            : readComparisonSource(path.join(root, relative), "utf8");
         // DDraw's common emitter is new; its former two inline VB paths are
         // covered by integration/build checks and both now call this function.
         if (process.env.D9WG_UPLOAD_BASELINE && api === "ddraw") continue;

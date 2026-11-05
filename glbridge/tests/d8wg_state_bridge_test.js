@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"state-bridge8-")),source8=fs.readFileSync(process.env.D8WG_STATE_SOURCE8||root+"/d3d8proxy/d3d8_proxy.c","utf8"),source9=fs.readFileSync(process.env.D8WG_STATE_SOURCE9||root+"/d3d9proxy/d3d9_proxy.c","utf8"),header=process.env.D8WG_STATE_BRIDGE_HEADER||root+"/runtime/d9wg_state_bridge8.h";
+const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"state-bridge8-")),source8=readComparisonSource(process.env.D8WG_STATE_SOURCE8||root+"/d3d8proxy/d3d8_proxy.c","utf8"),source9=readComparisonSource(process.env.D8WG_STATE_SOURCE9||root+"/d3d9proxy/d3d9_proxy.c","utf8"),header=process.env.D8WG_STATE_BRIDGE_HEADER||root+"/runtime/d9wg_state_bridge8.h";
 function extract(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return s.slice(m.index,b);}
 function family(s,names,prefix){let code=names.map(n=>extract(s,n)).join("\n");for(const n of names)code=code.replace(new RegExp("\\b"+n+"\\b","g"),prefix+n);return code;}
 function sdk(api){const r=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P","-x","c","-"],{input:"#include <d3d"+api+".h>\n",encoding:"utf8",maxBuffer:16<<20});assert.equal(r.status,0,r.stderr);return r.stdout;}
@@ -46,9 +48,9 @@ static Device*device_from_iface(Device*d){return d;}static UINT device_compatibi
 typedef struct{UINT count,op;DWORD bytes[4];} Capture;static Capture captured;static BOOL fail;
 static BOOL emit_command(UINT op,const void*p,UINT n){assert(n==16);captured.count++;captured.op=op;memcpy(captured.bytes,p,16);return !fail;}
 ${['sampler_state_slot','state_block_record_render_state','state_block_record_texture_stage_state','state_block_record_sampler_state'].map(n=>extract(source9,n)).join('\n')}
-${family(fs.readFileSync(root+'/tests/fixtures/d3d8_states_before_core.c','utf8'),['d3d8_stage_state_to_sampler_state',...names8],'old8_')}
+${family(readComparisonSource(root+'/tests/fixtures/d3d8_states_before_core.c','utf8'),['d3d8_stage_state_to_sampler_state',...names8],'old8_')}
 ${family(source8,names8,'now8_')}
-${family(fs.readFileSync(root+'/tests/fixtures/d3d9_states_before_core.c','utf8'),names9,'old9_')}
+${family(readComparisonSource(root+'/tests/fixtures/d3d9_states_before_core.c','utf8'),names9,'old9_')}
 ${family(source9,names9,'now9_')}
 #define IDirect3DDevice9_SetRenderState now9_device_set_render_state
 #define IDirect3DDevice9_SetTextureStageState now9_device_set_texture_stage_state

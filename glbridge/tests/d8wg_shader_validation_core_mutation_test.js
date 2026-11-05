@@ -1,5 +1,7 @@
 "use strict";
-const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),eight=fs.readFileSync(root+"/d3d8proxy/d3d8_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-pp-core-mut-"));
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
+const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=readComparisonSource(root+"/d3d9proxy/d3d9_proxy.c","utf8"),eight=readComparisonSource(root+"/d3d8proxy/d3d8_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-pp-core-mut-"));
 function mutate(before,after,name,side){const original=side===8?eight:source;const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(original);assert(m);let end=original.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(original[end]==="{")depth++;if(original[end]==="}")depth--;}const body=original.slice(m.index,end);assert(body.includes(before),before);return original.slice(0,m.index)+body.replace(before,after)+original.slice(end);}
 const cases=[
  ["CND1.4 refused",9,"shader8_opcode_supported","if (!is_pixel_shader || minor > 4u) return FALSE;","if (!is_pixel_shader || minor > 3u) return FALSE;","policy"],

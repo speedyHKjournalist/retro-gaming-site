@@ -1255,3 +1255,21 @@ The public default factory still uses the previous backend. Switching that entry
 and retiring the duplicate implementation form the next functional batch. This
 is not a claim of complete native compatibility, shader differential validation
 or game/FPS acceptance.
+
+
+### 2026-11-05: public Device8 switch and backend retirement (review 4L2)
+
+`Direct3DCreate8` / `IDirect3D8::CreateDevice` now returns the complete shared-core
+Device8 facade. The production Root8 source is 418 lines; the retired 8,350-line
+backend is immutable test comparison data and is never linked into a DLL.
+The shared core publishes the legacy HELLO; its existing functions are unchanged.
+The retail DLL shrank from 261,120 to 193,024 bytes.
+
+The public-entry XP run exercised all 97 SDK methods in four SDK120/220 normal/PURE
+contexts: 2,815 checks, four Reset operations, 80 handles and 1,762 commands.
+SwiftShader and Metal each validated 28 images / 1,408 pixels with zero error.
+The 398 guest suites passed after four retired-source harness updates; historical
+Device8 comparisons are explicitly separated from live Root8/adapter/core tests.
+The exact accepted retail DLL and a same-source diagnostic DLL are published.
+See deployment evidence 4L2. This does not close all phase 4 compatibility,
+software vertex processing, native HAL/game acceptance, or phase 5 shader work.

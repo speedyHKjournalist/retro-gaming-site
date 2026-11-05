@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),source=fs.readFileSync(path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-record-mutants-"));
+const root=path.resolve(__dirname,".."),source=readComparisonSource(path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-record-mutants-"));
 const mutations=[
  ["recorded render state changes live device","recorded->render_states[state] = value;","device->render_states[state] = value;"],
  ["same-value recording discarded","recorded->render_mask[state] = 1;","if (device->render_states[state] == value) return D3D_OK;recorded->render_mask[state] = 1;"],

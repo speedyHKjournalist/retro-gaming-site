@@ -41,7 +41,7 @@ ${definition(source, "static void emit_session_end(")}` : `static BOOL reserve_c
 static BOOL submit_batch_locked(BOOL present){(void)present;assert(g_transport_lock.held);submits++;g_command_count=0;g_batch_bytes=sizeof(D9WGBatchHeader);return TRUE;}
 static void close_transport_locked(void){assert(g_transport_lock.held&&g_process->references==1);transport_closes++;g_transport=INVALID_HANDLE_VALUE;g_dma_buffer=NULL;}
 ${api === "d3d8" ? "static D9WGProcess *backend_process;\n" + definition(fs.readFileSync(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8"), "BOOL WINAPI DllMain(").replace(/\bg_process\b/g,"backend_process").replace(/\bDllMain\b/,"d9wg_d3d9_core_module") + "\n" + definition(fs.readFileSync(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8"),"D9WGProcess *WINAPI d9wg_d3d9_core_process(").replace(/\bg_process\b/g,"backend_process") : ""}
-${definition(source, "static uint32_t allocate_handle(")}
+${definition(api === "d3d8" ? fs.readFileSync(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8") : source, "static uint32_t allocate_handle(")}
 #define DllMain ${api}_entry
 ${definition(source, "BOOL WINAPI DllMain(")}
 ${api === "d3d8" ? "D9WGProcess *d3d8_backend_state(void){return backend_process;}" : ""}

@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-palette-mutants-"));
 const mutations=[
@@ -11,6 +13,6 @@ const mutations=[
  ["d3d8proxy/d3d8_proxy.c","D8WG_PALETTE_SOURCE","D3D8 recording mutates live selection","if (device->recording_state_block) {\n        device->recording_state_block->state.palette_mask","if (0 && device->recording_state_block) {\n        device->recording_state_block->state.palette_mask"],
  ["d3d9proxy/d3d9_proxy.c","D9WG_PALETTE_SOURCE","D3D9 recording mutates live selection","device->recording_result->has_palette = TRUE;","device->current_palette = index;\n    device->recording_result->has_palette = TRUE;"]
 ];
-try{for(const [relative,variable,label,before,after] of mutations){const source=fs.readFileSync(path.join(root,relative),"utf8");assert.equal(source.split(before).length,2,label);const file=path.join(directory,path.basename(relative));fs.writeFileSync(file,source.replace(before,after));const run=spawnSync(process.execPath,[path.join(__dirname,"d9wg_palette_state_test.js")],{env:{...process.env,[variable]:file},encoding:"utf8"});assert.notEqual(run.status,0,"survived "+label);assert.match(run.stderr,/palette API [89] line/,"semantic runtime failure required: "+label);}
+try{for(const [relative,variable,label,before,after] of mutations){const source=readComparisonSource(path.join(root,relative),"utf8");assert.equal(source.split(before).length,2,label);const file=path.join(directory,path.basename(relative));fs.writeFileSync(file,source.replace(before,after));const run=spawnSync(process.execPath,[path.join(__dirname,"d9wg_palette_state_test.js")],{env:{...process.env,[variable]:file},encoding:"utf8"});assert.notEqual(run.status,0,"survived "+label);assert.match(run.stderr,/palette API [89] line/,"semantic runtime failure required: "+label);}
  console.log("PASS shared palette mutations: 8/8; defaults, alpha, ID range, page isolation, atomic OOM, release and actual D3D8/9 recording paths");
 }finally{fs.rmSync(directory,{recursive:true,force:true});}

@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d3d-bblock-"));
-const eight=fs.readFileSync(process.env.D8WG_BACKBUFFER_LOCK_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),nine=fs.readFileSync(process.env.D9WG_BACKBUFFER_LOCK_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8");
+const eight=readComparisonSource(process.env.D8WG_BACKBUFFER_LOCK_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),nine=readComparisonSource(process.env.D9WG_BACKBUFFER_LOCK_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8");
 function extract(source,name){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
 try{
 const code=`#include <stdint.h>

@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d3d-implicit-binding-mut-"));
 function mutate(s, name, old, replacement) {
@@ -11,7 +13,7 @@ function mutate(s, name, old, replacement) {
 try {
     let killed = 0;
     for (const api of [8,9]) {
-        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         const changes = api === 8 ? [
             ["implicit binding adds public ref", "surface_binding_add_ref", "if (surface_is_implicit(surface))", "if (0 && surface_is_implicit(surface))"],
             ["implicit unbind returns public ref", "surface_binding_release", "if (surface_is_implicit(surface))", "if (0 && surface_is_implicit(surface))"],

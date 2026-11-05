@@ -1,10 +1,12 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),header=process.env.D9WG_PALETTE_HEADER||path.join(root,"runtime/d9wg_palette_state.h");
 function extract(source,name){const m=new RegExp("static (?:HRESULT WINAPI|BOOL) "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 const directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-palettes-"));
 try{for(const api of [8,9]){
- const source=fs.readFileSync(process.env["D"+api+"WG_PALETTE_SOURCE"]||path.join(root,"d3d"+api+"proxy/d3d"+api+"_proxy.c"),"utf8");
+ const source=readComparisonSource(process.env["D"+api+"WG_PALETTE_SOURCE"]||path.join(root,"d3d"+api+"proxy/d3d"+api+"_proxy.c"),"utf8");
  const funcs=api===8?["device_set_palette","device_get_palette","device_set_current_palette","device_get_current_palette"]:["device_set_palette_entries","device_get_palette_entries","state_block_record_palette","device_set_current_texture_palette","device_get_current_texture_palette"];
  const names=api===8?funcs:[funcs[0],funcs[1],funcs[3],funcs[4]];
  const code=`#include <stdint.h>

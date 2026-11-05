@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),sources={header:fs.readFileSync(path.join(root,"runtime/d9wg_state_block_scope.h"),"utf8"),d8:fs.readFileSync(path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),d9:fs.readFileSync(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8")},directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-scope-mutants-"));
+const root=path.resolve(__dirname,".."),sources={header:readComparisonSource(path.join(root,"runtime/d9wg_state_block_scope.h"),"utf8"),d8:readComparisonSource(path.join(root,"d3d8proxy/d3d8_proxy.c"),"utf8"),d9:readComparisonSource(path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8")},directory=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-scope-mutants-"));
 const mutations=[
  ["pixel captures culling","header","D3DRS_ZWRITEENABLE,","D3DRS_CULLMODE,"],
  ["vertex loses tween factor","header","D3DRS_TWEENFACTOR,","D3DRS_ZENABLE,"],

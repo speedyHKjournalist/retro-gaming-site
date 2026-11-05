@@ -1,7 +1,9 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-cursor-"));
 function extract(source,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
-try{for(const api of[8,9]){const source=fs.readFileSync(process.env['D'+api+'WG_CURSOR_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),header=process.env.D9WG_CURSOR_HEADER||root+'/runtime/d9wg_cursor_bridge.h';fs.writeFileSync(dir+'/cursor.c',`#include <stdio.h>
+try{for(const api of[8,9]){const source=readComparisonSource(process.env['D'+api+'WG_CURSOR_SOURCE']||root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),header=process.env.D9WG_CURSOR_HEADER||root+'/runtime/d9wg_cursor_bridge.h';fs.writeFileSync(dir+'/cursor.c',`#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>

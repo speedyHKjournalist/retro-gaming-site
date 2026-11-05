@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os");
 const {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-display-mode-"));
@@ -10,7 +12,7 @@ function extract(source, name) {
 }
 try {
     for (const api of [8, 9]) {
-        const source = fs.readFileSync(process.env["D" + api + "WG_DISPLAY_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(process.env["D" + api + "WG_DISPLAY_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         fs.writeFileSync(dir + "/mode.c", `#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,7 +43,7 @@ static BOOL EnumDisplaySettingsA(const char*name,UINT index,DEVMODEA*out){assert
 static Device*device_from_iface(Device*d){return d;}
 ${api === 9 ? "static Chain*swap_chain_from_iface(Chain*c){return c;}" : ""}
 ${extract(source,"fill_display_mode")}
-${api === 8 ? (()=>{const backend=fs.readFileSync(process.env.D9WG_DISPLAY_FRONTEND||root+"/d3d9proxy/d3d9_proxy.c","utf8");return `typedef Interface IDirect3D9;
+${api === 8 ? (()=>{const backend=readComparisonSource(process.env.D9WG_DISPLAY_FRONTEND||root+"/d3d9proxy/d3d9_proxy.c","utf8");return `typedef Interface IDirect3D9;
 static Factory*d3d_from_iface(Interface*p){return (Factory*)p;}
 #define CopyMemory(p,q,n) memcpy(p,q,n)
 #define IDirect3D9_GetAdapterDisplayMode backend_adapter_display_mode

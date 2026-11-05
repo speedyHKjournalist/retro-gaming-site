@@ -1,10 +1,12 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-private-mut-"));
 
 
 
 function run(name,test,env){const r=spawnSync(process.execPath,[__dirname+'/'+test],{encoding:'utf8',timeout:30000,env:{...process.env,...env}});assert(!r.error,name+': '+r.error);assert.notEqual(r.status,0,name+' survived');const output=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(output),name+' compile failure: '+output);assert(/Present pacing|Present API|Assertion|signal=/.test(output),name+' no runtime failure');}
-const runtime=fs.readFileSync(root+'/runtime/d9wg_present_pacing.c','utf8'),bridge=fs.readFileSync(root+'/runtime/d9wg_present_pacing_bridge.h','utf8');
+const runtime=readComparisonSource(root+'/runtime/d9wg_present_pacing.c','utf8'),bridge=readComparisonSource(root+'/runtime/d9wg_present_pacing_bridge.h','utf8');
 const mutations=[
  ['early wakes not retried','sample < 8','sample < 2'],
  ['stalled short waits never increased','wait <= ceiling / 2 ? wait * 2 : ceiling','wait < ceiling ? wait : ceiling'],
@@ -33,5 +35,5 @@ for(const[name,old,replacement]of[
  ['counter not shifted with frequency','return (uint32_t)(value.QuadPart >> clock->shift);','return (uint32_t)value.QuadPart;'],
  ['disabled setting ignored',"value = size && size < sizeof(text) && text[0] != '0';",'value = 0; (void)size;'],
 ]){assert(bridge.includes(old),name);const file=dir+'/bridge.h';fs.writeFileSync(file,bridge.replace(old,replacement));run(name,'d9wg_present_pacing_entry_test.js',{D9WG_PACING_BRIDGE:file});killed++;}
-for(const api of[8,9])for(const[name,replacement]of[['accepted frames never paced','if (0 && ok)'],['failed frames paced','if (1)']]){const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),start=source.indexOf('static HRESULT WINAPI device_present('),end=source.indexOf('\nstatic ',start+1),part=source.slice(start,end);assert(part.includes('if (ok)'));const file=dir+'/frontend.c';fs.writeFileSync(file,source.slice(0,start)+part.replace('if (ok)',replacement)+source.slice(end));run('API '+api+' '+name,'d9wg_present_pacing_entry_test.js',{['D'+api+'WG_PACING_FRONTEND']:file});killed++;}
+for(const api of[8,9])for(const[name,replacement]of[['accepted frames never paced','if (0 && ok)'],['failed frames paced','if (1)']]){const source=readComparisonSource(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),start=source.indexOf('static HRESULT WINAPI device_present('),end=source.indexOf('\nstatic ',start+1),part=source.slice(start,end);assert(part.includes('if (ok)'));const file=dir+'/frontend.c';fs.writeFileSync(file,source.slice(0,start)+part.replace('if (ok)',replacement)+source.slice(end));run('API '+api+' '+name,'d9wg_present_pacing_entry_test.js',{['D'+api+'WG_PACING_FRONTEND']:file});killed++;}
 console.log('PASS Present pacing mutations: '+killed+'/27; interval policy, rational cadence, sub-ms debt, wrap/jump/late clocks, actual fallback/shift/disable and both public submission paths');}finally{fs.rmSync(dir,{recursive:true,force:true});}

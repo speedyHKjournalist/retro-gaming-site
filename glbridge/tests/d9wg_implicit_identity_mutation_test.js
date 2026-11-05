@@ -1,7 +1,9 @@
 'use strict';
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'d9wg-implicit-mutations-'));
 function span(s,name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(s);assert(m,name);let end=s.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(s[end]==='{')depth++;if(s[end]==='}')depth--;}return[m.index,end];}
-try{let killed=0;for(const api of[8,9]){const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),changes=api===8?[
+try{let killed=0;for(const api of[8,9]){const source=readComparisonSource(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),changes=api===8?[
  ['device_get_backbuffer','back cache ignored','if (device->implicit_back_buffer) {','if (0 && device->implicit_back_buffer) {'],
  ['device_get_depth_surface','depth cache ignored','if (device->implicit_depth_stencil) {','if (0 && device->implicit_depth_stencil) {'],
  ['device_get_backbuffer','back cache unpublished','device->implicit_back_buffer = surface_from_iface(*surface_out);','(void)surface_out;'],

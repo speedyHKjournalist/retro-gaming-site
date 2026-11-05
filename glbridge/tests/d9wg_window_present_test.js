@@ -1,9 +1,11 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-window-present-"));
 function extract(source,name){const m=source.match(new RegExp("static [^\\n]*\\b"+name+"\\([^;]*?\\)\\n\\{[\\s\\S]*?\\n}\\n"));assert(m,name);return m[0];}
 try{for(const api of (process.env.D9WG_WINDOW_PRESENT_ONLY_API?[Number(process.env.D9WG_WINDOW_PRESENT_ONLY_API)]:[8,9,7])){
- const folder=api===7?"ddraw":"d3d"+api,source=fs.readFileSync(process.env.D9WG_WINDOW_PRESENT_API===String(api)?process.env.D9WG_WINDOW_PRESENT_SOURCE:root+"/"+folder+"proxy/"+folder+"_proxy.c","utf8");
+ const folder=api===7?"ddraw":"d3d"+api,source=readComparisonSource(process.env.D9WG_WINDOW_PRESENT_API===String(api)?process.env.D9WG_WINDOW_PRESENT_SOURCE:root+"/"+folder+"proxy/"+folder+"_proxy.c","utf8");
  const names=api===8?["capture_surface","emit_surface_update_and_flush","emit_present_and_flush"]:api===9?["emit_window_state_from_probe","maintain_fullscreen_foreground","emit_present_and_flush"]:["emit_window_state_showing_from_probe","emit_present_and_flush"];
  const code=`#include "window_mock.h"
 #include "runtime/d9wg_window_probe.h"

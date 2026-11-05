@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os");
 const {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-reset-status-mut-"));
@@ -20,7 +22,7 @@ function mutateFunction(source, name, old, replacement) {
 }
 try {
     let killed = 0;
-    const policy = fs.readFileSync(root + "/runtime/d9wg_reset.h", "utf8");
+    const policy = readComparisonSource(root + "/runtime/d9wg_reset.h", "utf8");
     for (const [name, old, replacement] of [
         ["Reset attempt leaves ready", "state->required = 1;", "state->required = 0;"],
         ["successful Reset stays lost", "state->required = 0;", "state->required = 1;"],
@@ -35,7 +37,7 @@ try {
         run(name, {D9WG_RESET_STATUS_POLICY: file}); killed++;
     }
     for (const api of [8, 9]) {
-        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         for (const [name, fn, old, replacement] of [
             ["Reset retains recording", "device_reset", "    device_cancel_recording(device);", ""],
             ["recording cancelled before input validation", "device_reset", "d9wg_reset_begin(&device->reset_state);", "device_cancel_recording(device);\n    d9wg_reset_begin(&device->reset_state);"],

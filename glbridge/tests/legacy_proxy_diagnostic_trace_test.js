@@ -57,7 +57,7 @@ assert.match(opengl, /PROCESS_DETACH[\s\S]*?v86wg_diagnostic_process_detach/,
     "the OpenGL diagnostic build must flush its trace at process detach");
 
 for (const [name, source, macro, minimum] of [
-    ["D3D8", d3d8, "D8WG_TRACE_ERROR", 300],
+    ["D3D8 root facade", d3d8, "D8WG_TRACE_ERROR", 3],
     ["DirectDraw/D3D1-7", ddraw, "DDWG_TRACE_ERROR", 450],
 ]) {
     const wrapped = [...source.matchAll(new RegExp("\\b" + macro + "\\(", "g"))];
@@ -73,12 +73,10 @@ for (const [name, source, macro, minimum] of [
         name + " diagnostic build must flush its tail at process detach");
 }
 
-assert.match(d3d8, /TRANSPORT OPEN_FAIL[\s\S]*?win32=%lu/,
-    "D3D8 must preserve the Win32 reason when v86gl.sys is unavailable");
-assert.match(d3d8, /TRANSPORT MAP_FAIL[\s\S]*?win32=170/,
-    "D3D8 must distinguish a busy DMA mapping from a missing driver");
-assert.match(d3d8, /TRANSPORT SUBMIT_FAIL[\s\S]*?descriptor_bytes=%lu/,
-    "D3D8 must trace failed IOCTL submissions with batch context");
+// Device8 transport and device diagnostics now use the statically linked core.
+assert.match(read("d3d8proxy/build.sh"), /core_mode=--static-diagnostic/);
+assert.match(read("d3d9proxy/d3d9_proxy.c"), /TRANSPORT open\/map failed error=%lu/);
+assert.match(read("d3d9proxy/d3d9_proxy.c"), /#define TRACE_REFUSE\(hr\)/);
 assert.match(read("d3d9proxy/d3d9_proxy.c"),
     /SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u[\s\S]*?opcode=%04X/,
     "shared legacy8 shader rejection must identify the opcode and token offset");

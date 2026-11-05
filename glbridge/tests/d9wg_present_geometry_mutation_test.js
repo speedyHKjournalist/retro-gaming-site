@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-geometry-mut-"));
 function mutate(s, name, old, replacement) {
@@ -13,7 +15,7 @@ function run(label, test, env) {
     assert(!r.error, label + ": " + r.error); assert.notEqual(r.status, 0, label + " survived"); assert(!/error:|undefined reference|Undefined symbols/.test(out), label + " compile failure: " + out); assert(/Present geometry|Reset status|Assertion|signal=/.test(out));
 }
 try {
-    let killed = 0; const policy = fs.readFileSync(root + "/runtime/d9wg_present_parameters.h", "utf8");
+    let killed = 0; const policy = readComparisonSource(root + "/runtime/d9wg_present_parameters.h", "utf8");
     for (const [label, old, replacement] of [
         ["always fallback dimensions", "requested ? requested : client ? client : fallback", "fallback + 0u * requested + 0u * client"],
         ["client overrides explicit dimensions", "requested ? requested : client ? client : fallback", "client ? client : requested ? requested : fallback"],
@@ -27,7 +29,7 @@ try {
         assert(policy.includes(old), label); const file = dir + "/policy.h"; fs.writeFileSync(file, policy.replace(old, replacement)); run(label, "d9wg_present_geometry_entry_test.js", {D9WG_GEOMETRY_POLICY: file}); killed++;
     }
     for (const api of [8, 9]) {
-        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         for (const [label, fn, old, replacement, test] of [
             ["guest mode keeps 640", "d3d_create_device", "        width, height,", "        640, 480,", "d9wg_present_geometry_entry_test.js"],
             ["host width keeps fallback", "d3d_create_device", "    command.width = width;", "    command.width = parameters->BackBufferWidth ? parameters->BackBufferWidth : 640;", "d9wg_present_geometry_entry_test.js"],

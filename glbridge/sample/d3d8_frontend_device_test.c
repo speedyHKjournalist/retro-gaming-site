@@ -218,6 +218,15 @@ static void exercise(IDirect3D8 *root, struct IDirect3D9 *backend_root,
     CHECK(IDirect3DVertexBuffer8_Release(vb)==0);
     char line[200]; wsprintfA(line,"DEVICE8 CHECK pure=%u images=%u checks=%u reset=1 shaderDeletion=1 stateScopes=3 childRevival=1",pure,images,checks); report(line);
 }
+#ifdef D8WG_PUBLIC_DEVICE
+static HRESULT WINAPI public_create(IDirect3D8 *root, struct IDirect3D9 *unused,
+        UINT adapter, D3DDEVTYPE type, HWND focus, DWORD behavior,
+        D3DPRESENT_PARAMETERS *pp, IDirect3DDevice8 **out)
+{
+    (void)unused;
+    return IDirect3D8_CreateDevice(root, adapter, type, focus, behavior, pp, out);
+}
+#endif
 void WINAPI WinMainCRTStartup(void)
 {
     char directory[MAX_PATH],path[MAX_PATH]; GetModuleFileNameA(NULL,directory,sizeof(directory));
@@ -231,6 +240,10 @@ void WINAPI WinMainCRTStartup(void)
     struct IDirect3D9 *(WINAPI *core_factory)(void)=(void *)(uintptr_t)GetProcAddress(core_module,"Core8Factory");
     HRESULT (WINAPI *create)(IDirect3D8 *,struct IDirect3D9 *,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS *,IDirect3DDevice8 **)=(void *)(uintptr_t)GetProcAddress(core_module,"Core8Device");
     CHECK(factory&&core_factory&&create);
+#ifdef D8WG_PUBLIC_DEVICE
+    create = public_create;
+    report("PUBLIC Direct3DCreate8/CreateDevice entry");
+#endif
     HWND window=CreateWindowExA(0,"STATIC","Device8 frontend",WS_POPUP|WS_VISIBLE,0,0,8,8,NULL,NULL,GetModuleHandleA(NULL),NULL); CHECK(window!=NULL);
     for (UINT sdk=120;sdk<=220;sdk+=100) {
         IDirect3D8 *root=factory(sdk); struct IDirect3D9 *backend_root=core_factory(); CHECK(root&&backend_root);

@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-additional-mut-"));
 function mutate(s, name, old, replacement) {
@@ -11,7 +13,7 @@ function mutate(s, name, old, replacement) {
 try {
     let killed=0;
     for(const api of [8,9]) {
-        const source=fs.readFileSync(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),fn=api===8?'device_create_swapchain':'device_create_additional_swap_chain',p=api===8?'parameters':'params';
+        const source=readComparisonSource(root+'/d3d'+api+'proxy/d3d'+api+'_proxy.c','utf8'),fn=api===8?'device_create_swapchain':'device_create_additional_swap_chain',p=api===8?'parameters':'params';
         const changes=[
             ['caller output omitted','    d9wg_present_parameters_return('+(api===9?'api':api)+', '+p+', &chain->present);',''],
             ['cached parameters not resolved','    d9wg_present_parameters_effective(&chain->present, '+p+',\n        width, height, format, window);','    chain->present = *'+p+'; (void)format;'],

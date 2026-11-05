@@ -1,3 +1,5 @@
+// Root8 policy is production source; device_get_caps is the retired baseline.
+// Actual new Device8 forwarding is checked against Root8 in the SDK XP probe.
 "use strict";
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),eight=fs.readFileSync(process.env.D8WG_CAPS_CORE_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),nine=fs.readFileSync(process.env.D8WG_CAPS_CORE_BACKEND_SOURCE||root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-caps-core-"));
@@ -5,7 +7,7 @@ function extract(source,name){const m=new RegExp("^[^;{}\\n]*?\\b"+name+"\\([^;]
 function macros(source,names){return names.map(n=>{const m=new RegExp("^#define\\s+"+n+"\\s+([^\\n]+)","m").exec(source);assert(m,n);return "#define "+n+" "+m[1];}).join("\n");}
 function preprocess(api,source,body){const defines=macros(source,api===8?["D8WG_MAX_STREAMS","D8WG_MAX_TEXTURE_STAGES","D8WG_MAX_VS_CONSTANTS","D8WG_MAX_LIGHTS","D8WG_MAX_CLIP_PLANES","D3DPSHADECAPS_COLORFLATRGB","D3DPSHADECAPS_ALPHAFLATBLEND"]:["D9_MAX_STREAMS","D9_MAX_TEXTURE_STAGES","D9_MAX_VS_CONST_F","D9_PATCH_MAX_SEGMENTS","D9_MAX_RENDER_TARGETS","D9_MAX_CLIP_PLANES"]);const file=dir+"/sdk"+api+".c";fs.writeFileSync(file,"#define COBJMACROS\n#include <d3d"+api+".h>\n#include \""+root+"/d3d9proxy/d3d9_core.h\"\n#include \""+root+"/runtime/d9wg_present_pacing.h\"\n#include \""+root+"/runtime/d9wg_state_bridge8.h\"\n#define D8WG_TRACE_ERROR(v) (v)\n"+defines+"\n"+body.replace(/\bWINAPI\b/g,""));const p=spawnSync(process.env.D9WG_CC||"i686-w64-mingw32-gcc",["-E","-P",file],{encoding:"utf8",maxBuffer:16<<20});assert.equal(p.status,0,p.stderr);return p.stdout;}
 try{
-    const sdk8=preprocess(8,eight,[extract(eight,"fill_caps"),extract(eight,"d3d_get_device_caps"),extract(eight,"device_get_caps"),fs.readFileSync(root+"/tests/fixtures/d3d8_caps_before_core.c","utf8").replace(/\bfill_caps\b/g,"caps8_before")].join("\n"));
+    const sdk8=preprocess(8,eight,[extract(eight,"fill_caps"),extract(eight,"d3d_get_device_caps"),extract(fs.readFileSync(root+"/tests/fixtures/d3d8_legacy_proxy.c","utf8"),"device_get_caps"),fs.readFileSync(root+"/tests/fixtures/d3d8_caps_before_core.c","utf8").replace(/\bfill_caps\b/g,"caps8_before")].join("\n"));
     const sdk9=preprocess(9,nine,["apply_permissive_caps","reported_user_clip_planes","fill_caps_for_profile","fill_caps","d9wg_d3d9_core_caps8"].map(n=>extract(nine,n)).join("\n")+"\n"+fs.readFileSync(root+"/tests/fixtures/d3d9_caps_before_core.c","utf8").replace(/\bfill_caps\b/g,"caps9_before"));
     function type(source,name){const m=new RegExp("typedef struct _"+name+"\\s*\\{[\\s\\S]*?\\}\\s*"+name+"\\s*;").exec(source);assert(m,name);return m[0];}
     const structs=type(sdk8,"D3DCAPS8")+"\n"+["D3DVSHADERCAPS2_0","D3DPSHADERCAPS2_0","D3DCAPS9"].map(n=>type(sdk9,n)).join("\n");

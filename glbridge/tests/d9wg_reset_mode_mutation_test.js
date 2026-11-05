@@ -1,4 +1,6 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os");
 const {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), dir = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-reset-mode-mut-"));
@@ -17,7 +19,7 @@ function run(label, test, env) {
 }
 try {
     let killed = 0;
-    const header = fs.readFileSync(root + "/runtime/d9wg_window_reset.h", "utf8");
+    const header = readComparisonSource(root + "/runtime/d9wg_window_reset.h", "utf8");
     for (const [label, fn, old, replacement] of [
         ["WM_SIZE forwarded", "d9wg_reset_window_proc", "if (message == WM_SIZE)", "if (0 && message == WM_SIZE)"],
         ["all messages swallowed", "d9wg_reset_window_proc", "if (message == WM_SIZE)", "if (1)"],
@@ -35,7 +37,7 @@ try {
         const file = dir + "/guard.h"; fs.writeFileSync(file, mutate(header, fn, old, replacement));
         run(label, "d9wg_window_reset_test", {D9WG_WINDOW_RESET_HEADER: file}); killed++;
     }
-    const policy = fs.readFileSync(root + "/runtime/d9wg_window_mode.h", "utf8");
+    const policy = readComparisonSource(root + "/runtime/d9wg_window_mode.h", "utf8");
     for (const [label, fn, old, replacement] of [
         ["windowed restore omitted", "d9wg_window_mode_apply", "result = d9wg_window_mode_restore(bindings);", "result = TRUE;"],
         ["fullscreen setup omitted", "d9wg_window_mode_apply", "result = d9wg_window_mode_enter(bindings, window, width, height);", "(void)width; (void)height; result = TRUE;"],
@@ -60,7 +62,7 @@ try {
         run(label, "d9wg_reset_mode_entry_test", {D9WG_WINDOW_MODE_HEADER: file}); killed++;
     }
     for (const api of [8, 9]) {
-        const source = fs.readFileSync(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
+        const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
         for (const [label, old, replacement] of [
             ["saved style binding wrong", "&device->saved_window_style", "&device->saved_window_exstyle"],
             ["saved extended style binding wrong", "&device->saved_window_exstyle", "&device->saved_window_style"],

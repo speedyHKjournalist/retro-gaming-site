@@ -1,6 +1,8 @@
 "use strict";
+// Historical Device8 comparison; production facade coverage lives in d8wg_*_adapter/device tests and SDK XP probes.
+const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
-const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D8WG_INDEX_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-indices-"));
+const root=path.resolve(__dirname,".."),source=readComparisonSource(process.env.D8WG_INDEX_SOURCE||root+"/d3d8proxy/d3d8_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d8wg-indices-"));
 function extract(name){const m=new RegExp("static HRESULT WINAPI "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 try{const code=`#include <stdint.h>
 #include <stdio.h>
