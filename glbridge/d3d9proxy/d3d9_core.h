@@ -286,6 +286,17 @@ typedef void (WINAPI *D9WGCoreViewRetire8)(void *view);
 HRESULT WINAPI d9wg_d3d9_core_get_view8(struct IUnknown *object, void **out);
 HRESULT WINAPI d9wg_d3d9_core_attach_view8(struct IUnknown *object, void *view,
         D9WGCoreViewRetire8 retire);
+/* Optional frontend CPU metadata cleanup runs before native recording,
+ * owned blocks and live bindings are cleared, outside the transport lock and
+ * under the core temporary device pin. It must be idempotent: an explicit
+ * cleanup followed by final Release can notify it again. Retirement remains
+ * the final teardown callback; these observers never own public references. */
+typedef void (WINAPI *D9WGCoreDeviceCleanup8)(void *view);
+HRESULT WINAPI d9wg_d3d9_core_attach_device_view8(struct IDirect3DDevice9 *device,
+        void *view, D9WGCoreDeviceCleanup8 cleanup, D9WGCoreViewRetire8 retire);
+/* Call while the frontend retains device/storage. Rejects nested cleanup;
+ * callbacks may remove the last other pin, so the device may retire here. */
+HRESULT WINAPI d9wg_d3d9_core_release_owned8(struct IDirect3DDevice9 *device);
 /* Device-owned DWORD state blocks: no public9 block/device parent pin.
  * Raw8 scopes and Get metadata remain frontend-owned. Capture rebuilds the
  * mapped snapshot behind the same token; failed rebuild preserves it. */

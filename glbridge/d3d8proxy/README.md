@@ -1128,3 +1128,38 @@ scoped lint pass. Exact XP-accepted retail DLLs and same-source diagnostics
 published. First SDK compilation caught incompatible vtable pointer types;
 using opaque table addresses corrected it without relaxing strict flags.
 Evidence: `../deployments/d3d-webgpu-review-4K47.json`.
+
+
+### Review 4K48: frontend device-owned cleanup observer
+
+An optional weak device observer runs before native recording, owned blocks,
+live bindings and FVF cache cleanup, outside its transport lock scope under
+the core temporary device pin. The private explicit cleanup entry reuses that
+same implementation while public children remain alive. Nested cleanup is
+rejected. Callbacks can remove every other pin; dropping the temporary pin
+then uses normal final Release, so repeated notifications require idempotent
+frontend metadata. The entry never accesses the device after that Release.
+The generic weak attach ABI keeps its signature and supplies no observer.
+Only weak registry metadata gains a callback field; device/resource layouts
+remain unchanged. 683 of 685 old source functions and seventeen full files
+match; complete old source/header reconstruct exactly from the bridge edits.
+
+Native: 8,468 checks / 521 cases, 19 strict assertion mutants and ASAN. Retained
+35 resource-view and ten device-view mutants still pass after locating the
+shared attachment implementation. First actual XP: 117 seconds / 97 batches,
+nineteen devices and Resets, 140 handles, 27 declarations and 43 shaders.
+Four explicit cleanup calls while real VB children are publicly held cancel
+recording, invalidate native tokens and clear bindings. Frontend raw snapshot
+fixtures detach once; ten total explicit/final notifications are idempotent.
+Reset does not notify. Transient/retained finalizer device revival and late
+shader storage retirement remain covered. The frontend is an IUnknown device
+and CPU snapshot fixture; full Device8/raw tables/public factory remain open.
+
+Both GPUs match 68 full images / 3,776 pixels with empty maps before fallback.
+Four VB creates and destroys add eight commands (1,221 total); no new draw,
+upload or CPU shadow write. 9,205 corruption cases cover selected new fields,
+payload words and SDK summaries plus prefix sampling; full old fixtures run
+separately. 391 guest / 94 core regressions, 32 EXEs, four strict DLLs, private
+stdcall16/4 and isolated SDK8 ABI, two site tests and scoped lint pass. Exact
+XP-accepted retail DLLs and same-source diagnostics published.
+Evidence: `../deployments/d3d-webgpu-review-4K48.json`.

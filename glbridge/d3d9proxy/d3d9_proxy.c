@@ -1783,6 +1783,7 @@ typedef struct D9CoreView8 {
     void *object;
     void *view;
     D9WGCoreViewRetire8 retire;
+    D9WGCoreDeviceCleanup8 cleanup;
     BOOL retiring;
 } D9CoreView8;
 static D9CoreView8 *g_core_views8;
@@ -1830,8 +1831,8 @@ HRESULT WINAPI d9wg_d3d9_core_get_view8(IUnknown *object, void **out)
     return hr;
 }
 
-HRESULT WINAPI d9wg_d3d9_core_attach_view8(IUnknown *object, void *view,
-        D9WGCoreViewRetire8 retire)
+static HRESULT core_view_attach8(IUnknown *object, void *view,
+        D9WGCoreDeviceCleanup8 cleanup, D9WGCoreViewRetire8 retire)
 {
     if (!view || !retire || !core_view_device8(object)) return D3DERR_INVALIDCALL;
     EnterCriticalSection(&g_transport_lock);
@@ -1849,9 +1850,40 @@ HRESULT WINAPI d9wg_d3d9_core_attach_view8(IUnknown *object, void *view,
     entry->object = object;
     entry->view = view;
     entry->retire = retire;
+    entry->cleanup = cleanup;
     *link = entry;
     LeaveCriticalSection(&g_transport_lock);
     return D3D_OK;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_attach_view8(IUnknown *object, void *view,
+        D9WGCoreViewRetire8 retire)
+{
+    return core_view_attach8(object, view, NULL, retire);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_attach_device_view8(IDirect3DDevice9 *device,
+        void *view, D9WGCoreDeviceCleanup8 cleanup, D9WGCoreViewRetire8 retire)
+{
+    if (!device || device->lpVtbl != &g_device_vtbl || !cleanup)
+        return D3DERR_INVALIDCALL;
+    return core_view_attach8((IUnknown *)device, view, cleanup, retire);
+}
+
+/* Core temporary ownership keeps this weak metadata alive. Frontend CPU
+ * snapshots must detach before core blocks/bindings can retire their storage. */
+static void core_device_cleanup8(D9Device *device)
+{
+    D9WGCoreDeviceCleanup8 cleanup = NULL;
+    void *view = NULL;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 *entry = *core_view_link8(device);
+    if (entry && !entry->retiring) {
+        cleanup = entry->cleanup;
+        view = entry->view;
+    }
+    LeaveCriticalSection(&g_transport_lock);
+    if (cleanup) cleanup(view);
 }
 
 static void core_view_retire8(void *object)
@@ -3967,6 +3999,7 @@ static void device_release_owned_references(D9Device *device)
             device->handle,
             InterlockedCompareExchange(&device->refcount, 0, 0),
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
+    core_device_cleanup8(device);
     device_cancel_recording(device);
     device_clear_state_block_handles8(device);
     device_clear_bindings(device);
@@ -16639,6 +16672,24 @@ HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(IDirect3DDevice9 *iface,
     return IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,
             signed_base, min_vertex_index, vertex_count, start_index,
             primitive_count);
+}
+
+/* A frontend8 last-direct-reference boundary may precede core public zero
+ * while application-owned resources still pin the device. Use the same
+ * guarded cleanup and let normal Release finalize if callbacks remove them. */
+HRESULT WINAPI d9wg_d3d9_core_release_owned8(IDirect3DDevice9 *iface)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8u || device->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    device->releasing_owned_refs = TRUE;
+    device_release_owned_references(device);
+    device->releasing_owned_refs = FALSE;
+    IDirect3DDevice9_Release(iface);
+    return D3D_OK;
 }
 
 /* A raw8 DWORD handle owns storage, not a public9 resource/device pin.

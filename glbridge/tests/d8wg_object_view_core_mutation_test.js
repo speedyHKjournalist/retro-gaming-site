@@ -27,43 +27,43 @@ const plan=[
   ],
   [
     "attach null view success",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "    if (!view || !retire ||",
     "    if (!view) return D3D_OK;\n    if (!view || !retire ||"
   ],
   [
     "attach null callback success",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "    if (!view || !retire ||",
     "    if (!retire) return D3D_OK;\n    if (!view || !retire ||"
   ],
   [
     "duplicate attachment success",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "        return D3DERR_INVALIDCALL;",
     "        return D3D_OK;"
   ],
   [
     "OOM wrong status",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "return E_OUTOFMEMORY;",
     "return D3DERR_INVALIDCALL;"
   ],
   [
     "object key lost",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "    entry->object = object;",
     "    entry->object = NULL;"
   ],
   [
     "metadata lost",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "    entry->view = view;",
     "    entry->view = NULL;"
   ],
   [
     "view creates device cycle",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "    entry->view = view;",
     "    entry->view = view; IDirect3DDevice9_AddRef(&core_view_device8(object)->iface);"
   ],

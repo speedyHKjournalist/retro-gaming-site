@@ -47,7 +47,7 @@ const plan=[
   ],
   [
     "attach adds device pin",
-    "d9wg_d3d9_core_attach_view8",
+    "core_view_attach8",
     "    entry->object = object;",
     "    entry->object = object;\n    if (object->lpVtbl == (const void *)&g_device_vtbl) IDirect3DDevice9_AddRef((IDirect3DDevice9 *)object);"
   ],
