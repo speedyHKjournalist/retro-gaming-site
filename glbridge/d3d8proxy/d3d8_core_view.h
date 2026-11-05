@@ -1,6 +1,8 @@
 #ifndef D8WG_CORE_VIEW_H
 #define D8WG_CORE_VIEW_H
 #include <d3d8.h>
+void *WINAPI d8wg_core_device_allocate_view8(IDirect3DDevice8 *device, UINT bytes);
+void WINAPI d8wg_core_device_retire_view8(IDirect3DDevice8 *device, void *view);
 ULONG WINAPI d8wg_core_device_child_add8(IDirect3DDevice8 *device);
 ULONG WINAPI d8wg_core_device_child_release8(IDirect3DDevice8 *device);
 static inline BOOL d8wg_core_guid8(REFIID a, REFIID b)

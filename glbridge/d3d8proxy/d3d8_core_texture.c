@@ -22,6 +22,7 @@ static BOOL core_texture8_guid(REFIID a, REFIID b)
 static ULONG WINAPI core_texture8_add_ref(IDirect3DTexture8 *iface)
 {
     D8CoreTexture *texture = (D8CoreTexture *)iface;
+    if (!texture->backend) return 0;
     return d8wg_core_view_add8(&texture->refcount, (IUnknown *)texture->backend, texture->device);
 }
 static ULONG WINAPI core_texture8_release(IDirect3DTexture8 *iface)
@@ -145,7 +146,9 @@ static IDirect3DTexture8Vtbl g_core_texture8_vtbl = {
 };
 static void WINAPI core_texture8_retired(void *view)
 {
-    HeapFree(GetProcessHeap(), 0, view);
+    D8CoreTexture *texture = view;
+    texture->backend = NULL;
+    d8wg_core_device_retire_view8(texture->device, view);
 }
 HRESULT WINAPI d8wg_core_wrap_texture8(struct IDirect3DTexture9 *owned,
         IDirect3DDevice8 *device, IDirect3DTexture8 **out)
@@ -161,7 +164,7 @@ HRESULT WINAPI d8wg_core_wrap_texture8(struct IDirect3DTexture9 *owned,
     if (FAILED(hr)) goto done;
     view = (D8CoreTexture *)cached;
     if (!view) {
-        view = (D8CoreTexture *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*view));
+        view = (D8CoreTexture *)d8wg_core_device_allocate_view8(device, sizeof(*view));
         if (!view) { hr = E_OUTOFMEMORY; goto done; }
         view->iface.lpVtbl = &g_core_texture8_vtbl;
         view->identity = &g_core_texture8_vtbl;
@@ -170,7 +173,7 @@ HRESULT WINAPI d8wg_core_wrap_texture8(struct IDirect3DTexture9 *owned,
         view->device = device;
         hr = d9wg_d3d9_core_attach_view8((IUnknown *)owned, view, core_texture8_retired);
         if (FAILED(hr)) {
-            HeapFree(GetProcessHeap(), 0, view);
+            d8wg_core_device_retire_view8(device, view);
             if (hr != D3DERR_INVALIDCALL) goto done;
             hr = d9wg_d3d9_core_get_view8((IUnknown *)owned, &cached);
             if (FAILED(hr)) goto done;

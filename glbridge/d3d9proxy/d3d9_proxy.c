@@ -1183,8 +1183,9 @@ struct D9VertexBuffer {
     D9WGPrivateStore private_data;
     UINT lock_offset;
     UINT lock_size;
-    DWORD lock_flags;
+    uint32_t lock_flags;
     BOOL locked;
+    UINT lock_count;
     D9VertexBuffer *next_device_resource;
 };
 
@@ -1203,8 +1204,9 @@ struct D9IndexBuffer {
     D9WGPrivateStore private_data;
     UINT lock_offset;
     UINT lock_size;
-    DWORD lock_flags;
+    uint32_t lock_flags;
     BOOL locked;
+    UINT lock_count;
     D9IndexBuffer *next_device_resource;
 };
 
@@ -13743,17 +13745,18 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer9 *iface, UINT offset,
         UINT size, void **data_out, DWORD flags)
 {
     D9VertexBuffer *buffer = vb_from_iface(iface);
-    if (!data_out || buffer->locked || offset > buffer->length)
+    if (!data_out || (buffer->locked && device_compatibility_api(buffer->device) != 8u)
+            || offset > buffer->length)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    buffer->locked = TRUE;
-    buffer->lock_offset = offset;
-    buffer->lock_size = size;
     flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);
-    buffer->lock_flags = flags;
+    if (!d9wg_buffer_lock_merge(offset, size, flags, &buffer->lock_count,
+            &buffer->lock_offset, &buffer->lock_size, &buffer->lock_flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    buffer->locked = TRUE;
     if (flags & D3DLOCK_DISCARD) {
         d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
     }
@@ -13767,11 +13770,13 @@ static HRESULT WINAPI vb_unlock(IDirect3DVertexBuffer9 *iface)
     BOOL result;
     if (!buffer->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (buffer->lock_count > 1u) { --buffer->lock_count; return D3D_OK; }
     result = (buffer->lock_flags & D3DLOCK_READONLY)
             || emit_buffer_update(buffer->handle, buffer->lock_offset,
                     buffer->shadow + buffer->lock_offset, buffer->lock_size,
                     buffer->lock_flags);
     buffer->locked = FALSE;
+    buffer->lock_count = 0;
     buffer->lock_offset = 0;
     buffer->lock_size = 0;
     buffer->lock_flags = 0;
@@ -13907,17 +13912,18 @@ static HRESULT WINAPI ib_lock(IDirect3DIndexBuffer9 *iface, UINT offset,
         UINT size, void **data_out, DWORD flags)
 {
     D9IndexBuffer *buffer = ib_from_iface(iface);
-    if (!data_out || buffer->locked || offset > buffer->length)
+    if (!data_out || (buffer->locked && device_compatibility_api(buffer->device) != 8u)
+            || offset > buffer->length)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    buffer->locked = TRUE;
-    buffer->lock_offset = offset;
-    buffer->lock_size = size;
     flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);
-    buffer->lock_flags = flags;
+    if (!d9wg_buffer_lock_merge(offset, size, flags, &buffer->lock_count,
+            &buffer->lock_offset, &buffer->lock_size, &buffer->lock_flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    buffer->locked = TRUE;
     *data_out = buffer->shadow + offset;
     return D3D_OK;
 }
@@ -13928,11 +13934,13 @@ static HRESULT WINAPI ib_unlock(IDirect3DIndexBuffer9 *iface)
     BOOL result;
     if (!buffer->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (buffer->lock_count > 1u) { --buffer->lock_count; return D3D_OK; }
     result = (buffer->lock_flags & D3DLOCK_READONLY)
             || emit_buffer_update(buffer->handle, buffer->lock_offset,
                     buffer->shadow + buffer->lock_offset, buffer->lock_size,
                     buffer->lock_flags);
     buffer->locked = FALSE;
+    buffer->lock_count = 0;
     buffer->lock_offset = 0;
     buffer->lock_size = 0;
     buffer->lock_flags = 0;
@@ -16141,10 +16149,12 @@ HRESULT WINAPI d9wg_d3d9_core_render_target8(IDirect3DDevice9 *iface,
         UINT width, UINT height, UINT format, UINT multisample, BOOL lockable,
         IDirect3DSurface9 **out)
 {
-    if (!out || format == D3DFMT_UNKNOWN || (multisample != D3DMULTISAMPLE_NONE
-                && multisample != D3DMULTISAMPLE_4_SAMPLES)
+    if (!out || format == D3DFMT_UNKNOWN
             || (lockable && multisample != D3DMULTISAMPLE_NONE))
         return D3DERR_INVALIDCALL;
+    if (multisample != D3DMULTISAMPLE_NONE && multisample != D3DMULTISAMPLE_4_SAMPLES)
+        return multisample >= D3DMULTISAMPLE_2_SAMPLES && multisample <= D3DMULTISAMPLE_16_SAMPLES
+                ? D3DERR_NOTAVAILABLE : D3DERR_INVALIDCALL;
     *out = NULL;
     if (!iface || device_compatibility_api(device_from_iface(iface)) != 8
             || !width || !height || width > 4096 || height > 4096

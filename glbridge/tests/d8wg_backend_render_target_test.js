@@ -12,6 +12,10 @@ typedef struct{void*iface;BOOL device_container;UINT refcount,canary;BOOL lockab
 #define WINAPI
 #define D3D_OK 0
 #define D3DERR_INVALIDCALL (-1)
+#define D3DERR_NOTAVAILABLE (-4)
+#define D3DFMT_UNKNOWN 0
+#define D3DMULTISAMPLE_2_SAMPLES 2
+#define D3DMULTISAMPLE_16_SAMPLES 16
 #define E_OUTOFMEMORY (-3)
 #define D3DUSAGE_RENDERTARGET 1
 #define D3DPOOL_DEFAULT 0
@@ -43,10 +47,14 @@ static HRESULT provider(IDirect3DDevice9*d,UINT w,UINT h,D3DFORMAT f,UINT ms,DWO
 ${extract(source,'d9wg_d3d9_core_render_target8')}
 static UINT checks,cases;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 render target line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){(void)&provider;IDirect3DDevice9 device={8},wrong={9};const UINT sizes[]={0,1,4,4096,4097,8192,8193,0xffffffffu},samples[]={0,1,4,16};const BOOL lockable[]={0,1,-1};const HRESULT errors[]={0,-2,-3};
-for(UINT w=0;w<8;w++)for(UINT h=0;h<6;h++)for(UINT f=0;f<122;f++)for(UINT m=0;m<4;m++)for(UINT l=0;l<3;l++)for(UINT err=0;err<3;err++)for(UINT no_out=0;no_out<2;no_out++){
+int main(void){(void)&provider;IDirect3DDevice9 device={8},wrong={9};const UINT sizes[]={0,1,4,4096,4097,8192,8193,0xffffffffu},samples[]={0,1,2,4,16,17,0xffffffffu};const BOOL lockable[]={0,1,-1};const HRESULT errors[]={0,-2,-3};
+for(UINT w=0;w<8;w++)for(UINT h=0;h<6;h++)for(UINT f=0;f<122;f++)for(UINT m=0;m<7;m++)for(UINT l=0;l<3;l++)for(UINT err=0;err<3;err++)for(UINT no_out=0;no_out<2;no_out++){
  failure=errors[err];Surface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;old_storage_calls=new_storage_calls=0;memset(expected,0xcc,sizeof(expected));memset(observed,0xcc,sizeof(observed));UINT height=h==0?0:h==1?4:h==2?4096:h==3?4097:h==4?8192:0xffffffffu;expected_lock=!!lockable[l];
- HRESULT wanted=legacy_create(&device,sizes[w],height,f,samples[m],lockable[l],no_out?NULL:&before);BOOL old_lock=surface.lockable;surface.lockable=9;HRESULT hr=d9wg_d3d9_core_render_target8(&device,sizes[w],height,f,samples[m],lockable[l],no_out?NULL:&actual);
+ HRESULT wanted=legacy_create(&device,sizes[w],height,f,samples[m],lockable[l],no_out?NULL:&before);/* Retail D3D8 observations supersede the frozen proxy for UNKNOWN format
+  * and valid-but-unsupported sample counts; retain its other contracts. */
+ if (!no_out && f==0) before=(void*)(uintptr_t)99;
+ if (!no_out && f!=0 && !lockable[l] && samples[m]>=2 && samples[m]<=16 && samples[m]!=4) wanted=D3DERR_NOTAVAILABLE;
+ BOOL old_lock=surface.lockable;surface.lockable=9;HRESULT hr=d9wg_d3d9_core_render_target8(&device,sizes[w],height,f,samples[m],lockable[l],no_out?NULL:&actual);
  CHECK(hr==wanted&&actual==before&&old_storage_calls==new_storage_calls);CHECK(!memcmp(expected,observed,sizeof(expected)));if(!hr)CHECK(actual==&surface&&surface.lockable==old_lock&&surface.canary==0x1234abcd);else CHECK(surface.lockable==9);cases++;
 }
 for(UINT bad=0;bad<3;bad++){Surface*out=(void*)(uintptr_t)99;UINT calls=new_storage_calls;CHECK(d9wg_d3d9_core_render_target8(bad==0?NULL:bad==1?&wrong:&device,4,4,21,0,1,bad==2?NULL:&out)==-1);CHECK(calls==new_storage_calls&&(bad==2||!out));cases++;}

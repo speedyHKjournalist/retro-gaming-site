@@ -4,6 +4,10 @@ const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir()
 const groups=[{
     file:"d3d8proxy/d3d8_core_device.c",env:"D8WG_DEVICE_FRONTEND_SOURCE",test:"d8wg_device_frontend_lifetime_test.js",
     mutations:[
+        ["reused wrapper not cleared","ZeroMemory(storage + 1, bytes);","(void)bytes;"],
+        ["wrong-sized wrapper reused","while (*link && (*link)->bytes != bytes)","while (*link && (*link)->bytes == 0)"],
+        ["wrapper cache not drained","while (device->retired_views)","while (0 && device->retired_views)"],
+        ["wrapper not cached","device->retired_views = storage;","(void)storage;"],
         ["missing aggregate core pin","if (refs == 1) IUnknown_AddRef((IUnknown *)device->backend);","if (refs == 0) IUnknown_AddRef((IUnknown *)device->backend);"],
         ["repeated aggregate core pin","if (refs == 1) IUnknown_AddRef((IUnknown *)device->backend);","if (refs >= 1) IUnknown_AddRef((IUnknown *)device->backend);"],
         ["missing aggregate release","if (!refs) IUnknown_Release((IUnknown *)device->backend);","if (refs == 9999) IUnknown_Release((IUnknown *)device->backend);"],

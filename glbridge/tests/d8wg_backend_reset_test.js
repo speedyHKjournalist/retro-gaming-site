@@ -94,7 +94,7 @@ ${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_displa
 ${api === 8 ? "static BOOL supported_multisample_type(UINT ms){return ms==0||ms==4;}" : "static BOOL supported_multisample(D3DFORMAT f,UINT ms){return (ms==0||ms==4)&&!(f==75&&ms==4&&fail_depth_ms);}"}
 static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}
 static BOOL supported_backbuffer_format(D3DFORMAT f){return f==21||f==22||f==23;}
-${api===9?'static UINT device_compatibility_api(const Device*d){(void)d;return 8;}static BOOL supported_render_target_format8(D3DFORMAT f){return supported_backbuffer_format(f)||f==24||f==25||f==26;}static BOOL supported_depth_stencil_format8(D3DFORMAT f){return supported_depth_stencil_format(f);}':''}
+${api===9?'static BOOL IsWindow(HWND w){return w!=NULL;}static UINT device_compatibility_api(const Device*d){(void)d;return 8;}static BOOL supported_render_target_format8(D3DFORMAT f){return supported_backbuffer_format(f)||f==24||f==25||f==26;}static BOOL supported_depth_stencil_format8(D3DFORMAT f){return supported_depth_stencil_format(f);}':''}
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND h,RECT*r){assert(h);windows++;SetRect(r,0,0,64,64);}
 static void ClientToScreen(HWND h,POINT*p){assert(h);windows++;p->x=30;p->y=40;}
@@ -134,7 +134,7 @@ ${functions.map(name => extract(source, name).replace(/&device->iface/g, "device
 int main(void){unsigned checks=0,failures=0;${api===8?'(void)&d9wg_d3d9_core_parameters_effective8;':''}D3DPRESENT_PARAMETERS base={.SwapEffect=1,.Windowed=1,.BackBufferWidth=64,.BackBufferHeight=64,.BackBufferCount=1,.BackBufferFormat=22,.AutoDepthStencilFormat=75,.EnableAutoDepthStencil=1,.hDeviceWindow=(void*)(uintptr_t)0x44};
 for(unsigned kind=0;kind<15;kind++){
  if((${api}==8&&(kind==12||kind==13))||(${api}==9&&(kind==8||kind==9||kind==12)))continue;
- Device d={.handle=77,.creation={.BehaviorFlags=0x22},.display_mode={80,72,22,60},.tracked_window=(void*)(uintptr_t)0x33,.window_cache=99};active=&d;
+ Device d={.handle=77,.creation={.hFocusWindow=(void*)(uintptr_t)0x44,.BehaviorFlags=0x22},.display_mode={80,72,22,60},.tracked_window=(void*)(uintptr_t)0x33,.window_cache=99};active=&d;
  Device untouched={0};CHECK(device_test_cooperative_level(&d)==D3D_OK);D3DPRESENT_PARAMETERS p=base;HRESULT expected=D3DERR_INVALIDCALL;
  fail_layout=fail_alloc=fail_reset_emit=fail_state_emit=fail_depth_ms=fail_window_mode=0;
  switch(kind){case 1:p.BackBufferCount=4;break;case 2:d.blocked=1;expected=D3DERR_DEVICELOST;break;

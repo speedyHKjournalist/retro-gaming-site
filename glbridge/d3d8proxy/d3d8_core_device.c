@@ -42,10 +42,20 @@ typedef struct D8CoreBlock {
     UINT type;
     D8CoreRawState raw;
 } D8CoreBlock;
+/* Reusable frontend allocations preserve the COM header after retirement.
+ * Only idle wrappers are cached; backend resources are released immediately.
+ * Reuse bounds retained memory by peak simultaneous wrappers, and final device
+ * teardown frees the cache. This matches retail's immediate repeated Release. */
+typedef struct D8CoreViewStorage {
+    struct D8CoreViewStorage *next;
+    UINT bytes;
+} D8CoreViewStorage;
 struct D8CoreDevice {
     IDirect3DDevice8 iface;
     LONG refs, children, metadata_refs;
     BOOL cleaning, retired;
+    LONG view_storage_lock;
+    D8CoreViewStorage *retired_views;
     IDirect3D8 *parent;
     struct IDirect3DDevice9 *backend;
     const D9WGDeviceMethods8 *methods;
@@ -56,6 +66,42 @@ struct D8CoreDevice {
 static IDirect3DDevice8Vtbl g_core_device8_vtbl;
 static LONG g_core_shader8_token;
 static D8CoreDevice *core_device8(IDirect3DDevice8 *iface) { return (D8CoreDevice *)iface; }
+void *WINAPI d8wg_core_device_allocate_view8(IDirect3DDevice8 *iface, UINT bytes)
+{
+    if (iface->lpVtbl != &g_core_device8_vtbl)
+        return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    D8CoreDevice *device = core_device8(iface);
+    D8CoreViewStorage *storage = NULL;
+    while (InterlockedCompareExchange(&device->view_storage_lock, 1, 0)) Sleep(0);
+    D8CoreViewStorage **link = &device->retired_views;
+    while (*link && (*link)->bytes != bytes) link = &(*link)->next;
+    if (*link) { storage = *link; *link = storage->next; }
+    InterlockedExchange(&device->view_storage_lock, 0);
+    if (!storage) {
+        if (bytes > 0xffffffffu - sizeof(*storage)) return NULL;
+        storage = HeapAlloc(GetProcessHeap(), 0, sizeof(*storage) + bytes);
+        if (!storage) return NULL;
+        storage->bytes = bytes;
+    }
+    storage->next = NULL;
+    ZeroMemory(storage + 1, bytes);
+    return storage + 1;
+}
+
+void WINAPI d8wg_core_device_retire_view8(IDirect3DDevice8 *iface, void *view)
+{
+    if (iface->lpVtbl != &g_core_device8_vtbl) {
+        HeapFree(GetProcessHeap(), 0, view);
+        return;
+    }
+    D8CoreDevice *device = core_device8(iface);
+    D8CoreViewStorage *storage = (D8CoreViewStorage *)view - 1;
+    while (InterlockedCompareExchange(&device->view_storage_lock, 1, 0)) Sleep(0);
+    storage->next = device->retired_views;
+    device->retired_views = storage;
+    InterlockedExchange(&device->view_storage_lock, 0);
+}
+
 static void core_shader8_release(D8CoreShader *shader)
 {
     if (!shader || --shader->refs) return;
@@ -91,6 +137,11 @@ static void core_device8_metadata_release(D8CoreDevice *device)
 {
     if (InterlockedDecrement(&device->metadata_refs)) return;
     IDirect3D8 *parent = device->parent;
+    while (device->retired_views) {
+        D8CoreViewStorage *storage = device->retired_views;
+        device->retired_views = storage->next;
+        HeapFree(GetProcessHeap(), 0, storage);
+    }
     HeapFree(GetProcessHeap(), 0, device);
     IDirect3D8_Release(parent);
 }
@@ -1091,6 +1142,7 @@ static HRESULT WINAPI core_block8_apply_raw(void *context, UINT group,
 static HRESULT WINAPI core_device8_ApplyStateBlock(IDirect3DDevice8 *iface, DWORD token)
 {
     D8CoreDevice *device = core_device8(iface);
+    if (!token && !device->recording) return D3D_OK;
     D8CoreBlock *block = *core_block8_link(device, token);
     if (device->recording || !block) return D3DERR_INVALIDCALL;
     /* Resource setters may release private-data objects and reenter the

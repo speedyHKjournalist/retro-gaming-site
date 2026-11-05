@@ -13,12 +13,15 @@ try {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
 typedef uint32_t UINT,DWORD,ULONG; typedef int32_t LONG,HRESULT; typedef int BOOL; typedef unsigned char BYTE;
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
 #define D9WG_TEXTURE_STAGE_STATES8 32
 #define HEAP_ZERO_MEMORY 8
+#define ZeroMemory(p,n) memset(p,0,n)
 #define D3DERR_INVALIDCALL (-1)
 typedef struct IUnknown IUnknown;
 typedef IUnknown IDirect3D8, IDirect3DDevice8;
@@ -34,10 +37,14 @@ typedef struct D9WGDeviceMethods8 D9WGDeviceMethods8;
 #define IDirect3DDevice8_Release(p) IUnknown_Release(p)
 static LONG InterlockedIncrement(LONG *p){return ++*p;}
 static LONG InterlockedDecrement(LONG *p){assert(*p>0);return --*p;}
+static LONG InterlockedCompareExchange(LONG*p,LONG v,LONG c){__atomic_compare_exchange_n(p,&c,v,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);return c;}
+static LONG InterlockedExchange(LONG*p,LONG v){return __atomic_exchange_n(p,v,__ATOMIC_SEQ_CST);}
+static void Sleep(unsigned ms){assert(!ms);sched_yield();}
 static unsigned allocations, private_holds, retired_count, cleanup_count, checks;
 static void *GetProcessHeap(void){return NULL;}
-static void HeapFree(void *heap, DWORD flags, void *p){(void)heap;(void)flags; assert(p&&allocations);--allocations;free(p);}
-static void *allocate(size_t size){void *p=calloc(1,size);assert(p);++allocations;return p;}
+static void HeapFree(void *heap, DWORD flags, void *p){(void)heap;(void)flags; assert(p&&allocations);__atomic_sub_fetch(&allocations,1,__ATOMIC_SEQ_CST);free(p);}
+static void *allocate(size_t size){void *p=calloc(1,size);assert(p);__atomic_add_fetch(&allocations,1,__ATOMIC_SEQ_CST);return p;}
+static void*HeapAlloc(void*h,DWORD flags,size_t bytes){(void)h;assert(flags==0||flags==8);return allocate(bytes);}
 static HRESULT d9wg_d3d9_core_shader_storage_release8(struct IDirect3DDevice9*,IUnknown*);
 static HRESULT d9wg_d3d9_core_release_owned8(struct IDirect3DDevice9*);
 ${types}
@@ -83,6 +90,19 @@ static void add_bound_shader(D8CoreDevice*d){
     d->blocks=allocate(sizeof(*d->blocks));d->blocks->raw.vs=s;++s->refs;
     d->recording=allocate(sizeof(*d->recording));d->recording->raw.vs=s;++s->refs;
 }
+typedef struct {D8CoreDevice *device;BYTE value;} Worker;
+static void *reuse_worker(void *arg){
+    Worker *worker=arg;
+    for(UINT iteration=0;iteration<10000;iteration++){
+        UINT size=iteration%2?32:48;
+        BYTE *view=d8wg_core_device_allocate_view8(&worker->device->iface,size);assert(view);
+        for(UINT b=0;b<size;b++)assert(!view[b]);
+        memset(view,worker->value,size);sched_yield();
+        for(UINT b=0;b<size;b++)assert(view[b]==worker->value);
+        d8wg_core_device_retire_view8(&worker->device->iface,view);
+    }
+    return NULL;
+}
 int main(void){
     for(UINT iteration=0;iteration<1024;++iteration){
         Parent parent={{&parent_vtbl},1};Backend backend={0};D8CoreDevice*d=make(&parent,&backend);
@@ -100,13 +120,35 @@ int main(void){
         }
         assert(backend.dead&&backend.refs==0&&parent.refs==1&&!allocations&&!private_holds);checks+=10+children;
     }
+    {
+        Parent parent={{&parent_vtbl},1};Backend backend={0};D8CoreDevice*d=make(&parent,&backend);
+        void *first=d8wg_core_device_allocate_view8(&d->iface,32),*second=d8wg_core_device_allocate_view8(&d->iface,32);
+        assert(first&&second&&first!=second&&allocations==3);
+        memset(first,0xa5,32);d8wg_core_device_retire_view8(&d->iface,first);
+        for(unsigned iteration=0;iteration<10000;iteration++){
+            void *view=d8wg_core_device_allocate_view8(&d->iface,32);assert(view==first&&allocations==3);
+            for(unsigned b=0;b<32;b++)assert(((BYTE*)view)[b]==0);
+            memset(view,0x7f,32);d8wg_core_device_retire_view8(&d->iface,view);checks++;
+        }
+        void *different=d8wg_core_device_allocate_view8(&d->iface,48);assert(different&&different!=first&&different!=second&&allocations==4);
+        d8wg_core_device_retire_view8(&d->iface,different);d8wg_core_device_retire_view8(&d->iface,second);
+        assert(!core_device8_Release(&d->iface)&&backend.dead&&!allocations&&parent.refs==1);checks++;
+    }
+    {
+        Parent parent={{&parent_vtbl},1};Backend backend={0};D8CoreDevice*d=make(&parent,&backend);
+        pthread_t threads[4];Worker workers[4];
+        for(UINT i=0;i<4;i++){workers[i]=(Worker){d,i+1};assert(!pthread_create(&threads[i],NULL,reuse_worker,&workers[i]));}
+        for(UINT i=0;i<4;i++)assert(!pthread_join(threads[i],NULL));
+        assert(allocations<=9); /* one device plus four blocks of each size */
+        assert(!core_device8_Release(&d->iface)&&backend.dead&&!allocations&&parent.refs==1);checks+=40000;
+    }
     Parent fixture={{&parent_vtbl},1};
     assert(d8wg_core_device_child_add8(&fixture.iface)==2);
     assert(d8wg_core_device_child_release8(&fixture.iface)==1);
-    printf("PASS Device8 actual frontend lifetime: %u checks, 1024 child/reentry cases, %u retirements, %u cleanups; backend COM shim only\\n",checks,retired_count,cleanup_count);
+    printf("PASS Device8 actual frontend lifetime: %u checks, 1024 child/reentry cases, 50000 serial/concurrent cache reuses, %u retirements, %u cleanups; backend COM shim only\\n",checks,retired_count,cleanup_count);
 }
 `);
-    const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", dir + "/test.c", "-o", dir + "/test"], {encoding:"utf8"});
+    const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-pthread", "-Os", "-Wall", "-Wextra", "-Werror", ...(process.env.D9WG_SANITIZE?["-fsanitize=address,undefined","-fno-omit-frame-pointer"]:[]), dir + "/test.c", "-o", dir + "/test"], {encoding:"utf8"});
     assert.equal(build.status, 0, build.stderr);
     const run = spawnSync(dir + "/test", [], {encoding:"utf8",timeout:30000});
     assert.equal(run.status, 0, run.stderr + " signal=" + run.signal);

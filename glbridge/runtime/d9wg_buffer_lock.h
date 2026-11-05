@@ -15,6 +15,29 @@
  * DISCARD makes old contents undefined; do not clear the whole CPU shadow. */
 uint32_t d9wg_buffer_lock_flags(uint32_t usage, uint32_t pool, uint32_t requested);
 
+/* Retail8 permits nested maps. Preserve all writable ranges until the last
+ * Unlock (draw-time mapped uploads also observe this union). Streaming hints
+ * are conservative once maps overlap; READONLY survives only if all maps are. */
+static inline int d9wg_buffer_lock_merge(uint32_t offset, uint32_t size, uint32_t flags,
+        uint32_t *count, uint32_t *mapped_offset, uint32_t *mapped_size, uint32_t *mapped_flags)
+{
+    if (*count == UINT32_MAX) return 0;
+    if (!*count) {
+        *mapped_offset = offset;
+        *mapped_size = size;
+        *mapped_flags = flags;
+    } else {
+        uint32_t end = *mapped_offset + *mapped_size;
+        uint32_t next_end = offset + size;
+        if (offset < *mapped_offset) *mapped_offset = offset;
+        if (next_end > end) end = next_end;
+        *mapped_size = end - *mapped_offset;
+        *mapped_flags &= flags & D9WG_BUFFER_LOCK_READONLY;
+    }
+    ++*count;
+    return 1;
+}
+
 #define D9WG_MAX_DRAW_MAPS 17u
 typedef struct D9WGMappedBuffer {
     uintptr_t identity;

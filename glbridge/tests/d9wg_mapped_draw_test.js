@@ -26,10 +26,11 @@ typedef int32_t HRESULT;typedef int BOOL;typedef uint32_t UINT,DWORD;typedef uin
 typedef struct Device Device;
 typedef struct{unsigned marker;}Clip;
 /* Different VB/IB field order catches incorrect SDK object casts. */
-typedef struct VertexBuffer{Device *device;UINT handle,length,usage,pool;BYTE *shadow;UINT lock_offset,lock_size;DWORD lock_flags;BOOL locked;Clip clips;UINT guard;}VertexBuffer;
-typedef struct IndexBuffer{UINT guard;BOOL locked;DWORD lock_flags;BYTE *shadow;UINT pool,lock_size,length;Device *device;UINT handle,lock_offset,usage;}IndexBuffer;
+typedef struct VertexBuffer{Device *device;UINT handle,length,usage,pool;BYTE *shadow;UINT lock_offset,lock_size,lock_count;DWORD lock_flags;BOOL locked;Clip clips;UINT guard;}VertexBuffer;
+typedef struct IndexBuffer{UINT guard;BOOL locked;DWORD lock_flags;BYTE *shadow;UINT pool,lock_size,length;Device *device;UINT handle,lock_offset,usage,lock_count;}IndexBuffer;
 struct Device{struct{VertexBuffer *buffer;}streams[16];IndexBuffer *index_buffer;};
 typedef VertexBuffer D${api}VertexBuffer,IDirect3DVertexBuffer${api};typedef IndexBuffer D${api}IndexBuffer,IDirect3DIndexBuffer${api};
+${api===9?'static UINT device_compatibility_api(const Device*d){(void)d;return 9;}':''}
 static VertexBuffer *vb_from_iface(VertexBuffer*p){return p;}static IndexBuffer *ib_from_iface(IndexBuffer*p){return p;}
 static void d9wg_vertex_windows_clip_release(void*c,void*p){(void)c;(void)p;}
 static void d9wg_clip_buffer_free(Clip*c,void(*f)(void*,void*),void*context){(void)f;(void)context;c->marker=0;}

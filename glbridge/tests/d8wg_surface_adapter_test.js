@@ -79,6 +79,8 @@ static HRESULT d9wg_d3d9_core_attach_view8(IUnknown*,void*,D9WGCoreViewRetire8);
 ${common}
 /* These harness parents intentionally implement only IUnknown. Actual Device8
  * parent classification and child lifetime are covered by the device suite. */
+void *WINAPI d8wg_core_device_allocate_view8(IDirect3DDevice8*p,UINT bytes){(void)p;return HeapAlloc(GetProcessHeap(),8,bytes);}
+void WINAPI d8wg_core_device_retire_view8(IDirect3DDevice8*p,void*view){(void)p;HeapFree(GetProcessHeap(),0,view);}
 ULONG WINAPI d8wg_core_device_child_add8(IDirect3DDevice8 *p){return IDirect3DDevice8_AddRef(p);}
 ULONG WINAPI d8wg_core_device_child_release8(IDirect3DDevice8 *p){return IDirect3DDevice8_Release(p);}
 ${source}

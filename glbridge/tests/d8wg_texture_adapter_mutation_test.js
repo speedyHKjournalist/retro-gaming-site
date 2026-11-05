@@ -222,7 +222,7 @@ const plan=[
   [
     "Wrap candidate leaked",
     "d8wg_core_wrap_texture8",
-    "            HeapFree(GetProcessHeap(), 0, view);",
+    "            d8wg_core_device_retire_view8(device, view);",
     "            /* leaked candidate */"
   ],
   [
