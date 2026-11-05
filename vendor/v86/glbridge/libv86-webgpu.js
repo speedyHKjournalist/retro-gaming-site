@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "a75587607e9ccd7fa1c0";
+globalThis.V86GL_BUILD_REVISION = "fd0a2a95df0b43356bd8";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -1028,6 +1028,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             this.usesFragPosition = false;
             this.usesFrontFacing = false;
             this.usesRelativeConstants = false;
+            this.usesRelativeInputs = false;
             this.maxFloatConst = -1;
             this.maxIntConst = -1;
             this.maxBoolConst = -1;
@@ -1102,12 +1103,34 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 (this.constantCapacity() - 1) + ")";
         }
 
+        relativeRegisterIndex(operand, output) {
+            if (this.major !== 3 || !operand.relativeToken)
+                throw new Error("relative input/output addressing requires shader model 3");
+            const relative = decodeSource(operand.relativeToken, 0);
+            if (relative.index || relative.modifier || relative.relative)
+                throw new Error("invalid relative input/output index register");
+            let index;
+            if (relative.type === REG_LOOP) {
+                this.usesLoopCounter = true;
+                index = "aL";
+            } else if (!output && this.kind === "vertex" && relative.type === REG_ADDR) {
+                this.usesAddress = true;
+                index = "a0." + SWIZZLE_CHARS[relative.swizzle & 3];
+            } else {
+                throw new Error("relative input/output index requires " +
+                    (!output && this.kind === "vertex" ? "a0 or aL" : "aL"));
+            }
+            return "(" + index + " + " + operand.index + ")";
+        }
+
         constantCapacity() {
             return this.kind === "vertex" ? 256 : 224;
         }
 
         // Raw (unswizzled, unmodified) vec4<f32> read of a source register.
         rawSource(source) {
+            if (source.relative && ![REG_CONST, REG_CONST2, REG_CONST3, REG_CONST4, REG_INPUT].includes(source.type))
+                throw new Error("source register does not support relative addressing");
             switch (source.type) {
             case REG_TEMP:
                 this.temps.add(source.index);
@@ -1146,6 +1169,11 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 this.psTexcoordInputs.add(source.index);
                 return "t" + source.index;
             case REG_INPUT:
+                if (source.relative) {
+                    const index = this.relativeRegisterIndex(source, false);
+                    this.usesRelativeInputs = true;
+                    return "d9_read_input(" + index + ")";
+                }
                 if (this.kind === "vertex") {
                     if (!this.usedInputs.has(source.index))
                         this.usedInputs.set(source.index, null);
@@ -1164,10 +1192,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                     return "vec4<f32>(d9_face)";
                 }
                 throw new Error("unsupported misc register index " + source.index);
-            case REG_OUTPUT: // readable in vs_3_0 (o# behaves like a temp)
-                if (this.kind === "vertex" && this.major >= 3)
-                    return "o" + source.index;
-                throw new Error("output register is not readable in this shader model");
+            case REG_OUTPUT:
+                throw new Error("output registers are write-only");
             default:
                 throw new Error("unsupported source register type " + source.type);
             }
@@ -1218,6 +1244,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
         // Name of the lvalue a destination register writes through, plus the
         // bookkeeping that makes it exist in the prologue/epilogue.
         destTarget(dest) {
+            if (dest.relative && !(this.kind === "vertex" && this.major === 3 && dest.type === REG_OUTPUT))
+                throw new Error("destination register does not support relative addressing");
             switch (dest.type) {
             case REG_TEMP:
                 this.temps.add(dest.index);
@@ -1249,6 +1277,18 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             }
             case REG_OUTPUT: {
                 if (this.kind === "vertex" && this.major >= 3) {
+                    if (dest.relative) {
+                        const index = this.relativeRegisterIndex(dest, true);
+                        for (const declaration of this.outputDeclarations) {
+                            if (declaration.usageIndex === 0 &&
+                                    ((declaration.usage === DECLUSAGE_POSITION && declaration.register !== 0) ||
+                                     (declaration.usage === DECLUSAGE_PSIZE && declaration.register !== 1)))
+                                throw new Error("indexed outputs require POSITION0 at o0 and PSIZE0 at o1");
+                            const slot = varyingForSemantic(declaration.usage, declaration.usageIndex);
+                            if (slot >= 0) this.writtenVaryings.add(slot);
+                        }
+                        return "o_raw[" + index + "]";
+                    }
                     const semantic = this.outputSemantics.get(dest.index);
                     if (!semantic)
                         throw new Error("vs_3_0 output o" + dest.index +
@@ -1257,7 +1297,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                         const slot = varyingForSemantic(declaration.usage, declaration.usageIndex);
                         if (slot >= 0) this.writtenVaryings.add(slot);
                     }
-                    return "o_raw" + dest.index;
+                    return "o_raw[" + dest.index + "]";
                 }
                 const slot = VARYING_TEXCOORD0 + dest.index;
                 if (dest.index > 7)
@@ -1301,16 +1341,28 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             }
             this.emit("let " + name + " = " + value + ";");
             const gate = this.predicateGate;
+            if (dest.relative) {
+                const index = this.relativeRegisterIndex(dest, true);
+                // Undefined accesses must not alias an unrelated output, nor
+                // alter POSITION/PSIZE. Keep value evaluation outside the guard.
+                const excluded = [...new Set(this.outputDeclarations.filter(item =>
+                    item.usage === DECLUSAGE_POSITION || item.usage === DECLUSAGE_PSIZE).map(item => item.register))];
+                this.emit("if (" + index + " >= 0 && " + index + " < 12" +
+                    excluded.map(register => " && " + index + " != " + register).join("") + ") {");
+                this.indent += 2;
+            }
             if (dest.writeMask === 0xf && !gate) {
                 this.emit(target + " = " + name + ";");
-                return;
-            }
-            for (let i = 0; i < 4; ++i) {
+            } else for (let i = 0; i < 4; ++i) {
                 if (!(dest.writeMask & (1 << i))) continue;
                 const component = WRITEMASK_NAMES[i];
                 this.emit(target + "." + component + " = " + (gate
                     ? "select(" + target + "." + component + ", " + name + "." + component + ", " + gate[i] + ")"
                     : name + "." + component) + ";");
+            }
+            if (dest.relative) {
+                this.indent -= 2;
+                this.emit("}");
             }
         }
 
@@ -1369,6 +1421,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 return;
             }
             if (this.kind === "vertex" && dest.type === REG_INPUT) {
+                if (dest.index >= 16) throw new Error("vertex input register exceeds v15");
                 this.usedInputs.set(dest.index, {
                     usage: declaration.usage, usageIndex: declaration.usageIndex });
                 return;
@@ -2310,8 +2363,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
 
             if (kind === "vertex") {
                 if (this.major >= 3)
-                    for (const index of this.outputSemantics.keys())
-                        out.push("var<private> o_raw" + index + ": vec4<f32> = vec4<f32>(0.0);");
+                    out.push("var<private> o_raw: array<vec4<f32>, 12>;");
                 out.push("var<private> o_position: vec4<f32> = vec4<f32>(0.0, 0.0, 0.0, 1.0);");
                 if (this.usesPointSize)
                     out.push("var<private> o_pointsize: vec4<f32> = vec4<f32>(1.0);");
@@ -2351,6 +2403,14 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             }
             out.push("");
 
+            if (this.usesRelativeInputs) {
+                const count = kind === "vertex" ? 16 : 10;
+                out.push("var<private> d9_inputs: array<vec4<f32>, " + count + ">;");
+                out.push("fn d9_read_input(index: i32) -> vec4<f32> {");
+                out.push("    if (index < 0 || index >= " + count + ") { return vec4<f32>(0.0); }");
+                out.push("    return d9_inputs[index];");
+                out.push("}");
+            }
             for (const routine of routines.subroutines) {
                 out.push("fn d9_sub" + routine.label + "() {");
                 out.push(...bodies.get(routine.label));
@@ -2413,6 +2473,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             for (const entry of inputs)
                 out.push("    vin" + entry[0] + " = " +
                     inputValue(entry[0]) + ";");
+            if (this.usesRelativeInputs)
+                for (const entry of inputs) out.push("    d9_inputs[" + entry[0] + "] = vin" + entry[0] + ";");
             out.push("    d9_body();");
             if (this.major >= 3) {
                 for (const item of this.outputDeclarations) {
@@ -2421,10 +2483,10 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                         : item.usage === DECLUSAGE_PSIZE && item.usageIndex === 0 ? "o_pointsize"
                             : slot >= 0 ? "o_varying" + slot : null;
                     if (!target) continue;
-                    if (item.mask === 15) out.push("    " + target + " = o_raw" + item.register + ";");
+                    if (item.mask === 15) out.push("    " + target + " = o_raw[" + item.register + "];");
                     else for (let component = 0; component < 4; ++component) if (item.mask & 1 << component) {
                         const channel = "xyzw"[component];
-                        out.push("    " + target + "." + channel + " = o_raw" + item.register + "." + channel + ";");
+                        out.push("    " + target + "." + channel + " = o_raw[" + item.register + "]." + channel + ";");
                     }
                 }
             }
@@ -2487,7 +2549,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             // physical o# registers independently of its pixel-shader partner.
             if (this.options.semanticLink && this.options.semanticLink.vertex) {
                 for (const binding of this.options.semanticLink.vertex) {
-                    let value = "o_raw" + binding.register + "." + "xyzw"[binding.component];
+                    let value = "o_raw[" + binding.register + "]." + "xyzw"[binding.component];
                     if (this.options.pointExpansion && this.options.pointSprite &&
                             binding.usage === DECLUSAGE_TEXCOORD && binding.usageIndex < 8)
                         value = ["d9_point_uv.x", "d9_point_uv.y", "0.0", "1.0"][binding.component];
@@ -2568,6 +2630,8 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
             for (const entry of declared)
                 out.push("    " + entry.register + " = stage_in.varying" + entry.slot +
                     (entry.channel ? "." + entry.channel : "") + ";");
+            if (this.usesRelativeInputs)
+                for (const index of this.usedInputs.keys()) out.push("    d9_inputs[" + index + "] = v" + index + ";");
             if (this.usesFragPosition)
                 out.push("    d9_frag_position = stage_in.position;");
             if (this.usesFrontFacing)

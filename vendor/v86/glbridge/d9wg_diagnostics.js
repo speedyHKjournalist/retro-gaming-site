@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "a75587607e9ccd7fa1c0";
+globalThis.V86GL_BUILD_REVISION = "fd0a2a95df0b43356bd8";
 // Optional D3D9 diagnostics. Loaded only after an explicit debug request.
 // Snapshot and texture-preview capture starts at that request; rendering and
 // cheap error/stat counters do not depend on this module.
