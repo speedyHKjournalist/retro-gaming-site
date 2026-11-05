@@ -22,7 +22,7 @@ try {
             ["temporary self pin leaked", "refs = (ULONG)InterlockedDecrement(&device->refcount);\n        device->releasing_owned_refs = FALSE;", "refs = (ULONG)InterlockedCompareExchange(&device->refcount, 0, 0);\n        device->releasing_owned_refs = FALSE;"],
             ["reentrant insertion drained only once", "while (" + ref, "if (" + ref],
             ["live public parent/private stores drained", ref, "InterlockedCompareExchange(&device->refcount, 0, 0) >= 1", true],
-            ["retained parent loses pending depth data", "if (" + ref, "if (1"],
+            ["retained parent loses pending depth data", "if (" + ref + (api === 8 ? ")\n                d9wg_private_clear(&" + depth : "\n                    && device->implicit_depth_stencil)"), "if (1" + (api === 8 ? ")\n                d9wg_private_clear(&" + depth : "\n                    && device->implicit_depth_stencil)")],
             ["back entries detached without release", "d9wg_private_clear(&" + back + ", &d9wg_private_ops);", "ZeroMemory(&" + back + ", sizeof(" + back + "));"],
             ["depth entries detached without release", "d9wg_private_clear(&" + depth + ", &d9wg_private_ops);", "ZeroMemory(&" + depth + ", sizeof(" + depth + "));"],
         ];

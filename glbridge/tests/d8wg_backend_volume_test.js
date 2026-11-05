@@ -20,6 +20,7 @@ struct Device{UINT api,pins;union{Texture*volume_resources;Texture*volume_textur
 struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,depth,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;Texture*next_device_resource;};
 #define WINAPI
 #define D3D_OK 0
+#define D3DFMT_UNKNOWN 0
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
@@ -81,6 +82,7 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  if(api==8&&pools[p]==3)continue; /* CPU scratch expectations below. */
  UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x][0],h=dims[x][1],depth=dims[x][2];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==7?0:fail;transport_fail=fail==7;HRESULT wanted=api==8?old8_create(&before_device,w,h,depth,levels[l],usages[u],format,pools[p],nullout?NULL:&before):old9_create(&before_device,w,h,depth,levels[l],usages[u],format,pools[p],nullout?NULL:&before,NULL);
  if(api==8&&((usages[u]&8)||((usages[u]&0x200)&&pools[p]==1)||format==0x31495441u||format==0x32495441u)){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
+ if(api==8&&!format)before=(void*)(uintptr_t)99;
  UINT old_alloc=allocations,old_free=frees,old_creates=creates,old_handles=handles,args[10];memcpy(args,emitted,sizeof(args));
  allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));HRESULT hr=api==8?d9wg_d3d9_core_volume_texture8(&actual_device,w,h,depth,levels[l],usages[u],format,pools[p],nullout?NULL:&actual):device_create_volume_texture(&actual_device,w,h,depth,levels[l],usages[u],format,pools[p],nullout?NULL:&actual,NULL);
  if(allocations!=old_alloc||frees!=old_free||creates!=old_creates||handles!=old_handles)fprintf(stderr,"volume api%u fmt%u %ux%ux%u levels%u usage%x pool%u fail%u null%u allocations%u/%u frees%u/%u creates%u/%u handles%u/%u hr%d/%d\\n",api,format,w,h,depth,levels[l],usages[u],pools[p],fail,nullout,allocations,old_alloc,frees,old_free,creates,old_creates,handles,old_handles,hr,wanted);
@@ -88,11 +90,12 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->refcount==1&&a->device==&actual_device&&actual_device.volume_textures==a&&b->level_count==a->level_count&&a->width==w&&a->height==h&&a->depth==depth&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->depth==bb->depth&&aa->slice_pitch==bb->slice_pitch&&!!aa->level_volume==!!bb->level_volume&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}cleanup(before);cleanup(actual);}else CHECK(before==actual&&(!actual||actual==(void*)(uintptr_t)99)&&!before_device.volume_textures&&!actual_device.volume_textures);CHECK(!live&&!before_device.pins&&!actual_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
 }
 /* Scratch volumes use runtime storage even when the driver cannot create
- * that format. Check full mip dimensions/pitches and that no GPU create occurs. */
-for(UINT k=0;k<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts);k++)for(UINT w=1;w<=8;w++)for(UINT h=1;h<=8;h++)for(UINT depth=1;depth<=3;depth++)for(UINT failure=0;failure<5;failure++){
- const D9WGFormatLayout*q=d9wg_format_layouts+k;Device d={.api=8};Iface*out=(void*)(uintptr_t)99;allocations=frees=creates=handles=0;fail_at=failure;transport_fail=TRUE;
- BOOL dxt=(q->format&0xffffffu)==0x545844u,valid=(q->apis&2)&&(!dxt||(!(w%4)&&!(h%4)));UINT levels=1,maximum=w>h?w:h;if(depth>maximum)maximum=depth;while(maximum>1){levels++;maximum>>=1;}HRESULT expected=!valid?-1:failure&&failure<=levels+2?-3:0;
- HRESULT hr=d9wg_d3d9_core_volume_texture8(&d,w,h,depth,0,0,q->format,3,&out);CHECK(hr==expected&&!creates);
+ * that format. Compressed scratch stays CPU-only; uncompressed scratch must
+ * create GPU storage and propagate transport errors. */
+for(UINT k=0;k<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts);k++)for(UINT w=1;w<=8;w++)for(UINT h=1;h<=8;h++)for(UINT depth=1;depth<=3;depth++)for(UINT failure=0;failure<5;failure++)for(UINT transport=0;transport<2;transport++){
+ const D9WGFormatLayout*q=d9wg_format_layouts+k;Device d={.api=8};Iface*out=(void*)(uintptr_t)99;allocations=frees=creates=handles=0;fail_at=failure;transport_fail=transport;
+ BOOL dxt=(q->format&0xffffffu)==0x545844u,valid=(q->apis&2)&&(!dxt||(!(w%4)&&!(h%4)));UINT levels=1,maximum=w>h?w:h;if(depth>maximum)maximum=depth;while(maximum>1){levels++;maximum>>=1;}BOOL gpu=!dxt&&q->format!=0x31495441u&&q->format!=0x32495441u;BOOL emit=valid&&(!failure||failure>levels+2)&&gpu;HRESULT expected=!valid?-1:failure&&failure<=levels+2?-3:emit&&transport?-2:0;
+ HRESULT hr=d9wg_d3d9_core_volume_texture8(&d,w,h,depth,0,0,q->format,3,&out);CHECK(hr==expected&&creates==(UINT)emit);
  if(!hr){Texture*t=(Texture*)out;CHECK(t->level_count==levels&&t->pool==3&&d.pins==1);UINT mw=w,mh=h,md=depth;for(UINT n=0;n<levels;n++){Level*l=t->levels+n;UINT pitch=((mw+q->block_width-1)/q->block_width)*q->block_bytes,rows=(mh+q->block_height-1)/q->block_height;CHECK(l->width==mw&&l->height==mh&&l->depth==md&&l->row_pitch==pitch&&l->slice_pitch==pitch*rows&&l->byte_count==pitch*rows*md&&!l->level_volume&&zeroes(l->shadow,l->byte_count));mw=mw>1?mw/2:1;mh=mh>1?mh/2:1;md=md>1?md/2:1;}cleanup(out);}else CHECK(!out);CHECK(!live&&!d.pins);cases++;
 }
 Device good={.api=8},wrong={.api=9};for(UINT n=0;n<3;n++){Iface*out=(void*)(uintptr_t)99;allocations=0;CHECK(d9wg_d3d9_core_volume_texture8(n==0?NULL:n==1?&wrong:&good,3,2,3,1,0,65,1,n==2?NULL:&out)==-1&&!allocations&&(n==2||!out));cases++;}

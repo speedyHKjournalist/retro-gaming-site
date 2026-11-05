@@ -15,6 +15,8 @@ int main(void)
         d.vertex_declaration=&declaration;d.vertex_shader=(void*)1;d.handle=0x13579;
         D9VertexBuffer vb[2]={{0}};UINT stream_ids[]={7,15},extents[]={16,12};
         for(UINT i=0;i<2;i++){vb[i].device=&d;vb[i].shadow=storage;vb[i].length=1+indexed8_random()%512;d.streams[stream_ids[i]].buffer=&vb[i];d.streams[stream_ids[i]].offset=indexed8_random()%17;d.streams[stream_ids[i]].stride=indexed8_random()%33;}
+        /* Retail8 requires stream0 even when a declaration only reads other streams. */
+        d.streams[0].buffer=&vb[0];
         D9IndexBuffer ib={0};ib.device=&d;ib.shadow=storage;ib.format=round%2?101:102;ib.length=indexed8_random()%33;d.index_buffer=&ib;
         UINT raw=round%3?bases[round%9]:indexed8_random(),first=indexed8_random()%8,minimum=indexed8_random(),hint=indexed8_random();if(round%7==0)hint=0;
         UINT type=round%29==0?0:round%31==0?7:1,count=round%19==0?0:1;
@@ -45,7 +47,10 @@ int main(void)
     D9VertexDeclaration empty={0};D9IndexBuffer valid_ib={0};valid_ib.device=&d;valid_ib.length=12;valid_ib.format=101;valid_ib.shadow=storage;d.index_buffer=&valid_ib;d.vertex_declaration=&empty;d.vertex_shader=(void*)1;transport_ok=1;sequence_count=0;
     INDEX8_CHECK(!device_draw_indexed_primitive(&d,1,0,0,0,0,1));sent=emits;mirrors=invalidations;
     active_api=9;INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,1)==D3DERR_INVALIDCALL&&emits==sent&&invalidations==mirrors);
-    active_api=8;d.index_buffer=NULL;INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,0)==D3DERR_INVALIDCALL&&emits==sent);cases+=4;
+    active_api=8;d.index_buffer=NULL;INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,0)==D3D_OK&&emits==sent);
+    INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,1)==D3D_OK&&emits==sent);
+    D9VertexBuffer stream0={0};d.streams[0].buffer=&stream0;
+    INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,1)==D3DERR_INVALIDCALL&&emits==sent);cases+=6;
     transport_ok=1;active_api=9;
     printf("PASS actual core8 indexed draw: %u checks / %u cases (%u emitted successes/%u refused/%u zero/%u transport failures); raw32 signed extrema,independent physical-vertex enumeration,multi-stream offsets/constant strides,16/32bit IB bounds/opaque hints,actual9 emitter/state and unchanged bindings\n",checks,cases,accepted,refused,zero,failures);
     return 0;

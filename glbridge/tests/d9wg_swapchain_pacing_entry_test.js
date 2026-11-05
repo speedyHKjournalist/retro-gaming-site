@@ -13,6 +13,7 @@ typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef voi
 #define WINAPI
 #define FAILED(hr) ((hr)<0)
 #define D3D_OK 0
+#define D3DERR_INVALIDCALL (-3)
 #define D3DERR_DRIVERINTERNALERROR (-1)
 #define D3DERR_WASSTILLDRAWING (-2)
 #define D3DPRESENT_DONOTWAIT 1
@@ -23,7 +24,7 @@ typedef uint32_t DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef voi
 #define TRACE_MARK_EXIT(...)
 #define SUCCEEDED(hr) ((hr)>=0)
 typedef struct{DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect;BOOL Windowed;HWND hDeviceWindow;}Parameters;
-typedef struct{int implicit_swap_chain;D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Parameters present;struct{DWORD RefreshRate;}display_mode;int iface;}Device;
+typedef struct{struct{HWND hFocusWindow;}creation;int implicit_swap_chain;D9WGResetState reset_state;D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Parameters present;struct{DWORD RefreshRate;}display_mode;int iface;}Device;
 typedef struct{D9WGPresentClock present_clock;D9WGPresentPacing present_pacing;Device*device;Parameters present;DWORD handle;}Chain;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Chain D${api}SwapChain,IDirect3DSwapChain${api};
 static unsigned mode,locked,emits,fail_emit,env_reads,qpc_reads,sleeps,device_emits,chain_emits;static uint64_t time_us;static HWND last_window;
@@ -33,6 +34,7 @@ static BOOL QueryPerformanceFrequency(LARGE_INTEGER*out){assert(!locked);if(mode
 static BOOL QueryPerformanceCounter(LARGE_INTEGER*out){assert(!locked);qpc_reads++;if(mode==3&&qpc_reads>=4)return 0;out->QuadPart=(int64_t)time_us;return 1;}
 static DWORD GetTickCount(void){assert(!locked);return (DWORD)(time_us/1000);}
 static void Sleep(DWORD ms){assert(!locked&&ms&&ms<=201);sleeps++;time_us+=(uint64_t)ms*1000;}
+${api===9?"static unsigned device_compatibility_api(Device*d){(void)d;return 9;}static BOOL IsWindow(HWND w){return !!w;}":""}
 static Device*device_from_iface(Device*d){return d;}
 ${api===9?'static Chain*swap_chain_from_iface(Chain*c){return c;}':''}
 static BOOL emit_present_and_flush(Device*d,HWND window){(void)d;assert(!locked);locked=1;emits++;device_emits++;last_window=window;locked=0;return !fail_emit;}

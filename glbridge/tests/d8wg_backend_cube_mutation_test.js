@@ -3,7 +3,7 @@ const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),asse
 function body(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return[m.index,b,s.slice(m.index,b)];}
 const cases=[
  ["API8 failed lock output","cube_lock_rect","ZeroMemory(locked_rect, sizeof(*locked_rect));","(void)locked_rect;","lock"],
- ["WRITEONLY rejected","create_cube_texture_object","if (usage & D3DUSAGE_WRITEONLY)","if ((usage & D3DUSAGE_WRITEONLY) && 0)"],
+ ["WRITEONLY rejected","create_cube_texture_object","if ((usage & D3DUSAGE_WRITEONLY)","if ((0 && (usage & D3DUSAGE_WRITEONLY))"],
  ["DXT top-level alignment", "create_cube_texture_object", "block_width == 4u", "block_width == 400u"],
  ["creation mip metadata","emit_cube_texture_create","command.level_count = texture->level_count;","command.level_count = 1;"],
  ["reserved metadata","emit_cube_texture_create","command.reserved = 0;","command.reserved = 4;"],

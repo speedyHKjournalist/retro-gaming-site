@@ -36,13 +36,15 @@ typedef struct {uint8_t *shadow;UINT row_pitch,slice_pitch,depth,byte_count;} D8
 typedef struct {UINT handle,format;D8TextureLevel levels[4];} D8VolumeTexture;
 typedef struct D9VolumeTexture D9VolumeTexture;
 typedef struct {UINT api;} Device;
-struct D9VolumeTexture{UINT handle,format;D8TextureLevel levels[4];Device*device;};
+struct D9VolumeTexture{UINT handle,format,pool;D8TextureLevel levels[4];Device*device;};
 typedef struct {UINT handle,format,level_count;D9TextureLevel levels[24];Device*device;} D9CubeTexture;
 ${api === "d3d9" ? "static Device cube_device={9};static UINT device_compatibility_api(Device*d){return d->api;}" : ""}
 typedef struct {UINT Left,Top,Right,Bottom,Front,Back;} D3DBOX;
 typedef int INT;
 ${api === "d3d9" ? "static void SetRect(RECT *rect,INT l,INT t,INT r,INT b){rect->left=l;rect->top=t;rect->right=r;rect->bottom=b;}" : ""}
 typedef struct {uint8_t *shadow;UINT handle,width,height,mip_level,cube_face,format,bytes_per_pixel,pitch;BOOL upload_pending;} DDSurface;
+#define D3DPOOL_SCRATCH 3
+${api === "d3d9" ? "static BOOL supported_volume_texture_format8(UINT f){(void)f;assert(0);return 0;}" : ""}
 #define TRUE 1
 #define FALSE 0
 #define ZeroMemory(p,n) memset(p,0,n)

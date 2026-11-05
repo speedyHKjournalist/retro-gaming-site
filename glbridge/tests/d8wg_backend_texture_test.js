@@ -16,9 +16,11 @@ typedef struct Level{UINT width,height,depth,row_pitch,row_count,slice_pitch,byt
 typedef struct Device Device,D8Device,D9Device,IDirect3DDevice8,IDirect3DDevice9;
 typedef struct Texture Texture,D8Texture,D9Texture;
 struct Device{UINT api,pins;Texture*texture_resources;UINT handle;};
-struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;Texture*next_device_resource;};
+struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;BYTE*mip_storage;Texture*next_device_resource;};
 #define WINAPI
 #define D3D_OK 0
+#define D3DFMT_UNKNOWN 0
+#define D3DUSAGE_DYNAMIC 512
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
@@ -45,7 +47,7 @@ static int g_texture_vtbl;
 static UINT allocations,frees,live,fail_at,transport_fail,creates,handles;
 static UINT emitted[10];
 static void*HeapAlloc(void*h,UINT flags,size_t n){(void)h;allocations++;if(allocations==fail_at||n>32768)return NULL;BYTE*p=malloc(n?n:1);assert(p);memset(p,flags&8?0:0xcd,n);live++;return p;}
-static BOOL HeapFree(void*h,UINT flags,void*p){(void)h;(void)flags;assert(p&&live);frees++;live--;free(p);return TRUE;}
+static BOOL HeapFree(void*h,UINT flags,void*p){(void)h;(void)flags;if(!p)return FALSE;assert(live);frees++;live--;free(p);return TRUE;}
 static Device*device_from_iface(Device*d){return d;}static UINT device_compatibility_api(Device*d){return d->api;}
 static void device_child_add_ref(Device*d){d->pins++;}static void device_child_release(Device*d){assert(d->pins);d->pins--;}
 static UINT allocate_handle(void){return ++handles;}
@@ -66,22 +68,39 @@ ${extract(source,'emit_texture_create')}
 ${extract(source,'full_mip_level_count')}
 ${old8.replace(/\bdevice_create_texture\b/g,'old8_create').replace(/\bemit_texture_create\b/g,'old8_emit')}
 ${old9.replace(/\bdevice_create_texture\b/g,'old9_create').replace(/\btexture_level_layout\b/g,'old9_layout').replace(/\bemit_texture_create\b/g,'old9_emit')}
+${extract(source,'allocate_mip_shadows')}
 ${['create_texture_object','device_create_texture','d9wg_d3d9_core_texture8'].map(n=>extract(source,n)).join('\n')}
 static UINT checks,cases,api8cases,api9cases,levelchecks;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 texture case %u line %u: %s\\n",cases,__LINE__,#v);return 1;}checks++;}while(0)
-static void cleanup(Iface*i){Texture*t=(Texture*)i;for(UINT l=0;l<t->level_count;l++)if(t->levels[l].shadow)HeapFree(NULL,0,t->levels[l].shadow);t->device->pins--;t->device->texture_resources=NULL;HeapFree(NULL,0,t->levels);HeapFree(NULL,0,t);}
+static void cleanup(Iface*i){Texture*t=(Texture*)i;for(UINT l=0;l<t->level_count;l++)if(!t->mip_storage&&t->levels[l].shadow)HeapFree(NULL,0,t->levels[l].shadow);if(t->mip_storage)HeapFree(NULL,0,t->mip_storage);t->device->pins--;t->device->texture_resources=NULL;HeapFree(NULL,0,t->levels);HeapFree(NULL,0,t);}
 static BOOL zeroes(const BYTE*p,UINT n){for(UINT i=0;i<n;i++)if(p[i])return FALSE;return TRUE;}
-int main(void){const UINT dims[][2]={{0,2},{3,0},{3,2},{4,4},{4096,2},{4097,1},{1,4096},{1,4097},{8192,1},{1,8192},{8193,1},{1,8193},{UINT32_MAX,UINT32_MAX}},levels[]={0,1,2,32},usages[]={0,1,2,3,0x400,0x20000,8,9},pools[]={0,1,2,3,4};
-for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT x=0;x<sizeof(dims)/sizeof(*dims);x++)for(UINT l=0;l<4;l++)for(UINT u=0;u<8;u++)for(UINT p=0;p<5;p++)for(UINT fail=0;fail<8;fail++)for(UINT nullout=0;nullout<2;nullout++){
- UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x][0],h=dims[x][1];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==7?0:fail;transport_fail=fail==7;HRESULT wanted=api==8?old8_create(&before_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&before):old9_create(&before_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&before,NULL);
+int main(void){const UINT dims[][2]={{0,2},{3,0},{3,2},{4,4},{4096,2},{4097,1},{1,4096},{1,4097},{8192,1},{1,8192},{8193,1},{1,8193},{UINT32_MAX,UINT32_MAX}},levels[]={0,1,2,32},usages[]={0,1,2,3,0x400,0x20000,8,9,512,513},pools[]={0,1,2,3,4};
+for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT x=0;x<sizeof(dims)/sizeof(*dims);x++)for(UINT l=0;l<4;l++)for(UINT u=0;u<10;u++)for(UINT p=0;p<5;p++)for(UINT fail=0;fail<8;fail++)for(UINT nullout=0;nullout<2;nullout++){
+ UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x][0],h=dims[x][1];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==7?0:fail;transport_fail=fail==7;UINT requested_fail=fail_at;BOOL contiguous=api==8&&pools[p]!=0;
+ /* The frozen oracle allocates every mip separately. Only the first three
+  * allocations correspond to the new object/level-table/contiguous-block path. */
+ if(contiguous&&fail_at>3)fail_at=0;
+ HRESULT wanted=api==8?old8_create(&before_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&before):old9_create(&before_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&before,NULL);
  /* Wine top-level DXT dimension and texture WRITEONLY rules supersedes the frozen permissive constructor. */
  BOOL dxt=format==0x31545844u||format==0x32545844u||format==0x33545844u||format==0x34545844u||format==0x35545844u;
- if((dxt && ((w%4)||(h%4))) || (api==8 && (usages[u]&8))){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
+ if((api==8 && (usages[u]&1) && levels[l]!=1) || (dxt && ((w%4)||(h%4))) || (api==8 && ((usages[u]&8)||((usages[u]&512)&&(usages[u]&3))))){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
+ if(api==8&&!format)before=(void*)(uintptr_t)99;
  UINT old_alloc=allocations,old_free=frees,old_creates=creates,old_handles=handles,args[10];memcpy(args,emitted,sizeof(args));
+ if(contiguous&&old_alloc>=3){
+  UINT count=levels[l]?levels[l]:full_mip_level_count(w,h),mw=w,mh=h;uint64_t face_bytes=0;
+  for(UINT level=0;level<count;level++){UINT pitch,rows,bytes;CHECK(d9wg_texture_level_layout(8,format,mw,mh,&pitch,&rows,&bytes));face_bytes+=bytes;if(mw>1)mw/=2;if(mh>1)mh/=2;}
+  uint64_t total=((face_bytes+15)/16)*16*1;
+  if(total>32768){if(!wanted)cleanup(before);before=NULL;wanted=E_OUTOFMEMORY;old_creates=0;memset(args,0xcc,sizeof(args));old_free=2;}
+  else old_free=wanted?(wanted==E_OUTOFMEMORY?2:3):0;
+  old_alloc=3;
+ }
+ fail_at=requested_fail;
  allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));HRESULT hr=api==8?d9wg_d3d9_core_texture8(&actual_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&actual):device_create_texture(&actual_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&actual,NULL);
  CHECK(hr==wanted);CHECK(allocations==old_alloc&&frees==old_free&&creates==old_creates&&handles==old_handles&&!memcmp(args,emitted,sizeof(args)));CHECK(actual_device.pins==before_device.pins&&actual_device.pins==(!hr));
- if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->autogen_filter==b->autogen_filter&&a->refcount==1&&a->device==&actual_device&&actual_device.texture_resources==a&&b->level_count==a->level_count&&a->width==w&&a->height==h&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}cleanup(before);cleanup(actual);}else CHECK(before==actual&&(!actual||actual==(void*)(uintptr_t)99)&&!before_device.texture_resources&&!actual_device.texture_resources);CHECK(!live&&!before_device.pins&&!actual_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
+ if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->autogen_filter==b->autogen_filter&&a->refcount==1&&a->device==&actual_device&&actual_device.texture_resources==a&&b->level_count==a->level_count&&a->width==w&&a->height==h&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}
+ if(contiguous){CHECK(a->mip_storage);UINT offset=0;for(UINT face=0;face<1;face++){for(UINT level=0;level<a->level_count;level++){Level*entry=a->levels+face*a->level_count+level;CHECK(entry->shadow==a->mip_storage+offset&&entry->shadow_valid);offset+=entry->byte_count;}offset=(offset+15)/16*16;}}
+ cleanup(before);cleanup(actual);}else CHECK(before==actual&&(!actual||actual==(void*)(uintptr_t)99)&&!before_device.texture_resources&&!actual_device.texture_resources);CHECK(!live&&!before_device.pins&&!actual_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
 }
 Device good={.api=8},wrong={.api=9};for(UINT n=0;n<3;n++){Iface*out=(void*)(uintptr_t)99;allocations=0;CHECK(d9wg_d3d9_core_texture8(n==0?NULL:n==1?&wrong:&good,3,2,1,0,65,1,n==2?NULL:&out)==-1&&!allocations&&(n==2||!out));cases++;}
-printf("PASS actual backend8 texture creation: %u checks,%u cases (%u API8/%u ordinary9),%u mip comparisons; frozen8/9 methods plus Wine DXT creation alignment,all registry formats,4096/8192 bounds,levels/pools/usage/autogen,zero CPU storage,allocation/transport unwind/output/list/parent pins\\n",checks,cases,api8cases,api9cases,levelchecks);return 0;}
+printf("PASS actual backend8 texture creation: %u checks,%u cases (%u API8/%u ordinary9),%u mip comparisons; frozen8/9 metadata plus Wine retail rules and independent contiguous allocation/offset expectations,all registry formats,4096/8192 bounds,levels/pools/usage/autogen,zero CPU storage,allocation/transport unwind/output/list/parent pins\\n",checks,cases,api8cases,api9cases,levelchecks);return 0;}
 `;const compiled=code.replace('static HRESULT WINAPI old9_create(', 'static BOOL old9_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){return d9wg_texture_level_layout(9,f,w,h,p,r,b);}\nstatic HRESULT WINAPI old9_create(');fs.writeFileSync(dir+"/texture.c",compiled);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/texture.c","-o",dir+"/texture"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/texture",[],{encoding:"utf8",timeout:180000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}
