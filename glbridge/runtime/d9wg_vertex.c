@@ -362,13 +362,19 @@ static int screen_inside_limits(const D9WGProcessViewport *viewport, uint32_t *l
 
 static __inline int screen_position_inside(const void *position, const uint32_t *limits)
 {
-    uint32_t words[4];__builtin_memcpy(words, position, 16);
-    uint32_t x = screen_float_order(words[0]), y = screen_float_order(words[1]);
+    /* Fixed scalar copies remain alias/unaligned safe without the per-vertex
+     * stack-array REP MOVSD emitted by the size-optimized x86 compiler. */
+    uint32_t px, py, pz, pw;
+    __builtin_memcpy(&px, position, 4);
+    __builtin_memcpy(&py, (const uint8_t *)position + 4, 4);
+    __builtin_memcpy(&pz, (const uint8_t *)position + 8, 4);
+    __builtin_memcpy(&pw, (const uint8_t *)position + 12, 4);
+    uint32_t x = screen_float_order(px), y = screen_float_order(py);
     /* Positive finite reciprocal W in [2^-64, 2^64] keeps W and all
      * products finite. For 0 <= Z <= 1, rounding cannot move Z*W outside
      * [0,W]. Signed zero, NaN, infinities and other W ranges fall back. */
     return x > limits[0] && x < limits[1] && y > limits[2] && y < limits[3] &&
-        words[2] <= 0x3f800000u && words[3] >= 0x1f800000u && words[3] <= 0x5f800000u;
+        pz <= 0x3f800000u && pw >= 0x1f800000u && pw <= 0x5f800000u;
 }
 
 int d9wg_vertex_clip_codes(const D9WGClipDrawSource *s,

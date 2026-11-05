@@ -109,7 +109,18 @@ static void clip_status_cases(void)
     D3DVERTEXELEMENT9 elements[]={{0,0,D3DDECLTYPE_FLOAT3,0,D3DDECLUSAGE_POSITION,0},{1,0,D3DDECLTYPE_FLOAT3,0,D3DDECLUSAGE_NORMAL,0},D3DDECL_END()};
     IDirect3DVertexDeclaration9 *decl;OK(CALL(CreateVertexDeclaration)(device,elements,&decl));OK(CALL(SetVertexDeclaration)(device,decl));stream(source,12,12);OK(CALL(SetStreamSource)(device,1,source,0,12));
     status_reset();OK(CALL(BeginScene)(device));OK(CALL(DrawPrimitive)(device,D3DPT_TRIANGLELIST,1,1));OK(CALL(EndScene)(device));
-    Status unavailable;check(FAILED(CALL(GetClipStatus)(device,&unavailable)),"unsupported CPU layout cannot return stale status");IDirect3DVertexDeclaration9_Release(decl);
+    /* The shared stream pipeline now supports this declaration. The stream0
+     * byte offset plus first vertex selects positions[2..4], all left of x=-1;
+     * the separate normal stream cannot change those identity-space positions. */
+    status_expect(1,1,"multi-stream position offset and normal stream");
+    {
+        const DWORD code[]={0xfffe0101u,1u,0xc00f0000u,0x90e40000u,0x0000ffffu};
+        IDirect3DVertexShader9 *shader;OK(CALL(CreateVertexShader)(device,code,&shader));OK(CALL(SetVertexShader)(device,shader));
+        status_reset();OK(CALL(BeginScene)(device));OK(CALL(DrawPrimitive)(device,D3DPT_TRIANGLELIST,1,1));OK(CALL(EndScene)(device));
+        Status unavailable;check(FAILED(CALL(GetClipStatus)(device,&unavailable)),"unsupported CPU vertex program cannot return stale status");
+        OK(CALL(SetVertexShader)(device,NULL));IDirect3DVertexShader9_Release(shader);
+    }
+    IDirect3DVertexDeclaration9_Release(decl);
 #endif
     set_fvf(D3DFVF_XYZ);status_reset();status_draw_up(positions[2],12);status_expect(1,1,"status recovers after reset");
     set_fvf(D3DFVF_XYZRHW);float screen[3][4]={{-5,40,.5f,1},{-10,60,.5f,1},{-15,50,.5f,1}};

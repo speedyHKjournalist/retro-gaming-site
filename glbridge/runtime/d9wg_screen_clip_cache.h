@@ -56,8 +56,16 @@ static __inline void d9wg_screen_clip_store(D9WGScreenClipCache *cache,
     cache->valid = 0;
     if (!cache->positions || !vertices || stride < 16 || !count || count > cache->capacity/16u) return;
     const uint8_t *input = vertices;
-    for (uint32_t i = 0; i < count; ++i, input += stride)
-        __builtin_memcpy(cache->positions + i*16u, input, 16);
+    for (uint32_t i = 0; i < count; ++i, input += stride) {
+        /* Keep the same exact bit snapshot, with scalar unaligned-safe moves
+         * instead of setting up REP MOVSD for each individual position. */
+        uint32_t x = d9wg_screen_clip_word(input, 0), y = d9wg_screen_clip_word(input, 4);
+        uint32_t z = d9wg_screen_clip_word(input, 8), w = d9wg_screen_clip_word(input, 12);
+        __builtin_memcpy(cache->positions + i*16u, &x, 4);
+        __builtin_memcpy(cache->positions + i*16u + 4, &y, 4);
+        __builtin_memcpy(cache->positions + i*16u + 8, &z, 4);
+        __builtin_memcpy(cache->positions + i*16u + 12, &w, 4);
+    }
     cache->viewport = *viewport;cache->status = *status;cache->count = count;cache->valid = 1;
 }
 #endif
