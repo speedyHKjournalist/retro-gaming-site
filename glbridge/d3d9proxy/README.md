@@ -1849,3 +1849,15 @@ exit summaries, and zero resources before driver owner-release cleanup.
 See deployment evidence4L5. Published retail8/9 are the exact accepted Metal
 builds; diagnostics are rebuilt from the same source. The complete Wine
 device/visual/DirectDraw collection and game acceptance remain separate work.
+
+### Review batch 4L6: Wine compatibility boundaries
+
+The common 8/9 texture constructors now reject non-block-aligned top-level
+DXT sizes while preserving tiny mip levels. D3D8 validation exports return
+owned error strings and validate versions, caps, declarations and constants;
+its display modes come from the actual driver and format pairs follow Wine's
+Windows expectations. The selected XP compatibility group passed 2,996 checks
+on both SwiftShader and Metal with zero GPU errors and clean resource release.
+The full Wine device audit still has 805 observed failures and a compressed
+volume failure; it is explicitly not a passing full-suite result. See
+`../deployments/d3d-webgpu-review-4L6.json` for exact scope and binary hashes.

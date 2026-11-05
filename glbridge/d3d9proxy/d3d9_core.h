@@ -359,6 +359,8 @@ HRESULT WINAPI d9wg_d3d9_core_pixel_shader8(struct IDirect3DDevice9 *device,
  * policy stays in the8 frontend. Failed calls leave body_count unchanged. */
 BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,
         BOOL is_pixel, UINT minor, UINT *body_count);
+BOOL WINAPI d9wg_d3d9_core_validate_shader_export8(const DWORD *shader,
+        const DWORD *declaration, BOOL is_pixel, UINT max_constants);
 
 /* Private backend dispatch for the Device8 facade. SDK8 struct bytes stay
  * opaque here; only the SDK9 implementation casts to concrete SDK layouts.

@@ -4361,26 +4361,14 @@ static UINT enumerate_adapter_modes(D3DFORMAT format, UINT wanted,
  * UNKNOWN. Ordinary D3D9 factories retain driver-enumerated, filtered modes. */
 static UINT enumerate_adapter_modes8(UINT index, D3DDISPLAYMODE *mode)
 {
-    static const struct {
-        UINT width;
-        UINT height;
-        D3DFORMAT format;
-    } modes[] = {
-        { 640, 480, D3DFMT_X1R5G5B5 },
-        { 640, 480, D3DFMT_R5G6B5 },
-        { 640, 480, D3DFMT_X8R8G8B8 },
-        { 800, 600, D3DFMT_X1R5G5B5 },
-        { 800, 600, D3DFMT_R5G6B5 },
-        { 800, 600, D3DFMT_X8R8G8B8 },
-        { 1024, 768, D3DFMT_X1R5G5B5 },
-        { 1024, 768, D3DFMT_R5G6B5 },
-        { 1024, 768, D3DFMT_X8R8G8B8 }
-    };
-    const UINT count = sizeof(modes) / sizeof(modes[0]);
-    if (!mode) return count;
-    if (index >= count) return 0;
-    fill_display_mode(mode, modes[index].width, modes[index].height, modes[index].format);
-    return 1;
+    /* Flatten the actual driver's two supported display formats. Never
+     * advertise invented 15-bit modes or fixed resolutions / refresh rates. */
+    UINT count16 = enumerate_adapter_modes(D3DFMT_R5G6B5, 0, NULL);
+    if (!mode)
+        return count16 + enumerate_adapter_modes(D3DFMT_X8R8G8B8, 0, NULL);
+    return index < count16
+            ? enumerate_adapter_modes(D3DFMT_R5G6B5, index, mode)
+            : enumerate_adapter_modes(D3DFMT_X8R8G8B8, index - count16, mode);
 }
 
 static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D9 *iface, UINT adapter,
@@ -4473,6 +4461,17 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
                 || (legacy8 && display_format == D3DFMT_X1R5G5B5))
             && (legacy8 ? supported_render_target_format8(backbuffer_format)
                 : supported_backbuffer_format(backbuffer_format));
+    if (legacy8) {
+        /* D3D8 permits the alpha variant of the display format, but not
+         * arbitrary conversion between 16- and 32-bit back buffers. */
+        ok = ok && (backbuffer_format == display_format
+                || (display_format == D3DFMT_X8R8G8B8
+                    && backbuffer_format == D3DFMT_A8R8G8B8)
+                || (display_format == D3DFMT_X1R5G5B5
+                    && backbuffer_format == D3DFMT_A1R5G5B5));
+        if (!windowed && display_format == D3DFMT_X1R5G5B5)
+            ok = FALSE; /* The display driver exposes 16-bit RGB565 modes. */
+    }
 
     TRACE("OK CheckDeviceType adapter=%lu type=%lu display=%08lX backbuffer=%08lX "
             "windowed=%lu -> %08lX", adapter, (DWORD)type,
@@ -6832,6 +6831,14 @@ static HRESULT create_texture_object(D9Device *device,
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
+    /* The top level of a DXT resource must contain whole 4x4 blocks in
+     * every pool. Sublevels may be 1x1/2x2 and retain one physical block. */
+    UINT block_width, block_height, block_bytes;
+    if (d9wg_format_layout(api, format, &block_width, &block_height, &block_bytes)
+            && (format & 0x00ffffffu) == 0x00545844u /* DXT1 through DXT5 */
+            && block_width == 4u && block_height == 4u
+            && ((width & 3u) || (height & 3u)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(width, height);
     if (!levels) levels = full_levels;
     if (levels > full_levels) {
@@ -12256,6 +12263,11 @@ static HRESULT create_cube_texture_object(D9Device *device,
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
+    UINT block_width, block_height, block_bytes;
+    if (d9wg_format_layout(api, format, &block_width, &block_height, &block_bytes)
+            && (format & 0x00ffffffu) == 0x00545844u
+            && block_width == 4u && block_height == 4u && (edge & 3u))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(edge, edge);
     if (!levels) levels = full_levels;
     if (levels > full_levels) {
@@ -17447,6 +17459,69 @@ BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_t
 {
     if (!tokens || !body_count) return FALSE;
     return shader8_validate_body(tokens, max_tokens, is_pixel, minor, body_count);
+}
+
+/* Validation exports share the creation parser. Additional declaration/caps
+ * checks have no device, transport, or shader-object side effects. */
+BOOL WINAPI d9wg_d3d9_core_validate_shader_export8(const DWORD *shader,
+        const DWORD *declaration, BOOL is_pixel, UINT max_constants)
+{
+    UINT count, offset = 0, inputs = 0xffffffffu;
+    if (!shader || !shader8_validate_body(shader + 1,
+            D9WG_D3D8_SHADER_TOKENS, is_pixel, shader[0] & 0xffu, &count))
+        return FALSE;
+    if (declaration && !is_pixel) {
+        UINT decl_count;
+        if (!d9wg_declaration8_validate(declaration,
+                D9WG_D3D8_SHADER_TOKENS, &decl_count)) return FALSE;
+        inputs = 0;
+        for (UINT i = 0; i < decl_count; ++i) {
+            DWORD token = declaration[i];
+            UINT type = (token >> 29) & 7u;
+            if (type == 2u && !(token & 0x10000000u)) {
+                UINT reg = token & 0x1fu;
+                if (reg >= 16u) return FALSE;
+                inputs |= 1u << reg;
+            } else if (type == 4u) {
+                i += ((token >> 25) & 15u) * 4u;
+            }
+        }
+    }
+    const DWORD *body = shader + 1;
+    while (offset < count) {
+        WORD opcode = (WORD)(body[offset] & D3DSI_OPCODE_MASK);
+        UINT words;
+        if (opcode == D3DSIO_COMMENT) {
+            offset += 1u + ((body[offset] & D3DSI_COMMENTSIZE_MASK)
+                    >> D3DSI_COMMENTSIZE_SHIFT);
+            continue;
+        }
+        if (!shader8_opcode_supported(opcode, is_pixel,
+                shader[0] & 0xffu, &words)) return FALSE;
+        /* DEF's constants are immediate data. All other operands use the
+         * SM1 register encoding; matrix operands span consecutive constants. */
+        UINT operands = opcode == D3DSIO_DEF ? 1u : words;
+        for (UINT i = 1; i <= operands; ++i) {
+            DWORD token = body[offset + i];
+            UINT type = (token & D3DSP_REGTYPE_MASK) >> D3DSP_REGTYPE_SHIFT;
+            UINT reg = token & D3DSP_REGNUM_MASK;
+            if (type == D3DSPR_CONST) {
+                UINT span = 1u;
+                if (i == 3u) {
+                    if (opcode == D3DSIO_M4x4 || opcode == D3DSIO_M3x4) span = 4;
+                    else if (opcode == D3DSIO_M4x3 || opcode == D3DSIO_M3x3) span = 3;
+                    else if (opcode == D3DSIO_M3x2) span = 2;
+                }
+                if (span > max_constants || reg > max_constants - span)
+                    return FALSE;
+            } else if (!is_pixel && i > 1u && type == D3DSPR_INPUT
+                    && (reg >= 16u || !(inputs & (1u << reg)))) {
+                return FALSE;
+            }
+        }
+        offset += words + 1u;
+    }
+    return TRUE;
 }
 
 #endif

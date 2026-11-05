@@ -366,25 +366,47 @@ IDirect3D8 *WINAPI Direct3DCreate8(UINT sdk_version)
     return &d3d->iface;
 }
 
+/* These exports are callable before a device exists. Error strings belong to
+ * the process heap, including the empty string on success / muted failure.
+ * Unlike the vertex export, a NULL pixel program leaves errors untouched. */
+static HRESULT shader_validation_result(HRESULT result, WINBOOL return_error,
+        char **errors)
+{
+    if (errors) {
+        const char *message = FAILED(result) && return_error
+                ? "Invalid shader program.\n" : "";
+        SIZE_T size = (SIZE_T)lstrlenA(message) + 1u;
+        *errors = HeapAlloc(GetProcessHeap(), 0, size);
+        if (!*errors) return D8WG_TRACE_ERROR(E_OUTOFMEMORY);
+        CopyMemory(*errors, message, size);
+    }
+    return D8WG_TRACE_ERROR(result);
+}
+
 HRESULT WINAPI ValidateVertexShader(const DWORD *shader, const DWORD *declaration,
         const D3DCAPS8 *caps, WINBOOL return_error, char **errors)
 {
-    (void)shader;
-    (void)declaration;
-    (void)caps;
-    (void)return_error;
-    if (errors) *errors = NULL;
-    return S_OK;
+    HRESULT result = E_FAIL;
+    if (shader && (shader[0] == D3DVS_VERSION(1, 0)
+                || shader[0] == D3DVS_VERSION(1, 1))
+            && (!caps || shader[0] <= caps->VertexShaderVersion)
+            && d9wg_d3d9_core_validate_shader_export8(shader, declaration,
+                FALSE, caps ? caps->MaxVertexShaderConst : 96u))
+        result = S_OK;
+    return shader_validation_result(result, return_error, errors);
 }
 
 HRESULT WINAPI ValidatePixelShader(const DWORD *shader, const D3DCAPS8 *caps,
         WINBOOL return_error, char **errors)
 {
-    (void)shader;
-    (void)caps;
-    (void)return_error;
-    if (errors) *errors = NULL;
-    return S_OK;
+    if (!shader) return D8WG_TRACE_ERROR(E_FAIL);
+    HRESULT result = E_FAIL;
+    if (shader[0] >= D3DPS_VERSION(1, 0)
+            && shader[0] <= D3DPS_VERSION(1, 4)
+            && (!caps || shader[0] <= caps->PixelShaderVersion)
+            && d9wg_d3d9_core_validate_shader_export8(shader, NULL, TRUE, 8u))
+        result = S_OK;
+    return shader_validation_result(result, return_error, errors);
 }
 
 void WINAPI DebugSetMute(void)
