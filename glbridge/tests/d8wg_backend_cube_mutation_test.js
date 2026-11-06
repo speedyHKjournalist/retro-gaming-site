@@ -13,7 +13,7 @@ const cases=[
  ["edge ceiling","create_cube_texture_object","edge > 4096","edge > 8192"],
  ["API8 format","create_cube_texture_object","!supported_format8(format, FALSE)","(!supported_format8(format, FALSE) && format != 113u)"],
  ["depth usage","create_cube_texture_object","|| (usage & D3DUSAGE_DEPTHSTENCIL)","|| ((usage & D3DUSAGE_DEPTHSTENCIL) && 0)"],
- ["RT pool","create_cube_texture_object","pool != D3DPOOL_DEFAULT","pool > D3DPOOL_SCRATCH"],
+ ["RT pool","create_cube_texture_object","&& (pool != D3DPOOL_DEFAULT","&& (pool > D3DPOOL_SCRATCH"],
  ["mip bound","create_cube_texture_object","if (levels > full_levels)","if (levels > full_levels && 0)"],
  ["failed output","create_cube_texture_object","*texture_out = NULL;","(void)texture_out;"],
  ["resource list","create_cube_texture_object","device->cube_textures = texture;","(void)texture;"],

@@ -1232,7 +1232,7 @@ struct D9Texture {
     DWORD lod;
     D9WGPrivateStore private_data;
     D9TextureLevel *levels;
-    BYTE *mip_storage; /* API8 CPU pools: contiguous mip/face allocation. */
+    BYTE *mip_storage; /* CPU pools: contiguous mip/face allocation. */
     D9Texture *next_device_resource;
     /* Private surface/backbuffer storage: its public owner holds the device pin. */
     BOOL private_back_buffer;
@@ -6907,7 +6907,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-/* CPU pool mip pointers are part of the D3D8 API contract. Reserve every
+/* CPU pool mip pointers are part of the D3D8/9 API contract. Reserve every
  * face before assigning pointers, so overflow/allocation failure is atomic. */
 static BYTE *allocate_mip_shadows(D9TextureLevel *levels, UINT level_count, UINT faces)
 {
@@ -6948,6 +6948,11 @@ static HRESULT create_texture_object(D9Device *device,
     UINT level_height;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
+    /* CPU-pool mip pointers share one native contiguous allocation. ATI
+     * FOURCCs need a separate public-pitch translation before using this. */
+    BOOL contiguous_mips = pool != D3DPOOL_DEFAULT
+            && (api == 8u || (!(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+                && format != 0x31495441u && format != 0x32495441u));
     BOOL is_depth = (usage & D3DUSAGE_DEPTHSTENCIL) != 0;
 
     TRACE("CALL CreateTexture %lux%lu levels=%lu usage=%08lX "
@@ -7069,7 +7074,7 @@ static HRESULT create_texture_object(D9Device *device,
             if (level_height > 1) level_height >>= 1;
             continue;
         }
-        if (api != 8u || pool == D3DPOOL_DEFAULT) {
+        if (!contiguous_mips) {
             level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
                     HEAP_ZERO_MEMORY, level_data->byte_count);
             if (!level_data->shadow) goto allocation_failed;
@@ -7079,7 +7084,7 @@ static HRESULT create_texture_object(D9Device *device,
         if (level_height > 1) level_height >>= 1;
     }
 
-    if (api == 8u && pool != D3DPOOL_DEFAULT) {
+    if (contiguous_mips) {
         texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 1u);
         if (!texture->mip_storage) goto allocation_failed;
     }
@@ -9905,6 +9910,9 @@ static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,
 {
     D9Device *device = device_from_iface(iface);
     D9WGSetClipPlane command;
+    /* Native9 aliases every excess index to the last hardware plane. */
+    if (device_compatibility_api(device) == 9u && index >= D9_MAX_CLIP_PLANES)
+        index = D9_MAX_CLIP_PLANES - 1u;
     if (!plane || index >= D9_MAX_CLIP_PLANES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (state_block_record_clip_plane(device, index, plane)) return D3D_OK;
@@ -9920,6 +9928,9 @@ static HRESULT WINAPI device_get_clip_plane(IDirect3DDevice9 *iface,
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetClipPlane");
     D9Device *device = device_from_iface(iface);
+    /* Native9 aliases every excess index to the last hardware plane. */
+    if (device_compatibility_api(device) == 9u && index >= D9_MAX_CLIP_PLANES)
+        index = D9_MAX_CLIP_PLANES - 1u;
     if (!plane || index >= D9_MAX_CLIP_PLANES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(plane, device->clip_planes[index], sizeof(float) * 4u);
@@ -12044,6 +12055,28 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
                 source ? "destination" : "source");
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    if (device_compatibility_api(device) == 9u) {
+        DWORD source_usage = source->texture ? source->texture->usage
+                : source->cube_texture ? source->cube_texture->usage
+                : source->auto_depth_stencil ? D3DUSAGE_DEPTHSTENCIL
+                : source->swap_chain ? D3DUSAGE_RENDERTARGET : 0u;
+        DWORD destination_usage = destination->texture ? destination->texture->usage
+                : destination->cube_texture ? destination->cube_texture->usage
+                : destination->auto_depth_stencil ? D3DUSAGE_DEPTHSTENCIL
+                : destination->swap_chain ? D3DUSAGE_RENDERTARGET : 0u;
+        if (source->device != device || destination->device != device
+                || source->pool != D3DPOOL_DEFAULT || destination->pool != D3DPOOL_DEFAULT
+                || (filter != D3DTEXF_NONE && filter != D3DTEXF_POINT && filter != D3DTEXF_LINEAR))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        /* Color copies can target a render target, or copy plain -> plain.
+         * A regular texture level is not a StretchRect destination. Preserve
+         * the separate depth-copy path and the API8 CopyRects bridge. */
+        if (!((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL)
+                && !(destination_usage & D3DUSAGE_RENDERTARGET)
+                && (destination->texture_child || source->texture_child
+                    || (source_usage & D3DUSAGE_RENDERTARGET)))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
     ZeroMemory(&command, sizeof(command));
     if (!surface_target_handle(source, &command.source_texture_handle,
                 &command.source_level, &command.source_face)
@@ -12552,6 +12585,11 @@ static HRESULT create_cube_texture_object(D9Device *device,
     UINT total;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
+    /* CPU-pool mip pointers share one native contiguous allocation. ATI
+     * FOURCCs need a separate public-pitch translation before using this. */
+    BOOL contiguous_mips = pool != D3DPOOL_DEFAULT
+            && (api == 8u || (!(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+                && format != 0x31495441u && format != 0x32495441u));
 
     /* This path used to refuse without recording a single argument, which is
      * how a 3DMark06 crash spent a whole trace being unattributable: the log
@@ -12649,7 +12687,7 @@ static HRESULT create_cube_texture_object(D9Device *device,
                     &level_data->row_pitch, &level_data->row_count,
                     &level_data->byte_count))
                 goto allocation_failed;
-            if (api != 8u || pool == D3DPOOL_DEFAULT) {
+            if (!contiguous_mips) {
                 level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
                         HEAP_ZERO_MEMORY, level_data->byte_count);
                 if (!level_data->shadow) goto allocation_failed;
@@ -12657,7 +12695,7 @@ static HRESULT create_cube_texture_object(D9Device *device,
             if (size > 1) size >>= 1;
         }
     }
-    if (api == 8u && pool != D3DPOOL_DEFAULT) {
+    if (contiguous_mips) {
         texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 6u);
         if (!texture->mip_storage) goto allocation_failed;
     }

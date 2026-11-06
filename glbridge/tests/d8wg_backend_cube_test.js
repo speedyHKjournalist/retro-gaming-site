@@ -78,7 +78,7 @@ static void cleanup(Iface*i){Texture*t=(Texture*)i;for(UINT l=0;l<t->level_count
 static BOOL zeroes(const BYTE*p,UINT n){for(UINT i=0;i<n;i++)if(p[i])return FALSE;return TRUE;}
 int main(void){const UINT dims[]={0,1,3,4,4096,4097,8192,8193,UINT32_MAX},levels[]={0,1,2,32},usages[]={0,1,2,3,0x400,0x20000,8,9,512,513},pools[]={0,1,2,3,4};
 for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT x=0;x<sizeof(dims)/sizeof(*dims);x++)for(UINT l=0;l<4;l++)for(UINT u=0;u<10;u++)for(UINT p=0;p<5;p++)for(UINT fail=0;fail<10;fail++)for(UINT nullout=0;nullout<2;nullout++){
- UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==9?0:fail;transport_fail=fail==9;UINT requested_fail=fail_at;BOOL contiguous=api==8&&pools[p]!=0;
+ UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==9?0:fail;transport_fail=fail==9;UINT requested_fail=fail_at;BOOL contiguous=pools[p]!=0&&(api==8||(!(usages[u]&3)&&format!=0x31495441u&&format!=0x32495441u));
  /* The frozen oracle allocates every mip separately. Only the first three
   * allocations correspond to the new object/level-table/contiguous-block path. */
  if(contiguous&&fail_at>3)fail_at=0;
@@ -89,15 +89,16 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  if(api==8&&!format)before=(void*)(uintptr_t)99;
  UINT old_alloc=allocations,old_free=frees,old_creates=creates,old_handles=handles,args[10];memcpy(args,emitted,sizeof(args));
  if(contiguous&&old_alloc>=3){
-  UINT count=levels[l]?levels[l]:full_mip_level_count(w,w),mw=w,mh=w;uint64_t face_bytes=0;
-  for(UINT level=0;level<count;level++){UINT pitch,rows,bytes;CHECK(d9wg_texture_level_layout(8,format,mw,mh,&pitch,&rows,&bytes));face_bytes+=bytes;if(mw>1)mw/=2;if(mh>1)mh/=2;}
+  UINT count=api==9&&(usages[u]&0x400)?1:levels[l]?levels[l]:full_mip_level_count(w,w),mw=w,mh=w;uint64_t face_bytes=0;
+  for(UINT level=0;level<count;level++){UINT pitch,rows,bytes;CHECK(d9wg_texture_level_layout(api,format,mw,mh,&pitch,&rows,&bytes));face_bytes+=bytes;if(mw>1)mw/=2;if(mh>1)mh/=2;}
   uint64_t total=((face_bytes+15)/16)*16*6;
   if(total>32768){if(!wanted)cleanup(before);before=NULL;wanted=E_OUTOFMEMORY;old_creates=0;memset(args,0xcc,sizeof(args));old_free=2;}
   else old_free=wanted?(wanted==E_OUTOFMEMORY?2:3):0;
-  old_alloc=3;
+  old_alloc=total>UINT32_MAX?2:3;
  }
  fail_at=requested_fail;
  allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));HRESULT hr=api==8?d9wg_d3d9_core_cube_texture8(&actual_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&actual):device_create_cube_texture(&actual_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&actual,NULL);
+ if(hr!=wanted||allocations!=old_alloc||frees!=old_free)fprintf(stderr,"creation api=%u format=%08x w=%u levels=%u usage=%x pool=%u fault=%u null=%u hr=%d/%d alloc=%u/%u free=%u/%u\\n",api,format,w,levels[l],usages[u],pools[p],fail,nullout,hr,wanted,allocations,old_alloc,frees,old_free);
  CHECK(hr==wanted);CHECK(allocations==old_alloc&&frees==old_free&&creates==old_creates&&handles==old_handles&&!memcmp(args,emitted,sizeof(args)));CHECK(actual_device.pins==before_device.pins&&actual_device.pins==(!hr));
  if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->autogen_filter==b->autogen_filter&&a->refcount==1&&a->device==&actual_device&&actual_device.cube_textures==a&&b->level_count==a->level_count&&a->edge_length==w&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count*6;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}
  if(contiguous){CHECK(a->mip_storage);UINT offset=0;for(UINT face=0;face<6;face++){for(UINT level=0;level<a->level_count;level++){Level*entry=a->levels+face*a->level_count+level;CHECK(entry->shadow==a->mip_storage+offset&&entry->shadow_valid);offset+=entry->byte_count;}offset=(offset+15)/16*16;}}
