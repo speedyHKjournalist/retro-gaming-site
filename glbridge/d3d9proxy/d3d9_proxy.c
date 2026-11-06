@@ -12386,12 +12386,13 @@ static HRESULT WINAPI query_issue(IDirect3DQuery9 *iface, DWORD flags)
 
     if (!begin && !end)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* Event/timestamp markers have no begin interval. Native accepts BEGIN
+     * as a no-op, including when a previous END is still pending. */
     if (begin && query->type != D3DQUERYTYPE_OCCLUSION
             && query->type != D3DQUERYTYPE_TIMESTAMPDISJOINT)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
     if (begin) {
-        if (query->begun)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        /* A second BEGIN discards the previous interval and starts anew. */
         query->request_id = (uint32_t)next_response_request_id();
         response = query_response(query);
         if (!response)
@@ -12407,10 +12408,6 @@ static HRESULT WINAPI query_issue(IDirect3DQuery9 *iface, DWORD flags)
         return D3D_OK;
     }
 
-    if ((query->type == D3DQUERYTYPE_OCCLUSION
-            || query->type == D3DQUERYTYPE_TIMESTAMPDISJOINT)
-            && !query->begun)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!query->begun) {
         query->request_id = (uint32_t)next_response_request_id();
         response = query_response(query);
@@ -12465,13 +12462,17 @@ static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
 {
     D9Query *query = query_from_iface(iface);
     D9WGQueryResponse *response;
-    DWORD expected = query_get_data_size(iface);
     ULONGLONG value;
 
-    if (!query->issued)
+    if ((!data && size) || (flags & ~D3DGETDATA_FLUSH))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (data && size < expected)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!query->issued && !query->begun) {
+        /* XP exposes the initial debug-fill result until an interval/marker
+         * has been issued. This is an initial state, never a GPU completion. */
+        value = 0xddddddddddddddddULL;
+        if (data && size) CopyMemory(data, &value, size < sizeof(value) ? size : sizeof(value));
+        return S_OK;
+    }
 
     /* GetData must make progress even before Present.  D3DGETDATA_FLUSH asks
      * for this explicitly, but flushing on ordinary polling also avoids a
@@ -12481,6 +12482,8 @@ static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
         submit_batch_locked(FALSE);
     LeaveCriticalSection(&g_transport_lock);
 
+    /* An open interval cannot be observed as a completed result. */
+    if (query->begun) return S_FALSE;
     response = query_response(query);
     if (!response)
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
@@ -12507,13 +12510,11 @@ static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
     } else {
         value = ((ULONGLONG)response->value_high << 32) | response->value_low;
     }
-    if (data) {
-        if (expected == sizeof(ULONGLONG))
-            *(ULONGLONG *)data = value;
-        else
-            *(DWORD *)data = response->value_low;
-    }
-    (void)flags;
+    /* Native accepts partial result reads and extended 64-bit occlusion
+     * counts. Copying bytes also supports unaligned output and size-zero
+     * status probes without touching caller storage. */
+    if (data && size)
+        CopyMemory(data, &value, size < sizeof(value) ? size : sizeof(value));
     return S_OK;
 }
 
