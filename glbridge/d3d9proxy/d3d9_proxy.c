@@ -6399,7 +6399,7 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
         const D3DVIEWPORT9 *viewport)
 {
     D9Device *device = device_from_iface(iface);
-    /* XP accepts a viewport larger than the attachment and depth ranges
+    /* D3D9 on XP accepts a viewport larger than the attachment and depth ranges
      * outside [0,1]. The host clips to the target and maps depth per fragment.
      * Keep finite values and the WebGPU coordinate domain of our 8K adapter. */
     if (!viewport || !viewport->Width || !viewport->Height
@@ -6411,6 +6411,18 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
             || !(viewport->MaxZ <= 3.402823466e38F)
             || !(viewport->MinZ <= viewport->MaxZ))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* D3D8 validates the rectangle against the current color target, even
+     * while recording a state block. Depth ranges follow the shared path. */
+    if (device_compatibility_api(device) == 8u)
+    {
+        D9Surface *target = device->render_target_surfaces[0];
+        UINT width = target ? target->width : device->display_mode.Width;
+        UINT height = target ? target->height : device->display_mode.Height;
+        if (viewport->X > width || viewport->Y > height
+                || viewport->Width > width - viewport->X
+                || viewport->Height > height - viewport->Y)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
     TRACE("OK SetViewport x=%lu y=%lu %lux%lu minz=%ld/1000 maxz=%ld/1000",
             viewport->X, viewport->Y, viewport->Width, viewport->Height,
             (LONG)(viewport->MinZ * 1000.0f),

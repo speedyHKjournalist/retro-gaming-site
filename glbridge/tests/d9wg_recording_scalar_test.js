@@ -53,7 +53,8 @@ typedef struct D9StateBlock {${fields(266)}BOOL has_render_state[256],has_textur
 typedef struct D9Device {${fields(512)}BOOL scissor_set;struct {UINT BackBufferWidth,BackBufferHeight;} present;D9StateBlock *recording_result;uint32_t handle;D9Surface *render_target_surfaces[1];struct {UINT Width,Height;} display_mode;} D9Device;
 typedef D9Device IDirect3DDevice9;
 static D9Device *device_from_iface(D9Device *d){return d;}
-static UINT device_compatibility_api(D9Device *d){(void)d;return 9;}
+static UINT compatibility_api=9;
+static UINT device_compatibility_api(D9Device *d){(void)d;return compatibility_api;}
 static unsigned emissions;
 static BOOL emit_command(uint32_t op,const void *p,uint32_t bytes){(void)op;(void)p;(void)bytes;emissions++;return TRUE;}
 static BOOL emit_shader_constants(D9Device *d,uint32_t op,UINT start,UINT count,const void *p,UINT bytes){(void)d;(void)op;(void)start;(void)count;(void)p;(void)bytes;emissions++;return TRUE;}
@@ -69,6 +70,28 @@ int main(void){(void)g_pixel_state_render_states;(void)g_vertex_state_render_sta
  D3DVIEWPORT9 saved=block.viewport;vp.X=8192;CHECK(device_set_viewport(&device,&vp)==-1&&!memcmp(&block.viewport,&saved,sizeof(saved)));vp.X=10;
  vp.MinZ=4;vp.MaxZ=3;CHECK(device_set_viewport(&device,&vp)==-1&&!memcmp(&block.viewport,&saved,sizeof(saved)));
  vp.MinZ=0;vp.MaxZ=__builtin_inff();CHECK(device_set_viewport(&device,&vp)==-1);vp.MaxZ=__builtin_nanf("");CHECK(device_set_viewport(&device,&vp)==-1);
+ /* Independent native D3D8 viewport table, also used by Wine visual.c.
+  * Rejecting a rectangle must not alter live or recorded state. */
+ compatibility_api=8;
+ const UINT sizes[][2]={{640,480},{1280,960},{320,240},{800,600}};
+ const D3DVIEWPORT9 viewports[]={
+ {0,0,640,480,0,1},{0,0,320,240,0,1},{0,0,1280,960,0,1},
+ {0,0,2000,1600,0,1},{100,100,640,480,0,1},{0,0,8192,8192,0,1}};
+ for(UINT i=0;i<4;i++){
+  D9Surface target={sizes[i][0],sizes[i][1]};device.render_target_surfaces[0]=&target;
+  for(UINT j=0;j<6;j++){
+   D3DVIEWPORT9 prior=block.viewport;
+   BOOL fits=(uint64_t)viewports[j].X+viewports[j].Width<=sizes[i][0]
+     &&(uint64_t)viewports[j].Y+viewports[j].Height<=sizes[i][1];
+   CHECK(device_set_viewport(&device,&viewports[j])==(fits?0:-1));
+   CHECK(!memcmp(&block.viewport,fits?&viewports[j]:&prior,sizeof(prior)));
+  }
+ }
+ device.render_target_surfaces[0]=NULL;
+ vp=(D3DVIEWPORT9){0,0,64,64,0,7.5f};CHECK(!device_set_viewport(&device,&vp));
+ vp.X=1;CHECK(device_set_viewport(&device,&vp)==-1);
+ vp.X=0xffffffffu;CHECK(device_set_viewport(&device,&vp)==-1);
+ compatibility_api=9;
  D3DMATERIAL9 material={0},read_material;material.Diffuse.r=.125f;CHECK(device_set_material(&device,&material)==0&&device_get_material(&device,&read_material)==0&&read_material.Diffuse.r==0&&block.material.Diffuse.r==.125f);
  RECT rect={1,2,30,31},read_rect;CHECK(device_set_scissor_rect(&device,&rect)==0&&device_get_scissor_rect(&device,&read_rect)==0&&read_rect.left==0&&block.scissor_rect.left==1);
  float plane[4]={1,-2,.5f,3},read_plane[4];CHECK(device_set_clip_plane(&device,5,plane)==0&&device_get_clip_plane(&device,5,read_plane)==0&&read_plane[0]==0&&!memcmp(block.clip_planes[5],plane,16));CHECK(device_set_clip_plane(&device,6,plane)==0&&block.has_clip_plane[5]&&!memcmp(block.clip_planes[5],plane,16));
