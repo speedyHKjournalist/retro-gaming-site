@@ -2499,8 +2499,7 @@ static D9TextureLevel *surface_texture_level(D9Surface *surface)
 static BOOL ensure_target_shadow(D9Surface *surface)
 {
     D9TextureLevel *level = surface_texture_level(surface);
-    if (!level || (surface->format != D3DFMT_A8R8G8B8
-            && surface->format != D3DFMT_X8R8G8B8))
+    if (!level)
         return FALSE;
     if (level->shadow)
         return TRUE;
@@ -2513,12 +2512,16 @@ static BOOL ensure_target_shadow(D9Surface *surface)
     return level->shadow != NULL;
 }
 
+#include "../runtime/d9wg_color_fill_pixel.h"
+
 static void mirror_target_color_fill(D9Surface *surface, const RECT *area,
         D3DCOLOR color)
 {
     D9TextureLevel *level = surface_texture_level(surface);
     RECT clipped;
     UINT x, y;
+    BYTE pixel[16];
+    UINT pixel_bytes = d9wg_color_fill_pixel(surface->format, color, pixel);
     BOOL full;
 
     if (!level || !area)
@@ -2537,14 +2540,14 @@ static void mirror_target_color_fill(D9Surface *surface, const RECT *area,
     /* Filling part of an unknown image does not make the other pixels known. */
     if (!full && !level->shadow_valid)
         return;
-    if (!ensure_target_shadow(surface))
+    if (!pixel_bytes || !ensure_target_shadow(surface)) {
+        level->shadow_valid = FALSE;
         return;
-    if (surface->format == D3DFMT_X8R8G8B8)
-        color |= 0xFF000000u;
+    }
     for (y = (UINT)clipped.top; y < (UINT)clipped.bottom; ++y) {
-        DWORD *row = (DWORD *)(level->shadow + y * level->row_pitch);
+        BYTE *row = level->shadow + y * level->row_pitch;
         for (x = (UINT)clipped.left; x < (UINT)clipped.right; ++x)
-            row[x] = color;
+            CopyMemory(row + x * pixel_bytes, pixel, pixel_bytes);
     }
     if (full)
         level->shadow_valid = TRUE;
@@ -9590,7 +9593,7 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
     } else {
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    if (!destination_level->shadow || (source_level && source_level->locked)
+    if (source->locked || (source_level && source_level->locked)
             || destination_level->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (src_rect)
@@ -9617,6 +9620,15 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
             || destination_area.top % (LONG)block_height)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
+    /* Compressed tails may be smaller than a block only at both source
+     * and destination image edges; rounding an interior tail copies pixels
+     * outside the requested rectangle. */
+    if ((source_area.right != (LONG)source->width && source_area.right % (LONG)block_width)
+            || (source_area.bottom != (LONG)source->height && source_area.bottom % (LONG)block_height)
+            || (destination_area.right != (LONG)destination->width && destination_area.right % (LONG)block_width)
+            || (destination_area.bottom != (LONG)destination->height && destination_area.bottom % (LONG)block_height))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+
     source_block_x = (UINT)source_area.left / block_width;
     source_block_y = (UINT)source_area.top / block_height;
     destination_block_x = (UINT)destination_area.left / block_width;
@@ -9627,6 +9639,12 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
             + block_height - 1u) / block_height;
     if (!multiply_u32(block_columns, block_bytes, &row_bytes))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!destination_level->shadow) {
+        destination_level->shadow = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                destination_level->byte_count);
+        if (!destination_level->shadow)
+            return E_OUTOFMEMORY;
+    }
     for (row = 0; row < block_rows; ++row)
         CopyMemory(destination_level->shadow
                     + (destination_block_y + row)
@@ -9635,16 +9653,16 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
                 source_shadow + (source_block_y + row) * source_pitch
                     + source_block_x * block_bytes,
                 row_bytes);
-    destination_level->shadow_valid = destination_area.left == 0
+    destination_level->shadow_valid = destination_level->shadow_valid || (destination_area.left == 0
             && destination_area.top == 0
             && destination_area.right == (LONG)destination_level->width
-            && destination_area.bottom == (LONG)destination_level->height;
-    if (destination->cube_texture)
-        return emit_cube_texture_update(destination->cube_texture,
-                destination->cube_face, destination->level,
-                &destination_area) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
-    return emit_texture_update(destination->texture, destination->level,
-            &destination_area) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+            && destination_area.bottom == (LONG)destination_level->height);
+    BOOL uploaded = destination->cube_texture
+            ? emit_cube_texture_update(destination->cube_texture,
+                destination->cube_face, destination->level, &destination_area)
+            : emit_texture_update(destination->texture, destination->level, &destination_area);
+    if (!uploaded) destination_level->shadow_valid = FALSE;
+    return uploaded ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 /*
  * The other classic upload route besides Lock/Unlock: fill a
@@ -12267,6 +12285,8 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
                 source ? "destination" : "source");
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    normalize_rect(source_rect, (int)source->width, (int)source->height, &source_area);
+    normalize_rect(destination_rect, (int)destination->width, (int)destination->height, &destination_area);
     if (device_compatibility_api(device) == 9u) {
         DWORD source_usage = source->texture ? source->texture->usage
                 : source->cube_texture ? source->cube_texture->usage
@@ -12279,6 +12299,16 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
         if (source->device != device || destination->device != device
                 || source->pool != D3DPOOL_DEFAULT || destination->pool != D3DPOOL_DEFAULT
                 || (filter != D3DTEXF_NONE && filter != D3DTEXF_POINT && filter != D3DTEXF_LINEAR))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (source_area.left < 0 || source_area.top < 0
+                || source_area.right <= source_area.left || source_area.bottom <= source_area.top
+                || source_area.right > (LONG)source->width || source_area.bottom > (LONG)source->height
+                || destination_area.left < 0 || destination_area.top < 0
+                || destination_area.right <= destination_area.left || destination_area.bottom <= destination_area.top
+                || destination_area.right > (LONG)destination->width || destination_area.bottom > (LONG)destination->height
+                || (!(destination_usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+                    && (source_area.right - source_area.left != destination_area.right - destination_area.left
+                        || source_area.bottom - source_area.top != destination_area.bottom - destination_area.top)))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (device->in_scene
                 && ((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL))
@@ -12391,6 +12421,14 @@ static HRESULT WINAPI device_color_fill(IDirect3DDevice9 *iface,
     command.device_handle = device->handle;
     command.color = color;
     normalize_rect(rect, (int)surface->width, (int)surface->height, &area);
+    UINT bw, bh, bb;
+    if (!texture_format_layout(surface->format, &bw, &bh, &bb)
+            || area.left < 0 || area.top < 0 || area.right <= area.left || area.bottom <= area.top
+            || area.right > (LONG)surface->width || area.bottom > (LONG)surface->height
+            || area.left % (LONG)bw || area.top % (LONG)bh
+            || (area.right != (LONG)surface->width && area.right % (LONG)bw)
+            || (area.bottom != (LONG)surface->height && area.bottom % (LONG)bh))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     command.left = area.left;
     command.top = area.top;
     command.right = area.right;
@@ -14387,6 +14425,27 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
             && (UINT)area.right <= level_data->width && (UINT)area.bottom <= level_data->height);
     if (!mapped_rect_valid && !permissive)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (texture->private_back_buffer && texture->pool == D3DPOOL_DEFAULT
+            && !level_data->shadow_valid && !(flags & D3DLOCK_DISCARD)) {
+        D9WGReadbackSurface request;
+        D9WGReadbackDiagnostic detail;
+        ZeroMemory(&request, sizeof(request));
+        request.device_handle = texture->device->handle;
+        request.texture_handle = texture->handle;
+        request.level = level;
+        request.format = texture->format;
+        request.width = level_data->width;
+        request.height = level_data->height;
+        request.destination_pitch = level_data->row_pitch;
+        int result = d9wg_surface_readback(g_process, &request,
+                level_data->row_pitch, level_data->row_count,
+                level_data->shadow, level_data->byte_count,
+                submit_readback_batch_locked, &detail);
+        if (result)
+            return TRACE_REFUSE(result == D9WG_READBACK_INVALID
+                    ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
+        level_data->shadow_valid = TRUE;
+    }
     /* D3D8/9 CPU-pool 2D locks expose raw offsets even outside the image.
      * Preserve that API result without performing out-of-object C pointer
      * arithmetic. Upload only owned storage, never the caller's unchecked ROI. */

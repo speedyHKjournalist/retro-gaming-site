@@ -8,10 +8,10 @@ try {
 #include <assert.h>
 #include <string.h>
 #include "${root}/d3d9proxy/d3d9_protocol.h"
-typedef int HRESULT;typedef uint32_t DWORD,D3DCOLOR;typedef struct {int left,top,right,bottom;}RECT;
+typedef int HRESULT;typedef int32_t LONG;typedef unsigned UINT;typedef uint32_t DWORD,D3DCOLOR;typedef struct {int left,top,right,bottom;}RECT;
 typedef struct {uint32_t handle;}D9Device,IDirect3DDevice9;
 typedef struct {uint32_t usage;}Texture;
-typedef struct {D9Device*device;uint32_t pool,width,height;Texture*texture,*cube_texture;int auto_depth_stencil,swap_chain,texture_child;}D9Surface,IDirect3DSurface9;
+typedef struct {D9Device*device;uint32_t pool,width,height,format;Texture*texture,*cube_texture;int auto_depth_stencil,swap_chain,texture_child;}D9Surface,IDirect3DSurface9;
 #define WINAPI
 #define D3DPOOL_DEFAULT 0
 #define D3DUSAGE_RENDERTARGET 1
@@ -21,6 +21,7 @@ typedef struct {D9Device*device;uint32_t pool,width,height;Texture*texture,*cube
 #define D3D_OK 0
 #define TRACE_REFUSE(v) (v)
 #define ZeroMemory(p,n) memset(p,0,n)
+static int texture_format_layout(unsigned f,unsigned*w,unsigned*h,unsigned*b){*w=*h=f==0x31545844?4:1;*b=4;return 1;}
 static unsigned emitted,mirrored;static int fail;
 static D9Device*device_from_iface(IDirect3DDevice9*p){return p;}
 static D9Surface*surface_from_iface(IDirect3DSurface9*p){return p;}
@@ -39,8 +40,12 @@ for(unsigned pool=0;pool<4;pool++)for(unsigned kind=0;kind<5;kind++)for(unsigned
  assert(result==(accepted?(broken?-2:0):-1));assert(emitted==(unsigned)accepted&&mirrored==(unsigned)(accepted&&!broken));checks+=2;
 }
 emitted=0;assert(device_color_fill(&d,NULL,NULL,0)==-1&&!emitted);checks++;
+D9Surface plain={.device=&d,.pool=0,.width=16,.height=16};
+RECT invalid[]={{-1,0,4,4},{0,-1,4,4},{0,0,17,4},{0,0,4,17},{4,0,3,4},{0,4,4,3},{0,0,0,4}};
+for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);i++){emitted=mirrored=0;assert(device_color_fill(&d,&plain,&invalid[i],0xdeadbeef)==-1&&!emitted&&!mirrored);checks++;}
+plain.format=0x31545844;emitted=mirrored=0;assert(device_color_fill(&d,&plain,&area,0xdeadbeef)==-1&&!emitted&&!mirrored);checks++;
 printf("PASS ColorFill native contracts: %u checks; depth/texture/pool/device rejection before wire emission, cube/mip identity and transport failure\\n",checks);}
 `;
- fs.writeFileSync(dir+'/test.c',code);const cc=spawnSync('cc',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',dir+'/test.c','-o',dir+'/test'],{encoding:'utf8'});assert.equal(cc.status,0,cc.stderr);
+ fs.writeFileSync(dir+'/test.c',code);const cc=spawnSync('cc',['-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined',dir+'/test.c','-o',dir+'/test'],{encoding:'utf8'});assert.equal(cc.status,0,cc.stderr);
  const run=spawnSync(dir+'/test',[],{encoding:'utf8'});assert.equal(run.status,0,run.stdout+run.stderr);process.stdout.write(run.stdout);
 }finally{fs.rmSync(dir,{recursive:true,force:true});}
