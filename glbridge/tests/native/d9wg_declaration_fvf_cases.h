@@ -20,6 +20,13 @@ static int declaration_fvf_cases(void)
     UINT old_checks=checks,profiles=0,pairs=0;
     for(UINT round=0;round<32;round++)for(UINT order=0;order<4;order++){
         Parent parent={0};D9Device*d=new_device(&parent);UINT old_creates=fvf_creates,old_destroys=destroys;
+        for (UINT offset = 1; offset <= 3; ++offset) {
+            D3DVERTEXELEMENT9 bad[2]={{0,offset,4,0,10,0},D3DDECL_END()};
+            Interface *out=(void *)(uintptr_t)99;UINT allocated=allocations;
+            CHECK(device_create_vertex_declaration(&d->iface,bad,&out)==E_FAIL && !out && allocations==allocated);
+            bad[0].Offset=16;bad[0].Type=D3DDECLTYPE_UNUSED;out=(void *)(uintptr_t)99;
+            CHECK(device_create_vertex_declaration(&d->iface,bad,&out)==E_FAIL && !out && allocations==allocated);
+        }
         for(UINT i=0;i<sizeof(declaration_cases)/sizeof(*declaration_cases);i++){
             D3DVERTEXELEMENT9 elements[2]={declaration_cases[i].element,D3DDECL_END()};Interface*iface=NULL;
             CHECK(!device_create_vertex_declaration(&d->iface,elements,&iface)&&iface);

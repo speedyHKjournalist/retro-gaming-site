@@ -168,8 +168,8 @@ const cases=[
     "CPU lock uses9 layout",
     "lock",
     "surface_lock_rect",
-    "d9wg_format_layout(device_compatibility_api(surface->device),",
-    "d9wg_format_layout(9u,"
+    "d9wg_format_layout(api, surface->format,",
+    "d9wg_format_layout(9u, surface->format,"
   ],
   [
     "depth row alignment lost",

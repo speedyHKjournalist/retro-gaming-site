@@ -15,7 +15,7 @@ const code=`#include <stdint.h>
 #include "${process.env.D9WG_SURFACE_LOCK_HEADER||root+'/runtime/d9wg_surface_lock.h'}"
 #include "${process.env.D9WG_BACKBUFFER_UPLOAD_HEADER||root+'/runtime/d9wg_backbuffer_upload.h'}"
 typedef int HRESULT,D3DFORMAT;typedef uint8_t BYTE;typedef int32_t LONG,INT;typedef struct {LONG left,top,right,bottom;}RECT;
-typedef struct{INT Pitch;void*pBits;}D3DLOCKED_RECT;typedef struct{const void*lpVtbl;}Iface;typedef struct {BOOL locked,shadow_valid;}D9TextureLevel;typedef struct{Iface iface;UINT handle,usage;D9TextureLevel*levels;}Texture;
+typedef struct{INT Pitch;void*pBits;}D3DLOCKED_RECT;typedef struct{const void*lpVtbl;}Iface;typedef struct {BOOL locked,shadow_valid,dc_active;}D9TextureLevel;typedef struct{Iface iface;UINT handle,usage,level_count;D9TextureLevel*levels;}Texture,D9CubeTexture;
 typedef struct Device{UINT handle;BYTE*front_shadow;UINT front_shadow_pitch;struct{DWORD Flags;}present;UINT compatibility_api;}Device,D8Device,D9Device;
 typedef struct Surface{Iface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;UINT face,cube_face,level;void*swap_chain;struct{UINT Format,Pool,Usage,Size,MultiSampleType,Width,Height;}desc;UINT width,height,format,multisample,row_pitch,byte_count,pool;BYTE*shadow;BOOL locked,backbuffer,depth_stencil,lockable_render_target,texture_child;RECT lock_rect;DWORD lock_flags;}Surface,D8Surface,D9Surface;
 typedef struct Device Device;typedef struct Surface Surface;typedef Iface IDirect3DSurface8,IDirect3DSurface9;
@@ -65,6 +65,7 @@ static HRESULT texture_lock_level(Texture*t,UINT l,D3DLOCKED_RECT*out,const RECT
 static HRESULT texture_unlock_level(Texture*t,UINT l){(void)t;(void)l;return -21;}
 static HRESULT cube_lock_face(Texture*t,UINT f,UINT l,D3DLOCKED_RECT*out,const RECT*r,DWORD flags){(void)t;(void)f;(void)l;(void)out;(void)r;(void)flags;return -12;}
 static HRESULT cube_unlock_face(Texture*t,UINT f,UINT l){(void)t;(void)f;(void)l;return -22;}
+${extract(nine,"texture_levels_mapped")}
 ${["surface_lock_rect","surface_unlock_rect"].map(n=>extract(eight,n).replace(new RegExp('\\b'+n+'\\b','g'),n+'8')).join('\n')}
 ${["surface_lock_renderable","surface_unlock_renderable","surface_lock_rect","surface_unlock_rect"].map(n=>extract(nine,n).replace(/\bsurface_lock_rect\b/g,'surface_lock_rect9').replace(/\bsurface_unlock_rect\b/g,'surface_unlock_rect9')).join('\n')}
 static UINT checks,cases,plans;
@@ -96,7 +97,7 @@ int main(void){(void)&device_compatibility_api;(void)&surface_lock_renderable;(v
  }
  active_target=0;
  events();pixel_bytes=4;padding=0;Device d={.handle=7,.present={1}};active=&d;Surface s={.device=&d,.swap_chain=(void*)1,.width=width,.height=height,.format=21};D3DLOCKED_RECT out={123,(void*)99};fail_alloc=1;CHECK(lock(9,&s,&out,NULL,16)==-3&&!s.shadow&&!s.locked&&!reads&&out.Pitch==123&&out.pBits==(void*)99);
- Surface cpu={.device=&d,.width=width,.height=height,.format=21,.shadow=front,.row_pitch=32,.desc={.Width=width,.Height=height},.locked=FALSE};CHECK(!lock(8,&cpu,&out,NULL,16)&&!unlock(8,&cpu)&&!lock(9,&cpu,&out,NULL,16)&&!unlock(9,&cpu)&&!reads&&!emits);Texture texture={0};cpu.shadow=NULL;cpu.texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-11&&unlock(8,&cpu)==-21&&lock(9,&cpu,&out,NULL,0)==-11&&unlock(9,&cpu)==-21);cpu.texture=NULL;cpu.cube=cpu.cube_texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-12&&unlock(8,&cpu)==-22&&lock(9,&cpu,&out,NULL,0)==-12&&unlock(9,&cpu)==-22);CHECK(allocations==frees);
+ Surface cpu={.device=&d,.width=width,.height=height,.format=21,.shadow=front,.row_pitch=32,.desc={.Width=width,.Height=height},.locked=FALSE};CHECK(!lock(8,&cpu,&out,NULL,16)&&!unlock(8,&cpu)&&!lock(9,&cpu,&out,NULL,16)&&!unlock(9,&cpu)&&!reads&&!emits);Texture texture={0};cpu.shadow=NULL;cpu.texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-11&&unlock(8,&cpu)==-21&&lock(9,&cpu,&out,NULL,0)==-11&&unlock(9,&cpu)==-21);D9TextureLevel cube_levels[6]={{.locked=TRUE}};texture.level_count=1;texture.levels=cube_levels;cpu.texture=NULL;cpu.cube=cpu.cube_texture=&texture;CHECK(lock(8,&cpu,&out,NULL,0)==-12&&unlock(8,&cpu)==-22&&lock(9,&cpu,&out,NULL,0)==-12&&unlock(9,&cpu)==-22);cube_levels[0].locked=FALSE;CHECK(unlock(9,&cpu)==-1);cube_levels[5].dc_active=TRUE;CHECK(unlock(9,&cpu)==-22&&cube_levels[5].dc_active);CHECK(allocations==frees);
  for(UINT api=8;api<=9;api++){Device profile={.compatibility_api=api};Surface image={.device=&profile,.width=3,.height=2,.format=65,.row_pitch=16,.shadow=front};RECT part={1,0,3,2};memset(front,0,sizeof(front));out=(D3DLOCKED_RECT){123,(void*)99};events();HRESULT hr=lock(9,&image,&out,&part,0);if(api==8){CHECK(!hr&&out.Pitch==16&&out.pBits==front+4&&image.locked);memset(out.pBits,0x73,8);memset((BYTE*)out.pBits+16,0x45,8);CHECK(!unlock(9,&image)&&!image.locked&&!reads&&!emits);CHECK(!lock(9,&image,&out,NULL,16)&&out.pBits==front&&out.Pitch==16&&front[4]==0x73&&front[20]==0x45&&!unlock(9,&image));}else CHECK(hr==-1&&!image.locked&&out.Pitch==123&&out.pBits==(void*)99);CHECK(!reads&&!emits);}
 
  /* NULL targets expose a bounded scratch lock, with no readable color or GPU

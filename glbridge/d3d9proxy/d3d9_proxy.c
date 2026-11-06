@@ -2432,7 +2432,9 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
          * carries the same GPU texture a render target does, so both halves
          * hold and the honest answer is yes again.
          */
-        return supported_texture_format(format);
+        return supported_texture_format(format)
+                && ((format != (D3DFORMAT)0x31495441u && format != (D3DFORMAT)0x32495441u)
+                    || pool == D3DPOOL_SCRATCH);
     case D3DRTYPE_TEXTURE:
     case D3DRTYPE_CUBETEXTURE:
         return supported_texture_format(format);
@@ -7751,6 +7753,14 @@ static HRESULT WINAPI device_create_vertex_declaration(
     if (!decl_out || !elements)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *decl_out = NULL;
+    if (device_compatibility_api(device) == 9u) {
+        /* Native declaration validation reports E_FAIL for unused elements
+         * and offsets that cannot address a DWORD-aligned vertex value. */
+        UINT i;
+        for (i = 0; i < D3DMAXDECLLENGTH && elements[i].Stream != 0xff; ++i)
+            if ((elements[i].Offset & 3u) || elements[i].Type == D3DDECLTYPE_UNUSED)
+                return TRACE_REFUSE(E_FAIL);
+    }
     if (!parse_vertex_declaration(elements, wire, &count)) {
         /* The single most likely silent killer for a real game: one
          * unsupported D3DDECLTYPE/usage anywhere in the array rejects the
@@ -9751,6 +9761,14 @@ static HRESULT create_cpu_surface(D9Device *device, UINT width, UINT height,
     if (!d9wg_cpu_texture_level_layout(api, format, width, height,
             &row_pitch, &row_count, &byte_count))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 9u && !d9wg_cpu_texture_broken_pitch(api, format)) {
+        uint64_t aligned_pitch = ((uint64_t)row_pitch + 3u) & ~3ULL;
+        uint64_t aligned_bytes = aligned_pitch * row_count;
+        if (aligned_pitch > UINT32_MAX || aligned_bytes > UINT32_MAX)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        row_pitch = (UINT)aligned_pitch;
+        byte_count = (UINT)aligned_bytes;
+    }
     surface = (D9Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
     if (!surface)
@@ -9799,6 +9817,8 @@ static HRESULT WINAPI device_create_offscreen_plain_surface(
     *out = NULL;
     if (!width || !height || pool == D3DPOOL_MANAGED
             || pool > D3DPOOL_SCRATCH || !supported_texture_format(format)
+            || ((format == (D3DFORMAT)0x31495441u || format == (D3DFORMAT)0x32495441u)
+                && pool != D3DPOOL_SCRATCH)
             || ((format & 0x00ffffffu) == 0x00545844u /* DXT1..5 */
                 && ((width | height) & 3u)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -13078,7 +13098,8 @@ static HRESULT WINAPI cube_unlock_rect(IDirect3DCubeTexture9 *iface,
     if (texture_levels_mapped(texture->levels, texture->level_count * 6u, FALSE))
         return D3D_OK;
     if (!level_data->locked)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return device_compatibility_api(texture->device) == 9u
+                ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_cube_texture_update(texture, (UINT)face, level,
                 &level_data->lock_rect);
@@ -15321,7 +15342,14 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
             result = D3D_OK;
         }
     } else if (surface->cube_texture) {
-        result = IDirect3DCubeTexture9_UnlockRect(
+        D9CubeTexture *cube = surface->cube_texture;
+        D9TextureLevel *level = &cube->levels[surface->cube_face * cube->level_count + surface->level];
+        /* Unlike the cube interface, a surface view rejects redundant unlock.
+         * Keep an outstanding parent GetDC intact, as on the other views. */
+        if (device_compatibility_api(surface->device) == 9u && !level->locked
+                && !texture_levels_mapped(cube->levels, cube->level_count * 6u, FALSE))
+            result = D3DERR_INVALIDCALL;
+        else result = IDirect3DCubeTexture9_UnlockRect(
                 &surface->cube_texture->iface,
                 (D3DCUBEMAP_FACES)surface->cube_face, surface->level);
     } else if (!surface->texture) {
