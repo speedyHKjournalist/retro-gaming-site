@@ -2,7 +2,10 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"exclusive-mut-")),source=fs.readFileSync(root+"/runtime/d9wg_exclusive_window.c","utf8");
 const mutations=[
-    ["minimized app activation recovers early","(!wp || !IsIconic(window))","1"],
+    ["NOWINDOWCHANGES ignored on entry","if (!(flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) {","if (1) {"],
+    ["visible output forced topmost","(flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)","0 && (flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)"],
+    ["API9 iconic activation remains lost","|| (entry->flags & D9WG_EXCLUSIVE_D3D9)","|| (0 && (entry->flags & D9WG_EXCLUSIVE_D3D9))"],
+    ["minimized app activation recovers early","(!wp || !IsIconic(window)\n                    || (entry->flags & D9WG_EXCLUSIVE_D3D9))","1"],
     ["actual foreground gate omitted","GetForegroundWindow() == window","1"],
     ["lost-only recovery gate omitted","candidate->state->lost && !candidate->changing","!candidate->changing"],
     ["window activation fallback omitted","msg == WM_ACTIVATE && LOWORD(wp)","msg == WM_ACTIVATE + 1 && LOWORD(wp)"],

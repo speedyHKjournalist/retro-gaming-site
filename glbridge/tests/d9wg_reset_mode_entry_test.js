@@ -11,7 +11,7 @@ function extract(source, name) {
     return source.slice(m.index, end);
 }
 try {
-    for (const api of [8, 9]) {
+    for (const api of [8]) {
     const source = readComparisonSource(process.env["D" + api + "WG_RESET_MODE_FRONTEND"] || root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
     fs.writeFileSync(dir + "/mode.c", `#include <stdint.h>
 #include <stdio.h>
@@ -119,3 +119,6 @@ int main(void){unsigned checks=0;LONG style=WS_CAPTION|WS_THICKFRAME|WS_MINIMIZE
     assert.equal(run.status, 0, run.stdout + run.stderr + " signal=" + run.signal); process.stdout.write(run.stdout);
     }
 } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+
+// The live core now uses native focus subscriptions for both APIs.
+require("./d9wg_exclusive_mode_entry_test.js");

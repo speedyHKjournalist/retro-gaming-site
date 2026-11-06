@@ -5438,12 +5438,7 @@ static void raise_window_to_foreground(HWND window)
     d9wg_window_mode_raise(window);
 }
 
-static D9WGWindowModeBindings window_mode_bindings(D9Device* device)
-{
-    return (D9WGWindowModeBindings) { &device->styled_window,
-        &device->saved_window_style, &device->saved_window_exstyle,
-        &device->display_mode_changed, &device->last_foreground_claim };
-}
+
 
 
 
@@ -5472,7 +5467,7 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
 {
     DWORD now;
 
-    if (device_compatibility_api(device) == 8u || device->present.Windowed
+    if (device->exclusive_window || device_compatibility_api(device) == 8u || device->present.Windowed
             || !window || !(probe->state.flags & D9WG_WINDOW_IS_WINDOW))
         return FALSE;
     if ((probe->state.flags & D9WG_WINDOW_FOREGROUND) != 0)
@@ -5507,28 +5502,22 @@ static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
  * does not leave the guest desktop stuck at the game's resolution. */
 static BOOL restore_display_mode(D9Device* device)
 {
-    if (device_compatibility_api(device) == 8u) {
-        d9wg_exclusive_window_leave(&device->exclusive_window);
-        return TRUE;
-    }
-    D9WGWindowModeBindings bindings = window_mode_bindings(device);
-    return d9wg_window_mode_restore(&bindings);
+    d9wg_exclusive_window_leave(&device->exclusive_window);
+    return TRUE;
 }
 
 static BOOL reset_window_mode(D9Device* device, HWND window)
 {
-    if (device_compatibility_api(device) == 8u) {
-        if (device->present.Windowed) {
-            d9wg_exclusive_window_leave(&device->exclusive_window);
-            return TRUE;
-        }
-        return d9wg_exclusive_window_enter(&device->exclusive_window,
-            device->creation.hFocusWindow, window, device->display_mode.Width,
-            device->display_mode.Height, &device->reset_state);
+    if (device->present.Windowed) {
+        d9wg_exclusive_window_leave(&device->exclusive_window);
+        return TRUE;
     }
-    D9WGWindowModeBindings bindings = window_mode_bindings(device);
-    return d9wg_window_mode_apply(&bindings, device->present.Windowed, window,
-        device->creation.hFocusWindow, device->display_mode.Width, device->display_mode.Height);
+    UINT flags = device_compatibility_api(device) == 9u ? D9WG_EXCLUSIVE_D3D9 : 0u;
+    if (flags && (device->creation.BehaviorFlags & D3DCREATE_NOWINDOWCHANGES))
+        flags |= D9WG_EXCLUSIVE_NO_WINDOW_CHANGES;
+    return d9wg_exclusive_window_enter_ex(&device->exclusive_window,
+        device->creation.hFocusWindow, window, device->display_mode.Width,
+        device->display_mode.Height, &device->reset_state, flags);
 }
 
 static void emit_cursor_position(D9Device *device, int x, int y, DWORD flags)

@@ -63,12 +63,16 @@ try {
     }
     for (const api of [8, 9]) {
         const source = readComparisonSource(root + "/d3d" + api + "proxy/d3d" + api + "_proxy.c", "utf8");
-        for (const [label, old, replacement] of [
+        for (const [label, old, replacement] of (api === 8 ? [
             ["saved style binding wrong", "&device->saved_window_style", "&device->saved_window_exstyle"],
             ["saved extended style binding wrong", "&device->saved_window_exstyle", "&device->saved_window_style"],
             ["mode ownership binding wrong", "&device->display_mode_changed", "&device->present.Windowed"],
-        ]) {
-            const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, "window_mode_bindings", old, replacement));
+        ] : [
+            ["API9 mode flag lost", "? D9WG_EXCLUSIVE_D3D9 : 0u", "? 0u : 0u"],
+            ["NOWINDOWCHANGES ignored", "flags |= D9WG_EXCLUSIVE_NO_WINDOW_CHANGES;", "flags |= 0u;"],
+            ["focus replaced by output", "device->creation.hFocusWindow, window", "window, window"],
+        ])) {
+            const file = dir + "/frontend.c"; fs.writeFileSync(file, mutate(source, api === 8 ? "window_mode_bindings" : "reset_window_mode", old, replacement));
             run("API " + api + " " + label, "d9wg_reset_mode_entry_test", {["D" + api + "WG_RESET_MODE_FRONTEND"]: file}); killed++;
         }
         for (const [label, old, replacement] of [

@@ -7,7 +7,7 @@ struct D9WGExclusiveWindow {
     D9WGFocusHook *hook;
     LONG refs;
     HWND output;
-    UINT width, height;
+    UINT width, height, flags;
     D9WGResetState *state;
     BOOL mode_owned;
     unsigned changing;
@@ -66,7 +66,8 @@ static LRESULT CALLBACK exclusive_proc(HWND window, UINT msg, WPARAM wp, LPARAM 
         if (entry->state && !entry->changing) {
             if (msg == WM_DISPLAYCHANGE && ((UINT)LOWORD(lp) != entry->width || (UINT)HIWORD(lp) != entry->height)) {
                 entry->state->required = 1;
-            } else if (msg == WM_ACTIVATEAPP && (!wp || !IsIconic(window))) {
+            } else if (msg == WM_ACTIVATEAPP && (!wp || !IsIconic(window)
+                    || (entry->flags & D9WG_EXCLUSIVE_D3D9))) {
                 /* A thread-level activation while the focus window is still
                  * minimized is not fullscreen recovery. XP may send it during
                  * ShowWindow(SW_SHOWMINNOACTIVE); wait for the window restore. */
@@ -81,13 +82,18 @@ static LRESULT CALLBACK exclusive_proc(HWND window, UINT msg, WPARAM wp, LPARAM 
                         entry->mode_owned = FALSE;
                         ChangeDisplaySettingsA(NULL, CDS_FULLSCREEN);
                     }
-                    if (entry->state && IsWindowVisible(entry->output)) {
-                        ShowWindow(entry->output, SW_MINIMIZE);
+                    if (entry->state && !(entry->flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)
+                            && IsWindowVisible(entry->output)) {
+                        if (entry->flags & D9WG_EXCLUSIVE_D3D9)
+                            SetWindowPos(entry->output, HWND_TOPMOST, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                        if (entry->state) ShowWindow(entry->output,
+                            (entry->flags & D9WG_EXCLUSIVE_D3D9) ? SW_SHOWMINIMIZED : SW_MINIMIZE);
                     }
                     if (entry->state) entry->state->lost = 1;
                 } else {
                     entry->state->lost = 0;
-                    if (entry->output != window) {
+                    if (entry->output != window && !(entry->flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) {
                         if (entry->state) SetWindowPos(entry->output, NULL, 0, 0, entry->width, entry->height,
                             SWP_NOACTIVATE | SWP_NOZORDER);
                     }
@@ -174,8 +180,8 @@ void d9wg_exclusive_window_leave(D9WGExclusiveWindow **subscription)
     release_subscription(entry);
 }
 
-BOOL d9wg_exclusive_window_enter(D9WGExclusiveWindow **subscription,
-    HWND focus, HWND output, UINT width, UINT height, D9WGResetState *state)
+BOOL d9wg_exclusive_window_enter_ex(D9WGExclusiveWindow **subscription,
+    HWND focus, HWND output, UINT width, UINT height, D9WGResetState *state, UINT flags)
 {
     D9WGExclusiveWindow *entry = *subscription;
     BOOL initial = !entry;
@@ -189,7 +195,7 @@ BOOL d9wg_exclusive_window_enter(D9WGExclusiveWindow **subscription,
     if (!entry->hook) return FALSE;
     D9WGFocusHook *hook = entry->hook;
     InterlockedIncrement(&entry->refs);InterlockedIncrement(&hook->refs);
-    entry->output = output;entry->width = width;entry->height = height;entry->state = state;
+    entry->output = output;entry->width = width;entry->height = height;entry->state = state;entry->flags = flags;
     ++entry->changing;
     /* Focus and output windows are different roles. Raising the output steals
      * keyboard focus in applications that render through a secondary window. */
@@ -206,9 +212,15 @@ BOOL d9wg_exclusive_window_enter(D9WGExclusiveWindow **subscription,
     BOOL success = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN) == DISP_CHANGE_SUCCESSFUL;
     if (success && entry->state) {
         entry->mode_owned = TRUE;
-        SetWindowPos(output, HWND_TOPMOST, 0, 0, width, height, SWP_NOACTIVATE);
+        if (!(flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) {
+            /* XP keeps the application's window styles. A previously visible
+             * D3D9 output retains its existing topmost style; a hidden output becomes topmost. */
+            HWND after = (flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)
+                    ? HWND_TOP : HWND_TOPMOST;
+            SetWindowPos(output, after, 0, 0, width, height, SWP_NOACTIVATE);
+        }
         if (entry->state) {
-            ShowWindow(output, SW_SHOW);
+            if (!(flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) ShowWindow(output, SW_SHOW);
             if (GetForegroundWindow() != focus) SetForegroundWindow(focus);
             SetFocus(focus);
         }
@@ -217,4 +229,10 @@ BOOL d9wg_exclusive_window_enter(D9WGExclusiveWindow **subscription,
     --hook->suppress;--entry->changing;
     release_hook(hook);release_subscription(entry);
     return success;
+}
+
+BOOL d9wg_exclusive_window_enter(D9WGExclusiveWindow **subscription,
+    HWND focus, HWND output, UINT width, UINT height, D9WGResetState *state)
+{
+    return d9wg_exclusive_window_enter_ex(subscription, focus, output, width, height, state, 0);
 }

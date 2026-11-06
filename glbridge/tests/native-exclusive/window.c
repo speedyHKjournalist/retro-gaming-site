@@ -4,7 +4,7 @@
 #include <string.h>
 #include "windows.h"
 #include "../../runtime/d9wg_exclusive_window.h"
-struct Window {BOOL live,unicode,visible,iconic;DWORD thread;WNDPROC proc;HANDLE property;unsigned sizes,displays,restores,activations,positions;};
+struct Window {BOOL live,unicode,visible,iconic,topmost;DWORD thread;WNDPROC proc;HANDLE property;unsigned sizes,displays,restores,activations,positions,edits;};
 static unsigned allocations,fail_allocation,fail_prop,fail_proc,fail_mode,error,checks;
 static HWND focus_window,output_window,foreground;
 static D9WGExclusiveWindow *subscription,*second_subscription;
@@ -52,9 +52,11 @@ LONG ChangeDisplaySettingsA(DEVMODEA *mode,DWORD flags){
  if(IsWindow(focus_window))focus_window->proc(focus_window,WM_DISPLAYCHANGE,32,screen_width|(screen_height<<16));
  return 0;
 }
-BOOL ShowWindow(HWND w,int how){assert(IsWindow(w));w->visible=1;w->iconic=how==SW_MINIMIZE;w->proc(w,WM_SIZE,w->iconic,0);return 1;}
+BOOL ShowWindow(HWND w,int how){assert(IsWindow(w));w->edits++;w->visible=1;w->iconic=(how==SW_MINIMIZE || how==SW_SHOWMINIMIZED);w->proc(w,WM_SIZE,w->iconic,0);return 1;}
 BOOL SetWindowPos(HWND w,HWND after,int x,int y,int width,int height,UINT flags){
- assert(IsWindow(w)&&!x&&!y);if(after==HWND_TOPMOST){assert(w==output_window&&width==640&&height==480&&(flags&SWP_NOACTIVATE));w->proc(w,WM_SIZE,0,0);}
+ assert(IsWindow(w)&&!x&&!y);
+ if(after==HWND_TOPMOST)w->topmost=1;
+ if((after==HWND_TOPMOST||after==HWND_TOP)&&width){assert(w==output_window&&width==640&&height==480&&(flags&SWP_NOACTIVATE));w->edits++;w->proc(w,WM_SIZE,0,0);}
  else if(!after){assert(w==output_window&&width==640&&height==480&&flags==(SWP_NOACTIVATE|SWP_NOZORDER));w->proc(w,WM_WINDOWPOSCHANGED,0,0);}
  return 1;
 }
@@ -100,6 +102,26 @@ int main(void){
   }
   destroy_on_display=1;focus.proc(&focus,WM_ACTIVATEAPP,0,0);CHECK(!focus.live&&!focus.property&&allocations==1);
   d9wg_exclusive_window_leave(&subscription);CHECK(!allocations);
+ }
+ /* API9 retains styles and skips output changes under NOWINDOWCHANGES,
+  * while focus subclassing and device loss still operate in every mode. */
+ for(unsigned unicode=0;unicode<2;unicode++)for(unsigned same=0;same<2;same++)
+ for(unsigned visible=0;visible<2;visible++)for(unsigned nowc=0;nowc<2;nowc++){
+  struct Window focus={.live=1,.unicode=unicode,.visible=visible,.thread=7,.proc=application},output=focus;
+  focus_window=&focus;output_window=same?&focus:&output;foreground=NULL;state=(D9WGResetState){0};
+  UINT flags=D9WG_EXCLUSIVE_D3D9|(nowc?D9WG_EXCLUSIVE_NO_WINDOW_CHANGES:0);
+  CHECK(d9wg_exclusive_window_enter_ex(&subscription,&focus,output_window,640,480,&state,flags));
+  CHECK(focus.proc!=application&&screen_width==640&&screen_height==480&&!state.lost);
+  CHECK(output_window->edits==(nowc?0u:2u));
+  CHECK(output_window->visible==(BOOL)(nowc?visible:1)&&output_window->topmost==(!nowc&&!visible));
+  check_transition=1;focus.proc(&focus,WM_ACTIVATEAPP,0,0);check_transition=0;
+  CHECK(state.lost&&state.required&&screen_width==1024);
+  CHECK(output_window->iconic==!nowc&&output_window->topmost==!nowc);
+  CHECK(output_window->edits==(nowc?0u:3u));
+  focus.iconic=1;foreground=&focus;focus.proc(&focus,WM_ACTIVATEAPP,1,0);
+  CHECK(!state.lost&&state.required);
+  d9wg_exclusive_window_leave(&subscription);
+  CHECK(!subscription&&!allocations&&!focus.property&&focus.proc==application);
  }
  for(unsigned kind=0;kind<5;kind++){
   struct Window focus={.live=1,.thread=7,.proc=application};focus_window=output_window=&focus;

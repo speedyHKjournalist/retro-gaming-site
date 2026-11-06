@@ -21,6 +21,7 @@ typedef struct {UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields;} DEV
 #define SC_RESTORE 0xf120
 #define GWLP_WNDPROC (-4)
 #define SW_MINIMIZE 6
+#define SW_SHOWMINIMIZED 2
 #define SW_SHOW 5
 #define SWP_NOMOVE 2
 #define SWP_NOSIZE 1
