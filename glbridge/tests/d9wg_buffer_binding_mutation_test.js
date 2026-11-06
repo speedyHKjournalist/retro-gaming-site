@@ -21,7 +21,7 @@ for (const [kind, iface, setter, getter, slot, up] of [["vb", "IDirect3DVertexBu
         [kind + " getter fails to revive", getter, "if (*buffer_out)", "if (FALSE && *buffer_out)"],
         [kind + " cleanup uses public release", "device_clear_bindings", kind + "_binding_release(buffer);", iface + "_Release(&buffer->iface);"],
         [kind + " UP cleanup uses public release", up, "if (old) " + kind + "_binding_release(old);", "if (old) " + iface + "_Release(&old->iface);"],
-        [kind + " shadow leaked", kind + "_destroy_storage", "HeapFree(GetProcessHeap(), 0, buffer->shadow);", "(void)buffer->shadow;"],
+        [kind + " shadow leaked", kind + "_destroy_storage", "HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);", "(void)buffer->shadow;"],
         [kind + " live binding dropped", setter, slot + " = buffer;", slot + " = NULL;"],
     );
 }

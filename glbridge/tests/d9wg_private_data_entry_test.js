@@ -22,7 +22,7 @@ typedef uint32_t DWORD,ULONG;typedef int32_t HRESULT;typedef const void*REFGUID;
 #define D8WG_TRACE_ERROR(v) (v)
 #define TRACE_REFUSE(v) (v)
 typedef struct Buffer Buffer;typedef struct{Buffer*vertex_buffers,*index_buffers;unsigned refs;}Device;
-struct Buffer{Device*device;Buffer*next_device_resource;int32_t refcount,binding_refs;uint32_t handle;void*shadow;int clips;D9WGPrivateStore private_data;};
+struct Buffer{Device*device;Buffer*next_device_resource;int32_t refcount,binding_refs;uint32_t handle;void*shadow_allocation,*shadow;int clips;D9WGPrivateStore private_data;};
 typedef Device D${api}Device;
 typedef Buffer D${api}VertexBuffer,D${api}IndexBuffer,IDirect3DVertexBuffer${api},IDirect3DIndexBuffer${api};
 static Buffer*vb_from_iface(Buffer*b){return b;}static Buffer*ib_from_iface(Buffer*b){return b;}
@@ -44,7 +44,7 @@ static int emit_command(uint16_t op,const void*p,uint32_t size){assert(op==D9WG_
 ${[...(api===9?['vb_destroy_storage','ib_destroy_storage']:[]),'vb_set_private_data','vb_get_private_data','vb_free_private_data','vb_release','ib_set_private_data','ib_get_private_data','ib_free_private_data','ib_release'].map(n=>extract(source,n)).join('\n')}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Private entry API ${api} line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 int main(void){unsigned cases=0;Device d={.refs=1};const uint8_t key[16]={1},missing[16]={2};HRESULT(*set[2])(Buffer*,REFGUID,const void*,DWORD,DWORD)={vb_set_private_data,ib_set_private_data};HRESULT(*get[2])(Buffer*,REFGUID,void*,DWORD*)={vb_get_private_data,ib_get_private_data};HRESULT(*drop[2])(Buffer*,REFGUID)={vb_free_private_data,ib_free_private_data};ULONG(*release_buffer[2])(Buffer*)={vb_release,ib_release};
-for(unsigned kind=0;kind<2;kind++){Buffer*b=HeapAlloc(NULL,0,sizeof(*b));b->device=&d;b->refcount=2;b->handle=0x7000+kind;b->shadow=HeapAlloc(NULL,0,64);d.refs++;if(kind)d.index_buffers=b;else d.vertex_buffers=b;
+for(unsigned kind=0;kind<2;kind++){Buffer*b=HeapAlloc(NULL,0,sizeof(*b));b->device=&d;b->refcount=2;b->handle=0x7000+kind;b->shadow_allocation=b->shadow=HeapAlloc(NULL,0,64);d.refs++;if(kind)d.index_buffers=b;else d.vertex_buffers=b;
 DWORD size=0xaabbccdd,out=0xdeadbeef,value=0x1234abcd;CHECK(get[kind](b,missing,&out,&size)==D3DERR_NOTFOUND&&size==0xaabbccdd&&out==0xdeadbeef);CHECK(get[kind](b,missing,NULL,NULL)==D3DERR_NOTFOUND&&drop[kind](b,missing)==D3DERR_NOTFOUND);cases++;
 CHECK(!set[kind](b,key,&value,4,0));value=0;size=1;CHECK(!get[kind](b,key,NULL,&size)&&size==4);size=3;CHECK(get[kind](b,key,&out,&size)==D3DERR_MOREDATA&&size==4&&out==0xdeadbeef);size=4;CHECK(!get[kind](b,key,&out,&size)&&out==0x1234abcd);cases++;
 fail=1;CHECK(set[kind](b,key,&value,4,0)==E_OUTOFMEMORY);fail=0;CHECK(!get[kind](b,key,&out,&size)&&out==0x1234abcd);CHECK(set[kind](b,key,NULL,4,0)==D3DERR_INVALIDCALL);CHECK(!drop[kind](b,key)&&drop[kind](b,key)==D3DERR_NOTFOUND);cases++;

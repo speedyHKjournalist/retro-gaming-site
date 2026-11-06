@@ -18,6 +18,9 @@ typedef struct Texture Texture,D8CubeTexture,D9CubeTexture;
 struct Device{UINT api,pins;union{Texture*cube_resources;Texture*cube_textures;};UINT handle;};
 struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,edge_length,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;BYTE*mip_storage;Texture*next_device_resource;};
 #define WINAPI
+#ifndef E_NOTIMPL
+#define E_NOTIMPL ((HRESULT)0x80004001)
+#endif
 #define D3D_OK 0
 #define D3DFMT_UNKNOWN 0
 #define D3DUSAGE_DYNAMIC 512

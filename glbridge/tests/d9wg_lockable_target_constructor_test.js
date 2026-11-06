@@ -6,6 +6,9 @@ try{const old=fs.readFileSync(root+"/tests/fixtures/d3d9_render_target_before_lo
 #include <string.h>
 typedef uint32_t UINT,DWORD;typedef int HRESULT,BOOL,WINBOOL,D3DFORMAT,D3DMULTISAMPLE_TYPE;typedef void*HANDLE;typedef struct{UINT token;}D9Device,IDirect3DDevice9;typedef struct{void*vtbl;BOOL lockable_render_target;UINT canary;}D9Surface,IDirect3DSurface9;
 #define WINAPI
+#ifndef E_NOTIMPL
+#define E_NOTIMPL ((HRESULT)0x80004001)
+#endif
 #define D3D_OK 0
 #define TRUE 1
 #define FALSE 0

@@ -1,6 +1,7 @@
 LIBRARY d3d9
 EXPORTS
     Direct3DCreate9=Direct3DCreate9@4
+    Direct3DShaderValidatorCreate9=Direct3DShaderValidatorCreate9@0
 ; The real d3d9.dll exports these alongside Direct3DCreate9. A title that
 ; statically imports any of them fails to LOAD against a DLL that omits them,
 ; which surfaces as a generic "unable to initialize DirectX" with no chance to

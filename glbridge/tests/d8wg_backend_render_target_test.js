@@ -10,6 +10,9 @@ typedef struct{UINT api;}D9Device,IDirect3DDevice9,IDirect3DDevice8;
 typedef struct{void*iface;BOOL lockable_render_target,private_back_buffer;}D8Texture,IDirect3DTexture8;
 typedef struct{void*iface;BOOL device_container;UINT refcount,canary;BOOL lockable;}Surface,IDirect3DSurface8,IDirect3DSurface9;
 #define WINAPI
+#ifndef E_NOTIMPL
+#define E_NOTIMPL ((HRESULT)0x80004001)
+#endif
 #define D3D_OK 0
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_NOTAVAILABLE (-4)

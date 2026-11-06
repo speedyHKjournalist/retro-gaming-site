@@ -4,7 +4,7 @@ static D9Texture *new_buffer(D9Device *device, UINT pool, BOOL index)
     buffer->iface.lpVtbl = index ? &g_ib_vtbl : &g_vb_vtbl;
     buffer->refcount = 1;buffer->device = device;buffer->handle = allocate_handle();
     buffer->length = index ? 12 : 64;buffer->pool = pool;
-    buffer->shadow = HeapAlloc(NULL, 8, buffer->length);
+    buffer->shadow_allocation = buffer->shadow = HeapAlloc(NULL, 8, buffer->length);
     if (!index) buffer->clips = HeapAlloc(NULL, 8, 16);
     D9Texture **list = index ? &device->index_buffers : &device->vertex_buffers;
     buffer->next_device_resource = *list;*list = buffer;device_child_add_ref(device);

@@ -1176,6 +1176,7 @@ struct D9VertexBuffer {
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
+    BYTE *shadow_allocation;    /* heap base of the 16-byte aligned shadow */
     D9WGClipBuffer clips;
     UINT length;
     DWORD usage;
@@ -1198,6 +1199,7 @@ struct D9IndexBuffer {
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
+    BYTE *shadow_allocation;    /* heap base of the 16-byte aligned shadow */
     UINT length;
     DWORD usage;
     D3DFORMAT format;
@@ -4811,6 +4813,30 @@ static HMONITOR WINAPI d3d_get_adapter_monitor(IDirect3D9 *iface, UINT adapter)
     return monitor;
 }
 
+/* BFME Online Arena locates the Device9 vtable through the native x86
+ * constructor signature (also exercised by Wine's assembly-hook test).
+ * Keep this in the real initialization path so hooks find the exact table
+ * used by created devices, not a decoy that can diverge from it. */
+static void device_initialize_identity(D9Device *device)
+{
+#if defined(__i386__) && defined(__GNUC__)
+    __asm__ volatile (
+            ".byte 0xc7,0x06\n\t.long %c[vtbl]\n\t"
+            ".byte 0x89,0x86\n\t.long %c[children]\n\t"
+            ".byte 0x89,0x86\n\t.long %c[releasing]\n\t"
+            :
+            : "S"(device), "a"(0), [vtbl] "i"(&g_device_vtbl),
+              [children] "i"(offsetof(D9Device, child_parent_refs)),
+              [releasing] "i"(offsetof(D9Device, releasing_owned_refs))
+            : "memory");
+#else
+    device->iface.lpVtbl = &g_device_vtbl;
+    device->child_parent_refs = 0;
+    device->releasing_owned_refs = FALSE;
+#endif
+    device->refcount = 1;
+}
+
 static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     D3DDEVTYPE type, HWND focus_window, DWORD behavior,
     D3DPRESENT_PARAMETERS* parameters,
@@ -4973,10 +4999,9 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
         return E_OUTOFMEMORY;
     }
     d9wg_fpu_setup((behavior & D3DCREATE_FPU_PRESERVE) != 0);
-    device->iface.lpVtbl = &g_device_vtbl;
+    device_initialize_identity(device);
     device->implicit_swap_chain.iface.lpVtbl = &g_swap_chain_vtbl;
     device->implicit_swap_chain.device = device;
-    device->refcount = 1;
     device->parent = d3d;
     IDirect3D9_AddRef(iface);
     device->handle = allocate_handle();
@@ -6690,7 +6715,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
 {
     D9Device *device = device_from_iface(iface);
     D9VertexBuffer *buffer;
-    (void)shared_handle;
+    if (shared_handle) return TRACE_REFUSE(E_NOTIMPL);
     TRACE_MARK_ENTER("Device.CreateVertexBuffer");
     if (!buffer_out) {
         TRACE("FAIL CreateVertexBuffer length=%lu missing output -> %08lX",
@@ -6699,10 +6724,9 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *buffer_out = NULL;
-    if (!length || pool > D3DPOOL_SCRATCH
+    if (!length || pool >= D3DPOOL_SCRATCH
             || (device_compatibility_api(device) == 8u
-                && (pool == D3DPOOL_SCRATCH
-                    || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))) {
+                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
         TRACE("FAIL CreateVertexBuffer length=%lu usage=%08lX fvf=%08lX pool=%lu -> %08lX",
                 length, usage, fvf, (DWORD)pool, (DWORD)D3DERR_INVALIDCALL);
         HOSTLOG_FAILED("CreateVertexBuffer refused: length=%lu usage=%08lX "
@@ -6719,8 +6743,12 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
         TRACE_FLUSH();
         return E_OUTOFMEMORY;
     }
-    buffer->shadow = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            length);
+    if (length <= UINT32_MAX - 15u)
+        buffer->shadow_allocation = (BYTE *)HeapAlloc(GetProcessHeap(),
+                HEAP_ZERO_MEMORY, (SIZE_T)length + 15u);
+    if (buffer->shadow_allocation)
+        buffer->shadow = (BYTE *)(((uintptr_t)buffer->shadow_allocation + 15u)
+                & ~(uintptr_t)15u);
     if (!buffer->shadow) {
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE("FAIL CreateVertexBuffer shadow allocation length=%lu -> %08lX",
@@ -6743,7 +6771,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
         TRACE("FAIL CreateVertexBuffer transport length=%lu handle=%08lX -> %08lX",
                 length, buffer->handle, (DWORD)D3DERR_DRIVERINTERNALERROR);
         device_child_release(device);
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
+        HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE_MARK_EXIT("Device.CreateVertexBuffer",
                 D3DERR_DRIVERINTERNALERROR, NULL);
@@ -6777,7 +6805,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9IndexBuffer *buffer;
     UINT index_size;
-    (void)shared_handle;
+    if (shared_handle) return TRACE_REFUSE(E_NOTIMPL);
 
     TRACE_MARK_ENTER("Device.CreateIndexBuffer");
     if (!buffer_out) {
@@ -6787,10 +6815,9 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *buffer_out = NULL;
-    if (!length || pool > D3DPOOL_SCRATCH
+    if (!length || pool >= D3DPOOL_SCRATCH
             || (device_compatibility_api(device) == 8u
-                && (pool == D3DPOOL_SCRATCH
-                    || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))) {
+                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
         TRACE("FAIL CreateIndexBuffer length=%lu usage=%08lX format=%08lX pool=%lu -> %08lX",
                 length, usage, (DWORD)format, (DWORD)pool,
                 (DWORD)D3DERR_INVALIDCALL);
@@ -6824,8 +6851,12 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         TRACE_FLUSH();
         return E_OUTOFMEMORY;
     }
-    buffer->shadow = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            length);
+    if (length <= UINT32_MAX - 15u)
+        buffer->shadow_allocation = (BYTE *)HeapAlloc(GetProcessHeap(),
+                HEAP_ZERO_MEMORY, (SIZE_T)length + 15u);
+    if (buffer->shadow_allocation)
+        buffer->shadow = (BYTE *)(((uintptr_t)buffer->shadow_allocation + 15u)
+                & ~(uintptr_t)15u);
     if (!buffer->shadow) {
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE("FAIL CreateIndexBuffer shadow allocation length=%lu -> %08lX",
@@ -6848,7 +6879,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         TRACE("FAIL CreateIndexBuffer transport length=%lu handle=%08lX -> %08lX",
                 length, buffer->handle, (DWORD)D3DERR_DRIVERINTERNALERROR);
         device_child_release(device);
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
+        HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE_MARK_EXIT("Device.CreateIndexBuffer",
                 D3DERR_DRIVERINTERNALERROR, NULL);
@@ -7098,7 +7129,7 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
         UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
         D3DPOOL pool, IDirect3DTexture9 **texture_out, HANDLE *shared_handle)
 {
-    (void)shared_handle;
+    if (shared_handle) return TRACE_REFUSE(E_NOTIMPL);
     return create_texture_object(device_from_iface(iface), width, height,
             levels, usage, format, pool, 9u, texture_out);
 }
@@ -8972,7 +9003,7 @@ static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice9 *iface,
         D3DFORMAT format, D3DPOOL pool, IDirect3DVolumeTexture9 **out,
         HANDLE *shared)
 {
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
     return create_volume_texture_object(device_from_iface(iface), width,
             height, depth, levels, usage, format, pool, 9u, out);
 }
@@ -9703,12 +9734,14 @@ static HRESULT WINAPI device_create_offscreen_plain_surface(
         D3DPOOL pool, IDirect3DSurface9 **out, HANDLE *shared)
 {
     D9Device *device = device_from_iface(iface);
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
     if (!out)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *out = NULL;
     if (!width || !height || pool == D3DPOOL_MANAGED
-            || pool > D3DPOOL_SCRATCH || !supported_texture_format(format))
+            || pool > D3DPOOL_SCRATCH || !supported_texture_format(format)
+            || ((format & 0x00ffffffu) == 0x00545844u /* DXT1..5 */
+                && ((width | height) & 3u)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (pool == D3DPOOL_DEFAULT)
         return create_target_texture(device, width, height, format, 0u,
@@ -11715,7 +11748,7 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice9 *iface,
         D3DMULTISAMPLE_TYPE multisample, DWORD multisample_quality,
         WINBOOL lockable, IDirect3DSurface9 **surface_out, HANDLE *shared)
 {
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
     if (!supported_multisample(format, multisample)
             || multisample_quality != 0
             || (lockable && multisample != D3DMULTISAMPLE_NONE)) {
@@ -11734,7 +11767,7 @@ static HRESULT WINAPI device_create_depth_stencil_surface(
         D3DMULTISAMPLE_TYPE multisample, DWORD multisample_quality,
         WINBOOL discard, IDirect3DSurface9 **surface_out, HANDLE *shared)
 {
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
     (void)discard;
     if (!supported_multisample(format, multisample)
             || multisample_quality != 0)
@@ -12404,7 +12437,7 @@ static HRESULT WINAPI device_create_query(IDirect3DDevice9 *iface,
             && type != D3DQUERYTYPE_TIMESTAMPDISJOINT
             && type != D3DQUERYTYPE_TIMESTAMPFREQ) {
 
-        if (query_out) *query_out = NULL;
+        /* Native leaves the output untouched for an unsupported query. */
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     /* A NULL out pointer is D3D9's "do you support this type?" probe. */
@@ -12657,7 +12690,7 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
         UINT edge, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool,
         IDirect3DCubeTexture9 **texture_out, HANDLE *shared)
 {
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
     return create_cube_texture_object(device_from_iface(iface), edge, levels,
             usage, format, pool, 9u, texture_out);
 }
@@ -13712,7 +13745,7 @@ static void vb_destroy_storage(D9VertexBuffer *buffer)
     destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
-    HeapFree(GetProcessHeap(), 0, buffer->shadow);
+    HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
     core_view_retire8(buffer);
     HeapFree(GetProcessHeap(), 0, buffer);
 }
@@ -13879,7 +13912,7 @@ static void ib_destroy_storage(D9IndexBuffer *buffer)
     destroy.resource_handle = buffer->handle;
     destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-    HeapFree(GetProcessHeap(), 0, buffer->shadow);
+    HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
     core_view_retire8(buffer);
     HeapFree(GetProcessHeap(), 0, buffer);
 }
@@ -17919,6 +17952,10 @@ BOOL WINAPI d9wg_d3d9_core_validate_shader_export8(const DWORD *shader,
     return TRUE;
 }
 
+#endif
+
+#ifndef D9WG_STATIC_CORE
+#include "d3d9_shader_validator.inc"
 #endif
 
 /*

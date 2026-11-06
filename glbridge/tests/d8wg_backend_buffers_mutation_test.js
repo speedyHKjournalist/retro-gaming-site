@@ -2,6 +2,12 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"backend8-buffers-mut-"));
 function body(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return[m.index,b,s.slice(m.index,b)];}
 const cases=[
+ ["vertex shared refusal", "device_create_vertex_buffer", "if (shared_handle)", "if (0 && shared_handle)"],
+ ["vertex scratch refusal", "device_create_vertex_buffer", "pool >= D3DPOOL_SCRATCH", "pool > D3DPOOL_SCRATCH"],
+ ["vertex aligned shadow", "device_create_vertex_buffer", "& ~(uintptr_t)15u", "& ~(uintptr_t)0u"],
+ ["index shared refusal", "device_create_index_buffer", "if (shared_handle)", "if (0 && shared_handle)"],
+ ["index scratch refusal", "device_create_index_buffer", "pool >= D3DPOOL_SCRATCH", "pool > D3DPOOL_SCRATCH"],
+ ["index aligned shadow", "device_create_index_buffer", "& ~(uintptr_t)15u", "& ~(uintptr_t)0u"],
  ["VB profile","d9wg_d3d9_core_vertex_buffer8","!= 8u","!= 9u"],
  ["IB profile","d9wg_d3d9_core_index_buffer8","!= 8u","!= 9u"],
  ["VB failed output","d9wg_d3d9_core_vertex_buffer8","*out = NULL;","(void)out;"],
@@ -21,8 +27,8 @@ const cases=[
  ["IB list","device_create_index_buffer","device->index_buffers = buffer;","(void)buffer;"],
  ["VB initial state","device_create_vertex_buffer","HEAP_ZERO_MEMORY,\n            sizeof(*buffer)","0,\n            sizeof(*buffer)"],
  ["IB initial state","device_create_index_buffer","HEAP_ZERO_MEMORY,\n            sizeof(*buffer)","0,\n            sizeof(*buffer)"],
- ["VB zero storage","device_create_vertex_buffer","HEAP_ZERO_MEMORY,\n            length","0,\n            length"],
- ["IB zero storage","device_create_index_buffer","HEAP_ZERO_MEMORY,\n            length","0,\n            length"],
+ ["VB zero storage","device_create_vertex_buffer","HEAP_ZERO_MEMORY, (SIZE_T)length + 15u","0, (SIZE_T)length + 15u"],
+ ["IB zero storage","device_create_index_buffer","HEAP_ZERO_MEMORY, (SIZE_T)length + 15u","0, (SIZE_T)length + 15u"],
  ["VB descriptor FVF","vb_get_desc","desc->FVF = buffer->fvf;","desc->FVF = 0;"],
  ["IB descriptor size","ib_get_desc","desc->Size = buffer->length;","desc->Size = 0;"],
  ["VB descriptor size","vb_get_desc","desc->Size = buffer->length;","desc->Size = 0;"]
