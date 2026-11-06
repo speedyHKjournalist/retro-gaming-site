@@ -2446,7 +2446,8 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
 static BOOL supported_backbuffer_format(D3DFORMAT format)
 {
     return format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8
-            || format == D3DFMT_R5G6B5;
+            || format == D3DFMT_R5G6B5 || format == D3DFMT_X1R5G5B5
+            || format == D3DFMT_A1R5G5B5;
 }
 
 /* WebGPU guarantees a single quality level for the sample counts it exposes;
@@ -3638,7 +3639,10 @@ static void fill_caps_for_profile(D3DCAPS9 *caps, UINT shader_model, BOOL permis
              * game's frontend loader then exits cleanly. */
             | D3DPSHADECAPS_SPECULARGOURAUDRGB
             | D3DPSHADECAPS_FOGGOURAUD | D3DPSHADECAPS_ALPHAGOURAUDBLEND;
-    caps->TextureCaps = D3DPTEXTURECAPS_ALPHA | D3DPTEXTURECAPS_MIPMAP
+    /* Palette alpha is preserved through PALETTEENTRY, the wire palette and
+     * host P8 expansion (A8P8 uses its separate per-texel alpha). */
+    caps->TextureCaps = D3DPTEXTURECAPS_ALPHA | D3DPTEXTURECAPS_ALPHAPALETTE
+            | D3DPTEXTURECAPS_MIPMAP
             | D3DPTEXTURECAPS_PERSPECTIVE
             /* M3: real IDirect3DCubeTexture9, six faces per level, sampled
              * through a texture_cube<f32> by both the fixed-function cascade
@@ -4520,24 +4524,23 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
 {
     BOOL ok;
     BOOL legacy8 = d3d_from_iface(iface)->compatibility_api == 8;
-    (void)windowed;
+    if (!legacy8 && windowed && backbuffer_format == D3DFMT_UNKNOWN)
+        backbuffer_format = display_format;
     ok = !adapter && type == D3DDEVTYPE_HAL
             && (display_format == D3DFMT_X8R8G8B8
                 || display_format == D3DFMT_R5G6B5
-                || (legacy8 && display_format == D3DFMT_X1R5G5B5))
-            && (legacy8 ? supported_render_target_format8(backbuffer_format)
-                : supported_backbuffer_format(backbuffer_format));
-    if (legacy8) {
-        /* D3D8 permits the alpha variant of the display format, but not
-         * arbitrary conversion between 16- and 32-bit back buffers. */
-        ok = ok && (backbuffer_format == display_format
-                || (display_format == D3DFMT_X8R8G8B8
-                    && backbuffer_format == D3DFMT_A8R8G8B8)
-                || (display_format == D3DFMT_X1R5G5B5
-                    && backbuffer_format == D3DFMT_A1R5G5B5));
-        if (!windowed && display_format == D3DFMT_X1R5G5B5)
-            ok = FALSE; /* The display driver exposes 16-bit RGB565 modes. */
-    }
+                || display_format == D3DFMT_X1R5G5B5)
+            && supported_render_target_format8(backbuffer_format);
+    /* Fullscreen scan-out permits only the display format or its alpha
+     * variant. Windowed D3D9 uses the same RGB/alpha pairs as
+     * CheckDeviceFormatConversion; UNKNOWN selects the display format. */
+    ok = ok && (backbuffer_format == display_format
+            || (display_format == D3DFMT_X8R8G8B8
+                && backbuffer_format == D3DFMT_A8R8G8B8)
+            || (display_format == D3DFMT_X1R5G5B5
+                && backbuffer_format == D3DFMT_A1R5G5B5));
+    if (!windowed && display_format == D3DFMT_X1R5G5B5)
+        ok = FALSE; /* The display driver exposes 16-bit RGB565 modes. */
 
     TRACE("OK CheckDeviceType adapter=%lu type=%lu display=%08lX backbuffer=%08lX "
             "windowed=%lu -> %08lX", adapter, (DWORD)type,
@@ -4634,7 +4637,16 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
     if (d3d_from_iface(iface)->compatibility_api == 8)
         return d3d_check_device_format8(iface, adapter, type, adapter_format,
                 usage, resource_type, format);
-    (void)adapter_format;
+    if (adapter_format == D3DFMT_UNKNOWN
+            || resource_type == D3DRTYPE_VERTEXBUFFER
+            || resource_type == D3DRTYPE_INDEXBUFFER)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (adapter_format == D3DFMT_A8R8G8B8)
+        return D3DERR_NOTAVAILABLE;
+    if (resource_type == D3DRTYPE_SURFACE
+            && (usage & D3DUSAGE_QUERY_SRGBWRITE)
+            && !(usage & D3DUSAGE_RENDERTARGET))
+        return D3DERR_NOTAVAILABLE;
     /* 3DMark05's 0x0046F240 probe stops looking for filtered depth textures
      * when '-PCF' succeeds. Our depth comparison sampler supports PCF, so
      * NOTAVAILABLE is the expected answer here. Keep this query out of the
@@ -4702,7 +4714,8 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
     }
     result = ok ? D3D_OK : D3DERR_NOTAVAILABLE;
     if (ok && (usage & D3DUSAGE_AUTOGENMIPMAP)
-            && !d9wg_autogen_mips_supported(resource_type, format))
+            && (!supported_render_target_format(format)
+                || !d9wg_autogen_mips_supported(resource_type, format)))
         result = D3DOK_NOAUTOGEN;
     TRACE("%s CheckDeviceFormat adapter=%lu type=%lu adapter_fmt=%08lX "
             "usage=%08lX resource_type=%lu format=%08lX -> %08lX",
@@ -4754,7 +4767,7 @@ static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D9 *iface,
     ok = !adapter && type == D3DDEVTYPE_HAL
             && (d3d_from_iface(iface)->compatibility_api == 8
                     ? (depth_format != D3DFMT_D32 && supported_depth_stencil_format8(depth_format))
-                    : supported_depth_stencil_format(depth_format));
+                    : (depth_format != D3DFMT_D32 && supported_depth_stencil_format(depth_format)));
 
     TRACE("OK CheckDepthStencilMatch adapter=%lu type=%lu adapter_fmt=%08lX "
             "render_fmt=%08lX depth_fmt=%08lX -> %08lX", adapter, (DWORD)type,
@@ -4771,7 +4784,10 @@ static HRESULT WINAPI d3d_check_device_format_conversion(IDirect3D9 *iface,
     if (adapter || type != D3DDEVTYPE_HAL)
         result = D3DERR_NOTAVAILABLE;
     else
-        result = source == target ? D3D_OK : D3DERR_NOTAVAILABLE;
+        result = source == target
+                || (source == D3DFMT_A8R8G8B8 && target == D3DFMT_X8R8G8B8)
+                || (source == D3DFMT_A1R5G5B5 && target == D3DFMT_X1R5G5B5)
+                ? D3D_OK : D3DERR_NOTAVAILABLE;
     TRACE("OK CheckDeviceFormatConversion source=%08lX target=%08lX -> %08lX",
             (DWORD)source, (DWORD)target, (DWORD)result);
     return result;
@@ -6293,6 +6309,20 @@ static HRESULT WINAPI device_get_transform(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(matrix, device->transforms[state], sizeof(float) * 16);
     return D3D_OK;
+}
+
+static HRESULT device_set_live_scissor(D9Device *device, const RECT *rect)
+{
+    D9WGSetScissorRect command;
+    device->scissor_rect = *rect;
+    device->scissor_set = TRUE;
+    command.device_handle = device->handle;
+    command.left = rect->left;
+    command.top = rect->top;
+    command.right = rect->right;
+    command.bottom = rect->bottom;
+    return emit_command(D9WG_OP_SET_SCISSOR_RECT, &command, sizeof(command))
+            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
 static HRESULT device_set_live_viewport(D9Device *device,
@@ -11963,9 +11993,9 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
          * previous target's rect while the scissor test is on (review S2-29;
          * wined3d's device.c resets both) */
         SetRect(&scissor, 0, 0, (int)surface->width, (int)surface->height);
-        hr = IDirect3DDevice9_SetScissorRect(iface, &scissor);
+        hr = device_set_live_scissor(device, &scissor);
         if (FAILED(hr)) return hr;
-        return IDirect3DDevice9_SetViewport(iface, &viewport);
+        return device_set_live_viewport(device, &viewport, FALSE);
     }
     return D3D_OK;
 }
@@ -12232,7 +12262,6 @@ static HRESULT WINAPI device_set_scissor_rect(IDirect3DDevice9 *iface,
         const RECT *rect)
 {
     D9Device *device = device_from_iface(iface);
-    D9WGSetScissorRect command;
 
     if (!rect)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -12240,15 +12269,7 @@ static HRESULT WINAPI device_set_scissor_rect(IDirect3DDevice9 *iface,
             || rect->bottom < rect->top)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (state_block_record_scissor(device, rect)) return D3D_OK;
-    device->scissor_rect = *rect;
-    device->scissor_set = TRUE;
-    command.device_handle = device->handle;
-    command.left = rect->left;
-    command.top = rect->top;
-    command.right = rect->right;
-    command.bottom = rect->bottom;
-    return emit_command(D9WG_OP_SET_SCISSOR_RECT, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return device_set_live_scissor(device, rect);
 }
 
 static HRESULT WINAPI device_get_scissor_rect(IDirect3DDevice9 *iface,

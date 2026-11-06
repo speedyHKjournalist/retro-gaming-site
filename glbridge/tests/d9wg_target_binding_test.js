@@ -242,8 +242,8 @@ static void device_release_owned_references(D9Device*);
 ${stateBindings?"static void device_clear_state_block_handles8(D9Device*);":"static void device_clear_state_block_handles8(D9Device*d){(void)d;}"}
 ${stateBindings?"static ULONG state_block_release(Interface*);\n#define IDirect3DStateBlock9_Release state_block_release\n"+extract(source,"device_cancel_recording"):"static void device_cancel_recording(D9Device*d){(void)d;}"}
 static void SetRect(RECT*r,int l,int t,int right,int b){*r=(RECT){l,t,right,b};}
-static HRESULT IDirect3DDevice9_SetViewport(Interface*p,const D3DVIEWPORT9*v){(void)p;assert(v->Width==32&&(v->Height==24${cubeBindings?"||v->Height==32":""}));return 0;}
-static HRESULT IDirect3DDevice9_SetScissorRect(Interface*p,const RECT*r){(void)p;assert(r->right==32&&(r->bottom==24${cubeBindings?"||r->bottom==32":""}));return 0;}
+static HRESULT device_set_live_viewport(D9Device*p,const D3DVIEWPORT9*v,BOOL equal){(void)p;(void)equal;assert(v->Width==32&&(v->Height==24${cubeBindings?"||v->Height==32":""}));return 0;}
+static HRESULT device_set_live_scissor(D9Device*p,const RECT*r){(void)p;assert(r->right==32&&(r->bottom==24${cubeBindings?"||r->bottom==32":""}));return 0;}
 static HRESULT IDirect3DDevice9_GetBackBuffer(Interface*p,UINT a,UINT b,UINT c,Interface**out){(void)p;(void)a;(void)b;(void)c;(void)out;assert(0);return -1;}
 static void swap_chain_destroy_storage(D9SwapChain*c){(void)c;assert(0);}
 static void d9wg_light_free(void*p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(D9Device*d){(void)d;}static void restore_display_mode(D9Device*d){(void)d;}

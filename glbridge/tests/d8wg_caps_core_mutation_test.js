@@ -13,7 +13,7 @@ const cases=[
     ["D3D9-only device caps exposed","eight","fill_caps",devMask,"(void)caps->DevCaps;"],
     ["D3D9-only raster caps exposed","eight","fill_caps",rasterMask,"(void)caps->RasterCaps;"],
     ["D3D8 flat shade flags lost","eight","fill_caps","caps->ShadeCaps |= D3DPSHADECAPS_COLORFLATRGB | D3DPSHADECAPS_ALPHAFLATBLEND;","(void)caps->ShadeCaps;"],
-    ["D3D8 alpha palette flag lost","eight","fill_caps","caps->TextureCaps |= D3DPTEXTURECAPS_ALPHAPALETTE;","(void)caps->TextureCaps;"],
+    ["D3D9 alpha palette flag lost","nine","fill_caps_for_profile","D3DPTEXTURECAPS_ALPHA | D3DPTEXTURECAPS_ALPHAPALETTE","D3DPTEXTURECAPS_ALPHA"],
     ["D3D8 volume addressing relation lost","eight","fill_caps","caps->VolumeTextureAddressCaps = caps->TextureAddressCaps;","caps->VolumeTextureAddressCaps = 0;"],
     ["D3D9 vertex constant limit exposed","eight","fill_caps","caps->MaxVertexShaderConst = D8WG_MAX_VS_CONSTANTS;","caps->MaxVertexShaderConst = 256;"],
     ["D3D9 shader version exposed","eight","fill_caps","caps->PixelShaderVersion = (DWORD)D3DPS_VERSION(1, 4);","caps->PixelShaderVersion = (DWORD)D3DPS_VERSION(2, 0);"],

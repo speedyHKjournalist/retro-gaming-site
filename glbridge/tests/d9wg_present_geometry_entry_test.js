@@ -62,7 +62,7 @@ static ULONG factory_add_ref(Interface*p){parent_calls++;return ++((Factory*)p)-
 static ULONG device_release(Interface*p){Device*d=(Device*)p;factory_release(&d->parent->iface);HeapFree(NULL,0,d->front_shadow);HeapFree(NULL,0,d);return 0;}
 #define IDirect3DDevice${api}_Release device_release
 static void d9wg_fpu_setup(BOOL p){assert(p);}
-${api===9?'static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
+${api===9?'static void device_initialize_identity(Device*d){d->iface.lpVtbl=&g_device_vtbl;}static UINT desktop_format=22,desktop_queries;static UINT d9wg_display_mode_backbuffer_format(UINT f){if(f)return f;desktop_queries++;return desktop_format;}':''}
 static BOOL supported_multisample_type(UINT t){return t==0;}static BOOL supported_multisample(D3DFORMAT f,UINT t){return (f==21||f==22||f==23||f==75)&&!t;}
 static BOOL supported_depth_stencil_format(D3DFORMAT f){return f==75;}static BOOL supported_backbuffer_format(D3DFORMAT f){return f==21||f==22||f==23;}
 static UINT allocate_handle(void){return 77;}
