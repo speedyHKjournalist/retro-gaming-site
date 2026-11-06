@@ -30,6 +30,8 @@ enum{D9WG_COPY_2D,D9WG_COPY_CUBE,D9WG_COPY_VOLUME};
 typedef struct{UINT calls,kind;void*texture;const void*source;void*destination;D9WGTextureCopyExtent from,to;}Capture;static Capture captured;static HRESULT injected;
 static HRESULT d9wg_update_texture_common(void*t,UINT kind,const void*s,D9WGTextureCopyExtent from,void*d,D9WGTextureCopyExtent to){captured=(Capture){.calls=captured.calls+1,.kind=kind,.texture=t,.source=s,.destination=d,.from=from,.to=to};return injected;}
 static HRESULT d9wg_update_texture_common_mode(void*t,UINT kind,const void*s,D9WGTextureCopyExtent from,void*d,D9WGTextureCopyExtent to,BOOL legacy8){assert(legacy8);return d9wg_update_texture_common(t,kind,s,from,d,to);}
+/* Dispatch-only fixture; real dirty copies are exercised independently. */
+static HRESULT texture_update_dirty(D9Texture*s,D9Texture*d){return d9wg_update_texture_common_mode(d,D9WG_COPY_2D,s->levels,(D9WGTextureCopyExtent){s->width,s->height,1,s->level_count},d->levels,(D9WGTextureCopyExtent){d->width,d->height,1,d->level_count},TRUE);}
 ${family(readComparisonSource(root+'/tests/fixtures/d3d8_update_before_core.c','utf8'),names8,'old8_')}
 ${family(readComparisonSource(root+'/tests/fixtures/d3d9_update_before_core.c','utf8'),['device_update_texture'],'old9_')}
 ${family(s8,names8,'now8_')}

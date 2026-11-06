@@ -23,6 +23,9 @@ typedef struct{Device*device;UINT handle,format,usage,level_count;D9TextureLevel
 #define D3DUSAGE_DEPTHSTENCIL 2
 #define D3DLOCK_READONLY 16
 #define D3DPOOL_DEFAULT 0
+#define D3DPOOL_MANAGED 1
+#define D3DLOCK_NO_DIRTY_UPDATE 32768
+#define E_OUTOFMEMORY (-3)
 #define TRACE_REFUSE(v) (v)
 #define ZeroMemory(p,n) memset(p,0,n)
 static void SetRect(RECT*r,INT l,INT t,INT rr,INT b){*r=(RECT){l,t,rr,b};}
@@ -31,6 +34,9 @@ static BOOL texture_format_layout(D3DFORMAT f,UINT*w,UINT*h,UINT*b){return d9wg_
 static BOOL multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}
 static D9WGTextureRows observed;static UINT uploads;static BOOL fail_upload;
 static BOOL emit_texture_rows(const D9WGTextureRows*r){observed=*r;uploads++;return !fail_upload;}
+/* This fixture isolates lock offsets and immediate wire uploads. Exact dirty
+ * region/mip behavior is exercised by d9wg_texture_dirty_test.js. */
+static BOOL texture_mark_dirty(D9Texture*t,UINT l,const RECT*r){(void)t;(void)l;(void)r;return TRUE;}
 ${['texture_levels_mapped','emit_level_update_api','emit_level_update','emit_texture_update','texture_lock_level','texture_unlock_level'].map(extract).join('\n')}
 static UINT checks,cases;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 texture lock case %u line %u: %s\\n",cases,__LINE__,#v);return 1;}checks++;}while(0)
@@ -46,7 +52,7 @@ const RECT areas[]={{0,0,8,8},{1,1,3,3},{-4,0,0,8},{0,-4,8,0},{20,20,24,24},{0,0
 for(UINT api=8;api<=9;api++)for(UINT pool=0;pool<4;pool++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts);f++)for(UINT r=0;r<sizeof(areas)/sizeof(*areas);r++)for(UINT ro=0;ro<2;ro++){
  const D9WGFormatLayout*q=d9wg_format_layouts+f;UINT bw=q->block_width,bh=q->block_height,bytes=q->block_bytes,pitch=(8/bw)*bytes,rows=8/bh;Device d={api};D9TextureLevel level={.width=8,.height=8,.row_pitch=pitch,.row_count=rows,.byte_count=pitch*rows,.shadow=storage};D9Texture t={&d,77,q->format,0,1,&level,pool,0};D3DLOCKED_RECT out={123,(void*)(uintptr_t)99};const RECT*area=areas+r;BOOL broken=api==9&&(q->format==0x31495441u||q->format==0x32495441u);UINT mapped_pitch=broken?8:pitch;BOOL eligible=(q->apis&(1u<<(api-7)))!=0,aligned=r==0||(r==1&&bw==1&&bh==1),valid=eligible&&!(pool==0&&q->format<0x10000u)&&(aligned||(broken&&r==1)||pool!=0);uploads=0;fail_upload=FALSE;
  HRESULT hr=texture_lock_level(&t,0,&out,area,ro?16:0);CHECK(hr==(valid?0:-1));
- if(valid){uintptr_t offset=(uintptr_t)(broken?(int64_t)area->top*8+area->left:(int64_t)area->top/bh*pitch+(int64_t)area->left/bw*bytes);CHECK((uintptr_t)out.pBits==(uintptr_t)storage+offset&&out.Pitch==(INT)mapped_pitch);CHECK(texture_unlock_level(&t,0)==0&&uploads==!ro);if(!ro){CHECK((uintptr_t)observed.source>=(uintptr_t)storage&&(uintptr_t)observed.source+(observed.row_count-1)*observed.source_pitch+observed.row_bytes<=(uintptr_t)storage+level.byte_count);volatile BYTE checksum=0;for(UINT y=0;y<observed.row_count;y++)for(UINT x=0;x<observed.row_bytes;x++)checksum^=observed.source[y*observed.source_pitch+x];(void)checksum;if(!aligned)CHECK(observed.source==storage&&observed.width==8&&observed.height==8);}}
+ if(valid){uintptr_t offset=(uintptr_t)(broken?(int64_t)area->top*8+area->left:(int64_t)area->top/bh*pitch+(int64_t)area->left/bw*bytes);CHECK((uintptr_t)out.pBits==(uintptr_t)storage+offset&&out.Pitch==(INT)mapped_pitch);CHECK(texture_unlock_level(&t,0)==0&&uploads==(!ro&&pool!=1));if(!ro&&pool!=1){CHECK((uintptr_t)observed.source>=(uintptr_t)storage&&(uintptr_t)observed.source+(observed.row_count-1)*observed.source_pitch+observed.row_bytes<=(uintptr_t)storage+level.byte_count);volatile BYTE checksum=0;for(UINT y=0;y<observed.row_count;y++)for(UINT x=0;x<observed.row_bytes;x++)checksum^=observed.source[y*observed.source_pitch+x];(void)checksum;if(!aligned)CHECK(observed.source==storage&&observed.width==8&&observed.height==8);}}
  else CHECK(!level.locked&&!uploads&&out.Pitch==123&&out.pBits==(void*)(uintptr_t)99);cases++;
 }
 /* Retail pool/usage permission is independent of ROI and lock flags. */

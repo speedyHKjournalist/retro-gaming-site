@@ -72,6 +72,7 @@ typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESU
 #define E_OUTOFMEMORY (-3)
 #define E_FAIL (-6)
 #define D3DPOOL_DEFAULT 0
+#define D3DPOOL_MANAGED 1
 #define D3DMULTISAMPLE_NONE 0
 #define D3DVERTEXTEXTURESAMPLER0 257
 #define PURE_DEVICE_REFUSE(...)
@@ -100,7 +101,9 @@ typedef struct{const void*lpVtbl;}Interface;typedef Interface IDirect3DDevice9,I
 ${snapshotBindings?"typedef HRESULT (*D9WGStateBlockRecorder8)(IDirect3DDevice9*,const void*);":""}
 typedef struct Device D9Device;typedef struct Surface D9Surface,D9Volume;typedef struct Texture D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuffer;typedef struct Chain{Interface iface;D9Device*device;LONG refcount;UINT handle;struct Chain*next_device_chain;D9Surface*back_buffer,*cached_buffers[4];}D9SwapChain;
 typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL shadow_valid,locked;D9WGPrivateStore private_data;D9Surface*level_surface,*level_volume;}D9TextureLevel;
-struct Texture{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,width,height,level_count,usage,length,fvf;BYTE*shadow,*shadow_allocation;void*clips;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;D9TextureLevel*levels;void*mip_storage;D9Texture*next_device_resource;BOOL private_back_buffer;D9WGPrivateStore private_data;BOOL locked;};
+/* Ownership fixture textures contain no pending dirty allocations. */
+static void texture_dirty_clear(D9TextureLevel*l){(void)l;}
+struct Texture{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,width,height,level_count,usage,length,fvf;BYTE*shadow,*shadow_allocation;void*clips;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;D9TextureLevel*levels;void*mip_storage;D9Texture*next_device_resource;BOOL private_back_buffer,dirty_pending;D9WGPrivateStore private_data;BOOL locked;};
 struct Surface{Interface iface;LONG refcount,binding_refs;D9Device*device;D9Texture*texture,*cube_texture;D9SwapChain*swap_chain;BOOL texture_child,auto_depth_stencil,backbuffer,device_pin_transferred,locked;UINT level,width,height,cube_face;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;BYTE*shadow;void*dc,*dc_previous,*dib,*gdi_memory;D9WGPrivateStore private_data;};
 typedef struct{Interface iface;LONG refs;}Parent;
 typedef struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}D3DVIEWPORT9;
@@ -173,7 +176,7 @@ ${stateBindings?`#define D9_MAX_RENDER_STATES 256
 typedef struct{float X,Y,Width,Height,MinZ,MaxZ;}D9WGProcessViewport;
 typedef struct{UINT clip_union,clip_intersection;}D9WGClipStatus;
 typedef struct{const void*vertices,*indices;UINT length,stride,count,vertex_count,status_screen,index_bytes,index_stride,min_vertex;D9WGProcessViewport viewport;}D9WGClipDrawSource;
-struct Device{Interface iface;D9WGClipStatus clip_status;BOOL clip_status_valid;D9StateBlock*recording_result;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;UINT handle;Parent*parent;D9Texture*texture_resources;D9Surface*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;BOOL depth_stencil_unbound;void*extra_lights;int palettes;D9Texture*vertex_buffers,*index_buffers,*cube_textures,*volume_textures,*textures[20],*cube_bindings[20],*volume_bindings[20],*index_buffer;D9StreamBinding streams[16];D9VertexDeclaration*vertex_declaration,*vertex_declarations;D9Shader*vertex_shader,*pixel_shader,*shaders;UINT fvf;struct{UINT BackBufferWidth,BackBufferHeight,BackBufferFormat,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat;BOOL EnableAutoDepthStencil;}present;D9SwapChain implicit_swap_chain,*additional_swap_chains;D9StateBlock*state_blocks;${stateBindings?stateFields:""}};
+struct Device{BOOL managed_texture_dirty;Interface iface;D9WGClipStatus clip_status;BOOL clip_status_valid;D9StateBlock*recording_result;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;UINT handle;Parent*parent;D9Texture*texture_resources;D9Surface*implicit_back_buffer,*implicit_depth_stencil,*render_target_surfaces[4],*depth_stencil_surface;BOOL depth_stencil_unbound;void*extra_lights;int palettes;D9Texture*vertex_buffers,*index_buffers,*cube_textures,*volume_textures,*textures[20],*cube_bindings[20],*volume_bindings[20],*index_buffer;D9StreamBinding streams[16];D9VertexDeclaration*vertex_declaration,*vertex_declarations;D9Shader*vertex_shader,*pixel_shader,*shaders;UINT fvf;struct{UINT BackBufferWidth,BackBufferHeight,BackBufferFormat,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat;BOOL EnableAutoDepthStencil;}present;D9SwapChain implicit_swap_chain,*additional_swap_chains;D9StateBlock*state_blocks;${stateBindings?stateFields:""}};
 ${tokenBindings?`static void*token_private_alloc(void*,uint32_t);static void token_private_free(void*,void*);static void token_private_retain(void*,void*);static void token_private_release(void*,void*);
 static const D9WGPrivateOps d9wg_private_ops={NULL,token_private_alloc,token_private_free,token_private_retain,token_private_release,NULL,NULL};`:'static const D9WGPrivateOps d9wg_private_ops={0};'}static int g_texture_vtbl,g_surface_vtbl,g_transport_lock;
 ${deviceViewBindings?"#define D8WG_NATIVE_DEVICE_VIEWS8 1\nstatic void(*device_view_finalizer_hook)(void*);":""}
@@ -232,7 +235,8 @@ static BOOL fvf_to_declaration(DWORD f,D9WGVertexElement*w,UINT*n){${fvfBindings
 static BOOL emit_set_fvf(D9Device*d,DWORD f,const D9WGVertexElement*w,UINT n){(void)d;(void)w;assert(${fvfBindings?"f&&n&&n<=18":"f==2&&n==1"});fvf_sets++;return !fail_emit;}
 static BOOL emit_vertex_declaration_create(D9Device*d,UINT h,const D9WGVertexElement*w,UINT n){(void)w;assert(d==active_device&&h&&n<=18);if(fail_emit)return FALSE;fvf_creates++;return TRUE;}
 `:""}
-${upBindings?`static UINT up_emits,up_invalidations,up_status_calls;static HRESULT up_status_result;
+${upBindings?`static BOOL flush_managed_textures(D9Device*d){(void)d;return TRUE;}
+static UINT up_emits,up_invalidations,up_status_calls;static HRESULT up_status_result;
 static HRESULT d9_prepare_clip_status(D9Device*d,const D9WGClipDrawSource*s,BOOL bound,D9WGClipStatus*next,BOOL*valid){(void)d;assert(s->vertices&&s->stride&&!bound);up_status_calls++;*next=(D9WGClipStatus){17,19};*valid=TRUE;return up_status_result;}
 static BOOL emit_draw_primitive_up(const D9WGDrawPrimitiveUP*c,const void*p){assert(c->vertex_bytes&&p);up_emits++;return !fail_emit;}
 static BOOL emit_draw_indexed_primitive_up(const D9WGDrawIndexedPrimitiveUP*c,const void*i,const void*v){assert(c->vertex_bytes&&c->index_bytes&&i&&v);up_emits++;return !fail_emit;}

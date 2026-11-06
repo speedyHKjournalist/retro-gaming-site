@@ -878,7 +878,14 @@ typedef struct D9Volume D9Volume;
 typedef struct D9StateBlock D9StateBlock;
 typedef struct D9Query D9Query;
 
+typedef struct D9TextureDirtyRect {
+    RECT rect;
+    struct D9TextureDirtyRect *next;
+} D9TextureDirtyRect;
+
 typedef struct D9TextureLevel {
+    BOOL dirty_full;
+    D9TextureDirtyRect *dirty_rects;
     D9WGPrivateStore private_data;
     BYTE *shadow;
     /* The one surface GetSurfaceLevel hands out for this level, created on
@@ -1064,6 +1071,7 @@ struct D9Device {
     D9StreamBinding streams[D9_MAX_STREAMS];
     D9IndexBuffer *index_buffer;
     D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
+    BOOL managed_texture_dirty;
     /* Parallel to `textures`: a stage holds either a 2D or a cube texture, and
      * exactly one of the two slots is non-NULL. Keeping them apart rather than
      * behind a tagged union keeps the release paths type-correct. */
@@ -1239,6 +1247,7 @@ struct D9Texture {
     D9TextureLevel *levels;
     BYTE *mip_storage; /* CPU pools: contiguous mip/face allocation. */
     D9Texture *next_device_resource;
+    BOOL dirty_pending;
     /* Private surface/backbuffer storage: its public owner holds the device pin. */
     BOOL private_back_buffer;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
@@ -2653,6 +2662,8 @@ static BOOL emit_texture_update(D9Texture *texture, UINT level, const RECT *rect
 {
     return emit_level_update_api(device_compatibility_api(texture->device), texture->handle, texture->format, &texture->levels[level], level, 0, rect);
 }
+
+#include "../runtime/d9wg_texture_dirty2d.h"
 
 static BOOL primitive_element_count(D3DPRIMITIVETYPE type,
         UINT primitive_count, UINT *element_count)
@@ -5304,7 +5315,10 @@ static UINT WINAPI device_get_available_texture_mem(IDirect3DDevice9 *iface)
 
 static HRESULT WINAPI device_evict_managed_resources(IDirect3DDevice9 *iface)
 {
-    (void)iface;
+    D9Device *device = device_from_iface(iface);
+    for (D9Texture *texture = device->texture_resources; texture; texture = texture->next_device_resource)
+        if (texture->pool == D3DPOOL_MANAGED)
+            texture_dirty_all(texture);
     return D3D_OK;
 }
 
@@ -6665,6 +6679,8 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
     if (cube) cube_binding_add_ref(cube);
     if (volume) volume_texture_binding_add_ref(volume);
     device->textures[slot] = texture;
+    if (texture && texture->pool == D3DPOOL_MANAGED && texture->dirty_pending)
+        device->managed_texture_dirty = TRUE;
     device->cube_bindings[slot] = cube;
     device->volume_bindings[slot] = volume;
     if (old_texture) texture_binding_release(old_texture);
@@ -7192,6 +7208,7 @@ static HRESULT create_texture_object(D9Device *device,
     }
     texture->next_device_resource = device->texture_resources;
     device->texture_resources = texture;
+    if (pool == D3DPOOL_MANAGED || pool == D3DPOOL_SYSTEMMEM) texture_dirty_all(texture);
     *texture_out = &texture->iface;
     TRACE_REGISTER_RANGE("TEXTURE_OBJECT", texture->handle, texture, texture,
             sizeof(*texture));
@@ -7497,6 +7514,7 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
     D9WGClipStatus next_status;BOOL next_status_valid;
     HRESULT status_result = d9_prepare_clip_status(device, &status_source, TRUE, &next_status, &next_status_valid);
     if (FAILED(status_result)) return status_result;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     int clipped = d9_clip_vb_draw(device, primitive_type, start_vertex, vertex_count, NULL, 0, 0, 0, 0, vertex_count);
     if (clipped) {
         if (clipped < 0) return TRACE_REFUSE(clipped == -3 ? E_OUTOFMEMORY :
@@ -7589,6 +7607,7 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     D9WGClipStatus next_status;BOOL next_status_valid;
     HRESULT status_result = d9_prepare_clip_status(device, &status_source, TRUE, &next_status, &next_status_valid);
     if (FAILED(status_result)) return status_result;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     int clipped = d9_clip_vb_draw(device, primitive_type, 0, index_count, device->index_buffer->shadow + start_index*index_size,
             index_count*index_size, index_size, base_vertex_index,
             bounds.min_vertex, bounds.vertex_limit);
@@ -7692,6 +7711,7 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
     D9WGClipStatus next_status;BOOL next_status_valid;
     HRESULT status_result = d9_prepare_clip_status(device, &status_source, FALSE, &next_status, &next_status_valid);
     if (FAILED(status_result)) return status_result;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     result = emit_draw_primitive_up(&command, vertex_data);
     if (result) {
         device->clip_status = next_status;device->clip_status_valid = next_status_valid;
@@ -7766,6 +7786,7 @@ static HRESULT draw_indexed_up(D9Device *device, D3DPRIMITIVETYPE primitive_type
         HRESULT status_result = d9_prepare_clip_status(device, &status_source, FALSE, &next_status, &next_status_valid);
         if (FAILED(status_result)) return status_result;
     }
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     result = emit_draw_indexed_primitive_up(&command, index_data, vertex_data);
     if (!result) return D3DERR_DRIVERINTERNALERROR;
     if (track_status) { device->clip_status = next_status;device->clip_status_valid = next_status_valid; }
@@ -9606,6 +9627,7 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
 #define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_cube_texture_update((t),(f),(l),(r))
 #define D9WG_COPY_UPLOAD_VOLUME(t,l,b) emit_volume_texture_update((t),(l),(b))
 #include "../runtime/d9wg_texture_copy_bridge.h"
+#include "../runtime/d9wg_texture_dirty_copy2d.h"
 
 static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
         IDirect3DBaseTexture9 *src_iface, IDirect3DBaseTexture9 *dst_iface)
@@ -9634,9 +9656,7 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
     if (source->iface.lpVtbl != &g_texture_vtbl || source->device != device || destination->device != device ||
             !d9wg_texture_copy_pools(source->pool, destination->pool) || source->format != destination->format)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    return TRACE_REFUSE(d9wg_update_texture_common_mode(destination, D9WG_COPY_2D,
-            source->levels, (D9WGTextureCopyExtent){source->width, source->height, 1, source->level_count},
-            destination->levels, (D9WGTextureCopyExtent){destination->width, destination->height, 1, destination->level_count}, TRUE));
+    return TRACE_REFUSE(texture_update_dirty(source, destination));
 }
 
 /*
@@ -14287,9 +14307,13 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
     /* D3D8/9 CPU-pool 2D locks expose raw offsets even outside the image.
      * Preserve that API result without performing out-of-object C pointer
      * arithmetic. Upload only owned storage, never the caller's unchecked ROI. */
-    level_data->lock_rect = area;
+    RECT upload_area = area;
     if (!valid_rect)
-        SetRect(&level_data->lock_rect, 0, 0, level_data->width, level_data->height);
+        SetRect(&upload_area, 0, 0, level_data->width, level_data->height);
+    if (!(flags & (D3DLOCK_READONLY | D3DLOCK_NO_DIRTY_UPDATE))
+            && !texture_mark_dirty(texture, level, &upload_area))
+        return E_OUTOFMEMORY;
+    level_data->lock_rect = upload_area;
     level_data->lock_flags = flags;
     level_data->locked = TRUE;
     UINT public_pitch = broken_pitch ? level_data->width : level_data->row_pitch;
@@ -14317,7 +14341,7 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
     if (!level_data->locked)
         return device_compatibility_api(texture->device) == 8u || !texture->private_back_buffer
                 ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!(level_data->lock_flags & D3DLOCK_READONLY))
+    if (texture->pool != D3DPOOL_MANAGED && !(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_texture_update(texture, level, &level_data->lock_rect);
     level_data->locked = FALSE;
     level_data->lock_flags = 0;
@@ -14364,6 +14388,7 @@ static void texture_destroy_storage(D9Texture *texture)
     destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     for (level = 0; level < texture->level_count; ++level) {
+        texture_dirty_clear(&texture->levels[level]);
         d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
         /* The level's surface sub-object dies with the texture; nothing
          * can still hold it, because every surface reference is one of the
@@ -14451,7 +14476,10 @@ static DWORD WINAPI texture_get_priority(IDirect3DTexture9 *iface)
 { return texture_from_iface(iface)->priority; }
 
 static void WINAPI texture_preload(IDirect3DTexture9 *iface)
-{ (void)iface; }
+{
+    D9Texture *texture = texture_from_iface(iface);
+    if (texture->pool == D3DPOOL_MANAGED) texture_flush_dirty(texture);
+}
 
 static D3DRESOURCETYPE WINAPI texture_get_type(IDirect3DTexture9 *iface)
 { (void)iface; return D3DRTYPE_TEXTURE; }
@@ -14514,6 +14542,8 @@ static void WINAPI texture_generate_mip_sublevels(IDirect3DTexture9 *iface)
 {
     D9Texture *texture = texture_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
+        return;
+    if (texture->pool == D3DPOOL_MANAGED && !texture_flush_dirty(texture))
         return;
     emit_generate_mips(texture->device, texture->handle, texture->autogen_filter, FALSE);
 }
@@ -14650,7 +14680,7 @@ static HRESULT WINAPI texture_add_dirty_rect(IDirect3DTexture9 *iface,
             || (UINT)rect->right > texture->width
             || (UINT)rect->bottom > texture->height))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    return D3D_OK;
+    return texture_mark_dirty(texture, 0, rect) ? D3D_OK : E_OUTOFMEMORY;
 }
 
 /* ---- IDirect3DVertexDeclaration9 ---- */
@@ -16584,8 +16614,11 @@ static HRESULT readback_front8(D9Surface *surface, D3DFORMAT format,
 static BOOL upload_front8(D9Surface *surface, D3DFORMAT format,
         const RECT *area, const BYTE *pixels, UINT pitch, UINT pixel_bytes)
 {
-    if (surface->texture)
+    if (surface->texture) {
+        if (surface->texture->pool == D3DPOOL_SYSTEMMEM
+                && !texture_mark_dirty(surface->texture, surface->level, area)) return FALSE;
         return emit_texture_update(surface->texture, surface->level, area);
+    }
     if (surface->cube_texture)
         return emit_cube_texture_update(surface->cube_texture,
                 surface->cube_face, surface->level, area);

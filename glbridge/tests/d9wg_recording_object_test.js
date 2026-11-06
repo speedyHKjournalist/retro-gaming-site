@@ -2,7 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.D9WG_RECORD_OBJECT_SOURCE||path.join(root,"d3d9proxy/d3d9_proxy.c"),"utf8");
 function extract(name){const m=new RegExp("static (?:HRESULT(?: WINAPI)?|BOOL|void) "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
-const names=['texture_binding_slot',...['texture','stream_source','indices','vertex_shader','pixel_shader','vertex_declaration','fvf','light'].flatMap(n=>['device_set_'+n,'device_get_'+n]),'d9_emit_light','device_light_enable','device_get_light_enable','state_block_release_references','device_begin_state_block','device_end_state_block'];
+const names=['shader_binding_identity','texture_binding_slot',...['texture','stream_source','indices','vertex_shader','pixel_shader','vertex_declaration','fvf','light'].flatMap(n=>['device_set_'+n,'device_get_'+n]),'d9_emit_light','device_light_enable','device_get_light_enable','state_block_release_references','device_begin_state_block','device_end_state_block'];
 // The SetLight function calls this emitter, so put its definition first.
 names.splice(names.indexOf('d9_emit_light'),1);names.unshift('d9_emit_light');names.unshift('device_set_stream_binding');
 const interfaces=['VertexBuffer','IndexBuffer','BaseTexture','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','StateBlock'].map(n=>'typedef Interface IDirect3D'+n+'9;').join('\n');
@@ -18,6 +18,7 @@ typedef int BOOL,WINBOOL,HRESULT;typedef uint32_t UINT,DWORD;
 #define FALSE 0
 #define D3D_OK 0
 #define D3DPOOL_SCRATCH 3
+#define D3DPOOL_MANAGED 1
 #define FAILED(v) ((v)<0)
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
@@ -44,12 +45,12 @@ static void light_free(void *p){frees++;free(p);}
 typedef struct Interface {const void *lpVtbl;} Interface;
 ${interfaces}
 typedef struct D9Device D9Device;
-typedef struct Object {Interface iface;D9Device *device;uint32_t handle;UINT length;int refs;DWORD fvf;UINT pool,format;} Object;
+typedef struct Object {Interface iface;D9Device *device;uint32_t handle;UINT length;int refs;DWORD fvf;UINT pool,format;BOOL dirty_pending;struct Object *next_device_resource;} Object;
 typedef Object D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuffer,D9VertexDeclaration;
-typedef struct D9Shader {union {Interface vertex,pixel;} iface;D9Device *device;uint32_t handle;UINT length;int refs;} D9Shader;
+typedef struct D9Shader {union {Interface vertex,pixel;} iface;D9Device *device;uint32_t handle;UINT length;int refs;BOOL is_pixel;struct D9Shader *next_device_resource;} D9Shader;
 typedef struct D9StreamBinding {D9VertexBuffer *buffer;UINT stride,offset;DWORD frequency;} D9StreamBinding;
 typedef struct D9StateBlock {Interface iface;D9Device *device;BOOL device_parent_ref;D9Texture *textures[20];D9CubeTexture *cube_textures[20];D9VolumeTexture *volume_textures[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;BOOL has_texture[20],has_stream[16],has_indices,has_vertex_shader,has_pixel_shader,has_vertex_format;DWORD fvf;BOOL has_light[8],has_light_enable[8],light_enabled[8];D3DLIGHT9 lights[8];D9WGLightState *extra_lights;} D9StateBlock;
-struct D9Device {D9Texture *textures[20];D9CubeTexture *cube_bindings[20];D9VolumeTexture *volume_bindings[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;DWORD fvf;D9StateBlock *recording_result;D3DLIGHT9 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;uint32_t handle;};
+struct D9Device {BOOL managed_texture_dirty;D9Texture *texture_resources,*cube_textures,*volume_textures;D9Shader *shaders;D9Texture *textures[20];D9CubeTexture *cube_bindings[20];D9VolumeTexture *volume_bindings[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;DWORD fvf;D9StateBlock *recording_result;D3DLIGHT9 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;uint32_t handle;};
 typedef D9Device IDirect3DDevice9;
 static const int g_texture_vtbl=1,g_cube_vtbl=2,g_volume_texture_vtbl=3,g_vb_vtbl=4,g_ib_vtbl=5,g_decl_vtbl=6,g_vertex_shader_vtbl=7,g_pixel_shader_vtbl=8;
 static struct {void *iface;int *refs;int binding_refs;} registry[32];static unsigned registry_count,emissions;static int fail_alloc;
@@ -98,7 +99,7 @@ static void device_child_add_ref(D9Device*d){(void)d;device_pins++;}
 static D9StateBlock *state_block_alloc(D9Device *d,BOOL parent_ref){assert(!parent_ref);if(fail_alloc)return NULL;memset(&recording,0,sizeof(recording));recording.device=d;return &recording;}
 ${names.map(extract).join('\n')}
 static Object *make(Object *o,D9Device *d,const void *vtbl,uint32_t handle){*o=(Object){.iface={vtbl},.device=d,.handle=handle,.length=64,.refs=1};registry[registry_count].iface=&o->iface;registry[registry_count++].refs=&o->refs;return o;}
-static void make_shader(D9Shader *s,D9Device *d,const void *vtbl,uint32_t handle){memset(s,0,sizeof(*s));s->iface.vertex.lpVtbl=vtbl;s->device=d;s->handle=handle;s->length=64;s->refs=1;registry[registry_count].iface=&s->iface;registry[registry_count++].refs=&s->refs;}
+static void make_shader(D9Shader *s,D9Device *d,const void *vtbl,uint32_t handle){memset(s,0,sizeof(*s));s->iface.vertex.lpVtbl=vtbl;s->device=d;s->handle=handle;s->length=64;s->refs=1;s->is_pixel=vtbl==&g_pixel_shader_vtbl;registry[registry_count].iface=&s->iface;registry[registry_count++].refs=&s->refs;}
 static int refcount(void *p){for(unsigned i=0;i<registry_count;++i)if(registry[i].iface==p)return *registry[i].refs;abort();}
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"D3D9 object recording line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 int main(void){D9Device device={0};Object old_vb,new_vb,old_ib,new_ib,old_decl,new_decl,texture,cube,volume;D9Shader old_vs,new_vs,old_ps,new_ps;make(&old_vb,&device,&g_vb_vtbl,1);make(&new_vb,&device,&g_vb_vtbl,2);make(&old_ib,&device,&g_ib_vtbl,3);make(&new_ib,&device,&g_ib_vtbl,4);make(&old_decl,&device,&g_decl_vtbl,5);make(&new_decl,&device,&g_decl_vtbl,6);make(&texture,&device,&g_texture_vtbl,7);make(&cube,&device,&g_cube_vtbl,8);make(&volume,&device,&g_volume_texture_vtbl,9);make_shader(&old_vs,&device,&g_vertex_shader_vtbl,10);make_shader(&new_vs,&device,&g_vertex_shader_vtbl,11);make_shader(&old_ps,&device,&g_pixel_shader_vtbl,12);make_shader(&new_ps,&device,&g_pixel_shader_vtbl,13);
