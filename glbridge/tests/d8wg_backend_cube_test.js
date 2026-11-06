@@ -85,7 +85,7 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  HRESULT wanted=api==8?old8_create(&before_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&before):old9_create(&before_device,w,levels[l],usages[u],format,pools[p],nullout?NULL:&before,NULL);
  /* Wine top-level DXT dimension and texture WRITEONLY rules supersedes the frozen permissive constructor. */
  BOOL dxt=format==0x31545844u||format==0x32545844u||format==0x33545844u||format==0x34545844u||format==0x35545844u;
- if((dxt && (w%4)) || (api==8 && ((usages[u]&8)||((usages[u]&512)&&(usages[u]&3))))){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
+ if((dxt && (w%4)) || ((usages[u]&8)||((usages[u]&512)&&(usages[u]&3)))){if(!wanted)cleanup(before);before=nullout?(void*)(uintptr_t)99:NULL;wanted=D3DERR_INVALIDCALL;allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));}
  if(api==8&&!format)before=(void*)(uintptr_t)99;
  UINT old_alloc=allocations,old_free=frees,old_creates=creates,old_handles=handles,args[10];memcpy(args,emitted,sizeof(args));
  if(contiguous&&old_alloc>=3){

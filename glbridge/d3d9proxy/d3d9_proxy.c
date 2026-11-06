@@ -6745,8 +6745,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
     }
     *buffer_out = NULL;
     if (!length || pool >= D3DPOOL_SCRATCH
-            || (device_compatibility_api(device) == 8u
-                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
+            || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TRACE("FAIL CreateVertexBuffer length=%lu usage=%08lX fvf=%08lX pool=%lu -> %08lX",
                 length, usage, fvf, (DWORD)pool, (DWORD)D3DERR_INVALIDCALL);
         HOSTLOG_FAILED("CreateVertexBuffer refused: length=%lu usage=%08lX "
@@ -6836,8 +6835,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     }
     *buffer_out = NULL;
     if (!length || pool >= D3DPOOL_SCRATCH
-            || (device_compatibility_api(device) == 8u
-                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
+            || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TRACE("FAIL CreateIndexBuffer length=%lu usage=%08lX format=%08lX pool=%lu -> %08lX",
                 length, usage, (DWORD)format, (DWORD)pool,
                 (DWORD)D3DERR_INVALIDCALL);
@@ -6997,11 +6995,11 @@ static HRESULT create_texture_object(D9Device *device,
     if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *texture_out = NULL;
+    if ((usage & D3DUSAGE_WRITEONLY)
+            || ((usage & D3DUSAGE_DYNAMIC)
+                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (api == 8u) {
-        if ((usage & D3DUSAGE_WRITEONLY)
-                || ((usage & D3DUSAGE_DYNAMIC)
-                    && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!width || !height || width > 4096 || height > 4096
                 || !supported_format8(format, FALSE)
                 || (usage & D3DUSAGE_DEPTHSTENCIL)
@@ -8923,11 +8921,11 @@ static HRESULT create_volume_texture_object(D9Device *device,
     if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *out = NULL;
+    if ((usage & D3DUSAGE_WRITEONLY)
+            || ((usage & D3DUSAGE_DYNAMIC)
+                && (pool == D3DPOOL_MANAGED || pool == D3DPOOL_SCRATCH)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (api == 8u) {
-        if ((usage & D3DUSAGE_WRITEONLY)
-                || ((usage & D3DUSAGE_DYNAMIC)
-                    && (pool == D3DPOOL_MANAGED || pool == D3DPOOL_SCRATCH)))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!width || !height || !depth || width > 2048 || height > 2048
                 || depth > 2048
                 || !(pool == D3DPOOL_SCRATCH ? supported_format8(format, FALSE)
@@ -9140,7 +9138,7 @@ static HRESULT WINAPI volume_texture_free_private_data(IDirect3DVolumeTexture9* 
 static DWORD WINAPI volume_texture_set_priority(
         IDirect3DVolumeTexture9 *iface, DWORD priority)
 { D9VolumeTexture *texture = volume_texture_from_iface(iface);
-  if (device_compatibility_api(texture->device) == 8u && texture->pool != D3DPOOL_MANAGED) return 0;
+  if (texture->pool != D3DPOOL_MANAGED) return 0;
   DWORD previous = texture->priority; texture->priority = priority;
   return previous; }
 static DWORD WINAPI volume_texture_get_priority(IDirect3DVolumeTexture9 *iface)
@@ -9199,8 +9197,7 @@ static HRESULT WINAPI volume_texture_lock_box(IDirect3DVolumeTexture9 *iface,
     UINT block_width, block_height, block_bytes;
     if (!locked || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device_compatibility_api(texture->device) == 8u
-            && texture->pool == D3DPOOL_DEFAULT && !(texture->usage & D3DUSAGE_DYNAMIC)) {
+    if (texture->pool == D3DPOOL_DEFAULT && !(texture->usage & D3DUSAGE_DYNAMIC)) {
         locked->pBits = NULL;
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
@@ -12636,11 +12633,11 @@ static HRESULT create_cube_texture_object(D9Device *device,
     if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *texture_out = NULL;
+    if ((usage & D3DUSAGE_WRITEONLY)
+            || ((usage & D3DUSAGE_DYNAMIC)
+                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (api == 8u) {
-        if ((usage & D3DUSAGE_WRITEONLY)
-                || ((usage & D3DUSAGE_DYNAMIC)
-                    && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
         if (!edge || edge > 4096 || !supported_format8(format, FALSE)
                 || (usage & D3DUSAGE_DEPTHSTENCIL)
                 || ((usage & D3DUSAGE_RENDERTARGET)
@@ -12863,7 +12860,7 @@ static DWORD WINAPI cube_set_priority(IDirect3DCubeTexture9 *iface,
         DWORD priority)
 {
     D9CubeTexture *texture = cube_from_iface(iface);
-    if (device_compatibility_api(texture->device) == 8u && texture->pool != D3DPOOL_MANAGED)
+    if (texture->pool != D3DPOOL_MANAGED)
         return 0;
     DWORD previous = texture->priority;
     texture->priority = priority;
@@ -13881,7 +13878,7 @@ static DWORD WINAPI vb_set_priority(IDirect3DVertexBuffer9 *iface,
         DWORD priority)
 {
     D9VertexBuffer *buffer = vb_from_iface(iface);
-    if (device_compatibility_api(buffer->device) == 8u && buffer->pool != D3DPOOL_MANAGED)
+    if (buffer->pool != D3DPOOL_MANAGED)
         return 0;
     DWORD old = buffer->priority;
     buffer->priority = priority;
@@ -14048,7 +14045,7 @@ static DWORD WINAPI ib_set_priority(IDirect3DIndexBuffer9 *iface,
         DWORD priority)
 {
     D9IndexBuffer *buffer = ib_from_iface(iface);
-    if (device_compatibility_api(buffer->device) == 8u && buffer->pool != D3DPOOL_MANAGED)
+    if (buffer->pool != D3DPOOL_MANAGED)
         return 0;
     DWORD old = buffer->priority;
     buffer->priority = priority;
@@ -14194,7 +14191,8 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
     if (texture_levels_mapped(texture->levels, texture->level_count, FALSE))
         return D3D_OK;
     if (!level_data->locked)
-        return D3D_OK;
+        return device_compatibility_api(texture->device) == 8u || !texture->private_back_buffer
+                ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_texture_update(texture, level, &level_data->lock_rect);
     level_data->locked = FALSE;
@@ -14318,7 +14316,7 @@ static DWORD WINAPI texture_set_priority(IDirect3DTexture9 *iface,
         DWORD priority)
 {
     D9Texture *texture = texture_from_iface(iface);
-    if (device_compatibility_api(texture->device) == 8u && texture->pool != D3DPOOL_MANAGED)
+    if (texture->pool != D3DPOOL_MANAGED)
         return 0;
     DWORD old = texture->priority;
     texture->priority = priority;
