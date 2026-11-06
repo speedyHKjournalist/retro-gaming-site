@@ -1201,6 +1201,7 @@ struct D9VertexBuffer {
     UINT lock_size;
     uint32_t lock_flags;
     BOOL locked;
+    BOOL full_upload_pending; /* managed residency: load the whole shadow once */
     UINT lock_count;
     D9VertexBuffer *next_device_resource;
 };
@@ -1223,6 +1224,7 @@ struct D9IndexBuffer {
     UINT lock_size;
     uint32_t lock_flags;
     BOOL locked;
+    BOOL full_upload_pending; /* managed residency: load the whole shadow once */
     UINT lock_count;
     D9IndexBuffer *next_device_resource;
 };
@@ -5319,6 +5321,10 @@ static HRESULT WINAPI device_evict_managed_resources(IDirect3DDevice9 *iface)
     for (D9Texture *texture = device->texture_resources; texture; texture = texture->next_device_resource)
         if (texture->pool == D3DPOOL_MANAGED)
             texture_dirty_all(texture);
+    for (D9VertexBuffer *buffer = device->vertex_buffers; buffer; buffer = buffer->next_device_resource)
+        if (buffer->pool == D3DPOOL_MANAGED) buffer->full_upload_pending = TRUE;
+    for (D9IndexBuffer *buffer = device->index_buffers; buffer; buffer = buffer->next_device_resource)
+        if (buffer->pool == D3DPOOL_MANAGED) buffer->full_upload_pending = TRUE;
     return D3D_OK;
 }
 
@@ -6871,6 +6877,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
     buffer->usage = usage;
     buffer->fvf = fvf;
     buffer->pool = pool;
+    buffer->full_upload_pending = pool == D3DPOOL_MANAGED;
 
     if (!emit_vertex_buffer_create(device, buffer)) {
         TRACE("FAIL CreateVertexBuffer transport length=%lu handle=%08lX -> %08lX",
@@ -6978,6 +6985,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     buffer->usage = usage;
     buffer->format = format;
     buffer->pool = pool;
+    buffer->full_upload_pending = pool == D3DPOOL_MANAGED;
 
     if (!emit_index_buffer_create(device, buffer)) {
         TRACE("FAIL CreateIndexBuffer transport length=%lu handle=%08lX -> %08lX",
@@ -14033,7 +14041,11 @@ static DWORD WINAPI vb_get_priority(IDirect3DVertexBuffer9 *iface)
 { return vb_from_iface(iface)->priority; }
 
 static void WINAPI vb_preload(IDirect3DVertexBuffer9 *iface)
-{ (void)iface; }
+{
+    D9VertexBuffer *buffer = vb_from_iface(iface);
+    d9wg_preload_buffer(buffer->handle, buffer->shadow, buffer->length,
+            &buffer->full_upload_pending);
+}
 
 static D3DRESOURCETYPE WINAPI vb_get_type(IDirect3DVertexBuffer9 *iface)
 { (void)iface; return D3DRTYPE_VERTEXBUFFER; }
@@ -14068,7 +14080,8 @@ static HRESULT WINAPI vb_unlock(IDirect3DVertexBuffer9 *iface)
     if (!buffer->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (buffer->lock_count > 1u) { --buffer->lock_count; return D3D_OK; }
-    result = (buffer->lock_flags & D3DLOCK_READONLY)
+    result = buffer->full_upload_pending
+            || (buffer->lock_flags & D3DLOCK_READONLY)
             || emit_buffer_update(buffer->handle, buffer->lock_offset,
                     buffer->shadow + buffer->lock_offset, buffer->lock_size,
                     buffer->lock_flags);
@@ -14200,7 +14213,11 @@ static DWORD WINAPI ib_get_priority(IDirect3DIndexBuffer9 *iface)
 { return ib_from_iface(iface)->priority; }
 
 static void WINAPI ib_preload(IDirect3DIndexBuffer9 *iface)
-{ (void)iface; }
+{
+    D9IndexBuffer *buffer = ib_from_iface(iface);
+    d9wg_preload_buffer(buffer->handle, buffer->shadow, buffer->length,
+            &buffer->full_upload_pending);
+}
 
 static D3DRESOURCETYPE WINAPI ib_get_type(IDirect3DIndexBuffer9 *iface)
 { (void)iface; return D3DRTYPE_INDEXBUFFER; }
@@ -14232,7 +14249,8 @@ static HRESULT WINAPI ib_unlock(IDirect3DIndexBuffer9 *iface)
     if (!buffer->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (buffer->lock_count > 1u) { --buffer->lock_count; return D3D_OK; }
-    result = (buffer->lock_flags & D3DLOCK_READONLY)
+    result = buffer->full_upload_pending
+            || (buffer->lock_flags & D3DLOCK_READONLY)
             || emit_buffer_update(buffer->handle, buffer->lock_offset,
                     buffer->shadow + buffer->lock_offset, buffer->lock_size,
                     buffer->lock_flags);

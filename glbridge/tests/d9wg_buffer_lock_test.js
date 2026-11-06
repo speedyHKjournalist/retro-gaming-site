@@ -28,7 +28,7 @@ typedef int32_t HRESULT;typedef int BOOL;typedef uint32_t UINT,DWORD;typedef uin
 #define TRACE_REFUSE(v) (v)
 #define ZeroMemory(p,n) memset(p,0,n)
 typedef struct{unsigned marker;}Clip;
-typedef struct{uint32_t handle,length,usage,pool;BOOL locked;uint32_t lock_offset,lock_size,lock_flags,lock_count;void*device;BYTE *shadow;Clip clips;}Buffer;
+typedef struct{uint32_t handle,length,usage,pool;BOOL locked,full_upload_pending;uint32_t lock_offset,lock_size,lock_flags,lock_count;void*device;BYTE *shadow;Clip clips;}Buffer;
 typedef Buffer D${api}VertexBuffer,D${api}IndexBuffer,IDirect3DVertexBuffer${api},IDirect3DIndexBuffer${api};
 typedef ${api===8?"BYTE*":"void*"} LockPointer;
 static Buffer *vb_from_iface(IDirect3DVertexBuffer${api}*p){return p;}static Buffer *ib_from_iface(IDirect3DIndexBuffer${api}*p){return p;}

@@ -15,7 +15,7 @@ const cases=[
  ["failed callback gets a receipt","policy","d9wg_flush_mapped_buffers","        if (!emit(context,","        map->uploaded = 1;\n        if (!emit(context,"],
  ["accepted callback loses its receipt","policy","d9wg_flush_mapped_buffers","map->uploaded = 1;","map->uploaded = 0;"],
  ["zero-size maps skipped","policy","d9wg_flush_mapped_buffers","        if (!emit(context,","        if (!map->size) continue;\n        if (!emit(context,"],
- ["foreign mapped buffer accepted","bridge","d9wg_flush_draw_buffers","if ((buffer)->device != device)","if (0 && (buffer)->device != device)"],
+ ["foreign mapped buffer accepted", "bridge", "d9wg_flush_draw_buffers", "if ((buffer)->device != device) return FALSE; \\\n        maps[count]", "if (0 && (buffer)->device != device) return FALSE; \\\n        maps[count]"],
  ["last stream missing","bridge","d9wg_flush_draw_buffers","i < sizeof(device->streams)/sizeof(device->streams[0]);","i + 1u < sizeof(device->streams)/sizeof(device->streams[0]);"],
  ["index map not collected","bridge","d9wg_flush_draw_buffers","if (indexed) {","if (0 && indexed) {"],
  ["accepted prefix not committed","bridge","d9wg_flush_draw_buffers","    for (uint32_t i = 0; i < count; ++i) {\n        if (!maps[i].uploaded)","    if (!result) return FALSE;\n    for (uint32_t i = 0; i < count; ++i) {\n        if (!maps[i].uploaded)"],

@@ -55,8 +55,8 @@ static void *HeapAlloc(void *heap,unsigned flags,size_t size){(void)heap;if(++at
 static int HeapFree(void *heap,unsigned flags,void *p){(void)heap;(void)flags;if(p){frees++;free(p);}return 1;}
 #include "runtime/d9wg_vertex_windows.h"
 typedef struct D8Device D8Device;typedef D8Device IDirect3DDevice8;
-typedef struct D8VertexBuffer {int iface;D8Device *device;uint8_t *shadow;UINT length,handle,lock_offset,lock_size,lock_flags;BOOL locked;D9WGClipBuffer clips;} D8VertexBuffer;
-typedef struct D8IndexBuffer {int iface;D8Device *device;uint8_t *shadow;UINT length,format,handle,lock_offset,lock_size,lock_flags;BOOL locked;} D8IndexBuffer;
+typedef struct D8VertexBuffer {int iface;D8Device *device;uint8_t *shadow;UINT length,handle,lock_offset,lock_size,lock_flags;BOOL locked,full_upload_pending;D9WGClipBuffer clips;} D8VertexBuffer;
+typedef struct D8IndexBuffer {int iface;D8Device *device;uint8_t *shadow;UINT length,format,handle,lock_offset,lock_size,lock_flags;BOOL locked,full_upload_pending;} D8IndexBuffer;
 typedef struct D8Shader {BOOL declaration_only,deleted;UINT element_count;D9WGVertexElement elements[32];} D8Shader;
 struct D8Device {DWORD vertex_shader;D8Shader *vertex_shader_ref;struct {D8VertexBuffer *buffer;UINT stride;} streams[16];D8IndexBuffer *index_buffer;UINT base_vertex_index,handle;D9WGClipStatus clip_status;BOOL clip_status_valid;struct {DWORD BehaviorFlags;} creation;DWORD render_states[256];float transforms[266][16],clip_planes[6][4];struct {UINT X,Y,Width,Height;float MinZ,MaxZ;} viewport;};
 #define IDirect3DVertexBuffer8_Release(p) ((void)(p),++releases)
