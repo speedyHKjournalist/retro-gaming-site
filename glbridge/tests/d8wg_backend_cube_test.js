@@ -8,7 +8,7 @@ try{const old8=fs.readFileSync(root+"/tests/fixtures/d3d8_cube_before_core.c","u
 #include <string.h>
 #include <assert.h>
 #include "${root}/d3d9proxy/d3d9_protocol.h"
-#include "${root}/runtime/d9wg_format_layouts.h"
+#include "${root}/runtime/d9wg_cpu_texture_layout.h"
 #include "${root}/runtime/d9wg_format_queries.h"
 typedef uint32_t UINT,DWORD,D3DFORMAT,D3DPOOL,D3DMULTISAMPLE_TYPE,D3DTEXTUREFILTERTYPE;typedef int32_t BOOL,LONG,HRESULT;typedef uint8_t BYTE;typedef void*HANDLE;
 typedef struct{const void*lpVtbl;}Iface,IDirect3DCubeTexture8,IDirect3DCubeTexture9;
@@ -78,7 +78,7 @@ static void cleanup(Iface*i){Texture*t=(Texture*)i;for(UINT l=0;l<t->level_count
 static BOOL zeroes(const BYTE*p,UINT n){for(UINT i=0;i<n;i++)if(p[i])return FALSE;return TRUE;}
 int main(void){const UINT dims[]={0,1,3,4,4096,4097,8192,8193,UINT32_MAX},levels[]={0,1,2,32},usages[]={0,1,2,3,0x400,0x20000,8,9,512,513},pools[]={0,1,2,3,4};
 for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)+1;f++)for(UINT x=0;x<sizeof(dims)/sizeof(*dims);x++)for(UINT l=0;l<4;l++)for(UINT u=0;u<10;u++)for(UINT p=0;p<5;p++)for(UINT fail=0;fail<10;fail++)for(UINT nullout=0;nullout<2;nullout++){
- UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==9?0:fail;transport_fail=fail==9;UINT requested_fail=fail_at;BOOL contiguous=pools[p]!=0&&(api==8||(!(usages[u]&3)&&format!=0x31495441u&&format!=0x32495441u));
+ UINT format=f==sizeof(d9wg_format_layouts)/sizeof(*d9wg_format_layouts)?0:d9wg_format_layouts[f].format,w=dims[x];Device before_device={.api=api,.handle=77},actual_device={.api=api,.handle=77};Iface*before=(void*)(uintptr_t)99,*actual=(void*)(uintptr_t)99;assert(!live);allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));fail_at=fail==9?0:fail;transport_fail=fail==9;UINT requested_fail=fail_at;BOOL contiguous=pools[p]!=0&&(api==8||!(usages[u]&3));
  /* The frozen oracle allocates every mip separately. Only the first three
   * allocations correspond to the new object/level-table/contiguous-block path. */
  if(contiguous&&fail_at>3)fail_at=0;
@@ -89,9 +89,9 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  if(api==8&&!format)before=(void*)(uintptr_t)99;
  UINT old_alloc=allocations,old_free=frees,old_creates=creates,old_handles=handles,args[10];memcpy(args,emitted,sizeof(args));
  if(contiguous&&old_alloc>=3){
-  UINT count=api==9&&(usages[u]&0x400)?1:levels[l]?levels[l]:full_mip_level_count(w,w),mw=w,mh=w;uint64_t face_bytes=0;
-  for(UINT level=0;level<count;level++){UINT pitch,rows,bytes;CHECK(d9wg_texture_level_layout(api,format,mw,mh,&pitch,&rows,&bytes));face_bytes+=bytes;if(mw>1)mw/=2;if(mh>1)mh/=2;}
-  uint64_t total=((face_bytes+15)/16)*16*6;
+  UINT count=api==9&&(usages[u]&0x400)?1:levels[l]?levels[l]:full_mip_level_count(w,w),mw=w,mh=w;uint64_t face_bytes=0,face_extent=0;
+  for(UINT level=0;level<count;level++){UINT pitch,rows,bytes;CHECK(d9wg_texture_level_layout(api,format,mw,mh,&pitch,&rows,&bytes));uint64_t span=api==9&&(format==0x31495441u||format==0x32495441u)?(uint64_t)mw*mh:bytes;uint64_t end=face_bytes+(span>bytes?span:bytes);if(end>face_extent)face_extent=end;face_bytes+=span;if(mw>1)mw/=2;if(mh>1)mh/=2;}
+  uint64_t total=((face_bytes+15)/16)*16*6;uint64_t tail=((face_bytes+15)/16)*16*5+face_extent;if(tail>total)total=tail;
   if(total>32768){if(!wanted)cleanup(before);before=NULL;wanted=E_OUTOFMEMORY;old_creates=0;memset(args,0xcc,sizeof(args));old_free=2;}
   else old_free=wanted?(wanted==E_OUTOFMEMORY?2:3):0;
   old_alloc=total>UINT32_MAX?2:3;
@@ -101,9 +101,9 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  if(hr!=wanted||allocations!=old_alloc||frees!=old_free)fprintf(stderr,"creation api=%u format=%08x w=%u levels=%u usage=%x pool=%u fault=%u null=%u hr=%d/%d alloc=%u/%u free=%u/%u\\n",api,format,w,levels[l],usages[u],pools[p],fail,nullout,hr,wanted,allocations,old_alloc,frees,old_free);
  CHECK(hr==wanted);CHECK(allocations==old_alloc&&frees==old_free&&creates==old_creates&&handles==old_handles&&!memcmp(args,emitted,sizeof(args)));CHECK(actual_device.pins==before_device.pins&&actual_device.pins==(!hr));
  if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->autogen_filter==b->autogen_filter&&a->refcount==1&&a->device==&actual_device&&actual_device.cube_textures==a&&b->level_count==a->level_count&&a->edge_length==w&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count*6;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}
- if(contiguous){CHECK(a->mip_storage);UINT offset=0;for(UINT face=0;face<6;face++){for(UINT level=0;level<a->level_count;level++){Level*entry=a->levels+face*a->level_count+level;CHECK(entry->shadow==a->mip_storage+offset&&entry->shadow_valid);offset+=entry->byte_count;}offset=(offset+15)/16*16;}}
+ if(contiguous){CHECK(a->mip_storage);UINT offset=0;for(UINT face=0;face<6;face++){for(UINT level=0;level<a->level_count;level++){Level*entry=a->levels+face*a->level_count+level;CHECK(entry->shadow==a->mip_storage+offset&&entry->shadow_valid);offset+=api==9&&(format==0x31495441u||format==0x32495441u)?entry->width*entry->height:entry->byte_count;}offset=(offset+15)/16*16;}}
  cleanup(before);cleanup(actual);}else CHECK(before==actual&&(!actual||actual==(void*)(uintptr_t)99)&&!before_device.cube_textures&&!actual_device.cube_textures);CHECK(!live&&!before_device.pins&&!actual_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
 }
 Device good={.api=8},wrong={.api=9};for(UINT n=0;n<3;n++){Iface*out=(void*)(uintptr_t)99;allocations=0;CHECK(d9wg_d3d9_core_cube_texture8(n==0?NULL:n==1?&wrong:&good,3,1,0,65,1,n==2?NULL:&out)==-1&&!allocations&&(n==2||!out));cases++;}
 printf("PASS actual backend8 cube creation: %u checks,%u cases (%u API8/%u ordinary9),%u face/mip comparisons; frozen8/9 metadata plus Wine retail rules and independent contiguous allocation/offset expectations,all registry formats,4096/8192 bounds,levels/pools/usage/autogen,zero CPU storage,allocation/transport unwind/output/list/parent pins\\n",checks,cases,api8cases,api9cases,levelchecks);return 0;}
-`;const compiled=code.replace('static HRESULT WINAPI old9_create(', 'static BOOL old9_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){return d9wg_texture_level_layout(9,f,w,h,p,r,b);}\nstatic HRESULT WINAPI old9_create(');fs.writeFileSync(dir+"/texture.c",compiled);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/texture.c","-o",dir+"/texture"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/texture",[],{encoding:"utf8",timeout:180000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}
+`;const compiled=code.replace('static HRESULT WINAPI old9_create(', 'static BOOL old9_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){if(!d9wg_texture_level_layout(9,f,w,h,p,r,b))return FALSE;if(f==0x31495441u||f==0x32495441u){uint64_t public_bytes=(uint64_t)w*h;if(public_bytes>UINT32_MAX)return FALSE;if(public_bytes>*b)*b=(UINT)public_bytes;}return TRUE;}\nstatic HRESULT WINAPI old9_create(');fs.writeFileSync(dir+"/texture.c",compiled);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/texture.c","-o",dir+"/texture"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/texture",[],{encoding:"utf8",timeout:180000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

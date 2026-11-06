@@ -19,7 +19,7 @@ const cases=[
  ["resource list","create_cube_texture_object","device->cube_textures = texture;","(void)texture;"],
  ["autogen filter","create_cube_texture_object","if (api == 9u && (usage & D3DUSAGE_AUTOGENMIPMAP))","if (usage & D3DUSAGE_AUTOGENMIPMAP)"],
  ["allocation face/mip index","create_cube_texture_object","face * levels + level","face * levels"],
- ["lock API","cube_lock_rect","device_compatibility_api(texture->device),","9u,","lock"],
+ ["lock API","cube_lock_rect","UINT api = device_compatibility_api(texture->device);","UINT api = 9u;","lock"],
  ["upload API","emit_cube_texture_update","device_compatibility_api(texture->device)","9u","lock"],
  ["read only","cube_unlock_rect","if (!(level_data->lock_flags & D3DLOCK_READONLY))","if (1)","lock"],
  ["unlock cleanup","cube_unlock_rect","level_data->locked = FALSE;","level_data->locked = TRUE;","lock"],
@@ -27,8 +27,8 @@ const cases=[
  ["upload face/mip index","emit_cube_texture_update","face * texture->level_count + level","level","lock"],
  ["upload face selector","emit_cube_texture_update","level, face, rect","level, 0, rect","lock"],
  ["upload mip selector","emit_cube_texture_update","level, face, rect","0, face, rect","lock"],
- ["API8 BC alignment","cube_lock_rect","device_compatibility_api(texture->device) == 8u && block_width > 1u","device_compatibility_api(texture->device) == 7u && block_width > 1u","lock"],
- ["ordinary9 BC behavior","cube_lock_rect","device_compatibility_api(texture->device) == 8u && block_width > 1u","device_compatibility_api(texture->device) <= 9u && block_width > 1u","lock"],
+ ["BC alignment","cube_lock_rect","(broken_pitch || aligned)","(broken_pitch || aligned || 1)","lock"],
+ ["CPU permission","cube_lock_rect","api == 9u && texture->pool != D3DPOOL_DEFAULT","api == 8u && texture->pool != D3DPOOL_DEFAULT","lock"],
  ["subrect pitch","emit_level_update_api","rows.source_pitch = level_data->row_pitch;","rows.source_pitch = rows.row_bytes;","lock"],
  ["upload failure","cube_unlock_rect","return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;","return result ? D3D_OK : D3D_OK;","lock"]
 ];

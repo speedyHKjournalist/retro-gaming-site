@@ -6,7 +6,7 @@ try{const old8=fs.readFileSync(root+"/tests/fixtures/d3d8_image_surface_before_c
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include "${root}/runtime/d9wg_format_layouts.h"
+#include "${root}/runtime/d9wg_cpu_texture_layout.h"
 typedef uint32_t UINT,DWORD,D3DFORMAT,D3DPOOL;typedef int32_t BOOL,LONG,HRESULT;typedef uint8_t BYTE;typedef void*HANDLE;
 typedef struct{const void*lpVtbl;}Iface,IDirect3DSurface8,IDirect3DSurface9;typedef struct{UINT api,pins,implicit_surface_count;}Device,D8Device,D9Device,IDirect3DDevice8,IDirect3DDevice9;
 typedef struct{UINT Format,Type,Usage,Pool,Size,MultiSampleType,Width,Height;}Desc8;
@@ -42,7 +42,7 @@ static Device*device_from_iface(Device*d){return d;}static UINT device_compatibi
 static void device_child_add_ref(Device*d){d->pins++;}
 static BOOL texture_format_layout(D3DFORMAT f,UINT*w,UINT*h,UINT*b){return d9wg_format_layout(8,f,w,h,b);}
 static BOOL old_level_layout8(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){return d9wg_texture_level_layout(8,f,w,h,p,r,b);}
-static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){return d9wg_texture_level_layout(9,f,w,h,p,r,b);}
+static BOOL texture_level_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){if(!d9wg_texture_level_layout(9,f,w,h,p,r,b))return FALSE;if(f==0x31495441u||f==0x32495441u){uint64_t span=(uint64_t)w*h;if(span>UINT32_MAX)return FALSE;if(span>*b)*b=(UINT)span;}return TRUE;}
 static BOOL supported_texture_format(D3DFORMAT f){UINT w,h,b;return d9wg_format_layout(9,f,&w,&h,&b);}
 ${extract(source,'supported_format8')}
 static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Iface**out){(void)d;target_calls++;UINT a[]={w,h,f,usage,ms,quality};memcpy(target_args,a,sizeof(a));*out=NULL;return -7;}
@@ -61,7 +61,7 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  UINT wanted_alloc=allocations,wanted_free=frees,wanted_targets=target_calls,args[6];memcpy(args,target_args,sizeof(args));
  allocations=frees=target_calls=0;memset(target_args,0xcc,sizeof(target_args));HRESULT hr=api==8?d9wg_d3d9_core_image_surface8(&new_device,w,h,format,null_out?NULL:&actual):device_create_offscreen_plain_surface(&new_device,w,h,format,pool,null_out?NULL:&actual,NULL);
  CHECK(hr==expected&&allocations==wanted_alloc&&frees==wanted_free&&target_calls==wanted_targets&&!memcmp(args,target_args,sizeof(args)));CHECK(new_device.pins==old_device.pins&&new_device.pins==(!hr));
- if(!hr){D9Surface*n=(D9Surface*)actual;UINT pitch,count,bytes;CHECK(d9wg_texture_level_layout(api,format,w,h,&pitch,&count,&bytes)&&n->row_pitch==pitch&&n->byte_count==bytes&&n->width==w&&n->height==h&&n->format==format&&n->pool==pool&&n->refcount==1&&n->device==&new_device);BYTE*old_shadow=api==8?((D8Surface*)before)->shadow:((D9Surface*)before)->shadow;CHECK(!memcmp(old_shadow,n->shadow,bytes));for(UINT b=0;b<bytes;b++)CHECK(n->shadow[b]==0);if(api==8){D8Surface*o=(D8Surface*)before;CHECK(o->desc.Size==bytes&&o->desc.Format==format&&o->desc.Pool==2&&o->desc.Width==w&&o->desc.Height==h);cleanup8(before);}else cleanup9(before);cleanup9(actual);}else CHECK(actual==before&&(!actual||actual==(void*)(uintptr_t)99));CHECK(!live&&!new_device.pins&&!old_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
+ if(!hr){D9Surface*n=(D9Surface*)actual;UINT pitch,count,bytes;CHECK(d9wg_texture_level_layout(api,format,w,h,&pitch,&count,&bytes));if(api==9&&(format==0x31495441u||format==0x32495441u)&&w*h>bytes)bytes=w*h;CHECK(n->row_pitch==pitch&&n->byte_count==bytes&&n->width==w&&n->height==h&&n->format==format&&n->pool==pool&&n->refcount==1&&n->device==&new_device);BYTE*old_shadow=api==8?((D8Surface*)before)->shadow:((D9Surface*)before)->shadow;CHECK(!memcmp(old_shadow,n->shadow,bytes));for(UINT b=0;b<bytes;b++)CHECK(n->shadow[b]==0);if(api==8){D8Surface*o=(D8Surface*)before;CHECK(o->desc.Size==bytes&&o->desc.Format==format&&o->desc.Pool==2&&o->desc.Width==w&&o->desc.Height==h);cleanup8(before);}else cleanup9(before);cleanup9(actual);}else CHECK(actual==before&&(!actual||actual==(void*)(uintptr_t)99));CHECK(!live&&!new_device.pins&&!old_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
 }
 /* Independently check runtime-owned compressed images, including allocation
  * failures. No driver capability or legacy constructor supplies this oracle. */

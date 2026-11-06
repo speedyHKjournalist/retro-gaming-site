@@ -11,16 +11,17 @@ const code=`#include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include "${root}/runtime/d9wg_surface_readback.h"
-#include "${root}/runtime/d9wg_format_layouts.h"
+#include "${root}/runtime/d9wg_cpu_texture_layout.h"
 #include "${process.env.D9WG_SURFACE_LOCK_HEADER||root+'/runtime/d9wg_surface_lock.h'}"
 #include "${process.env.D9WG_BACKBUFFER_UPLOAD_HEADER||root+'/runtime/d9wg_backbuffer_upload.h'}"
 typedef int HRESULT,D3DFORMAT;typedef uint8_t BYTE;typedef int32_t LONG,INT;typedef struct {LONG left,top,right,bottom;}RECT;
 typedef struct{INT Pitch;void*pBits;}D3DLOCKED_RECT;typedef struct{const void*lpVtbl;}Iface;typedef struct {BOOL locked,shadow_valid;}D9TextureLevel;typedef struct{Iface iface;UINT handle,usage;D9TextureLevel*levels;}Texture;
 typedef struct Device{UINT handle;BYTE*front_shadow;UINT front_shadow_pitch;struct{DWORD Flags;}present;UINT compatibility_api;}Device,D8Device,D9Device;
-typedef struct Surface{Iface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;UINT face,cube_face,level;void*swap_chain;struct{UINT Format,Pool,Usage,Size,MultiSampleType,Width,Height;}desc;UINT width,height,format,multisample,row_pitch,byte_count;BYTE*shadow;BOOL locked,backbuffer,depth_stencil,lockable_render_target,texture_child;RECT lock_rect;DWORD lock_flags;}Surface,D8Surface,D9Surface;
+typedef struct Surface{Iface iface;LONG refcount;Device*device;Texture*texture,*cube,*cube_texture;UINT face,cube_face,level;void*swap_chain;struct{UINT Format,Pool,Usage,Size,MultiSampleType,Width,Height;}desc;UINT width,height,format,multisample,row_pitch,byte_count,pool;BYTE*shadow;BOOL locked,backbuffer,depth_stencil,lockable_render_target,texture_child;RECT lock_rect;DWORD lock_flags;}Surface,D8Surface,D9Surface;
 typedef struct Device Device;typedef struct Surface Surface;typedef Iface IDirect3DSurface8,IDirect3DSurface9;
 #define WINAPI
 #define D9FMT_NULL 0x4c4c554eu
+#define D3DPOOL_DEFAULT 0
 #define D3D_OK 0
 #define D3DFMT_A8R8G8B8 21
 #define D3DERR_INVALIDCALL (-1)

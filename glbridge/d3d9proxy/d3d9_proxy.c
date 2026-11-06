@@ -51,6 +51,7 @@
 #include "../runtime/d9wg_surface_lock.h"
 #include "../runtime/d9wg_backbuffer_upload.h"
 #include "../runtime/d9wg_format_layouts.h"
+#include "../runtime/d9wg_cpu_texture_layout.h"
 #include "../runtime/d9wg_depth_surface_layout8.h"
 #include "../runtime/d9wg_format_queries.h"
 #include "../runtime/d9wg_state_defaults.h"
@@ -6909,28 +6910,40 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
 
 /* CPU pool mip pointers are part of the D3D8/9 API contract. Reserve every
  * face before assigning pointers, so overflow/allocation failure is atomic. */
-static BYTE *allocate_mip_shadows(D9TextureLevel *levels, UINT level_count, UINT faces)
+static BYTE *allocate_mip_shadows(D9TextureLevel *levels, UINT level_count, UINT faces,
+        UINT api, D3DFORMAT format)
 {
     UINT face, level, bytes = 0, offset = 0;
     BYTE *storage;
     for (face = 0; face < faces; ++face) {
         for (level = 0; level < level_count; ++level) {
-            UINT size = levels[face * level_count + level].byte_count;
-            if (size > UINT32_MAX - bytes) return NULL;
-            bytes += size;
+            D9TextureLevel *data = &levels[face * level_count + level];
+            UINT span = data->byte_count;
+            if (!d9wg_cpu_texture_span(api, format, data->width, data->height,
+                        data->byte_count, &span)
+                    || data->byte_count > UINT32_MAX - offset
+                    || span > UINT32_MAX - offset) return NULL;
+            UINT end = offset + data->byte_count;
+            if (end > bytes) bytes = end;
+            offset += span;
         }
-        if (bytes > UINT32_MAX - 15u) return NULL;
-        bytes = (bytes + 15u) & ~15u;
+        if (offset > UINT32_MAX - 15u) return NULL;
+        offset = (offset + 15u) & ~15u;
     }
+    if (offset > bytes) bytes = offset;
     if (!bytes) return NULL;
     storage = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
     if (!storage) return NULL;
+    offset = 0;
     for (face = 0; face < faces; ++face) {
         for (level = 0; level < level_count; ++level) {
             D9TextureLevel *data = &levels[face * level_count + level];
+            UINT span = data->byte_count;
+            d9wg_cpu_texture_span(api, format, data->width, data->height,
+                    data->byte_count, &span);
             data->shadow = storage + offset;
             data->shadow_valid = TRUE;
-            offset += data->byte_count;
+            offset += span;
         }
         offset = (offset + 15u) & ~15u;
     }
@@ -6948,11 +6961,9 @@ static HRESULT create_texture_object(D9Device *device,
     UINT level_height;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
-    /* CPU-pool mip pointers share one native contiguous allocation. ATI
-     * FOURCCs need a separate public-pitch translation before using this. */
+    /* CPU-pool mip pointers share one native contiguous allocation. */
     BOOL contiguous_mips = pool != D3DPOOL_DEFAULT
-            && (api == 8u || (!(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
-                && format != 0x31495441u && format != 0x32495441u));
+            && (api == 8u || !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)));
     BOOL is_depth = (usage & D3DUSAGE_DEPTHSTENCIL) != 0;
 
     TRACE("CALL CreateTexture %lux%lu levels=%lu usage=%08lX "
@@ -7062,7 +7073,7 @@ static HRESULT create_texture_object(D9Device *device,
         level_data->width = level_width;
         level_data->height = level_height;
         if (!is_depth && format != D9FMT_NULL
-                && !d9wg_texture_level_layout(api, format, level_width, level_height,
+                && !d9wg_cpu_texture_level_layout(api, format, level_width, level_height,
                 &level_data->row_pitch, &level_data->row_count,
                 &level_data->byte_count))
             goto allocation_failed;
@@ -7085,7 +7096,7 @@ static HRESULT create_texture_object(D9Device *device,
     }
 
     if (contiguous_mips) {
-        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 1u);
+        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 1u, api, format);
         if (!texture->mip_storage) goto allocation_failed;
     }
     if (!emit_texture_create(device, texture)) {
@@ -9694,7 +9705,7 @@ static HRESULT create_cpu_surface(D9Device *device, UINT width, UINT height,
 {
     D9Surface *surface;
     UINT row_pitch, row_count, byte_count;
-    if (!d9wg_texture_level_layout(api, format, width, height,
+    if (!d9wg_cpu_texture_level_layout(api, format, width, height,
             &row_pitch, &row_count, &byte_count))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     surface = (D9Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
@@ -12585,11 +12596,9 @@ static HRESULT create_cube_texture_object(D9Device *device,
     UINT total;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
-    /* CPU-pool mip pointers share one native contiguous allocation. ATI
-     * FOURCCs need a separate public-pitch translation before using this. */
+    /* CPU-pool mip pointers share one native contiguous allocation. */
     BOOL contiguous_mips = pool != D3DPOOL_DEFAULT
-            && (api == 8u || (!(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
-                && format != 0x31495441u && format != 0x32495441u));
+            && (api == 8u || !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)));
 
     /* This path used to refuse without recording a single argument, which is
      * how a 3DMark06 crash spent a whole trace being unattributable: the log
@@ -12683,7 +12692,7 @@ static HRESULT create_cube_texture_object(D9Device *device,
             D9TextureLevel *level_data = &texture->levels[face * levels + level];
             level_data->width = size;
             level_data->height = size;
-            if (!d9wg_texture_level_layout(api, format, size, size,
+            if (!d9wg_cpu_texture_level_layout(api, format, size, size,
                     &level_data->row_pitch, &level_data->row_count,
                     &level_data->byte_count))
                 goto allocation_failed;
@@ -12696,7 +12705,7 @@ static HRESULT create_cube_texture_object(D9Device *device,
         }
     }
     if (contiguous_mips) {
-        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 6u);
+        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 6u, api, format);
         if (!texture->mip_storage) goto allocation_failed;
     }
     if (!emit_cube_texture_create(device, texture)) {
@@ -12951,11 +12960,13 @@ static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
     D9TextureLevel *level_data;
     RECT area;
     UINT block_width, block_height, block_bytes;
+    UINT api = device_compatibility_api(texture->device);
+    BOOL permissive = api == 9u && texture->pool != D3DPOOL_DEFAULT;
+    BOOL broken_pitch = d9wg_cpu_texture_broken_pitch(api, texture->format);
 
     if (locked_rect && device_compatibility_api(texture->device) == 8u)
         ZeroMemory(locked_rect, sizeof(*locked_rect));
-    if (!locked_rect || (device_compatibility_api(texture->device) == 8u
-                && texture->pool == D3DPOOL_DEFAULT
+    if (!locked_rect || (texture->pool == D3DPOOL_DEFAULT
                 && !(texture->usage & D3DUSAGE_DYNAMIC)
                 && (UINT)texture->format < 0x10000u) || (UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -12967,29 +12978,27 @@ static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
     } else {
         SetRect(&area, 0, 0, (int)level_data->width, (int)level_data->height);
     }
-    if (area.left < 0 || area.top < 0 || area.right <= area.left
-            || area.bottom <= area.top
-            || (UINT)area.right > level_data->width
-            || (UINT)area.bottom > level_data->height
-            || !d9wg_format_layout(device_compatibility_api(texture->device),
-                    texture->format, &block_width,
-                    &block_height, &block_bytes))
+    if (!d9wg_format_layout(api, texture->format, &block_width, &block_height, &block_bytes))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device_compatibility_api(texture->device) == 8u && block_width > 1u
-            && (((UINT)area.left % block_width)
-                || ((UINT)area.top % block_height)
-                || ((UINT)area.right != level_data->width
-                    && (UINT)area.right % block_width)
-                || ((UINT)area.bottom != level_data->height
-                    && (UINT)area.bottom % block_height)))
+    BOOL bounds = area.left >= 0 && area.top >= 0 && area.right > area.left
+            && area.bottom > area.top && (UINT)area.right <= level_data->width
+            && (UINT)area.bottom <= level_data->height;
+    BOOL aligned = !((UINT)area.left % block_width) && !((UINT)area.top % block_height)
+            && ((UINT)area.right == level_data->width || !((UINT)area.right % block_width))
+            && ((UINT)area.bottom == level_data->height || !((UINT)area.bottom % block_height));
+    if (!(bounds && (broken_pitch || aligned)) && !permissive)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data->lock_rect = area;
+    if (!bounds || !aligned)
+        SetRect(&level_data->lock_rect, 0, 0, level_data->width, level_data->height);
     level_data->lock_flags = flags;
     level_data->locked = TRUE;
-    locked_rect->Pitch = (INT)level_data->row_pitch;
-    locked_rect->pBits = level_data->shadow
-            + ((UINT)area.top / block_height) * level_data->row_pitch
-            + ((UINT)area.left / block_width) * block_bytes;
+    UINT public_pitch = broken_pitch ? level_data->width : level_data->row_pitch;
+    if (broken_pitch) block_width = block_height = block_bytes = 1u;
+    locked_rect->Pitch = (INT)public_pitch;
+    locked_rect->pBits = (void *)((uintptr_t)level_data->shadow
+            + (uintptr_t)((int64_t)(area.top / (LONG)block_height) * public_pitch
+                + (int64_t)(area.left / (LONG)block_width) * block_bytes));
     return D3D_OK;
 }
 
@@ -14087,10 +14096,11 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
     UINT block_height;
     UINT block_bytes;
     BOOL valid_rect;
-    BOOL permissive = device_compatibility_api(texture->device) == 8u
-            && texture->pool != D3DPOOL_DEFAULT;
+    BOOL permissive = texture->pool != D3DPOOL_DEFAULT;
+    BOOL broken_pitch = d9wg_cpu_texture_broken_pitch(
+            device_compatibility_api(texture->device), texture->format);
 
-    if (!locked_rect || (device_compatibility_api(texture->device) == 8u
+    if (!locked_rect || (!texture->private_back_buffer
                 && texture->pool == D3DPOOL_DEFAULT
                 && !(texture->usage & D3DUSAGE_DYNAMIC)
                 && (UINT)texture->format < 0x10000u) || level >= texture->level_count
@@ -14115,9 +14125,12 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
             && !((UINT)area.top % block_height)
             && ((UINT)area.right == level_data->width || !((UINT)area.right % block_width))
             && ((UINT)area.bottom == level_data->height || !((UINT)area.bottom % block_height));
-    if (!valid_rect && !permissive)
+    BOOL mapped_rect_valid = valid_rect || (broken_pitch && area.left >= 0 && area.top >= 0
+            && area.right > area.left && area.bottom > area.top
+            && (UINT)area.right <= level_data->width && (UINT)area.bottom <= level_data->height);
+    if (!mapped_rect_valid && !permissive)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /* D3D8 CPU-pool 2D locks expose raw offsets even outside the image.
+    /* D3D8/9 CPU-pool 2D locks expose raw offsets even outside the image.
      * Preserve that API result without performing out-of-object C pointer
      * arithmetic. Upload only owned storage, never the caller's unchecked ROI. */
     level_data->lock_rect = area;
@@ -14125,9 +14138,11 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
         SetRect(&level_data->lock_rect, 0, 0, level_data->width, level_data->height);
     level_data->lock_flags = flags;
     level_data->locked = TRUE;
-    locked_rect->Pitch = (INT)level_data->row_pitch;
+    UINT public_pitch = broken_pitch ? level_data->width : level_data->row_pitch;
+    if (broken_pitch) block_width = block_height = block_bytes = 1u;
+    locked_rect->Pitch = (INT)public_pitch;
     locked_rect->pBits = (void *)((uintptr_t)level_data->shadow
-            + (uintptr_t)((int64_t)(area.top / (LONG)block_height) * level_data->row_pitch
+            + (uintptr_t)((int64_t)(area.top / (LONG)block_height) * public_pitch
                 + (int64_t)(area.left / (LONG)block_width) * block_bytes));
     return D3D_OK;
 }
@@ -14137,7 +14152,7 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
     D9TextureLevel *level_data;
     BOOL result = TRUE;
 
-    if (level >= texture->level_count || (device_compatibility_api(texture->device) == 8u
+    if (level >= texture->level_count || (!texture->private_back_buffer
                 && texture->pool == D3DPOOL_DEFAULT
                 && !(texture->usage & D3DUSAGE_DYNAMIC)
                 && (UINT)texture->format < 0x10000u))
@@ -15169,22 +15184,31 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
             result = D3DERR_INVALIDCALL;
             goto done;
         }
-        if ((rect && (rect->left < 0 || rect->top < 0
+        UINT api = device_compatibility_api(surface->device);
+        BOOL permissive = api == 9u && surface->pool != D3DPOOL_DEFAULT;
+        if (!d9wg_format_layout(api, surface->format, &block_width, &block_height, &block_bytes)) {
+            result = D3DERR_INVALIDCALL;
+            goto done;
+        }
+        if (!permissive && ((rect && (rect->left < 0 || rect->top < 0
                     || rect->right <= rect->left
                     || rect->bottom <= rect->top
                     || rect->right > (LONG)surface->width
                     || rect->bottom > (LONG)surface->height))
-                || !d9wg_format_layout(device_compatibility_api(surface->device),
-                    surface->format, &block_width, &block_height, &block_bytes)
                 || x >= surface->width || y >= surface->height
-                || x % block_width || y % block_height) {
+                || x % block_width || y % block_height)) {
             result = D3DERR_INVALIDCALL;
             goto done;
         }
-        locked_rect->Pitch = (INT)surface->row_pitch;
-        locked_rect->pBits = surface->shadow
-                + (y / block_height) * surface->row_pitch
-                + (x / block_width) * block_bytes;
+        UINT public_pitch = surface->row_pitch;
+        if (d9wg_cpu_texture_broken_pitch(api, surface->format)) {
+            public_pitch = surface->width;
+            block_width = block_height = block_bytes = 1u;
+        }
+        locked_rect->Pitch = (INT)public_pitch;
+        locked_rect->pBits = (void *)((uintptr_t)surface->shadow
+                + (uintptr_t)((int64_t)((LONG)y / (LONG)block_height) * public_pitch
+                    + (int64_t)((LONG)x / (LONG)block_width) * block_bytes));
         surface->locked = TRUE;
         (void)flags;
         result = D3D_OK;
