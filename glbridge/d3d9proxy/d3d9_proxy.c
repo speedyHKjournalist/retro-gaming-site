@@ -2730,9 +2730,11 @@ static BOOL declaration_element_supported(const D3DVERTEXELEMENT9 *e)
     case D3DDECLUSAGE_TANGENT:
     case D3DDECLUSAGE_BINORMAL:
     case D3DDECLUSAGE_FOG:
+    case D3DDECLUSAGE_TESSFACTOR:
+    case D3DDECLUSAGE_DEPTH:
+    case D3DDECLUSAGE_SAMPLE:
         break;
     default:
-        /* TESSFACTOR/DEPTH/SAMPLE have no consumer on this path. */
         return FALSE;
     }
     switch (e->Type) {
@@ -12256,6 +12258,23 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
         if (device->in_scene
                 && ((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        /* Native depth copies cover whole, equally sized and formatted
+         * surfaces. Reject color/depth conversion and partial/flipped/scaled
+         * rectangles before normalization or emitting a GPU command. */
+        if ((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL) {
+            if (!(source_usage & destination_usage & D3DUSAGE_DEPTHSTENCIL)
+                    || source->format != destination->format
+                    || source->width != destination->width
+                    || source->height != destination->height
+                    || source->multisample != destination->multisample
+                    || (source_rect && (source_rect->left || source_rect->top
+                        || source_rect->right != (LONG)source->width
+                        || source_rect->bottom != (LONG)source->height))
+                    || (destination_rect && (destination_rect->left || destination_rect->top
+                        || destination_rect->right != (LONG)destination->width
+                        || destination_rect->bottom != (LONG)destination->height)))
+                return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
         /* Color copies can target a render target, or copy plain -> plain.
          * A regular texture level is not a StretchRect destination. Preserve
          * the separate depth-copy path and the API8 CopyRects bridge. */
@@ -12298,6 +12317,10 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
                 (DWORD)destination->pool);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    if (source->auto_depth_stencil)
+        command.source_texture_handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+    if (destination->auto_depth_stencil)
+        command.destination_texture_handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
     command.device_handle = device->handle;
     normalize_rect(source_rect, (int)source->width, (int)source->height,
             &source_area);

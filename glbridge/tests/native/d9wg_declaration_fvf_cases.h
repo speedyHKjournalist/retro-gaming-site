@@ -6,6 +6,7 @@ static const struct {D3DVERTEXELEMENT9 element;DWORD fvf;} declaration_cases[] =
     {{0,0,0,0,1,0},0},{{0,0,1,0,1,0},0},{{0,0,2,0,1,0},0},{{0,0,3,0,1,0},0},
     {{0,0,5,0,2,0},0},{{0,0,2,0,3,0},0},{{0,0,0,0,4,0},0},
     {{0,0,4,0,10,0},0},{{0,0,4,0,10,1},0},{{0,0,2,0,0,1},0},{{0,0,2,0,3,1},0},
+    {{0,0,0,0,8,0},0},{{0,0,3,0,12,0},0},{{0,0,0,0,13,0},0},
     {{0,0,0,0,5,0},0},{{0,0,1,0,5,0},0},{{0,0,2,0,5,0},0},{{0,0,3,0,5,0},0},
 };
 static int declaration_view(D9Device*d,Interface*wanted,DWORD fvf)
@@ -58,13 +59,13 @@ static int declaration_fvf_cases(void)
         CHECK(!state_block_apply_method(block)&&d->vertex_declaration==(void*)rhw&&d->fvf==4);
         CHECK(!device_set_fvf(&d->iface,4)&&!state_block_release(block));
         CHECK(!decl_release(xyz));
-        CHECK(fvf_creates==old_creates+21&&destroys==old_destroys+19&&d->refcount==1&&!d->child_parent_refs);
+        CHECK(fvf_creates==old_creates+24&&destroys==old_destroys+22&&d->refcount==1&&!d->child_parent_refs);
         if(order==0){device_clear_bindings(d);device_clear_fvf_cache(d);CHECK(!d->vertex_declarations&&!device_release(&d->iface));}
         else if(order==1){CHECK(!device_release(&d->iface));}
         else {Interface*held=NULL;CHECK(!device_get_vertex_declaration(&d->iface,&held));
             if(order==2){device_clear_bindings(d);device_clear_fvf_cache(d);CHECK(((D9VertexDeclaration*)held)->fvf_converted&&!((D9VertexDeclaration*)held)->fvf_cache_ref);CHECK(!device_set_fvf(&d->iface,4)&&d->vertex_declaration==(void*)held);CHECK(!decl_release(held)&&!device_release(&d->iface));}
             else {CHECK(device_release(&d->iface)==1&&!decl_release(held));}}
-        CHECK(!live&&!parent.refs&&destroys==old_destroys+21);profiles++;
+        CHECK(!live&&!parent.refs&&destroys==old_destroys+24);profiles++;
     }
-    printf("PASS actual D3D9 user declaration FVF: %u checks, %u owner profiles, %u collision pairs; seventeen Windows positive/negative layouts, conservative guards, both cache creation orders, stateblock private lifetime and exact final cleanup\n",checks-old_checks,profiles,pairs);return 0;
+    printf("PASS actual D3D9 user declaration FVF: %u checks, %u owner profiles, %u collision pairs; twenty positive/negative layouts, conservative guards, both cache creation orders, stateblock private lifetime and exact final cleanup\n",checks-old_checks,profiles,pairs);return 0;
 }
