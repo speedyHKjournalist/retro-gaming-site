@@ -2,6 +2,8 @@
 #define D9WG_SURFACE_LOCK_H
 #include <stdint.h>
 #define D9WG_SURFACE_LOCK_READONLY 0x10u
+/* D16_LOCKABLE uses a 16-bit UNORM CPU layout and actual GPU transfers. */
+static inline int d9wg_lockable_depth_format(uint32_t format) { return format == 70u; }
 /* SDK-independent linear-surface lock planning. Publish nothing on failure;
  * callers perform GPU readback before publishing their pointer/lock state. */
 typedef struct D9WGSurfaceLockRect { int32_t left, top, right, bottom; } D9WGSurfaceLockRect;

@@ -2315,10 +2315,8 @@ static BOOL supported_render_target_format(D3DFORMAT format)
     }
 }
 
-/* Depth surfaces are real WebGPU render attachments.  The guest cannot lock
- * or read them back, so the observable distinction between these D3D9
- * formats is their depth/stencil role rather than their physical storage;
- * the executor maps them to depth24plus-stencil8. */
+/* Depth surfaces use shared depth/stencil attachments. D16_LOCKABLE maps
+ * actual GPU depth values to/from its 16-bit UNORM CPU representation. */
 static BOOL supported_depth_stencil_format(D3DFORMAT format)
 {
     switch (format) {
@@ -12329,7 +12327,14 @@ static HRESULT WINAPI device_color_fill(IDirect3DDevice9 *iface,
     D9WGColorFill command;
     RECT area;
 
-    if (!surface)
+    if (!surface || surface->device != device || surface->pool != D3DPOOL_DEFAULT)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    DWORD usage = surface->texture ? surface->texture->usage
+            : surface->cube_texture ? surface->cube_texture->usage
+            : surface->auto_depth_stencil ? D3DUSAGE_DEPTHSTENCIL
+            : surface->swap_chain ? D3DUSAGE_RENDERTARGET : 0;
+    if ((usage & D3DUSAGE_DEPTHSTENCIL)
+            || (surface->texture_child && !(usage & D3DUSAGE_RENDERTARGET)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     ZeroMemory(&command, sizeof(command));
     if (!surface_target_handle(surface, &command.texture_handle, &command.level,
@@ -15278,7 +15283,9 @@ static HRESULT surface_lock_renderable(D9Surface *surface,
      * scratch bytes and normal bounds/lifetime rules; there is deliberately no
      * GPU color read or write. The scratch layout is private, not a format cap. */
     BOOL null_target = surface->format == D9FMT_NULL;
-    D3DFORMAT lock_format = null_target ? D3DFMT_A8R8G8B8 : surface->format;
+    BOOL depth_lock = d9wg_lockable_depth_format(surface->format);
+    D3DFORMAT lock_format = null_target ? D3DFMT_A8R8G8B8
+            : depth_lock ? D3DFMT_R5G6B5 : surface->format;
     if (rect) requested = (D9WGSurfaceLockRect){rect->left, rect->top, rect->right, rect->bottom};
     if (!out || !texture_format_layout(lock_format, &bw, &bh, &pixel_bytes)
             || bw != 1 || bh != 1
@@ -15286,7 +15293,7 @@ static HRESULT surface_lock_renderable(D9Surface *surface,
                 &pitch, &rows, &bytes) || rows != surface->height
             || !d9wg_surface_lock_plan(surface->width, surface->height, pitch,
                 pixel_bytes, surface->multisample,
-                surface->texture ? surface->lockable_render_target
+                surface->texture ? (surface->lockable_render_target || depth_lock)
                     : !!(surface->device->present.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER),
                 surface->locked || (surface->texture && surface->texture->levels[surface->level].locked),
                 rect ? &requested : NULL, flags, &plan))
@@ -15328,7 +15335,8 @@ static HRESULT surface_unlock_renderable(D9Surface *surface)
         UINT bw, bh, pixel_bytes;
         const RECT *r = &surface->lock_rect;
         const D9WGSurfaceLockRect area = {r->left, r->top, r->right, r->bottom};
-        uploaded = texture_format_layout(surface->format, &bw, &bh, &pixel_bytes)
+        uploaded = texture_format_layout(d9wg_lockable_depth_format(surface->format)
+                    ? D3DFMT_R5G6B5 : surface->format, &bw, &bh, &pixel_bytes)
                 && d9wg_renderable_upload(surface->device->handle, allocate_handle(),
                     surface->format, surface->texture ? surface->texture->handle : 0,
                     surface->level, 0, &area, surface->shadow
@@ -15370,7 +15378,7 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
         ZeroMemory(locked_rect, sizeof(*locked_rect));
     if ((surface->swap_chain && !surface->texture)
             || (surface->texture && !surface->texture_child
-                && (surface->texture->usage & D3DUSAGE_RENDERTARGET))) {
+                && (surface->texture->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
         result = surface_lock_renderable(surface, locked_rect, rect, flags);
         goto done;
     }
@@ -15452,7 +15460,7 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
             (DWORD)surface->locked);
     if ((surface->swap_chain && !surface->texture)
             || (surface->texture && !surface->texture_child
-                && (surface->texture->usage & D3DUSAGE_RENDERTARGET))) {
+                && (surface->texture->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
         result = surface_unlock_renderable(surface);
     } else if (surface->shadow) {
         if (!surface->locked)

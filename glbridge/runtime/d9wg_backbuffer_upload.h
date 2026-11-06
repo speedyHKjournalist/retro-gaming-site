@@ -13,6 +13,16 @@ static inline int d9wg_renderable_upload(uint32_t device, uint32_t handle,
         int (*emit)(uint16_t, const void *, uint32_t),
         int (*emit_rows)(const D9WGTextureRows *))
 {
+    if (d9wg_lockable_depth_format(format)) {
+        D9WGTextureRows rows = {0};
+        if (!destination || face || pixel_bytes != 2u) return 0;
+        rows.resource_handle = destination; rows.level = level;
+        rows.x = area->left; rows.y = area->top;
+        rows.width = area->right-area->left; rows.height = area->bottom-area->top;
+        rows.block_height = 1; rows.row_count = rows.height;
+        rows.row_bytes = rows.width*pixel_bytes; rows.source_pitch = pitch; rows.source = pixels;
+        return emit_rows(&rows);
+    }
     D9WGCreateTexture2D create = {0};
     D9WGTextureRows rows = {0};
     D9WGStretchRect copy = {0};

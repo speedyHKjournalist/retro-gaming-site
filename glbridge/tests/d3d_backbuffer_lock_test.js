@@ -24,6 +24,8 @@ typedef struct Device Device;typedef struct Surface Surface;typedef Iface IDirec
 #define D3DPOOL_DEFAULT 0
 #define D3D_OK 0
 #define D3DFMT_A8R8G8B8 21
+#define D3DFMT_R5G6B5 23
+#define D3DUSAGE_DEPTHSTENCIL 2
 #define D3DERR_INVALIDCALL (-1)
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
@@ -59,7 +61,7 @@ static HRESULT readback_surface_pixels(Surface*s,D3DFORMAT f,BYTE*dst,UINT pitch
 int d9wg_surface_readback(D9WGProcess*p,const D9WGReadbackSurface*q,uint32_t row_bytes,uint32_t rows,uint8_t*dst,uint32_t bytes,BOOL(*flush)(BOOL),D9WGReadbackDiagnostic*detail){assert(p==g_process&&q->device_handle==active->handle&&q->texture_handle==active_target&&!q->level&&!q->face&&q->width==width&&q->height==height&&row_bytes==width*pixel_bytes&&rows==height);assert(flush(FALSE));memset(detail,0,sizeof(*detail));return read_pixels(dst,q->destination_pitch,bytes);}
 static BOOL step(void){return ++emits!=fail_emit;}
 static BOOL emit_command(uint16_t op,const void*p,uint32_t size){(void)size;if(!step())return FALSE;if(op==D9WG_OP_CREATE_TEXTURE_2D){const D9WGCreateTexture2D*q=p;assert(!live&&q->device_handle==active->handle&&q->resource_handle==next_handle&&q->level_count==1&&!q->pool&&!q->usage);live=1;tw=q->width;th=q->height;assert(tw*th*pixel_bytes<=sizeof(transient));memset(transient,0,tw*th*pixel_bytes);creates++;}else if(op==D9WG_OP_STRETCH_RECT){const D9WGStretchRect*q=p;assert(live&&q->device_handle==active->handle&&q->source_texture_handle==next_handle&&q->destination_texture_handle==active_target&&!q->source_left&&!q->source_top&&q->source_right==(INT)tw&&q->source_bottom==(INT)th&&q->filter_point==1&&q->destination_right-q->destination_left==(INT)tw&&q->destination_bottom-q->destination_top==(INT)th);for(UINT y=0;y<th;y++)memcpy(gpu+((y+q->destination_top)*width+q->destination_left)*pixel_bytes,transient+y*tw*pixel_bytes,tw*pixel_bytes);blits++;}else{const D9WGDestroyResource*q=p;assert(op==D9WG_OP_DESTROY_RESOURCE&&q->resource_kind==D9WG_RESOURCE_TEXTURE_2D&&q->resource_handle==next_handle&&live);live=0;destroys++;}return TRUE;}
-static BOOL emit_texture_rows(const D9WGTextureRows*q){if(!step())return FALSE;assert(live&&q->resource_handle==next_handle&&!q->level&&!q->x&&!q->y&&!q->z&&q->width==tw&&q->height==th&&q->block_height==1&&q->row_count==th&&q->row_bytes==tw*pixel_bytes&&q->source_pitch>=q->row_bytes);for(UINT y=0;y<th;y++)memcpy(transient+y*tw*pixel_bytes,q->source+y*q->source_pitch,tw*pixel_bytes);uploads++;return TRUE;}
+static BOOL emit_texture_rows(const D9WGTextureRows*q){if(!step())return FALSE;if(q->resource_handle==active_target&&active_target){assert(!live&&!q->level&&!q->z&&q->block_height==1&&q->row_count==q->height&&q->row_bytes==q->width*2&&q->source_pitch>=q->row_bytes);for(UINT y=0;y<q->height;y++)memcpy(gpu+((y+q->y)*width+q->x)*2,q->source+y*q->source_pitch,q->width*2);uploads++;return TRUE;}assert(live&&q->resource_handle==next_handle&&!q->level&&!q->x&&!q->y&&!q->z&&q->width==tw&&q->height==th&&q->block_height==1&&q->row_count==th&&q->row_bytes==tw*pixel_bytes&&q->source_pitch>=q->row_bytes);for(UINT y=0;y<th;y++)memcpy(transient+y*tw*pixel_bytes,q->source+y*q->source_pitch,tw*pixel_bytes);uploads++;return TRUE;}
 static BOOL upload_backbuffer_rect(Surface*s,D3DFORMAT f,const RECT*r,const BYTE*p,UINT pitch,UINT b){D9WGSurfaceLockRect area={r->left,r->top,r->right,r->bottom};return d9wg_backbuffer_upload(s->device->handle,allocate_handle(),f,&area,p,pitch,b,emit_command,emit_texture_rows);}
 static HRESULT texture_lock_level(Texture*t,UINT l,D3DLOCKED_RECT*out,const RECT*r,DWORD f){(void)t;(void)l;(void)out;(void)r;(void)f;return -11;}
 static HRESULT texture_unlock_level(Texture*t,UINT l){(void)t;(void)l;return -21;}
@@ -114,6 +116,26 @@ int main(void){(void)&device_compatibility_api;(void)&surface_lock_renderable;(v
   target.lockable_render_target=TRUE;RECT bad={-1,0,8,6};CHECK(lock(9,&target,&out,&bad,0)==-1&&!reads&&!emits);
   HeapFree(NULL,0,target.shadow);cases++;
  }
+ /* D16_LOCKABLE dispatch shares real readback but writes the existing depth
+  * resource directly. Check CPU bytes, readonly, bounds, double-lock and failure. */
+ for(UINT ro=0;ro<2;ro++)for(UINT sub=0;sub<2;sub++){
+  events();width=8;height=6;pixel_bytes=2;padding=6;active_target=42;
+  Device d={.handle=7};active=&d;D9TextureLevel level={0};Texture backing={.handle=42,.usage=2,.levels=&level};
+  Surface target={.device=&d,.texture=&backing,.width=width,.height=height,.format=70};
+  RECT area={1,2,6,5};D3DLOCKED_RECT out={123,(void*)99};BYTE before[96];
+  for(UINT i=0;i<96;i++)gpu[i]=(BYTE)(i*7);memcpy(before,gpu,96);
+  CHECK(!lock(9,&target,&out,sub?&area:NULL,ro?16:0)&&reads==1&&target.locked&&level.locked&&out.Pitch==22);
+  UINT left=sub?1:0,top=sub?2:0,w=sub?5:8,h=sub?3:6;
+  for(UINT y=0;y<h;y++){CHECK(!memcmp((BYTE*)out.pBits+y*22,before+((y+top)*8+left)*2,w*2));memset((BYTE*)out.pBits+y*22,0x69,w*2);if(!ro)memset(before+((y+top)*8+left)*2,0x69,w*2);}
+  CHECK(lock(9,&target,&out,NULL,16)==-1&&reads==1);
+  CHECK(!unlock(9,&target)&&!target.locked&&!level.locked&&uploads==!ro&&!creates&&!blits&&!destroys&&!live&&!memcmp(gpu,before,96));
+  events();CHECK(!lock(9,&target,&out,NULL,0));fail_emit=1;CHECK(unlock(9,&target)==-2&&!target.locked&&!level.locked&&!live);
+  events();read_error=2;out=(D3DLOCKED_RECT){123,(void*)99};CHECK(lock(9,&target,&out,NULL,16)==-2&&!target.locked&&!level.locked&&out.Pitch==123&&out.pBits==(void*)99);
+  events();target.multisample=4;CHECK(lock(9,&target,&out,NULL,16)==-1&&!reads);target.multisample=0;
+  for(UINT format=71;format<=80;format++){target.format=format;CHECK(lock(9,&target,&out,NULL,16)==-1&&!reads);}
+  HeapFree(NULL,0,target.shadow);cases++;
+ }
+ active_target=0;
  CHECK(allocations==frees);
  printf("PASS actual8/9 renderable locks: %u checks,%u pureplans,%u adapter scenarios;six formats/padded pitches/partial writes,real shared upload bytes,readonly GPU refresh,no-upload,output guards,MSAA/flags/doublelock,readback/OOM/emission failure cleanup andCPU/texture/cube dispatch;standalone/additional targets,target flags/identity,level lock Reset tracking,stale-mirror invalidation andNULL scratch mapping\\n",checks,plans,cases);return 0;
 }
