@@ -10,7 +10,7 @@ try{const code=`#include <stdint.h>
 typedef uint32_t UINT,DWORD,D3DFORMAT;typedef int32_t BOOL,HRESULT,INT,LONG;typedef uint8_t BYTE;
 typedef struct{LONG left,top,right,bottom;}RECT;
 typedef struct{INT Pitch;void*pBits;}D3DLOCKED_RECT;
-typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL locked;DWORD lock_flags;RECT lock_rect;}D9TextureLevel;
+typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL locked,dc_active;DWORD lock_flags;RECT lock_rect;}D9TextureLevel;
 typedef struct{UINT api;}Device;
 typedef struct{Device*device;UINT handle,format,usage,level_count;D9TextureLevel*levels;UINT pool;}D9CubeTexture,IDirect3DCubeTexture9;
 typedef UINT D3DCUBEMAP_FACES;
@@ -34,7 +34,7 @@ static BOOL texture_format_layout(D3DFORMAT f,UINT*w,UINT*h,UINT*b){return d9wg_
 static BOOL multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}
 static D9WGTextureRows observed;static UINT uploads;static BOOL fail_upload;
 static BOOL emit_texture_rows(const D9WGTextureRows*r){observed=*r;uploads++;return !fail_upload;}
-${['emit_level_update_api','emit_level_update','emit_cube_texture_update','cube_lock_rect','cube_unlock_rect'].map(extract).join('\n')}
+${['texture_levels_mapped','emit_level_update_api','emit_level_update','emit_cube_texture_update','cube_lock_rect','cube_unlock_rect'].map(extract).join('\n')}
 static UINT checks,cases;
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 cube lock case %u line %u: %s\\n",cases,__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){(void)&texture_format_layout;(void)&emit_level_update;BYTE storage[4096];const UINT sizes[]={1,3,7},faces[]={0,1,2,3,4,5,6,UINT32_MAX};
@@ -46,5 +46,7 @@ for(UINT api=8;api<=9;api++)for(UINT pool=0;pool<4;pool++)for(UINT f=0;f<sizeof(
  D9TextureLevel saved=*level;uploads=0;HRESULT hr=cube_lock_rect(&t,face,mip,error==2?NULL:&out,rectmode?&r:NULL,flags);
  CHECK(hr==(valid?0:-1));if(!valid){CHECK(out.Pitch==(api==8&&error!=2?0:123)&&out.pBits==(api==8&&error!=2?NULL:(void*)(uintptr_t)99)&&!memcmp(level,&saved,sizeof(saved))&&!uploads);}else{CHECK(level->locked&&level->lock_flags==flags&&out.Pitch==(INT)mapped_pitch&&(uintptr_t)out.pBits==(uintptr_t)storage+(uintptr_t)(broken?(int64_t)r.top*w+r.left:(int64_t)r.top/bh*pitch+(int64_t)r.left/bw*bytes));D3DLOCKED_RECT again={456,(void*)(uintptr_t)98};CHECK(cube_lock_rect(&t,face,mip,&again,NULL,flags)==-1&&again.Pitch==(api==8?0:456)&&again.pBits==(api==8?NULL:(void*)(uintptr_t)98));CHECK(cube_lock_rect(&t,face,mip,NULL,NULL,0)==-1);fail_upload=dim==2;hr=cube_unlock_rect(&t,face,mip);CHECK(hr==(!ro&&fail_upload?-2:0)&&!level->locked&&!level->lock_flags&&!memcmp(&level->lock_rect,&(RECT){0},sizeof(RECT)));CHECK(uploads==!ro);if(!ro){RECT uploaded=bounds&&aligned?r:(RECT){0,0,(LONG)w,(LONG)h};UINT width=uploaded.right-uploaded.left;CHECK(observed.resource_handle==77&&observed.level==mip&&observed.z==face&&observed.x==(UINT)uploaded.left&&!observed.y&&observed.width==width&&observed.height==h&&observed.block_height==bh&&observed.row_count==rows&&observed.row_bytes==((width+bw-1)/bw)*bytes&&observed.source_pitch==pitch&&observed.source==storage+(UINT)uploaded.top/bh*pitch+(UINT)uploaded.left/bw*bytes);}CHECK(cube_unlock_rect(&t,face,mip)==-1);CHECK(cube_unlock_rect(&t,6,mip)==-1);CHECK(cube_unlock_rect(&t,face,3)==-1);for(UINT other=0;other<18;other++)if(other!=index)CHECK(!memcmp(levels+other,&(D9TextureLevel){0},sizeof(*level)));}cases++;
 }
+/* A DC on the last face/mip owns the complete cube until ReleaseDC. */
+{Device d={9};D9TextureLevel levels[18]={0};levels[0]=(D9TextureLevel){.width=4,.height=4,.row_pitch=16,.row_count=4,.byte_count=64,.shadow=storage};levels[17].dc_active=TRUE;levels[17].locked=TRUE;D9CubeTexture t={&d,77,21,0,3,levels,1};D3DLOCKED_RECT out={123,(void*)(uintptr_t)99};uploads=0;CHECK(cube_lock_rect(&t,0,0,&out,NULL,0)==-1&&out.Pitch==123&&out.pBits==(void*)(uintptr_t)99);CHECK(cube_unlock_rect(&t,0,0)==0&&levels[17].dc_active&&levels[17].locked&&!uploads);levels[17].dc_active=FALSE;CHECK(cube_lock_rect(&t,0,0,&out,NULL,16)==0);CHECK(cube_unlock_rect(&t,0,0)==0&&!uploads);}
 printf("PASS actual backend8 cube lock/upload: %u checks,%u cases;six faces/three mips,both APIs/all registry formats,native CPU-pool raw offsets and bounded GPU upload ROIs,subrect offset/pitch,read-only/refusal/upload-failure state andface/mip isolation\\n",checks,cases);return 0;}
 `;fs.writeFileSync(dir+"/lock.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/lock.c","-o",dir+"/lock"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/lock",[],{encoding:"utf8",timeout:60000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

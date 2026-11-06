@@ -905,6 +905,7 @@ typedef struct D9TextureLevel {
     D3DBOX lock_box;
     DWORD lock_flags;
     BOOL locked;
+    BOOL dc_active; /* GDI owns a map across the complete texture resource. */
 } D9TextureLevel;
 
 typedef struct D9StreamBinding {
@@ -12952,6 +12953,17 @@ static HRESULT WINAPI cube_get_cube_map_surface(IDirect3DCubeTexture9 *iface,
     return D3D_OK;
 }
 
+/* Ordinary maps are per subresource; a GDI map excludes all subresources. */
+static BOOL texture_levels_mapped(const D9TextureLevel *levels, UINT count,
+        BOOL include_locks)
+{
+    UINT i;
+    for (i = 0; i < count; ++i)
+        if (levels[i].dc_active || (include_locks && levels[i].locked))
+            return TRUE;
+    return FALSE;
+}
+
 static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
         D3DCUBEMAP_FACES face, UINT level, D3DLOCKED_RECT *locked_rect,
         const RECT *rect, DWORD flags)
@@ -12971,7 +12983,7 @@ static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
                 && (UINT)texture->format < 0x10000u) || (UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[(UINT)face * texture->level_count + level];
-    if (level_data->locked)
+    if (texture_levels_mapped(texture->levels, texture->level_count * 6u, FALSE) || level_data->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect) {
         area = *rect;
@@ -13012,6 +13024,8 @@ static HRESULT WINAPI cube_unlock_rect(IDirect3DCubeTexture9 *iface,
     if ((UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[(UINT)face * texture->level_count + level];
+    if (texture_levels_mapped(texture->levels, texture->level_count * 6u, FALSE))
+        return D3D_OK;
     if (!level_data->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
@@ -14108,7 +14122,7 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
                 | D3DUSAGE_DEPTHSTENCIL)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
-    if (level_data->locked || !level_data->shadow)
+    if (texture_levels_mapped(texture->levels, texture->level_count, FALSE) || level_data->locked || !level_data->shadow)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect) {
         area = *rect;
@@ -14158,9 +14172,10 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
                 && (UINT)texture->format < 0x10000u))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
+    if (texture_levels_mapped(texture->levels, texture->level_count, FALSE))
+        return D3D_OK;
     if (!level_data->locked)
-        return device_compatibility_api(texture->device) == 8u
-                ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_texture_update(texture, level, &level_data->lock_rect);
     level_data->locked = FALSE;
@@ -15290,12 +15305,12 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
  *
  * Two bits of D3D9's contract shape this:
  *
- *   - Only the four uncompressed display formats are permitted (D3D9 returns
+ *   - Only the six uncompressed display formats are permitted (D3D9 returns
  *     D3DERR_INVALIDCALL for anything else, including every compressed and
  *     floating-point format), which is what makes a fixed DIB layout viable.
  *   - The surface is locked for as long as the DC is out, so LockRect during
- *     that window must fail. Reusing surface_lock_rect() gives that for free
- *     rather than needing a second flag to mean the same thing.
+ *     that window must fail across the entire parent texture, including other
+ *     faces and mip levels. The DC flag retains ownership until ReleaseDC.
  *
  * GDI has no notion of the alpha channel: it writes whatever it likes into the
  * top byte. For an X8 format those bits are ignored anyway; for A8R8G8B8 the
@@ -15305,12 +15320,17 @@ static BOOL surface_dc_format_bytes(D3DFORMAT format, UINT *bytes,
         WORD *bit_count)
 {
     switch (format) {
+    case D3DFMT_A1R5G5B5:
     case D3DFMT_X1R5G5B5:
     case D3DFMT_R5G6B5:
         *bytes = 2;
         /* GDI's 16-bit DIBs are 555 unless a BI_BITFIELDS mask says otherwise,
          * and 565 needs that mask. Both are two bytes per pixel either way. */
         *bit_count = 16;
+        return TRUE;
+    case D3DFMT_R8G8B8:
+        *bytes = 3;
+        *bit_count = 24;
         return TRUE;
     case D3DFMT_X8R8G8B8:
     case D3DFMT_A8R8G8B8:
@@ -15341,8 +15361,11 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
         TRACE_MARK_EXIT("Surface.GetDC", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    *hdc = NULL;
-    if (surface->dc) {
+    if (surface->dc
+            || (surface->texture && texture_levels_mapped(surface->texture->levels,
+                    surface->texture->level_count, TRUE))
+            || (surface->cube_texture && texture_levels_mapped(surface->cube_texture->levels,
+                    surface->cube_texture->level_count * 6u, TRUE))) {
         /* D3D9 allows exactly one outstanding DC per surface. */
         TRACE("FAIL GetDC object=%08lX already has a DC",
                 (DWORD)(uintptr_t)iface);
@@ -15351,7 +15374,7 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
     }
     if (!surface_dc_format_bytes(surface->format, &pixel_bytes, &bit_count)) {
         HOSTLOG_REFUSED("Surface.GetDC refused: format %08lX is not one of the "
-                "four D3D9 permits a DC on", (DWORD)surface->format);
+                "six D3D9 permits a DC on", (DWORD)surface->format);
         TRACE_MARK_EXIT("Surface.GetDC", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
@@ -15380,10 +15403,10 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
     info.header.biHeight = -(LONG)surface->height;
     info.header.biPlanes = 1;
     info.header.biBitCount = bit_count;
-    if (surface->format == D3DFMT_R5G6B5) {
+    if (bit_count == 16) {
         info.header.biCompression = BI_BITFIELDS;
-        info.masks[0] = 0xF800;
-        info.masks[1] = 0x07E0;
+        info.masks[0] = surface->format == D3DFMT_R5G6B5 ? 0xF800 : 0x7C00;
+        info.masks[1] = surface->format == D3DFMT_R5G6B5 ? 0x07E0 : 0x03E0;
         info.masks[2] = 0x001F;
     } else {
         info.header.biCompression = BI_RGB;
@@ -15421,6 +15444,11 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
     }
     surface->dc_pixel_bytes = pixel_bytes;
 
+    if (surface->texture)
+        surface->texture->levels[surface->level].dc_active = TRUE;
+    if (surface->cube_texture)
+        surface->cube_texture->levels[surface->cube_face
+                * surface->cube_texture->level_count + surface->level].dc_active = TRUE;
     *hdc = surface->dc;
     TRACE("OK GetDC object=%08lX dc=%08lX %lux%lu format=%08lX",
             (DWORD)(uintptr_t)iface, (DWORD)(uintptr_t)surface->dc,
@@ -15459,6 +15487,11 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
     SelectObject(surface->dc, surface->dc_previous);
     DeleteDC(surface->dc);
     DeleteObject(surface->dib);
+    if (surface->texture)
+        surface->texture->levels[surface->level].dc_active = FALSE;
+    if (surface->cube_texture)
+        surface->cube_texture->levels[surface->cube_face
+                * surface->cube_texture->level_count + surface->level].dc_active = FALSE;
     surface->dc = NULL;
     surface->dc_previous = NULL;
     surface->dib = NULL;
