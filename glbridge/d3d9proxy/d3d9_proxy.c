@@ -38,6 +38,7 @@
 #include "d3d9_core.h"
 #include "../runtime/d9wg_declaration8.h"
 #include "../runtime/d9wg_shader8_local_defs.h"
+#include "../runtime/d9wg_shader9_constants.h"
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
 #include "../runtime/d9wg_reset.h"
@@ -7908,12 +7909,10 @@ static HRESULT WINAPI device_get_fvf(IDirect3DDevice9 *iface, DWORD *fvf)
  * resolve. Passing NULL means "go back to fixed function", which stays a
  * fully supported mode.
  *
- * The guest does no semantic work on the bytecode: it counts tokens, hashes
- * them, keeps a shadow copy for GetFunction and Reset replay, and ships the
- * raw stream. Translation to WGSL is entirely host-side (plan 4.2), so a
- * shader this build cannot translate still creates successfully here and is
- * refused where the failure is visible and countable -- in the executor --
- * rather than being second-guessed from inside the guest.
+ * The guest validates API register limits, counts tokens, hashes them and
+ * keeps the original bytes for GetFunction and Reset replay. Translation to
+ * WGSL stays host-side; invalid constant operands are rejected before either
+ * a COM resource or a GPU shader is allocated.
  */
 static D9Shader *vertex_shader_from_iface(IDirect3DVertexShader9 *iface)
 {
@@ -8005,7 +8004,10 @@ static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
             is_pixel = want_pixel;
         }
     } else {
-        valid = shader_token_count(bytecode, &token_count, &is_pixel);
+        valid = shader_token_count(bytecode, &token_count, &is_pixel)
+                && d9wg_shader9_constants_valid((const uint32_t *)bytecode, token_count,
+                        !!(device->creation.BehaviorFlags
+                            & (D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_MIXED_VERTEXPROCESSING)));
     }
     if (!valid || is_pixel != want_pixel) {
         /* Rejected before anything is emitted, so without this line the call

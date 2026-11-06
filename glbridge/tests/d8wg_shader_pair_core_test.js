@@ -12,6 +12,7 @@ try{
  const reg8=s=>s.replace(/\b(D3DSPR_\w+|_D3DSHADER_PARAM_REGISTER_TYPE|D3DSHADER_PARAM_REGISTER_TYPE)\b/g,"before8_$1"),before=s=>reg8(s).replace(/\b(shader_regtype_valid|shader_opcode_supported|validate_shader_body)\b/g,"before8_$1");
  function prefix(n){const b=extract(sdk8,n),end=b.indexOf("    entry =");assert(end>0);return before(b.slice(0,end)+"return 0x12345678;\n}").replace(new RegExp("\\b"+n+"\\b","g"),n+"_before8");}
  const code=`#include <stdint.h>
+#include "${root}/runtime/d9wg_shader9_constants.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -39,7 +40,7 @@ typedef struct{WORD Stream,Offset;BYTE Type,Method,Usage,UsageIndex;}D3DVERTEXEL
 ${enumeration(sdk9,"D3DSHADER_INSTRUCTION_OPCODE_TYPE")}
 ${enumeration(sdk9,"D3DSHADER_PARAM_REGISTER_TYPE")}
 ${reg8(enumeration(sdk8,"D3DSHADER_PARAM_REGISTER_TYPE"))}
-typedef struct D9Shader D9Shader;typedef struct{UINT api,refs;D9Shader*shaders;}D9Device,D8Device,IDirect3DDevice8,IDirect3DDevice9;typedef struct{const void*lpVtbl;}IDirect3DVertexShader9,IDirect3DPixelShader9;typedef UINT D8Shader;
+typedef struct D9Shader D9Shader;typedef struct{UINT api,refs;D9Shader*shaders;struct{UINT BehaviorFlags;}creation;}D9Device,D8Device,IDirect3DDevice8,IDirect3DDevice9;typedef struct{const void*lpVtbl;}IDirect3DVertexShader9,IDirect3DPixelShader9;typedef UINT D8Shader;
 struct D9Shader{union{IDirect3DVertexShader9 vertex;IDirect3DPixelShader9 pixel;}iface;UINT refcount;D9Device*device;UINT handle;BOOL is_pixel;UINT token_count;DWORD*code;UINT hash_low,hash_high;D9Shader*next_device_resource;};
 static int g_vertex_shader_vtbl,g_pixel_shader_vtbl;static UINT attempts,live,fail_at,fail_emit,emissions,dumps,child_adds,child_releases,allocator=100;static const DWORD*expected_input;static UINT expected_count,decl_live,shader_live,decl_emits,shader_emits,fail_decl_emit;
 static D9Device*device_from_iface(D9Device*p){return p;}static UINT device_compatibility_api(const D9Device*d){return d->api;}

@@ -12,6 +12,7 @@ try{
  const reg8=s=>s.replace(/\b(D3DSPR_\w+|_D3DSHADER_PARAM_REGISTER_TYPE|D3DSHADER_PARAM_REGISTER_TYPE)\b/g,"before8_$1"),before=s=>reg8(s).replace(/\b(shader_regtype_valid|shader_opcode_supported|validate_shader_body)\b/g,"before8_$1");
  function prefix(n){const b=extract(sdk8,n),end=b.indexOf("    entry =");assert(end>0);return before(b.slice(0,end)+"return 0x12345678;\n}").replace(new RegExp("\\b"+n+"\\b","g"),n+"_before8");}
  const code=`#include <stdint.h>
+#include "${root}/runtime/d9wg_shader9_constants.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -32,7 +33,7 @@ typedef uint32_t DWORD,UINT;typedef uint16_t WORD;typedef int BOOL,HRESULT;
 ${enumeration(sdk9,"D3DSHADER_INSTRUCTION_OPCODE_TYPE")}
 ${enumeration(sdk9,"D3DSHADER_PARAM_REGISTER_TYPE")}
 ${reg8(enumeration(sdk8,"D3DSHADER_PARAM_REGISTER_TYPE"))}
-typedef struct D9Shader D9Shader;typedef struct{UINT api,refs;D9Shader*shaders;}D9Device,D8Device,IDirect3DDevice8,IDirect3DDevice9;typedef struct{const void*lpVtbl;}IDirect3DVertexShader9,IDirect3DPixelShader9;typedef UINT D8Shader;
+typedef struct D9Shader D9Shader;typedef struct{UINT api,refs;D9Shader*shaders;struct{UINT BehaviorFlags;}creation;}D9Device,D8Device,IDirect3DDevice8,IDirect3DDevice9;typedef struct{const void*lpVtbl;}IDirect3DVertexShader9,IDirect3DPixelShader9;typedef UINT D8Shader;
 struct D9Shader{union{IDirect3DVertexShader9 vertex;IDirect3DPixelShader9 pixel;}iface;UINT refcount;D9Device*device;UINT handle;BOOL is_pixel;UINT token_count;DWORD*code;UINT hash_low,hash_high;D9Shader*next_device_resource;};
 static int g_vertex_shader_vtbl,g_pixel_shader_vtbl;static UINT attempts,live,fail_at,fail_emit,emissions,dumps,child_adds,child_releases,allocator=100;static const DWORD*expected_input;
 static D9Device*device_from_iface(D9Device*p){return p;}static UINT device_compatibility_api(const D9Device*d){return d->api;}
@@ -61,6 +62,18 @@ for(UINT api=8;api<=9;api++)for(UINT pixel=0;pixel<2;pixel++)for(UINT tag=0;tag<
  HRESULT actual=create_shader(&d,code,pixel,&out);CHECK(actual==expected&&!memcmp(code,saved,sizeof(code)));
  if(!actual){UINT wanted=api==8?body+2:body;uint64_t hash=reference_hash(code,wanted);CHECK(out&&out->device==&d&&d.shaders==out&&d.refs==2&&out->refcount==1&&out->is_pixel==(BOOL)pixel&&out->token_count==wanted&&out->hash_low==(UINT)hash&&out->hash_high==(UINT)(hash>>32)&&out->iface.vertex.lpVtbl==(pixel?(const void*)&g_pixel_shader_vtbl:(const void*)&g_vertex_shader_vtbl));CHECK(attempts==2&&live==2&&emissions==1&&dumps==1&&child_adds==1&&!child_releases);retire(&d,out);if(api==8)valid8++;}
  else{CHECK(!out&&d.refs==1&&!d.shaders&&!attempts&&!live&&!emissions&&!dumps&&!child_adds&&!child_releases);if(api==8)invalid8++;}
+ CHECK(d.refs==1&&!d.shaders&&!live);cases++;
+}
+/* Native9 constant refusal must happen before allocation or transport, while
+ * software and mixed VP still accept VS c256 regardless of current VP mode. */
+for(UINT pixel=0;pixel<2;pixel++)for(UINT major=1;major<=3;major++)for(UINT sw=0;sw<3;sw++)for(UINT over=0;over<2;over++){
+ UINT limit=pixel?(major==1?8:major==2?32:224):256,index=limit-1+over;
+ DWORD code[]={(pixel?0xffff0000u:0xfffe0000u)|(major<<8)|1u,major==1?81u:0x05000051u,0xa00f0000u|index,0xffffu,0xffffffffu,0xa0e407ffu,0xe0e40fffu,0xffffu};
+ expected_input=code;D9Device d={.api=9,.refs=1,.creation={sw==1?0x20u:sw==2?0x80u:0u}};D9Shader*out=(void*)(uintptr_t)1;
+ attempts=live=fail_at=fail_emit=emissions=dumps=child_adds=child_releases=0;BOOL valid=!over||(!pixel&&sw);HRESULT hr=create_shader(&d,code,pixel,&out);
+ CHECK(hr==(valid?D3D_OK:D3DERR_INVALIDCALL));
+ if(valid){CHECK(out&&out->token_count==8&&attempts==2&&emissions==1);retire(&d,out);}
+ else CHECK(!out&&!attempts&&!live&&!emissions&&!dumps&&!child_adds&&!child_releases);
  CHECK(d.refs==1&&!d.shaders&&!live);cases++;
 }
 for(UINT api=8;api<=9;api++)for(UINT pixel=0;pixel<2;pixel++)for(UINT failure=0;failure<4;failure++){
