@@ -6428,8 +6428,9 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
             || viewport->Width > 16383u - viewport->X
             || viewport->Height > 16383u - viewport->Y
             || !(viewport->MinZ >= -3.402823466e38F)
-            || !(viewport->MaxZ <= 3.402823466e38F)
-            || !(viewport->MinZ <= viewport->MaxZ))
+            || !(viewport->MinZ <= 3.402823466e38F)
+            || !(viewport->MaxZ >= -3.402823466e38F)
+            || !(viewport->MaxZ <= 3.402823466e38F))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     /* D3D8 validates the rectangle against the current color target, even
      * while recording a state block. Depth ranges follow the shared path. */
@@ -10817,31 +10818,28 @@ static HRESULT WINAPI device_set_stream_source_freq(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9WGSetStreamSourceFreq command;
     DWORD mode;
-    DWORD frequency;
 
     if (stream >= D9_MAX_STREAMS)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
     mode = divider & (D3DSTREAMSOURCE_INDEXEDDATA |
             D3DSTREAMSOURCE_INSTANCEDATA);
-    frequency = divider & D9_STREAMSOURCE_FREQUENCY_MASK;
-    if (divider != 1u) {
-        if (!frequency)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        if ((stream == 0 && mode != D3DSTREAMSOURCE_INDEXEDDATA) ||
-                (stream != 0 && mode != D3DSTREAMSOURCE_INSTANCEDATA))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
+    /* INDEXEDDATA is accepted on any stream; stream zero alone supplies
+     * the instance count. A flag with zero frequency is legal. */
+    if (!divider || mode == (D3DSTREAMSOURCE_INDEXEDDATA | D3DSTREAMSOURCE_INSTANCEDATA)
+            || (!stream && mode == D3DSTREAMSOURCE_INSTANCEDATA))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
     if (state_block_record_stream_frequency(device, stream, divider)) return D3D_OK;
     if (device->streams[stream].frequency == divider)
         return D3D_OK;
-    device->streams[stream].frequency = divider;
     command.device_handle = device->handle;
     command.stream = stream;
     command.divider = divider;
-    return emit_command(D9WG_OP_SET_STREAM_SOURCE_FREQ, &command,
-            sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    if (!emit_command(D9WG_OP_SET_STREAM_SOURCE_FREQ, &command, sizeof(command)))
+        return D3DERR_DRIVERINTERNALERROR;
+    device->streams[stream].frequency = divider;
+    return D3D_OK;
 }
 
 static HRESULT WINAPI device_get_stream_source_freq(IDirect3DDevice9 *iface,
