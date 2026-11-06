@@ -80,5 +80,21 @@ int main(void)
     declaration.element_count=0;device.vertex_shader=(void*)1;device.creation.BehaviorFlags=0;
     for(unsigned i=0;i<16;++i)device.streams[i].buffer=NULL;
     CHECK(device_draw_indexed_primitive(&device,4,0,0,0,0,1)==0&&last_opcode==D9WG_OP_DRAW_INDEXED_PRIMITIVE);
+    /* NULL streams provide constants even when stale stride/offset remain.
+     * All paths still submit real draw commands and retain non-NULL bounds. */
+    device.vertex_shader=NULL;device.vertex_declaration=NULL;device.fvf=2;
+    device.creation.BehaviorFlags=0x20;device.streams[0].stride=12;device.streams[0].offset=48;
+    CHECK(device_draw_primitive(&device,4,0,2)==0&&last_opcode==D9WG_OP_DRAW_PRIMITIVE);
+    CHECK(device_draw_indexed_primitive(&device,4,0,0,4,0,1)==0&&last_opcode==D9WG_OP_DRAW_INDEXED_PRIMITIVE);
+    device.index_buffer=NULL;
+    CHECK(device_draw_indexed_primitive(&device,4,0,0,4,0,1)==0&&last_opcode==D9WG_OP_DRAW_PRIMITIVE);
+    device.fvf=0;CHECK(device_draw_indexed_primitive(&device,4,0,0,4,0,1)==-1);device.fvf=2;
+    device.streams[0].buffer=&vb;device.streams[0].offset=0;
+    CHECK(device_draw_indexed_primitive(&device,4,0,0,4,0,1)==-1);
+    device.vertex_declaration=&declaration;declaration.element_count=2;
+    declaration=(D9VertexDeclaration){.element_count=2,.elements={{0,0,2,0,0,0},{1,0,4,0,10,0}}};
+    device.vertex_shader=(void*)1;
+    CHECK(device_draw_primitive(&device,1,0,1)==0&&last_opcode==D9WG_OP_DRAW_PRIMITIVE);
+    CHECK(device_draw_primitive(&device,1,4,1)==-1);
     puts("PASS actual D3D9 bound draw C: ignored/overflowing hints, NumVertices=0, signed base/offset and multi-stream CPU ClipStatus/recovery, six zero-primitive no-ops, exact IB/stream bounds, programmable/constant/instance declarations and atomic transport failure");return 0;
 }

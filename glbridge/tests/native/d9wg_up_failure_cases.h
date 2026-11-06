@@ -1,7 +1,8 @@
 static int up_empty_stream(D9Device*d,UINT offset,UINT stride)
 {
     Interface*view=(void*)1;UINT actual_offset=0,actual_stride=0;
-    CHECK(!device_get_stream_source(&d->iface,0,&view,&actual_offset,&actual_stride)&&!view&&actual_offset==offset&&actual_stride==stride);return 0;
+    CHECK(!device_get_stream_source(&d->iface,0,&view,&actual_offset,&actual_stride)&&!view&&actual_offset==offset&&actual_stride==stride);
+    CHECK(last_stream_command.device_handle==d->handle&&!last_stream_command.stream&&!last_stream_command.buffer_handle&&last_stream_command.offset_in_bytes==offset&&last_stream_command.stride==stride);return 0;
 }
 static int up_failure_cases(void)
 {
@@ -17,6 +18,7 @@ static int up_failure_cases(void)
             CHECK(!up_empty_stream(d,4,20)&&!vb->binding_refs&&vb->refcount==1&&d->index_buffer==ib&&ib->binding_refs==1&&d->streams[1].buffer==other);failures++;
             CHECK(!device_set_stream_source(&d->iface,0,&vb->iface,8,24));
             CHECK(device_draw_indexed_primitive_up(&d->iface,4,0,4,2,indices,101,vertices,16)==D3DERR_INVALIDCALL);
+            CHECK(!last_index_command.buffer_handle);
             CHECK(!up_empty_stream(d,8,24)&&!d->index_buffer&&!vb->binding_refs&&!ib->binding_refs&&d->streams[1].buffer==other);failures++;
             CHECK(!device_set_indices(&d->iface,&ib->iface));
         }

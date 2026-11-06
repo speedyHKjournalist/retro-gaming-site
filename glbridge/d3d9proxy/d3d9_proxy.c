@@ -7454,7 +7454,7 @@ static HRESULT d9_prepare_clip_status(D9Device *device, const D9WGClipDrawSource
         } else *valid = FALSE;
         return D3D_OK;
     }
-    if (bound_stream && (!supported_layout || !device->streams[0].stride))
+    if (bound_stream && (!supported_layout || !device->streams[0].stride || !device->streams[0].buffer))
         return d9_prepare_stream_clip_status(device, input, next, valid);
     BOOL pretransformed = supported_layout && layout.position_transformed;
     if ((!pretransformed && device->vertex_shader) || !supported_layout ||
@@ -7542,8 +7542,16 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     UINT index_size;
     UINT available_indices;
 
-    if (!device->index_buffer
-            || !device_has_vertex_format(device)
+    if (!device->index_buffer) {
+        /* With no vertex storage every attribute is constant, so indices
+         * cannot change the geometry. Submit the equivalent nonindexed draw. */
+        BOOL bound = FALSE;
+        for (UINT i = 0; i < D9_MAX_STREAMS; ++i)
+            if (device->streams[i].buffer) bound = TRUE;
+        if (!bound) return device_draw_primitive(iface, primitive_type, 0, primitive_count);
+        return D3DERR_INVALIDCALL;
+    }
+    if (!device_has_vertex_format(device)
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count)) {
         TRACE_FRAME_REJECT();
@@ -7620,20 +7628,24 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-static void clear_stream_zero_after_up(D9Device *device)
+static BOOL clear_stream_zero_after_up(D9Device *device)
 {
     D9VertexBuffer *old = device->streams[0].buffer;
     device->streams[0].buffer = NULL;
     device->streams[0].offset = 0;
     device->streams[0].stride = 0;
     if (old) vb_binding_release(old);
+    D9WGSetStreamSource command = { device->handle, 0, 0, 0, 0, 0 };
+    return emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command));
 }
 
-static void clear_indices_after_indexed_up(D9Device *device)
+static BOOL clear_indices_after_indexed_up(D9Device *device)
 {
     D9IndexBuffer *old = device->index_buffer;
     device->index_buffer = NULL;
     if (old) ib_binding_release(old);
+    D9WGSetIndices command = { device->handle, 0 };
+    return emit_command(D9WG_OP_SET_INDICES, &command, sizeof(command));
 }
 
 /* The missing-declaration failure detaches storage without the successful
@@ -7644,6 +7656,8 @@ static void clear_bindings_after_up_missing_format(D9Device *device, BOOL indexe
     D9VertexBuffer *old = device->streams[0].buffer;
     device->streams[0].buffer = NULL;
     if (old) vb_binding_release(old);
+    D9WGSetStreamSource command = { device->handle, 0, 0, device->streams[0].stride, device->streams[0].offset, 0 };
+    emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command));
     if (indexed) clear_indices_after_indexed_up(device);
 }
 
@@ -7694,7 +7708,7 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
         device->clip_status = next_status;device->clip_status_valid = next_status_valid;
         TRACE_FRAME_DRAW(primitive_count);
         invalidate_render_target_mirrors(device);
-        clear_stream_zero_after_up(device);
+        result = clear_stream_zero_after_up(device);
     }
     return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -7785,8 +7799,9 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
             vertex_count, primitive_count, index_data, index_format,
             vertex_data, stride, TRUE, TRUE);
     if (result == D3D_OK) {
-        clear_stream_zero_after_up(device);
-        clear_indices_after_indexed_up(device);
+        BOOL stream_ok = clear_stream_zero_after_up(device);
+        BOOL index_ok = clear_indices_after_indexed_up(device);
+        if (!stream_ok || !index_ok) result = D3DERR_DRIVERINTERNALERROR;
     }
     return result;
 }
@@ -10374,15 +10389,22 @@ static HRESULT d9_draw_index_bounds(D9Device *device, INT base_vertex, D9WGDrawI
         bounds->min_vertex = 0;bounds->vertex_limit = UINT32_MAX;return D3D_OK;
     }
     for (UINT i = 0; i < D9_MAX_STREAMS; ++i) frequencies[i] = device->streams[i].frequency;
+    UINT readable = 0;
     for (UINT i = 0; i < count; ++i) {
         UINT stream = elements[i].stream;
         if (stream >= D9_MAX_STREAMS) return D3DERR_INVALIDCALL;
         D9VertexBuffer *buffer = device->streams[stream].buffer;
-        if (!buffer || buffer->device != device) return D3DERR_INVALIDCALL;
+        if (!buffer) continue; /* Unbound streams supply constant attributes. */
+        if (buffer->device != device) return D3DERR_INVALIDCALL;
+        elements[readable++] = elements[i];
         streams[stream].length = buffer->length;streams[stream].base = device->streams[stream].offset;
         streams[stream].stride = device->streams[stream].stride;
     }
-    return d9wg_draw_index_bounds(elements, count, streams, frequencies, base_vertex, bounds) ? D3D_OK : D3DERR_INVALIDCALL;
+    if (!readable) {
+        bounds->min_vertex = base_vertex < 0 ? (UINT)(-(int64_t)base_vertex) : 0;
+        bounds->vertex_limit = UINT32_MAX;return D3D_OK;
+    }
+    return d9wg_draw_index_bounds(elements, readable, streams, frequencies, base_vertex, bounds) ? D3D_OK : D3DERR_INVALIDCALL;
 }
 
 static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex)
@@ -10405,7 +10427,8 @@ static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT
     for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
         if (!extent[i]) continue;
         D9VertexBuffer *buffer = device->streams[i].buffer;
-        if (!buffer || buffer->device != device) return D3DERR_INVALIDCALL;
+        if (!buffer) continue; /* The host supplies a constant default attribute. */
+        if (buffer->device != device) return D3DERR_INVALIDCALL;
         uint32_t vertex = (uint32_t)start, vertices = count, at;
         frequency = device->streams[i].frequency;
         if (frequency & D3DSTREAMSOURCE_INSTANCEDATA) {
@@ -10522,7 +10545,7 @@ static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const 
     } else if ((device->fvf & 0x00eu) != D3DFVF_XYZRHW) return 0;
     if (position_stream >= D9_MAX_STREAMS) return -1;
     D9VertexBuffer *buffer = device->streams[position_stream].buffer;
-    if (!buffer) return -1;
+    if (!buffer) return 0; /* Constant defaults have no ProcessVertices clip records. */
     d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
     if (!buffer->clips.head) return 0;
     BOOL live = FALSE;

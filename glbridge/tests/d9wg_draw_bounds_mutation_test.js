@@ -4,6 +4,9 @@ const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-draw-mutants-"));
 const cases=[
+ ["NULL nonindexed stream refused",9,"d9_bound_draw_range","if (!buffer) continue;","if (!buffer) return D3DERR_INVALIDCALL;"],
+ ["NULL indexed stream refused",9,"d9_draw_index_bounds","if (!buffer) continue;","if (!buffer) return D3DERR_INVALIDCALL;"],
+ ["constant indexed draw discarded",9,"device_draw_indexed_primitive","if (!bound) return device_draw_primitive(iface, primitive_type, 0, primitive_count);","if (!bound) return D3D_OK;"],
  ["extent lost","vertex","d9wg_draw_index_bounds","if (extent[stream] < end)","if (stream==15 && extent[stream] < end)"],
  ["negative lower bound lost","vertex","d9wg_draw_index_bounds","-(int64_t)base_vertex : 0","0 * (int64_t)base_vertex : 0"],
  ["base omitted from upper bound","vertex","d9wg_draw_index_bounds","end - base_vertex + 1","end - (base_vertex & 0) + 1"],
@@ -16,7 +19,7 @@ const cases=[
  ["hint beyond binding accepted","vertex","d9wg_draw_status_hints","count > bounds->vertex_limit - first","0 * count > bounds->vertex_limit - first"],
  ["index below hint accepted","vertex","d9wg_draw_status_hints","index < first || index - first >= count","index >= first && index - first >= count"],
  ["index past hint accepted","vertex","d9wg_draw_status_hints","index < first || index - first >= count","index < first"],
- ["empty programmable declaration refused",9,"d9_draw_index_bounds","if (!count) {","if (0 && !count) {"],
+ ["empty programmable declaration refused",9,"d9_draw_index_bounds","bounds->min_vertex = 0;bounds->vertex_limit = UINT32_MAX;return D3D_OK;","bounds->min_vertex = 0;bounds->vertex_limit = UINT32_MAX;return D3DERR_INVALIDCALL;"],
  ["valid multi-stream hints cannot recover status",9,"d9_prepare_stream_clip_status","if (!result) *valid = TRUE;","if (!result) *valid = FALSE;"],
  ["valid hints cannot recover status",9,"d9_prepare_clip_status","if (!error && (!layout.position_transformed || source.status_screen)) *valid = TRUE;","if (!error && (!layout.position_transformed || source.status_screen)) *valid = FALSE;"],
  ...[8,9].flatMap(api=>[
