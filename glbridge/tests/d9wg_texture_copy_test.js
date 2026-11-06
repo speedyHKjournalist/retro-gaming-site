@@ -42,7 +42,7 @@ typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3D
 static const int g_texture_vtbl=1,${api===8?"g_cube_texture_vtbl":"g_cube_vtbl"}=2,g_volume_texture_vtbl=3;
 #define G_CUBE_VTBL ${api===8?"g_cube_texture_vtbl":"g_cube_vtbl"}
 static Device *device_from_iface(Device*p){return p;}
-${api===9?"static UINT device_compatibility_api(Device*d){return d->marker==8?8:9;}":""}
+${api===9?"static __attribute__((unused)) UINT device_compatibility_api(Device*d){return d->marker==8?8:9;}":""}
 static Texture *current_source,*current_destination;static UINT current_kind,skip,copied;static unsigned emits,fail_emit,event_error;
 static struct{UINT layer,level,size;BYTE *data;}events[192];
 static int emit_level(Texture*t,UINT kind,UINT layer,UINT level,const RECT*rect,UINT front,UINT depth){

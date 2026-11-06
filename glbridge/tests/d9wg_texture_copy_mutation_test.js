@@ -4,9 +4,9 @@ const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-copy-mutants-"));
 const cases=[
- ["API8 locked copies rejected","bridge","d9wg_validate_texture_copy_level","!copy->legacy8 && (from->locked || to->locked)","(from->locked || to->locked)"],
- ["API8 unlike volumes rejected","bridge","d9wg_validate_texture_copy_level","if (copy->legacy8 && copy->kind == D9WG_COPY_VOLUME)","if (0 && copy->legacy8 && copy->kind == D9WG_COPY_VOLUME)"],
- ["API8 raw prefix loses last byte","bridge","d9wg_commit_texture_copy_level","bytes = from->byte_count;","bytes = from->byte_count - 1u;"],
+ ["native locked copies rejected","bridge","d9wg_validate_texture_copy_level","!copy->native_runtime && (from->locked || to->locked)","(from->locked || to->locked)"],
+ ["native unlike volumes rejected","bridge","d9wg_validate_texture_copy_level","if (copy->native_runtime && copy->kind == D9WG_COPY_VOLUME)","if (0 && copy->native_runtime && copy->kind == D9WG_COPY_VOLUME)"],
+ ["native raw prefix loses last byte","bridge","d9wg_commit_texture_copy_level","bytes = from->byte_count;","bytes = from->byte_count - 1u;"],
  ["source skip omitted","plan","d9wg_texture_copy_plan","while (size > target)","while (0 && size > target)"],
  ["source availability not reduced","plan","d9wg_texture_copy_plan","source->levels - skip : 0","source->levels : 0"],
  ["missing source mip underflows","plan","d9wg_texture_copy_plan","skip < source->levels ? source->levels - skip : 0","source->levels - skip"],

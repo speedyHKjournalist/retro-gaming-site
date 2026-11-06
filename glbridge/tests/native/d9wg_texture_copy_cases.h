@@ -52,12 +52,25 @@ int main(void)
     }
     /* Invalid last cube face/mip must not write pixels, allocate or emit. */
     build_texture(&source,&device,1,32,32,1,6,FALSE,TRUE);build_texture(&destination,&device,1,8,8,1,4,FALSE,FALSE);current_source=&source;current_destination=&destination;current_kind=1;skip=2;copied=4;destination.levels[23].locked=TRUE;unsigned before_alloc=allocations;
-    CHECK(call_update(&device,&source,&destination)==-1&&!emits&&allocations==before_alloc);for(unsigned i=0;i<24;++i)for(UINT b=0;b<destination.levels[i].byte_count;++b)CHECK(destination.levels[i].shadow[b]==0x3c);destination.levels[23].locked=FALSE;
+#if API == 9
+    CHECK(call_update(&device,&source,&destination)==0&&emits==24&&allocations==before_alloc);
+    CHECK(inspect_texture(&source,&destination,1,2,4,FALSE)==0);clear_events();
+    for(unsigned i=0;i<24;++i)memset(destination.levels[i].shadow,0x3c,destination.levels[i].byte_count);
+#else
+    CHECK(call_update(&device,&source,&destination)==-1&&!emits&&allocations==before_alloc);
+#endif
+    for(unsigned i=0;i<24;++i)for(UINT b=0;b<destination.levels[i].byte_count;++b)CHECK(destination.levels[i].shadow[b]==0x3c);destination.levels[23].locked=FALSE;
     destination.levels[23].byte_count--;CHECK(call_update(&device,&source,&destination)==-1&&!emits);destination.levels[23].byte_count++;
     source.levels[2].row_pitch++;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.levels[2].row_pitch--;
     source.levels[2].width++;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.levels[2].width--;
     BYTE *saved_shadow=source.levels[2].shadow;source.levels[2].shadow=NULL;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.levels[2].shadow=saved_shadow;
-    source.levels[2].locked=TRUE;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.levels[2].locked=FALSE;source.levels[0].locked=TRUE;CHECK(call_update(&device,&source,&destination)==0&&emits==24);source.levels[0].locked=FALSE;clear_events();
+    source.levels[2].locked=TRUE;
+#if API == 9
+    CHECK(call_update(&device,&source,&destination)==0&&emits==24);clear_events();
+#else
+    CHECK(call_update(&device,&source,&destination)==-1&&!emits);
+#endif
+    source.levels[2].locked=FALSE;source.levels[0].locked=TRUE;CHECK(call_update(&device,&source,&destination)==0&&emits==24);source.levels[0].locked=FALSE;clear_events();
     source.device=&foreign;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.device=&device;destination.format=22;CHECK(call_update(&device,&source,&destination)==-1&&!emits);destination.format=21;
     CHECK(call_update(&device,NULL,&destination)==-1);destination.iface.lpVtbl=&g_texture_vtbl;CHECK(call_update(&device,&source,&destination)==-1);destination.iface.lpVtbl=&G_CUBE_VTBL;
     source.pool=1;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.pool=2;
@@ -74,9 +87,10 @@ fail_emit=0;clear_events();free_texture(&source,1,FALSE);free_texture(&destinati
     for(unsigned i=0;i<3;++i){CHECK(!destination.levels[i].shadow_valid);if(destination.levels[i].shadow)for(UINT b=0;b<destination.levels[i].byte_count;++b)CHECK(!destination.levels[i].shadow[b]);}fail_alloc=0;
     CHECK(call_update(&device,&source,&destination)==0);CHECK(inspect_texture(&source,&destination,0,1,3,TRUE)==0);clear_events();free_texture(&source,0,FALSE);free_texture(&destination,0,TRUE);
 #if API == 9
-    /* Actual common-core API8 path: locked containers do not veto updates;
+    /* Both native common-core paths: locked containers do not veto updates;
      * mismatched volume storage copies the in-bounds raw prefix only. */
-    device.marker=8;
+    for (UINT runtime_api=8;runtime_api<=9;runtime_api++) {
+    device.marker=runtime_api;
     for(UINT kind=0;kind<3;kind++)for(UINT shape=0;shape<(kind==2?3u:1u);shape++)
     for(UINT locked=0;locked<4;locked++)for(UINT format=0;format<(kind==2?2u:1u);format++)
     for(UINT lazy=0;lazy<2;lazy++)for(UINT failure=0;failure<3;failure++) {
@@ -102,6 +116,7 @@ fail_emit=0;clear_events();free_texture(&source,1,FALSE);free_texture(&destinati
             if(changed){CHECK(to->shadow_valid);CHECK(!memcmp(events[layer*count+level].data,to->shadow,to->byte_count));}
         }
         fail_alloc=fail_emit=0;clear_events();free_texture(&source,kind,FALSE);free_texture(&destination,kind,lazy);++tested;
+    }
     }
     device.marker=0;
 #endif
