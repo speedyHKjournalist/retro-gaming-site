@@ -2,9 +2,11 @@ typedef struct StateGroup {
     D9Texture *texture;D9CubeTexture *cube;D9VolumeTexture *volume;
     D9VertexBuffer *vb;D9IndexBuffer *ib;D9VertexDeclaration *decl;D9Shader *vs,*ps;
 } StateGroup;
+/* State groups contain sampleable resources. CPU-only scratch volume views
+ * and rejected binding are covered separately in volume_binding_cases. */
 static StateGroup new_state_group(D9Device *device, UINT pool)
 {
-    return (StateGroup){new_texture(device,pool),new_cube(device,pool),new_volume(device,pool),new_buffer(device,pool,FALSE),new_buffer(device,pool,TRUE),new_declaration(device),new_shader(device,FALSE),new_shader(device,TRUE)};
+    return (StateGroup){new_texture(device,pool),new_cube(device,pool),new_volume(device,pool == 3 ? 2 : pool),new_buffer(device,pool,FALSE),new_buffer(device,pool,TRUE),new_declaration(device),new_shader(device,FALSE),new_shader(device,TRUE)};
 }
 static int state_group_refs(StateGroup group, LONG public_refs, LONG private_refs)
 {
@@ -37,6 +39,32 @@ static int bind_state_group(D9Device *device, StateGroup group)
 static int state_binding_cases(void)
 {
     UINT old_checks = checks, profiles = 0, captures = 0;
+    /* Original Wine test_vdecl_apply: a NULL captured declaration is a
+     * no-op on Apply, not an instruction to unbind the current declaration. */
+    {
+        Parent parent = {0};D9Device *device = new_device(&parent);
+        D9VertexDeclaration *first = new_declaration(device), *second = new_declaration(device);
+        Interface *block_iface = NULL, *observed = NULL;
+        CHECK(!device_begin_state_block(&device->iface));
+        CHECK(!device_set_vertex_declaration(&device->iface, &first->iface));
+        CHECK(!device_end_state_block(&device->iface, &block_iface));
+        CHECK(!state_block_apply_method(block_iface) && device->vertex_declaration == first);
+        CHECK(!device_set_vertex_declaration(&device->iface, NULL));
+        CHECK(!state_block_capture_method(block_iface) && !first->binding_refs);
+        CHECK(!device_set_vertex_declaration(&device->iface, &second->iface));
+        CHECK(!state_block_apply_method(block_iface));
+        CHECK(!device_get_vertex_declaration(&device->iface, &observed) && observed == &second->iface);
+        CHECK(decl_release(observed) == 1);
+        CHECK(!state_block_capture_method(block_iface));
+        CHECK(!device_set_vertex_declaration(&device->iface, NULL));
+        CHECK(!state_block_apply_method(block_iface) && device->vertex_declaration == second);
+        CHECK(!device_set_vertex_declaration(&device->iface, NULL));
+        CHECK(!state_block_capture_method(block_iface));
+        CHECK(!state_block_apply_method(block_iface) && !device->vertex_declaration);
+        CHECK(!state_block_release(block_iface));
+        CHECK(!decl_release(&first->iface) && !decl_release(&second->iface));
+        CHECK(!device_release(&device->iface) && !live && !parent.refs);
+    }
     for (UINT round = 0; round < 32; round++) for (UINT pool = 0; pool < 4; pool++) for (UINT order = 0; order < 4; order++) {
         Parent parent = {0};D9Device *device = new_device(&parent);StateGroup group = new_state_group(device,pool);
         UINT old_destroys = destroys;

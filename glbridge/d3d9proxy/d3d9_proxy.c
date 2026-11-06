@@ -2387,6 +2387,13 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
     }
     switch (type) {
     case D3DRTYPE_VOLUMETEXTURE:
+        /* SCRATCH is runtime-owned CPU storage; driver sampling support is
+         * irrelevant. Keep CheckDeviceFormat (DEFAULT pool) unchanged. */
+        if (pool == D3DPOOL_SCRATCH) {
+            UINT bw, bh, bytes;
+            return !(usage & (D3DUSAGE_WRITEONLY | D3DUSAGE_DYNAMIC))
+                    && d9wg_format_layout(9u, format, &bw, &bh, &bytes);
+        }
         return supported_volume_texture_format(format);
     case D3DRTYPE_SURFACE:
         /*
@@ -6509,8 +6516,9 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
         } else if (vtbl == (const void *)&g_volume_texture_vtbl) {
             volume = (D9VolumeTexture *)texture_iface;
             if (volume->device != device
-                    || (device_compatibility_api(device) == 8u && volume->pool == D3DPOOL_SCRATCH
-                        && !supported_volume_texture_format8(volume->format)))
+                    || (volume->pool == D3DPOOL_SCRATCH
+                        && (device_compatibility_api(device) == 9u
+                            || !supported_volume_texture_format8(volume->format))))
                 return TRACE_REFUSE(D3DERR_INVALIDCALL);
             handle = volume->handle;
         } else {
@@ -8769,15 +8777,18 @@ static BOOL supported_volume_texture_format(D3DFORMAT format)
     return supported_texture_format(format)
             && format != D3DFMT_DXT1 && format != D3DFMT_DXT2
             && format != D3DFMT_DXT3 && format != D3DFMT_DXT4
-            && format != D3DFMT_DXT5;
+            && format != D3DFMT_DXT5
+            && format != 0x31495441u /* ATI1: WebGPU BC is 2D-only. */
+            && format != 0x32495441u /* ATI2 */;
 }
 
 static BOOL emit_volume_texture_create(D9Device *device,
         D9VolumeTexture *texture)
 {
     D9WGCreateTextureVolume command;
-    if (device_compatibility_api(device) == 8u && texture->pool == D3DPOOL_SCRATCH
-            && !supported_volume_texture_format8(texture->format))
+    if (texture->pool == D3DPOOL_SCRATCH
+            && (device_compatibility_api(device) == 9u
+                || !supported_volume_texture_format8(texture->format)))
         return TRUE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
@@ -8796,8 +8807,9 @@ static BOOL emit_volume_texture_create(D9Device *device,
 static BOOL emit_volume_texture_update(D9VolumeTexture *texture, UINT level,
         const D3DBOX *box)
 {
-    if (device_compatibility_api(texture->device) == 8u && texture->pool == D3DPOOL_SCRATCH
-            && !supported_volume_texture_format8(texture->format))
+    if (texture->pool == D3DPOOL_SCRATCH
+            && (device_compatibility_api(texture->device) == 9u
+                || !supported_volume_texture_format8(texture->format)))
         return TRUE;
     D9TextureLevel *level_data = &texture->levels[level];
     D9TextureLevel slice = *level_data;
@@ -8871,7 +8883,7 @@ static HRESULT create_volume_texture_object(D9Device *device,
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
-    if (api == 8u && (format & 0x00ffffffu) == 0x00545844u
+    if ((format & 0x00ffffffu) == 0x00545844u
             && ((width & 3u) || (height & 3u)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     full_levels = full_volume_mip_level_count(width, height, depth);
@@ -9001,8 +9013,9 @@ static void volume_texture_destroy_storage(D9VolumeTexture *texture)
     d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
     destroy.resource_handle = texture->handle;
     destroy.resource_kind = D9WG_RESOURCE_TEXTURE_VOLUME;
-    if (device_compatibility_api(texture->device) != 8u || texture->pool != D3DPOOL_SCRATCH
-            || supported_volume_texture_format8(texture->format))
+    if (texture->pool != D3DPOOL_SCRATCH
+            || (device_compatibility_api(texture->device) == 8u
+                && supported_volume_texture_format8(texture->format)))
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     for (level = 0; level < texture->level_count; ++level) {
         d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
@@ -9144,9 +9157,8 @@ static HRESULT WINAPI volume_texture_lock_box(IDirect3DVolumeTexture9 *iface,
                     &block_height, &block_bytes)
             || area.Left % block_width || area.Top % block_height)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device_compatibility_api(texture->device) == 8u
-            && ((area.Right != level_data->width && area.Right % block_width)
-                || (area.Bottom != level_data->height && area.Bottom % block_height)))
+    if ((area.Right != level_data->width && area.Right % block_width)
+            || (area.Bottom != level_data->height && area.Bottom % block_height))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data->lock_box = area;
     level_data->lock_flags = flags;
@@ -13492,8 +13504,11 @@ static HRESULT state_block_apply_shared(struct D9StateBlock *block,
                     &block->vertex_declaration->iface));
         else if (block->fvf)
             APPLY_STATE(IDirect3DDevice9_SetFVF(iface, block->fvf));
-        else
+        else if (device_compatibility_api(device) == 8u)
             APPLY_STATE(IDirect3DDevice9_SetVertexDeclaration(iface, NULL));
+        /* Native9 does not apply a captured NULL declaration. Capturing
+         * NULL drops the block's reference but preserves the device's live
+         * declaration when this block is subsequently applied. */
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {

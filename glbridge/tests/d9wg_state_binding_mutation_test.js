@@ -19,6 +19,9 @@ for (const [kind, field, object, iface, member] of [["texture", "textures[stage]
 cases.push(["Capture accepts recording", "state_block_capture_method", "if (block->device->recording_result)", "if (FALSE && block->device->recording_result)"], ["Apply accepts recording", "state_block_apply_method", "if (block->device->recording_result)", "if (FALSE && block->device->recording_result)"], ["End loses completed block holds", "device_end_state_block", "device->recording_result = NULL;", "device->recording_result = NULL;state_block_release_references(block);"]);
 
 cases.push(
+    ["NULL captured declaration unbinds live input", "state_block_apply_shared",
+        "/* Native9 does not apply a captured NULL declaration.",
+        "else APPLY_STATE(IDirect3DDevice9_SetVertexDeclaration(iface, NULL));\n        /* Native9 does not apply a captured NULL declaration."],
     ["predefined Capture refreshes offsets", "state_block_capture", "if (block->freeze_stream_offsets)", "if (FALSE && block->freeze_stream_offsets)"],
     ["recorded Capture freezes offsets", "state_block_capture", "if (block->freeze_stream_offsets)", "if (TRUE || block->freeze_stream_offsets)"],
 );

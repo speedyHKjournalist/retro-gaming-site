@@ -18,7 +18,7 @@ static int volume_binding_cases(void)
 {
     const UINT stages[] = {0, 15, 257, 260};
     UINT profiles = 0, revivals = 0, old_checks = checks;
-    for (UINT round = 0; round < 64; round++) for (UINT pool = 0; pool < 4; pool++) for (UINT order = 0; order < 4; order++) {
+    for (UINT round = 0; round < 64; round++) for (UINT pool = 0; pool < 3; pool++) for (UINT order = 0; order < 4; order++) {
         Parent parent = {0};D9Device *device = new_device(&parent);
         D9VolumeTexture *texture = new_volume(device, pool);Interface *views[2];
         for (UINT i = 0; i < 4; i++) CHECK(!device_set_texture(&device->iface, stages[i], &texture->iface));
@@ -68,6 +68,20 @@ static int volume_binding_cases(void)
         D9VolumeTexture *volume = new_volume(device, 0);CHECK(!device_set_texture(&device->iface, 0, &volume->iface));CHECK(!device->cube_textures && volume->refcount == 1 && volume->binding_refs == 1);CHECK(!volume_texture_release(&volume->iface));
         plain = new_texture(device, 0);CHECK(!device_set_texture(&device->iface, 0, &plain->iface));CHECK(!device->volume_textures && plain->refcount == 1 && plain->binding_refs == 1);CHECK(!texture_release(&plain->iface));
         CHECK(!device_release(&device->iface) && !live && !parent.refs);
+    }
+    /* SCRATCH has CPU views but cannot be sampled and emits no destruction
+     * of a nonexistent host texture. A failed bind preserves the old slot. */
+    for (UINT round = 0; round < 64; ++round) {
+        Parent parent = {0};D9Device *device = new_device(&parent);
+        D9VolumeTexture *bound = new_volume(device, 0), *scratch = new_volume(device, 3);
+        CHECK(!device_set_texture(&device->iface, 0, &bound->iface));
+        for (UINT i = 0; i < 4; ++i) CHECK(device_set_texture(&device->iface, stages[i], &scratch->iface) == -1);
+        CHECK(!scratch->binding_refs && scratch->refcount == 1 && device->volume_bindings[0] == bound);
+        Interface *view = NULL;CHECK(!volume_texture_get_volume_level(&scratch->iface, 0, &view));
+        UINT before = destroys;CHECK(volume_texture_release(&scratch->iface) == 1);
+        CHECK(!volume_release(view) && destroys == before);
+        CHECK(!volume_texture_release(&bound->iface));
+        CHECK(!device_release(&device->iface) && !live && !parent.refs && destroys == before + 1);
     }
     printf("PASS actual D3D9 volume bindings: %u checks, %u pool/order profiles, %u public-zero revivals, 64 mixed-kind replacement cycles; four sampler slots, two cached volume levels, shared public parent count, exact device pins, public-only Reset blockers and complete final-owner cleanup\n", checks - old_checks, profiles, revivals);
     return 0;
