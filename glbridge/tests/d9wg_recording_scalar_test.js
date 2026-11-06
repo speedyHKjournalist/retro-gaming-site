@@ -63,7 +63,12 @@ int main(void){(void)g_pixel_state_render_states;(void)g_vertex_state_render_sta
  for(unsigned i=0;i<32;++i){CHECK(device_set_render_state(&device,7,i)==0&&device_get_render_state(&device,7,&value)==0&&value==0);CHECK(block.has_render_state[7]&&block.render_states[7]==i);}
  CHECK(device_set_texture_stage_state(&device,3,9,123)==0&&device_get_texture_stage_state(&device,3,9,&value)==0&&value==0);CHECK(block.has_texture_stage_state[3][9]&&block.texture_stage_states[3][9]==123);
  CHECK(device_set_sampler_state(&device,260,1,17)==0&&device_get_sampler_state(&device,260,1,&value)==0&&value==0);CHECK(block.has_sampler_state[19][1]&&block.sampler_states[19][1]==17);CHECK(device_set_sampler_state(&device,256,1,3)==-1);
- D3DVIEWPORT9 vp={1,2,32,30,.25f,.75f},read_vp;CHECK(device_set_viewport(&device,&vp)==0&&device_get_viewport(&device,&read_vp)==0&&read_vp.Width==64&&block.viewport.Width==32);vp.Width=64;CHECK(device_set_viewport(&device,&vp)==-1&&block.viewport.Width==32);
+ D3DVIEWPORT9 vp={1,2,32,30,.25f,.75f},read_vp;CHECK(device_set_viewport(&device,&vp)==0&&device_get_viewport(&device,&read_vp)==0&&read_vp.Width==64&&block.viewport.Width==32);vp.Width=64;vp.MinZ=2;vp.MaxZ=3;CHECK(device_set_viewport(&device,&vp)==0&&block.viewport.Width==64&&block.viewport.MinZ==2);vp.Width=8193;CHECK(device_set_viewport(&device,&vp)==-1&&block.viewport.Width==64);
+ const float ranges[][2]={{-1,2},{2,3},{0,7.5f},{.5f,.5f}};
+ for(UINT i=0;i<4;i++){vp=(D3DVIEWPORT9){10,20,8192,8192,ranges[i][0],ranges[i][1]};CHECK(!device_set_viewport(&device,&vp)&&!memcmp(&block.viewport,&vp,sizeof(vp)));}
+ D3DVIEWPORT9 saved=block.viewport;vp.X=8192;CHECK(device_set_viewport(&device,&vp)==-1&&!memcmp(&block.viewport,&saved,sizeof(saved)));vp.X=10;
+ vp.MinZ=4;vp.MaxZ=3;CHECK(device_set_viewport(&device,&vp)==-1&&!memcmp(&block.viewport,&saved,sizeof(saved)));
+ vp.MinZ=0;vp.MaxZ=__builtin_inff();CHECK(device_set_viewport(&device,&vp)==-1);vp.MaxZ=__builtin_nanf("");CHECK(device_set_viewport(&device,&vp)==-1);
  D3DMATERIAL9 material={0},read_material;material.Diffuse.r=.125f;CHECK(device_set_material(&device,&material)==0&&device_get_material(&device,&read_material)==0&&read_material.Diffuse.r==0&&block.material.Diffuse.r==.125f);
  RECT rect={1,2,30,31},read_rect;CHECK(device_set_scissor_rect(&device,&rect)==0&&device_get_scissor_rect(&device,&read_rect)==0&&read_rect.left==0&&block.scissor_rect.left==1);
  float plane[4]={1,-2,.5f,3},read_plane[4];CHECK(device_set_clip_plane(&device,5,plane)==0&&device_get_clip_plane(&device,5,read_plane)==0&&read_plane[0]==0&&!memcmp(block.clip_planes[5],plane,16));CHECK(device_set_clip_plane(&device,6,plane)==0&&block.has_clip_plane[5]&&!memcmp(block.clip_planes[5],plane,16));

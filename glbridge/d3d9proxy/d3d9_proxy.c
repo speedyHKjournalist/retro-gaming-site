@@ -6399,41 +6399,18 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
         const D3DVIEWPORT9 *viewport)
 {
     D9Device *device = device_from_iface(iface);
-    D9Surface *target = device->render_target_surfaces[0];
-    UINT target_width = target ? target->width : device->display_mode.Width;
-    UINT target_height = target ? target->height : device->display_mode.Height;
-    if (!viewport || !viewport->Width || !viewport->Height) {
-        TRACE("REJECT SetViewport empty viewport=%08lX",
-                (DWORD)(uintptr_t)viewport);
+    /* XP accepts a viewport larger than the attachment and depth ranges
+     * outside [0,1]. The host clips to the target and maps depth per fragment.
+     * Keep finite values and the WebGPU coordinate domain of our 8K adapter. */
+    if (!viewport || !viewport->Width || !viewport->Height
+            || viewport->Width > 8192u || viewport->Height > 8192u
+            || viewport->X > 16383u || viewport->Y > 16383u
+            || viewport->Width > 16383u - viewport->X
+            || viewport->Height > 16383u - viewport->Y
+            || !(viewport->MinZ >= -3.402823466e38F)
+            || !(viewport->MaxZ <= 3.402823466e38F)
+            || !(viewport->MinZ <= viewport->MaxZ))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    /*
-     * A rejected SetViewport is one of the worst silent failures in this
-     * surface: the call returns an error the app almost never checks, the old
-     * viewport stays, and every later draw is rendered at whatever scale that
-     * viewport implies. A title drawing a model into a small panel then gets it
-     * at full-target scale -- oversized and off-centre, with nothing anywhere
-     * saying why. Trace both outcomes; the accepted case is a few lines a frame
-     * and is what makes the rejected case legible by contrast.
-     */
-    if (viewport->X > target_width
-            || viewport->Y > target_height
-            || viewport->Width > target_width - viewport->X
-            || viewport->Height > target_height - viewport->Y
-            || viewport->MinZ < 0.0f || viewport->MaxZ > 1.0f
-            || viewport->MinZ > viewport->MaxZ) {
-        TRACE("REJECT SetViewport x=%lu y=%lu %lux%lu minz=%ld/1000 "
-                "maxz=%ld/1000 limit=%lux%lu",
-                viewport->X, viewport->Y, viewport->Width, viewport->Height,
-                (LONG)(viewport->MinZ * 1000.0f),
-                (LONG)(viewport->MaxZ * 1000.0f),
-                target_width, target_height);
-        HOSTLOG_REFUSED("SetViewport %lux%lu at %lu,%lu refused; the target is "
-                "%lux%lu, so every later draw keeps the previous viewport's "
-                "scale", viewport->Width, viewport->Height, viewport->X,
-                viewport->Y, target_width, target_height);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
     TRACE("OK SetViewport x=%lu y=%lu %lux%lu minz=%ld/1000 maxz=%ld/1000",
             viewport->X, viewport->Y, viewport->Width, viewport->Height,
             (LONG)(viewport->MinZ * 1000.0f),
