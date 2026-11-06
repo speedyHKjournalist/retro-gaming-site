@@ -25,7 +25,8 @@ static HRESULT texture_update_dirty(D9Texture *source, D9Texture *destination)
     D9WGTextureCopyExtent from = {source->width, source->height, 1, source->level_count};
     D9WGTextureCopyExtent to = {destination->width, destination->height, 1, destination->level_count};
     D9WGTextureCopyPlan plan;
-    if (!d9wg_texture_copy_plan(&from, &to, &plan)) return D3DERR_INVALIDCALL;
+    if (source->format != destination->format || !d9wg_texture_copy_plan(&from, &to, &plan))
+        return texture_update_legacy_color(source, destination, FALSE);
     D9WGTextureCopyContext context = {source->levels, destination->levels,
         source->level_count, destination->level_count, D9WG_COPY_2D, destination, TRUE};
     /* Validate the full operation even when no bytes are dirty. Keep native

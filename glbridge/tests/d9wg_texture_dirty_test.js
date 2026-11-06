@@ -19,7 +19,7 @@ typedef struct {UINT width,height,depth,row_pitch,row_count,slice_pitch,byte_cou
 typedef struct D9Texture D9Texture;
 typedef struct D9Buffer {UINT pool;BOOL full_upload_pending;struct D9Buffer *next_device_resource;} D9VertexBuffer,D9IndexBuffer;
 typedef struct {UINT api;BOOL managed_texture_dirty;D9Texture *textures[20],*texture_resources;D9VertexBuffer *vertex_buffers;D9IndexBuffer *index_buffers;} D9Device;
-struct D9Texture {D9Device *device;UINT handle,width,height,format,usage,level_count,pool,autogen_filter;BOOL private_back_buffer,dirty_pending;D9TextureLevel *levels;D9Texture *next_device_resource;};
+struct D9Texture {D9Device *device;UINT handle,width,height,edge_length,format,usage,level_count,pool,autogen_filter;BOOL private_back_buffer,dirty_pending;D9TextureLevel *levels;D9Texture *next_device_resource;};
 typedef D9Texture IDirect3DTexture9,D9CubeTexture,D9VolumeTexture;
 typedef D9Device IDirect3DDevice9;
 #define WINAPI
@@ -51,7 +51,7 @@ static void SetRect(RECT*r,INT l,INT t,INT rr,INT b){*r=(RECT){l,t,rr,b};}
 static UINT device_compatibility_api(D9Device*d){return d->api;}
 static D9Device *device_from_iface(D9Device*d){return d;}
 static D9Texture *texture_from_iface(D9Texture*t){return t;}
-static BYTE gpu[4][3][256];static unsigned uploads,fail_upload;
+static BYTE gpu[4][18][256];static unsigned uploads,fail_upload;
 static BOOL emit_texture_update(D9Texture*t,UINT level,const RECT*r){if(++uploads==fail_upload)return FALSE;D9TextureLevel*l=t->levels+level;UINT bw,bh,bytes;if(!d9wg_format_layout(t->device->api,t->format,&bw,&bh,&bytes))return FALSE;UINT x=r->left/bw*bytes,n=((r->right+bw-1)/bw)*bytes-x;for(UINT y=r->top/bh;y<(r->bottom+bh-1)/bh;y++)memcpy(gpu[t->handle][level]+y*l->row_pitch+x,l->shadow+y*l->row_pitch+x,n);return TRUE;}
 #include "${header}"
 #define D9WG_COPY_LEVEL D9TextureLevel
@@ -63,6 +63,8 @@ static BOOL emit_texture_update(D9Texture*t,UINT level,const RECT*r){if(++upload
 #define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_texture_update(t,l,r)
 #define D9WG_COPY_UPLOAD_VOLUME(t,l,b) (TRUE)
 #include "${root}/runtime/d9wg_texture_copy_bridge.h"
+static BOOL emit_cube_texture_update(D9CubeTexture*t,UINT face,UINT level,const RECT*r){if(++uploads==fail_upload)return FALSE;D9TextureLevel*l=t->levels+face*t->level_count+level;UINT bw,bh,bytes;if(!d9wg_format_layout(t->device->api,t->format,&bw,&bh,&bytes))return FALSE;UINT x=r->left/bw*bytes,n=((r->right+bw-1)/bw)*bytes-x;for(UINT y=r->top/bh;y<(r->bottom+bh-1)/bh;y++)memcpy(gpu[t->handle][face*t->level_count+level]+y*l->row_pitch+x,l->shadow+y*l->row_pitch+x,n);return TRUE;}
+#include "${process.env.D9WG_LEGACY_COLOR_HEADER||root+'/runtime/d9wg_texture_legacy_color.h'}"
 #include "${copyHeader}"
 static unsigned generations;static BYTE generated_pixel;
 static BOOL emit_generate_mips(D9Device*d,UINT handle,UINT filter,BOOL deferred){(void)d;(void)filter;(void)deferred;generations++;generated_pixel=gpu[handle][0][0];return TRUE;}
@@ -70,6 +72,7 @@ ${['texture_generate_mip_sublevels','texture_levels_mapped','texture_lock_level'
 static UINT checks;
 #define CHECK(v) do{checks++;if(!(v)){fprintf(stderr,"dirty texture line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 static void init_texture(D9Texture*t,D9Device*d,D9TextureLevel*levels,BYTE*storage,UINT handle,UINT pool){memset(t,0,sizeof(*t));memset(levels,0,sizeof(*levels)*3);*t=(D9Texture){.device=d,.handle=handle,.width=8,.height=8,.format=21,.level_count=3,.pool=pool,.levels=levels};UINT offset=0;for(UINT i=0;i<3;i++){UINT w=8>>i;levels[i]=(D9TextureLevel){.width=w,.height=w,.row_pitch=w*4,.row_count=w,.byte_count=w*w*4,.shadow=storage+offset};offset+=w*w*4;}texture_dirty_all(t);}
+static void init_color(D9Texture*t,D9Device*d,D9TextureLevel*l,BYTE*storage,UINT handle,UINT format,BOOL cube){memset(l,0,18*sizeof(*l));*t=(D9Texture){.device=d,.handle=handle,.width=8,.height=8,.edge_length=8,.format=format,.level_count=3,.pool=2,.levels=l};UINT off=0;for(UINT f=0;f<(cube?6u:1u);f++)for(UINT i=0;i<3;i++){UINT w=8>>i,n=format==23?2:4;l[f*3+i]=(D9TextureLevel){.width=w,.height=w,.row_pitch=w*n,.row_count=w,.byte_count=w*w*n,.shadow=storage+off};off+=w*w*n;}texture_dirty_all(t);}
 int main(void){(void)&d9wg_update_texture_common;(void)&d9wg_commit_texture_copy_level;
 for(UINT api=8;api<=9;api++){
  D9Device device={.api=api};D9Texture a,b;D9TextureLevel al[3],bl[3];BYTE as[336],bs[336];D3DLOCKED_RECT lock;
@@ -111,6 +114,53 @@ for(UINT format_index=0;format_index<3;format_index++){
  memset(storage,0x11,sizeof(storage));CHECK(texture_flush_dirty(&t));memset(storage,0x88,sizeof(storage));RECT r={1,1,3,3};CHECK(!texture_add_dirty_rect(&t,&r));CHECK(texture_flush_dirty(&t));
  CHECK(gpu[3][0][bytes*((1/bh)*(8/bw)+1/bw)]==0x88);CHECK(gpu[3][0][levels[0].byte_count-1]==0x11);CHECK(gpu[3][2][0]==0x88);for(UINT i=0;i<3;i++)texture_dirty_clear(levels+i);CHECK(allocations==frees);
 }
-printf("PASS actual texture dirty C: %u checks; both APIs, exact regions/mips, READONLY/NO_DIRTY_UPDATE, preload/eviction, locked UpdateTexture, OOM atomicity and upload retry\\n",checks);return 0;}
+/* Independent byte oracles for every color pair, all six faces and mips. */
+for(UINT api=8;api<=9;api++)for(UINT cube=0;cube<2;cube++)for(UINT sf=21;sf<=23;sf++)for(UINT df=21;df<=23;df++){
+ D9Device dev={.api=api};D9Texture a,b;D9TextureLevel al[18],bl[18];BYTE as[2016],bs[2016];
+ init_color(&a,&dev,al,as,1,sf,cube);init_color(&b,&dev,bl,bs,2,df,cube);memset(bs,0xbd,sizeof(bs));memset(gpu[2],0xbd,sizeof(gpu[2]));uploads=fail_upload=0;
+ const BYTE encoded[3][4]={{0x33,0x66,0x99,0x40},{0x33,0x66,0x99,3},{0x00,0xf8,0,0}};
+ const BYTE green[3][4]={{0,255,0,64},{0,255,0,3},{0xe0,7,0,0}};
+ for(UINT f=0;f<(cube?6u:1u);f++)for(UINT i=0;i<3;i++){D9TextureLevel*l=al+f*3+i;UINT n=sf==23?2:4;for(UINT y=0;y<l->height;y++)for(UINT x=0;x<l->width;x++)memcpy(l->shadow+y*l->row_pitch+x*n,f&1?green[sf-21]:encoded[sf-21],n);}
+ HRESULT hr=texture_update_legacy_color(&a,&b,cube);
+ if(api==9){CHECK(hr==-1&&!uploads&&bs[0]==0xbd&&a.dirty_pending);continue;}
+ CHECK(hr==0&&uploads==(cube?18u:3u));
+ for(UINT face=0;face<(cube?6u:1u);face++)for(UINT i=0;i<3;i++){
+  BYTE want[4];UINT n=df==23?2:4;
+  if(face&1){memcpy(want,green[df-21],4);if((df==21&&sf!=21)||(df==22&&sf!=22))want[3]=255;}
+  else if(sf==23){const BYTE red[3][4]={{0,0,255,255},{0,0,255,255},{0,248,0,0}};memcpy(want,red[df-21],4);}
+  else if(df==23){want[0]=0x26;want[1]=0x9b;}
+  else{memcpy(want,encoded[df-21],4);if((df==21&&sf==22)||(df==22&&sf!=22))want[3]=255;}
+  D9TextureLevel*l=bl+face*3+i;for(UINT y=0;y<l->height;y++)for(UINT x=0;x<l->width;x++){
+   CHECK(!memcmp(l->shadow+y*l->row_pitch+x*n,want,n));CHECK(!memcmp(gpu[2][face*3+i]+y*l->row_pitch+x*n,want,n));
+  }
+ }
+ if(!cube){CHECK(!a.dirty_pending);UINT prior=uploads;memset(as,0,2016);CHECK(!texture_update_legacy_color(&a,&b,FALSE)&&uploads==prior);
+  RECT r={2,2,4,4};CHECK(!texture_add_dirty_rect(&a,&r));fail_upload=uploads+1;CHECK(texture_update_legacy_color(&a,&b,FALSE)==-2&&a.dirty_pending);fail_upload=0;
+  CHECK(!texture_update_legacy_color(&a,&b,FALSE)&&!a.dirty_pending);CHECK(bs[0]==(df==23?(sf==23?0:0x26):(sf==23?0:0x33)));
+  UINT n=df==23?2:4;CHECK(bs[2*bl[0].row_pitch+2*n]==0&&bs[2*bl[0].row_pitch+2*n+1]==0);
+ }
+ /* Validate the last mip/face before touching even the first destination. */
+ UINT last=(cube?18:3)-1;bl[last].byte_count=1;uploads=0;memset(bs,0xbd,sizeof(bs));CHECK(texture_update_legacy_color(&a,&b,cube)==-1&&!uploads&&bs[0]==0xbd);
+ for(UINT i=0;i<(cube?18u:3u);i++)texture_dirty_clear(al+i);
+ CHECK(allocations==frees);
+}
+/* Different aspect ratios: only the overlapping texels of corresponding
+ * largest-dimension mips are copied. Lower destination rows stay untouched. */
+for(UINT api=8;api<=9;api++){
+ D9Device dev={.api=api};D9Texture a,b;D9TextureLevel al[18],bl[18];BYTE as[2016],bs[2016];init_color(&a,&dev,al,as,1,21,FALSE);init_color(&b,&dev,bl,bs,2,21,FALSE);
+ a.height=4;b.width=2;b.height=4;b.level_count=2;
+ for(UINT i=0;i<3;i++){al[i].height=4>>i;al[i].row_count=al[i].height;al[i].byte_count=al[i].row_pitch*al[i].height;}
+ for(UINT i=0;i<2;i++){bl[i].width=2>>i;bl[i].height=4>>i;bl[i].row_pitch=bl[i].width*4;bl[i].row_count=bl[i].height;bl[i].byte_count=bl[i].row_pitch*bl[i].height;}
+ memset(as,0x77,sizeof(as));memset(bs,0xbd,sizeof(bs));uploads=0;HRESULT hr=texture_update_dirty(&a,&b);
+ if(api==9)CHECK(hr==-1&&!uploads&&bs[0]==0xbd);
+ else{CHECK(!hr&&uploads==2);for(UINT i=0;i<2;i++)for(UINT y=0;y<bl[i].height;y++)for(UINT x=0;x<bl[i].row_pitch;x++)CHECK(bl[i].shadow[y*bl[i].row_pitch+x]==(y<al[i+1].height?0x77:0xbd));}
+}
+/* OOM is atomic across the mip chain, while a retry reuses reserved storage. */
+{
+ D9Device dev={.api=8};D9Texture a,b;D9TextureLevel al[18],bl[18];BYTE as[2016],bs[2016];init_color(&a,&dev,al,as,1,21,FALSE);init_color(&b,&dev,bl,bs,2,23,FALSE);memset(as,0xff,sizeof(as));for(UINT i=0;i<3;i++)bl[i].shadow=NULL;
+ uploads=0;fail_allocation=allocation_attempts+2;CHECK(texture_update_legacy_color(&a,&b,FALSE)==-3&&!uploads&&a.dirty_pending);CHECK(bl[0].shadow&&!bl[1].shadow&&!bl[2].shadow&&bl[0].shadow[0]==0);
+ fail_allocation=0;CHECK(!texture_update_legacy_color(&a,&b,FALSE)&&uploads==3);for(UINT i=0;i<3;i++){CHECK(bl[i].shadow[0]==255&&bl[i].shadow[1]==255);HeapFree(NULL,0,bl[i].shadow);}CHECK(allocations==frees);
+}
+printf("PASS actual texture dirty C: %u checks; both APIs, exact regions/mips, READONLY/NO_DIRTY_UPDATE, preload/eviction, locked UpdateTexture, OOM atomicity/upload retry, legacy color conversion across all cube faces/mips, exact dirty regions and mismatched aspect bounds\\n",checks);return 0;}
 `;
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'d9wg-dirty-'));try{fs.writeFileSync(dir+'/test.c',code);const b=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Os','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer',dir+'/test.c',root+'/runtime/d9wg_runtime.c','-o',dir+'/test'],{encoding:'utf8'});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+'/test',[],{encoding:'utf8'});assert.equal(r.status,0,r.stdout+r.stderr);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

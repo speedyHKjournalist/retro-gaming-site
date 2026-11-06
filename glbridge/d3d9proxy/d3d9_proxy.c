@@ -9635,6 +9635,7 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
 #define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_cube_texture_update((t),(f),(l),(r))
 #define D9WG_COPY_UPLOAD_VOLUME(t,l,b) emit_volume_texture_update((t),(l),(b))
 #include "../runtime/d9wg_texture_copy_bridge.h"
+#include "../runtime/d9wg_texture_legacy_color.h"
 #include "../runtime/d9wg_texture_dirty_copy2d.h"
 
 static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
@@ -9655,14 +9656,17 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
     }
     if (source->iface.lpVtbl == (const void *)&g_cube_vtbl) {
         D9CubeTexture *from = (D9CubeTexture *)src_iface, *to = (D9CubeTexture *)dst_iface;
-        if (from->device != device || to->device != device || !d9wg_texture_copy_pools(from->pool, to->pool) || from->format != to->format)
+        if (from->device != device || to->device != device || !d9wg_texture_copy_pools(from->pool, to->pool))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (from->format != to->format)
+            return TRACE_REFUSE(texture_update_legacy_color(from, to, TRUE));
         return TRACE_REFUSE(d9wg_update_texture_common_mode(to, D9WG_COPY_CUBE,
                 from->levels, (D9WGTextureCopyExtent){from->edge_length, from->edge_length, 1, from->level_count},
                 to->levels, (D9WGTextureCopyExtent){to->edge_length, to->edge_length, 1, to->level_count}, TRUE));
     }
     if (source->iface.lpVtbl != &g_texture_vtbl || source->device != device || destination->device != device ||
-            !d9wg_texture_copy_pools(source->pool, destination->pool) || source->format != destination->format)
+            !d9wg_texture_copy_pools(source->pool, destination->pool) || (source->format != destination->format
+                && !legacy_color_copy_supported(device_compatibility_api(device), source->format, destination->format)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     return TRACE_REFUSE(texture_update_dirty(source, destination));
 }
