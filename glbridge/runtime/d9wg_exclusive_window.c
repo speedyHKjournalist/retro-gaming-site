@@ -217,6 +217,11 @@ BOOL d9wg_exclusive_window_enter_ex(D9WGExclusiveWindow **subscription,
              * D3D9 output retains its existing topmost style; a hidden output becomes topmost. */
             HWND after = (flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)
                     ? HWND_TOP : HWND_TOPMOST;
+            /* SW_SHOW preserves WS_MINIMIZE. Reset must restore an iconic
+             * output before resizing it, otherwise Win32 keeps an active but
+             * minimized window and subsequent foreground transitions fail. */
+            if ((flags & D9WG_EXCLUSIVE_D3D9) && IsIconic(output))
+                ShowWindow(output, SW_RESTORE);
             SetWindowPos(output, after, 0, 0, width, height, SWP_NOACTIVATE);
         }
         if (entry->state) {

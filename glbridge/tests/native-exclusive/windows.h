@@ -23,6 +23,7 @@ typedef struct {UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields;} DEV
 #define SW_MINIMIZE 6
 #define SW_SHOWMINIMIZED 2
 #define SW_SHOW 5
+#define SW_RESTORE 9
 #define SWP_NOMOVE 2
 #define SWP_NOSIZE 1
 #define SWP_NOACTIVATE 16

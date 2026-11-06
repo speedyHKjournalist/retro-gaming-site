@@ -2,6 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"exclusive-mut-")),source=fs.readFileSync(root+"/runtime/d9wg_exclusive_window.c","utf8");
 const mutations=[
+    ["Reset leaves output minimized","ShowWindow(output, SW_RESTORE);","ShowWindow(output, SW_SHOW);"],
     ["NOWINDOWCHANGES ignored on entry","if (!(flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) {","if (1) {"],
     ["visible output forced topmost","(flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)","0 && (flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)"],
     ["API9 iconic activation remains lost","|| (entry->flags & D9WG_EXCLUSIVE_D3D9)","|| (0 && (entry->flags & D9WG_EXCLUSIVE_D3D9))"],

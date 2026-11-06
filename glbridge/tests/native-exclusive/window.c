@@ -52,7 +52,7 @@ LONG ChangeDisplaySettingsA(DEVMODEA *mode,DWORD flags){
  if(IsWindow(focus_window))focus_window->proc(focus_window,WM_DISPLAYCHANGE,32,screen_width|(screen_height<<16));
  return 0;
 }
-BOOL ShowWindow(HWND w,int how){assert(IsWindow(w));w->edits++;w->visible=1;w->iconic=(how==SW_MINIMIZE || how==SW_SHOWMINIMIZED);w->proc(w,WM_SIZE,w->iconic,0);return 1;}
+BOOL ShowWindow(HWND w,int how){assert(IsWindow(w));w->edits++;w->visible=1;if(how==SW_MINIMIZE||how==SW_SHOWMINIMIZED)w->iconic=1;else if(how==SW_RESTORE)w->iconic=0;w->proc(w,WM_SIZE,w->iconic,0);return 1;}
 BOOL SetWindowPos(HWND w,HWND after,int x,int y,int width,int height,UINT flags){
  assert(IsWindow(w)&&!x&&!y);
  if(after==HWND_TOPMOST)w->topmost=1;
@@ -120,6 +120,10 @@ int main(void){
   CHECK(output_window->edits==(nowc?0u:3u));
   focus.iconic=1;foreground=&focus;focus.proc(&focus,WM_ACTIVATEAPP,1,0);
   CHECK(!state.lost&&state.required);
+  BOOL iconic=output_window->iconic;unsigned edits=output_window->edits;
+  CHECK(d9wg_exclusive_window_enter_ex(&subscription,&focus,output_window,640,480,&state,flags));
+  CHECK(output_window->iconic==(nowc?iconic:0));
+  CHECK(output_window->edits==edits+(nowc?0u:2u+(unsigned)iconic));
   d9wg_exclusive_window_leave(&subscription);
   CHECK(!subscription&&!allocations&&!focus.property&&focus.proc==application);
  }

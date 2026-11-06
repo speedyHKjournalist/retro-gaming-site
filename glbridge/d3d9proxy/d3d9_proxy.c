@@ -5247,13 +5247,59 @@ static HRESULT WINAPI device_test_cooperative_level(IDirect3DDevice9* iface)
     return d9wg_reset_cooperative_result(&device_from_iface(iface)->reset_state);
 }
 
+/* GetAvailableTextureMem is an estimate of the virtual adapter budget, not
+ * physical browser GPU memory. Count live DEFAULT/MANAGED allocations using
+ * their logical layouts; CPU-only pools do not consume this budget. Reading
+ * the ownership lists also handles failed creates and private surface views
+ * without maintaining a second, potentially stale set of lifetime counters. */
+static uint64_t texture_memory_estimate(UINT width, UINT height, UINT depth,
+        UINT levels, D3DFORMAT format, DWORD usage, UINT samples)
+{
+    UINT bw = 1, bh = 1, bytes = 4;
+    uint64_t total = 0;
+    d9wg_format_layout(9u, format, &bw, &bh, &bytes);
+    if ((usage & D3DUSAGE_AUTOGENMIPMAP)
+            && d9wg_autogen_mips_supported(D3DRTYPE_TEXTURE, format)) {
+        UINT dimension = width > height ? width : height;
+        levels = 1;
+        while (dimension > 1) { dimension >>= 1; ++levels; }
+    }
+    for (UINT level = 0; level < levels; ++level) {
+        /* Divide the 32-bit dimensions before widening: the XP DLL has no
+         * CRT helper for 64-bit division. Quotient + remainder avoids overflow. */
+        total += (uint64_t)(width / bw + (width % bw != 0))
+                * (height / bh + (height % bh != 0)) * depth * bytes;
+        if (width > 1) width >>= 1;
+        if (height > 1) height >>= 1;
+        if (depth > 1) depth >>= 1;
+    }
+    return total * (samples > 1 ? samples : 1u);
+}
+
 static UINT WINAPI device_get_available_texture_mem(IDirect3DDevice9 *iface)
 {
-    (void)iface;
-    /* Titles size their texture budget from this, and some refuse to start
-     * below a threshold, so it is worth knowing when it was read. */
-    TRACE("OK Device.GetAvailableTextureMem -> %lu", 256u * 1024u * 1024u);
-    return 256u * 1024u * 1024u;
+    D9Device *device = device_from_iface(iface);
+    const uint64_t budget = 256u * 1024u * 1024u;
+    uint64_t used = 0;
+    for (D9Texture *t = device->texture_resources; t; t = t->next_device_resource)
+        if (t->pool <= D3DPOOL_MANAGED)
+            used += texture_memory_estimate(t->width, t->height, 1, t->level_count,
+                    t->format, t->usage, t->multisample);
+    for (D9CubeTexture *t = device->cube_textures; t; t = t->next_device_resource)
+        if (t->pool <= D3DPOOL_MANAGED)
+            used += 6u * texture_memory_estimate(t->edge_length, t->edge_length,
+                    1, t->level_count, t->format, t->usage, 1);
+    for (D9VolumeTexture *t = device->volume_textures; t; t = t->next_device_resource)
+        if (t->pool <= D3DPOOL_MANAGED)
+            used += texture_memory_estimate(t->width, t->height, t->depth,
+                    t->level_count, t->format, t->usage, 1);
+    for (D9VertexBuffer *v = device->vertex_buffers; v; v = v->next_device_resource)
+        if (v->pool <= D3DPOOL_MANAGED) used += v->length;
+    for (D9IndexBuffer *v = device->index_buffers; v; v = v->next_device_resource)
+        if (v->pool <= D3DPOOL_MANAGED) used += v->length;
+    UINT available = used >= budget ? 0u : (UINT)(budget - used) & ~((1u << 20) - 1u);
+    TRACE("OK Device.GetAvailableTextureMem -> %lu", available);
+    return available;
 }
 
 static HRESULT WINAPI device_evict_managed_resources(IDirect3DDevice9 *iface)
