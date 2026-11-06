@@ -6214,6 +6214,11 @@ static HRESULT WINAPI device_clear(IDirect3DDevice9 *iface, DWORD rect_count,
         return D3D_OK;
     if (!(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (device_compatibility_api(device) == 9u
+            && (flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL))
+            && !device->depth_stencil_surface
+            && (device->depth_stencil_unbound || !device->present.EnableAutoDepthStencil))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect_count > 0xFFFFFFFFu / sizeof(*rects))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     rect_bytes = rect_count * sizeof(*rects);
@@ -6523,17 +6528,10 @@ static HRESULT WINAPI device_get_texture(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-/*
- * SetTexture takes an IDirect3DBaseTexture9*, so the concrete type has to be
- * recovered from the vtable pointer -- there is no tag in the interface. Doing
- * it by vtable is also the validation: a pointer that is neither of ours is
- * rejected instead of being dereferenced as if it were.
- *
- * Cube textures (M3) bind through the same D9WG_OP_SET_TEXTURE, because the
- * host resource table is one flat handle space and the *host* already knows
- * each handle's kind from its CREATE command. Sending the kind again here would
- * be a second source of truth for the same fact.
- */
+/* Native D3D9 accepts its own resource even if an application has replaced
+ * its interface table. Keep the ordinary table/owner lookup constant-time;
+ * consult the device registry only for an unfamiliar table. No caller COM
+ * method is invoked to acquire the private binding reference. */
 static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
         DWORD stage, IDirect3DBaseTexture9 *texture_iface)
 {
@@ -6549,6 +6547,21 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (texture_iface) {
         const void *vtbl = ((const IDirect3DTexture9 *)texture_iface)->lpVtbl;
+        if (device_compatibility_api(device) == 9u
+                && vtbl != (const void *)&g_texture_vtbl
+                && vtbl != (const void *)&g_cube_vtbl
+                && vtbl != (const void *)&g_volume_texture_vtbl) {
+            D9Texture *t;
+            D9CubeTexture *c;
+            D9VolumeTexture *v;
+            for (t = device->texture_resources; t; t = t->next_device_resource)
+                if ((void *)t == (void *)texture_iface) { vtbl = &g_texture_vtbl; break; }
+            if (!t) for (c = device->cube_textures; c; c = c->next_device_resource)
+                if ((void *)c == (void *)texture_iface) { vtbl = &g_cube_vtbl; break; }
+            if (!t && vtbl != (const void *)&g_cube_vtbl)
+                for (v = device->volume_textures; v; v = v->next_device_resource)
+                    if ((void *)v == (void *)texture_iface) { vtbl = &g_volume_texture_vtbl; break; }
+        }
         if (vtbl == (const void *)&g_texture_vtbl) {
             texture = (D9Texture *)texture_iface;
             if (texture->device != device)
@@ -8104,14 +8117,27 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
+static BOOL shader_binding_identity(D9Device *device, D9Shader *shader, BOOL pixel)
+{
+    const void *expected = pixel ? (const void *)&g_pixel_shader_vtbl
+            : (const void *)&g_vertex_shader_vtbl;
+    if ((const void *)shader->iface.vertex.lpVtbl == expected)
+        return shader->device == device && shader->is_pixel == pixel;
+    if (device_compatibility_api(device) == 9u) {
+        D9Shader *owned;
+        for (owned = device->shaders; owned; owned = owned->next_device_resource)
+            if (owned == shader) return owned->is_pixel == pixel;
+    }
+    return FALSE;
+}
+
 static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice9 *iface,
         IDirect3DVertexShader9 *shader_iface)
 {
     D9Device *device = device_from_iface(iface);
     D9Shader *shader = shader_iface ? vertex_shader_from_iface(shader_iface) : NULL;
 
-    if (shader && (shader_iface->lpVtbl != &g_vertex_shader_vtbl
-            || shader->device != device))
+    if (shader && !shader_binding_identity(device, shader, FALSE))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
@@ -8148,8 +8174,7 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9Shader *shader = shader_iface ? pixel_shader_from_iface(shader_iface) : NULL;
 
-    if (shader && (shader_iface->lpVtbl != &g_pixel_shader_vtbl
-            || shader->device != device))
+    if (shader && !shader_binding_identity(device, shader, TRUE))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (device->recording_result) {
         D9StateBlock *block = device->recording_result;
@@ -11789,6 +11814,8 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice9 *iface,
         WINBOOL lockable, IDirect3DSurface9 **surface_out, HANDLE *shared)
 {
     if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    if (!surface_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *surface_out = NULL;
     if (!supported_multisample(format, multisample)
             || multisample_quality != 0
             || (lockable && multisample != D3DMULTISAMPLE_NONE)) {
@@ -11808,6 +11835,8 @@ static HRESULT WINAPI device_create_depth_stencil_surface(
         WINBOOL discard, IDirect3DSurface9 **surface_out, HANDLE *shared)
 {
     if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    if (!surface_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *surface_out = NULL;
     (void)discard;
     if (!supported_multisample(format, multisample)
             || multisample_quality != 0)
@@ -12096,6 +12125,9 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
         if (source->device != device || destination->device != device
                 || source->pool != D3DPOOL_DEFAULT || destination->pool != D3DPOOL_DEFAULT
                 || (filter != D3DTEXF_NONE && filter != D3DTEXF_POINT && filter != D3DTEXF_LINEAR))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (device->in_scene
+                && ((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         /* Color copies can target a render target, or copy plain -> plain.
          * A regular texture level is not a StretchRect destination. Preserve

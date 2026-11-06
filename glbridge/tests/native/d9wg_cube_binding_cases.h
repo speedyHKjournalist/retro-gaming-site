@@ -19,6 +19,15 @@ static int cube_binding_cases(void)
         Parent parent = {0};D9Device *device = new_device(&parent);
         D9CubeTexture *texture = new_cube(device, pool);Interface *view = NULL;
         CHECK(device->refcount == 2 && device->child_parent_refs == 1);
+        for (UINT table = 0; table < 2; table++) {
+            texture->iface.lpVtbl = table ? (void *)(uintptr_t)0xdeadbeef : NULL;
+            CHECK(!device_set_texture(&device->iface, 0, &texture->iface));
+            CHECK(texture->refcount == 1 && texture->binding_refs == 1);
+            Interface unknown = {texture->iface.lpVtbl};
+            CHECK(device_set_texture(&device->iface, 0, &unknown) == -1);
+            CHECK(!device_set_texture(&device->iface, 0, NULL) && !texture->binding_refs);
+        }
+        texture->iface.lpVtbl = &g_cube_vtbl;
         for (UINT i = 0; i < 4; i++) CHECK(!device_set_texture(&device->iface, stages[i], &texture->iface));
         CHECK(texture->refcount == 1 && texture->binding_refs == 4 && device->refcount == 2);
         for (UINT face = 0; face < 6; face++) {Interface *q = NULL; CHECK(!cube_get_cube_map_surface(&texture->iface, face, 0, &q)); CHECK(((D9Surface *)q)->texture_child && !((D9Surface *)q)->texture && ((D9Surface *)q)->cube_texture == texture); if (face == round % 6) view = q; else CHECK(surface_release(q) >= 1);}

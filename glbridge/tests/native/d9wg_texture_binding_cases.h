@@ -20,6 +20,16 @@ static int texture_binding_cases(void)
         Parent parent = {0};D9Device *device = new_device(&parent);
         D9Texture *texture = new_texture(device, pool);Interface *view = NULL;
         CHECK(device->refcount == 2 && device->child_parent_refs == 1);
+        for (UINT table = 0; table < 2; table++) {
+            texture->iface.lpVtbl = table ? (void *)(uintptr_t)0xdeadbeef : NULL;
+            CHECK(!device_set_texture(&device->iface, 0, &texture->iface));
+            CHECK(texture->refcount == 1 && texture->binding_refs == 1);
+            Interface unknown = {texture->iface.lpVtbl};
+            CHECK(device_set_texture(&device->iface, 0, &unknown) == -1);
+            CHECK(device->textures[0] == texture && texture->binding_refs == 1);
+            CHECK(!device_set_texture(&device->iface, 0, NULL) && !texture->binding_refs);
+        }
+        texture->iface.lpVtbl = &g_texture_vtbl;
         for (UINT i = 0; i < 4; i++) CHECK(!device_set_texture(&device->iface, stages[i], &texture->iface));
         CHECK(texture->refcount == 1 && texture->binding_refs == 4 && device->refcount == 2);
         CHECK(!texture_get_surface_level(&texture->iface, 0, &view) && texture->refcount == 2);

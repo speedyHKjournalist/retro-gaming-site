@@ -28,6 +28,22 @@ static int shader_binding_cases(void)
         D9VertexDeclaration *decl = new_declaration(device);
         D9Shader *vs = new_shader(device, FALSE), *ps = new_shader(device, TRUE);
         Interface *di = &decl->iface, *vi = &vs->iface.vertex, *pi = &ps->iface.pixel;
+        /* Native identity is independent of a temporarily replaced COM table,
+         * including before the resource has ever been bound. */
+        for (UINT table = 0; table < 2; table++) {
+            vi->lpVtbl = pi->lpVtbl = table ? (void *)(uintptr_t)0xdeadbeef : NULL;
+            CHECK(!device_set_vertex_shader(&device->iface, vi));
+            CHECK(!device_set_pixel_shader(&device->iface, pi));
+            CHECK(vs->refcount == 1 && ps->refcount == 1 && vs->binding_refs == 1 && ps->binding_refs == 1);
+            CHECK(device_set_pixel_shader(&device->iface, vi) == -1);
+            CHECK(device_set_vertex_shader(&device->iface, pi) == -1);
+            Interface unknown = {vi->lpVtbl};
+            CHECK(device_set_vertex_shader(&device->iface, &unknown) == -1);
+            CHECK(device_set_pixel_shader(&device->iface, &unknown) == -1);
+            CHECK(!device_set_vertex_shader(&device->iface, NULL) && !device_set_pixel_shader(&device->iface, NULL));
+            CHECK(!vs->binding_refs && !ps->binding_refs);
+        }
+        vi->lpVtbl = &g_vertex_shader_vtbl;pi->lpVtbl = &g_pixel_shader_vtbl;
         CHECK(!device_set_vertex_declaration(&device->iface, di) && !device_set_vertex_shader(&device->iface, vi) && !device_set_pixel_shader(&device->iface, pi));
         CHECK(decl->refcount == 1 && vs->refcount == 1 && ps->refcount == 1 && decl->binding_refs == 1 && vs->binding_refs == 1 && ps->binding_refs == 1 && device->refcount == 4 && device->child_parent_refs == 3);
         CHECK(!decl_release(di) && !vertex_shader_release(vi) && !pixel_shader_release(pi));

@@ -12,7 +12,7 @@ fs.writeFileSync(dir+"/test.c",`#include <stdint.h>
 #include "${root}/d3d9proxy/d3d9_protocol.h"
 typedef uint32_t UINT,DWORD,D3DTEXTUREFILTERTYPE;typedef int BOOL,HRESULT;
 typedef struct{int left,top,right,bottom;}RECT;
-typedef struct{UINT api,handle;BOOL recording,pure;float clip_planes[6][4],recorded[6][4];UINT recorded_mask;}D9Device,IDirect3DDevice9;
+typedef struct{UINT api,handle;BOOL recording,pure,in_scene;float clip_planes[6][4],recorded[6][4];UINT recorded_mask;}D9Device,IDirect3DDevice9;
 typedef struct{UINT usage;}Texture;
 typedef struct{D9Device*device;Texture*texture,*cube_texture;void*swap_chain,*shadow;UINT width,height,format,pool;BOOL auto_depth_stencil,texture_child,gpu;}D9Surface,IDirect3DSurface9;
 #define WINAPI
@@ -56,6 +56,13 @@ for(UINT api=8;api<=9;++api)for(UINT src=0;src<6;++src)for(UINT dst=0;dst<6;++ds
  if(valid)CHECK(copy_command.device_handle==7&&copy_command.source_left==0&&copy_command.source_top==0&&copy_command.source_right==32&&copy_command.source_bottom==24&&copy_command.destination_right==32&&copy_command.destination_bottom==24&&copy_command.filter_point==(filter<2));
 }
 D9Device d={.api=9,.handle=7};Texture st,dt;D9Surface s=make_surface(&d,&st,0,0),t=make_surface(&d,&dt,1,0);RECT a={1,2,11,12},b={3,4,13,14};emitted=mirrored=handles=0;CHECK(!device_stretch_rect(&d,&s,&a,&t,&b,2)&&emitted==1&&mirrored==1&&copy_command.source_left==1&&copy_command.source_bottom==12&&copy_command.destination_left==3&&copy_command.destination_bottom==14);
+for(UINT api=8;api<=9;++api)for(UINT depth=0;depth<2;++depth)for(UINT scene=0;scene<2;++scene){
+ d.api=api;d.in_scene=scene;st.usage=dt.usage=depth?2:1;s.texture=&st;s.texture_child=0;
+ emitted=mirrored=handles=0;BOOL valid=api==8||!depth||!scene;
+ CHECK(device_stretch_rect(&d,&s,NULL,&t,NULL,0)==(valid?0:-1));
+ CHECK(emitted==(UINT)valid&&mirrored==(UINT)valid&&handles==(valid?2u:0u));
+}
+d.api=9;d.in_scene=0;st.usage=dt.usage=1;
 transport_fail=1;mirrored=0;CHECK(device_stretch_rect(&d,&s,NULL,&t,NULL,0)==-2&&!mirrored);transport_fail=0;
 for(UINT api=8;api<=9;++api){d=(D9Device){.api=api,.handle=9};float plane[4]={2,8,5,0},out[4];
  for(UINT i=0;i<64;++i){plane[3]=(float)i;emitted=0;HRESULT hr=device_set_clip_plane(&d,i,plane);CHECK(hr==((api==9||i<6)?0:-1));if(!hr)CHECK(emitted==1&&clip_command.index<6&&!memcmp(clip_command.plane,plane,16));else CHECK(!emitted);}

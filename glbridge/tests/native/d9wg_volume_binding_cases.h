@@ -21,6 +21,15 @@ static int volume_binding_cases(void)
     for (UINT round = 0; round < 64; round++) for (UINT pool = 0; pool < 3; pool++) for (UINT order = 0; order < 4; order++) {
         Parent parent = {0};D9Device *device = new_device(&parent);
         D9VolumeTexture *texture = new_volume(device, pool);Interface *views[2];
+        for (UINT table = 0; table < 2; table++) {
+            texture->iface.lpVtbl = table ? (void *)(uintptr_t)0xdeadbeef : NULL;
+            CHECK(!device_set_texture(&device->iface, 0, &texture->iface));
+            CHECK(texture->refcount == 1 && texture->binding_refs == 1);
+            Interface unknown = {texture->iface.lpVtbl};
+            CHECK(device_set_texture(&device->iface, 0, &unknown) == -1);
+            CHECK(!device_set_texture(&device->iface, 0, NULL) && !texture->binding_refs);
+        }
+        texture->iface.lpVtbl = &g_volume_texture_vtbl;
         for (UINT i = 0; i < 4; i++) CHECK(!device_set_texture(&device->iface, stages[i], &texture->iface));
         CHECK(texture->refcount == 1 && texture->binding_refs == 4 && device->refcount == 2 && device->child_parent_refs == 1);
         for (UINT i = 0; i < 2; i++) {CHECK(!volume_texture_get_volume_level(&texture->iface, i, &views[i]));CHECK(((D9Volume *)views[i])->texture == texture && ((D9Volume *)views[i])->level == i);}
