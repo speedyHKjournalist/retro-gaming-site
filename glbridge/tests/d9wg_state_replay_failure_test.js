@@ -44,7 +44,7 @@ typedef float D3DMATRIX[16];
 typedef struct Interface {int value;} IDirect3DDevice9,IDirect3DBaseTexture9;
 typedef struct Resource {IDirect3DDevice9 iface;} Resource;
 typedef struct Shader {struct{IDirect3DDevice9 vertex,pixel;}iface;} Shader;
-typedef struct D9Device {IDirect3DDevice9 iface;} D9Device;
+typedef struct D9Device {IDirect3DDevice9 iface;UINT vs_float_capacity,vs_int_capacity,vs_bool_capacity;} D9Device;
 typedef struct D9WGLightState {struct D9WGLightState*next;UINT index;BOOL light_mask,set,enable_mask,enabled;int light;} D9WGLightState;
 struct D9StateBlock {
  D9Device*device;BOOL has_palette;UINT current_palette;
@@ -67,6 +67,7 @@ struct D9StateBlock {
 static UINT trace[256],calls,fail_at,index_observations;static HRESULT injected,observed_index;
 static HRESULT setter(UINT kind,...) {assert(calls<256);trace[calls++]=kind;return calls==fail_at?injected:D3D_OK;}
 ${setters.map((name,i) => "#define " + name + "(...) setter(" + i + ",__VA_ARGS__)").join("\n")}
+static UINT device_compatibility_api(D9Device*d){(void)d;return 9;}
 static UINT texture_binding_stage(UINT i){return i;}static UINT sampler_state_index(UINT i){return i;}static UINT d9wg_state_block_transform_state(UINT i){return i;}
 ${extract("state_block_apply_shared")}
 ${extract("state_block_apply")}
@@ -78,7 +79,7 @@ static HRESULT WINAPI intercept(void*context,UINT group,UINT index,HRESULT resul
 static UINT checks,cases;
 #define CHECK(x) do {checks++;if(!(x)){fprintf(stderr,"state replay failure line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 int main(void){
- D9Device device={0};Resource resource={{0}};Shader shader={0};D9WGLightState light={NULL,999,1,1,1,1,0};
+ D9Device device={.vs_float_capacity=2,.vs_int_capacity=2,.vs_bool_capacity=2};Resource resource={{0}};Shader shader={0};D9WGLightState light={NULL,999,1,1,1,1,0};
  for(UINT mode=0;mode<4;mode++){
   struct D9StateBlock b;memset(&b,0,sizeof(b));b.device=&device;
   b.has_palette=b.has_material=b.has_npatch_mode=b.has_viewport=b.has_scissor=1;

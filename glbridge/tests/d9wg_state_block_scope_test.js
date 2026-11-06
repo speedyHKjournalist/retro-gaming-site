@@ -48,7 +48,7 @@ typedef struct Light {uint32_t words[26];} Light;
 #define D9WG_LIGHT_FREE(pointer) free(pointer)
 #include "${path.join(root,'runtime/d9wg_light_state.h')}"
 typedef struct D9StateBlock D9StateBlock;
-typedef struct D9Device {BOOL light_set[8];D9WGLightState *extra_lights;D9StateBlock *recording_result;} D9Device;
+typedef struct D9Device {UINT vs_float_capacity,vs_int_capacity,vs_bool_capacity;BOOL light_set[8];D9WGLightState *extra_lights;D9StateBlock *recording_result;} D9Device;
 struct D9StateBlock {float transforms[266][16];D9Device *device;BOOL has_render_state[256],has_texture_stage_state[8][33],has_sampler_state[20][14],has_texture[20],has_transform[266],has_palette,has_material,has_clip_plane[6],has_npatch_mode,has_light[8],has_light_enable[8],has_vertex_shader,has_vertex_format,has_pixel_shader,has_vs_const_f[256],has_vs_const_i[16],has_vs_const_b[16],has_ps_const_f[224],has_ps_const_i[16],has_ps_const_b[16],has_viewport,has_scissor,has_stream[16],has_stream_frequency[16],has_indices,light_allocation_failed;D9WGLightState *extra_lights;};
 static BOOL device_light_is_set(D9Device *device,UINT index){return index<8&&device->light_set[index];}
 ${oldArrays}
@@ -66,7 +66,7 @@ ${['state_block_record_transform','state_block_mark_pixel_states','state_block_m
  for(unsigned i=0;i<6;++i)CHECK(!!s->clip_plane_mask[i]==(type==1));
  for(unsigned i=0;i<8;++i)CHECK(!!s->light_mask[i]==(type!=2)&&!!s->light_enable_mask[i]==(type!=2));
 `:`
- D9WGLightState light={0};light.index=37;light.set=TRUE;D9Device device={0};device.light_set[3]=TRUE;device.extra_lights=&light;
+ D9WGLightState light={0};light.index=37;light.set=TRUE;D9Device device={.vs_float_capacity=256,.vs_int_capacity=16,.vs_bool_capacity=16};device.light_set[3]=TRUE;device.extra_lights=&light;
  D9StateBlock block={0};block.device=&device;if(type==1)state_block_mark_all(&block);else if(type==2)state_block_mark_pixel_states(&block);else state_block_mark_vertex_states(&block);
  for(unsigned i=0;i<256;++i)CHECK(!!block.has_render_state[i]==(type==1?1:expected[type-2][i]));
  for(unsigned stage=0;stage<8;++stage)for(unsigned i=0;i<33;++i)CHECK(!!block.has_texture_stage_state[stage][i]==tss_expected(type,i));

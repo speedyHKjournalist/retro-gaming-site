@@ -820,6 +820,9 @@ static void trace_close(void)
  * here is the ps_3_0 ceiling, so the shadow is large enough for any shader
  * the host translator will accept without needing a second size later. */
 #define D9_MAX_VS_CONST_F 256u
+#define D9_SW_VS_CONST_F 8192u
+#define D9_SW_VS_CONST_I 2048u
+#define D9_SW_VS_CONST_B 2048u
 #define D9_MAX_PS_CONST_F 224u
 #define D9_MAX_CONST_I 16u
 #define D9_MAX_CONST_B 16u
@@ -969,16 +972,16 @@ struct D9StateBlock {
     D9Shader *vertex_shader;
     BOOL has_pixel_shader;
     D9Shader *pixel_shader;
-    BOOL has_vs_const_f[D9_MAX_VS_CONST_F];
-    float vs_const_f[D9_MAX_VS_CONST_F][4];
+    BOOL *has_vs_const_f;
+    float (*vs_const_f)[4];
     BOOL has_ps_const_f[D9_MAX_PS_CONST_F];
     float ps_const_f[D9_MAX_PS_CONST_F][4];
-    BOOL has_vs_const_i[D9_MAX_CONST_I];
-    int vs_const_i[D9_MAX_CONST_I][4];
+    BOOL *has_vs_const_i;
+    int (*vs_const_i)[4];
     BOOL has_ps_const_i[D9_MAX_CONST_I];
     int ps_const_i[D9_MAX_CONST_I][4];
-    BOOL has_vs_const_b[D9_MAX_CONST_B];
-    BOOL vs_const_b[D9_MAX_CONST_B];
+    BOOL *has_vs_const_b;
+    BOOL *vs_const_b;
     BOOL has_ps_const_b[D9_MAX_CONST_B];
     BOOL ps_const_b[D9_MAX_CONST_B];
     BOOL has_vertex_format;
@@ -1061,6 +1064,7 @@ struct D9Device {
     /* Only meaningful on a D3DCREATE_MIXED_VERTEXPROCESSING device; the other
      * two modes are fixed at creation and answer from BehaviorFlags. */
     BOOL software_vertex_processing;
+    BOOL vertex_shader_hw_disabled;
     /* SetNPatchMode's level, or 0 when tessellation is off. Zero is the gate
      * the draw path checks, so the default costs one comparison. */
     float npatch_segments;
@@ -1146,9 +1150,10 @@ struct D9Device {
      * "set the same matrix palette again every frame" traffic and lets
      * emit_device_state_after_reset() replay the live values after a Reset.
      */
-    float vs_const_f[D9_MAX_VS_CONST_F][4];
-    int vs_const_i[D9_MAX_CONST_I][4];
-    BOOL vs_const_b[D9_MAX_CONST_B];
+    UINT vs_float_capacity, vs_int_capacity, vs_bool_capacity;
+    float (*vs_const_f)[4];
+    int (*vs_const_i)[4];
+    BOOL *vs_const_b;
     float ps_const_f[D9_MAX_PS_CONST_F][4];
     int ps_const_i[D9_MAX_CONST_I][4];
     BOOL ps_const_b[D9_MAX_CONST_B];
@@ -1175,6 +1180,7 @@ struct D9Shader {
     D9Device *device;
     uint32_t handle;
     BOOL is_pixel;
+    BOOL requires_software;
     DWORD *code;
     UINT token_count;
     uint32_t hash_low;
@@ -1525,6 +1531,7 @@ static void device_clear_fvf_cache(D9Device *device)
 }
 
 static void shader_destroy_storage(D9Shader *object);
+static HRESULT emit_set_shader(D9Device *device, D9Shader *shader, BOOL is_pixel);
 
 static void shader_binding_add_ref(D9Shader *object)
 {
@@ -4058,6 +4065,7 @@ static void device_clear_bindings(D9Device *device)
     }
     if (device->vertex_shader) {
         D9Shader *shader = device->vertex_shader;
+        device->vertex_shader_hw_disabled = FALSE;
         device->vertex_shader = NULL;
         shader_binding_release(shader);
     }
@@ -4117,30 +4125,21 @@ static BOOL emit_device_state_after_reset(D9Device *device)
         return FALSE;
 
     if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
-                    0, D9_MAX_VS_CONST_F, device->vs_const_f,
-                    D9_MAX_VS_CONST_F * 16u)
+                    0, device->vs_float_capacity, device->vs_const_f,
+                    device->vs_float_capacity * 16u)
             || !emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
                     0, D9_MAX_PS_CONST_F, device->ps_const_f,
                     D9_MAX_PS_CONST_F * 16u)
             || !emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_I,
-                    0, D9_MAX_CONST_I, device->vs_const_i, D9_MAX_CONST_I * 16u)
+                    0, device->vs_int_capacity, device->vs_const_i, device->vs_int_capacity * 16u)
             || !emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_I,
                     0, D9_MAX_CONST_I, device->ps_const_i, D9_MAX_CONST_I * 16u))
         return FALSE;
-    {
-        uint32_t packed[D9_MAX_CONST_B];
-        UINT index;
-        for (index = 0; index < D9_MAX_CONST_B; ++index)
-            packed[index] = device->vs_const_b[index] ? 1u : 0u;
-        if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_B,
-                0, D9_MAX_CONST_B, packed, D9_MAX_CONST_B * 4u))
-            return FALSE;
-        for (index = 0; index < D9_MAX_CONST_B; ++index)
-            packed[index] = device->ps_const_b[index] ? 1u : 0u;
-        if (!emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_B,
-                0, D9_MAX_CONST_B, packed, D9_MAX_CONST_B * 4u))
-            return FALSE;
-    }
+    if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_B,
+            0, device->vs_bool_capacity, device->vs_const_b, device->vs_bool_capacity * 4u)
+            || !emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_B,
+            0, D9_MAX_CONST_B, device->ps_const_b, D9_MAX_CONST_B * 4u))
+        return FALSE;
     return TRUE;
 }
 
@@ -5044,8 +5043,15 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     if (width > 8192 || height > 8192)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
+    BOOL extended_constants = api == 9 && (behavior &
+            (D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_MIXED_VERTEXPROCESSING));
+    UINT float_capacity = extended_constants ? D9_SW_VS_CONST_F : D9_MAX_VS_CONST_F;
+    UINT int_capacity = extended_constants ? D9_SW_VS_CONST_I : D9_MAX_CONST_I;
+    UINT bool_capacity = extended_constants ? D9_SW_VS_CONST_B : D9_MAX_CONST_B;
+    /* One allocation, sized for the actual device. Hardware-only games keep
+     * the ordinary small constant file and state blocks. */
     device = (D9Device*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-        sizeof(*device));
+        sizeof(*device) + (float_capacity + int_capacity) * 16u + bool_capacity * 4u);
     if (!device) {
         TRACE("FAIL CreateDevice allocation -> %08lX", (DWORD)E_OUTOFMEMORY);
         return E_OUTOFMEMORY;
@@ -5061,6 +5067,12 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
     device->creation.DeviceType = type;
     device->creation.hFocusWindow = focus_window;
     device->creation.BehaviorFlags = behavior;
+    device->vs_float_capacity = float_capacity;
+    device->vs_int_capacity = int_capacity;
+    device->vs_bool_capacity = bool_capacity;
+    device->vs_const_f = (float (*)[4])(device + 1);
+    device->vs_const_i = (int (*)[4])(device->vs_const_f + float_capacity);
+    device->vs_const_b = (BOOL *)(device->vs_const_i + int_capacity);
     fill_display_mode(&device->display_mode,
         width, height,
         backbuffer_format);
@@ -5341,10 +5353,11 @@ static HRESULT WINAPI device_get_direct3d(IDirect3DDevice9 *iface,
 
 static HRESULT WINAPI device_get_caps(IDirect3DDevice9 *iface, D3DCAPS9 *caps)
 {
-    (void)iface;
     if (!caps)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     fill_caps(caps);
+    if (device_from_iface(iface)->creation.BehaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING)
+        caps->MaxVertexShaderConst = D9_SW_VS_CONST_F;
     trace_caps("Device.GetDeviceCaps", caps);
     return D3D_OK;
 }
@@ -6743,28 +6756,24 @@ static HRESULT WINAPI device_validate_device(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-/*
- * These two used to disagree: the setter returned D3D_OK and the getter always
- * answered FALSE, so an app that set software processing and read it back was
- * told its own call had not happened. That is worse than a refusal -- a
- * refusal is a fact the app can branch on, while a silent disagreement looks
- * like a driver bug in whatever renders wrong three frames later.
- *
- * D3D9's rule is that the mode is fixed at creation except on a mixed device,
- * where this switches between the two. The switch is honoured as bookkeeping:
- * every vertex is processed on the GPU either way, because that is the only
- * place this backend can process one. What that costs is the one guarantee
- * software processing carries that hardware does not -- no caps limits, so
- * shader versions and constant counts beyond what the device advertises --
- * which a title only reaches by first reading caps that already say otherwise.
- */
+/* Mixed devices retain their extended constant banks across mode switches.
+ * A rejected software-only program is disabled for subsequent hardware draws,
+ * but remains the API binding and is restored when software processing resumes. */
 static HRESULT WINAPI device_set_software_vertex_processing(
         IDirect3DDevice9 *iface, WINBOOL software)
 {
     D9Device *device = device_from_iface(iface);
     const DWORD behavior = device->creation.BehaviorFlags;
     if (behavior & D3DCREATE_MIXED_VERTEXPROCESSING) {
-        device->software_vertex_processing = software ? TRUE : FALSE;
+        BOOL next = software ? TRUE : FALSE;
+        if (device->software_vertex_processing != next) {
+            if (device->vertex_shader_hw_disabled) {
+                HRESULT hr = emit_set_shader(device, device->vertex_shader, FALSE);
+                if (FAILED(hr)) return hr;
+            }
+            device->vertex_shader_hw_disabled = FALSE;
+            device->software_vertex_processing = next;
+        }
         return D3D_OK;
     }
     /* Not a mixed device: the only accepted call is the one that asks for the
@@ -7488,6 +7497,17 @@ static HRESULT d9_prepare_clip_status(D9Device *device, const D9WGClipDrawSource
     return TRACE_REFUSE(error == 2 ? E_OUTOFMEMORY : error ? D3DERR_INVALIDCALL : D3D_OK);
 }
 
+static HRESULT d9_validate_vertex_shader_mode(D9Device *device)
+{
+    if (!device->vertex_shader || !device->vertex_shader->requires_software
+            || d9_software_vertex_processing(device) || device->vertex_shader_hw_disabled)
+        return D3D_OK;
+    HRESULT hr = emit_set_shader(device, NULL, FALSE);
+    if (FAILED(hr)) return hr;
+    device->vertex_shader_hw_disabled = TRUE;
+    return TRACE_REFUSE(D3DERR_INVALIDCALL);
+}
+
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT start_vertex,
         UINT primitive_count)
@@ -7503,6 +7523,8 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     if (!primitive_count) return D3D_OK;
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
     if (device->npatch_segments > 1.0f && device->streams[0].buffer && device->streams[0].stride) {
         HRESULT tessellated = d9_draw_npatch(iface, device, primitive_type,
                 primitive_count, NULL, 0, start_vertex);
@@ -7574,6 +7596,8 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     if (!primitive_count) return D3D_OK;
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
     index_size = device->index_buffer->format == D3DFMT_INDEX16 ? 2u : 4u;
     available_indices = device->index_buffer->length / index_size;
     if (start_index > available_indices
@@ -7704,6 +7728,8 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
@@ -7814,6 +7840,8 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
      * format/data validation and before either successful/failure unbinding. */
     if (stride && !primitive_count) return D3D_OK;
     D9Device *device = device_from_iface(iface);
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
     HRESULT result = draw_indexed_up(device, primitive_type, min_vertex_index,
             vertex_count, primitive_count, index_data, index_format,
             vertex_data, stride, TRUE, TRUE);
@@ -8074,6 +8102,8 @@ static HRESULT create_shader_object(D9Device *device, const DWORD *bytecode,
     shader->device = device;
     shader->handle = allocate_shader_handle();
     shader->is_pixel = want_pixel;
+    shader->requires_software = !want_pixel && device_compatibility_api(device) == 9
+            && !d9wg_shader9_constants_valid((const uint32_t *)bytecode, token_count, FALSE);
     shader->token_count = token_count;
     shader_bytecode_hash(shader->code, token_count, &shader->hash_low,
             &shader->hash_high);
@@ -8256,11 +8286,14 @@ static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice9 *iface,
         if (old) shader_binding_release(old);
         return D3D_OK;
     }
+    HRESULT hr = emit_set_shader(device, shader, FALSE);
+    if (FAILED(hr)) return hr;
+    device->vertex_shader_hw_disabled = FALSE;
     D9Shader *old_shader = device->vertex_shader;
     if (shader) shader_binding_add_ref(shader);
     device->vertex_shader = shader;
     if (old_shader) shader_binding_release(old_shader);
-    return emit_set_shader(device, shader, FALSE);
+    return D3D_OK;
 }
 
 static HRESULT WINAPI device_get_vertex_shader(IDirect3DDevice9 *iface,
@@ -8342,7 +8375,7 @@ static HRESULT set_constant_f(D9Device *device, BOOL is_pixel, UINT start,
         const float *data, UINT count)
 {
     float (*shadow)[4] = is_pixel ? device->ps_const_f : device->vs_const_f;
-    UINT capacity = is_pixel ? D9_MAX_PS_CONST_F : D9_MAX_VS_CONST_F;
+    UINT capacity = is_pixel ? D9_MAX_PS_CONST_F : device->vs_float_capacity;
     UINT first_dirty = count;
     UINT last_dirty = 0;
     UINT index;
@@ -8377,7 +8410,7 @@ static HRESULT set_constant_i(D9Device *device, BOOL is_pixel, UINT start,
     UINT last_dirty = 0;
     UINT index;
 
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_I))
+    if (!data || !constant_range_valid(start, count, is_pixel ? D9_MAX_CONST_I : device->vs_int_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (state_block_record_constant(device, is_pixel, FALSE, FALSE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
@@ -8406,12 +8439,11 @@ static HRESULT set_constant_b(D9Device *device, BOOL is_pixel, UINT start,
         const WINBOOL *data, UINT count)
 {
     BOOL *shadow = is_pixel ? device->ps_const_b : device->vs_const_b;
-    uint32_t packed[D9_MAX_CONST_B];
     UINT first_dirty = count;
     UINT last_dirty = 0;
     UINT index;
 
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_B))
+    if (!data || !constant_range_valid(start, count, is_pixel ? D9_MAX_CONST_B : device->vs_bool_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (state_block_record_constant(device, is_pixel, FALSE, TRUE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
@@ -8424,15 +8456,10 @@ static HRESULT set_constant_b(D9Device *device, BOOL is_pixel, UINT start,
     }
     if (first_dirty > last_dirty)
         return D3D_OK;
-    /* One 32-bit slot per register on the wire: the host's uniform layout
-     * (plan 9.7) has no packed-bit representation, and this is a handful of
-     * bytes either way. */
-    for (index = first_dirty; index <= last_dirty; ++index)
-        packed[index - first_dirty] = shadow[start + index] ? 1u : 0u;
     return emit_shader_constants(device,
             is_pixel ? D9WG_OP_SET_PIXEL_SHADER_CONSTANT_B
                     : D9WG_OP_SET_VERTEX_SHADER_CONSTANT_B,
-            start + first_dirty, last_dirty - first_dirty + 1, packed,
+            start + first_dirty, last_dirty - first_dirty + 1, shadow + start + first_dirty,
             (last_dirty - first_dirty + 1) * 4u)
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -8466,7 +8493,7 @@ static HRESULT WINAPI device_get_vertex_shader_constant_f(
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetVertexShaderConstantF");
     D9Device *device = device_from_iface(iface);
-    if (!data || !constant_range_valid(start, count, D9_MAX_VS_CONST_F))
+    if (!data || !constant_range_valid(start, count, device->vs_float_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(data, device->vs_const_f[start], count * 16u);
     return D3D_OK;
@@ -8488,7 +8515,7 @@ static HRESULT WINAPI device_get_vertex_shader_constant_i(
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetVertexShaderConstantI");
     D9Device *device = device_from_iface(iface);
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_I))
+    if (!data || !constant_range_valid(start, count, device->vs_int_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(data, device->vs_const_i[start], count * 16u);
     return D3D_OK;
@@ -8511,7 +8538,7 @@ static HRESULT WINAPI device_get_vertex_shader_constant_b(
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetVertexShaderConstantB");
     D9Device *device = device_from_iface(iface);
     UINT index;
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_B))
+    if (!data || !constant_range_valid(start, count, device->vs_bool_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     for (index = 0; index < count; ++index)
         data[index] = device->vs_const_b[start + index];
@@ -13524,7 +13551,7 @@ static void state_block_capture(struct D9StateBlock *block)
         if (block->pixel_shader)
             shader_binding_add_ref(block->pixel_shader);
     }
-    for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
+    for (index = 0; index < block->device->vs_float_capacity; ++index) {
         if (block->has_vs_const_f[index])
             CopyMemory(block->vs_const_f[index], device->vs_const_f[index], 16);
     }
@@ -13532,16 +13559,16 @@ static void state_block_capture(struct D9StateBlock *block)
         if (block->has_ps_const_f[index])
             CopyMemory(block->ps_const_f[index], device->ps_const_f[index], 16);
     }
-    for (index = 0; index < D9_MAX_CONST_I; ++index) {
+    for (index = 0; index < block->device->vs_int_capacity; ++index) {
         if (block->has_vs_const_i[index])
             CopyMemory(block->vs_const_i[index], device->vs_const_i[index], 16);
-        if (block->has_ps_const_i[index])
+        if (index < D9_MAX_CONST_I && block->has_ps_const_i[index])
             CopyMemory(block->ps_const_i[index], device->ps_const_i[index], 16);
     }
-    for (index = 0; index < D9_MAX_CONST_B; ++index) {
+    for (index = 0; index < block->device->vs_bool_capacity; ++index) {
         if (block->has_vs_const_b[index])
             block->vs_const_b[index] = device->vs_const_b[index];
-        if (block->has_ps_const_b[index])
+        if (index < D9_MAX_CONST_B && block->has_ps_const_b[index])
             block->ps_const_b[index] = device->ps_const_b[index];
     }
     if (block->has_vertex_format) {
@@ -13623,11 +13650,11 @@ static void state_block_mark_vertex_states(struct D9StateBlock *block)
     }
     block->has_vertex_shader = TRUE;
     block->has_vertex_format = TRUE;
-    for (index = 0; index < D9_MAX_VS_CONST_F; ++index)
+    for (index = 0; index < block->device->vs_float_capacity; ++index)
         block->has_vs_const_f[index] = TRUE;
-    for (index = 0; index < D9_MAX_CONST_I; ++index)
+    for (index = 0; index < block->device->vs_int_capacity; ++index)
         block->has_vs_const_i[index] = TRUE;
-    for (index = 0; index < D9_MAX_CONST_B; ++index)
+    for (index = 0; index < block->device->vs_bool_capacity; ++index)
         block->has_vs_const_b[index] = TRUE;
 }
 
@@ -13659,10 +13686,18 @@ static void state_block_mark_all(struct D9StateBlock *block)
 
 static struct D9StateBlock *state_block_alloc(D9Device *device, BOOL parent_ref)
 {
+    UINT floats = device->vs_float_capacity, ints = device->vs_int_capacity, bools = device->vs_bool_capacity;
     struct D9StateBlock *block = (struct D9StateBlock *)HeapAlloc(
-            GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*block));
+            GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*block) +
+            (floats + ints) * 20u + bools * 8u);
     if (!block)
         return NULL;
+    block->vs_const_f = (float (*)[4])(block + 1);
+    block->vs_const_i = (int (*)[4])(block->vs_const_f + floats);
+    block->vs_const_b = (BOOL *)(block->vs_const_i + ints);
+    block->has_vs_const_f = block->vs_const_b + bools;
+    block->has_vs_const_i = block->has_vs_const_f + floats;
+    block->has_vs_const_b = block->has_vs_const_i + ints;
     block->iface.lpVtbl = &g_state_block_vtbl;
     block->refcount = 1;
     block->device = device;
@@ -13761,7 +13796,7 @@ static HRESULT state_block_apply_shared(struct D9StateBlock *block,
     else if (block->has_pixel_shader)
         APPLY_STATE(IDirect3DDevice9_SetPixelShader(iface, block->pixel_shader
                 ? &block->pixel_shader->iface.pixel : NULL));
-    for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
+    for (index = 0; index < device->vs_float_capacity; ++index) {
         if (block->has_vs_const_f[index])
             APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantF(iface, index,
                     block->vs_const_f[index], 1));
@@ -13771,19 +13806,19 @@ static HRESULT state_block_apply_shared(struct D9StateBlock *block,
             APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantF(iface, index,
                     block->ps_const_f[index], 1));
     }
-    for (index = 0; index < D9_MAX_CONST_I; ++index) {
+    for (index = 0; index < device->vs_int_capacity; ++index) {
         if (block->has_vs_const_i[index])
             APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantI(iface, index,
                     block->vs_const_i[index], 1));
-        if (block->has_ps_const_i[index])
+        if (index < D9_MAX_CONST_I && block->has_ps_const_i[index])
             APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantI(iface, index,
                     block->ps_const_i[index], 1));
     }
-    for (index = 0; index < D9_MAX_CONST_B; ++index) {
+    for (index = 0; index < device->vs_bool_capacity; ++index) {
         if (block->has_vs_const_b[index])
             APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantB(iface, index,
                     &block->vs_const_b[index], 1));
-        if (block->has_ps_const_b[index])
+        if (index < D9_MAX_CONST_B && block->has_ps_const_b[index])
             APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantB(iface, index,
                     &block->ps_const_b[index], 1));
     }
@@ -17501,7 +17536,7 @@ HRESULT WINAPI d9wg_d3d9_core_record_common_state8(IDirect3DDevice9 *iface,
         COPY_MASK(has_palette); COPY_MASK(has_material); COPY_MASK(has_clip_plane);
         COPY_MASK(has_light); COPY_MASK(has_light_enable); COPY_MASK(has_viewport);
         COPY_MASK(has_vertex_shader); COPY_MASK(has_pixel_shader);
-        COPY_MASK(has_vs_const_f); COPY_MASK(has_ps_const_f);
+        CopyMemory(dst->has_vs_const_f, src->has_vs_const_f, device->vs_float_capacity * sizeof(BOOL)); COPY_MASK(has_ps_const_f);
         COPY_MASK(has_vertex_format); COPY_MASK(has_stream); COPY_MASK(has_indices);
 #undef COPY_MASK
         for (D9WGLightState *light = src->extra_lights; light; light = light->next) {
