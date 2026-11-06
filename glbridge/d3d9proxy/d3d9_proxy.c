@@ -33,6 +33,8 @@
 #include <windows.h>
 #include <initguid.h>
 #include <d3d9.h>
+#include <ddraw.h>
+#include "d3d9_gdi_memory.inc"
 #include "d3d9_core.h"
 #include "../runtime/d9wg_declaration8.h"
 #include "../runtime/d9wg_shader8_local_defs.h"
@@ -1356,6 +1358,7 @@ struct D9Surface {
      * copy back. The surface stays LockRect-locked for that whole window,
      * which is what D3D9 specifies. */
     HDC dc;
+    D9GdiMemory *gdi_memory;
     HBITMAP dib;
     HBITMAP dc_previous;
     void *dib_bits;
@@ -1521,6 +1524,21 @@ static void shader_binding_release(D9Shader *object)
     if (!InterlockedDecrement(&object->binding_refs)
             && !InterlockedCompareExchange(&object->refcount, 0, 0))
         shader_destroy_storage(object);
+}
+
+static void surface_dispose_dc(D9Surface *surface)
+{
+    if (!surface) return;
+    if (surface->gdi_memory) {
+        gdi_memory_close(surface->gdi_memory, NULL, 0);
+        surface->gdi_memory = NULL;
+    } else if (surface->dc) {
+        SelectObject(surface->dc, surface->dc_previous);
+        DeleteDC(surface->dc);
+    }
+    if (surface->dib) DeleteObject(surface->dib);
+    surface->dc = NULL;
+    surface->dib = NULL;
 }
 
 static void surface_destroy_storage(D9Surface *surface);
@@ -12783,6 +12801,7 @@ static void cube_destroy_storage(D9CubeTexture *texture)
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
     for (index = 0; index < texture->level_count * 6u; ++index) {
         d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
+        surface_dispose_dc(texture->levels[index].level_surface);
         core_view_retire8(texture->levels[index].level_surface);
         HeapFree(GetProcessHeap(), 0,
             texture->levels[index].level_surface);
@@ -14230,6 +14249,7 @@ static void texture_destroy_storage(D9Texture *texture)
         if (texture->levels[level].level_surface) {
             TRACE_SURFACE_FREED(
                 &texture->levels[level].level_surface->iface);
+            surface_dispose_dc(texture->levels[level].level_surface);
             core_view_retire8(texture->levels[level].level_surface);
             HeapFree(GetProcessHeap(), 0,
                 texture->levels[level].level_surface);
@@ -14822,15 +14842,7 @@ static void surface_destroy_storage(D9Surface *surface)
      * the teardown reclaims them rather than trusting the caller. The
      * contents are deliberately *not* copied back: a surface being freed
      * has nowhere for them to go. */
-    if (surface->dc) {
-        SelectObject(surface->dc, surface->dc_previous);
-        DeleteDC(surface->dc);
-        surface->dc = NULL;
-    }
-    if (surface->dib) {
-        DeleteObject(surface->dib);
-        surface->dib = NULL;
-    }
+    surface_dispose_dc(surface);
     if (shadow)
         HeapFree(GetProcessHeap(), 0, shadow);
     TRACE("SURFACE FREE_END object=%08lX", (DWORD)(uintptr_t)iface);
@@ -15296,12 +15308,10 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
  * video frame -- straight onto a D3D surface, so refusing it was a whole class
  * of 2D art silently never arriving.
  *
- * It is implemented entirely on this side of the wire, on top of the LockRect
- * path that already exists: a DIB section is the one bitmap GDI will draw into
- * *and* hand back a raw pointer for, so the surface's bits are copied into a
- * DIB for the duration of the DC and copied back on release. That is also how
- * wined3d does it, and for the same reason -- there is no way to point GDI at
- * arbitrary memory with a known layout otherwise.
+ * Mapping and uploads stay on the ordinary LockRect path. API9 uses an OS
+ * DirectDraw SYSTEMMEMORY surface to obtain the native GDI bitmap metadata;
+ * API8 retains its DIB section. Both copy actual pixels into GDI storage and
+ * back on ReleaseDC. The OS surface does no 3D rendering or presentation.
  *
  * Two bits of D3D9's contract shape this:
  *
@@ -15395,6 +15405,20 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
         return result;
     }
 
+    surface->dc_pitch = (UINT)locked.Pitch;
+    surface->dc_bits = locked.pBits;
+    if (device_compatibility_api(surface->device) == 9u) {
+        result = gdi_memory_open(surface->width, surface->height, surface->format,
+                locked.pBits, (UINT)locked.Pitch, g_module_instance, &surface->gdi_memory);
+        if (FAILED(result)) {
+            surface->dc_bits = NULL;
+            surface_unlock_rect(iface);
+            return result;
+        }
+        surface->dc = surface->gdi_memory->dc;
+        goto mapped_dc;
+    }
+
     ZeroMemory(&info, sizeof(info));
     info.header.biSize = sizeof(info.header);
     info.header.biWidth = (LONG)surface->width;
@@ -15442,6 +15466,7 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
                 (const BYTE *)locked.pBits + row * surface->dc_pitch,
                 copy_bytes);
     }
+mapped_dc:
     surface->dc_pixel_bytes = pixel_bytes;
 
     if (surface->texture)
@@ -15462,6 +15487,7 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
     D9Surface *surface = surface_from_iface(iface);
     UINT row;
     UINT copy_bytes;
+    HRESULT result = D3D_OK;
 
     TRACE_MARK_ENTER("Surface.ReleaseDC");
     if (!surface->dc || hdc != surface->dc) {
@@ -15474,6 +15500,10 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
         return D3DERR_INVALIDCALL;
     }
 
+    if (surface->gdi_memory) {
+        result = gdi_memory_close(surface->gdi_memory, surface->dc_bits, surface->dc_pitch);
+        surface->gdi_memory = NULL;
+    } else {
     /* Anything GDI still has queued has to land in the DIB before it is read
      * back, or the last drawing operation is the one that goes missing. */
     GdiFlush();
@@ -15487,6 +15517,7 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
     SelectObject(surface->dc, surface->dc_previous);
     DeleteDC(surface->dc);
     DeleteObject(surface->dib);
+    }
     if (surface->texture)
         surface->texture->levels[surface->level].dc_active = FALSE;
     if (surface->cube_texture)
@@ -15502,7 +15533,8 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
      * through exactly the path an ordinary LockRect write would. */
     TRACE("OK ReleaseDC object=%08lX", (DWORD)(uintptr_t)iface);
     TRACE_MARK_EXIT("Surface.ReleaseDC", D3D_OK, NULL);
-    return surface_unlock_rect(iface);
+    HRESULT unlocked = surface_unlock_rect(iface);
+    return FAILED(result) ? result : unlocked;
 }
 
 /* ---- IDirect3DSwapChain9: the device's implicit primary chain ---- */
