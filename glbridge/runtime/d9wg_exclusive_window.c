@@ -1,5 +1,6 @@
 #include "d9wg_exclusive_window.h"
 #define EXCLUSIVE_PROPERTY "D9WG.ExclusiveFocus.v1"
+static UINT resize_message;
 
 typedef struct D9WGFocusHook D9WGFocusHook;
 struct D9WGExclusiveWindow {
@@ -9,7 +10,7 @@ struct D9WGExclusiveWindow {
     HWND output;
     UINT width, height, flags;
     D9WGResetState *state;
-    BOOL mode_owned;
+    BOOL mode_owned, resize_scheduled, resize_restored;
     unsigned changing;
 };
 struct D9WGFocusHook {
@@ -64,7 +65,30 @@ static LRESULT CALLBACK exclusive_proc(HWND window, UINT msg, WPARAM wp, LPARAM 
         D9WGExclusiveWindow *next = entry->next;
         if (next) InterlockedIncrement(&next->refs);
         if (entry->state && !entry->changing) {
-            if (msg == WM_DISPLAYCHANGE && ((UINT)LOWORD(lp) != entry->width || (UINT)HIWORD(lp) != entry->height)) {
+            if (resize_message && msg == resize_message && entry->resize_scheduled) {
+                entry->resize_scheduled = FALSE;
+                if (!entry->state->lost && entry->mode_owned && IsWindow(entry->output)) {
+                    ++entry->changing;
+                    ++hook->suppress;
+                    SetWindowPos(entry->output, NULL, 0, 0, entry->width, entry->height,
+                        SWP_NOACTIVATE | SWP_NOZORDER);
+                    --hook->suppress;
+                    --entry->changing;
+                }
+            } else if (msg == WM_WINDOWPOSCHANGED && lp && entry->output == window
+                    && (entry->flags & D9WG_EXCLUSIVE_D3D9)
+                    && !(entry->flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)
+                    && !entry->state->lost && !entry->state->required && entry->mode_owned && !entry->resize_restored) {
+                const WINDOWPOS *position = (const WINDOWPOS *)lp;
+                if (!(position->flags & SWP_NOSIZE)
+                        && (position->cx != (int)entry->width || position->cy != (int)entry->height)
+                        && resize_message && PostMessageA(window, resize_message, 0, 0)) {
+                    /* The application's MoveWindow returns its requested size.
+                     * Restore only after dispatch, and only for the first resize. */
+                    entry->resize_scheduled = TRUE;
+                    entry->resize_restored = TRUE;
+                }
+            } else if (msg == WM_DISPLAYCHANGE && ((UINT)LOWORD(lp) != entry->width || (UINT)HIWORD(lp) != entry->height)) {
                 entry->state->required = 1;
             } else if (msg == WM_ACTIVATEAPP && (!wp || !IsIconic(window)
                     || (entry->flags & D9WG_EXCLUSIVE_D3D9))) {
@@ -104,6 +128,10 @@ static LRESULT CALLBACK exclusive_proc(HWND window, UINT msg, WPARAM wp, LPARAM 
         }
         release_subscription(entry);
         entry = next;
+    }
+    if (resize_message && msg == resize_message) {
+        release_hook(hook);
+        return 0;
     }
     /* Native handles restore before calling the application procedure. Other
      * system commands retain ordinary application-first dispatch. */
@@ -183,6 +211,8 @@ void d9wg_exclusive_window_leave(D9WGExclusiveWindow **subscription)
 BOOL d9wg_exclusive_window_enter_ex(D9WGExclusiveWindow **subscription,
     HWND focus, HWND output, UINT width, UINT height, D9WGResetState *state, UINT flags)
 {
+    if (!resize_message)
+        resize_message = RegisterWindowMessageA("v86.D9WG.FullscreenResize.v1");
     D9WGExclusiveWindow *entry = *subscription;
     BOOL initial = !entry;
     if (!entry) {
@@ -196,6 +226,7 @@ BOOL d9wg_exclusive_window_enter_ex(D9WGExclusiveWindow **subscription,
     D9WGFocusHook *hook = entry->hook;
     InterlockedIncrement(&entry->refs);InterlockedIncrement(&hook->refs);
     entry->output = output;entry->width = width;entry->height = height;entry->state = state;entry->flags = flags;
+    entry->resize_scheduled = entry->resize_restored = FALSE;
     ++entry->changing;
     /* Focus and output windows are different roles. Raising the output steals
      * keyboard focus in applications that render through a secondary window. */

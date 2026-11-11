@@ -3,7 +3,7 @@ static D9VolumeTexture *new_volume(D9Device *device, UINT pool)
     D9VolumeTexture *texture = HeapAlloc(NULL, 8, sizeof(*texture));
     texture->iface.lpVtbl = &g_volume_texture_vtbl;texture->refcount = 1;
     texture->device = device;texture->handle = allocate_handle();texture->pool = pool;
-    texture->level_count = 2;texture->levels = HeapAlloc(NULL, 8, 2 * sizeof(*texture->levels));
+    texture->format = 21;texture->level_count = 2;texture->levels = HeapAlloc(NULL, 8, 2 * sizeof(*texture->levels));
     for (UINT i = 0; i < 2; i++) {
         texture->levels[i].shadow = HeapAlloc(NULL, 8, 64 >> i);
         D9Volume *volume = HeapAlloc(NULL, 8, sizeof(*volume));
@@ -18,7 +18,7 @@ static int volume_binding_cases(void)
 {
     const UINT stages[] = {0, 15, 257, 260};
     UINT profiles = 0, revivals = 0, old_checks = checks;
-    for (UINT round = 0; round < 64; round++) for (UINT pool = 0; pool < 3; pool++) for (UINT order = 0; order < 4; order++) {
+    for (UINT round = 0; round < 64; round++) for (UINT pool = 0; pool < 4; pool++) for (UINT order = 0; order < 4; order++) {
         Parent parent = {0};D9Device *device = new_device(&parent);
         D9VolumeTexture *texture = new_volume(device, pool);Interface *views[2];
         for (UINT table = 0; table < 2; table++) {
@@ -30,6 +30,11 @@ static int volume_binding_cases(void)
             CHECK(!device_set_texture(&device->iface, 0, NULL) && !texture->binding_refs);
         }
         texture->iface.lpVtbl = &g_volume_texture_vtbl;
+        if (pool == D3DPOOL_SCRATCH) {
+            texture->format = 0;
+            CHECK(device_set_texture(&device->iface, 0, &texture->iface) == -1 && !texture->binding_refs);
+            texture->format = 21;
+        }
         for (UINT i = 0; i < 4; i++) CHECK(!device_set_texture(&device->iface, stages[i], &texture->iface));
         CHECK(texture->refcount == 1 && texture->binding_refs == 4 && device->refcount == 2 && device->child_parent_refs == 1);
         for (UINT i = 0; i < 2; i++) {CHECK(!volume_texture_get_volume_level(&texture->iface, i, &views[i]));CHECK(((D9Volume *)views[i])->texture == texture && ((D9Volume *)views[i])->level == i);}
@@ -53,19 +58,19 @@ static int volume_binding_cases(void)
         CHECK(volume_texture_get_volume_level(&texture->iface, 0, NULL) == -1 && device_get_texture(&device->iface, 256, &sentinel) == -1);
         D9Device foreign = {0};D9VolumeTexture other = {.iface = {&g_volume_texture_vtbl}, .device = &foreign};
         CHECK(device_set_texture(&device->iface, 0, &other.iface) == -1 && texture->binding_refs == refs && device->volume_bindings[0] == texture);
-        UINT old_destroys = destroys;
+        UINT old_destroys = destroys, expected_destroy = pool != D3DPOOL_SCRATCH;
         if (order == 0) {
             for (UINT i = 0; i < 4; i++) CHECK(!device_set_texture(&device->iface, stages[i], NULL));
-            CHECK(destroys == old_destroys + 1 && !device->volume_textures && live == 1);
+            CHECK(destroys == old_destroys + expected_destroy && !device->volume_textures && live == 1);
             CHECK(!device_release(&device->iface) && !live && !parent.refs);
         } else if (order == 1) {
-            CHECK(!device_release(&device->iface) && !live && !parent.refs && destroys == old_destroys + 1);
+            CHECK(!device_release(&device->iface) && !live && !parent.refs && destroys == old_destroys + expected_destroy);
         } else if (order == 2) {
             Interface *queried = NULL;CHECK(!device_get_texture(&device->iface, 0, &queried));
             device_clear_bindings(device);CHECK(texture->refcount == 1 && !texture->binding_refs && device->refcount == 2 && destroys == old_destroys);
-            CHECK(device_release(&device->iface) == 1);CHECK(!volume_texture_release(queried) && !live && !parent.refs && destroys == old_destroys + 1);
+            CHECK(device_release(&device->iface) == 1);CHECK(!volume_texture_release(queried) && !live && !parent.refs && destroys == old_destroys + expected_destroy);
         } else {
-            device_clear_bindings(device);CHECK(device->refcount == 1 && !device->volume_textures && destroys == old_destroys + 1 && live == 1);
+            device_clear_bindings(device);CHECK(device->refcount == 1 && !device->volume_textures && destroys == old_destroys + expected_destroy && live == 1);
             CHECK(!device_release(&device->iface) && !live && !parent.refs);
         }
         profiles++;
@@ -78,17 +83,22 @@ static int volume_binding_cases(void)
         plain = new_texture(device, 0);CHECK(!device_set_texture(&device->iface, 0, &plain->iface));CHECK(!device->volume_textures && plain->refcount == 1 && plain->binding_refs == 1);CHECK(!texture_release(&plain->iface));
         CHECK(!device_release(&device->iface) && !live && !parent.refs);
     }
-    /* SCRATCH has CPU views but cannot be sampled and emits no destruction
-     * of a nonexistent host texture. A failed bind preserves the old slot. */
+    /* SCRATCH retains its CPU storage and interface identity. Supported
+     * formats may be bound by D3D9, without creating a host texture. */
     for (UINT round = 0; round < 64; ++round) {
         Parent parent = {0};D9Device *device = new_device(&parent);
         D9VolumeTexture *bound = new_volume(device, 0), *scratch = new_volume(device, 3);
         CHECK(!device_set_texture(&device->iface, 0, &bound->iface));
+        scratch->format = 0;
         for (UINT i = 0; i < 4; ++i) CHECK(device_set_texture(&device->iface, stages[i], &scratch->iface) == -1);
         CHECK(!scratch->binding_refs && scratch->refcount == 1 && device->volume_bindings[0] == bound);
+        scratch->format = 21;
+        for (UINT i = 0; i < 4; ++i) CHECK(!device_set_texture(&device->iface, stages[i], &scratch->iface));
+        CHECK(scratch->binding_refs == 4 && scratch->refcount == 1 && device->volume_bindings[0] == scratch);
         Interface *view = NULL;CHECK(!volume_texture_get_volume_level(&scratch->iface, 0, &view));
         UINT before = destroys;CHECK(volume_texture_release(&scratch->iface) == 1);
         CHECK(!volume_release(view) && destroys == before);
+        device_clear_bindings(device);CHECK(destroys == before && device->volume_bindings[0] == NULL);
         CHECK(!volume_texture_release(&bound->iface));
         CHECK(!device_release(&device->iface) && !live && !parent.refs && destroys == before + 1);
     }

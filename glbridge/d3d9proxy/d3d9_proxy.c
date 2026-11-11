@@ -2452,6 +2452,11 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
                 && ((format != (D3DFORMAT)0x31495441u && format != (D3DFORMAT)0x32495441u)
                     || pool == D3DPOOL_SCRATCH);
     case D3DRTYPE_TEXTURE:
+        /* Depth textures can be sampled without being attachment surfaces.
+         * Keep their public Usage unchanged; the host selects depth storage
+         * from the format. CPU pools still reject hardware depth formats. */
+        return supported_texture_format(format)
+                || (pool == D3DPOOL_DEFAULT && supported_depth_stencil_format(format));
     case D3DRTYPE_CUBETEXTURE:
         return supported_texture_format(format);
     default:
@@ -3622,7 +3627,8 @@ static void fill_caps_for_profile(D3DCAPS9 *caps, UINT shader_model, BOOL permis
             | D3DPMISCCAPS_CLIPTLVERTS
             /* M3: D3DTA_TEMP as a stage argument and D3DTSS_RESULTARG
              * choosing it, both implemented by the host's cascade. */
-            | D3DPMISCCAPS_TSSARGTEMP;
+            | D3DPMISCCAPS_TSSARGTEMP
+            | D3DPMISCCAPS_PERSTAGECONSTANT;
     caps->RasterCaps = D3DPRASTERCAPS_ZTEST | D3DPRASTERCAPS_DEPTHBIAS
             | D3DPRASTERCAPS_SLOPESCALEDEPTHBIAS
             | D3DPRASTERCAPS_FOGVERTEX | D3DPRASTERCAPS_FOGTABLE
@@ -4547,13 +4553,15 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
                 || display_format == D3DFMT_X1R5G5B5)
             && supported_render_target_format8(backbuffer_format);
     /* Fullscreen scan-out permits only the display format or its alpha
-     * variant. Windowed D3D9 uses the same RGB/alpha pairs as
-     * CheckDeviceFormatConversion; UNKNOWN selects the display format. */
+     * variant. Windowed D3D9 permits the implemented display conversions;
+     * UNKNOWN selects the display format. */
     ok = ok && (backbuffer_format == display_format
             || (display_format == D3DFMT_X8R8G8B8
                 && backbuffer_format == D3DFMT_A8R8G8B8)
             || (display_format == D3DFMT_X1R5G5B5
-                && backbuffer_format == D3DFMT_A1R5G5B5));
+                && backbuffer_format == D3DFMT_A1R5G5B5)
+            || (!legacy8 && windowed && display_format == D3DFMT_X8R8G8B8
+                && backbuffer_format == D3DFMT_R5G6B5));
     if (!windowed && display_format == D3DFMT_X1R5G5B5)
         ok = FALSE; /* The display driver exposes 16-bit RGB565 modes. */
 
@@ -6675,8 +6683,9 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
             volume = (D9VolumeTexture *)texture_iface;
             if (volume->device != device
                     || (volume->pool == D3DPOOL_SCRATCH
-                        && (device_compatibility_api(device) == 9u
-                            || !supported_volume_texture_format8(volume->format))))
+                        && !(device_compatibility_api(device) == 9u
+                            ? supported_volume_texture_format(volume->format)
+                            : supported_volume_texture_format8(volume->format))))
                 return TRACE_REFUSE(D3DERR_INVALIDCALL);
             handle = volume->handle;
         } else {

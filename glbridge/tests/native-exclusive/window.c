@@ -4,12 +4,15 @@
 #include <string.h>
 #include "windows.h"
 #include "../../runtime/d9wg_exclusive_window.h"
-struct Window {BOOL live,unicode,visible,iconic,topmost;DWORD thread;WNDPROC proc;HANDLE property;unsigned sizes,displays,restores,activations,positions,edits;};
+struct Window {BOOL live,unicode,visible,iconic,topmost;DWORD thread;WNDPROC proc;HANDLE property;unsigned sizes,displays,restores,activations,positions,edits;int width,height;};
 static unsigned allocations,fail_allocation,fail_prop,fail_proc,fail_mode,error,checks;
 static HWND focus_window,output_window,foreground;
 static D9WGExclusiveWindow *subscription,*second_subscription;
 static D9WGResetState state,second_state;
 static UINT screen_width=1024,screen_height=768;
+static HWND posted_window;static UINT posted_message;
+UINT RegisterWindowMessageA(const char *name){assert(name&&*name);return 0xc123;}
+BOOL PostMessageA(HWND window,UINT message,WPARAM wp,LPARAM lp){assert(!wp&&!lp&&!posted_message);posted_window=window;posted_message=message;return TRUE;}
 static BOOL release_on_display,destroy_on_display,check_transition,release_on_position;
 LONG InterlockedIncrement(LONG *p){return ++*p;}LONG InterlockedDecrement(LONG *p){assert(*p);return --*p;}
 HANDLE GetProcessHeap(void){return NULL;}
@@ -55,6 +58,7 @@ LONG ChangeDisplaySettingsA(DEVMODEA *mode,DWORD flags){
 BOOL ShowWindow(HWND w,int how){assert(IsWindow(w));w->edits++;w->visible=1;if(how==SW_MINIMIZE||how==SW_SHOWMINIMIZED)w->iconic=1;else if(how==SW_RESTORE)w->iconic=0;w->proc(w,WM_SIZE,w->iconic,0);return 1;}
 BOOL SetWindowPos(HWND w,HWND after,int x,int y,int width,int height,UINT flags){
  assert(IsWindow(w)&&!x&&!y);
+ if(!(flags&SWP_NOSIZE)){w->width=width;w->height=height;}
  if(after==HWND_TOPMOST)w->topmost=1;
  if((after==HWND_TOPMOST||after==HWND_TOP)&&width){assert(w==output_window&&width==640&&height==480&&(flags&SWP_NOACTIVATE));w->edits++;w->proc(w,WM_SIZE,0,0);}
  else if(!after){assert(w==output_window&&width==640&&height==480&&flags==(SWP_NOACTIVATE|SWP_NOZORDER));w->proc(w,WM_WINDOWPOSCHANGED,0,0);}
@@ -126,6 +130,21 @@ int main(void){
   CHECK(output_window->edits==edits+(nowc?0u:2u+(unsigned)iconic));
   d9wg_exclusive_window_leave(&subscription);
   CHECK(!subscription&&!allocations&&!focus.property&&focus.proc==application);
+ }
+ /* The first application resize is restored asynchronously; later resizes,
+  * NOWINDOWCHANGES and an owner released before dispatch remain untouched. */
+ for(unsigned nowc=0;nowc<2;nowc++)for(unsigned early=0;early<2;early++){
+  struct Window focus={.live=1,.visible=1,.thread=7,.proc=application};focus_window=output_window=&focus;foreground=NULL;state=(D9WGResetState){0};
+  UINT flags=D9WG_EXCLUSIVE_D3D9|(nowc?D9WG_EXCLUSIVE_NO_WINDOW_CHANGES:0);
+  CHECK(d9wg_exclusive_window_enter_ex(&subscription,&focus,&focus,640,480,&state,flags));
+  WINDOWPOS position={.hwnd=&focus,.cx=639,.cy=479};unsigned before=focus.positions;focus.width=639;focus.height=479;
+  focus.proc(&focus,WM_WINDOWPOSCHANGED,0,(LPARAM)&position);
+  CHECK(focus.positions==before+1&&!!posted_message==!nowc);
+  if(early)d9wg_exclusive_window_leave(&subscription);
+  if(posted_message){UINT message=posted_message;posted_message=0;posted_window->proc(posted_window,message,0,0);}
+  CHECK(focus.positions==before+1);CHECK(focus.width==(!nowc&&!early?640:639)&&focus.height==(!nowc&&!early?480:479));
+  if(!early){focus.proc(&focus,WM_WINDOWPOSCHANGED,0,(LPARAM)&position);CHECK(!posted_message);d9wg_exclusive_window_leave(&subscription);}
+  CHECK(!allocations&&!focus.property);
  }
  for(unsigned kind=0;kind<5;kind++){
   struct Window focus={.live=1,.thread=7,.proc=application};focus_window=output_window=&focus;

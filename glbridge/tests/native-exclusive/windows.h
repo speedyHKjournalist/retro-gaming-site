@@ -5,6 +5,7 @@
 typedef uint32_t UINT,DWORD;typedef int32_t LONG;typedef int BOOL;typedef unsigned char BYTE;
 typedef intptr_t LONG_PTR,LRESULT,LPARAM;typedef uintptr_t WPARAM;typedef void *HANDLE;
 typedef struct Window *HWND;typedef LRESULT(*WNDPROC)(HWND,UINT,WPARAM,LPARAM);
+typedef struct {HWND hwnd,hwndInsertAfter;int x,y,cx,cy;UINT flags;} WINDOWPOS;
 typedef struct {UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields;} DEVMODEA;
 #define CALLBACK
 #define TRUE 1
@@ -49,5 +50,6 @@ LRESULT DefWindowProcA(HWND,UINT,WPARAM,LPARAM);LRESULT DefWindowProcW(HWND,UINT
 void SetLastError(DWORD);DWORD GetLastError(void);
 LONG ChangeDisplaySettingsA(DEVMODEA*,DWORD);BOOL ShowWindow(HWND,int);
 HWND GetForegroundWindow(void);
+UINT RegisterWindowMessageA(const char*);BOOL PostMessageA(HWND,UINT,WPARAM,LPARAM);
 BOOL SetWindowPos(HWND,HWND,int,int,int,int,UINT);BOOL SetForegroundWindow(HWND);HWND SetFocus(HWND);
 #endif
