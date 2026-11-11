@@ -36,7 +36,7 @@ ${names.map(n=>extract(sdk8,n)).join("\n")}
 ${[...shared,...names].map(n=>extract(sdk9,n+"_before9")).join("\n")}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"D3D8 checks core line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
 int main(void){(void)&d3d_check_device_type_before9;(void)&provider_type;(void)&provider_ms;(void)&provider_depth;${bridges.map(n=>"(void)&"+n+";").join("")}
- IDirect3D9 b8={8},b9={9};IDirect3D8 r8={&b8};const UINT adapters[]={0,1,UINT32_MAX},types[]={0,1,2,3,UINT32_MAX};const int windows[]={0,1,-1};const D3DFORMAT formats[]={0,20,21,22,23,24,25,26,28,50,60,70,71,73,75,77,79,80,82,111,112,113,114,115,116,0x5a544e49u,0x36314644u,0x34324644u,0x5a574152u,0x4c4c554eu,0x31545844u,0x7fffffffu,(D3DFORMAT)UINT32_MAX};const UINT nf=sizeof(formats)/sizeof(formats[0]);
+ IDirect3D9 b8={8},b9={9};IDirect3D8 r8={&b8};const UINT adapters[]={0,1,UINT32_MAX},types[]={0,1,2,3,UINT32_MAX};const int windows[]={0,1,-1};const D3DFORMAT formats[]={0,20,21,22,23,24,25,26,28,50,60,70,71,73,75,77,79,80,82,111,112,113,114,115,116,0x5a544e49u,0x36314644u,0x34324644u,0x5a574152u,0x4c4c554eu,0x31545844u,0x32595559u,0x7fffffffu,(D3DFORMAT)UINT32_MAX};const UINT nf=sizeof(formats)/sizeof(formats[0]);
  for(UINT a=0;a<3;a++)for(UINT t=0;t<5;t++)for(UINT w=0;w<3;w++)for(UINT f=0;f<nf;f++){
   for(UINT b=0;b<nf;b++){UINT c=type_calls,v[]={adapters[a],types[t],formats[f],formats[b],(UINT)windows[w],0};HRESULT old=d3d_check_device_type_before8(&r8,adapters[a],types[t],formats[f],formats[b],windows[w]);/* Wine display/backbuffer compatibility, independent explicit pair table. */
    if(old==0){BOOL pair=(formats[f]==22&&(formats[b]==21||formats[b]==22))||(formats[f]==23&&formats[b]==23)||(windows[w]&&formats[f]==24&&(formats[b]==24||formats[b]==25));if(!pair)old=(HRESULT)0x8876086au;}CHECK(d3d_check_device_type(&r8,adapters[a],types[t],formats[f],formats[b],windows[w])==old&&type_calls==c+1&&!memcmp(v,observed,sizeof(v)));D3DFORMAT bb=windows[w]&&formats[b]==0?formats[f]:formats[b];BOOL pair9=(formats[f]==22&&(bb==22||bb==21))||(formats[f]==23&&bb==23)||(windows[w]&&formats[f]==24&&(bb==24||bb==25));HRESULT expected9=!adapters[a]&&types[t]==1&&pair9?0:(HRESULT)0x8876086au;CHECK(d3d_check_device_type_actual9(&b9,adapters[a],types[t],formats[f],formats[b],windows[w])==expected9);type_cases++;}
@@ -46,7 +46,7 @@ int main(void){(void)&d3d_check_device_type_before9;(void)&provider_type;(void)&
  for(UINT f=0;f<nf;f++) {
   CHECK(supported_backbuffer_format(formats[f])==(formats[f]>=21&&formats[f]<=25));
   for(UINT b=0;b<nf;b++)for(UINT a=0;a<3;a++)for(UINT t=0;t<5;t++) {
-   BOOL pair=formats[f]==formats[b]||(formats[f]==21&&formats[b]==22)||(formats[f]==25&&formats[b]==24);
+   BOOL pair=formats[f]==formats[b]||(formats[f]==21&&formats[b]==22)||(formats[f]==22&&formats[b]==21)||(formats[f]==25&&formats[b]==24)||(formats[f]==23&&formats[b]==22)||(formats[f]==0x32595559u&&(formats[b]==22||formats[b]==23));
    CHECK(d3d_check_device_format_conversion(&b9,adapters[a],types[t],formats[f],formats[b])==(!adapters[a]&&types[t]==1&&pair?0:(HRESULT)0x8876086au));
   }
  }

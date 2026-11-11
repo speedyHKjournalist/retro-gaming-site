@@ -11,4 +11,16 @@ int main(void){unsigned checks=0;const unsigned types[]={2,11,12,13,7,14};for(un
 uint32_t payload[]={0xffff0300u,0x0003fffeu,0xffffffffu,0xa0e407ffu,0xe0e40fffu,0x0200001fu,0xa0e407ffu,0x900f0000u,0xffffu};assert(d9wg_shader9_constants_valid(payload,9,0));checks++;
 for(unsigned n=0;n<9;n++){assert(!d9wg_shader9_constants_valid(payload,n,0));checks++;}
 assert(!d9wg_shader9_constants_valid(NULL,9,0));checks++;
+/* ps_3_0 declarations: POSITION0 is not an input, but POSITION1 and every other usage are. */
+for(unsigned pixel=0;pixel<2;pixel++)for(unsigned major=2;major<=3;major++)for(unsigned type=1;type<=3;type++)for(unsigned usage=0;usage<=13;usage++)for(unsigned usage_index=0;usage_index<3;usage_index++){
+ uint32_t semantic=0x80000000u|usage|(usage_index<<16),code[]={(pixel?0xffff0000u:0xfffe0000u)|(major<<8),0x0200001fu,semantic,0x800f0000u|((type&7u)<<28)|((type&24u)<<8),0x0200001u,0xe00f0000u,0xe40000u,0xffffu};
+ code[4]=1u|(2u<<24);code[5]=0x800f0000u;code[6]=0x90e40000u;code[7]=0xffffu;uint32_t count=8;
+ assert(d9wg_shader9_declarations_valid(code,count)==!(pixel&&major==3&&type==1&&!usage&&!usage_index));checks++;
+}
+{uint32_t shader[]={0xffff0300u,0x0200001fu,0x80000005u,0x900f0000u,0x02000001u,0x800f0800u,0x90e40000u,0xffffu};assert(d9wg_shader9_declarations_valid(shader,8));checks++;
+ shader[2]=0x80000000u;assert(!d9wg_shader9_declarations_valid(shader,8));checks++;
+ shader[2]=0x80010000u;assert(d9wg_shader9_declarations_valid(shader,8));checks++;
+ uint32_t comment[]={0xffff0300u,0x0002fffeu,0x0200001fu,0x80000000u,0x900f0000u,0xffffu};assert(d9wg_shader9_declarations_valid(comment,6));checks++;
+ for(unsigned n=0;n<8;n++){uint32_t truncated[]={0xffff0300u,0x0200001fu,0x80000000u,0x900f0000u,0x02000001u,0x800f0800u,0x90e40000u,0xffffu};if(n<4)assert(n<2?d9wg_shader9_declarations_valid(truncated,n):!d9wg_shader9_declarations_valid(truncated,n));checks++;}
+ assert(d9wg_shader9_declarations_valid(NULL,8));checks++;}
 printf("PASS shader9 constant operands: %u checks; register banks/bounds, all profiles, software mode, immediate/comment/semantic isolation and truncation\n",checks);return 0;}

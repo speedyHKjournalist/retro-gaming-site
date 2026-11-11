@@ -62,4 +62,38 @@ static __inline int d9wg_shader9_constants_valid(const uint32_t *code,
     }
     return 0;
 }
+
+/* ps_3_0 inputs cannot declare POSITION0: vPos carries the pixel position, and
+ * the native assembler (so CreatePixelShader) rejects the declaration. Other
+ * usages, including POSITION with a non-zero index, are ordinary inputs. */
+static __inline int d9wg_shader9_declarations_valid(const uint32_t *code, uint32_t count)
+{
+    if (!code || count < 2u || (code[0] >> 16) != 0xffffu || ((code[0] >> 8) & 255u) != 3u) return 1;
+    for (uint32_t i = 1u; i < count;) {
+        uint32_t word = code[i++], op = word & 0xffffu;
+        if (word & 0x80000000u) continue;
+        if (op == 0xffffu) return 1;
+        if (op == 0xfffeu) {
+            uint32_t words = (word >> 16) & 0x7fffu;
+            if (words > count - i) return 0;
+            i += words;
+            continue;
+        }
+        if (op == 81u || op == 48u || op == 47u) {
+            uint32_t words = op == 47u ? 2u : 5u;
+            if (words > count - i) return 0;
+            i += words;
+            continue;
+        }
+        uint32_t words = (word >> 24) & 15u;
+        if (words > count - i) return 0;
+        if (op == 31u && words >= 2u) {
+            uint32_t semantic = code[i], target = code[i + 1u];
+            uint32_t type = ((target >> 28) & 7u) | ((target >> 8) & 24u);
+            if (type == 1u && !(semantic & 0x1fu) && !((semantic >> 16) & 15u)) return 0;
+        }
+        i += words;
+    }
+    return 1;
+}
 #endif

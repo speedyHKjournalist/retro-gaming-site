@@ -1,17 +1,19 @@
 #ifndef D9WG_TEXTURE_LEGACY_COLOR_H
 #define D9WG_TEXTURE_LEGACY_COLOR_H
 
-/* Retail D3D8 accepts these color conversions in UpdateTexture (Wine's
- * original visual test includes ARGB/XRGB and ARGB -> RGB565). D3D9 keeps
- * its same-format rule. Unknown / compressed format pairs remain rejected. */
+/* Retail D3D8 and D3D9 accept these color conversions in UpdateTexture (Wine's
+ * original visual tests include ARGB/XRGB and ARGB -> RGB565). D3D9 also
+ * accepts a float R32F destination, filled with the red channel; R32F is never
+ * a conversion source. Unknown / compressed format pairs remain rejected. */
 static UINT legacy_color_bytes(D3DFORMAT format)
 {
-    return format == 21u || format == 22u ? 4u : format == 23u ? 2u : 0u;
+    return format == 21u || format == 22u || format == 114u ? 4u : format == 23u ? 2u : 0u;
 }
 
 static BOOL legacy_color_copy_supported(UINT api, D3DFORMAT from, D3DFORMAT to)
 {
-    return api == 8u && legacy_color_bytes(from) && legacy_color_bytes(to);
+    return (api == 8u || api == 9u) && from != 114u && legacy_color_bytes(from)
+            && legacy_color_bytes(to) && (to != 114u || api == 9u);
 }
 
 static BOOL legacy_color_layout(const D9TextureLevel *level, UINT bytes, BOOL source)
@@ -40,6 +42,9 @@ static void legacy_color_pixel(const BYTE *from, UINT source_format,
     if (destination_format == 23u) {
         UINT color = (red >> 3) << 11 | (green >> 2) << 5 | (blue >> 3);
         to[0] = (BYTE)color; to[1] = (BYTE)(color >> 8);
+    } else if (destination_format == 114u) {
+        float value = (float)red / 255.0f;
+        CopyMemory(to, &value, sizeof(value));
     } else {
         to[0] = (BYTE)blue; to[1] = (BYTE)green; to[2] = (BYTE)red;
         to[3] = destination_format == 22u ? 255u : (BYTE)alpha;

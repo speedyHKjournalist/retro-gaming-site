@@ -18,7 +18,7 @@ typedef struct D9TextureDirtyRect {RECT rect;struct D9TextureDirtyRect *next;} D
 typedef struct {UINT width,height,depth,row_pitch,row_count,slice_pitch,byte_count;BYTE *shadow;BOOL shadow_valid,locked,dc_active,dirty_full;DWORD lock_flags;RECT lock_rect;D9TextureDirtyRect *dirty_rects;} D9TextureLevel;
 typedef struct D9Texture D9Texture;
 typedef struct D9Buffer {UINT pool;BOOL full_upload_pending;struct D9Buffer *next_device_resource;} D9VertexBuffer,D9IndexBuffer;
-typedef struct {UINT api;BOOL managed_texture_dirty;D9Texture *textures[20],*texture_resources;D9VertexBuffer *vertex_buffers;D9IndexBuffer *index_buffers;} D9Device;
+typedef struct {UINT api,handle;BOOL managed_texture_dirty;D9Texture *textures[20],*texture_resources;D9VertexBuffer *vertex_buffers;D9IndexBuffer *index_buffers;} D9Device;
 struct D9Texture {D9Device *device;UINT handle,width,height,edge_length,format,usage,level_count,pool,autogen_filter;BOOL private_back_buffer,dirty_pending;D9TextureLevel *levels;D9Texture *next_device_resource;};
 typedef D9Texture IDirect3DTexture9,D9CubeTexture,D9VolumeTexture;
 typedef D9Device IDirect3DDevice9;
@@ -33,6 +33,7 @@ typedef D9Device IDirect3DDevice9;
 #define D3DPOOL_MANAGED 1
 #define D3DPOOL_SYSTEMMEM 2
 #define D3DLOCK_READONLY 16
+#define D3DLOCK_DISCARD 8192
 #define D3DLOCK_NO_DIRTY_UPDATE 32768
 #define D3DUSAGE_RENDERTARGET 1
 #define D3DUSAGE_DEPTHSTENCIL 2
@@ -44,6 +45,12 @@ typedef D9Device IDirect3DDevice9;
 #define CopyMemory memcpy
 #define HEAP_ZERO_MEMORY 8
 #define GetProcessHeap() NULL
+typedef struct {UINT device_handle,texture_handle,level,format,width,height,destination_pitch;} D9WGReadbackSurface;
+typedef struct {UINT status;} D9WGReadbackDiagnostic;
+#define D9WG_READBACK_INVALID 1
+static void *g_process;
+static int d9wg_surface_readback(void*p,const D9WGReadbackSurface*q,uint32_t row_bytes,uint32_t rows,uint8_t*dst,uint32_t bytes,BOOL(*flush)(BOOL),D9WGReadbackDiagnostic*detail){(void)p;(void)q;(void)row_bytes;(void)rows;(void)dst;(void)bytes;(void)flush;(void)detail;return 0;}
+static BOOL submit_readback_batch_locked(BOOL present){(void)present;return TRUE;}
 static unsigned allocations,frees,allocation_attempts,fail_allocation;
 static void *HeapAlloc(void *h,unsigned flags,size_t n){(void)h;if(++allocation_attempts==fail_allocation)return NULL;void *p=flags?calloc(1,n):malloc(n);if(p)allocations++;return p;}
 static int HeapFree(void*h,unsigned f,void*p){(void)h;(void)f;if(p){frees++;free(p);}return 1;}
@@ -122,7 +129,6 @@ for(UINT api=8;api<=9;api++)for(UINT cube=0;cube<2;cube++)for(UINT sf=21;sf<=23;
  const BYTE green[3][4]={{0,255,0,64},{0,255,0,3},{0xe0,7,0,0}};
  for(UINT f=0;f<(cube?6u:1u);f++)for(UINT i=0;i<3;i++){D9TextureLevel*l=al+f*3+i;UINT n=sf==23?2:4;for(UINT y=0;y<l->height;y++)for(UINT x=0;x<l->width;x++)memcpy(l->shadow+y*l->row_pitch+x*n,f&1?green[sf-21]:encoded[sf-21],n);}
  HRESULT hr=texture_update_legacy_color(&a,&b,cube);
- if(api==9){CHECK(hr==-1&&!uploads&&bs[0]==0xbd&&a.dirty_pending);continue;}
  CHECK(hr==0&&uploads==(cube?18u:3u));
  for(UINT face=0;face<(cube?6u:1u);face++)for(UINT i=0;i<3;i++){
   BYTE want[4];UINT n=df==23?2:4;
@@ -144,6 +150,32 @@ for(UINT api=8;api<=9;api++)for(UINT cube=0;cube<2;cube++)for(UINT sf=21;sf<=23;
  for(UINT i=0;i<(cube?18u:3u);i++)texture_dirty_clear(al+i);
  CHECK(allocations==frees);
 }
+/* D3D9 float destination: every pixel's red channel; D3D8 rejects the pair and R32F is never a source. */
+for(UINT api=8;api<=9;api++)for(UINT cube=0;cube<2;cube++)for(UINT sf=21;sf<=23;sf++){
+ D9Device dev={.api=api};D9Texture a,b;D9TextureLevel al[18],bl[18];BYTE as[2016],bs[2016];
+ init_color(&a,&dev,al,as,1,sf,cube);init_color(&b,&dev,bl,bs,2,114,cube);memset(bs,0xbd,sizeof(bs));memset(gpu[2],0xbd,sizeof(gpu[2]));uploads=fail_upload=0;
+ const BYTE encoded[3][4]={{0x33,0x66,0x99,0x40},{0x33,0x66,0x99,3},{0x00,0xf8,0,0}};
+ const BYTE green[3][4]={{0,255,0,64},{0,255,0,3},{0xe0,7,0,0}};
+ for(UINT f=0;f<(cube?6u:1u);f++)for(UINT i=0;i<3;i++){D9TextureLevel*l=al+f*3+i;UINT n=sf==23?2:4;for(UINT y=0;y<l->height;y++)for(UINT x=0;x<l->width;x++)memcpy(l->shadow+y*l->row_pitch+x*n,f&1?green[sf-21]:encoded[sf-21],n);}
+ HRESULT hr=texture_update_legacy_color(&a,&b,cube);
+ if(api==8){CHECK(hr==-1&&!uploads&&bs[0]==0xbd&&a.dirty_pending);}
+ else{
+  CHECK(hr==0&&uploads==(cube?18u:3u));
+  for(UINT face=0;face<(cube?6u:1u);face++)for(UINT i=0;i<3;i++){
+   float want=face&1?0.0f:sf==23?1.0f:153.0f/255.0f;D9TextureLevel*l=bl+face*3+i;
+   for(UINT y=0;y<l->height;y++)for(UINT x=0;x<l->width;x++){CHECK(!memcmp(l->shadow+y*l->row_pitch+x*4,&want,4));CHECK(!memcmp(gpu[2][face*3+i]+y*l->row_pitch+x*4,&want,4));}
+  }
+ }
+ for(UINT i=0;i<(cube?18u:3u);i++)texture_dirty_clear(al+i);
+ CHECK(allocations==frees);
+}
+for(UINT api=8;api<=9;api++){
+ D9Device dev={.api=api};D9Texture a,b;D9TextureLevel al[18],bl[18];BYTE as[2016],bs[2016];
+ init_color(&a,&dev,al,as,1,114,FALSE);init_color(&b,&dev,bl,bs,2,21,FALSE);memset(bs,0xbd,sizeof(bs));uploads=0;
+ CHECK(texture_update_legacy_color(&a,&b,FALSE)==-1&&!uploads&&bs[0]==0xbd);
+ for(UINT i=0;i<3;i++)texture_dirty_clear(al+i);
+ CHECK(allocations==frees);
+}
 /* Different aspect ratios: only the overlapping texels of corresponding
  * largest-dimension mips are copied. Lower destination rows stay untouched. */
 for(UINT api=8;api<=9;api++){
@@ -152,8 +184,7 @@ for(UINT api=8;api<=9;api++){
  for(UINT i=0;i<3;i++){al[i].height=4>>i;al[i].row_count=al[i].height;al[i].byte_count=al[i].row_pitch*al[i].height;}
  for(UINT i=0;i<2;i++){bl[i].width=2>>i;bl[i].height=4>>i;bl[i].row_pitch=bl[i].width*4;bl[i].row_count=bl[i].height;bl[i].byte_count=bl[i].row_pitch*bl[i].height;}
  memset(as,0x77,sizeof(as));memset(bs,0xbd,sizeof(bs));uploads=0;HRESULT hr=texture_update_dirty(&a,&b);
- if(api==9)CHECK(hr==-1&&!uploads&&bs[0]==0xbd);
- else{CHECK(!hr&&uploads==2);for(UINT i=0;i<2;i++)for(UINT y=0;y<bl[i].height;y++)for(UINT x=0;x<bl[i].row_pitch;x++)CHECK(bl[i].shadow[y*bl[i].row_pitch+x]==(y<al[i+1].height?0x77:0xbd));}
+ {CHECK(!hr&&uploads==2);for(UINT i=0;i<2;i++)for(UINT y=0;y<bl[i].height;y++)for(UINT x=0;x<bl[i].row_pitch;x++)CHECK(bl[i].shadow[y*bl[i].row_pitch+x]==(y<al[i+1].height?0x77:0xbd));}
 }
 /* OOM is atomic across the mip chain, while a retry reuses reserved storage. */
 {

@@ -4799,9 +4799,15 @@ static HRESULT WINAPI d3d_check_device_format_conversion(IDirect3D9 *iface,
     if (adapter || type != D3DDEVTYPE_HAL)
         result = D3DERR_NOTAVAILABLE;
     else
+        /* StretchRect converts between these through the host blit (alpha
+         * dropped or forced opaque; 5:6:5 expanded; packed YUY2 decoded). */
         result = source == target
                 || (source == D3DFMT_A8R8G8B8 && target == D3DFMT_X8R8G8B8)
+                || (source == D3DFMT_X8R8G8B8 && target == D3DFMT_A8R8G8B8)
                 || (source == D3DFMT_A1R5G5B5 && target == D3DFMT_X1R5G5B5)
+                || (source == D3DFMT_R5G6B5 && target == D3DFMT_X8R8G8B8)
+                || (source == D3DFMT_YUY2
+                    && (target == D3DFMT_X8R8G8B8 || target == D3DFMT_R5G6B5))
                 ? D3D_OK : D3DERR_NOTAVAILABLE;
     TRACE("OK CheckDeviceFormatConversion source=%08lX target=%08lX -> %08lX",
             (DWORD)source, (DWORD)target, (DWORD)result);
@@ -8162,7 +8168,8 @@ static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
         valid = shader_token_count(bytecode, &token_count, &is_pixel)
                 && d9wg_shader9_constants_valid((const uint32_t *)bytecode, token_count,
                         !!(device->creation.BehaviorFlags
-                            & (D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_MIXED_VERTEXPROCESSING)));
+                            & (D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_MIXED_VERTEXPROCESSING)))
+                && d9wg_shader9_declarations_valid((const uint32_t *)bytecode, token_count);
     }
     if (!valid || is_pixel != want_pixel) {
         /* Rejected before anything is emitted, so without this line the call
@@ -9327,7 +9334,7 @@ static DWORD WINAPI volume_texture_get_level_count(
 { return volume_texture_from_iface(iface)->level_count; }
 static HRESULT WINAPI volume_texture_set_auto_gen_filter_type(
         IDirect3DVolumeTexture9 *iface, D3DTEXTUREFILTERTYPE type)
-{ (void)iface; (void)type; return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+{ (void)iface; (void)type; return D3D_OK; }
 static D3DTEXTUREFILTERTYPE WINAPI volume_texture_get_auto_gen_filter_type(
         IDirect3DVolumeTexture9 *iface)
 { (void)iface; return D3DTEXF_NONE; }
@@ -13136,7 +13143,7 @@ static HRESULT WINAPI cube_set_auto_gen_filter_type(
 {
     D9CubeTexture *texture = cube_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
     if (!d9wg_autogen_filter_supported(texture->format, type,
                 (d9wg_format_query_info(texture->format) & 4u) ? runtime_host_features() : 0))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -14660,8 +14667,10 @@ static HRESULT WINAPI texture_set_auto_gen_filter_type(
         IDirect3DTexture9 *iface, D3DTEXTUREFILTERTYPE filter)
 {
     D9Texture *texture = texture_from_iface(iface);
+    /* A texture without D3DUSAGE_AUTOGENMIPMAP accepts and ignores the call
+     * (Wine's test_generate_mipmap sets it on an ordinary render target). */
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
     if (!d9wg_autogen_filter_supported(texture->format, filter,
                 (d9wg_format_query_info(texture->format) & 4u) ? runtime_host_features() : 0))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
