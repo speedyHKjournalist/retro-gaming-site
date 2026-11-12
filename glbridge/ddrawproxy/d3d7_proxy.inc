@@ -74,6 +74,9 @@ struct D3D7Device {
     BOOL in_scene;
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
+    /* D3D7's CPU processor retains its last processed positive shininess.
+     * SetMaterial/GetMaterial and GPU draws keep the actual material value. */
+    float process_specular_power;
     D3DMATRIX transforms[D3D7_MAX_TRANSFORMS];
     D3DMATRIX legacy_projection, legacy_clipspace;
     DWORD render_states[D3D7_MAX_RENDER_STATES];
@@ -1883,6 +1886,10 @@ static HRESULT WINAPI d3d7_device_SetMaterial(IDirect3DDevice7 *iface,
     CopyMemory(command.specular, &material->specular, sizeof(command.specular));
     CopyMemory(command.emissive, &material->emissive, sizeof(command.emissive));
     command.power = material->power;
+    /* Pre-D3D7 zero shininess disables material specular lighting. Keep the
+     * public material and prelit vertex colours unchanged. */
+    if (device->creation_version < 7u && material->power == 0.0f)
+        command.specular[0] = command.specular[1] = command.specular[2] = 0.0f;
     if (!emit_command(D9WG_OP_SET_MATERIAL, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_MATERIAL_SETDATA_FAILED);
     device->material = *material;
@@ -3191,6 +3198,9 @@ static BOOL d3d7_prepare_lighting(D3D7Device *device, const D3DMATRIX *world_vie
 {
     UINT index;
     d9wg_lighting_sdk_prepare(state, &device->material, device->render_states, world_view);
+    state->specular_alpha_material = device->creation_version >= 7u;
+    if (device->creation_version < 7u && device->material.power == 0.0f)
+        state->flags.specular_enable = FALSE;
     state->flags.lighting = lighting;
     if (!state->flags.lighting) return TRUE;
     for (index = 0; index < D3D7_MAX_LIGHTS; ++index) {
@@ -3234,6 +3244,12 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &world_view_projection);
     if (!d3d7_prepare_lighting(device, &world_view, (vertex_op & D3DVOP_LIGHT) != 0, &light_state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->creation_version >= 7u && light_state.flags.lighting) {
+        if (light_state.material.power == 0.0f)
+            light_state.material.power = device->process_specular_power;
+        if (light_state.material.power == 0.0f)
+            light_state.flags.specular_enable = FALSE;
+    }
     D9WGVertexState vertex_state;
     d9wg_vertex_state_init(&vertex_state, device->render_states);
     if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
@@ -3272,6 +3288,9 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
         if (clip_batch) d9wg_vertex_windows_clip_release(NULL, clip_batch);
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
+    if (device->creation_version >= 7u && light_state.flags.lighting &&
+            device->material.power > 0.0f)
+        device->process_specular_power = device->material.power;
     d9wg_clip_legacy_processed(&device->clip_status, clip_batch,
             destination->shadow + destination_offset + destination_layout.position,
             destination->stride, count, (vertex_op & D3DVOP_EXTENTS) != 0, &viewport);

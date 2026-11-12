@@ -12,7 +12,7 @@ int main(void)
         D9VertexDeclaration declaration={0};declaration.element_count=2;
         declaration.elements[0].Stream=7;declaration.elements[0].Offset=4;declaration.elements[0].Type=2;
         declaration.elements[1].Stream=15;declaration.elements[1].Offset=8;declaration.elements[1].Type=4;declaration.elements[1].Usage=10;
-        d.vertex_declaration=&declaration;d.vertex_shader=(void*)1;d.handle=0x13579;
+        d.vertex_declaration=&declaration;d.vertex_shader=&bound_shader;d.handle=0x13579;
         D9VertexBuffer vb[2]={{0}};UINT stream_ids[]={7,15},extents[]={16,12};
         for(UINT i=0;i<2;i++){vb[i].device=&d;vb[i].shadow=storage;vb[i].length=1+indexed8_random()%512;d.streams[stream_ids[i]].buffer=&vb[i];d.streams[stream_ids[i]].offset=indexed8_random()%17;d.streams[stream_ids[i]].stride=indexed8_random()%33;}
         /* Retail8 requires stream0 even when a declaration only reads other streams. */
@@ -39,12 +39,12 @@ int main(void)
         if(!accepted_call){INDEX8_CHECK(hr==D3DERR_INVALIDCALL&&!emits&&!invalidations);refused++;}
         else if(!count){INDEX8_CHECK(!hr&&!emits&&!invalidations);zero++;}
         else {INDEX8_CHECK(hr==(failed_transport?D3DERR_DRIVERINTERNALERROR:D3D_OK));INDEX8_CHECK(emits==1&&last_opcode==D9WG_OP_DRAW_INDEXED_PRIMITIVE&&sequence_count==1&&sequence[0]=='D');INDEX8_CHECK(indexed.device_handle==d.handle&&indexed.primitive_type==type&&indexed.base_vertex_index==signed_value&&indexed.min_vertex_index==minimum&&indexed.vertex_count==hint&&indexed.start_index==first&&indexed.primitive_count==count);INDEX8_CHECK(invalidations==(failed_transport?0u:1u));if(failed_transport){INDEX8_CHECK(d.clip_status_valid&&memcmp(&d.clip_status,&prior,sizeof(prior))==0);failures++;}else accepted++;}
-        INDEX8_CHECK(d.index_buffer==&ib&&d.vertex_declaration==&declaration&&d.vertex_shader==(void*)1&&!uploads);
+        INDEX8_CHECK(d.index_buffer==&ib&&d.vertex_declaration==&declaration&&d.vertex_shader==&bound_shader&&!uploads);
         cases++;
     }
     D9Device d={0};UINT sent=emits,mirrors=invalidations;
     INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(NULL,1,0,0,0,0,1)==D3DERR_INVALIDCALL);
-    D9VertexDeclaration empty={0};D9IndexBuffer valid_ib={0};valid_ib.device=&d;valid_ib.length=12;valid_ib.format=101;valid_ib.shadow=storage;d.index_buffer=&valid_ib;d.vertex_declaration=&empty;d.vertex_shader=(void*)1;transport_ok=1;sequence_count=0;
+    D9VertexDeclaration empty={0};D9IndexBuffer valid_ib={0};valid_ib.device=&d;valid_ib.length=12;valid_ib.format=101;valid_ib.shadow=storage;d.index_buffer=&valid_ib;d.vertex_declaration=&empty;d.vertex_shader=&bound_shader;transport_ok=1;sequence_count=0;
     INDEX8_CHECK(!device_draw_indexed_primitive(&d,1,0,0,0,0,1));sent=emits;mirrors=invalidations;
     active_api=9;INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,1)==D3DERR_INVALIDCALL&&emits==sent&&invalidations==mirrors);
     active_api=8;d.index_buffer=NULL;INDEX8_CHECK(d9wg_d3d9_core_draw_indexed8(&d,1,0,0,0,0,0)==D3D_OK&&emits==sent);

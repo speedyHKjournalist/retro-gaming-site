@@ -4,7 +4,7 @@ const {spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."
 const mutations=[
  ["diffuse quantized before lighting","vertex","if (s->diffuse >= 0) d9wg_decl_read(s->diffuse_type, in + s->diffuse, color0);","if (s->diffuse >= 0) { d9wg_decl_read(s->diffuse_type, in + s->diffuse, color0); uint32_t packed = d9wg_pack_color(color0); d9wg_lighting_color(packed, color0); }"],
  ["specular quantized before lighting","vertex","if (s->specular >= 0) d9wg_decl_read(s->specular_type, in + s->specular, color1);","if (s->specular >= 0) { d9wg_decl_read(s->specular_type, in + s->specular, color1); uint32_t packed = d9wg_pack_color(color1); d9wg_lighting_color(packed, color1); }"],
- ["source specular alpha lost","lighting","out_specular[3] = color1 ? color1[3] : 0.0f;","out_specular[3] = 0.0f;"],
+ ["source specular alpha lost","lighting",": color1 ? color1[3] : 0.0f;",": 0.0f;"],
  ["DONOTCOPYDATA still copies float colors","vertex","(copy_data || lighting->flags.lighting)","(copy_data || lighting->flags.lighting || s->diffuse_type != 4)"],
  ["fog destroys preserved specular RGB","vertex","(specular & 0x00ffffffu) |","(specular & 0x00000000u) |"],
  ["NaN reaches integer conversion","math","if (!(value > 0.0f)) return 0;","if (value < 0.0f) return 0;",true],

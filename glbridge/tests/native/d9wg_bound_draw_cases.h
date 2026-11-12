@@ -77,7 +77,7 @@ int main(void)
     void *guard=mmap(NULL,4096,PROT_NONE,MAP_PRIVATE|MAP_ANON,-1,0);CHECK(guard!=MAP_FAILED);
     BYTE *saved_indices=ib.shadow;ib.shadow=guard;
     CHECK(device_draw_indexed_primitive(&device,4,0,0,3,0,1)==0);ib.shadow=saved_indices;CHECK(munmap(guard,4096)==0);
-    declaration.element_count=0;device.vertex_shader=(void*)1;device.creation.BehaviorFlags=0;
+    declaration.element_count=0;device.vertex_shader=&bound_shader;device.creation.BehaviorFlags=0;
     for(unsigned i=0;i<16;++i)device.streams[i].buffer=NULL;
     CHECK(device_draw_indexed_primitive(&device,4,0,0,0,0,1)==0&&last_opcode==D9WG_OP_DRAW_INDEXED_PRIMITIVE);
     /* NULL streams provide constants even when stale stride/offset remain.
@@ -93,7 +93,7 @@ int main(void)
     CHECK(device_draw_indexed_primitive(&device,4,0,0,4,0,1)==-1);
     device.vertex_declaration=&declaration;declaration.element_count=2;
     declaration=(D9VertexDeclaration){.element_count=2,.elements={{0,0,2,0,0,0},{1,0,4,0,10,0}}};
-    device.vertex_shader=(void*)1;
+    device.vertex_shader=&bound_shader;
     CHECK(device_draw_primitive(&device,1,0,1)==0&&last_opcode==D9WG_OP_DRAW_PRIMITIVE);
     CHECK(device_draw_primitive(&device,1,4,1)==-1);
     puts("PASS actual D3D9 bound draw C: ignored/overflowing hints, NumVertices=0, signed base/offset and multi-stream CPU ClipStatus/recovery, six zero-primitive no-ops, exact IB/stream bounds, programmable/constant/instance declarations and atomic transport failure");return 0;

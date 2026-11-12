@@ -57,6 +57,7 @@ typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT,INT,D3
 typedef D9WGProcessLayout D9ProcessLayout;
 #include "runtime/d9wg_vertex_windows.h"
 typedef struct D9Device D9Device;typedef D9Device IDirect3DDevice9;
+typedef struct{BOOL requires_software;}D9Shader;static D9Shader bound_shader;
 ${processVertices8?`typedef struct{const void*lpVtbl;}ProcessInterface;
 typedef ProcessInterface IDirect3DVertexBuffer9,IDirect3DVertexDeclaration9;
 static int g_vb_vtbl;
@@ -86,7 +87,8 @@ static void process_free(void*p){if(p){if(!process_live)abort();process_live--;p
 typedef struct D9VertexBuffer{${processVertices8?"ProcessInterface iface;DWORD fvf;":""}D9Device *device;BYTE *shadow;UINT length,handle,lock_offset,lock_size,lock_flags;BOOL locked,full_upload_pending;D9WGClipBuffer clips;}D9VertexBuffer;
 typedef struct D9IndexBuffer{D9Device *device;BYTE *shadow;UINT length,format,handle,lock_offset,lock_size,lock_flags;BOOL locked,full_upload_pending;}D9IndexBuffer;
 typedef struct D9VertexDeclaration{${processVertices8?"ProcessInterface iface;D9Device*device;":""}UINT element_count;struct{UINT Stream,Offset,Type,Method,Usage,UsageIndex;}elements[64];}D9VertexDeclaration;
-struct D9Device{D9VertexDeclaration *vertex_declaration;DWORD fvf;void *vertex_shader;struct{D9VertexBuffer *buffer;UINT offset,stride,frequency;}streams[16];D9IndexBuffer *index_buffer;UINT handle;float npatch_segments;D9WGClipStatus clip_status;BOOL clip_status_valid,software_vertex_processing;struct{DWORD BehaviorFlags;}creation;DWORD render_states[256];${processVertices8?"DWORD texture_stage_states[8][33];":""}float transforms[266][16],clip_planes[6][4];struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}viewport;};
+struct D9Device{D9VertexDeclaration *vertex_declaration;DWORD fvf;D9Shader *vertex_shader;BOOL vertex_shader_hw_disabled;struct{D9VertexBuffer *buffer;UINT offset,stride,frequency;}streams[16];D9IndexBuffer *index_buffer;UINT handle;float npatch_segments;D9WGClipStatus clip_status;BOOL clip_status_valid,software_vertex_processing;struct{DWORD BehaviorFlags;}creation;DWORD render_states[256];${processVertices8?"DWORD texture_stage_states[8][33];":""}float transforms[266][16],clip_planes[6][4];struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}viewport;};
+static HRESULT emit_set_shader(D9Device*d,D9Shader*s,BOOL pixel){(void)d;(void)s;(void)pixel;abort();}
 static BOOL flush_managed_textures(D9Device*d){(void)d;return TRUE;}
 static unsigned uploads,upload_fail_at,sequence_count;static char sequence[128];
 static unsigned emits,invalidations;static int transport_ok=1;static UINT last_opcode;static D9WGDrawIndexedPrimitive indexed;
@@ -107,7 +109,7 @@ static BOOL emit_buffer_update(uint32_t h,uint32_t off,const void *p,uint32_t n,
 #include "runtime/d9wg_mapped_draw_bridge.h"
 ${input[0]}
 static HRESULT d9_draw_npatch(IDirect3DDevice9*i,D9Device*d,D3DPRIMITIVETYPE t,UINT c,const void*p,UINT s,UINT b){(void)i;(void)d;(void)t;(void)c;(void)p;(void)s;(void)b;abort();}
-${["multiply_u32","primitive_element_count","device_has_vertex_format","d9_current_source_elements","d9_current_source_layout","d9_current_source_position_transformed","d9_process_input_free","d9_process_input","d9_prepare_stream_clip_status","d9_draw_index_bounds","d9_bound_draw_range","d9_clip_emit","d9_clip_mask","d9_clip_vb_draw","d9_software_vertex_processing","d9_prepare_clip_status","device_draw_primitive","device_draw_indexed_primitive"].map(extract).join("\n")}
+${["multiply_u32","primitive_element_count","device_has_vertex_format","d9_current_source_elements","d9_current_source_layout","d9_current_source_position_transformed","d9_process_input_free","d9_process_input","d9_prepare_stream_clip_status","d9_draw_index_bounds","d9_bound_draw_range","d9_clip_emit","d9_clip_mask","d9_clip_vb_draw","d9_software_vertex_processing","d9_validate_vertex_shader_mode","d9_prepare_clip_status","device_draw_primitive","device_draw_indexed_primitive"].map(extract).join("\n")}
 ${processVertices8?`
 static D9VertexBuffer*vb_from_iface(IDirect3DVertexBuffer9*p){return (D9VertexBuffer*)p;}
 static D9VertexDeclaration*decl_from_iface(IDirect3DVertexDeclaration9*p){return (D9VertexDeclaration*)p;}

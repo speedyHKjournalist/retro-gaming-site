@@ -46,7 +46,7 @@ static void release(void *p){frees++;free(p);}
 #define D9WG_LIGHT_FREE(p) release(p)
 #include "${path.join(root,'runtime/d9wg_light_state.h')}"
 typedef struct D3DMATRIX {float data[16];} D3DMATRIX;
-typedef struct Material {uint32_t words[17];} Material;
+typedef struct Material {uint32_t colors[16];float power;} Material;
 typedef struct Viewport {DWORD x,y,width,height;float min_z,max_z;} Viewport;
 typedef struct DDSurface {int vtbl7;} DDSurface;
 typedef struct IDirectDrawSurface7 {int unused;} IDirectDrawSurface7;
@@ -54,12 +54,12 @@ static void surface_AddRef(IDirectDrawSurface7 *p){(void)p;}
 static void surface_Release(IDirectDrawSurface7 *p){(void)p;}
 typedef struct D3D7StateBlock {struct D3D7StateBlock *next;DWORD handle,type;BOOL all_lights_scope;BYTE light_mask[8],light_enable_mask[8],render_mask[256],texture_mask[8],texture_stage_mask[8][33],transform_mask[24],clip_plane_mask[6];BOOL viewport_mask,material_mask;DWORD render_states[256],texture_stage_states[8][33];DDSurface *textures[8];D3DMATRIX transforms[24];D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;float clip_planes[6][4];Viewport viewport;Material material;} D3D7StateBlock;
 typedef struct Owner {uint32_t device_handle;} Owner;
-typedef struct D3D7Device {DWORD wire_handle;D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;D3D7StateBlock *recording_state_block,*state_blocks;DWORD next_state_block_handle;Owner *owner;DWORD render_states[256],texture_stage_states[8][33];DDSurface *textures[8];D3DMATRIX transforms[24];float clip_planes[6][4];Viewport viewport;Material material;} D3D7Device;
+typedef struct D3D7Device {UINT creation_version;DWORD wire_handle;D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;D3D7StateBlock *recording_state_block,*state_blocks;DWORD next_state_block_handle;Owner *owner;DWORD render_states[256],texture_stage_states[8][33];DDSurface *textures[8];D3DMATRIX transforms[24];float clip_planes[6][4];Viewport viewport;Material material;} D3D7Device;
 typedef D3D7Device IDirect3DDevice7;
 static D3D7Device *d3d7_device_from_iface(D3D7Device *p){return p;}
 static uint32_t ddraw_light_type_to_d3d9(uint32_t t){return t;}
 static BOOL emit_command(uint32_t op,const void *p,uint32_t n){(void)op;(void)p;(void)n;emissions++;return TRUE;}
-typedef struct D9WGTNLLighting {struct {BOOL lighting;} flags;unsigned count;uint32_t indices[8];} D9WGTNLLighting;
+typedef struct D9WGTNLLighting {struct {BOOL lighting,specular_enable;} flags;BOOL specular_alpha_material;unsigned count;uint32_t indices[8];} D9WGTNLLighting;
 static void d9wg_lighting_sdk_prepare(D9WGTNLLighting *state,const void *material,const DWORD *rs,const void *matrix){(void)material;(void)rs;(void)matrix;memset(state,0,sizeof(*state));}
 static BOOL d9wg_lighting_sdk_add(D9WGTNLLighting *state,uint32_t index,const D3DLIGHT7 *light,const void *view){(void)light;(void)view;if(state->count==8)return FALSE;state->indices[state->count++]=index;return TRUE;}
 ${names.map(extract).join('\n')}

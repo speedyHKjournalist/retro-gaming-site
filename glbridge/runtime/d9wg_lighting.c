@@ -21,6 +21,7 @@ void d9wg_lighting_init(D9WGTNLLighting *state, const D9WGSetMaterial *material,
 {
     float ambient[4];
     state->material = *material;state->flags = *flags;state->light_count = 0;
+    state->specular_alpha_material = 0;
     d9wg_lighting_color(ambient_argb, ambient);
     for (unsigned i = 0; i < 3; ++i) state->ambient[i] = ambient[i];
 }
@@ -148,9 +149,12 @@ void d9wg_lighting_vertex_view_float(const D9WGTNLLighting *state, const float *
     d9wg_lighting_shade(state, eye_position, eye_normal,
             color0 ? color0 : default0, color1 ? color1 : default1,
             (color0 ? 1u : 0u) | (color1 ? 2u : 0u), out_diffuse, out_specular);
-    /* Fog-alpha generation is separate. Preserve the source specular alpha
-     * through lighting without first quantizing a floating point declaration. */
-    out_specular[3] = color1 ? color1[3] : 0.0f;
+    /* Fog-alpha generation is separate. D3D7 selects material/source alpha;
+     * D3D8/9 preserve source alpha without quantizing float declarations. */
+    out_specular[3] = state->flags.lighting && state->specular_alpha_material
+            ? material_source(state, state->flags.specular_source, state->material.specular,
+                    color0, color1, (color0 ? 1u : 0u) | (color1 ? 2u : 0u))[3]
+            : color1 ? color1[3] : 0.0f;
     *diffuse = d9wg_pack_color(out_diffuse);*specular = d9wg_pack_color(out_specular);
 }
 void d9wg_lighting_vertex_view(const D9WGTNLLighting *state, const float *eye_position,
