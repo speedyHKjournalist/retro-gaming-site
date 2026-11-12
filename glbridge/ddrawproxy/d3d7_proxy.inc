@@ -845,15 +845,11 @@ static void d3d7_fill_caps_for(const GUID *device, D3DDEVICEDESC7 *caps)
     if (device && !guid_equal(device, &IID_IDirect3DTnLHalDevice))
         caps->dwDevCaps &= ~(DWORD)D3DDEVCAPS_HWTRANSFORMANDLIGHT;
     if (device && guid_equal(device, &IID_IDirect3DRGBDevice)) {
-        caps->dwDevCaps &= ~(DWORD)D3DDEVCAPS_HWRASTERIZATION;
+        caps->dwDevCaps &= ~(DWORD)(D3DDEVCAPS_HWRASTERIZATION |
+            D3DDEVCAPS_DRAWPRIMITIVES2 | D3DDEVCAPS_DRAWPRIMITIVES2EX);
         caps->dvGuardBandLeft = caps->dvGuardBandTop = -4096.0f;
         caps->dvGuardBandRight = caps->dvGuardBandBottom = 4095.0f;
     }
-}
-
-static void d3d7_fill_caps(D3DDEVICEDESC7 *caps)
-{
-    d3d7_fill_caps_for(&IID_IDirect3DTnLHalDevice, caps);
 }
 
 static void d3d7_make_rgb_format(DDPIXELFORMAT *format, DWORD bits,
@@ -1001,24 +997,16 @@ static ULONG WINAPI d3d7_Release(IDirect3D7 *iface)
 static HRESULT WINAPI d3d7_EnumDevices(IDirect3D7 *iface,
         LPD3DENUMDEVICESCALLBACK7 callback, void *context)
 {
-    /*
-     * All three retail device types, best first. CreateDevice already accepts
-     * each of these GUIDs, so enumerating only the T&L HAL hid two devices
-     * that work: an app offering a "hardware T&L / software T&L" choice --
-     * 3DMark 2000 is exactly that -- finds nothing behind the software entry
-     * and cannot select it. The order matters for the other kind of app, the
-     * one that takes the first device it is handed.
-     */
+    /* Preserve the runtime's device order and logical class names. Games
+     * inspect the capabilities to select hardware or software processing. */
     static const struct {
         const GUID *guid;
         const char *description;
         const char *name;
     } devices[] = {
-        { &IID_IDirect3DTnLHalDevice, "v86 WebGPU T&L HAL",
-          "Direct3D T&L HAL" },
+        { &IID_IDirect3DRGBDevice, "v86 WebGPU RGB Emulation", "RGB Emulation" },
         { &IID_IDirect3DHALDevice, "v86 WebGPU HAL", "Direct3D HAL" },
-        { &IID_IDirect3DRGBDevice, "v86 WebGPU RGB Emulation",
-          "Direct3D RGB" },
+        { &IID_IDirect3DTnLHalDevice, "v86 WebGPU T&L HAL", "Direct3D T&L HAL" },
     };
     D3DDEVICEDESC7 caps;
     UINT index;

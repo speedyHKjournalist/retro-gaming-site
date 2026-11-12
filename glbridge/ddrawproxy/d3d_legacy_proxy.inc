@@ -166,7 +166,7 @@ static void d3d_legacy_fill_caps(D3DDEVICEDESC *caps)
 {
     D3DDEVICEDESC7 caps7;
     ZeroMemory(caps, sizeof(*caps));
-    d3d7_fill_caps(&caps7);
+    d3d7_fill_caps_for(&IID_IDirect3DHALDevice, &caps7);
     caps->dwSize = sizeof(*caps);
     caps->dwFlags = D3DDD_COLORMODEL | D3DDD_DEVCAPS |
             D3DDD_TRANSFORMCAPS | D3DDD_LIGHTINGCAPS | D3DDD_BCLIPPING |
@@ -174,8 +174,8 @@ static void d3d_legacy_fill_caps(D3DDEVICEDESC *caps)
             D3DDD_DEVICEZBUFFERBITDEPTH | D3DDD_MAXBUFFERSIZE |
             D3DDD_MAXVERTEXCOUNT;
     caps->dcmColorModel = D3DCOLOR_RGB;
-    caps->dwDevCaps = caps7.dwDevCaps | D3DDEVCAPS_EXECUTESYSTEMMEMORY |
-            D3DDEVCAPS_EXECUTEVIDEOMEMORY;
+    caps->dwDevCaps = caps7.dwDevCaps | D3DDEVCAPS_FLOATTLVERTEX |
+            D3DDEVCAPS_EXECUTESYSTEMMEMORY;
     caps->dtcTransformCaps.dwSize = sizeof(caps->dtcTransformCaps);
     caps->dtcTransformCaps.dwCaps = D3DTRANSFORMCAPS_CLIP;
     caps->bClipping = TRUE;
@@ -189,7 +189,7 @@ static void d3d_legacy_fill_caps(D3DDEVICEDESC *caps)
     caps->dpcTriCaps = caps7.dpcTriCaps;
     caps->dwDeviceRenderBitDepth = caps7.dwDeviceRenderBitDepth;
     caps->dwDeviceZBufferBitDepth = caps7.dwDeviceZBufferBitDepth;
-    caps->dwMaxBufferSize = 16u * 1024u * 1024u;
+    caps->dwMaxBufferSize = 0;
     caps->dwMaxVertexCount = D3DMAXNUMVERTICES;
     caps->dwMinTextureWidth = caps7.dwMinTextureWidth;
     caps->dwMinTextureHeight = caps7.dwMinTextureHeight;
@@ -210,43 +210,132 @@ static void d3d_legacy_fill_caps(D3DDEVICEDESC *caps)
     caps->wMaxSimultaneousTextures = caps7.wMaxSimultaneousTextures;
 }
 
-static HRESULT d3d_legacy_enum_devices(LPD3DENUMDEVICESCALLBACK callback,
-        void *context)
+static DWORD d3d_legacy_caps_size(unsigned version)
 {
+    if (version == 1u) return offsetof(D3DDEVICEDESC, dwMinTextureWidth);
+    if (version == 2u) return offsetof(D3DDEVICEDESC, dwMaxTextureRepeat);
+    return sizeof(D3DDEVICEDESC);
+}
+
+static void d3d_legacy_empty_caps(D3DDEVICEDESC *caps, unsigned version)
+{
+    ZeroMemory(caps, sizeof(*caps));
+    caps->dwSize = d3d_legacy_caps_size(version);
+    caps->dtcTransformCaps.dwSize = sizeof(caps->dtcTransformCaps);
+    caps->dlcLightingCaps.dwSize = sizeof(caps->dlcLightingCaps);
+    caps->dpcLineCaps.dwSize = sizeof(caps->dpcLineCaps);
+    caps->dpcTriCaps.dwSize = sizeof(caps->dpcTriCaps);
+}
+
+static void d3d_legacy_caps_pair(const GUID *guid, unsigned version,
+        D3DDEVICEDESC *hal, D3DDEVICEDESC *hel)
+{
+    d3d_legacy_empty_caps(hal, version);
+    d3d_legacy_empty_caps(hel, version);
+    if (guid_equal(guid, &IID_IDirect3DHALDevice)) {
+        d3d_legacy_fill_caps(hal);
+        hal->dwSize = d3d_legacy_caps_size(version);
+        /* The runtime's HEL fallback beside a HAL is metadata, rather than
+         * a second copy of hardware rasterisation capabilities. */
+        hel->dwFlags = D3DDD_COLORMODEL | D3DDD_DEVCAPS |
+            D3DDD_TRANSFORMCAPS | D3DDD_LIGHTINGCAPS | D3DDD_BCLIPPING;
+        hel->dwDevCaps = D3DDEVCAPS_FLOATTLVERTEX;
+        hel->dtcTransformCaps.dwCaps = D3DTRANSFORMCAPS_CLIP;
+        hel->bClipping = TRUE;
+        hel->dlcLightingCaps.dwCaps = D3DLIGHTCAPS_POINT | D3DLIGHTCAPS_SPOT |
+            D3DLIGHTCAPS_DIRECTIONAL | D3DLIGHTCAPS_PARALLELPOINT;
+        hel->dlcLightingCaps.dwLightingModel = D3DLIGHTINGMODEL_RGB;
+        hel->dwMaxVertexCount = hal->dwMaxVertexCount;
+    } else {
+        d3d_legacy_fill_caps(hel);
+        hel->dwSize = d3d_legacy_caps_size(version);
+        hel->dwFlags &= ~(DWORD)D3DDD_LINECAPS;
+        hel->dcmColorModel = guid_equal(guid, &IID_IDirect3DRampDevice)
+            ? D3DCOLOR_MONO : D3DCOLOR_RGB;
+        /* SORT flags describe required input ordering, not an automatic
+         * sorting operation. These are the native logical HEL profiles. */
+        hel->dwDevCaps = D3DDEVCAPS_FLOATTLVERTEX | D3DDEVCAPS_SORTINCREASINGZ |
+            D3DDEVCAPS_SORTEXACT | D3DDEVCAPS_EXECUTESYSTEMMEMORY |
+            D3DDEVCAPS_TLVERTEXSYSTEMMEMORY | D3DDEVCAPS_TEXTURESYSTEMMEMORY |
+            D3DDEVCAPS_DRAWPRIMTLVERTEX;
+        hel->dpcLineCaps.dwTextureCaps |= D3DPTEXTURECAPS_POW2;
+        hel->dpcTriCaps.dwTextureCaps |= D3DPTEXTURECAPS_POW2;
+    }
+    {
+        DWORD size = d3d_legacy_caps_size(version);
+        if (size < sizeof(*hal)) {
+            ZeroMemory((BYTE *)hal + size, sizeof(*hal) - size);
+            ZeroMemory((BYTE *)hel + size, sizeof(*hel) - size);
+        }
+    }
+}
+
+static HRESULT d3d_legacy_enum_devices(LPD3DENUMDEVICESCALLBACK callback,
+        void *context, unsigned version)
+{
+    static const struct {
+        const GUID *guid;
+        const char *name;
+        unsigned min_version, max_version;
+    } devices[] = {
+        { &IID_IDirect3DRampDevice, "Ramp Emulation", 1u, 2u },
+        { &IID_IDirect3DRGBDevice, "RGB Emulation", 1u, 3u },
+        { &IID_IDirect3DHALDevice, "Direct3D HAL", 1u, 3u },
+        { &IID_IDirect3DMMXDevice, "MMX Emulation", 2u, 2u },
+    };
     D3DDEVICEDESC hal, hel;
-    GUID guid;
+    UINT index;
     if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d_legacy_fill_caps(&hal);
-    hel = hal;
-    guid = IID_IDirect3DHALDevice;
-    if (callback(&guid, (char *)"v86 WebGPU HAL",
-            (char *)"v86 WebGPU Direct3D 1-6 HAL", &hal, &hel, context)
-            == D3DENUMRET_CANCEL) return D3D_OK;
-    guid = IID_IDirect3DRGBDevice;
-    if (callback(&guid, (char *)"v86 WebGPU RGB",
-            (char *)"v86 WebGPU Direct3D RGB", &hel, &hel, context)
-            == D3DENUMRET_CANCEL) return D3D_OK;
-    guid = IID_IDirect3DRampDevice;
-    if (callback(&guid, (char *)"v86 WebGPU ramp compatibility",
-            (char *)"v86 WebGPU Direct3D ramp", &hel, &hel, context)
-            == D3DENUMRET_CANCEL) return D3D_OK;
-    guid = IID_IDirect3DMMXDevice;
-    callback(&guid, (char *)"v86 WebGPU MMX compatibility",
-            (char *)"v86 WebGPU Direct3D MMX", &hel, &hel, context);
+    for (index = 0; index < sizeof(devices) / sizeof(devices[0]); ++index) {
+        GUID guid;
+        if (version < devices[index].min_version || version > devices[index].max_version)
+            continue;
+        guid = *devices[index].guid;
+        d3d_legacy_caps_pair(&guid, version, &hal, &hel);
+        if (callback(&guid, (char *)devices[index].name,
+                (char *)devices[index].name, &hal, &hel, context) == D3DENUMRET_CANCEL)
+            break;
+    }
     return D3D_OK;
 }
 
 static HRESULT d3d_legacy_find_device(D3DFINDDEVICESEARCH *search,
-        D3DFINDDEVICERESULT *result)
+        D3DFINDDEVICERESULT *result, unsigned version)
 {
-    if (!search || !result || search->dwSize != sizeof(*search) ||
-            result->dwSize != sizeof(*result))
+    D3DDEVICEDESC hal, hel;
+    GUID selected;
+    const GUID *guid = &IID_IDirect3DHALDevice;
+    DWORD size, stride, prefix = offsetof(D3DFINDDEVICERESULT, ddHwDesc);
+    if (!search || !result || search->dwSize != sizeof(*search))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    ZeroMemory(result, sizeof(*result));
-    result->dwSize = sizeof(*result);
-    result->guid = IID_IDirect3DHALDevice;
-    d3d_legacy_fill_caps(&result->ddHwDesc);
-    result->ddSwDesc = result->ddHwDesc;
+    size = result->dwSize;
+    if (size != prefix + 2u * d3d_legacy_caps_size(1u) &&
+            size != prefix + 2u * d3d_legacy_caps_size(2u) &&
+            size != sizeof(*result))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (search->dwFlags & D3DFDS_GUID) {
+        guid = &search->guid;
+        if (!guid_equal(guid, &IID_IDirect3DHALDevice) &&
+                !guid_equal(guid, &IID_IDirect3DRGBDevice) &&
+                !(version <= 2u && guid_equal(guid, &IID_IDirect3DRampDevice)) &&
+                !(version == 2u && guid_equal(guid, &IID_IDirect3DMMXDevice)))
+            return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    } else if ((search->dwFlags & D3DFDS_HARDWARE) && !search->bHardware) {
+        guid = &IID_IDirect3DRGBDevice;
+    }
+    if ((search->dwFlags & D3DFDS_HARDWARE) &&
+            !!search->bHardware != !!guid_equal(guid, &IID_IDirect3DHALDevice))
+        return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    /* Native FindDevice ignores the colour-model criterion. Result size
+     * selects descriptor strides; the API view selects each reported size. */
+    d3d_legacy_caps_pair(guid, version, &hal, &hel);
+    stride = (size - prefix) / 2u;
+    selected = *guid;
+    ZeroMemory(result, size);
+    result->dwSize = size;
+    result->guid = selected;
+    CopyMemory((BYTE *)result + prefix, &hal, stride);
+    CopyMemory((BYTE *)result + prefix + stride, &hel, stride);
     return D3D_OK;
 }
 
@@ -273,14 +362,14 @@ static HRESULT WINAPI d3d3_EnumDevices(IDirect3D3 *iface,
         LPD3DENUMDEVICESCALLBACK callback, void *context)
 {
     (void)iface;
-    return d3d_legacy_enum_devices(callback, context);
+    return d3d_legacy_enum_devices(callback, context, 3u);
 }
 
 static HRESULT WINAPI d3d3_FindDevice(IDirect3D3 *iface,
         D3DFINDDEVICESEARCH *search, D3DFINDDEVICERESULT *result)
 {
     (void)iface;
-    return d3d_legacy_find_device(search, result);
+    return d3d_legacy_find_device(search, result, 3u);
 }
 
 static HRESULT WINAPI d3d2_QueryInterface(IDirect3D2 *iface, REFIID iid,
@@ -306,14 +395,14 @@ static HRESULT WINAPI d3d2_EnumDevices(IDirect3D2 *iface,
         LPD3DENUMDEVICESCALLBACK callback, void *context)
 {
     (void)iface;
-    return d3d_legacy_enum_devices(callback, context);
+    return d3d_legacy_enum_devices(callback, context, 2u);
 }
 
 static HRESULT WINAPI d3d2_FindDevice(IDirect3D2 *iface,
         D3DFINDDEVICESEARCH *search, D3DFINDDEVICERESULT *result)
 {
     (void)iface;
-    return d3d_legacy_find_device(search, result);
+    return d3d_legacy_find_device(search, result, 2u);
 }
 
 static HRESULT WINAPI d3d1_QueryInterface(IDirect3D *iface, REFIID iid,
@@ -347,14 +436,14 @@ static HRESULT WINAPI d3d1_EnumDevices(IDirect3D *iface,
         LPD3DENUMDEVICESCALLBACK callback, void *context)
 {
     (void)iface;
-    return d3d_legacy_enum_devices(callback, context);
+    return d3d_legacy_enum_devices(callback, context, 1u);
 }
 
 static HRESULT WINAPI d3d1_FindDevice(IDirect3D *iface,
         D3DFINDDEVICESEARCH *search, D3DFINDDEVICERESULT *result)
 {
     (void)iface;
-    return d3d_legacy_find_device(search, result);
+    return d3d_legacy_find_device(search, result, 1u);
 }
 
 /* ------------------------------------------------------------------ *
