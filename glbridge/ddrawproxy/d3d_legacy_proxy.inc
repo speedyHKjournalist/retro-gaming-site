@@ -514,7 +514,7 @@ static ULONG WINAPI d3d_material_Release(IDirect3DMaterial3 *iface)
             heap_free(entry);
         }
         heap_free(material);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, FALSE);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -650,7 +650,9 @@ static HRESULT d3d_legacy_create_material(DDrawObject *owner,
             material->material.diffuse.b = material->material.diffuse.a = 1.0f;
     material->next = owner->legacy_materials;
     owner->legacy_materials = material;
-    ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
+    /* Legacy materials retain the owner allocation, without changing its
+     * observable DirectDraw/Direct3D reference count. */
+    ddraw_child_attach(owner, FALSE);
     *out = material;
     return D3D_OK;
 }

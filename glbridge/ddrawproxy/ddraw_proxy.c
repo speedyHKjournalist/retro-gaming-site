@@ -5538,6 +5538,34 @@ static const struct { DWORD width; DWORD height; } g_modes[] = {
 };
 static const DWORD g_mode_depths[] = { 8, 16, 32 };
 
+/* Match the fields selected by a descriptor, ignoring inactive union members. */
+static BOOL ddraw_enum_pixel_format_matches(const DDPIXELFORMAT *actual,
+        const DDPIXELFORMAT *filter)
+{
+    if (actual->dwFlags != filter->dwFlags) return FALSE;
+    if (filter->dwFlags & DDPF_FOURCC)
+        return actual->dwFourCC == filter->dwFourCC;
+    if (actual->dwRGBBitCount != filter->dwRGBBitCount) return FALSE;
+    if ((filter->dwFlags & DDPF_RGB) &&
+            !(filter->dwFlags & DDPF_PALETTEINDEXED8) &&
+            (actual->dwRBitMask != filter->dwRBitMask ||
+             actual->dwGBitMask != filter->dwGBitMask ||
+             actual->dwBBitMask != filter->dwBBitMask)) return FALSE;
+    if ((filter->dwFlags & (DDPF_ALPHAPIXELS | DDPF_ALPHA | DDPF_ZBUFFER)) &&
+            actual->dwRGBAlphaBitMask != filter->dwRGBAlphaBitMask) return FALSE;
+    if ((filter->dwFlags & (DDPF_ZBUFFER | DDPF_STENCILBUFFER)) &&
+            (actual->dwZBitMask != filter->dwZBitMask ||
+             actual->dwStencilBitDepth != filter->dwStencilBitDepth ||
+             actual->dwStencilBitMask != filter->dwStencilBitMask)) return FALSE;
+    return TRUE;
+}
+
+static BOOL ddraw_enum_color_key_matches(const DDCOLORKEY *actual, const DDCOLORKEY *filter)
+{
+    return actual->dwColorSpaceLowValue == filter->dwColorSpaceLowValue &&
+        actual->dwColorSpaceHighValue == filter->dwColorSpaceHighValue;
+}
+
 static HRESULT WINAPI ddraw_EnumDisplayModes(IDirectDraw7 *iface, DWORD flags,
         LPDDSURFACEDESC2 filter, LPVOID context,
         LPDDENUMMODESCALLBACK2 callback)
@@ -5572,6 +5600,8 @@ static HRESULT WINAPI ddraw_EnumDisplayModes(IDirectDraw7 *iface, DWORD flags,
             description.dwRefreshRate = 60;
             mode_pixel_format(g_mode_depths[depth],
                     &description.ddpfPixelFormat);
+            if (filter && (filter->dwFlags & DDSD_PIXELFORMAT) &&
+                    !ddraw_enum_pixel_format_matches(&description.ddpfPixelFormat, &filter->ddpfPixelFormat)) continue;
             description.lPitch = (LONG)surface_pitch_for(g_modes[mode].width,
                     g_mode_depths[depth] / 8u);
             if (callback(&description, context) == DDENUMRET_CANCEL)
@@ -5581,28 +5611,159 @@ static HRESULT WINAPI ddraw_EnumDisplayModes(IDirectDraw7 *iface, DWORD flags,
     return DDWG_TRACE_RESULT(DD_OK);
 }
 
+static BOOL ddraw_enum_description_matches(const DDSURFACEDESC2 *actual,
+        const DDSURFACEDESC2 *filter)
+{
+    DWORD flags;
+    if (!filter) return TRUE;
+    flags = filter->dwFlags;
+    if ((flags & actual->dwFlags) != flags) return FALSE;
+    if ((flags & DDSD_CAPS) &&
+            (actual->ddsCaps.dwCaps != filter->ddsCaps.dwCaps ||
+             actual->ddsCaps.dwCaps2 != filter->ddsCaps.dwCaps2 ||
+             actual->ddsCaps.dwCaps3 != filter->ddsCaps.dwCaps3 ||
+             actual->ddsCaps.dwCaps4 != filter->ddsCaps.dwCaps4)) return FALSE;
+    if ((flags & DDSD_WIDTH) && actual->dwWidth != filter->dwWidth) return FALSE;
+    if ((flags & DDSD_HEIGHT) && actual->dwHeight != filter->dwHeight) return FALSE;
+    if ((flags & (DDSD_PITCH | DDSD_LINEARSIZE)) && actual->lPitch != filter->lPitch) return FALSE;
+    if ((flags & DDSD_BACKBUFFERCOUNT) && actual->dwBackBufferCount != filter->dwBackBufferCount) return FALSE;
+    if ((flags & (DDSD_MIPMAPCOUNT | DDSD_REFRESHRATE)) && actual->dwMipMapCount != filter->dwMipMapCount) return FALSE;
+    if ((flags & DDSD_ALPHABITDEPTH) && actual->dwAlphaBitDepth != filter->dwAlphaBitDepth) return FALSE;
+    if ((flags & DDSD_LPSURFACE) && actual->lpSurface != filter->lpSurface) return FALSE;
+    if ((flags & DDSD_CKDESTOVERLAY) && !ddraw_enum_color_key_matches(&actual->ddckCKDestOverlay, &filter->ddckCKDestOverlay)) return FALSE;
+    if ((flags & DDSD_CKDESTBLT) && !ddraw_enum_color_key_matches(&actual->ddckCKDestBlt, &filter->ddckCKDestBlt)) return FALSE;
+    if ((flags & DDSD_CKSRCOVERLAY) && !ddraw_enum_color_key_matches(&actual->ddckCKSrcOverlay, &filter->ddckCKSrcOverlay)) return FALSE;
+    if ((flags & DDSD_CKSRCBLT) && !ddraw_enum_color_key_matches(&actual->ddckCKSrcBlt, &filter->ddckCKSrcBlt)) return FALSE;
+    if ((flags & DDSD_PIXELFORMAT) && !ddraw_enum_pixel_format_matches(&actual->ddpfPixelFormat, &filter->ddpfPixelFormat)) return FALSE;
+    return TRUE;
+}
+
+typedef HRESULT (*DDrawEnumSurfaceCallback)(DDSurface *,
+        const DDSURFACEDESC2 *, void *);
+
+/* CANBECREATED reports descriptions, with no COM object or backing allocation. */
+static BOOL ddraw_enum_creatable_description(const DDSURFACEDESC2 *request,
+        DWORD width, DWORD height, DWORD bpp, DDSURFACEDESC2 *description)
+{
+    DDrawPixelFormatDesc format_desc;
+    unsigned format;
+    UINT bytes_per_pixel, block_bytes;
+    DWORD caps = request->ddsCaps.dwCaps;
+    if (!width || !height || (caps & DDSCAPS_VIDEOPORT) ||
+            ((caps & DDSCAPS_SYSTEMMEMORY) && (caps & DDSCAPS_VIDEOMEMORY)) ||
+            ((caps & DDSCAPS_ALLOCONLOAD) && !(caps & DDSCAPS_TEXTURE)) ||
+            ((caps & DDSCAPS_MIPMAP) && !(caps & DDSCAPS_TEXTURE))) return FALSE;
+    *description = *request;
+    description->dwSize = sizeof(*description);
+    description->dwWidth = width;
+    description->dwHeight = height;
+    description->dwFlags |= DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    description->dwFlags &= ~(DDSD_LPSURFACE | DDSD_PITCH | DDSD_LINEARSIZE);
+    description->lpSurface = NULL;
+    if (!(request->dwFlags & DDSD_PIXELFORMAT))
+        mode_pixel_format(bpp, &description->ddpfPixelFormat);
+    describe_pixel_format(&description->ddpfPixelFormat, &format_desc);
+    format = ddraw_pixel_format_to_d3dformat(&format_desc);
+    bytes_per_pixel = format_bytes_per_pixel(format);
+    block_bytes = format_compressed_block_bytes(format);
+    if (!bytes_per_pixel && !block_bytes) return FALSE;
+    if (block_bytes) {
+        uint64_t bytes = ((uint64_t)width + 3u) / 4u * block_bytes *
+                (((uint64_t)height + 3u) / 4u);
+        if (bytes > 0x7fffffffu) return FALSE;
+        description->dwFlags |= DDSD_LINEARSIZE;
+        description->dwLinearSize = (DWORD)bytes;
+    } else {
+        if ((uint64_t)width * bytes_per_pixel > 0x7ffffffcu) return FALSE;
+        description->dwFlags |= DDSD_PITCH;
+        description->lPitch = (LONG)surface_pitch_for(width, bytes_per_pixel);
+    }
+    if (request->ddsCaps.dwCaps2 & (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE))
+        caps |= DDSCAPS_SYSTEMMEMORY;
+    if (!(caps & DDSCAPS_SYSTEMMEMORY)) caps |= DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM;
+    description->ddsCaps.dwCaps = caps;
+    return TRUE;
+}
+
+static HRESULT ddraw_enum_surfaces(DDrawObject *object, DWORD flags,
+        const DDSURFACEDESC2 *filter, DDrawEnumSurfaceCallback callback,
+        void *context)
+{
+    const DWORD selections = DDENUMSURFACES_ALL | DDENUMSURFACES_MATCH | DDENUMSURFACES_NOMATCH;
+    DWORD selection = flags & selections;
+    typedef struct { DDSurface *surface; DDSURFACEDESC2 description; } Snapshot;
+    Snapshot *items;
+    DDSurface *surface;
+    SIZE_T count = 0, index;
+    if (!callback || (flags & ~(selections | DDENUMSURFACES_CANBECREATED | DDENUMSURFACES_DOESEXIST)) ||
+            !(flags & (DDENUMSURFACES_CANBECREATED | DDENUMSURFACES_DOESEXIST)) ||
+            (selection && (selection & (selection - 1u))) ||
+            ((flags & DDENUMSURFACES_CANBECREATED) && selection != DDENUMSURFACES_MATCH) ||
+            (selection != DDENUMSURFACES_ALL && !filter) ||
+            (filter && (filter->dwSize != sizeof(*filter) ||
+             (!!(filter->dwFlags & DDSD_WIDTH) != !!(filter->dwFlags & DDSD_HEIGHT)))))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (flags & DDENUMSURFACES_CANBECREATED) {
+        DDSURFACEDESC2 request = *filter, description;
+        DWORD bpp = object->mode_bpp ? object->mode_bpp : 32u;
+        UINT mode, end = sizeof(g_modes) / sizeof(g_modes[0]);
+        if ((request.dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) == (DDSD_WIDTH | DDSD_HEIGHT)) end = 1;
+        for (mode = 0; mode < end; ++mode) {
+            DWORD width = request.dwFlags & DDSD_WIDTH ? request.dwWidth : g_modes[mode].width;
+            DWORD height = request.dwFlags & DDSD_HEIGHT ? request.dwHeight : g_modes[mode].height;
+            if (ddraw_enum_creatable_description(&request, width, height, bpp, &description) &&
+                    callback(NULL, &description, context) == DDENUMRET_CANCEL) break;
+        }
+        return DD_OK;
+    }
+    /* Snapshot private allocation pins before calling application code. A
+     * callback may release another surface, create one or recursively enumerate.
+     * Public callback references are granted by the version-specific adapter. */
+    EnterCriticalSection(&g_object_lock);
+    for (surface = object->surfaces; surface; surface = surface->next) ++count;
+    if (count > (SIZE_T)-1 / sizeof(*items)) {
+        LeaveCriticalSection(&g_object_lock);
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    }
+    items = count ? heap_alloc_zero(count * sizeof(*items)) : NULL;
+    if (count && !items) {
+        LeaveCriticalSection(&g_object_lock);
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    }
+    count = 0;
+    for (surface = object->surfaces; surface; surface = surface->next) {
+        BOOL match = ddraw_enum_description_matches(&surface->desc, filter);
+        if (selection != DDENUMSURFACES_ALL && match == (selection == DDENUMSURFACES_NOMATCH)) continue;
+        items[count].surface = surface;
+        items[count++].description = surface->desc;
+        surface_private_addref(surface);
+    }
+    LeaveCriticalSection(&g_object_lock);
+    for (index = 0; index < count; ++index)
+        if (callback(items[index].surface, &items[index].description, context) == DDENUMRET_CANCEL) break;
+    for (index = 0; index < count; ++index) surface_private_release(items[index].surface);
+    heap_free(items);
+    return DD_OK;
+}
+
+typedef struct { LPDDENUMSURFACESCALLBACK7 callback; void *context; } DDrawEnumSurface7Context;
+static HRESULT ddraw_enum_surface7(DDSurface *surface,
+        const DDSURFACEDESC2 *description, void *context)
+{
+    DDrawEnumSurface7Context *adapter = context;
+    DDSURFACEDESC2 output = *description;
+    if (surface) surface_public_addref(surface, DD_VERSION_7);
+    return adapter->callback(surface ? (IDirectDrawSurface7 *)surface_interface(surface, DD_VERSION_7) : NULL,
+            &output, adapter->context);
+}
+
 static HRESULT WINAPI ddraw_EnumSurfaces(IDirectDraw7 *iface, DWORD flags,
         LPDDSURFACEDESC2 filter, LPVOID context,
         LPDDENUMSURFACESCALLBACK7 callback)
 {
-    DDrawObject *object = object_from_iface(iface);
-    DDSurface *surface;
-
-    (void)flags; (void)filter;
+    DDrawEnumSurface7Context adapter = {callback, context};
     if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    EnterCriticalSection(&g_object_lock);
-    surface = object->surfaces;
-    LeaveCriticalSection(&g_object_lock);
-    while (surface) {
-        DDSURFACEDESC2 description = surface->desc;
-        DDSurface *next = surface->next;
-        IDirectDrawSurface7_AddRef((IDirectDrawSurface7 *)surface);
-        if (callback((IDirectDrawSurface7 *)surface, &description, context)
-                == DDENUMRET_CANCEL)
-            break;
-        surface = next;
-    }
-    return DD_OK;
+    return ddraw_enum_surfaces(object_from_iface(iface), flags, filter, ddraw_enum_surface7, &adapter);
 }
 
 static HRESULT WINAPI ddraw_FlipToGDISurface(IDirectDraw7 *iface)
@@ -7142,6 +7303,8 @@ static HRESULT WINAPI tag##_EnumDisplayModes(IFACE *iface, DWORD flags, \
             description.dwRefreshRate = 60; \
             mode_pixel_format(g_mode_depths[depth], \
                     &description.ddpfPixelFormat); \
+            if (filter && (filter->dwFlags & DDSD_PIXELFORMAT) && \
+                    !ddraw_enum_pixel_format_matches(&description.ddpfPixelFormat, &filter->ddpfPixelFormat)) continue; \
             description.lPitch = (LONG)surface_pitch_for( \
                     g_modes[mode].width, g_mode_depths[depth] / 8u); \
             if (callback(&description, context) == DDENUMRET_CANCEL) \
@@ -7150,28 +7313,28 @@ static HRESULT WINAPI tag##_EnumDisplayModes(IFACE *iface, DWORD flags, \
     } \
     return DD_OK; \
 } \
+typedef struct { ENUMSURFCB callback; void *context; } tag##_EnumSurfaceContext; \
+static HRESULT tag##_enum_surface(DDSurface *surface, \
+        const DDSURFACEDESC2 *description, void *context) \
+{ \
+    tag##_EnumSurfaceContext *adapter = context; \
+    DESC output; \
+    if (sizeof(DESC) == sizeof(DDSURFACEDESC)) \
+        desc2_to_desc1(description, (DDSURFACEDESC *)&output); \
+    else CopyMemory(&output, description, sizeof(output)); \
+    if (surface) surface_public_addref(surface, surface_factory_view(VERSION)); \
+    return adapter->callback(surface ? (SURFIFACE *)surface_interface(surface, surface_factory_view(VERSION)) : NULL, \
+            &output, adapter->context); \
+} \
 static HRESULT WINAPI tag##_EnumSurfaces(IFACE *iface, DWORD flags, \
         DESC *filter, LPVOID context, ENUMSURFCB callback) \
 { \
-    DDrawObject *object = object_from_any(iface, NULL); \
-    DDSurface *surface; \
-    (void)flags; (void)filter; \
-    if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
-    EnterCriticalSection(&g_object_lock); \
-    surface = object->surfaces; \
-    LeaveCriticalSection(&g_object_lock); \
-    while (surface) { \
-        DESC description; \
-        DDSurface *next = surface->next; \
-        description.dwSize = sizeof(DESC); \
-        legacy_describe(surface, &description); \
-        surface_public_addref(surface, surface_factory_view(VERSION)); \
-        if (callback(surface_interface(surface, surface_factory_view(VERSION)), &description, \
-                context) == DDENUMRET_CANCEL) \
-            break; \
-        surface = next; \
-    } \
-    return DD_OK; \
+    DDSURFACEDESC2 filter2; \
+    tag##_EnumSurfaceContext adapter = {callback, context}; \
+    if (!callback || (filter && filter->dwSize != sizeof(DESC))) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
+    if (filter) legacy_widen(filter, &filter2); \
+    return ddraw_enum_surfaces(object_from_any(iface, NULL), flags, \
+            filter ? &filter2 : NULL, tag##_enum_surface, &adapter); \
 } \
 static HRESULT WINAPI tag##_FlipToGDISurface(IFACE *iface) \
 { \
