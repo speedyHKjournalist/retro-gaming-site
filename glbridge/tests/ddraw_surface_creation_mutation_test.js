@@ -2,6 +2,9 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-creation-mut-"));
 const mutations=[
+ ["managed textures allow explicit placement","ddraw","ddraw_CreateSurfaceForVersion","(caps & (DDSCAPS_SYSTEMMEMORY | DDSCAPS_VIDEOMEMORY)))","FALSE)"],
+ ["managed storage allows nontextures","ddraw","ddraw_CreateSurfaceForVersion","if (!(caps & DDSCAPS_TEXTURE) ||","if (FALSE ||"],
+ ["writeonly accepted on ordinary surfaces","ddraw","ddraw_CreateSurfaceForVersion","} else if (caps & DDSCAPS_WRITEONLY) {","} else if (FALSE && (caps & DDSCAPS_WRITEONLY)) {"],
  ["v7 accepts compressed borrowed pitch","ddraw","ddraw_CreateSurfaceForVersion","version >= DD_VERSION_7 && (request->dwFlags & DDSD_PITCH)","FALSE"],
  ["compressed root permits partial blocks","ddraw","ddraw_CreateSurfaceForVersion","format_compressed_block_bytes(format) && ((width | height) & 3u)","FALSE && ((width | height) & 3u)"],
  ["compressed system roots bypass alignment","ddraw","ddraw_CreateSurfaceForVersion","format_compressed_block_bytes(format) && ((width | height) & 3u)","!(caps & DDSCAPS_SYSTEMMEMORY) && format_compressed_block_bytes(format) && ((width | height) & 3u)"],

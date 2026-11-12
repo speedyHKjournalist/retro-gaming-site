@@ -640,6 +640,7 @@ struct DDrawObject {
     LONG ref;
     LONG lifetime_ref;          /* public refs plus private child allocations */
     BOOL initialized;          /* COM activation waits for Initialize */
+    BOOL extended_factory;     /* DirectDrawCreateEx lock compatibility */
     HWND window;
     DWORD cooperative_flags;
     uint32_t device_handle;
@@ -3512,6 +3513,10 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     RECT locked_rect;
     DDSURFACEDESC2 output;
     DWORD output_size;
+    BOOL system_texture = surface->owner->extended_factory &&
+            (surface->desc.ddsCaps.dwCaps &
+            (DDSCAPS_TEXTURE | DDSCAPS_SYSTEMMEMORY)) ==
+            (DDSCAPS_TEXTURE | DDSCAPS_SYSTEMMEMORY);
 
     (void)event;
     DDWG_TRACE_CHECKPOINT("CALL surface_Lock handle=%lu flags=%08lX "
@@ -3522,16 +3527,17 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
             surface->lock_depth);
     if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     output_size = description->dwSize;
-    if (output_size != sizeof(DDSURFACEDESC) && output_size != sizeof(DDSURFACEDESC2))
+    if (!system_texture && output_size != sizeof(DDSURFACEDESC) &&
+            output_size != sizeof(DDSURFACEDESC2))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!surface->shadow) return DDWG_TRACE_ERROR(DDERR_GENERIC);
     if (surface->dc || surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
     if (rect) {
-        if (rect->left < 0 || rect->top < 0 ||
+        if (!system_texture && (rect->left < 0 || rect->top < 0 ||
                 rect->right > (LONG)surface->width ||
                 rect->bottom > (LONG)surface->height ||
-                rect->right < rect->left || rect->bottom < rect->top) {
+                rect->right < rect->left || rect->bottom < rect->top)) {
             description->lpSurface = NULL;
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         }
@@ -3569,15 +3575,22 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
      * subsequent surfaces, including successive FOURCC formats. */
     output.dwFlags = (output.dwFlags & ~DDSD_LPSURFACE) | DDSD_PITCH;
     output.lPitch = (LONG)surface->pitch;
+    /* Native system-memory texture locks do not validate the rectangle. Form
+     * their address with unsigned integer arithmetic, without stepping a C
+     * pointer outside its backing allocation or reading those bytes here. */
     if (format_is_compressed(surface->format))
-        output.lpSurface = surface->shadow + (top / 4) * surface->pitch
-            + (left / 4) * format_compressed_block_bytes(surface->format);
+        output.lpSurface = (void *)((uintptr_t)surface->shadow +
+                (uintptr_t)(intptr_t)(top / 4) * surface->pitch +
+                (uintptr_t)(intptr_t)(left / 4) *
+                    format_compressed_block_bytes(surface->format));
     else
-        output.lpSurface = surface->shadow + top * surface->pitch
-            + left * surface->bytes_per_pixel;
-    if (output_size == sizeof(DDSURFACEDESC))
+        output.lpSurface = (void *)((uintptr_t)surface->shadow +
+                (uintptr_t)(intptr_t)top * surface->pitch +
+                (uintptr_t)(intptr_t)left * surface->bytes_per_pixel);
+    if (output_size < sizeof(DDSURFACEDESC2))
         desc2_to_desc1(&output, (DDSURFACEDESC *)description);
     else *description = output;
+    description->dwSize = output_size;
     DDWG_TRACE("SURFACE LOCKED handle=%lu pitch=%lu bits=%08lX depth=%lu",
             surface->handle, surface->pitch,
             (DWORD)(uintptr_t)output.lpSurface, surface->lock_depth);
@@ -5402,6 +5415,15 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     if ((caps & DDSCAPS_ALLOCONLOAD) && !(caps & DDSCAPS_TEXTURE))
         return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if (request->ddsCaps.dwCaps2 &
+            (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)) {
+        if (!(caps & DDSCAPS_TEXTURE) ||
+                (caps & (DDSCAPS_SYSTEMMEMORY | DDSCAPS_VIDEOMEMORY)))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    } else if (caps & DDSCAPS_WRITEONLY) {
+        /* WRITEONLY is an output capability except on a managed texture. */
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    }
     if (request->dwFlags & DDSD_LPSURFACE) {
         if (caps & DDSCAPS_VIDEOMEMORY)
             return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
@@ -6519,6 +6541,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID *guid, LPVOID *out, REFIID iid,
     object = object_create();
     if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     object->initialized = TRUE;
+    object->extended_factory = TRUE;
     emit_hello_once();
     HOSTLOG_INFO("DirectDraw/Direct3D7 frontend attached");
     *out = (IDirectDraw7 *)object;
@@ -7125,16 +7148,8 @@ static HRESULT WINAPI tag##_IsLost(IFACE *iface) \
 static HRESULT WINAPI tag##_Lock(IFACE *iface, LPRECT rect, DESC *description, \
         DWORD flags, HANDLE event) \
 { \
-    DDSURFACEDESC2 description2; \
-    HRESULT result; \
-    if (!description || (description->dwSize != sizeof(DDSURFACEDESC) && description->dwSize != sizeof(DDSURFACEDESC2))) \
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
-    ZeroMemory(&description2, sizeof(description2)); \
-    description2.dwSize = sizeof(description2); \
-    result = surface_Lock(SURFACE7(iface), rect, &description2, flags, event); \
-    if (SUCCEEDED(result)) legacy_narrow(&description2, description); \
-    else if (result == DDERR_INVALIDPARAMS) description->lpSurface = NULL; \
-    return DDWG_TRACE_ERROR(result); \
+    return surface_Lock(SURFACE7(iface), rect, \
+            (DDSURFACEDESC2 *)description, flags, event); \
 } \
 static HRESULT WINAPI tag##_ReleaseDC(IFACE *iface, HDC dc) \
 { \
@@ -7242,17 +7257,6 @@ static void legacy_describe(DDSurface *surface, void *description)
     desc2_to_desc1(&surface->desc, narrow);
 }
 
-static void legacy_narrow(const DDSURFACEDESC2 *from, void *to)
-{
-    DDSURFACEDESC *narrow = (DDSURFACEDESC *)to;
-
-    if (narrow->dwSize == sizeof(DDSURFACEDESC2)) {
-        *(DDSURFACEDESC2 *)to = *from;
-        ((DDSURFACEDESC2 *)to)->dwSize = sizeof(DDSURFACEDESC2);
-        return;
-    }
-    desc2_to_desc1(from, narrow);
-}
 
 /*
  * Versions 1-3 hand Unlock the pointer Lock returned; version 4 hands it a
