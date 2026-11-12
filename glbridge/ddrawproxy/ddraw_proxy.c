@@ -33,6 +33,7 @@
 #include <initguid.h>
 #include <objbase.h>
 #include <ddraw.h>
+#include <ddrawi.h>
 #include <d3d.h>
 #include <stdint.h>
 #include "../runtime/d9wg_runtime.h"
@@ -607,7 +608,8 @@ struct DDSurface {
     LONG overlay_z_order;
     BOOL overlay_dirty;
     D3DTEXTUREHANDLE texture_handle;
-    HDC dc;                     /* GetDC/ReleaseDC over a DIB section */
+    HDC dc;
+    void *gdi_dc;                /* native system-memory surface DC, if RGB */
     HBITMAP dib;
     HBITMAP old_bitmap;
     BYTE *dib_bits;
@@ -3043,14 +3045,97 @@ static HRESULT WINAPI surface_GetColorKey(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
-/*
- * GDI interoperation. A DirectDraw surface has no HDC of its own here, so
- * GetDC hands back a DIB section of the same geometry seeded from the shadow,
- * and ReleaseDC copies it back and uploads. That is enough for what these
- * titles use it for -- TextOut over a menu or a score -- and it is honest
- * about what it is not: GDI drawn straight onto the primary while DirectDraw
- * owns it does not appear, which is the same boundary d7vk draws.
- */
+/* Native GDI system-memory surfaces expose DirectDraw's bitmap metadata and
+ * write directly into our CPU shadow. Their kernel objects own no GPU texture
+ * or presentation state. Indexed surfaces retain their explicit palette DIB. */
+typedef struct DDrawNativeDC {
+    DDRAWI_DIRECTDRAW_GBL draw;
+    DDRAWI_DIRECTDRAW_LCL local;
+    DDRAWI_DDRAWSURFACE_GBL_MORE global_more;
+    struct {
+        DDRAWI_DDRAWSURFACE_GBL_MORE *more;
+        DDRAWI_DDRAWSURFACE_GBL global;
+    } storage;
+    DDRAWI_DDRAWSURFACE_MORE more;
+    DDRAWI_DDRAWSURFACE_LCL surface;
+    HDC screen, dc;
+    BOOL (WINAPI *create_draw)(DDRAWI_DIRECTDRAW_GBL *, HDC);
+    BOOL (WINAPI *delete_draw)(DDRAWI_DIRECTDRAW_GBL *);
+    BOOL (WINAPI *create_surface)(DDRAWI_DDRAWSURFACE_LCL *, BOOL);
+    BOOL (WINAPI *delete_surface)(DDRAWI_DDRAWSURFACE_LCL *);
+    HDC (WINAPI *get_dc)(DDRAWI_DDRAWSURFACE_LCL *, PALETTEENTRY *);
+    BOOL (WINAPI *release_dc)(DDRAWI_DDRAWSURFACE_LCL *);
+} DDrawNativeDC;
+
+static void ddraw_gdi_dc_destroy(void *cookie)
+{
+    DDrawNativeDC *native = (DDrawNativeDC *)cookie;
+    if (!native) return;
+    if (native->dc) {
+        GdiFlush();
+        native->release_dc(&native->surface);
+    }
+    if (native->surface.hDDSurface) native->delete_surface(&native->surface);
+    if (native->draw.hDD) native->delete_draw(&native->draw);
+    if (native->screen) ReleaseDC(NULL, native->screen);
+    heap_free(native);
+}
+
+static DDrawNativeDC *ddraw_gdi_dc_create(DDSurface *surface)
+{
+    DDrawNativeDC *native;
+    DDRAWI_DDRAWSURFACE_GBL *global;
+    HMODULE gdi;
+    if (!surface->shadow || !surface->width || !surface->height ||
+            surface->width > 0xffffu || surface->height > 0xffffu ||
+            surface->pitch > 0x7fffffffu)
+        return NULL;
+    native = (DDrawNativeDC *)heap_alloc_zero(sizeof(*native));
+    if (!native) return NULL;
+    gdi = GetModuleHandleA("gdi32.dll");
+    if (!gdi) goto failed;
+    native->create_draw = (void *)GetProcAddress(gdi, "GdiEntry1");
+    native->delete_draw = (void *)GetProcAddress(gdi, "GdiEntry3");
+    native->create_surface = (void *)GetProcAddress(gdi, "GdiEntry4");
+    native->delete_surface = (void *)GetProcAddress(gdi, "GdiEntry5");
+    native->get_dc = (void *)GetProcAddress(gdi, "GdiEntry7");
+    native->release_dc = (void *)GetProcAddress(gdi, "GdiEntry8");
+    if (!native->create_draw || !native->delete_draw ||
+            !native->create_surface || !native->delete_surface ||
+            !native->get_dc || !native->release_dc)
+        goto failed;
+    native->screen = GetDC(NULL);
+    if (!native->screen || !native->create_draw(&native->draw, native->screen))
+        goto failed;
+    native->local.lpGbl = &native->draw;
+    native->local.dwProcessId = GetCurrentProcessId();
+    native->global_more.dwSize = sizeof(native->global_more);
+    native->storage.more = &native->global_more;
+    native->more.dwSize = sizeof(native->more);
+    native->more.lpDD_lcl = &native->local;
+    global = &native->storage.global;
+    global->lpDD = &native->draw;
+    global->fpVidMem = (FLATPTR)(uintptr_t)surface->shadow;
+    global->lPitch = (LONG)surface->pitch;
+    global->wWidth = (WORD)surface->width;
+    global->wHeight = (WORD)surface->height;
+    global->dwGlobalFlags = DDRAWISURFGBL_SYSMEMREQUESTED | DDRAWISURFGBL_ISCLIENTMEM;
+    global->ddpfSurface = surface->desc.ddpfPixelFormat;
+    native->surface.lpSurfMore = &native->more;
+    native->surface.lpGbl = global;
+    native->surface.dwProcessId = GetCurrentProcessId();
+    native->surface.dwFlags = DDRAWISURF_HASPIXELFORMAT;
+    native->surface.ddsCaps.dwCaps = DDSCAPS_SYSTEMMEMORY | DDSCAPS_OFFSCREENPLAIN;
+    if (!native->create_surface(&native->surface, FALSE)) goto failed;
+    native->dc = native->get_dc(&native->surface, NULL);
+    if (!native->dc) goto failed;
+    return native;
+
+failed:
+    ddraw_gdi_dc_destroy(native);
+    return NULL;
+}
+
 static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
 {
     DDSurface *surface = surface_from_iface(iface);
@@ -3079,6 +3164,18 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
     if (surface->dc) return DDWG_TRACE_ERROR(DDERR_DCALREADYCREATED);
     if (surface->memory->gpu_dirty && !surface_readback(surface))
         return DDWG_TRACE_ERROR(DDERR_GENERIC);
+
+    if (!surface->indexed) {
+        DDrawNativeDC *native = ddraw_gdi_dc_create(surface);
+        if (!native) {
+            *out = NULL;
+            return DDWG_TRACE_ERROR(DDERR_CANTCREATEDC);
+        }
+        surface->gdi_dc = native;
+        surface->dc = native->dc;
+        *out = native->dc;
+        return DD_OK;
+    }
 
     ZeroMemory(&info, sizeof(info));
     info.header.biSize = sizeof(info.header);
@@ -3173,15 +3270,20 @@ static HRESULT surface_finish_dc(DDSurface *surface, BOOL present)
     UINT row_bytes;
 
     GdiFlush();
-    row_bytes = surface->width * surface->bytes_per_pixel;
-    for (row = 0; row < surface->height; ++row) {
-        CopyMemory(surface->shadow + row * surface->pitch,
-                surface->dib_bits + row * (((row_bytes + 3u) & ~3u)),
-                row_bytes);
+    if (surface->gdi_dc) {
+        ddraw_gdi_dc_destroy(surface->gdi_dc);
+        surface->gdi_dc = NULL;
+    } else {
+        row_bytes = surface->width * surface->bytes_per_pixel;
+        for (row = 0; row < surface->height; ++row) {
+            CopyMemory(surface->shadow + row * surface->pitch,
+                    surface->dib_bits + row * (((row_bytes + 3u) & ~3u)),
+                    row_bytes);
+        }
+        SelectObject(surface->dc, surface->old_bitmap);
+        DeleteObject(surface->dib);
+        DeleteDC(surface->dc);
     }
-    SelectObject(surface->dc, surface->old_bitmap);
-    DeleteObject(surface->dib);
-    DeleteDC(surface->dc);
     surface->dc = NULL;
     surface->dib = NULL;
     surface->dib_bits = NULL;
@@ -4248,6 +4350,11 @@ static void surface_destroy(DDSurface *surface)
         emit_overlay_state(surface);
     }
 
+    if (surface->gdi_dc) {
+        ddraw_gdi_dc_destroy(surface->gdi_dc);
+        surface->gdi_dc = NULL;
+        surface->dc = NULL;
+    }
     if (surface->dc) {
         SelectObject(surface->dc, surface->old_bitmap);
         DeleteObject(surface->dib);

@@ -11,7 +11,7 @@ typedef struct {LONG left,top,right,bottom;} RECT,*LPRECT;
 typedef struct {BOOL client_succeeded,origin_succeeded;struct{LONG window_x,window_y;UINT client_width,client_height;}state;} D9WGWindowProbe;
 typedef struct{HWND window;} DDClipper;typedef struct{HWND window;UINT cooperative_flags;uint32_t device_handle;} DDrawObject;
 typedef struct{BOOL gpu_dirty;} Memory;
-typedef struct DDSurface{DDrawObject*owner;DDClipper*clipper;UINT width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL primary;void*flip_next;Memory*memory;BYTE*shadow,*dib_bits;void*dc,*dib,*old_bitmap;DWORD lock_flags,lock_depth;RECT locked_rect;} DDSurface;
+typedef struct DDSurface{DDrawObject*owner;DDClipper*clipper;UINT width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL primary;void*flip_next;Memory*memory;BYTE*shadow,*dib_bits;void*dc,*dib,*old_bitmap,*gdi_dc;DWORD lock_flags,lock_depth;RECT locked_rect;} DDSurface;
 typedef DDSurface IDirectDrawSurface7;
 #define WINAPI
 #define TRUE 1
@@ -27,6 +27,7 @@ typedef DDSurface IDirectDrawSurface7;
 #define DDWG_TRACE_ERROR(x) (x)
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
+static unsigned native_releases;
 static unsigned checks,probes,blits,presents,uploads,fail_blit,fail_present,fail_prepare;static uintptr_t probed_window;static D9WGWindowProbe next_probe;static D9WGDDBlt last_blit;static RECT last_upload;
 static void d9wg_window_probe_capture(uintptr_t w,UINT flags,D9WGWindowProbe*p){(void)flags;probes++;probed_window=w;*p=next_probe;}
 static BOOL sync_external_surface_for_read(DDSurface*s){(void)s;return TRUE;}
@@ -37,6 +38,7 @@ static BOOL emit_present_and_flush(DDrawObject*o){(void)o;presents++;if(fail_pre
 static DDSurface *surface_from_iface(IDirectDrawSurface7*p){return p;}
 static void emit_surface_upload(DDSurface*s,RECT*r){(void)s;uploads++;last_upload=r?*r:(RECT){0,0,(LONG)s->width,(LONG)s->height};}
 static void GdiFlush(void){}
+static void ddraw_gdi_dc_destroy(void*p){(void)p;native_releases++;}
 static void SelectObject(void*a,void*b){(void)a;(void)b;}
 static void DeleteObject(void*p){(void)p;}
 static void DeleteDC(void*p){(void)p;}
@@ -66,6 +68,7 @@ static int routes(void){
   s.lock_depth=1;s.lock_flags=DDLOCK_READONLY;b=blits;p=presents;u=uploads;CHECK(!surface_Unlock(&s,NULL)&&blits==b&&presents==p&&uploads==u);
   s.dc=(void*)1;s.dib=(void*)2;s.old_bitmap=(void*)3;s.dib_bits=dib;b=blits;p=presents;u=uploads;CHECK(!surface_finish_dc(&s,TRUE)&&uploads==u+1&&blits==b+primary&&presents==p+primary&&!s.dc&&!s.dib&&!s.dib_bits&&!s.old_bitmap&&!memcmp(shadow,dib,64));
   s.dc=(void*)1;s.dib_bits=dib;b=blits;p=presents;CHECK(!surface_finish_dc(&s,FALSE)&&blits==b&&presents==p);
+  memset(shadow,0x91,64);s.dc=(void*)1;s.gdi_dc=(void*)5;s.dib_bits=dib;b=blits;p=presents;u=uploads;unsigned released=native_releases;CHECK(!surface_finish_dc(&s,TRUE)&&!s.gdi_dc&&!s.dc&&native_releases==released+1&&uploads==u+1&&blits==b+primary&&presents==p+primary);for(unsigned k=0;k<64;k++)CHECK(shadow[k]==0x91);
  }
  s.primary=TRUE;s.flip_next=(void*)1;unsigned p=presents;fail_blit=1;CHECK(!present_changed_primary(&s,NULL)&&presents==p);fail_present=1;CHECK(!present_changed_primary(&s,NULL)&&presents==p+1);CHECK(present_changed_primary(&s,NULL));fail_prepare=1;CHECK(!present_changed_primary(&s,NULL));fail_prepare=0;
  s.lock_depth=1;s.lock_flags=0;s.locked_rect=(RECT){0,0,4,4};fail_present=1;CHECK(surface_Unlock(&s,NULL)==DDERR_GENERIC&&!s.lock_depth);s.dc=(void*)1;s.dib_bits=dib;fail_blit=1;CHECK(surface_finish_dc(&s,TRUE)==DDERR_GENERIC&&!s.dc);return 0;
