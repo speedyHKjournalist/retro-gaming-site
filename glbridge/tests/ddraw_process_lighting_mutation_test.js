@@ -2,6 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),front=fs.readFileSync(root+'/ddrawproxy/d3d7_proxy.inc','utf8'),kernel=fs.readFileSync(root+'/runtime/d9wg_lighting.c','utf8'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-process-light-mutants-'));
 const cases=[
+ ["D3D3 incorrectly applies DONOTCOPYDATA","front","device->creation_version < 7u || !(flags & D3DPV_DONOTCOPYDATA)","!(flags & D3DPV_DONOTCOPYDATA)"],
+ ["missing legacy material still CPU lit","front","(device->creation_version >= 7u || device->legacy_material)","TRUE"],
  ['modern GPU zero-power incorrectly disabled','front','device->creation_version < 7u && material->power == 0.0f','device->creation_version >= 7u && material->power == 0.0f'],
  ['D3D7 material alpha profile disabled','front','state->specular_alpha_material = device->creation_version >= 7u;','state->specular_alpha_material = FALSE;'],
  ['legacy CPU zero-power incorrectly enabled','front','if (device->creation_version < 7u && device->material.power == 0.0f)','if (FALSE && device->creation_version < 7u && device->material.power == 0.0f)'],

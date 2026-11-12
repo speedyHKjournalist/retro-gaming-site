@@ -1,7 +1,7 @@
 struct Input{float p[3],n[3];DWORD diffuse,specular;};
 struct Output{float p[4];DWORD diffuse,specular;};
 static void seed(D3D7Device*d,unsigned api){
- memset(d,0,sizeof(*d));d->creation_version=api;d->wire_handle=9;d->viewport=(D3DVIEWPORT7){0,0,128,128,0,1};
+ memset(d,0,sizeof(*d));d->creation_version=api;d->legacy_material=api<7?(void*)1:NULL;d->wire_handle=9;d->viewport=(D3DVIEWPORT7){0,0,128,128,0,1};
  for(unsigned m=0;m<24;m++)for(unsigned i=0;i<16;i++)d->transforms[m].v[i]=i%5==0?1:0;
  d->render_states[137]=d->render_states[141]=d->render_states[142]=1;d->render_states[145]=1;d->render_states[146]=2;d->render_states[29]=1;d->light_set[0]=d->light_enabled[0]=1;
 }
@@ -39,4 +39,11 @@ static void isolation_cases(void){
  MUST(!d3d7_process_vertex_bytes(&dst,D3DVOP_TRANSFORM,0,1,(BYTE*)&in,0xd2,32,0,&d,0));memcpy(&s,output+20,4);MUST(s==in.specular);memset(output,0x6d,24);MUST(!d3d7_process_vertex_bytes(&dst,D3DVOP_TRANSFORM,0,1,(BYTE*)&in,0xd2,32,0,&d,D3DPV_DONOTCOPYDATA));memcpy(&s,output+20,4);MUST(s==0x6d6d6d6d);
  D9WGTNLLighting state;memset(&state,0xa5,sizeof(state));D9WGTNLLightingFlags flags={.lighting=1};D9WGSetMaterial mat={.specular={1,1,1,.5f}};d9wg_lighting_init(&state,&mat,0,&flags);MUST(!state.specular_alpha_material);float pos[]={0,0,1,1},normal[]={0,0,-1},c1[]={1,1,1,.75f};DWORD diffuse,specular;d9wg_lighting_vertex_view_float(&state,pos,normal,NULL,NULL,&diffuse,&specular);MUST(!(specular>>24));d9wg_lighting_vertex_view_float(&state,pos,normal,NULL,c1,&diffuse,&specular);MUST((specular>>24)==191);
 }
-int main(void){native_cases();isolation_cases();printf("PASS actual SDK ProcessVertices lighting: %u checks, original system RGB observations, real material/processing entry points and shared kernels, source alpha selection, zero-power profiles, offset/guard isolation, fog precedence, recording/failure paths, default D3D8/9 alpha\n",checks);return 0;}
+
+static void absent_material_cases(void){
+ for(unsigned bound=0;bound<2;bound++)for(unsigned normal=0;normal<2;normal++)for(unsigned colors=0;colors<2;colors++)for(unsigned lit=0;lit<2;lit++)for(unsigned keep=0;keep<2;keep++){
+  D3D7Device d;seed(&d,3);d.light_set[0]=d.light_enabled[0]=0;d.legacy_material=bound?(void*)1:NULL;D3DMATERIAL7 m={.emissive={0,1,0,0}};MUST(!d3d7_device_SetMaterial(&d,&m));DWORD fvf=0x102|(normal?0x10:0)|(colors?0xc0:0);D9WGProcessLayout layout;MUST(d9wg_process_fvf(7,fvf,&layout));BYTE input[40]={0},out[32];float pos[]={0,0,.5f},n[]={0,0,-1};DWORD c0=0x40ffffff,c1=0xc0123456;memcpy(input,pos,12);if(normal)memcpy(input+layout.normal,n,12);if(colors){memcpy(input+layout.diffuse,&c0,4);memcpy(input+layout.specular,&c1,4);}float uv[2]={.25f,.75f};memcpy(input+layout.texcoord[0],uv,8);memset(out,0x6d,32);D3D7VertexBuffer dst={.desc={16,0,0x1c4,1},.shadow=out,.stride=32,.byte_count=32,.handle=1};MUST(!d3d7_process_vertex_bytes(&dst,D3DVOP_TRANSFORM|(lit?D3DVOP_LIGHT:0),0,1,input,fvf,layout.stride,0,&d,keep?D3DPV_DONOTCOPYDATA:0));DWORD diffuse,specular;memcpy(&diffuse,out+16,4);memcpy(&specular,out+20,4);MUST(!memcmp(out+24,uv,8));
+  if(lit&&bound){MUST(diffuse==((colors?0x40000000:0)|0x0000ff00));MUST(specular==(colors?0xc0000000:0));}else{MUST(diffuse==(colors?c0:0xffffffff));MUST(specular==(colors?c1:0));}
+ }
+}
+int main(void){native_cases();isolation_cases();absent_material_cases();printf("PASS actual SDK ProcessVertices lighting: %u checks, original system RGB observations, real material/processing entry points and shared kernels, source alpha selection, zero-power profiles, offset/guard isolation, fog precedence, recording/failure paths, default D3D8/9 alpha\n",checks);return 0;}

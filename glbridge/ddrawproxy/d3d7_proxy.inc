@@ -1916,9 +1916,6 @@ static BOOL d3d7_emit_light(D3D7Device *device, DWORD index, const D3DLIGHT7 *li
     CopyMemory(command.ambient, &light->dcvAmbient, sizeof(command.ambient));
     CopyMemory(command.position, &light->dvPosition, sizeof(command.position));
     CopyMemory(command.direction, &light->dvDirection, sizeof(command.direction));
-    if (light->dltType == D3DLIGHT_PARALLELPOINT)
-        CopyMemory(command.direction, &light->dvPosition,
-                sizeof(command.direction));
     command.range = light->dvRange;
     command.falloff = light->dvFalloff;
     command.attenuation[0] = light->dvAttenuation0;
@@ -2298,7 +2295,8 @@ static HRESULT d3d7_prepare_legacy_draw(D3D7Device *device, DWORD fvf, DWORD fla
     if (device->creation_version >= 7u) return D3D_OK;
     return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
             D3DRENDERSTATE_LIGHTING,
-            !!(fvf & D3DFVF_NORMAL) && !(flags & D3DDP_DONOTLIGHT));
+            device->legacy_material && !!(fvf & D3DFVF_NORMAL) &&
+                    !(flags & D3DDP_DONOTLIGHT));
 }
 
 static HRESULT WINAPI d3d7_device_DrawPrimitive(IDirect3DDevice7 *iface,
@@ -3201,7 +3199,8 @@ static BOOL d3d7_prepare_lighting(D3D7Device *device, const D3DMATRIX *world_vie
     state->specular_alpha_material = device->creation_version >= 7u;
     if (device->creation_version < 7u && device->material.power == 0.0f)
         state->flags.specular_enable = FALSE;
-    state->flags.lighting = lighting;
+    state->flags.lighting = lighting &&
+            (device->creation_version >= 7u || device->legacy_material);
     if (!state->flags.lighting) return TRUE;
     for (index = 0; index < D3D7_MAX_LIGHTS; ++index) {
         if (device->light_set[index] && device->light_enabled[index] &&
@@ -3279,10 +3278,13 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
         d9wg_vertex_windows_blend_free(&vertex_state);
         return DDWG_TRACE_ERROR(clip_error == 2 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
     }
+    /* Original VertexBuffer3 copies colours/texture coordinates even with
+     * DONOTCOPYDATA; VertexBuffer7 applies the flag to unaffected attributes. */
     BOOL processed = d9wg_process_vertices(&source_layout,
             source, (uint32_t)source_length, 0, source_stride, source_index, &destination_layout,
             destination->shadow, destination->byte_count, destination_index, count,
-            &world_view, &world_view_projection, &viewport, &light_state, !(flags & D3DPV_DONOTCOPYDATA), &vertex_state);
+            &world_view, &world_view_projection, &viewport, &light_state,
+            device->creation_version < 7u || !(flags & D3DPV_DONOTCOPYDATA), &vertex_state);
     d9wg_vertex_windows_blend_free(&vertex_state);
     if (!processed) {
         if (clip_batch) d9wg_vertex_windows_clip_release(NULL, clip_batch);

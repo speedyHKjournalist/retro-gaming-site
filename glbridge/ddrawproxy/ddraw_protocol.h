@@ -631,9 +631,9 @@ static __inline unsigned ddraw_vertex_type_needs_repack(unsigned vertex_type)
  * Lights
  * ------------------------------------------------------------------ *
  *
- * D3DLIGHT7 is byte-for-byte D3DLIGHT9, so the structure is memcpy'd. Only the
- * type enumeration has two extra values, both of which D3D dropped in DX7
- * because no driver implemented them.
+ * D3DLIGHT7 and D3DLIGHT9 share the data layout. The shared wire/host also
+ * supports the legacy parallel-point type, using its view-space position
+ * as the direction toward the light (the opposite directional-light sign).
  */
 #define D3D7LIGHT_POINT 1u
 #define D3D7LIGHT_SPOT 2u
@@ -644,10 +644,6 @@ static __inline unsigned ddraw_vertex_type_needs_repack(unsigned vertex_type)
 static __inline unsigned ddraw_light_type_to_d3d9(unsigned type)
 {
     switch (type) {
-    /* A parallel-point light is a point light whose rays are parallel, which
-     * is a directional light with the position used as the direction. The
-     * caller substitutes the direction; here it only picks the type. */
-    case D3D7LIGHT_PARALLELPOINT: return D3D7LIGHT_DIRECTIONAL;
     case D3D7LIGHT_GLSPOT: return D3D7LIGHT_SPOT;
     default: return type;
     }

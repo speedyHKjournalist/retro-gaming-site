@@ -1104,7 +1104,7 @@ static HRESULT WINAPI d3d_viewport_SetBackground(IDirect3DViewport3 *iface,
         D3DMATERIALHANDLE handle)
 {
     D3DLegacyViewport *viewport = d3d_viewport_from_any(iface);
-    if (handle && !d3d_legacy_find_material(viewport->owner, handle))
+    if (!handle || !d3d_legacy_find_material(viewport->owner, handle))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     viewport->background = handle;
     viewport->background_valid = !!handle;
@@ -1204,7 +1204,6 @@ static HRESULT WINAPI d3d_viewport_AddLight(IDirect3DViewport3 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     light = d3d_light_from_iface(light_iface);
     if (light->owner != viewport->owner) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (light->viewport == viewport) return D3D_OK;
     if (light->viewport) return DDWG_TRACE_ERROR(D3DERR_LIGHTHASVIEWPORT);
     light->viewport = viewport;
     light->next_in_viewport = viewport->lights;
