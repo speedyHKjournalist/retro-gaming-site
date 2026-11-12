@@ -2990,12 +2990,21 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
             DDSCAPS2_CUBEMAP_POSITIVEZ, DDSCAPS2_CUBEMAP_NEGATIVEZ,
         };
         UINT face;
+        DDSurface *candidate = surface->mip_next;
+        /* The face selector still applies while walking that face's mip
+         * chain. The source itself is never an attached surface. */
+        if (candidate && surface->cube_face < 6u &&
+                (caps->dwCaps2 & face_caps[surface->cube_face]) &&
+                (candidate->desc.ddsCaps.dwCaps & caps->dwCaps) == caps->dwCaps) {
+            *out = (IDirectDrawSurface7 *)candidate;
+            IDirectDrawSurface7_AddRef(*out);
+            return DD_OK;
+        }
         for (face = 0u; face < 6u; ++face) {
-            DDSurface *candidate = surface->cube_faces[face];
-            if (!candidate && face == surface->cube_face &&
-                    surface->mip_level == 0u)
-                candidate = surface;
-            if (candidate && (caps->dwCaps2 & face_caps[face])) {
+            candidate = surface->cube_faces[face];
+            if (candidate && candidate != surface &&
+                    (caps->dwCaps2 & face_caps[face]) &&
+                    (candidate->desc.ddsCaps.dwCaps & caps->dwCaps) == caps->dwCaps) {
                 *out = (IDirectDrawSurface7 *)candidate;
                 IDirectDrawSurface7_AddRef(*out);
                 return DD_OK;
@@ -5007,6 +5016,10 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
     if (caps & DDSCAPS_MIPMAP) root_seed.dwFlags |= DDSD_MIPMAPCOUNT;
     root_seed.dwMipMapCount = level_count;
     root_seed.ddsCaps.dwCaps = caps;
+    if (cube)
+        root_seed.ddsCaps.dwCaps2 = (root_seed.ddsCaps.dwCaps2 &
+                ~DDSCAPS2_CUBEMAP_ALLFACES) | DDSCAPS2_CUBEMAP |
+                DDSCAPS2_CUBEMAP_POSITIVEX;
     root = surface_allocate(object, &root_seed, format, width, height, caps,
             NULL, 0u, 0u);
     if (!root) return NULL;
