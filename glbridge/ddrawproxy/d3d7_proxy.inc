@@ -1474,15 +1474,22 @@ static HRESULT WINAPI d3d7_device_QueryInterface(IDirect3DDevice7 *iface,
     if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid) return DDWG_TRACE_ERROR(E_NOINTERFACE);
-    if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DDevice7))
-        *out = &device->vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice3))
-        *out = &device->device3_vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice2))
-        *out = &device->device2_vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice))
-        *out = &device->device1_vtbl;
-    else return DDWG_TRACE_ERROR(E_NOINTERFACE);
+    if (iid_is_unknown(iid)) {
+        if (device->creation_version == 7u) *out = &device->vtbl;
+        else if (device->creation_version == 3u) *out = &device->device3_vtbl;
+        else if (device->creation_version == 2u) *out = &device->device2_vtbl;
+        else *out = &device->device1_vtbl;
+    } else if (device->creation_version == 7u) {
+        if (guid_equal(iid, &IID_IDirect3DDevice7)) *out = &device->vtbl;
+    } else {
+        if (device->creation_version >= 3u && guid_equal(iid, &IID_IDirect3DDevice3))
+            *out = &device->device3_vtbl;
+        else if (device->creation_version >= 2u && guid_equal(iid, &IID_IDirect3DDevice2))
+            *out = &device->device2_vtbl;
+        else if (guid_equal(iid, &IID_IDirect3DDevice))
+            *out = &device->device1_vtbl;
+    }
+    if (!*out) return DDWG_TRACE_ERROR(E_NOINTERFACE);
     IDirect3DDevice7_AddRef(iface);
     return S_OK;
 }

@@ -1452,21 +1452,8 @@ static HRESULT WINAPI d3d3_EvictManagedTextures(IDirect3D3 *iface)
 static HRESULT WINAPI d3d3_device_QueryInterface(IDirect3DDevice3 *iface,
         REFIID iid, void **out)
 {
-    D3D7Device *device = d3d3_device_from_iface(iface);
-    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
-    *out = NULL;
-    if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DDevice7))
-        *out = &device->vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice3))
-        *out = &device->device3_vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice2))
-        *out = &device->device2_vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice))
-        *out = &device->device1_vtbl;
-    else
-        return DDWG_TRACE_ERROR(E_NOINTERFACE);
-    d3d7_device_AddRef((IDirect3DDevice7 *)device);
-    return S_OK;
+    return d3d7_device_QueryInterface((IDirect3DDevice7 *)
+            d3d3_device_from_iface(iface), iid, out);
 }
 
 static ULONG WINAPI d3d3_device_AddRef(IDirect3DDevice3 *iface)
@@ -1534,8 +1521,13 @@ static HRESULT d3d_legacy_delete_viewport(D3D7Device *device,
     link = &device->legacy_viewports;
     while (*link && *link != viewport) link = &(*link)->next_in_device;
     if (*link) *link = viewport->next_in_device;
-    if (device->legacy_current_viewport == viewport)
+    if (device->legacy_current_viewport == viewport) {
         device->legacy_current_viewport = NULL;
+        /* Device2 retains its current reference after detachment; Device3
+         * releases it. Keep this native version difference explicit. */
+        if (device->creation_version >= 3u)
+            d3d_viewport_Release((IDirect3DViewport3 *)&viewport->vtbl3);
+    }
     viewport->device = NULL;
     viewport->next_in_device = NULL;
     d3d_viewport_Release((IDirect3DViewport3 *)&viewport->vtbl3);
@@ -1637,10 +1629,23 @@ static HRESULT WINAPI d3d3_device_GetDirect3D(IDirect3DDevice3 *iface,
 static HRESULT d3d_legacy_set_current_viewport(D3D7Device *device,
         D3DLegacyViewport *viewport)
 {
+    D3DLegacyViewport *previous;
+    HRESULT result = D3D_OK;
     if (!viewport || viewport->device != device)
-        return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
-    device->legacy_current_viewport = viewport;
-    return d3d_legacy_apply_viewport(viewport);
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    previous = device->legacy_current_viewport;
+    if (viewport->viewport1_set || viewport->viewport2_set) {
+        result = d3d_legacy_apply_viewport(viewport);
+        if (FAILED(result)) return result;
+    }
+    if (previous != viewport) {
+        if (device->creation_version >= 2u)
+            d3d_viewport_AddRef((IDirect3DViewport3 *)&viewport->vtbl3);
+        device->legacy_current_viewport = viewport;
+        if (previous && device->creation_version >= 2u)
+            d3d_viewport_Release((IDirect3DViewport3 *)&previous->vtbl3);
+    }
+    return result;
 }
 
 static HRESULT WINAPI d3d3_device_SetCurrentViewport(IDirect3DDevice3 *iface,
@@ -1655,9 +1660,9 @@ static HRESULT WINAPI d3d3_device_GetCurrentViewport(IDirect3DDevice3 *iface,
 {
     D3DLegacyViewport *viewport =
             d3d3_device_from_iface(iface)->legacy_current_viewport;
-    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *out = viewport ? (IDirect3DViewport3 *)&viewport->vtbl3 : NULL;
     if (!viewport) return DDWG_TRACE_ERROR(D3DERR_NOCURRENTVIEWPORT);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    *out = (IDirect3DViewport3 *)&viewport->vtbl3;
     d3d_viewport_AddRef(*out);
     return D3D_OK;
 }
@@ -2338,9 +2343,9 @@ static HRESULT WINAPI d3d2_device_GetCurrentViewport(IDirect3DDevice2 *iface,
 {
     D3DLegacyViewport *viewport =
             d3d2_device_from_iface(iface)->legacy_current_viewport;
-    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *out = viewport ? (IDirect3DViewport2 *)&viewport->vtbl2 : NULL;
     if (!viewport) return DDWG_TRACE_ERROR(D3DERR_NOCURRENTVIEWPORT);
+    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    *out = (IDirect3DViewport2 *)&viewport->vtbl2;
     d3d_viewport_AddRef((IDirect3DViewport3 *)&viewport->vtbl3);
     return D3D_OK;
 }
@@ -3469,6 +3474,11 @@ static void d3d_legacy_device_cleanup(D3D7Device *device)
 {
     D3DLegacyViewport *viewport = device->legacy_viewports;
     D3DLegacyMatrix *matrix = device->legacy_matrices;
+    if (device->creation_version >= 3u && device->legacy_current_viewport)
+        d3d_viewport_Release((IDirect3DViewport3 *)&
+                device->legacy_current_viewport->vtbl3);
+    device->legacy_current_viewport = NULL;
+    device->legacy_viewports = NULL;
     while (viewport) {
         D3DLegacyViewport *next = viewport->next_in_device;
         viewport->device = NULL;
