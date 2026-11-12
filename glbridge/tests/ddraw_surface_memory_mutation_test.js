@@ -2,10 +2,14 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/ddraw_proxy.c"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-memory-mut-"));
 const mutations=[
+ ["compressed mip rows round down","shadow_rows = (height - 1u) / 4u + 1u;","shadow_rows = height / 4u;"],
+ ["compressed mip stride rounds down","(((uint64_t)width + 3u) / 4u) * block_bytes","((uint64_t)width / 4u) * block_bytes"],
+ ["compressed stride overflow wraps","if (row_bytes > 0xffffffffu) return NULL;","if (row_bytes > 0x4ffffffffu) return NULL;"],
  ["borrowed bits replaced","surface_memory_create(external ? request->lpSurface : NULL,","surface_memory_create(NULL,"],
  ["borrowed bytes owned","shadow_bytes, !external);","shadow_bytes, TRUE);"],
  ["caller RGB pitch ignored","pitch = external ? (UINT)request->lPitch\n            : surface_pitch_for(width, bytes_per_pixel);","pitch = surface_pitch_for(width, bytes_per_pixel);"],
- ["caller compressed pitch ignored","pitch = external ? (UINT)request->lPitch\n            : ((width + 3u) / 4u) * block_bytes;","pitch = ((width + 3u) / 4u) * block_bytes;"],
+ ["caller compressed size mistaken for stride","pitch = (UINT)row_bytes;","pitch = external ? (UINT)request->lPitch : (UINT)row_bytes;"],
+ ["borrowed compressed capacity sentinel lost","surface->desc.dwLinearSize = external ? ~0u : (DWORD)shadow_bytes;","surface->desc.dwLinearSize = (DWORD)shadow_bytes;"],
  ["external memory loses synchronization","surface->external_memory = external;","surface->external_memory = FALSE;"],
  ["description leaks pointer","surface->desc.lpSurface = NULL;","surface->desc.lpSurface = request->lpSurface;"],
  ["unflagged backbuffer value exposed","surface->desc.dwBackBufferCount = 0;","surface->desc.dwBackBufferCount = request->dwBackBufferCount;"],

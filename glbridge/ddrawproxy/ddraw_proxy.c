@@ -4730,9 +4730,13 @@ static DDSurface *surface_allocate(DDrawObject *object,
     if ((!bytes_per_pixel && !block_bytes) || !width || !height)
         return NULL;
     if (block_bytes) {
-        pitch = external ? (UINT)request->lPitch
-            : ((width + 3u) / 4u) * block_bytes;
-        shadow_rows = (height + 3u) / 4u;
+        uint64_t row_bytes = (((uint64_t)width + 3u) / 4u) * block_bytes;
+        if (row_bytes > 0xffffffffu) return NULL;
+        /* Compressed user memory uses the packed block layout. lPitch is an
+         * ignored input, and dwLinearSize describes capacity, not row stride.
+         * Implicit mip tails may be smaller than one compression block. */
+        pitch = (UINT)row_bytes;
+        shadow_rows = (height - 1u) / 4u + 1u;
     } else {
         pitch = external ? (UINT)request->lPitch
             : surface_pitch_for(width, bytes_per_pixel);
@@ -4811,7 +4815,7 @@ static DDSurface *surface_allocate(DDrawObject *object,
     if (block_bytes) {
         surface->desc.dwFlags &= ~DDSD_PITCH;
         surface->desc.dwFlags |= DDSD_LINEARSIZE;
-        surface->desc.dwLinearSize = (DWORD)shadow_bytes;
+        surface->desc.dwLinearSize = external ? ~0u : (DWORD)shadow_bytes;
     } else {
         surface->desc.dwFlags &= ~DDSD_LINEARSIZE;
         surface->desc.dwFlags |= DDSD_PITCH;
@@ -5402,7 +5406,7 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
         if (caps & DDSCAPS_VIDEOMEMORY)
             return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
         if (version < DD_VERSION_4 || !(caps & DDSCAPS_SYSTEMMEMORY) ||
-                !(request->dwFlags & DDSD_PITCH) || !request->lpSurface)
+                !request->lpSurface)
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
     if (caps & DDSCAPS_FLIP) {
@@ -5503,14 +5507,29 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
                 pixel_format.dwBBitMask);
         return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     }
+    /* Only the explicitly requested compressed root must be block aligned.
+     * The implicit 2x2 / 1x1 mip levels bypass this factory validation. */
+    if (format_compressed_block_bytes(format) && ((width | height) & 3u))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (request->dwFlags & DDSD_LPSURFACE) {
         UINT pixel_bytes = format_bytes_per_pixel(format);
         UINT block_bytes = format_compressed_block_bytes(format);
-        UINT minimum = block_bytes ? ((width + 3u) / 4u) * block_bytes
-            : width * pixel_bytes;
-        if (request->lPitch <= 0 || (request->lPitch & 3) ||
-                (UINT)request->lPitch < minimum || cube || mip_levels > 1u || back_buffers)
+        if (cube || mip_levels > 1u || back_buffers)
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (block_bytes) {
+            uint64_t minimum = (uint64_t)(width / 4u) * block_bytes *
+                    (height / 4u);
+            if ((version >= DD_VERSION_7 && (request->dwFlags & DDSD_PITCH)) ||
+                    !(request->dwFlags & (DDSD_PITCH | DDSD_LINEARSIZE)) ||
+                    ((request->dwFlags & DDSD_LINEARSIZE) &&
+                        request->dwLinearSize < minimum))
+                return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        } else {
+            uint64_t minimum = (uint64_t)width * pixel_bytes;
+            if (!(request->dwFlags & DDSD_PITCH) || request->lPitch <= 0 ||
+                    (request->lPitch & 3) || (UINT)request->lPitch < minimum)
+                return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        }
     }
 
     {

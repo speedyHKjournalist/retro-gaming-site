@@ -2,6 +2,14 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-creation-mut-"));
 const mutations=[
+ ["v7 accepts compressed borrowed pitch","ddraw","ddraw_CreateSurfaceForVersion","version >= DD_VERSION_7 && (request->dwFlags & DDSD_PITCH)","FALSE"],
+ ["compressed root permits partial blocks","ddraw","ddraw_CreateSurfaceForVersion","format_compressed_block_bytes(format) && ((width | height) & 3u)","FALSE && ((width | height) & 3u)"],
+ ["compressed system roots bypass alignment","ddraw","ddraw_CreateSurfaceForVersion","format_compressed_block_bytes(format) && ((width | height) & 3u)","!(caps & DDSCAPS_SYSTEMMEMORY) && format_compressed_block_bytes(format) && ((width | height) & 3u)"],
+ ["compressed borrowed memory still requires pitch","ddraw","ddraw_CreateSurfaceForVersion","if (block_bytes) {","if (block_bytes && (request->dwFlags & DDSD_PITCH)) {"],
+ ["compressed declared size ignores block rows","ddraw","ddraw_CreateSurfaceForVersion","(height / 4u);","1u;"],
+ ["compressed oversized borrowed buffer rejected","ddraw","ddraw_CreateSurfaceForVersion","request->dwLinearSize < minimum","request->dwLinearSize != minimum"],
+ ["compressed undersized borrowed buffer accepted","ddraw","ddraw_CreateSurfaceForVersion","request->dwLinearSize < minimum","request->dwLinearSize > minimum"],
+ ["unflagged compressed borrowed storage accepted","ddraw","ddraw_CreateSurfaceForVersion","!(request->dwFlags & (DDSD_PITCH | DDSD_LINEARSIZE))","FALSE"],
  ["legacy rectangular mip tail retained","ddraw","ddraw_CreateSurfaceForVersion","version >= DD_VERSION_7\n            ? surface_full_mip_count","TRUE\n            ? surface_full_mip_count"],
  ["noncomplex mip texture grows chain","ddraw","ddraw_CreateSurfaceForVersion",": (caps & DDSCAPS_COMPLEX) ? full_levels : 1u;",": full_levels;"],
  ["mipmap without texture accepted","ddraw","ddraw_CreateSurfaceForVersion","if ((caps & DDSCAPS_MIPMAP) && !(caps & DDSCAPS_TEXTURE))","if (FALSE)"],
