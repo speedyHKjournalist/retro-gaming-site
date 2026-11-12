@@ -1561,9 +1561,9 @@ static HRESULT WINAPI d3d3_CreateVertexBuffer(IDirect3D3 *iface,
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
-    result = d3d7_CreateVertexBuffer((IDirect3D7 *)&
+    result = d3d7_CreateVertexBufferForVersion((IDirect3D7 *)&
             d3d3_object_from_iface(iface)->d3d7_vtbl, description, &buffer7,
-            flags);
+            flags, DD_VERSION_3);
     if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     *out = (IDirect3DVertexBuffer *)&
             d3d7_vb_from_iface(buffer7)->legacy_vtbl;

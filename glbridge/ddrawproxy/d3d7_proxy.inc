@@ -119,6 +119,8 @@ struct D3D7VertexBuffer {
     const IDirect3DVertexBufferVtbl *legacy_vtbl;
     LONG ref;
     DDrawObject *owner;
+    unsigned creation_version;
+    BOOL owner_public_ref;
     uint32_t handle;
     D3DVERTEXBUFFERDESC desc;
     UINT stride;
@@ -1430,9 +1432,9 @@ static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
     return d3d7_create_device_for_version(iface, clsid, surface_iface, out, 7u);
 }
 
-static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
+static HRESULT d3d7_CreateVertexBufferForVersion(IDirect3D7 *iface,
         D3DVERTEXBUFFERDESC *description, IDirect3DVertexBuffer7 **out,
-        DWORD flags)
+        DWORD flags, unsigned version)
 {
     DDrawObject *owner = d3d7_object_from_iface(iface);
     D3D7VertexBuffer *buffer;
@@ -1440,6 +1442,7 @@ static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
     D9WGCreateBuffer create;
     UINT count = 0;
+    UINT byte_count;
 
     (void)flags;
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -1448,25 +1451,26 @@ static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
             !description->dwNumVertices ||
             !d3d7_decode_fvf(description->dwFVF, &layout, elements, &count))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!d3d7_multiply_u32(description->dwNumVertices, layout.stride,
+            &byte_count))
+        return DDWG_TRACE_ERROR(D3DERR_TOOMANYVERTICES);
     buffer = (D3D7VertexBuffer *)heap_alloc_zero(sizeof(*buffer));
     if (!buffer) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
-    if (!d3d7_multiply_u32(description->dwNumVertices, layout.stride,
-            &buffer->byte_count)) {
-        heap_free(buffer);
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    }
+    buffer->byte_count = byte_count;
     buffer->shadow = (BYTE *)heap_alloc_zero(buffer->byte_count);
     if (!buffer->shadow) { heap_free(buffer); return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY); }
     buffer->vtbl = &g_d3d7_vb_vtbl;
     buffer->legacy_vtbl = &g_d3d_vb_vtbl;
     buffer->ref = 1;
     buffer->owner = owner;
+    buffer->creation_version = version;
+    buffer->owner_public_ref = version == DD_VERSION_7;
     buffer->handle = allocate_handle();
     buffer->desc = *description;
     buffer->stride = layout.stride;
-    ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
+    ddraw_child_attach(owner, buffer->owner_public_ref);
     if (!ensure_device(owner)) {
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, buffer->owner_public_ref);
         heap_free(buffer->shadow);
         heap_free(buffer);
         return DDWG_TRACE_ERROR(D3DERR_VBUF_CREATE_FAILED);
@@ -1480,13 +1484,21 @@ static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
     create.pool = (description->dwCaps & D3DVBCAPS_SYSTEMMEMORY)
             ? DDWG_POOL_SYSTEMMEM : DDWG_POOL_DEFAULT;
     if (!emit_command(D9WG_OP_CREATE_BUFFER, &create, sizeof(create))) {
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, buffer->owner_public_ref);
         heap_free(buffer->shadow);
         heap_free(buffer);
         return DDWG_TRACE_ERROR(D3DERR_VBUF_CREATE_FAILED);
     }
     *out = (IDirect3DVertexBuffer7 *)buffer;
     return D3D_OK;
+}
+
+static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
+        D3DVERTEXBUFFERDESC *description, IDirect3DVertexBuffer7 **out,
+        DWORD flags)
+{
+    return d3d7_CreateVertexBufferForVersion(iface, description, out, flags,
+            DD_VERSION_7);
 }
 
 static HRESULT WINAPI d3d7_EnumZBufferFormats(IDirect3D7 *iface,
@@ -3089,9 +3101,14 @@ static HRESULT WINAPI d3d7_vb_QueryInterface(IDirect3DVertexBuffer7 *iface,
     if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid) return DDWG_TRACE_ERROR(E_NOINTERFACE);
-    if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DVertexBuffer7))
+    if (iid_is_unknown(iid))
+        *out = buffer->creation_version == DD_VERSION_7
+            ? (void *)&buffer->vtbl : (void *)&buffer->legacy_vtbl;
+    else if (buffer->creation_version == DD_VERSION_7 &&
+            guid_equal(iid, &IID_IDirect3DVertexBuffer7))
         *out = &buffer->vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DVertexBuffer))
+    else if (buffer->creation_version != DD_VERSION_7 &&
+            guid_equal(iid, &IID_IDirect3DVertexBuffer))
         *out = &buffer->legacy_vtbl;
     else return DDWG_TRACE_ERROR(E_NOINTERFACE);
     IDirect3DVertexBuffer7_AddRef(iface);
@@ -3110,13 +3127,14 @@ static ULONG WINAPI d3d7_vb_Release(IDirect3DVertexBuffer7 *iface)
     if (remaining == 0) {
         D9WGDestroyResource destroy;
         DDrawObject *owner = buffer->owner;
+        BOOL public_ref = buffer->owner_public_ref;
         destroy.resource_handle = buffer->handle;
         destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
         d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         heap_free(buffer->shadow);
         heap_free(buffer);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, public_ref);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -3129,7 +3147,8 @@ static HRESULT WINAPI d3d7_vb_Lock(IDirect3DVertexBuffer7 *iface,
     if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERLOCKED);
     if (flags & DDLOCK_DISCARDCONTENTS) {
         d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
-        ZeroMemory(buffer->shadow, buffer->byte_count);
+        /* Native DD3/7 treat DISCARD as a synchronization hint; the CPU
+         * backing bytes remain observable across repeated locks. */
     }
     buffer->locked = TRUE;
     buffer->lock_flags = flags;
@@ -3308,9 +3327,13 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
 static HRESULT WINAPI d3d7_vb_GetVertexBufferDesc(
         IDirect3DVertexBuffer7 *iface, D3DVERTEXBUFFERDESC *description)
 {
-    if (!description || description->dwSize != sizeof(*description))
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *description = d3d7_vb_from_iface(iface)->desc;
+    const D3DVERTEXBUFFERDESC *stored = &d3d7_vb_from_iface(iface)->desc;
+    if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    /* Native fills the three payload fields, independently of the caller's
+     * dwSize. It preserves that word, including zero. */
+    description->dwCaps = stored->dwCaps;
+    description->dwFVF = stored->dwFVF;
+    description->dwNumVertices = stored->dwNumVertices;
     return D3D_OK;
 }
 
