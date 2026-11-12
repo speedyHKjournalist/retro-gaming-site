@@ -17,6 +17,8 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 #define DDERR_INVALIDPARAMS (-1)
 #define DDERR_NOCOLORKEY (-2)
 #define DDERR_NOCOLORKEYHW (-3)
+#define DDERR_NOTONMIPMAPSUBLEVEL (-24)
+#define DDPCAPS_ALPHA 0x400u
 #define DDERR_UNSUPPORTED (-4)
 #define DDERR_INVALIDPIXELFORMAT (-5)
 #define DDERR_OUTOFVIDEOMEMORY (-6)
@@ -73,7 +75,7 @@ typedef struct{DWORD dwColorSpaceLowValue,dwColorSpaceHighValue;}DDCOLORKEY,*LPD
 typedef struct{DWORD dwSize,dwFlags,dwRGBBitCount,dwRBitMask,dwGBitMask,dwBBitMask;}DDPIXELFORMAT;
 typedef struct{void*lpSurface;union{int32_t lPitch;DWORD dwLinearSize;};DWORD dwSize,dwFlags,dwWidth,dwHeight,dwBackBufferCount,dwMipMapCount;struct{DWORD dwCaps,dwCaps2;}ddsCaps;DDPIXELFORMAT ddpfPixelFormat;DDCOLORKEY ddckCKSrcBlt,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKDestOverlay;}DDSURFACEDESC2,*LPDDSURFACEDESC2;
 typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref,cooperative_flags;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
-struct DDSurface{void*vtbl7;void*storage;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
+struct DDSurface{void*vtbl7;void*storage;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;UINT mip_level;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;typedef struct{unsigned unused;}DDrawPixelFormatDesc;
 #define DD_VERSION_1 1u
 #define DD_VERSION_4 4u
@@ -94,7 +96,7 @@ static DDSurface*surface_create(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,
 static DDSurface*surface_create_complex_texture(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps,UINT levels,BOOL cube){assert(levels==2&&!cube);return surface_create(d,p,f,w,h,caps);}
 BOOL IsBadWritePtr(void*p,size_t n){(void)n;return !p||(uintptr_t)p==0xdeadbeef;}
 void surface_creation_profile(DDSurface*s,unsigned version){(void)s;(void)version;}
-${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKey','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),...(source.includes('static HRESULT ddraw_CreateSurfaceForVersion(')?['ddraw_CreateSurfaceForVersion']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
+${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKeyForVersion','surface_SetColorKey','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),...(source.includes('static HRESULT ddraw_CreateSurfaceForVersion(')?['ddraw_CreateSurfaceForVersion']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
 #define CHECK(v) do{checks++;if(!(v)){fprintf(stderr,"DDraw color key line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 static void events(void){sets=overlays=0;emitted_kind=99;emitted_present=0;emitted_key=(DDCOLORKEY){0};}
 int main(void){(void)&ddraw_AddRef;(void)&surface_destroy;(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;

@@ -576,6 +576,7 @@ struct DDSurface {
     DDTextureStorage *storage;
     UINT mip_level;
     UINT cube_face;
+    DWORD priority;             /* managed root's eviction hint */
     DDSURFACEDESC2 desc;        /* what the app asked for, kept verbatim */
     DDGAMMARAMP gamma_ramp;     /* stored per surface */
     unsigned format;            /* DDWG_FMT_* */
@@ -3456,6 +3457,7 @@ static HRESULT WINAPI surface_GetPalette(IDirectDrawSurface7 *iface,
     DDSurface *surface = surface_from_iface(iface);
 
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    *out = NULL;
     if (!surface->palette) return DDWG_TRACE_ERROR(DDERR_NOPALETTEATTACHED);
     *out = (IDirectDrawPalette *)surface->palette;
     IDirectDrawPalette_AddRef(*out);
@@ -3618,8 +3620,8 @@ static HRESULT WINAPI surface_SetClipper(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
-static HRESULT WINAPI surface_SetColorKey(IDirectDrawSurface7 *iface,
-        DWORD flags, LPDDCOLORKEY key)
+static HRESULT surface_SetColorKeyForVersion(IDirectDrawSurface7 *iface,
+        DWORD flags, LPDDCOLORKEY key, unsigned version)
 {
     DDSurface *surface = surface_from_iface(iface);
     DDSurface *walk;
@@ -3629,6 +3631,8 @@ static HRESULT WINAPI surface_SetColorKey(IDirectDrawSurface7 *iface,
 
     if (!surface_color_key_kind(flags, &kind, &description_flag))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (version >= DD_VERSION_7 && surface->mip_level)
+        return DDWG_TRACE_ERROR(DDERR_NOTONMIPMAPSUBLEVEL);
 
     if (key) {
         if (!d9wg_ddraw_color_key_normalize(key->dwColorSpaceLowValue,
@@ -3667,6 +3671,12 @@ static HRESULT WINAPI surface_SetColorKey(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
+static HRESULT WINAPI surface_SetColorKey(IDirectDrawSurface7 *iface,
+        DWORD flags, LPDDCOLORKEY key)
+{
+    return surface_SetColorKeyForVersion(iface, flags, key, DD_VERSION_7);
+}
+
 static HRESULT WINAPI surface_SetOverlayPosition(IDirectDrawSurface7 *iface,
         LONG x, LONG y)
 {
@@ -3687,22 +3697,43 @@ static HRESULT WINAPI surface_SetOverlayPosition(IDirectDrawSurface7 *iface,
             ? DD_OK : DDERR_GENERIC);
 }
 
-static HRESULT WINAPI surface_SetPalette(IDirectDrawSurface7 *iface,
-        LPDIRECTDRAWPALETTE palette_iface)
+static HRESULT surface_SetPaletteForVersion(IDirectDrawSurface7 *iface,
+        LPDIRECTDRAWPALETTE palette_iface, unsigned version)
 {
     DDSurface *surface = surface_from_iface(iface);
     DDPalette *palette = palette_iface ? palette_from_iface(palette_iface)
         : NULL;
+    DDPalette *previous = surface->palette;
+
+    /* Unlike Lock's factory mode, this rule follows the interface used for
+     * this call. Older views can attach a palette to the very same mip. */
+    if (version >= DD_VERSION_7 && surface->mip_level)
+        return DDWG_TRACE_ERROR(DDERR_NOTONMIPMAPSUBLEVEL);
+    if (palette) {
+        if ((palette->caps & DDPCAPS_ALPHA) &&
+                !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDSURFACETYPE);
+        if (!surface->indexed)
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
+    } else if (!previous) {
+        return DDWG_TRACE_ERROR(DDERR_NOPALETTEATTACHED);
+    }
 
     if (palette) IDirectDrawPalette_AddRef(palette_iface);
-    if (surface->palette)
-        IDirectDrawPalette_Release((IDirectDrawPalette *)surface->palette);
     surface->palette = palette;
+    if (previous)
+        IDirectDrawPalette_Release((IDirectDrawPalette *)previous);
     if (palette) {
         emit_palette_table(palette);
         emit_surface_palette_binding(surface);
     }
     return DD_OK;
+}
+
+static HRESULT WINAPI surface_SetPalette(IDirectDrawSurface7 *iface,
+        LPDIRECTDRAWPALETTE palette_iface)
+{
+    return surface_SetPaletteForVersion(iface, palette_iface, DD_VERSION_7);
 }
 
 static HRESULT WINAPI surface_Unlock(IDirectDrawSurface7 *iface, LPRECT rect)
@@ -4207,20 +4238,37 @@ static HRESULT WINAPI surface_ChangeUniquenessValue(IDirectDrawSurface7 *iface)
     return DD_OK;
 }
 
+static HRESULT surface_priority_valid(const DDSurface *surface)
+{
+    if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE))
+        return DDERR_INVALIDOBJECT;
+    if (!(surface->desc.ddsCaps.dwCaps2 &
+            (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)) ||
+            surface->mip_level || surface->cube_face)
+        return DDERR_INVALIDPARAMS;
+    return DD_OK;
+}
+
 static HRESULT WINAPI surface_SetPriority(IDirectDrawSurface7 *iface,
         DWORD priority)
 {
-    (void)iface; (void)priority;
-    /* A managed-texture eviction hint. Nothing is evicted here. */
+    DDSurface *surface = surface_from_iface(iface);
+    HRESULT result = surface_priority_valid(surface);
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
+    /* The hint is observable even though this bridge never evicts textures. */
+    surface->priority = priority;
     return DD_OK;
 }
 
 static HRESULT WINAPI surface_GetPriority(IDirectDrawSurface7 *iface,
         LPDWORD priority)
 {
-    (void)iface;
+    DDSurface *surface = surface_from_iface(iface);
+    HRESULT result;
     if (!priority) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *priority = 0;
+    result = surface_priority_valid(surface);
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
+    *priority = surface->priority;
     return DD_OK;
 }
 
@@ -7167,7 +7215,7 @@ static HRESULT WINAPI tag##_SetClipper(IFACE *iface, \
 static HRESULT WINAPI tag##_SetColorKey(IFACE *iface, DWORD flags, \
         LPDDCOLORKEY key) \
 { \
-    return surface_SetColorKey(SURFACE7(iface), flags, key); \
+    return surface_SetColorKeyForVersion(SURFACE7(iface), flags, key, VERSION); \
 } \
 static HRESULT WINAPI tag##_SetOverlayPosition(IFACE *iface, LONG x, LONG y) \
 { \
@@ -7176,7 +7224,7 @@ static HRESULT WINAPI tag##_SetOverlayPosition(IFACE *iface, LONG x, LONG y) \
 static HRESULT WINAPI tag##_SetPalette(IFACE *iface, \
         LPDIRECTDRAWPALETTE palette) \
 { \
-    return surface_SetPalette(SURFACE7(iface), palette); \
+    return surface_SetPaletteForVersion(SURFACE7(iface), palette, VERSION); \
 } \
 static HRESULT WINAPI tag##_Unlock(IFACE *iface, UNLOCKARG locked) \
 { \
