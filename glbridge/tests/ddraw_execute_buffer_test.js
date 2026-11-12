@@ -11,6 +11,7 @@ static unsigned checks,allocations,allocation_calls,fail_allocation,invalid_call
 static void*heap_alloc_zero(size_t bytes){allocation_calls++;if(fail_allocation||bytes>(1u<<24))return NULL;void*p=calloc(1,bytes);MUST(p);allocations++;return p;}
 static void heap_free(void*p){if(p){MUST(allocations);allocations--;free(p);}}
 static D3DLegacyExecuteBuffer*d3d_execute_buffer_from_iface(void*p){return p;}
+static HRESULT d3d_execute_refresh_transforms(D3D7Device*d){(void)d;return D3D_OK;}
 static BOOL d3d7_prepare_lighting(D3D7Device*d,const D3DMATRIX*m,BOOL enabled,D9WGTNLLighting*s){(void)d;(void)m;(void)enabled;(void)s;return FALSE;}
 static void d9wg_lighting_vertex(const D9WGTNLLighting*s,const D3DMATRIX*m,const float*p,const float*n,const void*a,const void*b,uint32_t*c,uint32_t*spec){(void)s;(void)m;(void)p;(void)n;(void)a;(void)b;*c=0;*spec=0;}
 `;

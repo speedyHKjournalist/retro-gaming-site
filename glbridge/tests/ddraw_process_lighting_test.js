@@ -4,17 +4,20 @@ const root=path.resolve(__dirname,'..'),source=fs.readFileSync(process.env.DDRAW
 const {testPath}=require('./host_paths.js');
 const native=require(testPath('fixtures/ddraw_native_lighting.json'));
 const normals=require(testPath('fixtures/ddraw_native_normals.json'));
+const viewportReference=require(testPath('fixtures/ddraw_native_transforms.json'));
+assert.equal(require('node:crypto').createHash('sha256').update(fs.readFileSync(path.resolve(root,'..',viewportReference.source))).digest('hex'),viewportReference.sourceSha256);
 const reference=fs.readFileSync(path.resolve(root,'..',normals.source),'utf8');assert.equal(require('node:crypto').createHash('sha256').update(reference).digest('hex'),normals.sourceSha256);
 const worldData=/static const float worlds\[\]\[16\]=\{[\s\S]*?\n};/.exec(reference)[0].replace('worlds','normal_worlds');
 const refStart=reference.indexOf('static void vertices_for'),refEnd=reference.indexOf('static void cpu_rows',refStart);
 const vertexData=reference.slice(refStart,refEnd).replaceAll('struct Vertex','struct MatrixVertex').replace('vertices_for','normal_vertices_for');
+const viewportData='static const DWORD native_viewports[][6]={'+viewportReference.views.map(r=>'{'+r.words.map(n=>n+'u').join(',')+'}').join(',')+'};\nstatic const struct ViewportVertexRow{unsigned viewport,vertex;DWORD words[4];}viewport_vertex_rows[]={'+viewportReference.vertices.map(r=>'{'+r.case+'u,'+r.vertex+'u,{'+r.words.map(n=>n+'u').join(',')+'}}').join(',')+'};\n';
 const normalData='struct MatrixVertex{float p[3],n[3];};\n'+worldData+'\n'+vertexData+'\nstatic const struct NormalRow{unsigned api,matrix,normalize,vertex;DWORD diffuse,specular;}normal_rows[]={'+normals.cpu.map(r=>'{'+[r.api,r.matrix,r.normalize,r.vertex,r.diffuse,r.specular].map(n=>n+'u').join(',')+'}').join(',')+'};\nstatic const struct HistoryRow{unsigned normalize,sequence,step;DWORD diffuse;}normal_history[]={'+normals.history.map(r=>'{'+[r.normalize,r.sequence,r.step,r.diffuse].map(n=>n+'u').join(',')+'}').join(',')+'};\n';
 function extract(name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(source);assert(m,name);let end=source.indexOf('{',m.index)+1,depth=1;for(;depth;end++){if(source[end]==='{')depth++;if(source[end]==='}')depth--;}return source.slice(m.index,end).replace(/\bWINAPI\b/g,'');}
 const methods=['d3d7_multiply_matrix','d3d7_device_SetMaterial','d3d7_device_GetMaterial','d3d7_prepare_lighting','d3d7_upload_vertex_range','d3d7_process_vertex_bytes'].map(extract).join('\n');
 const rows='static const struct Row{unsigned api;const char*phase;unsigned kind,power,colors,cv,source,vertex;DWORD diffuse,specular;}rows[]={'+native.rows.map(r=>'{'+r.api+',"'+r.phase+'",'+[r.kind,r.power,r.colors,r.cv,r.source,r.vertex,r.diffuse,r.specular].map(n=>n+'u').join(',')+'}').join(',')+'};\n';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-process-lighting-'));
 try{
- const sdk=dir+'/sdk.c';fs.writeFileSync(sdk,'#define COBJMACROS\n#include <d3d.h>\n#include "'+root+'/ddrawproxy/ddraw_protocol.h"\n#define DDWG_TRACE_ERROR(h) (h)\n#define D3D7_MAX_LIGHTS 8u\nstatic int lighting_begin;\n'+methods+'\n'+rows+normalData+fs.readFileSync(__dirname+'/native/ddraw_process_lighting_cases.h','utf8')+'\nstatic int lighting_end;');
+ const sdk=dir+'/sdk.c';fs.writeFileSync(sdk,'#define COBJMACROS\n#include <d3d.h>\n#include "'+root+'/ddrawproxy/ddraw_protocol.h"\n#define DDWG_TRACE_ERROR(h) (h)\n#define D3D7_MAX_LIGHTS 8u\nstatic int lighting_begin;\n'+methods+'\n'+rows+normalData+viewportData+fs.readFileSync(__dirname+'/native/ddraw_process_lighting_cases.h','utf8')+'\nstatic int lighting_end;');
  const pp=spawnSync(process.env.D9WG_CC||'i686-w64-mingw32-gcc',['-E','-P',sdk],{encoding:'utf8',maxBuffer:16<<20});assert.equal(pp.status,0,pp.stderr);const body=pp.stdout.split('static int lighting_begin;')[1].split('static int lighting_end;')[0];
  const enums=['D3DTRANSFORMSTATETYPE','D3DRENDERSTATETYPE','D3DLIGHTTYPE'].map(name=>{const m=new RegExp('typedef enum [^{}]*\\{[^{}]*\\} '+name+';').exec(pp.stdout);assert(m,name);return m[0];}).join('\n');
  fs.writeFileSync(dir+'/test.c',fs.readFileSync(__dirname+'/native/ddraw_process_lighting_prefix.h','utf8')+enums+body);

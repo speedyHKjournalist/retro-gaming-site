@@ -3054,6 +3054,52 @@ static D3DLegacyMatrix *d3d_legacy_find_matrix(D3D7Device *device,
     return link ? *link : NULL;
 }
 
+/* Execute transform states retain handles. Matrix writes through SetMatrix,
+ * MATRIXLOAD and MATRIXMULTIPLY are visible when subsequent vertices process. */
+static HRESULT d3d_execute_bind_transform(D3D7Device *device,
+        D3DTRANSFORMSTATETYPE state, D3DMATRIXHANDLE handle)
+{
+    D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(device, handle);
+    if (!matrix) return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
+    HRESULT hr = d3d_legacy_set_transform(device, state, &matrix->matrix);
+    if (SUCCEEDED(hr)) device->legacy_transform_handles[state] = handle;
+    return hr;
+}
+static HRESULT d3d_execute_refresh_transforms(D3D7Device *device)
+{
+    for (UINT state = 0; state < D3D7_MAX_TRANSFORMS; ++state) {
+        D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(device,
+                device->legacy_transform_handles[state]);
+        /* Preserve the last bound value if that handle has been deleted. */
+        if (!matrix) continue;
+        const D3DMATRIX *current = state == D3DTRANSFORMSTATE_PROJECTION
+                ? &device->legacy_projection : &device->transforms[state];
+        UINT byte = 0;
+        while (byte < sizeof(*current) && ((const BYTE *)current)[byte] ==
+                ((const BYTE *)&matrix->matrix)[byte]) ++byte;
+        if (byte == sizeof(*current)) continue;
+        HRESULT hr = d3d_legacy_set_transform(device, state, &matrix->matrix);
+        if (FAILED(hr)) return hr;
+    }
+    return D3D_OK;
+}
+static HRESULT d3d_execute_update_matrix(D3D7Device *device,
+        D3DMATRIXHANDLE destination_handle, D3DMATRIXHANDLE first_handle,
+        D3DMATRIXHANDLE second_handle, BOOL multiply)
+{
+    D3DLegacyMatrix *destination = d3d_legacy_find_matrix(device, destination_handle);
+    D3DLegacyMatrix *first = d3d_legacy_find_matrix(device, first_handle);
+    D3DLegacyMatrix *second = multiply ? d3d_legacy_find_matrix(device, second_handle) : NULL;
+    if (!destination || !first || (multiply && !second))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
+    if (second) {
+        D3DMATRIX value;
+        d3d7_multiply_matrix(&first->matrix, &second->matrix, &value);
+        destination->matrix = value;
+    } else destination->matrix = first->matrix;
+    return D3D_OK;
+}
+
 static HRESULT WINAPI d3d1_device_CreateMatrix(IDirect3DDevice *iface,
         D3DMATRIXHANDLE *handle)
 {
@@ -3154,6 +3200,8 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
                 (SIZE_T)process->dwCount * sizeof(D3DTLVERTEX));
         return D3D_OK;
     }
+    result = d3d_execute_refresh_transforms(device);
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
@@ -3393,42 +3441,23 @@ static HRESULT d3d_execute_run(D3DLegacyExecuteBuffer *buffer,
             break;
         case D3DOP_MATRIXLOAD:
             for (index = 0; index < instruction->wCount; ++index) {
-                D3DMATRIXLOAD *load = (D3DMATRIXLOAD *)(records +
-                        index * instruction->bSize);
-                D3DLegacyMatrix *destination = d3d_legacy_find_matrix(device,
-                        load->hDestMatrix);
-                D3DLegacyMatrix *source = d3d_legacy_find_matrix(device,
-                        load->hSrcMatrix);
-                if (!destination || !source) return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
-                destination->matrix = source->matrix;
+                D3DMATRIXLOAD *load = (D3DMATRIXLOAD *)(records + index * instruction->bSize);
+                result = d3d_execute_update_matrix(device, load->hDestMatrix, load->hSrcMatrix, 0, FALSE);
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_MATRIXMULTIPLY:
             for (index = 0; index < instruction->wCount; ++index) {
-                D3DMATRIXMULTIPLY *multiply = (D3DMATRIXMULTIPLY *)(records +
-                        index * instruction->bSize);
-                D3DLegacyMatrix *destination = d3d_legacy_find_matrix(device,
-                        multiply->hDestMatrix);
-                D3DLegacyMatrix *first = d3d_legacy_find_matrix(device,
-                        multiply->hSrcMatrix1);
-                D3DLegacyMatrix *second = d3d_legacy_find_matrix(device,
-                        multiply->hSrcMatrix2);
-                D3DMATRIX value;
-                if (!destination || !first || !second)
-                    return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
-                d3d7_multiply_matrix(&first->matrix, &second->matrix, &value);
-                destination->matrix = value;
+                D3DMATRIXMULTIPLY *multiply = (D3DMATRIXMULTIPLY *)(records + index * instruction->bSize);
+                result = d3d_execute_update_matrix(device, multiply->hDestMatrix,
+                        multiply->hSrcMatrix1, multiply->hSrcMatrix2, TRUE);
+                if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;
         case D3DOP_STATETRANSFORM:
             for (index = 0; index < instruction->wCount; ++index) {
-                D3DSTATE *state = (D3DSTATE *)(records +
-                        index * instruction->bSize);
-                D3DLegacyMatrix *matrix = d3d_legacy_find_matrix(device,
-                        state->dwArg[0]);
-                if (!matrix) return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
-                result = d3d_legacy_set_transform(device,
-                        state->dtstTransformStateType, &matrix->matrix);
+                D3DSTATE *state = (D3DSTATE *)(records + index * instruction->bSize);
+                result = d3d_execute_bind_transform(device, state->dtstTransformStateType, state->dwArg[0]);
                 if (FAILED(result)) return DDWG_TRACE_ERROR(result);
             }
             break;

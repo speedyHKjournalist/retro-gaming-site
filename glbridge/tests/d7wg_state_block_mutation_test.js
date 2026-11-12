@@ -16,9 +16,14 @@ function replaceInFunction(name, before, after) {
     assert.equal(original.split(before).length, 2, name + ": " + before);
     return source.slice(0, start) + original.replace(before, after) + source.slice(end);
 }
+let killed = 0;
 const cases = [
     ["recorded matrix mutates live", () => replaceInFunction("d3d7_device_SetTransform", "if (device->recording_state_block)", "if (0 && device->recording_state_block)")],
-    ["Multiply ignores preceding recorded transform", () => replaceInFunction("d3d7_device_MultiplyTransform", "device->recording_state_block &&", "0 && device->recording_state_block &&")],
+    ["Multiply incorrectly records", () => replaceInFunction("d3d7_device_MultiplyTransform", "device->recording_state_block = NULL;", "/* lost primary-state routing */")],
+    ["Multiply reverses native order", () => replaceInFunction("d3d7_device_MultiplyTransform", "d3d7_multiply_matrix(matrix, &device->transforms[state], &result);", "d3d7_multiply_matrix(&device->transforms[state], matrix, &result);")],
+    ["Multiply reads preceding recorded transform", () => replaceInFunction("d3d7_device_MultiplyTransform", "d3d7_multiply_matrix(matrix, &device->transforms[state], &result);", "d3d7_multiply_matrix(matrix, device->recording_state_block && device->recording_state_block->transform_mask[state] ? &device->recording_state_block->transforms[state] : &device->transforms[state], &result);")],
+    ["viewport loses minimum depth span", () => replaceInFunction("d3d7_device_SetViewport", "effective.dvMaxZ = effective.dvMinZ + 0.001f;", "effective.dvMaxZ = viewport->dvMaxZ;")],
+    ["viewport rejects zero extent", () => replaceInFunction("d3d7_device_SetViewport", "if (!viewport ||", "if (!viewport || !viewport->dwWidth || !viewport->dwHeight ||")],
     ["recorded viewport mutates live", () => replaceInFunction("d3d7_device_SetViewport", "if (device->recording_state_block)", "if (0 && device->recording_state_block)")],
     ["recorded material mutates live", () => replaceInFunction("d3d7_device_SetMaterial", "if (device->recording_state_block)", "if (0 && device->recording_state_block)")],
     ["recorded render state mutates live", () => replaceInFunction("d3d7_set_render_state", "if (device->recording_state_block)", "if (0 && device->recording_state_block)")],
@@ -54,6 +59,7 @@ try {
         const run = spawnSync(process.execPath, [path.join(__dirname, "d7wg_state_block_test.js")], { env: { ...process.env, D7WG_STATE_BLOCK_SOURCE: file }, encoding: "utf8" });
         assert.notEqual(run.status, 0, "survived " + label);
         assert.match(run.stderr, /D3D7 state block line/, "runtime assertion required: " + label);
+        assert(!/error: |ERROR: AddressSanitizer|runtime error:/.test(run.stderr),run.stderr);killed++;console.log("KILL "+label);
     }
     const legacy = fs.readFileSync(path.join(__dirname, "../ddrawproxy/d3d_legacy_proxy.inc"), "utf8");
     for (const [label, before, after] of [
@@ -68,8 +74,9 @@ try {
         const run = spawnSync(process.execPath, [path.join(__dirname, "d7wg_state_block_test.js")], { env: { ...process.env, D7WG_LEGACY_STATE_SOURCE: file }, encoding: "utf8" });
         assert.notEqual(run.status, 0, "survived " + label);
         assert.match(run.stderr, /D3D7 state block line/, "runtime assertion required: " + label);
+        assert(!/error: |ERROR: AddressSanitizer|runtime error:/.test(run.stderr),run.stderr);killed++;console.log("KILL "+label);
     }
-    console.log("PASS D3D7 ordinary state-block mutations: 19/19; live isolation, ordered Multiply, zero early uploads, texture ownership, End and native predefined scope");
+    console.log("PASS D3D7 ordinary state-block mutations: "+killed+"/"+killed+"; live isolation, ordered Multiply, zero early uploads, texture ownership, End and native predefined scope");
 } finally {
     fs.rmSync(directory, { recursive: true, force: true });
 }

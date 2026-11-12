@@ -99,6 +99,7 @@ struct D3D7Device {
     D3DLegacyViewport *legacy_viewports;
     D3DLegacyViewport *legacy_current_viewport;
     D3DLegacyMatrix *legacy_matrices;
+    D3DMATRIXHANDLE legacy_transform_handles[D3D7_MAX_TRANSFORMS];
     BYTE *legacy_vertices;
     WORD *legacy_indices;
     DWORD legacy_vertex_count;
@@ -1823,17 +1824,19 @@ static HRESULT WINAPI d3d7_device_SetViewport(IDirect3DDevice7 *iface,
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetViewport command;
-    if (!viewport || !viewport->dwWidth || !viewport->dwHeight ||
+    D3DVIEWPORT7 effective;
+    if (!viewport ||
             viewport->dwX > device->render_target->width ||
             viewport->dwY > device->render_target->height ||
             viewport->dwWidth > device->render_target->width - viewport->dwX ||
-            viewport->dwHeight > device->render_target->height - viewport->dwY ||
-            viewport->dvMinZ < 0.0f || viewport->dvMaxZ > 1.0f ||
-            viewport->dvMinZ > viewport->dvMaxZ)
+            viewport->dwHeight > device->render_target->height - viewport->dwY)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    effective = *viewport;
+    if (effective.dvMaxZ < effective.dvMinZ + 0.001f)
+        effective.dvMaxZ = effective.dvMinZ + 0.001f;
     if (device->recording_state_block) {
         D3D7StateBlock *block = device->recording_state_block;
-        block->viewport_mask = TRUE;block->viewport = *viewport;
+        block->viewport_mask = TRUE;block->viewport = effective;
         return D3D_OK;
     }
     ZeroMemory(&command, sizeof(command));
@@ -1842,11 +1845,11 @@ static HRESULT WINAPI d3d7_device_SetViewport(IDirect3DDevice7 *iface,
     command.y = viewport->dwY;
     command.width = viewport->dwWidth;
     command.height = viewport->dwHeight;
-    command.min_z = viewport->dvMinZ;
-    command.max_z = viewport->dvMaxZ;
+    command.min_z = effective.dvMinZ;
+    command.max_z = effective.dvMaxZ;
     if (!emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    device->viewport = *viewport;
+    device->viewport = effective;
     return D3D_OK;
 }
 
@@ -1857,10 +1860,13 @@ static HRESULT WINAPI d3d7_device_MultiplyTransform(IDirect3DDevice7 *iface,
     D3DMATRIX result;
     if (!matrix || !d3d7_transform_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    const D3DMATRIX *source = device->recording_state_block && device->recording_state_block->transform_mask[state]
-            ? &device->recording_state_block->transforms[state] : &device->transforms[state];
-    d3d7_multiply_matrix(source, matrix, &result);
-    return d3d7_device_SetTransform(iface, state, &result);
+    /* Multiply targets the primary state even while SetTransform records. */
+    D3D7StateBlock *recording = device->recording_state_block;
+    d3d7_multiply_matrix(matrix, &device->transforms[state], &result);
+    device->recording_state_block = NULL;
+    HRESULT hr = d3d7_device_SetTransform(iface, state, &result);
+    device->recording_state_block = recording;
+    return hr;
 }
 
 static HRESULT WINAPI d3d7_device_GetViewport(IDirect3DDevice7 *iface,

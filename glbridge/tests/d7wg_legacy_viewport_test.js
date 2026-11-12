@@ -70,6 +70,7 @@ static HRESULT d3d7_device_SetViewport(IDirect3DDevice7*d,D3DVIEWPORT7*v){viewpo
 static D3DLegacyViewport*d3d_viewport_from_any(IDirect3DViewport3*p){return p;}
 static D3D7Device*d3d3_device_from_iface(IDirect3DDevice3*p){return p;}
 static D3D7Device*d3d2_device_from_iface(IDirect3DDevice2*p){return p;}
+static HRESULT d3d_execute_refresh_transforms(D3D7Device*d){(void)d;return D3D_OK;}
 static BOOL d3d7_prepare_lighting(D3D7Device*d,const D3DMATRIX*m,BOOL enabled,D9WGTNLLighting*s){(void)d;(void)m;(void)enabled;prepares++;s->prepared=1;return !fail_light;}
 static void d9wg_lighting_vertex(const D9WGTNLLighting*s,const D3DMATRIX*m,const float*p,const float*n,const void*a,const void*b,uint32_t*c,uint32_t*spec){(void)m;(void)p;(void)n;(void)a;(void)b;lights+=s->prepared;*c=0xff123456;*spec=0x00112233;}
 ${["d3d_legacy_viewport7", "d3d_legacy_viewport_clipspace", "d3d_legacy_apply_viewport_projection", "d3d_legacy_set_transform", "d3d_legacy_get_transform", "d3d_legacy_multiply_transform", "d3d3_device_SetTransform", "d3d3_device_GetTransform", "d3d3_device_MultiplyTransform", "d3d2_device_SetTransform", "d3d2_device_GetTransform", "d3d2_device_MultiplyTransform", "d3d_viewport_TransformVertices", "d3d_execute_reserve_vertices", "d3d_execute_process_vertices"].map(n => extract(n)).join("\n")}
