@@ -2888,35 +2888,18 @@ static HRESULT WINAPI d3d_execute_buffer_Unlock(IDirect3DExecuteBuffer *iface)
     return D3D_OK;
 }
 
-static BOOL d3d_execute_data_valid(D3DLegacyExecuteBuffer *buffer,
-        const D3DEXECUTEDATA *data)
-{
-    uint64_t vertices_end, instructions_end;
-    if (!data || data->dwSize != sizeof(*data)) return FALSE;
-    vertices_end = (uint64_t)data->dwVertexOffset +
-            (uint64_t)data->dwVertexCount * sizeof(D3DVERTEX);
-    instructions_end = (uint64_t)data->dwInstructionOffset +
-            data->dwInstructionLength;
-    return vertices_end <= buffer->byte_count &&
-            instructions_end <= buffer->byte_count &&
-            data->dwHVertexOffset <= buffer->byte_count;
-}
-
+/* Execute-data is metadata, not a validation or allocation request. The
+ * instruction stream and vertex ranges are checked when they are consumed. */
 static HRESULT WINAPI d3d_execute_buffer_SetExecuteData(
         IDirect3DExecuteBuffer *iface, D3DEXECUTEDATA *data)
 {
     D3DLegacyExecuteBuffer *buffer = d3d_execute_buffer_from_iface(iface);
-    D3DTLVERTEX *processed = NULL;
     if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_LOCKED);
-    if (!d3d_execute_data_valid(buffer, data)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (data->dwVertexCount) {
-        processed = (D3DTLVERTEX *)heap_alloc_zero((SIZE_T)data->dwVertexCount *
-                sizeof(*processed));
-        if (!processed) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
-    }
+    if (!data || data->dwSize != sizeof(*data))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     heap_free(buffer->processed);
-    buffer->processed = processed;
-    buffer->processed_count = data->dwVertexCount;
+    buffer->processed = NULL;
+    buffer->processed_count = 0;
     buffer->data = *data;
     return D3D_OK;
 }
@@ -2956,6 +2939,8 @@ static HRESULT d3d_execute_validate_internal(D3DLegacyExecuteBuffer *buffer,
     DWORD cursor = buffer->data.dwInstructionOffset;
     DWORD end = cursor + buffer->data.dwInstructionLength;
     BOOL found_exit = FALSE;
+    if ((uint64_t)cursor + buffer->data.dwInstructionLength > buffer->byte_count)
+        goto invalid;
     while (cursor < end) {
         D3DINSTRUCTION *instruction;
         UINT expected;
@@ -2974,6 +2959,7 @@ static HRESULT d3d_execute_validate_internal(D3DLegacyExecuteBuffer *buffer,
         }
     }
     if (found_exit) return D3D_OK;
+invalid:
     if (bad_offset) *bad_offset = cursor;
     if (callback) callback(context, cursor);
     return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
@@ -3110,6 +3096,26 @@ static HRESULT WINAPI d3d1_device_DeleteMatrix(IDirect3DDevice *iface,
     return D3D_OK;
 }
 
+/* Grow from the instruction's destination range, independently of the
+ * advisory dwVertexCount. Commit only after allocation/copy succeeds. */
+static HRESULT d3d_execute_reserve_vertices(D3DLegacyExecuteBuffer *buffer,
+        uint64_t count)
+{
+    D3DTLVERTEX *processed;
+    if (count <= buffer->processed_count) return D3D_OK;
+    if (count > 0xffffffffu || count > (SIZE_T)-1 / sizeof(*processed))
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    processed = heap_alloc_zero((SIZE_T)count * sizeof(*processed));
+    if (!processed) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    if (buffer->processed_count)
+        CopyMemory(processed, buffer->processed,
+                (SIZE_T)buffer->processed_count * sizeof(*processed));
+    heap_free(buffer->processed);
+    buffer->processed = processed;
+    buffer->processed_count = (DWORD)count;
+    return D3D_OK;
+}
+
 static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
         const D3DPROCESSVERTICES *process)
 {
@@ -3118,33 +3124,31 @@ static HRESULT d3d_execute_process_vertices(D3DLegacyExecuteBuffer *buffer,
     D9WGTNLLighting light_state;
     DWORD index;
     DWORD operation = process->dwFlags & D3DPROCESSVERTICES_OPMASK;
-    if ((DWORD)process->wStart > buffer->data.dwVertexCount ||
-            process->dwCount > buffer->data.dwVertexCount - process->wStart ||
-            (DWORD)process->wDest > buffer->processed_count ||
-            process->dwCount > buffer->processed_count - process->wDest)
-        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
-    if (operation == D3DPROCESSVERTICES_COPY) {
-        uint64_t source_offset = (uint64_t)buffer->data.dwVertexOffset +
-                (uint64_t)process->wStart * sizeof(D3DTLVERTEX);
-        uint64_t source_end = source_offset +
-                (uint64_t)process->dwCount * sizeof(D3DTLVERTEX);
-        if (source_end > buffer->byte_count) return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
-        CopyMemory(buffer->processed + process->wDest,
-                buffer->memory + (DWORD)source_offset,
-                process->dwCount * sizeof(D3DTLVERTEX));
-        return D3D_OK;
-    }
-    if (operation != D3DPROCESSVERTICES_TRANSFORM &&
+    HRESULT result;
+    uint64_t source_offset, source_end;
+    if (operation != D3DPROCESSVERTICES_COPY &&
+            operation != D3DPROCESSVERTICES_TRANSFORM &&
             operation != D3DPROCESSVERTICES_TRANSFORMLIGHT)
         return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
+    source_offset = (uint64_t)buffer->data.dwVertexOffset +
+            (uint64_t)process->wStart * sizeof(D3DVERTEX);
+    source_end = source_offset + (uint64_t)process->dwCount * sizeof(D3DVERTEX);
+    if (source_end > buffer->byte_count)
+        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
+    if (!process->dwCount) return D3D_OK;
+    result = d3d_execute_reserve_vertices(buffer,
+            (uint64_t)process->wDest + process->dwCount);
+    if (FAILED(result)) return DDWG_TRACE_ERROR(result);
+    if (operation == D3DPROCESSVERTICES_COPY) {
+        CopyMemory(buffer->processed + process->wDest,
+                buffer->memory + (DWORD)source_offset,
+                (SIZE_T)process->dwCount * sizeof(D3DTLVERTEX));
+        return D3D_OK;
+    }
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &transform);
-    if ((uint64_t)buffer->data.dwVertexOffset +
-            ((uint64_t)process->wStart + process->dwCount) * sizeof(D3DVERTEX)
-            > buffer->byte_count)
-        return DDWG_TRACE_ERROR(D3DERR_EXECUTE_FAILED);
     if (operation == D3DPROCESSVERTICES_TRANSFORMLIGHT &&
             !(process->dwFlags & D3DPROCESSVERTICES_NOCOLOR) &&
             !d3d7_prepare_lighting(device, &world_view, TRUE, &light_state))
