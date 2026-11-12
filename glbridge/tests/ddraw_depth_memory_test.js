@@ -6,16 +6,18 @@ const code=`#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "ddrawproxy/ddraw_protocol.h"
+#include "runtime/d9wg_format_layouts.h"
 typedef uint32_t DWORD,UINT,D3DCOLOR;typedef int32_t LONG,HRESULT;typedef uint8_t BYTE;typedef int BOOL;
 typedef struct{LONG left,top,right,bottom;} RECT;typedef RECT D3DRECT;
 typedef struct{BOOL gpu_dirty;BYTE bits[160];} Memory;
 typedef struct{DWORD device_handle;} DDrawObject;
-typedef struct DDSurface{DDrawObject*owner;Memory*memory;BYTE*shadow;UINT format,width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL upload_pending;struct DDSurface*attached_depth;} DDSurface;
+typedef struct DDSurface{DDrawObject*owner;Memory*memory;BYTE*shadow;UINT format,width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL upload_pending;struct{struct{DWORD dwCaps;}ddsCaps;}desc;struct DDSurface*attached_depth;} DDSurface;
 typedef struct{DWORD wire_handle;DDrawObject*owner;DDSurface*render_target;DWORD render_states[256];BOOL render_target_invalid,render_target_pending;} D3D7Device;typedef D3D7Device IDirect3DDevice7;typedef float D3DVALUE;
 #define TRUE 1
 #define FALSE 0
 #define WINAPI
 #define D3D_OK 0
+#define DDSCAPS_SYSTEMMEMORY 0x800u
 #define DDERR_INVALIDPARAMS (-1)
 #define DDERR_INVALIDPIXELFORMAT (-5)
 #define D3DERR_ZBUFFER_NOTPRESENT (-2)
@@ -35,6 +37,7 @@ typedef struct{DWORD wire_handle;DDrawObject*owner;DDSurface*render_target;DWORD
 #define HOSTLOG_REFUSED(...)
 static unsigned checks,emits,uploads;static BOOL fail_emit,fail_storage;static int g_transport_lock;static BYTE payload[256];
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw depth memory line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
+static BOOL surface_readback(DDSurface*s){(void)s;return FALSE;}
 static BOOL ensure_surface_storage(DDSurface*s){(void)s;return !fail_storage;}
 static BOOL emit_surface_upload(DDSurface*s,const RECT*r){(void)r;uploads++;s->upload_pending=FALSE;return TRUE;}
 static BOOL sync_external_surface_for_read(DDSurface*s){(void)s;return TRUE;}
@@ -44,7 +47,7 @@ static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*d){return d;}
 static BOOL d3d7_emit_render_target(D3D7Device*d){(void)d;return FALSE;}
 static BOOL d3d7_multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}
 static BOOL reserve_command_locked(UINT op,UINT size,UINT extra,uint8_t**p,uint8_t**blob){(void)op;if(size+extra>sizeof(payload)||fail_emit)return FALSE;*p=payload;*blob=payload+size;return TRUE;}
-${["format_is_yuv","surface_depth_mask","prepare_surface_for_host","surface_mirror_depth_fill","surface_fill_yuv","emit_blt"].map(n=>extract(source,n)).join("\n")}
+${["format_is_depth","format_compressed_block_bytes","format_is_compressed","format_is_yuv","surface_can_mirror_color_fill","surface_prepare_color_fill","surface_mirror_color_fill","surface_depth_mask","prepare_surface_for_host","surface_mirror_depth_fill","surface_fill_yuv","emit_blt"].map(n=>extract(source,n)).join("\n")}
 ${["d3d7_mark_draw_surfaces_dirty","d3d7_device_Clear"].map(n=>extract(legacy,n)).join("\n")}
 static int fills(void){
  const UINT formats[]={70,71,73,75,77,79,80},masks[]={0xffff,0xffffffff,0xfffe,0xffffff00,0xffffff00,0xffffff00,0xffff};

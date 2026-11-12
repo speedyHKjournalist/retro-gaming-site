@@ -1391,12 +1391,57 @@ static BOOL surface_fill_yuv(DDSurface *surface, const RECT *rect, DWORD value)
     return TRUE;
 }
 
+static BOOL surface_readback(DDSurface *surface);
+
+static BOOL surface_can_mirror_color_fill(DDSurface *surface)
+{
+    return (surface->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) &&
+        surface->bytes_per_pixel >= 1u && surface->bytes_per_pixel <= 4u &&
+        !format_is_depth(surface->format) && !format_is_yuv(surface->format) &&
+        !format_is_compressed(surface->format);
+}
+
+static BOOL surface_prepare_color_fill(DDSurface *surface, const RECT *rect)
+{
+    RECT area = {0, 0, (LONG)surface->width, (LONG)surface->height};
+    if (rect) area = *rect;
+    if (!surface->shadow || area.left < 0 || area.top < 0 ||
+            area.right > (LONG)surface->width || area.bottom > (LONG)surface->height ||
+            area.right <= area.left || area.bottom <= area.top)
+        return FALSE;
+    /* A complete known fill replaces every pixel. A partial one must first
+     * recover any unknown GPU writes outside its rectangle. */
+    if (surface->memory->gpu_dirty && (area.left || area.top ||
+            area.right != (LONG)surface->width || area.bottom != (LONG)surface->height))
+        return surface_readback(surface);
+    return TRUE;
+}
+
+static void surface_mirror_color_fill(DDSurface *surface, const RECT *rect,
+        DWORD value, BOOL was_dirty)
+{
+    RECT area = {0, 0, (LONG)surface->width, (LONG)surface->height};
+    LONG x, y;
+    if (rect) area = *rect;
+    if (was_dirty && (area.left || area.top ||
+            area.right != (LONG)surface->width || area.bottom != (LONG)surface->height))
+        return;
+    /* Keep the exact packed CPU value, including X bits that a GPU XRGB
+     * texture does not retain. The host still receives the actual GPU fill. */
+    for (y = area.top; y < area.bottom; ++y)
+        for (x = area.left; x < area.right; ++x)
+            CopyMemory(surface->shadow + y * surface->pitch +
+                    x * surface->bytes_per_pixel, &value, surface->bytes_per_pixel);
+    surface->memory->gpu_dirty = FALSE;
+}
+
 static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         DDSurface *source, const RECT *source_rect, uint32_t flags,
         uint32_t fill_color, float fill_depth)
 {
     D9WGDDBlt command;
     BOOL was_dirty;
+    BOOL mirror_color;
 
     if (!destination || !destination->owner)
         return FALSE;
@@ -1410,6 +1455,10 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         HOSTLOG_REFUSED("a GPU blit into packed YUV storage is not implemented");
         return FALSE;
     }
+    mirror_color = !source && flags == D9WG_DDBLT_COLOR_FILL &&
+        surface_can_mirror_color_fill(destination);
+    if (mirror_color && !surface_prepare_color_fill(destination, destination_rect))
+        return FALSE;
     if (!prepare_surface_for_host(destination))
         return FALSE;
     if (source && !prepare_surface_for_host(source))
@@ -1449,6 +1498,8 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
     destination->memory->gpu_dirty = TRUE;
     if (flags & D9WG_DDBLT_DEPTH_FILL)
         surface_mirror_depth_fill(destination, destination_rect, fill_color, was_dirty);
+    if (mirror_color)
+        surface_mirror_color_fill(destination, destination_rect, fill_color, was_dirty);
     return TRUE;
 }
 
