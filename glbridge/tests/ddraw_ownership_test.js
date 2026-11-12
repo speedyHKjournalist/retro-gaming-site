@@ -44,7 +44,7 @@ typedef struct DDrawObject DDrawObject;typedef struct DDSurface DDSurface;typede
 struct DDrawObject {void*vtbl7;LONG ref,lifetime_ref;DWORD device_handle,guest_mode_changed,mode_bpp,next_palette_slot,cooperative_flags;DDSurface*surfaces,*primary;DDPalette*palettes;DDClipper*clippers;DDrawObject*next;};
 struct DDPalette {void*vtbl;LONG ref;DDrawObject*owner;BOOL owner_public_ref;DWORD caps,slot;PALETTEENTRY entries[256];DDPalette*next;};
 struct DDClipper {void*vtbl;LONG ref;DDrawObject*owner;void*clip_list;DDClipper*next,*all_next;BOOL changed;};
-typedef struct {LONG ref;DWORD handle;} DDTextureStorage;typedef struct {LONG ref;BYTE bits[4];} DDSurfaceMemory;
+typedef struct {LONG ref;DWORD handle;} DDTextureStorage;typedef struct {LONG ref;DWORD content_version;BYTE bits[4];} DDSurfaceMemory;
 struct DDSurface {void*vtbl7;LONG ref;LONG public_refs[8];unsigned creation_version;void*device1;DDrawObject*owner;BOOL owner_public_ref,primary,front_of_chain,owns_flip_chain,flip_root_ref,implicit,overlay_visible,external_memory;DWORD handle,lock_depth;unsigned attached_depth_version,attachment_version,flip_root_ref_version;DWORD attach_saved_caps;UINT width,height,format,mip_level,cube_face;DDSURFACEDESC2 desc;DDSurface*next,*flip_next,*mip_next,*cube_faces[6],*attached_depth,*overlay_destination;DDPalette*palette;DDClipper*clipper;DDTextureStorage*storage;DDSurfaceMemory*memory;BYTE*shadow;void*dc,*dib,*old_bitmap,*gdi_dc;DWORD color_key_present,texture_handle;DDCOLORKEY color_key[4];};
 typedef DDrawObject*LPDIRECTDRAW;typedef DDrawObject IDirectDraw7;typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;typedef DDPalette IDirectDrawPalette,*LPDIRECTDRAWPALETTE;typedef DDClipper IDirectDrawClipper,*LPDIRECTDRAWCLIPPER;typedef struct {unsigned unused;} DDrawPixelFormatDesc;
 static unsigned native_dc_releases,ordinary_dc_deletes;
@@ -62,7 +62,9 @@ static void emit_window_state_not_showing(DDrawObject*d){alive(d);hidden++;}stat
 static void ddraw_gdi_dc_destroy(void*p){MUST(p==(void*)1);native_dc_releases++;}
 static void emit_overlay_state(DDSurface*s){alive(s);}static void emit_palette_table(DDPalette*p){alive(p);}static void emit_surface_palette_binding(DDSurface*s){alive(s);}
 static DDrawObject*object_from_iface(IDirectDraw7*p){return p;}static DDrawObject*object_from_any(IDirectDraw7*p,void*v){(void)v;return p;}static DDSurface*surface_from_iface(DDSurface*p){return p;}static DDSurface*surface_from_any(DDSurface*p,void*v){if(v&&p)*(unsigned*)v=p->creation_version;return p;}static DDPalette*palette_from_iface(DDPalette*p){return p;}${extract("clipper_from_iface")}
-static ULONG WINAPI ddraw_AddRef(IDirectDraw7*);static ULONG WINAPI ddraw_Release(IDirectDraw7*);static void ddraw_lifetime_release(DDrawObject*);static void surface_destroy(DDSurface*);static ULONG WINAPI surface_Release(IDirectDrawSurface7*);
+static ULONG WINAPI ddraw_AddRef(IDirectDraw7*);static ULONG WINAPI ddraw_Release(IDirectDraw7*);static void ddraw_lifetime_release(DDrawObject*);static void surface_private_data_clear(DDSurface*s){(void)s;}
+static void surface_release_lookup_dc(DDSurface*s){(void)s;}
+static void surface_destroy(DDSurface*);static ULONG WINAPI surface_Release(IDirectDrawSurface7*);
 ${["ddraw_child_attach", "ddraw_child_detach", "ddraw_AddRef", "ddraw_lifetime_release", "ddraw_Release", "palette_AddRef", "palette_Release", "palette_GetCaps", "clipper_AddRef", "clipper_Release", "clipper_Initialize", "clipper_IsClipListChanged"].map(extract).join("\n")}
 #define IDirectDrawPalette_AddRef palette_AddRef
 #define IDirectDrawPalette_Release palette_Release

@@ -19,7 +19,7 @@ typedef unsigned char BYTE;typedef uint16_t WORD;typedef int32_t LONG;typedef si
 typedef struct DDSurface DDSurface;
 typedef struct{DDSurface*surfaces;unsigned children;}DDrawObject;
 typedef struct{LONG ref;DWORD handle;}DDTextureStorage;
-typedef struct{LONG ref;BYTE*bits;SIZE_T bytes;BOOL owned,gpu_dirty;}DDSurfaceMemory;
+typedef struct{LONG ref;BYTE*bits;SIZE_T bytes;BOOL owned,gpu_dirty;DWORD content_version;}DDSurfaceMemory;
 struct DDSurface{const int*vtbl7,*vtbl4,*vtbl3,*vtbl2,*vtbl1,*texture2_vtbl,*texture1_vtbl,*gamma_vtbl;LONG ref,public_refs[8];unsigned creation_version;DDrawObject*owner;struct{uint16_t red[256],green[256],blue[256];}gamma_ramp;DDTextureStorage*storage;DDSurfaceMemory*memory;BYTE*shadow;BOOL external_memory,indexed,primary,implicit;DWORD handle,overlay_id,mip_level,cube_face,format,width,height,bytes_per_pixel,pitch;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;DDSurface*next;};
 typedef DDSurface IDirectDrawSurface7;
 static const int g_surface_vtbl=7,g_surface_vtbl4=4,g_surface_vtbl3=3,g_surface_vtbl2=2,g_surface_vtbl1=1,g_d3d_texture2_vtbl=12,g_d3d_texture1_vtbl=11,g_gamma_vtbl=20;

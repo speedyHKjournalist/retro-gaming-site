@@ -492,11 +492,15 @@ static void d3d7_mark_draw_surfaces_dirty(D3D7Device *device)
 {
     if (!device->render_target) return;
     device->render_target->memory->gpu_dirty = TRUE;
+    surface_memory_changed(device->render_target->memory);
     if (device->render_target->attached_depth &&
             ((device->render_states[D3DRENDERSTATE_ZENABLE] &&
               device->render_states[D3DRENDERSTATE_ZWRITEENABLE]) ||
              device->render_states[D3DRENDERSTATE_STENCILENABLE]))
+    {
         device->render_target->attached_depth->memory->gpu_dirty = TRUE;
+        surface_memory_changed(device->render_target->attached_depth->memory);
+    }
 }
 
 static BOOL d3d7_draw_clip_status_locked(D3D7Device *device, DWORD fvf,
@@ -1753,9 +1757,15 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result && (flags & D3DCLEAR_TARGET))
+    {
         device->render_target->memory->gpu_dirty = TRUE;
+        surface_memory_changed(device->render_target->memory);
+    }
     if (result && (flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
+    {
         device->render_target->attached_depth->memory->gpu_dirty = TRUE;
+        surface_memory_changed(device->render_target->attached_depth->memory);
+    }
     return DDWG_TRACE_ERROR(result ? D3D_OK : D3DERR_INITFAILED);
 }
 

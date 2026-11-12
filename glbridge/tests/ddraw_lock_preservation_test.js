@@ -9,7 +9,11 @@ typedef uint32_t DWORD,UINT;typedef int32_t LONG,HRESULT;typedef int BOOL;typede
 typedef struct {LONG left,top,right,bottom;} RECT;typedef RECT *LPRECT;
 typedef struct {DWORD dwSize,dwFlags,dwWidth,dwHeight;LONG lPitch;void *lpSurface;} DDSURFACEDESC;
 typedef struct {DWORD dwSize,dwFlags,dwWidth,dwHeight;LONG lPitch;void *lpSurface;DWORD dwTextureStage;} DDSURFACEDESC2,*LPDDSURFACEDESC2;
-typedef struct {BOOL gpu_dirty;BYTE bits[64];} Memory;
+typedef struct {BOOL gpu_dirty;DWORD content_version;BYTE bits[64];} Memory;
+typedef Memory DDSurfaceMemory;
+#define InterlockedIncrement(p) (++*(p))
+${fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8").match(/static void surface_memory_changed\([^)]*\)\s*\{[\s\S]*?\n}/)[0]}
+
 typedef struct DDSurface {Memory *memory;BYTE *shadow;void *dc,*owner,*flip_next;UINT width,height,pitch,format,bytes_per_pixel,handle;DWORD lock_depth,lock_flags;RECT locked_rect;BOOL primary;DDSURFACEDESC2 desc;} DDSurface;
 typedef DDSurface IDirectDrawSurface7;
 #define WINAPI
@@ -50,7 +54,7 @@ static int cycles(void){
   Memory m={.gpu_dirty=TRUE};DDSurface s=make(&m),alias=s;DWORD before[16];for(unsigned i=0;i<16;i++)before[i]=0xff204060u+round*256+i;memcpy(gpu,before,64);RECT r={1,1,3,3};DDSURFACEDESC2 d={.dwSize=sizeof(d)};unsigned old_reads=reads,old_uploads=uploads;
   CHECK(surface_Lock(&s,part?&r:NULL,&d,flags[mode]|DDLOCK_WAIT,NULL)==0);CHECK(reads==old_reads+1&&!m.gpu_dirty&&s.lock_depth==1);CHECK(!(d.dwFlags&DDSD_LPSURFACE)&&d.lpSurface==m.bits+(part?20:0)&&d.lPitch==16&&d.dwWidth==4&&d.dwHeight==4);CHECK(!memcmp(m.bits,before,64));
   if(mode!=1)*(DWORD*)d.lpSurface=0xffe01020u+round;
-  CHECK(surface_Unlock(&s,NULL)==0&&s.lock_depth==0);CHECK(uploads==old_uploads+(mode!=1));
+  CHECK(surface_Unlock(&s,NULL)==0&&s.lock_depth==0);CHECK(uploads==old_uploads+(mode!=1));CHECK(m.content_version==(DWORD)(mode!=1));
   if(mode!=1){CHECK(uploaded.left==(part?1:0)&&uploaded.top==(part?1:0)&&uploaded.right==(part?3:4)&&uploaded.bottom==(part?3:4));before[part?5:0]=0xffe01020u+round;}
   CHECK(!memcmp(gpu,before,64));d=(DDSURFACEDESC2){.dwSize=sizeof(d)};CHECK(!surface_Lock(&alias,NULL,&d,DDLOCK_READONLY,NULL)&&!surface_Unlock(&alias,NULL)&&reads==old_reads+1);CHECK(!presents);
  }

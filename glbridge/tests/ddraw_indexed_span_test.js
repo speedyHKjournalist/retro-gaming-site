@@ -20,7 +20,12 @@ typedef int BOOL;typedef uint32_t UINT,DWORD,D3DPRIMITIVETYPE;typedef uint16_t W
 #define LeaveCriticalSection(p) ((void)(p))
 typedef struct {uint32_t status;} D9WGClipLegacyStatus;
 typedef struct {uint32_t device_handle;} Owner;
-typedef struct {int gpu_dirty;} Memory;
+typedef struct {int gpu_dirty;DWORD content_version;} Memory;
+typedef Memory DDSurfaceMemory;
+typedef int32_t LONG;
+#define InterlockedIncrement(p) (++*(p))
+${fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8").match(/static void surface_memory_changed\([^)]*\)\s*\{[\s\S]*?\n}/)[0]}
+
 typedef struct Surface {Memory *memory;struct Surface*attached_depth;} Surface;
 typedef struct {DWORD wire_handle;Owner *owner;Surface *render_target;D9WGClipLegacyStatus clip_status;DWORD render_states[256];} D3D7Device;
 static uint8_t wire[8192];static int g_transport_lock;static unsigned submissions,classified;

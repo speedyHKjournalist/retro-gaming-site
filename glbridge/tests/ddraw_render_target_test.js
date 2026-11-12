@@ -12,7 +12,11 @@ typedef uint32_t DWORD,UINT,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;
 typedef struct{const int*lpVtbl;}IDirectDrawSurface7,IDirectDrawSurface;
 typedef uint32_t D3DCOLOR;typedef float D3DVALUE;typedef struct{int32_t x1,y1,x2,y2;}D3DRECT;
 typedef struct{unsigned id;}DDrawObject;
-typedef struct{BOOL gpu_dirty;}Memory;static Memory clear_memory;
+typedef struct{BOOL gpu_dirty;DWORD content_version;}Memory;
+typedef Memory DDSurfaceMemory;
+static LONG InterlockedIncrement(LONG*);
+${fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8").match(/static void surface_memory_changed\([^)]*\)\s*\{[\s\S]*?\n}/)[0]}
+static Memory clear_memory;
 typedef struct DDSurface{const int*vtbl7,*vtbl1;DDrawObject*owner;LONG ref,public_refs[8];BOOL implicit,indexed,dead;Memory*memory;struct{struct{DWORD dwCaps;}ddsCaps;}desc;UINT format,handle,mip_level,cube_face,width,height;struct DDSurface*attached_depth;}DDSurface;
 typedef struct D3D7Device{DDSurface*render_target;DDrawObject*owner;UINT creation_version,wire_handle;BOOL render_target_invalid,render_target_pending,legacy_failed_rt;}D3D7Device,IDirect3DDevice7,IDirect3DDevice2;
 #define D3DERR_ZBUFFER_NOTPRESENT (-6)

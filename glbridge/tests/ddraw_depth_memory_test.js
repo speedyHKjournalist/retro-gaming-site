@@ -9,7 +9,11 @@ const code=`#include <stdint.h>
 #include "runtime/d9wg_format_layouts.h"
 typedef uint32_t DWORD,UINT,D3DCOLOR;typedef int32_t LONG,HRESULT;typedef uint8_t BYTE;typedef int BOOL;
 typedef struct{LONG left,top,right,bottom;} RECT;typedef RECT D3DRECT;
-typedef struct{BOOL gpu_dirty;BYTE bits[160];} Memory;
+typedef struct{BOOL gpu_dirty;DWORD content_version;BYTE bits[160];} Memory;
+typedef Memory DDSurfaceMemory;
+#define InterlockedIncrement(p) (++*(p))
+${fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8").match(/static void surface_memory_changed\([^)]*\)\s*\{[\s\S]*?\n}/)[0]}
+
 typedef struct{DWORD device_handle;} DDrawObject;
 typedef struct DDSurface{DDrawObject*owner;Memory*memory;BYTE*shadow;UINT format,width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL upload_pending;struct{struct{DWORD dwCaps;}ddsCaps;}desc;struct DDSurface*attached_depth;} DDSurface;
 typedef struct{DWORD wire_handle;DDrawObject*owner;DDSurface*render_target;DWORD render_states[256];BOOL render_target_invalid,render_target_pending;} D3D7Device;typedef D3D7Device IDirect3DDevice7;typedef float D3DVALUE;

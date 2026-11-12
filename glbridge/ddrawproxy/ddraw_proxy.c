@@ -536,7 +536,16 @@ struct DDSurfaceMemory {
     SIZE_T bytes;
     BOOL owned;                 /* FALSE for SetSurfaceDesc client memory */
     BOOL gpu_dirty;             /* shared by DuplicateSurface aliases */
+    DWORD content_version;      /* shared content identity for volatile private data */
 };
+
+typedef struct DDSurfacePrivateData {
+    GUID tag;
+    DWORD bytes, flags, content_version;
+    uintptr_t memory_identity;
+    struct DDSurfacePrivateData *next;
+    BYTE data[1];
+} DDSurfacePrivateData;
 
 struct DDSurface {
     /*
@@ -576,6 +585,7 @@ struct DDSurface {
     UINT bytes_per_pixel;
     UINT pitch;
     DDSurfaceMemory *memory;
+    DDSurfacePrivateData *private_data;
     BYTE *shadow;               /* system-memory bits Lock hands out */
     BOOL external_memory;       /* upload before every use as a source */
     BOOL upload_pending;        /* host texture is blank; owes a full upload */
@@ -610,6 +620,7 @@ struct DDSurface {
     D3DTEXTUREHANDLE texture_handle;
     HDC dc;
     void *gdi_dc;                /* native system-memory surface DC, if RGB */
+    HDC lookup_screen_dc;        /* borrowed by exported GetSurfaceFromDC for DIB DCs */
     HBITMAP dib;
     HBITMAP old_bitmap;
     BYTE *dib_bits;
@@ -679,6 +690,7 @@ static DDSurfaceMemory *surface_memory_create(BYTE *bits, SIZE_T bytes,
         if (!bits) { heap_free(memory); return NULL; }
     }
     memory->ref = 1;
+    memory->content_version = 1;
     memory->bits = bits;
     memory->bytes = bytes;
     memory->owned = owned;
@@ -695,6 +707,12 @@ static void surface_memory_release(DDSurfaceMemory *memory)
     if (!memory || InterlockedDecrement(&memory->ref) != 0) return;
     if (memory->owned) heap_free(memory->bits);
     heap_free(memory);
+}
+
+static void surface_memory_changed(DDSurfaceMemory *memory)
+{
+    if (!InterlockedIncrement((LONG *)&memory->content_version))
+        InterlockedIncrement((LONG *)&memory->content_version);
 }
 
 static DDSurface *surface_from_iface(IDirectDrawSurface7 *iface)
@@ -1383,6 +1401,7 @@ static BOOL surface_fill_yuv(DDSurface *surface, const RECT *rect, DWORD value)
         if ((surface->width & 1u) && area.right == (LONG)surface->width)
             CopyMemory(row + surface->width * 2u, (const BYTE *)&value + 2u, 2u);
     }
+    surface_memory_changed(surface->memory);
     surface->memory->gpu_dirty = FALSE;
     if (!emit_surface_upload(surface, &area)) {
         surface->upload_pending = TRUE;
@@ -1445,6 +1464,9 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
 
     if (!destination || !destination->owner)
         return FALSE;
+    /* BC formats can be sampled or copied as compressed blocks, but cannot
+     * be color attachments. No supported encoding path exists for this blit. */
+    if (format_is_compressed(destination->format)) return FALSE;
     if (source && !sync_external_surface_for_read(source))
         return FALSE;
     if (!ensure_device(destination->owner))
@@ -1496,6 +1518,7 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         return FALSE;
     was_dirty = destination->memory->gpu_dirty;
     destination->memory->gpu_dirty = TRUE;
+    surface_memory_changed(destination->memory);
     if (flags & D9WG_DDBLT_DEPTH_FILL)
         surface_mirror_depth_fill(destination, destination_rect, fill_color, was_dirty);
     if (mirror_color)
@@ -2867,6 +2890,8 @@ static void surface_swap_flip_storage(DDSurface *a, DDSurface *b)
     b->handle = handle; b->storage = storage;
     b->memory = memory; b->shadow = shadow;
     b->external_memory = external; b->upload_pending = pending;
+    surface_memory_changed(a->memory);
+    surface_memory_changed(b->memory);
 }
 
 /* Overlay identity belongs to the public surface; source and destination
@@ -3118,6 +3143,20 @@ typedef struct DDrawNativeDC {
     BOOL (WINAPI *release_dc)(DDRAWI_DDRAWSURFACE_LCL *);
 } DDrawNativeDC;
 
+static void surface_release_lookup_dc(DDSurface *surface)
+{
+    HDC screen = surface->lookup_screen_dc;
+    surface->lookup_screen_dc = NULL;
+    if (screen) ReleaseDC(NULL, screen);
+}
+
+static HDC surface_lookup_device_dc(DDSurface *surface)
+{
+    if (surface->gdi_dc) return ((DDrawNativeDC *)surface->gdi_dc)->screen;
+    if (!surface->lookup_screen_dc) surface->lookup_screen_dc = GetDC(NULL);
+    return surface->lookup_screen_dc;
+}
+
 static void ddraw_gdi_dc_destroy(void *cookie)
 {
     DDrawNativeDC *native = (DDrawNativeDC *)cookie;
@@ -3339,6 +3378,8 @@ static HRESULT surface_finish_dc(DDSurface *surface, BOOL present)
     surface->dib = NULL;
     surface->dib_bits = NULL;
     surface->old_bitmap = NULL;
+    surface_release_lookup_dc(surface);
+    surface_memory_changed(surface->memory);
     emit_surface_upload(surface, NULL);
     surface->memory->gpu_dirty = FALSE;
     if (present && !present_changed_primary(surface, NULL))
@@ -3669,6 +3710,7 @@ static HRESULT WINAPI surface_Unlock(IDirectDrawSurface7 *iface, LPRECT rect)
     if (rect) uploaded = *rect;
     /* A read-only lock changed nothing, so there is nothing to send. */
     if (!(surface->lock_flags & DDLOCK_READONLY)) {
+        surface_memory_changed(surface->memory);
         emit_surface_upload(surface, &uploaded);
         surface->memory->gpu_dirty = FALSE;
         if (!present_changed_primary(surface, &uploaded))
@@ -4028,40 +4070,127 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
+static DDSurfacePrivateData **surface_private_data_link(DDSurface *surface,
+        REFGUID tag)
+{
+    DDSurfacePrivateData **link = &surface->private_data;
+    while (*link && !guid_equal(&(*link)->tag, tag)) link = &(*link)->next;
+    return link;
+}
+
+static void surface_private_data_release(DDSurfacePrivateData *entry)
+{
+    if (!entry) return;
+    if (entry->flags & DDSPD_IUNKNOWNPOINTER) {
+        IUnknown *object;
+        CopyMemory(&object, entry->data, sizeof(object));
+        IUnknown_Release(object);
+    }
+    heap_free(entry);
+}
+
+static void surface_private_data_clear(DDSurface *surface)
+{
+    DDSurfacePrivateData *entry = surface->private_data;
+    surface->private_data = NULL;
+    while (entry) {
+        DDSurfacePrivateData *next = entry->next;
+        surface_private_data_release(entry);
+        entry = next;
+    }
+}
+
 static HRESULT WINAPI surface_SetPrivateData(IDirectDrawSurface7 *iface,
         REFGUID tag, LPVOID data, DWORD bytes, DWORD flags)
 {
-    (void)iface; (void)tag; (void)data; (void)bytes; (void)flags;
-    return UNSUPPORTED("Surface SetPrivateData", DDERR_UNSUPPORTED);
+    DDSurface *surface = surface_from_iface(iface);
+    DDSurfacePrivateData **link, *entry, *old;
+    SIZE_T prefix = offsetof(DDSurfacePrivateData, data);
+    if (!tag || !data || !bytes || (flags & ~(DDSPD_IUNKNOWNPOINTER | DDSPD_VOLATILE)))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    link = surface_private_data_link(surface, tag);
+    if ((flags & DDSPD_IUNKNOWNPOINTER) && bytes != sizeof(IUnknown *)) {
+        /* Native DD4/7 preserve an old value for zero size, but erase it for
+         * other invalid IUnknown sizes. D3D8/9 deliberately differ here. */
+        if (bytes && *link) {
+            old = *link;
+            *link = old->next;
+            surface_private_data_release(old);
+        }
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
+    if (bytes > (SIZE_T)-1 - prefix)
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    entry = heap_alloc_zero(prefix + bytes);
+    if (!entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    entry->tag = *tag;
+    entry->bytes = bytes;
+    entry->flags = flags;
+    entry->memory_identity = (uintptr_t)surface->memory;
+    entry->content_version = surface->memory->content_version;
+    if (flags & DDSPD_IUNKNOWNPOINTER) {
+        IUnknown_AddRef((IUnknown *)data);
+        CopyMemory(entry->data, &data, sizeof(data));
+    } else if (bytes) CopyMemory(entry->data, data, bytes);
+    /* Publish before releasing the replaced COM object: Release can reenter. */
+    old = *link;
+    entry->next = old ? old->next : NULL;
+    *link = entry;
+    surface_private_data_release(old);
+    return DD_OK;
 }
 
 static HRESULT WINAPI surface_GetPrivateData(IDirectDrawSurface7 *iface,
         REFGUID tag, LPVOID buffer, LPDWORD bytes)
 {
-    (void)iface; (void)tag; (void)buffer; (void)bytes;
-    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    DDSurface *surface = surface_from_iface(iface);
+    DDSurfacePrivateData *entry;
+    if (!tag) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    entry = *surface_private_data_link(surface, tag);
+    if (!entry) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    if (!bytes) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if ((entry->flags & DDSPD_VOLATILE) &&
+            (entry->memory_identity != (uintptr_t)surface->memory ||
+             entry->content_version != surface->memory->content_version)) {
+        *bytes = 0;
+        return DDWG_TRACE_ERROR(DDERR_EXPIRED);
+    }
+    if (*bytes < entry->bytes) {
+        *bytes = entry->bytes;
+        return DDWG_TRACE_ERROR(DDERR_MOREDATA);
+    }
+    if (!buffer) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (entry->bytes) CopyMemory(buffer, entry->data, entry->bytes);
+    *bytes = entry->bytes;
+    /* DD4/7 return a borrowed IUnknown; the stored entry owns the reference. */
+    return DD_OK;
 }
 
 static HRESULT WINAPI surface_FreePrivateData(IDirectDrawSurface7 *iface,
         REFGUID tag)
 {
-    (void)iface; (void)tag;
-    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    DDSurface *surface = surface_from_iface(iface);
+    DDSurfacePrivateData **link, *entry;
+    if (!tag) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    link = surface_private_data_link(surface, tag);
+    if (!(entry = *link)) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    *link = entry->next;
+    surface_private_data_release(entry);
+    return DD_OK;
 }
 
 static HRESULT WINAPI surface_GetUniquenessValue(IDirectDrawSurface7 *iface,
         LPDWORD value)
 {
     DDSurface *surface = surface_from_iface(iface);
-
     if (!value) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *value = (DWORD)surface->handle;
+    *value = surface->memory->content_version;
     return DD_OK;
 }
 
 static HRESULT WINAPI surface_ChangeUniquenessValue(IDirectDrawSurface7 *iface)
 {
-    (void)iface;
+    surface_memory_changed(surface_from_iface(iface)->memory);
     return DD_OK;
 }
 
@@ -4471,6 +4600,8 @@ static void surface_destroy(DDSurface *surface)
     /* Outside the object lock: emitting takes the transport lock, and the two
      * are never held in the other order anywhere else. */
     if (was_primary) emit_window_state_not_showing(owner);
+    surface_release_lookup_dc(surface);
+    surface_private_data_clear(surface);
     surface_memory_release(surface->memory);
     heap_free(surface);
     ddraw_child_detach(owner, public_ref);
@@ -6176,25 +6307,49 @@ static HRESULT WINAPI ddraw_GetAvailableVidMem(IDirectDraw7 *iface,
     return DD_OK;
 }
 
-static HRESULT WINAPI ddraw_GetSurfaceFromDC(IDirectDraw7 *iface, HDC dc,
-        LPDIRECTDRAWSURFACE7 *out)
+/* Resolve active surface DCs, taking an allocation pin before leaving the
+ * registry lock. The caller chooses the native public interface view. */
+static HRESULT ddraw_surface_from_dc(DDrawObject *owner, HDC dc,
+        void **out, unsigned view, HDC *device_dc)
 {
-    DDrawObject *object = object_from_iface(iface);
-    DDSurface *surface;
-
-    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    DDrawObject *object;
+    DDSurface *found = NULL;
+    if (!out) return DDWG_TRACE_ERROR(E_INVALIDARG);
     *out = NULL;
+    if (device_dc) *device_dc = NULL;
+    if (!dc) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
     EnterCriticalSection(&g_object_lock);
-    for (surface = object->surfaces; surface; surface = surface->next) {
-        if (surface->dc == dc) {
-            *out = (IDirectDrawSurface7 *)surface;
+    for (object = g_objects; object && !found; object = object->next) {
+        DDSurface *surface;
+        if (owner && object != owner) continue;
+        for (surface = object->surfaces; surface; surface = surface->next) {
+            if (surface->dc != dc) continue;
+            found = surface;
+            surface_private_addref(found);
             break;
         }
     }
     LeaveCriticalSection(&g_object_lock);
-    if (!*out) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
-    IDirectDrawSurface7_AddRef(*out);
+    if (!found) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    if (device_dc) {
+        HDC display = surface_lookup_device_dc(found);
+        if (!display) {
+            surface_private_release(found);
+            return DDWG_TRACE_ERROR(DDERR_GENERIC);
+        }
+        *device_dc = display;
+    }
+    surface_public_addref(found, view);
+    *out = surface_interface(found, view);
+    surface_private_release(found);
     return DD_OK;
+}
+
+static HRESULT WINAPI ddraw_GetSurfaceFromDC(IDirectDraw7 *iface, HDC dc,
+        LPDIRECTDRAWSURFACE7 *out)
+{
+    return ddraw_surface_from_dc(object_from_iface(iface), dc, (void **)out,
+            DD_VERSION_7, NULL);
 }
 
 static HRESULT WINAPI ddraw_RestoreAllSurfaces(IDirectDraw7 *iface)
@@ -6613,10 +6768,12 @@ DWORD WINAPI GetDDSurfaceLocal(DWORD unknown1, DWORD unknown2, DWORD unknown3)
     return 0;
 }
 
-HRESULT WINAPI GetSurfaceFromDC(DWORD unknown1, DWORD unknown2, DWORD unknown3)
+HRESULT WINAPI GetSurfaceFromDC(HDC dc, IDirectDrawSurface **out, HDC *device_dc)
 {
-    (void)unknown1; (void)unknown2; (void)unknown3;
-    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    if (!out) return DDWG_TRACE_ERROR(E_INVALIDARG);
+    *out = NULL;
+    if (!device_dc) return DDWG_TRACE_ERROR(E_INVALIDARG);
+    return ddraw_surface_from_dc(NULL, dc, (void **)out, DD_VERSION_1, device_dc);
 }
 
 DWORD WINAPI GetOLEThunkData(DWORD index)
@@ -7475,17 +7632,9 @@ LEGACY_DDRAW_VIDMEM_THUNK(ddraw4, IDirectDraw4, DDSCAPS2)
 static HRESULT WINAPI tag##_GetSurfaceFromDC(IFACE *iface, HDC dc, \
         SURFIFACE **out) \
 { \
-    IDirectDrawSurface7 *found = NULL; \
-    HRESULT result; \
-    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
-    *out = NULL; \
-    result = ddraw_GetSurfaceFromDC(DDRAW7(iface), dc, &found); \
-    if (SUCCEEDED(result) && found) { \
-        surface_transfer_public_ref(surface_from_any(found, NULL), DD_VERSION_7, surface_factory_view(VERSION)); \
-        *out = (SURFIFACE *)surface_interface(surface_from_any(found, NULL), \
-                surface_factory_view(VERSION)); \
-    } \
-    return DDWG_TRACE_ERROR(result); \
+    /* DD3/4 return Surface1 here, even through the Surface4-typed output. */ \
+    return ddraw_surface_from_dc(object_from_any(iface, NULL), dc, \
+            (void **)out, DD_VERSION_1, NULL); \
 }
 
 LEGACY_DDRAW_SURFACE_FROM_DC_THUNK(ddraw3, IDirectDraw3, IDirectDrawSurface,

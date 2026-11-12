@@ -5,11 +5,12 @@ function extract(name) {const re = new RegExp("static [^;{}\\n]*?\\b" + name + "
 const code = `#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-typedef int BOOL,HRESULT;typedef uint32_t DWORD;typedef unsigned char BYTE;
-typedef struct{unsigned index;} DDTextureStorage;typedef struct{BYTE bits[4];} DDSurfaceMemory;
+typedef int32_t LONG;typedef int BOOL,HRESULT;typedef uint32_t DWORD;typedef unsigned char BYTE;
+typedef struct{unsigned index;} DDTextureStorage;typedef struct{BYTE bits[4];DWORD content_version;} DDSurfaceMemory;
 typedef struct DDSurface DDSurface;typedef struct{DDSurface*surfaces;} DDrawObject;
 struct DDSurface{DDrawObject*owner;DDSurface*next,*flip_next,*overlay_destination;struct{struct{DWORD dwCaps;}ddsCaps;}desc;BOOL primary,overlay_visible,external_memory,upload_pending;DWORD handle,lock_depth,overlay_id;DDTextureStorage*storage;DDSurfaceMemory*memory;BYTE*shadow;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
+#define InterlockedIncrement(p) (++*(p))
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
@@ -31,10 +32,10 @@ static void d3d7_rebind_after_flip(DDrawObject*p){(void)p;device_rebinds++;}
 static BOOL emit_blt_to_screen(DDSurface*p,const void*r){(void)r;screens++;screen_handle=p->handle;if(fail_screen){fail_screen=0;return FALSE;}return TRUE;}
 static BOOL emit_overlay_state(DDSurface*p){overlays++;overlay_handle=p->handle;overlay_destination=p->overlay_destination?p->overlay_destination->handle:0;overlay_id=p->overlay_id;if(fail_overlay){fail_overlay=0;return FALSE;}return TRUE;}
 static BOOL emit_present_and_flush(DDrawObject*p){(void)p;presents++;if(fail_present){fail_present=0;return FALSE;}return TRUE;}
-${["surface_flip_contains", "surface_swap_flip_storage", "surface_rebind_flip_overlays", "surface_Flip"].map(extract).join("\n")}
+${["surface_memory_changed", "surface_flip_contains", "surface_swap_flip_storage", "surface_rebind_flip_overlays", "surface_Flip"].map(extract).join("\n")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw overlay flip line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
-static void seed(DDrawObject*o,DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned count){memset(s,0,sizeof(*s)*count);o->surfaces=s;for(unsigned i=0;i<count;i++){t[i].index=i;m[i].bits[0]=(BYTE)i;s[i].owner=o;s[i].next=i+1<count?&s[i+1]:NULL;s[i].flip_next=&s[(i+1)%count];s[i].desc.ddsCaps.dwCaps=DDSCAPS_FLIP|(i==0?DDSCAPS_FRONTBUFFER:0);s[i].handle=100+i;s[i].storage=&t[i];s[i].memory=&m[i];s[i].shadow=m[i].bits;s[i].external_memory=i==1;s[i].upload_pending=i!=1;s[i].overlay_id=200+i;}}
-static int verify(DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned*order,unsigned count){for(unsigned i=0;i<count;i++){unsigned n=order[i];CHECK(s[i].handle==100+n&&s[i].storage==&t[n]&&s[i].memory==&m[n]&&s[i].shadow==m[n].bits&&s[i].external_memory==(n==1)&&s[i].upload_pending==(n!=1)&&s[i].overlay_id==200+i);}return 0;}
+static void seed(DDrawObject*o,DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned count){memset(s,0,sizeof(*s)*count);o->surfaces=s;for(unsigned i=0;i<count;i++){t[i].index=i;m[i].content_version=1;m[i].bits[0]=(BYTE)i;s[i].owner=o;s[i].next=i+1<count?&s[i+1]:NULL;s[i].flip_next=&s[(i+1)%count];s[i].desc.ddsCaps.dwCaps=DDSCAPS_FLIP|(i==0?DDSCAPS_FRONTBUFFER:0);s[i].handle=100+i;s[i].storage=&t[i];s[i].memory=&m[i];s[i].shadow=m[i].bits;s[i].external_memory=i==1;s[i].upload_pending=i!=1;s[i].overlay_id=200+i;}}
+static int verify(DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned*order,unsigned count){for(unsigned i=0;i<count;i++){unsigned n=order[i];CHECK(m[n].content_version>1);CHECK(s[i].handle==100+n&&s[i].storage==&t[n]&&s[i].memory==&m[n]&&s[i].shadow==m[n].bits&&s[i].external_memory==(n==1)&&s[i].upload_pending==(n!=1)&&s[i].overlay_id==200+i);}return 0;}
 static int rotations(void){
  for(unsigned count=2;count<=3;count++){
   DDrawObject owner={0};DDSurface s[3],destination={.handle=9};DDTextureStorage t[3];DDSurfaceMemory m[3];seed(&owner,s,t,m,count);s[0].desc.ddsCaps.dwCaps|=DDSCAPS_OVERLAY;s[0].overlay_visible=TRUE;s[0].overlay_destination=&destination;unsigned order[]={0,1,2};
@@ -55,4 +56,4 @@ static int other_cases(void){
 }
 int main(void){(void)&surface_from_any;(void)&surface_flip_contains;(void)&surface_swap_flip_storage;(void)&surface_rebind_flip_overlays;CHECK(!rotations());CHECK(!other_cases());printf("PASS actual DDraw overlay Flip: %u checks, 512 two/three-buffer default/named flips, coupled storage/pending state, stable overlay identity, source/destination rebinding, primary base preservation, silent hidden/offscreen flips and invalid-target isolation\\n",checks);return 0;}
 `;
-try {const file = dir + "/flip.c", binary = dir + "/flip"; fs.writeFileSync(file, code); const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {encoding: "utf8"}); assert.equal(built.status, 0, built.stderr); const run = spawnSync(binary, [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stderr); process.stdout.write(run.stdout);} finally {fs.rmSync(dir, {recursive: true, force: true});}
+try {const file = dir + "/flip.c", binary = dir + "/flip"; fs.writeFileSync(file, code); const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-O1", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {encoding: "utf8"}); assert.equal(built.status, 0, built.stderr); const run = spawnSync(binary, [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stderr); process.stdout.write(run.stdout);} finally {fs.rmSync(dir, {recursive: true, force: true});}

@@ -10,7 +10,11 @@ typedef uint32_t UINT,DWORD;typedef int32_t LONG,HRESULT;typedef int BOOL;typede
 typedef struct {LONG left,top,right,bottom;} RECT,*LPRECT;
 typedef struct {BOOL client_succeeded,origin_succeeded;struct{LONG window_x,window_y;UINT client_width,client_height;}state;} D9WGWindowProbe;
 typedef struct{HWND window;} DDClipper;typedef struct{HWND window;UINT cooperative_flags;uint32_t device_handle;} DDrawObject;
-typedef struct{BOOL gpu_dirty;} Memory;
+typedef struct{BOOL gpu_dirty;DWORD content_version;} Memory;
+typedef Memory DDSurfaceMemory;
+#define InterlockedIncrement(p) (++*(p))
+${fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8").match(/static void surface_memory_changed\([^)]*\)\s*\{[\s\S]*?\n}/)[0]}
+
 typedef struct DDSurface{DDrawObject*owner;DDClipper*clipper;UINT width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL primary;void*flip_next;Memory*memory;BYTE*shadow,*dib_bits;void*dc,*dib,*old_bitmap,*gdi_dc;DWORD lock_flags,lock_depth;RECT locked_rect;} DDSurface;
 typedef DDSurface IDirectDrawSurface7;
 #define WINAPI
@@ -42,6 +46,7 @@ static void ddraw_gdi_dc_destroy(void*p){(void)p;native_releases++;}
 static void SelectObject(void*a,void*b){(void)a;(void)b;}
 static void DeleteObject(void*p){(void)p;}
 static void DeleteDC(void*p){(void)p;}
+static void surface_release_lookup_dc(DDSurface*s){(void)s;}
 ${extract("primary_present_area")}
 ${extract("emit_blt_to_screen")}
 ${extract("present_changed_primary")}
