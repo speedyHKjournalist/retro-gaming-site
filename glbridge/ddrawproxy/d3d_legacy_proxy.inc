@@ -1712,7 +1712,7 @@ static BOOL d3d_legacy_grow(void **memory, DWORD *capacity, DWORD required,
 
 static HRESULT d3d_legacy_begin(D3D7Device *device,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, void *vertices,
-        DWORD vertex_count)
+        DWORD vertex_count, DWORD flags)
 {
     D3D7FVFLayout layout;
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
@@ -1735,6 +1735,7 @@ static HRESULT d3d_legacy_begin(D3D7Device *device,
                 (SIZE_T)vertex_count * layout.stride);
     device->legacy_primitive_type = primitive_type;
     device->legacy_fvf = fvf;
+    device->legacy_draw_flags = flags;
     device->legacy_vertex_count = vertex_count;
     device->legacy_index_count = 0;
     device->legacy_in_begin = TRUE;
@@ -1744,18 +1745,16 @@ static HRESULT d3d_legacy_begin(D3D7Device *device,
 static HRESULT WINAPI d3d3_device_Begin(IDirect3DDevice3 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, DWORD flags)
 {
-    (void)flags;
     return d3d_legacy_begin(d3d3_device_from_iface(iface), primitive_type,
-            fvf, NULL, 0);
+            fvf, NULL, 0, flags);
 }
 
 static HRESULT WINAPI d3d3_device_BeginIndexed(IDirect3DDevice3 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, void *vertices,
         DWORD vertex_count, DWORD flags)
 {
-    (void)flags;
     return d3d_legacy_begin(d3d3_device_from_iface(iface), primitive_type,
-            fvf, vertices, vertex_count);
+            fvf, vertices, vertex_count, flags);
 }
 
 static HRESULT WINAPI d3d3_device_Vertex(IDirect3DDevice3 *iface,
@@ -1805,13 +1804,13 @@ static HRESULT WINAPI d3d3_device_End(IDirect3DDevice3 *iface, DWORD flags)
         result = d3d7_device_DrawIndexedPrimitive((IDirect3DDevice7 *)device,
                 device->legacy_primitive_type, device->legacy_fvf,
                 device->legacy_vertices, device->legacy_vertex_count,
-                device->legacy_indices, device->legacy_index_count, 0);
+                device->legacy_indices, device->legacy_index_count, device->legacy_draw_flags);
         d3d7_primitive_counts(device->legacy_primitive_type,
                 device->legacy_index_count, &primitive_count);
     } else {
         result = d3d7_device_DrawPrimitive((IDirect3DDevice7 *)device,
                 device->legacy_primitive_type, device->legacy_fvf,
-                device->legacy_vertices, device->legacy_vertex_count, 0);
+                device->legacy_vertices, device->legacy_vertex_count, device->legacy_draw_flags);
         d3d7_primitive_counts(device->legacy_primitive_type,
                 device->legacy_vertex_count, &primitive_count);
     }
@@ -2377,9 +2376,8 @@ static HRESULT WINAPI d3d2_device_Begin(IDirect3DDevice2 *iface,
 {
     DWORD fvf = d3d_legacy_vertex_type_fvf(vertex_type);
     if (!fvf) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
-    (void)flags;
     return d3d_legacy_begin(d3d2_device_from_iface(iface), primitive_type,
-            fvf, NULL, 0);
+            fvf, NULL, 0, flags);
 }
 
 static HRESULT WINAPI d3d2_device_BeginIndexed(IDirect3DDevice2 *iface,
@@ -2388,9 +2386,8 @@ static HRESULT WINAPI d3d2_device_BeginIndexed(IDirect3DDevice2 *iface,
 {
     DWORD fvf = d3d_legacy_vertex_type_fvf(vertex_type);
     if (!fvf) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
-    (void)flags;
     return d3d_legacy_begin(d3d2_device_from_iface(iface), primitive_type,
-            fvf, vertices, vertex_count);
+            fvf, vertices, vertex_count, flags);
 }
 
 static HRESULT WINAPI d3d2_device_Vertex(IDirect3DDevice2 *iface,

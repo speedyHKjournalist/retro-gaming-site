@@ -96,6 +96,7 @@ struct D3D7Device {
     DWORD legacy_index_count;
     DWORD legacy_index_capacity;
     DWORD legacy_fvf;
+    DWORD legacy_draw_flags;
     D3DPRIMITIVETYPE legacy_primitive_type;
     BOOL legacy_in_begin;
     D3DSTATS legacy_stats;
@@ -2167,11 +2168,22 @@ static HRESULT WINAPI d3d7_device_PreLoad(IDirect3DDevice7 *iface,
             ? D3D_OK : D3DERR_INITFAILED);
 }
 
+/* Before D3D7, the vertex format and draw flags select lighting; the
+ * LIGHTING render state itself is ignored by the public legacy interface. */
+static HRESULT d3d7_prepare_legacy_draw(D3D7Device *device, DWORD fvf, DWORD flags)
+{
+    if (device->creation_version >= 7u) return D3D_OK;
+    return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+            D3DRENDERSTATE_LIGHTING,
+            !!(fvf & D3DFVF_NORMAL) && !(flags & D3DDP_DONOTLIGHT));
+}
+
 static HRESULT WINAPI d3d7_device_DrawPrimitive(IDirect3DDevice7 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, void *vertices,
         DWORD vertex_count, DWORD flags)
 {
-    (void)flags;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
     return d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
             fvf, vertices, vertex_count) ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
@@ -2181,7 +2193,8 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitive(
         void *vertices, DWORD vertex_count, WORD *indices, DWORD index_count,
         DWORD flags)
 {
-    (void)flags;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
     return d3d7_emit_draw_indexed_up(d3d7_device_from_iface(iface),
             primitive_type, fvf, vertices, vertex_count, indices, index_count)
             ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
@@ -2260,7 +2273,8 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveStrided(
     BYTE *packed;
     UINT bytes;
     HRESULT result;
-    (void)flags;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
@@ -2278,7 +2292,8 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveStrided(
     BYTE *packed;
     UINT bytes;
     HRESULT result;
-    (void)flags;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
@@ -2341,7 +2356,6 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     D9WGSetStreamSource stream;
     D9WGDrawPrimitive draw;
     UINT primitive_count;
-    (void)flags;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d7_vb_from_iface(buffer_iface);
@@ -2351,6 +2365,8 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
             !d3d7_primitive_counts(primitive_type, vertex_count,
                     &primitive_count))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
     D9WGClipLegacyStatus next_status = device->clip_status;
     if (!d3d7_draw_clip_status(device, buffer->desc.dwFVF,
             buffer->shadow + start_vertex*buffer->stride, vertex_count, NULL, 0, FALSE, &next_status))
@@ -2396,7 +2412,6 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
     D3D7Device *device = d3d7_device_from_iface(iface);
     D3D7VertexBuffer *buffer;
     UINT primitive_count;
-    (void)flags;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl || !indices)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d7_vb_from_iface(buffer_iface);
@@ -2406,6 +2421,8 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
             !d3d7_primitive_counts(primitive_type, index_count, &primitive_count))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     (void)primitive_count;
+    HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
     D9WGClipLegacyStatus next_status = device->clip_status;
     if (!d3d7_draw_clip_status(device, buffer->desc.dwFVF,
             buffer->shadow + start_vertex*buffer->stride, vertex_count, indices, index_count, FALSE, &next_status))
