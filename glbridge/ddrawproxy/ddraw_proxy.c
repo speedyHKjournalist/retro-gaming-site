@@ -2404,6 +2404,10 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         source = NULL;
     } else {
         if (!source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (format_is_depth(source->format) != format_is_depth(destination->format))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (format_is_depth(source->format) && source->format != destination->format)
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
         effective_source.left = 0;
         effective_source.top = 0;
         effective_source.right = (LONG)source->width;

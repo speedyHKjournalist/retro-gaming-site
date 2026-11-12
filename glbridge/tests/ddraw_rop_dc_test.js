@@ -108,6 +108,7 @@ static int fills(void){
   RECT invalid[]={{-1,0,8,8},{0,-1,8,8},{0,0,9,8},{0,0,8,9},{4,0,4,8},{0,5,8,4}};
   for(unsigned i=0;i<6;i++){CHECK(surface_Blt(&d,&invalid[i],NULL,NULL,flags,&fx)==DDERR_INVALIDRECT&&blits==b);CHECK(!surface_Blt(&d,NULL,NULL,&invalid[i],flags,&fx));b=blits;CHECK(surface_Blt(&d,NULL,&s,&invalid[i],DDBLT_ROP,&fx)==DDERR_INVALIDRECT&&blits==b);}
  }
+ d.format=80;s.format=21;unsigned before_depth=blits;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==DDERR_INVALIDPARAMS&&blits==before_depth);s.format=71;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==DDERR_INVALIDPIXELFORMAT&&blits==before_depth);s.format=80;CHECK(!surface_Blt(&d,NULL,&s,NULL,0,NULL)&&last_source==&s);d.format=21;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==DDERR_INVALIDPARAMS);s.format=21;
  for(unsigned i=0;i<3;i++){d.format=i==0?DDWG_FMT_YUY2:i==1?DDWG_FMT_UYVY:DDWG_FMT_DXT1;unsigned b=blits;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_NORASTEROPHW&&blits==b);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==(i==2?E_NOTIMPL:DD_OK));}
  d.format=21;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_ROP,&fx)==DDERR_INVALIDPARAMS);CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx));d.format=80;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);return 0;
 }
