@@ -48,7 +48,7 @@ static int cycles(void){
  const DWORD flags[]={0,DDLOCK_READONLY,DDLOCK_WRITEONLY};
  for(unsigned round=0;round<128;round++)for(unsigned mode=0;mode<3;mode++)for(unsigned part=0;part<2;part++){
   Memory m={.gpu_dirty=TRUE};DDSurface s=make(&m),alias=s;DWORD before[16];for(unsigned i=0;i<16;i++)before[i]=0xff204060u+round*256+i;memcpy(gpu,before,64);RECT r={1,1,3,3};DDSURFACEDESC2 d={.dwSize=sizeof(d)};unsigned old_reads=reads,old_uploads=uploads;
-  CHECK(surface_Lock(&s,part?&r:NULL,&d,flags[mode]|DDLOCK_WAIT,NULL)==0);CHECK(reads==old_reads+1&&!m.gpu_dirty&&s.lock_depth==1);CHECK(d.lpSurface==m.bits+(part?20:0)&&d.lPitch==16&&d.dwWidth==4&&d.dwHeight==4);CHECK(!memcmp(m.bits,before,64));
+  CHECK(surface_Lock(&s,part?&r:NULL,&d,flags[mode]|DDLOCK_WAIT,NULL)==0);CHECK(reads==old_reads+1&&!m.gpu_dirty&&s.lock_depth==1);CHECK(!(d.dwFlags&DDSD_LPSURFACE)&&d.lpSurface==m.bits+(part?20:0)&&d.lPitch==16&&d.dwWidth==4&&d.dwHeight==4);CHECK(!memcmp(m.bits,before,64));
   if(mode!=1)*(DWORD*)d.lpSurface=0xffe01020u+round;
   CHECK(surface_Unlock(&s,NULL)==0&&s.lock_depth==0);CHECK(uploads==old_uploads+(mode!=1));
   if(mode!=1){CHECK(uploaded.left==(part?1:0)&&uploaded.top==(part?1:0)&&uploaded.right==(part?3:4)&&uploaded.bottom==(part?3:4));before[part?5:0]=0xffe01020u+round;}

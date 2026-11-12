@@ -3390,6 +3390,8 @@ static HRESULT WINAPI surface_GetSurfaceDesc(IDirectDrawSurface7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *description = surface->desc;
     description->dwSize = sizeof(DDSURFACEDESC2);
+    description->dwFlags &= ~DDSD_LPSURFACE;
+    description->lpSurface = NULL;
     return DD_OK;
 }
 
@@ -3470,7 +3472,10 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
 
     output = surface->desc;
     output.dwSize = sizeof(DDSURFACEDESC2);
-    output.dwFlags |= DDSD_LPSURFACE | DDSD_PITCH;
+    /* Native Lock returns the address without the SetSurfaceDesc/CreateSurface
+     * input-only DDSD_LPSURFACE flag. Callers reuse this description to create
+     * subsequent surfaces, including successive FOURCC formats. */
+    output.dwFlags = (output.dwFlags & ~DDSD_LPSURFACE) | DDSD_PITCH;
     output.lPitch = (LONG)surface->pitch;
     if (format_is_compressed(surface->format))
         output.lpSurface = surface->shadow + (top / 4) * surface->pitch
@@ -4538,14 +4543,17 @@ static DDSurface *surface_allocate(DDrawObject *object,
     UINT pitch;
     UINT shadow_rows;
     SIZE_T shadow_bytes;
+    BOOL external = (request->dwFlags & DDSD_LPSURFACE) != 0;
 
     if ((!bytes_per_pixel && !block_bytes) || !width || !height)
         return NULL;
     if (block_bytes) {
-        pitch = ((width + 3u) / 4u) * block_bytes;
+        pitch = external ? (UINT)request->lPitch
+            : ((width + 3u) / 4u) * block_bytes;
         shadow_rows = (height + 3u) / 4u;
     } else {
-        pitch = surface_pitch_for(width, bytes_per_pixel);
+        pitch = external ? (UINT)request->lPitch
+            : surface_pitch_for(width, bytes_per_pixel);
         shadow_rows = height;
     }
     shadow_bytes = (SIZE_T)pitch * shadow_rows;
@@ -4553,9 +4561,11 @@ static DDSurface *surface_allocate(DDrawObject *object,
 
     surface = (DDSurface *)heap_alloc_zero(sizeof(*surface));
     if (!surface) return NULL;
-    surface->memory = surface_memory_create(NULL, shadow_bytes, TRUE);
+    surface->memory = surface_memory_create(external ? request->lpSurface : NULL,
+            shadow_bytes, !external);
     if (!surface->memory) { heap_free(surface); return NULL; }
     surface->shadow = surface->memory->bits;
+    surface->external_memory = external;
 
     /* Every version's vtable, because QueryInterface may hand out any of them
      * and the app calls straight through whichever it holds. */
@@ -4608,6 +4618,10 @@ static DDSurface *surface_allocate(DDrawObject *object,
 
     surface->desc = *request;
     surface->desc.dwSize = sizeof(DDSURFACEDESC2);
+    surface->desc.lpSurface = NULL;
+    surface->desc.dwFlags &= ~DDSD_LPSURFACE;
+    if (!(request->dwFlags & DDSD_BACKBUFFERCOUNT))
+        surface->desc.dwBackBufferCount = 0;
     surface->desc.dwFlags |= DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT |
         DDSD_CAPS;
     surface->desc.dwWidth = width;
@@ -4617,6 +4631,7 @@ static DDSurface *surface_allocate(DDrawObject *object,
         surface->desc.dwFlags |= DDSD_LINEARSIZE;
         surface->desc.dwLinearSize = (DWORD)shadow_bytes;
     } else {
+        surface->desc.dwFlags &= ~DDSD_LINEARSIZE;
         surface->desc.dwFlags |= DDSD_PITCH;
         surface->desc.lPitch = (LONG)pitch;
     }
@@ -4742,7 +4757,7 @@ static DDSurface *surface_create_complex_texture(DDrawObject *object,
     if (level_count > 1u) caps |= DDSCAPS_MIPMAP | DDSCAPS_COMPLEX;
     if (cube) caps |= DDSCAPS_COMPLEX;
     root_seed.dwFlags |= DDSD_PIXELFORMAT | DDSD_CAPS;
-    if (level_count > 1u) root_seed.dwFlags |= DDSD_MIPMAPCOUNT;
+    if (caps & DDSCAPS_MIPMAP) root_seed.dwFlags |= DDSD_MIPMAPCOUNT;
     root_seed.dwMipMapCount = level_count;
     root_seed.ddsCaps.dwCaps = caps;
     root = surface_allocate(object, &root_seed, format, width, height, caps,
@@ -5194,6 +5209,45 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
     caps = request->ddsCaps.dwCaps;
     back_buffers = (request->dwFlags & DDSD_BACKBUFFERCOUNT)
         ? request->dwBackBufferCount : 0;
+    /* Validate the requested roles before adding the implementation's placement
+     * and flip-chain flags. A back-buffer count does not itself make a surface
+     * flippable, and only primary flip chains require exclusive mode. */
+    if ((caps & DDSCAPS_SYSTEMMEMORY) && (caps & DDSCAPS_VIDEOMEMORY))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if ((caps & DDSCAPS_ALLOCONLOAD) && !(caps & DDSCAPS_TEXTURE))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if (request->dwFlags & DDSD_LPSURFACE) {
+        if (caps & DDSCAPS_VIDEOMEMORY)
+            return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+        if (version < DD_VERSION_4 || !(caps & DDSCAPS_SYSTEMMEMORY) ||
+                !(request->dwFlags & DDSD_PITCH) || !request->lpSurface)
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
+    if (caps & DDSCAPS_FLIP) {
+        if (!(caps & DDSCAPS_COMPLEX) || !back_buffers ||
+                (caps & (DDSCAPS_FRONTBUFFER | DDSCAPS_BACKBUFFER)))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    } else if (request->dwFlags & DDSD_BACKBUFFERCOUNT) {
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    }
+    if (caps & DDSCAPS_PRIMARYSURFACE) {
+        /* The original DirectDraw factory alone accepts FRONTBUFFER on a
+         * standalone primary; the later interface factories reject it. */
+        if (version > DD_VERSION_1 && (caps & DDSCAPS_FRONTBUFFER))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+        if ((caps & (DDSCAPS_TEXTURE | DDSCAPS_OFFSCREENPLAIN |
+                DDSCAPS_ZBUFFER | DDSCAPS_OVERLAY | DDSCAPS_BACKBUFFER)) ||
+                ((caps & DDSCAPS_COMPLEX) && !(caps & DDSCAPS_FLIP)))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+        if ((caps & DDSCAPS_FLIP) &&
+                !(object->cooperative_flags & DDSCL_EXCLUSIVE))
+            return DDWG_TRACE_ERROR(DDERR_NOEXCLUSIVEMODE);
+    }
+    if (request->ddsCaps.dwCaps2 &
+            (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE))
+        caps |= DDSCAPS_SYSTEMMEMORY;
+    if (!(caps & DDSCAPS_SYSTEMMEMORY))
+        caps |= DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM;
     if (caps & DDSCAPS_PRIMARYSURFACE) caps |= DDSCAPS_VISIBLE;
     if (back_buffers) caps |= DDSCAPS_FLIP | DDSCAPS_FRONTBUFFER;
     DDWG_TRACE_CHECKPOINT("SURFACE REQUEST flags=%08lX caps=%08lX caps2=%08lX "
@@ -5234,10 +5288,23 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
     }
     cube = (request->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP) != 0;
     if (cube && width != height) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if ((caps & DDSCAPS_MIPMAP) && !(caps & DDSCAPS_TEXTURE))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if ((caps & DDSCAPS_COMPLEX) && !(caps & (DDSCAPS_FLIP | DDSCAPS_MIPMAP)) && !cube)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if ((request->dwFlags & DDSD_MIPMAPCOUNT) &&
+            (caps & (DDSCAPS_TEXTURE | DDSCAPS_MIPMAP | DDSCAPS_COMPLEX)) !=
+                (DDSCAPS_TEXTURE | DDSCAPS_MIPMAP | DDSCAPS_COMPLEX))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     if ((caps & DDSCAPS_MIPMAP) || (request->dwFlags & DDSD_MIPMAPCOUNT)) {
-        UINT full_levels = surface_full_mip_count(width, height);
+        /* DD1-4 stop when either dimension reaches one. DD7 permits the
+         * remaining 1xN tail. A noncomplex mip texture has just its root. */
+        UINT full_levels = version >= DD_VERSION_7
+            ? surface_full_mip_count(width, height)
+            : surface_full_mip_count(width < height ? width : height,
+                    width < height ? width : height);
         mip_levels = (request->dwFlags & DDSD_MIPMAPCOUNT)
-            ? request->dwMipMapCount : full_levels;
+            ? request->dwMipMapCount : (caps & DDSCAPS_COMPLEX) ? full_levels : 1u;
         if (!mip_levels || mip_levels > full_levels)
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     }
@@ -5254,12 +5321,25 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
                 pixel_format.dwBBitMask);
         return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     }
+    if (request->dwFlags & DDSD_LPSURFACE) {
+        UINT pixel_bytes = format_bytes_per_pixel(format);
+        UINT block_bytes = format_compressed_block_bytes(format);
+        UINT minimum = block_bytes ? ((width + 3u) / 4u) * block_bytes
+            : width * pixel_bytes;
+        if (request->lPitch <= 0 || (request->lPitch & 3) ||
+                (UINT)request->lPitch < minimum || cube || mip_levels > 1u || back_buffers)
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
 
     {
         DDSURFACEDESC2 seed = *request;
+        /* Unflagged union members and application pointers are not output
+         * metadata. Noncompressed storage reports the pitch we allocated. */
+        seed.dwBackBufferCount = back_buffers;
+        seed.dwFlags &= ~DDSD_LINEARSIZE;
         seed.ddpfPixelFormat = pixel_format;
         seed.dwFlags |= DDSD_PIXELFORMAT;
-        if (cube || mip_levels > 1u)
+        if (cube || (caps & DDSCAPS_MIPMAP))
             surface = surface_create_complex_texture(object, &seed, format,
                     width, height, caps, mip_levels, cube);
         else
@@ -5481,6 +5561,44 @@ static HRESULT WINAPI ddraw_FlipToGDISurface(IDirectDraw7 *iface)
     return DD_OK;
 }
 
+static DWORD ddraw_video_memory_free(void)
+{
+    DWORD available = 48u * 1024u * 1024u;
+    DDrawObject *object;
+    DDSurface *surface;
+    EnterCriticalSection(&g_object_lock);
+    for (object = g_objects; object; object = object->next) {
+        for (surface = object->surfaces; surface; surface = surface->next) {
+            DDrawObject *previous_owner;
+            BOOL counted = FALSE;
+            if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_VIDEOMEMORY) ||
+                    !surface->memory)
+                continue;
+            /* DuplicateSurface aliases a subresource's allocation. Mip/cube
+             * levels have distinct memory, although their GPU storage is shared. */
+            for (previous_owner = g_objects; previous_owner && !counted;
+                    previous_owner = previous_owner->next) {
+                DDSurface *previous;
+                for (previous = previous_owner->surfaces; previous;
+                        previous = previous->next) {
+                    if (previous == surface) break;
+                    if (previous->memory == surface->memory &&
+                            (previous->desc.ddsCaps.dwCaps & DDSCAPS_VIDEOMEMORY)) {
+                        counted = TRUE;
+                        break;
+                    }
+                }
+                if (previous_owner == object) break;
+            }
+            if (!counted)
+                available = surface->memory->bytes < available
+                    ? available - (DWORD)surface->memory->bytes : 0;
+        }
+    }
+    LeaveCriticalSection(&g_object_lock);
+    return available;
+}
+
 static void fill_caps(DDCAPS *caps)
 {
     DWORD size = caps->dwSize;
@@ -5521,10 +5639,10 @@ static void fill_caps(DDCAPS *caps)
     caps->dwPalCaps = DDPCAPS_8BIT | DDPCAPS_ALLOW256 | DDPCAPS_PRIMARYSURFACE;
     caps->dwSVCaps = 0;
     caps->dwZBufferBitDepths = DDBD_16 | DDBD_24 | DDBD_32;
-    /* The host allocates GPU textures on demand; there is no fixed pool. This
-     * number exists because titles refuse to start when it is zero. */
+    /* Report a stable compatibility budget less the live video allocations.
+     * System-memory shadows and duplicate views do not consume this budget. */
     caps->dwVidMemTotal = 64u * 1024u * 1024u;
-    caps->dwVidMemFree = 48u * 1024u * 1024u;
+    caps->dwVidMemFree = ddraw_video_memory_free();
     caps->dwMaxVisibleOverlays = 32;
     caps->dwCurrVisibleOverlays = 0;
     caps->dwMinOverlayStretch = 1;
@@ -5842,7 +5960,7 @@ static HRESULT WINAPI ddraw_GetAvailableVidMem(IDirectDraw7 *iface,
 {
     (void)iface; (void)caps;
     if (total) *total = 64u * 1024u * 1024u;
-    if (free_bytes) *free_bytes = 48u * 1024u * 1024u;
+    if (free_bytes) *free_bytes = ddraw_video_memory_free();
     return DD_OK;
 }
 

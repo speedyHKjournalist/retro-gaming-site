@@ -33,6 +33,7 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 #define DDCKEY_DESTOVERLAY 4u
 #define DDCKEY_SRCBLT 8u
 #define DDCKEY_SRCOVERLAY 16u
+#define DDSD_PITCH 8u
 #define DDSD_CAPS 1u
 #define DDSD_WIDTH 4u
 #define DDSD_HEIGHT 2u
@@ -43,6 +44,20 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 #define DDSD_CKSRCOVERLAY 0x8000u
 #define DDSD_CKSRCBLT 0x10000u
 #define DDSD_MIPMAPCOUNT 0x20000u
+#define DDSCL_EXCLUSIVE 16u
+#define DDERR_NOEXCLUSIVEMODE (-18)
+#define DDERR_INVALIDCAPS (-20)
+#define DDSD_LPSURFACE 0x800u
+#define DDSD_LINEARSIZE 0x80000u
+#define DDSCAPS_COMPLEX 8u
+#define DDSCAPS_SYSTEMMEMORY 0x800u
+#define DDSCAPS_VIDEOMEMORY 0x4000u
+#define DDSCAPS_LOCALVIDMEM 0x10000000u
+#define DDSCAPS_ALLOCONLOAD 0x4000000u
+#define DDSCAPS_ZBUFFER 0x20000u
+#define DDSCAPS_OVERLAY 0x80u
+#define DDSCAPS2_TEXTUREMANAGE 0x10u
+#define DDSCAPS2_D3DTEXTUREMANAGE 0x20000u
 #define DDSCAPS_TEXTURE 0x1000u
 #define DDSCAPS_OFFSCREENPLAIN 0x40u
 #define DDSCAPS_PRIMARYSURFACE 0x200u
@@ -55,10 +70,11 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 #define DDSCAPS2_CUBEMAP 0x200u
 typedef struct{DWORD dwColorSpaceLowValue,dwColorSpaceHighValue;}DDCOLORKEY,*LPDDCOLORKEY;
 typedef struct{DWORD dwSize,dwFlags,dwRGBBitCount,dwRBitMask,dwGBitMask,dwBBitMask;}DDPIXELFORMAT;
-typedef struct{DWORD dwSize,dwFlags,dwWidth,dwHeight,dwBackBufferCount,dwMipMapCount;struct{DWORD dwCaps,dwCaps2;}ddsCaps;DDPIXELFORMAT ddpfPixelFormat;DDCOLORKEY ddckCKSrcBlt,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKDestOverlay;}DDSURFACEDESC2,*LPDDSURFACEDESC2;
-typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
+typedef struct{void*lpSurface;int32_t lPitch;DWORD dwSize,dwFlags,dwWidth,dwHeight,dwBackBufferCount,dwMipMapCount;struct{DWORD dwCaps,dwCaps2;}ddsCaps;DDPIXELFORMAT ddpfPixelFormat;DDCOLORKEY ddckCKSrcBlt,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKDestOverlay;}DDSURFACEDESC2,*LPDDSURFACEDESC2;
+typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref,cooperative_flags;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
 struct DDSurface{void*vtbl7;void*storage;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;typedef struct{unsigned unused;}DDrawPixelFormatDesc;
+#define DD_VERSION_1 1u
 #define DD_VERSION_4 4u
 #define DD_VERSION_7 7u
 static unsigned ddraw_AddRef(DDrawObject*d){return ++d->ref;}
@@ -71,8 +87,9 @@ static void object_display_size(DDrawObject*d,UINT*w,UINT*h){(void)d;*w=*h=32;}
 static void mode_pixel_format(UINT bits,DDPIXELFORMAT*p){*p=(DDPIXELFORMAT){.dwSize=sizeof(*p),.dwRGBBitCount=bits};}
 static void describe_pixel_format(const DDPIXELFORMAT*p,DDrawPixelFormatDesc*d){assert(p->dwRGBBitCount==32);d->unused=0;}
 static unsigned ddraw_pixel_format_to_d3dformat(const DDrawPixelFormatDesc*p){(void)p;return 22;}
+static UINT format_bytes_per_pixel(UINT f){(void)f;return 4;}static UINT format_compressed_block_bytes(UINT f){(void)f;return 0;}
 static void watch_object_window(DDrawObject*d){assert(d);}static BOOL seed_windowed_primary_from_screen(DDSurface*s){assert(s);return 1;}
-static DDSurface*surface_create(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps){DWORD expected=p->ddsCaps.dwCaps;if(expected&DDSCAPS_PRIMARYSURFACE)expected|=DDSCAPS_VISIBLE;assert(d&&f==22&&w==32&&h==32&&caps==expected);creates++;DDSurface*s=calloc(1,sizeof(*s));assert(s);s->owner=d;s->desc=*p;return s;}
+static DDSurface*surface_create(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps){DWORD expected=p->ddsCaps.dwCaps;if(!(expected&DDSCAPS_SYSTEMMEMORY))expected|=DDSCAPS_VIDEOMEMORY|DDSCAPS_LOCALVIDMEM;if(expected&DDSCAPS_PRIMARYSURFACE)expected|=DDSCAPS_VISIBLE;assert(d&&f==22&&w==32&&h==32&&caps==expected);creates++;DDSurface*s=calloc(1,sizeof(*s));assert(s);s->owner=d;s->desc=*p;return s;}
 static DDSurface*surface_create_complex_texture(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps,UINT levels,BOOL cube){assert(levels==2&&!cube);return surface_create(d,p,f,w,h,caps);}
 BOOL IsBadWritePtr(void*p,size_t n){(void)n;return !p||(uintptr_t)p==0xdeadbeef;}
 void surface_creation_profile(DDSurface*s,unsigned version){(void)s;(void)version;}
@@ -94,7 +111,7 @@ for(UINT mode=0;mode<6;mode++){DWORD flags=mode==0?0:mode==1?DDCKEY_COLORSPACE:m
 CHECK(surface_GetColorKey(&surface,DDCKEY_SRCBLT,NULL)==DDERR_INVALIDPARAMS);
 for(UINT profile=0;profile<4;profile++)for(UINT mask=1;mask<16;mask++)for(UINT bad=0;bad<5;bad++){
  DDSURFACEDESC2 request={.dwSize=sizeof(request),.dwFlags=DDSD_CAPS|DDSD_WIDTH|DDSD_HEIGHT|DDSD_PIXELFORMAT,.dwWidth=32,.dwHeight=32,.ddsCaps={.dwCaps=profile==0?DDSCAPS_OFFSCREENPLAIN:profile==1?DDSCAPS_TEXTURE:profile==2?DDSCAPS_PRIMARYSURFACE:DDSCAPS_TEXTURE|DDSCAPS_MIPMAP},.ddpfPixelFormat={.dwSize=sizeof(DDPIXELFORMAT),.dwRGBBitCount=32}};
- if(profile==3){request.dwFlags|=DDSD_MIPMAPCOUNT;request.dwMipMapCount=2;}
+ if(profile==3){request.ddsCaps.dwCaps|=DDSCAPS_COMPLEX;request.dwFlags|=DDSD_MIPMAPCOUNT;request.dwMipMapCount=2;}
  DDCOLORKEY*keys[]={&request.ddckCKSrcBlt,&request.ddckCKDestBlt,&request.ddckCKSrcOverlay,&request.ddckCKDestOverlay};BOOL rejected=0;
  for(UINT kind=0;kind<4;kind++){*keys[kind]=(DDCOLORKEY){0x11223344+kind,0x11223344+kind};if(mask&(1u<<kind))request.dwFlags|=descflags[kind];if(bad==kind+1){keys[kind]->dwColorSpaceHighValue^=1;rejected=(mask&(1u<<kind))!=0;}}
  DDSURFACEDESC2 before=request;DDSurface*out=(void*)(uintptr_t)1;unsigned old_creates=creates;HRESULT hr=ddraw_CreateSurface(&owner,&request,&out,NULL);

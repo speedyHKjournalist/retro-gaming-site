@@ -1352,6 +1352,28 @@ static BOOL d3d7_create_host_context(D3D7Device *device)
     return emit_command(D9WG_OP_WINDOW_STATE, &hidden, sizeof(hidden));
 }
 
+static HRESULT d3d7_validate_device_target(DDSurface *surface, REFCLSID clsid,
+        UINT version)
+{
+    DWORD caps = surface->desc.ddsCaps.dwCaps;
+    BOOL software = guid_equal(clsid, &IID_IDirect3DRGBDevice);
+    if (!(caps & DDSCAPS_3DDEVICE) || (caps & DDSCAPS_ZBUFFER))
+        return DDERR_INVALIDCAPS;
+    if (surface->indexed && !surface->palette)
+        return DDERR_NOPALETTEATTACHED;
+    if (!software && !(caps & DDSCAPS_VIDEOMEMORY))
+        return D3DERR_SURFACENOTINVIDMEM;
+    if (format_is_depth(surface->format) || format_is_yuv(surface->format) ||
+            format_is_compressed(surface->format))
+        return DDERR_INVALIDPIXELFORMAT;
+    /* Legacy RGB devices can draw into palettised memory. D3D7 removed that
+     * render-target format, even though P8 remains a valid texture format. */
+    if (surface->indexed && (!software || version >= 7u))
+        return software && !(caps & DDSCAPS_VIDEOMEMORY)
+            ? E_FAIL : DDERR_INVALIDPIXELFORMAT;
+    return D3D_OK;
+}
+
 static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
         IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out,
         UINT version)
@@ -1359,6 +1381,7 @@ static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
     DDrawObject *owner = d3d7_object_from_iface(iface);
     DDSurface *surface;
     D3D7Device *device;
+    HRESULT hr;
 
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
@@ -1369,8 +1392,10 @@ static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
             !guid_equal(clsid, &IID_IDirect3DRGBDevice))
         return DDWG_TRACE_ERROR(D3DERR_INVALID_DEVICE);
     surface = surface_from_any(surface_iface, NULL);
-    if (!surface || surface->owner != owner || format_is_depth(surface->format))
+    if (!surface || surface->owner != owner)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    hr = d3d7_validate_device_target(surface, clsid, version);
+    if (FAILED(hr)) return DDWG_TRACE_ERROR(hr);
     if (!ensure_device(owner)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device = (D3D7Device *)heap_alloc_zero(sizeof(*device));
     if (!device) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);

@@ -1,0 +1,24 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
+const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-creation-mut-"));
+const mutations=[
+ ["legacy rectangular mip tail retained","ddraw","ddraw_CreateSurfaceForVersion","version >= DD_VERSION_7\n            ? surface_full_mip_count","TRUE\n            ? surface_full_mip_count"],
+ ["noncomplex mip texture grows chain","ddraw","ddraw_CreateSurfaceForVersion",": (caps & DDSCAPS_COMPLEX) ? full_levels : 1u;",": full_levels;"],
+ ["mipmap without texture accepted","ddraw","ddraw_CreateSurfaceForVersion","if ((caps & DDSCAPS_MIPMAP) && !(caps & DDSCAPS_TEXTURE))","if (FALSE)"],
+ ["modern primary accepts explicit front role","ddraw","ddraw_CreateSurfaceForVersion","version > DD_VERSION_1 && (caps & DDSCAPS_FRONTBUFFER)","FALSE"],
+ ["implicit flip from count","ddraw","ddraw_CreateSurfaceForVersion","} else if (request->dwFlags & DDSD_BACKBUFFERCOUNT) {","} else if (FALSE) {"],
+ ["missing complex role","ddraw","ddraw_CreateSurfaceForVersion","!(caps & DDSCAPS_COMPLEX) || !back_buffers","FALSE || !back_buffers"],
+ ["primary flip outside exclusive","ddraw","ddraw_CreateSurfaceForVersion","!(object->cooperative_flags & DDSCL_EXCLUSIVE)","FALSE"],
+ ["default placement missing","ddraw","ddraw_CreateSurfaceForVersion","caps |= DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM;","caps |= DDSCAPS_VIDEOMEMORY;"],
+ ["unflagged count leaks","ddraw","ddraw_CreateSurfaceForVersion","seed.dwBackBufferCount = back_buffers;","seed.dwBackBufferCount = request->dwBackBufferCount;"],
+ ["nonflipping primary needs exclusive","ddraw","ddraw_CreateSurfaceForVersion","if ((caps & DDSCAPS_FLIP) &&","if ((caps & DDSCAPS_FLIP) ||"],
+ ["application pointer accepted","ddraw","ddraw_CreateSurfaceForVersion","if (request->dwFlags & DDSD_LPSURFACE) {\n        if (caps & DDSCAPS_VIDEOMEMORY)","if (FALSE) {\n        if (caps & DDSCAPS_VIDEOMEMORY)"],
+ ["system memory charged","ddraw","ddraw_video_memory_free","!(surface->desc.ddsCaps.dwCaps & DDSCAPS_VIDEOMEMORY) ||","FALSE ||"],
+ ["duplicate view charged twice","ddraw","ddraw_video_memory_free","previous->memory == surface->memory &&","FALSE &&"],
+ ["memory budget wraps","ddraw","ddraw_video_memory_free","surface->memory->bytes < available","TRUE"],
+ ["device ignores caps","d3d","d3d7_validate_device_target","!(caps & DDSCAPS_3DDEVICE) || (caps & DDSCAPS_ZBUFFER)","FALSE"],
+ ["palette check loses priority","d3d","d3d7_validate_device_target","if (surface->indexed && !surface->palette)","if (surface->indexed && !surface->palette && (caps & DDSCAPS_VIDEOMEMORY))"],
+ ["HAL accepts system target","d3d","d3d7_validate_device_target","if (!software && !(caps & DDSCAPS_VIDEOMEMORY))","if (FALSE)"],
+ ["D3D7 accepts indexed target","d3d","d3d7_validate_device_target","(!software || version >= 7u)","(!software || version > 7u)"],
+];
+try{for(let i=0;i<mutations.length;i++){const[label,kind,name,from,to]=mutations[i],source=fs.readFileSync(root+"/ddrawproxy/"+(kind==="d3d"?"d3d7_proxy.inc":"ddraw_proxy.c"),"utf8"),m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}const body=source.slice(m.index,end);assert.equal(body.split(from).length,2,label);const file=dir+"/mut-"+i+".c";fs.writeFileSync(file,source.slice(0,m.index)+body.replace(from,to)+source.slice(end));const run=spawnSync(process.execPath,[__dirname+"/ddraw_surface_creation_test.js"],{encoding:"utf8",env:{...process.env,[kind==="d3d"?"DDRAW_TARGET_SOURCE":"DDRAW_CREATION_SOURCE"]:file}});assert.notEqual(run.status,0,label);assert.match(run.stderr,/surface creation line/,label+": must compile and fail runtime checks");process.stdout.write("KILL "+label+"\n");}process.stdout.write("PASS surface creation mutations: "+mutations.length+"/"+mutations.length+" compiled implementations rejected at runtime\n");}finally{fs.rmSync(dir,{recursive:true,force:true});}
