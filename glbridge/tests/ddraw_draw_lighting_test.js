@@ -8,11 +8,13 @@ const code=`#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL,D3DPRIMITIVETYPE;typedef uint16_t WORD;typedef unsigned char BYTE;
-typedef struct{unsigned creation_version;BOOL lighting;}D3D7Device,IDirect3DDevice7;
+typedef struct{unsigned creation_version;BOOL lighting,render_target_invalid,render_target_pending;}D3D7Device,IDirect3DDevice7;
 typedef void D3DDRAWPRIMITIVESTRIDEDDATA;
 #define WINAPI
 #define D3D_OK 0
 #define D3DERR_INVALIDVERTEXFORMAT (-1)
+#define DDERR_INVALIDPIXELFORMAT (-2)
+#define D3DERR_INITFAILED (-3)
 #define D3DRENDERSTATE_LIGHTING 137u
 #define D3DFVF_NORMAL 0x10u
 #define D3DDP_DONOTLIGHT 4u
@@ -21,6 +23,7 @@ typedef void D3DDRAWPRIMITIVESTRIDEDDATA;
 static unsigned checks,sets,draws,frees,fail_set,fail_draw,fail_pack;static BOOL want;
 #define MUST(x) do{checks++;if(!(x)){fprintf(stderr,"draw lighting line %u: %s\\n",__LINE__,#x);exit(1);}}while(0)
 static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*p){return p;}
+static BOOL d3d7_emit_render_target(D3D7Device*d){(void)d;MUST(0);return 0;}
 static HRESULT d3d7_device_SetRenderState(IDirect3DDevice7*d,DWORD state,DWORD value){sets++;MUST(state==D3DRENDERSTATE_LIGHTING);if(fail_set)return -90;d->lighting=value;return D3D_OK;}
 static BOOL d3d7_emit_draw_up(D3D7Device*d,D3DPRIMITIVETYPE type,DWORD fvf,const void*v,DWORD count){(void)type;(void)fvf;MUST(v&&count==4&&d->lighting==want);draws++;return !fail_draw;}
 static BOOL d3d7_emit_draw_indexed_up(D3D7Device*d,D3DPRIMITIVETYPE type,DWORD fvf,const void*v,DWORD count,const WORD*indices,DWORD n){MUST(indices&&n==6);return d3d7_emit_draw_up(d,type,fvf,v,count);}

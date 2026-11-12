@@ -60,6 +60,9 @@ struct D3D7Device {
     DWORD wire_handle;
     BOOL wire_created;
     DDSurface *render_target;
+    BOOL render_target_invalid;
+    BOOL render_target_pending;
+    BOOL legacy_failed_rt;
     DDSurface *aggregate_surface; /* Device1's public IUnknown is Surface1 */
     /* Which of the three device GUIDs CreateDevice was given. GetCaps has to
      * answer for that device, not for the best one this DLL can offer: an app
@@ -1296,6 +1299,8 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
     D9WGSetDepthStencilSurfaceLevel depth;
     DDSurface *target = device->render_target;
 
+    if (device->render_target_invalid) return FALSE;
+    device->render_target_pending = TRUE;
     if (target && !prepare_surface_for_host(target))
         return FALSE;
     if (target && target->attached_depth &&
@@ -1316,8 +1321,10 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
         depth.width = target->attached_depth->width;
         depth.height = target->attached_depth->height;
     }
-    return emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &depth,
-            sizeof(depth));
+    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &depth,
+            sizeof(depth))) return FALSE;
+    device->render_target_pending = FALSE;
+    return TRUE;
 }
 
 static void d3d7_destroy_host_context(D3D7Device *device)
@@ -1554,6 +1561,18 @@ static ULONG WINAPI d3d7_device_AddRef(IDirect3DDevice7 *iface)
     return (ULONG)InterlockedIncrement(&d3d7_device_from_iface(iface)->ref);
 }
 
+static void d3d7_release_target(DDSurface *surface, BOOL legacy_failed)
+{
+    if (!surface) return;
+    /* Device2 installs an invalid-format target without taking a public
+     * Surface1 reference, then consumes one on replacement/destruction. Retain
+     * an implementation-view pin while it is installed, so the native
+     * public-count quirk never leaves our internal pointer dangling. */
+    if (legacy_failed && surface->public_refs[DD_VERSION_1] > 0)
+        surface_public_release(surface, DD_VERSION_1);
+    surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
+}
+
 static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
@@ -1572,9 +1591,7 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
                 surface_Release((IDirectDrawSurface7 *)
                         &device->textures[stage]->vtbl7);
         }
-        if (device->render_target)
-            surface_Release((IDirectDrawSurface7 *)
-                    &device->render_target->vtbl7);
+        d3d7_release_target(device->render_target, device->legacy_failed_rt);
         block = device->state_blocks;
         while (block) {
             D3D7StateBlock *next = block->next;
@@ -1651,24 +1668,50 @@ static HRESULT WINAPI d3d7_device_SetRenderTarget(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     DDSurface *surface;
     DDSurface *old;
+    DWORD caps;
+    BOOL invalid_format, old_invalid, old_failed;
     (void)flags;
     if (!surface_iface || surface_iface->lpVtbl != &g_surface_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = surface_from_any(surface_iface, NULL);
-    if (!surface || surface->owner != device->owner ||
-            format_is_depth(surface->format))
+    if (!surface || surface->owner != device->owner)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (surface == device->render_target) return D3D_OK;
+    caps = surface->desc.ddsCaps.dwCaps;
+    if (!(caps & DDSCAPS_3DDEVICE) || surface->indexed)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if (device->creation_version >= 7u && (caps & DDSCAPS_SYSTEMMEMORY))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    invalid_format = format_is_depth(surface->format) ||
+        format_is_yuv(surface->format) || format_is_compressed(surface->format);
+    if (surface == device->render_target) {
+        if (invalid_format) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
+        if (device->render_target_pending && !d3d7_emit_render_target(device))
+            return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+        return D3D_OK;
+    }
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     old = device->render_target;
+    old_invalid = device->render_target_invalid;
+    old_failed = device->legacy_failed_rt;
     device->render_target = surface;
-    if (!d3d7_emit_render_target(device)) {
+    device->render_target_invalid = invalid_format;
+    device->render_target_pending = TRUE;
+    device->legacy_failed_rt = invalid_format && device->creation_version == 2u;
+    /* Windows exposes the invalid-format target through GetRenderTarget even
+     * though SetRenderTarget fails. It cannot become a GPU color attachment. */
+    if (!invalid_format && !d3d7_emit_render_target(device)) {
         device->render_target = old;
+        device->render_target_invalid = old_invalid;
+        device->legacy_failed_rt = old_failed;
+        /* A successful color command may precede the failed depth command.
+         * Repair the old binding now; retain debt if the transport still fails.
+         * Every subsequent Clear/draw retries that debt before emitting work. */
+        if (!old_invalid) (void)d3d7_emit_render_target(device);
         surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
-    if (old) surface_Release((IDirectDrawSurface7 *)&old->vtbl7);
-    return D3D_OK;
+    d3d7_release_target(old, old_failed);
+    return DDWG_TRACE_ERROR(invalid_format ? DDERR_INVALIDPIXELFORMAT : D3D_OK);
 }
 
 static HRESULT WINAPI d3d7_device_GetRenderTarget(IDirect3DDevice7 *iface,
@@ -1696,6 +1739,7 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
                     D3DCLEAR_STENCIL)) ||
             !d3d7_multiply_u32(rect_count, sizeof(*rects), &rect_bytes))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->render_target_invalid) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     if ((flags & D3DCLEAR_ZBUFFER) &&
             !device->render_target->attached_depth)
         return DDWG_TRACE_ERROR(D3DERR_ZBUFFER_NOTPRESENT);
@@ -1703,6 +1747,8 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
             (!device->render_target->attached_depth ||
              device->render_target->attached_depth->format != DDWG_FMT_D24S8))
         return DDWG_TRACE_ERROR(D3DERR_STENCILBUFFER_NOTPRESENT);
+    if (device->render_target_pending && !d3d7_emit_render_target(device))
+        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->wire_handle;
     command.clear_flags = flags;
@@ -2229,6 +2275,9 @@ static HRESULT WINAPI d3d7_device_PreLoad(IDirect3DDevice7 *iface,
  * LIGHTING render state itself is ignored by the public legacy interface. */
 static HRESULT d3d7_prepare_legacy_draw(D3D7Device *device, DWORD fvf, DWORD flags)
 {
+    if (device->render_target_invalid) return DDERR_INVALIDPIXELFORMAT;
+    if (device->render_target_pending && !d3d7_emit_render_target(device))
+        return D3DERR_INITFAILED;
     if (device->creation_version >= 7u) return D3D_OK;
     return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
             D3DRENDERSTATE_LIGHTING,
