@@ -398,8 +398,10 @@ check("mip and cube subresources keep their level and face on every wire path",
     assert.match(readback,
         /const face = D9WG\.has\(length, "ReadbackSurface", "face"\)\s*\? view\.getUint32\(offset \+ D9WG\.F\.ReadbackSurface\.face, true\) : 0/,
         "52-byte requests must select a cube face while old requests use face 0");
+    assert.match(readback, /let copyLevel = level, copyRow = firstRow;/,
+        "ordinary readback retains the requested row before optional depth conversion");
     assert.match(readback,
-        /origin: \{ x: 0, y: firstRow, z: face \}/,
+        /origin: \{ x: 0, y: copyRow, z: face \}/,
         "the selected face must reach copyTextureToBuffer");
 });
 

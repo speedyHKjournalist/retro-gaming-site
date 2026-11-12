@@ -18,6 +18,7 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDERR_NOTFLIPPABLE (-2)
 #define DDERR_SURFACEBUSY (-3)
 #define DDSCAPS_FLIP 0x200u
+#define DDSCAPS_FRONTBUFFER 0x20u
 #define DDSCAPS_OVERLAY 0x80u
 #define DDWG_TRACE_CHECKPOINT(...)
 #define DDWG_TRACE_RESULT(x) (x)
@@ -32,7 +33,7 @@ static BOOL emit_overlay_state(DDSurface*p){overlays++;overlay_handle=p->handle;
 static BOOL emit_present_and_flush(DDrawObject*p){(void)p;presents++;if(fail_present){fail_present=0;return FALSE;}return TRUE;}
 ${["surface_flip_contains", "surface_swap_flip_storage", "surface_rebind_flip_overlays", "surface_Flip"].map(extract).join("\n")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw overlay flip line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
-static void seed(DDrawObject*o,DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned count){memset(s,0,sizeof(*s)*count);o->surfaces=s;for(unsigned i=0;i<count;i++){t[i].index=i;m[i].bits[0]=(BYTE)i;s[i].owner=o;s[i].next=i+1<count?&s[i+1]:NULL;s[i].flip_next=&s[(i+1)%count];s[i].desc.ddsCaps.dwCaps=DDSCAPS_FLIP;s[i].handle=100+i;s[i].storage=&t[i];s[i].memory=&m[i];s[i].shadow=m[i].bits;s[i].external_memory=i==1;s[i].upload_pending=i!=1;s[i].overlay_id=200+i;}}
+static void seed(DDrawObject*o,DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned count){memset(s,0,sizeof(*s)*count);o->surfaces=s;for(unsigned i=0;i<count;i++){t[i].index=i;m[i].bits[0]=(BYTE)i;s[i].owner=o;s[i].next=i+1<count?&s[i+1]:NULL;s[i].flip_next=&s[(i+1)%count];s[i].desc.ddsCaps.dwCaps=DDSCAPS_FLIP|(i==0?DDSCAPS_FRONTBUFFER:0);s[i].handle=100+i;s[i].storage=&t[i];s[i].memory=&m[i];s[i].shadow=m[i].bits;s[i].external_memory=i==1;s[i].upload_pending=i!=1;s[i].overlay_id=200+i;}}
 static int verify(DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned*order,unsigned count){for(unsigned i=0;i<count;i++){unsigned n=order[i];CHECK(s[i].handle==100+n&&s[i].storage==&t[n]&&s[i].memory==&m[n]&&s[i].shadow==m[n].bits&&s[i].external_memory==(n==1)&&s[i].upload_pending==(n!=1)&&s[i].overlay_id==200+i);}return 0;}
 static int rotations(void){
  for(unsigned count=2;count<=3;count++){
@@ -48,7 +49,7 @@ static int rotations(void){
 static int other_cases(void){
  DDrawObject owner={0},foreign_owner={0};DDSurface s[3],overlay={0},other={.owner=&owner,.handle=900},foreign={.owner=&foreign_owner};DDTextureStorage t[3];DDSurfaceMemory m[3];seed(&owner,s,t,m,3);s[2].next=&overlay;overlay.owner=&owner;overlay.desc.ddsCaps.dwCaps=DDSCAPS_OVERLAY;overlay.overlay_visible=TRUE;overlay.handle=800;overlay.overlay_destination=s;overlay.overlay_id=777;s[0].primary=TRUE;
  unsigned b=screens,p=presents,o=overlays;CHECK(!surface_Flip(s,NULL,0)&&screens==b+1&&presents==p+1&&overlays==o+1&&screen_handle==101&&overlay_handle==800&&overlay_destination==101&&overlay_id==777);
- DWORD before=s[0].handle;b=screens;p=presents;o=overlays;CHECK(surface_Flip(s,s,0)==DDERR_NOTFLIPPABLE&&surface_Flip(s,&other,0)==DDERR_NOTFLIPPABLE&&surface_Flip(s,&foreign,0)==DDERR_NOTFLIPPABLE&&s[0].handle==before&&screens==b&&presents==p&&overlays==o);s[0].lock_depth=1;CHECK(surface_Flip(s,NULL,0)==DDERR_SURFACEBUSY&&s[0].handle==before);s[0].lock_depth=0;
+ CHECK(surface_Flip(&s[1],NULL,0)==DDERR_NOTFLIPPABLE);DWORD before=s[0].handle;b=screens;p=presents;o=overlays;CHECK(surface_Flip(s,s,0)==DDERR_NOTFLIPPABLE&&surface_Flip(s,&other,0)==DDERR_NOTFLIPPABLE&&surface_Flip(s,&foreign,0)==DDERR_NOTFLIPPABLE&&s[0].handle==before&&screens==b&&presents==p&&overlays==o);s[0].lock_depth=1;CHECK(surface_Flip(s,NULL,0)==DDERR_SURFACEBUSY&&s[0].handle==before);s[0].lock_depth=0;
  s[0].primary=FALSE;overlay.overlay_destination=NULL;b=screens;p=presents;o=overlays;CHECK(!surface_Flip(s,NULL,0)&&screens==b&&presents==p&&overlays==o);overlay.overlay_destination=s;b=screens;p=presents;o=overlays;CHECK(!surface_Flip(s,NULL,0)&&screens==b&&presents==p+1&&overlays==o+1&&overlay_destination==s[0].handle);
  s[0].primary=TRUE;before=s[0].handle;fail_screen=1;p=presents;o=overlays;CHECK(surface_Flip(s,NULL,0)==DDERR_GENERIC&&s[0].handle!=before&&presents==p&&overlays==o);fail_overlay=1;p=presents;CHECK(surface_Flip(s,NULL,0)==DDERR_GENERIC&&presents==p);fail_present=1;CHECK(surface_Flip(s,NULL,0)==DDERR_GENERIC);CHECK(!surface_Flip(s,NULL,0));s[0].primary=FALSE;s[0].desc.ddsCaps.dwCaps=0;before=s[0].handle;CHECK(surface_Flip(s,NULL,0)==DDERR_NOTFLIPPABLE&&s[0].handle==before);return 0;
 }

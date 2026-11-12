@@ -57,6 +57,7 @@ struct D3D7Device {
     LONG ref;
     DDrawObject *owner;
     DDSurface *render_target;
+    DDSurface *aggregate_surface; /* Device1's public IUnknown is Surface1 */
     /* Which of the three device GUIDs CreateDevice was given. GetCaps has to
      * answer for that device, not for the best one this DLL can offer: an app
      * that asked for the non-T&L HAL and is told it has hardware T&L will
@@ -1486,6 +1487,7 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
     LONG remaining = InterlockedDecrement(&device->ref);
     if (remaining == 0) {
         DDrawObject *owner = device->owner;
+        BOOL legacy_parent = device->creation_version == 1u;
         D3D7StateBlock *block;
         UINT stage;
         if (owner->d3d7_device == device) owner->d3d7_device = NULL;
@@ -1508,7 +1510,8 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
         heap_free(device->screen_clip_cache.positions);
         d9wg_light_free(&device->extra_lights);
         heap_free(device);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        if (legacy_parent) ddraw_child_detach(owner, FALSE);
+        else ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }

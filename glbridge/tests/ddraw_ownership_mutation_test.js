@@ -2,6 +2,20 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-ownership-mutants-"));
 const cases = [
+    ["primary factory omits visible cap", "if (caps & DDSCAPS_PRIMARYSURFACE) caps |= DDSCAPS_VISIBLE;", "if (FALSE && (caps & DDSCAPS_PRIMARYSURFACE)) caps |= DDSCAPS_VISIBLE;"],
+    ["automatic flip root omits frontbuffer", "if (back_buffers) caps |= DDSCAPS_FLIP | DDSCAPS_FRONTBUFFER;", "if (back_buffers) caps |= DDSCAPS_FLIP;"],
+    ["all automatic children marked backbuffer", "if (!index) buffer_caps |= DDSCAPS_BACKBUFFER;", "buffer_caps |= DDSCAPS_BACKBUFFER;"],
+    ["child inherits requested backbuffer count", "seed.dwBackBufferCount = 0;", "seed.dwBackBufferCount = request->dwBackBufferCount;"],
+    ["D3D7 surface accepts manual non-depth attachment", "version != DD_VERSION_7 && surface_manual_flip_attachment(other)", "version <= DD_VERSION_7 && surface_manual_flip_attachment(other)"],
+    ["manual closing edge loses native root pin", "surface_public_addref(next, next->flip_root_ref_version);", "(void)next->flip_root_ref_version;"],
+    ["detached member retains public attachment pin", "surface_public_release(other, other->attachment_version);", "(void)other->attachment_version;"],
+    ["manual backbuffer count not updated", "surface_flip_backbuffer_count(surface, TRUE);", "(void)surface;"],
+    ["detached member keeps flip caps", "other->desc.ddsCaps.dwCaps = other->attach_saved_caps;", "other->desc.ddsCaps.dwCaps = other->attach_saved_caps | DDSCAPS_FLIP;"],
+    ["self detach misclassified as root detach", "other && other != surface && other->owns_flip_chain", "other && TRUE && other->owns_flip_chain"],
+    ["primary keeps freed palette identity", "owner->primary->palette = NULL;", "(void)owner->primary->palette;"],
+    ["attached primary palette cap omitted", "*caps |= DDPCAPS_PRIMARYSURFACE;", "*caps |= 0;"],
+    ["duplicate backbuffer rewires ring", "if (surface->flip_next == other)", "if (FALSE && surface->flip_next == other)"],
+    ["live backbuffer stolen from another ring", "if (other->flip_next || surface->width != other->width", "if (FALSE || surface->width != other->width"],
     ["DD4/7 surface creator not retained", "surface->owner_public_ref = version >= DD_VERSION_4;", "surface->owner_public_ref = version > DD_VERSION_7;"],
     ["DD1/2 palette changes public parent count", "palette->owner_public_ref = version >= DD_VERSION_4;", "palette->owner_public_ref = version >= 1;"],
     ["duplicate creator not retained", "duplicate->owner_public_ref = version >= DD_VERSION_4;", "duplicate->owner_public_ref = version > DD_VERSION_7;"],
@@ -12,13 +26,13 @@ const cases = [
     ["surface parent pin leaked", "ddraw_child_detach(owner, public_ref);\n}\n\n/*", "ddraw_child_detach(owner, FALSE && public_ref);\n}\n\n/*"],
     ["same palette released before retain", "if (palette) IDirectDrawPalette_AddRef(palette_iface);\n    if (surface->palette)\n        IDirectDrawPalette_Release((IDirectDrawPalette *)surface->palette);\n    surface->palette = palette;", "if (surface->palette)\n        IDirectDrawPalette_Release((IDirectDrawPalette *)surface->palette);\n    surface->palette = palette;\n    if (palette) IDirectDrawPalette_AddRef(palette_iface);"],
     ["same clipper released before retain", "if (clipper) IDirectDrawClipper_AddRef(clipper_iface);\n    if (surface->clipper)\n        IDirectDrawClipper_Release((IDirectDrawClipper *)surface->clipper);\n    surface->clipper = clipper;", "if (surface->clipper)\n        IDirectDrawClipper_Release((IDirectDrawClipper *)surface->clipper);\n    surface->clipper = clipper;\n    if (clipper) IDirectDrawClipper_AddRef(clipper_iface);"],
-    ["implicit count zero frees ring member", "if (remaining == 0 && !surface->implicit)", "if (remaining == 0)"],
+    ["implicit count zero frees ring member", "if (!remaining && !surface->implicit) surface_destroy(surface);", "if (!remaining) surface_destroy(surface);"],
     ["root flip chain ignored", "if (surface->owns_flip_chain) {", "if (FALSE && surface->owns_flip_chain) {"],
     ["implicit flip child uses public Release", "if (walk->implicit) surface_destroy(walk);", "if (walk->implicit) surface_Release((IDirectDrawSurface7 *)&walk->vtbl7);"],
     ["implicit mip uses public Release", "if (mip->implicit) surface_destroy(mip);", "if (mip->implicit) surface_Release((IDirectDrawSurface7 *)&mip->vtbl7);"],
     ["implicit cube uses public Release", "if (attached->implicit) surface_destroy(attached);", "if (attached->implicit) surface_Release((IDirectDrawSurface7 *)&attached->vtbl7);"],
-    ["soft flip attachment never releases", "else surface_Release((IDirectDrawSurface7 *)&walk->vtbl7);", "else (void)walk;"],
+    ["soft flip attachment never releases", "else surface_public_release(walk, walk->attachment_version);", "else (void)walk;"],
     ["implicit mip can detach and leak", "if (surface->mip_next == other)\n            return DDWG_TRACE_ERROR(DDERR_CANNOTDETACHSURFACE);", "if (FALSE && surface->mip_next == other)\n            return DDWG_TRACE_ERROR(DDERR_CANNOTDETACHSURFACE);"],
     ["partial flip allocation reported success", "surface_destroy(surface);\n                return DDWG_TRACE_ERROR(DDERR_OUTOFVIDEOMEMORY);", "break;"],
 ];
-try {for (const [label, before, after] of cases) {assert.equal(source.split(before).length, 2, label); const file = dir + "/proxy.c"; fs.writeFileSync(file, source.replace(before, after)); const r = spawnSync(process.execPath, [path.join(__dirname, "ddraw_ownership_test.js")], {env: {...process.env, DDRAW_OWNERSHIP_SOURCE: file}, encoding: "utf8"}); assert.notEqual(r.status, 0, "survived " + label); assert.match(r.stderr, /DDraw ownership line/, "strict compilation then runtime assertion required: " + label + "\n" + r.stderr); console.log("KILL " + label);} console.log("PASS DDraw ownership mutations: 18/18, strict compilation and runtime assertions");} finally {fs.rmSync(dir, {recursive: true, force: true});}
+try {for (const [label, before, after] of cases) {assert.equal(source.split(before).length, 2, label); const file = dir + "/proxy.c"; fs.writeFileSync(file, source.replace(before, after)); const r = spawnSync(process.execPath, [path.join(__dirname, "ddraw_ownership_test.js")], {env: {...process.env, DDRAW_OWNERSHIP_SOURCE: file}, encoding: "utf8"}); assert.notEqual(r.status, 0, "survived " + label); assert.match(r.stderr, /DDraw ownership line/, "strict compilation then runtime assertion required: " + label + "\n" + r.stderr); console.log("KILL " + label);} console.log("PASS DDraw ownership mutations: "+cases.length+"/"+cases.length+", strict compilation and runtime assertions");} finally {fs.rmSync(dir, {recursive: true, force: true});}
