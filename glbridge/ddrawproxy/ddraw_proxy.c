@@ -720,8 +720,13 @@ static DDClipper *clipper_from_iface(IDirectDrawClipper *iface)
 static UINT format_bytes_per_pixel(unsigned format)
 {
     const D9WGFormatLayout *layout = d9wg_find_format(format);
-    return layout && (layout->apis & 1u) && layout->block_width == 1u
-            && layout->block_height == 1u ? layout->block_bytes : 0u;
+    return layout && (layout->apis & 1u) && layout->block_height == 1u
+            ? layout->block_bytes / layout->block_width : 0u;
+}
+
+static BOOL format_is_yuv(unsigned format)
+{
+    return format == DDWG_FMT_YUY2 || format == DDWG_FMT_UYVY;
 }
 
 static UINT format_compressed_block_bytes(unsigned format)
@@ -1134,6 +1139,13 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
     }
     if (right <= left || bottom <= top)
         return TRUE;
+    if (format_is_yuv(surface->format)) {
+        /* Each four-byte pair shares chroma. Upload both members, retaining
+         * the neighbouring luma from the CPU shadow for an odd lock edge. */
+        left &= ~1u;
+        right = (right + 1u) & ~1u;
+        if (right > surface->width) right = surface->width;
+    }
     if (block_bytes) {
         UINT left_block = left / 4u;
         UINT top_block = top / 4u;
@@ -1144,7 +1156,9 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
         source_x = left_block * block_bytes;
         source_y = top_block;
     } else {
-        row_bytes = (right - left) * surface->bytes_per_pixel;
+        row_bytes = format_is_yuv(surface->format)
+            ? ((right + 1u) / 2u - left / 2u) * 4u
+            : (right - left) * surface->bytes_per_pixel;
         rows = bottom - top;
         source_x = left * surface->bytes_per_pixel;
         source_y = top;
@@ -1338,6 +1352,33 @@ static void surface_mirror_depth_fill(DDSurface *surface, const RECT *rect,
     surface->memory->gpu_dirty = FALSE;
 }
 
+static BOOL surface_fill_yuv(DDSurface *surface, const RECT *rect, DWORD value)
+{
+    RECT area = {0, 0, (LONG)surface->width, (LONG)surface->height};
+    LONG x, y;
+    if (rect) area = *rect;
+    if (!surface->shadow || area.left < 0 || area.top < 0 ||
+            area.right > (LONG)surface->width || area.bottom > (LONG)surface->height ||
+            area.right <= area.left || area.bottom <= area.top ||
+            (surface->memory->gpu_dirty && (area.left || area.top ||
+                area.right != (LONG)surface->width || area.bottom != (LONG)surface->height)))
+        return FALSE;
+    if (!ensure_surface_storage(surface)) return FALSE;
+    for (y = area.top; y < area.bottom; ++y) {
+        BYTE *row = surface->shadow + y * surface->pitch;
+        for (x = area.left; x < area.right; ++x)
+            CopyMemory(row + x * 2u, (const BYTE *)&value + (x & 1) * 2u, 2u);
+        if ((surface->width & 1u) && area.right == (LONG)surface->width)
+            CopyMemory(row + surface->width * 2u, (const BYTE *)&value + 2u, 2u);
+    }
+    surface->memory->gpu_dirty = FALSE;
+    if (!emit_surface_upload(surface, &area)) {
+        surface->upload_pending = TRUE;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         DDSurface *source, const RECT *source_rect, uint32_t flags,
         uint32_t fill_color, float fill_depth)
@@ -1351,6 +1392,12 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         return FALSE;
     if (!ensure_device(destination->owner))
         return FALSE;
+    if (format_is_yuv(destination->format)) {
+        if (flags == D9WG_DDBLT_COLOR_FILL && !source)
+            return surface_fill_yuv(destination, destination_rect, fill_color);
+        HOSTLOG_REFUSED("a GPU blit into packed YUV storage is not implemented");
+        return FALSE;
+    }
     if (!prepare_surface_for_host(destination))
         return FALSE;
     if (source && !prepare_surface_for_host(source))
@@ -2299,6 +2346,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (flags & (DDBLT_COLORFILL | DDBLT_DEPTHFILL))
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (format_is_yuv(destination->format) || format_is_compressed(destination->format))
+            return DDWG_TRACE_ERROR(DDERR_NORASTEROPHW);
         if (fx->dwROP != SRCCOPY && fx->dwROP != BLACKNESS &&
                 fx->dwROP != WHITENESS)
             return UNSUPPORTED("Blt with a raster operation other than "
@@ -2322,6 +2371,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     } else if (flags & DDBLT_COLORFILL) {
         if (!fx || source || format_is_depth(destination->format))
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (format_is_compressed(destination->format))
+            return DDWG_TRACE_ERROR(E_NOTIMPL);
         blt_flags |= D9WG_DDBLT_COLOR_FILL;
         fill_color = fx->dwFillColor;
         source = NULL;

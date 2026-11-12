@@ -31,6 +31,7 @@ typedef struct{DDrawObject*owner;DDSurface*render_target;DWORD render_states[256
 #define EnterCriticalSection(p) ((void)(p))
 #define LeaveCriticalSection(p) ((void)(p))
 #define DDWG_TRACE_ERROR(x) (x)
+#define HOSTLOG_REFUSED(...)
 static unsigned checks,emits,uploads;static BOOL fail_emit,fail_storage;static int g_transport_lock;static BYTE payload[256];
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw depth memory line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 static BOOL ensure_surface_storage(DDSurface*s){(void)s;return !fail_storage;}
@@ -41,7 +42,7 @@ static BOOL emit_command(UINT op,const void*data,UINT bytes){(void)data;(void)by
 static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*d){return d;}
 static BOOL d3d7_multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}
 static BOOL reserve_command_locked(UINT op,UINT size,UINT extra,uint8_t**p,uint8_t**blob){(void)op;if(size+extra>sizeof(payload)||fail_emit)return FALSE;*p=payload;*blob=payload+size;return TRUE;}
-${["surface_depth_mask","prepare_surface_for_host","surface_mirror_depth_fill","emit_blt"].map(n=>extract(source,n)).join("\n")}
+${["format_is_yuv","surface_depth_mask","prepare_surface_for_host","surface_mirror_depth_fill","surface_fill_yuv","emit_blt"].map(n=>extract(source,n)).join("\n")}
 ${["d3d7_mark_draw_surfaces_dirty","d3d7_device_Clear"].map(n=>extract(legacy,n)).join("\n")}
 static int fills(void){
  const UINT formats[]={70,71,73,75,77,79,80},masks[]={0xffff,0xffffffff,0xfffe,0xffffff00,0xffffff00,0xffffff00,0xffff};

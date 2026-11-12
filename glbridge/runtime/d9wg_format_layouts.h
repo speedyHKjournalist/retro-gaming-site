@@ -58,13 +58,13 @@ static const D9WGFormatLayout d9wg_format_layouts[] = {
     {827611204u, 4u, 4u, 8u, 7u, 0u},
     {843666497u, 4u, 4u, 16u, 4u, 0u},
     {844388420u, 4u, 4u, 16u, 7u, 0u},
-    {844715353u, 2u, 1u, 4u, 6u, 0u},
+    {844715353u, 2u, 1u, 4u, 7u, 0u},
     {861165636u, 4u, 4u, 16u, 7u, 0u},
     {877942852u, 4u, 4u, 16u, 7u, 0u},
     {894720068u, 4u, 4u, 16u, 7u, 0u},
     {1111970375u, 2u, 1u, 4u, 4u, 0u},
     {1195525970u, 2u, 1u, 4u, 4u, 0u},
-    {1498831189u, 2u, 1u, 4u, 6u, 0u},
+    {1498831189u, 2u, 1u, 4u, 7u, 0u},
 };
 static __inline const D9WGFormatLayout *d9wg_find_format(uint32_t format)
 {

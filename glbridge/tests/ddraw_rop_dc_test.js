@@ -33,6 +33,7 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDERR_UNSUPPORTED (-7)
 #define DDERR_DCALREADYCREATED (-8)
 #define DDERR_INVALIDRECT (-9)
+#define E_NOTIMPL (-10)
 #define DDBLT_COLORFILL 1u
 #define DDBLT_DEPTHFILL 2u
 #define DDBLT_ROP 4u
@@ -65,6 +66,8 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define CopyMemory memcpy
 static unsigned checks,blits,presents,readbacks,bindings,fail_emit,fail_present,fail_read,fail_dc,dc_creates;static RECT clip,last_rect;static BOOL clipped;static DDSurface*last_source;static DWORD last_flags,last_fill;static float last_depth;static BYTE dib[256];static BITMAPINFO captured;
 static DDSurface*surface_from_iface(IDirectDrawSurface7*p){return p;}
+static BOOL format_is_yuv(DWORD f){return f==DDWG_FMT_YUY2||f==DDWG_FMT_UYVY;}
+static BOOL format_is_compressed(DWORD f){return f==DDWG_FMT_DXT1;}
 static BOOL format_is_depth(DWORD f){return f==70||f==71||f==73||f==75||f==77||f==79||f==80;}
 static void emit_surface_palette_binding(DDSurface*s){(void)s;bindings++;}
 static void emit_color_key(DDSurface*s,DWORD k,DDCOLORKEY*c,BOOL enabled){(void)s;(void)k;(void)c;(void)enabled;}
@@ -105,6 +108,7 @@ static int fills(void){
   RECT invalid[]={{-1,0,8,8},{0,-1,8,8},{0,0,9,8},{0,0,8,9},{4,0,4,8},{0,5,8,4}};
   for(unsigned i=0;i<6;i++){CHECK(surface_Blt(&d,&invalid[i],NULL,NULL,flags,&fx)==DDERR_INVALIDRECT&&blits==b);CHECK(!surface_Blt(&d,NULL,NULL,&invalid[i],flags,&fx));b=blits;CHECK(surface_Blt(&d,NULL,&s,&invalid[i],DDBLT_ROP,&fx)==DDERR_INVALIDRECT&&blits==b);}
  }
+ for(unsigned i=0;i<3;i++){d.format=i==0?DDWG_FMT_YUY2:i==1?DDWG_FMT_UYVY:DDWG_FMT_DXT1;unsigned b=blits;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_NORASTEROPHW&&blits==b);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==(i==2?E_NOTIMPL:DD_OK));}
  d.format=21;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_ROP,&fx)==DDERR_INVALIDPARAMS);CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx));d.format=80;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);return 0;
 }
 static int contexts(void){
