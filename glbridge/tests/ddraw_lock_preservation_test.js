@@ -7,7 +7,8 @@ const code = `#include <stdint.h>
 #include <string.h>
 typedef uint32_t DWORD,UINT;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef unsigned char BYTE;typedef void *HANDLE;
 typedef struct {LONG left,top,right,bottom;} RECT;typedef RECT *LPRECT;
-typedef struct {DWORD dwSize,dwFlags,dwWidth,dwHeight;LONG lPitch;void *lpSurface;} DDSURFACEDESC2,*LPDDSURFACEDESC2;
+typedef struct {DWORD dwSize,dwFlags,dwWidth,dwHeight;LONG lPitch;void *lpSurface;} DDSURFACEDESC;
+typedef struct {DWORD dwSize,dwFlags,dwWidth,dwHeight;LONG lPitch;void *lpSurface;DWORD dwTextureStage;} DDSURFACEDESC2,*LPDDSURFACEDESC2;
 typedef struct {BOOL gpu_dirty;BYTE bits[64];} Memory;
 typedef struct DDSurface {Memory *memory;BYTE *shadow;void *dc,*owner,*flip_next;UINT width,height,pitch,format,bytes_per_pixel,handle;DWORD lock_depth,lock_flags;RECT locked_rect;BOOL primary;DDSURFACEDESC2 desc;} DDSurface;
 typedef DDSurface IDirectDrawSurface7;
@@ -38,6 +39,7 @@ static void emit_surface_upload(DDSurface*s,RECT*r){uploads++;uploaded=*r;for(LO
 static BOOL emit_blt_to_screen(DDSurface*s,const RECT*r){(void)s;(void)r;presents++;return TRUE;}
 static BOOL emit_present_and_flush(void*p){(void)p;presents++;return TRUE;}
 ${source.includes("static BOOL present_changed_primary(") ? extract("present_changed_primary") : ""}
+static void desc2_to_desc1(const DDSURFACEDESC2*from,DDSURFACEDESC*to){memcpy(to,from,sizeof(*to));to->dwSize=sizeof(*to);}
 ${extract("surface_Lock")}
 ${extract("surface_Unlock")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw lock line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
@@ -55,13 +57,14 @@ static int cycles(void){
  return 0;
 }
 static int failures(void){
- Memory m={.gpu_dirty=TRUE};DDSurface s=make(&m);memset(m.bits,0x5a,64);s.lock_flags=0x100;s.locked_rect=(RECT){2,2,4,4};DDSURFACEDESC2 d={.dwSize=sizeof(d)},before=d;unsigned old_reads=reads;RECT bad[]={ {-1,0,4,4},{0,-1,4,4},{0,0,5,4},{0,0,4,5},{1,0,1,4},{0,2,4,2},{2,0,1,4}};
- for(unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++){CHECK(surface_Lock(&s,&bad[i],&d,DDLOCK_WRITEONLY,NULL)==DDERR_INVALIDRECT);CHECK(reads==old_reads&&!s.lock_depth&&s.lock_flags==0x100&&!memcmp(&d,&before,sizeof(d)));}
+ Memory m={.gpu_dirty=TRUE};DDSurface s=make(&m);memset(m.bits,0x5a,64);s.lock_flags=0x100;s.locked_rect=(RECT){2,2,4,4};DDSURFACEDESC2 d={.dwSize=sizeof(d)},before=d;unsigned old_reads=reads;RECT bad[]={ {-1,0,4,4},{0,-1,4,4},{0,0,5,4},{0,0,4,5},{2,0,1,4},{0,3,4,2}};
+ for(unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++){d=before;d.lpSurface=(void*)1;CHECK(surface_Lock(&s,&bad[i],&d,DDLOCK_WRITEONLY,NULL)==DDERR_INVALIDPARAMS);CHECK(reads==old_reads&&!s.lock_depth&&s.lock_flags==0x100&&!d.lpSurface&&!memcmp(&d,&before,sizeof(d)));}
  CHECK(surface_Lock(&s,NULL,NULL,0,NULL)==DDERR_INVALIDPARAMS);d.dwSize=0;CHECK(surface_Lock(&s,NULL,&d,0,NULL)==DDERR_INVALIDPARAMS);d=before;s.dc=(void*)1;CHECK(surface_Lock(&s,NULL,&d,0,NULL)==DDERR_SURFACEBUSY);s.dc=NULL;BYTE*shadow=s.shadow;s.shadow=NULL;CHECK(surface_Lock(&s,NULL,&d,0,NULL)==DDERR_GENERIC);s.shadow=shadow;CHECK(reads==old_reads);
  for(unsigned mode=0;mode<3;mode++){fail_read=1;CHECK(surface_Lock(&s,NULL,&d,(DWORD[]){0,DDLOCK_READONLY,DDLOCK_WRITEONLY}[mode],NULL)==DDERR_GENERIC);CHECK(!s.lock_depth&&s.lock_flags==0x100&&s.locked_rect.left==2&&m.gpu_dirty&&!memcmp(&d,&before,sizeof(d)));for(unsigned i=0;i<64;i++)CHECK(m.bits[i]==0x5a);}
  CHECK(surface_Unlock(&s,NULL)==DDERR_NOTLOCKED);fail_read=0;CHECK(!surface_Lock(&s,NULL,&d,DDLOCK_WRITEONLY,NULL)&&!surface_Unlock(&s,NULL));
- s=make(&m);s.format=0x31545844u;s.width=s.height=8;s.pitch=16;m.gpu_dirty=TRUE;RECT block_bad={3,0,8,8};old_reads=reads;d=before;CHECK(surface_Lock(&s,&block_bad,&d,DDLOCK_WRITEONLY,NULL)==DDERR_INVALIDRECT&&reads==old_reads);RECT block={4,4,8,8};CHECK(!surface_Lock(&s,&block,&d,DDLOCK_READONLY,NULL)&&d.lpSurface==m.bits+24&&reads==old_reads+1);CHECK(!surface_Unlock(&s,NULL));return 0;
+ s=make(&m);s.format=0x31545844u;s.width=s.height=8;s.pitch=16;m.gpu_dirty=TRUE;RECT block_bad={3,0,8,8};old_reads=reads;d=before;CHECK(surface_Lock(&s,&block_bad,&d,DDLOCK_WRITEONLY,NULL)==DDERR_INVALIDPARAMS&&!d.lpSurface&&reads==old_reads);RECT block={4,4,8,8};CHECK(!surface_Lock(&s,&block,&d,DDLOCK_READONLY,NULL)&&d.lpSurface==m.bits+24&&reads==old_reads+1);CHECK(!surface_Unlock(&s,NULL));return 0;
 }
-int main(void){CHECK(!cycles());CHECK(!failures());printf("PASS actual DDraw Lock/Unlock: %u checks, 768 full/partial GPU-dirty locks, all write modes, shared aliases, untouched pixels, compressed offsets, invalid-call isolation and readback failure/retry\\n",checks);return 0;}
+static int contracts(void){Memory m={0};DDSurface s=make(&m);RECT empty[]={{1,0,1,4},{0,2,4,2},{2,2,2,2}};for(unsigned n=0;n<64;n++)for(unsigned i=0;i<3;i++){DDSURFACEDESC2 d={.dwSize=sizeof(d)};CHECK(!surface_Lock(&s,&empty[i],&d,DDLOCK_WRITEONLY,NULL)&&s.lock_depth==1);DDSURFACEDESC2 before=d;CHECK(surface_Lock(&s,&empty[i],&d,0,NULL)==DDERR_SURFACEBUSY&&!memcmp(&before,&d,sizeof(d))&&s.lock_depth==1);CHECK(!surface_Unlock(&s,NULL)&&surface_Unlock(&s,NULL)==DDERR_NOTLOCKED);}for(unsigned n=0;n<64;n++){struct{DDSURFACEDESC old;BYTE guard[32];}d;memset(&d,0xa5,sizeof(d));d.old.dwSize=sizeof(d.old);CHECK(!surface_Lock(&s,NULL,(void*)&d.old,DDLOCK_READONLY,NULL));CHECK(d.old.dwSize==sizeof(d.old)&&d.old.dwWidth==4&&d.old.dwHeight==4&&d.old.lpSurface==m.bits);for(unsigned j=0;j<32;j++)CHECK(d.guard[j]==0xa5);CHECK(!surface_Unlock(&s,NULL));}return 0;}
+int main(void){CHECK(!cycles());CHECK(!failures());CHECK(!contracts());printf("PASS actual DDraw Lock/Unlock: %u checks, 768 full/partial GPU-dirty locks, all write modes, shared aliases, untouched pixels, compressed offsets, native zero-area/duplicate-lock/old-descriptor contracts, invalid-call isolation and readback failure/retry\\n",checks);return 0;}
 `;
 try {const file = dir + "/lock.c", binary = dir + "/lock"; fs.writeFileSync(file, code); const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {encoding: "utf8"}); assert.equal(built.status, 0, built.stderr); const run = spawnSync(binary, [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stderr); process.stdout.write(run.stdout);} finally {fs.rmSync(dir, {recursive: true, force: true});}

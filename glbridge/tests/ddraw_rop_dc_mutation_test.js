@@ -2,6 +2,9 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-rop-dc-mutants-"));
 const cases = [
+    ["non-GDI format accepted", "(!surface->indexed && (!(surface->desc.ddpfPixelFormat.dwFlags & DDPF_RGB) ||", "(FALSE && (!(surface->desc.ddpfPixelFormat.dwFlags & DDPF_RGB) ||"],
+    ["missing DC has wrong error", "if (!surface->dc) return DDWG_TRACE_ERROR(DDERR_NODC);", "if (!surface->dc) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);"],
+    ["locked GetDC rejected", "    if (surface->memory->gpu_dirty && !surface_readback(surface))", "    if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);\n    if (surface->memory->gpu_dirty && !surface_readback(surface))", 0],
     ["mixed depth/color copy accepted", "if (format_is_depth(source->format) != format_is_depth(destination->format))", "if (FALSE && format_is_depth(source->format) != format_is_depth(destination->format))"],
     ["mismatched depth layout copy accepted", "if (format_is_depth(source->format) && source->format != destination->format)", "if (FALSE && format_is_depth(source->format) && source->format != destination->format)"],
     ["color fill accepts depth", "if (!fx || source || format_is_depth(destination->format))", "if (!fx || source)"],

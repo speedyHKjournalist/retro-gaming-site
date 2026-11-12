@@ -1955,6 +1955,19 @@ static void desc2_to_desc1(const DDSURFACEDESC2 *from, DDSURFACEDESC *to)
     to->ddsCaps.dwCaps = from->ddsCaps.dwCaps;
 }
 
+/* GetDisplayMode clears the caller-provided shape but reports the descriptor
+ * size of the interface used, even when the other accepted size was supplied. */
+static void ddraw_write_display_mode(const DDSURFACEDESC2 *from, void *to,
+        DWORD output_size, UINT version)
+{
+    ZeroMemory(to, output_size);
+    if (output_size == sizeof(DDSURFACEDESC))
+        desc2_to_desc1(from, (DDSURFACEDESC *)to);
+    else CopyMemory(to, from, sizeof(*from));
+    ((DDSURFACEDESC *)to)->dwSize = version <= DD_VERSION_3
+        ? sizeof(DDSURFACEDESC) : sizeof(DDSURFACEDESC2);
+}
+
 static void surface_destroy(DDSurface *surface);
 static void emit_window_state_not_showing(DDrawObject *object);
 static void surface_storage_release(DDTextureStorage *storage);
@@ -3057,13 +3070,15 @@ static HRESULT WINAPI surface_GetDC(IDirectDrawSurface7 *iface, HDC *out)
             "bpp=%lu", surface->handle, surface->width, surface->height,
             surface->bytes_per_pixel * 8u);
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (!surface->bytes_per_pixel) return DDWG_TRACE_ERROR(DDERR_UNSUPPORTED);
+    if (!surface->bytes_per_pixel ||
+            (!surface->indexed && (!(surface->desc.ddpfPixelFormat.dwFlags & DDPF_RGB) ||
+                surface->bytes_per_pixel == 1u))) {
+        *out = NULL;
+        return DDWG_TRACE_ERROR(DDERR_UNSUPPORTED);
+    }
     if (surface->dc) return DDWG_TRACE_ERROR(DDERR_DCALREADYCREATED);
-    if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
-    /* A failed readback has already reported itself; the DC is still built
-     * over the shadow, because a DC that does not exist is worse than one
-     * whose GPU-written pixels are stale. */
-    (void)(surface->memory->gpu_dirty && surface_readback(surface));
+    if (surface->memory->gpu_dirty && !surface_readback(surface))
+        return DDWG_TRACE_ERROR(DDERR_GENERIC);
 
     ZeroMemory(&info, sizeof(info));
     info.header.biSize = sizeof(info.header);
@@ -3143,8 +3158,8 @@ static HRESULT WINAPI surface_ReleaseDC(IDirectDrawSurface7 *iface, HDC dc)
 
     DDWG_TRACE_CHECKPOINT("CALL surface_ReleaseDC handle=%lu dc=%08lX",
             surface->handle, (DWORD)(uintptr_t)dc);
-    if (!surface->dc || dc != surface->dc)
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!surface->dc) return DDWG_TRACE_ERROR(DDERR_NODC);
+    if (dc != surface->dc) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     result = surface_finish_dc(surface, TRUE);
     return DDWG_TRACE_RESULT(result);
 }
@@ -3299,6 +3314,8 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     DDSurface *surface = surface_from_iface(iface);
     LONG left = 0, top = 0;
     RECT locked_rect;
+    DDSURFACEDESC2 output;
+    DWORD output_size;
 
     (void)event;
     DDWG_TRACE_CHECKPOINT("CALL surface_Lock handle=%lu flags=%08lX "
@@ -3308,23 +3325,28 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
             rect ? rect->bottom : (LONG)surface->height,
             surface->lock_depth);
     if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (description->dwSize != sizeof(DDSURFACEDESC2))
+    output_size = description->dwSize;
+    if (output_size != sizeof(DDSURFACEDESC) && output_size != sizeof(DDSURFACEDESC2))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!surface->shadow) return DDWG_TRACE_ERROR(DDERR_GENERIC);
-    if (surface->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
+    if (surface->dc || surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
     if (rect) {
         if (rect->left < 0 || rect->top < 0 ||
                 rect->right > (LONG)surface->width ||
                 rect->bottom > (LONG)surface->height ||
-                rect->right <= rect->left || rect->bottom <= rect->top)
-            return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
+                rect->right < rect->left || rect->bottom < rect->top) {
+            description->lpSurface = NULL;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        }
         if (format_is_compressed(surface->format) &&
                 ((rect->left & 3) || (rect->top & 3) ||
                  ((rect->right & 3) && rect->right != (LONG)surface->width) ||
                  ((rect->bottom & 3) &&
-                    rect->bottom != (LONG)surface->height)))
-            return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
+                    rect->bottom != (LONG)surface->height))) {
+            description->lpSurface = NULL;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        }
         locked_rect = *rect;
         left = rect->left;
         top = rect->top;
@@ -3344,19 +3366,22 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     surface->lock_flags = flags;
     ++surface->lock_depth;
 
-    *description = surface->desc;
-    description->dwSize = sizeof(DDSURFACEDESC2);
-    description->dwFlags |= DDSD_LPSURFACE | DDSD_PITCH;
-    description->lPitch = (LONG)surface->pitch;
+    output = surface->desc;
+    output.dwSize = sizeof(DDSURFACEDESC2);
+    output.dwFlags |= DDSD_LPSURFACE | DDSD_PITCH;
+    output.lPitch = (LONG)surface->pitch;
     if (format_is_compressed(surface->format))
-        description->lpSurface = surface->shadow + (top / 4) * surface->pitch
+        output.lpSurface = surface->shadow + (top / 4) * surface->pitch
             + (left / 4) * format_compressed_block_bytes(surface->format);
     else
-        description->lpSurface = surface->shadow + top * surface->pitch
+        output.lpSurface = surface->shadow + top * surface->pitch
             + left * surface->bytes_per_pixel;
+    if (output_size == sizeof(DDSURFACEDESC))
+        desc2_to_desc1(&output, (DDSURFACEDESC *)description);
+    else *description = output;
     DDWG_TRACE("SURFACE LOCKED handle=%lu pitch=%lu bits=%08lX depth=%lu",
             surface->handle, surface->pitch,
-            (DWORD)(uintptr_t)description->lpSurface, surface->lock_depth);
+            (DWORD)(uintptr_t)output.lpSurface, surface->lock_depth);
     return DDWG_TRACE_RESULT(DD_OK);
 }
 
@@ -5465,14 +5490,20 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
         LPDDSURFACEDESC2 description)
 {
     DDrawObject *object = object_from_iface(iface);
+    DDSURFACEDESC2 output;
+    LPDDSURFACEDESC2 caller = description;
+    DWORD output_size;
     UINT bpp = object->mode_bpp ? object->mode_bpp : 32u;
 
     DDWG_TRACE_CHECKPOINT("CALL ddraw_GetDisplayMode object=%08lX "
             "description=%08lX size=%lu", (DWORD)(uintptr_t)object,
             (DWORD)(uintptr_t)description,
             description ? description->dwSize : 0u);
-    if (!description || description->dwSize != sizeof(DDSURFACEDESC2))
+    if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    output_size = description->dwSize;
+    if (output_size != sizeof(DDSURFACEDESC) && output_size != sizeof(DDSURFACEDESC2))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    description = &output;
     ZeroMemory(description, sizeof(*description));
     description->dwSize = sizeof(*description);
     description->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PITCH |
@@ -5489,6 +5520,7 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
     DDWG_TRACE("DISPLAY_MODE_CURRENT size=%lux%lux%lu refresh=%lu pitch=%ld",
             description->dwWidth, description->dwHeight, bpp,
             description->dwRefreshRate, description->lPitch);
+    ddraw_write_display_mode(&output, caller, output_size, DD_VERSION_7);
     return DDWG_TRACE_RESULT(DD_OK);
 }
 
@@ -6482,12 +6514,13 @@ static HRESULT WINAPI tag##_Lock(IFACE *iface, LPRECT rect, DESC *description, \
 { \
     DDSURFACEDESC2 description2; \
     HRESULT result; \
-    if (!description || description->dwSize != sizeof(DESC)) \
+    if (!description || (description->dwSize != sizeof(DDSURFACEDESC) && description->dwSize != sizeof(DDSURFACEDESC2))) \
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     ZeroMemory(&description2, sizeof(description2)); \
     description2.dwSize = sizeof(description2); \
     result = surface_Lock(SURFACE7(iface), rect, &description2, flags, event); \
     if (SUCCEEDED(result)) legacy_narrow(&description2, description); \
+    else if (result == DDERR_INVALIDPARAMS) description->lpSurface = NULL; \
     return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_ReleaseDC(IFACE *iface, HDC dc) \
@@ -6877,12 +6910,14 @@ static HRESULT WINAPI tag##_GetDisplayMode(IFACE *iface, DESC *description) \
 { \
     DDSURFACEDESC2 description2; \
     HRESULT result; \
-    if (!description || description->dwSize != sizeof(DESC)) \
+    DWORD output_size; \
+    if (!description || (description->dwSize != sizeof(DDSURFACEDESC) && description->dwSize != sizeof(DDSURFACEDESC2))) \
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
+    output_size = description->dwSize; \
     ZeroMemory(&description2, sizeof(description2)); \
     description2.dwSize = sizeof(description2); \
     result = ddraw_GetDisplayMode(DDRAW7(iface), &description2); \
-    if (SUCCEEDED(result)) legacy_narrow(&description2, description); \
+    if (SUCCEEDED(result)) ddraw_write_display_mode(&description2, description, output_size, VERSION); \
     return DDWG_TRACE_ERROR(result); \
 } \
 static HRESULT WINAPI tag##_GetFourCCCodes(IFACE *iface, LPDWORD count, \

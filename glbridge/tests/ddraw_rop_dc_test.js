@@ -34,6 +34,7 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDERR_DCALREADYCREATED (-8)
 #define DDERR_INVALIDRECT (-9)
 #define E_NOTIMPL (-10)
+#define DDERR_NODC (-11)
 #define DDBLT_COLORFILL 1u
 #define DDBLT_DEPTHFILL 2u
 #define DDBLT_ROP 4u
@@ -86,6 +87,8 @@ ${extract("rect_intersect")}
 ${extract("surface_depth_mask")}
 ${extract("surface_Blt")}
 ${extract("surface_GetDC")}
+static HRESULT surface_finish_dc(DDSurface*s,BOOL present){(void)present;s->dc=NULL;return DD_OK;}
+${extract("surface_ReleaseDC")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw ROP/DC line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 static int raster(void){
  Memory memory={0};BYTE shadow[256]={0};DDrawObject owner={0};DDSurface d={.width=8,.height=8,.pitch=32,.bytes_per_pixel=4,.format=21,.memory=&memory,.shadow=shadow,.owner=&owner},s=d;s.lock_depth=1;
@@ -117,7 +120,7 @@ static int contexts(void){
  for(unsigned round=0;round<64;round++)for(unsigned mode=0;mode<4;mode++){
   for(unsigned i=0;i<256;i++){own.entries[i]=(PALETTEENTRY){(BYTE)(round+i),(BYTE)(round+2*i),(BYTE)(round+3*i),99};primary.entries[i]=(PALETTEENTRY){(BYTE)(round+4*i),(BYTE)(round+5*i),(BYTE)(round+6*i),77};}d.palette=mode==0?&own:NULL;d.owner=mode==3?NULL:&owner;front.palette=mode==2?NULL:&primary;d.dc=NULL;HDC dc=(void*)9;CHECK(!surface_GetDC(&d,&dc)&&dc==(void*)2&&d.dc==dc);CHECK(captured.bmiHeader.biWidth==8&&captured.bmiHeader.biHeight==-8&&captured.bmiHeader.biBitCount==8&&captured.bmiHeader.biClrUsed==256);for(unsigned i=0;i<256;i++){PALETTEENTRY want=mode==0?own.entries[i]:mode==1?primary.entries[i]:(PALETTEENTRY){0};RGBQUAD got=captured.bmiColors[i];CHECK(got.rgbRed==want.peRed&&got.rgbGreen==want.peGreen&&got.rgbBlue==want.peBlue&&!got.rgbReserved);}for(unsigned y=0;y<8;y++)CHECK(!memcmp(d.dib_bits+y*8,shadow+y*8,8));CHECK(d.palette==(mode==0?&own:NULL));
  }
- HDC out=(void*)9;d.dc=NULL;d.owner=&owner;d.bytes_per_pixel=0;CHECK(surface_GetDC(&d,&out)==DDERR_UNSUPPORTED&&out==(void*)9);d.bytes_per_pixel=1;CHECK(surface_GetDC(&d,NULL)==DDERR_INVALIDPARAMS);d.lock_depth=1;CHECK(surface_GetDC(&d,&out)==DDERR_SURFACEBUSY&&out==(void*)9);d.lock_depth=0;d.dc=(void*)1;CHECK(surface_GetDC(&d,&out)==DDERR_DCALREADYCREATED&&out==(void*)9);d.dc=NULL;for(fail_dc=1;fail_dc<=3;fail_dc++){CHECK(surface_GetDC(&d,&out)==DDERR_GENERIC&&!d.dc&&out==(void*)9);}fail_dc=0;memory.gpu_dirty=1;fail_read=1;unsigned r=readbacks;CHECK(!surface_GetDC(&d,&out)&&readbacks==r+1);fail_read=0;d.dc=NULL;d.bytes_per_pixel=2;d.pitch=16;d.desc.ddpfPixelFormat=(PF){DDPF_RGB,0xf800,0x7e0,0x1f};CHECK(!surface_GetDC(&d,&out)&&captured.bmiHeader.biCompression==BI_BITFIELDS);DWORD masks[3];memcpy(masks,captured.bmiColors,12);CHECK(masks[0]==0xf800&&masks[1]==0x7e0&&masks[2]==0x1f);return 0;
+ HDC out=(void*)9;d.dc=NULL;CHECK(surface_ReleaseDC(&d,NULL)==DDERR_NODC);d.dc=(void*)2;CHECK(surface_ReleaseDC(&d,(void*)1)==DDERR_INVALIDPARAMS&&d.dc==(void*)2);CHECK(!surface_ReleaseDC(&d,(void*)2)&&!d.dc);CHECK(surface_ReleaseDC(&d,(void*)2)==DDERR_NODC);d.owner=&owner;d.bytes_per_pixel=0;CHECK(surface_GetDC(&d,&out)==DDERR_UNSUPPORTED&&!out);out=(void*)9;d.bytes_per_pixel=1;d.indexed=1;CHECK(surface_GetDC(&d,NULL)==DDERR_INVALIDPARAMS);d.lock_depth=1;CHECK(!surface_GetDC(&d,&out)&&out==(void*)2&&d.lock_depth==1);d.dc=NULL;out=(void*)9;d.lock_depth=0;d.dc=(void*)1;CHECK(surface_GetDC(&d,&out)==DDERR_DCALREADYCREATED&&out==(void*)9);d.dc=NULL;for(fail_dc=1;fail_dc<=3;fail_dc++){CHECK(surface_GetDC(&d,&out)==DDERR_GENERIC&&!d.dc&&out==(void*)9);}fail_dc=0;memory.gpu_dirty=1;fail_read=1;unsigned r=readbacks;CHECK(surface_GetDC(&d,&out)==DDERR_GENERIC&&!d.dc&&readbacks==r+1);fail_read=0;d.dc=NULL;d.bytes_per_pixel=2;d.indexed=0;d.pitch=16;d.desc.ddpfPixelFormat=(PF){DDPF_RGB,0xf800,0x7e0,0x1f};CHECK(!surface_GetDC(&d,&out)&&captured.bmiHeader.biCompression==BI_BITFIELDS);DWORD masks[3];memcpy(masks,captured.bmiColors,12);CHECK(masks[0]==0xf800&&masks[1]==0x7e0&&masks[2]==0x1f);d.dc=NULL;for(unsigned kind=0;kind<3;kind++){d.bytes_per_pixel=kind==2?2:1;d.desc.ddpfPixelFormat.dwFlags=kind==0?DDPF_RGB:0;out=(void*)9;CHECK(surface_GetDC(&d,&out)==DDERR_UNSUPPORTED&&!out&&!d.dc);}return 0;
 }
 int main(void){CHECK(!raster());CHECK(!fills());CHECK(!contexts());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, seven depth fill layouts, incompatible formats/sources/flags, invalid rectangle isolation, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
 `;
