@@ -11,7 +11,7 @@ typedef struct{LONG left,top,right,bottom;} RECT;typedef RECT D3DRECT;
 typedef struct{BOOL gpu_dirty;BYTE bits[160];} Memory;
 typedef struct{DWORD device_handle;} DDrawObject;
 typedef struct DDSurface{DDrawObject*owner;Memory*memory;BYTE*shadow;UINT format,width,height,pitch,bytes_per_pixel,handle,mip_level,cube_face;BOOL upload_pending;struct DDSurface*attached_depth;} DDSurface;
-typedef struct{DDrawObject*owner;DDSurface*render_target;DWORD render_states[256];} D3D7Device;typedef D3D7Device IDirect3DDevice7;typedef float D3DVALUE;
+typedef struct{DWORD wire_handle;DDrawObject*owner;DDSurface*render_target;DWORD render_states[256];} D3D7Device;typedef D3D7Device IDirect3DDevice7;typedef float D3DVALUE;
 #define TRUE 1
 #define FALSE 0
 #define WINAPI
@@ -57,7 +57,7 @@ static int fills(void){
  }
  return 0;
 }
-static int invalidation(void){Memory color={0},depth={0};DDrawObject owner={7};DDSurface ds={.memory=&depth,.format=75},rt={.memory=&color,.attached_depth=&ds};D3D7Device d={.owner=&owner,.render_target=&rt};
+static int invalidation(void){Memory color={0},depth={0};DDrawObject owner={7};DDSurface ds={.memory=&depth,.format=75},rt={.memory=&color,.attached_depth=&ds};D3D7Device d={.wire_handle=33,.owner=&owner,.render_target=&rt};
  for(DWORD flags=1;flags<8;flags++){color.gpu_dirty=depth.gpu_dirty=FALSE;CHECK(!d3d7_device_Clear(&d,0,NULL,flags,0,.5f,3));CHECK(color.gpu_dirty==!!(flags&1)&&depth.gpu_dirty==!!(flags&6));color.gpu_dirty=depth.gpu_dirty=FALSE;fail_emit=TRUE;CHECK(d3d7_device_Clear(&d,0,NULL,flags,0,.5f,3)==D3DERR_INITFAILED&&!color.gpu_dirty&&!depth.gpu_dirty);fail_emit=FALSE;}
  for(unsigned z=0;z<2;z++)for(unsigned write=0;write<2;write++)for(unsigned stencil=0;stencil<2;stencil++){d.render_states[7]=z;d.render_states[14]=write;d.render_states[52]=stencil;color.gpu_dirty=depth.gpu_dirty=FALSE;d3d7_mark_draw_surfaces_dirty(&d);CHECK(color.gpu_dirty&&depth.gpu_dirty==(BOOL)((z&&write)||stencil));}color.gpu_dirty=depth.gpu_dirty=FALSE;rt.attached_depth=NULL;d3d7_mark_draw_surfaces_dirty(&d);CHECK(color.gpu_dirty&&!depth.gpu_dirty);d.render_target=NULL;d3d7_mark_draw_surfaces_dirty(&d);return 0;}
 int main(void){CHECK(!fills());CHECK(!invalidation());printf("PASS actual DDraw depth memory: %u checks; seven packed formats, exact D32 fill bits, immediate system-memory writes, partial/stencil dirty retention, transport failure atomicity, depth uploads and draw/clear invalidation\\n",checks);return 0;}

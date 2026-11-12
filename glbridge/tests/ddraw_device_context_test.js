@@ -41,6 +41,7 @@ static ULONG d3d_viewport_Release(IDirect3DViewport3*p){D3DLegacyViewport*v=p;MU
 static HRESULT d3d_legacy_apply_viewport(D3DLegacyViewport*v){MUST(v->device);applies++;return fail_apply?-90:D3D_OK;}
 static void heap_free(void*p){MUST(!p);}
 static ULONG d3d_material_Release(IDirect3DMaterial3*p){(void)p;MUST(0);return 0;}
+static void d3d_legacy_forget_material_handles(D3D7Device*d){(void)d;}
 ${extract("d3d7_device_QueryInterface",modern)}
 ${["d3d3_device_QueryInterface","d3d2_device_QueryInterface","d3d_legacy_add_viewport","d3d_legacy_delete_viewport","d3d_legacy_set_current_viewport","d3d2_device_GetCurrentViewport","d3d3_device_GetCurrentViewport","d3d_legacy_device_cleanup"].map(n=>extract(n)).join("\n")}
 static HRESULT qi(D3D7Device*d,unsigned view,REFIID iid,void**out){if(view==3)return d3d3_device_QueryInterface(&d->device3_vtbl,iid,out);if(view==2)return d3d2_device_QueryInterface(&d->device2_vtbl,iid,out);return d3d7_device_QueryInterface(d,iid,out);}

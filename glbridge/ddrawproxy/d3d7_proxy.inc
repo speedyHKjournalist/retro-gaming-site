@@ -56,6 +56,9 @@ struct D3D7Device {
     const IDirect3DDeviceVtbl *device1_vtbl;
     LONG ref;
     DDrawObject *owner;
+    D3D7Device *next_in_owner;
+    DWORD wire_handle;
+    BOOL wire_created;
     DDSurface *render_target;
     DDSurface *aggregate_surface; /* Device1's public IUnknown is Surface1 */
     /* Which of the three device GUIDs CreateDevice was given. GetCaps has to
@@ -469,7 +472,7 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     result = reserve_command_locked(D9WG_OP_SET_FVF, sizeof(command), bytes,
             &payload, &blob);
     if (result) {
-        command.device_handle = device->owner->device_handle;
+        command.device_handle = device->wire_handle;
         command.fvf = ddraw_fvf_to_d3d9(fvf);
         command.element_count = count;
         CopyMemory(payload, &command, sizeof(command));
@@ -580,7 +583,7 @@ static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
     ZeroMemory(&command, sizeof(command));
     if (!d3d7_multiply_u32(vertex_count, stride, &command.vertex_bytes))
         return FALSE;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.primitive_type = primitive_type;
     command.primitive_count = primitive_count;
     command.stride = stride;
@@ -635,7 +638,7 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
      * processes the complete caller-declared range, including unused data. */
     command.vertex_bytes = (last_vertex - first_vertex + 1u)*stride;
     extra_bytes = command.index_bytes + command.vertex_bytes;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.primitive_type = primitive_type;
     command.vertex_count = last_vertex - first_vertex + 1u;
     command.primitive_count = primitive_count;
@@ -1299,14 +1302,14 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
             !ensure_surface_storage(target->attached_depth))
         return FALSE;
     ZeroMemory(&color, sizeof(color));
-    color.device_handle = device->owner->device_handle;
+    color.device_handle = device->wire_handle;
     color.color_texture_handle = target ? target->handle : 0u;
     color.color_level = target ? target->mip_level : 0u;
     color.color_face = target ? target->cube_face : 0u;
     if (!emit_command(D9WG_OP_SET_RENDER_TARGET, &color, sizeof(color)))
         return FALSE;
     ZeroMemory(&depth, sizeof(depth));
-    depth.device_handle = device->owner->device_handle;
+    depth.device_handle = device->wire_handle;
     if (target && target->attached_depth) {
         depth.depth_texture_handle = target->attached_depth->handle;
         depth.depth_level = target->attached_depth->mip_level;
@@ -1315,6 +1318,38 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
     }
     return emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &depth,
             sizeof(depth));
+}
+
+static void d3d7_destroy_host_context(D3D7Device *device)
+{
+    if (device->wire_created) {
+        D9WGDestroyResource destroy;
+        ZeroMemory(&destroy, sizeof(destroy));
+        destroy.resource_handle = device->wire_handle;
+        destroy.resource_kind = 0;
+        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    }
+    device->wire_created = FALSE;
+    device->wire_handle = 0;
+}
+
+static BOOL d3d7_create_host_context(D3D7Device *device)
+{
+    D9WGCreateDevice create;
+    D9WGWindowState hidden;
+    ZeroMemory(&create, sizeof(create));
+    device->wire_handle = allocate_handle();
+    create.device_handle = device->wire_handle;
+    create.width = device->render_target->width;
+    create.height = device->render_target->height;
+    create.backbuffer_format = DDWG_FMT_X8R8G8B8;
+    create.windowed = TRUE;
+    if (!emit_command(D9WG_OP_CREATE_DEVICE, &create, sizeof(create))) return FALSE;
+    device->wire_created = TRUE;
+    ZeroMemory(&hidden, sizeof(hidden));
+    hidden.device_handle = device->wire_handle;
+    hidden.flags = D9WG_WINDOW_NO_SURFACE;
+    return emit_command(D9WG_OP_WINDOW_STATE, &hidden, sizeof(hidden));
 }
 
 static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
@@ -1336,7 +1371,6 @@ static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
     surface = surface_from_any(surface_iface, NULL);
     if (!surface || surface->owner != owner || format_is_depth(surface->format))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (owner->d3d7_device) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     if (!ensure_device(owner)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device = (D3D7Device *)heap_alloc_zero(sizeof(*device));
     if (!device) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
@@ -1352,21 +1386,16 @@ static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
     ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     d3d7_device_init_state(device);
+    if (!d3d7_create_host_context(device) || !d3d7_emit_render_target(device) ||
+            !d3d7_sync_initial_state(device)) {
+        d3d7_destroy_host_context(device);
+        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
+        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        heap_free(device);
+        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    }
+    device->next_in_owner = owner->d3d7_device;
     owner->d3d7_device = device;
-    if (!d3d7_emit_render_target(device)) {
-        owner->d3d7_device = NULL;
-        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
-        heap_free(device);
-        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    }
-    if (!d3d7_sync_initial_state(device)) {
-        owner->d3d7_device = NULL;
-        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
-        heap_free(device);
-        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    }
     *out = (IDirect3DDevice7 *)device;
     return D3D_OK;
 }
@@ -1509,7 +1538,10 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
         BOOL legacy_parent = device->creation_version == 1u;
         D3D7StateBlock *block;
         UINT stage;
-        if (owner->d3d7_device == device) owner->d3d7_device = NULL;
+        D3D7Device **link = &owner->d3d7_device;
+        while (*link && *link != device) link = &(*link)->next_in_owner;
+        if (*link) *link = device->next_in_owner;
+        d3d7_destroy_host_context(device);
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
             if (device->textures[stage])
                 surface_Release((IDirectDrawSurface7 *)
@@ -1557,7 +1589,7 @@ static HRESULT WINAPI d3d7_device_BeginScene(IDirect3DDevice7 *iface)
     D9WGDeviceOnly command;
     if (device->in_scene) return DDWG_TRACE_ERROR(D3DERR_SCENE_IN_SCENE);
     device->in_scene = TRUE;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.reserved = 0;
     if (!emit_command(D9WG_OP_BEGIN_SCENE, &command, sizeof(command))) {
         device->in_scene = FALSE;
@@ -1572,7 +1604,7 @@ static HRESULT WINAPI d3d7_device_EndScene(IDirect3DDevice7 *iface)
     D9WGDeviceOnly command;
     if (!device->in_scene) return DDWG_TRACE_ERROR(D3DERR_SCENE_NOT_IN_SCENE);
     device->in_scene = FALSE;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.reserved = 0;
     return emit_command(D9WG_OP_END_SCENE, &command, sizeof(command))
             ? D3D_OK : D3DERR_SCENE_END_FAILED;
@@ -1647,7 +1679,7 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
              device->render_target->attached_depth->format != DDWG_FMT_D24S8))
         return DDWG_TRACE_ERROR(D3DERR_STENCILBUFFER_NOTPRESENT);
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.clear_flags = flags;
     command.color = color;
     command.depth = depth_value;
@@ -1681,7 +1713,7 @@ static HRESULT WINAPI d3d7_device_SetTransform(IDirect3DDevice7 *iface,
         return D3D_OK;
     }
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.state = ddraw_transform_state_to_d3d9(state);
     CopyMemory(command.matrix, matrix, sizeof(command.matrix));
     if (!emit_command(D9WG_OP_SET_TRANSFORM, &command, sizeof(command)))
@@ -1718,7 +1750,7 @@ static HRESULT WINAPI d3d7_device_SetViewport(IDirect3DDevice7 *iface,
         return D3D_OK;
     }
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.x = viewport->dwX;
     command.y = viewport->dwY;
     command.width = viewport->dwWidth;
@@ -1764,7 +1796,7 @@ static HRESULT WINAPI d3d7_device_SetMaterial(IDirect3DDevice7 *iface,
         return D3D_OK;
     }
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     CopyMemory(command.diffuse, &material->diffuse, sizeof(command.diffuse));
     CopyMemory(command.ambient, &material->ambient, sizeof(command.ambient));
     CopyMemory(command.specular, &material->specular, sizeof(command.specular));
@@ -1788,7 +1820,7 @@ static BOOL d3d7_emit_light(D3D7Device *device, DWORD index, const D3DLIGHT7 *li
 {
     D9WGSetLight command;
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.index = index;
     command.type = ddraw_light_type_to_d3d9(light->dltType);
     CopyMemory(command.diffuse, &light->dcvDiffuse, sizeof(command.diffuse));
@@ -1855,7 +1887,7 @@ static BOOL d3d7_emit_sampler_state(D3D7Device *device, DWORD stage,
         DWORD state, DWORD value)
 {
     D9WGSetSamplerState command;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.sampler = stage;
     command.state = state;
     command.value = value;
@@ -1866,7 +1898,7 @@ static BOOL d3d7_emit_texture_stage_state(D3D7Device *device, DWORD stage,
         DWORD state, DWORD value)
 {
     D9WGSetTextureStageState command;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.stage = stage;
     command.state = state;
     command.value = value;
@@ -1913,7 +1945,7 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
     unsigned sampler_state;
     unsigned action = ddraw_render_state_action(state, &sampler_state);
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
 
     if (action == DDRAW_STATE_SHADOW_ONLY) return TRUE;
     if (action == DDRAW_STATE_SAMPLER) {
@@ -2315,7 +2347,7 @@ static int d3d7_clip_emit(void *context, uint32_t primitive_type,
 static int d3d7_clip_mask(void *context, uint32_t mask)
 {
     D3D7ClipEmitContext *emit = context;
-    D9WGSetRenderState command = { emit->device->owner->device_handle, D3DRENDERSTATE_CLIPPLANEENABLE, mask, 0 };
+    D9WGSetRenderState command = { emit->device->wire_handle, D3DRENDERSTATE_CLIPPLANEENABLE, mask, 0 };
     return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
 }
 static HRESULT d3d7_clip_vb_draw(D3D7Device *device, D3D7VertexBuffer *buffer,
@@ -2388,12 +2420,12 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     if (!d3d7_emit_fvf(device, buffer->desc.dwFVF, NULL))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     ZeroMemory(&stream, sizeof(stream));
-    stream.device_handle = device->owner->device_handle;
+    stream.device_handle = device->wire_handle;
     stream.buffer_handle = buffer->handle;
     stream.stride = buffer->stride;
     if (!emit_command(D9WG_OP_SET_STREAM_SOURCE, &stream, sizeof(stream)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    draw.device_handle = device->owner->device_handle;
+    draw.device_handle = device->wire_handle;
     draw.primitive_type = primitive_type;
     draw.start_vertex = start_vertex;
     draw.primitive_count = primitive_count;
@@ -2549,7 +2581,7 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = surface_iface ? surface_from_any(surface_iface, NULL) : NULL;
     if (stage >= D3D7_MAX_TEXTURE_STAGES ||
-            (surface && (surface->owner != device->owner ||
+            (surface && ((device->creation_version >= 7u && surface->owner != device->owner) ||
                     format_is_depth(surface->format))))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (device->recording_state_block) {
@@ -2571,7 +2603,7 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
     old = device->textures[stage];
     device->textures[stage] = surface;
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.stage = stage;
     command.texture_handle = surface ? surface->handle : 0u;
     if (!emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command))) {
@@ -2879,7 +2911,7 @@ static HRESULT WINAPI d3d7_device_LightEnable(IDirect3DDevice7 *iface,
         if (!d3d7_emit_light(device, index, light)) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
         *set = TRUE;
     }
-    D9WGLightEnable command = {device->owner->device_handle, index, !!enable, 0};
+    D9WGLightEnable command = {device->wire_handle, index, !!enable, 0};
     if (!emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command))) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
     if (entry) entry->enabled = !!enable;else device->light_enabled[index] = !!enable;
     return D3D_OK;
@@ -2911,7 +2943,7 @@ static HRESULT WINAPI d3d7_device_SetClipPlane(IDirect3DDevice7 *iface,
         block->clip_plane_mask[index] = 1;CopyMemory(block->clip_planes[index], plane, sizeof(command.plane));
         return D3D_OK;
     }
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.index = index;
     CopyMemory(command.plane, plane, sizeof(command.plane));
     if (!emit_command(D9WG_OP_SET_CLIP_PLANE, &command, sizeof(command)))
@@ -2948,30 +2980,31 @@ static HRESULT WINAPI d3d7_device_GetInfo(IDirect3DDevice7 *iface,
  */
 static void d3d7_refresh_render_target(DDrawObject *object, DDSurface *surface)
 {
-    D3D7Device *device = object ? object->d3d7_device : NULL;
-    if (!device || device->render_target != surface) return;
-    d3d7_emit_render_target(device);
+    D3D7Device *device;
+    for (device = object ? object->d3d7_device : NULL; device; device = device->next_in_owner)
+        if (device->render_target == surface) d3d7_emit_render_target(device);
 }
 
 static void d3d7_rebind_after_flip(DDrawObject *object)
 {
-    D3D7Device *device = object ? object->d3d7_device : NULL;
+    D3D7Device *device;
     UINT stage;
-    if (!device) return;
-    d3d7_emit_render_target(device);
-    for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
-        if (device->textures[stage]) {
-            D9WGSetTexture command;
-            if (!prepare_surface_for_host(device->textures[stage]))
-                continue;
-            ZeroMemory(&command, sizeof(command));
-            command.device_handle = object->device_handle;
-            command.stage = stage;
-            command.texture_handle = device->textures[stage]->handle;
-            emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command));
+    for (device = object ? object->d3d7_device : NULL; device; device = device->next_in_owner) {
+        d3d7_emit_render_target(device);
+        for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
+            if (device->textures[stage]) {
+                D9WGSetTexture command;
+                if (!prepare_surface_for_host(device->textures[stage])) continue;
+                ZeroMemory(&command, sizeof(command));
+                command.device_handle = device->wire_handle;
+                command.stage = stage;
+                command.texture_handle = device->textures[stage]->handle;
+                emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command));
+            }
         }
     }
 }
+
 
 /* ------------------------------------------------------------------ *
  * IDirect3DVertexBuffer7

@@ -8,6 +8,12 @@
 
 typedef struct D3DLegacyExecuteBuffer D3DLegacyExecuteBuffer;
 
+typedef struct D3DLegacyMaterialHandle {
+    D3D7Device *device;
+    D3DMATERIALHANDLE handle;
+    struct D3DLegacyMaterialHandle *next;
+} D3DLegacyMaterialHandle;
+
 struct D3DLegacyMaterial {
     const IDirect3DMaterial3Vtbl *vtbl3;
     const IDirect3DMaterial2Vtbl *vtbl2;
@@ -15,7 +21,7 @@ struct D3DLegacyMaterial {
     LONG ref;
     DDrawObject *owner;
     D3DMATERIAL material;
-    D3DMATERIALHANDLE handle;
+    D3DLegacyMaterialHandle *handles;
     D3DLegacyMaterial *next;
 };
 
@@ -368,10 +374,15 @@ static void d3d_legacy_material7(const D3DMATERIAL *source,
 static D3DLegacyMaterial *d3d_legacy_find_material(DDrawObject *owner,
         D3DMATERIALHANDLE handle)
 {
-    D3DLegacyMaterial *material;
-    for (material = owner->legacy_materials; material;
-            material = material->next) {
-        if (material->handle == handle) return material;
+    DDrawObject *object;
+    (void)owner;
+    for (object = g_objects; object; object = object->next) {
+        D3DLegacyMaterial *material;
+        for (material = object->legacy_materials; material; material = material->next) {
+            D3DLegacyMaterialHandle *entry;
+            for (entry = material->handles; entry; entry = entry->next)
+                if (entry->handle == handle) return material;
+        }
     }
     return NULL;
 }
@@ -408,6 +419,11 @@ static ULONG WINAPI d3d_material_Release(IDirect3DMaterial3 *iface)
         D3DLegacyMaterial **link = &owner->legacy_materials;
         while (*link && *link != material) link = &(*link)->next;
         if (*link) *link = material->next;
+        while (material->handles) {
+            D3DLegacyMaterialHandle *entry = material->handles;
+            material->handles = entry->next;
+            heap_free(entry);
+        }
         heap_free(material);
         ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
     }
@@ -423,13 +439,19 @@ static HRESULT WINAPI d3d_material_SetMaterial(IDirect3DMaterial3 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     material->material = *data;
     material->material.dwSize = sizeof(material->material);
-    if (material->owner->d3d7_device) {
-        d3d_legacy_material7(&material->material, &material7);
-        if (material->owner->d3d7_device->legacy_material == material)
-            return d3d7_device_SetMaterial((IDirect3DDevice7 *)
-                    material->owner->d3d7_device, &material7);
+    DDrawObject *object;
+    HRESULT result = D3D_OK;
+    d3d_legacy_material7(&material->material, &material7);
+    for (object = g_objects; object; object = object->next) {
+        D3D7Device *device;
+        for (device = object->d3d7_device; device; device = device->next_in_owner) {
+            if (device->legacy_material == material) {
+                HRESULT hr = d3d7_device_SetMaterial((IDirect3DDevice7 *)device, &material7);
+                if (FAILED(hr)) result = hr;
+            }
+        }
     }
-    return D3D_OK;
+    return result;
 }
 
 static HRESULT WINAPI d3d_material_GetMaterial(IDirect3DMaterial3 *iface,
@@ -448,11 +470,35 @@ static HRESULT WINAPI d3d_material_GetMaterial(IDirect3DMaterial3 *iface,
 static HRESULT d3d_material_get_handle(D3DLegacyMaterial *material,
         D3D7Device *device, D3DMATERIALHANDLE *handle)
 {
-    if (!handle || !device || device->owner != material->owner)
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (!material->handle) material->handle = allocate_handle();
-    *handle = material->handle;
+    D3DLegacyMaterialHandle *entry;
+    if (!handle || !device) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    for (entry = material->handles; entry; entry = entry->next)
+        if (entry->device == device) { *handle = entry->handle; return D3D_OK; }
+    entry = heap_alloc_zero(sizeof(*entry));
+    if (!entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    entry->device = device;
+    entry->handle = allocate_handle();
+    entry->next = material->handles;
+    material->handles = entry;
+    *handle = entry->handle;
     return D3D_OK;
+}
+
+static void d3d_legacy_forget_material_handles(D3D7Device *device)
+{
+    DDrawObject *object;
+    for (object = g_objects; object; object = object->next) {
+        D3DLegacyMaterial *material;
+        for (material = object->legacy_materials; material; material = material->next) {
+            D3DLegacyMaterialHandle **link = &material->handles;
+            while (*link) {
+                D3DLegacyMaterialHandle *entry = *link;
+                if (entry->device != device) { link = &entry->next; continue; }
+                *link = entry->next;
+                heap_free(entry);
+            }
+        }
+    }
 }
 
 static HRESULT WINAPI d3d_material3_GetHandle(IDirect3DMaterial3 *iface,
@@ -1266,8 +1312,7 @@ static ULONG WINAPI d3d_texture2_Release(IDirect3DTexture2 *iface)
 static HRESULT d3d_texture_get_handle(DDSurface *surface, D3D7Device *device,
         D3DTEXTUREHANDLE *handle)
 {
-    if (!handle || !device || device->owner != surface->owner ||
-            format_is_depth(surface->format)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!handle || !device || format_is_depth(surface->format)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!surface->texture_handle) surface->texture_handle = allocate_handle();
     *handle = surface->texture_handle;
     return D3D_OK;
@@ -1830,9 +1875,13 @@ static HRESULT WINAPI d3d3_device_End(IDirect3DDevice3 *iface, DWORD flags)
 static DDSurface *d3d_legacy_find_texture(DDrawObject *owner,
         D3DTEXTUREHANDLE handle)
 {
-    DDSurface *surface;
-    for (surface = owner->surfaces; surface; surface = surface->next) {
-        if (surface->texture_handle == handle) return surface;
+    DDrawObject *object;
+    (void)owner;
+    if (!handle) return NULL;
+    for (object = g_objects; object; object = object->next) {
+        DDSurface *surface;
+        for (surface = object->surfaces; surface; surface = surface->next)
+            if (surface->texture_handle == handle) return surface;
     }
     return NULL;
 }
@@ -2235,28 +2284,40 @@ static HRESULT WINAPI d3d2_device_GetCaps(IDirect3DDevice2 *iface,
     return d3d_legacy_device_get_caps(hal, hel);
 }
 
+static HRESULT d3d_legacy_swap_texture_handles(DDSurface *first, DDSurface *second)
+{
+    DDrawObject *object;
+    D3DTEXTUREHANDLE first_handle = first->texture_handle, second_handle = second->texture_handle;
+    HRESULT result = D3D_OK;
+    if (!first_handle || !second_handle) return DDWG_TRACE_ERROR(E_INVALIDARG);
+    first->texture_handle = second_handle;
+    second->texture_handle = first_handle;
+    for (object = g_objects; object; object = object->next) {
+        D3D7Device *device;
+        for (device = object->d3d7_device; device; device = device->next_in_owner) {
+            DWORD current = device->render_states[D3DRENDERSTATE_TEXTUREHANDLE];
+            if (device->creation_version > 3u || !current ||
+                    (current != first_handle && current != second_handle)) continue;
+            HRESULT hr = d3d3_device_SetRenderState((IDirect3DDevice3 *)&device->device3_vtbl,
+                    D3DRENDERSTATE_TEXTUREHANDLE, current);
+            if (FAILED(hr)) result = hr;
+        }
+    }
+    return result;
+}
+
 static HRESULT WINAPI d3d2_device_SwapTextureHandles(IDirect3DDevice2 *iface,
         IDirect3DTexture2 *first_iface, IDirect3DTexture2 *second_iface)
 {
     DDSurface *first, *second;
-    D3DTEXTUREHANDLE handle;
-    D3D7Device *device = d3d2_device_from_iface(iface);
+    (void)iface;
     if (!first_iface || !second_iface ||
             first_iface->lpVtbl != &g_d3d_texture2_vtbl ||
             second_iface->lpVtbl != &g_d3d_texture2_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     first = d3d_texture2_from_iface(first_iface);
     second = d3d_texture2_from_iface(second_iface);
-    if (first->owner != device->owner || second->owner != device->owner)
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    handle = first->texture_handle;
-    first->texture_handle = second->texture_handle;
-    second->texture_handle = handle;
-    if (device->render_states[D3DRENDERSTATE_TEXTUREHANDLE])
-        return d3d3_device_SetRenderState((IDirect3DDevice3 *)&
-                device->device3_vtbl, D3DRENDERSTATE_TEXTUREHANDLE,
-                device->render_states[D3DRENDERSTATE_TEXTUREHANDLE]);
-    return D3D_OK;
+    return d3d_legacy_swap_texture_handles(first, second);
 }
 
 static HRESULT WINAPI d3d2_device_GetStats(IDirect3DDevice2 *iface,
@@ -2646,20 +2707,14 @@ static HRESULT WINAPI d3d1_device_SwapTextureHandles(IDirect3DDevice *iface,
         IDirect3DTexture *first_iface, IDirect3DTexture *second_iface)
 {
     DDSurface *first, *second;
-    D3DTEXTUREHANDLE handle;
-    D3D7Device *device = d3d1_device_from_iface(iface);
+    (void)iface;
     if (!first_iface || !second_iface ||
             first_iface->lpVtbl != &g_d3d_texture1_vtbl ||
             second_iface->lpVtbl != &g_d3d_texture1_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     first = d3d_texture1_from_iface(first_iface);
     second = d3d_texture1_from_iface(second_iface);
-    if (first->owner != device->owner || second->owner != device->owner)
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    handle = first->texture_handle;
-    first->texture_handle = second->texture_handle;
-    second->texture_handle = handle;
-    return D3D_OK;
+    return d3d_legacy_swap_texture_handles(first, second);
 }
 
 static D3DLegacyExecuteBuffer *d3d_execute_buffer_from_iface(
@@ -2890,14 +2945,27 @@ static HRESULT WINAPI d3d1_device_GetStats(IDirect3DDevice *iface,
             stats);
 }
 
+static D3DLegacyMatrix **d3d_legacy_matrix_link(D3DMATRIXHANDLE handle)
+{
+    DDrawObject *object;
+    if (!handle) return NULL;
+    for (object = g_objects; object; object = object->next) {
+        D3D7Device *device;
+        for (device = object->d3d7_device; device; device = device->next_in_owner) {
+            D3DLegacyMatrix **link = &device->legacy_matrices;
+            while (*link && (*link)->handle != handle) link = &(*link)->next;
+            if (*link) return link;
+        }
+    }
+    return NULL;
+}
+
 static D3DLegacyMatrix *d3d_legacy_find_matrix(D3D7Device *device,
         D3DMATRIXHANDLE handle)
 {
-    D3DLegacyMatrix *matrix;
-    for (matrix = device->legacy_matrices; matrix; matrix = matrix->next) {
-        if (matrix->handle == handle) return matrix;
-    }
-    return NULL;
+    D3DLegacyMatrix **link = d3d_legacy_matrix_link(handle);
+    (void)device;
+    return link ? *link : NULL;
 }
 
 static HRESULT WINAPI d3d1_device_CreateMatrix(IDirect3DDevice *iface,
@@ -2940,10 +3008,9 @@ static HRESULT WINAPI d3d1_device_GetMatrix(IDirect3DDevice *iface,
 static HRESULT WINAPI d3d1_device_DeleteMatrix(IDirect3DDevice *iface,
         D3DMATRIXHANDLE handle)
 {
-    D3D7Device *device = d3d1_device_from_iface(iface);
-    D3DLegacyMatrix **link = &device->legacy_matrices;
-    while (*link && (*link)->handle != handle) link = &(*link)->next;
-    if (!*link) return DDWG_TRACE_ERROR(D3DERR_MATRIX_DESTROY_FAILED);
+    D3DLegacyMatrix **link = d3d_legacy_matrix_link(handle);
+    (void)iface;
+    if (!link) return DDWG_TRACE_ERROR(D3DERR_MATRIX_DESTROY_FAILED);
     {
         D3DLegacyMatrix *matrix = *link;
         *link = matrix->next;
@@ -3476,6 +3543,7 @@ static void d3d_legacy_device_cleanup(D3D7Device *device)
                 device->legacy_current_viewport->vtbl3);
     device->legacy_current_viewport = NULL;
     device->legacy_viewports = NULL;
+    d3d_legacy_forget_material_handles(device);
     while (viewport) {
         D3DLegacyViewport *next = viewport->next_in_device;
         viewport->device = NULL;
