@@ -3158,14 +3158,19 @@ static HRESULT WINAPI d3d7_vb_Lock(IDirect3DVertexBuffer7 *iface,
 {
     D3D7VertexBuffer *buffer = d3d7_vb_from_iface(iface);
     if (!data) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERLOCKED);
     if (flags & DDLOCK_DISCARDCONTENTS) {
         d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         /* Native DD3/7 treat DISCARD as a synchronization hint; the CPU
          * backing bytes remain observable across repeated locks. */
     }
+    /* Repeated locks share the same mapping. Keep any write intent, and
+     * only retain NOOVERWRITE when every lock made that promise. */
+    if (buffer->locked) {
+        DWORD unanimous = DDLOCK_READONLY | DDLOCK_NOOVERWRITE;
+        buffer->lock_flags = ((buffer->lock_flags | flags) & ~unanimous)
+                | ((buffer->lock_flags & flags) & unanimous);
+    } else buffer->lock_flags = flags;
     buffer->locked = TRUE;
-    buffer->lock_flags = flags;
     *data = buffer->shadow;
     if (data_size) *data_size = buffer->byte_count;
     return D3D_OK;
@@ -3175,7 +3180,7 @@ static HRESULT WINAPI d3d7_vb_Unlock(IDirect3DVertexBuffer7 *iface)
 {
     D3D7VertexBuffer *buffer = d3d7_vb_from_iface(iface);
     BOOL result = TRUE;
-    if (!buffer->locked) return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERUNLOCKFAILED);
+    if (!buffer->locked) return D3D_OK;
     if (!(buffer->lock_flags & DDLOCK_READONLY))
         result = emit_buffer_update(buffer->handle, 0, buffer->shadow,
                 buffer->byte_count, buffer->lock_flags);
@@ -3274,6 +3279,7 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     }
     D9WGVertexState vertex_state;
     d9wg_vertex_state_init(&vertex_state, device->render_states);
+    vertex_state.blend_zero_w_nan = device->creation_version >= 7u && !(vertex_op & D3DVOP_CLIP);
     if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
             sizeof(device->texture_stage_states[0]), &device->transforms[D3DTRANSFORMSTATE_TEXTURE0]))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -3340,6 +3346,34 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
             ? D3D_OK : D3DERR_VERTEXBUFFERUNLOCKFAILED;
 }
 
+/* Legacy weighted processing can consume scalars following XYZ even when
+ * the FVF omitted them. Transcode only bytes within the source backing. */
+static BYTE *d3d7_implicit_weight_stream(const BYTE *source,
+        UINT source_bytes, UINT source_stride, UINT first, UINT count, UINT weights)
+{
+    if (!weights || weights > 3u) return NULL;
+    UINT output_stride = 12u + weights*4u;
+    if (!count || source_stride < 12u || count > 0xffffffffu / output_stride)
+        return NULL;
+    uint64_t first_offset = (uint64_t)first*source_stride;
+    if (first_offset > source_bytes || source_bytes - first_offset < 12u ||
+            (uint64_t)(count - 1u)*source_stride > source_bytes - first_offset - 12u)
+        return NULL;
+    BYTE *expanded = heap_alloc_zero((SIZE_T)count*output_stride);
+    if (!expanded) return NULL;
+    for (UINT vertex = 0; vertex < count; ++vertex) {
+        uint64_t offset = ((uint64_t)first + vertex)*source_stride;
+        CopyMemory(expanded + vertex*output_stride, source + (UINT)offset, 12u);
+        for (UINT weight = 0; weight < weights; ++weight) {
+            uint64_t weight_offset = offset + 12u + weight*4u;
+            if (weight_offset + 4u <= source_bytes)
+                CopyMemory(expanded + vertex*output_stride + 12u + weight*4u,
+                        source + (UINT)weight_offset, 4u);
+        }
+    }
+    return expanded;
+}
+
 static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
         DWORD vertex_op, DWORD destination_index, DWORD count,
         IDirect3DVertexBuffer7 *source_iface, DWORD source_index,
@@ -3365,10 +3399,20 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
         if (!snapshot) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
         CopyMemory(snapshot, source->shadow, source->byte_count);input = snapshot;
     }
+    BYTE *expanded = NULL;
+    DWORD fvf = source->desc.dwFVF;
+    UINT stride = source->stride;
+    UINT weights = d3d_device->render_states[D3DRENDERSTATE_VERTEXBLEND];
+    if (count && fvf == D3DFVF_XYZ && weights >= 1u && weights <= 3u) {
+        expanded = d3d7_implicit_weight_stream(input, source->byte_count,
+                stride, source_index, count, weights);
+        if (!expanded) { heap_free(snapshot);return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY); }
+        input = expanded;fvf = D3DFVF_XYZB1 + (weights - 1u)*2u;
+        stride = 12u + weights*4u;source_index = 0;
+    }
     HRESULT result = d3d7_process_vertex_bytes(destination, vertex_op,
-            destination_index, count, input, source->desc.dwFVF,
-            source->stride, source_index, d3d_device, flags);
-    heap_free(snapshot);return result;
+            destination_index, count, input, fvf, stride, source_index, d3d_device, flags);
+    heap_free(expanded);heap_free(snapshot);return result;
 }
 
 static HRESULT WINAPI d3d7_vb_GetVertexBufferDesc(

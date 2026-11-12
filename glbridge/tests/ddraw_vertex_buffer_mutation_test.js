@@ -2,6 +2,10 @@
 const fs=require("node:fs"),os=require("node:os"),path=require("node:path"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),sources={seven:fs.readFileSync(root+'/ddrawproxy/d3d7_proxy.inc','utf8'),legacy:fs.readFileSync(root+'/ddrawproxy/d3d_legacy_proxy.inc','utf8')},dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-vb-mut-'));
 const cases=[
+ ['repeated mapping rejected','seven','d3d7_vb_Lock','if (buffer->locked) {','if (buffer->locked) { return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERLOCKED);'],
+ ['late readonly suppresses prior write','seven','d3d7_vb_Lock','((buffer->lock_flags & flags) & unanimous)','(flags & unanimous)'],
+ ['mixed lock grants NOOVERWRITE','seven','d3d7_vb_Lock','DWORD unanimous = DDLOCK_READONLY | DDLOCK_NOOVERWRITE;','DWORD unanimous = DDLOCK_READONLY;'],
+ ['extra Unlock emits update','seven','d3d7_vb_Unlock','if (!buffer->locked) return D3D_OK;','if (FALSE && !buffer->locked) return D3D_OK;'],
  ['discard erases native backing bytes','seven','d3d7_vb_Lock','d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);','d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL); ZeroMemory(buffer->shadow, buffer->byte_count);'],
  ['legacy factory uses v7 profile','legacy','d3d3_CreateVertexBuffer','flags, DD_VERSION_3);','flags, DD_VERSION_7);'],
  ['legacy IUnknown returns v7 pointer','seven','d3d7_vb_QueryInterface','buffer->creation_version == DD_VERSION_7\n            ?','1\n            ?'],

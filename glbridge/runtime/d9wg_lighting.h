@@ -20,6 +20,7 @@ typedef struct D9WGTNLLighting {
      * D3D8/9 instead preserve the input specular alpha. */
     uint32_t specular_alpha_material;
     uint32_t position_matrix_override;
+    uint32_t legacy_attenuation;
     float position_matrix[16];
     float ambient[3], normal_matrix[16];
     uint32_t light_count;

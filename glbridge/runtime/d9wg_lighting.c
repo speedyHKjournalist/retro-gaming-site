@@ -23,6 +23,7 @@ void d9wg_lighting_init(D9WGTNLLighting *state, const D9WGSetMaterial *material,
     state->material = *material;state->flags = *flags;state->light_count = 0;
     state->specular_alpha_material = 0;
     state->position_matrix_override = 0;
+    state->legacy_attenuation = 0;
     d9wg_lighting_color(ambient_argb, ambient);
     for (unsigned i = 0; i < 3; ++i) state->ambient[i] = ambient[i];
 }
@@ -92,9 +93,17 @@ void d9wg_lighting_shade(const D9WGTNLLighting *state, const float *eye_position
             float distance, denominator;
             for (unsigned i = 0; i < 3; ++i) to_light[i] = light->position[i] - eye_position[i];
             distance = d9wg_tnl_sqrt(dot3(to_light, to_light));
-            denominator = maxf(light->attenuation[0] + light->attenuation[1]*distance + light->attenuation[2]*distance*distance, 1e-6f);
-            attenuation = 1.0f / denominator;
-            if (distance > light->range) attenuation = 0.0f;
+            if (state->legacy_attenuation) {
+                if (light->range > 0.0f && distance < light->range) {
+                    float fade = 1.0f - distance / light->range;
+                    attenuation = light->attenuation[0] + light->attenuation[1]*fade
+                            + light->attenuation[2]*fade*fade;
+                } else attenuation = 0.0f;
+            } else {
+                denominator = maxf(light->attenuation[0] + light->attenuation[1]*distance + light->attenuation[2]*distance*distance, 1e-6f);
+                attenuation = 1.0f / denominator;
+                if (distance > light->range) attenuation = 0.0f;
+            }
             if (distance > 0.0f) for (unsigned i = 0; i < 3; ++i) to_light[i] /= maxf(distance, 1e-6f);
             else { to_light[0] = to_light[1] = 0.0f;to_light[2] = 1.0f; }
             if (light->type == 2) {

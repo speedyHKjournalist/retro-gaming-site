@@ -72,6 +72,7 @@ int d9wg_process_stream_gather(const D9WGProcessStreamLayout *layout,
 typedef struct D9WGVertexBlend D9WGVertexBlend;
 typedef struct D9WGVertexState {
     uint32_t fog_mode, range_fog;
+    uint32_t blend_zero_w_nan;
     float fog_start, fog_end, fog_density;
     uint32_t texture_mask;
     struct {

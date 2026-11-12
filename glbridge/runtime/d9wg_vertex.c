@@ -10,6 +10,7 @@ void d9wg_vertex_state_init(D9WGVertexState *state, const void *render_states)
     const uint8_t *bytes = render_states;
     state->texture_mask = 0;
     state->blend = 0;
+    state->blend_zero_w_nan = 0;
     state->clip_vertices = 0;state->clip_plane_mask = 0;
     /* The public D3D7/8/9 render-state indices and DWORD storage agree. Fog
      * generation follows FOGVERTEXMODE; FOGENABLE controls later blending. */
@@ -231,6 +232,12 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             }
             for (unsigned i = 0; i < 4; ++i) screen[i] = record->stored[i];
         } else d9wg_clip_project(clip, viewport, screen);
+        if (blend && vertex_state->blend_zero_w_nan && clip[3] == 0.0f) {
+            /* XP's unclipped D3D7 blender produces a quiet NaN reciprocal at
+             * W=0. Other API profiles retain their existing projection rule. */
+            const uint32_t nan_word = 0xffc00000u;
+            for (unsigned i = 0; i < 4; ++i) __builtin_memcpy(&screen[i], &nan_word, 4u);
+        }
         /* Never reproduce native spill writes beyond the public allocation. */
         uint64_t output_base = (uint64_t)destination + (uint64_t)vertex*d->stride;
         for (unsigned i = 0; i < 4; ++i)

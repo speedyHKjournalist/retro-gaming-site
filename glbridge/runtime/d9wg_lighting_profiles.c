@@ -54,6 +54,7 @@ void d9wg_lighting_legacy_geometry(D9WGTNLLighting *state,
         light_transform[12u+row]=-eye[row];
     }
     state->position_matrix_override=1;
+    state->legacy_attenuation=1;
     state->flags.normalize_normals=0;
 }
 static int rigid(const void *matrix)
