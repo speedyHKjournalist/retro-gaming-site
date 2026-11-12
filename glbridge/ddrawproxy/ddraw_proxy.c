@@ -491,10 +491,11 @@ struct DDClipper {
     LONG ref;
     DDrawObject *owner;
     HWND window;
-    RGNDATA *clip_list;         /* heap copy, or NULL when tracking a window */
+    RGNDATA *clip_list;         /* saved custom region, also while tracking HWND */
     DWORD clip_list_bytes;
     BOOL changed;
     DDClipper *next;
+    DDClipper *all_next;
 };
 
 /* One WebGPU texture may expose many DirectDraw surface objects: every mip
@@ -653,6 +654,7 @@ struct DDrawObject {
 static DDrawObject *g_objects;
 static LONG g_object_count;
 static LONG g_clipper_count;
+static DDClipper *g_all_clippers;
 
 static void *heap_alloc_zero(SIZE_T bytes)
 {
@@ -710,7 +712,15 @@ static DDPalette *palette_from_iface(IDirectDrawPalette *iface)
 
 static DDClipper *clipper_from_iface(IDirectDrawClipper *iface)
 {
-    return (DDClipper *)iface;
+    DDClipper *clipper;
+    /* Validate allocation identity before dereferencing the caller's pointer.
+     * AddRef accepts a live object even with a damaged vtable; a copied vtable
+     * on arbitrary/freed memory never makes that memory a clipper. */
+    EnterCriticalSection(&g_object_lock);
+    for (clipper = g_all_clippers; clipper; clipper = clipper->all_next)
+        if ((IDirectDrawClipper *)clipper == iface) break;
+    LeaveCriticalSection(&g_object_lock);
+    return clipper;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1808,6 +1818,7 @@ static IDirectDraw2Vtbl g_ddraw_vtbl2;
 static IDirectDrawVtbl g_ddraw_vtbl1;
 static IDirectDrawPaletteVtbl g_palette_vtbl;
 static IDirectDrawClipperVtbl g_clipper_vtbl;
+static ULONG WINAPI clipper_AddRef(IDirectDrawClipper *iface);
 
 #define DD_VERSION_1 1u
 #define DD_VERSION_2 2u
@@ -3358,6 +3369,7 @@ static HRESULT WINAPI surface_SetClipper(IDirectDrawSurface7 *iface,
     DDClipper *clipper = clipper_iface ? clipper_from_iface(clipper_iface)
         : NULL;
 
+    if (clipper_iface && !clipper) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (clipper) IDirectDrawClipper_AddRef(clipper_iface);
     if (surface->clipper)
         IDirectDrawClipper_Release((IDirectDrawClipper *)surface->clipper);
@@ -4016,10 +4028,10 @@ static HRESULT WINAPI palette_SetEntries(IDirectDrawPalette *iface,
 static HRESULT WINAPI clipper_QueryInterface(IDirectDrawClipper *iface,
         REFIID iid, void **out)
 {
-    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!clipper_from_iface(iface) || !out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirectDrawClipper)) {
-        IDirectDrawClipper_AddRef(iface);
+        clipper_AddRef(iface);
         *out = iface;
         return DD_OK;
     }
@@ -4028,17 +4040,31 @@ static HRESULT WINAPI clipper_QueryInterface(IDirectDrawClipper *iface,
 
 static ULONG WINAPI clipper_AddRef(IDirectDrawClipper *iface)
 {
-    return (ULONG)InterlockedIncrement(&clipper_from_iface(iface)->ref);
+    DDClipper *clipper = clipper_from_iface(iface);
+    return clipper ? (ULONG)InterlockedIncrement(&clipper->ref) : 0;
 }
 
 static ULONG WINAPI clipper_Release(IDirectDrawClipper *iface)
 {
     DDClipper *clipper = clipper_from_iface(iface);
-    LONG remaining = InterlockedDecrement(&clipper->ref);
+    LONG remaining;
+    if (!clipper || clipper->vtbl != &g_clipper_vtbl) return 0;
+    remaining = InterlockedDecrement(&clipper->ref);
 
     if (remaining == 0) {
         DDrawObject *owner = clipper->owner;
+        DDrawObject *object;
+        DDClipper **all;
         EnterCriticalSection(&g_object_lock);
+        for (all = &g_all_clippers; *all && *all != clipper; all = &(*all)->all_next) {}
+        if (*all) *all = clipper->all_next;
+        /* Native tolerates clients stealing the surface's public clipper ref.
+         * Do not leave any surface to invoke a freed clipper vtable later. */
+        for (object = g_objects; object; object = object->next) {
+            DDSurface *surface;
+            for (surface = object->surfaces; surface; surface = surface->next)
+                if (surface->clipper == clipper) surface->clipper = NULL;
+        }
         if (clipper->owner) {
             DDClipper **link = &clipper->owner->clippers;
             while (*link && *link != clipper) link = &(*link)->next;
@@ -4060,14 +4086,16 @@ static HRESULT WINAPI clipper_GetClipList(IDirectDrawClipper *iface,
     DWORD needed;
 
     (void)rect;
-    if (!size) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!clipper || !size) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (clipper->window) {
         RECT client;
+        if (!IsWindow(clipper->window)) return DDWG_TRACE_ERROR(E_FAIL);
         needed = (DWORD)(sizeof(RGNDATAHEADER) + sizeof(RECT));
         if (!list) { *size = needed; return DD_OK; }
         if (*size < needed) return DDWG_TRACE_ERROR(DDERR_REGIONTOOSMALL);
         if (!GetClientRect(clipper->window, &client))
             return DDWG_TRACE_ERROR(DDERR_GENERIC);
+        MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);
         ZeroMemory(list, needed);
         list->rdh.dwSize = sizeof(RGNDATAHEADER);
         list->rdh.iType = RDH_RECTANGLES;
@@ -4091,7 +4119,7 @@ static HRESULT WINAPI clipper_GetHWnd(IDirectDrawClipper *iface, HWND *out)
 {
     DDClipper *clipper = clipper_from_iface(iface);
 
-    if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!clipper || !out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = clipper->window;
     return DD_OK;
 }
@@ -4099,7 +4127,8 @@ static HRESULT WINAPI clipper_GetHWnd(IDirectDrawClipper *iface, HWND *out)
 static HRESULT WINAPI clipper_Initialize(IDirectDrawClipper *iface,
         LPDIRECTDRAW dd, DWORD flags)
 {
-    (void)iface; (void)dd; (void)flags;
+    (void)dd; (void)flags;
+    if (!clipper_from_iface(iface)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
 }
 
@@ -4108,7 +4137,7 @@ static HRESULT WINAPI clipper_IsClipListChanged(IDirectDrawClipper *iface,
 {
     DDClipper *clipper = clipper_from_iface(iface);
 
-    if (!changed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!clipper || !changed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *changed = clipper->changed;
     clipper->changed = FALSE;
     return DD_OK;
@@ -4120,7 +4149,8 @@ static HRESULT WINAPI clipper_SetClipList(IDirectDrawClipper *iface,
     DDClipper *clipper = clipper_from_iface(iface);
     DWORD bytes;
 
-    (void)flags;
+    if (!clipper || flags) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (clipper->window) return DDWG_TRACE_ERROR(DDERR_CLIPPERISUSINGHWND);
     heap_free(clipper->clip_list);
     clipper->clip_list = NULL;
     clipper->clip_list_bytes = 0;
@@ -4140,10 +4170,7 @@ static HRESULT WINAPI clipper_SetHWnd(IDirectDrawClipper *iface, DWORD flags,
 {
     DDClipper *clipper = clipper_from_iface(iface);
 
-    (void)flags;
-    heap_free(clipper->clip_list);
-    clipper->clip_list = NULL;
-    clipper->clip_list_bytes = 0;
+    if (!clipper || flags) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     clipper->window = window;
     clipper->changed = TRUE;
     return DD_OK;
@@ -4928,6 +4955,8 @@ static HRESULT WINAPI ddraw_CreateClipper(IDirectDraw7 *iface, DWORD flags,
     EnterCriticalSection(&g_object_lock);
     clipper->next = object->clippers;
     object->clippers = clipper;
+    clipper->all_next = g_all_clippers;
+    g_all_clippers = clipper;
     LeaveCriticalSection(&g_object_lock);
     ddraw_child_attach(object, FALSE);
     *out = (IDirectDrawClipper *)clipper;
@@ -5891,6 +5920,10 @@ HRESULT WINAPI DirectDrawCreateClipper(DWORD flags,
     clipper->ref = 1;
     InterlockedIncrement(&g_clipper_count);
     clipper->owner = NULL;   /* a free-standing clipper has no DirectDraw */
+    EnterCriticalSection(&g_object_lock);
+    clipper->all_next = g_all_clippers;
+    g_all_clippers = clipper;
+    LeaveCriticalSection(&g_object_lock);
     *out = (IDirectDrawClipper *)clipper;
     return DD_OK;
 }

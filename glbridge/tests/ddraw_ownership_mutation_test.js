@@ -2,6 +2,9 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-ownership-mutants-"));
 const cases = [
+    ["invalid clipper accepted by copied vtable", "    return clipper;\n}\n\n/* ------------------------------------------------------------------ *\n * Formats", "    return clipper ? clipper : (DDClipper *)iface;\n}\n\n/* ------------------------------------------------------------------ *\n * Formats"],
+    ["damaged clipper vtable decrements count", "if (!clipper || clipper->vtbl != &g_clipper_vtbl) return 0;", "if (!clipper) return 0;"],
+    ["freed clipper remains attached", "if (surface->clipper == clipper) surface->clipper = NULL;", "if (surface->clipper == clipper) (void)surface->clipper;"],
     ["primary factory omits visible cap", "if (caps & DDSCAPS_PRIMARYSURFACE) caps |= DDSCAPS_VISIBLE;", "if (FALSE && (caps & DDSCAPS_PRIMARYSURFACE)) caps |= DDSCAPS_VISIBLE;"],
     ["automatic flip root omits frontbuffer", "if (back_buffers) caps |= DDSCAPS_FLIP | DDSCAPS_FRONTBUFFER;", "if (back_buffers) caps |= DDSCAPS_FLIP;"],
     ["all automatic children marked backbuffer", "if (!index) buffer_caps |= DDSCAPS_BACKBUFFER;", "buffer_caps |= DDSCAPS_BACKBUFFER;"],
