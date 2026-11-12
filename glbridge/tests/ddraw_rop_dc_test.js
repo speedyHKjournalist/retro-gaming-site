@@ -32,6 +32,7 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDERR_NOCOLORKEY (-6)
 #define DDERR_UNSUPPORTED (-7)
 #define DDERR_DCALREADYCREATED (-8)
+#define DDERR_INVALIDRECT (-9)
 #define DDBLT_COLORFILL 1u
 #define DDBLT_DEPTHFILL 2u
 #define DDBLT_ROP 4u
@@ -62,14 +63,14 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define UNSUPPORTED(s,x) (x)
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
-static unsigned checks,blits,presents,readbacks,bindings,fail_emit,fail_present,fail_read,fail_dc,dc_creates;static RECT clip,last_rect;static BOOL clipped;static DDSurface*last_source;static DWORD last_flags,last_fill;static BYTE dib[256];static BITMAPINFO captured;
+static unsigned checks,blits,presents,readbacks,bindings,fail_emit,fail_present,fail_read,fail_dc,dc_creates;static RECT clip,last_rect;static BOOL clipped;static DDSurface*last_source;static DWORD last_flags,last_fill;static float last_depth;static BYTE dib[256];static BITMAPINFO captured;
 static DDSurface*surface_from_iface(IDirectDrawSurface7*p){return p;}
-static BOOL format_is_depth(DWORD f){return f==DDWG_FMT_D16;}
+static BOOL format_is_depth(DWORD f){return f==70||f==71||f==73||f==75||f==77||f==79||f==80;}
 static void emit_surface_palette_binding(DDSurface*s){(void)s;bindings++;}
 static void emit_color_key(DDSurface*s,DWORD k,DDCOLORKEY*c,BOOL enabled){(void)s;(void)k;(void)c;(void)enabled;}
 static UINT clipper_rects(void*c,RECT*r,UINT n){(void)c;(void)n;if(clipped)*r=clip;return clipped;}
 static LONG MulDiv(LONG a,LONG b,LONG c){return (LONG)((int64_t)a*b/c);}
-static BOOL emit_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr,DWORD flags,DWORD fill,float depth){(void)d;(void)sr;(void)depth;blits++;last_rect=*dr;last_source=s;last_flags=flags;last_fill=fill;return !fail_emit;}
+static BOOL emit_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr,DWORD flags,DWORD fill,float depth){(void)d;(void)sr;last_depth=depth;blits++;last_rect=*dr;last_source=s;last_flags=flags;last_fill=fill;return !fail_emit;}
 static BOOL surface_readback(DDSurface*s){(void)s;readbacks++;return !fail_read;}
 static BOOL present_changed_primary(DDSurface*s,const RECT*r){(void)s;(void)r;presents++;return !fail_present;}
 static HDC GetDC(void*p){(void)p;return fail_dc==1?NULL:(void*)1;}
@@ -79,6 +80,7 @@ static HBITMAP CreateDIBSection(HDC d,const BITMAPINFO*i,UINT usage,void**bits,v
 static HBITMAP SelectObject(HDC d,HBITMAP b){(void)d;(void)b;return (void*)4;}
 static void DeleteDC(HDC d){(void)d;}
 ${extract("rect_intersect")}
+${extract("surface_depth_mask")}
 ${extract("surface_Blt")}
 ${extract("surface_GetDC")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw ROP/DC line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
@@ -90,6 +92,21 @@ static int raster(void){
  }
  clipped=0;d.external_memory=0;DDBLTFX fx={.dwROP=SRCCOPY};unsigned b=blits;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_INVALIDPARAMS&&blits==b);CHECK(surface_Blt(&d,NULL,&s,NULL,DDBLT_ROP,&fx)==DDERR_SURFACEBUSY);s.lock_depth=0;CHECK(!surface_Blt(&d,NULL,&s,NULL,DDBLT_ROP,&fx)&&last_source==&s&&!last_flags);b=blits;CHECK(surface_Blt(&d,NULL,&s,NULL,DDBLT_ROP,NULL)==DDERR_INVALIDPARAMS&&blits==b);for(unsigned i=0;i<32;i++){fx.dwROP=0x1000+i;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_NORASTEROPHW&&blits==b);}fx.dwROP=BLACKNESS;d.lock_depth=1;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_SURFACEBUSY);d.lock_depth=0;fail_emit=1;unsigned p=presents;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_GENERIC&&presents==p);fail_emit=0;fail_present=1;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_GENERIC);fail_present=0;d.external_memory=1;fail_read=1;p=presents;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_GENERIC&&presents==p);fail_read=0;return 0;
 }
+static int fills(void){
+ Memory m={0};DDrawObject owner={0};DDSurface d={.width=8,.height=8,.format=21,.memory=&m,.owner=&owner},s=d;DDBLTFX fx={.dwFillColor=0xdeadbeef,.dwFillDepth=0xdeadbeef,.dwROP=WHITENESS};clipped=0;
+ const DWORD formats[]={70,71,73,75,77,79,80},mask[]={0xffff,0xffffffff,0xfffe,0xffffff00,0xffffff00,0xffffff00,0xffff};
+ for(unsigned i=0;i<7;i++){
+  d.format=formats[i];unsigned b=blits;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==DDERR_INVALIDPARAMS&&blits==b);CHECK(surface_Blt(&d,NULL,&s,NULL,DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS&&blits==b);
+  CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_DEPTHFILL,&fx)&&last_flags==D9WG_DDBLT_DEPTH_FILL&&last_fill==0xdeadbeef&&!last_source);DWORD shift=i==2?1:(i>=3&&i<=5)?8:0;float expected=(float)((fx.dwFillDepth&mask[i])>>shift)/(float)(mask[i]>>shift);CHECK(last_depth==expected);
+  CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)&&last_flags==D9WG_DDBLT_DEPTH_FILL&&last_fill==mask[i]&&last_depth==1.0f);fx.dwROP=BLACKNESS;CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)&&!last_fill&&last_depth==0.0f);fx.dwROP=WHITENESS;
+ }
+ for(unsigned kind=0;kind<2;kind++){
+  d.format=kind?80:21;DWORD flags=kind?DDBLT_DEPTHFILL:DDBLT_COLORFILL;unsigned b=blits;CHECK(surface_Blt(&d,NULL,NULL,NULL,flags,NULL)==DDERR_INVALIDPARAMS&&blits==b);CHECK(surface_Blt(&d,NULL,&s,NULL,flags,&fx)==DDERR_INVALIDPARAMS&&blits==b);
+  RECT invalid[]={{-1,0,8,8},{0,-1,8,8},{0,0,9,8},{0,0,8,9},{4,0,4,8},{0,5,8,4}};
+  for(unsigned i=0;i<6;i++){CHECK(surface_Blt(&d,&invalid[i],NULL,NULL,flags,&fx)==DDERR_INVALIDRECT&&blits==b);CHECK(!surface_Blt(&d,NULL,NULL,&invalid[i],flags,&fx));b=blits;CHECK(surface_Blt(&d,NULL,&s,&invalid[i],DDBLT_ROP,&fx)==DDERR_INVALIDRECT&&blits==b);}
+ }
+ d.format=21;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_ROP,&fx)==DDERR_INVALIDPARAMS);CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx));d.format=80;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);return 0;
+}
 static int contexts(void){
  DDPalette own,primary;Memory memory={0};BYTE shadow[256];memset(shadow,0x41,sizeof(shadow));DDSurface front={.palette=&primary};DDrawObject owner={.primary=&front};DDSurface d={.width=8,.height=8,.pitch=8,.bytes_per_pixel=1,.indexed=1,.memory=&memory,.shadow=shadow,.owner=&owner};
  for(unsigned round=0;round<64;round++)for(unsigned mode=0;mode<4;mode++){
@@ -97,6 +114,6 @@ static int contexts(void){
  }
  HDC out=(void*)9;d.dc=NULL;d.owner=&owner;d.bytes_per_pixel=0;CHECK(surface_GetDC(&d,&out)==DDERR_UNSUPPORTED&&out==(void*)9);d.bytes_per_pixel=1;CHECK(surface_GetDC(&d,NULL)==DDERR_INVALIDPARAMS);d.lock_depth=1;CHECK(surface_GetDC(&d,&out)==DDERR_SURFACEBUSY&&out==(void*)9);d.lock_depth=0;d.dc=(void*)1;CHECK(surface_GetDC(&d,&out)==DDERR_DCALREADYCREATED&&out==(void*)9);d.dc=NULL;for(fail_dc=1;fail_dc<=3;fail_dc++){CHECK(surface_GetDC(&d,&out)==DDERR_GENERIC&&!d.dc&&out==(void*)9);}fail_dc=0;memory.gpu_dirty=1;fail_read=1;unsigned r=readbacks;CHECK(!surface_GetDC(&d,&out)&&readbacks==r+1);fail_read=0;d.dc=NULL;d.bytes_per_pixel=2;d.pitch=16;d.desc.ddpfPixelFormat=(PF){DDPF_RGB,0xf800,0x7e0,0x1f};CHECK(!surface_GetDC(&d,&out)&&captured.bmiHeader.biCompression==BI_BITFIELDS);DWORD masks[3];memcpy(masks,captured.bmiColors,12);CHECK(masks[0]==0xf800&&masks[1]==0x7e0&&masks[2]==0x1f);return 0;
 }
-int main(void){CHECK(!raster());CHECK(!contexts());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
+int main(void){CHECK(!raster());CHECK(!fills());CHECK(!contexts());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, seven depth fill layouts, incompatible formats/sources/flags, invalid rectangle isolation, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
 `;
 try {const file = dir + "/rop.c", binary = dir + "/rop"; fs.writeFileSync(file, code); const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {encoding: "utf8"}); assert.equal(built.status, 0, built.stderr); const run = spawnSync(binary, [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stderr); process.stdout.write(run.stdout);} finally {fs.rmSync(dir, {recursive: true, force: true});}

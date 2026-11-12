@@ -1180,10 +1180,7 @@ static BOOL prepare_surface_for_host(DDSurface *surface)
         return FALSE;
     if (!surface->upload_pending)
         return TRUE;
-    /* A depth buffer's guest shadow is never the truth -- nothing writes it,
-     * and UPDATE_TEXTURE against a depth texture is not a copy the host can
-     * make. A rebuilt one simply starts cleared. */
-    if (!surface->shadow || format_is_depth(surface->format)) {
+    if (!surface->shadow) {
         surface->upload_pending = FALSE;
         return TRUE;
     }
@@ -1297,11 +1294,56 @@ static void rebind_host_surface_state(DDSurface *surface)
         emit_surface_palette_binding(surface);
 }
 
+static DWORD surface_depth_mask(unsigned format)
+{
+    switch (format) {
+    case DDWG_FMT_D16_LOCKABLE:
+    case DDWG_FMT_D16: return 0xffffu;
+    case DDWG_FMT_D15S1: return 0xfffeu;
+    case DDWG_FMT_D24S8:
+    case DDWG_FMT_D24X8:
+    case DDWG_FMT_D24X4S4: return 0xffffff00u;
+    case DDWG_FMT_D32: return 0xffffffffu;
+    default: return 0;
+    }
+}
+
+/* A known fill is also an exact CPU write. Keep integer bits (including D32
+ * values a float cannot represent) and make system-memory pointers observe it
+ * immediately. A partial GPU-dirty surface, or unknown stencil bits, still
+ * requires the real GPU readback; never validate a stale shadow. */
+static void surface_mirror_depth_fill(DDSurface *surface, const RECT *rect,
+        DWORD value, BOOL was_dirty)
+{
+    DWORD mask = surface_depth_mask(surface->format);
+    BOOL stencil = surface->format == DDWG_FMT_D15S1 ||
+        surface->format == DDWG_FMT_D24S8 || surface->format == DDWG_FMT_D24X4S4;
+    RECT area = {0, 0, (LONG)surface->width, (LONG)surface->height};
+    LONG x, y;
+    if (rect) area = *rect;
+    if (!mask || !surface->shadow || area.left < 0 || area.top < 0 ||
+            area.right > (LONG)surface->width || area.bottom > (LONG)surface->height ||
+            area.right <= area.left || area.bottom <= area.top ||
+            (was_dirty && (stencil || area.left || area.top ||
+                area.right != (LONG)surface->width || area.bottom != (LONG)surface->height)))
+        return;
+    for (y = area.top; y < area.bottom; ++y)
+        for (x = area.left; x < area.right; ++x) {
+            BYTE *pixel = surface->shadow + y * surface->pitch + x * surface->bytes_per_pixel;
+            DWORD packed = 0;
+            CopyMemory(&packed, pixel, surface->bytes_per_pixel);
+            packed = (packed & ~mask) | (value & mask);
+            CopyMemory(pixel, &packed, surface->bytes_per_pixel);
+        }
+    surface->memory->gpu_dirty = FALSE;
+}
+
 static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         DDSurface *source, const RECT *source_rect, uint32_t flags,
         uint32_t fill_color, float fill_depth)
 {
     D9WGDDBlt command;
+    BOOL was_dirty;
 
     if (!destination || !destination->owner)
         return FALSE;
@@ -1344,7 +1386,10 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
     }
     if (!emit_command(D9WG_OP_DD_BLT, &command, sizeof(command)))
         return FALSE;
+    was_dirty = destination->memory->gpu_dirty;
     destination->memory->gpu_dirty = TRUE;
+    if (flags & D9WG_DDBLT_DEPTH_FILL)
+        surface_mirror_depth_fill(destination, destination_rect, fill_color, was_dirty);
     return TRUE;
 }
 
@@ -2252,10 +2297,17 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
 
     if (flags & DDBLT_ROP) {
         if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (flags & (DDBLT_COLORFILL | DDBLT_DEPTHFILL))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (fx->dwROP != SRCCOPY && fx->dwROP != BLACKNESS &&
                 fx->dwROP != WHITENESS)
             return UNSUPPORTED("Blt with a raster operation other than "
                     "SRCCOPY/BLACKNESS/WHITENESS", DDERR_NORASTEROPHW);
+        if (source && source_rect && (source_rect->left < 0 || source_rect->top < 0 ||
+                source_rect->right > (LONG)source->width ||
+                source_rect->bottom > (LONG)source->height ||
+                source_rect->right <= source_rect->left || source_rect->bottom <= source_rect->top))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
     }
     /* Source-independent raster operations must bypass source validation.
      * Fill native RGB bits (or the P8 index); ARGB alpha remains zero. */
@@ -2268,27 +2320,23 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                 destination->desc.ddpfPixelFormat.dwBBitMask;
         source = NULL;
     } else if (flags & DDBLT_COLORFILL) {
-        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (!fx || source || format_is_depth(destination->format))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         blt_flags |= D9WG_DDBLT_COLOR_FILL;
         fill_color = fx->dwFillColor;
         source = NULL;
     } else if (flags & DDBLT_DEPTHFILL) {
         DWORD depth;
-        DWORD maximum;
-        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        DWORD maximum, mask, shift = 0;
+        if (!fx || source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (!format_is_depth(destination->format))
-            return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
-        depth = fx->dwFillDepth;
-        switch (destination->format) {
-        case DDWG_FMT_D15S1: maximum = 0x7fffu; break;
-        case DDWG_FMT_D16:
-        case DDWG_FMT_D16_LOCKABLE: maximum = 0xffffu; break;
-        case DDWG_FMT_D24S8:
-        case DDWG_FMT_D24X8:
-        case DDWG_FMT_D24X4S4: maximum = 0xffffffu; break;
-        default: maximum = 0xffffffffu; break;
-        }
-        if (depth > maximum) depth = maximum;
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        mask = surface_depth_mask(destination->format);
+        if (!mask) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        while (!(mask & (1u << shift))) ++shift;
+        maximum = mask >> shift;
+        fill_color = fx->dwFillDepth;
+        depth = (fill_color & mask) >> shift;
         fill_depth = (float)depth / (float)maximum;
         blt_flags |= D9WG_DDBLT_DEPTH_FILL;
         source = NULL;
@@ -2301,6 +2349,24 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         if (source_rect) effective_source = *source_rect;
         if (source->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
         if (source->palette) emit_surface_palette_binding(source);
+    }
+
+    if (effective_destination.left < 0 || effective_destination.top < 0 ||
+            effective_destination.right > (LONG)destination->width ||
+            effective_destination.bottom > (LONG)destination->height ||
+            effective_destination.right <= effective_destination.left ||
+            effective_destination.bottom <= effective_destination.top)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
+    if (source && (effective_source.left < 0 || effective_source.top < 0 ||
+            effective_source.right > (LONG)source->width ||
+            effective_source.bottom > (LONG)source->height ||
+            effective_source.right <= effective_source.left ||
+            effective_source.bottom <= effective_source.top))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
+    if ((blt_flags & D9WG_DDBLT_COLOR_FILL) && format_is_depth(destination->format)) {
+        fill_color = fx->dwROP == BLACKNESS ? 0 : surface_depth_mask(destination->format);
+        fill_depth = fx->dwROP == BLACKNESS ? 0.0f : 1.0f;
+        blt_flags = (blt_flags & ~D9WG_DDBLT_COLOR_FILL) | D9WG_DDBLT_DEPTH_FILL;
     }
 
     if (flags & DDBLT_KEYSRC) {

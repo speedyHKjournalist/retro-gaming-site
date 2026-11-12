@@ -479,6 +479,19 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     return result;
 }
 
+/* A submitted draw may update either attachment. Invalidate the shared
+ * memory so a later legacy Lock sees actual depth/stencil as well as color. */
+static void d3d7_mark_draw_surfaces_dirty(D3D7Device *device)
+{
+    if (!device->render_target) return;
+    device->render_target->memory->gpu_dirty = TRUE;
+    if (device->render_target->attached_depth &&
+            ((device->render_states[D3DRENDERSTATE_ZENABLE] &&
+              device->render_states[D3DRENDERSTATE_ZWRITEENABLE]) ||
+             device->render_states[D3DRENDERSTATE_STENCILENABLE]))
+        device->render_target->attached_depth->memory->gpu_dirty = TRUE;
+}
+
 static BOOL d3d7_draw_clip_status_locked(D3D7Device *device, DWORD fvf,
         const void *vertices, uint32_t vertex_count, const WORD *indices, uint32_t index_count,
         BOOL screen, D9WGClipLegacyStatus *status)
@@ -583,8 +596,7 @@ static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result) device->clip_status = next_status;
-    if (result && device->render_target)
-        device->render_target->memory->gpu_dirty = TRUE;
+    if (result) d3d7_mark_draw_surfaces_dirty(device);
     return result;
 }
 
@@ -648,8 +660,7 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result) device->clip_status = next_status;
-    if (result && device->render_target)
-        device->render_target->memory->gpu_dirty = TRUE;
+    if (result) d3d7_mark_draw_surfaces_dirty(device);
     return result;
 }
 
@@ -1644,6 +1655,8 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
     LeaveCriticalSection(&g_transport_lock);
     if (result && (flags & D3DCLEAR_TARGET))
         device->render_target->memory->gpu_dirty = TRUE;
+    if (result && (flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
+        device->render_target->attached_depth->memory->gpu_dirty = TRUE;
     return DDWG_TRACE_ERROR(result ? D3D_OK : D3DERR_INITFAILED);
 }
 
@@ -2339,7 +2352,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
             primitive_type, start_vertex, vertex_count, NULL, 0, &clipped);
     if (clipped) {
         if (SUCCEEDED(clip_result)) {
-            device->render_target->memory->gpu_dirty = TRUE;device->clip_status = next_status;
+            d3d7_mark_draw_surfaces_dirty(device);device->clip_status = next_status;
         }
         return DDWG_TRACE_ERROR(clip_result);
     }
@@ -2364,7 +2377,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     if (!emit_command(D9WG_OP_DRAW_PRIMITIVE, &draw, sizeof(draw)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device->clip_status = next_status;
-    device->render_target->memory->gpu_dirty = TRUE;
+    d3d7_mark_draw_surfaces_dirty(device);
     return D3D_OK;
 }
 
@@ -2394,7 +2407,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
             primitive_type, start_vertex, vertex_count, indices, index_count, &clipped);
     if (clipped) {
         if (SUCCEEDED(clip_result)) {
-            device->render_target->memory->gpu_dirty = TRUE;device->clip_status = next_status;
+            d3d7_mark_draw_surfaces_dirty(device);device->clip_status = next_status;
         }
         return DDWG_TRACE_ERROR(clip_result);
     }

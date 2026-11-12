@@ -9,6 +9,9 @@ try {
 #include <string.h>
 #include "d3d9proxy/d3d9_protocol.h"
 typedef int BOOL;typedef uint32_t UINT,DWORD,D3DPRIMITIVETYPE;typedef uint16_t WORD;typedef uint8_t BYTE;
+#define D3DRENDERSTATE_ZENABLE 7
+#define D3DRENDERSTATE_ZWRITEENABLE 14
+#define D3DRENDERSTATE_STENCILENABLE 52
 #define TRUE 1
 #define FALSE 0
 #define ZeroMemory(p,n) memset(p,0,n)
@@ -18,8 +21,8 @@ typedef int BOOL;typedef uint32_t UINT,DWORD,D3DPRIMITIVETYPE;typedef uint16_t W
 typedef struct {uint32_t status;} D9WGClipLegacyStatus;
 typedef struct {uint32_t device_handle;} Owner;
 typedef struct {int gpu_dirty;} Memory;
-typedef struct {Memory *memory;} Surface;
-typedef struct {Owner *owner;Surface *render_target;D9WGClipLegacyStatus clip_status;} D3D7Device;
+typedef struct Surface {Memory *memory;struct Surface*attached_depth;} Surface;
+typedef struct {Owner *owner;Surface *render_target;D9WGClipLegacyStatus clip_status;DWORD render_states[256];} D3D7Device;
 static uint8_t wire[8192];static int g_transport_lock;static unsigned submissions,classified;
 static int allow_submission=1,allow_classification=1;
 static uint8_t *batch_base(void){return wire;}
@@ -28,24 +31,25 @@ static BOOL d3d7_emit_fvf(D3D7Device*d,DWORD fvf,UINT*stride){(void)d;if(fvf!=0x
 static BOOL d3d7_multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return 0;*out=a*b;return 1;}
 static BOOL d3d7_draw_clip_status(D3D7Device*d,DWORD f,const void*v,UINT count,const WORD*i,UINT ic,BOOL screen,D9WGClipLegacyStatus*s){(void)d;(void)f;(void)v;(void)i;(void)ic;(void)screen;classified=count;s->status=123;return allow_classification;}
 static BOOL reserve_command_locked(UINT op,UINT payload,UINT extra,uint8_t **p,uint8_t **blob){if(op!=D9WG_OP_DRAW_INDEXED_PRIMITIVE_UP||payload+extra>sizeof(wire)||!allow_submission)return 0;*p=wire;*blob=wire+payload;++submissions;return 1;}
+${source.slice(source.indexOf("static void d3d7_mark_draw_surfaces_dirty("),source.indexOf("static BOOL d3d7_draw_clip_status_locked("))}
 ${source.slice(start,end)}
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"indexed span assertion line %d\\n",__LINE__);return 1;}}while(0)
 int main(void){
- Owner owner={17};Memory memory={0};Surface surface={&memory};D3D7Device d={&owner,&surface,{9}};
+ Owner owner={17};Memory memory={0};Memory depth_memory={0};Surface depth={&depth_memory,NULL},surface={&memory,&depth};D3D7Device d={.owner=&owner,.render_target=&surface,.clip_status={9},.render_states={[7]=1,[14]=1}};
  uint8_t vertices[128][28];for(unsigned i=0;i<sizeof(vertices);++i)((uint8_t*)vertices)[i]=(uint8_t)(i*37u+i/28u);
  for(unsigned first=0;first<120;++first){WORD indices[6]={(WORD)(first+4),(WORD)first,(WORD)(first+2),(WORD)(first+2),(WORD)first,(WORD)(first+4)};
   submissions=classified=0;CHECK(d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,indices,6));
   D9WGDrawIndexedPrimitiveUP command;memcpy(&command,wire,sizeof(command));
   CHECK(submissions==1&&classified==128&&command.vertex_count==5&&command.vertex_bytes==140&&command.index_bytes==12&&command.primitive_count==2&&command.device_handle==17);
   for(unsigned i=0;i<6;++i){WORD index;memcpy(&index,wire+command.index_data_offset+i*2u,2);CHECK(index<5);CHECK(!memcmp(wire+command.vertex_data_offset+index*28u,vertices[indices[i]],28));}
-  CHECK(d.clip_status.status==123&&memory.gpu_dirty);
+  CHECK(d.clip_status.status==123&&memory.gpu_dirty&&depth_memory.gpu_dirty);
  }
- WORD bad[3]={1,128,2};submissions=0;d.clip_status.status=77;memory.gpu_dirty=0;
- CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,bad,3)&&!submissions&&d.clip_status.status==77&&!memory.gpu_dirty);
+ WORD bad[3]={1,128,2};submissions=0;d.clip_status.status=77;memory.gpu_dirty=depth_memory.gpu_dirty=0;
+ CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,bad,3)&&!submissions&&d.clip_status.status==77&&!memory.gpu_dirty&&!depth_memory.gpu_dirty);
  bad[1]=1;CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,bad,0));
  CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,UINT32_MAX,bad,3));
  allow_classification=0;CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,bad,3)&&!submissions);
- allow_classification=1;allow_submission=0;CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,bad,3)&&d.clip_status.status==77&&!memory.gpu_dirty);
+ allow_classification=1;allow_submission=0;CHECK(!d3d7_emit_draw_indexed_up_raw(&d,4,0x144,vertices,128,bad,3)&&d.clip_status.status==77&&!memory.gpu_dirty&&!depth_memory.gpu_dirty);
  puts("PASS actual DDraw indexed upload: 120 rebased ranges preserve every addressed vertex, full ClipStatus input, invalid bounds and failure atomicity");return 0;
 }
 `);
