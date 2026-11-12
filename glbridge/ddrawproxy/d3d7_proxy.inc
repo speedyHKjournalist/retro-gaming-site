@@ -77,6 +77,7 @@ struct D3D7Device {
     /* D3D7's CPU processor retains its last processed positive shininess.
      * SetMaterial/GetMaterial and GPU draws keep the actual material value. */
     float process_specular_power;
+    float process_normal_inverse[16];
     D3DMATRIX transforms[D3D7_MAX_TRANSFORMS];
     D3DMATRIX legacy_projection, legacy_clipspace;
     DWORD render_states[D3D7_MAX_RENDER_STATES];
@@ -1348,6 +1349,8 @@ static BOOL d3d7_create_host_context(D3D7Device *device)
     create.height = device->render_target->height;
     create.backbuffer_format = DDWG_FMT_X8R8G8B8;
     create.windowed = TRUE;
+    if (device->creation_version < 7u)
+        create.behavior_flags = D9WG_DEVICE_LEGACY_LIGHTING;
     if (!emit_command(D9WG_OP_CREATE_DEVICE, &create, sizeof(create))) return FALSE;
     device->wire_created = TRUE;
     ZeroMemory(&hidden, sizeof(hidden));
@@ -3195,6 +3198,9 @@ static BOOL d3d7_prepare_lighting(D3D7Device *device, const D3DMATRIX *world_vie
         BOOL lighting, D9WGTNLLighting *state)
 {
     UINT index;
+    static const float identity[16] = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    float legacy_light_transform[16];
+    const void *lighting_view = &device->transforms[D3DTRANSFORMSTATE_VIEW];
     d9wg_lighting_sdk_prepare(state, &device->material, device->render_states, world_view);
     state->specular_alpha_material = device->creation_version >= 7u;
     if (device->creation_version < 7u && device->material.power == 0.0f)
@@ -3202,13 +3208,21 @@ static BOOL d3d7_prepare_lighting(D3D7Device *device, const D3DMATRIX *world_vie
     state->flags.lighting = lighting &&
             (device->creation_version >= 7u || device->legacy_material);
     if (!state->flags.lighting) return TRUE;
+    if (device->creation_version < 7u) {
+        d9wg_lighting_legacy_geometry(state, &device->transforms[D3DTRANSFORMSTATE_WORLD],
+                &device->transforms[D3DTRANSFORMSTATE_VIEW], legacy_light_transform);
+        lighting_view = legacy_light_transform;
+    }
     for (index = 0; index < D3D7_MAX_LIGHTS; ++index) {
         if (device->light_set[index] && device->light_enabled[index] &&
-                !d9wg_lighting_sdk_add(state, index, &device->lights[index], (const void *)&device->transforms[D3DTRANSFORMSTATE_VIEW])) return FALSE;
+                !d9wg_lighting_sdk_add(state, index, &device->lights[index],
+                    device->creation_version < 7u && device->lights[index].dltType == D3DLIGHT_PARALLELPOINT
+                            ? identity : lighting_view)) return FALSE;
     }
     for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
         if (entry->set && entry->enabled && !d9wg_lighting_sdk_add(state, entry->index, &entry->light,
-                (const void *)&device->transforms[D3DTRANSFORMSTATE_VIEW])) return FALSE;
+                device->creation_version < 7u && entry->light.dltType == D3DLIGHT_PARALLELPOINT
+                        ? identity : lighting_view)) return FALSE;
     }
     return TRUE;
 }
@@ -3243,6 +3257,9 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &world_view_projection);
     if (!d3d7_prepare_lighting(device, &world_view, (vertex_op & D3DVOP_LIGHT) != 0, &light_state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    BOOL update_normal_inverse = device->creation_version >= 7u && light_state.flags.lighting &&
+            source_layout.normal >= 0 && !device->render_states[D3DRENDERSTATE_VERTEXBLEND]
+            && d9wg_lighting_process7_normal(&light_state, &world_view, device->process_normal_inverse);
     if (device->creation_version >= 7u && light_state.flags.lighting) {
         if (light_state.material.power == 0.0f)
             light_state.material.power = device->process_specular_power;
@@ -3293,6 +3310,9 @@ static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
     if (device->creation_version >= 7u && light_state.flags.lighting &&
             device->material.power > 0.0f)
         device->process_specular_power = device->material.power;
+    if (update_normal_inverse)
+        CopyMemory(device->process_normal_inverse, light_state.normal_matrix,
+                sizeof(device->process_normal_inverse));
     d9wg_clip_legacy_processed(&device->clip_status, clip_batch,
             destination->shadow + destination_offset + destination_layout.position,
             destination->stride, count, (vertex_op & D3DVOP_EXTENTS) != 0, &viewport);

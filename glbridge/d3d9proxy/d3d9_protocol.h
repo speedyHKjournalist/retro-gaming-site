@@ -77,6 +77,11 @@
 #define D9WG_RESPONSE_FAILED 2u
 
 #define D9WG_BATCH_FLAG_PRESENT (1u << 0)
+/* Internal CreateDevice.behavior_flags bit, never a public D3DCREATE flag.
+ * DDraw's pre-D3D7 fixed pipeline lights in world space with normalized
+ * world-matrix basis rows. Old senders leave it clear; D3D8/9 keep their
+ * existing view-space inverse-transpose lighting. Payloads are unchanged. */
+#define D9WG_DEVICE_LEGACY_LIGHTING (1u << 31)
 
 /*
  * D9WGHello.feature_bits. The host does not gate anything on these; they let

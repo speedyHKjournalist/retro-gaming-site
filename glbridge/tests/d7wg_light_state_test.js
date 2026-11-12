@@ -27,6 +27,7 @@ typedef int BOOL,WINBOOL,HRESULT;typedef uint32_t DWORD,UINT;typedef uint8_t BYT
 #define D3D7_MAX_TEXTURE_STAGE_STATES 33u
 #define D3D7_MAX_TRANSFORMS 24u
 #define D3D7_MAX_CLIP_PLANES 6u
+#define D3DTRANSFORMSTATE_WORLD 1u
 #define D3DTRANSFORMSTATE_VIEW 2u
 #define D3DSBT_ALL 1u
 #define D3DSBT_PIXELSTATE 2u
@@ -67,6 +68,7 @@ static D9WGSetLight submitted_light;
 static BOOL emit_command(uint32_t op,const void *p,uint32_t n){if(op==D9WG_OP_SET_LIGHT){if(n!=sizeof(submitted_light))abort();memcpy(&submitted_light,p,n);}emissions++;return TRUE;}
 typedef struct D9WGTNLLighting {struct {BOOL lighting,specular_enable;} flags;BOOL specular_alpha_material;unsigned count;uint32_t indices[8];} D9WGTNLLighting;
 static void d9wg_lighting_sdk_prepare(D9WGTNLLighting *state,const void *material,const DWORD *rs,const void *matrix){(void)material;(void)rs;(void)matrix;memset(state,0,sizeof(*state));}
+static void d9wg_lighting_legacy_geometry(D9WGTNLLighting*s,const void*w,const void*v,float*m){(void)s;(void)w;(void)v;(void)m;abort();}
 static BOOL d9wg_lighting_sdk_add(D9WGTNLLighting *state,uint32_t index,const D3DLIGHT7 *light,const void *view){(void)light;(void)view;if(state->count==8)return FALSE;state->indices[state->count++]=index;return TRUE;}
 ${names.map(extract).join('\n')}
 static const struct Row {uint32_t index,op,changed,get,enable,enabled,words[26];} rows[]={${native.cases.map(r=>'{'+[r.index,r.op,r.changed,r.get,r.enable,r.enabled].map(n=>n+'u').join(',')+',{'+r.words.map(n=>n+'u').join(',')+'}}').join(',')}};

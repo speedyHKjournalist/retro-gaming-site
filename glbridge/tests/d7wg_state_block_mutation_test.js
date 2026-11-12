@@ -57,6 +57,8 @@ try {
     }
     const legacy = fs.readFileSync(path.join(__dirname, "../ddrawproxy/d3d_legacy_proxy.inc"), "utf8");
     for (const [label, before, after] of [
+        ["legacy normalization setter forgets value", "device->rejected_render_values[state] = value;", "device->rejected_render_values[state] = 0;"],
+        ["legacy normalization getter loses initial sentinel", "? device->rejected_render_values[state] : 0xffffffffu;", "? device->rejected_render_values[state] : 0;"],
         ["legacy getter inherits Device7 rejection", "!d3d_legacy_render_state_valid(state)", "!d3d7_render_state_valid(state)"],
         ["legacy setter inherits Device7 rejection", "return d3d7_set_render_state((IDirect3DDevice7 *)device, state,", "return d3d7_device_SetRenderState((IDirect3DDevice7 *)device, state,"],
     ]) {

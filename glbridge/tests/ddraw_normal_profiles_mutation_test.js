@@ -1,0 +1,16 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
+const root=path.resolve(__dirname,".."),profiles=fs.readFileSync(root+"/runtime/d9wg_lighting_profiles.c","utf8"),front=fs.readFileSync(root+"/ddrawproxy/d3d7_proxy.inc","utf8"),kernel=fs.readFileSync(root+"/runtime/d9wg_lighting.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-normal-mutants-"));
+const cases=[
+ ["legacy basis normalization omitted","profiles","d9wg_tnl_normalize3(basis,0.0f);","/* lost basis normalization */"],
+ ["legacy final normal incorrectly normalized","profiles","state->flags.normalize_normals=0;","state->flags.normalize_normals=1;"],
+ ["legacy normal uses inverse transpose","profiles","state->position_matrix_override=1;","d9wg_inverse_transpose4(world,state->normal_matrix); state->position_matrix_override=1;"],
+ ["legacy view scale leaks into normal","front","d9wg_lighting_legacy_geometry(state, &device->transforms[D3DTRANSFORMSTATE_WORLD],","d9wg_lighting_legacy_geometry(state, world_view,"],
+ ["singular inverse erases previous cache","profiles","__builtin_memcpy(state->normal_matrix,previous,16u*4u);return 0;","(void)previous; __builtin_memset(state->normal_matrix,0,16u*4u);return 0;"],
+ ["rigid processing advances inverse cache","profiles","return 0;\n    }\n    if(d9wg_inverse_transpose4(world_view,state->normal_matrix))return 1;","return 1;\n    }\n    if(d9wg_inverse_transpose4(world_view,state->normal_matrix))return 1;"],
+ ["normalized rigid processing bypasses cache","profiles","if(!state->flags.normalize_normals&&rigid(world_view))","if(rigid(world_view))"],
+ ["projective normal inversion loses W column","profiles","double divisor=rows[pivot][c];","if(c==0u){rows[0][3]=rows[1][3]=rows[2][3]=0.0;rows[3][3]=1.0;} double divisor=rows[pivot][c];"],
+ ["successful processing never saves inverse","front","if (update_normal_inverse)\n        CopyMemory(device->process_normal_inverse, light_state.normal_matrix,","if (FALSE && update_normal_inverse)\n        CopyMemory(device->process_normal_inverse, light_state.normal_matrix,"],
+ ["modern position override uninitialized","kernel","state->position_matrix_override = 0;","/* lost position override initialization */"],
+];
+try{for(const[name,kind,before,after]of cases){const original={profiles,front,kernel}[kind];assert.equal(original.split(before).length,2,name);const file=dir+"/mutant."+(kind==="front"?"inc":"c");fs.writeFileSync(file,original.replace(before,after));const env={...process.env,[{profiles:"DDRAW_NORMAL_PROFILES_SOURCE",front:"DDRAW_PROCESS_LIGHT_SOURCE",kernel:"DDRAW_PROCESS_LIGHT_KERNEL"}[kind]]:file};const run=spawnSync(process.execPath,[__dirname+"/ddraw_process_lighting_test.js"],{encoding:"utf8",env});assert.notEqual(run.status,0,"survived "+name);assert(/process lighting line \d+:/.test(run.stderr),"compiled runtime assertion required: "+name+"\n"+run.stderr);assert(!/error: |ERROR: AddressSanitizer|runtime error:/.test(run.stderr),run.stderr);console.log("KILL "+name);}console.log("PASS native normal profile faults: "+cases.length+"/"+cases.length);}finally{fs.rmSync(dir,{recursive:true,force:true});}

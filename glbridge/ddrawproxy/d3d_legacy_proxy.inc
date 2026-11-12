@@ -1981,7 +1981,12 @@ static HRESULT WINAPI d3d3_device_GetRenderState(IDirect3DDevice3 *iface,
 {
     D3D7Device *device = d3d3_device_from_iface(iface);
     if (!value || !d3d_legacy_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (state == D3DRENDERSTATE_LIGHTING || state == D3DRENDERSTATE_NORMALIZENORMALS ||
+    if (state == D3DRENDERSTATE_NORMALIZENORMALS) {
+        *value = device->rejected_render_set[state]
+                ? device->rejected_render_values[state] : 0xffffffffu;
+        return D3D_OK;
+    }
+    if (state == D3DRENDERSTATE_LIGHTING ||
             state == D3DRENDERSTATE_LOCALVIEWER) {
         *value = 0xffffffffu;
         return D3D_OK;
@@ -2005,7 +2010,12 @@ static HRESULT WINAPI d3d3_device_SetRenderState(IDirect3DDevice3 *iface,
             device->render_states[D3DRENDERSTATE_TEXTUREHANDLE] = value;
         return DDWG_TRACE_ERROR(result);
     }
-    if (state == D3DRENDERSTATE_LIGHTING || state == D3DRENDERSTATE_NORMALIZENORMALS ||
+    if (state == D3DRENDERSTATE_NORMALIZENORMALS) {
+        device->rejected_render_set[state] = TRUE;
+        device->rejected_render_values[state] = value;
+        return D3D_OK;
+    }
+    if (state == D3DRENDERSTATE_LIGHTING ||
             state == D3DRENDERSTATE_LOCALVIEWER)
         return D3D_OK;
     return d3d7_set_render_state((IDirect3DDevice7 *)device, state,

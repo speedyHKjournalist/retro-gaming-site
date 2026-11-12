@@ -4,6 +4,7 @@
 #include <string.h>
 #include "runtime/d9wg_vertex.h"
 #include "runtime/d9wg_math.h"
+#include "runtime/d9wg_lighting_profiles.h"
 #include "runtime/d9wg_fvf.h"
 typedef uint32_t DWORD,UINT;typedef int32_t HRESULT,BOOL;typedef unsigned char BYTE;
 typedef struct{float r,g,b,a;}Color;
@@ -22,7 +23,7 @@ typedef struct{DWORD dltType;Color dcvDiffuse,dcvSpecular,dcvAmbient;Vector dvPo
 #define D9WG_LIGHT_FREE(p) free(p)
 #include "runtime/d9wg_light_state.h"
 typedef struct{BOOL material_mask;D3DMATERIAL7 material;}D3D7StateBlock;
-typedef struct D3D7Device{UINT creation_version;void*legacy_material;DWORD wire_handle;D3DMATERIAL7 material;float process_specular_power;DWORD render_states[256],texture_stage_states[8][33];D3DMATRIX transforms[24];D3DVIEWPORT7 viewport;D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState*extra_lights;D3D7StateBlock*recording_state_block;float clip_planes[6][4];D9WGClipLegacyStatus clip_status;int device_guid;}D3D7Device,IDirect3DDevice7;
+typedef struct D3D7Device{UINT creation_version;void*legacy_material;DWORD wire_handle;D3DMATERIAL7 material;float process_specular_power;float process_normal_inverse[16];DWORD render_states[256],texture_stage_states[8][33];D3DMATRIX transforms[24];D3DVIEWPORT7 viewport;D3DLIGHT7 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState*extra_lights;D3D7StateBlock*recording_state_block;float clip_planes[6][4];D9WGClipLegacyStatus clip_status;int device_guid;}D3D7Device,IDirect3DDevice7;
 typedef struct{D3DVERTEXBUFFERDESC desc;BYTE*shadow;UINT stride,byte_count,handle;BOOL locked;D9WGClipBuffer clips;}D3D7VertexBuffer;
 static unsigned checks,emits,uploads,fail_emit,fail_upload;static D9WGSetMaterial wire_material;static UINT uploaded_offset,uploaded_bytes;
 #define MUST(x) do{checks++;if(!(x)){fprintf(stderr,"process lighting line %u: %s\n",__LINE__,#x);exit(1);}}while(0)

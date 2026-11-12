@@ -19,6 +19,8 @@ typedef struct D9WGTNLLighting {
     /* D3D7 ProcessVertices emits the selected specular material alpha.
      * D3D8/9 instead preserve the input specular alpha. */
     uint32_t specular_alpha_material;
+    uint32_t position_matrix_override;
+    float position_matrix[16];
     float ambient[3], normal_matrix[16];
     uint32_t light_count;
     D9WGTNLPreparedLight lights[D9WG_TNL_MAX_LIGHTS];

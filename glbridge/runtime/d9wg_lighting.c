@@ -22,6 +22,7 @@ void d9wg_lighting_init(D9WGTNLLighting *state, const D9WGSetMaterial *material,
     float ambient[4];
     state->material = *material;state->flags = *flags;state->light_count = 0;
     state->specular_alpha_material = 0;
+    state->position_matrix_override = 0;
     d9wg_lighting_color(ambient_argb, ambient);
     for (unsigned i = 0; i < 3; ++i) state->ambient[i] = ambient[i];
 }
@@ -178,7 +179,8 @@ static void lighting_vertex_geometry(const D9WGTNLLighting *state, const void *w
     if (state->flags.lighting) {
         if (normal) for (unsigned i = 0; i < 3; ++i)
             __builtin_memcpy(&source_normal[i], (const uint8_t *)normal + i*sizeof(float), sizeof(float));
-        d9wg_transform_vector4(world_view, position, eye_position);
+        d9wg_transform_vector4(state->position_matrix_override
+                ? state->position_matrix : world_view, position, eye_position);
         d9wg_lighting_normal(state, normal ? source_normal : 0, eye_normal);
     }
 }
