@@ -24,6 +24,8 @@ typedef struct{Memory*memory;BYTE*shadow;UINT width,height,pitch,bytes_per_pixel
 static unsigned checks,uploads;static BOOL fail_storage,fail_upload;static D9WGTextureRows observed;static BYTE uploaded[256];
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw YUV line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
 static BOOL ensure_surface_storage(DDSurface*s){(void)s;return !fail_storage;}
+/* Single storage fixture; alias debt is checked by ddraw_memory_blt_test. */
+static void surface_memory_upload_aliases(DDSurface*s,BOOL p){s->upload_pending=p;}
 static BOOL emit_texture_rows(const D9WGTextureRows*r){observed=*r;uploads++;for(UINT y=0;y<r->row_count;y++)memcpy(uploaded+y*r->row_bytes,r->source+y*r->source_pitch,r->row_bytes);return !fail_upload;}
 ${["format_bytes_per_pixel","format_is_yuv","format_compressed_block_bytes","surface_pitch_for","emit_surface_upload","surface_fill_yuv"].map(extract).join("\n")}
 int main(void){for(unsigned fmt=0;fmt<2;fmt++){for(UINT width=1;width<12;width++){for(unsigned part=0;part<2;part++){for(unsigned dirty=0;dirty<2;dirty++){

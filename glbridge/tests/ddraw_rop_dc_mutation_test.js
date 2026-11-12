@@ -2,6 +2,11 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-rop-dc-mutants-"));
 const cases = [
+    ["cross-owner format conversion accepted", "if (source->owner != destination->owner && source->format != destination->format)", "if (FALSE && source->owner != destination->owner && source->format != destination->format)", 0],
+    ["BltFast clipper rejection omitted", "if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);", "if (FALSE && destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);"],
+    ["BltFast cross-format rejection omitted", "if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);\n    if (source->owner != destination->owner && source->format != destination->format)", "if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);\n    if (FALSE && source->owner != destination->owner && source->format != destination->format)"],
+    ["missing clip list ignored", "if (FAILED(clip_result)) return DDWG_TRACE_ERROR(clip_result);", "if (FALSE && FAILED(clip_result)) return DDWG_TRACE_ERROR(clip_result);"],
+    ["empty clip list becomes unclipped", "if (!clip_count && !destination->clipper)", "if (!clip_count)"],
     ["non-GDI format accepted", "(!surface->indexed && (!(surface->desc.ddpfPixelFormat.dwFlags & DDPF_RGB) ||", "(FALSE && (!(surface->desc.ddpfPixelFormat.dwFlags & DDPF_RGB) ||"],
     ["missing DC has wrong error", "if (!surface->dc) return DDWG_TRACE_ERROR(DDERR_NODC);", "if (!surface->dc) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);"],
     ["locked GetDC rejected", "    if (surface->memory->gpu_dirty && !surface_readback(surface))", "    if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);\n    if (surface->memory->gpu_dirty && !surface_readback(surface))", 0],

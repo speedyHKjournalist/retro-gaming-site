@@ -90,6 +90,7 @@ ${api !== "ddraw" ? `static BOOL texture_format_layout(D3DFORMAT format,UINT *w,
 static BOOL multiply_u32(UINT a,UINT b,UINT *out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}`
     : `static UINT format_compressed_block_bytes(UINT format){return format==21?0:8;}
 static BOOL ensure_surface_storage(DDSurface *surface){(void)surface;return TRUE;}`}
+${api === "ddraw" ? "static void surface_memory_upload_aliases(DDSurface*s,BOOL pending){s->upload_pending=pending;}\nstatic BOOL format_is_yuv(UINT f){return f==0x32595559u||f==0x59565955u;}" : ""}
 ${frontend}
 static void run_case(UINT width,UINT height,BOOL bc,BOOL partial,UINT mip,UINT face,BOOL tiny){
  UINT bw=bc?4:1,bytes=bc?8:4;block_height=bw;row_count=(height+bw-1)/bw;row_bytes=((width+bw-1)/bw)*bytes;

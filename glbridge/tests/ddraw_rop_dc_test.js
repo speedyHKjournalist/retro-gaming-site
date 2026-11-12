@@ -34,6 +34,11 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDERR_DCALREADYCREATED (-8)
 #define DDERR_INVALIDRECT (-9)
 #define E_NOTIMPL (-10)
+#define DDERR_NOCLIPLIST (-13)
+#define DDERR_BLTFASTCANTCLIP (-14)
+#define FAILED(x) ((x)<0)
+#define DDBLTFAST_SRCCOLORKEY 1u
+#define DDBLTFAST_DESTCOLORKEY 2u
 #define DDERR_NODC (-11)
 #define DDERR_CANTCREATEDC (-12)
 #define DDBLT_COLORFILL 1u
@@ -66,14 +71,14 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define UNSUPPORTED(s,x) (x)
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
-static unsigned checks,blits,presents,readbacks,bindings,fail_emit,fail_present,fail_read,fail_dc,fail_native,dc_creates;static RECT clip,last_rect;static BOOL clipped;static DDSurface*last_source;static DWORD last_flags,last_fill;static float last_depth;static BYTE dib[256];static BITMAPINFO captured;
+static unsigned checks,blits,presents,readbacks,bindings,fail_emit,fail_present,fail_read,fail_dc,fail_native,dc_creates;static RECT clip,last_rect;static BOOL clipped;static HRESULT clip_error;static DDSurface*last_source;static DWORD last_flags,last_fill;static float last_depth;static BYTE dib[256];static BITMAPINFO captured;
 static DDSurface*surface_from_iface(IDirectDrawSurface7*p){return p;}
 static BOOL format_is_yuv(DWORD f){return f==DDWG_FMT_YUY2||f==DDWG_FMT_UYVY;}
 static BOOL format_is_compressed(DWORD f){return f==DDWG_FMT_DXT1;}
 static BOOL format_is_depth(DWORD f){return f==70||f==71||f==73||f==75||f==77||f==79||f==80;}
 static void emit_surface_palette_binding(DDSurface*s){(void)s;bindings++;}
 static void emit_color_key(DDSurface*s,DWORD k,DDCOLORKEY*c,BOOL enabled){(void)s;(void)k;(void)c;(void)enabled;}
-static UINT clipper_rects(void*c,RECT*r,UINT n){(void)c;(void)n;if(clipped)*r=clip;return clipped;}
+static HRESULT clipper_blt_rects(void*c,RECT*r,UINT n,UINT*count){(void)c;(void)n;if(clipped)*r=clip;*count=clipped;return clip_error;}
 static LONG MulDiv(LONG a,LONG b,LONG c){return (LONG)((int64_t)a*b/c);}
 static BOOL emit_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr,DWORD flags,DWORD fill,float depth){(void)d;(void)sr;last_depth=depth;blits++;last_rect=*dr;last_source=s;last_flags=flags;last_fill=fill;return !fail_emit;}
 static BOOL surface_readback(DDSurface*s){(void)s;readbacks++;return !fail_read;}
@@ -87,6 +92,7 @@ static void DeleteDC(HDC d){(void)d;}
 ${extract("rect_intersect")}
 ${extract("surface_depth_mask")}
 ${extract("surface_Blt")}
+${extract("surface_BltFast")}
 typedef struct{HDC dc;}DDrawNativeDC;static DDrawNativeDC native_dc={(void*)2};
 static DDrawNativeDC*ddraw_gdi_dc_create(DDSurface*s){(void)s;return fail_native?NULL:&native_dc;}
 ${extract("surface_GetDC")}
@@ -118,6 +124,11 @@ static int fills(void){
  for(unsigned i=0;i<3;i++){d.format=i==0?DDWG_FMT_YUY2:i==1?DDWG_FMT_UYVY:DDWG_FMT_DXT1;unsigned b=blits;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_ROP,&fx)==DDERR_NORASTEROPHW&&blits==b);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==(i==2?E_NOTIMPL:DD_OK));}
  d.format=21;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_ROP,&fx)==DDERR_INVALIDPARAMS);CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx));d.format=80;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL|DDBLT_DEPTHFILL,&fx)==DDERR_INVALIDPARAMS);return 0;
 }
+static int transfers(void){
+ Memory m={0};DDrawObject a={0},b={0};DDSurface d={.width=8,.height=8,.format=22,.memory=&m,.owner=&a},s=d;s.owner=&b;s.format=24;clipped=FALSE;clip_error=0;
+ unsigned old=blits,keys=bindings,p=presents,r=readbacks;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==E_NOTIMPL);CHECK(surface_BltFast(&d,0,0,&s,NULL,0)==E_NOTIMPL);CHECK(blits==old&&bindings==keys&&presents==p&&readbacks==r);s.format=22;CHECK(!surface_Blt(&d,NULL,&s,NULL,0,NULL)&&blits==old+1);CHECK(!surface_BltFast(&d,0,0,&s,NULL,0)&&blits==old+2);s.owner=&a;s.format=24;CHECK(!surface_Blt(&d,NULL,&s,NULL,0,NULL)&&blits==old+3);s.format=22;
+ d.clipper=(void*)1;old=blits;CHECK(surface_BltFast(&d,0,0,&s,NULL,0)==DDERR_BLTFASTCANTCLIP&&blits==old);DDBLTFX fx={.dwFillColor=7};clip_error=DDERR_NOCLIPLIST;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==DDERR_NOCLIPLIST&&blits==old);clip_error=DDERR_GENERIC;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==DDERR_GENERIC&&blits==old);clip_error=0;p=presents;CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)&&blits==old&&presents==p+1);d.clipper=NULL;CHECK(!surface_BltFast(&d,0,0,&s,NULL,0)&&blits==old+1);return 0;
+}
 static int contexts(void){
  DDPalette own,primary;Memory memory={0};BYTE shadow[256];memset(shadow,0x41,sizeof(shadow));DDSurface front={.palette=&primary};DDrawObject owner={.primary=&front};DDSurface d={.width=8,.height=8,.pitch=8,.bytes_per_pixel=1,.indexed=1,.memory=&memory,.shadow=shadow,.owner=&owner};
  for(unsigned round=0;round<64;round++)for(unsigned mode=0;mode<4;mode++){
@@ -125,6 +136,6 @@ static int contexts(void){
  }
  HDC out=(void*)9;d.dc=NULL;CHECK(surface_ReleaseDC(&d,NULL)==DDERR_NODC);d.dc=(void*)2;CHECK(surface_ReleaseDC(&d,(void*)1)==DDERR_INVALIDPARAMS&&d.dc==(void*)2);CHECK(!surface_ReleaseDC(&d,(void*)2)&&!d.dc);CHECK(surface_ReleaseDC(&d,(void*)2)==DDERR_NODC);d.owner=&owner;d.bytes_per_pixel=0;CHECK(surface_GetDC(&d,&out)==DDERR_UNSUPPORTED&&!out);out=(void*)9;d.bytes_per_pixel=1;d.indexed=1;CHECK(surface_GetDC(&d,NULL)==DDERR_INVALIDPARAMS);d.lock_depth=1;CHECK(!surface_GetDC(&d,&out)&&out==(void*)2&&d.lock_depth==1);d.dc=NULL;out=(void*)9;d.lock_depth=0;d.dc=(void*)1;CHECK(surface_GetDC(&d,&out)==DDERR_DCALREADYCREATED&&out==(void*)9);d.dc=NULL;for(fail_dc=1;fail_dc<=3;fail_dc++){CHECK(surface_GetDC(&d,&out)==DDERR_GENERIC&&!d.dc&&out==(void*)9);}fail_dc=0;memory.gpu_dirty=1;fail_read=1;unsigned r=readbacks;CHECK(surface_GetDC(&d,&out)==DDERR_GENERIC&&!d.dc&&readbacks==r+1);fail_read=0;d.dc=NULL;d.bytes_per_pixel=2;d.indexed=0;d.pitch=16;d.desc.ddpfPixelFormat=(PF){DDPF_RGB,0xf800,0x7e0,0x1f};CHECK(!surface_GetDC(&d,&out)&&out==(void*)2&&d.gdi_dc==&native_dc);d.dc=NULL;d.gdi_dc=NULL;fail_native=1;out=(void*)9;CHECK(surface_GetDC(&d,&out)==DDERR_CANTCREATEDC&&!out&&!d.dc&&!d.gdi_dc);fail_native=0;for(unsigned kind=0;kind<3;kind++){d.bytes_per_pixel=kind==2?2:1;d.desc.ddpfPixelFormat.dwFlags=kind==0?DDPF_RGB:0;out=(void*)9;CHECK(surface_GetDC(&d,&out)==DDERR_UNSUPPORTED&&!out&&!d.dc);}return 0;
 }
-int main(void){CHECK(!raster());CHECK(!fills());CHECK(!contexts());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, seven depth fill layouts, incompatible formats/sources/flags, invalid rectangle isolation, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
+int main(void){CHECK(!raster());CHECK(!fills());CHECK(!contexts());CHECK(!transfers());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, seven depth fill layouts, incompatible formats/sources/flags, invalid rectangle isolation, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
 `;
 try {const file = dir + "/rop.c", binary = dir + "/rop"; fs.writeFileSync(file, code); const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {encoding: "utf8"}); assert.equal(built.status, 0, built.stderr); const run = spawnSync(binary, [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stderr); process.stdout.write(run.stdout);} finally {fs.rmSync(dir, {recursive: true, force: true});}

@@ -1138,6 +1138,16 @@ static BOOL emit_surface_create(DDSurface *surface)
 #define D9WG_DISCARD_FLAG DDLOCK_DISCARDCONTENTS
 #include "../runtime/d9wg_upload_bridge.h"
 
+static void surface_memory_upload_aliases(DDSurface *surface, BOOL pending)
+{
+    DDSurface *alias;
+    surface->upload_pending = pending;
+    EnterCriticalSection(&g_object_lock);
+    for (alias = surface->owner->surfaces; alias; alias = alias->next)
+        if (alias->memory == surface->memory) alias->upload_pending = pending;
+    LeaveCriticalSection(&g_object_lock);
+}
+
 static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
 {
     D9WGTextureRows upload;
@@ -1155,7 +1165,7 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
         /* The guest just wrote pixels the host will never see. Record the
          * debt against this surface so the upload happens once the texture
          * exists, rather than losing the write. */
-        surface->upload_pending = TRUE;
+        surface_memory_upload_aliases(surface, TRUE);
         return FALSE;
     }
     /* A texture that has just been created holds nothing, so a dirty-rect
@@ -1210,8 +1220,9 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
     upload.row_bytes = row_bytes;upload.row_count = rows;upload.source_pitch = surface->pitch;
     upload.source = surface->shadow + source_y * surface->pitch + source_x;
     result = emit_texture_rows(&upload);
-    if (result && left == 0 && top == 0 && right >= surface->width && bottom >= surface->height)
-        surface->upload_pending = FALSE;
+    if (!result) surface_memory_upload_aliases(surface, TRUE);
+    else if (left == 0 && top == 0 && right >= surface->width && bottom >= surface->height)
+        surface_memory_upload_aliases(surface, FALSE);
     DDWG_TRACE_CHECKPOINT("SURFACE UPLOAD_END handle=%lu result=%lu "
             "pending=%lu", surface->handle, result ? 1u : 0u,
             surface->upload_pending ? 1u : 0u);
@@ -1457,6 +1468,97 @@ static void surface_mirror_color_fill(DDSurface *surface, const RECT *rect,
     surface->memory->gpu_dirty = FALSE;
 }
 
+static BOOL surface_can_memory_blt(DDSurface *destination, DDSurface *source,
+        uint32_t flags)
+{
+    return source && !flags && !destination->clipper &&
+        (destination->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) &&
+        (source->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) &&
+        destination->format == source->format &&
+        destination->bytes_per_pixel >= 1u && destination->bytes_per_pixel <= 4u &&
+        destination->bytes_per_pixel == source->bytes_per_pixel &&
+        !format_is_depth(destination->format) &&
+        !format_is_yuv(destination->format) &&
+        !format_is_compressed(destination->format);
+}
+
+static BOOL surface_memory_rect(DDSurface *surface, const RECT *input, RECT *area)
+{
+    *area = input ? *input : (RECT){0, 0, (LONG)surface->width, (LONG)surface->height};
+    if (!surface->shadow || !surface->memory || area->left < 0 || area->top < 0 ||
+            area->right <= area->left || area->bottom <= area->top ||
+            (uint64_t)area->right > surface->width ||
+            (uint64_t)area->bottom > surface->height ||
+            (uint64_t)surface->width * surface->bytes_per_pixel > surface->pitch)
+        return FALSE;
+    return (uint64_t)(area->bottom - 1u)*surface->pitch +
+        (uint64_t)area->right*surface->bytes_per_pixel <= surface->memory->bytes;
+}
+
+/* A system-memory copy must preserve every packed bit, including XRGB's
+ * unused byte. A GPU round-trip replaces that byte with opaque alpha. */
+static BOOL surface_memory_blt(DDSurface *destination, const RECT *destination_rect,
+        DDSurface *source, const RECT *source_rect)
+{
+    RECT dst, src;
+    BYTE *snapshot = NULL;
+    const BYTE *input;
+    UINT input_pitch, bytes = source->bytes_per_pixel;
+    UINT sw, sh, dw, dh, y, sy = 0, y_error = 0, y_step, y_remainder;
+    uint64_t source_start, destination_start, snapshot_bytes;
+    if (!surface_memory_rect(source, source_rect, &src) ||
+            !surface_memory_rect(destination, destination_rect, &dst))
+        return FALSE;
+    sw = src.right - src.left; sh = src.bottom - src.top;
+    dw = dst.right - dst.left; dh = dst.bottom - dst.top;
+    if (!surface_readback(source)) return FALSE;
+    if (destination->memory->gpu_dirty && (dst.left || dst.top ||
+            dst.right != (LONG)destination->width ||
+            dst.bottom != (LONG)destination->height) &&
+            !surface_readback(destination))
+        return FALSE;
+    input = source->shadow + (SIZE_T)src.top*source->pitch + src.left*bytes;
+    input_pitch = source->pitch;
+    source_start = (uintptr_t)source->shadow;
+    destination_start = (uintptr_t)destination->shadow;
+    if (source_start < destination_start + destination->memory->bytes &&
+            destination_start < source_start + source->memory->bytes) {
+        snapshot_bytes = (uint64_t)sw*sh*bytes;
+        if (snapshot_bytes > (SIZE_T)-1) return FALSE;
+        snapshot = heap_alloc_zero((SIZE_T)snapshot_bytes);
+        if (!snapshot) return FALSE;
+        input_pitch = sw*bytes;
+        for (y = 0; y < sh; ++y)
+            CopyMemory(snapshot + y*input_pitch,
+                    input + y*source->pitch, input_pitch);
+        input = snapshot;
+    }
+    y_step = sh/dh; y_remainder = sh%dh;
+    for (y = 0; y < dh; ++y) {
+        BYTE *row = destination->shadow + (SIZE_T)(dst.top + y)*destination->pitch
+                + dst.left*bytes;
+        const BYTE *source_row = input + (SIZE_T)sy*input_pitch;
+        if (sw == dw) CopyMemory(row, source_row, dw*bytes);
+        else {
+            UINT sx = 0, error = 0, step = sw/dw, remainder = sw%dw;
+            for (UINT x = 0; x < dw; ++x) {
+                CopyMemory(row + x*bytes, source_row + sx*bytes, bytes);
+                sx += step; error += remainder;
+                if (error >= dw) { error -= dw; ++sx; }
+            }
+        }
+        sy += y_step; y_error += y_remainder;
+        if (y_error >= dh) { y_error -= dh; ++sy; }
+    }
+    heap_free(snapshot);
+    surface_memory_changed(destination->memory);
+    destination->memory->gpu_dirty = FALSE;
+    surface_memory_upload_aliases(destination, TRUE);
+    if (!emit_surface_upload(destination, NULL)) return FALSE;
+    surface_memory_upload_aliases(destination, FALSE);
+    return TRUE;
+}
+
 static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         DDSurface *source, const RECT *source_rect, uint32_t flags,
         uint32_t fill_color, float fill_depth)
@@ -1467,6 +1569,8 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
 
     if (!destination || !destination->owner)
         return FALSE;
+    if (surface_can_memory_blt(destination, source, flags))
+        return surface_memory_blt(destination, destination_rect, source, source_rect);
     /* BC formats can be sampled or copied as compressed blocks, but cannot
      * be color attachments. No supported encoding path exists for this blit. */
     if (format_is_compressed(destination->format)) return FALSE;
@@ -2370,30 +2474,30 @@ static HRESULT WINAPI surface_AddOverlayDirtyRect(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
-/* Resolves the clipper attached to a destination into the rectangle list the
- * blit has to be split across. Returns the count written, or 0 when the blit
- * is unclipped. */
-static UINT clipper_rects(DDClipper *clipper, RECT *out, UINT capacity)
+/* Keep absent clippers, empty regions and missing/invalid regions distinct.
+ * Only an absent clipper requests an unclipped blit. */
+static HRESULT clipper_blt_rects(DDClipper *clipper, RECT *out, UINT capacity,
+        UINT *count)
 {
-    UINT count = 0;
-
-    if (!clipper) return 0;
+    *count = 0;
+    if (!clipper) return DD_OK;
     if (clipper->window) {
         RECT client;
-        if (!GetClientRect(clipper->window, &client)) return 0;
-        if (capacity) { out[0] = client; count = 1; }
-        return count;
+        if (!GetClientRect(clipper->window, &client)) return E_FAIL;
+        if (capacity) { out[0] = client; *count = 1; }
+        return DD_OK;
     }
-    if (clipper->clip_list && clipper->clip_list->rdh.nCount) {
+    if (!clipper->clip_list) return DDERR_NOCLIPLIST;
+    if (clipper->clip_list->rdh.nCount) {
         const RECT *rects = (const RECT *)clipper->clip_list->Buffer;
         UINT total = clipper->clip_list->rdh.nCount;
         UINT index;
         if (total > capacity) total = capacity;
         for (index = 0; index < total; ++index)
             out[index] = rects[index];
-        return total;
+        *count = total;
     }
-    return 0;
+    return DD_OK;
 }
 
 static BOOL rect_intersect(const RECT *a, const RECT *b, RECT *out)
@@ -2422,6 +2526,7 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     UINT clip_count;
     UINT index;
     BOOL ok = TRUE;
+    HRESULT clip_result;
 
     DDWG_TRACE_CHECKPOINT("CALL surface_Blt dst=%lu src=%lu flags=%08lX "
             "dst_rect=%ld,%ld-%ld,%ld src_rect=%ld,%ld-%ld,%ld",
@@ -2506,7 +2611,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         effective_source.bottom = (LONG)source->height;
         if (source_rect) effective_source = *source_rect;
         if (source->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
-        if (source->palette) emit_surface_palette_binding(source);
+        if (source->owner != destination->owner && source->format != destination->format)
+            return DDWG_TRACE_ERROR(E_NOTIMPL);
     }
 
     if (effective_destination.left < 0 || effective_destination.top < 0 ||
@@ -2526,6 +2632,10 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         fill_depth = fx->dwROP == BLACKNESS ? 0.0f : 1.0f;
         blt_flags = (blt_flags & ~D9WG_DDBLT_COLOR_FILL) | D9WG_DDBLT_DEPTH_FILL;
     }
+    clip_result = clipper_blt_rects(destination->clipper, clip_rects,
+            DDWG_MAX_CLIP_RECTS, &clip_count);
+    if (FAILED(clip_result)) return DDWG_TRACE_ERROR(clip_result);
+    if (source && source->palette) emit_surface_palette_binding(source);
 
     if (flags & DDBLT_KEYSRC) {
         if (!(source && (source->color_key_present &
@@ -2569,9 +2679,7 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                     "ignored; only mirroring is implemented");
     }
 
-    clip_count = clipper_rects(destination->clipper, clip_rects,
-            DDWG_MAX_CLIP_RECTS);
-    if (!clip_count) {
+    if (!clip_count && !destination->clipper) {
         ok = emit_blt(destination, &effective_destination, source,
                 source ? &effective_source : NULL, blt_flags, fill_color,
                 fill_depth);
@@ -2667,6 +2775,9 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
     if (!source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (destination->lock_depth || source->lock_depth)
         return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
+    if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);
+    if (source->owner != destination->owner && source->format != destination->format)
+        return DDWG_TRACE_ERROR(E_NOTIMPL);
     if (source->palette) emit_surface_palette_binding(source);
 
     effective_source.left = 0;

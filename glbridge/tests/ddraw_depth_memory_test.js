@@ -46,6 +46,9 @@ static BOOL ensure_surface_storage(DDSurface*s){(void)s;return !fail_storage;}
 static BOOL emit_surface_upload(DDSurface*s,const RECT*r){(void)r;uploads++;s->upload_pending=FALSE;return TRUE;}
 static BOOL sync_external_surface_for_read(DDSurface*s){(void)s;return TRUE;}
 static BOOL ensure_device(DDrawObject*d){return !!d;}
+/* Depth/fill fixture; exact packed copies are covered independently. */
+static BOOL surface_can_memory_blt(DDSurface*d,DDSurface*s,uint32_t f){(void)d;(void)s;(void)f;return FALSE;}
+static BOOL surface_memory_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr){(void)d;(void)dr;(void)s;(void)sr;return FALSE;}
 static BOOL emit_command(UINT op,const void*data,UINT bytes){(void)data;(void)bytes;if(op!=D9WG_OP_DD_BLT)return FALSE;emits++;return !fail_emit;}
 static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*d){return d;}
 static BOOL d3d7_emit_render_target(D3D7Device*d){(void)d;return FALSE;}
