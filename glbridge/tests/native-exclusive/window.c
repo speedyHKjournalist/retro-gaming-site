@@ -4,7 +4,7 @@
 #include <string.h>
 #include "windows.h"
 #include "../../runtime/d9wg_exclusive_window.h"
-struct Window {BOOL live,unicode,visible,iconic,topmost;DWORD thread;WNDPROC proc;HANDLE property;unsigned sizes,displays,restores,activations,positions,edits;int width,height;};
+struct Window {BOOL live,unicode,visible,iconic,topmost;DWORD thread;WNDPROC proc;HANDLE property;unsigned sizes,displays,restores,activations,positions,edits;int width,height,client_width,client_height;};
 static unsigned allocations,fail_allocation,fail_prop,fail_proc,fail_mode,error,checks;
 static HWND focus_window,output_window,foreground;
 static D9WGExclusiveWindow *subscription,*second_subscription;
@@ -58,8 +58,14 @@ LONG ChangeDisplaySettingsA(DEVMODEA *mode,DWORD flags){
 BOOL ShowWindow(HWND w,int how){assert(IsWindow(w));w->edits++;w->visible=1;if(how==SW_MINIMIZE||how==SW_SHOWMINIMIZED)w->iconic=1;else if(how==SW_RESTORE)w->iconic=0;w->proc(w,WM_SIZE,w->iconic,0);return 1;}
 BOOL SetWindowPos(HWND w,HWND after,int x,int y,int width,int height,UINT flags){
  assert(IsWindow(w)&&!x&&!y);
+ BOOL resized=!(flags&SWP_NOSIZE)&&(w->width!=width||w->height!=height);
  if(!(flags&SWP_NOSIZE)){w->width=width;w->height=height;}
+ if(resized||(flags&SWP_FRAMECHANGED)){
+  LRESULT nonclient=w->proc(w,WM_NCCALCSIZE,TRUE,0);
+  w->client_width=w->width-(nonclient?8:0);w->client_height=w->height-(nonclient?27:0);
+ }
  if(after==HWND_TOPMOST)w->topmost=1;
+ if(flags&SWP_NOSIZE){assert(!width&&!height);return 1;}
  if((after==HWND_TOPMOST||after==HWND_TOP)&&width){assert(w==output_window&&width==640&&height==480&&(flags&SWP_NOACTIVATE));w->edits++;w->proc(w,WM_SIZE,0,0);}
  else if(!after){assert(w==output_window&&width==640&&height==480&&flags==(SWP_NOACTIVATE|SWP_NOZORDER));w->proc(w,WM_WINDOWPOSCHANGED,0,0);}
  return 1;
@@ -118,8 +124,11 @@ int main(void){
   CHECK(focus.proc!=application&&screen_width==640&&screen_height==480&&!state.lost);
   CHECK(output_window->edits==(nowc?0u:2u));
   CHECK(output_window->visible==(BOOL)(nowc?visible:1)&&output_window->topmost==(!nowc&&!visible));
+  if(!nowc){CHECK(output_window->client_width==(same?640:632));CHECK(output_window->client_height==(same?480:453));}
+  CHECK(focus.proc(&focus,WM_NCCALCSIZE,TRUE,0)==(same&&!nowc?0:73));
   check_transition=1;focus.proc(&focus,WM_ACTIVATEAPP,0,0);check_transition=0;
   CHECK(state.lost&&state.required&&screen_width==1024);
+  CHECK(focus.proc(&focus,WM_NCCALCSIZE,TRUE,0)==73);
   CHECK(output_window->iconic==!nowc&&output_window->topmost==!nowc);
   CHECK(output_window->edits==(nowc?0u:3u));
   focus.iconic=1;foreground=&focus;focus.proc(&focus,WM_ACTIVATEAPP,1,0);
@@ -130,6 +139,16 @@ int main(void){
   CHECK(output_window->edits==edits+(nowc?0u:2u+(unsigned)iconic));
   d9wg_exclusive_window_leave(&subscription);
   CHECK(!subscription&&!allocations&&!focus.property&&focus.proc==application);
+  if(same&&!nowc){CHECK(focus.client_width==632&&focus.client_height==453);CHECK(focus.proc(&focus,WM_NCCALCSIZE,TRUE,0)==73);}
+ }
+ /* A window may already have the requested outer dimensions. Recalculate
+  * its frame on entry and restore the normal client border on leave. */
+ for(unsigned unicode=0;unicode<2;unicode++){
+  struct Window focus={.live=1,.unicode=unicode,.visible=1,.thread=7,.proc=application,.width=640,.height=480,.client_width=632,.client_height=453};
+  focus_window=output_window=&focus;foreground=&focus;state=(D9WGResetState){0};
+  CHECK(d9wg_exclusive_window_enter_ex(&subscription,&focus,&focus,640,480,&state,D9WG_EXCLUSIVE_D3D9));
+  CHECK(focus.client_width==640&&focus.client_height==480);
+  d9wg_exclusive_window_leave(&subscription);CHECK(focus.client_width==632&&focus.client_height==453&&!allocations);
  }
  /* The first application resize is restored asynchronously; later resizes,
   * NOWINDOWCHANGES and an owner released before dispatch remain untouched. */

@@ -2,6 +2,12 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"exclusive-mut-")),source=fs.readFileSync(root+"/runtime/d9wg_exclusive_window.c","utf8");
 const mutations=[
+    ["fullscreen nonclient calculation omitted","if (msg == WM_NCCALCSIZE)","if (msg == WM_NCCALCSIZE && FALSE)"],
+    ["separate focus loses its frame","candidate->output == window\n                    && (candidate->flags","TRUE\n                    && (candidate->flags"],
+    ["NOWINDOWCHANGES loses its frame","&& !(candidate->flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)","&& TRUE"],
+    ["lost mode keeps fullscreen client","candidate->state && candidate->mode_owned","candidate->state && TRUE"],
+    ["same-size entry keeps old client","position_flags |= SWP_FRAMECHANGED;","position_flags |= 0;"],
+    ["windowed return keeps fullscreen client","SWP_NOACTIVATE | SWP_FRAMECHANGED);","SWP_NOACTIVATE);"],
     ["Reset leaves output minimized","ShowWindow(output, SW_RESTORE);","ShowWindow(output, SW_SHOW);"],
     ["NOWINDOWCHANGES ignored on entry","if (!(flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) {","if (1) {"],
     ["visible output forced topmost","(flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)","0 && (flags & D9WG_EXCLUSIVE_D3D9) && IsWindowVisible(output)"],
@@ -16,7 +22,7 @@ const mutations=[
     ["external display change ignored","entry->state->required = 1;\n            } else if","entry->state->required = 0;\n            } else if"],
     ["application replacement overwritten","if (current == exclusive_proc)","if (current)"],
     ["subscription freed during callback","if (entry) InterlockedIncrement(&entry->refs);","(void)entry;"],
-    ["hook freed during callback","InterlockedIncrement(&hook->refs);\n    if (hook->suppress","(void)hook;\n    if (hook->suppress"],
+    ["hook freed during callback","InterlockedIncrement(&hook->refs);\n    /* A shared focus/output","(void)hook;\n    /* A shared focus/output"],
     ["destroyed window property retained","RemovePropA(window, EXCLUSIVE_PROPERTY);","(void)window;"],
     ["retired subscription not freed","    release_subscription(entry);\n}\n\nBOOL d9wg_exclusive_window_enter","    (void)entry;\n}\n\nBOOL d9wg_exclusive_window_enter"],
     ["foreign-thread window accepted","GetWindowThreadProcessId(focus, NULL) != GetCurrentThreadId()","GetWindowThreadProcessId(focus, NULL) == GetCurrentThreadId() + 999u"],

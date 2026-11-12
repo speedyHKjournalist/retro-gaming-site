@@ -39,6 +39,23 @@ static LRESULT CALLBACK exclusive_proc(HWND window, UINT msg, WPARAM wp, LPARAM 
     D9WGFocusHook *hook = (D9WGFocusHook *)GetPropA(window, EXCLUSIVE_PROPERTY);
     if (!hook) return IsWindowUnicode(window) ? DefWindowProcW(window, msg, wp, lp) : DefWindowProcA(window, msg, wp, lp);
     InterlockedIncrement(&hook->refs);
+    /* A shared focus/output window needs a fullscreen client rectangle even
+     * when its caption/frame style bits are retained. DefWindowProc would
+     * subtract those borders during our synchronous resize, giving an 800x600
+     * RenderWare device a 792x573 client and failing its camera setup. Handle
+     * this before the mode-change message guard. Separate output windows and
+     * NOWINDOWCHANGES retain their ordinary nonclient calculation. */
+    if (msg == WM_NCCALCSIZE) {
+        for (D9WGExclusiveWindow *candidate = hook->head; candidate; candidate = candidate->next) {
+            if (candidate->state && candidate->mode_owned
+                    && candidate->output == window
+                    && (candidate->flags & D9WG_EXCLUSIVE_D3D9)
+                    && !(candidate->flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) {
+                release_hook(hook);
+                return 0;
+            }
+        }
+    }
     if (hook->suppress && msg != WM_DISPLAYCHANGE && msg != WM_NCDESTROY) {
         LRESULT result = hook->unicode ? DefWindowProcW(window, msg, wp, lp) : DefWindowProcA(window, msg, wp, lp);
         release_hook(hook);
@@ -188,6 +205,11 @@ void d9wg_exclusive_window_leave(D9WGExclusiveWindow **subscription)
         ++hook->suppress;
     }
     if (entry->mode_owned) {entry->mode_owned = FALSE;ChangeDisplaySettingsA(NULL, CDS_FULLSCREEN);}
+    if (hook && entry->output == hook->window && IsWindow(entry->output)
+            && (entry->flags & D9WG_EXCLUSIVE_D3D9)
+            && !(entry->flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES))
+        SetWindowPos(entry->output, NULL, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     if (hook) {
         --hook->suppress;
         D9WGExclusiveWindow **link = &hook->head;
@@ -253,7 +275,10 @@ BOOL d9wg_exclusive_window_enter_ex(D9WGExclusiveWindow **subscription,
              * minimized window and subsequent foreground transitions fail. */
             if ((flags & D9WG_EXCLUSIVE_D3D9) && IsIconic(output))
                 ShowWindow(output, SW_RESTORE);
-            SetWindowPos(output, after, 0, 0, width, height, SWP_NOACTIVATE);
+            UINT position_flags = SWP_NOACTIVATE;
+            if ((flags & D9WG_EXCLUSIVE_D3D9) && output == focus)
+                position_flags |= SWP_FRAMECHANGED;
+            SetWindowPos(output, after, 0, 0, width, height, position_flags);
         }
         if (entry->state) {
             if (!(flags & D9WG_EXCLUSIVE_NO_WINDOW_CHANGES)) ShowWindow(output, SW_SHOW);

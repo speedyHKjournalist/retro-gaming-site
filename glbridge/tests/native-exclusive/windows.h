@@ -18,6 +18,7 @@ typedef struct {UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields;} DEV
 #define WA_INACTIVE 0
 #define WM_DISPLAYCHANGE 126
 #define WM_NCDESTROY 130
+#define WM_NCCALCSIZE 131
 #define WM_SYSCOMMAND 274
 #define SC_RESTORE 0xf120
 #define GWLP_WNDPROC (-4)
@@ -29,6 +30,7 @@ typedef struct {UINT dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields;} DEV
 #define SWP_NOSIZE 1
 #define SWP_NOACTIVATE 16
 #define SWP_NOZORDER 4
+#define SWP_FRAMECHANGED 32
 #define HWND_TOP ((HWND)(uintptr_t)1)
 #define HWND_TOPMOST ((HWND)(uintptr_t)2)
 #define CDS_FULLSCREEN 4
