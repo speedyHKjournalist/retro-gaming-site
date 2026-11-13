@@ -2,6 +2,9 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/d3d7_proxy.inc"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-multiple-mutants-"));
 const cases=[
+ ["older surface view rejected","(const void *)surface_iface->lpVtbl != &g_surface_vtbl1 &&","TRUE &&"],
+ ["foreign vtable accepted","(const void *)surface_iface->lpVtbl != &g_surface_vtbl4))","FALSE))"],
+
  ["legacy lighting profile omitted","create.behavior_flags = D9WG_DEVICE_LEGACY_LIGHTING;","create.behavior_flags = 0;"],
  ["legacy lighting profile leaks to Device7","if (device->creation_version < 7u)\n        create.behavior_flags = D9WG_DEVICE_LEGACY_LIGHTING;","if (device->creation_version <= 7u)\n        create.behavior_flags = D9WG_DEVICE_LEGACY_LIGHTING;"],
  ["invalid target reaches transport","if (FAILED(hr)) return DDWG_TRACE_ERROR(hr);","(void)hr;"],

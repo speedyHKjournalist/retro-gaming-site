@@ -42,7 +42,7 @@ typedef DWORD*LPDWORD;
 #define CopyMemory(d,s,n) memcpy(d,s,n)
 typedef struct {BYTE peRed,peGreen,peBlue,peFlags;} PALETTEENTRY,*LPPALETTEENTRY;
 typedef struct DDrawObject DDrawObject;typedef struct DDSurface DDSurface;typedef struct DDPalette DDPalette;typedef struct DDClipper DDClipper;
-struct DDrawObject {void*vtbl7;LONG ref,lifetime_ref;DWORD device_handle,guest_mode_changed,mode_bpp,next_palette_slot,cooperative_flags;DDSurface*surfaces,*primary;DDPalette*palettes;DDClipper*clippers;DDrawObject*next;};
+struct DDrawObject {void*vtbl7;LONG ref,lifetime_ref;DWORD device_handle,guest_mode_changed,mode_set,mode_bpp,next_palette_slot,cooperative_flags;DDSurface*surfaces,*primary;DDPalette*palettes;DDClipper*clippers;DDrawObject*next;};
 struct DDPalette {void*vtbl;LONG ref;DDrawObject*owner;BOOL owner_public_ref;DWORD caps,slot;PALETTEENTRY entries[256];DDPalette*next;};
 struct DDClipper {void*vtbl;LONG ref;DDrawObject*owner;void*clip_list;DDClipper*next,*all_next;BOOL changed;};
 typedef struct {LONG ref;DWORD handle;} DDTextureStorage;typedef struct {LONG ref;DWORD content_version;BYTE bits[4];} DDSurfaceMemory;
@@ -58,7 +58,10 @@ static LONG InterlockedIncrement(LONG*p){alive(p);return ++*p;}static LONG Inter
 static void*heap_alloc_zero(size_t n){return allocation(n,0);}static void heap_free(void*p){if(!p)return;for(unsigned i=0;i<allocated;i++)if(allocations[i].p==p){MUST(!allocations[i].dead);if(allocations[i].kind==1){DDrawObject*d=p;MUST(!d->surfaces&&!d->palettes&&!d->clippers&&!d->lifetime_ref&&!d->ref);objects_freed++;}if(allocations[i].kind==2)surfaces_freed++;allocations[i].dead=1;return;}MUST(0);}
 static void EnterCriticalSection(void*p){(void)p;}static void LeaveCriticalSection(void*p){(void)p;}
 static BOOL ddraw_platform_release(DDrawObject*d){(void)d;return 0;}static void ddraw_platform_poll_loss(DDrawObject*d){(void)d;}
-static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,unsigned v){(void)d;(void)s;(void)v;}
+typedef struct DDPlatformPrimary{DDSURFACEDESC2 desc;BOOL metadata;}DDPlatformPrimary;
+static void ddraw_platform_primary_prepare(DDrawObject*d,unsigned v,BOOL flip,DWORD back,DDPlatformPrimary*p){(void)d;(void)v;(void)flip;(void)back;memset(p,0,sizeof(*p));}
+static void ddraw_platform_primary_dispose(DDPlatformPrimary*p){(void)p;}
+static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,DDPlatformPrimary*p){(void)d;(void)s;ddraw_platform_primary_dispose(p);}
 static void ddraw_platform_primary_detach(DDrawObject*d){(void)d;}
 #ifndef DDERR_PRIMARYSURFACEALREADYEXISTS
 #define DDERR_PRIMARYSURFACEALREADYEXISTS ((HRESULT)0x88760234u)
@@ -92,7 +95,7 @@ static UINT format_bytes_per_pixel(UINT f){return f==41?1:4;}static UINT format_
 static DDSurface*surface_create_complex_texture(DDrawObject*d,const DDSURFACEDESC2*r,unsigned f,UINT w,UINT h,DWORD caps,UINT levels,BOOL cube){(void)levels;(void)cube;return surface_create(d,r,f,w,h,caps);}
 static DDSurface*surface_allocate(DDrawObject*d,const DDSURFACEDESC2*r,unsigned f,UINT w,UINT h,DWORD caps,DDTextureStorage*shared,UINT mip,UINT face){DDSurface*s=new_surface(d,shared);s->desc=*r;s->format=f;s->indexed=f==41;s->width=w;s->height=h;s->desc.ddsCaps.dwCaps=caps;s->mip_level=mip;s->cube_face=face;return s;}
 ${["surface_request_color_keys_valid", "surface_full_mip_count", "ddraw_CreateSurfaceForVersion", "ddraw_CreateSurface", "ddraw_DuplicateSurfaceForVersion", "ddraw_DuplicateSurface"].map(extract).join("\n")}
-static DDrawObject*owner(void){DDrawObject*d=allocation(sizeof(*d),1);d->ref=d->lifetime_ref=1;d->mode_bpp=32;d->next=g_objects;g_objects=d;g_object_count++;return d;}
+static DDrawObject*owner(void){DDrawObject*d=allocation(sizeof(*d),1);d->ref=d->lifetime_ref=1;d->mode_bpp=32;d->cooperative_flags=DDSCL_NORMAL;d->next=g_objects;g_objects=d;g_object_count++;return d;}
 static DDSURFACEDESC2 description(void){DDSURFACEDESC2 r={0};r.dwSize=sizeof(r);r.dwFlags=DDSD_WIDTH|DDSD_HEIGHT|DDSD_CAPS;r.dwWidth=r.dwHeight=32;r.ddsCaps.dwCaps=DDSCAPS_OFFSCREENPLAIN;return r;}
 static void version_cases(unsigned version){DDrawObject*d=owner();DDSurface*s=NULL,*dup=NULL;DDPalette*p=NULL;DDClipper*c=NULL;PALETTEENTRY entries[256]={{0}};DDSURFACEDESC2 r=description();r.dwFlags|=DDSD_PIXELFORMAT;r.ddpfPixelFormat.dwSize=sizeof(DDPIXELFORMAT);r.ddpfPixelFormat.dwRGBBitCount=8;r.ddpfPixelFormat.dwFlags=0x60u;unsigned pin=version>=4;
  MUST(!ddraw_CreateSurfaceForVersion(d,&r,&s,NULL,version));MUST(d->ref==1+(LONG)pin&&d->lifetime_ref==2+(LONG)pin&&s->owner_public_ref==(BOOL)pin);MUST(!ddraw_CreatePaletteForVersion(d,DDPCAPS_8BIT,entries,&p,NULL,version));MUST(d->ref==1+2*(LONG)pin);MUST(!ddraw_CreateClipper(d,0,&c,NULL)&&d->ref==1+2*(LONG)pin);MUST(!ddraw_DuplicateSurfaceForVersion(d,s,&dup,version)&&d->ref==1+3*(LONG)pin&&s->storage==dup->storage&&s->memory==dup->memory);

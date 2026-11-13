@@ -2,6 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),main=fs.readFileSync(root+'/ddrawproxy/ddraw_proxy.c','utf8'),platform=fs.readFileSync(root+'/ddrawproxy/ddraw_platform_control.inc','utf8'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-platform-mut-'));
 const rows=[
+ ['unavailable Draw3 does not use Draw2','platform','ddraw_platform_view','version == DD_VERSION_3 && *hr == E_NOINTERFACE','FALSE && *hr == E_NOINTERFACE'],
+
  ['cooperative hold omitted','main','ddraw_SetCooperativeLevelForVersion','InterlockedIncrement(&object->lifetime_ref);','(void)object;'],
  ['mode hold omitted','main','ddraw_SetDisplayModeForVersion','InterlockedIncrement(&object->lifetime_ref);','(void)object;'],
  ['restore hold omitted','main','ddraw_RestoreDisplayModeForVersion','InterlockedIncrement(&object->lifetime_ref);','(void)object;'],

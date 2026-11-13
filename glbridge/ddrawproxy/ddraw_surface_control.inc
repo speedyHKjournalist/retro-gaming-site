@@ -33,19 +33,40 @@ static void ddraw_platform_primary_detach(DDrawObject *object)
     if (primary) IUnknown_Release(primary);
 }
 
-static void ddraw_platform_primary_attach(DDrawObject *object, DDSurface *surface,
-        unsigned version)
+typedef struct DDPlatformPrimary {
+    IUnknown *surface, *view, *root;
+    DDSURFACEDESC2 desc;
+    BOOL metadata;
+} DDPlatformPrimary;
+
+static void ddraw_platform_primary_dispose(DDPlatformPrimary *prepared)
 {
-    IUnknown *view, *primary = NULL, *root = object->platform_ddraw;
+    /* Legacy surfaces do not keep their public draw parent alive. */
+    if (prepared->surface) IUnknown_Release(prepared->surface);
+    if (prepared->view) IUnknown_Release(prepared->view);
+    ZeroMemory(prepared, sizeof(*prepared));
+}
+
+static void ddraw_platform_primary_prepare(DDrawObject *object, unsigned version,
+        BOOL flip, DWORD back_buffers, DDPlatformPrimary *prepared)
+{
+    IUnknown *view, *primary = NULL;
     HRESULT hr;
-    if (!ddraw_platform_view(object, version, &view, &hr)) return;
-    if (FAILED(hr)) return;
+    ZeroMemory(prepared, sizeof(*prepared));
+    prepared->root = object->platform_ddraw;
+    if (!ddraw_platform_view(object, version, &view, &hr) || FAILED(hr)) return;
+    prepared->view = view;
     if (version < DD_VERSION_4) {
         DDSURFACEDESC desc;
         ZeroMemory(&desc, sizeof(desc));
         desc.dwSize = sizeof(desc);
         desc.dwFlags = DDSD_CAPS;
         desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+        if (flip) {
+            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;
+            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;
+            desc.dwBackBufferCount = back_buffers;
+        }
         if (version == DD_VERSION_1)
             hr = IDirectDraw_CreateSurface((IDirectDraw *)view, &desc,
                     (IDirectDrawSurface **)&primary, NULL);
@@ -61,6 +82,11 @@ static void ddraw_platform_primary_attach(DDrawObject *object, DDSurface *surfac
         desc.dwSize = sizeof(desc);
         desc.dwFlags = DDSD_CAPS;
         desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+        if (flip) {
+            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;
+            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;
+            desc.dwBackBufferCount = back_buffers;
+        }
         if (version == DD_VERSION_4)
             hr = IDirectDraw4_CreateSurface((IDirectDraw4 *)view, &desc,
                     (IDirectDrawSurface4 **)&primary, NULL);
@@ -68,20 +94,43 @@ static void ddraw_platform_primary_attach(DDrawObject *object, DDSurface *surfac
             hr = IDirectDraw7_CreateSurface((IDirectDraw7 *)view, &desc,
                     (IDirectDrawSurface7 **)&primary, NULL);
     }
-    if (SUCCEEDED(hr)) {
-        EnterCriticalSection(&g_object_lock);
-        if (object->platform_ddraw == root && object->primary == surface &&
-                object->ref > 0 && !object->platform_primary) {
-            object->platform_primary = primary;
-            object->platform_primary_lost = FALSE;
-            primary = NULL;
-        }
-        LeaveCriticalSection(&g_object_lock);
+    if (FAILED(hr)) {
+        if (primary) IUnknown_Release(primary);
+        return;
     }
-    /* A callback may have retired the public owner during CreateSurface.
-     * Drop its new surface before the temporary draw view can reach zero. */
-    if (primary) IUnknown_Release(primary);
-    IUnknown_Release(view);
+    prepared->surface = primary;
+    if (version < DD_VERSION_4) {
+        DDSURFACEDESC desc;
+        ZeroMemory(&desc, sizeof(desc));
+        desc.dwSize = sizeof(desc);
+        hr = IDirectDrawSurface_GetSurfaceDesc((IDirectDrawSurface *)primary, &desc);
+        if (SUCCEEDED(hr)) {
+            prepared->desc.dwWidth = desc.dwWidth;
+            prepared->desc.dwHeight = desc.dwHeight;
+            prepared->desc.ddpfPixelFormat = desc.ddpfPixelFormat;
+        }
+    } else {
+        prepared->desc.dwSize = sizeof(prepared->desc);
+        hr = IDirectDrawSurface7_GetSurfaceDesc((IDirectDrawSurface7 *)primary,
+                &prepared->desc);
+    }
+    prepared->metadata = SUCCEEDED(hr) && prepared->desc.dwWidth &&
+            prepared->desc.dwHeight;
+}
+
+static void ddraw_platform_primary_attach(DDrawObject *object, DDSurface *surface,
+        DDPlatformPrimary *prepared)
+{
+    EnterCriticalSection(&g_object_lock);
+    if (prepared->surface && object->platform_ddraw == prepared->root &&
+            object->primary == surface && object->ref > 0 &&
+            !object->platform_primary) {
+        object->platform_primary = prepared->surface;
+        object->platform_primary_lost = FALSE;
+        prepared->surface = NULL;
+    }
+    LeaveCriticalSection(&g_object_lock);
+    ddraw_platform_primary_dispose(prepared);
 }
 
 static void ddraw_platform_lose_all_video_surfaces(void)
@@ -145,6 +194,11 @@ static HRESULT ddraw_platform_restore_surface(DDSurface *surface)
             (surface->width != object->mode_width ||
              surface->height != object->mode_height ||
              surface->desc.ddpfPixelFormat.dwRGBBitCount != object->mode_bpp))
+        return DDERR_WRONGMODE;
+    /* Native Restore of a flip primary in NORMAL can crash on XP. Its
+     * allocation cannot be restored until exclusive ownership returns. */
+    if (surface->primary && surface->front_of_chain &&
+            !(object->cooperative_flags & DDSCL_EXCLUSIVE))
         return DDERR_WRONGMODE;
     primary = surface->primary ? ddraw_platform_primary_ref(object, &draw) : NULL;
     if (primary) {

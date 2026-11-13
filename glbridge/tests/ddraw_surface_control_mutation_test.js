@@ -2,6 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-surface-control-mut-'));
 const sources={main:fs.readFileSync(root+'/ddrawproxy/ddraw_proxy.c','utf8'),surface:fs.readFileSync(root+'/ddrawproxy/ddraw_surface_control.inc','utf8'),control:fs.readFileSync(root+'/ddrawproxy/ddraw_platform_control.inc','utf8')};
 const rows=[
+ ['flip primary created as standalone','surface','ddraw_platform_primary_prepare','desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;\n        if (flip) {\n            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;\n            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;\n            desc.dwBackBufferCount = back_buffers;\n        }\n        if (version == DD_VERSION_1)', 'desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;\n        if (FALSE && flip) {\n            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;\n            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;\n            desc.dwBackBufferCount = back_buffers;\n        }\n        if (version == DD_VERSION_1)'],
+
  ['legacy parent not pinned','surface','ddraw_platform_primary_ref','IUnknown_AddRef(*draw);','(void)*draw;'],
  ['native primary not pinned','surface','ddraw_platform_primary_ref','IUnknown_AddRef(primary);','(void)primary;'],
  ['native primary loss ignored','surface','ddraw_platform_poll_loss','hr == DDERR_SURFACELOST && !object->platform_primary_lost','FALSE && hr == DDERR_SURFACELOST && !object->platform_primary_lost'],
@@ -10,8 +12,8 @@ const rows=[
  ['restored surface stays lost','surface','ddraw_platform_restore_surface','surface->cooperative_lost = FALSE;','surface->cooperative_lost = TRUE;'],
  ['flip children stay lost','surface','ddraw_platform_restore_surface','        walk->cooperative_lost = FALSE;','        walk->cooperative_lost = TRUE;'],
  ['aliases stay lost','surface','ddraw_platform_restore_surface','if (walk->storage == surface->storage) walk->cooperative_lost = FALSE;','if (walk->storage == surface->storage) walk->cooperative_lost = TRUE;'],
- ['retired creator publishes a primary','surface','ddraw_platform_primary_attach','object->platform_ddraw == root && object->primary == surface &&\n                object->ref > 0','root != NULL && surface != NULL'],
- ['legacy primary uses extended descriptor','surface','ddraw_platform_primary_attach','hr = IDirectDraw_CreateSurface','hr = IDirectDraw7_CreateSurface'],
+ ['retired creator publishes a primary','surface','ddraw_platform_primary_attach','prepared->surface && object->platform_ddraw == prepared->root &&\n            object->primary == surface && object->ref > 0 &&\n            !object->platform_primary','prepared->surface && surface != NULL'],
+ ['legacy primary uses extended descriptor','surface','ddraw_platform_primary_prepare','hr = IDirectDraw_CreateSurface','hr = IDirectDraw7_CreateSurface'],
  ['mode change ignores other owners','main','ddraw_SetDisplayModeForVersion','ddraw_platform_lose_all_video_surfaces();','ddraw_platform_lose_video_surfaces(object);'],
  ['restore snapshot does not pin','main','ddraw_RestoreAllSurfaces','surface_private_addref(surface);','(void)surface;'],
  ['native parent destroyed before primary','control','ddraw_platform_release','if (primary) IUnknown_Release(primary);\n    if (native) IUnknown_Release(native);','if (native) IUnknown_Release(native);\n    if (primary) IUnknown_Release(primary);'],

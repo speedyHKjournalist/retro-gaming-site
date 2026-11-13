@@ -1393,7 +1393,14 @@ static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
 
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (!surface_iface || surface_iface->lpVtbl != &g_surface_vtbl || !clsid)
+    /* Wine and existing games can pass an older surface view to Device7.
+     * Accept only our known vtables before resolving the interface offset. */
+    if (!surface_iface || !clsid ||
+            ((const void *)surface_iface->lpVtbl != &g_surface_vtbl &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl1 &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl2 &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl3 &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl4))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!guid_equal(clsid, &IID_IDirect3DHALDevice) &&
             !guid_equal(clsid, &IID_IDirect3DTnLHalDevice) &&

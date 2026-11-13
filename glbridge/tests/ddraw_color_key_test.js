@@ -10,6 +10,10 @@ try{fs.writeFileSync(dir+"/entry.c",`#include <assert.h>
 #include "${process.env.DDRAW_COLOR_KEY_POLICY||root+'/runtime/d9wg_ddraw_color_key.h'}"
 #include "d3d9proxy/d3d9_protocol.h"
 typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef void IUnknown;
+#define ZeroMemory(p,n) memset(p,0,n)
+#define DDERR_INVALIDOBJECT (-9)
+#define DDERR_NOCOOPERATIVELEVELSET (-25)
+#define DDSCL_NORMAL 0x8u
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
@@ -74,7 +78,7 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 typedef struct{DWORD dwColorSpaceLowValue,dwColorSpaceHighValue;}DDCOLORKEY,*LPDDCOLORKEY;
 typedef struct{DWORD dwSize,dwFlags,dwRGBBitCount,dwRBitMask,dwGBitMask,dwBBitMask;}DDPIXELFORMAT;
 typedef struct{void*lpSurface;union{int32_t lPitch;DWORD dwLinearSize;};DWORD dwSize,dwFlags,dwWidth,dwHeight,dwBackBufferCount,dwMipMapCount;struct{DWORD dwCaps,dwCaps2;}ddsCaps;DDPIXELFORMAT ddpfPixelFormat;DDCOLORKEY ddckCKSrcBlt,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKDestOverlay;}DDSURFACEDESC2,*LPDDSURFACEDESC2;
-typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref,cooperative_flags;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
+typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref,cooperative_flags;BOOL mode_set,guest_mode_changed;int32_t lifetime_ref;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
 struct DDSurface{void*vtbl7;void*storage;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;UINT mip_level;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;typedef struct{unsigned unused;}DDrawPixelFormatDesc;
 #define DD_VERSION_1 1u
@@ -86,8 +90,13 @@ static unsigned checks,sets,overlays,creates;static DWORD emitted_kind;static BO
 static DDSurface*surface_from_iface(DDSurface*s){return s;}static DDrawObject*object_from_iface(DDrawObject*d){return d;}
 static void emit_color_key(DDSurface*s,DWORD kind,const DDCOLORKEY*key,BOOL present){assert(s&&kind<4);sets++;emitted_kind=kind;emitted_present=present;if(key)emitted_key=*key;}
 static void emit_overlay_state(DDSurface*s){assert(s&&s->overlay_visible);overlays++;}
+static int32_t InterlockedIncrement(int32_t*p){return ++*p;}
+static void ddraw_lifetime_release(DDrawObject*d){assert(d->lifetime_ref>0);--d->lifetime_ref;}
 static void ddraw_platform_poll_loss(DDrawObject*d){(void)d;}
-static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,unsigned v){(void)d;(void)s;(void)v;}
+typedef struct DDPlatformPrimary{DDSURFACEDESC2 desc;BOOL metadata;}DDPlatformPrimary;
+static void ddraw_platform_primary_prepare(DDrawObject*d,unsigned v,BOOL flip,DWORD back,DDPlatformPrimary*p){(void)d;(void)v;(void)flip;(void)back;memset(p,0,sizeof(*p));}
+static void ddraw_platform_primary_dispose(DDPlatformPrimary*p){(void)p;}
+static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,DDPlatformPrimary*p){(void)d;(void)s;ddraw_platform_primary_dispose(p);}
 #ifndef DDERR_PRIMARYSURFACEALREADYEXISTS
 #define DDERR_PRIMARYSURFACEALREADYEXISTS ((HRESULT)0x88760234u)
 #endif
@@ -105,7 +114,7 @@ void surface_creation_profile(DDSurface*s,unsigned version){(void)s;(void)versio
 ${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKeyForVersion','surface_SetColorKey','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),...(source.includes('static HRESULT ddraw_CreateSurfaceForVersion(')?['ddraw_CreateSurfaceForVersion']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
 #define CHECK(v) do{checks++;if(!(v)){fprintf(stderr,"DDraw color key line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 static void events(void){sets=overlays=0;emitted_kind=99;emitted_present=0;emitted_key=(DDCOLORKEY){0};}
-int main(void){(void)&ddraw_AddRef;(void)&surface_destroy;(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;
+int main(void){(void)&ddraw_AddRef;(void)&surface_destroy;(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32,.cooperative_flags=DDSCL_NORMAL};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;
 const DWORD selectors[]={DDCKEY_SRCBLT,DDCKEY_DESTBLT,DDCKEY_SRCOVERLAY,DDCKEY_DESTOVERLAY},descflags[]={DDSD_CKSRCBLT,DDSD_CKDESTBLT,DDSD_CKSRCOVERLAY,DDSD_CKDESTOVERLAY};
 const DWORD values[]={0,1,0xff,0xffff,0x12345678,0xffffffff};unsigned set_cases=0,create_cases=0;
 for(UINT kind=0;kind<4;kind++)for(UINT lo=0;lo<6;lo++)for(UINT hi=0;hi<6;hi++)for(UINT range=0;range<2;range++){

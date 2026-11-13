@@ -71,6 +71,11 @@ static BOOL ddraw_platform_view(DDrawObject *object, unsigned version,
     *view = NULL;
     if (!object->platform_ddraw) return FALSE;
     *hr = IUnknown_QueryInterface(object->platform_ddraw, iid, (void **)view);
+    /* XP does not expose IDirectDraw3. All private controller methods used
+     * here are inherited from Draw2 at the same slots and descriptor ABI. */
+    if (version == DD_VERSION_3 && *hr == E_NOINTERFACE)
+        *hr = IUnknown_QueryInterface(object->platform_ddraw, &IID_IDirectDraw2,
+                (void **)view);
     return TRUE;
 }
 

@@ -1944,8 +1944,7 @@ static BOOL emit_overlay_state(DDSurface *surface)
 
 static IUnknown *ddraw_platform_primary_take_locked(DDrawObject *object);
 static void ddraw_platform_primary_detach(DDrawObject *object);
-static void ddraw_platform_primary_attach(DDrawObject *object, DDSurface *surface,
-        unsigned version);
+
 static void ddraw_platform_poll_loss(DDrawObject *object);
 static BOOL ddraw_platform_primary_format(DDrawObject *object, DDPIXELFORMAT *format);
 static HRESULT ddraw_platform_restore_surface(DDSurface *surface);
@@ -5808,10 +5807,14 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
     DWORD back_buffers;
     UINT mip_levels = 1u;
     BOOL cube;
+    BOOL primary_hold = FALSE;
+    DDPlatformPrimary prepared;
 
     DDWG_TRACE_CHECKPOINT("CALL ddraw_CreateSurface object=%08lX request=%08lX "
             "outer=%08lX", (DWORD)(uintptr_t)object,
             (DWORD)(uintptr_t)request, (DWORD)(uintptr_t)outer);
+    if (!object->cooperative_flags)
+        return DDWG_TRACE_ERROR(DDERR_NOCOOPERATIVELEVELSET);
     if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     if (!out || IsBadWritePtr(out, sizeof(*out)) || !request) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (request->dwSize != sizeof(DDSURFACEDESC2)) {
@@ -5977,6 +5980,35 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
         }
     }
 
+    ZeroMemory(&prepared, sizeof(prepared));
+    if (caps & DDSCAPS_PRIMARYSURFACE) {
+        /* Native allocation metadata can differ from GetDisplayMode after
+         * external mode/focus changes. Obtain it before allocating pixels. */
+        InterlockedIncrement(&object->lifetime_ref);
+        primary_hold = TRUE;
+        ddraw_platform_primary_prepare(object, version, back_buffers != 0,
+                back_buffers, &prepared);
+        if (object->ref <= 0 || object->primary) {
+            HRESULT hr = object->primary ? DDERR_PRIMARYSURFACEALREADYEXISTS :
+                    DDERR_INVALIDOBJECT;
+            ddraw_platform_primary_dispose(&prepared);
+            ddraw_lifetime_release(object);
+            return DDWG_TRACE_ERROR(hr);
+        }
+        if (prepared.metadata && !(object->mode_set && !object->guest_mode_changed)) {
+            width = prepared.desc.dwWidth;
+            height = prepared.desc.dwHeight;
+            pixel_format = prepared.desc.ddpfPixelFormat;
+            describe_pixel_format(&pixel_format, &format_desc);
+            format = ddraw_pixel_format_to_d3dformat(&format_desc);
+            if (format == DDWG_FMT_UNKNOWN) {
+                ddraw_platform_primary_dispose(&prepared);
+                ddraw_lifetime_release(object);
+                return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
+            }
+        }
+    }
+
     {
         DDSURFACEDESC2 seed = *request;
         /* Unflagged union members and application pointers are not output
@@ -5992,7 +6024,11 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
             surface = surface_create(object, &seed, format, width, height,
                     caps);
     }
-    if (!surface) return DDWG_TRACE_ERROR(DDERR_OUTOFVIDEOMEMORY);
+    if (!surface) {
+        ddraw_platform_primary_dispose(&prepared);
+        if (primary_hold) ddraw_lifetime_release(object);
+        return DDWG_TRACE_ERROR(DDERR_OUTOFVIDEOMEMORY);
+    }
     surface->front_of_chain = back_buffers > 0;
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
@@ -6028,6 +6064,8 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
             if (!back) {
                 previous->flip_next = surface;
                 surface_destroy(surface);
+                ddraw_platform_primary_dispose(&prepared);
+                if (primary_hold) ddraw_lifetime_release(object);
                 return DDWG_TRACE_ERROR(DDERR_OUTOFVIDEOMEMORY);
             }
             back->implicit = TRUE;
@@ -6045,10 +6083,19 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
         for (walk = surface->flip_next; walk && walk != surface; walk = walk->flip_next)
             surface_creation_profile(walk, version);
     }
+    if (primary_hold && object->ref <= 0) {
+        surface_destroy(surface);
+        ddraw_platform_primary_dispose(&prepared);
+        ddraw_lifetime_release(object);
+        return DDWG_TRACE_ERROR(DDERR_INVALIDOBJECT);
+    }
     surface->owner_public_ref = version >= DD_VERSION_4;
     if (surface->owner_public_ref) ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
     if (caps & DDSCAPS_PRIMARYSURFACE)
-        ddraw_platform_primary_attach(object, surface, version);
+        ddraw_platform_primary_attach(object, surface, &prepared);
+    else
+        ddraw_platform_primary_dispose(&prepared);
+    if (primary_hold) ddraw_lifetime_release(object);
     *out = (IDirectDrawSurface7 *)surface;
     DDWG_TRACE("SURFACE CREATED handle=%lu object=%08lX size=%lux%lu "
             "pitch=%lu format=%u caps=%08lX primary=%lu backbuffers=%lu",
@@ -7988,6 +8035,8 @@ static HRESULT WINAPI tag##_CreateSurface(IFACE *iface, DESC *request, \
     DDSURFACEDESC2 request2; \
     IDirectDrawSurface7 *created = NULL; \
     HRESULT result; \
+    if (!object_from_iface(DDRAW7(iface))->cooperative_flags) \
+        return DDWG_TRACE_ERROR(DDERR_NOCOOPERATIVELEVELSET); \
     if (!out || IsBadWritePtr(out, sizeof(*out)) || !request) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     *out = NULL; \
     if (request->dwSize != sizeof(DESC)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
