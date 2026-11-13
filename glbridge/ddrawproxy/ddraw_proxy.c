@@ -6075,15 +6075,6 @@ static HRESULT WINAPI ddraw_DuplicateSurface(IDirectDraw7 *iface,
     return ddraw_DuplicateSurfaceForVersion(iface, source, out, DD_VERSION_7);
 }
 
-/* The modes this path can really present. Anything not listed is a mode the
- * page would have to letterbox or scale, and reporting one we cannot honour is
- * how a game ends up rendering into a rectangle nobody sees. */
-static const struct { DWORD width; DWORD height; } g_modes[] = {
-    { 320, 200 }, { 320, 240 }, { 512, 384 }, { 640, 400 }, { 640, 480 },
-    { 800, 600 }, { 1024, 768 }, { 1152, 864 }, { 1280, 720 }, { 1280, 1024 },
-};
-static const DWORD g_mode_depths[] = { 8, 16, 32 };
-
 /* Match the fields selected by a descriptor, ignoring inactive union members. */
 static BOOL ddraw_enum_pixel_format_matches(const DDPIXELFORMAT *actual,
         const DDPIXELFORMAT *filter)
@@ -6112,47 +6103,85 @@ static BOOL ddraw_enum_color_key_matches(const DDCOLORKEY *actual, const DDCOLOR
         actual->dwColorSpaceHighValue == filter->dwColorSpaceHighValue;
 }
 
+/* Display capabilities come from the driver. Dimensionless creatable
+ * surface enumeration uses the same current-depth resolution list. */
+static BOOL ddraw_next_display_mode(DWORD *index, DWORD flags,
+        DDSURFACEDESC2 *description)
+{
+    DEVMODEA mode;
+    for (;;) {
+        DWORD current = (*index)++;
+        UINT bytes_per_pixel;
+        BOOL duplicate = FALSE;
+        ZeroMemory(&mode, sizeof(mode));
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsA(NULL, current, &mode)) return FALSE;
+        if (mode.dmBitsPerPel != 8u && mode.dmBitsPerPel != 16u &&
+                mode.dmBitsPerPel != 24u && mode.dmBitsPerPel != 32u)
+            continue;
+        bytes_per_pixel = mode.dmBitsPerPel / 8u;
+        if (!mode.dmPelsWidth || !mode.dmPelsHeight ||
+                mode.dmPelsWidth > (0x7ffffffcu / bytes_per_pixel))
+            continue;
+        if (!(flags & DDEDM_REFRESHRATES)) {
+            for (DWORD previous = 0; previous < current; ++previous) {
+                DEVMODEA earlier;
+                ZeroMemory(&earlier, sizeof(earlier));
+                earlier.dmSize = sizeof(earlier);
+                if (!EnumDisplaySettingsA(NULL, previous, &earlier)) break;
+                if (earlier.dmPelsWidth == mode.dmPelsWidth &&
+                        earlier.dmPelsHeight == mode.dmPelsHeight &&
+                        earlier.dmBitsPerPel == mode.dmBitsPerPel) {
+                    duplicate = TRUE;
+                    break;
+                }
+            }
+        }
+        if (duplicate) continue;
+        ZeroMemory(description, sizeof(*description));
+        description->dwSize = sizeof(*description);
+        description->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT |
+            DDSD_PITCH | DDSD_REFRESHRATE;
+        description->dwWidth = mode.dmPelsWidth;
+        description->dwHeight = mode.dmPelsHeight;
+        description->dwRefreshRate = flags & DDEDM_REFRESHRATES
+            ? mode.dmDisplayFrequency : 0u;
+        mode_pixel_format(mode.dmBitsPerPel, &description->ddpfPixelFormat);
+        description->lPitch = (LONG)surface_pitch_for(mode.dmPelsWidth,
+                bytes_per_pixel);
+        return TRUE;
+    }
+}
+
+static UINT ddraw_desktop_refresh_rate(void)
+{
+    DEVMODEA mode;
+    ZeroMemory(&mode, sizeof(mode));
+    mode.dmSize = sizeof(mode);
+    if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &mode) &&
+            mode.dmDisplayFrequency)
+        return mode.dmDisplayFrequency;
+    return 60u;
+}
+
 static HRESULT WINAPI ddraw_EnumDisplayModes(IDirectDraw7 *iface, DWORD flags,
         LPDDSURFACEDESC2 filter, LPVOID context,
         LPDDENUMMODESCALLBACK2 callback)
 {
-    UINT mode;
-    UINT depth;
-
+    DWORD index = 0;
+    DDSURFACEDESC2 description;
     (void)iface;
-    (void)flags;
-    DDWG_TRACE_CHECKPOINT("CALL ddraw_EnumDisplayModes flags=%08lX "
-            "filter=%08lX filter_flags=%08lX", flags,
-            (DWORD)(uintptr_t)filter, filter ? filter->dwFlags : 0u);
     if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    for (mode = 0; mode < sizeof(g_modes) / sizeof(g_modes[0]); ++mode) {
-        for (depth = 0; depth < sizeof(g_mode_depths) / sizeof(DWORD);
-                ++depth) {
-            DDSURFACEDESC2 description;
-            if (filter) {
-                if ((filter->dwFlags & DDSD_WIDTH) &&
-                        filter->dwWidth != g_modes[mode].width)
-                    continue;
-                if ((filter->dwFlags & DDSD_HEIGHT) &&
-                        filter->dwHeight != g_modes[mode].height)
-                    continue;
-            }
-            ZeroMemory(&description, sizeof(description));
-            description.dwSize = sizeof(description);
-            description.dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT |
-                DDSD_PITCH | DDSD_REFRESHRATE;
-            description.dwWidth = g_modes[mode].width;
-            description.dwHeight = g_modes[mode].height;
-            description.dwRefreshRate = 60;
-            mode_pixel_format(g_mode_depths[depth],
-                    &description.ddpfPixelFormat);
-            if (filter && (filter->dwFlags & DDSD_PIXELFORMAT) &&
+    while (ddraw_next_display_mode(&index, flags, &description)) {
+        if (filter) {
+            if ((filter->dwFlags & DDSD_WIDTH) &&
+                    filter->dwWidth != description.dwWidth) continue;
+            if ((filter->dwFlags & DDSD_HEIGHT) &&
+                    filter->dwHeight != description.dwHeight) continue;
+            if ((filter->dwFlags & DDSD_PIXELFORMAT) &&
                     !ddraw_enum_pixel_format_matches(&description.ddpfPixelFormat, &filter->ddpfPixelFormat)) continue;
-            description.lPitch = (LONG)surface_pitch_for(g_modes[mode].width,
-                    g_mode_depths[depth] / 8u);
-            if (callback(&description, context) == DDENUMRET_CANCEL)
-                return DDWG_TRACE_RESULT(DD_OK);
         }
+        if (callback(&description, context) == DDENUMRET_CANCEL) break;
     }
     return DDWG_TRACE_RESULT(DD_OK);
 }
@@ -6252,13 +6281,25 @@ static HRESULT ddraw_enum_surfaces(DDrawObject *object, DWORD flags,
     if (flags & DDENUMSURFACES_CANBECREATED) {
         DDSURFACEDESC2 request = *filter, description;
         DWORD bpp = object->mode_bpp ? object->mode_bpp : 32u;
-        UINT mode, end = sizeof(g_modes) / sizeof(g_modes[0]);
-        if ((request.dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) == (DDSD_WIDTH | DDSD_HEIGHT)) end = 1;
-        for (mode = 0; mode < end; ++mode) {
-            DWORD width = request.dwFlags & DDSD_WIDTH ? request.dwWidth : g_modes[mode].width;
-            DWORD height = request.dwFlags & DDSD_HEIGHT ? request.dwHeight : g_modes[mode].height;
+        DWORD mode_index = 0;
+        BOOL explicit_dimensions = (request.dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) ==
+            (DDSD_WIDTH | DDSD_HEIGHT);
+        for (;;) {
+            DWORD width, height;
+            if (explicit_dimensions) {
+                width = request.dwWidth;
+                height = request.dwHeight;
+            } else {
+                DDSURFACEDESC2 available;
+                do {
+                    if (!ddraw_next_display_mode(&mode_index, 0, &available)) return DD_OK;
+                } while (available.ddpfPixelFormat.dwRGBBitCount != bpp);
+                width = available.dwWidth;
+                height = available.dwHeight;
+            }
             if (ddraw_enum_creatable_description(&request, width, height, bpp, &description) &&
                     callback(NULL, &description, context) == DDENUMRET_CANCEL) break;
+            if (explicit_dimensions) break;
         }
         return DD_OK;
     }
@@ -6496,7 +6537,7 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
     description->dwHeight = object->mode_height ? object->mode_height
         : (DWORD)GetSystemMetrics(SM_CYSCREEN);
     description->dwRefreshRate = object->mode_refresh ? object->mode_refresh
-        : 60u;
+        : ddraw_desktop_refresh_rate();
     mode_pixel_format(bpp, &description->ddpfPixelFormat);
     description->lPitch = (LONG)surface_pitch_for(description->dwWidth,
             bpp / 8u);
@@ -7832,38 +7873,24 @@ static HRESULT WINAPI tag##_DuplicateSurface(IFACE *iface, SURFIFACE *source, \
 static HRESULT WINAPI tag##_EnumDisplayModes(IFACE *iface, DWORD flags, \
         DESC *filter, LPVOID context, ENUMMODESCB callback) \
 { \
-    UINT mode; \
-    UINT depth; \
-    (void)iface; (void)flags; \
+    DWORD index = 0; \
+    DDSURFACEDESC2 mode_description; \
+    (void)iface; \
     if (!callback) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
-    for (mode = 0; mode < sizeof(g_modes) / sizeof(g_modes[0]); ++mode) { \
-        for (depth = 0; depth < sizeof(g_mode_depths) / sizeof(DWORD); \
-                ++depth) { \
-            DESC description; \
-            if (filter) { \
-                if ((filter->dwFlags & DDSD_WIDTH) && \
-                        filter->dwWidth != g_modes[mode].width) \
-                    continue; \
-                if ((filter->dwFlags & DDSD_HEIGHT) && \
-                        filter->dwHeight != g_modes[mode].height) \
-                    continue; \
-            } \
-            ZeroMemory(&description, sizeof(description)); \
-            description.dwSize = sizeof(description); \
-            description.dwFlags = DDSD_WIDTH | DDSD_HEIGHT | \
-                DDSD_PIXELFORMAT | DDSD_PITCH | DDSD_REFRESHRATE; \
-            description.dwWidth = g_modes[mode].width; \
-            description.dwHeight = g_modes[mode].height; \
-            description.dwRefreshRate = 60; \
-            mode_pixel_format(g_mode_depths[depth], \
-                    &description.ddpfPixelFormat); \
-            if (filter && (filter->dwFlags & DDSD_PIXELFORMAT) && \
+    while (ddraw_next_display_mode(&index, flags, &mode_description)) { \
+        DESC description; \
+        if (sizeof(DESC) == sizeof(DDSURFACEDESC)) \
+            desc2_to_desc1(&mode_description, (DDSURFACEDESC *)&description); \
+        else CopyMemory(&description, &mode_description, sizeof(description)); \
+        if (filter) { \
+            if ((filter->dwFlags & DDSD_WIDTH) && \
+                    filter->dwWidth != description.dwWidth) continue; \
+            if ((filter->dwFlags & DDSD_HEIGHT) && \
+                    filter->dwHeight != description.dwHeight) continue; \
+            if ((filter->dwFlags & DDSD_PIXELFORMAT) && \
                     !ddraw_enum_pixel_format_matches(&description.ddpfPixelFormat, &filter->ddpfPixelFormat)) continue; \
-            description.lPitch = (LONG)surface_pitch_for( \
-                    g_modes[mode].width, g_mode_depths[depth] / 8u); \
-            if (callback(&description, context) == DDENUMRET_CANCEL) \
-                return DD_OK; \
         } \
+        if (callback(&description, context) == DDENUMRET_CANCEL) break; \
     } \
     return DD_OK; \
 } \
