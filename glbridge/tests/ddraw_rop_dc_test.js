@@ -37,6 +37,11 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDERR_NOCLIPLIST (-13)
 #define DDERR_BLTFASTCANTCLIP (-14)
 #define FAILED(x) ((x)<0)
+#define DDBLT_WAIT 0x1000u
+#define DDBLT_DONOTWAIT 0x2000u
+#define DDBLT_ASYNC 0x4000u
+#define DDBLTFAST_WAIT 0x10u
+#define DDBLTFAST_DONOTWAIT 0x20u
 #define DDBLTFAST_SRCCOLORKEY 1u
 #define DDBLTFAST_DESTCOLORKEY 2u
 #define DDERR_NODC (-11)
@@ -127,7 +132,7 @@ static int fills(void){
 static int transfers(void){
  Memory m={0};DDrawObject a={0},b={0};DDSurface d={.width=8,.height=8,.format=22,.memory=&m,.owner=&a},s=d;s.owner=&b;s.format=24;clipped=FALSE;clip_error=0;
  unsigned old=blits,keys=bindings,p=presents,r=readbacks;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==E_NOTIMPL);CHECK(surface_BltFast(&d,0,0,&s,NULL,0)==E_NOTIMPL);CHECK(blits==old&&bindings==keys&&presents==p&&readbacks==r);s.format=22;CHECK(!surface_Blt(&d,NULL,&s,NULL,0,NULL)&&blits==old+1);CHECK(!surface_BltFast(&d,0,0,&s,NULL,0)&&blits==old+2);s.owner=&a;s.format=24;CHECK(!surface_Blt(&d,NULL,&s,NULL,0,NULL)&&blits==old+3);s.format=22;
- d.clipper=(void*)1;old=blits;CHECK(surface_BltFast(&d,0,0,&s,NULL,0)==DDERR_BLTFASTCANTCLIP&&blits==old);DDBLTFX fx={.dwFillColor=7};clip_error=DDERR_NOCLIPLIST;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==DDERR_NOCLIPLIST&&blits==old);clip_error=DDERR_GENERIC;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==DDERR_GENERIC&&blits==old);clip_error=0;p=presents;CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)&&blits==old&&presents==p+1);d.clipper=NULL;CHECK(!surface_BltFast(&d,0,0,&s,NULL,0)&&blits==old+1);return 0;
+ d.clipper=(void*)1;old=blits;CHECK(surface_BltFast(&d,0,0,&s,NULL,0)==DDERR_BLTFASTCANTCLIP&&blits==old);DDBLTFX fx={.dwFillColor=7};clip_error=DDERR_NOCLIPLIST;CHECK(surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)==DDERR_NOCLIPLIST&&blits==old);clip_error=DDERR_GENERIC;CHECK(surface_Blt(&d,NULL,&s,NULL,0,NULL)==DDERR_GENERIC&&blits==old);clip_error=0;p=presents;CHECK(!surface_Blt(&d,NULL,NULL,NULL,DDBLT_COLORFILL,&fx)&&blits==old&&presents==p+1);d.clipper=NULL;CHECK(!surface_BltFast(&d,0,0,&s,NULL,0)&&blits==old+1);d.format=s.format=DDWG_FMT_DXT1;old=blits;CHECK(surface_Blt(&d,NULL,&s,NULL,0x100000u,NULL)==DDERR_GENERIC&&blits==old);CHECK(surface_BltFast(&d,0,0,&s,NULL,0x100000u)==DDERR_GENERIC&&blits==old);CHECK(!surface_Blt(&d,NULL,&s,NULL,DDBLT_WAIT|DDBLT_ASYNC,NULL)&&blits==old+1);CHECK(!surface_BltFast(&d,0,0,&s,NULL,DDBLTFAST_WAIT)&&blits==old+2);return 0;
 }
 static int contexts(void){
  DDPalette own,primary;Memory memory={0};BYTE shadow[256];memset(shadow,0x41,sizeof(shadow));DDSurface front={.palette=&primary};DDrawObject owner={.primary=&front};DDSurface d={.width=8,.height=8,.pitch=8,.bytes_per_pixel=1,.indexed=1,.memory=&memory,.shadow=shadow,.owner=&owner};

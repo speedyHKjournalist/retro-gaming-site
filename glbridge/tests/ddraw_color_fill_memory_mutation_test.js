@@ -2,7 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/ddraw_proxy.c"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-fill-memory-mut-"));
 const cases=[
- ["compressed blit reaches GPU","emit_blt","if (format_is_compressed(destination->format)) return FALSE;","if (FALSE && format_is_compressed(destination->format)) return FALSE;"],
+ ["compressed blit reaches GPU","emit_blt","if (format_is_compressed(destination->format))","if (FALSE && format_is_compressed(destination->format))"],
  ["video memory falsely mirrored","surface_can_mirror_color_fill","(surface->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY)","TRUE"],
  ["partial dirty shadow not recovered","surface_prepare_color_fill","return surface_readback(surface);","return TRUE;"],
  ["complete known fill needlessly read back","surface_prepare_color_fill","surface->memory->gpu_dirty && (area.left || area.top ||","surface->memory->gpu_dirty || (area.left || area.top ||"],

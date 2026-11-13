@@ -2,6 +2,8 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-rop-dc-mutants-"));
 const cases = [
+    ["compressed public effects silently accepted", "if (source && format_is_compressed(destination->format) &&", "if (FALSE && source && format_is_compressed(destination->format) &&"],
+    ["compressed BltFast unknown flags accepted", "if (format_is_compressed(destination->format) &&", "if (FALSE && format_is_compressed(destination->format) &&"],
     ["cross-owner format conversion accepted", "if (source->owner != destination->owner && source->format != destination->format)", "if (FALSE && source->owner != destination->owner && source->format != destination->format)", 0],
     ["BltFast clipper rejection omitted", "if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);", "if (FALSE && destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);"],
     ["BltFast cross-format rejection omitted", "if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);\n    if (source->owner != destination->owner && source->format != destination->format)", "if (destination->clipper) return DDWG_TRACE_ERROR(DDERR_BLTFASTCANTCLIP);\n    if (FALSE && source->owner != destination->owner && source->format != destination->format)"],

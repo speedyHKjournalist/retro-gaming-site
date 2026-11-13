@@ -780,6 +780,8 @@ static BOOL format_is_depth(unsigned format)
     return layout && layout->depth;
 }
 
+#include "ddraw_bc_codec.h"
+
 static void describe_pixel_format(const DDPIXELFORMAT *source,
         DDrawPixelFormatDesc *out)
 {
@@ -1559,6 +1561,156 @@ static BOOL surface_memory_blt(DDSurface *destination, const RECT *destination_r
     return TRUE;
 }
 
+static BOOL surface_can_bc_blt(DDSurface *destination, DDSurface *source,
+        uint32_t flags)
+{
+    return source && !flags && !destination->clipper &&
+        d9wg_bc_kind(destination->format) &&
+        (d9wg_bc_kind(source->format) ||
+            (source->format >= DDWG_FMT_R8G8B8 && source->format <= DDWG_FMT_A4R4G4B4 &&
+             source->bytes_per_pixel == format_bytes_per_pixel(source->format)));
+}
+
+static BOOL surface_bc_rect(DDSurface *surface, const RECT *input, RECT *area)
+{
+    UINT block = format_compressed_block_bytes(surface->format);
+    if (!block) return surface_memory_rect(surface, input, area);
+    *area = input ? *input : (RECT){0, 0, (LONG)surface->width, (LONG)surface->height};
+    if (!surface->shadow || !surface->memory || area->left < 0 || area->top < 0 ||
+            area->right <= area->left || area->bottom <= area->top ||
+            (uint64_t)area->right > surface->width || (uint64_t)area->bottom > surface->height ||
+            ((uint64_t)surface->width + 3u)/4u*block > surface->pitch)
+        return FALSE;
+    return (((uint64_t)area->bottom + 3u)/4u - 1u)*surface->pitch +
+        ((uint64_t)area->right + 3u)/4u*block <= surface->memory->bytes;
+}
+
+static void surface_blt_sample_map(UINT *map, UINT count, UINT first, UINT extent)
+{
+    UINT at = first, error = 0, step = extent/count, remainder = extent%count;
+    for (UINT i = 0; i < count; ++i) {
+        map[i] = at;
+        at += step; error += remainder;
+        if (error >= count) { error -= count; ++at; }
+    }
+}
+
+/* Read stored RGBA channels. Premultiplication is handled once by the caller. */
+static void surface_bc_pixel(DDSurface *source, UINT x, UINT y,
+        SIZE_T *cached_offset, BYTE cached[16][4], BYTE pixel[4])
+{
+    UINT block = format_compressed_block_bytes(source->format);
+    if (block) {
+        SIZE_T offset = (SIZE_T)(y/4u)*source->pitch + x/4u*block;
+        if (*cached_offset != offset) {
+            d9wg_bc_decode(source->format, source->shadow + offset, cached);
+            *cached_offset = offset;
+        }
+        CopyMemory(pixel, cached[(y%4u)*4u + x%4u], 4u);
+        return;
+    }
+    const BYTE *p = source->shadow + (SIZE_T)y*source->pitch + x*source->bytes_per_pixel;
+    if (source->format <= DDWG_FMT_X8R8G8B8) {
+        pixel[0] = p[2]; pixel[1] = p[1]; pixel[2] = p[0];
+        pixel[3] = source->format == DDWG_FMT_A8R8G8B8 ? p[3] : 255u;
+    } else {
+        UINT value = p[0] | (UINT)p[1] << 8;
+        if (source->format == DDWG_FMT_R5G6B5) d9wg_bc_565((uint16_t)value, pixel);
+        else if (source->format == DDWG_FMT_A4R4G4B4) {
+            pixel[0] = ((value >> 8) & 15u)*17u;
+            pixel[1] = ((value >> 4) & 15u)*17u;
+            pixel[2] = (value & 15u)*17u; pixel[3] = (value >> 12)*17u;
+        } else {
+            UINT r = (value >> 10) & 31u, g = (value >> 5) & 31u, b = value & 31u;
+            pixel[0] = (r << 3) | (r >> 2); pixel[1] = (g << 3) | (g >> 2);
+            pixel[2] = (b << 3) | (b >> 2);
+            pixel[3] = source->format == DDWG_FMT_A1R5G5B5 ? (value >> 15)*255u : 255u;
+        }
+    }
+}
+
+static BOOL surface_bc_blt(DDSurface *destination, const RECT *destination_rect,
+        DDSurface *source, const RECT *source_rect)
+{
+    RECT dst, src;
+    DDSurface input = *source;
+    BYTE *snapshot = NULL;
+    UINT *maps = NULL;
+    UINT block = format_compressed_block_bytes(destination->format);
+    UINT sw, sh, dw, dh;
+    UINT destination_kind = d9wg_bc_kind(destination->format), source_kind = d9wg_bc_kind(source->format);
+    BOOL destination_premultiplied = destination_kind == 2u || destination_kind == 4u;
+    BOOL source_premultiplied = source_kind == 2u || source_kind == 4u;
+    if (!block || (source_premultiplied && !destination_premultiplied) ||
+            !surface_bc_rect(source, source_rect, &src) ||
+            !surface_bc_rect(destination, destination_rect, &dst))
+        return FALSE;
+    sw = src.right - src.left; sh = src.bottom - src.top;
+    dw = dst.right - dst.left; dh = dst.bottom - dst.top;
+    BOOL raw = source->format == destination->format && sw == dw && sh == dh &&
+        !((src.left | src.top | dst.left | dst.top | dw | dh) & 3u);
+    if (!surface_readback(source)) return FALSE;
+    if (destination->memory->gpu_dirty && (dst.left || dst.top ||
+            dst.right != (LONG)destination->width || dst.bottom != (LONG)destination->height) &&
+            !surface_readback(destination))
+        return FALSE;
+    uint64_t source_start = (uintptr_t)source->shadow, destination_start = (uintptr_t)destination->shadow;
+    if (source_start < destination_start + destination->memory->bytes &&
+            destination_start < source_start + source->memory->bytes) {
+        snapshot = heap_alloc_zero(source->memory->bytes);
+        if (!snapshot) return FALSE;
+        CopyMemory(snapshot, source->shadow, source->memory->bytes); input.shadow = snapshot;
+    }
+    if (!raw) {
+        uint64_t map_bytes = ((uint64_t)dw + dh)*sizeof(*maps);
+        if (map_bytes > (SIZE_T)-1 || !(maps = heap_alloc_zero((SIZE_T)map_bytes))) {
+            heap_free(snapshot); return FALSE;
+        }
+        surface_blt_sample_map(maps, dw, src.left, sw);
+        surface_blt_sample_map(maps + dw, dh, src.top, sh);
+    }
+    if (raw) {
+        for (UINT y = 0; y < dh/4u; ++y)
+            CopyMemory(destination->shadow + (SIZE_T)(dst.top/4u + y)*destination->pitch + dst.left/4u*block,
+                    input.shadow + (SIZE_T)(src.top/4u + y)*input.pitch + src.left/4u*block, dw/4u*block);
+    } else {
+        BYTE cached[16][4]; SIZE_T cached_offset = (SIZE_T)-1;
+        for (UINT by = dst.top/4u; by < ((UINT)dst.bottom + 3u)/4u; ++by)
+            for (UINT bx = dst.left/4u; bx < ((UINT)dst.right + 3u)/4u; ++bx) {
+                BYTE rgba[16][4];
+                BYTE *output = destination->shadow + (SIZE_T)by*destination->pitch + bx*block;
+                d9wg_bc_decode(destination->format, output, rgba);
+                for (UINT y = 0; y < 4u && by*4u + y < destination->height; ++y)
+                    for (UINT x = 0; x < 4u && bx*4u + x < destination->width; ++x) {
+                        UINT px = bx*4u + x, py = by*4u + y;
+                        if (px < (UINT)dst.left || px >= (UINT)dst.right ||
+                                py < (UINT)dst.top || py >= (UINT)dst.bottom) continue;
+                        BYTE *pixel = rgba[y*4u + x];
+                        surface_bc_pixel(&input, maps[px - dst.left], maps[dw + py - dst.top],
+                                &cached_offset, cached, pixel);
+                        if (destination_premultiplied && !source_premultiplied)
+                            for (UINT c = 0; c < 3u; ++c) pixel[c] = (UINT)pixel[c]*pixel[3]/255u;
+                    }
+                /* Invalid texels beyond a small mip's edge must not distort
+                 * the visible pixels' compression endpoints. */
+                UINT valid_width = destination->width - bx*4u, valid_height = destination->height - by*4u;
+                if (valid_width > 4u) valid_width = 4u;
+                if (valid_height > 4u) valid_height = 4u;
+                for (UINT y = 0; y < 4u; ++y) for (UINT x = 0; x < 4u; ++x)
+                    if (x >= valid_width || y >= valid_height)
+                        CopyMemory(rgba[y*4u + x], rgba[(y < valid_height ? y : valid_height - 1u)*4u +
+                                (x < valid_width ? x : valid_width - 1u)], 4u);
+                d9wg_bc_encode(destination->format, rgba, output);
+            }
+    }
+    heap_free(maps); heap_free(snapshot);
+    surface_memory_changed(destination->memory); destination->memory->gpu_dirty = FALSE;
+    surface_memory_upload_aliases(destination, TRUE);
+    if (!emit_surface_upload(destination, NULL)) return FALSE;
+    surface_memory_upload_aliases(destination, FALSE);
+    return TRUE;
+}
+
 static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         DDSurface *source, const RECT *source_rect, uint32_t flags,
         uint32_t fill_color, float fill_depth)
@@ -1571,9 +1723,11 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
         return FALSE;
     if (surface_can_memory_blt(destination, source, flags))
         return surface_memory_blt(destination, destination_rect, source, source_rect);
-    /* BC formats can be sampled or copied as compressed blocks, but cannot
-     * be color attachments. No supported encoding path exists for this blit. */
-    if (format_is_compressed(destination->format)) return FALSE;
+    /* BC textures cannot be color attachments. Convert in packed CPU storage
+     * and send a full aligned upload, preserving their readable block bytes. */
+    if (format_is_compressed(destination->format))
+        return surface_can_bc_blt(destination, source, flags) &&
+            surface_bc_blt(destination, destination_rect, source, source_rect);
     if (source && !sync_external_surface_for_read(source))
         return FALSE;
     if (!ensure_device(destination->owner))
@@ -2679,7 +2833,12 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                     "ignored; only mirroring is implemented");
     }
 
-    if (!clip_count && !destination->clipper) {
+    /* The new encoder implements plain copies only. Preserve refusal of
+     * public effects that the legacy parser does not put on the wire. */
+    if (source && format_is_compressed(destination->format) &&
+            (flags & ~(DDBLT_WAIT | DDBLT_DONOTWAIT | DDBLT_ASYNC)))
+        ok = FALSE;
+    else if (!clip_count && !destination->clipper) {
         ok = emit_blt(destination, &effective_destination, source,
                 source ? &effective_source : NULL, blt_flags, fill_color,
                 fill_depth);
@@ -2809,7 +2968,10 @@ static HRESULT WINAPI surface_BltFast(IDirectDrawSurface7 *iface, DWORD x,
         blt_flags |= D9WG_DDBLT_KEY_DESTINATION;
     }
 
-    ok = emit_blt(destination, &destination_rect, source, &effective_source,
+    if (format_is_compressed(destination->format) &&
+            (trans & ~(DDBLTFAST_WAIT | DDBLTFAST_DONOTWAIT)))
+        ok = FALSE;
+    else ok = emit_blt(destination, &destination_rect, source, &effective_source,
             blt_flags, 0, 0.0f);
     if (ok && destination->external_memory &&
             !surface_readback(destination))

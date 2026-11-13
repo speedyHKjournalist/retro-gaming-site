@@ -34,6 +34,9 @@ static BOOL emit_surface_upload(DDSurface*s,const RECT*r){(void)s;(void)r;MUST(0
 /* This fixture isolates fills; plain memory copies have their own fixture. */
 static BOOL surface_can_memory_blt(DDSurface*d,DDSurface*s,uint32_t f){(void)d;(void)s;(void)f;return FALSE;}
 static BOOL surface_memory_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr){(void)d;(void)dr;(void)s;(void)sr;MUST(0);return FALSE;}
+/* Compressed targets have a separate actual-C fixture. */
+static BOOL surface_can_bc_blt(DDSurface*d,DDSurface*s,uint32_t f){(void)d;(void)s;(void)f;return FALSE;}
+static BOOL surface_bc_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr){(void)d;(void)dr;(void)s;(void)sr;return FALSE;}
 static BOOL emit_command(UINT op,const void*p,UINT bytes){MUST(op==D9WG_OP_DD_BLT&&bytes==sizeof(command));emits++;command=*(D9WGDDBlt*)p;return !fail_emit;}
 ${["format_compressed_block_bytes","format_is_compressed","format_is_depth","format_is_yuv","surface_depth_mask","surface_mirror_depth_fill","surface_fill_yuv","surface_can_mirror_color_fill","surface_prepare_color_fill","surface_mirror_color_fill","emit_blt"].map(extract).join("\n")}
 static DDSurface make(DDrawObject*o,Memory*m,unsigned format,unsigned bytes){return(DDSurface){.owner=o,.memory=m,.shadow=m->bits,.format=format,.width=7,.height=3,.pitch=((7*bytes+7)&~7u)+8,.bytes_per_pixel=bytes,.handle=9,.desc={.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY}}};}
