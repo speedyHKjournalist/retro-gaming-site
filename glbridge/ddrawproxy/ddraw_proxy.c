@@ -57,6 +57,7 @@
 #include <stdarg.h>
 #include "../openglproxy/v86gl_ioctl.h"
 #include "ddraw_protocol.h"
+#include "ddraw_depth_layout.h"
 #include "../runtime/d9wg_window_probe.h"
 #include "../runtime/d9wg_window_watch.h"
 
@@ -811,6 +812,11 @@ static void describe_pixel_format(const DDPIXELFORMAT *source,
     out->alpha_mask = source->dwRGBAlphaBitMask;
     out->z_bit_depth = source->dwZBufferBitDepth;
     out->stencil_bit_depth = source->dwStencilBitDepth;
+    /* Storage width and precision are distinct in legacy depth descriptors. */
+    if ((source->dwFlags & DDPF_ZBUFFER) &&
+            !(source->dwFlags & DDPF_STENCILBUFFER) &&
+            source->dwZBufferBitDepth == 32u && source->dwZBitMask == 0x00ffffffu)
+        out->z_bit_depth = 24u;
 }
 
 /* The pixel format of the current display mode, which is what a surface
@@ -1166,9 +1172,15 @@ static void surface_memory_upload_aliases(DDSurface *surface, BOOL pending)
     LeaveCriticalSection(&g_object_lock);
 }
 
+static BOOL surface_depth_transfer_masks(DDSurface *surface, DWORD *wire_depth,
+        DWORD *wire_stencil, DWORD *client_depth, DWORD *client_stencil);
+static void surface_repack_depth_rows(DDSurface *surface, BYTE *bytes,
+        UINT pitch, UINT width, UINT rows, BOOL to_wire);
+
 static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
 {
     D9WGTextureRows upload;
+    BYTE *converted = NULL;
     BOOL result;
     UINT left = 0, top = 0, right = surface->width, bottom = surface->height;
     UINT row_bytes;
@@ -1237,7 +1249,26 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
     upload.block_height = block_bytes ? 4u : 1u;
     upload.row_bytes = row_bytes;upload.row_count = rows;upload.source_pitch = surface->pitch;
     upload.source = surface->shadow + source_y * surface->pitch + source_x;
+    {
+        DWORD wz, ws, cz, cs;
+        if (surface_depth_transfer_masks(surface, &wz, &ws, &cz, &cs)) {
+            SIZE_T bytes = (SIZE_T)row_bytes * rows;
+            UINT row;
+            if ((rows && bytes / rows != row_bytes) ||
+                    !(converted = heap_alloc_zero(bytes))) {
+                surface_memory_upload_aliases(surface, TRUE);
+                return FALSE;
+            }
+            for (row = 0; row < rows; ++row)
+                CopyMemory(converted + row * row_bytes,
+                        upload.source + row * upload.source_pitch, row_bytes);
+            surface_repack_depth_rows(surface, converted, row_bytes,
+                    right - left, rows, TRUE);
+            upload.source = converted;upload.source_pitch = row_bytes;
+        }
+    }
     result = emit_texture_rows(&upload);
+    heap_free(converted);
     if (!result) surface_memory_upload_aliases(surface, TRUE);
     else if (left == 0 && top == 0 && right >= surface->width && bottom >= surface->height)
         surface_memory_upload_aliases(surface, FALSE);
@@ -1384,6 +1415,58 @@ static DWORD surface_depth_mask(unsigned format)
     }
 }
 
+/* Shadows keep the application's DDPIXELFORMAT; the wire keeps D3D9 packing. */
+static BOOL surface_depth_transfer_masks(DDSurface *surface, DWORD *wire_depth,
+        DWORD *wire_stencil, DWORD *client_depth, DWORD *client_stencil)
+{
+    const DDPIXELFORMAT *pf = &surface->desc.ddpfPixelFormat;
+    *wire_depth = surface_depth_mask(surface->format);
+    *wire_stencil = surface->format == DDWG_FMT_D15S1 ? 1u :
+        surface->format == DDWG_FMT_D24S8 ? 255u :
+        surface->format == DDWG_FMT_D24X4S4 ? 15u : 0u;
+    *client_depth = pf->dwZBitMask ? pf->dwZBitMask : *wire_depth;
+    *client_stencil = *wire_stencil ? pf->dwStencilBitMask : 0u;
+    if (*wire_stencil && !*client_stencil)
+        *client_stencil = *client_depth == *wire_depth ? *wire_stencil :
+            ddraw_depth_move_field(*wire_stencil, *wire_stencil, ~*client_depth);
+    if (!pf->dwZBitMask && (*client_depth & *client_stencil))
+        *client_depth = ddraw_depth_move_field(*wire_depth, *wire_depth, ~*client_stencil);
+    return *wire_depth && !(*client_depth & *client_stencil) &&
+        (*wire_depth != *client_depth || *wire_stencil != *client_stencil);
+}
+
+static DWORD surface_client_depth_mask(DDSurface *surface)
+{
+    DWORD wz, ws, cz, cs;
+    surface_depth_transfer_masks(surface, &wz, &ws, &cz, &cs);
+    return cz;
+}
+
+static float surface_depth_fill_value(DDSurface *surface, DWORD word)
+{
+    DWORD mask = surface_client_depth_mask(surface), shift = 0;
+    if (!mask) return 0.0f;
+    while (!(mask & (1u << shift))) ++shift;
+    return (float)((word & mask) >> shift) / (float)(mask >> shift);
+}
+
+static void surface_repack_depth_rows(DDSurface *surface, BYTE *bytes,
+        UINT pitch, UINT width, UINT rows, BOOL to_wire)
+{
+    DWORD wz, ws, cz, cs;
+    UINT x, y;
+    if (!surface_depth_transfer_masks(surface, &wz, &ws, &cz, &cs)) return;
+    for (y = 0; y < rows; ++y)
+        for (x = 0; x < width; ++x) {
+            BYTE *pixel = bytes + y * pitch + x * surface->bytes_per_pixel;
+            DWORD word = 0;
+            CopyMemory(&word, pixel, surface->bytes_per_pixel);
+            word = to_wire ? ddraw_depth_repack_word(word, cz, cs, wz, ws) :
+                ddraw_depth_repack_word(word, wz, ws, cz, cs);
+            CopyMemory(pixel, &word, surface->bytes_per_pixel);
+        }
+}
+
 /* A known fill is also an exact CPU write. Keep integer bits (including D32
  * values a float cannot represent) and make system-memory pointers observe it
  * immediately. A partial GPU-dirty surface, or unknown stencil bits, still
@@ -1391,7 +1474,7 @@ static DWORD surface_depth_mask(unsigned format)
 static void surface_mirror_depth_fill(DDSurface *surface, const RECT *rect,
         DWORD value, BOOL was_dirty)
 {
-    DWORD mask = surface_depth_mask(surface->format);
+    DWORD mask = surface_client_depth_mask(surface);
     BOOL stencil = surface->format == DDWG_FMT_D15S1 ||
         surface->format == DDWG_FMT_D24S8 || surface->format == DDWG_FMT_D24X4S4;
     RECT area = {0, 0, (LONG)surface->width, (LONG)surface->height};
@@ -2155,6 +2238,8 @@ static BOOL surface_readback(DDSurface *surface)
         }
         CopyMemory(surface->shadow + first_row * surface->pitch,
                 (const uint8_t *)(response + 1), command.destination_bytes);
+        surface_repack_depth_rows(surface, surface->shadow + first_row * surface->pitch,
+                surface->pitch, surface->width, chunk_rows, FALSE);
         first_row += chunk_rows;
     }
     LeaveCriticalSection(&g_readback_lock);
@@ -2289,10 +2374,15 @@ static void desc1_to_desc2(const DDSURFACEDESC *from, DDSURFACEDESC2 *to)
             !(from->dwFlags & DDSD_PIXELFORMAT)) {
         to->dwFlags = (to->dwFlags & ~DDSD_ZBUFFERBITDEPTH) | DDSD_PIXELFORMAT;
         to->dwMipMapCount = 0;
+        ZeroMemory(&to->ddpfPixelFormat, sizeof(to->ddpfPixelFormat));
         to->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
         to->ddpfPixelFormat.dwFlags = DDPF_ZBUFFER;
         to->ddpfPixelFormat.dwZBufferBitDepth = from->dwZBufferBitDepth;
         to->ddpfPixelFormat.dwRGBBitCount = from->dwZBufferBitDepth;
+        /* Legacy D24 occupies the low 24 bits of a DWORD. The wire's D24X8
+         * puts those bits above its padding; retain the client layout here. */
+        if (from->dwZBufferBitDepth == 24u)
+            to->ddpfPixelFormat.dwZBitMask = 0x00ffffffu;
     }
 }
 
@@ -2809,18 +2899,14 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         fill_color = fx->dwFillColor;
         source = NULL;
     } else if (flags & DDBLT_DEPTHFILL) {
-        DWORD depth;
-        DWORD maximum, mask, shift = 0;
+        DWORD mask;
         if (!fx || source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (!format_is_depth(destination->format))
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-        mask = surface_depth_mask(destination->format);
+        mask = surface_client_depth_mask(destination);
         if (!mask) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-        while (!(mask & (1u << shift))) ++shift;
-        maximum = mask >> shift;
         fill_color = fx->dwFillDepth;
-        depth = (fill_color & mask) >> shift;
-        fill_depth = (float)depth / (float)maximum;
+        fill_depth = surface_depth_fill_value(destination, fill_color);
         blt_flags |= D9WG_DDBLT_DEPTH_FILL;
         source = NULL;
     } else {
@@ -2854,7 +2940,7 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
             effective_source.bottom <= effective_source.top))
         return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
     if ((blt_flags & D9WG_DDBLT_COLOR_FILL) && format_is_depth(destination->format)) {
-        fill_color = fx->dwROP == BLACKNESS ? 0 : surface_depth_mask(destination->format);
+        fill_color = fx->dwROP == BLACKNESS ? 0 : surface_client_depth_mask(destination);
         fill_depth = fx->dwROP == BLACKNESS ? 0.0f : 1.0f;
         blt_flags = (blt_flags & ~D9WG_DDBLT_COLOR_FILL) | D9WG_DDBLT_DEPTH_FILL;
     }

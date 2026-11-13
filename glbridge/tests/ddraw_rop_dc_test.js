@@ -101,6 +101,9 @@ static HBITMAP SelectObject(HDC d,HBITMAP b){(void)d;(void)b;return (void*)4;}
 static void DeleteDC(HDC d){(void)d;}
 ${extract("rect_intersect")}
 ${extract("surface_depth_mask")}
+/* Canonical-format fixture; explicit client masks are covered by depth_transfer. */
+static DWORD surface_client_depth_mask(DDSurface*s){return surface_depth_mask(s->format);}
+${extract("surface_depth_fill_value")}
 ${extract("clipped_blt_source_rect")}
 ${extract("surface_Blt")}
 ${extract("surface_BltFast")}

@@ -2629,18 +2629,18 @@ static HRESULT WINAPI d3d7_device_ComputeSphereVisibility(
      * OpenGL [-w,w] convention.  Plane order matches the D3DVIS bit pairs. */
 #define D3D7_SET_PLANE(dst, sign, column) do { \
     planes[(dst)][0] = world_view_projection._14 sign \
-            world_view_projection.column##1; \
+            world_view_projection._1##column; \
     planes[(dst)][1] = world_view_projection._24 sign \
-            world_view_projection.column##2; \
+            world_view_projection._2##column; \
     planes[(dst)][2] = world_view_projection._34 sign \
-            world_view_projection.column##3; \
+            world_view_projection._3##column; \
     planes[(dst)][3] = world_view_projection._44 sign \
-            world_view_projection.column##4; \
+            world_view_projection._4##column; \
 } while (0)
-    D3D7_SET_PLANE(0, +, _1); /* left:   w + x */
-    D3D7_SET_PLANE(1, -, _1); /* right:  w - x */
-    D3D7_SET_PLANE(2, -, _2); /* top:    w - y */
-    D3D7_SET_PLANE(3, +, _2); /* bottom: w + y */
+    D3D7_SET_PLANE(0, +, 1); /* left:   w + x */
+    D3D7_SET_PLANE(1, -, 1); /* right:  w - x */
+    D3D7_SET_PLANE(2, -, 2); /* top:    w - y */
+    D3D7_SET_PLANE(3, +, 2); /* bottom: w + y */
 #undef D3D7_SET_PLANE
     planes[4][0] = world_view_projection._13; /* near: z */
     planes[4][1] = world_view_projection._23;

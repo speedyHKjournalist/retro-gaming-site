@@ -57,7 +57,10 @@ static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*d){return d;}
 static BOOL d3d7_emit_render_target(D3D7Device*d){(void)d;return FALSE;}
 static BOOL d3d7_multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}
 static BOOL reserve_command_locked(UINT op,UINT size,UINT extra,uint8_t**p,uint8_t**blob){(void)op;if(size+extra>sizeof(payload)||fail_emit)return FALSE;*p=payload;*blob=payload+size;return TRUE;}
-${["format_is_depth","format_compressed_block_bytes","format_is_compressed","format_is_yuv","surface_can_mirror_color_fill","surface_prepare_color_fill","surface_mirror_color_fill","surface_depth_mask","prepare_surface_for_host","surface_mirror_depth_fill","surface_fill_yuv","emit_blt"].map(n=>extract(source,n)).join("\n")}
+${extract(source,"surface_depth_mask")}
+/* Canonical-format fixture; explicit client masks are covered by depth_transfer. */
+static DWORD surface_client_depth_mask(DDSurface*s){return surface_depth_mask(s->format);}
+${["format_is_depth","format_compressed_block_bytes","format_is_compressed","format_is_yuv","surface_can_mirror_color_fill","surface_prepare_color_fill","surface_mirror_color_fill","prepare_surface_for_host","surface_mirror_depth_fill","surface_fill_yuv","emit_blt"].map(n=>extract(source,n)).join("\n")}
 ${["d3d7_mark_draw_surfaces_dirty","d3d7_device_Clear"].map(n=>extract(legacy,n)).join("\n")}
 static int fills(void){
  const UINT formats[]={70,71,73,75,77,79,80},masks[]={0xffff,0xffffffff,0xfffe,0xffffff00,0xffffff00,0xffffff00,0xffff};

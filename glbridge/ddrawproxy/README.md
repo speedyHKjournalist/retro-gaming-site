@@ -100,16 +100,21 @@ pair there is a crash with no explanation anywhere near the mistake, inside a
 VM. `ddraw_d3d_legacy_vtable_test.js` performs the same check for the 241 slots
 in the seventeen Direct3D 1-6 vtables.
 
-### Not yet run against a real game
+### Guest acceptance
 
-Everything above is verified statically, by the JS suites, by real `naga`
-compilation and by clean `-Werror`, no-CRT builds. The XP-targeted four smoke
-programs are written and build: the D3D7 triangle, the advanced
-mip/cube/DXT/colour-key/sphere test, a D3D1 execute-buffer test that also draws
-through Device2 and Device3, and the advanced DirectDraw surface/overlay test.
-None has executed inside the XP guest yet.
-Guest execution is therefore still the next acceptance gate; static and host
-executor coverage is not presented as real-game compatibility.
+The frozen Wine DirectDraw 1/2/4/7 suites run in XP with the actual WebGPU
+renderer and GPU readbacks. Applicable conformance failures remain; local
+compiled C checks and metadata probes do not replace those full runs. Exact
+DLL hashes, original failures, unreviewed skips, environment histories and
+game-specific evidence are in
+[`docs/d3d-stage6-local-acceptance.md`](../../docs/d3d-stage6-local-acceptance.md).
+
+Client depth memory retains the DirectDraw pixel format's depth, stencil and
+padding bits. Upload/readback privately repacks these integer fields into the
+existing D3D9 wire format; D32 does not pass through a float conversion.
+Legacy `DDSD_ZBUFFERBITDEPTH=24` uses the low 24 bits of a DWORD. Device3 sphere
+classification follows XP's inverse-corner plane construction and half-unit
+intersection boundary; Device7 retains its separate classification rules.
 
 ## Documented deviations
 
@@ -128,7 +133,7 @@ another, on purpose.
 | Raster operations other than `SRCCOPY` and `BLACKNESS` | refused with `DDERR_NORASTEROPHW` | the only two DirectDraw ever required of a driver |
 | GDI drawn straight onto the primary after its initial desktop snapshot | does not appear | the primary is a host texture, not the screen; the same boundary d7vk draws |
 | `CoCreateInstance(CLSID_DirectDraw)` | reaches `system32\ddraw.dll`, not this DLL | the registry, not the loader, resolves it; app-local replacement cannot intercept it |
-| Surface loss | never reported; `Restore` returns `DD_OK` | nothing here is lost to a mode change or a task switch |
+| Surface loss | proxy allocations track mode/focus loss and restoration; some original Wine transition assertions remain outstanding | native system surfaces supply window/mode control, while retained GPU allocations and public loss state are managed by the proxy |
 | Filtered true-colour texture colour keys | compared after the sampled RGB value is quantised | exact at texel centres; filtered edges may differ from individual 1990s drivers |
 | `IDirectDrawGammaControl::SetGammaRamp` | the ramp is stored and returned by `GetGammaRamp`, not applied to the output | presentation and output transfer belong to the browser, the same boundary the D3D8/D3D9 frontends' `SetGammaRamp` draws. A fade done by ramping gamma stays lit; refusing the interface while `DDCAPS2_PRIMARYGAMMA` is advertised would be worse, and dropping the cap loses apps that query without checking |
 | `D3DLIGHT_PARALLELPOINT` / `D3DLIGHT_GLSPOT` | translated to directional / spot | D3D9/WebGPU has no distinct form for either legacy light type |

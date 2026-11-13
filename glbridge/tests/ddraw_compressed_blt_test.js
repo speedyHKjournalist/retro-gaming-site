@@ -11,6 +11,9 @@ const code=`#include "${root}/ddrawproxy/ddraw_protocol.h"
 #include "${root}/runtime/d9wg_format_layouts.h"
 #include "${header}"
 ${fs.readFileSync(__dirname+"/native/ddraw_bc_blt_prefix.h","utf8")}
+/* Non-depth fixture; actual masked depth transfers are covered by depth_transfer. */
+static BOOL surface_depth_transfer_masks(DDSurface*s,DWORD*wz,DWORD*ws,DWORD*cz,DWORD*cs){const D9WGFormatLayout*l=d9wg_find_format(s->format);if(l&&l->depth){MUST(0);}*wz=*ws=*cz=*cs=0;return FALSE;}
+static void surface_repack_depth_rows(DDSurface*s,BYTE*bytes,UINT pitch,UINT width,UINT rows,BOOL to_wire){(void)s;(void)bytes;(void)pitch;(void)width;(void)rows;(void)to_wire;MUST(0);}
 ${["format_bytes_per_pixel","format_compressed_block_bytes","format_is_compressed","format_is_yuv","surface_memory_changed","surface_memory_upload_aliases","emit_surface_upload","prepare_surface_for_host","surface_memory_rect","surface_can_bc_blt","surface_bc_rect","surface_blt_sample_map","surface_bc_pixel","surface_bc_blt","emit_blt"].map(extract).join("\n")}
 static const struct{UINT format;DWORD pixels[16];BYTE bytes[16];}native[]={${nativeCases.join(",\n")}};
 ${fs.readFileSync(__dirname+"/native/ddraw_bc_blt_cases.h","utf8")}

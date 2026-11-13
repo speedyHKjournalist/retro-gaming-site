@@ -12,7 +12,7 @@ const code=String.raw`
 #include <string.h>
 typedef uint32_t DWORD;typedef int32_t LONG;typedef int BOOL;
 typedef struct{DWORD low,high;}DDCOLORKEY;
-typedef struct{DWORD dwSize,dwFlags;union{DWORD dwRGBBitCount,dwZBufferBitDepth;};DWORD masks[5];}DDPIXELFORMAT;
+typedef struct{DWORD dwSize,dwFlags,dwFourCC;union{DWORD dwRGBBitCount,dwZBufferBitDepth;};union{DWORD dwRBitMask,dwStencilBitDepth;};union{DWORD dwGBitMask,dwZBitMask;};union{DWORD dwBBitMask,dwStencilBitMask;};DWORD dwRGBAlphaBitMask;}DDPIXELFORMAT;
 #define PREFIX DWORD dwSize,dwFlags,dwHeight,dwWidth;LONG lPitch;DWORD dwBackBufferCount;union{DWORD dwMipMapCount,dwZBufferBitDepth;};DWORD dwAlphaBitDepth,dwReserved;void*lpSurface;DDCOLORKEY ddckCKDestOverlay,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKSrcBlt;DDPIXELFORMAT ddpfPixelFormat
 typedef struct{PREFIX;struct{DWORD dwCaps;}ddsCaps;}DDSURFACEDESC;
 typedef struct{PREFIX;struct{DWORD dwCaps,dwCaps2,dwCaps3,dwCaps4;}ddsCaps;DWORD dwTextureStage;}DDSURFACEDESC2;
@@ -28,6 +28,17 @@ static BOOL ddraw_platform_primary_format(DDrawObject*o,DDPIXELFORMAT*p){*p=o->l
 METHODS
 static const struct Row{const char*name;unsigned version,flags,w,h,pitch,bits,u,pf,caps;}rows[]={NATIVE_ROWS};
 int main(void){
+ for(unsigned bits=16;bits<=32;bits+=8){
+  DDSURFACEDESC old={.dwSize=sizeof(old),.dwFlags=DDSD_ZBUFFERBITDEPTH,.dwZBufferBitDepth=bits};
+  memset(&old.ddpfPixelFormat,0xa5,sizeof(old.ddpfPixelFormat));DDSURFACEDESC before=old;DDSURFACEDESC2 modern;
+  desc1_to_desc2(&old,&modern);
+  MUST(sizeof(DDPIXELFORMAT)==32&&modern.dwFlags==DDSD_PIXELFORMAT&&!modern.dwMipMapCount);
+  MUST(modern.ddpfPixelFormat.dwZBufferBitDepth==bits&&modern.ddpfPixelFormat.dwZBitMask==(bits==24?0xffffffu:0u));
+  MUST(modern.ddpfPixelFormat.dwFlags==DDPF_ZBUFFER&&!modern.ddpfPixelFormat.dwFourCC&&!modern.ddpfPixelFormat.dwStencilBitDepth&&!modern.ddpfPixelFormat.dwStencilBitMask&&!modern.ddpfPixelFormat.dwRGBAlphaBitMask);
+  MUST(!memcmp(&old,&before,sizeof(old)));
+  old.dwFlags|=DDSD_PIXELFORMAT;old.ddpfPixelFormat.dwZBitMask=0xffffff00;desc1_to_desc2(&old,&modern);
+  MUST(!memcmp(&old.ddpfPixelFormat,&modern.ddpfPixelFormat,sizeof(old.ddpfPixelFormat)));
+ }
  for(unsigned repeat=0;repeat<32;repeat++)for(unsigned i=0;i<sizeof(rows)/sizeof(*rows);i++){
   const struct Row*r=&rows[i];DDrawObject owner={.live={.dwSize=sizeof(DDPIXELFORMAT),.dwFlags=r->pf,.dwRGBBitCount=r->bits}};
   DDSurface s={.primary=!strncmp(r->name,"primary_",8),.owner=&owner};

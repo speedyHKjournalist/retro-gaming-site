@@ -25,7 +25,7 @@ const cases = [
     ["mismatched depth layout copy accepted", "if (format_is_depth(source->format) && source->format != destination->format)", "if (FALSE && format_is_depth(source->format) && source->format != destination->format)"],
     ["color fill accepts depth", "if (!fx || source || format_is_depth(destination->format))", "if (!fx || source)"],
     ["depth fill ignores supplied source", "if (!fx || source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);", "if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);"],
-    ["depth fill clamps instead of masks", "depth = (fill_color & mask) >> shift;", "depth = fill_color > maximum ? maximum : fill_color;"],
+    ["depth fill clamps instead of masks", "return (float)((word & mask) >> shift) / (float)(mask >> shift);", "return (float)(word > (mask >> shift) ? (mask >> shift) : word) / (float)(mask >> shift);"],
     ["invalid destination emitted", "if (effective_destination.left < 0 || effective_destination.top < 0 ||", "if (FALSE && (effective_destination.left < 0 || effective_destination.top < 0 ||"],
     ["source required before ROP", "    if (flags & DDBLT_ROP) {", "    if (!source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);\n    if (flags & DDBLT_ROP) {"],
     ["WHITENESS becomes black", "fill_color = fx->dwROP == BLACKNESS ? 0 : destination->indexed ?", "fill_color = TRUE || fx->dwROP == BLACKNESS ? 0 : destination->indexed ?"],

@@ -826,6 +826,17 @@ static HRESULT d3d_legacy_apply_viewport_projection(D3DLegacyViewport *viewport)
     if (!viewport->viewport1_set && !viewport->viewport2_set)
         return DDWG_TRACE_ERROR(D3DERR_VIEWPORTDATANOTSET);
     d3d_legacy_viewport7(viewport, &vp);
+    /* Device1 executes transformed vertices using the stored logical viewport.
+     * Keep its oversized coordinates there, while the GPU viewport stays legal. */
+    if (device->creation_version <= 1u && device->render_target &&
+            (vp.dwX > device->render_target->width ||
+             vp.dwY > device->render_target->height ||
+             vp.dwWidth > device->render_target->width - vp.dwX ||
+             vp.dwHeight > device->render_target->height - vp.dwY)) {
+        vp.dwX = vp.dwY = 0;
+        vp.dwWidth = device->render_target->width;
+        vp.dwHeight = device->render_target->height;
+    }
     d3d_legacy_viewport_clipspace(viewport, &clip);
     d3d7_multiply_matrix(&device->legacy_projection, &clip, &projection);
     hr = d3d7_device_SetViewport((IDirect3DDevice7 *)device, &vp);
@@ -1010,7 +1021,7 @@ static HRESULT WINAPI d3d_viewport_TransformVertices(
     DWORD index, clip_union = 0, clip_intersection = ~0u;
     BOOL clipped = (flags & D3DTRANSFORM_CLIPPED) != 0;
     if (!device) return DDWG_TRACE_ERROR(D3DERR_VIEWPORTHASNODEVICE);
-    if (!data || data->dwSize < sizeof(*data) ||
+    if (!data || data->dwSize != sizeof(*data) ||
             (count && (!data->lpIn || !data->lpOut ||
                 data->dwInSize < 32u || data->dwOutSize < 32u)) ||
             !(flags & (D3DTRANSFORM_CLIPPED | D3DTRANSFORM_UNCLIPPED)))
@@ -2234,6 +2245,56 @@ static HRESULT WINAPI d3d3_device_DrawIndexedPrimitiveVB(
             indices, index_count, flags);
 }
 
+static double d3d3_sphere_sqrt(double value)
+{
+    union { double value; uint64_t bits; } root;
+    root.value = value;root.bits = (root.bits >> 1) + 0x1ff8000000000000ULL;
+    double guess = root.value;
+    for (unsigned i = 0; i < 8; ++i) guess = 0.5 * (guess + value / guess);
+    return guess;
+}
+
+static BOOL d3d3_sphere_plane(const float *a, const float *b, const float *c, float *out)
+{
+    float ab[3], ac[3];
+    for (unsigned i = 0; i < 3; ++i) { ab[i] = b[i] - a[i];ac[i] = c[i] - a[i]; }
+    double nx = (double)ab[1]*ac[2] - (double)ab[2]*ac[1];
+    double ny = (double)ab[2]*ac[0] - (double)ab[0]*ac[2];
+    double nz = (double)ab[0]*ac[1] - (double)ab[1]*ac[0];
+    double length2 = (nz*nz + ny*ny) + nx*nx;
+    if (!(length2 > 0) || !__builtin_isfinite(length2)) return FALSE;
+    double scale = 1.0 / d3d3_sphere_sqrt(length2);
+    out[0] = (float)(nx*scale);out[1] = (float)(ny*scale);out[2] = (float)(nz*scale);
+    out[3] = (float)(-((nz*a[2] + ny*a[1]) + nx*a[0])*scale);
+    return TRUE;
+}
+
+/* Device3 constructs planes from the inverse unit clip cube. Direct column
+ * extraction loses XP boundary behavior for zero-radius spheres at the eye. */
+static BOOL d3d3_sphere_planes(const D3DMATRIX *matrix, float planes[6][4])
+{
+    D3DMATRIX bias, biased;
+    float inverse[16], points[8][3];
+    d3d7_identity_matrix(&bias);bias._11 = bias._22 = 0.5f;bias._41 = bias._42 = 0.5f;
+    d3d7_multiply_matrix(matrix, &bias, &biased);
+    if (!d9wg_inverse_transpose4(&biased, inverse)) return FALSE;
+    for (unsigned p = 0; p < 8; ++p) {
+        float v[4];
+        for (unsigned c = 0; c < 4; ++c) {
+            v[c] = inverse[c*4u + 3u];
+            for (unsigned bit = 0; bit < 3; ++bit)
+                if (p & (1u << bit)) v[c] += inverse[c*4u + bit];
+        }
+        if (v[3] == 0 || !__builtin_isfinite(v[3])) return FALSE;
+        double reciprocal = 1.0 / v[3];
+        for (unsigned c = 0; c < 3; ++c) points[p][c] = (float)(v[c]*reciprocal);
+    }
+    static const BYTE faces[6][3] = {{0,2,4},{1,5,3},{2,3,6},{0,4,1},{0,1,2},{4,6,5}};
+    for (unsigned p = 0; p < 6; ++p)
+        if (!d3d3_sphere_plane(points[faces[p][0]], points[faces[p][1]], points[faces[p][2]], planes[p])) return FALSE;
+    return TRUE;
+}
+
 static HRESULT WINAPI d3d3_device_ComputeSphereVisibility(
         IDirect3DDevice3 *iface, D3DVECTOR *centers, D3DVALUE *radii,
         DWORD sphere_count, DWORD flags, DWORD *results)
@@ -2249,42 +2310,21 @@ static HRESULT WINAPI d3d3_device_ComputeSphereVisibility(
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
             &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &matrix);
-#define D3D3_SET_PLANE(dst, sign, column) do { \
-    planes[(dst)][0] = matrix._14 sign matrix.column##1; \
-    planes[(dst)][1] = matrix._24 sign matrix.column##2; \
-    planes[(dst)][2] = matrix._34 sign matrix.column##3; \
-    planes[(dst)][3] = matrix._44 sign matrix.column##4; \
-} while (0)
-    D3D3_SET_PLANE(0, +, _1);
-    D3D3_SET_PLANE(1, -, _1);
-    D3D3_SET_PLANE(2, -, _2);
-    D3D3_SET_PLANE(3, +, _2);
-#undef D3D3_SET_PLANE
-    planes[4][0] = matrix._13;
-    planes[4][1] = matrix._23;
-    planes[4][2] = matrix._33;
-    planes[4][3] = matrix._43;
-    planes[5][0] = matrix._14 - matrix._13;
-    planes[5][1] = matrix._24 - matrix._23;
-    planes[5][2] = matrix._34 - matrix._33;
-    planes[5][3] = matrix._44 - matrix._43;
+    if (!d3d3_sphere_planes(&matrix, planes))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDMATRIX);
     for (index = 0; index < sphere_count; ++index) {
         DWORD visibility = D3DVIS_INSIDE_FRUSTUM;
         BOOL intersects = FALSE, outside = FALSE;
         for (plane = 0; plane < 6u; ++plane) {
-            float length = d3d7_sqrt(planes[plane][0] * planes[plane][0] +
-                    planes[plane][1] * planes[plane][1] +
-                    planes[plane][2] * planes[plane][2]);
-            float distance;
-            if (!(length > 0.0f)) continue;
-            distance = (planes[plane][0] * centers[index].x +
-                    planes[plane][1] * centers[index].y +
-                    planes[plane][2] * centers[index].z + planes[plane][3]) /
-                    length;
+            double distance = ((double)planes[plane][0] * centers[index].x +
+                    (double)planes[plane][2] * centers[index].z) +
+                    (double)planes[plane][1] * centers[index].y + planes[plane][3];
             if (distance < -radii[index]) {
                 visibility |= D3DVIS_OUTSIDE_LEFT << (plane * 2u);
                 outside = TRUE;
-            } else if (distance <= radii[index]) {
+            /* XP Device3 keeps the outside threshold at -radius, but pads
+             * its intersection threshold by half a unit. Device7 differs. */
+            } else if (distance - radii[index] < 0.5f) {
                 visibility |= D3DVIS_INTERSECT_LEFT << (plane * 2u);
                 intersects = TRUE;
             }

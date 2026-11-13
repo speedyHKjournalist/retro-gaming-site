@@ -2,6 +2,8 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-descriptor-mut-"));
 const cases=[
+ ["legacy D24 keeps wire packing","desc1_to_desc2","to->ddpfPixelFormat.dwZBitMask = 0x00ffffffu;","to->ddpfPixelFormat.dwZBitMask = 0xffffff00u;"],
+ ["unused legacy format bytes leak into synthesized depth","desc1_to_desc2","ZeroMemory(&to->ddpfPixelFormat, sizeof(to->ddpfPixelFormat));",""],
  ["live primary format omitted","legacy_describe","ddraw_platform_primary_format(surface->owner, &current.ddpfPixelFormat);","(void)&ddraw_platform_primary_format;"],
  ["modern shape returns stale primary format","legacy_describe","*(DDSURFACEDESC2 *)description = current;","*(DDSURFACEDESC2 *)description = surface->desc;"],
  ["legacy depth keeps pixel-format flag","legacy_describe","narrow->dwFlags & ~DDSD_PIXELFORMAT","narrow->dwFlags | DDSD_PIXELFORMAT"],
