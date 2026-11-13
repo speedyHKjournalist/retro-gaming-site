@@ -8,9 +8,9 @@ const code=String.raw`
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-typedef uint32_t DWORD,UINT,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef void*HWND,*HMODULE;typedef struct{unsigned version;}GUID;typedef const GUID*REFIID;
+typedef size_t SIZE_T;typedef uint32_t DWORD,UINT,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef void*HWND,*HMODULE;typedef struct{unsigned version;}GUID;typedef const GUID*REFIID;
 typedef struct Native{unsigned refs,version;}IUnknown,IDirectDraw,IDirectDraw2,IDirectDraw3,IDirectDraw4;
-typedef struct DDSurface{struct DDSurface*next,*flip_next;struct{struct{DWORD dwCaps,dwCaps2;}ddsCaps;}desc;BOOL cooperative_lost;}DDSurface,IDirectDrawSurface7;
+typedef struct DDSurface{struct DDSurface*next,*flip_next;struct{struct{DWORD dwCaps,dwCaps2;}ddsCaps;}desc;BOOL cooperative_lost,primary;struct DDrawObject*owner;}DDSurface,IDirectDrawSurface7;
 typedef struct DDrawObject{const void*vtbl7;DDSurface*surfaces,*primary;IUnknown*platform_ddraw;BOOL initialized,extended_factory;LONG ref,lifetime_ref,control_serial;HWND window;DWORD cooperative_flags;UINT mode_width,mode_height,mode_bpp,mode_refresh;BOOL mode_set,guest_mode_changed;}DDrawObject,IDirectDraw7;
 typedef struct{DWORD dwSize,dwWidth,dwHeight;struct{DWORD dwRGBBitCount;}ddpfPixelFormat;}DDSURFACEDESC2;
 typedef struct{DWORD dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields,dmDisplayFrequency;}DEVMODEA;
@@ -24,6 +24,7 @@ typedef struct{DWORD dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields,dmDis
 #define DD_VERSION_4 4
 #define DD_VERSION_7 7
 #define DD_OK 0
+#define DDERR_OUTOFMEMORY ((HRESULT)0x8007000eu)
 #define E_FAIL ((HRESULT)0x80004005u)
 #define E_NOTIMPL ((HRESULT)0x80004001u)
 #define DDERR_INVALIDPARAMS ((HRESULT)0x80070057u)
@@ -83,6 +84,12 @@ static HRESULT current(void*p,DDSURFACEDESC2*d){MUST(!g_object_lock&&p==&native&
 #define IDirectDraw7_GetDisplayMode(p,d) current(p,d)
 #define IDirectDraw7_TestCooperativeLevel(p) test_coop(p)
 static HRESULT test_coop(void*p){MUST(p==&native);return native_hr;}
+static IUnknown*ddraw_platform_primary_take_locked(DDrawObject*o){(void)o;return NULL;}
+static void ddraw_platform_lose_all_video_surfaces(void){}
+static void ddraw_platform_poll_loss(DDrawObject*o){(void)o;}
+static void*heap_alloc_zero(size_t n){return calloc(1,n);}static void heap_free(void*p){free(p);}
+static ULONG surface_private_addref(DDSurface*s){(void)s;return 1;}static ULONG surface_private_release(DDSurface*s){(void)s;return 1;}
+static HRESULT ddraw_platform_restore_surface(DDSurface*s){s->cooperative_lost=FALSE;for(DDSurface*w=s->flip_next;w&&w!=s;w=w->flip_next)w->cooperative_lost=FALSE;return 0;}
 static BOOL ddraw_platform_release(DDrawObject*);
 static void ddraw_lifetime_release(DDrawObject*o){MUST(o->lifetime_ref>0);if(!--o->lifetime_ref){MUST(!o->ref);ddraw_platform_release(o);deaths++;free(o);}}
 static DDSurface*surface_from_iface(IDirectDrawSurface7*p){return p;}
@@ -98,7 +105,7 @@ static DDrawObject*owner(BOOL ex){DDrawObject*o=calloc(1,sizeof(*o));MUST(o);o->
 static void release_public(void){MUST(active->ref>0);ddraw_Release(active);}
 static void nested_mode(void){MUST(!ddraw_SetDisplayModeForVersion(active,4,1024,768,32,0,0));}
 static void nested_coop(void){MUST(!ddraw_SetCooperativeLevelForVersion(active,2,(void*)(uintptr_t)22,DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN));}
-int main(void){(void)&ddraw_platform_load_mode;const unsigned versions[]={1,2,3,4,7};for(unsigned repeat=0;repeat<16;repeat++)for(unsigned i=0;i<5;i++){
+int main(void){(void)&ddraw_platform_load_mode;(void)&ddraw_platform_restore_surface;const unsigned versions[]={1,2,3,4,7};for(unsigned repeat=0;repeat<16;repeat++)for(unsigned i=0;i<5;i++){
  unsigned v=versions[i];native_hr=query_hr=create_hr=0;DDrawObject*o=owner(i&1);MUST(o->platform_ddraw==&native&&native.refs==1&&o->lifetime_ref==1);MUST(!ddraw_TestCooperativeLevel(o));native_hr=E_FAIL;MUST(ddraw_TestCooperativeLevel(o)==E_FAIL);native_hr=0;unsigned c=creates;ddraw_platform_attach(o);MUST(creates==c);MUST(!ddraw_SetCooperativeLevelForVersion(o,v,(void*)(uintptr_t)11,DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN)&&actual_version==v&&o->lifetime_ref==1&&native.refs==1);
  MUST(!ddraw_SetDisplayModeForVersion(o,v,640,480,16,0,0)&&actual_version==v&&o->guest_mode_changed&&o->mode_set);DDSURFACEDESC2 d;HRESULT hr;MUST(ddraw_platform_mode(o,&d,&hr)&&!hr&&d.dwWidth==640&&d.dwHeight==480&&d.ddpfPixelFormat.dwRGBBitCount==16);
  DDPlatformModeState before=ddraw_platform_save_mode(o);native_hr=DDERR_INVALIDPARAMS;MUST(ddraw_SetDisplayModeForVersion(o,v,123,456,24,0,0)==native_hr);DDPlatformModeState after=ddraw_platform_save_mode(o);MUST(!memcmp(&before,&after,sizeof(before)));MUST(ddraw_SetCooperativeLevelForVersion(o,v,(void*)(uintptr_t)33,DDSCL_NORMAL)==native_hr&&o->window==(void*)(uintptr_t)11&&o->cooperative_flags==(DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN));native_hr=0;
@@ -112,7 +119,7 @@ int main(void){(void)&ddraw_platform_load_mode;const unsigned versions[]={1,2,3,
  g_platform_ddraw_tried=FALSE;g_platform_ddraw=NULL;missing_module=TRUE;o=owner(FALSE);MUST(!o->platform_ddraw&&!ddraw_TestCooperativeLevel(o));MUST(ddraw_SetCooperativeLevelForVersion(o,7,NULL,DDSCL_EXCLUSIVE)==DDERR_INVALIDPARAMS&&!o->cooperative_flags);MUST(!ddraw_SetCooperativeLevelForVersion(o,7,(void*)(uintptr_t)11,DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN));MUST(!ddraw_SetDisplayModeForVersion(o,7,640,480,32,75,0)&&o->guest_mode_changed&&o->mode_refresh==75&&cds_calls==1);MUST(!ddraw_RestoreDisplayModeForVersion(o,7)&&cds_calls==2);release_public();missing_module=FALSE;
  g_platform_ddraw_tried=FALSE;self_module=TRUE;o=owner(FALSE);MUST(!o->platform_ddraw&&frees==1);release_public();self_module=FALSE;
  g_platform_ddraw_tried=FALSE;create_hr=E_FAIL;o=owner(FALSE);MUST(!o->platform_ddraw&&native.refs==0);release_public();create_hr=0;missing_create=TRUE;o=owner(TRUE);MUST(!o->platform_ddraw);release_public();missing_create=FALSE;
- DDSurface video={.desc={.ddsCaps={.dwCaps=DDSCAPS_VIDEOMEMORY}}},system={.desc={.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY}}},managed={.desc={.ddsCaps={.dwCaps=DDSCAPS_VIDEOMEMORY,.dwCaps2=DDSCAPS2_TEXTUREMANAGE}}};video.next=&system;system.next=&managed;DDrawObject local={.surfaces=&video};ddraw_platform_lose_video_surfaces(&local);MUST(surface_IsLost(&video)==DDERR_SURFACELOST&&!surface_IsLost(&system)&&!surface_IsLost(&managed));DDSurface back={.cooperative_lost=TRUE};video.flip_next=&back;back.flip_next=&video;MUST(!surface_Restore(&video)&&!surface_IsLost(&video)&&!surface_IsLost(&back));ddraw_platform_lose_video_surfaces(&local);MUST(!ddraw_RestoreAllSurfaces(&local)&&!surface_IsLost(&video));
+ DDSurface video={.desc={.ddsCaps={.dwCaps=DDSCAPS_VIDEOMEMORY}}},system={.desc={.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY}}},managed={.desc={.ddsCaps={.dwCaps=DDSCAPS_VIDEOMEMORY,.dwCaps2=DDSCAPS2_TEXTUREMANAGE}}};video.next=&system;system.next=&managed;DDrawObject local={.surfaces=&video};ddraw_platform_lose_video_surfaces(&local);MUST(surface_IsLost(&video)==DDERR_SURFACELOST&&!surface_IsLost(&system)&&!surface_IsLost(&managed)&&!system.cooperative_lost&&!managed.cooperative_lost);DDSurface back={.cooperative_lost=TRUE};video.flip_next=&back;back.flip_next=&video;MUST(!surface_Restore(&video)&&!surface_IsLost(&video)&&!surface_IsLost(&back));ddraw_platform_lose_video_surfaces(&local);MUST(!ddraw_RestoreAllSurfaces(&local)&&!surface_IsLost(&video));
  o=owner(FALSE);o->lifetime_ref++;o->guest_mode_changed=TRUE;o->primary=&video;unsigned hidden=hides;MUST(!ddraw_Release(o)&&o->lifetime_ref==1&&!o->platform_ddraw&&!o->primary&&!o->guest_mode_changed&&!native.refs&&hides==hidden+1);ddraw_lifetime_release(o);
  const struct{unsigned version,refs;}native_lifetimes[]={NATIVE_LIFETIMES};for(unsigned i=0;i<4;i++){o=owner(native_lifetimes[i].version==7);BOOL pin=native_lifetimes[i].version>=4;ddraw_child_attach(o,pin);MUST(ddraw_Release(o)==native_lifetimes[i].refs);MUST(!!o->platform_ddraw==!!native_lifetimes[i].refs&&native.refs==native_lifetimes[i].refs);unsigned died=deaths;ddraw_child_detach(o,pin);MUST(deaths==died+1&&!native.refs);}
  MUST(!g_object_lock&&!native.refs&&deaths==90);printf("PASS actual platform-control C: %u checks; all five interfaces, physical/virtual modes, native validation rollback, nested callbacks, last-public-release lifetime, absolute native load, self-load and factory failures\n",checks);return 0;}

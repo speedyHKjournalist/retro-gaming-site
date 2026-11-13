@@ -44,15 +44,21 @@ static void ddraw_platform_attach(DDrawObject *object)
 
 static BOOL ddraw_platform_release(DDrawObject *object)
 {
-    IUnknown *native = object->platform_ddraw;
+    IUnknown *native, *primary = NULL;
+    EnterCriticalSection(&g_object_lock);
+    native = object->platform_ddraw;
     object->platform_ddraw = NULL;
-    if (!native) return FALSE;
-    /* Legacy surfaces do not pin the public draw interface. Its control
-     * ownership ends at public zero even while proxy storage remains private. */
-    object->guest_mode_changed = FALSE;
-    object->primary = NULL;
-    IUnknown_Release(native);
-    return TRUE;
+    if (native) {
+        object->guest_mode_changed = FALSE;
+        object->primary = NULL;
+        primary = ddraw_platform_primary_take_locked(object);
+    }
+    LeaveCriticalSection(&g_object_lock);
+    /* Keep native legacy primaries valid until their own release, and drop
+     * extended primary parent pins before the final draw reference. */
+    if (primary) IUnknown_Release(primary);
+    if (native) IUnknown_Release(native);
+    return native != NULL;
 }
 
 static BOOL ddraw_platform_view(DDrawObject *object, unsigned version,
@@ -184,7 +190,7 @@ static void ddraw_platform_lose_video_surfaces(DDrawObject *object)
     DDSurface *surface;
     EnterCriticalSection(&g_object_lock);
     for (surface = object->surfaces; surface; surface = surface->next) {
-        if ((surface->desc.ddsCaps.dwCaps & DDSCAPS_VIDEOMEMORY) &&
+        if ((surface->primary || (surface->desc.ddsCaps.dwCaps & DDSCAPS_VIDEOMEMORY)) &&
                 !(surface->desc.ddsCaps.dwCaps2 &
                 (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)))
             surface->cooperative_lost = TRUE;

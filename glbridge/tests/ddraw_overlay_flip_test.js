@@ -7,7 +7,7 @@ const code = `#include <stdint.h>
 #include <string.h>
 typedef int32_t LONG;typedef int BOOL,HRESULT;typedef uint32_t DWORD;typedef unsigned char BYTE;
 typedef struct{unsigned index;} DDTextureStorage;typedef struct{BYTE bits[4];DWORD content_version;} DDSurfaceMemory;
-typedef struct DDSurface DDSurface;typedef struct{DDSurface*surfaces;} DDrawObject;
+typedef struct DDSurface DDSurface;typedef struct{DDSurface*surfaces;DWORD cooperative_flags;} DDrawObject;
 struct DDSurface{DDrawObject*owner;DDSurface*next,*flip_next,*overlay_destination;struct{struct{DWORD dwCaps;}ddsCaps;}desc;BOOL primary,overlay_visible,external_memory,upload_pending;DWORD handle,lock_depth,overlay_id;DDTextureStorage*storage;DDSurfaceMemory*memory;BYTE*shadow;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define InterlockedIncrement(p) (++*(p))
@@ -15,6 +15,10 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define TRUE 1
 #define FALSE 0
 #define DD_OK 0
+#define FAILED(h) ((h)<0)
+#define DDERR_SURFACELOST (-10)
+#define DDERR_NOEXCLUSIVEMODE (-11)
+#define DDSCL_EXCLUSIVE 16u
 #define DDERR_GENERIC (-1)
 #define DDERR_NOTFLIPPABLE (-2)
 #define DDERR_SURFACEBUSY (-3)
@@ -25,6 +29,7 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDWG_TRACE_RESULT(x) (x)
 #define DDWG_TRACE_ERROR(x) (x)
 static unsigned checks,screens,presents,overlays,rebinds,device_rebinds,fail_screen,fail_overlay,fail_present;static DWORD screen_handle,overlay_handle,overlay_destination,overlay_id;
+static HRESULT surface_IsLost(void*p){(void)p;return 0;}
 static DDSurface*surface_from_iface(IDirectDrawSurface7*p){return p;}
 static DDSurface*surface_from_any(void*p,void*q){(void)q;return p;}
 static void rebind_host_surface_state(DDSurface*p){(void)p;rebinds++;}
@@ -38,7 +43,7 @@ static void seed(DDrawObject*o,DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,
 static int verify(DDSurface*s,DDTextureStorage*t,DDSurfaceMemory*m,unsigned*order,unsigned count){for(unsigned i=0;i<count;i++){unsigned n=order[i];CHECK(m[n].content_version>1);CHECK(s[i].handle==100+n&&s[i].storage==&t[n]&&s[i].memory==&m[n]&&s[i].shadow==m[n].bits&&s[i].external_memory==(n==1)&&s[i].upload_pending==(n!=1)&&s[i].overlay_id==200+i);}return 0;}
 static int rotations(void){
  for(unsigned count=2;count<=3;count++){
-  DDrawObject owner={0};DDSurface s[3],destination={.handle=9};DDTextureStorage t[3];DDSurfaceMemory m[3];seed(&owner,s,t,m,count);s[0].desc.ddsCaps.dwCaps|=DDSCAPS_OVERLAY;s[0].overlay_visible=TRUE;s[0].overlay_destination=&destination;unsigned order[]={0,1,2};
+  DDrawObject owner={.cooperative_flags=DDSCL_EXCLUSIVE};DDSurface s[3],destination={.handle=9};DDTextureStorage t[3];DDSurfaceMemory m[3];seed(&owner,s,t,m,count);s[0].desc.ddsCaps.dwCaps|=DDSCAPS_OVERLAY;s[0].overlay_visible=TRUE;s[0].overlay_destination=&destination;unsigned order[]={0,1,2};
   for(unsigned round=0;round<128;round++){
    unsigned a=order[0];for(unsigned i=0;i+1<count;i++)order[i]=order[i+1];order[count-1]=a;unsigned b=screens,p=presents,o=overlays,r=rebinds,d=device_rebinds;CHECK(!surface_Flip(s,NULL,0));CHECK(screens==b&&presents==p+1&&overlays==o+1&&rebinds==r+count&&device_rebinds==d+1);CHECK(overlay_handle==s[0].handle&&overlay_destination==9&&overlay_id==200);CHECK(!verify(s,t,m,order,count));
    a=order[0];order[0]=order[count-1];order[count-1]=a;b=screens;p=presents;o=overlays;CHECK(!surface_Flip(s,&s[count-1],0));CHECK(screens==b&&presents==p+1&&overlays==o+1&&!verify(s,t,m,order,count));
@@ -48,7 +53,7 @@ static int rotations(void){
  return 0;
 }
 static int other_cases(void){
- DDrawObject owner={0},foreign_owner={0};DDSurface s[3],overlay={0},other={.owner=&owner,.handle=900},foreign={.owner=&foreign_owner};DDTextureStorage t[3];DDSurfaceMemory m[3];seed(&owner,s,t,m,3);s[2].next=&overlay;overlay.owner=&owner;overlay.desc.ddsCaps.dwCaps=DDSCAPS_OVERLAY;overlay.overlay_visible=TRUE;overlay.handle=800;overlay.overlay_destination=s;overlay.overlay_id=777;s[0].primary=TRUE;
+ DDrawObject owner={.cooperative_flags=DDSCL_EXCLUSIVE},foreign_owner={0};DDSurface s[3],overlay={0},other={.owner=&owner,.handle=900},foreign={.owner=&foreign_owner};DDTextureStorage t[3];DDSurfaceMemory m[3];seed(&owner,s,t,m,3);s[2].next=&overlay;overlay.owner=&owner;overlay.desc.ddsCaps.dwCaps=DDSCAPS_OVERLAY;overlay.overlay_visible=TRUE;overlay.handle=800;overlay.overlay_destination=s;overlay.overlay_id=777;s[0].primary=TRUE;
  unsigned b=screens,p=presents,o=overlays;CHECK(!surface_Flip(s,NULL,0)&&screens==b+1&&presents==p+1&&overlays==o+1&&screen_handle==101&&overlay_handle==800&&overlay_destination==101&&overlay_id==777);
  CHECK(surface_Flip(&s[1],NULL,0)==DDERR_NOTFLIPPABLE);DWORD before=s[0].handle;b=screens;p=presents;o=overlays;CHECK(surface_Flip(s,s,0)==DDERR_NOTFLIPPABLE&&surface_Flip(s,&other,0)==DDERR_NOTFLIPPABLE&&surface_Flip(s,&foreign,0)==DDERR_NOTFLIPPABLE&&s[0].handle==before&&screens==b&&presents==p&&overlays==o);s[0].lock_depth=1;CHECK(surface_Flip(s,NULL,0)==DDERR_SURFACEBUSY&&s[0].handle==before);s[0].lock_depth=0;
  s[0].primary=FALSE;overlay.overlay_destination=NULL;b=screens;p=presents;o=overlays;CHECK(!surface_Flip(s,NULL,0)&&screens==b&&presents==p&&overlays==o);overlay.overlay_destination=s;b=screens;p=presents;o=overlays;CHECK(!surface_Flip(s,NULL,0)&&screens==b&&presents==p+1&&overlays==o+1&&overlay_destination==s[0].handle);

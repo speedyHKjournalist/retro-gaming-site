@@ -75,11 +75,13 @@ typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
 #define DDWG_TRACE(...)
 #define HOSTLOG_REFUSED(...)
 #define DDWG_TRACE_RESULT(x) (x)
+#define DDERR_SURFACELOST ((HRESULT)0x887601c2u)
 #define DDWG_TRACE_ERROR(x) (x)
 #define UNSUPPORTED(s,x) (x)
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
 static unsigned checks,blits,presents,readbacks,bindings,fail_emit,fail_present,fail_read,fail_dc,fail_native,dc_creates;static RECT clip,last_rect;static BOOL clipped;static HRESULT clip_error;static UINT clip_override_count;static RECT clip_override[2];static BOOL capture;static UINT captured_count;static struct{RECT dst,src;DWORD flags,fill;BOOL source;}blit_captured[2];static DDSurface*last_source;static DWORD last_flags,last_fill;static float last_depth;static BYTE dib[256];static BITMAPINFO captured;
+static HRESULT surface_IsLost(void*p){(void)p;return 0;}
 static DDSurface*surface_from_iface(IDirectDrawSurface7*p){return p;}
 static BOOL format_is_yuv(DWORD f){return f==DDWG_FMT_YUY2||f==DDWG_FMT_UYVY;}
 static BOOL format_is_compressed(DWORD f){return f==DDWG_FMT_DXT1;}

@@ -645,6 +645,9 @@ struct DDrawObject {
     BOOL initialized;          /* COM activation waits for Initialize */
     BOOL extended_factory;     /* DirectDrawCreateEx lock compatibility */
     IUnknown *platform_ddraw;   /* system DLL: window/display control only */
+    IUnknown *platform_primary; /* control/loss marker, never drawn */
+    BOOL platform_primary_lost;
+    BOOL platform_exclusive_lost;
     LONG control_serial;       /* nested window callbacks supersede outer state */
     HWND window;
     DWORD cooperative_flags;
@@ -1939,6 +1942,15 @@ static BOOL emit_overlay_state(DDSurface *surface)
     return result;
 }
 
+static IUnknown *ddraw_platform_primary_take_locked(DDrawObject *object);
+static void ddraw_platform_primary_detach(DDrawObject *object);
+static void ddraw_platform_primary_attach(DDrawObject *object, DDSurface *surface,
+        unsigned version);
+static void ddraw_platform_poll_loss(DDrawObject *object);
+static BOOL ddraw_platform_primary_format(DDrawObject *object, DDPIXELFORMAT *format);
+static HRESULT ddraw_platform_restore_surface(DDSurface *surface);
+static HRESULT WINAPI surface_IsLost(IDirectDrawSurface7 *iface);
+
 static void emit_window_state_showing(DDrawObject *object, BOOL flush);
 static void emit_window_state_showing_from_probe(DDrawObject *object, BOOL flush,
         const D9WGWindowProbe *probe);
@@ -2732,6 +2744,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                     (source ? (LONG)source->width : 0),
             source_rect ? source_rect->bottom :
                     (source ? (LONG)source->height : 0));
+    if (FAILED(surface_IsLost(iface)))
+        return DDWG_TRACE_ERROR(DDERR_SURFACELOST);
     if (destination->lock_depth)
         return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
@@ -2792,6 +2806,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         source = NULL;
     } else {
         if (!source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        if (FAILED(surface_IsLost((IDirectDrawSurface7 *)source)))
+            return DDWG_TRACE_ERROR(DDERR_SURFACELOST);
         if (format_is_depth(source->format) != format_is_depth(destination->format))
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         if (format_is_depth(source->format) && source->format != destination->format)
@@ -3248,6 +3264,9 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
             != (DDSCAPS_FLIP | DDSCAPS_FRONTBUFFER) || !surface->flip_next
             || surface->flip_next == surface)
         return DDWG_TRACE_ERROR(DDERR_NOTFLIPPABLE);
+    if (FAILED(surface_IsLost(iface))) return DDWG_TRACE_ERROR(DDERR_SURFACELOST);
+    if (surface->primary && !(surface->owner->cooperative_flags & DDSCL_EXCLUSIVE))
+        return DDWG_TRACE_ERROR(DDERR_NOEXCLUSIVEMODE);
     if (surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
     if (override_iface && (!override_surface || override_surface == surface ||
             override_surface->owner != surface->owner ||
@@ -3799,6 +3818,7 @@ static HRESULT WINAPI surface_GetPixelFormat(IDirectDrawSurface7 *iface,
 
     if (!format) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *format = surface->desc.ddpfPixelFormat;
+    if (surface->primary) ddraw_platform_primary_format(surface->owner, format);
     format->dwSize = sizeof(*format);
     return DD_OK;
 }
@@ -3812,6 +3832,8 @@ static HRESULT WINAPI surface_GetSurfaceDesc(IDirectDrawSurface7 *iface,
     if (description->dwSize != sizeof(DDSURFACEDESC2))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *description = surface->desc;
+    if (surface->primary)
+        ddraw_platform_primary_format(surface->owner, &description->ddpfPixelFormat);
     description->dwSize = sizeof(DDSURFACEDESC2);
     description->dwFlags &= ~DDSD_LPSURFACE;
     description->lpSurface = NULL;
@@ -3829,6 +3851,11 @@ static HRESULT WINAPI surface_Initialize(IDirectDrawSurface7 *iface,
 static HRESULT WINAPI surface_IsLost(IDirectDrawSurface7 *iface)
 {
     DDSurface *surface = surface_from_iface(iface);
+    if (!surface->primary && (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_VIDEOMEMORY) ||
+            (surface->desc.ddsCaps.dwCaps2 &
+                (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE))))
+        return DD_OK;
+    ddraw_platform_poll_loss(surface->owner);
     return surface->cooperative_lost ? DDERR_SURFACELOST : DD_OK;
 }
 
@@ -3928,13 +3955,11 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
 static HRESULT WINAPI surface_Restore(IDirectDrawSurface7 *iface)
 {
     DDSurface *surface = surface_from_iface(iface);
-    DDSurface *walk;
-    surface->cooperative_lost = FALSE;
-    /* Restore the implicit flip allocation as one unit. An attached depth
-     * surface is an independent allocation and still needs its own Restore. */
-    for (walk = surface->flip_next; walk && walk != surface; walk = walk->flip_next)
-        walk->cooperative_lost = FALSE;
-    return DD_OK;
+    HRESULT hr;
+    surface_private_addref(surface);
+    hr = ddraw_platform_restore_surface(surface);
+    surface_private_release(surface);
+    return DDWG_TRACE_RESULT(hr);
 }
 
 static HRESULT WINAPI surface_SetClipper(IDirectDrawSurface7 *iface,
@@ -4992,7 +5017,10 @@ static void surface_destroy(DDSurface *surface)
     LeaveCriticalSection(&g_object_lock);
     /* Outside the object lock: emitting takes the transport lock, and the two
      * are never held in the other order anywhere else. */
-    if (was_primary) emit_window_state_not_showing(owner);
+    if (was_primary) {
+        ddraw_platform_primary_detach(owner);
+        emit_window_state_not_showing(owner);
+    }
     surface_release_lookup_dc(surface);
     surface_private_data_clear(surface);
     surface_memory_release(surface->memory);
@@ -5659,6 +5687,7 @@ static void ddraw_lifetime_release(DDrawObject *object)
 }
 
 #include "ddraw_platform_control.inc"
+#include "ddraw_surface_control.inc"
 
 static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
 {
@@ -5795,7 +5824,10 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
     *out = NULL;
     if (!surface_request_color_keys_valid(request))
         return DDWG_TRACE_ERROR(DDERR_NOCOLORKEYHW);
+    ddraw_platform_poll_loss(object);
     caps = request->ddsCaps.dwCaps;
+    if ((caps & DDSCAPS_PRIMARYSURFACE) && object->primary)
+        return DDWG_TRACE_ERROR(DDERR_PRIMARYSURFACEALREADYEXISTS);
     back_buffers = (request->dwFlags & DDSD_BACKBUFFERCOUNT)
         ? request->dwBackBufferCount : 0;
     /* Validate the requested roles before adding the implementation's placement
@@ -6015,6 +6047,8 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
     }
     surface->owner_public_ref = version >= DD_VERSION_4;
     if (surface->owner_public_ref) ddraw_AddRef((IDirectDraw7 *)&object->vtbl7);
+    if (caps & DDSCAPS_PRIMARYSURFACE)
+        ddraw_platform_primary_attach(object, surface, version);
     *out = (IDirectDrawSurface7 *)surface;
     DDWG_TRACE("SURFACE CREATED handle=%lu object=%08lX size=%lux%lu "
             "pitch=%lu format=%u caps=%08lX primary=%lu backbuffers=%lu",
@@ -6799,6 +6833,7 @@ static HRESULT ddraw_SetDisplayModeForVersion(IDirectDraw7 *iface,
                 return ddraw_control_finish(object, DD_OK);
         }
     }
+    ddraw_platform_lose_all_video_surfaces();
     emit_display_mode(object);
     return ddraw_control_finish(object, DD_OK);
 }
@@ -6886,12 +6921,33 @@ static HRESULT WINAPI ddraw_GetSurfaceFromDC(IDirectDraw7 *iface, HDC dc,
 static HRESULT WINAPI ddraw_RestoreAllSurfaces(IDirectDraw7 *iface)
 {
     DDrawObject *object = object_from_iface(iface);
-    DDSurface *surface;
+    DDSurface *surface, **snapshot;
+    SIZE_T count = 0, index;
+    HRESULT result = DD_OK;
     EnterCriticalSection(&g_object_lock);
-    for (surface = object->surfaces; surface; surface = surface->next)
-        surface_Restore((IDirectDrawSurface7 *)surface);
+    for (surface = object->surfaces; surface; surface = surface->next) ++count;
+    if (!count) { LeaveCriticalSection(&g_object_lock); return DD_OK; }
+    if (count > ((SIZE_T)-1) / sizeof(*snapshot)) {
+        LeaveCriticalSection(&g_object_lock);
+        return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    }
+    snapshot = heap_alloc_zero(count * sizeof(*snapshot));
+    if (!snapshot) { LeaveCriticalSection(&g_object_lock); return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY); }
+    index = 0;
+    for (surface = object->surfaces; surface; surface = surface->next) {
+        surface_private_addref(surface);
+        snapshot[index++] = surface;
+    }
     LeaveCriticalSection(&g_object_lock);
-    return DD_OK;
+    /* A native Restore can dispatch application messages. The snapshot pins
+     * every allocation while callbacks can release/create other surfaces. */
+    for (index = 0; index < count; ++index) {
+        HRESULT hr = surface_Restore((IDirectDrawSurface7 *)snapshot[index]);
+        if (FAILED(hr) && SUCCEEDED(result)) result = hr;
+    }
+    for (index = 0; index < count; ++index) surface_private_release(snapshot[index]);
+    heap_free(snapshot);
+    return DDWG_TRACE_RESULT(result);
 }
 
 static HRESULT WINAPI ddraw_TestCooperativeLevel(IDirectDraw7 *iface)

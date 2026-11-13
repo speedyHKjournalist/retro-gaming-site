@@ -57,7 +57,13 @@ static void alive(const void*p){for(unsigned i=0;i<allocated;i++)if((uintptr_t)p
 static LONG InterlockedIncrement(LONG*p){alive(p);return ++*p;}static LONG InterlockedDecrement(LONG*p){alive(p);return --*p;}
 static void*heap_alloc_zero(size_t n){return allocation(n,0);}static void heap_free(void*p){if(!p)return;for(unsigned i=0;i<allocated;i++)if(allocations[i].p==p){MUST(!allocations[i].dead);if(allocations[i].kind==1){DDrawObject*d=p;MUST(!d->surfaces&&!d->palettes&&!d->clippers&&!d->lifetime_ref&&!d->ref);objects_freed++;}if(allocations[i].kind==2)surfaces_freed++;allocations[i].dead=1;return;}MUST(0);}
 static void EnterCriticalSection(void*p){(void)p;}static void LeaveCriticalSection(void*p){(void)p;}
-static BOOL ddraw_platform_release(DDrawObject*d){(void)d;return 0;}static void ddraw_platform_sync(DDrawObject*d){(void)d;}
+static BOOL ddraw_platform_release(DDrawObject*d){(void)d;return 0;}static void ddraw_platform_poll_loss(DDrawObject*d){(void)d;}
+static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,unsigned v){(void)d;(void)s;(void)v;}
+static void ddraw_platform_primary_detach(DDrawObject*d){(void)d;}
+#ifndef DDERR_PRIMARYSURFACEALREADYEXISTS
+#define DDERR_PRIMARYSURFACEALREADYEXISTS ((HRESULT)0x88760234u)
+#endif
+static void ddraw_platform_sync(DDrawObject*d){(void)d;}
 static void unwatch_object_window(DDrawObject*d){alive(d);}static void ChangeDisplaySettingsA(void*p,unsigned n){(void)p;(void)n;}
 static void emit_device_destroy(DDrawObject*d){alive(d);device_destroys++;}static void submit_batch_locked(BOOL wait){(void)wait;}
 static void emit_window_state_not_showing(DDrawObject*d){alive(d);hidden++;}static void SelectObject(void*p,void*q){(void)p;(void)q;}static void DeleteObject(void*p){(void)p;}static void DeleteDC(void*p){(void)p;ordinary_dc_deletes++;}

@@ -35,6 +35,11 @@ static BOOL format_is_depth(UINT f){return f==75;}static BOOL format_is_yuv(UINT
 static BOOL IsBadWritePtr(void*p,size_t n){(void)n;return !p;}
 static DDrawObject*object_from_iface(DDrawObject*p){return p;}
 static unsigned ddraw_AddRef(DDrawObject*d){pins++;return ++d->ref;}
+static void ddraw_platform_poll_loss(DDrawObject*d){(void)d;}
+static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,unsigned v){(void)d;(void)s;(void)v;}
+#ifndef DDERR_PRIMARYSURFACEALREADYEXISTS
+#define DDERR_PRIMARYSURFACEALREADYEXISTS ((HRESULT)0x88760234u)
+#endif
 static void ddraw_platform_sync(DDrawObject*d){(void)d;}
 static void object_display_size(DDrawObject*d,UINT*w,UINT*h){MUST(d);*w=640;*h=480;}
 static void mode_pixel_format(UINT bpp,DDPIXELFORMAT*p){*p=(DDPIXELFORMAT){.dwSize=sizeof(*p),.dwRGBBitCount=bpp};}

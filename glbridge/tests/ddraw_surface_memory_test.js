@@ -24,6 +24,7 @@ typedef struct{LONG ref;BYTE*bits;SIZE_T bytes;BOOL owned,gpu_dirty;DWORD conten
 struct DDSurface{const int*vtbl7,*vtbl4,*vtbl3,*vtbl2,*vtbl1,*texture2_vtbl,*texture1_vtbl,*gamma_vtbl;LONG ref,public_refs[8];unsigned creation_version;DDrawObject*owner;struct{uint16_t red[256],green[256],blue[256];}gamma_ramp;DDTextureStorage*storage;DDSurfaceMemory*memory;BYTE*shadow;BOOL external_memory,indexed,primary,implicit;DWORD handle,overlay_id,mip_level,cube_face,format,width,height,bytes_per_pixel,pitch;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;DDSurface*next,*mip_next;};
 typedef DDSurface IDirectDrawSurface7;
 static const int g_surface_vtbl=7,g_surface_vtbl4=4,g_surface_vtbl3=3,g_surface_vtbl2=2,g_surface_vtbl1=1,g_d3d_texture2_vtbl=12,g_d3d_texture1_vtbl=11,g_gamma_vtbl=20;
+static BOOL ddraw_platform_primary_format(DDrawObject*d,DDPIXELFORMAT*p){(void)d;(void)p;return 0;}
 static int g_object_lock;static unsigned checks,allocs,calls,fail_call,serial=100;
 #define MUST(x) do{checks++;if(!(x)){fprintf(stderr,"surface memory line %u: %s\\n",__LINE__,#x);exit(1);}}while(0)
 static void*heap_alloc_zero(size_t n){calls++;if(calls==fail_call)return NULL;void*p=calloc(1,n);MUST(p);allocs++;return p;}
