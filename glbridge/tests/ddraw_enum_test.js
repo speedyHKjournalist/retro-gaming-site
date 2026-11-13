@@ -29,6 +29,7 @@ static void *heap_alloc_zero(size_t n) { if (fail_allocation) return NULL; void 
 static void heap_free(void *p) { if (p) { MUST(allocations); allocations--; free(p); } }
 static void EnterCriticalSection(int *p) { MUST(!(*p)++); }
 static void LeaveCriticalSection(int *p) { MUST((*p)--==1); }
+static BOOL ddraw_platform_mode(DDrawObject *o,DDSURFACEDESC2 *m,HRESULT *h){(void)o;(void)m;(void)h;return FALSE;}
 static DDrawObject *object_from_iface(void *p) { return p; }
 static DDrawObject *object_from_any(void *p, unsigned *v) { (void)v; return p; }
 static void *surface_interface(DDSurface *s, unsigned v) { MUST(v==1||v==4||v==7); return s; }

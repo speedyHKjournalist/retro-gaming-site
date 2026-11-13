@@ -27,6 +27,8 @@ typedef struct DDSurface{void*vtbl7;BOOL upload_pending;DDSURFACEDESC2 desc;void
 #define DD_OK 0
 #define DDERR_INVALIDPARAMS (-1)
 #define DDERR_NOTFOUND (-2)
+#define FAILED(h) ((HRESULT)(h)<0)
+#define DDERR_SURFACELOST ((HRESULT)0x887601c2u)
 #define DDWG_TRACE_ERROR(h) (h)
 #define DDSCAPS_COMPLEX 8u
 #define DDSCAPS_TEXTURE 0x1000u
@@ -43,6 +45,7 @@ typedef struct DDSurface{void*vtbl7;BOOL upload_pending;DDSURFACEDESC2 desc;void
 #define DDSCAPS2_MIPMAPSUBLEVEL 0x10000u
 static unsigned checks;
 #define MUST(x) do{checks++;if(!(x)){fprintf(stderr,"attachment query line %u: %s\\n",__LINE__,#x);exit(1);}}while(0)
+static HRESULT surface_IsLost(void*p){(void)p;return 0;}
 static DDSurface*surface_from_iface(DDSurface*p){return p;}
 static void IDirectDrawSurface7_AddRef(DDSurface*p){MUST(p);p->refs++;}
 static DDSurface pool[64];static unsigned allocated;

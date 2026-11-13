@@ -51,6 +51,7 @@ static BOOL guid_equal(REFIID a,REFIID b){return a&&b&&a->Data1==b->Data1;}stati
 static void*heap_alloc_zero(size_t n){return fail_allocation?NULL:calloc(1,n);}static void heap_free(void*p){free(p);}
 static DDrawObject*object_from_iface(IDirectDraw7*p){return p;}
 static DDrawObject*object_create(void){DDrawObject*p=heap_alloc_zero(sizeof(*p));if(p){p->ref=1;++g_object_count;}return p;}
+static void ddraw_platform_attach(DDrawObject*p){(void)p;}
 static void emit_hello_once(void){}
 static HRESULT ddraw_QueryInterface(IDirectDraw7*p,REFIID iid,void**out){(void)iid;*out=p;++p->ref;return S_OK;}
 static ULONG ddraw_Release(IDirectDraw7*p){LONG n=--p->ref;if(!n){--g_object_count;heap_free(p);}return n;}

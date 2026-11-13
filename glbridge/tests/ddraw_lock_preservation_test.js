@@ -35,11 +35,14 @@ typedef DDSurface IDirectDrawSurface7;
 #define DDSCAPS_SYSTEMMEMORY 0x800u
 #define DDSD_LPSURFACE 0x800u
 #define DDSD_PITCH 8u
+#define FAILED(h) ((HRESULT)(h)<0)
+#define DDERR_SURFACELOST ((HRESULT)0x887601c2u)
 #define DDWG_TRACE_ERROR(x) (x)
 #define DDWG_TRACE_RESULT(x) (x)
 #define DDWG_TRACE_CHECKPOINT(...)
 #define DDWG_TRACE(...)
 static unsigned checks,reads,uploads,presents,fail_read;static BYTE gpu[64];static RECT uploaded;
+static HRESULT surface_IsLost(void*p){(void)p;return 0;}
 static DDSurface *surface_from_iface(IDirectDrawSurface7*p){return p;}
 static BOOL format_is_compressed(UINT f){return f==0x31545844u;}
 static UINT format_compressed_block_bytes(UINT f){(void)f;return 8;}

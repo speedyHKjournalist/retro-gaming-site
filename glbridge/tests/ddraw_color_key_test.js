@@ -86,6 +86,7 @@ static unsigned checks,sets,overlays,creates;static DWORD emitted_kind;static BO
 static DDSurface*surface_from_iface(DDSurface*s){return s;}static DDrawObject*object_from_iface(DDrawObject*d){return d;}
 static void emit_color_key(DDSurface*s,DWORD kind,const DDCOLORKEY*key,BOOL present){assert(s&&kind<4);sets++;emitted_kind=kind;emitted_present=present;if(key)emitted_key=*key;}
 static void emit_overlay_state(DDSurface*s){assert(s&&s->overlay_visible);overlays++;}
+static void ddraw_platform_sync(DDrawObject*d){(void)d;}
 static void object_display_size(DDrawObject*d,UINT*w,UINT*h){(void)d;*w=*h=32;}
 static void mode_pixel_format(UINT bits,DDPIXELFORMAT*p){*p=(DDPIXELFORMAT){.dwSize=sizeof(*p),.dwRGBBitCount=bits};}
 static void describe_pixel_format(const DDPIXELFORMAT*p,DDrawPixelFormatDesc*d){assert(p->dwRGBBitCount==32);d->unused=0;}

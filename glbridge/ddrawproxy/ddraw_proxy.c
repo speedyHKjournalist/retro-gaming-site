@@ -596,6 +596,7 @@ struct DDSurface {
     RECT locked_rect;
     DWORD lock_flags;
     BOOL primary;
+    BOOL cooperative_lost;      /* video allocations invalidated on exclusive entry */
     BOOL front_of_chain;
     BOOL owns_flip_chain;
     BOOL flip_root_ref;
@@ -643,6 +644,8 @@ struct DDrawObject {
     LONG lifetime_ref;          /* public refs plus private child allocations */
     BOOL initialized;          /* COM activation waits for Initialize */
     BOOL extended_factory;     /* DirectDrawCreateEx lock compatibility */
+    IUnknown *platform_ddraw;   /* system DLL: window/display control only */
+    LONG control_serial;       /* nested window callbacks supersede outer state */
     HWND window;
     DWORD cooperative_flags;
     uint32_t device_handle;
@@ -3279,6 +3282,8 @@ static HRESULT WINAPI surface_Flip(IDirectDrawSurface7 *iface,
     return DD_OK;
 }
 
+static HRESULT WINAPI surface_IsLost(IDirectDrawSurface7 *iface);
+
 static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
         LPDDSCAPS2 caps, LPDIRECTDRAWSURFACE7 *out)
 {
@@ -3287,6 +3292,7 @@ static HRESULT WINAPI surface_GetAttachedSurface(IDirectDrawSurface7 *iface,
 
     if (!caps || !out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
+    if (FAILED(surface_IsLost(iface))) return DDWG_TRACE_ERROR(DDERR_SURFACELOST);
     /*
      * Some DirectX 6 callers initialise only DDSCAPS2::dwCaps before asking
      * for the next mip level.  Native DirectDraw does not interpret the
@@ -3822,11 +3828,8 @@ static HRESULT WINAPI surface_Initialize(IDirectDrawSurface7 *iface,
 
 static HRESULT WINAPI surface_IsLost(IDirectDrawSurface7 *iface)
 {
-    (void)iface;
-    /* Surfaces live in guest memory plus a host texture, and neither is lost
-     * on a mode change or a task switch. A title that calls Restore anyway
-     * gets DD_OK from it. */
-    return DD_OK;
+    DDSurface *surface = surface_from_iface(iface);
+    return surface->cooperative_lost ? DDERR_SURFACELOST : DD_OK;
 }
 
 static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
@@ -3854,6 +3857,7 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
     if (!system_texture && output_size != sizeof(DDSURFACEDESC) &&
             output_size != sizeof(DDSURFACEDESC2))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (FAILED(surface_IsLost(iface))) return DDWG_TRACE_ERROR(DDERR_SURFACELOST);
     if (!surface->shadow) return DDWG_TRACE_ERROR(DDERR_GENERIC);
     if (surface->dc || surface->lock_depth) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
 
@@ -3923,7 +3927,13 @@ static HRESULT WINAPI surface_Lock(IDirectDrawSurface7 *iface, LPRECT rect,
 
 static HRESULT WINAPI surface_Restore(IDirectDrawSurface7 *iface)
 {
-    (void)iface;
+    DDSurface *surface = surface_from_iface(iface);
+    DDSurface *walk;
+    surface->cooperative_lost = FALSE;
+    /* Restore the implicit flip allocation as one unit. An attached depth
+     * surface is an independent allocation and still needs its own Restore. */
+    for (walk = surface->flip_next; walk && walk != surface; walk = walk->flip_next)
+        walk->cooperative_lost = FALSE;
     return DD_OK;
 }
 
@@ -5620,6 +5630,8 @@ static ULONG WINAPI ddraw_AddRef(IDirectDraw7 *iface)
     return (ULONG)InterlockedIncrement(&object->ref);
 }
 
+static BOOL ddraw_platform_release(DDrawObject *object);
+
 static void ddraw_lifetime_release(DDrawObject *object)
 {
     if (InterlockedDecrement(&object->lifetime_ref) == 0) {
@@ -5635,7 +5647,7 @@ static void ddraw_lifetime_release(DDrawObject *object)
         }
         LeaveCriticalSection(&g_object_lock);
         unwatch_object_window(object);
-        if (object->guest_mode_changed)
+        if (!ddraw_platform_release(object) && object->guest_mode_changed)
             ChangeDisplaySettingsA(NULL, 0);
         emit_device_destroy(object);
         EnterCriticalSection(&g_transport_lock);
@@ -5646,10 +5658,14 @@ static void ddraw_lifetime_release(DDrawObject *object)
     }
 }
 
+#include "ddraw_platform_control.inc"
+
 static ULONG WINAPI ddraw_Release(IDirectDraw7 *iface)
 {
     DDrawObject *object = object_from_any(iface, NULL);
     LONG remaining = InterlockedDecrement(&object->ref);
+    if (!remaining && ddraw_platform_release(object))
+        emit_window_state_not_showing(object);
     ddraw_lifetime_release(object);
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -5840,6 +5856,7 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
             request->ddpfPixelFormat.dwRGBBitCount);
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
+        ddraw_platform_sync(object);
         object_display_size(object, &width, &height);
         mode_pixel_format(object->mode_bpp, &pixel_format);
     } else {
@@ -6517,6 +6534,7 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
     DDSURFACEDESC2 output;
     LPDDSURFACEDESC2 caller = description;
     DWORD output_size;
+    HRESULT hr;
     UINT bpp = object->mode_bpp ? object->mode_bpp : 32u;
 
     DDWG_TRACE_CHECKPOINT("CALL ddraw_GetDisplayMode object=%08lX "
@@ -6527,6 +6545,11 @@ static HRESULT WINAPI ddraw_GetDisplayMode(IDirectDraw7 *iface,
     output_size = description->dwSize;
     if (output_size != sizeof(DDSURFACEDESC) && output_size != sizeof(DDSURFACEDESC2))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (ddraw_platform_mode(object, &output, &hr)) {
+        if (FAILED(hr)) return DDWG_TRACE_ERROR(hr);
+        ddraw_write_display_mode(&output, caller, output_size, DD_VERSION_7);
+        return DDWG_TRACE_RESULT(DD_OK);
+    }
     description = &output;
     ZeroMemory(description, sizeof(*description));
     description->dwSize = sizeof(*description);
@@ -6635,104 +6658,156 @@ static HRESULT WINAPI ddraw_Initialize(IDirectDraw7 *iface, GUID *guid)
     (void)guid;
     if (object->initialized) return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
     object->initialized = TRUE;
+    ddraw_platform_attach(object);
     return DD_OK;
+}
+
+/* Native DirectDraw owns the synchronous window callbacks. Keep a private
+ * lifetime while the application procedure can release or reenter this object. */
+static HRESULT ddraw_RestoreDisplayModeForVersion(IDirectDraw7 *iface,
+        unsigned version)
+{
+    DDrawObject *object = object_from_iface(iface);
+    HRESULT hr;
+    LONG serial;
+    InterlockedIncrement(&object->lifetime_ref);
+    serial = InterlockedIncrement(&object->control_serial);
+    if (ddraw_platform_restore(object, version, &hr)) {
+        if (FAILED(hr) || serial != object->control_serial)
+            return ddraw_control_finish(object, hr);
+    } else if (object->guest_mode_changed) {
+        ChangeDisplaySettingsA(NULL, 0);
+        if (serial != object->control_serial)
+            return ddraw_control_finish(object, DD_OK);
+    }
+    object->guest_mode_changed = FALSE;
+    object->mode_set = FALSE;
+    object->mode_refresh = 0;
+    ddraw_platform_sync(object);
+    emit_display_mode(object);
+    return ddraw_control_finish(object, DD_OK);
 }
 
 static HRESULT WINAPI ddraw_RestoreDisplayMode(IDirectDraw7 *iface)
 {
-    DDrawObject *object = object_from_iface(iface);
-
-    DDWG_TRACE_CHECKPOINT("CALL ddraw_RestoreDisplayMode object=%08lX "
-            "guest_changed=%lu", (DWORD)(uintptr_t)object,
-            object->guest_mode_changed ? 1u : 0u);
-    if (object->guest_mode_changed) {
-        ChangeDisplaySettingsA(NULL, 0);
-        object->guest_mode_changed = FALSE;
-    }
-    object->mode_set = FALSE;
-    emit_display_mode(object);
-    return DDWG_TRACE_RESULT(DD_OK);
+    return ddraw_RestoreDisplayModeForVersion(iface, DD_VERSION_7);
 }
 
-static HRESULT WINAPI ddraw_SetCooperativeLevel(IDirectDraw7 *iface,
-        HWND window, DWORD flags)
+static HRESULT ddraw_SetCooperativeLevelForVersion(IDirectDraw7 *iface,
+        unsigned version, HWND window, DWORD flags)
 {
     DDrawObject *object = object_from_iface(iface);
-    UINT width;
-    UINT height;
-
-    DDWG_TRACE_CHECKPOINT("CALL ddraw_SetCooperativeLevel object=%08lX "
-            "hwnd=%08lX flags=%08lX", (DWORD)(uintptr_t)object,
-            (DWORD)(uintptr_t)window, flags);
-    if ((flags & DDSCL_EXCLUSIVE) && !window)
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    HWND old_window = object->window;
+    DWORD old_flags = object->cooperative_flags;
+    UINT width, height;
+    HRESULT hr;
+    LONG serial;
+    InterlockedIncrement(&object->lifetime_ref);
+    serial = InterlockedIncrement(&object->control_serial);
     object->window = window;
     object->cooperative_flags = flags;
+    if (ddraw_platform_cooperative(object, version, window, flags, &hr)) {
+        if (FAILED(hr)) {
+            if (serial != object->control_serial)
+                return ddraw_control_finish(object, hr);
+            object->window = old_window;
+            object->cooperative_flags = old_flags;
+            return ddraw_control_finish(object, hr);
+        }
+        /* Native completes the outer EXCLUSIVE call even when activation
+         * reenters with NORMAL. Mirror the completed native operation. */
+        object->window = window;
+        object->cooperative_flags = flags;
+        if (!(flags & DDSCL_EXCLUSIVE)) {
+            object->mode_set = FALSE;
+            object->guest_mode_changed = FALSE;
+            object->mode_refresh = 0;
+        }
+        ddraw_platform_sync(object);
+    } else if ((flags & DDSCL_EXCLUSIVE) && !window) {
+        object->window = old_window;
+        object->cooperative_flags = old_flags;
+        return ddraw_control_finish(object, DDERR_INVALIDPARAMS);
+    }
+    if ((flags & DDSCL_EXCLUSIVE) && !(old_flags & DDSCL_EXCLUSIVE))
+        ddraw_platform_lose_video_surfaces(object);
     if (!object->mode_width || !object->mode_height) {
         object_display_size(object, &width, &height);
         if (!object->mode_width) object->mode_width = width;
         if (!object->mode_height) object->mode_height = height;
     }
     emit_display_mode(object);
-    DDWG_TRACE("COOPERATIVE_LEVEL object=%08lX size=%lux%lu mode_bpp=%lu",
-            (DWORD)(uintptr_t)object, object->mode_width,
-            object->mode_height, object->mode_bpp);
-    return DDWG_TRACE_RESULT(DD_OK);
+    return ddraw_control_finish(object, DD_OK);
 }
 
-static HRESULT WINAPI ddraw_SetDisplayMode(IDirectDraw7 *iface, DWORD width,
-        DWORD height, DWORD bpp, DWORD refresh, DWORD flags)
+static HRESULT WINAPI ddraw_SetCooperativeLevel(IDirectDraw7 *iface,
+        HWND window, DWORD flags)
+{
+    return ddraw_SetCooperativeLevelForVersion(iface, DD_VERSION_7, window, flags);
+}
+
+static HRESULT ddraw_SetDisplayModeForVersion(IDirectDraw7 *iface,
+        unsigned version, DWORD width, DWORD height, DWORD bpp, DWORD refresh,
+        DWORD flags)
 {
     DDrawObject *object = object_from_iface(iface);
     DEVMODEA mode;
-
-    (void)flags;
-    DDWG_TRACE_CHECKPOINT("CALL ddraw_SetDisplayMode object=%08lX "
-            "size=%lux%lux%lu refresh=%lu flags=%08lX cooperative=%08lX",
-            (DWORD)(uintptr_t)object, width, height, bpp, refresh, flags,
-            object->cooperative_flags);
+    DDPlatformModeState old;
+    HRESULT hr;
+    LONG serial;
     if (!width || !height) return DDWG_TRACE_ERROR(DDERR_INVALIDMODE);
     if (bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)
         return DDWG_TRACE_ERROR(DDERR_INVALIDMODE);
-
+    InterlockedIncrement(&object->lifetime_ref);
+    serial = InterlockedIncrement(&object->control_serial);
+    old = ddraw_platform_save_mode(object);
     object->mode_width = width;
     object->mode_height = height;
     object->mode_bpp = bpp;
     object->mode_refresh = refresh;
     object->mode_set = TRUE;
-
-    /*
-     * Try to move the guest desktop for real first. When it works, the game's
-     * window is the screen and a click lands where the picture says it should;
-     * when it does not, the overlay stays at the window's own rectangle at 1:1
-     * rather than being stretched, because a stretched overlay with untouched
-     * input coordinates looks right and points wrong.
-     */
-    object->guest_mode_changed = FALSE;
-    if (object->cooperative_flags & DDSCL_FULLSCREEN) {
-        ZeroMemory(&mode, sizeof(mode));
-        mode.dmSize = sizeof(mode);
-        mode.dmPelsWidth = width;
-        mode.dmPelsHeight = height;
-        mode.dmBitsPerPel = bpp;
-        mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
-        if (refresh) {
-            mode.dmDisplayFrequency = refresh;
-            mode.dmFields |= DM_DISPLAYFREQUENCY;
+    object->guest_mode_changed = TRUE;
+    if (ddraw_platform_set_mode(object, version, width, height, bpp,
+            refresh, flags, &hr)) {
+        if (serial != object->control_serial)
+            return ddraw_control_finish(object, hr);
+        if (FAILED(hr)) {
+            /* Keep the established virtual-mode path for driver modes that
+             * XP cannot expose. Other native validation errors are observable. */
+            if (hr != E_NOTIMPL && hr != DDERR_UNSUPPORTEDMODE) {
+                ddraw_platform_load_mode(object, &old);
+                return ddraw_control_finish(object, hr);
+            }
+            object->guest_mode_changed = FALSE;
         }
-        if (ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN) ==
-                DISP_CHANGE_SUCCESSFUL)
-            object->guest_mode_changed = TRUE;
-        else
-            HOSTLOG_INFO("the guest desktop could not switch to %lux%lux%lu; "
-                    "the overlay is placed over the game window at 1:1 "
-                    "instead", width, height, bpp);
+    } else {
+        object->guest_mode_changed = FALSE;
+        if (object->cooperative_flags & DDSCL_FULLSCREEN) {
+            ZeroMemory(&mode, sizeof(mode));
+            mode.dmSize = sizeof(mode);
+            mode.dmPelsWidth = width;
+            mode.dmPelsHeight = height;
+            mode.dmBitsPerPel = bpp;
+            mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+            if (refresh) {
+                mode.dmDisplayFrequency = refresh;
+                mode.dmFields |= DM_DISPLAYFREQUENCY;
+            }
+            if (ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN) == DISP_CHANGE_SUCCESSFUL)
+                object->guest_mode_changed = TRUE;
+            if (serial != object->control_serial)
+                return ddraw_control_finish(object, DD_OK);
+        }
     }
     emit_display_mode(object);
-    DDWG_TRACE("DISPLAY_MODE_RESULT object=%08lX guest_changed=%lu",
-            (DWORD)(uintptr_t)object,
-            object->guest_mode_changed ? 1u : 0u);
-    return DDWG_TRACE_RESULT(DD_OK);
+    return ddraw_control_finish(object, DD_OK);
+}
+
+static HRESULT WINAPI ddraw_SetDisplayMode(IDirectDraw7 *iface, DWORD width,
+        DWORD height, DWORD bpp, DWORD refresh, DWORD flags)
+{
+    return ddraw_SetDisplayModeForVersion(iface, DD_VERSION_7, width, height,
+            bpp, refresh, flags);
 }
 
 static HRESULT WINAPI ddraw_WaitForVerticalBlank(IDirectDraw7 *iface,
@@ -6810,16 +6885,25 @@ static HRESULT WINAPI ddraw_GetSurfaceFromDC(IDirectDraw7 *iface, HDC dc,
 
 static HRESULT WINAPI ddraw_RestoreAllSurfaces(IDirectDraw7 *iface)
 {
-    (void)iface;
+    DDrawObject *object = object_from_iface(iface);
+    DDSurface *surface;
+    EnterCriticalSection(&g_object_lock);
+    for (surface = object->surfaces; surface; surface = surface->next)
+        surface_Restore((IDirectDrawSurface7 *)surface);
+    LeaveCriticalSection(&g_object_lock);
     return DD_OK;
 }
 
 static HRESULT WINAPI ddraw_TestCooperativeLevel(IDirectDraw7 *iface)
 {
-    (void)iface;
-    /* Nothing here is ever lost to another process: the overlay belongs to
-     * this page and this session. */
-    return DD_OK;
+    DDrawObject *object = object_from_iface(iface);
+    IUnknown *view;
+    HRESULT hr;
+    if (!ddraw_platform_view(object, DD_VERSION_7, &view, &hr)) return DD_OK;
+    if (FAILED(hr)) return DDWG_TRACE_ERROR(hr);
+    hr = IDirectDraw7_TestCooperativeLevel((IDirectDraw7 *)view);
+    IUnknown_Release(view);
+    return DDWG_TRACE_RESULT(hr);
 }
 
 static HRESULT WINAPI ddraw_GetDeviceIdentifier(IDirectDraw7 *iface,
@@ -6957,6 +7041,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID *guid, LPVOID *out, REFIID iid,
     if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     object->initialized = TRUE;
     object->extended_factory = TRUE;
+    ddraw_platform_attach(object);
     emit_hello_once();
     HOSTLOG_INFO("DirectDraw/Direct3D7 frontend attached");
     *out = (IDirectDraw7 *)object;
@@ -6979,6 +7064,7 @@ HRESULT WINAPI DirectDrawCreate(GUID *guid, LPDIRECTDRAW *out, IUnknown *outer)
     object = object_create();
     if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
     object->initialized = TRUE;
+    ddraw_platform_attach(object);
     emit_hello_once();
     HOSTLOG_INFO("DirectDraw frontend attached through DirectDrawCreate "
             "(version 1 interface)");
@@ -7979,12 +8065,12 @@ static HRESULT WINAPI tag##_Initialize(IFACE *iface, GUID *guid) \
 } \
 static HRESULT WINAPI tag##_RestoreDisplayMode(IFACE *iface) \
 { \
-    return ddraw_RestoreDisplayMode(DDRAW7(iface)); \
+    return ddraw_RestoreDisplayModeForVersion(DDRAW7(iface), VERSION); \
 } \
 static HRESULT WINAPI tag##_SetCooperativeLevel(IFACE *iface, HWND window, \
         DWORD flags) \
 { \
-    return ddraw_SetCooperativeLevel(DDRAW7(iface), window, flags); \
+    return ddraw_SetCooperativeLevelForVersion(DDRAW7(iface), VERSION, window, flags); \
 } \
 static HRESULT WINAPI tag##_WaitForVerticalBlank(IFACE *iface, DWORD flags, \
         HANDLE event) \
@@ -8022,20 +8108,20 @@ LEGACY_DDRAW_THUNKS(ddraw4, IDirectDraw4, IDirectDrawSurface4, DD_VERSION_4,
 static HRESULT WINAPI ddraw1_SetDisplayMode(IDirectDraw *iface, DWORD width,
         DWORD height, DWORD bpp)
 {
-    return ddraw_SetDisplayMode(DDRAW7(iface), width, height, bpp, 0, 0);
+    return ddraw_SetDisplayModeForVersion(DDRAW7(iface), DD_VERSION_1, width, height, bpp, 0, 0);
 }
 
-#define LEGACY_DDRAW_MODE_THUNK(tag, IFACE) \
+#define LEGACY_DDRAW_MODE_THUNK(tag, IFACE, VERSION) \
 static HRESULT WINAPI tag##_SetDisplayMode(IFACE *iface, DWORD width, \
         DWORD height, DWORD bpp, DWORD refresh, DWORD flags) \
 { \
-    return ddraw_SetDisplayMode(DDRAW7(iface), width, height, bpp, refresh, \
+    return ddraw_SetDisplayModeForVersion(DDRAW7(iface), VERSION, width, height, bpp, refresh, \
             flags); \
 }
 
-LEGACY_DDRAW_MODE_THUNK(ddraw2, IDirectDraw2)
-LEGACY_DDRAW_MODE_THUNK(ddraw3, IDirectDraw3)
-LEGACY_DDRAW_MODE_THUNK(ddraw4, IDirectDraw4)
+LEGACY_DDRAW_MODE_THUNK(ddraw2, IDirectDraw2, DD_VERSION_2)
+LEGACY_DDRAW_MODE_THUNK(ddraw3, IDirectDraw3, DD_VERSION_3)
+LEGACY_DDRAW_MODE_THUNK(ddraw4, IDirectDraw4, DD_VERSION_4)
 
 /* GetAvailableVidMem arrived in version 2 with a DDSCAPS, and version 4
  * widened it to DDSCAPS2. Neither is read: there is no fixed pool to report

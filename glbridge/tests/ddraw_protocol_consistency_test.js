@@ -459,7 +459,7 @@ check("advanced DirectDraw surface features are real core paths, not stubs",
         /object_display_size[\s\S]*?GetSystemMetrics\(SM_CXSCREEN\)[\s\S]*?GetSystemMetrics\(SM_CYSCREEN\)/,
         "a windowless normal-mode primary must fall back to the desktop size");
     assert.match(guestSource,
-        /if \(caps & DDSCAPS_PRIMARYSURFACE\) \{\s*object_display_size\(object,\s*&width,\s*&height\)/,
+        /if \(caps & DDSCAPS_PRIMARYSURFACE\) \{\s*ddraw_platform_sync\(object\);\s*object_display_size\(object,\s*&width,\s*&height\)/,
         "CreateSurface must resolve a primary size without requiring exclusive mode");
     assert.doesNotMatch(guestSource,
         /if \(!width \|\| !height\) return DDERR_NOEXCLUSIVEMODE/,
