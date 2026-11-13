@@ -11,7 +11,7 @@ const code=String.raw`
 typedef size_t SIZE_T;typedef uint32_t DWORD,UINT,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL;typedef void*HWND,*HMODULE,*HDC;typedef struct{unsigned version;}GUID;typedef const GUID*REFIID;
 typedef struct Native{unsigned refs,version;}IUnknown,IDirectDraw,IDirectDraw2,IDirectDraw3,IDirectDraw4;
 typedef struct DDSurface{struct DDSurface*next,*flip_next;struct{struct{DWORD dwCaps,dwCaps2;}ddsCaps;}desc;BOOL cooperative_lost,primary;struct DDrawObject*owner;}DDSurface,IDirectDrawSurface7;
-typedef struct DDrawObject{const void*vtbl7;DDSurface*surfaces,*primary;IUnknown*platform_ddraw;BOOL initialized,extended_factory;LONG ref,lifetime_ref,control_serial;HWND window;DWORD cooperative_flags;UINT mode_width,mode_height,mode_bpp,mode_refresh;BOOL mode_set,guest_mode_changed;}DDrawObject,IDirectDraw7;
+typedef struct DDrawObject{const void*vtbl7;DDSurface*surfaces,*primary;IUnknown*platform_ddraw;unsigned factory_kind;BOOL initialized,extended_factory;LONG ref,lifetime_ref,control_serial;HWND window;DWORD cooperative_flags;UINT mode_width,mode_height,mode_bpp,mode_refresh;BOOL mode_set,guest_mode_changed;}DDrawObject,IDirectDraw7;
 typedef struct{DWORD dwSize,dwWidth,dwHeight;struct{DWORD dwRGBBitCount;}ddpfPixelFormat;}DDSURFACEDESC2;
 typedef struct{DWORD dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields,dmDisplayFrequency;}DEVMODEA;
 #define WINAPI
@@ -39,6 +39,7 @@ typedef struct{DWORD dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields,dmDis
 #define DDSCL_FULLSCREEN 1u
 #define DDSCL_EXCLUSIVE 16u
 #define DDSCL_NORMAL 8u
+#define DDRAW_FACTORY_EMULATION 2u
 #define DM_PELSWIDTH 1u
 #define DM_PELSHEIGHT 2u
 #define DM_BITSPERPEL 4u

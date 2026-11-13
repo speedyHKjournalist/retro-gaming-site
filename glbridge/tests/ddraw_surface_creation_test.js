@@ -145,6 +145,23 @@ static void restored_desktop_metadata(void){
  }
  desktop_available=FALSE;desktop_ready=FALSE;desktop_depth=32;desktop_width=800;desktop_height=600;preparation_behavior=0;
 }
-int main(void){sysmem_overlay_policy();restored_desktop_metadata();emulation_allocations();primary_allocation_metadata();no_cooperative_level();creations();mipmaps();borrowed_inputs();block_inputs();managed_roles();targets();memory();MUST(!g_object_lock);printf("PASS actual surface creation C: %u checks, DD1/2/3/4/7 role/placement/flip/backbuffer contracts, rejection before allocation, input preservation, palette/memory/device validation priority, and live global video accounting with duplicate/mip/system-memory isolation and saturation\\n",checks);return 0;}
+static void borrowed_complex_contract(void){
+ const unsigned versions[]={4,7};
+ for(unsigned v=0;v<2;v++){
+  DDrawObject o={.mode_bpp=32,.ref=1,.cooperative_flags=DDSCL_NORMAL};
+  for(unsigned shape=0;shape<4;shape++){
+   DDSURFACEDESC2 r=desc(DDSCAPS_TEXTURE|DDSCAPS_SYSTEMMEMORY|DDSCAPS_MIPMAP|(shape?DDSCAPS_COMPLEX:0));
+   r.dwFlags|=DDSD_PITCH|DDSD_LPSURFACE;r.dwWidth=r.dwHeight=16;r.lPitch=64;r.lpSurface=(void*)0xdeadbeef;r.dwMipMapCount=1;
+   if(shape==2)r.dwFlags|=DDSD_MIPMAPCOUNT;
+   if(shape==3){r.ddsCaps.dwCaps&=~DDSCAPS_MIPMAP;r.ddsCaps.dwCaps2=DDSCAPS2_CUBEMAP|0xfc00u;}
+   request(&o,&r,shape?DDERR_INVALIDCAPS:DD_OK,r.ddsCaps.dwCaps,versions[v]);
+  }
+  DDSURFACEDESC2 r=desc(DDSCAPS_TEXTURE|DDSCAPS_COMPLEX);r.dwWidth=r.dwHeight=16;r.ddsCaps.dwCaps2=DDSCAPS2_CUBEMAP|0xfc00u;r.dwFlags|=DDSD_BACKBUFFERCOUNT;r.dwBackBufferCount=0;
+  request(&o,&r,DDERR_INVALIDPARAMS,0,versions[v]);
+  r.ddsCaps.dwCaps|=DDSCAPS_FLIP;request(&o,&r,DDERR_INVALIDCAPS,0,versions[v]);
+  MUST(o.ref==1&&!o.surfaces&&!o.lifetime_ref);
+ }
+}
+int main(void){borrowed_complex_contract();sysmem_overlay_policy();restored_desktop_metadata();emulation_allocations();primary_allocation_metadata();no_cooperative_level();creations();mipmaps();borrowed_inputs();block_inputs();managed_roles();targets();memory();MUST(!g_object_lock);printf("PASS actual surface creation C: %u checks, DD1/2/3/4/7 role/placement/flip/backbuffer contracts, rejection before allocation, input preservation, palette/memory/device validation priority, and live global video accounting with duplicate/mip/system-memory isolation and saturation\\n",checks);return 0;}
 `.replace('NATIVE_FACTORY_ROWS',factoryNative.surfaces.filter(r=>r.flavor===2).map(r=>'{'+[r.depth,r.place,r.hr,r.caps,r.bpp,r.width,r.height].join(',')+'}').join(','));
 try{const file=dir+"/creation.c",binary=dir+"/creation";fs.writeFileSync(file,code);const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-O1","-Wall","-Wextra","-Werror","-fsanitize=address,undefined","-fno-omit-frame-pointer",file,"-o",binary],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(binary,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

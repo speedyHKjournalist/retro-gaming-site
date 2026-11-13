@@ -2,6 +2,9 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),source=fs.readFileSync(root+'/ddrawproxy/ddraw_proxy.c','utf8'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-metadata-mut-'));
 const rows=[
+ ['caps2 incorrectly validated','surface_SetSurfaceDesc','description->ddsCaps.dwCaps || description->ddsCaps.dwCaps3 ||','description->ddsCaps.dwCaps || description->ddsCaps.dwCaps2 || description->ddsCaps.dwCaps3 ||','desc_policy','DDRAW_DESC_POLICY_SOURCE'],
+ ['reserved caps3 accepted','surface_SetSurfaceDesc','description->ddsCaps.dwCaps || description->ddsCaps.dwCaps3 ||','description->ddsCaps.dwCaps || FALSE ||','desc_policy','DDRAW_DESC_POLICY_SOURCE'],
+ ['reserved caps4 accepted','surface_SetSurfaceDesc','description->ddsCaps.dwCaps4))','FALSE))','desc_policy','DDRAW_DESC_POLICY_SOURCE'],
  ['managed SetSurfaceDesc changes allocation','surface_SetSurfaceDesc','(surface->desc.ddsCaps.dwCaps2 &\n                (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)) ||','FALSE ||','desc_policy','DDRAW_DESC_POLICY_SOURCE'],
 
  ['HEL lacks palette surface role','copy_caps_to_caller','DDSCAPS_PALETTE | DDSCAPS_PRIMARYSURFACE','DDSCAPS_PRIMARYSURFACE','caps_profile','DDRAW_CAPS_SOURCE'],

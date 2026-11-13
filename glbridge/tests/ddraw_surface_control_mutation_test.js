@@ -2,6 +2,11 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-surface-control-mut-'));
 const sources={main:fs.readFileSync(root+'/ddrawproxy/ddraw_proxy.c','utf8'),surface:fs.readFileSync(root+'/ddrawproxy/ddraw_surface_control.inc','utf8'),control:fs.readFileSync(root+'/ddrawproxy/ddraw_platform_control.inc','utf8')};
 const rows=[
+ ['DDraw1 exit wrongly loses allocations','main','ddraw_SetCooperativeLevelForVersion','version != DD_VERSION_1 &&','TRUE &&'],
+ ['DDraw2/3/4 exit wrongly preserves allocations','main','ddraw_SetCooperativeLevelForVersion','version != DD_VERSION_1 &&','version == DD_VERSION_7 &&'],
+ ['NORMAL with FULLSCREEN loses HAL allocations','main','ddraw_SetCooperativeLevelForVersion','!(flags & DDSCL_FULLSCREEN) &&','TRUE &&'],
+ ['HAL exit preserves video allocations','main','ddraw_SetCooperativeLevelForVersion','((old_flags & DDSCL_EXCLUSIVE) && !(flags & DDSCL_EXCLUSIVE) &&','(FALSE && !(flags & DDSCL_EXCLUSIVE) &&'],
+ ['HEL exit applies HAL loss policy','main','ddraw_SetCooperativeLevelForVersion','object->factory_kind != DDRAW_FACTORY_EMULATION','TRUE'],
  ['native restore validates the wrong allocation','surface','ddraw_platform_restore_surface','if (known && (surface->width != width','if (FALSE && known && (surface->width != width'],
 
  ['flip primary created as standalone','surface','ddraw_platform_primary_prepare','desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;\n        if (flip) {\n            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;\n            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;\n            desc.dwBackBufferCount = back_buffers;\n        }\n        if (version == DD_VERSION_1)', 'desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;\n        if (FALSE && flip) {\n            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;\n            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;\n            desc.dwBackBufferCount = back_buffers;\n        }\n        if (version == DD_VERSION_1)'],

@@ -3914,6 +3914,10 @@ static HRESULT WINAPI surface_GetOverlayPosition(IDirectDrawSurface7 *iface,
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
         return DDWG_TRACE_ERROR(DDERR_NOTAOVERLAYSURFACE);
     if (!surface->overlay_destination) return DDWG_TRACE_ERROR(DDERR_NOOVERLAYDEST);
+    if (!surface->overlay_visible) {
+        *x = *y = 0;
+        return DDWG_TRACE_ERROR(DDERR_OVERLAYNOTVISIBLE);
+    }
     *x = surface->overlay_destination_rect.left;
     *y = surface->overlay_destination_rect.top;
     return DD_OK;
@@ -4275,6 +4279,8 @@ static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
             (!fx || fx->dwSize != sizeof(*fx)))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
+    if (!target) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+
     if ((flags & DDOVER_HIDE) || (!destination && !destination_rect &&
             !source_rect && !(flags & (DDOVER_SHOW | DDOVER_REFRESHALL |
                 DDOVER_REFRESHDIRTYRECTS)))) {
@@ -4298,10 +4304,11 @@ static HRESULT WINAPI surface_UpdateOverlay(IDirectDrawSurface7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
 
     if (destination_rect) destination_area = *destination_rect;
-    else if (surface->overlay_destination)
-        destination_area = surface->overlay_destination_rect;
-    else
-        return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
+    else {
+        destination_area.left = destination_area.top = 0;
+        destination_area.right = (LONG)target->width;
+        destination_area.bottom = (LONG)target->height;
+    }
     if (destination_area.right <= destination_area.left ||
             destination_area.bottom <= destination_area.top)
         return DDWG_TRACE_ERROR(DDERR_INVALIDRECT);
@@ -4488,9 +4495,10 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     if (description->dwFlags & ~allowed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(description->dwFlags & DDSD_LPSURFACE) || !description->lpSurface)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    /* XP ignores caps2 here; the primary caps and reserved tail stay invalid. */
     if ((description->dwFlags & DDSD_CAPS) &&
-            (description->ddsCaps.dwCaps || description->ddsCaps.dwCaps2 ||
-             description->ddsCaps.dwCaps3 || description->ddsCaps.dwCaps4))
+            (description->ddsCaps.dwCaps || description->ddsCaps.dwCaps3 ||
+             description->ddsCaps.dwCaps4))
         return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     if ((description->dwFlags & DDSD_WIDTH) &&
             !(description->dwFlags & DDSD_PITCH))
@@ -5983,12 +5991,21 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
         if (version < DD_VERSION_4 || !(caps & DDSCAPS_SYSTEMMEMORY) ||
                 !request->lpSurface)
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        /* A supplied pointer describes one allocation, never a complex
+         * mip/cube graph, even when its requested level count is one. */
+        if ((caps & DDSCAPS_COMPLEX) && ((caps & DDSCAPS_MIPMAP) ||
+                (request->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP)))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     }
     if (caps & DDSCAPS_FLIP) {
         if (!(caps & DDSCAPS_COMPLEX) || !back_buffers ||
                 (caps & (DDSCAPS_FRONTBUFFER | DDSCAPS_BACKBUFFER)))
             return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     } else if (request->dwFlags & DDSD_BACKBUFFERCOUNT) {
+        if ((caps & (DDSCAPS_TEXTURE | DDSCAPS_COMPLEX)) ==
+                (DDSCAPS_TEXTURE | DDSCAPS_COMPLEX) &&
+                (request->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP))
+            return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     }
     if (caps & DDSCAPS_PRIMARYSURFACE) {
@@ -6981,7 +6998,13 @@ static HRESULT ddraw_SetCooperativeLevelForVersion(IDirectDraw7 *iface,
         object->cooperative_flags = old_flags;
         return ddraw_control_finish(object, DDERR_INVALIDPARAMS);
     }
-    if ((flags & DDSCL_EXCLUSIVE) && !(old_flags & DDSCL_EXCLUSIVE))
+    /* DirectDraw1 preserves allocations on a direct exit to NORMAL. Newer
+     * HAL interfaces lose them unless FULLSCREEN is retained, even when the
+     * private HEL marker remains valid. A later nonexclusive call is no exit. */
+    if (((flags & DDSCL_EXCLUSIVE) && !(old_flags & DDSCL_EXCLUSIVE)) ||
+            ((old_flags & DDSCL_EXCLUSIVE) && !(flags & DDSCL_EXCLUSIVE) &&
+             version != DD_VERSION_1 && !(flags & DDSCL_FULLSCREEN) &&
+             object->factory_kind != DDRAW_FACTORY_EMULATION))
         ddraw_platform_lose_video_surfaces(object);
     if (!object->mode_width || !object->mode_height) {
         object_display_size(object, &width, &height);
@@ -7910,6 +7933,8 @@ static HRESULT WINAPI tag##_GetSurfaceDesc(IFACE *iface, DESC *description) \
     if (!description || description->dwSize != sizeof(DESC)) \
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS); \
     legacy_describe(surface, description); \
+    description->dwFlags &= ~DDSD_LPSURFACE; \
+    description->lpSurface = NULL; \
     return DD_OK; \
 } \
 static HRESULT WINAPI tag##_Initialize(IFACE *iface, LPDIRECTDRAW dd, \
