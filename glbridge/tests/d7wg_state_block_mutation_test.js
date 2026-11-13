@@ -18,6 +18,8 @@ function replaceInFunction(name, before, after) {
 }
 let killed = 0;
 const cases = [
+    ["failed EndStateBlock overwrites caller output", () => replaceInFunction("d3d7_device_EndStateBlock", "if (!block) return DDWG_TRACE_ERROR(D3DERR_NOTINBEGINSTATEBLOCK);", "if (!block) { *handle = 0; return DDWG_TRACE_ERROR(D3DERR_NOTINBEGINSTATEBLOCK); }")],
+
     ["recorded matrix mutates live", () => replaceInFunction("d3d7_device_SetTransform", "if (device->recording_state_block)", "if (0 && device->recording_state_block)")],
     ["Multiply incorrectly records", () => replaceInFunction("d3d7_device_MultiplyTransform", "device->recording_state_block = NULL;", "/* lost primary-state routing */")],
     ["Multiply reverses native order", () => replaceInFunction("d3d7_device_MultiplyTransform", "d3d7_multiply_matrix(matrix, &device->transforms[state], &result);", "d3d7_multiply_matrix(&device->transforms[state], matrix, &result);")],

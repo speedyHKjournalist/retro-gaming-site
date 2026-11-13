@@ -190,11 +190,21 @@ static HRESULT ddraw_platform_restore_surface(DDSurface *surface)
     HRESULT hr;
     ddraw_platform_poll_loss(object);
     if (!surface->cooperative_lost) return DD_OK;
-    if (surface->primary && object->mode_set && !object->guest_mode_changed &&
-            (surface->width != object->mode_width ||
-             surface->height != object->mode_height ||
-             surface->desc.ddpfPixelFormat.dwRGBBitCount != object->mode_bpp))
-        return DDERR_WRONGMODE;
+    if (surface->primary) {
+        UINT width, height, bpp;
+        BOOL known;
+        if (object->mode_set && !object->guest_mode_changed) {
+            width = object->mode_width;
+            height = object->mode_height;
+            bpp = object->mode_bpp;
+            known = TRUE;
+        } else known = ddraw_platform_desktop_size(&width, &height, &bpp);
+        /* The private control allocation can have different dimensions.
+         * Its successful Restore cannot validate the proxy's pixel storage. */
+        if (known && (surface->width != width || surface->height != height ||
+                surface->desc.ddpfPixelFormat.dwRGBBitCount != bpp))
+            return DDERR_WRONGMODE;
+    }
     /* Native Restore of a flip primary in NORMAL can crash on XP. Its
      * allocation cannot be restored until exclusive ownership returns. */
     if (surface->primary && surface->front_of_chain &&

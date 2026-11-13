@@ -2,6 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-surface-control-mut-'));
 const sources={main:fs.readFileSync(root+'/ddrawproxy/ddraw_proxy.c','utf8'),surface:fs.readFileSync(root+'/ddrawproxy/ddraw_surface_control.inc','utf8'),control:fs.readFileSync(root+'/ddrawproxy/ddraw_platform_control.inc','utf8')};
 const rows=[
+ ['native restore validates the wrong allocation','surface','ddraw_platform_restore_surface','if (known && (surface->width != width','if (FALSE && known && (surface->width != width'],
+
  ['flip primary created as standalone','surface','ddraw_platform_primary_prepare','desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;\n        if (flip) {\n            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;\n            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;\n            desc.dwBackBufferCount = back_buffers;\n        }\n        if (version == DD_VERSION_1)', 'desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;\n        if (FALSE && flip) {\n            desc.dwFlags |= DDSD_BACKBUFFERCOUNT;\n            desc.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_FLIP;\n            desc.dwBackBufferCount = back_buffers;\n        }\n        if (version == DD_VERSION_1)'],
 
  ['legacy parent not pinned','surface','ddraw_platform_primary_ref','IUnknown_AddRef(*draw);','(void)*draw;'],

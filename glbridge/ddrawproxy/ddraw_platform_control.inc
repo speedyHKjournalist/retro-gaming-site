@@ -145,10 +145,36 @@ static BOOL ddraw_platform_mode(DDrawObject *object, DDSURFACEDESC2 *mode,
     return TRUE;
 }
 
+/* A desktop primary follows the Windows mode. A private native primary may
+ * still describe an allocation from the preceding exclusive mode. */
+static BOOL ddraw_platform_desktop_size(UINT *width, UINT *height, UINT *bpp)
+{
+    HDC screen = GetDC(NULL);
+    int screen_width, screen_height, bits, planes;
+    if (!screen) return FALSE;
+    screen_width = GetDeviceCaps(screen, HORZRES);
+    screen_height = GetDeviceCaps(screen, VERTRES);
+    bits = GetDeviceCaps(screen, BITSPIXEL);
+    planes = GetDeviceCaps(screen, PLANES);
+    ReleaseDC(NULL, screen);
+    if (screen_width <= 0 || screen_height <= 0 || bits <= 0 || planes <= 0 ||
+            bits > 32 || planes > 32)
+        return FALSE;
+    bits *= planes;
+    if (bits != 8 && bits != 16 && bits != 24 && bits != 32) return FALSE;
+    *width = (UINT)screen_width;
+    *height = (UINT)screen_height;
+    *bpp = (UINT)bits;
+    return TRUE;
+}
+
 static void ddraw_platform_sync(DDrawObject *object)
 {
     DDSURFACEDESC2 mode;
     HRESULT hr;
+    /* Focus loss can restore the desktop while DirectDraw still has a
+     * selected exclusive mode. Keep that mode until NORMAL or Restore. */
+    if (object->mode_set) return;
     if (ddraw_platform_mode(object, &mode, &hr) && SUCCEEDED(hr)) {
         object->mode_width = mode.dwWidth;
         object->mode_height = mode.dwHeight;

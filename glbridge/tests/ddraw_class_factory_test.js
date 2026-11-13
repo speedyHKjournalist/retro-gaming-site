@@ -21,8 +21,13 @@ static const GUID CLSID_DirectDraw={21},CLSID_DirectDraw7={22},CLSID_DirectDrawC
 typedef struct IClassFactory IClassFactory;typedef struct IUnknown IUnknown;
 typedef struct IClassFactoryVtbl{HRESULT(*QueryInterface)(IClassFactory*,REFIID,void**);ULONG(*AddRef)(IClassFactory*);ULONG(*Release)(IClassFactory*);HRESULT(*CreateInstance)(IClassFactory*,IUnknown*,REFIID,void**);HRESULT(*LockServer)(IClassFactory*,BOOL);}IClassFactoryVtbl;
 struct IClassFactory{IClassFactoryVtbl*lpVtbl;};struct IUnknown{unsigned unused;};typedef IUnknown IDirect3D;
-typedef struct DDrawObject{void*vtbl1;LONG ref;BOOL initialized,extended_factory;}DDrawObject;typedef DDrawObject IDirectDraw7,IDirectDraw,*LPDIRECTDRAW;typedef void*LPVOID;
+typedef struct DDrawObject{void*vtbl1;LONG ref;BOOL initialized,extended_factory;unsigned factory_kind;}DDrawObject;typedef DDrawObject IDirectDraw7,IDirectDraw,*LPDIRECTDRAW;typedef void*LPVOID;
 typedef struct IDirectDrawClipper{LONG ref;}IDirectDrawClipper;
+#define DDRAW_FACTORY_DEFAULT 0
+#define DDRAW_FACTORY_HARDWARE 1
+#define DDRAW_FACTORY_EMULATION 2
+#define DDCREATE_HARDWAREONLY ((GUID*)1)
+#define DDCREATE_EMULATIONONLY ((GUID*)2)
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
@@ -58,12 +63,15 @@ static ULONG ddraw_Release(IDirectDraw7*p){LONG n=--p->ref;if(!n){--g_object_cou
 static HRESULT DirectDrawCreateClipper(unsigned flags,IDirectDrawClipper**out,IUnknown*outer){(void)flags;(void)outer;*out=heap_alloc_zero(sizeof(**out));if(!*out)return E_OUTOFMEMORY;(*out)->ref=1;++g_clipper_count;return S_OK;}
 static HRESULT clipper_QueryInterface(IDirectDrawClipper*p,REFIID iid,void**out){*out=NULL;if(!iid_is_unknown(iid)&&!guid_equal(iid,&IID_IDirectDrawClipper))return E_NOINTERFACE;++p->ref;*out=p;return S_OK;}
 static ULONG clipper_Release(IDirectDrawClipper*p){LONG n=--p->ref;if(!n){--g_clipper_count;heap_free(p);}return n;}
+${extract("ddraw_factory_kind")}
 ${extract("DirectDrawCreateEx")}
 ${extract("DirectDrawCreate")}
 ${extract("ddraw_Initialize")}
 ${extract("d3d1_Initialize",legacy)}
 ${factory}
 static void entry_points(void){
+ for(unsigned profile=0;profile<3;profile++){GUID*guid=(void*)(uintptr_t)profile;void*created=NULL;MUST(!DirectDrawCreateEx(guid,&created,&IID_IDirectDraw7,NULL)&&created&&((DDrawObject*)created)->factory_kind==profile&&!ddraw_Release(created));LPDIRECTDRAW old_view=NULL;MUST(!DirectDrawCreate(guid,&old_view,NULL)&&old_view&&old_view->factory_kind==profile&&!ddraw_Release(old_view));DDrawObject*pending=object_create();MUST(pending&&!ddraw_Initialize(pending,guid)&&pending->factory_kind==profile&&ddraw_Initialize(pending,NULL)==DDERR_ALREADYINITIALIZED&&pending->factory_kind==profile&&!ddraw_Release(pending));}
+
  void*out=(void*)1;MUST(DirectDrawCreateEx(NULL,&out,&IID_IDirectDraw7,NULL)==DD_OK&&out);DDrawObject*d=out;MUST(d->ref==1&&d->initialized&&d->extended_factory&&!ddraw_Release(d));
  LPDIRECTDRAW old=(void*)1;MUST(DirectDrawCreate(NULL,&old,NULL)==DD_OK&&old);d=(void*)old;MUST(d->ref==1&&d->initialized&&!d->extended_factory&&!ddraw_Release(d));
  out=(void*)1;MUST(DirectDrawCreateEx(NULL,&out,&IID_IDirectDraw4,NULL)==DDERR_INVALIDPARAMS&&!out&&!g_object_count);

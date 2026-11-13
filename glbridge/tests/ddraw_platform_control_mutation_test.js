@@ -2,6 +2,15 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),main=fs.readFileSync(root+'/ddrawproxy/ddraw_proxy.c','utf8'),platform=fs.readFileSync(root+'/ddrawproxy/ddraw_platform_control.inc','utf8'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-platform-mut-'));
 const rows=[
+ ['selected exclusive mode overwritten by desktop','include','ddraw_platform_sync','if (object->mode_set) return;','if (FALSE && object->mode_set) return;'],
+
+ ['failed screen DC accepted','include','ddraw_platform_desktop_size','if (!screen) return FALSE;','if (FALSE && !screen) return FALSE;'],
+ ['screen DC leaked','include','ddraw_platform_desktop_size','ReleaseDC(NULL, screen);','(void)&ReleaseDC;'],
+
+ ['desktop width validity ignored','include','ddraw_platform_desktop_size','screen_width <= 0','FALSE'],
+ ['desktop height validity ignored','include','ddraw_platform_desktop_size','screen_height <= 0','FALSE'],
+ ['invalid physical pixel depth accepted','include','ddraw_platform_desktop_size','bits != 8 && bits != 16 && bits != 24 && bits != 32','FALSE && bits != 8 && bits != 16 && bits != 24 && bits != 32'],
+
  ['unavailable Draw3 does not use Draw2','platform','ddraw_platform_view','version == DD_VERSION_3 && *hr == E_NOINTERFACE','FALSE && *hr == E_NOINTERFACE'],
 
  ['cooperative hold omitted','main','ddraw_SetCooperativeLevelForVersion','InterlockedIncrement(&object->lifetime_ref);','(void)object;'],

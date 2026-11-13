@@ -2276,7 +2276,6 @@ static HRESULT WINAPI d3d7_device_EndStateBlock(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     D3D7StateBlock *block = device->recording_state_block;
     if (!handle) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *handle = 0;
     if (!block) return DDWG_TRACE_ERROR(D3DERR_NOTINBEGINSTATEBLOCK);
     device->recording_state_block = NULL;
     block->handle = device->next_state_block_handle++;

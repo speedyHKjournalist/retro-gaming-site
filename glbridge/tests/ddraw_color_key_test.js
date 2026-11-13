@@ -14,6 +14,8 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 #define DDERR_INVALIDOBJECT (-9)
 #define DDERR_NOCOOPERATIVELEVELSET (-25)
 #define DDSCL_NORMAL 0x8u
+#define DDRAW_FACTORY_EMULATION 2u
+#define DDERR_NODIRECTDRAWHW (-27)
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
@@ -78,8 +80,8 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 typedef struct{DWORD dwColorSpaceLowValue,dwColorSpaceHighValue;}DDCOLORKEY,*LPDDCOLORKEY;
 typedef struct{DWORD dwSize,dwFlags,dwRGBBitCount,dwRBitMask,dwGBitMask,dwBBitMask;}DDPIXELFORMAT;
 typedef struct{void*lpSurface;union{int32_t lPitch;DWORD dwLinearSize;};DWORD dwSize,dwFlags,dwWidth,dwHeight,dwBackBufferCount,dwMipMapCount;struct{DWORD dwCaps,dwCaps2;}ddsCaps;DDPIXELFORMAT ddpfPixelFormat;DDCOLORKEY ddckCKSrcBlt,ddckCKDestBlt,ddckCKSrcOverlay,ddckCKDestOverlay;}DDSURFACEDESC2,*LPDDSURFACEDESC2;
-typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,ref,cooperative_flags;BOOL mode_set,guest_mode_changed;int32_t lifetime_ref;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
-struct DDSurface{void*vtbl7;void*storage;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;UINT mip_level;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
+typedef struct DDSurface DDSurface;typedef struct{void*vtbl7;DWORD mode_bpp,mode_width,mode_height,ref,cooperative_flags,factory_kind;void*gdi_memory;BOOL mode_set,guest_mode_changed;int32_t lifetime_ref;DDSurface*surfaces,*primary;}DDrawObject,IDirectDraw7;
+struct DDSurface{void*vtbl7;void*storage,*memory;DDrawObject*owner;DDSURFACEDESC2 desc;DDCOLORKEY color_key[4];DWORD color_key_present;UINT mip_level;BOOL overlay_visible,front_of_chain,implicit,owns_flip_chain,owner_public_ref;DDSurface*overlay_destination,*next,*flip_next;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;typedef struct{unsigned unused;}DDrawPixelFormatDesc;
 #define DD_VERSION_1 1u
 #define DD_VERSION_4 4u
@@ -100,7 +102,7 @@ static void ddraw_platform_primary_attach(DDrawObject*d,DDSurface*s,DDPlatformPr
 #ifndef DDERR_PRIMARYSURFACEALREADYEXISTS
 #define DDERR_PRIMARYSURFACEALREADYEXISTS ((HRESULT)0x88760234u)
 #endif
-static void ddraw_platform_sync(DDrawObject*d){(void)d;}
+static BOOL ddraw_platform_desktop_size(UINT*w,UINT*h,UINT*b){(void)w;(void)h;(void)b;return FALSE;}\nstatic void ddraw_platform_sync(DDrawObject*d){(void)d;}
 static void object_display_size(DDrawObject*d,UINT*w,UINT*h){(void)d;*w=*h=32;}
 static void mode_pixel_format(UINT bits,DDPIXELFORMAT*p){*p=(DDPIXELFORMAT){.dwSize=sizeof(*p),.dwRGBBitCount=bits};}
 static void describe_pixel_format(const DDPIXELFORMAT*p,DDrawPixelFormatDesc*d){assert(p->dwRGBBitCount==32);d->unused=0;}

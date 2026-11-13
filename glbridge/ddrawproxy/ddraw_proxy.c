@@ -630,6 +630,14 @@ struct DDSurface {
     DDSurface *next;            /* the owner's flat list */
 };
 
+enum { DDRAW_FACTORY_DEFAULT, DDRAW_FACTORY_HARDWARE, DDRAW_FACTORY_EMULATION };
+static unsigned ddraw_factory_kind(GUID *guid)
+{
+    return guid == (GUID *)DDCREATE_HARDWAREONLY ? DDRAW_FACTORY_HARDWARE :
+        guid == (GUID *)DDCREATE_EMULATIONONLY ? DDRAW_FACTORY_EMULATION :
+        DDRAW_FACTORY_DEFAULT;
+}
+
 struct DDrawObject {
     const IDirectDraw7Vtbl *vtbl7;          /* first: the canonical identity */
     const IDirectDraw4Vtbl *vtbl4;
@@ -644,6 +652,8 @@ struct DDrawObject {
     LONG lifetime_ref;          /* public refs plus private child allocations */
     BOOL initialized;          /* COM activation waits for Initialize */
     BOOL extended_factory;     /* DirectDrawCreateEx lock compatibility */
+    unsigned factory_kind;
+    DDSurfaceMemory *gdi_memory; /* weak identity of the original primary allocation */
     IUnknown *platform_ddraw;   /* system DLL: window/display control only */
     IUnknown *platform_primary; /* control/loss marker, never drawn */
     BOOL platform_primary_lost;
@@ -2278,6 +2288,7 @@ static void desc1_to_desc2(const DDSURFACEDESC *from, DDSURFACEDESC2 *to)
     if ((from->dwFlags & DDSD_ZBUFFERBITDEPTH) &&
             !(from->dwFlags & DDSD_PIXELFORMAT)) {
         to->dwFlags = (to->dwFlags & ~DDSD_ZBUFFERBITDEPTH) | DDSD_PIXELFORMAT;
+        to->dwMipMapCount = 0;
         to->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
         to->ddpfPixelFormat.dwFlags = DDPF_ZBUFFER;
         to->ddpfPixelFormat.dwZBufferBitDepth = from->dwZBufferBitDepth;
@@ -4358,6 +4369,8 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) ||
             (surface->desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) ||
+            (surface->desc.ddsCaps.dwCaps2 &
+                (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)) ||
             surface->implicit)
         return DDWG_TRACE_ERROR(DDERR_INVALIDSURFACETYPE);
     if (surface->lock_depth || surface->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
@@ -5010,6 +5023,7 @@ static void surface_destroy(DDSurface *surface)
         if (*link) *link = surface->next;
         if (owner->primary == surface) {
             owner->primary = NULL;
+            owner->gdi_memory = NULL;
             was_primary = TRUE;
         }
     }
@@ -5838,6 +5852,9 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
      * flippable, and only primary flip chains require exclusive mode. */
     if ((caps & DDSCAPS_SYSTEMMEMORY) && (caps & DDSCAPS_VIDEOMEMORY))
         return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if (object->factory_kind == DDRAW_FACTORY_EMULATION &&
+            (caps & DDSCAPS_VIDEOMEMORY))
+        return DDWG_TRACE_ERROR(DDERR_NODIRECTDRAWHW);
     if ((caps & DDSCAPS_ALLOCONLOAD) && !(caps & DDSCAPS_TEXTURE))
         return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     if (request->ddsCaps.dwCaps2 &
@@ -5878,6 +5895,9 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
     }
     if (request->ddsCaps.dwCaps2 &
             (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE))
+        caps |= DDSCAPS_SYSTEMMEMORY;
+    if (object->factory_kind == DDRAW_FACTORY_EMULATION &&
+            !(caps & (DDSCAPS_SYSTEMMEMORY | DDSCAPS_VIDEOMEMORY)))
         caps |= DDSCAPS_SYSTEMMEMORY;
     if (!(caps & DDSCAPS_SYSTEMMEMORY))
         caps |= DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM;
@@ -5955,6 +5975,9 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
                 pixel_format.dwBBitMask);
         return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     }
+    if (object->factory_kind == DDRAW_FACTORY_EMULATION &&
+            (caps & DDSCAPS_ZBUFFER) && pixel_format.dwRGBBitCount == 24u)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     /* Only the explicitly requested compressed root must be block aligned.
      * The implicit 2x2 / 1x1 mip levels bypass this factory validation. */
     if (format_compressed_block_bytes(format) && ((width | height) & 3u))
@@ -5995,17 +6018,16 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
             ddraw_lifetime_release(object);
             return DDWG_TRACE_ERROR(hr);
         }
-        if (prepared.metadata && !(object->mode_set && !object->guest_mode_changed)) {
-            width = prepared.desc.dwWidth;
-            height = prepared.desc.dwHeight;
-            pixel_format = prepared.desc.ddpfPixelFormat;
+        if (!object->mode_set) {
+            UINT desktop_bpp;
+            if (ddraw_platform_desktop_size(&width, &height, &desktop_bpp)) {
+                object->mode_width = width;
+                object->mode_height = height;
+                object->mode_bpp = desktop_bpp;
+            }
+            mode_pixel_format(object->mode_bpp, &pixel_format);
             describe_pixel_format(&pixel_format, &format_desc);
             format = ddraw_pixel_format_to_d3dformat(&format_desc);
-            if (format == DDWG_FMT_UNKNOWN) {
-                ddraw_platform_primary_dispose(&prepared);
-                ddraw_lifetime_release(object);
-                return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
-            }
         }
     }
 
@@ -6033,6 +6055,7 @@ static HRESULT ddraw_CreateSurfaceForVersion(IDirectDraw7 *iface,
 
     if (caps & DDSCAPS_PRIMARYSURFACE) {
         object->primary = surface;
+        object->gdi_memory = surface->memory;
         watch_object_window(object);
         if (!back_buffers)
             (void)seed_windowed_primary_from_screen(surface);
@@ -6453,9 +6476,18 @@ static HRESULT WINAPI ddraw_EnumSurfaces(IDirectDraw7 *iface, DWORD flags,
 
 static HRESULT WINAPI ddraw_FlipToGDISurface(IDirectDraw7 *iface)
 {
-    (void)iface;
-    /* There is no GDI surface behind the overlay to flip back to. */
-    return DD_OK;
+    DDrawObject *object = object_from_iface(iface);
+    DDSurface *primary = object->primary, *walk;
+    if (!primary) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    if (!primary->front_of_chain) return DDWG_TRACE_ERROR(DDERR_NOTFLIPPABLE);
+    if (FAILED(surface_IsLost((IDirectDrawSurface7 *)&primary->vtbl7)))
+        return DDWG_TRACE_ERROR(DDERR_SURFACELOST);
+    if (primary->memory == object->gdi_memory) return DD_OK;
+    for (walk = primary->flip_next; walk && walk != primary; walk = walk->flip_next)
+        if (walk->memory == object->gdi_memory)
+            return surface_Flip((IDirectDrawSurface7 *)&primary->vtbl7,
+                    (IDirectDrawSurface7 *)&walk->vtbl7, DDFLIP_WAIT);
+    return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
 }
 
 static DWORD ddraw_video_memory_free(void)
@@ -6556,7 +6588,7 @@ static void fill_caps(DDCAPS *caps)
 }
 
 static HRESULT copy_caps_to_caller(LPDDCAPS destination, DWORD visible,
-        WINBOOL emulation)
+        unsigned profile)
 {
     DDCAPS caps;
     DWORD caller_size = destination->dwSize;
@@ -6573,7 +6605,25 @@ static HRESULT copy_caps_to_caller(LPDDCAPS destination, DWORD visible,
     caps.dwSize = sizeof(caps);
     fill_caps(&caps);
     caps.dwCurrVisibleOverlays = visible;
-    if (emulation) caps.dwCaps = 0;
+    if (profile == 1u) {
+        caps.dwCaps = DDCAPS_3D | DDCAPS_BLT | DDCAPS_BLTSTRETCH |
+            DDCAPS_BLTCOLORFILL | DDCAPS_BLTDEPTHFILL | DDCAPS_COLORKEY |
+            DDCAPS_PALETTE | DDCAPS_CANBLTSYSMEM;
+        caps.dwCaps2 = 0;
+        caps.dwMaxVisibleOverlays = caps.dwCurrVisibleOverlays = 0;
+        caps.dwMinOverlayStretch = caps.dwMaxOverlayStretch = 0;
+        caps.ddsOldCaps.dwCaps = DDSCAPS_FLIP | DDSCAPS_OFFSCREENPLAIN |
+            DDSCAPS_PALETTE | DDSCAPS_PRIMARYSURFACE | DDSCAPS_TEXTURE |
+            DDSCAPS_ZBUFFER | DDSCAPS_MIPMAP;
+        caps.ddsCaps.dwCaps = caps.ddsOldCaps.dwCaps;
+        caps.ddsCaps.dwCaps2 = 0;
+        caps.dwZBufferBitDepths = DDBD_16;
+        caps.dwVidMemTotal = caps.dwVidMemFree = 0;
+    } else if (profile >= 2u) {
+        ZeroMemory(&caps, sizeof(caps));
+        caps.dwSize = sizeof(caps);
+        if (profile == 3u) caps.dwCaps = DDCAPS_NOHARDWARE;
+    }
 
     copy_size = caller_size < sizeof(caps) ? caller_size : sizeof(caps);
     CopyMemory(destination, &caps, copy_size);
@@ -6596,13 +6646,15 @@ static HRESULT WINAPI ddraw_GetCaps(IDirectDraw7 *iface, LPDDCAPS driver,
         if (surface->overlay_visible) ++visible;
     if (!driver && !emulation) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (driver) {
-        result = copy_caps_to_caller(driver, visible, FALSE);
+        result = copy_caps_to_caller(driver, visible,
+                object->factory_kind == DDRAW_FACTORY_EMULATION ? 3u : 0u);
         if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     }
     if (emulation) {
-        /* Everything here is "hardware": there is no software fallback layer
-         * underneath, and claiming one would invite a title to ask for it. */
-        result = copy_caps_to_caller(emulation, visible, TRUE);
+        /* HAL and HEL expose different DirectDraw surface/depth policies;
+         * factory flags select which profile the caller can enumerate. */
+        result = copy_caps_to_caller(emulation, visible,
+                object->factory_kind == DDRAW_FACTORY_HARDWARE ? 2u : 1u);
         if (FAILED(result)) return DDWG_TRACE_ERROR(result);
     }
     return DDWG_TRACE_RESULT(DD_OK);
@@ -6675,10 +6727,14 @@ static HRESULT WINAPI ddraw_GetGDISurface(IDirectDraw7 *iface,
         LPDIRECTDRAWSURFACE7 *out)
 {
     DDrawObject *object = object_from_iface(iface);
-
+    DDSurface *surface = object->primary, *walk;
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (!object->primary) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
-    *out = (IDirectDrawSurface7 *)object->primary;
+    *out = NULL;
+    if (!surface) return DDWG_TRACE_ERROR(DDERR_NOTFOUND);
+    if (surface->memory != object->gdi_memory)
+        for (walk = surface->flip_next; walk && walk != surface; walk = walk->flip_next)
+            if (walk->memory == object->gdi_memory) { surface = walk; break; }
+    *out = (IDirectDrawSurface7 *)&surface->vtbl7;
     IDirectDrawSurface7_AddRef(*out);
     return DD_OK;
 }
@@ -6738,6 +6794,7 @@ static HRESULT WINAPI ddraw_Initialize(IDirectDraw7 *iface, GUID *guid)
     DDrawObject *object = object_from_iface(iface);
     (void)guid;
     if (object->initialized) return DDWG_TRACE_ERROR(DDERR_ALREADYINITIALIZED);
+    object->factory_kind = ddraw_factory_kind(guid);
     object->initialized = TRUE;
     ddraw_platform_attach(object);
     return DD_OK;
@@ -7131,7 +7188,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID *guid, LPVOID *out, REFIID iid,
 
     (void)guid;
     DDWG_TRACE_CHECKPOINT("CALL DirectDrawCreateEx guid=%08lX iid=%08lX "
-            "out=%08lX outer=%08lX", guid ? guid->Data1 : 0u,
+            "out=%08lX outer=%08lX", (DWORD)(uintptr_t)guid,
             iid ? iid->Data1 : 0u, (DWORD)(uintptr_t)out,
             (DWORD)(uintptr_t)outer);
     if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
@@ -7142,6 +7199,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID *guid, LPVOID *out, REFIID iid,
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     object = object_create();
     if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    object->factory_kind = ddraw_factory_kind(guid);
     object->initialized = TRUE;
     object->extended_factory = TRUE;
     ddraw_platform_attach(object);
@@ -7159,13 +7217,14 @@ HRESULT WINAPI DirectDrawCreate(GUID *guid, LPDIRECTDRAW *out, IUnknown *outer)
 
     (void)guid;
     DDWG_TRACE_CHECKPOINT("CALL DirectDrawCreate guid=%08lX out=%08lX "
-            "outer=%08lX", guid ? guid->Data1 : 0u,
+            "outer=%08lX", (DWORD)(uintptr_t)guid,
             (DWORD)(uintptr_t)out, (DWORD)(uintptr_t)outer);
     if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
     object = object_create();
     if (!object) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    object->factory_kind = ddraw_factory_kind(guid);
     object->initialized = TRUE;
     ddraw_platform_attach(object);
     emit_hello_once();
@@ -7852,13 +7911,22 @@ static HRESULT WINAPI tag##_SetSurfaceDesc(IFACE *iface, DESC *description, \
 static void legacy_describe(DDSurface *surface, void *description)
 {
     DDSURFACEDESC *narrow = (DDSURFACEDESC *)description;
+    DDSURFACEDESC2 current = surface->desc;
 
+    if (surface->primary)
+        ddraw_platform_primary_format(surface->owner, &current.ddpfPixelFormat);
     if (narrow->dwSize == sizeof(DDSURFACEDESC2)) {
-        *(DDSURFACEDESC2 *)description = surface->desc;
+        *(DDSURFACEDESC2 *)description = current;
         ((DDSURFACEDESC2 *)description)->dwSize = sizeof(DDSURFACEDESC2);
         return;
     }
-    desc2_to_desc1(&surface->desc, narrow);
+    desc2_to_desc1(&current, narrow);
+    /* XP's old surface views report depth through the legacy union/flag,
+     * including surfaces originally created with an explicit pixel format. */
+    if (current.ddpfPixelFormat.dwFlags & DDPF_ZBUFFER) {
+        narrow->dwFlags = (narrow->dwFlags & ~DDSD_PIXELFORMAT) | DDSD_ZBUFFERBITDEPTH;
+        narrow->dwZBufferBitDepth = current.ddpfPixelFormat.dwZBufferBitDepth;
+    }
 }
 
 

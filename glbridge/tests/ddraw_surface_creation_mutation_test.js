@@ -2,12 +2,20 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-creation-mut-"));
 const mutations=[
- ["native primary metadata ignored","ddraw","ddraw_CreateSurfaceForVersion","if (prepared.metadata &&","if (FALSE &&"],
- ["virtual primary uses physical metadata","ddraw","ddraw_CreateSurfaceForVersion","!(object->mode_set && !object->guest_mode_changed)","TRUE"],
+ ["virtual primary replaced by desktop geometry","ddraw","ddraw_CreateSurfaceForVersion","if (!object->mode_set) {","if (!object->mode_set || !object->guest_mode_changed) {"],
+ ["desktop primary uses stale native dimensions","ddraw","ddraw_CreateSurfaceForVersion","if (!object->mode_set) {","if (FALSE && !object->mode_set) {"],
+ ["inactive explicit mode replaced by desktop geometry","ddraw","ddraw_CreateSurfaceForVersion","if (!object->mode_set) {","if (TRUE || !object->mode_set) {"],
+ ["desktop display query ignored","ddraw","ddraw_CreateSurfaceForVersion","if (ddraw_platform_desktop_size(&width, &height, &desktop_bpp))","if (FALSE && ddraw_platform_desktop_size(&width, &height, &desktop_bpp))"],
+ ["primary loses GDI allocation identity","ddraw","ddraw_CreateSurfaceForVersion","object->gdi_memory = surface->memory;","object->gdi_memory = NULL;"],
+
+ ["HEL accepts explicit video memory","ddraw","ddraw_CreateSurfaceForVersion","(caps & DDSCAPS_VIDEOMEMORY))\n        return DDWG_TRACE_ERROR(DDERR_NODIRECTDRAWHW);","FALSE)\n        return DDWG_TRACE_ERROR(DDERR_NODIRECTDRAWHW);"],
+ ["HEL default allocation uses video memory","ddraw","ddraw_CreateSurfaceForVersion","caps |= DDSCAPS_SYSTEMMEMORY;\n    if (!(caps & DDSCAPS_SYSTEMMEMORY))","caps |= DDSCAPS_VIDEOMEMORY;\n    if (!(caps & DDSCAPS_SYSTEMMEMORY))"],
+ ["HEL accepts 24bit depth","ddraw","ddraw_CreateSurfaceForVersion","(caps & DDSCAPS_ZBUFFER) && pixel_format.dwRGBBitCount == 24u","FALSE && pixel_format.dwRGBBitCount == 24u"],
+
  ["primary allocation has no lifetime hold","ddraw","ddraw_CreateSurfaceForVersion","InterlockedIncrement(&object->lifetime_ref);","(void)&InterlockedIncrement;"],
  ["retired creator resurrected after allocation","ddraw","ddraw_CreateSurfaceForVersion","if (primary_hold && object->ref <= 0)","if (FALSE && object->ref <= 0)"],
  ["creation before cooperative level","ddraw","ddraw_CreateSurfaceForVersion","if (!object->cooperative_flags)","if (FALSE)"],
- ["managed textures allow explicit placement","ddraw","ddraw_CreateSurfaceForVersion","(caps & (DDSCAPS_SYSTEMMEMORY | DDSCAPS_VIDEOMEMORY)))","FALSE)"],
+ ["managed textures allow explicit placement","ddraw","ddraw_CreateSurfaceForVersion","if (!(caps & DDSCAPS_TEXTURE) ||\n                (caps & (DDSCAPS_SYSTEMMEMORY | DDSCAPS_VIDEOMEMORY)))","if (!(caps & DDSCAPS_TEXTURE) || FALSE)"],
  ["managed storage allows nontextures","ddraw","ddraw_CreateSurfaceForVersion","if (!(caps & DDSCAPS_TEXTURE) ||","if (FALSE ||"],
  ["writeonly accepted on ordinary surfaces","ddraw","ddraw_CreateSurfaceForVersion","} else if (caps & DDSCAPS_WRITEONLY) {","} else if (FALSE && (caps & DDSCAPS_WRITEONLY)) {"],
  ["v7 accepts compressed borrowed pitch","ddraw","ddraw_CreateSurfaceForVersion","version >= DD_VERSION_7 && (request->dwFlags & DDSD_PITCH)","FALSE"],

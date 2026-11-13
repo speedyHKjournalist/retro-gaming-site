@@ -42,7 +42,7 @@ typedef DWORD*LPDWORD;
 #define CopyMemory(d,s,n) memcpy(d,s,n)
 typedef struct {BYTE peRed,peGreen,peBlue,peFlags;} PALETTEENTRY,*LPPALETTEENTRY;
 typedef struct DDrawObject DDrawObject;typedef struct DDSurface DDSurface;typedef struct DDPalette DDPalette;typedef struct DDClipper DDClipper;
-struct DDrawObject {void*vtbl7;LONG ref,lifetime_ref;DWORD device_handle,guest_mode_changed,mode_set,mode_bpp,next_palette_slot,cooperative_flags;DDSurface*surfaces,*primary;DDPalette*palettes;DDClipper*clippers;DDrawObject*next;};
+struct DDrawObject {void*vtbl7;LONG ref,lifetime_ref;DWORD device_handle,guest_mode_changed,mode_set,mode_bpp,mode_width,mode_height,next_palette_slot,cooperative_flags,factory_kind;void*gdi_memory;DDSurface*surfaces,*primary;DDPalette*palettes;DDClipper*clippers;DDrawObject*next;};
 struct DDPalette {void*vtbl;LONG ref;DDrawObject*owner;BOOL owner_public_ref;DWORD caps,slot;PALETTEENTRY entries[256];DDPalette*next;};
 struct DDClipper {void*vtbl;LONG ref;DDrawObject*owner;void*clip_list;DDClipper*next,*all_next;BOOL changed;};
 typedef struct {LONG ref;DWORD handle;} DDTextureStorage;typedef struct {LONG ref;DWORD content_version;BYTE bits[4];} DDSurfaceMemory;
@@ -66,7 +66,7 @@ static void ddraw_platform_primary_detach(DDrawObject*d){(void)d;}
 #ifndef DDERR_PRIMARYSURFACEALREADYEXISTS
 #define DDERR_PRIMARYSURFACEALREADYEXISTS ((HRESULT)0x88760234u)
 #endif
-static void ddraw_platform_sync(DDrawObject*d){(void)d;}
+static BOOL ddraw_platform_desktop_size(UINT*w,UINT*h,UINT*b){(void)w;(void)h;(void)b;return FALSE;}\nstatic void ddraw_platform_sync(DDrawObject*d){(void)d;}
 static void unwatch_object_window(DDrawObject*d){alive(d);}static void ChangeDisplaySettingsA(void*p,unsigned n){(void)p;(void)n;}
 static void emit_device_destroy(DDrawObject*d){alive(d);device_destroys++;}static void submit_batch_locked(BOOL wait){(void)wait;}
 static void emit_window_state_not_showing(DDrawObject*d){alive(d);hidden++;}static void SelectObject(void*p,void*q){(void)p;(void)q;}static void DeleteObject(void*p){(void)p;}static void DeleteDC(void*p){(void)p;ordinary_dc_deletes++;}
