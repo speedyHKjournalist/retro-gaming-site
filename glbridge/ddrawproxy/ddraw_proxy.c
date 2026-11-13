@@ -2638,6 +2638,7 @@ static HRESULT clipper_blt_rects(DDClipper *clipper, RECT *out, UINT capacity,
     if (clipper->window) {
         RECT client;
         if (!GetClientRect(clipper->window, &client)) return E_FAIL;
+        MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);
         if (capacity) { out[0] = client; *count = 1; }
         return DD_OK;
     }
@@ -2664,6 +2665,39 @@ static BOOL rect_intersect(const RECT *a, const RECT *b, RECT *out)
 }
 
 #define DDWG_MAX_CLIP_RECTS 64u
+
+static void clipped_blt_source_rect(const RECT *source, const RECT *destination,
+        const RECT *piece, uint32_t flags, RECT *wire_bits)
+{
+    float x_scale = (float)(source->right - source->left) /
+        (float)(destination->right - destination->left);
+    float y_scale = (float)(source->bottom - source->top) /
+        (float)(destination->bottom - destination->top);
+    float rect[4];
+    if (flags & D9WG_DDBLT_MIRROR_X) {
+        rect[0] = source->right - (piece->right - destination->left)*x_scale;
+        rect[2] = source->right - (piece->left - destination->left)*x_scale;
+    } else {
+        rect[0] = source->left + (piece->left - destination->left)*x_scale;
+        rect[2] = source->left + (piece->right - destination->left)*x_scale;
+    }
+    if (flags & D9WG_DDBLT_MIRROR_Y) {
+        rect[1] = source->bottom - (piece->bottom - destination->top)*y_scale;
+        rect[3] = source->bottom - (piece->top - destination->top)*y_scale;
+    } else {
+        rect[1] = source->top + (piece->top - destination->top)*y_scale;
+        rect[3] = source->top + (piece->bottom - destination->top)*y_scale;
+    }
+    /* Subtraction after a rounded scale (or an FMA) can put an exact edge
+     * just outside the original source. The intersected piece is in range. */
+    const float minimum[4] = {source->left, source->top, source->left, source->top};
+    const float maximum[4] = {source->right, source->bottom, source->right, source->bottom};
+    for (UINT i = 0; i < 4u; ++i) {
+        if (rect[i] < minimum[i]) rect[i] = minimum[i];
+        if (rect[i] > maximum[i]) rect[i] = maximum[i];
+    }
+    CopyMemory(wire_bits, rect, sizeof(rect));
+}
 
 static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         LPDIRECTDRAWSURFACE7 source_iface, LPRECT source_rect, DWORD flags,
@@ -2846,10 +2880,15 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         for (index = 0; index < clip_count; ++index) {
             RECT piece;
             RECT piece_source;
+            uint32_t piece_flags = blt_flags;
             if (!rect_intersect(&effective_destination, &clip_rects[index],
                     &piece))
                 continue;
-            if (source) {
+            if (source && !format_is_depth(source->format)) {
+                clipped_blt_source_rect(&effective_source, &effective_destination,
+                        &piece, blt_flags, &piece_source);
+                piece_flags |= D9WG_DDBLT_SOURCE_RECT_F32;
+            } else if (source) {
                 LONG destination_width = effective_destination.right -
                     effective_destination.left;
                 LONG destination_height = effective_destination.bottom -
@@ -2874,7 +2913,7 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                         source_height, destination_height);
             }
             if (!emit_blt(destination, &piece, source,
-                    source ? &piece_source : NULL, blt_flags, fill_color,
+                    source ? &piece_source : NULL, piece_flags, fill_color,
                     fill_depth))
                 ok = FALSE;
         }

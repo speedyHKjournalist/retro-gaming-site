@@ -2,6 +2,15 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-rop-dc-mutants-"));
 const cases = [
+    ["fractional source marker omitted", "piece_flags |= D9WG_DDBLT_SOURCE_RECT_F32;", "piece_flags |= 0;"],
+    ["fractional source rounded to pixels", "CopyMemory(wire_bits, rect, sizeof(rect));", "for (UINT i=0;i<4u;++i) rect[i]=(float)(LONG)rect[i]; CopyMemory(wire_bits, rect, sizeof(rect));"],
+    ["clipping loses global mirror X", "if (flags & D9WG_DDBLT_MIRROR_X) {", "if (FALSE && (flags & D9WG_DDBLT_MIRROR_X)) {"],
+    ["clipping loses global mirror Y", "if (flags & D9WG_DDBLT_MIRROR_Y) {", "if (FALSE && (flags & D9WG_DDBLT_MIRROR_Y)) {"],
+    ["rounded source edge escapes bounds", "if (rect[i] < minimum[i]) rect[i] = minimum[i];", "if (FALSE && rect[i] < minimum[i]) rect[i] = minimum[i];"],
+    ["fractional source serialized as integer", "CopyMemory(wire_bits, rect, sizeof(rect));", "*wire_bits=(RECT){(LONG)rect[0],(LONG)rect[1],(LONG)rect[2],(LONG)rect[3]};"],
+    ["clipping restarts the stretch for each piece", "(float)(destination->right - destination->left);", "(float)(piece->right - piece->left);"],
+    ["clipped piece drops original effects", "uint32_t piece_flags = blt_flags;", "uint32_t piece_flags = 0;"],
+    ["color clipping uses integer depth path", "if (source && !format_is_depth(source->format)) {", "if (FALSE && source && !format_is_depth(source->format)) {"],
     ["compressed public effects silently accepted", "if (source && format_is_compressed(destination->format) &&", "if (FALSE && source && format_is_compressed(destination->format) &&"],
     ["compressed BltFast unknown flags accepted", "if (format_is_compressed(destination->format) &&", "if (FALSE && format_is_compressed(destination->format) &&"],
     ["cross-owner format conversion accepted", "if (source->owner != destination->owner && source->format != destination->format)", "if (FALSE && source->owner != destination->owner && source->format != destination->format)", 0],

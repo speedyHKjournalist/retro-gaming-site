@@ -122,7 +122,7 @@ function handlerSource(name) {
 function offsetsRead(source, struct) {
     const offsets = new Set();
     for (const match of source.matchAll(
-            /view\.get(?:Uint32|Int32|Float32)\(offset\s*\+\s*D9WG\.F\.(\w+)\.(\w+)(?:\s*\+\s*(\d+))?\s*,/g)) {
+            /(?:view\.get(?:Uint32|Int32|Float32)|sourceCoordinate)\(offset\s*\+\s*D9WG\.F\.(\w+)\.(\w+)(?:\s*\+\s*(\d+))?\s*[,)]/g)) {
         assert.equal("D9WG" + match[1], struct, "a read of " + match[1] + "." + match[2] + " in a " + struct + " handler");
         assert.ok(match[2] in D9WG.F[match[1]], match[1] + " has no field " + match[2]);
         offsets.add(D9WG.F[match[1]][match[2]] + (match[3] ? Number(match[3]) : 0));
@@ -155,13 +155,19 @@ check("onDDBlt decodes every field of D9WGDDBlt at its own offset", () => {
         "source_level", "source_face", "source_rect", "destination_handle",
         "destination_level", "destination_face", "flags",
         "destination_rect", "fill_color"]);
-    // The rectangles are four consecutive int32s read one by one, so their
+    // Both rectangles retain four consecutive 32-bit fields, so their
     // interior offsets have to be accepted as well as their starts.
     const read = offsetsRead(handlerSource("onDDBlt"), "D9WGDDBlt");
     for (const base of [BLT.get("source_rect"), BLT.get("destination_rect")])
         for (let index = 0; index < 4; ++index)
             assert.ok(read.has(base + index * 4),
                 "rectangle component at " + (base + index * 4) + " is not read");
+});
+
+check("fractional source reads retain the integer wire layout and flag selection", () => {
+    assert.match(handlerSource("onDDBlt"), /sourceCoordinate = at => flags & DDBLT_SOURCE_RECT_F32\s*\? view\.getFloat32\(at, true\) : view\.getInt32\(at, true\)/);
+    assert.equal(ddraw.DDBLT_SOURCE_RECT_F32, D9WG.C.D9WG_DDBLT_SOURCE_RECT_F32);
+    assert.equal(D9WG.C.D9WG_DDBLT_SOURCE_RECT_F32, 1 << 7);
 });
 
 check("onDDSetColorKey decodes the key and its presence flag", () => {
