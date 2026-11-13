@@ -1745,8 +1745,7 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
     uint8_t *payload;
     uint8_t *blob;
     BOOL result;
-    if ((rect_count && !rects) ||
-            !(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER |
+    if (!(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER |
                     D3DCLEAR_STENCIL)) ||
             !d3d7_multiply_u32(rect_count, sizeof(*rects), &rect_bytes))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -1758,6 +1757,10 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
             (!device->render_target->attached_depth ||
              device->render_target->attached_depth->format != DDWG_FMT_D24S8))
         return DDWG_TRACE_ERROR(D3DERR_STENCILBUFFER_NOTPRESENT);
+    /* The pointer selects rectangle mode. Keep the count overflow check
+     * above: unlike D3D8/9, native D3D7 still rejects an oversized null list. */
+    if (rects && !rect_count) return D3D_OK;
+    if (!rects) rect_count = rect_bytes = 0;
     if (device->render_target_pending && !d3d7_emit_render_target(device))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     ZeroMemory(&command, sizeof(command));
@@ -2308,12 +2311,28 @@ static HRESULT d3d7_prepare_legacy_draw(D3D7Device *device, DWORD fvf, DWORD fla
                     !(flags & D3DDP_DONOTLIGHT));
 }
 
+/* Empty streams have no declaration to upload or vertices to classify.
+ * Retain the runtime's format checks that precede this no-op: texture sizes
+ * must name existing coordinate sets, and strided data cannot supply RHW. */
+static HRESULT d3d7_empty_draw_result(DWORD fvf, BOOL strided)
+{
+    UINT texture_count = (fvf >> 8u) & 15u;
+    DWORD texture_sizes = texture_count >= 8u ? 0xffffu :
+        (1u << (2u * texture_count)) - 1u;
+    if (texture_count > 8u || ((fvf >> 16u) & ~texture_sizes))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (strided && (fvf & 0x000eu) == 0x0004u)
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
+    return D3D_OK;
+}
+
 static HRESULT WINAPI d3d7_device_DrawPrimitive(IDirect3DDevice7 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, void *vertices,
         DWORD vertex_count, DWORD flags)
 {
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count) return d3d7_empty_draw_result(fvf, 0);
     return d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
             fvf, vertices, vertex_count) ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
@@ -2325,6 +2344,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitive(
 {
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count || !index_count) return d3d7_empty_draw_result(fvf, 0);
     return d3d7_emit_draw_indexed_up(d3d7_device_from_iface(iface),
             primitive_type, fvf, vertices, vertex_count, indices, index_count)
             ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
@@ -2405,6 +2425,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveStrided(
     HRESULT result;
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count) return d3d7_empty_draw_result(fvf, 1);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
@@ -2424,6 +2445,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveStrided(
     HRESULT result;
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count || !index_count) return d3d7_empty_draw_result(fvf, 1);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
@@ -2491,9 +2513,10 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     buffer = d3d7_vb_from_iface(buffer_iface);
     if (buffer->owner != device->owner || buffer->locked ||
             start_vertex > buffer->desc.dwNumVertices ||
-            vertex_count > buffer->desc.dwNumVertices - start_vertex ||
-            !d3d7_primitive_counts(primitive_type, vertex_count,
-                    &primitive_count))
+            vertex_count > buffer->desc.dwNumVertices - start_vertex)
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    if (!vertex_count) return D3D_OK;
+    if (!d3d7_primitive_counts(primitive_type, vertex_count, &primitive_count))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
@@ -2542,13 +2565,15 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
     D3D7Device *device = d3d7_device_from_iface(iface);
     D3D7VertexBuffer *buffer;
     UINT primitive_count;
-    if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl || !indices)
+    if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl || (index_count && !indices))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d7_vb_from_iface(buffer_iface);
     if (buffer->owner != device->owner || buffer->locked ||
             start_vertex > buffer->desc.dwNumVertices ||
-            vertex_count > buffer->desc.dwNumVertices - start_vertex ||
-            !d3d7_primitive_counts(primitive_type, index_count, &primitive_count))
+            vertex_count > buffer->desc.dwNumVertices - start_vertex)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!vertex_count || !index_count) return D3D_OK;
+    if (!d3d7_primitive_counts(primitive_type, index_count, &primitive_count))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     (void)primitive_count;
     HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
