@@ -2,6 +2,11 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-ownership-mutants-"));
 const cases = [
+    ["DD4 manual attachment rejected", "surface->creation_version <= DD_VERSION_4 && !surface->implicit", "surface->creation_version == DD_VERSION_1 && !surface->implicit"],
+    ["new manual backbuffer role not transferred", "other->flip_next->desc.ddsCaps.dwCaps &= ~DDSCAPS_BACKBUFFER;", "(void)other;"],
+    ["new manual buffer lacks backbuffer role", "other->flip_next->desc.ddsCaps.dwCaps &= ~DDSCAPS_BACKBUFFER;\n                other->desc.ddsCaps.dwCaps |= DDSCAPS_BACKBUFFER;", "other->flip_next->desc.ddsCaps.dwCaps &= ~DDSCAPS_BACKBUFFER;\n                (void)other;"],
+    ["implicit successor loses native extra reference", "surface_public_addref(next, surface_factory_view(next->creation_version));", "(void)next;"],
+
     ["invalid clipper accepted by copied vtable", "    return clipper;\n}\n\n/* ------------------------------------------------------------------ *\n * Formats", "    return clipper ? clipper : (DDClipper *)iface;\n}\n\n/* ------------------------------------------------------------------ *\n * Formats"],
     ["damaged clipper vtable decrements count", "if (!clipper || clipper->vtbl != &g_clipper_vtbl) return 0;", "if (!clipper) return 0;"],
     ["freed clipper remains attached", "if (surface->clipper == clipper) surface->clipper = NULL;", "if (surface->clipper == clipper) (void)surface->clipper;"],

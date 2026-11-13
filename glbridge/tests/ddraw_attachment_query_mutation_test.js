@@ -2,6 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/ddraw_proxy.c"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-query-mutants-"));
 const cases=[
+    ["flip queries incorrectly search the whole ring", "    walk = surface->flip_next;\n    if (walk && walk != surface &&\n            (walk->desc.ddsCaps.dwCaps & caps->dwCaps) == caps->dwCaps) {\n        *out = (IDirectDrawSurface7 *)walk;\n        IDirectDrawSurface7_AddRef(*out);\n        return DD_OK;\n    }", "    walk = surface->flip_next;\n    while (walk && walk != surface) {\n        if ((walk->desc.ddsCaps.dwCaps & caps->dwCaps) == caps->dwCaps) {\n            *out = (IDirectDrawSurface7 *)walk;\n            IDirectDrawSurface7_AddRef(*out);\n            return DD_OK;\n        }\n        walk = walk->flip_next;\n    }"],
     ["cube root reports every face","root_seed.ddsCaps.dwCaps2 = (root_seed.ddsCaps.dwCaps2 &\n                ~DDSCAPS2_CUBEMAP_ALLFACES) | DDSCAPS2_CUBEMAP |\n                DDSCAPS2_CUBEMAP_POSITIVEX;","root_seed.ddsCaps.dwCaps2 |= DDSCAPS2_CUBEMAP_ALLFACES;"],
     ["same-face query returns current node","DDSurface *candidate = surface->mip_next;","DDSurface *candidate = surface;"],
     ["same-face mip search disabled","if (candidate && surface->cube_face < 6u &&","if (FALSE && candidate && surface->cube_face < 6u &&"],

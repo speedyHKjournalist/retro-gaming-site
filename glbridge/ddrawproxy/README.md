@@ -65,7 +65,7 @@ interface version and the Direct3D 1-7 fixed-function object models:
 | D3D7 environment bump mapping | done; `V8U8`/`DDPF_BUMPDUDV` is enumerated and uploaded as signed Du/Dv, with `BUMPENVMAP` and `BUMPENVMAPLUMINANCE` executed by the fixed-function WebGPU cascade |
 | D3D7 state blocks and `IDirect3DVertexBuffer7`, including software `ProcessVertices` | done |
 | D3D7 mip chains, six-face cube maps, DXT1-5 upload/readback and texture colour-key rendering | done |
-| D3D7 `ComputeSphereVisibility`, including enabled user clip planes | exact CPU frustum classification |
+| D3D7 `ComputeSphereVisibility`, including enabled user clip planes | implemented; original Wine classification cases remain under repair |
 | Direct3D 1-6 factory/device/texture/VB/viewport/material/light views | done as adapters over the D3D7 core |
 | D3D1 matrices, execute buffers, all 14 opcodes and triangle `Pick` records | done |
 | DirectDraw video ports and overlay alpha/bob capture modes | not advertised; refused |
@@ -75,14 +75,17 @@ browser console rather than only as an `HRESULT` nobody can see.
 
 ### How the interface versions fit together
 
-A versioned DirectDraw interface is a different *view* of one object with one
-reference count, not a different object, so each object carries every vtable it
-answers to and `QueryInterface` hands back a pointer into the same allocation.
-Which version a call arrived through is recovered from the vtable the caller's
-pointer names (`surface_from_any`), which is also how a method that returns an
-interface knows which version to hand back -- a version 2 app calling
-`GetAttachedSurface` gets an `IDirectDrawSurface2`, because that is what it
-will call through.
+A versioned DirectDraw interface is a different *view* of one allocation.
+Public references are counted by interface group, alongside private references
+that keep attached allocations alive. `QueryInterface` returns the requested
+vtable within that allocation; a zero public count in one group does not destroy
+an allocation that another group or an attachment still owns.
+
+Returned interfaces follow the native method's ABI. `GetAttachedSurface` and
+`EnumAttachedSurfaces` inherited by Surface2/3 return Surface1; Surface4/7 return
+their respective interfaces. Depth attachment deletion also retains the caller's
+interface namespace separately from the target reference group it must release.
+The native XP attachment fixtures cover these identities and reference counts.
 
 The version 7 methods are the implementation; the older versions are generated
 thunks that convert their arguments and forward. They differ in exactly three

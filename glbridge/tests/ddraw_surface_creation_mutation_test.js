@@ -2,6 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-creation-mut-"));
 const mutations=[
+ ["system-memory overlays accepted", "ddraw", "ddraw_CreateSurfaceForVersion", "    if ((caps & (DDSCAPS_SYSTEMMEMORY | DDSCAPS_OVERLAY)) ==\n            (DDSCAPS_SYSTEMMEMORY | DDSCAPS_OVERLAY))\n        return DDWG_TRACE_ERROR(DDERR_NOOVERLAYHW);", "    if (FALSE) return DDWG_TRACE_ERROR(DDERR_NOOVERLAYHW);"],
  ["virtual primary replaced by desktop geometry","ddraw","ddraw_CreateSurfaceForVersion","if (!object->mode_set) {","if (!object->mode_set || !object->guest_mode_changed) {"],
  ["desktop primary uses stale native dimensions","ddraw","ddraw_CreateSurfaceForVersion","if (!object->mode_set) {","if (FALSE && !object->mode_set) {"],
  ["inactive explicit mode replaced by desktop geometry","ddraw","ddraw_CreateSurfaceForVersion","if (!object->mode_set) {","if (TRUE || !object->mode_set) {"],

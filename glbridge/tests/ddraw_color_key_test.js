@@ -20,6 +20,7 @@ typedef uint32_t DWORD,UINT;typedef int32_t HRESULT;typedef int BOOL;typedef voi
 #define TRUE 1
 #define FALSE 0
 #define DD_OK 0
+#define DDERR_NOOVERLAYHW (-41)
 #define DDERR_INVALIDPARAMS (-1)
 #define DDERR_NOCOLORKEY (-2)
 #define DDERR_NOCOLORKEYHW (-3)
