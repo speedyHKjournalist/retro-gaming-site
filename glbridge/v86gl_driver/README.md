@@ -8,9 +8,8 @@ name and proxy DLL IOCTL ABI are unchanged.
 Game → existing proxy DLL → MAP_BUFFER / SUBMIT IOCTL → virtqueue →
 registered shared RAM → browser graphics adapter → WebGPU.
 
-The shipping `v86gl.sys` now contains this virtio implementation;
-`v86gl-virtio.sys` is a byte-identical compatibility filename. XP cold boot,
-GL/GLSL queries, exact GDI Unicode glyph pixels, window lifecycle and Cube 2
+The sole shipping driver is `v86gl.sys`, which contains this virtio implementation.
+XP cold boot, GL/GLSL queries, exact GDI Unicode glyph pixels, window lifecycle and Cube 2
 have passed with the current driver, including the local and CPU-worker paths.
 Use the driver and proxy from the same release. F6's deployment manifest records
 source, payload and installed-image hashes and the preserved image backups.
