@@ -88,6 +88,12 @@ static void palette_and_key_views(void){
    if(denied)MUST(!memcmp(&s,&before,sizeof(s))&&key_commands==old_keys&&overlay_commands==old_overlays);
    DDCOLORKEY got={0xdeadbeef,0xdeadbeef};MUST(surface_GetColorKey(&s,selectors[k],&got)==(denied?DDERR_NOCOLORKEY:DD_OK));MUST(got.dwColorSpaceLowValue==(denied?0xdeadbeef:0x22)&&got.dwColorSpaceHighValue==got.dwColorSpaceLowValue);
    MUST(set_key(views[v],&s,selectors[k],NULL)==(denied?DDERR_NOTONMIPMAPSUBLEVEL:DD_OK));
+   if(!denied){
+    UINT kind=k;DDCOLORKEY*desc=surface_description_color_key(&s,kind);
+    MUST(!desc->dwColorSpaceLowValue&&!desc->dwColorSpaceHighValue);
+    MUST(s.color_key[kind].dwColorSpaceLowValue==0x22&&s.color_key[kind].dwColorSpaceHighValue==0x22);
+    DDCOLORKEY absent={0xdeadbeef,0xdeadbeef};MUST(surface_GetColorKey(&s,selectors[k],&absent)==DDERR_NOCOLORKEY&&absent.dwColorSpaceLowValue==0xdeadbeef&&absent.dwColorSpaceHighValue==0xdeadbeef);
+   }
   }
   // A cube face at mip zero is not a mip sublevel for palette or key setters.
   s.mip_level=0;s.cube_face=5;s.indexed=TRUE;s.desc.ddsCaps.dwCaps|=DDSCAPS_TEXTURE;s.desc.ddsCaps.dwCaps2|=DDSCAPS2_CUBEMAP;DDCOLORKEY key={0x22,0x22};

@@ -5,6 +5,10 @@ function extract(name) {const m = new RegExp("static [^;{}\\n]*?\\b" + name + "\
 const nativeClipping=JSON.parse(fs.readFileSync(path.resolve(root,"../../v86/tests/glbridge/fixtures/ddraw_native_clipping.json")));
 const nativeClippingSource=path.resolve(root,"../",nativeClipping.source);
 assert.equal(require("node:crypto").createHash("sha256").update(fs.readFileSync(nativeClippingSource)).digest("hex"),nativeClipping.sourceSha256);
+const bltViews=[1,2,3,4].map(view=>{
+ const a=source.indexOf("static HRESULT WINAPI tag##_Blt("),b=source.indexOf("static HRESULT WINAPI tag##_BltBatch(",a);assert(a>=0&&b>a);
+ return source.slice(a,b).replace(/\\\r?\n/g,"\n").replaceAll("tag##","view"+view).replaceAll("IFACE","IDirectDrawSurface7").replace(/\bVERSION\b/g,String(view));
+}).join("\n");
 const code = `#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,6 +27,9 @@ typedef struct DDSurface DDSurface;typedef struct{DDSurface*primary;}DDrawObject
 typedef struct{BOOL gpu_dirty;}Memory;
 struct DDSurface{DWORD handle,width,height,pitch,bytes_per_pixel,format,lock_depth,color_key_present;DDCOLORKEY color_key[4];BOOL indexed,external_memory;DDPalette*palette;DDrawObject*owner;Memory*memory;void*clipper;BYTE*shadow,*dib_bits;HDC dc;void*gdi_dc;HBITMAP dib,old_bitmap;struct{PF ddpfPixelFormat;}desc;};
 typedef DDSurface IDirectDrawSurface7,*LPDIRECTDRAWSURFACE7;
+#define SURFACE7(p) (p)
+#define DD_VERSION_4 4u
+#define DD_VERSION_7 7u
 #define WINAPI
 #define TRUE 1
 #define FALSE 0
@@ -87,7 +94,8 @@ static BOOL format_is_yuv(DWORD f){return f==DDWG_FMT_YUY2||f==DDWG_FMT_UYVY;}
 static BOOL format_is_compressed(DWORD f){return f==DDWG_FMT_DXT1;}
 static BOOL format_is_depth(DWORD f){return f==70||f==71||f==73||f==75||f==77||f==79||f==80;}
 static void emit_surface_palette_binding(DDSurface*s){(void)s;bindings++;}
-static void emit_color_key(DDSurface*s,DWORD k,DDCOLORKEY*c,BOOL enabled){(void)s;(void)k;(void)c;(void)enabled;}
+static unsigned key_count;static struct{DDSurface*surface;DWORD kind,low,high;BOOL enabled;}keys[16];
+static void emit_color_key(DDSurface*s,DWORD k,const DDCOLORKEY*c,BOOL enabled){if(key_count<16){keys[key_count].surface=s;keys[key_count].kind=k;keys[key_count].low=c?c->dwColorSpaceLowValue:0;keys[key_count].high=c?c->dwColorSpaceHighValue:0;keys[key_count].enabled=enabled;}key_count++;}
 static HRESULT clipper_blt_rects(void*c,RECT*r,UINT n,UINT*count){(void)c;if(clip_override_count){*count=clip_override_count<n?clip_override_count:n;memcpy(r,clip_override,*count*sizeof(RECT));}else{if(clipped)*r=clip;*count=clipped;}return clip_error;}
 static LONG MulDiv(LONG a,LONG b,LONG c){return (LONG)((int64_t)a*b/c);}
 static BOOL emit_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr,DWORD flags,DWORD fill,float depth){(void)d;last_depth=depth;blits++;last_rect=*dr;last_source=s;last_flags=flags;last_fill=fill;if(capture&&captured_count<2){blit_captured[captured_count].dst=*dr;blit_captured[captured_count].src=sr?*sr:(RECT){0};blit_captured[captured_count].flags=flags;blit_captured[captured_count].fill=fill;blit_captured[captured_count].source=!!s;captured_count++;}return !fail_emit;}
@@ -105,7 +113,10 @@ ${extract("surface_depth_mask")}
 static DWORD surface_client_depth_mask(DDSurface*s){return surface_depth_mask(s->format);}
 ${extract("surface_depth_fill_value")}
 ${extract("clipped_blt_source_rect")}
+${extract("surface_BltForVersion")}
 ${extract("surface_Blt")}
+${bltViews}
+static HRESULT blit_view(unsigned v,IDirectDrawSurface7*d,RECT*dr,IDirectDrawSurface7*s,RECT*sr,DWORD f,DDBLTFX*fx){switch(v){case 1:return view1_Blt(d,dr,s,sr,f,fx);case 2:return view2_Blt(d,dr,s,sr,f,fx);case 3:return view3_Blt(d,dr,s,sr,f,fx);case 4:return view4_Blt(d,dr,s,sr,f,fx);default:return surface_Blt(d,dr,s,sr,f,fx);}}
 ${extract("surface_BltFast")}
 typedef struct{HDC dc;}DDrawNativeDC;static DDrawNativeDC native_dc={(void*)2};
 static DDrawNativeDC*ddraw_gdi_dc_create(DDSurface*s){(void)s;return fail_native?NULL:&native_dc;}
@@ -113,6 +124,19 @@ ${extract("surface_GetDC")}
 static HRESULT surface_finish_dc(DDSurface*s,BOOL present){(void)present;s->dc=NULL;return DD_OK;}
 ${extract("surface_ReleaseDC")}
 #define CHECK(x) do{checks++;if(!(x)){fprintf(stderr,"DDraw ROP/DC line %u: %s\\n",__LINE__,#x);return 1;}}while(0)
+static int key_versions(void){
+ Memory m={0};DDrawObject owner={0};DDSurface d={.width=6,.height=1,.format=21,.memory=&m,.owner=&owner},s=d;DDBLTFX fx={.ddckSrcColorkey={0x110000,0x110000},.ddckDestColorkey={0x1100,0x1100}};clipped=FALSE;clip_error=0;
+ d.color_key_present=(1u<<D9WG_DDCKEY_DESTINATION_BLT);d.color_key[D9WG_DDCKEY_DESTINATION_BLT]=(DDCOLORKEY){0xff0000,0xff0000};s.color_key[D9WG_DDCKEY_DESTINATION_BLT]=(DDCOLORKEY){0xaa,0xaa};
+ unsigned versions[]={1,2,3,4,7};
+ for(unsigned p=0;p<2;p++)for(unsigned v=0;v<5;v++){
+  s.color_key_present=p?(1u<<D9WG_DDCKEY_DESTINATION_BLT):0;DDSurface before_d=d,before_s=s;DDBLTFX before_fx=fx;key_count=0;
+  CHECK(!blit_view(versions[v],&d,NULL,&s,NULL,DDBLT_KEYDEST,&fx));CHECK(key_count==(versions[v]<4?2:1));CHECK(keys[0].surface==&d&&keys[0].kind==D9WG_DDCKEY_DESTINATION_BLT&&keys[0].low==(versions[v]<4?0xaa:0xff0000)&&keys[0].high==keys[0].low&&keys[0].enabled);
+  CHECK(keys[key_count-1].low==0xff0000&&keys[key_count-1].enabled);CHECK(!memcmp(&d,&before_d,sizeof(d))&&!memcmp(&s,&before_s,sizeof(s))&&!memcmp(&fx,&before_fx,sizeof(fx)));
+  fail_emit=TRUE;key_count=0;CHECK(blit_view(versions[v],&d,NULL,&s,NULL,DDBLT_KEYDEST,&fx)==DDERR_GENERIC);CHECK(key_count==(versions[v]<4?2:1)&&keys[key_count-1].low==0xff0000&&keys[key_count-1].enabled);CHECK(!memcmp(&d,&before_d,sizeof(d))&&!memcmp(&s,&before_s,sizeof(s))&&!memcmp(&fx,&before_fx,sizeof(fx)));fail_emit=FALSE;
+ }
+ DWORD conflicts[]={DDBLT_KEYSRC|DDBLT_KEYSRCOVERRIDE,DDBLT_KEYDEST|DDBLT_KEYDESTOVERRIDE};for(unsigned i=0;i<2;i++){unsigned b=blits;key_count=0;CHECK(blit_view(1,&d,NULL,&s,NULL,conflicts[i],&fx)==DDERR_INVALIDPARAMS&&blits==b&&!key_count);}
+ s.color_key_present=0;unsigned b=blits;key_count=0;CHECK(surface_Blt(&d,NULL,&s,NULL,DDBLT_KEYSRC,&fx)==DDERR_INVALIDPARAMS&&blits==b&&!key_count);s.color_key_present=1u<<D9WG_DDCKEY_SOURCE_BLT;d.color_key_present=0;key_count=0;CHECK(blit_view(1,&d,NULL,&s,NULL,DDBLT_KEYDEST,&fx)==DDERR_INVALIDPARAMS&&blits==b&&!key_count);CHECK(surface_Blt(&d,NULL,&s,NULL,DDBLT_KEYSRC|DDBLT_KEYDEST,&fx)==DDERR_INVALIDPARAMS&&blits==b&&!key_count);return 0;
+}
 static int raster(void){
  Memory memory={0};BYTE shadow[256]={0};DDrawObject owner={0};DDSurface d={.width=8,.height=8,.pitch=32,.bytes_per_pixel=4,.format=21,.memory=&memory,.shadow=shadow,.owner=&owner},s=d;s.lock_depth=1;
  const DWORD masks[4][3]={{0,0,0},{0xf800,0x7e0,0x1f},{0x7c00,0x3e0,0x1f},{0xff0000,0xff00,0xff}},white[4]={255,65535,32767,0xffffff};
@@ -160,6 +184,6 @@ static int fractional(void){
  }
  clip_override_count=0;d.clipper=NULL;return 0;
 }
-int main(void){CHECK(!raster());CHECK(!fills());CHECK(!contexts());CHECK(!transfers());CHECK(!fractional());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, seven depth fill layouts, incompatible formats/sources/flags, invalid rectangle isolation, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
+int main(void){CHECK(!key_versions());CHECK(!raster());CHECK(!fills());CHECK(!contexts());CHECK(!transfers());CHECK(!fractional());printf("PASS actual DDraw ROP/DC C: %u checks, 1024 source-independent raster fills, seven depth fill layouts, incompatible formats/sources/flags, invalid rectangle isolation, 256 full DC palette snapshots, own/primary/none precedence, clipping, caller guards and accepted failure prefixes\\n",checks);return 0;}
 `;
 try {const file = dir + "/rop.c", binary = dir + "/rop"; fs.writeFileSync(file, code); const built = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", file, "-o", binary], {encoding: "utf8"}); assert.equal(built.status, 0, built.stderr); const run = spawnSync(binary, [], {encoding: "utf8"}); assert.equal(run.status, 0, run.stderr); if(process.argv.includes("--write-fixture")){const rows=[...run.stdout.matchAll(/^CLIPPED ([0-9 ]+)$/gm)].map(m=>m[1].split(" ").map(Number));assert.equal(rows.length,14);const scenes=Array.from({length:8},(_,index)=>({index,label:index<2?"native-stretch-"+index:index===2?"native-window-fill":index===3?"legacy-int-source":"fractional-mirror-"+(index-4),sourceWidth:index>=4?8:6,sourceHeight:index>=4?8:3,sourceRect:index>=4?[0,0,6,5]:[1,1,5,2],destinationRect:index>=4?[4,5,124,91]:[0,0,128,96],clips:index===3?null:index>=4?[[0,0,71,43],[37,43,128,96]]:index===2?[[32,48,64,64]]:[[0,0,128,32],[64,32,128,96]],mirror:index===1?1:index>=4?index-4:0,fill:index===2,commands:rows.filter(r=>r[0]===index).map(r=>({flags:r[2],sourceBits:r.slice(3,7).map(v=>v|0),fill:r[7],destinationRect:r.slice(8,12),source:!!r[12]})),nativePixels:nativeClipping.pixels.filter(p=>p.case===index)}));const sha=p=>require("node:crypto").createHash("sha256").update(fs.readFileSync(p)).digest("hex");fs.writeFileSync(path.resolve(root,"../../v86/tests/glbridge/fixtures/ddraw_clipped_packets.json"),JSON.stringify({description:"Actual public C Blt clipped packets and independent original XP pixel controls; synthetic full-frame oracle is evaluated by browser.",frontSourceSha256:sha(root+"/ddrawproxy/ddraw_proxy.c"),producerSha256:sha(__filename),protocolSha256:sha(root+"/d3d9proxy/d3d9_protocol.h"),nativeReferenceSha256:sha(path.resolve(root,"../../v86/tests/glbridge/fixtures/ddraw_native_clipping.json")),scenes},null,2)+"\n");}process.stdout.write(run.stdout);} finally {fs.rmSync(dir, {recursive: true, force: true});}

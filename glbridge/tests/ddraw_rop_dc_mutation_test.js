@@ -2,6 +2,13 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const source = fs.readFileSync(path.join(__dirname, "../ddrawproxy/ddraw_proxy.c"), "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-rop-dc-mutants-"));
 const cases = [
+    ["conflicting source/destination key selectors accepted", "    if ((flags & (DDBLT_KEYSRC | DDBLT_KEYSRCOVERRIDE)) ==\n            (DDBLT_KEYSRC | DDBLT_KEYSRCOVERRIDE) ||\n            (flags & (DDBLT_KEYDEST | DDBLT_KEYDESTOVERRIDE)) ==\n            (DDBLT_KEYDEST | DDBLT_KEYDESTOVERRIDE))\n        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);", "    (void)fx;"],
+    ["missing keys accepted before wire state", "    /* Validate every requested key before publishing temporary wire state. */\n    if (((flags & DDBLT_KEYSRC) && !(source &&\n                (source->color_key_present & (1u << D9WG_DDCKEY_SOURCE_BLT)))) ||\n            ((flags & DDBLT_KEYDEST) && !(destination->color_key_present &\n                (1u << D9WG_DDCKEY_DESTINATION_BLT))) ||\n            ((flags & DDBLT_KEYSRCOVERRIDE) && (!fx || !source)) ||\n            ((flags & DDBLT_KEYDESTOVERRIDE) && !fx))\n        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);\n", ""],
+    ["old surface view reads destination value", "version < DD_VERSION_4 && source", "FALSE && source"],
+    ["modern surface view reads legacy source value", "version < DD_VERSION_4 && source", "TRUE && source"],
+    ["borrowed legacy destination key not restored", "if ((flags & DDBLT_KEYDESTOVERRIDE) ||\n            (version < DD_VERSION_4 && (flags & DDBLT_KEYDEST))) {", "if (flags & DDBLT_KEYDESTOVERRIDE) {"],
+    ["legacy Blt thunk forces modern policy", "source ? SURFACE7(source) : NULL, source_rect, flags, fx, VERSION);", "source ? SURFACE7(source) : NULL, source_rect, flags, fx, DD_VERSION_7);"],
+
     ["fractional source marker omitted", "piece_flags |= D9WG_DDBLT_SOURCE_RECT_F32;", "piece_flags |= 0;"],
     ["fractional source rounded to pixels", "CopyMemory(wire_bits, rect, sizeof(rect));", "for (UINT i=0;i<4u;++i) rect[i]=(float)(LONG)rect[i]; CopyMemory(wire_bits, rect, sizeof(rect));"],
     ["clipping loses global mirror X", "if (flags & D9WG_DDBLT_MIRROR_X) {", "if (FALSE && (flags & D9WG_DDBLT_MIRROR_X)) {"],

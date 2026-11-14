@@ -1057,6 +1057,10 @@ static void record_surface_storage_create(DDSurface *surface, UINT level_count,
             cube_create.usage |= DDWG_USAGE_RENDERTARGET;
         if (surface->indexed)
             cube_create.usage |= D9WG_USAGE_DDRAW_INDEXED;
+        /* Preserve the unused native byte in GPU storage. Sampling and
+         * destination-alpha blending keep their separate opaque semantics. */
+        if (surface->format == DDWG_FMT_X8R8G8B8)
+            cube_create.usage |= D9WG_USAGE_DDRAW_XRGB_BITS;
         cube_create.pool = DDWG_POOL_DEFAULT;
         storage->resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
         storage->create_opcode = D9WG_OP_CREATE_TEXTURE_CUBE;
@@ -1079,6 +1083,10 @@ static void record_surface_storage_create(DDSurface *surface, UINT level_count,
             create.usage |= DDWG_USAGE_RENDERTARGET;
         if (surface->indexed)
             create.usage |= D9WG_USAGE_DDRAW_INDEXED;
+        /* Preserve the unused native byte in GPU storage. Sampling and
+         * destination-alpha blending keep their separate opaque semantics. */
+        if (surface->format == DDWG_FMT_X8R8G8B8)
+            create.usage |= D9WG_USAGE_DDRAW_XRGB_BITS;
         create.pool = DDWG_POOL_DEFAULT;
         storage->resource_kind = D9WG_RESOURCE_TEXTURE_2D;
         storage->create_opcode = D9WG_OP_CREATE_TEXTURE_2D;
@@ -2823,9 +2831,9 @@ static void clipped_blt_source_rect(const RECT *source, const RECT *destination,
     CopyMemory(wire_bits, rect, sizeof(rect));
 }
 
-static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
+static HRESULT surface_BltForVersion(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         LPDIRECTDRAWSURFACE7 source_iface, LPRECT source_rect, DWORD flags,
-        LPDDBLTFX fx)
+        LPDDBLTFX fx, unsigned version)
 {
     DDSurface *destination = surface_from_iface(iface);
     DDSurface *source = source_iface ? surface_from_iface(source_iface) : NULL;
@@ -2863,6 +2871,12 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     effective_destination.right = (LONG)destination->width;
     effective_destination.bottom = (LONG)destination->height;
     if (dest_rect) effective_destination = *dest_rect;
+
+    if ((flags & (DDBLT_KEYSRC | DDBLT_KEYSRCOVERRIDE)) ==
+            (DDBLT_KEYSRC | DDBLT_KEYSRCOVERRIDE) ||
+            (flags & (DDBLT_KEYDEST | DDBLT_KEYDESTOVERRIDE)) ==
+            (DDBLT_KEYDEST | DDBLT_KEYDESTOVERRIDE))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     if (flags & DDBLT_ROP) {
         if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -2947,18 +2961,22 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     clip_result = clipper_blt_rects(destination->clipper, clip_rects,
             DDWG_MAX_CLIP_RECTS, &clip_count);
     if (FAILED(clip_result)) return DDWG_TRACE_ERROR(clip_result);
+    /* Validate every requested key before publishing temporary wire state. */
+    if (((flags & DDBLT_KEYSRC) && !(source &&
+                (source->color_key_present & (1u << D9WG_DDCKEY_SOURCE_BLT)))) ||
+            ((flags & DDBLT_KEYDEST) && !(destination->color_key_present &
+                (1u << D9WG_DDCKEY_DESTINATION_BLT))) ||
+            ((flags & DDBLT_KEYSRCOVERRIDE) && (!fx || !source)) ||
+            ((flags & DDBLT_KEYDESTOVERRIDE) && !fx))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (source && source->palette) emit_surface_palette_binding(source);
 
     if (flags & DDBLT_KEYSRC) {
-        if (!(source && (source->color_key_present &
-                (1u << D9WG_DDCKEY_SOURCE_BLT))))
-            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
         emit_color_key(source, D9WG_DDCKEY_SOURCE_BLT,
                 &source->color_key[D9WG_DDCKEY_SOURCE_BLT], TRUE);
         blt_flags |= D9WG_DDBLT_KEY_SOURCE;
     }
     if (flags & DDBLT_KEYSRCOVERRIDE) {
-        if (!fx || !source) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         /* An override key is a key for the duration of one blit. Sending it as
          * surface state around the blit keeps DD_BLT to one shape instead of
          * carrying a second key nobody else needs. */
@@ -2967,15 +2985,13 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
         blt_flags |= D9WG_DDBLT_KEY_SOURCE;
     }
     if (flags & DDBLT_KEYDEST) {
-        if (!(destination->color_key_present &
-                (1u << D9WG_DDCKEY_DESTINATION_BLT)))
-            return DDWG_TRACE_ERROR(DDERR_NOCOLORKEY);
-        emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT,
-                &destination->color_key[D9WG_DDCKEY_DESTINATION_BLT], TRUE);
+        const DDCOLORKEY *value = version < DD_VERSION_4 && source
+            ? &source->color_key[D9WG_DDCKEY_DESTINATION_BLT]
+            : &destination->color_key[D9WG_DDCKEY_DESTINATION_BLT];
+        emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT, value, TRUE);
         blt_flags |= D9WG_DDBLT_KEY_DESTINATION;
     }
     if (flags & DDBLT_KEYDESTOVERRIDE) {
-        if (!fx) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
         emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT,
                 &fx->ddckDestColorkey, TRUE);
         blt_flags |= D9WG_DDBLT_KEY_DESTINATION;
@@ -3050,7 +3066,8 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
                 (source->color_key_present &
                     (1u << D9WG_DDCKEY_SOURCE_BLT)) != 0);
     }
-    if (flags & DDBLT_KEYDESTOVERRIDE) {
+    if ((flags & DDBLT_KEYDESTOVERRIDE) ||
+            (version < DD_VERSION_4 && (flags & DDBLT_KEYDEST))) {
         emit_color_key(destination, D9WG_DDCKEY_DESTINATION_BLT,
                 &destination->color_key[D9WG_DDCKEY_DESTINATION_BLT],
                 (destination->color_key_present &
@@ -3070,6 +3087,14 @@ static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
     if (ok && !present_changed_primary(destination, &effective_destination))
         ok = FALSE;
     return DDWG_TRACE_RESULT(ok ? DD_OK : DDERR_GENERIC);
+}
+
+static HRESULT WINAPI surface_Blt(IDirectDrawSurface7 *iface, LPRECT dest_rect,
+        LPDIRECTDRAWSURFACE7 source_iface, LPRECT source_rect, DWORD flags,
+        LPDDBLTFX fx)
+{
+    return surface_BltForVersion(iface, dest_rect, source_iface, source_rect,
+            flags, fx, DD_VERSION_7);
 }
 
 static HRESULT WINAPI surface_BltBatch(IDirectDrawSurface7 *iface,
@@ -4129,6 +4154,7 @@ static HRESULT surface_SetColorKeyForVersion(IDirectDrawSurface7 *iface,
     if (!key) {
         surface->color_key_present &= ~(1u << kind);
         surface->desc.dwFlags &= ~description_flag;
+        ZeroMemory(surface_description_color_key(surface, kind), sizeof(DDCOLORKEY));
         emit_color_key(surface, kind, NULL, FALSE);
     } else {
         surface->color_key[kind] = *key;
@@ -7761,8 +7787,8 @@ static HRESULT WINAPI tag##_AddOverlayDirtyRect(IFACE *iface, LPRECT rect) \
 static HRESULT WINAPI tag##_Blt(IFACE *iface, LPRECT destination_rect, \
         IFACE *source, LPRECT source_rect, DWORD flags, LPDDBLTFX fx) \
 { \
-    return surface_Blt(SURFACE7(iface), destination_rect, \
-            source ? SURFACE7(source) : NULL, source_rect, flags, fx); \
+    return surface_BltForVersion(SURFACE7(iface), destination_rect, \
+            source ? SURFACE7(source) : NULL, source_rect, flags, fx, VERSION); \
 } \
 static HRESULT WINAPI tag##_BltBatch(IFACE *iface, LPDDBLTBATCH batch, \
         DWORD count, DWORD flags) \

@@ -2,6 +2,8 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/ddraw_proxy.c"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-resource-mut-"));
 const rows=[
+ ["removed key descriptor stays stale","surface_SetColorKeyForVersion","ZeroMemory(surface_description_color_key(surface, kind), sizeof(DDCOLORKEY));","(void)surface;"],
+ ["removed key forgets legacy retained value","surface_SetColorKeyForVersion","surface->color_key_present &= ~(1u << kind);","surface->color_key_present &= ~(1u << kind); ZeroMemory(&surface->color_key[kind], sizeof(DDCOLORKEY));"],
  ["missing palette preserves stale output","surface_GetPalette","*out = NULL;","(void)out;"],
  ["palette getter omits AddRef","surface_GetPalette","IDirectDrawPalette_AddRef(*out);","(void)out;"],
  ["nontexture priority accepted","surface_priority_valid","if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE))","if (FALSE && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE))"],

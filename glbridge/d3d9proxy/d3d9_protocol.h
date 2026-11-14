@@ -28,7 +28,7 @@
 
 #define D9WG_MAGIC 0x47573944u /* "D9WG" */
 #define D9WG_VERSION_MAJOR 1u
-#define D9WG_VERSION_MINOR 9u
+#define D9WG_VERSION_MINOR 10u
 
 /* The last four MiB of v86gl.sys's mapped DMA allocation are never used for
  * command batches.  The browser writes asynchronous query/readback results
@@ -309,6 +309,9 @@ enum D9WGOpcode {
  * CPU-expanded destination freezes at whatever palette was current when the
  * sprite landed. Colour keying on such a surface compares indices too.
  */
+/* Ordinary DirectDraw XRGB surfaces retain the unused byte across GPU
+ * blits/readback. Texture sampling still supplies opaque alpha. */
+#define D9WG_USAGE_DDRAW_XRGB_BITS 0x40000000u
 #define D9WG_USAGE_DDRAW_INDEXED 0x80000000u
 
 #pragma pack(push, 1)
