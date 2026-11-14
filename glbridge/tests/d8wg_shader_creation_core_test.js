@@ -34,7 +34,7 @@ ${enumeration(sdk9,"D3DSHADER_INSTRUCTION_OPCODE_TYPE")}
 ${enumeration(sdk9,"D3DSHADER_PARAM_REGISTER_TYPE")}
 ${reg8(enumeration(sdk8,"D3DSHADER_PARAM_REGISTER_TYPE"))}
 typedef struct D9Shader D9Shader;typedef struct{UINT api,refs;D9Shader*shaders;struct{UINT BehaviorFlags;}creation;}D9Device,D8Device,IDirect3DDevice8,IDirect3DDevice9;typedef struct{const void*lpVtbl;}IDirect3DVertexShader9,IDirect3DPixelShader9;typedef UINT D8Shader;
-struct D9Shader{union{IDirect3DVertexShader9 vertex;IDirect3DPixelShader9 pixel;}iface;UINT refcount;D9Device*device;UINT handle;BOOL is_pixel;UINT token_count;DWORD*code;UINT hash_low,hash_high;D9Shader*next_device_resource;};
+struct D9Shader{union{IDirect3DVertexShader9 vertex;IDirect3DPixelShader9 pixel;}iface;UINT refcount;D9Device*device;UINT handle;BOOL is_pixel,requires_software;UINT token_count;DWORD*code;UINT hash_low,hash_high;D9Shader*next_device_resource;};
 static int g_vertex_shader_vtbl,g_pixel_shader_vtbl;static UINT attempts,live,fail_at,fail_emit,emissions,dumps,child_adds,child_releases,allocator=100;static const DWORD*expected_input;
 static D9Device*device_from_iface(D9Device*p){return p;}static UINT device_compatibility_api(const D9Device*d){return d->api;}
 static BOOL validate_vertex_declaration(const DWORD*d,UINT max,UINT*out){assert(d&&max==8192);*out=0;return 1;}

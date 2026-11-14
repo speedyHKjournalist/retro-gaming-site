@@ -15,6 +15,12 @@
 #define D3D7_MAX_CLIP_PLANES 6u
 #define D3D7_MAX_VERTEX_ELEMENTS 24u
 
+/* Logical input binding, including a deferred empty strided declaration. */
+#define D3D7_INPUT_PACKED 0u
+#define D3D7_INPUT_STRIDED 1u
+#define D3D7_INPUT_EMPTY_INDEXED_STRIDED 2u
+#define D3D7_INPUT_VERTEX_BUFFER 3u
+
 typedef struct D3D7VertexBuffer D3D7VertexBuffer;
 typedef struct D3D7StateBlock D3D7StateBlock;
 
@@ -70,6 +76,8 @@ struct D3D7Device {
      * measure the wrong thing and believe the wrong caps. */
     GUID device_guid;
     UINT creation_version;
+    UINT draw_input_kind;
+    DWORD draw_input_fvf;
     BOOL legacy_texture_blending;
     BOOL in_scene;
     D3DVIEWPORT7 viewport;
@@ -2361,15 +2369,52 @@ static HRESULT d3d7_empty_draw_result(DWORD fvf, BOOL strided)
     return D3D_OK;
 }
 
+/* Empty draws still select the logical input declaration on native T&L.
+ * NVIDIA93.71/D3DIM700: an empty indexed strided XYZ input followed by an
+ * empty indexed VB bind returns E_FAIL while consuming that transition; the
+ * next VB call succeeds. Cold VB, RGB/HAL and ordinary packed inputs succeed.
+ * This records the binding transition, never a call count or GPU draw. */
+static void d3d7_commit_draw_input(D3D7Device *device, UINT kind, DWORD fvf)
+{
+    device->draw_input_kind = kind;
+    device->draw_input_fvf = fvf;
+}
+
+static HRESULT d3d7_empty_stream_input_result(D3D7Device *device, DWORD fvf,
+        BOOL strided, BOOL indexed, DWORD vertex_count, DWORD index_count)
+{
+    HRESULT result = d3d7_empty_draw_result(fvf, strided);
+    if (SUCCEEDED(result))
+        d3d7_commit_draw_input(device, strided
+                ? (indexed && !vertex_count && !index_count
+                    ? D3D7_INPUT_EMPTY_INDEXED_STRIDED : D3D7_INPUT_STRIDED)
+                : D3D7_INPUT_PACKED, fvf);
+    return result;
+}
+
+static HRESULT d3d7_empty_vb_input_result(D3D7Device *device, DWORD fvf,
+        BOOL indexed, DWORD vertex_count, DWORD index_count)
+{
+    BOOL deferred_tnl_binding = indexed && !vertex_count && !index_count &&
+        device->creation_version >= 7u &&
+        guid_equal(&device->device_guid, &IID_IDirect3DTnLHalDevice) &&
+        device->draw_input_kind == D3D7_INPUT_EMPTY_INDEXED_STRIDED &&
+        device->draw_input_fvf == fvf && (fvf & 0x000eu) != 0x0004u;
+    d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, fvf);
+    return DDWG_TRACE_ERROR(deferred_tnl_binding ? E_FAIL : D3D_OK);
+}
+
 static HRESULT WINAPI d3d7_device_DrawPrimitive(IDirect3DDevice7 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, void *vertices,
         DWORD vertex_count, DWORD flags)
 {
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
-    if (!vertex_count) return d3d7_empty_draw_result(fvf, 0);
-    return d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
-            fvf, vertices, vertex_count) ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    if (!vertex_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, FALSE, FALSE, vertex_count, 0u);
+    BOOL emitted = d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
+            fvf, vertices, vertex_count) ;
+    if (emitted) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_PACKED, fvf);
+    return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
 static HRESULT WINAPI d3d7_device_DrawIndexedPrimitive(
@@ -2379,10 +2424,12 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitive(
 {
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
-    if (!vertex_count || !index_count) return d3d7_empty_draw_result(fvf, 0);
-    return d3d7_emit_draw_indexed_up(d3d7_device_from_iface(iface),
+    if (!vertex_count || !index_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, FALSE, TRUE, vertex_count, index_count);
+    BOOL emitted = d3d7_emit_draw_indexed_up(d3d7_device_from_iface(iface),
             primitive_type, fvf, vertices, vertex_count, indices, index_count)
-            ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+            ;
+    if (emitted) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_PACKED, fvf);
+    return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
 static HRESULT WINAPI d3d7_device_SetClipStatus(IDirect3DDevice7 *iface,
@@ -2460,13 +2507,14 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveStrided(
     HRESULT result;
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
-    if (!vertex_count) return d3d7_empty_draw_result(fvf, 1);
+    if (!vertex_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, TRUE, FALSE, vertex_count, 0u);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     result = d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
             fvf, packed, vertex_count) ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
     heap_free(packed);
+    if (SUCCEEDED(result)) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_STRIDED, fvf);
     return DDWG_TRACE_ERROR(result);
 }
 
@@ -2480,7 +2528,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveStrided(
     HRESULT result;
     HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
     if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
-    if (!vertex_count || !index_count) return d3d7_empty_draw_result(fvf, 1);
+    if (!vertex_count || !index_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, TRUE, TRUE, vertex_count, index_count);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
@@ -2488,6 +2536,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveStrided(
             primitive_type, fvf, packed, vertex_count, indices, index_count)
             ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
     heap_free(packed);
+    if (SUCCEEDED(result)) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_STRIDED, fvf);
     return DDWG_TRACE_ERROR(result);
 }
 
@@ -2550,7 +2599,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
             start_vertex > buffer->desc.dwNumVertices ||
             vertex_count > buffer->desc.dwNumVertices - start_vertex)
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
-    if (!vertex_count) return D3D_OK;
+    if (!vertex_count) return d3d7_empty_vb_input_result(device, buffer->desc.dwFVF, FALSE, vertex_count, 0u);
     if (!d3d7_primitive_counts(primitive_type, vertex_count, &primitive_count))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
@@ -2563,6 +2612,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
             primitive_type, start_vertex, vertex_count, NULL, 0, &clipped);
     if (clipped) {
         if (SUCCEEDED(clip_result)) {
+            d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
             d3d7_mark_draw_surfaces_dirty(device);device->clip_status = next_status;
         }
         return DDWG_TRACE_ERROR(clip_result);
@@ -2570,7 +2620,10 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     if (d3d7_fvf_uses_wrap(device, buffer->desc.dwFVF)) {
         BOOL emitted = d3d7_emit_draw_up(device, primitive_type, buffer->desc.dwFVF,
                 buffer->shadow + start_vertex*buffer->stride, vertex_count);
-        if (emitted) device->clip_status = next_status;
+        if (emitted) {
+        d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+        device->clip_status = next_status;
+    }
         return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
     }
     if (!d3d7_emit_fvf(device, buffer->desc.dwFVF, NULL))
@@ -2587,6 +2640,7 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     draw.primitive_count = primitive_count;
     if (!emit_command(D9WG_OP_DRAW_PRIMITIVE, &draw, sizeof(draw)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
     device->clip_status = next_status;
     d3d7_mark_draw_surfaces_dirty(device);
     return D3D_OK;
@@ -2607,7 +2661,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
             start_vertex > buffer->desc.dwNumVertices ||
             vertex_count > buffer->desc.dwNumVertices - start_vertex)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (!vertex_count || !index_count) return D3D_OK;
+    if (!vertex_count || !index_count) return d3d7_empty_vb_input_result(device, buffer->desc.dwFVF, TRUE, vertex_count, index_count);
     if (!d3d7_primitive_counts(primitive_type, index_count, &primitive_count))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     (void)primitive_count;
@@ -2621,6 +2675,7 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
             primitive_type, start_vertex, vertex_count, indices, index_count, &clipped);
     if (clipped) {
         if (SUCCEEDED(clip_result)) {
+            d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
             d3d7_mark_draw_surfaces_dirty(device);device->clip_status = next_status;
         }
         return DDWG_TRACE_ERROR(clip_result);
@@ -2629,7 +2684,10 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
             buffer->desc.dwFVF, buffer->shadow + start_vertex * buffer->stride,
             vertex_count, indices, index_count)
 ;
-    if (emitted) device->clip_status = next_status;
+    if (emitted) {
+        d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+        device->clip_status = next_status;
+    }
     return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
@@ -3228,6 +3286,10 @@ static HRESULT WINAPI d3d7_vb_Lock(IDirect3DVertexBuffer7 *iface,
 {
     D3D7VertexBuffer *buffer = d3d7_vb_from_iface(iface);
     if (!data) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    /* These hints were introduced by Direct3D7. Legacy vertex buffers keep
+     * synchronized uploads even when callers pass the later flag bits. */
+    if (buffer->creation_version < DD_VERSION_7)
+        flags &= ~(DDLOCK_NOOVERWRITE | DDLOCK_DISCARDCONTENTS);
     if (flags & DDLOCK_DISCARDCONTENTS) {
         d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         /* Native DD3/7 treat DISCARD as a synchronization hint; the CPU

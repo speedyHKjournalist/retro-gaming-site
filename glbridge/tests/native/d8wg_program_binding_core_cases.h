@@ -65,15 +65,16 @@ static int program8_binding_cases(void)
     CHECK(!d->recording_result->has_vertex_format&&!d->recording_result->has_vertex_shader);
     Interface*empty=NULL;CHECK(!device_end_state_block(&d->iface,&empty)&&!state_block_release(empty));
 #undef REJECT_PAIR
-    /* Core9 setters publish shadow state before transport. Preserve that
-     * explicit failure contract; never replay an uncertain accepted prefix. */
+    /* The declaration prefix is retained, but the shader setter commits only
+     * after its own submission succeeds. Do not replay an uncertain prefix. */
     pair_fail_submission=pair_submissions+1;
     CHECK(d9wg_d3d9_core_set_vertex_shader8(&d->iface,&b->iface,&green->iface.vertex)==D3DERR_DRIVERINTERNALERROR);
     CHECK(pair_submissions==pair_fail_submission&&d->vertex_declaration==b&&d->vertex_shader==red);
     pair_fail_submission=0;CHECK(!d9wg_d3d9_core_set_vertex_shader8(&d->iface,&a->iface,&red->iface.vertex));
     pair_fail_submission=pair_submissions+2;
     CHECK(d9wg_d3d9_core_set_vertex_shader8(&d->iface,&b->iface,&green->iface.vertex)==D3DERR_DRIVERINTERNALERROR);
-    CHECK(pair_submissions==pair_fail_submission&&d->vertex_declaration==b&&d->vertex_shader==green);
+    CHECK(pair_submissions==pair_fail_submission&&d->vertex_declaration==b&&d->vertex_shader==red);
+    CHECK(!green->binding_refs&&red->binding_refs==1);
     pair_fail_submission=0;CHECK(!d9wg_d3d9_core_set_vertex_shader8(&d->iface,NULL,NULL));
     CHECK(!decl_release(&a->iface)&&!decl_release(&b->iface)&&!vertex_shader_release(&red->iface.vertex)&&!vertex_shader_release(&green->iface.vertex)&&!pixel_shader_release(&pixel->iface.pixel));
     CHECK(!device_release(&d->iface)&&!live&&!owner.refs);cases+=2;

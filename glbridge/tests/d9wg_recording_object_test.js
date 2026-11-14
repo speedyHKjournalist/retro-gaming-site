@@ -50,7 +50,7 @@ typedef Object D9Texture,D9CubeTexture,D9VolumeTexture,D9VertexBuffer,D9IndexBuf
 typedef struct D9Shader {union {Interface vertex,pixel;} iface;D9Device *device;uint32_t handle;UINT length;int refs;BOOL is_pixel;struct D9Shader *next_device_resource;} D9Shader;
 typedef struct D9StreamBinding {D9VertexBuffer *buffer;UINT stride,offset;DWORD frequency;} D9StreamBinding;
 typedef struct D9StateBlock {Interface iface;D9Device *device;BOOL device_parent_ref;D9Texture *textures[20];D9CubeTexture *cube_textures[20];D9VolumeTexture *volume_textures[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;BOOL has_texture[20],has_stream[16],has_indices,has_vertex_shader,has_pixel_shader,has_vertex_format;DWORD fvf;BOOL has_light[8],has_light_enable[8],light_enabled[8];D3DLIGHT9 lights[8];D9WGLightState *extra_lights;} D9StateBlock;
-struct D9Device {BOOL managed_texture_dirty;D9Texture *texture_resources,*cube_textures,*volume_textures;D9Shader *shaders;D9Texture *textures[20];D9CubeTexture *cube_bindings[20];D9VolumeTexture *volume_bindings[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;DWORD fvf;D9StateBlock *recording_result;D3DLIGHT9 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;uint32_t handle;};
+struct D9Device {BOOL vertex_shader_hw_disabled;BOOL managed_texture_dirty;D9Texture *texture_resources,*cube_textures,*volume_textures;D9Shader *shaders;D9Texture *textures[20];D9CubeTexture *cube_bindings[20];D9VolumeTexture *volume_bindings[20];D9Shader *vertex_shader,*pixel_shader;D9VertexDeclaration *vertex_declaration;D9StreamBinding streams[16];D9IndexBuffer *index_buffer;DWORD fvf;D9StateBlock *recording_result;D3DLIGHT9 lights[8];BOOL light_set[8],light_enabled[8];D9WGLightState *extra_lights;uint32_t handle;};
 typedef D9Device IDirect3DDevice9;
 static const int g_texture_vtbl=1,g_cube_vtbl=2,g_volume_texture_vtbl=3,g_vb_vtbl=4,g_ib_vtbl=5,g_decl_vtbl=6,g_vertex_shader_vtbl=7,g_pixel_shader_vtbl=8;
 static struct {void *iface;int *refs;int binding_refs;} registry[32];static unsigned registry_count,emissions;static int fail_alloc;
@@ -78,6 +78,7 @@ static void texture_binding_release(D9Texture*t){release_storage(&t->iface);}
 
 ${['VertexBuffer','IndexBuffer','Texture','CubeTexture','VolumeTexture','VertexDeclaration','VertexShader','PixelShader','BaseTexture'].map(n=>'#define IDirect3D'+n+'9_AddRef(p) addref(p)\n#define IDirect3D'+n+'9_Release(p) release(p)').join('\n')}
 static D9Device *device_from_iface(D9Device *p){return p;}
+static BOOL supported_volume_texture_format(UINT f){return f==21;}
 static BOOL supported_volume_texture_format8(UINT f){(void)f;assert(0);return 0;}
 static UINT device_compatibility_api(D9Device*d){(void)d;return 9;}
 static D9VertexBuffer *vb_from_iface(Interface *p){return (void*)p;}

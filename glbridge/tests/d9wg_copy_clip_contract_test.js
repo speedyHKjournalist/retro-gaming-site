@@ -10,11 +10,11 @@ fs.writeFileSync(dir+"/test.c",`#include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include "${root}/d3d9proxy/d3d9_protocol.h"
-typedef uint32_t UINT,DWORD,D3DTEXTUREFILTERTYPE;typedef int BOOL,HRESULT;
+typedef uint32_t UINT,DWORD,D3DTEXTUREFILTERTYPE;typedef int BOOL,HRESULT;typedef int32_t LONG;
 typedef struct{int left,top,right,bottom;}RECT;
 typedef struct{UINT api,handle;BOOL recording,pure,in_scene;float clip_planes[6][4],recorded[6][4];UINT recorded_mask;}D9Device,IDirect3DDevice9;
 typedef struct{UINT usage;}Texture;
-typedef struct{D9Device*device;Texture*texture,*cube_texture;void*swap_chain,*shadow;UINT width,height,format,pool;BOOL auto_depth_stencil,texture_child,gpu;}D9Surface,IDirect3DSurface9;
+typedef struct{D9Device*device;Texture*texture,*cube_texture;void*swap_chain,*shadow;UINT width,height,format,pool,multisample;BOOL auto_depth_stencil,texture_child,gpu;}D9Surface,IDirect3DSurface9;
 #define WINAPI
 #define D3D_OK 0
 #define D3DERR_INVALIDCALL (-1)

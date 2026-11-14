@@ -24,7 +24,7 @@ const mutations=[
  ["failed lock overwrites caller output","lock_surface_texture_level","level->locked = FALSE;","*out = locked; level->locked = FALSE;"],
  ["mandatory submission failure masked","submit_readback_batch_locked","return d9wg_transport_submit(g_process, present);","(void)present; return TRUE;"],
  ["transient back-buffer destination offset","d9wg_renderable_upload","copy.destination_top = area->top;","copy.destination_top = 0;"],
- ["transient upload ignores source stride","d9wg_renderable_upload","rows.source_pitch = pitch;","rows.source_pitch = ((void)pitch, rows.row_bytes);"],
+ ["transient upload ignores source stride","d9wg_renderable_upload","    rows.source_pitch = pitch;\n    rows.source = pixels;","    rows.source_pitch = ((void)pitch, rows.row_bytes);\n    rows.source = pixels;"],
  ["transient texture cleanup opcode","d9wg_renderable_upload","D9WG_OP_DESTROY_RESOURCE","D9WG_OP_SET_TEXTURE"],
  ["CPU upload omits rectangle origin","upload_surface_rect","pixels + area->top * pitch + area->left * pixel_bytes","pixels"],
  ["overlap uses live source","copy_surface_rect","if (input == output)","if (0)"],

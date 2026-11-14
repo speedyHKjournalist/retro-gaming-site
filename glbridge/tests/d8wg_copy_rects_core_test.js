@@ -23,6 +23,7 @@ ${desc(9,'D3DSURFACE_DESC')}
 #define D3DERR_DRIVERINTERNALERROR (-2)
 #define E_OUTOFMEMORY (-3)
 #define D3DPOOL_DEFAULT 0u
+#define D3DPOOL_SYSTEMMEM 2u
 #define D3DUSAGE_RENDERTARGET 1u
 #define D3DUSAGE_DEPTHSTENCIL 2u
 #define D3DRTYPE_SURFACE 1u
@@ -60,6 +61,10 @@ static UINT allocate_handle(void){return 101;}
 static BOOL emit_texture_rows(const D9WGTextureRows*r){(void)r;return TRUE;}
 static BOOL observed_renderable(UINT dev,UINT handle,UINT fmt,UINT target,UINT level,UINT face,const D9WGSurfaceLockRect*r,const BYTE*p,UINT pitch,UINT pb,int(*emit)(uint16_t,const void*,UINT),int(*rows)(const D9WGTextureRows*)){D9Surface*s=gpu_view(0,0,0);assert(dev==device.handle&&handle==101&&fmt==s->format&&!target&&!level&&!face&&p==s->shadow+r->top*pitch+r->left*pb&&pitch==s->row_pitch&&emit==emit_command&&rows==emit_texture_rows);RECT a={r->left,r->top,r->right,r->bottom};return observe_upload(s,&a);}
 #define d9wg_renderable_upload observed_renderable
+/* Dirty-list allocation/propagation is covered by d9wg_texture_dirty_test.
+ * This surface-copy fixture observes the exact SYSTEMMEM callback boundary;
+ * it must receive owned storage and a bounded upload rectangle. */
+static BOOL texture_mark_dirty(D9Texture*t,UINT level,const RECT*r){assert(t&&t->pool==D3DPOOL_SYSTEMMEM&&level<t->level_count&&r&&r->left>=0&&r->top>=0&&r->right>=r->left&&r->bottom>=r->top&&(UINT)r->right<=t->levels[level].width&&(UINT)r->bottom<=t->levels[level].height);return TRUE;}
 ${['upload_front8','refresh_copy8'].map(n=>extract(source,n)).join('\n')}
 ${block[0].replace('../runtime/d9wg_copy_rects_bridge8.h',process.env.D8WG_RECT_BRIDGE_HEADER||root+'/runtime/d9wg_copy_rects_bridge8.h')}
 ${extract(source,'d9wg_d3d9_core_copy_rects8')}

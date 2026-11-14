@@ -12,11 +12,13 @@ try{const old8=fs.readFileSync(root+"/tests/fixtures/d3d8_texture_before_core.c"
 #include "${root}/runtime/d9wg_format_queries.h"
 typedef uint32_t UINT,DWORD,D3DFORMAT,D3DPOOL,D3DMULTISAMPLE_TYPE,D3DTEXTUREFILTERTYPE;typedef int32_t BOOL,LONG,HRESULT;typedef uint8_t BYTE;typedef void*HANDLE;
 typedef struct{const void*lpVtbl;}Iface,IDirect3DTexture8,IDirect3DTexture9;
-typedef struct Level{UINT width,height,depth,row_pitch,row_count,slice_pitch,byte_count;BYTE*shadow;BOOL shadow_valid;}Level,D8TextureLevel,D9TextureLevel;
+typedef struct{LONG left,top,right,bottom;}RECT;
+typedef struct D9TextureDirtyRect{struct D9TextureDirtyRect*next;RECT rect;}D9TextureDirtyRect;
+typedef struct Level{UINT width,height,depth,row_pitch,row_count,slice_pitch,byte_count;BYTE*shadow;BOOL shadow_valid,dirty_full;D9TextureDirtyRect*dirty_rects;}Level,D8TextureLevel,D9TextureLevel;
 typedef struct Device Device,D8Device,D9Device,IDirect3DDevice8,IDirect3DDevice9;
 typedef struct Texture Texture,D8Texture,D9Texture;
-struct Device{UINT api,pins;Texture*texture_resources;UINT handle;};
-struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;BYTE*mip_storage;Texture*next_device_resource;};
+struct Device{UINT api,pins;Texture*texture_resources;UINT handle;BOOL managed_texture_dirty;};
+struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,level_count,usage,format,pool,multisample_type,multisample,multisample_quality,autogen_filter;Level*levels;BYTE*mip_storage;Texture*next_device_resource;BOOL dirty_pending;};
 #define WINAPI
 #define D9FMT_NULL 0x4c4c554eu
 #ifndef E_NOTIMPL
@@ -68,6 +70,7 @@ static UINT runtime_host_features(void){return 0;}
 static BOOL emit_command(UINT op,const void*payload,UINT bytes){assert(op==D9WG_OP_CREATE_TEXTURE_2D&&bytes==sizeof(D9WGCreateTexture2D));const D9WGCreateTexture2D*q=payload;creates++;UINT a[]={q->width,q->height,q->level_count,q->usage,q->format,q->pool,q->multisample_type,0,q->resource_handle,q->multisample_quality};memcpy(emitted,a,sizeof(a));return !transport_fail;}
 static BOOL emit_generate_mips(Device*d,UINT handle,UINT filter,BOOL initial){(void)d;assert(handle&&initial);emitted[7]=filter;emitted[9]+=16;return TRUE;}
 #define ZeroMemory(p,n) memset(p,0,n)
+${["texture_dirty_clear","texture_dirty_all"].map(n=>extract(fs.readFileSync(root+"/runtime/d9wg_texture_dirty2d.h","utf8"),n)).join("\n")}
 ${extract(source,'emit_texture_create')}
 ${extract(source,'full_mip_level_count')}
 ${old8.replace(/\bdevice_create_texture\b/g,'old8_create').replace(/\bemit_texture_create\b/g,'old8_emit')}
@@ -102,7 +105,7 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  allocations=frees=creates=handles=0;memset(emitted,0xcc,sizeof(emitted));HRESULT hr=api==8?d9wg_d3d9_core_texture8(&actual_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&actual):device_create_texture(&actual_device,w,h,levels[l],usages[u],format,pools[p],nullout?NULL:&actual,NULL);
  if(hr!=wanted||allocations!=old_alloc||frees!=old_free)fprintf(stderr,"creation api=%u format=%08x w=%u levels=%u usage=%x pool=%u fault=%u null=%u hr=%d/%d alloc=%u/%u free=%u/%u\\n",api,format,w,levels[l],usages[u],pools[p],fail,nullout,hr,wanted,allocations,old_alloc,frees,old_free);
  CHECK(hr==wanted);CHECK(allocations==old_alloc&&frees==old_free&&creates==old_creates&&handles==old_handles&&!memcmp(args,emitted,sizeof(args)));CHECK(actual_device.pins==before_device.pins&&actual_device.pins==(!hr));
- if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->autogen_filter==b->autogen_filter&&a->refcount==1&&a->device==&actual_device&&actual_device.texture_resources==a&&b->level_count==a->level_count&&a->width==w&&a->height==h&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}
+ if(!hr){Texture*a=(Texture*)actual,*b=(Texture*)before;CHECK(a->dirty_pending==(pools[p]==1||pools[p]==2)&&actual_device.managed_texture_dirty==(pools[p]==1));for(UINT dirty=0;dirty<a->level_count;dirty++)CHECK(a->levels[dirty].dirty_full==(pools[p]==1||pools[p]==2)&&!a->levels[dirty].dirty_rects);CHECK(a->autogen_filter==b->autogen_filter&&a->refcount==1&&a->device==&actual_device&&actual_device.texture_resources==a&&b->level_count==a->level_count&&a->width==w&&a->height==h&&a->usage==usages[u]&&a->format==format&&a->pool==pools[p]&&!a->multisample_type);for(UINT n=0;n<a->level_count;n++){Level*aa=a->levels+n,*bb=b->levels+n;CHECK(aa->width==bb->width&&aa->height==bb->height&&aa->row_pitch==bb->row_pitch&&aa->row_count==bb->row_count&&aa->byte_count==bb->byte_count&&!!aa->shadow==!!bb->shadow);if(aa->shadow)CHECK(!memcmp(aa->shadow,bb->shadow,aa->byte_count)&&zeroes(aa->shadow,aa->byte_count));levelchecks++;}
  if(contiguous){CHECK(a->mip_storage);UINT offset=0;for(UINT face=0;face<1;face++){for(UINT level=0;level<a->level_count;level++){Level*entry=a->levels+face*a->level_count+level;CHECK(entry->shadow==a->mip_storage+offset&&entry->shadow_valid);offset+=api==9&&(format==0x31495441u||format==0x32495441u)?entry->width*entry->height:entry->byte_count;}offset=(offset+15)/16*16;}}
  cleanup(before);cleanup(actual);}else CHECK(before==actual&&(!actual||actual==(void*)(uintptr_t)99)&&!before_device.texture_resources&&!actual_device.texture_resources);CHECK(!live&&!before_device.pins&&!actual_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
 }

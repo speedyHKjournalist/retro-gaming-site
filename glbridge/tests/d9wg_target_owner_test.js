@@ -34,6 +34,8 @@ typedef struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}D3DVIEWPORT9;typedef struc
 typedef struct {BOOL has_viewport,has_scissor;D3DVIEWPORT9 viewport;RECT scissor_rect;}D9StateBlock;
 struct Device{Interface iface;UINT handle;D9Surface*render_target_surfaces[4];D3DVIEWPORT9 viewport;RECT scissor_rect;BOOL scissor_set;D9StateBlock*recording_result;struct{UINT Width,Height;}display_mode;};
 static int g_surface_vtbl,bad_vtbl;static unsigned commands,viewport_calls,scissor_calls,checks,cases;static D9WGSetRenderTarget last;
+/* This fixture selects the ordinary D3D9 ownership contract. */
+static UINT device_compatibility_api(D9Device*d){(void)d;return 9;}
 static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Surface*surface_from_iface(Interface*p){return (D9Surface*)p;}
 static ULONG IDirect3DSurface9_AddRef(Interface*p){return ++p->refs;}static ULONG IDirect3DSurface9_Release(Interface*p){assert(p->refs);return --p->refs;}
 static void surface_binding_add_ref(D9Surface*s){IDirect3DSurface9_AddRef(&s->iface);}

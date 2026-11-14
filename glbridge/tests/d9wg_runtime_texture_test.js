@@ -5,20 +5,19 @@ const assert = require("node:assert/strict"), fs = require("node:fs"), os = requ
 const { spawnSync, execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, ".."), directory = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-texture-"));
 function definition(source, name) {
-    let start = -1, at;
-    do { start = source.indexOf("static BOOL " + name + "(", start + 1);assert(start >= 0, name);at = source.indexOf("{", start); }
-    while (source.indexOf(";", start) < at);
-    let depth = 1;
-    for (at++; depth; at++) { if (source[at] === "{") depth++;else if (source[at] === "}") depth--; }
-    return source.slice(start, at);
+    const m=new RegExp("^static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{","m").exec(source);assert(m,name);
+    let at=source.indexOf("{",m.index)+1,depth=1;
+    for(;depth;at++){if(source[at]==="{")depth++;if(source[at]==="}")depth--;}
+    return source.slice(m.index,at);
 }
+
 try {
     for (const api of ["d3d8", "d3d9", "ddraw"]) {
         if (process.env.D9WG_TEXTURE_BASELINE && api !== "d3d8") continue;
         const relative = api + "proxy/" + api + "_proxy.c";
         const source = process.env.D9WG_TEXTURE_BASELINE ? execFileSync("git", ["show", "833bc0e:glbridge/" + relative], { cwd: path.dirname(root), encoding: "utf8" })
             : readComparisonSource(path.join(root, relative), "utf8");
-        const frontend = (api === "d3d9" ? definition(source, "emit_level_update_api") + "\n" : "") + definition(source, api === "ddraw" ? "emit_surface_upload" : "emit_level_update") +
+        const frontend = (api === "ddraw" ? ["surface_wire_mip_level","surface_wire_cube_face","surface_depth_mask","surface_depth_transfer_masks","surface_repack_depth_rows"].map(n=>definition(source,n)).join("\n")+"\n" : "") + (api === "d3d9" ? definition(source, "emit_level_update_api") + "\n" : "") + definition(source, api === "ddraw" ? "emit_surface_upload" : "emit_level_update") +
             (api === "d3d9" ? "\n" + definition(source, "emit_cube_texture_update") + "\n" + definition(source, "emit_volume_texture_update") :
                 api === "d3d8" ? "\n" + definition(source, "emit_volume_level_update") : "");
         const code = `
@@ -30,7 +29,7 @@ try {
 #include "d3d9proxy/d3d9_protocol.h"
 #include "runtime/d9wg_runtime.h"
 #include "runtime/d9wg_format_layouts.h"
-typedef uint32_t UINT,D3DFORMAT;typedef int32_t LONG;typedef int BOOL;
+typedef uint8_t BYTE;typedef uint32_t UINT,D3DFORMAT,DWORD;typedef size_t SIZE_T;typedef int32_t LONG;typedef int BOOL;
 typedef struct {LONG left,top,right,bottom;} RECT;
 typedef struct {uint8_t *shadow;UINT row_pitch,slice_pitch,depth,byte_count;} D8TextureLevel,D9TextureLevel;
 typedef struct {UINT handle,format;D8TextureLevel levels[4];} D8VolumeTexture;
@@ -42,7 +41,12 @@ ${api === "d3d9" ? "static Device cube_device={9};static UINT device_compatibili
 typedef struct {UINT Left,Top,Right,Bottom,Front,Back;} D3DBOX;
 typedef int INT;
 ${api === "d3d9" ? "static void SetRect(RECT *rect,INT l,INT t,INT r,INT b){rect->left=l;rect->top=t;rect->right=r;rect->bottom=b;}" : ""}
-typedef struct {uint8_t *shadow;UINT handle,width,height,mip_level,cube_face,format,bytes_per_pixel,pitch;BOOL upload_pending;} DDSurface;
+typedef struct {UINT resource_kind,mip_base;} DDSurfaceStorage;
+typedef struct{DWORD dwZBitMask,dwStencilBitMask;}DDPIXELFORMAT;
+typedef struct {uint8_t *shadow;UINT handle,width,height,mip_level,cube_face,format,bytes_per_pixel,pitch;BOOL upload_pending;DDSurfaceStorage*storage;struct{DDPIXELFORMAT ddpfPixelFormat;}desc;} DDSurface;
+#include "ddrawproxy/ddraw_protocol.h"
+#include "ddrawproxy/ddraw_depth_layout.h"
+${api==="ddraw"?"static void*heap_alloc_zero(SIZE_T bytes){return calloc(1,bytes);}\nstatic void heap_free(void*p){free(p);}":""}
 #define D3DPOOL_SCRATCH 3
 ${api === "d3d9" ? "static BOOL supported_volume_texture_format8(UINT f){(void)f;assert(0);return 0;}" : ""}
 #define TRUE 1
@@ -102,7 +106,7 @@ static void run_case(UINT width,UINT height,BOOL bc,BOOL partial,UINT mip,UINT f
  capacity=tiny?sizeof(D9WGBatchHeader)+D9WG_ALIGN8(sizeof(D9WGCommandHeader)+sizeof(D9WGUpdateTexture)+row_bytes):12u*1024u*1024u-36u;
  used=sizeof(D9WGBatchHeader);rows_done=records=0;
  RECT rect={(LONG)origin_x,(LONG)origin_y,(LONG)(origin_x+width),(LONG)(origin_y+height)};
- ${api === "ddraw" ? `DDSurface surface={shadow,77,width+origin_x,height+origin_y,mip,face,bc?0x31545844u:21,bc?0:4,source_pitch,partial?FALSE:TRUE};
+ ${api === "ddraw" ? `DDSurfaceStorage storage={face?D9WG_RESOURCE_TEXTURE_CUBE:D9WG_RESOURCE_TEXTURE_2D,0};DDSurface surface={.shadow=shadow,.handle=77,.width=width+origin_x,.height=height+origin_y,.mip_level=mip,.cube_face=face,.format=bc?0x31545844u:21,.bytes_per_pixel=bc?0:4,.pitch=source_pitch,.upload_pending=partial?FALSE:TRUE,.storage=&storage};
  assert(emit_surface_upload(&surface,&rect));assert(!surface.upload_pending);`
     : `${api === "d3d9" ? "D9" : "D8"}TextureLevel data={.shadow=shadow,.row_pitch=source_pitch};
  ${api === "d3d9" ? `if(face){D9CubeTexture cube={.device=&cube_device,.handle=77,.format=bc?0x31545844u:21,.level_count=3};cube.levels[face*3+mip]=data;assert(emit_cube_texture_update(&cube,face,mip,&rect));}

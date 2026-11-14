@@ -55,10 +55,11 @@ ${api===8?'static void d9wg_d3d9_core_parameters_effective8(void*out,const void*
 typedef struct{Interface iface;}Parent;
 struct D9SwapChain{Interface iface;LONG refcount,binding_refs;Device*device;UINT handle;View*back_buffer,*cached_buffers[4];D9SwapChain*next_device_chain;};
 struct Device{Interface iface;LONG refcount,child_parent_refs;BOOL releasing_owned_refs;D9WGPrivateStore back_buffer_private_data,depth_surface_private_data;UINT implicit_surface_count,additional_swap_chain_count;View*implicit_back_buffer,*implicit_depth_stencil;Parent*parent;void*vertex_shaders,*pixel_shaders,*extra_lights,*front_shadow;int palettes;uint32_t handle;Mode display_mode;D3DPRESENT_PARAMETERS present;struct{HWND hFocusWindow;}creation;Texture*texture_resources,*cube_textures,*render_target_texture;View*render_target_surface,*render_target_surface_2,*depth_surface;D9SwapChain implicit_swap_chain,*additional_swap_chains;};
-typedef struct{D9WGPrivateStore private_data;View*level_surface;void*shadow;}Level;typedef Level D8TextureLevel;
+typedef struct D9TextureDirtyRect{struct D9TextureDirtyRect*next;RECT rect;}D9TextureDirtyRect;
+typedef struct{BOOL dirty_full;D9TextureDirtyRect*dirty_rects;D9WGPrivateStore private_data;View*level_surface;void*shadow;}Level;typedef Level D8TextureLevel;
 struct Texture{Interface iface;Level*levels;void*mip_storage;unsigned level_count,usage;LONG refcount,binding_refs;Device*device;Texture*next_device_resource;UINT handle;BOOL private_back_buffer;void*swap_chain;D9WGPrivateStore private_data;};
 typedef struct D8PrivateDataOwner{LONG refs;D9WGPrivateStore store;}D8PrivateDataOwner;
-struct View{Interface iface;LONG refcount,binding_refs;Device*device;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;BOOL texture_child,reset_blocker,implicit,depth_stencil,additional_back_buffer,device_pin_transferred,device_container;D9SwapChain*swap_chain;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;D8PrivateDataOwner*retained_private_data;void*shadow,*dc,*dc_previous,*dib;struct{UINT MultiSampleType;}desc;};
+struct View{Interface iface;LONG refcount,binding_refs;Device*device;Texture*texture,*cube,*cube_texture;unsigned level,face,cube_face;BOOL texture_child,reset_blocker,implicit,depth_stencil,additional_back_buffer,device_pin_transferred,device_container;D9SwapChain*swap_chain;D9WGPrivateStore private_data;D9WGPrivateStore*private_data_owner;D8PrivateDataOwner*retained_private_data;void*shadow,*dc,*dc_previous,*dib,*gdi_memory;struct{UINT MultiSampleType;}desc;};
 typedef struct{Interface iface;LONG refcount;D8PrivateDataOwner*private_data_owner;Device*device;D3DPRESENT_PARAMETERS present;UINT handle;View*back_buffer;}D8SwapChain;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Texture D${api}Texture,D${api}CubeTexture;typedef View D${api}Surface,IDirect3DSurface${api};typedef Interface IDirect3DSwapChain8,IDirect3DSwapChain9;
 
@@ -70,6 +71,7 @@ static void GetClientRect(HWND h,RECT*r){(void)h;SetRect(r,0,0,64,64);}`:""}
 static void*GetProcessHeap(void){return NULL;}
 static void*HeapAlloc(void*h,unsigned flags,uint32_t size){(void)h;(void)flags;assert(!held);allocation_calls++;if(fail_nth&&allocation_calls==fail_nth)return NULL;void*p=calloc(1,size);assert(p);allocated++;return p;}
 static void HeapFree(void*h,unsigned flags,void*p){(void)h;(void)flags;assert(!held);if(!p)return;assert(allocated);allocated--;free(p);}
+${api===9?extract(fs.readFileSync(root+"/runtime/d9wg_texture_dirty2d.h","utf8"),"texture_dirty_clear").replace(/\bD9TextureLevel\b/g,"Level"):""}
 static void EnterCriticalSection(int*lock){(void)lock;assert(!held);held=1;}
 static void LeaveCriticalSection(int*lock){(void)lock;assert(held);held=0;}
 static Device* callback_device;static unsigned callback_calls;
@@ -119,7 +121,9 @@ ${['swapchain_destroy_storage','texture_add_ref','texture_release','texture_get_
 static HRESULT device_create_render_target(Device*d,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,View**out){assert(w==64&&h==64&&f==22&&!ms&&!lockable);*out=NULL;if(fail_create)return E_OUTOFMEMORY;Texture*t=HeapAlloc(NULL,0,sizeof(*t));if(!t)return E_OUTOFMEMORY;t->levels=HeapAlloc(NULL,0,sizeof(*t->levels));if(!t->levels){HeapFree(NULL,0,t);return E_OUTOFMEMORY;}t->refcount=1;t->level_count=1;t->usage=1;t->device=d;t->handle=allocate_handle();t->next_device_resource=d->texture_resources;d->texture_resources=t;device_child_add_ref(d);HRESULT hr=texture_get_surface_level(&t->iface,0,out);if(hr>=0){(*out)->device_container=1;(*out)->refcount=1;t->private_back_buffer=1;}texture_release(&t->iface);return hr;}
 ${['surface_is_implicit','free_implicit_surfaces','create_backbuffer_surface','device_get_backbuffer','device_create_swapchain','swapchain_get_backbuffer','swapchain_add_ref','swapchain_release'].map(n=>extract(source,n).replace(/&device->implicit_back_buffer->iface/g,'device->implicit_back_buffer')).join('\n')}`:`static D9SwapChain*swap_chain_from_iface(Interface*p){return (D9SwapChain*)p;}
 static BOOL surface_is_implicit(View*v){return v->implicit;}
+static void gdi_memory_close(void*p,void*out,UINT n){(void)out;(void)n;assert(!p);}
 static void SelectObject(void*a,void*b){(void)a;(void)b;}static void DeleteDC(void*p){(void)p;}static void DeleteObject(void*p){(void)p;}
+${api===9?extract(source,"surface_dispose_dc"):""}
 static void d9wg_light_free(void**p){(void)p;}static void d9wg_palette_free(void*p){(void)p;}static void unwatch_window_state(Device*d){(void)d;}static void restore_display_mode(Device*d){(void)d;}
 static unsigned g_command_count;
 static int emit_command(uint16_t op,const void*p,uint32_t size){if(op==D9WG_OP_DESTROY_SWAP_CHAIN){const D9WGDestroySwapChain*c=p;assert(size==sizeof(*c)&&c->device_handle==0x9000);return 1;}assert(op==D9WG_OP_DESTROY_RESOURCE&&size==sizeof(D9WGDestroyResource));const D9WGDestroyResource*c=p;assert(c->resource_kind==3||(c->resource_handle==0x9000&&!c->resource_kind));return 1;}

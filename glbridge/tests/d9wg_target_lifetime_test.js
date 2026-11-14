@@ -39,7 +39,8 @@ typedef uint32_t UINT,DWORD,ULONG,D3DMULTISAMPLE_TYPE;typedef int32_t LONG,HRESU
 #define TRACE_FLUSH(...)
 typedef struct{const void*lpVtbl;}Interface;typedef Interface IDirect3DDevice9,IDirect3DSurface9,IDirect3DTexture9;
 typedef struct Device D9Device;typedef struct Surface D9Surface;typedef struct Texture D9Texture,D9CubeTexture;typedef struct{LONG refcount;UINT handle;D9Device*device;D9Surface*back_buffer,*cached_buffers[4];}D9SwapChain;
-typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL shadow_valid;D9WGPrivateStore private_data;D9Surface*level_surface;}D9TextureLevel;
+typedef struct D9TextureDirtyRect{struct D9TextureDirtyRect*next;struct{int left,top,right,bottom;} rect;}D9TextureDirtyRect;
+typedef struct{UINT width,height,row_pitch,row_count,byte_count;BYTE*shadow;BOOL shadow_valid,dirty_full;D9TextureDirtyRect*dirty_rects;D9WGPrivateStore private_data;D9Surface*level_surface;}D9TextureLevel;
 struct Texture{Interface iface;LONG refcount,binding_refs;D9Device*device;UINT handle,width,height,level_count,usage;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;D9TextureLevel*levels;void*mip_storage;D9Texture*next_device_resource;BOOL private_back_buffer;D9WGPrivateStore private_data;};
 struct Surface{Interface iface;LONG refcount,binding_refs;D9Device*device;D9Texture*texture,*cube_texture;D9SwapChain*swap_chain;BOOL texture_child,auto_depth_stencil,backbuffer,device_pin_transferred;UINT level,width,height;D3DFORMAT format;D3DPOOL pool;D3DMULTISAMPLE_TYPE multisample;DWORD multisample_quality;BYTE*shadow;void*dc,*dc_previous,*dib,*gdi_memory;D9WGPrivateStore private_data;};
 typedef struct{Interface iface;LONG refs;}Parent;
@@ -50,6 +51,7 @@ static UINT live,allocations,fail_allocation,fail_emit,fail_layout,handles,creat
 static D9Device*device_from_iface(Interface*p){return (D9Device*)p;}static D9Surface*surface_from_iface(Interface*p){return (D9Surface*)p;}static D9Texture*texture_from_iface(Interface*p){return (D9Texture*)p;}
 static void*GetProcessHeap(void){return NULL;}static void*HeapAlloc(void*h,UINT f,size_t n){(void)h;assert(f==8&&n);if(++allocations==fail_allocation)return NULL;void*p=calloc(1,n);assert(p);live++;return p;}
 static void HeapFree(void*h,UINT f,void*p){(void)h;assert(!f);if(p){assert(live);live--;free(p);}}
+${extract(fs.readFileSync(root+"/runtime/d9wg_texture_dirty2d.h","utf8"),"texture_dirty_clear").replace(/\bD9TextureLevel\b/g,"D9TextureLevel")}
 static LONG InterlockedIncrement(LONG*p){return ++*p;}static LONG InterlockedDecrement(LONG*p){assert(*p>0);return --*p;}static LONG InterlockedCompareExchange(LONG*p,LONG v,LONG c){LONG old=*p;if(old==c)*p=v;return old;}
 static void cube_destroy_storage(D9CubeTexture*);static void cube_binding_add_ref(D9CubeTexture*);static void cube_binding_release(D9CubeTexture*);static void texture_destroy_storage(D9Texture*);static void texture_binding_add_ref(D9Texture*);static void texture_binding_release(D9Texture*);static void surface_destroy_storage(D9Surface*);static void surface_binding_release(D9Surface*);
 static ULONG device_add_ref(Interface*);static ULONG device_release(Interface*);static ULONG surface_add_ref(Interface*);static ULONG surface_release(Interface*);static ULONG texture_release(Interface*);

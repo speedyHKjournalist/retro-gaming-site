@@ -92,6 +92,16 @@ static int clip_status_cases(void){
  const float depths[5]={.1f,.9f,-.1f,1.1f,.5f};
  for(unsigned depth=0;depth<5;++depth){for(unsigned i=0;i<3;++i)screen[i][2]=depths[depth];if(depth==4)viewport.min_z=viewport.max_z=0;
   CHECK(d9wg_clip_legacy_set(&legacy,&initial)&&!draw_screen(screen,1,0)&&!query(3));}
+ /* Independent scalar oracle: transformed screen depth is independent of
+  * the viewport range. Keep all100 native reference rows above unchanged. */
+ {const float z[]={-.125f,.125f,.5f,1.125f},rhw[]={0,.5f,1,2};
+  for(unsigned range=0;range<2;range++)for(unsigned k=0;k<4;k++)for(unsigned r=0;r<4;r++){
+   D9WGProcessViewport view={7,11,100,80,.25f,range?.25f:.75f};
+   float screen_position[4]={32,55,z[k],rhw[r]},clip_position[4];
+   d9wg_clip_unproject(screen_position,&view,clip_position);
+   float w=rhw[r]?1/rhw[r]:1;
+   CHECK(clip_position[3]==w&&clip_position[2]==z[k]*w);
+  }}
  CHECK(row==100);
  /* Boolean per-plane histories are an independent oracle for OR/AND state. */
  uint32_t random=0x391a864bu,hits[12]={0};D9WGClipStatus status;d9wg_clip_status_init(&status);CHECK(status.clip_union==0&&status.clip_intersection==0xffffffffu);

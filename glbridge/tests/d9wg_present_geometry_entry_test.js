@@ -32,6 +32,12 @@ typedef struct{int left,top,right,bottom;}RECT;typedef struct{int x,y;}POINT;
 #define D3DFMT_UNKNOWN 0
 #define D3DFMT_X8R8G8B8 22
 #define D3DDEVTYPE_HAL 1
+#define D9_MAX_VS_CONST_F 256u
+#define D9_SW_VS_CONST_F 8192u
+#define D9_SW_VS_CONST_I 2048u
+#define D9_SW_VS_CONST_B 2048u
+#define D9_MAX_CONST_I 16u
+#define D9_MAX_CONST_B 16u
 #define D3DCREATE_FPU_PRESERVE 2
 #define D3DCREATE_SOFTWARE_VERTEXPROCESSING 0x20
 #define D3DCREATE_HARDWARE_VERTEXPROCESSING 0x40
@@ -50,7 +56,7 @@ typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSample
 ${api===8?'static unsigned core_parameter_calls;static void d9wg_d3d9_core_parameters_effective8(void*out,const void*in,UINT w,UINT h,UINT f,HWND window){core_parameter_calls++;d9wg_present_parameters_effective(out,in,w,h,f,window);}':''}
 typedef struct{void*lpVtbl;}Interface;typedef struct{Interface iface;unsigned refs;UINT compatibility_api;}Factory;
 typedef struct{UINT Width,Height,Format,RefreshRate;}Mode;
-typedef struct Device{Interface iface;unsigned refcount;Factory*parent;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT AdapterOrdinal;D3DDEVTYPE DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;}creation;Mode display_mode;struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}viewport;RECT scissor_rect;BOOL depth_surface_enabled;BYTE*front_shadow;UINT front_shadow_pitch;int palettes,material,render_states[4];struct{Interface iface;struct Device*device;}implicit_swap_chain;}Device;
+typedef struct Device{Interface iface;UINT vs_float_capacity,vs_int_capacity,vs_bool_capacity;float (*vs_const_f)[4];int (*vs_const_i)[4];BOOL *vs_const_b;unsigned refcount;Factory*parent;UINT handle;D3DPRESENT_PARAMETERS present;struct{UINT AdapterOrdinal;D3DDEVTYPE DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;}creation;Mode display_mode;struct{UINT X,Y,Width,Height;float MinZ,MaxZ;}viewport;RECT scissor_rect;BOOL depth_surface_enabled;BYTE*front_shadow;UINT front_shadow_pitch;int palettes,material,render_states[4];struct{Interface iface;struct Device*device;}implicit_swap_chain;}Device;
 typedef Factory D${api}Direct3D;typedef Device D${api}Device;typedef Interface IDirect3D${api},IDirect3DDevice${api};
 static int g_device_vtbl,g_swap_chain_vtbl;static Device*active;static unsigned live,allocations,fail_at,parent_calls,front_bytes,emits,fail_emit,fail_states,fail_mode;static int client_width,client_height;static HWND observed_window;
 static Factory*d3d_from_iface(Interface*p){return (Factory*)p;}static void*GetProcessHeap(void){return NULL;}

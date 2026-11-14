@@ -34,10 +34,17 @@ typedef int32_t HRESULT;
 #define D3DOK_NOAUTOGEN ((HRESULT)0x0876086f)
 #define D3DERR_NOTAVAILABLE ((HRESULT)0x8876086A)
 #define D3DDEVTYPE_HAL 1
+#define D3DRTYPE_SURFACE 1
+#define D3DRTYPE_VERTEXBUFFER 6
+#define D3DRTYPE_INDEXBUFFER 7
 #define D3DRTYPE_TEXTURE 3
 #define D3DRTYPE_VOLUMETEXTURE 4
 #define D3DRTYPE_CUBETEXTURE 5
 #define D3DPOOL_DEFAULT 0
+#define D3DFMT_UNKNOWN 0
+#define D3DFMT_A8R8G8B8 21
+#define D3DERR_INVALIDCALL ((HRESULT)0x8876086c)
+#define D3DUSAGE_RENDERTARGET 1u
 #define D3DUSAGE_SOFTWAREPROCESSING 0x10u
 #define D3DUSAGE_AUTOGENMIPMAP 0x400u
 #define D3DUSAGE_DYNAMIC 0x200u
@@ -61,6 +68,7 @@ static uint32_t d9wg_transport_host_features(void *process,uint32_t features,BOO
 #define TRACE(...) ((void)0)
 #define HOSTLOG_INFO(...) (++infos)
 #define HOSTLOG_REFUSED(...) (++warnings)
+#define TRACE_REFUSE(hr) (++warnings, (hr))
 // The query's shared creation predicate is external to the behavior under
 // test. Accept the D32 depth texture queried next by 3DMark05, nothing else.
 static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
@@ -86,6 +94,11 @@ int main(void) {
     assert(d3d_check_device_format(&factory, 1, 1, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
     assert(d3d_check_device_format(&factory, 0, 2, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
     assert(infos == 1 && warnings == 5);
+    // Invalid adapters and buffer resource types are malformed calls, even for the probe FOURCC.
+    assert(d3d_check_device_format(&factory, 0, 1, 0, 0, 3, D9FOURCC_NO_PCF) == D3DERR_INVALIDCALL);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 6, D9FOURCC_NO_PCF) == D3DERR_INVALIDCALL);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 7, D9FOURCC_NO_PCF) == D3DERR_INVALIDCALL);
+    assert(infos == 1 && warnings == 8);
     return 0;
 }
 `);

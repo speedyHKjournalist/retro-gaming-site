@@ -98,6 +98,15 @@ int main(void){D8Device device={.handle=7,.front_shadow_pitch=16,.display_mode={
  /* An omitted point means origin; zero count with unused pointers is a no-op. */
  reset_events();POINT zero={0,0};memcpy(before,cpu_b,64);expected_copy(expected,before,4,cpu_a,4,&r,&zero);D8Surface image2=image;image2.shadow=cpu_b;CHECK(!call_copy(&device,&image,&r,1,&image2,NULL)&&!memcmp(cpu_b,expected,64));CHECK(!call_copy(&device,&image,&r,0,&image2,&pt)&&!emissions);cases++;
  for(unsigned bad=0;bad<12;bad++){reset_events();RECT q=r;POINT p=pt;UINT format=image2.desc.Format,usage=image2.desc.Usage;D8Device*owner=image2.device;if(bad==0)q.left=-1;if(bad==1)q.right=5;if(bad==2)q.bottom=q.top;if(bad==3)p.x=-1;if(bad==4)p.y=INT32_MAX;if(bad==5)p.x=INT32_MAX;if(bad==6)image2.desc.Format=22;if(bad==7)image2.desc.Usage=2;if(bad==8)image.locked=TRUE;if(bad==9)image2.locked=TRUE;if(bad==10)image2.device=&foreign;if(bad==11)image2.iface.lpVtbl=NULL;copy_guard_begin=image2.shadow;copy_guard_size=64;CHECK(call_copy(&device,&image,&q,1,&image2,&p)==-1&&!reads&&!emissions);copy_guard_begin=NULL;image2.desc.Format=format;image2.desc.Usage=usage;image2.device=owner;image.locked=image2.locked=FALSE;image2.iface.lpVtbl=&g_surface_vtbl;cases++;}
+ /* A transient backbuffer upload must retain its padded source stride. */
+ {BYTE pitched_front[96];memset(pitched_front,0xE3,sizeof(pitched_front));
+  device.front_shadow=pitched_front;device.front_shadow_pitch=24;
+  BYTE*target=gpu_pixels(0,0,0,&w,&h);pattern(target,64,61);pattern(cpu_a,64,87);
+  memcpy(before,target,64);expected_copy(expected,before,4,cpu_a,4,&r,&pt);
+  reset_events();CHECK(!call_copy(&device,&image,&r,1,&back,&pt)&&updates==1&&!memcmp(target,expected,64));
+  for(UINT y=0;y<4;y++)for(UINT x=16;x<24;x++)CHECK(pitched_front[y*24+x]==0xE3);
+  device.front_shadow=front;device.front_shadow_pitch=16;cases++;
+ }
  /* CPU-accessible pools retain authoritative bytes after failed GPU uploads. */
  reset_events();ta.pool=2;la[0].gpu_dirty=TRUE;pattern(cpu_a,64,193);memcpy(before,cpu_a,64);CHECK(!texture_lock_level(&ta,0,&lock,NULL,16)&&!reads&&!memcmp(cpu_a,before,64));CHECK(!texture_unlock_level(&ta,0));ta.pool=0;cases++;
  /* GetFrontBuffer uses real bytes and forces opaque ARGB, never Clear's mirror. */

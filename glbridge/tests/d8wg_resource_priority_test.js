@@ -17,11 +17,12 @@ ${kinds.map(([prefix,type])=>`typedef Resource D9${type},IDirect3D${type}9;
 static Resource *${prefix}_from_iface(Resource*p){return p;}
 ${extract(prefix+'_set_priority')}
 ${extract(prefix+'_get_priority')}`).join('\n')}
-int main(void){DWORD(*set[])(Resource*,DWORD)={${kinds.map(([p])=>p+'_set_priority').join(',')}};DWORD(*get[])(Resource*)={${kinds.map(([p])=>p+'_get_priority').join(',')}};UINT cases=0;
+/* Frozen Wine d3d9_device.c:12228-12233 accepts priority only for MANAGED. */
+int main(void){(void)&device_compatibility_api;DWORD(*set[])(Resource*,DWORD)={${kinds.map(([p])=>p+'_set_priority').join(',')}};DWORD(*get[])(Resource*)={${kinds.map(([p])=>p+'_get_priority').join(',')}};UINT cases=0;
 for(UINT kind=0;kind<5;kind++)for(UINT api=8;api<=9;api++)for(UINT pool=0;pool<4;pool++){
  Device device={api};Resource resource={&device,pool,0};DWORD previous=0;const DWORD values[]={1,0xffffffffu,0x80000000u,17,0};
- for(UINT i=0;i<5;i++){assert(get[kind](&resource)==previous);assert(set[kind](&resource,values[i])==previous);previous=api==8&&pool!=1?0:values[i];assert(get[kind](&resource)==previous);cases++;}}
-printf("PASS actual resource priority: %u cases, five resource types, API8 managed-only, API9 preserved, full DWORD values\\n",cases);return 0;}`;
+ for(UINT i=0;i<5;i++){assert(get[kind](&resource)==previous);assert(set[kind](&resource,values[i])==previous);previous=pool!=1?0:values[i];assert(get[kind](&resource)==previous);cases++;}}
+printf("PASS actual resource priority: %u cases, five resource types, both APIs managed-only, frozen Wine pool matrix, full DWORD values\\n",cases);return 0;}`;
  fs.writeFileSync(dir+"/test.c",c);const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Wall","-Wextra","-Werror",dir+"/test.c","-o",dir+"/test"],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);
  const run=spawnSync(dir+"/test",[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

@@ -22,7 +22,7 @@ const cases=[
  ["API8 autogen visibility","create_texture_object","if (api == 9u && (usage & D3DUSAGE_AUTOGENMIPMAP))","if (usage & D3DUSAGE_AUTOGENMIPMAP)"],
  ["lock API","texture_lock_level","if (!d9wg_format_layout(device_compatibility_api(texture->device),","if (!d9wg_format_layout(9u,","lock"],
  ["upload API","emit_texture_update","device_compatibility_api(texture->device)","9u","lock"],
- ["read only","texture_unlock_level","if (!(level_data->lock_flags & D3DLOCK_READONLY))","if (1)","lock"],
+ ["read only","texture_unlock_level","if (texture->pool != D3DPOOL_MANAGED && !(level_data->lock_flags & D3DLOCK_READONLY))","if (texture->pool != D3DPOOL_MANAGED)","lock"],
  ["unlock cleanup","texture_unlock_level","level_data->locked = FALSE;","level_data->locked = TRUE;","lock"],
  ["subrect offset","texture_lock_level","+ (int64_t)(area.left / (LONG)block_width) * block_bytes","+ (int64_t)(area.left / (LONG)block_width) * block_bytes * 0u","lock"],
  ["CPU pool permission","texture_lock_level","BOOL permissive = texture->pool != D3DPOOL_DEFAULT;","BOOL permissive = texture->pool == D3DPOOL_DEFAULT;","lock"],

@@ -51,13 +51,15 @@ int main(void){
  ${process.env.D8WG_CAPS_PRINT_REFERENCE === "1" ? 'D3DCAPS8 reference;caps8_before(&reference);DWORD words_ref[53];memcpy(words_ref,&reference,sizeof(reference));printf("CAPS8_REFERENCE [");for(UINT i=0;i<53;i++)printf("%s%u",i?",":"",words_ref[i]);puts("]");' : ""}
  const UINT profiles[]={0,2,3};UINT cases=0,words=0;
  for(UINT round=0;round<32;round++)for(UINT p=0;p<3;p++)for(permissive=0;permissive<2;permissive++){
-  profile=profiles[p];injection=0;D3DCAPS9 before9,current9;caps9_before(&before9);before9.TextureCaps |= 0x80u;fill_caps(&current9);CHECK(!memcmp(&before9,&current9,sizeof(before9)));
+  /* Per-stage fixed-function constants were enabled in stage6; preserve the
+   * frozen capability table and explicitly include that implemented increase. */
+  profile=profiles[p];injection=0;D3DCAPS9 before9,current9;caps9_before(&before9);before9.TextureCaps |= 0x80u;before9.PrimitiveMiscCaps |= 0x8000u;fill_caps(&current9);if(memcmp(&before9,&current9,sizeof(before9))){for(UINT i=0;i<sizeof(before9)/4;i++){DWORD a,b;memcpy(&a,(char*)&before9+i*4,4);memcpy(&b,(char*)&current9+i*4,4);if(a!=b)fprintf(stderr,"caps9 difference word=%u old=%08x actual=%08x\\n",i,a,b);}}CHECK(!memcmp(&before9,&current9,sizeof(before9)));
   D3DCAPS8 before8;caps8_before(&before8);
   /* Stage 6 Wine texop_test validates the four existing host modulate/add
    * operations that the old API8 mask omitted. Keep the retired fixture
    * unchanged and make the intentional capability increase explicit. */
   before8.TextureOpCaps |= 0x001e0000u;
-  UINT saved_profile=profile,saved_permissive=permissive;D3DCAPS9 raw_expected;profile=0;permissive=0;caps9_before(&raw_expected);raw_expected.TextureCaps |= 0x80u;profile=saved_profile;permissive=saved_permissive;
+  UINT saved_profile=profile,saved_permissive=permissive;D3DCAPS9 raw_expected;profile=0;permissive=0;caps9_before(&raw_expected);raw_expected.TextureCaps |= 0x80u;raw_expected.PrimitiveMiscCaps |= 0x8000u;profile=saved_profile;permissive=saved_permissive;
   if(raw_expected.RasterCaps&0x04000000u)raw_expected.RasterCaps|=0x00004000u;
   struct{uint32_t before[4];D3DCAPS8 caps;uint32_t after[32];}raw;memset(&raw,0xa5,sizeof(raw));UINT raw_calls=backend_calls;d9wg_d3d9_core_caps8(&raw.caps);
   CHECK(backend_calls==raw_calls+1&&!memcmp(&raw.caps,&raw_expected,212));for(UINT i=0;i<4;i++)CHECK(raw.before[i]==0xa5a5a5a5u);for(UINT i=0;i<32;i++)CHECK(raw.after[i]==0xa5a5a5a5u);

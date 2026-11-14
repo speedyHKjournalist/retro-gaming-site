@@ -3,7 +3,7 @@
 const {readComparisonSource} = require("./legacy8_comparison.js");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),os=require("node:os"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"d9wg-texture-copy-"));
-function extract(source,name){const m=new RegExp("static (?:BOOL|HRESULT)(?: WINAPI)? "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
+function extract(source,name){const m=new RegExp("static (?:BOOL|HRESULT|void)(?: WINAPI)? "+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;++at){assert(at<source.length);if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 try{for(const api of [8,9]){
  const source=readComparisonSource(process.env.D9WG_TEXTURE_COPY_API===String(api)?process.env.D9WG_TEXTURE_COPY_FRONTEND_SOURCE:root+"/d3d"+api+"proxy/d3d"+api+"_proxy.c","utf8"),adapter=source.match(new RegExp("#define D9WG_COPY_LEVEL D"+api+"TextureLevel[\\s\\S]*?#include \\\"\\.\\./runtime/d9wg_texture_copy_bridge.h\\\""));assert(adapter,"actual SDK adapter");
  const code=`#include <stdint.h>
@@ -11,7 +11,8 @@ try{for(const api of [8,9]){
 #include <stdlib.h>
 #include <string.h>
 #include "runtime/d9wg_runtime.h"
-typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT;
+#include "runtime/d9wg_format_layouts.h"
+typedef uint32_t UINT,DWORD,D3DFORMAT;typedef int32_t LONG;typedef uint8_t BYTE;typedef int BOOL,HRESULT;
 #define WINAPI
 #define API ${api}
 #define TRUE 1
@@ -30,13 +31,14 @@ typedef uint32_t UINT,DWORD;typedef uint8_t BYTE;typedef int BOOL,HRESULT;
 #define ZeroMemory(p,n) memset(p,0,n)
 typedef struct{int32_t left,top,right,bottom;}RECT;
 typedef struct{UINT Left,Top,Right,Bottom,Front,Back;}D3DBOX;
-static int SetRect(RECT*r,int l,int t,int rr,int b){*r=(RECT){l,t,rr,b};return 1;}
+static __attribute__((unused)) int SetRect(RECT*r,int l,int t,int rr,int b){*r=(RECT){l,t,rr,b};return 1;}
 static unsigned allocations,frees,attempts,fail_alloc;
 static void *HeapAlloc(void*h,UINT flags,size_t n){(void)h;if(++attempts==fail_alloc)return NULL;void*p=flags?calloc(1,n):malloc(n);if(p)allocations++;return p;}
 typedef struct{const void *lpVtbl;}Iface;
 typedef struct{unsigned marker;}Device;
-typedef struct Level{UINT guard_a;BOOL locked;UINT depth;BYTE *shadow;UINT byte_count,width,height,row_pitch,row_count,slice_pitch;BOOL shadow_valid,gpu_dirty;UINT guard_b;}Level;
-typedef struct Texture{Iface iface;Device *device;UINT handle,width,height,depth,edge_length,level_count,format,pool;Level *levels;}Texture;
+typedef struct D9TextureDirtyRect{RECT rect;struct D9TextureDirtyRect*next;}D9TextureDirtyRect;
+typedef struct Level{UINT guard_a;BOOL locked;UINT depth;BYTE *shadow;UINT byte_count,width,height,row_pitch,row_count,slice_pitch;BOOL shadow_valid,gpu_dirty,dirty_full;D9TextureDirtyRect*dirty_rects;UINT guard_b;}Level;
+typedef struct Texture{Iface iface;Device *device;UINT handle,width,height,depth,edge_length,level_count,format,pool;Level *levels;BOOL dirty_pending;}Texture;
 typedef Device D${api}Device,IDirect3DDevice${api};typedef Level D${api}TextureLevel;
 typedef Texture D${api}Texture,D${api}CubeTexture,D${api}VolumeTexture,IDirect3DCubeTexture${api},IDirect3DVolumeTexture${api};typedef Iface IDirect3DBaseTexture${api},IDirect3DBaseTexture${api}Vtbl;
 static const int g_texture_vtbl=1,${api===8?"g_cube_texture_vtbl":"g_cube_vtbl"}=2,g_volume_texture_vtbl=3;
@@ -57,6 +59,10 @@ ${extract(source,"d8_copy_volume_upload")}
 ${extract(source,"d8_copy_upload_result")}`:`static BOOL emit_cube_texture_update(Texture*t,UINT face,UINT level,const RECT*r){return emit_level(t,1,face,level,r,0,1);}
 static BOOL emit_volume_texture_update(Texture*t,UINT level,const D3DBOX*b){RECT r={(int)b->Left,(int)b->Top,(int)b->Right,(int)b->Bottom};return emit_level(t,2,0,level,&r,b->Front,b->Back-b->Front);}`}
 ${adapter[0].replace('../runtime/d9wg_texture_copy_bridge.h',process.env.D9WG_TEXTURE_COPY_BRIDGE_HEADER||'runtime/d9wg_texture_copy_bridge.h')}
+${api===9?`static BOOL HeapFree(void*h,UINT flags,void*p){(void)h;(void)flags;if(p){frees++;free(p);}return TRUE;}
+${extract(fs.readFileSync(root+"/runtime/d9wg_texture_dirty2d.h","utf8"),"texture_dirty_clear")}
+#include "runtime/d9wg_texture_legacy_color.h"
+#include "runtime/d9wg_texture_dirty_copy2d.h"`:""}
 ${(api===8?["update_cube_texture","update_volume_texture","device_update_texture"]:["device_update_texture"]).map(n=>extract(source,n)).join("\n")}
 static HRESULT call_update(Device*d,Texture*s,Texture*t){return device_update_texture(d,s?&s->iface:NULL,t?&t->iface:NULL);}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"texture copy SDK line %u API=${api}: %s event=%u\\n",__LINE__,#v,event_error);return 1;}}while(0)

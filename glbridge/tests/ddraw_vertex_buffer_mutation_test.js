@@ -2,6 +2,8 @@
 const fs=require("node:fs"),os=require("node:os"),path=require("node:path"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),sources={seven:fs.readFileSync(root+'/ddrawproxy/d3d7_proxy.inc','utf8'),legacy:fs.readFileSync(root+'/ddrawproxy/d3d_legacy_proxy.inc','utf8')},dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-vb-mut-'));
 const cases=[
+ ['legacy forwards v7 lock hints','seven','d3d7_vb_Lock','if (buffer->creation_version < DD_VERSION_7)','if (FALSE && buffer->creation_version < DD_VERSION_7)'],
+ ['v7 lock hints are discarded','seven','d3d7_vb_Lock','if (buffer->creation_version < DD_VERSION_7)','if (TRUE)'],
  ['repeated mapping rejected','seven','d3d7_vb_Lock','if (buffer->locked) {','if (buffer->locked) { return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERLOCKED);'],
  ['late readonly suppresses prior write','seven','d3d7_vb_Lock','((buffer->lock_flags & flags) & unanimous)','(flags & unanimous)'],
  ['mixed lock grants NOOVERWRITE','seven','d3d7_vb_Lock','DWORD unanimous = DDLOCK_READONLY | DDLOCK_NOOVERWRITE;','DWORD unanimous = DDLOCK_READONLY;'],

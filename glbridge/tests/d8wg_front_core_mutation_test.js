@@ -12,7 +12,7 @@ const cases=[
  ['allocation zero','core','front_pixels8','HEAP_ZERO_MEMORY, bytes','0, bytes'],
  ['level byte capacity','core','front_pixels8','level->byte_count);','level->byte_count + 1u);'],
  ['lazy API format','core','front_pixels8','d9wg_texture_level_layout(8u,','d9wg_texture_level_layout(9u,'],
- ['2D upload level','core','upload_front8','surface->texture, surface->level, area','surface->texture, surface->level + 1u, area'],
+ ['2D upload level','core','upload_front8','return emit_texture_update(surface->texture, surface->level, area)','return emit_texture_update(surface->texture, surface->level + 1u, area)'],
  ['cube face','core','upload_front8','surface->cube_face, surface->level, area','surface->cube_face ^ 1u, surface->level, area'],
  ['backbuffer target','core','upload_front8','format, 0, 0, 0,','format, 1, 0, 0,'],
  ['front owner','bridge','d9wg_front_buffer8_common','D9WG_FRONT_OWNER(destination) != device','(D9WG_FRONT_OWNER(destination) != device && 0)'],

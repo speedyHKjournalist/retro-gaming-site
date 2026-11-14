@@ -65,6 +65,10 @@ static BOOL emit_command(uint16_t o,const void*p,uint32_t n){(void)o;(void)p;(vo
 static BOOL emit_texture_rows(const D9WGTextureRows*r){(void)r;return TRUE;}
 static BOOL observe_renderable(UINT dev,UINT handle,UINT fmt,UINT target,UINT level,UINT face,const D9WGSurfaceLockRect*r,const BYTE*p,UINT pitch,UINT pb,int(*emit)(uint16_t,const void*,uint32_t),int(*emit_rows)(const D9WGTextureRows*)){if(dev!=device.handle||handle!=101||fmt!=current_destination->format||target||emit!=emit_command||emit_rows!=emit_texture_rows){observer_error=__LINE__;return FALSE;}RECT a={r->left,r->top,r->right,r->bottom};return observe_upload(current_destination,3,face,level,&a,p,pitch,pb);}
 #define d9wg_renderable_upload observe_renderable
+/* Dirty-list allocation/propagation is covered by d9wg_texture_dirty_test.
+ * This surface-copy fixture observes the exact SYSTEMMEM callback boundary;
+ * it must receive owned storage and a bounded upload rectangle. */
+static BOOL texture_mark_dirty(D9Texture*t,UINT level,const RECT*r){assert(t&&t->pool==D3DPOOL_SYSTEMMEM&&level<t->level_count&&r&&r->left>=0&&r->top>=0&&r->right>=r->left&&r->bottom>=r->top&&(UINT)r->right<=t->levels[level].width&&(UINT)r->bottom<=t->levels[level].height);return TRUE;}
 ${['front_pixels8','front_layout8','readback_front8','upload_front8'].map(n=>extract(source,n)).join('\n')}
 ${block[0].replace('../runtime/d9wg_front_buffer_bridge8.h',process.env.D8WG_FRONT_BRIDGE_HEADER||root+'/runtime/d9wg_front_buffer_bridge8.h')}
 static BOOL texture_level_layout(UINT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){return d9wg_texture_level_layout(9u,f,w,h,p,r,b);}

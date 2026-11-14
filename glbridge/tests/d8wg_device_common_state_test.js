@@ -30,7 +30,7 @@ typedef struct D9StateBlock{
  BOOL has_vertex_shader,has_pixel_shader,has_vs_const_f[256],has_ps_const_f[224],has_vertex_format,has_stream[16],has_indices;
  D9WGLightState*extra_lights;
 }D9StateBlock;
-typedef struct IDirect3DDevice9{const void*lpVtbl;UINT api,reset_epoch;BOOL set[8];struct{BOOL EnableAutoDepthStencil;}present;D9StateBlock*recording_result;D9WGLightState*extra_lights;}IDirect3DDevice9;
+typedef struct IDirect3DDevice9{const void*lpVtbl;UINT api,reset_epoch,vs_float_capacity;BOOL set[8];struct{BOOL EnableAutoDepthStencil;}present;D9StateBlock*recording_result;D9WGLightState*extra_lights;}IDirect3DDevice9;
 typedef IDirect3DDevice9 D9Device;
 static int g_device_vtbl;static D9StateBlock original;static UINT captures,allocations,fail_at;
 static D9Device*device_from_iface(IDirect3DDevice9*d){return d;}
@@ -49,7 +49,7 @@ static void clear(D9WGLightState**p){while(*p){D9WGLightState*n=(*p)->next;free(
 int main(void){UINT checks=0;
  for(UINT seed=0;seed<128;++seed)for(UINT type=0;type<=3;++type)for(UINT incremental=0;incremental<2;++incremental){
   D9StateBlock recorded={0},expected={0};memset(&original,0,sizeof(original));
-  D9Device d={.lpVtbl=&g_device_vtbl,.api=8,.recording_result=&recorded};
+  D9Device d={.lpVtbl=&g_device_vtbl,.api=8,.vs_float_capacity=256,.recording_result=&recorded};
   for(UINT i=0;i<8;++i)d.set[i]=(seed>>i)&1;
   D9WGLightState live[3]={{.index=37,.set=TRUE},{.index=700,.set=FALSE},{.index=UINT32_MAX,.set=TRUE}};
   live[0].next=live+1;live[1].next=live+2;d.extra_lights=live;
@@ -68,7 +68,7 @@ int main(void){UINT checks=0;
   assert(count==incremental+((type==1||type==3)?2u:0u));
   clear(&recorded.extra_lights);clear(&original.extra_lights);checks+=5;
  }
- D9StateBlock recorded={0};D9Device d={.lpVtbl=&g_device_vtbl,.api=8,.recording_result=&recorded,.reset_epoch=99,.present={TRUE}};
+ D9StateBlock recorded={0};D9Device d={.lpVtbl=&g_device_vtbl,.api=8,.vs_float_capacity=256,.recording_result=&recorded,.reset_epoch=99,.present={TRUE}};
  UINT epoch=1;BOOL recording=FALSE,depth=FALSE;assert(!d9wg_d3d9_core_device_state8(&d,&epoch,&recording,&depth)&&epoch==99&&recording&&depth);
  for(UINT invalid=0;invalid<5;++invalid){D9Device bad=d;if(invalid==0)bad.api=9;if(invalid==1)bad.lpVtbl=NULL;if(invalid==2)bad.recording_result=NULL;UINT before=captures;
   assert(d9wg_d3d9_core_record_common_state8(&bad,invalid==3?4:1,invalid==4?72:0)==D3DERR_INVALIDCALL&&captures==before);checks++;

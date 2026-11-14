@@ -7,12 +7,12 @@ static void clear_events(void)
 static void build_texture(Texture *t,Device *device,UINT kind,UINT width,UINT height,UINT depth,UINT levels,BOOL lazy,BOOL source)
 {
     memset(t,0,sizeof(*t));t->iface.lpVtbl=kind==0?(const void*)&g_texture_vtbl:kind==1?(const void*)&G_CUBE_VTBL:(const void*)&g_volume_texture_vtbl;
-    t->device=device;t->handle=source?301:401;t->pool=source?2:0;t->format=21;t->level_count=levels;
+    t->device=device;t->handle=source?301:401;t->pool=source?2:0;t->format=21;t->level_count=levels;t->dirty_pending=source;
     if(kind==1)t->edge_length=width;else{t->width=width;t->height=height;if(kind==2)t->depth=depth;}
     unsigned layers=kind==1?6:1;t->levels=calloc(layers*levels,sizeof(*t->levels));if(!t->levels)abort();
     for(unsigned layer=0;layer<layers;++layer){UINT w=width,h=kind==1?width:height,d=kind==2?depth:1;
         for(unsigned level=0;level<levels;++level){Level *l=t->levels+layer*levels+level;l->width=w;l->height=h;l->depth=kind==2?d:0;l->row_pitch=w*4;l->row_count=h;l->slice_pitch=kind==2?w*h*4:0;l->byte_count=w*h*d*4;l->guard_a=0x24680;l->guard_b=0x13579;
-            l->gpu_dirty=!source;l->shadow_valid=source?TRUE:FALSE;if(!lazy){l->shadow=malloc(l->byte_count);if(!l->shadow)abort();for(UINT b=0;b<l->byte_count;++b)l->shadow[b]=source?(BYTE)(1+(layer*31+level*7+b)%251):0x3c;}
+            l->dirty_full=source;l->gpu_dirty=!source;l->shadow_valid=source?TRUE:FALSE;if(!lazy){l->shadow=malloc(l->byte_count);if(!l->shadow)abort();for(UINT b=0;b<l->byte_count;++b)l->shadow[b]=source?(BYTE)(1+(layer*31+level*7+b)%251):0x3c;}
             w=next_dimension(w);h=next_dimension(h);d=next_dimension(d);
         }
     }
@@ -71,7 +71,20 @@ int main(void)
     CHECK(call_update(&device,&source,&destination)==-1&&!emits);
 #endif
     source.levels[2].locked=FALSE;source.levels[0].locked=TRUE;CHECK(call_update(&device,&source,&destination)==0&&emits==24);source.levels[0].locked=FALSE;clear_events();
-    source.device=&foreign;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.device=&device;destination.format=22;CHECK(call_update(&device,&source,&destination)==-1&&!emits);destination.format=21;
+    source.device=&foreign;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.device=&device;
+#if API == 9
+    /* The native ARGB -> XRGB conversion was added during stage6; assert its
+     * opaque alpha explicitly, then retain the unsupported-format refusal. */
+    destination.format=22;CHECK(call_update(&device,&source,&destination)==0&&emits==24&&!event_error);
+    for(UINT face=0;face<6;face++)for(UINT level=0;level<4;level++){
+        Level *s=source.levels+face*source.level_count+2+level,*d=destination.levels+face*4+level;
+        for(UINT byte=0;byte<d->byte_count;byte++)CHECK(d->shadow[byte]==(byte%4==3?255:s->shadow[byte]));
+    }
+    clear_events();destination.format=0x12345678;
+#else
+    destination.format=22;
+#endif
+    CHECK(call_update(&device,&source,&destination)==-1&&!emits);destination.format=21;
     CHECK(call_update(&device,NULL,&destination)==-1);destination.iface.lpVtbl=&g_texture_vtbl;CHECK(call_update(&device,&source,&destination)==-1);destination.iface.lpVtbl=&G_CUBE_VTBL;
     source.pool=1;CHECK(call_update(&device,&source,&destination)==-1&&!emits);source.pool=2;
     for(unsigned i=0;i<24;++i)memset(destination.levels[i].shadow,0x3c,destination.levels[i].byte_count);
@@ -113,7 +126,9 @@ fail_emit=0;clear_events();free_texture(&source,1,FALSE);free_texture(&destinati
             Level *from=source.levels+layer*3+first+(level<count?level:0);
             UINT prefix=to->byte_count<from->byte_count?to->byte_count:from->byte_count;
             for(UINT b=0;b<to->byte_count;b++)CHECK(to->shadow[b]==(changed&&b<prefix?from->shadow[b]:lazy?0:0x3c));
-            if(changed){CHECK(to->shadow_valid);CHECK(!memcmp(events[layer*count+level].data,to->shadow,to->byte_count));}
+            /* Failed 2D uploads retain dirty CPU data for retry and do not publish a
+             * synchronized mirror. Cube/volume common copies retain their existing semantics. */
+            if(changed){CHECK(to->shadow_valid==!(kind==0&&failure==2&&layer*count+level+1==written));CHECK(!memcmp(events[layer*count+level].data,to->shadow,to->byte_count));}
         }
         fail_alloc=fail_emit=0;clear_events();free_texture(&source,kind,FALSE);free_texture(&destination,kind,lazy);++tested;
     }
