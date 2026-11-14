@@ -28,7 +28,7 @@
 
 #define D9WG_MAGIC 0x47573944u /* "D9WG" */
 #define D9WG_VERSION_MAJOR 1u
-#define D9WG_VERSION_MINOR 10u
+#define D9WG_VERSION_MINOR 11u
 
 /* The last four MiB of v86gl.sys's mapped DMA allocation are never used for
  * command batches.  The browser writes asynchronous query/readback results
@@ -403,6 +403,16 @@ typedef struct D9WGClear {
     uint32_t stencil;
     uint32_t rect_count;
 } D9WGClear;
+/* Protocol1.11: CLEAR with this command-header flag appends ClearBounds
+ * after its inline Rect list. This is a caller-owned viewport bound for
+ * legacy Viewport.Clear; device viewport/scissor state remains untouched. */
+#define D9WG_COMMAND_CLEAR_BOUNDS 1u
+typedef struct D9WGClearBounds {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} D9WGClearBounds; /* 16 bytes; optional CLEAR trailer */
 typedef struct D9WGRect {
     int32_t left;
     int32_t top;
@@ -1261,6 +1271,11 @@ typedef char D9WGAssertClear_color[offsetof(D9WGClear, color) == 8 ? 1 : -1];
 typedef char D9WGAssertClear_depth[offsetof(D9WGClear, depth) == 12 ? 1 : -1];
 typedef char D9WGAssertClear_stencil[offsetof(D9WGClear, stencil) == 16 ? 1 : -1];
 typedef char D9WGAssertClear_rect_count[offsetof(D9WGClear, rect_count) == 20 ? 1 : -1];
+typedef char D9WGAssertClearBoundsSize[sizeof(D9WGClearBounds) == 16 ? 1 : -1];
+typedef char D9WGAssertClearBounds_x[offsetof(D9WGClearBounds, x) == 0 ? 1 : -1];
+typedef char D9WGAssertClearBounds_y[offsetof(D9WGClearBounds, y) == 4 ? 1 : -1];
+typedef char D9WGAssertClearBounds_width[offsetof(D9WGClearBounds, width) == 8 ? 1 : -1];
+typedef char D9WGAssertClearBounds_height[offsetof(D9WGClearBounds, height) == 12 ? 1 : -1];
 typedef char D9WGAssertRectSize[sizeof(D9WGRect) == 16 ? 1 : -1];
 typedef char D9WGAssertRect_left[offsetof(D9WGRect, left) == 0 ? 1 : -1];
 typedef char D9WGAssertRect_top[offsetof(D9WGRect, top) == 4 ? 1 : -1];

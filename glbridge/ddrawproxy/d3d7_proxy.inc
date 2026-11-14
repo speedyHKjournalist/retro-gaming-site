@@ -1742,13 +1742,13 @@ static HRESULT WINAPI d3d7_device_GetRenderTarget(IDirect3DDevice7 *iface,
     return DDWG_TRACE_ERROR(surface ? D3D_OK : DDERR_NOTFOUND);
 }
 
-static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
+static HRESULT d3d7_device_clear_bounds(IDirect3DDevice7 *iface,
         DWORD rect_count, D3DRECT *rects, DWORD flags, D3DCOLOR color,
-        D3DVALUE depth_value, DWORD stencil)
+        D3DVALUE depth_value, DWORD stencil, const D3DVIEWPORT7 *clear_viewport)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGClear command;
-    UINT rect_bytes;
+    UINT rect_bytes, extra_bytes;
     uint8_t *payload;
     uint8_t *blob;
     BOOL result;
@@ -1768,6 +1768,9 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
      * above: unlike D3D8/9, native D3D7 still rejects an oversized null list. */
     if (rects && !rect_count) return D3D_OK;
     if (!rects) rect_count = rect_bytes = 0;
+    if (clear_viewport && rect_bytes > 0xffffffffu - sizeof(D9WGClearBounds))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    extra_bytes = rect_bytes + (clear_viewport ? sizeof(D9WGClearBounds) : 0u);
     if (device->render_target_pending && !d3d7_emit_render_target(device))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     ZeroMemory(&command, sizeof(command));
@@ -1778,11 +1781,19 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
     command.stencil = stencil;
     command.rect_count = rect_count;
     EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_CLEAR, sizeof(command), rect_bytes,
+    result = clear_viewport
+        ? reserve_command_with_flags_locked(D9WG_OP_CLEAR,
+            D9WG_COMMAND_CLEAR_BOUNDS, sizeof(command), extra_bytes, &payload, &blob)
+        : reserve_command_locked(D9WG_OP_CLEAR, sizeof(command), rect_bytes,
             &payload, &blob);
     if (result) {
         CopyMemory(payload, &command, sizeof(command));
         if (rect_bytes) CopyMemory(blob, rects, rect_bytes);
+        if (clear_viewport) {
+            D9WGClearBounds bounds = {clear_viewport->dwX, clear_viewport->dwY,
+                clear_viewport->dwWidth, clear_viewport->dwHeight};
+            CopyMemory(blob + rect_bytes, &bounds, sizeof(bounds));
+        }
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result && (flags & D3DCLEAR_TARGET))
@@ -1796,6 +1807,14 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
         surface_memory_changed(device->render_target->attached_depth->memory);
     }
     return DDWG_TRACE_ERROR(result ? D3D_OK : D3DERR_INITFAILED);
+}
+
+static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
+        DWORD rect_count, D3DRECT *rects, DWORD flags, D3DCOLOR color,
+        D3DVALUE depth_value, DWORD stencil)
+{
+    return d3d7_device_clear_bounds(iface, rect_count, rects, flags, color,
+            depth_value, stencil, NULL);
 }
 
 static HRESULT WINAPI d3d7_device_SetTransform(IDirect3DDevice7 *iface,
@@ -2010,6 +2029,16 @@ static BOOL d3d7_emit_texture_stage_state(D3D7Device *device, DWORD stage,
             sizeof(command));
 }
 
+/* Legacy HAL keeps the API texture reference even when its caps make it
+ * unsampleable. Device7 instead exposes a null binding for that surface. */
+static DDSurface *d3d7_sampled_texture(D3D7Device *device, DDSurface *surface)
+{
+    if (surface && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE) &&
+            !guid_equal(&device->device_guid, &IID_IDirect3DRGBDevice))
+        return NULL;
+    return surface;
+}
+
 static DWORD d3d7_legacy_texture_alpha_op(const DDSurface *texture)
 {
     return d9wg_legacy_modulate_alpha_op(texture != NULL,
@@ -2024,7 +2053,7 @@ static void d3d7_texture_map_blend_cascade(D3D7Device *device, DWORD value,
         texture = device->recording_state_block->textures[0];
     ddraw_texture_map_blend_cascade(value, cascade);
     if (value == D3D7TBLEND_MODULATE)
-        cascade->alpha_op = d3d7_legacy_texture_alpha_op(texture);
+        cascade->alpha_op = d3d7_legacy_texture_alpha_op(d3d7_sampled_texture(device, texture));
 }
 
 static BOOL d3d7_fixup_legacy_texture_alpha(D3D7Device *device)
@@ -2033,7 +2062,7 @@ static BOOL d3d7_fixup_legacy_texture_alpha(D3D7Device *device)
     if (!device->legacy_texture_blending ||
             device->render_states[D3DRENDERSTATE_TEXTUREMAPBLEND] != D3D7TBLEND_MODULATE)
         return TRUE;
-    op = d3d7_legacy_texture_alpha_op(device->textures[0]);
+    op = d3d7_legacy_texture_alpha_op(d3d7_sampled_texture(device, device->textures[0]));
     if (op == device->texture_stage_states[0][D3DTSS_ALPHAOP])
         return TRUE;
     if (!d3d7_emit_texture_stage_state(device, 0, D3DTSS_ALPHAOP, op))
@@ -2706,20 +2735,29 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
     DDSurface *surface;
     DDSurface *old;
     D9WGSetTexture command;
-    if (surface_iface && surface_iface->lpVtbl != &g_surface_vtbl)
+    const void *view = surface_iface ? surface_iface->lpVtbl : NULL;
+    if (surface_iface && view != &g_surface_vtbl && view != &g_surface_vtbl1 &&
+            view != &g_surface_vtbl2 && view != &g_surface_vtbl3 &&
+            view != &g_surface_vtbl4)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = surface_iface ? surface_from_any(surface_iface, NULL) : NULL;
     if (stage >= D3D7_MAX_TEXTURE_STAGES ||
             (surface && ((device->creation_version >= 7u && surface->owner != device->owner) ||
                     format_is_depth(surface->format))))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    /* Device7 discards ordinary surfaces from both query and draw state.
+     * Older interfaces retain the reference; only RGB can sample it. */
+    if (surface && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE) &&
+            device->creation_version >= 7u)
+        surface = NULL;
     if (device->recording_state_block) {
         D3D7StateBlock *block = device->recording_state_block;
         if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
         if (block->textures[stage]) surface_Release((IDirectDrawSurface7 *)&block->textures[stage]->vtbl7);
         block->textures[stage] = surface;block->texture_mask[stage] = 1;return D3D_OK;
     }
-    if (surface) {
+    DDSurface *sampled = d3d7_sampled_texture(device, surface);
+    if (sampled) {
         if (!sync_external_surface_for_read(surface)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         if (!prepare_surface_for_host(surface)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         rebind_host_surface_state(surface);
@@ -2734,7 +2772,7 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->wire_handle;
     command.stage = stage;
-    command.texture_handle = surface ? surface->handle : 0u;
+    command.texture_handle = sampled ? sampled->handle : 0u;
     if (!emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command))) {
         device->textures[stage] = old;
         if (surface) surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
@@ -3121,13 +3159,14 @@ static void d3d7_rebind_after_flip(DDrawObject *object)
     for (device = object ? object->d3d7_device : NULL; device; device = device->next_in_owner) {
         d3d7_emit_render_target(device);
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
-            if (device->textures[stage]) {
+            DDSurface *texture = d3d7_sampled_texture(device, device->textures[stage]);
+            if (texture) {
                 D9WGSetTexture command;
-                if (!prepare_surface_for_host(device->textures[stage])) continue;
+                if (!prepare_surface_for_host(texture)) continue;
                 ZeroMemory(&command, sizeof(command));
                 command.device_handle = device->wire_handle;
                 command.stage = stage;
-                command.texture_handle = device->textures[stage]->handle;
+                command.texture_handle = texture->handle;
                 emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command));
             }
         }

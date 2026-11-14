@@ -363,6 +363,21 @@ static BOOL reserve_command_locked(uint16_t opcode, uint32_t payload_bytes,
             NULL, payload_out, extra_out, submit_batch_locked);
 }
 
+/* Reserve one atomic command carrying optional caller-owned clear bounds.
+ * Returning a header avoids changing transport state or the device viewport. */
+static BOOL reserve_command_with_flags_locked(uint16_t opcode, uint16_t flags,
+        uint32_t payload_bytes, uint32_t extra_bytes,
+        uint8_t **payload_out, uint8_t **extra_out)
+{
+    D9WGCommandHeader *header;
+    BOOL result;
+    if (!open_transport_locked()) return FALSE;
+    result = d9wg_transport_reserve(g_process, opcode, payload_bytes, extra_bytes,
+            &header, payload_out, extra_out, submit_batch_locked);
+    if (result) header->flags = flags;
+    return result;
+}
+
 static BOOL emit_command(uint16_t opcode, const void *payload,
         uint32_t payload_bytes)
 {

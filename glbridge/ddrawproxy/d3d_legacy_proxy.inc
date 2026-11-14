@@ -1193,8 +1193,10 @@ static HRESULT WINAPI d3d_viewport_Clear2(IDirect3DViewport3 *iface,
     /* Viewport Clear/Clear2 enumerate explicit rectangles. Unlike Device7,
      * a null list does not select a full-viewport clear. */
     if (!count || !rects) return D3D_OK;
-    return d3d7_device_Clear((IDirect3DDevice7 *)viewport->device, count,
-            rects, flags, color, z, stencil);
+    D3DVIEWPORT7 bounds;
+    d3d_legacy_viewport7(viewport, &bounds);
+    return d3d7_device_clear_bounds((IDirect3DDevice7 *)viewport->device, count,
+            rects, flags, color, z, stencil, &bounds);
 }
 
 static HRESULT WINAPI d3d_viewport_Clear(IDirect3DViewport3 *iface,

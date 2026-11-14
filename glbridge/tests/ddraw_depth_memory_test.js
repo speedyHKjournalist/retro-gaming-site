@@ -9,6 +9,7 @@ const code=`#include <stdint.h>
 #include "runtime/d9wg_format_layouts.h"
 typedef uint32_t DWORD,UINT,D3DCOLOR;typedef int32_t LONG,HRESULT;typedef uint8_t BYTE;typedef int BOOL;
 typedef struct{LONG left,top,right,bottom;} RECT;typedef RECT D3DRECT;
+typedef struct{DWORD dwX,dwY,dwWidth,dwHeight;float dvMinZ,dvMaxZ;}D3DVIEWPORT7;
 typedef struct{BOOL gpu_dirty;DWORD content_version;BYTE bits[160];} Memory;
 typedef Memory DDSurfaceMemory;
 #define InterlockedIncrement(p) (++*(p))
@@ -57,11 +58,12 @@ static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*d){return d;}
 static BOOL d3d7_emit_render_target(D3D7Device*d){(void)d;return FALSE;}
 static BOOL d3d7_multiply_u32(UINT a,UINT b,UINT*out){if(b&&a>UINT32_MAX/b)return FALSE;*out=a*b;return TRUE;}
 static BOOL reserve_command_locked(UINT op,UINT size,UINT extra,uint8_t**p,uint8_t**blob){(void)op;if(size+extra>sizeof(payload)||fail_emit)return FALSE;*p=payload;*blob=payload+size;return TRUE;}
+static BOOL reserve_command_with_flags_locked(UINT op,UINT flags,UINT bytes,UINT extra,uint8_t**p,uint8_t**blob){(void)flags;return reserve_command_locked(op,bytes,extra,p,blob);}
 ${extract(source,"surface_depth_mask")}
 /* Canonical-format fixture; explicit client masks are covered by depth_transfer. */
 static DWORD surface_client_depth_mask(DDSurface*s){return surface_depth_mask(s->format);}
 ${["format_is_depth","format_compressed_block_bytes","format_is_compressed","format_is_yuv","surface_can_mirror_color_fill","surface_prepare_color_fill","surface_mirror_color_fill","prepare_surface_for_host","surface_mirror_depth_fill","surface_fill_yuv","emit_blt"].map(n=>extract(source,n)).join("\n")}
-${["d3d7_mark_draw_surfaces_dirty","d3d7_device_Clear"].map(n=>extract(legacy,n)).join("\n")}
+${["d3d7_mark_draw_surfaces_dirty","d3d7_device_clear_bounds","d3d7_device_Clear"].map(n=>extract(legacy,n)).join("\n")}
 static int fills(void){
  const UINT formats[]={70,71,73,75,77,79,80},masks[]={0xffff,0xffffffff,0xfffe,0xffffff00,0xffffff00,0xffffff00,0xffff};
  const DWORD values[]={0,1,0xffff,0xdeadbeef,0xffffffff};
