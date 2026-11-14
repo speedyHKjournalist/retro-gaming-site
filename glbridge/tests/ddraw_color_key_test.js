@@ -3,6 +3,7 @@ const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("n
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-color-key-")),source=fs.readFileSync(process.env.DDRAW_COLOR_KEY_SOURCE||root+"/ddrawproxy/ddraw_proxy.c","utf8");
 function extract(name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let end=source.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(source[end]==="{")depth++;if(source[end]==="}")depth--;}return source.slice(m.index,end);}
 try{fs.writeFileSync(dir+"/entry.c",`#include <assert.h>
+#define FAILED(h) ((h)<0)
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -114,10 +115,19 @@ static DDSurface*surface_create(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,
 static DDSurface*surface_create_complex_texture(DDrawObject*d,const DDSURFACEDESC2*p,unsigned f,UINT w,UINT h,DWORD caps,UINT levels,BOOL cube){assert(levels==2&&!cube);return surface_create(d,p,f,w,h,caps);}
 BOOL IsBadWritePtr(void*p,size_t n){(void)n;return !p||(uintptr_t)p==0xdeadbeef;}
 void surface_creation_profile(DDSurface*s,unsigned version){(void)s;(void)version;}
-${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKeyForVersion','surface_SetColorKey','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),...(source.includes('static HRESULT ddraw_CreateSurfaceForVersion(')?['ddraw_CreateSurfaceForVersion']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
+${['surface_color_key_kind','surface_description_color_key','surface_GetColorKey','surface_SetColorKeyForVersion','surface_SetColorKey','d3d_texture_copy_keys','surface_full_mip_count',...(source.includes('static BOOL surface_request_color_keys_valid(')?['surface_request_color_keys_valid']:[]),...(source.includes('static HRESULT ddraw_CreateSurfaceForVersion(')?['ddraw_CreateSurfaceForVersion']:[]),'ddraw_CreateSurface'].map(extract).join('\n')}
 #define CHECK(v) do{checks++;if(!(v)){fprintf(stderr,"DDraw color key line %u: %s\\n",__LINE__,#v);return 1;}}while(0)
 static void events(void){sets=overlays=0;emitted_kind=99;emitted_present=0;emitted_key=(DDCOLORKEY){0};}
-int main(void){(void)&ddraw_AddRef;(void)&surface_destroy;(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32,.cooperative_flags=DDSCL_NORMAL};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;
+static int load_key_matrix(void){
+ const DWORD selectors[]={DDCKEY_SRCBLT,DDCKEY_DESTBLT,DDCKEY_SRCOVERLAY,DDCKEY_DESTOVERLAY};
+ for(UINT modern=0;modern<2;modern++)for(UINT sm=0;sm<16;sm++)for(UINT dm=0;dm<16;dm++){
+  DDrawObject owner={0};DDSurface src={.owner=&owner},dst={.owner=&owner};
+  for(UINT k=0;k<4;k++){DDCOLORKEY sk={0x112200u+k,0x112200u+k},dk={0x334400u+k,0x334400u+k};CHECK(!surface_SetColorKey(&src,selectors[k],&sk)&&!surface_SetColorKey(&dst,selectors[k],&dk));if(!(sm&(1u<<k)))CHECK(!surface_SetColorKey(&src,selectors[k],NULL));if(!(dm&(1u<<k)))CHECK(!surface_SetColorKey(&dst,selectors[k],NULL));}
+  DDSurface source_before=src,destination_before=dst;events();CHECK(!d3d_texture_copy_keys(&dst,&src,modern));CHECK(!memcmp(&src,&source_before,sizeof(src))&&sets==(modern?4u:!!(sm&1u))&&!overlays);
+  for(UINT k=0;k<4;k++){BOOL copied=(sm&(1u<<k))&&(modern||k==0),present=modern?!!(sm&(1u<<k)):copied||!!(dm&(1u<<k));DDCOLORKEY out={0xabcdef,0xfedcba},before=out;CHECK(!!(dst.color_key_present&(1u<<k))==present);DWORD kind,flag;CHECK(surface_color_key_kind(selectors[k],&kind,&flag)&&kind==k);CHECK(!!(dst.desc.dwFlags&flag)==present);HRESULT hr=surface_GetColorKey(&dst,selectors[k],&out);CHECK(hr==(present?DD_OK:DDERR_NOCOLORKEY));if(present)CHECK(out.dwColorSpaceLowValue==(copied?0x112200u+k:0x334400u+k)&&out.dwColorSpaceHighValue==out.dwColorSpaceLowValue);else{CHECK(!memcmp(&out,&before,sizeof(out)));DDCOLORKEY*desc=surface_description_color_key(&dst,k);CHECK(!desc->dwColorSpaceLowValue&&!desc->dwColorSpaceHighValue);}CHECK(dst.color_key[k].dwColorSpaceLowValue==(copied?0x112200u+k:destination_before.color_key[k].dwColorSpaceLowValue));}
+ }
+ puts("PASS actual Load key matrix: modern/legacy x16 source masks x16 destination masks; real setters, getters, canonical descriptions, retained private last values and immutable source");return 0;}
+int main(void){CHECK(!load_key_matrix());(void)&ddraw_AddRef;(void)&surface_destroy;(void)d9wg_ddraw_color_key_normalize;DDrawObject owner={.mode_bpp=32,.cooperative_flags=DDSCL_NORMAL};DDSurface surface={.owner=&owner,.overlay_visible=1},other={.owner=&owner,.overlay_visible=1,.overlay_destination=&surface};owner.surfaces=&surface;surface.next=&other;
 const DWORD selectors[]={DDCKEY_SRCBLT,DDCKEY_DESTBLT,DDCKEY_SRCOVERLAY,DDCKEY_DESTOVERLAY},descflags[]={DDSD_CKSRCBLT,DDSD_CKDESTBLT,DDSD_CKSRCOVERLAY,DDSD_CKDESTOVERLAY};
 const DWORD values[]={0,1,0xff,0xffff,0x12345678,0xffffffff};unsigned set_cases=0,create_cases=0;
 for(UINT kind=0;kind<4;kind++)for(UINT lo=0;lo<6;lo++)for(UINT hi=0;hi<6;hi++)for(UINT range=0;range<2;range++){

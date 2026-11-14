@@ -12,7 +12,7 @@ const cases = [
     ["legacy permits missing destination palette", "d3d_texture_load_legacy", "dst, src, TRUE", "dst, src, FALSE"],
     ["Device7 only copies source-blit key", "d3d_texture_load_mip_subset", "d3d_texture_copy_keys(destination, source, TRUE)", "d3d_texture_copy_keys(destination, source, FALSE)"],
     ["legacy overwrites all keys", "d3d_texture_load_legacy", "d3d_texture_copy_keys(dst, src, FALSE)", "d3d_texture_copy_keys(dst, src, TRUE)"],
-    ["absent source keys erase destination", "d3d_texture_copy_keys", "if (!(source->color_key_present & (1u << kind))) continue;", "if (FALSE && !(source->color_key_present & (1u << kind))) continue;"],
+    ["absent legacy source key erases destination", "d3d_texture_copy_keys", "if (!present && !all_keys) continue;", "if (!present && all_keys) continue;"],
     ["ALLOCONLOAD retained", "d3d_texture_load_legacy", "dst->desc.ddsCaps.dwCaps &= ~DDSCAPS_ALLOCONLOAD;", "dst->desc.ddsCaps.dwCaps |= DDSCAPS_ALLOCONLOAD;"],
     ["legacy rejects unequal mip lengths", "d3d_texture_load_legacy", "/* The older public interfaces", "if (dst || src) return D3DERR_TEXTURE_BADSIZE;\n    /* The older public interfaces"],
     ["empty cube selection copies all faces", "d3d_texture_load7", "!(flags & (DDSCAPS2_CUBEMAP_POSITIVEX << face))", "(FALSE && !(flags & (DDSCAPS2_CUBEMAP_POSITIVEX << face)))"],

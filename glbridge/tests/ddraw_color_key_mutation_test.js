@@ -10,6 +10,10 @@ try{let killed=0;const policy=fs.readFileSync(root+"/runtime/d9wg_ddraw_color_ke
  ["equal explicit key refused","low != high","(low != high || low == high)"],
 ]){assert(policy.includes(old),label);const file=dir+"/policy.h";fs.writeFileSync(file,policy.replace(old,replacement));run(label,{DDRAW_COLOR_KEY_POLICY:file});killed++;}
 const source=fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8");for(const[label,fn,old,replacement]of[
+ ["Device7 Load retains absent destination keys","d3d_texture_copy_keys","if (!present && !all_keys) continue;","if (!present) continue;"],
+ ["legacy Load clears absent destination key","d3d_texture_copy_keys","if (!present && !all_keys) continue;","if (!present && FALSE) continue;"],
+ ["Device7 Load only copies one key kind","d3d_texture_copy_keys","if (!all_keys && flags[index] != DDCKEY_SRCBLT) continue;","if (flags[index] != DDCKEY_SRCBLT) continue; (void)all_keys;"],
+ ["Load modifies source key state","d3d_texture_copy_keys","&destination->vtbl7","&((destination ? source : destination)->vtbl7)"],
  ["setter ignores explicit range","surface_SetColorKeyForVersion","(flags & DDCKEY_COLORSPACE) != 0","0"],
  ["setter treats every high as explicit","surface_SetColorKeyForVersion","(flags & DDCKEY_COLORSPACE) != 0","1"],
  ["setter uses caller range after normalization","surface_SetColorKeyForVersion","key = &fixed_key;","(void)fixed_key;"],
@@ -23,4 +27,4 @@ const source=fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8");for(const[
  ["creation inspects unflagged keys","surface_request_color_keys_valid","(request->dwFlags & flags[i])","((request->dwFlags & flags[i]) || TRUE)"],
  ["creation wrong refusal code","ddraw_CreateSurfaceForVersion","DDWG_TRACE_ERROR(DDERR_NOCOLORKEYHW)","DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS)"],
 ]){const file=dir+"/frontend.c";fs.writeFileSync(file,mutate(source,fn,old,replacement));run(label,{DDRAW_COLOR_KEY_SOURCE:file});killed++;}
-console.log("PASS DDraw color-key mutations: "+killed+"/16; shared canonicalization, explicit ranges, cache/description/wire agreement, overlay failure atomicity, full creation preflight, all selectors and ignored unflagged values");}finally{fs.rmSync(dir,{recursive:true,force:true});}
+console.log("PASS DDraw color-key mutations: "+killed+"/20; shared canonicalization, explicit ranges, cache/description/wire agreement, overlay failure atomicity, full creation preflight, all selectors and ignored unflagged values");}finally{fs.rmSync(dir,{recursive:true,force:true});}

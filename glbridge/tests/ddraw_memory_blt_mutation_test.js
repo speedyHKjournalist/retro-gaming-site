@@ -2,6 +2,7 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/ddraw_proxy.c"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-memory-mutants-"));
 const cases=[
+ ["packed X1 to software A1 route disabled","source->format == DDWG_FMT_X1R5G5B5;","FALSE;"],
  ["packed memory route disabled","if (surface_can_memory_blt(destination, source, flags))","if (FALSE && surface_can_memory_blt(destination, source, flags))"],
  ["last packed byte dropped","CopyMemory(row, source_row, dw*bytes);","CopyMemory(row, source_row, dw*bytes-1u);"],
  ["overlap snapshot disabled","if (source_start < destination_start + destination->memory->bytes &&","if (FALSE && source_start < destination_start + destination->memory->bytes &&"],

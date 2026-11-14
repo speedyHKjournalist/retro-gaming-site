@@ -249,7 +249,7 @@ static void d3d_legacy_caps_pair(const GUID *guid, unsigned version,
     } else {
         d3d_legacy_fill_caps(hel);
         hel->dwSize = d3d_legacy_caps_size(version);
-        hel->dwFlags &= ~(DWORD)D3DDD_LINECAPS;
+        if (version < 3u) hel->dwFlags &= ~(DWORD)D3DDD_LINECAPS;
         hel->dcmColorModel = guid_equal(guid, &IID_IDirect3DRampDevice)
             ? D3DCOLOR_MONO : D3DCOLOR_RGB;
         /* SORT flags describe required input ordering, not an automatic
@@ -258,6 +258,8 @@ static void d3d_legacy_caps_pair(const GUID *guid, unsigned version,
             D3DDEVCAPS_SORTEXACT | D3DDEVCAPS_EXECUTESYSTEMMEMORY |
             D3DDEVCAPS_TLVERTEXSYSTEMMEMORY | D3DDEVCAPS_TEXTURESYSTEMMEMORY |
             D3DDEVCAPS_DRAWPRIMTLVERTEX;
+        if (version >= 3u)
+            hel->dwDevCaps &= ~(DWORD)(D3DDEVCAPS_SORTINCREASINGZ | D3DDEVCAPS_SORTEXACT);
         hel->dpcLineCaps.dwTextureCaps |= D3DPTEXTURECAPS_POW2;
         hel->dpcTriCaps.dwTextureCaps |= D3DPTEXTURECAPS_POW2;
     }

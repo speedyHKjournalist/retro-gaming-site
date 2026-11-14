@@ -37,7 +37,7 @@ static unsigned checks,copies,palettes,keys,readbacks,fail_copy,fail_palette,fai
 struct Copy {DDSurface*dst,*src;RECT d,s;};static struct Copy records[128];
 static HRESULT palette_SetEntries(IDirectDrawPalette*p,DWORD flags,DWORD start,DWORD count,PALETTEENTRY*e){MUST(!flags&&!start&&count==256);palettes++;memmove(p->entries,e,sizeof(p->entries));return fail_palette?DDERR_GENERIC:0;}
 ${extract("surface_color_key_kind")}
-static HRESULT surface_SetColorKey(IDirectDrawSurface7*d,DWORD flag,LPDDCOLORKEY key){DWORD kind,description;MUST(surface_color_key_kind(flag,&kind,&description));keys++;if(fail_key&&keys==fail_key)return DDERR_GENERIC;d->color_key[kind]=*key;d->color_key_present|=1u<<kind;return 0;}
+static HRESULT surface_SetColorKey(IDirectDrawSurface7*d,DWORD flag,LPDDCOLORKEY key){DWORD kind,description;MUST(surface_color_key_kind(flag,&kind,&description));keys++;if(fail_key&&keys==fail_key)return DDERR_GENERIC;if(key){d->color_key[kind]=*key;d->color_key_present|=1u<<kind;}else d->color_key_present&=~(1u<<kind);return 0;}
 static BOOL emit_blt(DDSurface*d,const RECT*dr,DDSurface*s,const RECT*sr,DWORD flags,DWORD fill,float depth){MUST(!flags&&!fill&&depth==0&&copies<128);records[copies++]=(struct Copy){d,s,*dr,*sr};return !fail_copy||copies!=fail_copy;}
 static BOOL surface_readback(DDSurface*d){MUST(d->external_memory);readbacks++;return !fail_readback;}
 static DDSurface*surface_from_any(IDirectDrawSurface7*p,void*v){(void)v;return p;}static D3D7Device*d3d7_device_from_iface(IDirect3DDevice7*p){return p;}

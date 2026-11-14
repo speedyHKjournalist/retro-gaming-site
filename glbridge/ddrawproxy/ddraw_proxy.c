@@ -1609,10 +1609,15 @@ static void surface_mirror_color_fill(DDSurface *surface, const RECT *rect,
 static BOOL surface_can_memory_blt(DDSurface *destination, DDSurface *source,
         uint32_t flags)
 {
+    /* Native software destinations copy the packed X1 bit into A1. Video
+     * destinations keep their format-conversion/opaque-alpha GPU path. */
+    BOOL alpha_bit_copy = source && destination->format == DDWG_FMT_A1R5G5B5 &&
+        source->format == DDWG_FMT_X1R5G5B5;
     return source && !flags && !destination->clipper &&
         (destination->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) &&
-        (source->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) &&
-        destination->format == source->format &&
+        (alpha_bit_copy ||
+         ((source->desc.ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY) &&
+          destination->format == source->format)) &&
         destination->bytes_per_pixel >= 1u && destination->bytes_per_pixel <= 4u &&
         destination->bytes_per_pixel == source->bytes_per_pixel &&
         !format_is_depth(destination->format) &&
@@ -5621,9 +5626,10 @@ static HRESULT d3d_texture_copy_keys(DDSurface *destination,
         if (!all_keys && flags[index] != DDCKEY_SRCBLT) continue;
         if (!surface_color_key_kind(flags[index], &kind, &description_flag))
             return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-        if (!(source->color_key_present & (1u << kind))) continue;
+        BOOL present = (source->color_key_present & (1u << kind)) != 0;
+        if (!present && !all_keys) continue;
         hr = surface_SetColorKey((IDirectDrawSurface7 *)&destination->vtbl7,
-                flags[index], &source->color_key[kind]);
+                flags[index], present ? &source->color_key[kind] : NULL);
         if (FAILED(hr)) return hr;
     }
     return DD_OK;

@@ -2,6 +2,9 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-caps-mut-"));
 const cases=[
+ ["D3D3 RGB omits LINECAPS","legacy","d3d_legacy_caps_pair","if (version < 3u)","if (TRUE)"],
+ ["D3D3 RGB reports obsolete sorting","legacy","d3d_legacy_caps_pair","if (version >= 3u)","if (FALSE)"],
+ ["older RGB loses sorting","legacy","d3d_legacy_caps_pair","if (version >= 3u)","if (TRUE)"],
  ["API descriptor sizes merged","legacy","d3d_legacy_caps_size","if (version == 1u)","if (FALSE && version == 1u)"],
  ["old view exposes new tail","legacy","d3d_legacy_caps_pair","if (size < sizeof(*hal))","if (FALSE && size < sizeof(*hal))"],
  ["software reports hardware descriptor","legacy","d3d_legacy_caps_pair","d3d_legacy_fill_caps(hel);","d3d_legacy_fill_caps(hal); d3d_legacy_fill_caps(hel);"],
