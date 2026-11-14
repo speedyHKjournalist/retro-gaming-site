@@ -37,7 +37,9 @@ static int texcoord_cases(unsigned iterations)
     TCHECK(output[4]==.75f && output[5]==.5f && output[6]==2 && output[7]==3);
     TCHECK(d9wg_vertex_texture_state(&state,0,0,1,matrix));
     TCHECK(tex_run(&source,input,&destination,output,identity,&viewport,&lighting,&state,0));
-    TCHECK(output[4]==.75f && output[5]==19 && output[6]==23 && output[7]==29);
+    TCHECK(output[4]==17 && output[5]==19 && output[6]==23 && output[7]==29);
+    TCHECK(tex_run(&source,input,&destination,output,identity,&viewport,&lighting,&state,1));
+    TCHECK(output[4]==.25f && output[5]==.75f && output[6]==23 && output[7]==29);
     TCHECK(d9wg_vertex_texture_state(&state,0,0x20000,0,identity));
     float view[16]={1,0,0,0,0,1,0,0,0,0,2,0,.5f,-.25f,0,1};
     TCHECK(tex_run(&source,input,&destination,output,view,&viewport,&lighting,&state,0));
@@ -59,7 +61,11 @@ static int texcoord_cases(unsigned iterations)
     TCHECK(tex_near(output[4],.7071067811865475f) && tex_near(output[6],-.7071067811865475f));
     TCHECK(d9wg_vertex_texture_state(&state,0,0x40000,0,identity));
     TCHECK(tex_run(&source,input,&destination,output,identity,&viewport,&lighting,&state,0));
-    TCHECK(tex_near(output[4],.9619397662556434f) && output[5]==.5f && output[6]==23 && output[7]==29);
+    TCHECK(tex_near(output[4],.6913417161825449f) && output[5]==.5f && output[6]==23 && output[7]==29);
+    lighting.flags.normalize_normals=0;
+    input[3]=.5f;input[4]=input[5]=0;
+    TCHECK(tex_run(&source,input,&destination,output,identity,&viewport,&lighting,&state,0));
+    TCHECK(tex_near(output[4],.8850380761895643f) && output[5]==.5f);
     input[0]=0;
     TCHECK(tex_run(&source,input,&destination,output,identity,&viewport,&lighting,&state,0));
     TCHECK(output[4]==.5f && output[5]==.5f);

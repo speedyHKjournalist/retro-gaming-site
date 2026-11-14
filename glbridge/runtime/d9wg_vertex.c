@@ -292,6 +292,9 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
             uint32_t index = configured ? vertex_state->texture[i].coordinate_index : i;
             uint32_t flags = configured ? vertex_state->texture[i].flags : 0;
             uint32_t generated = index >> 16, transformed = flags & 0xffu, source_set = index & 0xffffu;
+            /* Match the fixed-function texture matrix: COUNT1 is identity,
+             * rather than a one-component matrix transform. */
+            if (transformed == 1u) transformed = 0;
             uint32_t floats = generated ? generated == 4 ? 2u : 3u : s->texcoord_floats[source_set];
             float coordinate[4] = {0,0,0,1}, converted[4];
             if (d->texcoord[i] < 0 || !floats || (!generated && s->texcoord[source_set] < 0)) continue;
@@ -315,12 +318,14 @@ int d9wg_process_vertices(const D9WGProcessLayout *s,
                     coordinate[component] = generated == 1 ? eye_normal[component] : eye[component];
                 if (generated >= 3) {
                     float dot;
-                    d9wg_tnl_normalize3(coordinate, 0.0f);d9wg_tnl_normalize3(eye_normal, 0.0f);
+                    d9wg_tnl_normalize3(coordinate, 0.0f);
+                    if (generated == 3) d9wg_tnl_normalize3(eye_normal, 0.0f);
                     dot = coordinate[0]*eye_normal[0] + coordinate[1]*eye_normal[1] + coordinate[2]*eye_normal[2];
                     for (unsigned component = 0; component < 3; ++component)
                         coordinate[component] -= 2.0f*dot*eye_normal[component];
                     if (generated == 4) {
-                        float z = coordinate[2] + 1.0f;
+                        /* Direct3D's sphere pole is R.z - 1, unlike GL's +1. */
+                        float z = coordinate[2] - 1.0f;
                         float divisor = 2.0f*d9wg_tnl_sqrt(coordinate[0]*coordinate[0] + coordinate[1]*coordinate[1] + z*z);
                         if (divisor < 1e-6f) divisor = 1e-6f;
                         coordinate[0] = coordinate[0] / divisor + .5f;coordinate[1] = coordinate[1] / divisor + .5f;

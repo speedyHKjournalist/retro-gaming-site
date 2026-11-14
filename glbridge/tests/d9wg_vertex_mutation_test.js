@@ -5,7 +5,9 @@ const original = fs.readFileSync(path.join(__dirname, "../runtime/d9wg_vertex.c"
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "d9wg-vertex-mutants-"));
 const mutations = [
     ["generated texture data suppressed by DONOTCOPYDATA", "if (!copy_data && !generated && !transformed) continue;", "if (!copy_data) continue;", "d9wg_texcoord_test.js"],
-    ["COUNT1 skips matrix", "if (transformed) {", "if (transformed > 1) {", "d9wg_texcoord_test.js"],
+    ["COUNT1 incorrectly applies matrix", "if (transformed == 1u) transformed = 0;", "if (0) transformed = 0;", "d9wg_texcoord_test.js"],
+    ["sphere uses the GL pole", "float z = coordinate[2] - 1.0f;", "float z = coordinate[2] + 1.0f;", "d9wg_texcoord_test.js"],
+    ["sphere always normalizes the normal", "if (generated == 3) d9wg_tnl_normalize3(eye_normal, 0.0f);", "d9wg_tnl_normalize3(eye_normal, 0.0f);", "d9wg_texcoord_test.js"],
     ["projection divides before rasterization", "floats = transformed;", "if(flags & 256u)for(unsigned c=0;c+1<transformed;c++)coordinate[c]/=coordinate[transformed-1];floats = transformed;", "d9wg_texcoord_test.js"],
     ["source set forced to zero", "source_set = index & 0xffffu;", "source_set = 0;", "d9wg_texcoord_test.js"],
     ["vertex fog is never generated", "if (vertex_state && vertex_state->fog_mode && d->specular >= 0 &&", "if (0 && vertex_state && vertex_state->fog_mode && d->specular >= 0 &&"],
@@ -23,5 +25,5 @@ try {
         assert.notEqual(result.status, 0, "survived: " + label);
         assert.match(result.stderr, /(vertex|texcoord) mismatch header line/, "must fail an executed assertion, not compilation: " + label);
     }
-    console.log("PASS shared C vertex mutations: 9/9 semantic errors detected; production sources untouched");
+    console.log("PASS shared C vertex mutations: " + mutations.length + "/" + mutations.length + " semantic errors detected; production sources untouched");
 } finally { fs.rmSync(directory, { recursive: true, force: true }); }

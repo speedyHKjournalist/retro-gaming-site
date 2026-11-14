@@ -380,7 +380,7 @@ void WINAPI WinMainCRTStartup(void)
     identity(&matrix);matrix._11=2;matrix._22=.5f;matrix._31=.25f;matrix._32=.125f;matrix._33=2;
     check(SUCCEEDED(CALL(SetTransform)(device,D3DTS_TEXTURE0,&matrix)),"texture matrix");
     texture_state(0,2);output=process_flags(&input,1);check(output.tex[0]==.75f && output.tex[1]==.5f && output.tex[2]==23 && output.tex[3]==29,"texture transform with DONOTCOPYDATA");
-    texture_state(0,1);output=process(&input);check(output.tex[0]==.75f && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"COUNT1 transforms one component");
+    texture_state(0,1);output=process(&input);check(output.tex[0]==17 && output.tex[1]==19 && output.tex[2]==23 && output.tex[3]==29,"COUNT1 preserves input without a texture transform");
     texture_state(0,259);output=process(&input);check(output.tex[0]==.75f && output.tex[1]==.5f && output.tex[2]==2 && output.tex[3]==29,"projected coordinate keeps undivided q");
     input.x=.2f;input.y=.3f;input.z=.4f;texture_state(0x20000,0);output=process_flags(&input,1);
     check(near_value(output.tex[0],.2f) && near_value(output.tex[1],.3f) && near_value(output.tex[2],.4f) && output.tex[3]==29,"camera position coordinates");
