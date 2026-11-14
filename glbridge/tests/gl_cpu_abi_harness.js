@@ -55,7 +55,7 @@ async function run(code, check, configure) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-cpu-abi-"));
     try {
         fs.writeFileSync(path.join(dir, "test.c"), code);
-        execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-I", path.join(__dirname, "../openglproxy"), path.join(dir, "test.c"), "-o", path.join(dir, "test")]);
+        execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE", "-pthread", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-I", path.join(__dirname, "../openglproxy"), path.join(dir, "test.c"), "-o", path.join(dir, "test")]);
         for (const copied of [false, true]) {
             const shadow = new GLShadow(), { host } = createFakeHost(), gpu = new GLWebGPUExecutor(null, { host, strict: true }); await gpu.initialize();
             gpu.options.writeGuestMemory = (offset, data, metadata) => metadata.guestBytes.set(data, offset + (metadata.originalOffset || 0));

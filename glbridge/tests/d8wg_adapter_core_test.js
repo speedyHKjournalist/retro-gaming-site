@@ -26,7 +26,11 @@ ${type(sdk9,"D3DDISPLAYMODE")}
 typedef struct{UINT compatibility_api;}IDirect3D9;typedef struct{IDirect3D9*backend;}IDirect3D8;
 #define d3d_from_iface(v) (v)
 #define ZeroMemory(p,n) memset(p,0,n)
-#define CopyMemory(p,q,n) memcpy(p,q,n)
+/* Keep the copy observable even when an invalid mutant would let the
+ * optimizer assume the surrounding object canaries cannot be changed. */
+static __attribute__((noinline,unused)) void observed_copy(void *out,const void *in,size_t count){volatile BYTE *dst=out;const volatile BYTE *src=in;for(size_t i=0;i<count;i++)dst[i]=src[i];}
+#define memcpy(p,q,n) observed_copy(p,q,n)
+#define CopyMemory(p,q,n) observed_copy(p,q,n)
 static void lstrcpynA(char*out,const char*in,UINT n){if(n){UINT len=(UINT)strlen(in);if(len>=n)len=n-1;memcpy(out,in,len);out[len]=0;}}
 typedef struct{UINT width,height,format,refresh_rate;}D9WGDisplayMode;
 static UINT checks,id_calls,mode_calls,software_calls,current_calls;static void*observed_software;static D9WGDisplayMode current;
@@ -60,7 +64,7 @@ int main(void){
  printf("ADAPTER checks=%u\\n",checks);return 0;
 }
 `;
- fs.writeFileSync(dir+"/adapter.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/adapter.c","-o",dir+"/adapter"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/adapter",[],{encoding:"utf8",timeout:10000});assert.equal(r.status,0,r.stderr+" signal="+r.signal);total+=Number(r.stdout.match(/checks=(\d+)/)[1]);
+ fs.writeFileSync(dir+"/adapter.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-fsanitize=address","-Os","-Wall","-Wextra","-Werror",dir+"/adapter.c","-o",dir+"/adapter"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/adapter",[],{encoding:"utf8",timeout:10000});assert.equal(r.status,0,r.stderr+" signal="+r.signal);total+=Number(r.stdout.match(/checks=(\d+)/)[1]);
 }
 console.log(`PASS actual D3D8 adapter/core C: ${total} checks, 4 D3D9 identity configurations, 1024 legacy identity/display/software rounds; exact1068/1100-byte prior outputs, WHQL polarity, guarded copies, observed delegation and untouched error outputs`);
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

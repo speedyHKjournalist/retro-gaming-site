@@ -47,6 +47,6 @@ int main(void){
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gl-window-dispatcher-"));
 try {
     const file = path.join(directory, "test.c"), binary = path.join(directory, "test");fs.writeFileSync(file, code);
-    execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-Wall", "-Wextra", "-Werror", file, "-o", binary]);execFileSync(binary);
+    execFileSync(process.env.CC_HOST || "cc", ["-std=c99", "-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE", "-pthread", "-Wall", "-Wextra", "-Werror", file, "-o", binary]);execFileSync(binary);
     console.log("PASS actual C window dispatcher: serialized idle updates, DLL reference, start failures, final-context exit and sequential restart");
 } finally { fs.rmSync(directory, { recursive: true, force: true }); }

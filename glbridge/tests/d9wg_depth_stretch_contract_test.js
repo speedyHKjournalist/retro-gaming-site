@@ -49,6 +49,6 @@ for(unsigned src_kind=0;src_kind<3;src_kind++)for(unsigned dst_kind=0;dst_kind<3
 }
 printf("PASS depth StretchRect native contract: %u checks; implicit/explicit depth, whole/partial/flipped rectangles, color conversion, extent/format/sample mismatch, filters, scene and atomic transport failure\\n",checks);}
 `;
- fs.writeFileSync(dir+'/test.c',code);const cc=spawnSync('cc',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',dir+'/test.c','-o',dir+'/test'],{encoding:'utf8'});assert.equal(cc.status,0,cc.stderr);
+ fs.writeFileSync(dir+'/test.c',code);const cc=spawnSync(process.env.HOST_CC||'cc',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',dir+'/test.c','-o',dir+'/test'],{encoding:'utf8'});assert.equal(cc.status,0,cc.stderr);
  const run=spawnSync(dir+'/test',[],{encoding:'utf8'});assert.equal(run.status,0,run.stdout+run.stderr);process.stdout.write(run.stdout);
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

@@ -51,5 +51,5 @@ int main(void){
 }`;
  const input=dir+"/bounds.c",bin=dir+"/bounds";fs.writeFileSync(input,code);
  const sources=["clip","blend","vertex","fvf","math","lighting","tnl_math"].map(n=>process.env["D9WG_"+n.toUpperCase()+"_SOURCE"]||root+"/runtime/d9wg_"+n+".c");
- const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror","-I",root,"-I",root+"/runtime",input,...sources,"-o",bin],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(bin,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);process.stdout.write(run.stdout);
+ const build=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-fsanitize=undefined","-fno-sanitize-recover=all","-Os","-Wall","-Wextra","-Werror","-I",root,"-I",root+"/runtime",input,...sources,"-o",bin],{encoding:"utf8"});assert.equal(build.status,0,build.stderr);const run=spawnSync(bin,[],{encoding:"utf8"});assert.equal(run.status,0,run.stderr||"native run signal "+run.signal);process.stdout.write(run.stdout);
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

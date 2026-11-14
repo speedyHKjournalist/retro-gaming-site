@@ -368,6 +368,6 @@ D9Surface s={0};D9Texture t={0};D9SwapChain chain={0};CHECK(surface_uses_private
 printf("PASS actual D3D9 target bindings: %u checks, %u lifecycle groups, %u public-zero revivals; actual RT/depth setters/getters, one/two internal slots, one public device pin, public-only Reset blockers, same-object rebinding and unbind/device-first/last-public cleanup\\n",checks,cases,revivals);return 0;}
 
 `);
-    const b = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-I", root, dir + "/target.c", root + "/runtime/d9wg_private_data.c", ...(fvfBindings?[process.env.D8WG_FVF8_DECODE_SOURCE||root + "/runtime/d9wg_fvf.c"]:[]), "-o", dir + "/target"], {encoding: "utf8"}); assert.equal(b.status, 0, b.stderr);
+    const b = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", ...(process.env.D9WG_TEST_STATE_BLOCK_HANDLE8 === "1" ? ["-fsanitize=address"] : []), "-Os", "-Wall", "-Wextra", "-Werror", "-I", root, dir + "/target.c", root + "/runtime/d9wg_private_data.c", ...(fvfBindings?[process.env.D8WG_FVF8_DECODE_SOURCE||root + "/runtime/d9wg_fvf.c"]:[]), "-o", dir + "/target"], {encoding: "utf8"}); assert.equal(b.status, 0, b.stderr);
     const r = spawnSync(dir + "/target", [], {encoding: "utf8", timeout: legacyFvfBindings?30000:10000}); assert.equal(r.status, 0, r.stderr + " signal=" + r.signal); process.stdout.write(r.stdout);
 } finally {fs.rmSync(dir, {recursive: true, force: true});}
