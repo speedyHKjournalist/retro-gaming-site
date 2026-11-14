@@ -29,6 +29,8 @@ typedef struct{D9Device*device;Texture*texture,*cube_texture;void*swap_chain,*sh
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
 #define HOSTLOG_FAILED(...)
+/* Diagnostics are observed separately by the severity regression. */
+#define HOSTLOG_REFUSED(...)
 #define ZeroMemory(p,n) memset(p,0,n)
 #define CopyMemory memcpy
 #define PURE_DEVICE_REFUSE(d,label) do{if((d)->pure)return D3DERR_INVALIDCALL;}while(0)

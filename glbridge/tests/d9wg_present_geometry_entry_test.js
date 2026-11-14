@@ -48,6 +48,8 @@ typedef struct{int left,top,right,bottom;}RECT;typedef struct{int x,y;}POINT;
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
 #define HOSTLOG_FAILED(...)
+/* Diagnostics are observed separately by the severity regression. */
+#define HOSTLOG_REFUSED(...)
 #define ZeroMemory(p,n) memset(p,0,n)
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,AutoDepthStencilFormat,BackBufferFormat;DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect,Flags,FullScreen_RefreshRateInHz;BOOL Windowed,EnableAutoDepthStencil;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "${process.env.D9WG_GEOMETRY_POLICY || root + "/runtime/d9wg_present_parameters.h"}"

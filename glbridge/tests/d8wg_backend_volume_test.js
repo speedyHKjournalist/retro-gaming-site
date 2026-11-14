@@ -50,6 +50,8 @@ struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
 #define HOSTLOG_FAILED(...)
+/* Diagnostics are observed separately by the severity regression. */
+#define HOSTLOG_REFUSED(...)
 #define TRACE_REGISTER_RANGE(...)
 #define GetProcessHeap() NULL
 struct Volume{Iface iface;Texture*texture;UINT level;};

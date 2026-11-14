@@ -43,7 +43,10 @@ struct Device{UINT api,pins,handle;Buffer*vertex_buffers,*index_buffers;};struct
 #define D8WG_TRACE_ERROR(v) (v)
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
-#define HOSTLOG_FAILED(...)
+static UINT logged_errors,logged_refusals;
+#define HOSTLOG_FAILED(...) (++logged_errors)
+/* Diagnostics are observed separately by the severity regression. */
+#define HOSTLOG_REFUSED(...) (++logged_refusals)
 #define TRACE_REGISTER_RANGE(...)
 #define TRACE_MARK_ENTER(...)
 #define TRACE_MARK_EXIT(...)
@@ -87,5 +90,13 @@ for(UINT kind=0;kind<2;kind++)for(UINT pool=0;pool<4;pool++)for(UINT valid=0;val
  CHECK(hr==E_NOTIMPL&&out==(void*)(uintptr_t)99&&!allocations&&!frees&&!creates&&!handles&&!d.pins&&!live);cases++;
 }
 Device good={.api=8},wrong={.api=9};for(UINT kind=0;kind<2;kind++)for(UINT bi=0;bi<3;bi++){UINT bad=bi==0?1:bi==1?0:2;Iface*out=(void*)(uintptr_t)99;allocations=0;CHECK((kind?d9wg_d3d9_core_index_buffer8(bad==0?NULL:bad==1?&wrong:&good,12,0,101,1,bad==2?NULL:&out):d9wg_d3d9_core_vertex_buffer8(bad==0?NULL:bad==1?&wrong:&good,80,0,44,1,bad==2?NULL:&out))==-1&&!allocations&&(bad==2||!out));cases++;}
+/* Expected caller validation failures stay visible as refusals for both
+ * API profiles. Logging does not change return values, outputs or ownership. */
+for(UINT api=8;api<=9;api++)for(UINT kind=0;kind<2;kind++)for(UINT invalid=0;invalid<4;invalid++){
+ Device d={.api=api,.handle=77};Iface*out=(void*)(uintptr_t)99;
+ allocations=frees=creates=handles=fail_at=transport_fail=0;logged_errors=logged_refusals=0;
+ HRESULT hr=kind?device_create_index_buffer(&d,invalid==0?0:16,invalid==1?1:invalid==2?2:0,101,invalid==3?3:0,&out,NULL):device_create_vertex_buffer(&d,invalid==0?0:16,invalid==1?1:invalid==2?2:0,0,invalid==3?3:0,&out,NULL);
+ CHECK(hr==D3DERR_INVALIDCALL&&!out&&!allocations&&!creates&&!live&&!d.pins&&logged_refusals==1&&!logged_errors);cases++;
+}
 printf("PASS actual backend8 VB/IB creation: %u checks,%u cases (%u API8/%u ordinary9),%u zeroed bytes;frozen8/9 allocation/descriptor oracle plus Wine pool/usage expectations and 16-byte buffer storage alignment,realSDK24/20-byte layouts,unaligned indices/pools/length/usage/FVF/output/OOM/transport/zero storage/list/pins,private sharedNULL dispatch\\n",checks,cases,api8cases,api9cases,zeroed);return 0;}
 `;fs.writeFileSync(dir+"/buffers.c",code);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/buffers.c","-o",dir+"/buffers"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/buffers",[],{encoding:"utf8",timeout:180000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

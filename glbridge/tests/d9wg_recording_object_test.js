@@ -25,6 +25,7 @@ typedef int BOOL,WINBOOL,HRESULT;typedef uint32_t UINT,DWORD;
 #define E_OUTOFMEMORY (-3)
 #define TRACE_REFUSE(x) (x)
 #define HOSTLOG_FAILED(...) ((void)0)
+#define HOSTLOG_REFUSED(...) ((void)0)
 #define PURE_DEVICE_REFUSE(...) ((void)0)
 #define CopyMemory memcpy
 #define D9_MAX_TEXTURE_BINDINGS 20u

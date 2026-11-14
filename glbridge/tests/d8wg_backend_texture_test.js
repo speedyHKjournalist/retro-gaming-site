@@ -46,7 +46,10 @@ struct Texture{Iface iface;LONG refcount;Device*device;UINT handle,width,height,
 #define D8WG_TRACE_ERROR(v) (v)
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
-#define HOSTLOG_FAILED(...)
+static UINT logged_errors,logged_refusals;
+#define HOSTLOG_FAILED(...) (++logged_errors)
+/* Diagnostics are observed separately by the severity regression. */
+#define HOSTLOG_REFUSED(...) (++logged_refusals)
 #define TRACE_REGISTER_RANGE(...)
 #define GetProcessHeap() NULL
 static int g_texture_vtbl;
@@ -110,5 +113,16 @@ for(UINT api=8;api<=9;api++)for(UINT f=0;f<sizeof(d9wg_format_layouts)/sizeof(*d
  cleanup(before);cleanup(actual);}else CHECK(before==actual&&(!actual||actual==(void*)(uintptr_t)99)&&!before_device.texture_resources&&!actual_device.texture_resources);CHECK(!live&&!before_device.pins&&!actual_device.pins);cases++;if(api==8)api8cases++;else api9cases++;
 }
 Device good={.api=8},wrong={.api=9};for(UINT n=0;n<3;n++){Iface*out=(void*)(uintptr_t)99;allocations=0;CHECK(d9wg_d3d9_core_texture8(n==0?NULL:n==1?&wrong:&good,3,2,1,0,65,1,n==2?NULL:&out)==-1&&!allocations&&(n==2||!out));cases++;}
+/* Invalid dimensions are warnings; real allocation/transport failures
+ * retain error reports, HRESULT/output/unwind and live-object invariants. */
+for(UINT mode=0;mode<4;mode++){
+ Device d={.api=9,.handle=77};Iface*out=(void*)(uintptr_t)99;
+ allocations=frees=creates=handles=0;fail_at=mode==1?3:0;transport_fail=mode==2;logged_errors=logged_refusals=0;
+ HRESULT hr=device_create_texture(&d,mode==0?8193:4,4,1,0,21,0,&out,NULL);
+ CHECK(hr==(mode==0?D3DERR_INVALIDCALL:mode==1?E_OUTOFMEMORY:mode==2?D3DERR_DRIVERINTERNALERROR:D3D_OK));
+ CHECK(logged_refusals==(mode==0)&&logged_errors==(mode==1||mode==2));
+ if(mode==3)cleanup(out);else CHECK(!out);
+ CHECK(!live&&!d.pins&&!d.texture_resources);cases++;
+}
 printf("PASS actual backend8 texture creation: %u checks,%u cases (%u API8/%u ordinary9),%u mip comparisons; frozen8/9 metadata plus Wine retail rules and independent contiguous allocation/offset expectations,all registry formats,4096/8192 bounds,levels/pools/usage/autogen,zero CPU storage,allocation/transport unwind/output/list/parent pins\\n",checks,cases,api8cases,api9cases,levelchecks);return 0;}
 `;const compiled=code.replace('static HRESULT WINAPI old9_create(', 'static BOOL old9_layout(D3DFORMAT f,UINT w,UINT h,UINT*p,UINT*r,UINT*b){if(!d9wg_texture_level_layout(9,f,w,h,p,r,b))return FALSE;if(f==0x31495441u||f==0x32495441u){uint64_t public_bytes=(uint64_t)w*h;if(public_bytes>UINT32_MAX)return FALSE;if(public_bytes>*b)*b=(UINT)public_bytes;}return TRUE;}\nstatic HRESULT WINAPI old9_create(');fs.writeFileSync(dir+"/texture.c",compiled);const b=spawnSync(process.env.HOST_CC||"cc",["-std=c11","-Os","-Wall","-Wextra","-Werror",dir+"/texture.c","-o",dir+"/texture"],{encoding:"utf8"});assert.equal(b.status,0,b.stderr);const r=spawnSync(dir+"/texture",[],{encoding:"utf8",timeout:180000});assert.equal(r.status,0,r.stdout+r.stderr+" signal="+r.signal);process.stdout.write(r.stdout);}finally{fs.rmSync(dir,{recursive:true,force:true});}

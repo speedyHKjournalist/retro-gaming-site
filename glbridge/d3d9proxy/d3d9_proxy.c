@@ -2115,7 +2115,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
  */
 /* Bumped whenever guest-visible behaviour changes, so the console can say
  * which DLL is actually loaded rather than leaving it to be inferred. */
-#define D9_PROXY_BUILD "negative-pcf-probe-20260906"
+#define D9_PROXY_BUILD "api-refusal-severity-20261114"
 
 #define D9_HOSTLOG_MAX_DISTINCT 128u
 
@@ -5027,7 +5027,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
                 behavior,
                 vertex_processing ? "more than one" : "no",
                 (DWORD)D3DERR_INVALIDCALL);
-            HOSTLOG_FAILED("CreateDevice refused: BehaviorFlags %08lX must "
+            HOSTLOG_REFUSED("CreateDevice refused: BehaviorFlags %08lX must "
                            "name exactly one vertex-processing mode",
                 behavior);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -5038,7 +5038,7 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
                   "non-hardware vertex processing -> %08lX",
                 behavior,
                 (DWORD)D3DERR_INVALIDCALL);
-            HOSTLOG_FAILED("CreateDevice refused: D3DCREATE_PUREDEVICE "
+            HOSTLOG_REFUSED("CreateDevice refused: D3DCREATE_PUREDEVICE "
                            "requires D3DCREATE_HARDWARE_VERTEXPROCESSING");
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
@@ -6868,7 +6868,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
             || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TRACE("FAIL CreateVertexBuffer length=%lu usage=%08lX fvf=%08lX pool=%lu -> %08lX",
                 length, usage, fvf, (DWORD)pool, (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateVertexBuffer refused: length=%lu usage=%08lX "
+        HOSTLOG_REFUSED("CreateVertexBuffer refused: length=%lu usage=%08lX "
                 "fvf=%08lX pool=%lu", length, usage, fvf, (DWORD)pool);
         TRACE_MARK_EXIT("Device.CreateVertexBuffer", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
@@ -6960,7 +6960,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         TRACE("FAIL CreateIndexBuffer length=%lu usage=%08lX format=%08lX pool=%lu -> %08lX",
                 length, usage, (DWORD)format, (DWORD)pool,
                 (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateIndexBuffer refused: length=%lu usage=%08lX "
+        HOSTLOG_REFUSED("CreateIndexBuffer refused: length=%lu usage=%08lX "
                 "format=%08lX pool=%lu", length, usage, (DWORD)format,
                 (DWORD)pool);
         TRACE_MARK_EXIT("Device.CreateIndexBuffer", D3DERR_INVALIDCALL, NULL);
@@ -7153,7 +7153,7 @@ static HRESULT create_texture_object(D9Device *device,
 
             TRACE("FAIL CreateTexture invalid arguments -> %08lX",
                     (DWORD)D3DERR_INVALIDCALL);
-            HOSTLOG_FAILED("CreateTexture refused: %lux%lu levels=%lu usage=%08lX "
+            HOSTLOG_REFUSED("CreateTexture refused: %lux%lu levels=%lu usage=%08lX "
                     "format=%08lX pool=%lu", width, height, levels, usage,
                     (DWORD)format, (DWORD)pool);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -7910,7 +7910,7 @@ static HRESULT WINAPI device_create_vertex_declaration(
         /* The single most likely silent killer for a real game: one
          * unsupported D3DDECLTYPE/usage anywhere in the array rejects the
          * whole declaration, and without this the app just never draws. */
-        HOSTLOG_FAILED("CreateVertexDeclaration refused (see the "
+        HOSTLOG_REFUSED("CreateVertexDeclaration refused (see the "
                 "element-level line above for which element and why)");
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
@@ -8032,12 +8032,10 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
     /* Native treats zero as a successful no-op, including while recording. */
     if (!fvf) return D3D_OK;
     if (!fvf_to_declaration(fvf, wire, &count)) {
-        /* Worse than a plain refusal: nothing here clears the declaration
-         * already in force, so the app's next draw is laid out by the
-         * *previous* format. That renders -- with the wrong attributes at the
-         * wrong offsets -- rather than failing, which is the shape "the model
-         * is one flat colour" takes when a texcoord goes missing this way. */
-        HOSTLOG_FAILED("SetFVF refused: fvf=%08lX (the declaration already in "
+        /* Native keeps the previous declaration on an invalid FVF. Keep the
+         * rejection visible as an API warning, without reporting a host or
+         * transport failure for the caller's invalid format. */
+        HOSTLOG_REFUSED("SetFVF refused: fvf=%08lX (the declaration already in "
                 "force stays bound, so following draws use a stale layout)",
                 fvf);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -8697,9 +8695,16 @@ static HRESULT WINAPI device_create_additional_swap_chain(
             D3DUSAGE_RENDERTARGET, params->MultiSampleType,
             params->MultiSampleQuality, &back_buffer);
     if (FAILED(hr)) {
-        HOSTLOG_FAILED("CreateAdditionalSwapChain refused: its back buffer "
-                "(%lux%lu format=%08lX) could not be created", width, height,
-                (DWORD)format);
+        /* Bad dimensions/formats are caller validation failures. Preserve
+         * error-level reports for allocation and transport failures. */
+        if (hr == D3DERR_INVALIDCALL)
+            HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: its back buffer "
+                    "(%lux%lu format=%08lX) could not be created", width, height,
+                    (DWORD)format);
+        else
+            HOSTLOG_FAILED("CreateAdditionalSwapChain refused: its back buffer "
+                    "(%lux%lu format=%08lX) could not be created", width, height,
+                    (DWORD)format);
         TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain", hr, NULL);
         return hr;
     }
@@ -9123,7 +9128,7 @@ static HRESULT create_volume_texture_object(D9Device *device,
                 || depth > 2048
                 || !texture_create_supported(D3DRTYPE_VOLUMETEXTURE, usage, format,
                         pool)) {
-            HOSTLOG_FAILED("CreateVolumeTexture refused: %lux%lux%lu levels=%lu "
+            HOSTLOG_REFUSED("CreateVolumeTexture refused: %lux%lux%lu levels=%lu "
                     "usage=%08lX format=%08lX pool=%lu", width, height, depth,
                     levels, usage, (DWORD)format, (DWORD)pool);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -12297,7 +12302,7 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
     RECT destination_area;
 
     if (!source || !destination) {
-        HOSTLOG_FAILED("StretchRect refused: %s surface is NULL",
+        HOSTLOG_REFUSED("StretchRect refused: %s surface is NULL",
                 source ? "destination" : "source");
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
@@ -12369,7 +12374,7 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
          * CPU-to-CPU is a memcpy that never has to reach the host at all.
          * Without this line the refusal is just "invalid call" again.
          */
-        HOSTLOG_FAILED("StretchRect refused: no GPU resource behind %s "
+        HOSTLOG_REFUSED("StretchRect refused: no GPU resource behind %s "
                 "(source %lux%lu fmt=%08lX pool=%lu cpu_only=%lu, "
                 "destination %lux%lu fmt=%08lX pool=%lu cpu_only=%lu)",
                 source->shadow
@@ -12919,7 +12924,7 @@ static HRESULT create_cube_texture_object(D9Device *device,
 
             TRACE("FAIL CreateCubeTexture invalid arguments -> %08lX",
                     (DWORD)D3DERR_INVALIDCALL);
-            HOSTLOG_FAILED("CreateCubeTexture refused: edge=%lu levels=%lu "
+            HOSTLOG_REFUSED("CreateCubeTexture refused: edge=%lu levels=%lu "
                     "usage=%08lX format=%08lX pool=%lu", edge, levels, usage,
                     (DWORD)format, (DWORD)pool);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);

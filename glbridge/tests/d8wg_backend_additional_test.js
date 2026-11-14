@@ -47,8 +47,9 @@ typedef uint32_t UINT,DWORD,ULONG;typedef int32_t LONG,HRESULT;typedef int BOOL,
 #define TRACE(...)
 #define TRACE_MARK_ENTER(...)
 #define TRACE_MARK_EXIT(...)
-#define HOSTLOG_REFUSED(...)
-#define HOSTLOG_FAILED(...)
+#define HOSTLOG_REFUSED(...) (++logged_refusals)
+static UINT logged_errors,logged_refusals;static HRESULT target_error;
+#define HOSTLOG_FAILED(...) (++logged_errors)
 typedef struct{UINT BackBufferWidth,BackBufferHeight,BackBufferCount,MultiSampleType,MultiSampleQuality,BackBufferFormat;BOOL Windowed;DWORD FullScreen_PresentationInterval,PresentationInterval,SwapEffect,Flags;HWND hDeviceWindow;}D3DPRESENT_PARAMETERS;
 #include "runtime/d9wg_present_parameters.h"
 /* Logical PP provider;real packed SDK8/9 bridge is independently tested. */
@@ -80,7 +81,7 @@ static BOOL supported_multisample_type(UINT t){return t==0||t==4;}static BOOL su
 static void SetRect(RECT*r,int a,int b,int c,int d){*r=(RECT){a,b,c,d};}
 static void GetClientRect(HWND w,RECT*r){observed_window=w;assert(w==(void*)(uintptr_t)0x44||w==(void*)(uintptr_t)0x55);SetRect(r,0,0,empty_client?0:w==(void*)(uintptr_t)0x55?96:128,empty_client?0:w==(void*)(uintptr_t)0x55?80:96);}
 static void probe_window_rect(HWND w,int fw,int fh,RECT*r,POINT*p){assert(fw==128&&fh==96);GetClientRect(w,r);*p=(POINT){30,40};}
-static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert(w&&h&&w<=8192&&h<=8192&&(f>=21&&f<=26)&&usage==1&&(!ms||ms==4)&&!quality);last_ms=ms;last_texture_format=f;backing_texture.private_back_buffer=${api===9?1:0};backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);latest_surface=s;*out=&s->iface;return D3D_OK;}
+static HRESULT create_target_texture(Device*d,UINT w,UINT h,D3DFORMAT f,UINT usage,UINT ms,UINT quality,Interface**out){assert(w&&h&&w<=8192&&h<=8192&&(f>=21&&f<=26)&&usage==1&&(!ms||ms==4)&&!quality);last_ms=ms;last_texture_format=f;if(target_error){*out=NULL;return target_error;}backing_texture.private_back_buffer=${api===9?1:0};backing_texture.swap_chain=NULL;*out=NULL;Surface*s=HeapAlloc(NULL,1,sizeof(*s));if(!s)return E_OUTOFMEMORY;*s=(Surface){.device=d,.texture=&backing_texture,.width=w,.height=h};device_child_add_ref(d);latest_surface=s;*out=&s->iface;return D3D_OK;}
 static HRESULT device_create_render_target(Interface*p,UINT w,UINT h,D3DFORMAT f,UINT ms,BOOL lockable,Interface**out){last_ms=ms;last_lockable=lockable;if(lockable&&ms)return D3DERR_INVALIDCALL;return create_target_texture((Device*)p,w,h,f,1,ms,0,out);}
 static void ClientToScreen(HWND w,POINT*p){assert(w==observed_window);*p=(POINT){30,40};}
 static UINT allocate_handle(void){return next_handle++;}
@@ -90,7 +91,7 @@ ${[...(api===8&&source.includes("static void swapchain_destroy_storage(")?["swap
 #define CREATE(d,p,o) ${api===8?"device_create_swapchain(&(d)->iface,p,o)":"device_create_additional_swap_chain(&(d)->iface,p,o)"}
 #define RELEASE(c) ${api===8?"swapchain_release(c)":"swap_chain_release(c)"}
 #define CHECK(v) do{if(!(v)){fprintf(stderr,"Backend8 additional parameters API ${api} line %u: %s\\n",__LINE__,#v);return 1;}checks++;}while(0)
-int main(void){unsigned checks=0,cases=0;const UINT counts[]={0,1,3};Device d={.refs=1,.handle=77,.present={.SwapEffect=1,.Windowed=1},.display_mode={128,96,22},.creation={.hFocusWindow=(void*)(uintptr_t)0x44}};
+int main(void){(void)logged_errors;(void)logged_refusals;unsigned checks=0,cases=0;const UINT counts[]={0,1,3};Device d={.refs=1,.handle=77,.present={.SwapEffect=1,.Windowed=1},.display_mode={128,96,22},.creation={.hFocusWindow=(void*)(uintptr_t)0x44}};
 for(unsigned window=0;window<2;window++)for(unsigned w=0;w<2;w++)for(unsigned h=0;h<2;h++)for(unsigned n=0;n<3;n++){
  D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferWidth=w?80:0,.BackBufferHeight=h?72:0,.BackBufferFormat=22,.BackBufferCount=counts[n],.Flags=n&1,.hDeviceWindow=window?(void*)(uintptr_t)0x55:NULL},input=p;UINT width=w?80:window?96:128,height=h?72:window?80:96;Interface*out=(void*)(uintptr_t)1;
  ${api===8?'unsigned before_core=core_parameter_calls;':''}CHECK(CREATE(&d,&p,&out)==D3D_OK&&out${api===8?'&&core_parameter_calls==before_core+1':''});Chain*c=(Chain*)out;${api===9?'CHECK(((Surface*)c->back_buffer)->lockable_render_target==!!(p.Flags&1));':''}
@@ -131,6 +132,15 @@ for(UINT format=21;format<=26;format++)for(UINT window=0;window<4;window++)for(U
 }
 empty_client=0;d.creation.hFocusWindow=(void*)(uintptr_t)0x44;observed_window=d.creation.hFocusWindow;d.present.Windowed=1;D3DPRESENT_PARAMETERS legacy={.SwapEffect=4,.Windowed=1,.BackBufferFormat=22},saved=legacy;saved.BackBufferCount=1;out=NULL;CHECK(CREATE(&d,&legacy,&out)==D3D_OK&&out&&!memcmp(&legacy,&saved,sizeof(legacy)));CHECK(!RELEASE(out)&&!live&&d.refs==1);cases++;
 `:''}
+${api===9?`/* Provider validation is refused; resource/transport faults stay errors. */
+for(UINT fault=0;fault<3;fault++){
+ D3DPRESENT_PARAMETERS p={.SwapEffect=1,.Windowed=1,.BackBufferFormat=22},input=p;Interface*out=(void*)(uintptr_t)1;
+ target_error=fault==0?D3DERR_INVALIDCALL:fault==1?E_OUTOFMEMORY:D3DERR_DRIVERINTERNALERROR;
+ fail_at=fail_emit=0;logged_errors=logged_refusals=0;
+ CHECK(CREATE(&d,&p,&out)==target_error&&!out&&!live&&d.refs==1&&!d.pins&&!memcmp(&p,&input,sizeof(p)));
+ CHECK(logged_refusals==(fault==0)&&logged_errors==(fault!=0));cases++;
+}
+target_error=0;`:""}
 printf("PASS actual backend8 core additional parameters: %u checks, %u constructors; separate/fallback windows, independent zero dimensions, count bounds, version outputs and failure cleanup\\n",checks,cases);return 0;}
 `);
         const build = spawnSync(process.env.HOST_CC || "cc", ["-std=c11", "-Os", "-Wall", "-Wextra", "-Werror", "-Wno-unused-variable", "-Wno-unused-function", "-I", root, dir + "/additional.c", root + "/runtime/d9wg_present_pacing.c", "-o", dir + "/additional"], {encoding: "utf8"}); assert.equal(build.status, 0, build.stderr);

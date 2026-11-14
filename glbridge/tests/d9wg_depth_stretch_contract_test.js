@@ -25,6 +25,8 @@ typedef struct {D9Device*device;uint32_t pool,width,height,format,multisample;Te
 #define TRACE_REFUSE(v) (v)
 #define TRACE(...)
 #define HOSTLOG_FAILED(...)
+/* Diagnostics are observed separately by the severity regression. */
+#define HOSTLOG_REFUSED(...)
 #define ZeroMemory(p,n) memset(p,0,n)
 static unsigned emitted,mirrored,wanted_source,wanted_destination;static int fail;
 static D9Device*device_from_iface(IDirect3DDevice9*p){return p;}
