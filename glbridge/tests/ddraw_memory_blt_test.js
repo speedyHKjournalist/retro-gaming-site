@@ -5,7 +5,11 @@ const fixture=JSON.parse(fs.readFileSync(path.resolve(root,"../../v86/tests/glbr
 assert.equal(createHash("sha256").update(fs.readFileSync(path.resolve(root,"../",fixture.source))).digest("hex"),fixture.sourceSha256);
 assert.equal(fixture.self.length,4);assert.ok(fixture.self.every(r=>!r.mismatches));
 function extract(name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;at++){if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
-const code=`#include <stdint.h>
+const code=`/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

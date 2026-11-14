@@ -2,7 +2,11 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.DDRAW_DEPTH_MEMORY_SOURCE||root+"/ddrawproxy/ddraw_proxy.c","utf8"),legacy=fs.readFileSync(root+"/ddrawproxy/d3d7_proxy.inc","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-depth-memory-"));
 function extract(input,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(input);assert(m,name);let at=input.indexOf("{",m.index)+1,depth=1;for(;depth;at++){if(input[at]==="{")depth++;if(input[at]==="}")depth--;}return input.slice(m.index,at);}
-const code=`#include <stdint.h>
+const code=`/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "ddrawproxy/ddraw_protocol.h"

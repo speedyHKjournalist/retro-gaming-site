@@ -1308,15 +1308,15 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
     ZeroMemory(&color, sizeof(color));
     color.device_handle = device->wire_handle;
     color.color_texture_handle = target ? target->handle : 0u;
-    color.color_level = target ? target->mip_level : 0u;
-    color.color_face = target ? target->cube_face : 0u;
+    color.color_level = target ? surface_wire_mip_level(target) : 0u;
+    color.color_face = target ? surface_wire_cube_face(target) : 0u;
     if (!emit_command(D9WG_OP_SET_RENDER_TARGET, &color, sizeof(color)))
         return FALSE;
     ZeroMemory(&depth, sizeof(depth));
     depth.device_handle = device->wire_handle;
     if (target && target->attached_depth) {
         depth.depth_texture_handle = target->attached_depth->handle;
-        depth.depth_level = target->attached_depth->mip_level;
+        depth.depth_level = surface_wire_mip_level(target->attached_depth);
         depth.width = target->attached_depth->width;
         depth.height = target->attached_depth->height;
     }

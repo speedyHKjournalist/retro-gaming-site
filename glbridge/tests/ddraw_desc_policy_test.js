@@ -21,9 +21,9 @@ typedef size_t SIZE_T;typedef int32_t LONG;typedef unsigned char BYTE;
 #ifndef DDERR_OUTOFMEMORY
 #define DDERR_OUTOFMEMORY (-30)
 #endif
-typedef struct{BYTE*bits;BOOL gpu_dirty;}DDSurfaceMemory;
-typedef struct{unsigned ref;DWORD handle;}DDTextureStorage;
-typedef struct DDSurface{DDSURFACEDESC2 desc;unsigned lock_depth,width,height,format,bytes_per_pixel,pitch;void*dc;BOOL implicit,indexed,external_memory,upload_pending;struct DDSurface*mip_next,*cube_faces[6];DDSurfaceMemory*memory;DDTextureStorage*storage;BYTE*shadow;DWORD handle;}DDSurface,IDirectDrawSurface7;
+typedef struct{unsigned ref;BYTE*bits;BOOL gpu_dirty;}DDSurfaceMemory;
+typedef struct{unsigned ref;DWORD handle,mip_base;}DDTextureStorage;
+typedef struct DDSurface{DDSURFACEDESC2 desc;unsigned lock_depth,width,height,format,bytes_per_pixel,pitch,mip_level;void*dc;BOOL implicit,indexed,external_memory,upload_pending;struct DDSurface*mip_next,*cube_faces[6];DDSurfaceMemory*memory;DDTextureStorage*storage;BYTE*shadow;DWORD handle;}DDSurface,IDirectDrawSurface7;
 typedef struct{unsigned format;}DDrawPixelFormatDesc;
 static unsigned checks,allocated,released;static BOOL rejecting;
 #define MUST(x) do{checks++;if(!(x)){fprintf(stderr,"desc policy line %u: %s\\n",__LINE__,#x);exit(1);}}while(0)
@@ -33,7 +33,7 @@ static unsigned ddraw_pixel_format_to_d3dformat(DDrawPixelFormatDesc*d){return d
 static UINT format_bytes_per_pixel(unsigned f){return f==22?4:0;}
 static UINT format_compressed_block_bytes(unsigned f){(void)f;return 0;}
 static UINT surface_pitch_for(UINT w,UINT p){return w*p;}
-static DDSurfaceMemory*surface_memory_create(BYTE*p,SIZE_T bytes,BOOL own){MUST(!rejecting&&p&&bytes&&!own);DDSurfaceMemory*m=calloc(1,sizeof(*m));MUST(m);m->bits=p;allocated++;return m;}
+static DDSurfaceMemory*surface_memory_create(BYTE*p,SIZE_T bytes,BOOL own){MUST(!rejecting&&p&&bytes&&!own);DDSurfaceMemory*m=calloc(1,sizeof(*m));MUST(m);m->ref=1;m->bits=p;allocated++;return m;}
 static void surface_memory_release(DDSurfaceMemory*p){if(p){released++;free(p);}}
 static DDTextureStorage*surface_storage_allocate(void){MUST(!rejecting);DDTextureStorage*p=calloc(1,sizeof(*p));MUST(p);p->ref=1;p->handle=123;return p;}
 static void surface_storage_release(DDTextureStorage*p){free(p);}
@@ -44,7 +44,7 @@ static void rebind_host_surface_state(DDSurface*p){MUST(!rejecting&&p);}
 ${extract('surface_SetSurfaceDesc')}
 static const struct{DWORD caps[4],hr;}native_caps[]={NATIVE_CAPS};
 static void native_caps_tail(void){
- BYTE bits[256]={0};DDSurfaceMemory*memory=calloc(1,sizeof(*memory));DDTextureStorage*storage=calloc(1,sizeof(*storage));MUST(memory&&storage);memory->bits=bits;storage->ref=1;
+ BYTE bits[256]={0};DDSurfaceMemory*memory=calloc(1,sizeof(*memory));DDTextureStorage*storage=calloc(1,sizeof(*storage));MUST(memory&&storage);memory->ref=1;memory->bits=bits;storage->ref=1;
  DDSurface s={.width=8,.height=8,.format=22,.memory=memory,.storage=storage,.desc={.dwSize=sizeof(DDSURFACEDESC2),.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_OFFSCREENPLAIN},.ddpfPixelFormat={.dwSize=sizeof(DDPIXELFORMAT),.dwRGBBitCount=32}}};
  rejecting=FALSE;
  for(unsigned i=0;i<sizeof(native_caps)/sizeof(*native_caps);i++){
@@ -57,7 +57,7 @@ static void native_caps_tail(void){
 }
 int main(void){BYTE old_bits[256]={0},new_bits[1024]={0};DWORD managed[]={DDSCAPS2_TEXTUREMANAGE,DDSCAPS2_D3DTEXTUREMANAGE};DWORD flags[]={DDSD_LPSURFACE,DDSD_WIDTH,DDSD_WIDTH|DDSD_HEIGHT,DDSD_LPSURFACE|DDSD_WIDTH|DDSD_PITCH,0,0xffffffffu};
  for(unsigned i=0;i<2;i++)for(unsigned j=0;j<6;j++){DDSurface s={.width=8,.height=8,.format=22,.desc={.dwSize=sizeof(DDSURFACEDESC2),.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_TEXTURE,.dwCaps2=managed[i]}}},before=s;DDSURFACEDESC2 request={.dwSize=sizeof(request),.dwFlags=flags[j],.dwWidth=8,.dwHeight=8,.lPitch=32,.lpSurface=new_bits},saved=request;rejecting=TRUE;MUST(surface_SetSurfaceDesc(&s,&request,0)==DDERR_INVALIDSURFACETYPE&&!memcmp(&s,&before,sizeof(s))&&!memcmp(&request,&saved,sizeof(request))&&!allocated&&!released);}
- rejecting=FALSE;DDSurfaceMemory*old=calloc(1,sizeof(*old));MUST(old);old->bits=old_bits;DDTextureStorage*storage=calloc(1,sizeof(*storage));MUST(storage);storage->ref=1;DDSurface ordinary={.width=8,.height=8,.format=22,.memory=old,.storage=storage,.desc={.dwSize=sizeof(DDSURFACEDESC2),.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_OFFSCREENPLAIN},.ddpfPixelFormat={.dwSize=sizeof(DDPIXELFORMAT),.dwRGBBitCount=32}}};DDSURFACEDESC2 request={.dwSize=sizeof(request),.dwFlags=DDSD_LPSURFACE|DDSD_WIDTH|DDSD_HEIGHT|DDSD_PITCH,.dwWidth=16,.dwHeight=16,.lPitch=64,.lpSurface=new_bits};MUST(!surface_SetSurfaceDesc(&ordinary,&request,0)&&ordinary.memory->bits==new_bits&&ordinary.width==16&&ordinary.height==16&&ordinary.pitch==64&&ordinary.external_memory&&allocated==1&&released==1);surface_memory_release(ordinary.memory);surface_storage_release(ordinary.storage);
+ rejecting=FALSE;DDSurfaceMemory*old=calloc(1,sizeof(*old));MUST(old);old->ref=1;old->bits=old_bits;DDTextureStorage*storage=calloc(1,sizeof(*storage));MUST(storage);storage->ref=1;DDSurface ordinary={.width=8,.height=8,.format=22,.memory=old,.storage=storage,.desc={.dwSize=sizeof(DDSURFACEDESC2),.ddsCaps={.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_OFFSCREENPLAIN},.ddpfPixelFormat={.dwSize=sizeof(DDPIXELFORMAT),.dwRGBBitCount=32}}};DDSURFACEDESC2 request={.dwSize=sizeof(request),.dwFlags=DDSD_LPSURFACE|DDSD_WIDTH|DDSD_HEIGHT|DDSD_PITCH,.dwWidth=16,.dwHeight=16,.lPitch=64,.lpSurface=new_bits};MUST(!surface_SetSurfaceDesc(&ordinary,&request,0)&&ordinary.memory->bits==new_bits&&ordinary.width==16&&ordinary.height==16&&ordinary.pitch==64&&ordinary.external_memory&&allocated==1&&released==1);surface_memory_release(ordinary.memory);surface_storage_release(ordinary.storage);
  native_caps_tail();
  printf("PASS actual SetSurfaceDesc policy C: %u checks; two managed types reject before metadata/memory changes, invalid field combinations preserve outputs, ordinary client-memory replacement still succeeds\\n",checks);return 0;}
 `.replace('NATIVE_CAPS',capsInputs.map((caps,i)=>{const row=memoryNative.results.find(r=>r.name==='caps'+i);assert(row&&[0,0x88760064].includes(row.hr));return '{{'+caps.join(',')+'},'+row.hr+'u}';}).join(','));

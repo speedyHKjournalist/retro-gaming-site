@@ -386,8 +386,8 @@ check("mip and cube subresources keep their level and face on every wire path",
         () => {
     // Upload level/face and logical BC edge heights are exercised through
     // the actual C emitter in d9wg_runtime_texture_test.js.
-    assert.match(guestSource, /command\.level\s*=\s*surface->mip_level/);
-    assert.match(guestSource, /command\.face\s*=\s*surface->cube_face/);
+    assert.match(guestSource, /command\.level\s*=\s*surface_wire_mip_level\(surface\)/);
+    assert.match(guestSource, /command\.face\s*=\s*surface_wire_cube_face\(surface\)/);
     assert.match(guestSource,
         /storage->create_opcode = D9WG_OP_CREATE_TEXTURE_CUBE;[\s\S]*?storage->create\.texture_cube = cube_create;/,
         "a cube surface must record a cube create with the cube payload");

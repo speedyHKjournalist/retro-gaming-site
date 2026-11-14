@@ -523,6 +523,7 @@ struct DDClipper {
  * underneath its siblings. */
 struct DDTextureStorage {
     LONG ref;
+    UINT mip_base;              /* logical mip mapped to physical level zero */
     uint32_t handle;
     uint32_t resource_kind;
     BOOL created;
@@ -781,6 +782,19 @@ static DDClipper *clipper_from_iface(IDirectDrawClipper *iface)
 /* ------------------------------------------------------------------ *
  * Formats
  * ------------------------------------------------------------------ */
+
+/* Client-visible mip/cube roles survive a per-surface memory/layout remap.
+ * A detached allocation is a standalone2D image even for an implicit view. */
+static UINT surface_wire_mip_level(const DDSurface *surface)
+{
+    return surface->mip_level - surface->storage->mip_base;
+}
+
+static UINT surface_wire_cube_face(const DDSurface *surface)
+{
+    return surface->storage->resource_kind == D9WG_RESOURCE_TEXTURE_CUBE
+        ? surface->cube_face : 0u;
+}
 
 static UINT format_bytes_per_pixel(unsigned format)
 {
@@ -1266,8 +1280,8 @@ static BOOL emit_surface_upload(DDSurface *surface, const RECT *rect)
             left, top, right, bottom, row_bytes, row_bytes * rows);
 
     ZeroMemory(&upload, sizeof(upload));
-    upload.resource_handle = surface->handle;upload.level = surface->mip_level;
-    upload.x = left;upload.y = top;upload.z = surface->cube_face;
+    upload.resource_handle = surface->handle;upload.level = surface_wire_mip_level(surface);
+    upload.x = left;upload.y = top;upload.z = surface_wire_cube_face(surface);
     upload.width = right - left;upload.height = bottom - top;
     upload.block_height = block_bytes ? 4u : 1u;
     upload.row_bytes = row_bytes;upload.row_count = rows;upload.source_pitch = surface->pitch;
@@ -1871,11 +1885,11 @@ static BOOL emit_blt(DDSurface *destination, const RECT *destination_rect,
     ZeroMemory(&command, sizeof(command));
     command.device_handle = destination->owner->device_handle;
     command.source_handle = source ? source->handle : 0u;
-    command.source_level = source ? source->mip_level : 0u;
-    command.source_face = source ? source->cube_face : 0u;
+    command.source_level = source ? surface_wire_mip_level(source) : 0u;
+    command.source_face = source ? surface_wire_cube_face(source) : 0u;
     command.destination_handle = destination->handle;
-    command.destination_level = destination->mip_level;
-    command.destination_face = destination->cube_face;
+    command.destination_level = surface_wire_mip_level(destination);
+    command.destination_face = surface_wire_cube_face(destination);
     command.flags = flags;
     command.fill_color = fill_color;
     command.fill_depth = fill_depth;
@@ -1965,8 +1979,8 @@ static BOOL emit_blt_to_screen(DDSurface *source, const RECT *dirty_rect)
     ZeroMemory(&command, sizeof(command));
     command.device_handle = object->device_handle;
     command.source_handle = source->handle;
-    command.source_level = source->mip_level;
-    command.source_face = source->cube_face;
+    command.source_level = surface_wire_mip_level(source);
+    command.source_face = surface_wire_cube_face(source);
     command.source_rect[0] = area.left;
     command.source_rect[1] = area.top;
     command.source_rect[2] = area.right;
@@ -2206,8 +2220,8 @@ static BOOL surface_readback(DDSurface *surface)
         ZeroMemory(&command, sizeof(command));
         command.device_handle = surface->owner->device_handle;
         command.texture_handle = surface->handle;
-        command.level = surface->mip_level;
-        command.face = surface->cube_face;
+        command.level = surface_wire_mip_level(surface);
+        command.face = surface_wire_cube_face(surface);
         command.format = surface->format;
         command.width = surface->width;
         command.height = surface->height;
@@ -4530,7 +4544,8 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
             (surface->desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) ||
             (surface->desc.ddsCaps.dwCaps2 &
                 (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)) ||
-            surface->implicit)
+            (surface->implicit &&
+             !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE)))
         return DDWG_TRACE_ERROR(DDERR_INVALIDSURFACETYPE);
     if (surface->lock_depth || surface->dc) return DDWG_TRACE_ERROR(DDERR_SURFACEBUSY);
     if (description->dwFlags & ~allowed) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -4547,9 +4562,10 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     if ((description->dwFlags & DDSD_PITCH) &&
             !(description->dwFlags & DDSD_WIDTH))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (surface->mip_next || surface->cube_faces[1] ||
-            surface->cube_faces[2] || surface->cube_faces[3] ||
-            surface->cube_faces[4] || surface->cube_faces[5])
+    if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE) &&
+            (surface->mip_next || surface->cube_faces[1] ||
+             surface->cube_faces[2] || surface->cube_faces[3] ||
+             surface->cube_faces[4] || surface->cube_faces[5]))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
 
     width = (description->dwFlags & DDSD_WIDTH)
@@ -4591,7 +4607,9 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     if (!new_memory) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
 
     recreate = width != surface->width || height != surface->height ||
-        new_format != surface->format || surface->storage->ref > 1;
+        new_format != surface->format || surface->memory->ref > 1;
+    /* Distinct mip/cube memories share a texture graph, not pixel aliases.
+     * Pointer-only replacement keeps that graph; true duplicate aliases split. */
     if (recreate) {
         new_storage = surface_storage_allocate();
         if (!new_storage) {
@@ -4622,6 +4640,7 @@ static HRESULT WINAPI surface_SetSurfaceDesc(IDirectDrawSurface7 *iface,
     surface->shadow = new_memory->bits;
     surface->external_memory = TRUE;
     if (new_storage) {
+        new_storage->mip_base = surface->mip_level;
         surface->storage = new_storage;
         surface->handle = new_storage->handle;
         /* The rollback that used to live here existed for a host texture that

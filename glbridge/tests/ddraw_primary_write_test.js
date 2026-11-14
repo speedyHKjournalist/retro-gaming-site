@@ -2,7 +2,11 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict"), {spawnSync} = require("node:child_process");
 const root = path.resolve(__dirname, ".."), source = fs.readFileSync(process.env.DDRAW_PRIMARY_WRITE_SOURCE || root + "/ddrawproxy/ddraw_proxy.c", "utf8"), dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddraw-primary-write-"));
 function extract(name) {const pattern = new RegExp("static [^;{}\\n]*?\\b" + name + "\\([^;]*?\\)\\s*\\{"); let input = source, m = pattern.exec(input); if (!m && ["primary_present_area", "present_changed_primary"].includes(name)) {input = fs.readFileSync(root + "/ddrawproxy/ddraw_proxy.c", "utf8"); m = pattern.exec(input);} assert(m, name); let end = input.indexOf("{", m.index) + 1, depth = 1; for (; depth; end++) {if (input[end] === "{") depth++; if (input[end] === "}") depth--;} return input.slice(m.index, end);}
-const code = `#include <stdint.h>
+const code = `/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "${root}/ddrawproxy/ddraw_protocol.h"

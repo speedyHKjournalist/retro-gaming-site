@@ -2,7 +2,11 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.DDRAW_COLOR_FILL_SOURCE||root+"/ddrawproxy/ddraw_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-color-memory-"));
 function extract(name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;at++){if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
-const code=`#include <stdint.h>
+const code=`/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

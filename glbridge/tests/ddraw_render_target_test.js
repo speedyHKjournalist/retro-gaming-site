@@ -4,7 +4,11 @@ const root=path.resolve(__dirname,".."),source=fs.readFileSync(process.env.DDRAW
 function extract(input,name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(input);assert(m,name);let end=input.indexOf("{",m.index)+1,depth=1;for(;depth;end++){if(input[end]==="{")depth++;if(input[end]==="}")depth--;}return input.slice(m.index,end);}
 const nativePath=path.resolve(root,"../../v86/tests/glbridge/fixtures/ddraw_native_empty.json"),native=JSON.parse(fs.readFileSync(nativePath)),sha=p=>require("node:crypto").createHash("sha256").update(fs.readFileSync(p)).digest("hex");assert.equal(sha(root+"/../"+native.source),native.sourceSha256);
 const nativeClear=native.calls.filter(r=>r.name==="clear");assert.equal(nativeClear.length,7);
-const code=`#include <stdint.h>
+const code=`/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
+#include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>

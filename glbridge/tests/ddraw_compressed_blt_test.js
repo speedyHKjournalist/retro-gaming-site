@@ -6,7 +6,11 @@ assert.equal(createHash("sha256").update(fs.readFileSync(path.resolve(root,"../"
 function extract(name){const m=new RegExp("static [^;{}\\n]*?\\b"+name+"\\([^;]*?\\)\\s*\\{").exec(source);assert(m,name);let at=source.indexOf("{",m.index)+1,depth=1;for(;depth;at++){if(source[at]==="{")depth++;if(source[at]==="}")depth--;}return source.slice(m.index,at);}
 const native=reference.blocks.filter(r=>r.pattern<2||[1,3].includes(r.format));
 const nativeCases=native.map(row=>{const pixels=[];for(let i=0;i<16;i++){let p=row.pattern===0?0xff0000ff:[0,3,7,10,11,14].includes(i)?0xff00ff00:0xff0000ff;if(row.pattern===2)p=(p&0xffffff)|((i*17)<<24);if(row.pattern===3)p=(p&0xffffff)|((i&1)?0xff000000:0);pixels.push(p>>>0);}const bytes=[];row.words.forEach(w=>bytes.push(w&255,w>>>8&255,w>>>16&255,w>>>24));return `{${(0x30545844+(row.format<<24))>>>0}u,{${pixels.map(p=>p+"u")}},{${bytes}}}`;});
-const code=`#include "${root}/ddrawproxy/ddraw_protocol.h"
+const code=`/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
+#include "${root}/ddrawproxy/ddraw_protocol.h"
 #include "${root}/runtime/d9wg_runtime.h"
 #include "${root}/runtime/d9wg_format_layouts.h"
 #include "${header}"

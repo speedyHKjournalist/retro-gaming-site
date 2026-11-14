@@ -3,6 +3,10 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),asse
 const file=process.env.DDRAW_DEPTH_LAYOUT_SOURCE||path.resolve(__dirname,'../ddrawproxy/ddraw_proxy.c'),source=fs.readFileSync(file,'utf8'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'ddraw-depth-layout-'));
 function extract(name){const m=new RegExp('static [^;{}\\n]*?\\b'+name+'\\([^;]*?\\)\\s*\\{').exec(source);assert(m,name);let e=source.indexOf('{',m.index)+1,d=1;for(;d;e++){if(source[e]==='{')d++;if(source[e]==='}')d--;}return source.slice(m.index,e);}
 const prefix=String.raw`
+/* Existing fixtures model undetached subresources. Detached mappings use
+ * actual helpers in ddraw_memory_graph_test and real XP/GPU graph probes. */
+#define surface_wire_mip_level(s) ((s)->mip_level)
+#define surface_wire_cube_face(s) ((s)->cube_face)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

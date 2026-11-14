@@ -28,7 +28,10 @@
 
 #define D9WG_MAGIC 0x47573944u /* "D9WG" */
 #define D9WG_VERSION_MAJOR 1u
-#define D9WG_VERSION_MINOR 11u
+/* Native NV render-state extension, sent through SetRenderState. A missing
+ * mask retains ordinary D3D all-target blending; bits 0..3 select targets. */
+#define D9WG_NV_RS_COLOR_BLEND_MASK 0x1000u
+#define D9WG_VERSION_MINOR 12u
 
 /* The last four MiB of v86gl.sys's mapped DMA allocation are never used for
  * command batches.  The browser writes asynchronous query/readback results
