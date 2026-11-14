@@ -203,13 +203,13 @@ static HRESULT ddraw_platform_restore_surface(DDSurface *surface)
          * Its successful Restore cannot validate the proxy's pixel storage. */
         if (known && (surface->width != width || surface->height != height ||
                 surface->desc.ddpfPixelFormat.dwRGBBitCount != bpp))
-            return DDERR_WRONGMODE;
+            return DDWG_TRACE_ERROR(DDERR_WRONGMODE);
     }
     /* Native Restore of a flip primary in NORMAL can crash on XP. Its
      * allocation cannot be restored until exclusive ownership returns. */
     if (surface->primary && surface->front_of_chain &&
             !(object->cooperative_flags & DDSCL_EXCLUSIVE))
-        return DDERR_WRONGMODE;
+        return DDWG_TRACE_ERROR(DDERR_WRONGMODE);
     primary = surface->primary ? ddraw_platform_primary_ref(object, &draw) : NULL;
     if (primary) {
         hr = IDirectDrawSurface_Restore((IDirectDrawSurface *)primary);
@@ -221,7 +221,7 @@ static HRESULT ddraw_platform_restore_surface(DDSurface *surface)
             ddraw_platform_view(object, DD_VERSION_7, &view, &hr) && SUCCEEDED(hr)) {
         hr = IDirectDraw7_TestCooperativeLevel((IDirectDraw7 *)view);
         IUnknown_Release(view);
-        if (hr == DDERR_NOEXCLUSIVEMODE) return DDERR_WRONGMODE;
+        if (hr == DDERR_NOEXCLUSIVEMODE) return DDWG_TRACE_ERROR(DDERR_WRONGMODE);
         if (FAILED(hr)) return hr;
     }
     EnterCriticalSection(&g_object_lock);

@@ -33,7 +33,7 @@ const cases=[
  ["draw ignores binding debt","d3d7_prepare_legacy_draw","device->render_target_pending && !d3d7_emit_render_target(device)","FALSE"],
  ["Clear ignores binding debt","d3d7_device_clear_bounds","device->render_target_pending && !d3d7_emit_render_target(device)","FALSE"],
  ["same-target retry ignores binding debt","d3d7_device_SetRenderTarget","device->render_target_pending && !d3d7_emit_render_target(device)","FALSE"],
- ["draw accepts invalid target","d3d7_prepare_legacy_draw","if (device->render_target_invalid) return DDERR_INVALIDPIXELFORMAT;","if (FALSE) return DDERR_INVALIDPIXELFORMAT;"],
+ ["draw accepts invalid target","d3d7_prepare_legacy_draw","if (device->render_target_invalid) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);","if (FALSE) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);"],
  ["Clear accepts invalid target","d3d7_device_clear_bounds","if (device->render_target_invalid) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);","if (FALSE) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);"],
  ["successful binding retains debt","d3d7_emit_render_target","device->render_target_pending = FALSE;","device->render_target_pending = TRUE;"],
 ];

@@ -2,9 +2,9 @@
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
 const source=fs.readFileSync(path.join(__dirname,"../ddrawproxy/ddraw_proxy.c"),"utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-clipper-mutants-"));
 const cases=[
- ["Blt missing-list error lost","if (!clipper->clip_list) return DDERR_NOCLIPLIST;","if (!clipper->clip_list) return DDERR_GENERIC;"],
+ ["Blt missing-list error lost","if (!clipper->clip_list) return DDWG_TRACE_ERROR(DDERR_NOCLIPLIST);","if (!clipper->clip_list) return DDWG_TRACE_ERROR(DDERR_GENERIC);","clipper_blt_rects"],
  ["Blt custom list count lost","*count = total;","*count = 0;"],
- ["Blt destroyed window succeeds","if (!GetClientRect(clipper->window, &client)) return E_FAIL;","if (!GetClientRect(clipper->window, &client)) return DD_OK;"],
+ ["Blt destroyed window succeeds","if (!GetClientRect(clipper->window, &client)) return DDWG_TRACE_ERROR(E_FAIL);","if (!GetClientRect(clipper->window, &client)) return DD_OK;","clipper_blt_rects"],
  ["HWND clip list uses client coordinates","MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);","if (FALSE) MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);","clipper_GetClipList"],
  ["HWND blit uses client coordinates","MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);","if (FALSE) MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);","clipper_blt_rects"],
  ["destroyed HWND has a region","if (!IsWindow(clipper->window)) return DDWG_TRACE_ERROR(E_FAIL);","if (FALSE && !IsWindow(clipper->window)) return DDWG_TRACE_ERROR(E_FAIL);"],

@@ -1374,14 +1374,14 @@ static HRESULT d3d7_validate_device_target(DDSurface *surface, REFCLSID clsid,
     DWORD caps = surface->desc.ddsCaps.dwCaps;
     BOOL software = guid_equal(clsid, &IID_IDirect3DRGBDevice);
     if (!(caps & DDSCAPS_3DDEVICE) || (caps & DDSCAPS_ZBUFFER))
-        return DDERR_INVALIDCAPS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
     if (surface->indexed && !surface->palette)
-        return DDERR_NOPALETTEATTACHED;
+        return DDWG_TRACE_ERROR(DDERR_NOPALETTEATTACHED);
     if (!software && !(caps & DDSCAPS_VIDEOMEMORY))
-        return D3DERR_SURFACENOTINVIDMEM;
+        return DDWG_TRACE_ERROR(D3DERR_SURFACENOTINVIDMEM);
     if (format_is_depth(surface->format) || format_is_yuv(surface->format) ||
             format_is_compressed(surface->format))
-        return DDERR_INVALIDPIXELFORMAT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     /* Legacy RGB devices can draw into palettised memory. D3D7 removed that
      * render-target format, even though P8 remains a valid texture format. */
     if (surface->indexed && (!software || version >= 7u))
@@ -2344,9 +2344,9 @@ static HRESULT WINAPI d3d7_device_PreLoad(IDirect3DDevice7 *iface,
  * LIGHTING render state itself is ignored by the public legacy interface. */
 static HRESULT d3d7_prepare_legacy_draw(D3D7Device *device, DWORD fvf, DWORD flags)
 {
-    if (device->render_target_invalid) return DDERR_INVALIDPIXELFORMAT;
+    if (device->render_target_invalid) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     if (device->render_target_pending && !d3d7_emit_render_target(device))
-        return D3DERR_INITFAILED;
+        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     if (device->creation_version >= 7u) return D3D_OK;
     return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
             D3DRENDERSTATE_LIGHTING,

@@ -2803,12 +2803,12 @@ static HRESULT clipper_blt_rects(DDClipper *clipper, RECT *out, UINT capacity,
     if (!clipper) return DD_OK;
     if (clipper->window) {
         RECT client;
-        if (!GetClientRect(clipper->window, &client)) return E_FAIL;
+        if (!GetClientRect(clipper->window, &client)) return DDWG_TRACE_ERROR(E_FAIL);
         MapWindowPoints(clipper->window, NULL, (POINT *)&client, 2);
         if (capacity) { out[0] = client; *count = 1; }
         return DD_OK;
     }
-    if (!clipper->clip_list) return DDERR_NOCLIPLIST;
+    if (!clipper->clip_list) return DDWG_TRACE_ERROR(DDERR_NOCLIPLIST);
     if (clipper->clip_list->rdh.nCount) {
         const RECT *rects = (const RECT *)clipper->clip_list->Buffer;
         UINT total = clipper->clip_list->rdh.nCount;
@@ -4794,11 +4794,11 @@ static HRESULT WINAPI surface_ChangeUniquenessValue(IDirectDrawSurface7 *iface)
 static HRESULT surface_priority_valid(const DDSurface *surface)
 {
     if (!(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE))
-        return DDERR_INVALIDOBJECT;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDOBJECT);
     if (!(surface->desc.ddsCaps.dwCaps2 &
             (DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE)) ||
             surface->mip_level || surface->cube_face)
-        return DDERR_INVALIDPARAMS;
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     return DD_OK;
 }
 
@@ -7037,6 +7037,8 @@ static HRESULT ddraw_SetCooperativeLevelForVersion(IDirectDraw7 *iface,
     UINT width, height;
     HRESULT hr;
     LONG serial;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_SetCooperativeLevel object=%08lX version=%u window=%08lX flags=%08lX",
+            (DWORD)(uintptr_t)object, version, (DWORD)(uintptr_t)window, flags);
     InterlockedIncrement(&object->lifetime_ref);
     serial = InterlockedIncrement(&object->control_serial);
     object->window = window;
@@ -7096,6 +7098,8 @@ static HRESULT ddraw_SetDisplayModeForVersion(IDirectDraw7 *iface,
     DDPlatformModeState old;
     HRESULT hr;
     LONG serial;
+    DDWG_TRACE_CHECKPOINT("CALL ddraw_SetDisplayMode object=%08lX version=%u width=%lu height=%lu bpp=%lu refresh=%lu flags=%08lX",
+            (DWORD)(uintptr_t)object, version, width, height, bpp, refresh, flags);
     if (!width || !height) return DDWG_TRACE_ERROR(DDERR_INVALIDMODE);
     if (bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)
         return DDWG_TRACE_ERROR(DDERR_INVALIDMODE);
@@ -7528,10 +7532,10 @@ static ULONG WINAPI class_factory_AddRef(IClassFactory *iface)
 static HRESULT WINAPI class_factory_QueryInterface(IClassFactory *iface,
         REFIID iid, void **out)
 {
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid_is_unknown(iid) && !guid_equal(iid, &IID_IClassFactory))
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     class_factory_AddRef(iface);
     *out = iface;
     return S_OK;
@@ -7553,9 +7557,9 @@ static HRESULT WINAPI class_factory_CreateInstance(IClassFactory *iface,
 {
     DDClassFactory *factory = (DDClassFactory *)iface;
     HRESULT hr;
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
-    if (outer) return CLASS_E_NOAGGREGATION;
+    if (outer) return DDWG_TRACE_ERROR(CLASS_E_NOAGGREGATION);
     if (factory->clipper) {
         IDirectDrawClipper *clipper;
         hr = DirectDrawCreateClipper(0, &clipper, NULL);
@@ -7569,9 +7573,9 @@ static HRESULT WINAPI class_factory_CreateInstance(IClassFactory *iface,
                 && !guid_equal(iid, &IID_IDirectDraw3)
                 && !guid_equal(iid, &IID_IDirectDraw4)
                 && !guid_equal(iid, &IID_IDirectDraw7))
-            return E_NOINTERFACE;
+            return DDWG_TRACE_ERROR(E_NOINTERFACE);
         object = object_create();
-        if (!object) return E_OUTOFMEMORY;
+        if (!object) return DDWG_TRACE_ERROR(E_OUTOFMEMORY);
         emit_hello_once();
         hr = ddraw_QueryInterface((IDirectDraw7 *)object, iid, out);
         ddraw_Release((IDirectDraw7 *)object);
@@ -7602,15 +7606,15 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
 {
     DDClassFactory *factory;
     BOOL clipper = guid_equal(clsid, &CLSID_DirectDrawClipper);
-    if (!out) return E_POINTER;
+    if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid_is_unknown(iid) && !guid_equal(iid, &IID_IClassFactory))
-        return E_NOINTERFACE;
+        return DDWG_TRACE_ERROR(E_NOINTERFACE);
     if (!clipper && !guid_equal(clsid, &CLSID_DirectDraw)
             && !guid_equal(clsid, &CLSID_DirectDraw7))
-        return CLASS_E_CLASSNOTAVAILABLE;
+        return DDWG_TRACE_ERROR(CLASS_E_CLASSNOTAVAILABLE);
     factory = heap_alloc_zero(sizeof(*factory));
-    if (!factory) return E_OUTOFMEMORY;
+    if (!factory) return DDWG_TRACE_ERROR(E_OUTOFMEMORY);
     factory->iface.lpVtbl = &g_class_factory_vtbl;
     factory->ref = 1;
     factory->clipper = clipper;

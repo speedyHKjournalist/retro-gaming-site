@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
+globalThis.V86GL_BUILD_REVISION = "5a4f0bf2252e904cfe40";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -106,6 +106,14 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
         TEXM3x2DEPTH: 84, TEXDP3: 85, TEXM3x3: 86, TEXDEPTH: 87, CMP: 88,
         BEM: 89, DP2ADD: 90, DSX: 91, DSY: 92, TEXLDD: 93, SETP: 94,
         TEXLDL: 95, BREAKP: 96,
+        // Private NV40 arithmetic in D9WG shader bytecode. Never emitted by the guest D3D
+        // proxy: control selects RCC, legacy EXP/LOG, LIT, RCP, RSQ or LG2.
+        NV_ALU: 0x1000,
+        NV_LOAD: 0x1001, NV_STORE: 0x1002, NV_HALF: 0x1003, NV_COPY: 0x1004,
+        NV_PACK: 0x1005, NV_UNPACK: 0x1006,
+        NV_DEPTH_SAMPLER: 0x1007,
+        NV_DIV: 0x1008,
+        NV_SAT: 0x1009,
         PHASE: 0xfffd, COMMENT: 0xfffe, END: 0xffff,
     };
 
@@ -136,6 +144,13 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
         [OP.BREAKP]: [0, 1], [OP.MOVA]: [1, 1], [OP.SETP]: [1, 2],
         [OP.TEXCOORD]: [1, 0], [OP.TEXKILL]: [1, 0],
         [OP.EXPP]: [1, 1], [OP.LOGP]: [1, 1], [OP.CND]: [1, 3],
+        [OP.NV_ALU]: [1, 1],
+        [OP.NV_LOAD]: [1, 1], [OP.NV_STORE]: [1, 2],
+        [OP.NV_HALF]: [1, 1], [OP.NV_COPY]: [1, 2],
+        [OP.NV_PACK]: [1, 2], [OP.NV_UNPACK]: [1, 1],
+        [OP.NV_DEPTH_SAMPLER]: [1, 0],
+        [OP.NV_DIV]: [1, 2],
+        [OP.NV_SAT]: [1, 1],
         [OP.CMP]: [1, 3], [OP.DP2ADD]: [1, 3], [OP.DSX]: [1, 1],
         [OP.DSY]: [1, 1], [OP.TEXLDD]: [1, 4], [OP.TEXLDL]: [1, 2],
         [OP.TEXREG2AR]: [1, 1], [OP.TEXREG2GB]: [1, 1],
@@ -278,7 +293,10 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                 if (semantics.has(key)) throw new Error("duplicate pixel input semantic " + key);
                 semantics.add(key);
                 const output = bySemantic.get(key);
-                if (!output || input.mask & ~output.mask)
+                // Between two programmable SM3 stages an input the vertex shader
+                // never writes is legal and reads zero; only the fixed canonical
+                // slots of a legacy vertex stage must match exactly.
+                if (!programmable3 && (!output || input.mask & ~output.mask))
                     throw new Error("unmatched pixel input semantic " + key + " mask " + input.mask);
                 for (let component = 0; component < 4; ++component) if (input.mask & 1 << component) {
                     const address = input.register * 4 + component;
@@ -286,6 +304,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                         throw new Error("overlapping or out-of-range pixel input declaration");
                     occupied.add(address);
                     matched.push({input, output, component,
+                        written: !!output && !!(output.mask & 1 << component),
                         flat: input.usage === DECLUSAGE_COLOR && input.usageIndex < 2});
                 }
             }
@@ -299,7 +318,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                     if (slot >= VARYING_COUNT) throw new Error("inter-stage component budget exceeded");
                     if (flat && !link.flatSlots.includes(slot)) link.flatSlots.push(slot);
                     link.pixel.push({register: item.input.register, component: item.component, slot, channel});
-                    if (programmable3) link.vertex.push({register: item.output.register,
+                    if (programmable3 && item.written) link.vertex.push({register: item.output.register,
                         component: item.component, slot, channel,
                         usage: item.input.usage, usageIndex: item.input.usageIndex});
                     ++cursor;
@@ -466,6 +485,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
 
     function sampleSwizzleExpression(expression, swizzle) {
         if (!swizzle) return expression;
+        if (swizzle === "rgb1") return "vec4<f32>((" + expression + ").rgb, 1.0)";
         if (swizzle === "r111") return "vec4<f32>((" + expression + ").r, 1.0, 1.0, 1.0)";
         if (swizzle === "rg11") return "vec4<f32>((" + expression + ").rg, 1.0, 1.0)";
         if (swizzle === "rrrr") return "vec4<f32>((" + expression + ").r)";
@@ -473,11 +493,22 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
         throw new Error("Unsupported D3D texture sample swizzle " + swizzle);
     }
 
-    const PROGRAM_MAPS = ["usedInputs", "outputSemantics", "samplers", "floatDefaults", "intDefaults", "boolDefaults"];
+    // AMD Fetch4 (D3DSAMP_MIPMAPLODBIAS = 'GET4'): one gather of level 0 in place
+    // of every sampling form, returning the 2x2 footprint whose first texel is
+    // floor(coord * size) as (top-right, bottom-left, bottom-right, top-left).
+    // textureGather itself starts at floor(coord * size - 0.5), hence the
+    // half-texel shift; the sampler's address modes still apply.
+    function fetch4Expression(texture, sampler, coord, channel) {
+        const shifted = "((" + coord + ") + vec2<f32>(0.5) / vec2<f32>(textureDimensions(" + texture + ")))";
+        return "textureGather(" + (channel === "depth" ? "" : channel + ", ") + texture + ", " +
+            sampler + ", " + shifted + ").zxyw";
+    }
+
+    const PROGRAM_MAPS = ["usedInputs", "outputSemantics", "samplers", "floatDefaults", "intDefaults", "boolDefaults", "nvDepthFunctions"];
     const PROGRAM_SETS = ["temps", "writtenVaryings", "psTexcoordInputs", "bumpStages", "psColorInputs", "colorOutputs"];
     const PROGRAM_VALUES = ["outputDeclarations", "inputDeclarations", "usesAddress", "usesLoopCounter", "usesPredicate",
         "usesPointSize", "usesDepthOutput", "usesFragPosition", "usesFrontFacing", "usesRelativeConstants", "usesRelativeInputs",
-        "maxFloatConst", "maxIntConst", "maxBoolConst", "temporaryId", "warnings"];
+        "maxFloatConst", "maxIntConst", "maxBoolConst", "temporaryId", "warnings", "nvAlu", "nvRegisters"];
 
     class Translator {
         constructor(parsed, options) {
@@ -489,6 +520,9 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             this.lines = [];
             this.indent = 2;
             this.temps = new Set();
+            this.nvAlu = false;
+            this.nvRegisters = false;
+            this.nvDepthFunctions = new Map();
             this.usedInputs = new Map();       // register -> {usage, usageIndex}
             this.outputSemantics = new Map();  // vs_3_0 o# -> {usage, usageIndex}
             this.outputDeclarations = [];
@@ -597,7 +631,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                 return String(base);
             }
             this.usesRelativeConstants = true;
-            this.maxFloatConst = Math.max(this.maxFloatConst, 255);
+            this.maxFloatConst = Math.max(this.maxFloatConst, this.constantCapacity() - 1);
             // vs_1_1 has no relative-index token: a0.x is the only legal
             // index register. vs_2_0+ names it (a0 or aL) explicitly.
             let index = "a0.x";
@@ -611,8 +645,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             } else {
                 this.usesAddress = true;
             }
-            return "clamp(" + index + " + " + base + ", 0, " +
-                (this.constantCapacity() - 1) + ")";
+            return "clamp(" + index + " + " + base + ", 0, d9_float_constant_max)";
         }
 
         relativeRegisterIndex(operand, output) {
@@ -636,7 +669,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
         }
 
         constantCapacity() {
-            return this.kind === "vertex" ? 256 : 224;
+            return this.kind === "vertex" ? (this.options.floatConstantCapacity === 8192 ? 8192 : 256) : 224;
         }
 
         // Raw (unswizzled, unmodified) vec4<f32> read of a source register.
@@ -888,7 +921,9 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             for (const instruction of parsed.instructions) {
                 if (instruction.opcode === OP.DCL) this.declare(instruction);
                 else if (instruction.opcode === OP.DEF)
-                    this.floatDefaults.set(instruction.dest.index, instruction.literals);
+                    this.floatDefaults.set(instruction.dest.index +
+                        (instruction.dest.type === REG_CONST2 ? 2048 : instruction.dest.type === REG_CONST3 ? 4096 :
+                            instruction.dest.type === REG_CONST4 ? 6144 : 0), instruction.literals);
                 else if (instruction.opcode === OP.DEFI)
                     this.intDefaults.set(instruction.dest.index, instruction.literals);
                 else if (instruction.opcode === OP.DEFB)
@@ -1124,6 +1159,98 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             case OP.FRC: this.store(dest, "fract(" + s(0) + ")"); return;
             case OP.ABS: this.store(dest, "abs(" + s(0) + ")"); return;
             case OP.RCP: this.store(dest, "vec4<f32>(d9_rcp(" + scalar(0) + "))"); return;
+            case OP.NV_ALU:
+                if (instruction.control > 6 || this.kind !== "vertex" && ![4, 6].includes(instruction.control))
+                    throw new Error("invalid private NV40 arithmetic variant");
+                this.nvAlu = true;
+                this.store(dest, "nv40_alu(" + instruction.control + "u, " + s(0) + ")");
+                return;
+            case OP.NV_DIV:
+                if (this.kind !== "pixel" || instruction.control)
+                    throw new Error("invalid private NV40 fragment division");
+                this.nvAlu = true;
+                this.store(dest, "nv40_div(" + s(0) + ", (" + s(1) + ").x)");
+                return;
+            case OP.NV_SAT:
+                if (this.kind !== "pixel" || instruction.control)
+                    throw new Error("invalid private NV40 fragment saturation");
+                this.nvRegisters = true;
+                this.store(dest, "nv40_saturate(" + s(0) + ")");
+                return;
+            case OP.NV_LOAD: case OP.NV_STORE: case OP.NV_HALF: case OP.NV_COPY: {
+                if (this.kind !== "pixel" || instruction.control > 1 || instruction.predicated ||
+                    dest.relative || dest.type !== REG_TEMP || dest.modifier || dest.shift)
+                    throw new Error("invalid private NV40 fragment register operation");
+                this.nvRegisters = true;
+                const half = instruction.control, physical = opcode === OP.NV_LOAD ? sources[0] : dest;
+                if (opcode !== OP.NV_HALF && (physical.index >= 64 || physical.type !== REG_TEMP || physical.relative))
+                    throw new Error("invalid private NV40 fragment register index");
+                if (opcode === OP.NV_HALF) {
+                    this.store(dest, "nv40_half(" + s(0) + ")"); return;
+                }
+                if (opcode === OP.NV_LOAD) {
+                    if (sources[0].modifier || sources[0].swizzle !== 0xe4)
+                        throw new Error("invalid private NV40 register load source");
+                    this.store(dest, "nv40_load(" + physical.index + "u, " + half + "u)"); return;
+                }
+                const value = this.fresh("nv"), predicate = this.fresh("nv_gate");
+                if (opcode === OP.NV_COPY) {
+                    const source = sources[0];
+                    if (source.type !== REG_TEMP || source.relative || source.index >= 64 ||
+                        ![SRCMOD_NONE, SRCMOD_NEG, SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier))
+                        throw new Error("invalid private NV40 register copy source");
+                    let raw = "nv40_raw(" + source.index + "u, " + half + "u)." + swizzleString(source.swizzle);
+                    const sign = half ? "0x8000u" : "0x80000000u";
+                    if ([SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier)) raw = "(" + raw + " & vec4<u32>(~" + sign + "))";
+                    if ([SRCMOD_NEG, SRCMOD_ABSNEG].includes(source.modifier)) raw = "(" + raw + " ^ vec4<u32>(" + sign + "))";
+                    this.emit("let " + value + " = " + raw + ";");
+                } else {
+                    this.emit("let " + value + " = " + (half ? "nv40_encode(" + s(0) + ")" : "bitcast<vec4<u32>>(" + s(0) + ")") + ";");
+                }
+                this.emit("let " + predicate + " = " + s(1) + ";");
+                for (let lane = 0; lane < 4; lane++) if (dest.writeMask & 1 << lane) {
+                    const component = WRITEMASK_NAMES[lane];
+                    this.emit("if (" + predicate + "." + component + " >= 0.0) { nv40_write(" +
+                        physical.index + "u, " + half + "u, " + lane + "u, " + value + "." + component + "); }");
+                }
+                return;
+            }
+            case OP.NV_PACK: case OP.NV_UNPACK: {
+                const pack = opcode === OP.NV_PACK, control = instruction.control;
+                if (this.kind !== "pixel" || control > (pack ? 3 : 7) || instruction.predicated ||
+                    dest.relative || dest.type !== REG_TEMP || pack && (dest.index >= 64 || dest.modifier || dest.shift))
+                    throw new Error("invalid private NV40 fragment packing operation");
+                this.nvRegisters = true;
+                if (pack) {
+                    const value = this.fresh("nv_pack"), predicate = this.fresh("nv_gate");
+                    this.emit("let " + value + " = nv40_pack(" + control + "u, " + s(0) + ");");
+                    this.emit("let " + predicate + " = " + s(1) + ";");
+                    for (let lane = 0; lane < 4; lane++) if (dest.writeMask & 1 << lane) {
+                        const component = WRITEMASK_NAMES[lane];
+                        this.emit("if (" + predicate + "." + component + " >= 0.0) { nv40_write(" +
+                            dest.index + "u, 0u, " + lane + "u, " + value + "); }");
+                    }
+                } else {
+                    const source = sources[0], physical = !!(control & 4);
+                    if (source.relative || physical && (source.type !== REG_TEMP || source.index >= 64) ||
+                        ![SRCMOD_NONE, SRCMOD_NEG, SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier))
+                        throw new Error("invalid private NV40 unpack source");
+                    let value = physical ? "nv40_raw(" + source.index + "u, 0u)"
+                        : "bitcast<vec4<u32>>(" + this.rawSource(source) + ")";
+                    value = "(" + value + ")." + SWIZZLE_CHARS[source.swizzle & 3];
+                    if ([SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier)) value = "(" + value + " & 0x7fffffffu)";
+                    if ([SRCMOD_NEG, SRCMOD_ABSNEG].includes(source.modifier)) value = "(" + value + " ^ 0x80000000u)";
+                    this.store(dest, "nv40_unpack(" + (control & 3) + "u, " + value + ")");
+                }
+                return;
+            }
+            case OP.NV_DEPTH_SAMPLER:
+                if (this.kind !== "pixel" || instruction.control > 7 || instruction.predicated ||
+                    dest.type !== REG_SAMPLER || dest.index >= 16 || dest.relative || dest.modifier || dest.shift)
+                    throw new Error("invalid private NV40 depth sampler");
+                this.nvDepthFunctions.set(dest.index, ["never", "greater", "equal", "greater-equal",
+                    "less", "not-equal", "less-equal", "always"][instruction.control]);
+                return;
             case OP.RSQ: this.store(dest, "vec4<f32>(d9_rsq(" + scalar(0) + "))"); return;
             case OP.EXP: this.store(dest, "vec4<f32>(exp2(" + scalar(0) + "))"); return;
             case OP.LOG: this.store(dest, "vec4<f32>(d9_log(" + scalar(0) + "))"); return;
@@ -1157,7 +1284,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                     s(1) + ").xyz), 0.0)");
                 return;
             case OP.NRM:
-                this.store(dest, "vec4<f32>(d9_normalize((" + s(0) + ").xyz), 0.0)");
+                this.store(dest, "d9_normalize(" + s(0) + ")");
                 return;
             case OP.SGN: this.store(dest, "sign(" + s(0) + ")"); return;
             case OP.LIT: this.store(dest, "d9_lit(" + s(0) + ")"); return;
@@ -1279,13 +1406,14 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                 this.bumpStages.add(index);
                 const bump = "d9c.bump[" + index + "]";
                 const source = this.sourceExpression(sources[0]);
-                const perturbed = this.fresh("bem");
-                this.emit("let " + perturbed + " = t" + index + ".xy + vec2<f32>(" +
+                // The displacement is added to the stage's own coordinate after
+                // D3DTTFF_PROJECTED has divided it, as the plain tex form would.
+                const displacement = "vec2<f32>(" +
                     bump + ".x * (" + source + ").x + " + bump + ".z * (" +
                     source + ").y, " + bump + ".y * (" + source + ").x + " +
-                    bump + ".w * (" + source + ").y);");
+                    bump + ".w * (" + source + ").y)";
                 const sampled = this.sampleExpression(index,
-                    { coord: perturbed, ref: null }, {});
+                    this.coordinateFor(index, "t" + index, "legacy"), { offset: displacement });
                 if (instruction.opcode === OP.TEXBEM) {
                     this.store(dest, sampled);
                 } else {
@@ -1627,9 +1755,10 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                 const params = [], args = [coordinate.rawExpression ||
                     "vec4<f32>(" + coordinate.coord + ", 0.0, 1.0)"];
                 const dimension = (this.samplers.get(index) || "2d") === "2d" ? 2 : 3;
-                for (const name of ["lod", "bias", "ddx", "ddy"]) {
+                for (const name of ["lod", "bias", "ddx", "ddy", "offset"]) {
                     if (!options || options[name] === undefined) continue;
-                    params.push({name, type: name === "ddx" || name === "ddy" ? "vec" + dimension + "<f32>" : "f32"});
+                    params.push({name, type: name === "ddx" || name === "ddy" ? "vec" + dimension + "<f32>"
+                        : name === "offset" ? "vec2<f32>" : "f32"});
                     args.push(options[name]);
                 }
                 const operation = {index, projected: coordinate.projected || false, params,
@@ -1650,7 +1779,13 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
         rawSampleExpression(index, coordinate, options) {
             const texture = "d9_tex" + index;
             const sampler = "d9_smp" + index;
-            const coord = this.mirrorOnceCoord(index, coordinate.coord);
+            const coord = this.mirrorOnceCoord(index, options && options.offset !== undefined
+                ? "(" + coordinate.coord + " + " + options.offset + ")" : coordinate.coord);
+            const fetch4 = this.kind === "pixel" && this.options.fetch4Samplers
+                ? this.options.fetch4Samplers[index] : undefined;
+            if (fetch4 !== undefined && (this.samplers.get(index) || "2d") === "2d" &&
+                    (fetch4 === "depth") === this.isDepthFetchSampler(index))
+                return fetch4Expression(texture, sampler, coord, fetch4);
             if (this.isDepthSampler(index) && !this.isDepthFetchSampler(index))
                 return this.compareExpression(texture, sampler, coord,
                     coordinate.ref === null || coordinate.ref === undefined ? "0.0" : coordinate.ref, options);
@@ -1819,7 +1954,13 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             } else if (biased) {
                 sampleOptions.bias = "(" + coordinateExpression + ").w";
             }
-            this.store(dest, this.sampleExpression(index, coordinate, sampleOptions));
+            let sampled = this.sampleExpression(index, coordinate, sampleOptions);
+            // The swizzle written on a texld sampler register selects components
+            // of the returned texel (ps_2_0 and later have a sampler operand).
+            const samplerSwizzle = sources.length > 1 && sources[1].type === REG_SAMPLER
+                ? swizzleString(sources[1].swizzle) : "xyzw";
+            if (samplerSwizzle !== "xyzw") sampled = "(" + sampled + ")." + samplerSwizzle;
+            this.store(dest, sampled);
         }
 
         // ps_1_x texreg2ar/gb/rgb: build the coordinate from components of a
@@ -1840,10 +1981,13 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
         assemble(routines, bodies, mainBody) {
             const out = [];
             const kind = this.kind;
-            const floatCount = Math.max(1, Math.min(this.constantCapacity(),
-                this.maxFloatConst + 1));
+            const floatCount = Math.max(1, Math.min(kind === "vertex" ? 8192 : 224,
+                Math.max(this.maxFloatConst + 1, this.usesRelativeConstants ? this.constantCapacity() : 0)));
             const intCount = Math.max(1, this.maxIntConst + 1);
             const boolVectors = Math.max(1, Math.ceil((this.maxBoolConst + 1) / 4));
+            // Extended software constants exceed WebGPU's uniform binding limit.
+            // Leave room for viewport, clipping and point expansion parameters.
+            const storage = kind === "vertex" && (floatCount + intCount + boolVectors) * 16 > 65280;
 
             out.push("// translated from " + kind + " shader model " +
                 this.major + "." + this.minor);
@@ -1852,6 +1996,8 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             // all the time; Tint rejects those modules unless this is off
             // (naga does not check it at all)
             out.push("diagnostic(off, derivative_uniformity);");
+            if (this.usesRelativeConstants)
+                out.push("const d9_float_constant_max: i32 = " + (this.constantCapacity() - 1) + ";");
             out.push("struct D9Constants {");
             out.push("    f: array<vec4<f32>, " + floatCount + ">,");
             out.push("    i: array<vec4<i32>, " + intCount + ">,");
@@ -1887,7 +2033,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             }
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
-                ") var<uniform> d9c: D9Constants;");
+                ") var<" + (storage ? "storage, read" : "uniform") + "> d9c: D9Constants;");
 
             const samplerIndices = Array.from(this.samplers.keys()).sort((a, b) => a - b);
             const samplerBindingBase = kind === "vertex" ? 34 : 2;
@@ -1905,6 +2051,171 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             }
 
             out.push("");
+            if (this.nvRegisters) out.push(`
+// NV40's R/H names view the same bits. H[2*n].xy/zw occupy R[n].x/y;
+// H[2*n+1].xy/zw occupy R[n].z/w. Integer storage preserves packed NaNs.
+var<private> nv40_registers: array<vec4<u32>, 64>;
+fn nv40_f16(value: f32) -> u32 {
+    let raw = bitcast<u32>(value);
+    let sign = (raw >> 16u) & 0x8000u;
+    let mag = raw & 0x7fffffffu;
+    if (mag >= 0x7f800000u) {
+        if (mag == 0x7f800000u) { return sign | 0x7c00u; }
+        return sign | 0x7e00u | ((mag >> 13u) & 0x3ffu);
+    }
+    if (mag >= 0x477ff000u) { return sign | 0x7c00u; }
+    let exponent = mag >> 23u;
+    if (exponent >= 113u) {
+        return sign | ((mag - 0x38000000u + 0xfffu + ((mag >> 13u) & 1u)) >> 13u);
+    }
+    if (exponent < 102u) { return sign; }
+    let mantissa = (mag & 0x7fffffu) | 0x800000u;
+    let shift = 126u - exponent;
+    let rounded = mantissa + (1u << (shift - 1u)) - 1u + ((mantissa >> shift) & 1u);
+    return sign | (rounded >> shift);
+}
+fn nv40_f32(value: u32) -> f32 {
+    let sign = (value & 0x8000u) << 16u;
+    var mantissa = value & 0x3ffu;
+    var exponent = (value >> 10u) & 31u;
+    if (exponent == 31u) { return bitcast<f32>(sign | 0x7f800000u | (mantissa << 13u)); }
+    if (exponent == 0u) {
+        if (mantissa == 0u) { return bitcast<f32>(sign); }
+        exponent = 113u;
+        loop {
+            if ((mantissa & 0x400u) != 0u) { break; }
+            mantissa <<= 1u; exponent -= 1u;
+        }
+        mantissa &= 0x3ffu;
+    } else { exponent += 112u; }
+    return bitcast<f32>(sign | (exponent << 23u) | (mantissa << 13u));
+}
+fn nv40_encode(value: vec4<f32>) -> vec4<u32> {
+    return vec4<u32>(nv40_f16(value.x), nv40_f16(value.y), nv40_f16(value.z), nv40_f16(value.w));
+}
+fn nv40_half(value: vec4<f32>) -> vec4<f32> {
+    let h = nv40_encode(value);
+    return vec4<f32>(nv40_f32(h.x), nv40_f32(h.y), nv40_f32(h.z), nv40_f32(h.w));
+}
+fn nv40_saturate(value: vec4<f32>) -> vec4<f32> {
+    let nan = (bitcast<vec4<u32>>(value) & vec4<u32>(0x7fffffffu)) > vec4<u32>(0x7f800000u);
+    return clamp(select(value, vec4<f32>(0.0), nan), vec4<f32>(0.0), vec4<f32>(1.0));
+}
+fn nv40_raw(index: u32, half: u32) -> vec4<u32> {
+    if (half == 0u) { return nv40_registers[index]; }
+    let r = nv40_registers[index >> 1u];
+    let pair = (index & 1u) * 2u;
+    return vec4<u32>(r[pair] & 0xffffu, r[pair] >> 16u, r[pair+1u] & 0xffffu, r[pair+1u] >> 16u);
+}
+fn nv40_load(index: u32, half: u32) -> vec4<f32> {
+    let raw = nv40_raw(index, half);
+    if (half == 0u) { return bitcast<vec4<f32>>(raw); }
+    return vec4<f32>(nv40_f32(raw.x), nv40_f32(raw.y), nv40_f32(raw.z), nv40_f32(raw.w));
+}
+fn nv40_write(index: u32, half: u32, lane: u32, value: u32) {
+    if (half == 0u) { nv40_registers[index][lane] = value; return; }
+    let component = (index & 1u) * 2u + (lane >> 1u);
+    let shift = (lane & 1u) * 16u;
+    let old = nv40_registers[index >> 1u][component];
+    nv40_registers[index >> 1u][component] = (old & ~(0xffffu << shift)) | ((value & 0xffffu) << shift);
+}
+fn nv40_pack(op: u32, value: vec4<f32>) -> u32 {
+    if (op == 0u) { return nv40_f16(value.x) | (nv40_f16(value.y) << 16u); }
+    if (op == 1u) {
+        let words = vec2<u32>(round(clamp(value.xy, vec2<f32>(0.0), vec2<f32>(1.0)) * 65535.0));
+        return words.x | (words.y << 16u);
+    }
+    var converted = round(clamp(value, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0);
+    if (op == 2u) { converted = round(clamp(value, vec4<f32>(-128.0/127.0), vec4<f32>(1.0)) * 127.0 + 128.0); }
+    let bytes = vec4<u32>(converted);
+    return bytes.x | (bytes.y << 8u) | (bytes.z << 16u) | (bytes.w << 24u);
+}
+fn nv40_unpack(op: u32, value: u32) -> vec4<f32> {
+    if (op == 0u) { return vec4<f32>(nv40_f32(value & 0xffffu), nv40_f32(value >> 16u), nv40_f32(value & 0xffffu), nv40_f32(value >> 16u)); }
+    if (op == 1u) { return vec4<f32>(f32(value & 0xffffu), f32(value >> 16u), f32(value & 0xffffu), f32(value >> 16u)) / 65535.0; }
+    let bytes = vec4<f32>(f32(value & 255u), f32((value >> 8u) & 255u), f32((value >> 16u) & 255u), f32(value >> 24u));
+    if (op == 2u) { return (bytes - 128.0) / 127.0; }
+    return bytes / 255.0;
+}
+`);
+            if (this.nvAlu) out.push(`
+// NV arithmetic differs from D3D's finite-zero helpers and legacy
+// partial-precision instructions. Classification uses bits, including -0.
+// Runtime bitcasts avoid WGSL constant-evaluation rejection of Inf/NaN.
+fn nv40_bits(bits: u32) -> f32 { return bitcast<f32>(bits); }
+fn nv40_divide(a: f32, b: f32) -> f32 {
+    let ra = bitcast<u32>(a); let rb = bitcast<u32>(b);
+    let ma = ra & 0x7fffffffu; let mb = rb & 0x7fffffffu;
+    let sign = (ra ^ rb) & 0x80000000u;
+    if (ma > 0x7f800000u || mb > 0x7f800000u ||
+        (ma == 0u && mb == 0u) || (ma == 0x7f800000u && mb == 0x7f800000u)) {
+        return nv40_bits(0x7fc00000u);
+    }
+    if (mb == 0u || ma == 0x7f800000u) { return nv40_bits(sign | 0x7f800000u); }
+    if (ma == 0u || mb == 0x7f800000u) { return nv40_bits(sign); }
+    return a / b;
+}
+fn nv40_div(a: vec4<f32>, b: f32) -> vec4<f32> {
+    return vec4<f32>(nv40_divide(a.x,b), nv40_divide(a.y,b), nv40_divide(a.z,b), nv40_divide(a.w,b));
+}
+fn nv40_alu(op: u32, s: vec4<f32>) -> vec4<f32> {
+    let raw = bitcast<u32>(s.x);
+    let mag = raw & 0x7fffffffu;
+    let sign = raw & 0x80000000u;
+    let inf = nv40_bits(0x7f800000u);
+    if (op == 0u || op == 4u) {
+        if (mag > 0x7f800000u) { return vec4<f32>(s.x); }
+        var value = inf;
+        if (mag != 0u) { value = 1.0 / abs(s.x); }
+        if (op == 0u) { value = clamp(value, 5.421010862427522e-20, 18446744073709551616.0); }
+        return vec4<f32>(bitcast<f32>(bitcast<u32>(value) | sign));
+    }
+    if (op == 1u) {
+        var power = exp2(s.x);
+        if (mag == 0x7f800000u) { power = select(inf, 0.0, sign != 0u); }
+        if (mag > 0x7f800000u) { power = s.x; }
+        return vec4<f32>(exp2(floor(s.x)), fract(s.x), power, 1.0);
+    }
+    if (op == 2u || op == 6u) {
+        if (mag > 0x7f800000u) { return select(vec4<f32>(s.x, s.x, s.x, 1.0), vec4<f32>(s.x), op == 6u); }
+        if (op == 6u && sign != 0u && mag != 0u) { return vec4<f32>(nv40_bits(0x7fc00000u)); }
+        if (mag == 0u) { return select(vec4<f32>(-inf, 1.0, -inf, 1.0), vec4<f32>(-inf), op == 6u); }
+        if (mag == 0x7f800000u) { return select(vec4<f32>(inf, 1.0, inf, 1.0), vec4<f32>(inf), op == 6u); }
+        // Extract exponent/mantissa exactly; floor(log2(x)) alone can round
+        // up for the float immediately below an exact power of two.
+        var exponent = i32(mag >> 23u) - 127;
+        var mantissa = mag & 0x007fffffu;
+        if ((mag >> 23u) == 0u) {
+            exponent = -126;
+            loop {
+                if ((mantissa & 0x00800000u) != 0u) { break; }
+                mantissa <<= 1u; exponent -= 1;
+            }
+        }
+        let fraction = bitcast<f32>((mantissa & 0x007fffffu) | 0x3f800000u);
+        let result = f32(exponent) + log2(fraction);
+        return select(vec4<f32>(f32(exponent), fraction, result, 1.0), vec4<f32>(result), op == 6u);
+    }
+    if (op == 3u) {
+        let diffuse = max(s.x, 0.0);
+        let base = max(s.y, 0.0);
+        let power = clamp(s.w, -127.99999237060547, 127.99999237060547);
+        var specular = 0.0;
+        if (s.x > 0.0) {
+            if (power == 0.0) { specular = 1.0; }
+            else if (base == 0.0) { specular = select(0.0, inf, power < 0.0); }
+            else { specular = pow(base, power); }
+        }
+        return vec4<f32>(1.0, diffuse, specular, 1.0);
+    }
+    // NV RSQ is signed-domain square root, unlike D3D's abs(x) operation.
+    if (mag > 0x7f800000u) { return vec4<f32>(s.x); }
+    if (mag == 0u) { return vec4<f32>(nv40_bits(0x7f800000u | sign)); }
+    if (sign != 0u) { return vec4<f32>(nv40_bits(0x7fc00000u)); }
+    if (mag == 0x7f800000u) { return vec4<f32>(0.0); }
+    return vec4<f32>(inverseSqrt(s.x));
+}
+`);
             out.push("fn d9_rcp(v: f32) -> f32 { return select(1.0 / v, " +
                 FLOAT_MAX + ", v == 0.0); }");
             out.push("fn d9_rsq(v: f32) -> f32 { let a = abs(v); return " +
@@ -1916,8 +2227,8 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             out.push("    if (x == 0.0 && y > 0.0) { return 0.0; }");
             out.push("    return pow(abs(x), y);");
             out.push("}");
-            out.push("fn d9_normalize(v: vec3<f32>) -> vec3<f32> { let l = " +
-                "dot(v, v); return select(v * inverseSqrt(l), vec3<f32>(0.0), l == 0.0); }");
+            out.push("fn d9_normalize(v: vec4<f32>) -> vec4<f32> { let l = " +
+                "dot(v.xyz, v.xyz); return select(v * inverseSqrt(l), vec4<f32>(0.0), l == 0.0); }");
             out.push("fn d9_lit(s: vec4<f32>) -> vec4<f32> {");
             out.push("    let power = clamp(s.w, -127.9961, 127.9961);");
             out.push("    let specular = select(0.0, pow(max(s.y, 0.0), power), " +
@@ -2005,7 +2316,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             if (kind === "vertex") this.assembleVertexEntry(out);
             else this.assemblePixelEntry(out);
 
-            const reflection = this.reflect(floatCount, intCount, boolVectors);
+            const reflection = this.reflect(floatCount, intCount, boolVectors, storage);
             return { wgsl: out.join("\n") + "\n", reflection };
         }
 
@@ -2109,8 +2420,10 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             const clampColors = this.major < 3 || this.options.legacyColorClamp;
             for (let slot = 0; slot < VARYING_COUNT; ++slot) {
                 let value = "o_varying" + slot;
+                // Colour interpolators hold 8-bit values: round to even on the
+                // fp32 product like the hardware, so a 0.3 input stores 76, not 77.
                 if (clampColors && (slot === VARYING_COLOR0 || slot === VARYING_COLOR1))
-                    value = "clamp(" + value + ", vec4<f32>(0.0), vec4<f32>(1.0))";
+                    value = "round(clamp(" + value + ", vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0) / 255.0";
                 if (this.major < 3 && slot === VARYING_FOG && !this.writtenVaryings.has(slot))
                     value = "vec4<f32>(clamp(o_varying1.a, 0.0, 1.0), 0.0, 0.0, 0.0)";
                 out.push("    result.varying" + slot + " = " + value + ";");
@@ -2209,11 +2522,13 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             // target within a pass, and is visible in reflection.colorOutputs.
             const targetCount = this.colorOutputs.size
                 ? Math.max(...this.colorOutputs) + 1 : 1;
+            const viewportDepthRange = this.options.viewportDepthRange;
             out.push("struct D9PixelOutput {");
             for (let target = 0; target < targetCount; ++target)
                 out.push("    @location(" + target + ") color" + target +
                     ": vec4<f32>,");
-            if (this.usesDepthOutput)
+            const depthBias = this.options.depthBias;
+            if (this.usesDepthOutput || viewportDepthRange || depthBias)
                 out.push("    @builtin(frag_depth) depth: f32,");
             out.push("};");
             out.push("");
@@ -2239,7 +2554,8 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             // ps_1_x leaves its result in r0; ps_2_0+ writes oC0 explicitly.
             out.push("    result.color0 = " + (this.major === 1 ? "r0" : "oC0") + ";");
             for (let target = 1; target < targetCount; ++target)
-                out.push("    result.color" + target + " = oC" + target + ";");
+                out.push("    result.color" + target + " = " +
+                    (this.colorOutputs.has(target) ? "oC" + target : "vec4<f32>(0.0)") + ";");
             // D3D9's alpha test runs after the shader, on the colour it
             // produced. WebGPU has no such stage, so the caller passes the
             // comparison in and it becomes a discard here -- which is why an
@@ -2250,6 +2566,11 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             if (this.options.fogBlend) out.push(this.options.fogBlend.replace(/\n$/, ""));
             if (this.usesDepthOutput)
                 out.push("    result.depth = o_depthv.x;");
+            else if (viewportDepthRange || depthBias)
+                out.push("    result.depth = clamp(" + (viewportDepthRange
+                    ? "mix(f32(" + viewportDepthRange[0] + "), f32(" + viewportDepthRange[1] +
+                        "), stage_in.position.z)" : "stage_in.position.z") +
+                    (depthBias ? " + f32(" + depthBias + ")" : "") + ", 0.0, 1.0);");
             out.push("    return result;");
             out.push("}");
 
@@ -2265,7 +2586,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             return null;
         }
 
-        reflect(floatCount, intCount, boolVectors) {
+        reflect(floatCount, intCount, boolVectors, storage) {
             const inputs = [];
             for (const register of this.usedInputs.keys()) {
                 const semantic = this.inputSemanticFor(register);
@@ -2284,6 +2605,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             const samplerBindingBase = this.kind === "vertex" ? 34 : 2;
             const samplers = Array.from(this.samplers.entries())
                 .map(([index, type]) => ({ index, type,
+                    ...(this.nvDepthFunctions.has(index) ? {compareFunction:this.nvDepthFunctions.get(index)} : {}),
                     depth: this.isDepthSampler(index)
                         ? (this.isDepthFetchSampler(index) ? "fetch" : "compare")
                         : false,
@@ -2343,6 +2665,7 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
                 outputDeclarations: this.outputDeclarations.map(item => ({...item})),
                 inputDeclarations: this.inputDeclarations.map(item => ({...item})),
                 samplers,
+                constantBufferType: storage ? "read-only-storage" : "uniform",
                 floatConstCount: floatCount,
                 intConstCount: intCount,
                 boolVectorCount: boolVectors,
@@ -2462,6 +2785,11 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
             translator.sampleOperations = program.sampleOperations;
             if (program.kind === "pixel" && program.major === 1)
                 for (const index of translator.samplers.keys()) translator.samplers.set(index, translator.legacySamplerType(index));
+            else if (program.kind === "pixel" && options && options.legacySamplerTypes)
+                for (const index of translator.samplers.keys()) {
+                    const type = options.legacySamplerTypes[index];
+                    if (type) translator.samplers.set(index, type);
+                }
             const result = translator.assemble({subroutines: program.subroutines}, new Map(program.bodies), program.mainBody);
             return {ok: true, wgsl: result.wgsl, reflection: result.reflection, program};
         } catch (error) {
@@ -2637,13 +2965,14 @@ globalThis.V86GL_BUILD_REVISION = "ce2e3593ba41e7d3dcb9";
     }
 
     const api = {
-        compileShader, specializeShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression, linkShaderSemantics,
+        compileShader, specializeShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression, fetch4Expression, linkShaderSemantics,
         vertexInputConversion, vertexInputType, vertexInputValue, vertexInputHelpers,
         TRANSLATOR_REVISION,
         VARYING_COLOR0, VARYING_COLOR1, VARYING_TEXCOORD0, VARYING_FOG,
         VARYING_COUNT, varyingForSemantic,
         OP, REGISTER: {
             TEMP: REG_TEMP, INPUT: REG_INPUT, CONST: REG_CONST, ADDR: REG_ADDR,
+            CONST2: REG_CONST2, CONST3: REG_CONST3, CONST4: REG_CONST4,
             TEXTURE: REG_TEXTURE, RASTOUT: REG_RASTOUT, ATTROUT: REG_ATTROUT,
             OUTPUT: REG_OUTPUT, CONSTINT: REG_CONSTINT, COLOROUT: REG_COLOROUT,
             DEPTHOUT: REG_DEPTHOUT, SAMPLER: REG_SAMPLER,

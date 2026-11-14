@@ -51,6 +51,7 @@ typedef struct{DWORD dmSize,dmPelsWidth,dmPelsHeight,dmBitsPerPel,dmFields,dmDis
 #define SUCCEEDED(h) ((HRESULT)(h)>=0)
 #define DDWG_TRACE_ERROR(h) (h)
 #define DDWG_TRACE_RESULT(h) (h)
+#define DDWG_TRACE_CHECKPOINT(...) ((void)0)
 static GUID IID_IDirectDraw={1},IID_IDirectDraw2={2},IID_IDirectDraw3={3},IID_IDirectDraw4={4},IID_IDirectDraw7={7};
 static int g_object_lock;static HMODULE g_instance=(void*)(uintptr_t)1;static struct Native native;static unsigned checks,hides,loads,frees,creates,ex_creates,queries,native_releases,emits,cds_calls,deaths,control_calls;static HRESULT native_hr,query_hr,create_hr;static unsigned actual_version,fallback_queries;static BOOL native_no_draw3,missing_module,self_module,missing_create;static DDrawObject*active;static void(*callback)(void);static DWORD current_width=800,current_height=600,current_bpp=32;
 #define MUST(x) do{++checks;if(!(x)){fprintf(stderr,"platform line %u: %s\n",__LINE__,#x);exit(1);}}while(0)

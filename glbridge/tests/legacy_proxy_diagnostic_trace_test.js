@@ -12,6 +12,8 @@ const shared = read("diagnostic_trace.h");
 const d3d8 = read("d3d8proxy/d3d8_proxy.c");
 const ddraw = [
     read("ddrawproxy/ddraw_proxy.c"),
+    read("ddrawproxy/ddraw_platform_control.inc"),
+    read("ddrawproxy/ddraw_surface_control.inc"),
     read("ddrawproxy/d3d7_proxy.inc"),
     read("ddrawproxy/d3d_legacy_proxy.inc"),
 ].join("\n");
