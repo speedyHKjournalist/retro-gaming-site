@@ -33,8 +33,8 @@ programs in both CPU modes, exact full-VM cold restore, continued frames,
 process switching and paired F6/candidate measurements. It records the two
 GLView shader-resource corrections, the separate Tremulous flare-map fixture
 and the non-repeatable first worker timing difference. Guest/image hashes
-remain in the [F6 deployment manifest](deployments/opengl-webgpu-F6.json);
-the final host/matrix versions are in the [G manifest](deployments/opengl-webgpu-G.json).
+remain in the [F6 deployment manifest](../tests/acceptance/deployments/opengl-webgpu-F6.json);
+the final host/matrix versions are in the [G manifest](../tests/acceptance/deployments/opengl-webgpu-G.json).
 These are local branch assets and local installed images.
 
 The page runs the CPU in v86's worker (`cpu_worker: true`), selects the display
@@ -72,4 +72,4 @@ The individual probes retain their explicit simulated-reply modes for wire
 fixture generation. Those modes do not count as live GPU acceptance. This
 batch changes test infrastructure and sample assertions; published DLLs,
 host renderer, protocol, and shader bundle retain their previous versions.
-See [4L4 evidence](deployments/d3d-webgpu-review-4L4.json).
+See [4L4 evidence](../../v86/tests/acceptance/d3d/stage4l4-validation.json).

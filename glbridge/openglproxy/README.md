@@ -251,7 +251,7 @@ window chains before allowing Cube 2 to launch.
 
 ### F6 installed images
 
-`../deployments/opengl-webgpu-F6.json` records the exact source, shipping and
+`../../tests/acceptance/deployments/opengl-webgpu-F6.json` records the exact source, shipping and
 installed-image hashes plus original-image backup names. XP, Cube 2 and Warcraft
 III local images contain the current driver/proxy. The XP system OpenGL files
 are protected and remain unchanged. The old and new Cube DLLs are both 145408

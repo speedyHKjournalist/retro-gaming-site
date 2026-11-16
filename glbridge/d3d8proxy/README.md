@@ -378,20 +378,20 @@ the 1100-byte D3D9 identifier by skipping DeviceName. Normal D3D9 identities
 remain byte-identical across all four build configurations. Old accepted DLLs
 are the XP byte-comparison baseline, with native delegation/error/copy guards
 and independent SwiftShader/Metal replay. See review stage 4K4 and deployment
-`../deployments/d3d-webgpu-review-4K4.json`. Adapter enumeration/format/PP and
+`../../../v86/tests/acceptance/d3d/stage4k4-validation.json`. Adapter enumeration/format/PP and
 D3D8 device/resource wrapping continue in following phases.
 
 Stage 4K5 also moves the D3D8 adapter mode count and nine-entry list into the
 private API8-profile core. Its resolution-major X1R5G5B5/R5G6B5/X8R8G8B8
 ordering stays intact; ordinary D3D9 still enumerates real driver modes by
 format. Previous-C native comparisons, old-DLL XP comparisons and both GPU
-backends cover the move. See `../deployments/d3d-webgpu-review-4K5.json`.
+backends cover the move. See `../../../v86/tests/acceptance/d3d/stage4k5-validation.json`.
 
 Stage 4K6 delegates D3D8 device-type, multisample and depth-match queries to
 the private core factory. Its legacy format restrictions filter common
 predicates, while ordinary D3D9 query and quality results stay unchanged.
 Native current/prior-C matrix checks and old-DLL XP comparisons cover both
-APIs. See `../deployments/d3d-webgpu-review-4K6.json`. The legacy D3D8
+APIs. See `../../../v86/tests/acceptance/d3d/stage4k6-validation.json`. The legacy D3D8
 creation predicates remain until device/resource objects are wrapped.
 
 Stage 4K7 delegates D3D8 CheckDeviceFormat through the API8-profile core.
@@ -399,14 +399,14 @@ It retains API8 shared-layout filtering and legacy resource/usage rules;
 ordinary D3D9 query/autogen/host-capability behavior stays unchanged.
 Native prior-C comparisons and old-DLL XP comparisons cover the move. XP
 uses an explicit simulated capability response0; real pixels are separately
-replayed on SwiftShader/Metal. See `../deployments/d3d-webgpu-review-4K7.json`.
+replayed on SwiftShader/Metal. See `../../../v86/tests/acceptance/d3d/stage4k7-validation.json`.
 
 Stage 4K8 routes D3D8 CreateDevice effective parameter storage through a
 checked52-byte PP8 to56-byte PP9 layout bridge and the common SDK9 helper.
 Quality is zero;legacy8 swap/interval/flag values and caller publication stay
 intact. Native alias/guard/provider tests and real SDK120/220 zero-parameter
 constructors cover the path. Reset/additional-chain normalization remains for
-the next step. See `../deployments/d3d-webgpu-review-4K8.json`.
+the next step. See `../../../v86/tests/acceptance/d3d/stage4k8-validation.json`.
 
 Stage 4K9 completes effective parameter routing for D3D8 Reset and
 additional swap chains through the same checked PP8/PP9 core bridge.
@@ -414,7 +414,7 @@ SDK120/220 actually resets each device and creates/releases a transient
 texture/swap-chain pair,verifies count-only caller publication and8x8
 backbuffers,then replays five main images on both GPU backends with all
 resources retired before SessionEnd. Actual device/resource wrapping follows.
-See `../deployments/d3d-webgpu-review-4K9.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k9-validation.json`.
 
 Stage 4K10 adds a private API8-profile actual core9 device constructor.
 It preserves immutable PP8 input,legacy constructor validation and initial
@@ -423,7 +423,7 @@ A test-only SDK8 consumer verifies seven actual devices and two private
 module lifetimes in XP;both GPUs replay five images/320 pixels with all
 resources retired before SessionEnd. Public8 device/resource wrapping and
 API8 Reset/additional/shader adapters remain open.
-See `../deployments/d3d-webgpu-review-4K10.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k10-validation.json`.
 
 Stage 4K11 extends the private API8 core device to Reset validation,
 legacy blocker errors,cooperative pending/recovery,count-only publication,
@@ -432,7 +432,7 @@ SDK8 consumers verify real held-backbuffer failures andsuccessful recovery;
 ordinary9 Reset preserves9 publication anddefaults. Three actual Reset
 commands replay five images/320 pixels on both GPUs. Public8 devices remain
 legacy;additional/shader adapters anddevice/resource wrapping follow.
-See `../deployments/d3d-webgpu-review-4K11.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k11-validation.json`.
 
 Stage 4K12 adds private API8 core additional-chain construction with
 immutable PP8 input,legacy validation/current-format fallback,count-only
@@ -441,7 +441,7 @@ RT texture/chain lifetimes,16-bit NULL-window chains,MSAA4/flag1 metadata,
 container identity andcomplete retirement beforedrawing. Both GPUs replay
 five images/320 pixels with allmaps empty beforefallback cleanup. Public8
 wrappers,surface LockRect andadditional Present remain separate adapters.
-See `../deployments/d3d-webgpu-review-4K12.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k12-validation.json`.
 
 Stage 4K13 shares the existing legacy8 shader body/opcode/register policy in
 this static core. Public8 delegates body validation; API8 core devices use
@@ -453,7 +453,7 @@ core8 shader creation, byte queries, zero-public-reference bindings and two
 programmable draws. SwiftShader and Metal each verify five frames/320 pixels;
 all 22 shader resources retire before fallback cleanup. Public8 device/resource/
 handle wrapping and numeric shader differential testing remain open.
-See `../deployments/d3d-webgpu-review-4K13.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k13-validation.json`.
 
 Stage 4K14 preserves all D3DVSD_CONST blocks as shader-local DEF instructions
 in private wire code. Literal data cannot terminate the declaration scan;
@@ -468,7 +468,7 @@ XP SDK120/220 compares accepted 4K13 and current DLLs. Both GPU backends verify
 14 frames/896 pixels, including the old lost-block regression and current
 red/green/gap/overwrite/state-block/Reset results. Direct public8 backbuffer
 LockRect remains open; the probe uses existing CopyRects to CPU surfaces.
-See `../deployments/d3d-webgpu-review-4K14.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k14-validation.json`.
 
 Stage 4K15 accepts documented CND in ps_1_4 through the shared API8 policy.
 Vertex rejection, other opcode rules and the ordinary9 scanner stay intact.
@@ -480,7 +480,7 @@ original function bytes and expired handles. SwiftShader/Metal each compare
 adjacent float32 values,including alpha. Coissue,NaN arithmetic and the full
 numeric differential corpus remain separate work. The shipped ordinary9 DLL
 inherits its accepted version; only the accepted current8 DLL is published.
-See `../deployments/d3d-webgpu-review-4K15.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k15-validation.json`.
 
 Stage 4K16 implements explicit lockable implicit backbuffers in public8 and
 core9, including private API8-profile core devices. A common pure planner
@@ -494,7 +494,7 @@ ordinary9 and privatecore8. Both GPUs independently compare 27 images/1536
 pixels, including partial/full writes and 4x4 resize after Reset. XP CPU replies
 explicitly inject analytic expected images; only GPU replay establishes pixels.
 Additional-chain/depth/other target locks and other GPU formats remain open.
-See `../deployments/d3d-webgpu-review-4K16.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k16-validation.json`.
 
 Stage 4K17 extends core9 renderable locks to explicitly lockable standalone RTs
 and additional backbuffers. The common upload bridge addresses their texture
@@ -506,7 +506,7 @@ XP validates five modes, ten targets, four Reset recoveries and 46 readbacks.
 Both GPUs independently verify 2944 pixels; XP CPU replies explicitly inject
 analytic images. Additional Present is excluded: replay has no window link
 and refuses five presentation chains while exercising real target textures.
-See `../deployments/d3d-webgpu-review-4K17.json`.
+See `../../../v86/tests/acceptance/d3d/stage4k17-validation.json`.
 
 Stage 4K18 adds the private SDK8-callable standalone render-target constructor.
 It preserves public8's4096 limit, six formats, sample/lockability and output
@@ -516,7 +516,7 @@ Native validation compares the frozen public8 method across421635 cases.
 XP exercises13 guarded failures and the new constructor with the retained
 46-image/2944-pixel contract, independently verified by both GPU backends.
 CPU replies are analytic injection; additional Present and full public8 device
-or resource wrapping are excluded. See `../deployments/d3d-webgpu-review-4K18.json`.
+or resource wrapping are excluded. See `../../../v86/tests/acceptance/d3d/stage4k18-validation.json`.
 
 Stage 4K19 adds the private SDK8-callable depth-surface constructor with the
 legacy six-format/sample and early-output rules. It reuses core8192 storage
@@ -527,7 +527,7 @@ ordinary9 andcore8SDK120/220:depth retention after rebind,depth-only clear,
 and a half-screen stencil mask,plusmetadata/identity/lock refusal andReset.
 Both GPUs independently match20images/1280pixels; CPU replies are analytic
 injection. MSAA4 depth metadata/storage is tested,not physical coverage or
-precision. Public8wrapping remains pending. See `../deployments/d3d-webgpu-review-4K19.json`.
+precision. Public8wrapping remains pending. See `../../../v86/tests/acceptance/d3d/stage4k19-validation.json`.
 
 Stage 4K20 adds private API8 CPU-image and32-byte surface-descriptor adapters.
 Shared CPU allocation preserves ordinary9 behavior; image8 selects its linear
@@ -538,7 +538,7 @@ refusal,andatomic descriptor byte guards. Both GPUs independently retain the
 20-image/1280-pixel depth/stencil contract; no GPU-format65 claim is made.
 Depth Size currently mirrors the old proxy's0/fixed4 metadata. Pinned Wine
 shows this is a resource-size issue to correct next; it is not native compliance.
-Public8 wrapping stays pending. See `../deployments/d3d-webgpu-review-4K20.json`.
+Public8 wrapping stays pending. See `../../../v86/tests/acceptance/d3d/stage4k20-validation.json`.
 
 Stage 4K21 corrects API8 depth resource Size through one shared format layout.
 Six depth formats use 2/4 bytes per pixel and four-byte row alignment, without
@@ -552,7 +552,7 @@ zero errors; CPU replies are explicit analytic injection. Native checks include
 103680 layout cases,192 public descriptor cases,47203 SDK descriptor cases,
 31 strict runtime mutations,four actual old-function controls andfive ASAN
 families. Public8 wrapping remains pending. Evidence:
-`../deployments/d3d-webgpu-review-4K21.json`.
+`../../../v86/tests/acceptance/d3d/stage4k21-validation.json`.
 
 Stage 4K22 adds the private32-byte stdcall API8 2D texture creation boundary.
 A shared constructor retains8's4096 bound/format/pool/mip/output policy and
@@ -565,7 +565,7 @@ four-level21 storage/surface views,partial uploads andBC1. Both GPUs match
 20images/1280pixels from43uploads and20sample draws. CPU GPUreadback replies
 are explicit analytic injection. Renderable texture readback,fullpublic8
 wrapping andnative alignment/format conformance remain pending. Evidence:
-`../deployments/d3d-webgpu-review-4K22.json`.
+`../../../v86/tests/acceptance/d3d/stage4k22-validation.json`.
 
 Stage 4K23 adds private API8 cube creation through the28-byte stdcall boundary.
 Shared storage preserves8's4096/legacy policy and9's8192/autogen policy,with
@@ -578,7 +578,7 @@ surface writes andBC1. Both GPUs independently match45images/2880pixels from
 173uploads,six face colors andunchanged adjacent face afterediting+Z.
 CPU GPUreadback replies are explicit analytic injection. Renderable cube
 readback,fullpublic8wrapping andnative alignment/fullformat conformance remain
-pending. Evidence: `../deployments/d3d-webgpu-review-4K23.json`.
+pending. Evidence: `../../../v86/tests/acceptance/d3d/stage4k23-validation.json`.
 
 Stage 4K24 adds private API8 volume creation@36 andSDK8 descriptor@12.
 Shared storage retains2048/legacy8 policy andordinary9 creation behavior,
@@ -592,7 +592,7 @@ four ASAN families. XP validatesfour slices/threemips/child-view box writes;
 both GPUs match30images/1920pixels from56uploads. CPU GPUreadback replies
 are explicit analytic injection. Native alignment/fullflags/formats/filtering
 andfullpublic8wrapping remain open. Evidence:
-`../deployments/d3d-webgpu-review-4K24.json`.
+`../../../v86/tests/acceptance/d3d/stage4k24-validation.json`.
 
 Stage 4K25 adds private API8 VB/IB constructors,both24-byte stdcall entries.
 They validate the API8 device profile andforward toactual9 storage/locks/
@@ -606,7 +606,7 @@ capture withdecimal44 metadata. Both GPUs match20images/1280pixels through
 15indexed and5nonindexed draws. CPU GPUreadback replies are explicit analytic
 injection. This preserves existing proxy validation,including knownnative
 pool/FVF-length gaps;fullpublic8wrapping remains open. Evidence:
-`../deployments/d3d-webgpu-review-4K25.json`.
+`../../../v86/tests/acceptance/d3d/stage4k25-validation.json`.
 
 Stage 4K26 shares API8 render/TSS translation through
 `runtime/d9wg_state_bridge8.h`. Public8 emitters and private core8 state
@@ -625,7 +625,7 @@ It waits for asynchronous window workers to unload all four DLLs before
 process exit. The frozen trace checks every state packet against an
 independent operation plan. This is state/API evidence with no new pixel
 claim; ZBIAS precision remains a local compatibility approximation. See
-`../deployments/d3d-webgpu-review-4K26.json` for results and preserved probe
+`../../../v86/tests/acceptance/d3d/stage4k26-validation.json` for results and preserved probe
 corrections. Full public8 wrapping and later review stages remain open.
 
 Stage 4K27 fixes UpdateTexture pool validation in public8 and shares the
@@ -646,7 +646,7 @@ wire model verifies1440 uploads and6205 corruptions. This probe has no
 GPU readbacks or injected CPU responses. Retained copy replay separately
 covers84 frames/252 sampled color probes onboth GPUs, rather than claiming
 full-frame pixel coverage. Evidence:
-`../deployments/d3d-webgpu-review-4K27.json`.
+`../../../v86/tests/acceptance/d3d/stage4k27-validation.json`.
 
 Stage 4K28 moves API8 GetFrontBuffer into a shared SDK-bound algorithm and
 adds private core8 front readback (@8). Larger targets preserve their outer
@@ -665,7 +665,7 @@ copied image opaque. Both GPUs independently match49images/2940pixels,
 including2D/cube copied centers and retained borders, with maps empty before
 SessionEnd cleanup and owner release. Native desktop/window offsets/Present
 timing and complete public8 wrapping remain open. Evidence:
-`../deployments/d3d-webgpu-review-4K28.json`.
+`../../../v86/tests/acceptance/d3d/stage4k28-validation.json`.
 
 
 ### Review 4K29: shared API8 CopyRects
@@ -683,7 +683,7 @@ and Metal each verify20 full images /1,084 pixels with zero error,16uploads/528b
 and20blits; noDraw/Present. CPU replies in XP are explicit analytic injection.
 This phase publishes exact accepted public8 and same-source built9 retail DLLs;
 it does not claim a new ordinary9 SDK execution. Evidence:
-`../deployments/d3d-webgpu-review-4K29.json`.
+`../../../v86/tests/acceptance/d3d/stage4k29-validation.json`.
 
 
 ### Review 4K30: shared API8 declarations
@@ -702,7 +702,7 @@ Reset operations retaining managedbuffers/layouts. Both GPUs verifyten complete
 images /640pixels, two offset input streams, red-to-green afterReset, withzero
 error. XP CPU replies are explicitly analytic injection. Complete shader/handle
 wrapping and the8-vs9 NULL-stream metadata difference remain adapter work.
-Evidence: `../deployments/d3d-webgpu-review-4K30.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k30-validation.json`.
 
 
 ### Review 4K31: shared local DEFs and core8 shader objects
@@ -723,7 +723,7 @@ coreSDK120/220 withfiveReset,35shaders/15declarations/60handles. BothGPUs verify
 20complete images/1,280pixels:localred survivesAPIoverride,localgreen survives
 Reset. PS1.0-1.4 arecreated/queried/released without numerical drawing claims.
 XP CPU replies are explicit analytic injection. Evidence:
-`../deployments/d3d-webgpu-review-4K31.json`.
+`../../../v86/tests/acceptance/d3d/stage4k31-validation.json`.
 
 
 ### Review 4K32: core8 FVF binding and declaration cache
@@ -745,7 +745,7 @@ five Reset. Both GPUs verify20complete images/1,280pixels with zero error,
 5programmable+15FFP draws and empty maps before SessionEnd/owner cleanup.
 XP CPU replies are explicit analytic injection. Full public8 wrappers,
 raw handle policy and ProcessVertices destination8 FVF remain open.
-Evidence: `../deployments/d3d-webgpu-review-4K32.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k32-validation.json`.
 
 
 ### Review 4K33: core8 program/declaration pair binding
@@ -766,7 +766,7 @@ andReset restore,localDEF/APIbank isolation andfinalrefs0. BothGPUs verify
 20full images/1,280pixels withzeroerror. PS1.0-1.4 metadata remainseparate from
 numerical drawing. VMCPUreplies areexplicit analytic injection;fullraw8
 handle/query/stateblock wrappers andProcessVertices destination8FVF remainopen.
-Evidence: `../deployments/d3d-webgpu-review-4K33.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k33-validation.json`.
 
 
 ### Review 4K34: raw8 BaseVertexIndex to signed core9 indexed draws
@@ -786,7 +786,7 @@ managedVB/IB survivefiveReset,raw8 queries/zero/two refusals andfinalrefs0 pass.
 BothGPUs verify20complete indexed images/1,280pixels withzeroerror. Extreme
 bases are native metadata/range tests;GPU images use valid+1/-1/0 geometry.
 VMCPUreplies areexplicit analytic injection. Evidence:
-`../deployments/d3d-webgpu-review-4K34.json`. Fullraw8 state-block/wrappers
+`../../../v86/tests/acceptance/d3d/stage4k34-validation.json`. Fullraw8 state-block/wrappers
 andProcessVertices destination8FVF remainopen.
 
 
@@ -809,7 +809,7 @@ andADDRESSU sampler queries pass. Old8/reference abandonment explicitly uses
 End/Delete orEnd/Release;private8 callbackfailure usesactualcancel. BothGPUs
 verify20complete images/1,280pixels zeroerror. CPU replies areexplicit analytic
 injection;fullpublic8 DWORD/predefined-scope wrappers remainopen. Evidence:
-`../deployments/d3d-webgpu-review-4K35.json`.
+`../../../v86/tests/acceptance/d3d/stage4k35-validation.json`.
 
 
 ### Review 4K36: ProcessVertices8 through the shared software pipeline
@@ -830,7 +830,7 @@ ordinary9 normalizedFVF andcoreSDK120/220:5devices/5Reset/10managedVB,
 Independentwire verifies45updates/5,760bytes;8,084corruptions caught.
 BothGPUs verify20complete images/1,280pixels zeroerror. Framebuffer CPU
 replies areexplicit analytic injection,separate from actualCPUvertex results
-andGPU images. Evidence:`../deployments/d3d-webgpu-review-4K36.json`.
+andGPU images. Evidence:`../../../v86/tests/acceptance/d3d/stage4k36-validation.json`.
 Fullpublic8 DWORD state-block ownership/predefined scopes andwrappers remain.
 
 
@@ -855,7 +855,7 @@ Capture failure/stable replacement/deletion andunreleased empty-token cleanup.
 Independentwire catches11,753corruptions. DualGPU:20fullimages/1,280pixels
 zeroerror. CPUframebuffer replies areexplicit analytic injection. Public8
 wrappers/raw scopes/Get metadata still need frontend integration. Evidence:
-`../deployments/d3d-webgpu-review-4K37.json`.
+`../../../v86/tests/acceptance/d3d/stage4k37-validation.json`.
 
 
 ### Review 4K38: incremental8 Begin/End to core DWORD tokens
@@ -876,7 +876,7 @@ exercise Begin/nestedBegin/invalidEnd/End-token/Apply andReset restoration.
 Independentwire catches11,756corruptions;bothGPUs verify20fullimages/1,280pixels
 zeroerror. CPUframebuffer replies areexplicit analytic injection. Fullpublic8
 wrappers/predefined scopes remainopen. Evidence:
-`../deployments/d3d-webgpu-review-4K38.json`.
+`../../../v86/tests/acceptance/d3d/stage4k38-validation.json`.
 
 
 ### Review 4K39: weak identity cache for frontend8 object views
@@ -902,7 +902,7 @@ model catches16,339corruptions. BothGPUs verify20fullimages/1,280pixels zeroerro
 including real additional canvas creation (2created/0refused/2destroyed) and
 empty mapsbeforeSessionEnd. Framebuffer CPU replies remainanalytic injection.
 These entries provide cache metadata;fullpublic8 COMwrappers still need
-integration. Evidence:`../deployments/d3d-webgpu-review-4K39.json`.
+integration. Evidence:`../../../v86/tests/acceptance/d3d/stage4k39-validation.json`.
 
 
 ### Review 4K40: actual SDK8 Surface8 adapter on core9 storage
@@ -929,7 +929,7 @@ Surface8 texture Lock/Unlock uploadsred/blue into real9 fixed-function draws:
 onbothGPUs. Wire catches17,108corruptions,including sixuploads/384bytes. Cube
 green isCPU/upload coverage,not sampled here. CPUframebuffer replies remain
 analytic injection,separate fromactualCPUshadow checks andGPU images.
-Evidence:`../deployments/d3d-webgpu-review-4K40.json`.
+Evidence:`../../../v86/tests/acceptance/d3d/stage4k40-validation.json`.
 
 
 ### Review 4K41: real SDK8 Texture8 and Surface8 container integration
@@ -954,7 +954,7 @@ LOD/dirty/QI/publiczero/Reset/final0,352actualCPUshadow DWORDs.
 wire corruptions. CPUframebuffer replies areanalytic;actualCPUshadow andGPU
 checks areseparate. 376guest/87core regressions,32EXEs/fourstrictDLLs/site2/
 scopedlint0. ExactXPaccepted retail DLLs andsame-source diagnostics published.
-Evidence:`../deployments/d3d-webgpu-review-4K41.json`.
+Evidence:`../../../v86/tests/acceptance/d3d/stage4k41-validation.json`.
 
 
 ### Review 4K42: real SDK8 CubeTexture8 and Surface8 face containers
@@ -977,7 +977,7 @@ CPUshadow DWORDs acrossallprobes. CPUframebuffer replies areanalytic,separate
 fromactualCPUshadow andGPUchecks. CubeAddDirtyRect retains the current core9
 no-op policy. 378guest/88core regressions,32EXEs/fourstrictDLLs/site2/scopedlint0.
 ExactXPaccepted retail DLLs andsame-source diagnostics published.
-Evidence:`../deployments/d3d-webgpu-review-4K42.json`.
+Evidence:`../../../v86/tests/acceptance/d3d/stage4k42-validation.json`.
 
 
 ### Review 4K43: real SDK8 VolumeTexture8 and Volume8 containers
@@ -1004,7 +1004,7 @@ New Device8 parents remain IUnknown fixtures; default factory integration is ope
 Analytic framebuffer replies are separate from CPU shadow and actual GPU checks.
 381 guest / 89 core regressions, 32 EXEs, four strict DLLs, two site tests and
 scoped lint pass. Exact accepted XP retail and same-source diagnostics published.
-Evidence: `../deployments/d3d-webgpu-review-4K43.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k43-validation.json`.
 
 
 ### Review 4K44: shared real SDK8 VB8/IB8 adapters
@@ -1029,7 +1029,7 @@ analytic framebuffer replies are separate. Host drawCalls=50 counts nonindexed
 draws; indexedDrawCalls=6 is separate. 383 guest / 90 core regressions, 32 EXEs,
 four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
 DLLs and same-source diagnostics are published.
-Evidence: `../deployments/d3d-webgpu-review-4K44.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k44-validation.json`.
 
 
 ### Review 4K45: real SDK8 SwapChain8 and Surface8 backbuffers
@@ -1057,7 +1057,7 @@ region policy and native HAL differences remain outside this adapter change.
 45686 wire corruptions, 385 guest / 91 core regressions, 32 EXEs,
 four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
 DLLs and same-source diagnostics published.
-Evidence: `../deployments/d3d-webgpu-review-4K45.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k45-validation.json`.
 
 
 ### Review 4K46: weak frontend device metadata
@@ -1092,7 +1092,7 @@ at 500 seconds for this fixture; cached opcode lookups and a fresh complete
 run with an 1800-second deadline replace that attempt. 387 guest / 92 core regressions, 32 EXEs,
 four strict DLLs, two site tests and scoped lint pass. Exact accepted XP retail
 DLLs and same-source diagnostics published.
-Evidence: `../deployments/d3d-webgpu-review-4K46.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k46-validation.json`.
 
 
 ### Review 4K47: private shader storage for frontend8 handle metadata
@@ -1127,7 +1127,7 @@ retained-prefix sampling plus complete old fixtures in the regression suite.
 scoped lint pass. Exact XP-accepted retail DLLs and same-source diagnostics
 published. First SDK compilation caught incompatible vtable pointer types;
 using opaque table addresses corrected it without relaxing strict flags.
-Evidence: `../deployments/d3d-webgpu-review-4K47.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k47-validation.json`.
 
 
 ### Review 4K48: frontend device-owned cleanup observer
@@ -1162,7 +1162,7 @@ payload words and SDK summaries plus prefix sampling; full old fixtures run
 separately. 391 guest / 94 core regressions, 32 EXEs, four strict DLLs, private
 stdcall16/4 and isolated SDK8 ABI, two site tests and scoped lint pass. Exact
 XP-accepted retail DLLs and same-source diagnostics published.
-Evidence: `../deployments/d3d-webgpu-review-4K48.json`.
+Evidence: `../../../v86/tests/acceptance/d3d/stage4k48-validation.json`.
 
 
 ### Review 4K49: typed Device8 backend dispatch and constant bytes
@@ -1328,4 +1328,4 @@ Windows expectations. The selected XP compatibility group passed 2,996 checks
 on both SwiftShader and Metal with zero GPU errors and clean resource release.
 The full Wine device audit still has 805 observed failures and a compressed
 volume failure; it is explicitly not a passing full-suite result. See
-`../deployments/d3d-webgpu-review-4L6.json` for exact scope and binary hashes.
+`../../../v86/tests/acceptance/d3d/stage4l6-validation.json` for exact scope and binary hashes.
