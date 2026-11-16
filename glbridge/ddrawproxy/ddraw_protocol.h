@@ -1,5 +1,7 @@
 #ifndef DDRAW_PROTOCOL_H
 #define DDRAW_PROTOCOL_H
+#include "../runtime/d9wg_legacy_device_defaults.h"
+#include "../runtime/d9wg_legacy_viewport.h"
 
 /*
  * The DirectDraw / Direct3D 1-7 guest frontend does not define a wire protocol
@@ -284,28 +286,16 @@ static __inline unsigned ddraw_format_is_palettised(unsigned format)
  */
 static __inline unsigned ddraw_expand_channel(unsigned value, unsigned bits)
 {
-    unsigned max;
+    unsigned expanded, width;
     if (bits == 0u) return 0u;
     if (bits >= 8u) return (value >> (bits - 8u)) & 0xFFu;
-    max = (1u << bits) - 1u;
-    value &= max;
-    /*
-     * Truncated scaling, not the high-bit replication DirectDraw drivers used.
-     *
-     * The rule itself is a choice; agreeing with the host is not. The executor
-     * expands a 16-bit texture on upload as `(v * 255 / max) | 0`
-     * (expandRowToGPU in ../d3d9-webgpu/d3d9_executor.js), and a colour key is
-     * compared against those expanded texels. Replication and truncated
-     * scaling differ by one for values like 24/31 -- 198 against 197 -- so a
-     * key expanded by the other rule misses on exactly those colours, and a
-     * sprite keyed on one of them blits as a solid rectangle.
-     *
-     * The executor's rule is the incumbent: every D3D8 and D3D9 16-bit texture
-     * already goes through it, so this side is the one that moves.
-     * ../tests/ddraw_channel_expansion_test.js compiles this function and
-     * compares it against the executor's, value by value, for every width.
-     */
-    return (value * 255u) / max;
+    value &= (1u << bits) - 1u;
+    /* Match native D3D bit replication and the host's actual upload rule.
+     * The compiled channel sweep checks every value against d9wg_formats.js. */
+    expanded = value;
+    width = bits;
+    while (width < 8u) { expanded = (expanded << bits) | value; width += bits; }
+    return expanded >> (width - 8u);
 }
 
 /*
@@ -641,9 +631,9 @@ static __inline unsigned ddraw_vertex_type_needs_repack(unsigned vertex_type)
  * Lights
  * ------------------------------------------------------------------ *
  *
- * D3DLIGHT7 is byte-for-byte D3DLIGHT9, so the structure is memcpy'd. Only the
- * type enumeration has two extra values, both of which D3D dropped in DX7
- * because no driver implemented them.
+ * D3DLIGHT7 and D3DLIGHT9 share the data layout. The shared wire/host also
+ * supports the legacy parallel-point type, using its view-space position
+ * as the direction toward the light (the opposite directional-light sign).
  */
 #define D3D7LIGHT_POINT 1u
 #define D3D7LIGHT_SPOT 2u
@@ -654,10 +644,6 @@ static __inline unsigned ddraw_vertex_type_needs_repack(unsigned vertex_type)
 static __inline unsigned ddraw_light_type_to_d3d9(unsigned type)
 {
     switch (type) {
-    /* A parallel-point light is a point light whose rays are parallel, which
-     * is a directional light with the position used as the direction. The
-     * caller substitutes the direction; here it only picks the type. */
-    case D3D7LIGHT_PARALLELPOINT: return D3D7LIGHT_DIRECTIONAL;
     case D3D7LIGHT_GLSPOT: return D3D7LIGHT_SPOT;
     default: return type;
     }
@@ -759,9 +745,9 @@ static __inline void ddraw_texture_map_blend_cascade(unsigned blend,
         return;
     case D3D7TBLEND_MODULATE:
         out->color_op = D3D9TOP_MODULATE;
-        /* MODULATE keeps the *vertex* alpha, unlike MODULATEALPHA. */
-        out->alpha_op = D3D9TOP_SELECTARG2;
-        out->alpha_arg2 = D3D9TA_DIFFUSE;
+        /* The device selects CURRENT instead when the bound texture has no
+         * alpha. No texture uses this same SELECTARG1 default. */
+        out->alpha_op = D3D9TOP_SELECTARG1;
         return;
     case D3D7TBLEND_MODULATEALPHA:
         out->color_op = D3D9TOP_MODULATE;
@@ -770,12 +756,10 @@ static __inline void ddraw_texture_map_blend_cascade(unsigned blend,
     case D3D7TBLEND_DECALALPHA:
         out->color_op = D3D9TOP_BLENDTEXTUREALPHA;
         out->alpha_op = D3D9TOP_SELECTARG2;
-        out->alpha_arg2 = D3D9TA_DIFFUSE;
         return;
     case D3D7TBLEND_ADD:
         out->color_op = D3D9TOP_ADD;
         out->alpha_op = D3D9TOP_SELECTARG2;
-        out->alpha_arg2 = D3D9TA_DIFFUSE;
         return;
     /* DECALMASK/MODULATEMASK are the 1-bit-mask forms, which need the colour
      * key path rather than a blend cascade, and no driver of the era

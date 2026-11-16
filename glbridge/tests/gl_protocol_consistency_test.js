@@ -2,18 +2,19 @@
 // Checks the host's view of the OpenGL wire format against the guest that
 // produces it.
 //
-// gl_wire.js and gl_constants.js are generated from openglproxy/opengl32_proxy.c,
-// and a single wrong field decodes every later argument at the wrong offset --
-// with a symptom that looks like anything at all. Regenerating is cheap;
-// noticing that someone edited the guest and not the table is what this file
-// is for.
+// The opcodes, control records, flat argument lists, fixed record headers and
+// protocol constants come from v86's gl_protocol.js (openglproxy/gl_protocol.h
+// is generated from it); the GL enum values in gl_constants.js come from the
+// guest's #defines. A single wrong field decodes every later argument at the
+// wrong offset -- with a symptom that looks like anything at all -- so this
+// file checks what is still written twice.
 
 "use strict";
 
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const wire = require(require("./host_paths.js").hostPath("gl-webgpu/gl_wire.js"));
+const wire = require(require("./host_paths.js").hostPath("gl-webgpu/gl_protocol.js"));
 const constants = require(require("./host_paths.js").hostPath("gl-webgpu/gl_constants.js"));
 
 const proxyPath = path.join(__dirname, "..", "openglproxy", "opengl32_proxy.c");
@@ -25,38 +26,23 @@ function test(name, fn) {
     try { fn(); ++passed; } catch (error) { failures.push([name, error]); }
 }
 
-test("every guest opcode has the same number in gl_constants.js", () => {
-    const block = /enum \{\s*\n(\s*GLFN_VIEWPORT[\s\S]*?)\n\};/.exec(source);
-    assert.ok(block, "the GLFN enum is still where the generator expects it");
-    const entries = [...block[1].matchAll(/(GLFN_[A-Z0-9_]+)\s*=\s*(\d+)/g)];
-    assert.strictEqual(entries.length, 217,
-        "the guest exports 217 opcodes; a new one needs the table regenerated");
-    for (const [, name, value] of entries) {
-        const key = name.slice(5);
-        assert.strictEqual(constants.GLFN[key], parseInt(value, 10),
-            name + " disagrees with the guest");
-    }
-    assert.strictEqual(Object.keys(constants.GLFN).length, entries.length,
-        "the table has an opcode the guest does not");
-});
-
-test("the control record codes match the guest", () => {
-    for (const [name, value] of [["MAKE_CURRENT", 0xFFF0],
-            ["RELEASE_CURRENT", 0xFFF1], ["DESTROY_CONTEXT", 0xFFF2],
-            ["WINDOW_STATE", 0xFFF3]]) {
-        assert.strictEqual(constants.CTRL[name], value);
-        assert.ok(source.indexOf("V86GL_CTRL_" + name + " 0x" +
-            value.toString(16).toUpperCase() + "u") >= 0,
-            "the guest still defines V86GL_CTRL_" + name);
-    }
+test("the guest takes its opcodes and protocol constants from gl_protocol.h", () => {
+    assert.ok(/#include "gl_protocol\.h"/.test(source), "opengl32_proxy.c includes gl_protocol.h");
+    assert.ok(!/\bGLFN_[A-Z0-9_]+\s*=\s*\d+/.test(source), "the guest numbers no opcode itself");
+    for (const [name] of wire.DEFINES)
+        assert.ok(!new RegExp("#define\\s+" + name + "\\b").test(source), "the guest defines " + name + " itself");
+    assert.strictEqual(Object.keys(constants.GLFN).length, 257);
+    assert.strictEqual(constants.GLFN, wire.GLFN, "gl_constants.js takes GLFN from gl_protocol.js");
+    assert.strictEqual(constants.CTRL, wire.CTRL, "and CTRL");
 });
 
 // The window-state flags are D9WGWindowState's, which gl_executor.js decodes
 test("the window-state flags match D9WG's", () => {
     const d3d9 = fs.readFileSync(path.join(__dirname, "../d3d9proxy/d3d9_protocol.h"), "utf8");
+    const header = fs.readFileSync(path.join(__dirname, "../openglproxy/gl_protocol.h"), "utf8");
     for (const [gl, d9] of [["IS_WINDOW", "IS_WINDOW"], ["VISIBLE", "VISIBLE"], ["ICONIC", "ICONIC"],
             ["OCCLUDED", "OCCLUDED"], ["REGION", "REGION"]]) {
-        const guest = source.match(new RegExp("#define V86GL_WINDOW_" + gl + " +\\(1u << (\\d+)\\)"));
+        const guest = header.match(new RegExp("#define V86GL_WINDOW_" + gl + " +\\(1u << (\\d+)\\)"));
         const d9wg = d3d9.match(new RegExp("#define D9WG_WINDOW_" + d9 + " +\\(1u << (\\d+)\\)"));
         assert.ok(guest && d9wg, gl + " is defined on both sides");
         assert.strictEqual(guest[1], d9wg[1], gl);
@@ -130,58 +116,44 @@ test("the response region matches the D9WG layout the D3D path uses", () => {
  * moment to open the matching handler.
  */
 const GUEST_LAYOUTS = [
-    ["emit_buffer_data", "BUFFER_DATA",
-     ["target", "size", "usage", "data_size"]],
-    ["emit_buffer_sub_data", "BUFFER_SUB_DATA",
-     ["target", "offset", "size", "data_size"]],
-    ["emit_draw_elements_direct", "DRAW_ELEMENTS_DIRECT",
-     ["mode", "start", "end", "count", "type", "offset"]],
-    ["glProgramStringARB", "PROGRAM_STRING_ARB",
-     ["target", "format", "length", "reserved"]],
-    ["emit_arb_program_parameter_fv", "PROGRAM_PARAMETER_FV_ARB",
-     ["parameter_kind", "target", "index", "count"]],
-    ["emit_arb_program_parameter_dv", "PROGRAM_PARAMETER_DV_ARB",
-     ["parameter_kind", "target", "index", "reserved", "values"]],
-    ["emit_query_program_iv_arb", "QUERY_PROGRAM_IV_ARB",
-     ["target", "pname", "status", "value"]],
-    ["emit_query_program_parameter_arb", "QUERY_PROGRAM_PARAMETER_FV_ARB",
-     ["parameter_kind", "target", "index", "status", "data_size", "reserved"]],
-    ["emit_query_program_string_arb", "QUERY_PROGRAM_STRING_ARB",
-     ["target", "pname", "status", "length", "data_size", "reserved"]],
-    ["emit_query_object_iv", "QUERY_OBJECT_IV",
-     ["object_kind", "name", "pname", "status", "value", "reserved"]],
-    ["emit_query_object_log", "QUERY_OBJECT_LOG",
-     ["object_kind", "name", "buf_size", "status", "length", "data_size"]],
-    ["emit_query_active", "QUERY_ACTIVE",
-     ["active_kind", "program", "index", "buf_size", "status", "length",
-      "size", "type", "data_size", "reserved"]],
-    ["emit_query_location", "QUERY_LOCATION",
-     ["location_kind", "program", "guest_location", "status", "result",
-      "value_type", "value_count", "name_length"]],
-    ["emit_query_uniform", "QUERY_UNIFORM",
-     ["program", "location", "value_kind", "status", "value_count",
-      "data_size", "reserved0", "reserved1"]],
-    ["emit_query_integer", "QUERY_INTEGER",
-     ["pname", "status", "value", "reserved"]],
-    ["emit_query_error", "QUERY_ERROR",
-     ["status", "value", "reserved0", "reserved1"]],
-    ["emit_query_gl_string", "QUERY_GL_STRING",
-     ["name", "status", "length", "data_size"]],
-    ["emit_check_framebuffer_status", "CHECK_FRAMEBUFFER_STATUS",
-     ["target", "status", "result", "reserved"]],
-    ["emit_read_pixels", "READ_PIXELS",
-     ["x", "y", "width", "height", "format", "type", "data_size", "status"]],
-    ["glTexImage2D", "TEX_IMAGE_2D",
-     ["target", "level", "internalformat", "width", "height", "border",
-      "format", "type", "data_size"]],
-    ["emit_vbo_attrib_pointer", "VERTEX_ATTRIB_POINTER_VBO",
-     ["index", "size", "type", "normalized", "stride", "offset"]],
+    ["emit_buffer_data", "BUFFER_DATA"],
+    ["emit_buffer_sub_data", "BUFFER_SUB_DATA"],
+    ["emit_draw_elements_direct", "DRAW_ELEMENTS_DIRECT"],
+    ["glProgramStringARB", "PROGRAM_STRING_ARB"],
+    ["emit_arb_program_parameter_fv", "PROGRAM_PARAMETER_FV_ARB"],
+    ["emit_arb_program_parameter_dv", "PROGRAM_PARAMETER_DV_ARB"],
+    ["emit_query_program_iv_arb", "QUERY_PROGRAM_IV_ARB"],
+    ["emit_query_program_parameter_arb", "QUERY_PROGRAM_PARAMETER_FV_ARB"],
+    ["emit_query_program_string_arb", "QUERY_PROGRAM_STRING_ARB"],
+    ["emit_query_object_iv", "QUERY_OBJECT_IV"],
+    ["emit_query_object_log", "QUERY_OBJECT_LOG"],
+    ["emit_query_active", "QUERY_ACTIVE"],
+    ["emit_query_location", "QUERY_LOCATION"],
+    ["emit_query_uniform", "QUERY_UNIFORM"],
+    ["emit_query_error", "QUERY_ERROR"],
+    ["emit_query_gl_string", "QUERY_GL_STRING"],
+    ["emit_check_framebuffer_status", "CHECK_FRAMEBUFFER_STATUS"],
+    ["emit_read_pixels", "READ_PIXELS"],
+    ["glTexImage2D", "TEX_IMAGE_2D", "meta"],
+    ["glTexImage1D", "TEX_IMAGE_1D", "meta"],
+    ["glTexImage3DEXT", "TEX_IMAGE_3D", "meta"],
+    ["glTexSubImage1D", "TEX_SUB_IMAGE_1D", "meta"],
+    ["glTexSubImage2D", "TEX_SUB_IMAGE_2D", "meta"],
+    ["glTexSubImage3DEXT", "TEX_SUB_IMAGE_3D", "meta"],
+    ["emit_compressed_tex_sub_image", "COMPRESSED_TEX_SUB_IMAGE_2D", "meta"],
+    ["emit_vbo_attrib_pointer", "VERTEX_ATTRIB_POINTER_VBO"],
+    ["emit_vbo_pointer", "VERTEX_POINTER_VBO"],
+    ["glDrawArrays", "PACKED_DRAW_ARRAYS_MT", "header"],
+    ["glDrawElements", "PACKED_DRAW_ELEMENTS_MT", "header"],
+    ["emit_multi_draw_arrays_direct", "MULTI_DRAW_ARRAYS_DIRECT", "header"],
+    ["emit_multi_draw_elements_direct", "MULTI_DRAW_ELEMENTS_DIRECT", "header"],
+    ["glDrawPixels", "DRAW_PIXELS", "meta"],
 ];
 
 /* The first anonymous struct declared inside a guest function, as its field
  * names in order -- which is the same as their offsets, every field being a
  * 32-bit word except the ARB double parameters. */
-function guestStructFields(functionName) {
+function guestStructFields(functionName, variable = "payload") {
     const at = source.search(new RegExp(
         "^[A-Za-z].*\\b" + functionName + "\\s*\\(", "m"));
     assert.ok(at >= 0, "openglproxy still defines " + functionName);
@@ -191,12 +163,17 @@ function guestStructFields(functionName) {
     // redeclaring the same anonymous struct in the function.  Pin that layout
     // too; otherwise the old regexp silently grabs the next unrelated struct
     // in the following function and reports a misleading protocol mismatch.
-    const declaration = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+payload\s*;/m.exec(body);
+    const declaration = new RegExp("^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s+" + variable + "\\s*;", "m").exec(body);
     if (declaration && (!block || declaration.index < block.index)) {
-            const escaped = declaration[1].replace(/[.*+?^${}()|[\]\\]/g,
+            let type = declaration[1];
+            const alias = new RegExp("typedef\\s+(V86GLRecord\\w+)\\s+" + type + "\\s*;").exec(source);
+            if (alias) type = alias[1];
+            const escaped = type.replace(/[.*+?^${}()|[\]\\]/g,
                 "\\$&");
-            block = new RegExp("typedef\\s+struct\\s*\\{\\n([^}]*)\\n\\}\\s*" +
-                escaped + "\\s*;").exec(source);
+            const definitions = type.startsWith("V86GLRecord") ? fs.readFileSync(
+                path.join(__dirname, "../openglproxy/gl_protocol.h"), "utf8") : source;
+            block = new RegExp("typedef\\s+struct\\s*(?:" + escaped + "\\s*)?\\{\\n([^}]*)\\n\\}\\s*" +
+                escaped + "\\s*;").exec(definitions);
     }
     assert.ok(block, functionName + " still declares its payload as a struct");
     return [...block[1].matchAll(
@@ -205,18 +182,19 @@ function guestStructFields(functionName) {
 }
 
 test("the hand-written payload structs still have the fields the host decodes", () => {
-    for (const [functionName, opcode, fields] of GUEST_LAYOUTS) {
-        assert.ok(constants.GLFN[opcode] !== undefined,
-            opcode + " is not an opcode");
-        assert.deepStrictEqual(guestStructFields(functionName), fields,
-            functionName + " changed shape: gl_executor.js's " + opcode +
-            " handler decodes it by hand and has to move with it");
+    for (const [functionName, opcode, variable] of GUEST_LAYOUTS) {
+        assert.ok(wire.RECORDS[opcode], opcode + " has no fixed header in gl_protocol.js");
+        // array fields count once, by name
+        const fields = Object.keys(wire.RECORDS[opcode].fields);
+        assert.deepStrictEqual(guestStructFields(functionName, variable), fields,
+            functionName + " changed shape: its struct and " + opcode +
+            "'s header in gl_protocol.js have to agree");
     }
 });
 
 /* The two enumerations the guest and host both have to agree on by value, and
  * that a reader cannot tell apart by looking at either side alone. */
-test("the object, location and parameter kinds are the guest's numbers", () => {
+test("the object, location and parameter kinds are the numbers both sides were built with", () => {
     for (const [name, value] of [
             ["V86GL_OBJECT_KIND_SHADER", 1], ["V86GL_OBJECT_KIND_PROGRAM", 2],
             ["V86GL_OBJECT_KIND_QUERY", 3],
@@ -224,8 +202,7 @@ test("the object, location and parameter kinds are the guest's numbers", () => {
             ["V86GL_LOCATION_KIND_UNIFORM", 1], ["V86GL_LOCATION_KIND_ATTRIB", 2],
             ["V86GL_PROGRAM_PARAMETER_ENV", 1],
             ["V86GL_PROGRAM_PARAMETER_LOCAL", 2]]) {
-        assert.ok(source.indexOf("#define " + name + " " + value + "u") >= 0,
-            name + " is no longer " + value + "; gl_executor.js hard-codes it");
+        assert.strictEqual(wire.C[name], value, name + " is no longer " + value);
     }
 });
 
@@ -246,7 +223,7 @@ test("the executor has a handler for every opcode it claims to implement", () =>
     void table;
     assert.deepStrictEqual(missing, [],
         "every opcode the guest can send needs a handler or an explicit refusal");
-    assert.strictEqual(implemented, 217);
+    assert.strictEqual(implemented, 257);
 });
 
 for (const [name, error] of failures)

@@ -1,0 +1,90 @@
+#ifndef D9WG_STATE_BLOCK_SCOPE_H
+#define D9WG_STATE_BLOCK_SCOPE_H
+#include <stdint.h>
+/* SDK enums have matching shared state IDs. D3D8 ZBIAS and the D3D9-only
+ * additions stay versioned. Wine's Windows-tested lists resolve differences
+ * from the documentation (notably CCW_STENCILFUNC and material-source RS). */
+static const uint16_t g_pixel_state_render_states[] = {
+    D3DRS_ZENABLE, D3DRS_FILLMODE, D3DRS_SHADEMODE, D3DRS_ZWRITEENABLE,
+    D3DRS_ALPHATESTENABLE, D3DRS_LASTPIXEL, D3DRS_SRCBLEND, D3DRS_DESTBLEND,
+    D3DRS_ZFUNC, D3DRS_ALPHAREF, D3DRS_ALPHAFUNC, D3DRS_DITHERENABLE,
+    D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_FOGDENSITY, D3DRS_ALPHABLENDENABLE,
+    D3DRS_STENCILENABLE, D3DRS_STENCILFAIL, D3DRS_STENCILZFAIL, D3DRS_STENCILPASS,
+    D3DRS_STENCILFUNC, D3DRS_STENCILREF, D3DRS_STENCILMASK, D3DRS_STENCILWRITEMASK,
+    D3DRS_TEXTUREFACTOR, D3DRS_WRAP0, D3DRS_WRAP1, D3DRS_WRAP2,
+    D3DRS_WRAP3, D3DRS_WRAP4, D3DRS_WRAP5, D3DRS_WRAP6,
+    D3DRS_WRAP7, D3DRS_COLORWRITEENABLE, D3DRS_BLENDOP,
+#if D9WG_STATE_BLOCK_API == 8
+    D3DRS_ZBIAS,
+#else
+    D3DRS_DEPTHBIAS, D3DRS_WRAP8, D3DRS_WRAP9, D3DRS_WRAP10,
+    D3DRS_WRAP11, D3DRS_WRAP12, D3DRS_WRAP13, D3DRS_WRAP14,
+    D3DRS_WRAP15, D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS, D3DRS_ANTIALIASEDLINEENABLE,
+    D3DRS_TWOSIDEDSTENCILMODE, D3DRS_CCW_STENCILFAIL, D3DRS_CCW_STENCILZFAIL, D3DRS_CCW_STENCILPASS,
+    D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2, D3DRS_COLORWRITEENABLE3, D3DRS_BLENDFACTOR,
+    D3DRS_SRGBWRITEENABLE, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SRCBLENDALPHA, D3DRS_DESTBLENDALPHA,
+    D3DRS_BLENDOPALPHA,
+#endif
+};
+static const uint16_t g_vertex_state_render_states[] = {
+    D3DRS_CULLMODE, D3DRS_FOGENABLE, D3DRS_FOGCOLOR, D3DRS_FOGTABLEMODE,
+    D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_FOGDENSITY, D3DRS_RANGEFOGENABLE,
+    D3DRS_AMBIENT, D3DRS_COLORVERTEX, D3DRS_FOGVERTEXMODE, D3DRS_CLIPPING,
+    D3DRS_LIGHTING, D3DRS_LOCALVIEWER, D3DRS_EMISSIVEMATERIALSOURCE, D3DRS_AMBIENTMATERIALSOURCE,
+    D3DRS_DIFFUSEMATERIALSOURCE, D3DRS_SPECULARMATERIALSOURCE, D3DRS_VERTEXBLEND, D3DRS_CLIPPLANEENABLE,
+    D3DRS_POINTSIZE, D3DRS_POINTSIZE_MIN, D3DRS_POINTSPRITEENABLE, D3DRS_POINTSCALEENABLE,
+    D3DRS_POINTSCALE_A, D3DRS_POINTSCALE_B, D3DRS_POINTSCALE_C, D3DRS_MULTISAMPLEANTIALIAS,
+    D3DRS_MULTISAMPLEMASK, D3DRS_PATCHEDGESTYLE, D3DRS_POINTSIZE_MAX, D3DRS_INDEXEDVERTEXBLENDENABLE,
+    D3DRS_TWEENFACTOR, D3DRS_NORMALIZENORMALS, D3DRS_SPECULARENABLE, D3DRS_SHADEMODE,
+#if D9WG_STATE_BLOCK_API == 8
+    D3DRS_POSITIONORDER, D3DRS_NORMALORDER,
+#else
+    D3DRS_POSITIONDEGREE, D3DRS_NORMALDEGREE, D3DRS_MINTESSELLATIONLEVEL, D3DRS_MAXTESSELLATIONLEVEL,
+    D3DRS_ADAPTIVETESS_X, D3DRS_ADAPTIVETESS_Y, D3DRS_ADAPTIVETESS_Z, D3DRS_ADAPTIVETESS_W,
+    D3DRS_ENABLEADAPTIVETESSELLATION,
+#endif
+};
+/* Pixel and vertex texture-state classes overlap at coordinate routing and
+ * texture-transform flags. Resource bindings, matrices, material, viewport
+ * and plane coefficients are ALL-only, or explicitly recorded. */
+static __inline int d9wg_state_block_texture_state(uint32_t type, uint32_t state)
+{
+    if (type == D3DSBT_ALL) return 1;
+    if (state == D3DTSS_TEXCOORDINDEX || state == D3DTSS_TEXTURETRANSFORMFLAGS)
+        return type == D3DSBT_VERTEXSTATE || type == D3DSBT_PIXELSTATE;
+    if (type != D3DSBT_PIXELSTATE) return 0;
+    if ((state >= 1 && state <= 10) || state == D3DTSS_BUMPENVLSCALE ||
+            state == D3DTSS_BUMPENVLOFFSET || state == D3DTSS_COLORARG0 ||
+            state == D3DTSS_ALPHAARG0 || state == D3DTSS_RESULTARG) return 1;
+#if D9WG_STATE_BLOCK_API == 8
+    return (state >= D3DTSS_ADDRESSU && state <= D3DTSS_MAXANISOTROPY) || state == D3DTSS_ADDRESSW;
+#else
+    return 0;
+#endif
+}
+#if D9WG_STATE_BLOCK_API == 9
+static __inline int d9wg_state_block_sampler_state(uint32_t type, uint32_t state)
+{
+    if (!state || state > D3DSAMP_DMAPOFFSET) return 0;
+    if (type == D3DSBT_ALL) return 1;
+    return state == D3DSAMP_DMAPOFFSET ? type == D3DSBT_VERTEXSTATE : type == D3DSBT_PIXELSTATE;
+}
+#endif
+/* Both D3D8 and D3D9 expose 256 world matrices, plus view, projection
+ * and eight texture matrices. Dense snapshot slots avoid the enum gaps. */
+#define D9WG_STATE_BLOCK_TRANSFORMS 266u
+static __inline uint32_t d9wg_state_block_transform_state(uint32_t slot)
+{
+    if (slot < 2) return slot + 2u;
+    if (slot < 10) return slot + 14u;
+    return slot < D9WG_STATE_BLOCK_TRANSFORMS ? slot + 246u : UINT32_MAX;
+}
+static __inline int d9wg_state_block_transform_slot(uint32_t state, uint32_t *slot)
+{
+    if (state == 2 || state == 3) *slot = state - 2u;
+    else if (state >= 16 && state <= 23) *slot = state - 14u;
+    else if (state >= 256 && state <= 511) *slot = state - 246u;
+    else return 0;
+    return 1;
+}
+#endif

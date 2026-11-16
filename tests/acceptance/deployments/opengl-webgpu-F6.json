@@ -1,0 +1,227 @@
+{
+  "version": 1,
+  "plan": "opengl-webgpu F6",
+  "source": {
+    "v86": "8aab6704",
+    "site": "b0c740b"
+  },
+  "host": "6a5eb14d73549ecd56fe",
+  "payloads": {
+    "dll": {
+      "path": "glbridge/openglproxy/opengl32.dll",
+      "sha256": "4bffb949270e19d263289e46bbc01cb8eae49fe048e13260d06e0625cabdd71f",
+      "size": 145408
+    },
+    "driver": {
+      "path": "glbridge/v86gl_driver/v86gl.sys",
+      "sha256": "57c47879bdc28c95352c259df2b441904a82dac36ebc33671d3f238cee68177d",
+      "size": 19636
+    },
+    "libv86.js": {
+      "path": "libv86.js",
+      "sha256": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+      "size": 771458
+    },
+    "cpu-worker.js": {
+      "path": "cpu-worker.js",
+      "sha256": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+      "size": 780426
+    },
+    "v86.wasm": {
+      "path": "v86.wasm",
+      "sha256": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+      "size": 3011563
+    },
+    "v86-bochs-vga.js": {
+      "path": "v86-bochs-vga.js",
+      "sha256": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+      "size": 44376
+    }
+  },
+  "images": [
+    {
+      "image": "windowsxp/windowsxp_multidisk_C_4G.img",
+      "backup": "windowsxp/windowsxp_multidisk_C_4G.img.opengl-webgpu-F6-1793475426041-8206.backup",
+      "before": "243ac643e0dc5a6dee79f876e10a334b09ae0b1a87030748cda4a65b6a65734a",
+      "after": "92c97295a26f324f195c146ff03abcc3538c1c312205dc3691cc16bee4bf8060",
+      "size": 4294967296,
+      "blocks": 86680,
+      "ntfsFlags": 0,
+      "verified": [
+        {
+          "path": "v86gl/v86gl.sys",
+          "sha256": "57c47879bdc28c95352c259df2b441904a82dac36ebc33671d3f238cee68177d"
+        },
+        {
+          "path": "winproxy/opengl32.dll",
+          "sha256": "4bffb949270e19d263289e46bbc01cb8eae49fe048e13260d06e0625cabdd71f"
+        },
+        {
+          "path": "WINDOWS/system32/opengl32.dll",
+          "sha256": "032f6258f77770886c97421fce472b8d820a79e52c956f5508c0507bf46e746d"
+        },
+        {
+          "path": "WINDOWS/system32/dllcache/opengl32.dll",
+          "sha256": "032f6258f77770886c97421fce472b8d820a79e52c956f5508c0507bf46e746d"
+        }
+      ]
+    },
+    {
+      "image": "game/cube2.img",
+      "backup": "game/cube2.img.opengl-webgpu-F6-1793475431135-8206.backup",
+      "before": "85eed6ed228f3b50936cc10fabb229adfa75a69c0ad80b7c577d55de0ea3db67",
+      "after": "55fc040c8e1f8dfc8890684e5b8b2e9d1e560c9b1aad52dafcb673188cf5e7a5",
+      "size": 3221225472,
+      "blocks": 1234,
+      "ntfsFlags": null,
+      "verified": [
+        {
+          "path": "SauerbratenPortable/App/Sauerbraten/bin/opengl32.dll",
+          "sha256": "4bffb949270e19d263289e46bbc01cb8eae49fe048e13260d06e0625cabdd71f"
+        }
+      ]
+    },
+    {
+      "image": "game/warcraft3.img",
+      "backup": "game/warcraft3.img.opengl-webgpu-F6-1793475795261-8556.backup",
+      "before": "2d208015d1612d8194b902abb1aaf9732c23287b1b1827a41f1c47e423e1da06",
+      "after": "8f0743ffc028c99084d32ed3d579435428091567804eb7dca855f95518b4806a",
+      "size": 2634022912,
+      "blocks": 662,
+      "ntfsFlags": null,
+      "verified": [
+        {
+          "path": "Warcraft III/opengl32.dll",
+          "sha256": "4bffb949270e19d263289e46bbc01cb8eae49fe048e13260d06e0625cabdd71f"
+        }
+      ]
+    }
+  ],
+  "guestEvidence": [
+    {
+      "game": "cube2",
+      "deployed": true,
+      "errors": [],
+      "disks": [
+        {
+          "name": "hda",
+          "file": "gl-deploy-cube2-hda.bin.gz",
+          "blocks": 86680,
+          "bytes": 4647029,
+          "sha256": "61edee4c7a9deb3debf9b3f5b3e0c95e3a4768602c369129adf7e0e31f82e416"
+        },
+        {
+          "name": "hdb",
+          "file": "gl-deploy-cube2-hdb.bin.gz",
+          "blocks": 1234,
+          "bytes": 143295,
+          "sha256": "c5ae2afa411dfc18d7c83501df52d3be606e65c2bdc33cfc2cff065fe6bc2ce0"
+        }
+      ],
+      "stats": {
+        "batches": 59,
+        "commands": 90,
+        "draws": 2,
+        "immediateBatches": 1,
+        "pipelines": 3,
+        "bindGroups": 2,
+        "shaderLinks": 2,
+        "shaderCacheHits": 0,
+        "uniformStampHits": 0,
+        "uniformByteChecks": 0,
+        "uniformWrites": 0,
+        "clearDraws": 0,
+        "textureUploads": 0,
+        "textureBytes": 0,
+        "refusals": 0,
+        "refusalsByOp": {},
+        "expandedIndices": 0,
+        "dxtDecodes": 0,
+        "nonUniformSamples": 0,
+        "pipelinesRejected": 0,
+        "framesRejected": 0,
+        "hostErrors": 0
+      },
+      "shutdownWaitMs": 45000
+    },
+    {
+      "game": "warcraft3",
+      "deployed": true,
+      "errors": [],
+      "disks": [
+        {
+          "name": "hda",
+          "file": "gl-deploy-warcraft3-hda.bin.gz",
+          "blocks": 50686,
+          "bytes": 3295736,
+          "sha256": "2de6011db731ed82b3aa1c9cd055d859b49c369bbc3fc574935efde8856f2b20"
+        },
+        {
+          "name": "hdb",
+          "file": "gl-deploy-warcraft3-hdb.bin.gz",
+          "blocks": 662,
+          "bytes": 69761,
+          "sha256": "fd935c03406c1c5ce65dce67d733c4c6da34e9bfa3f8b7ff8d5c0d0acb05f0a3"
+        }
+      ],
+      "stats": {
+        "batches": 59,
+        "commands": 90,
+        "draws": 2,
+        "immediateBatches": 1,
+        "pipelines": 3,
+        "bindGroups": 2,
+        "shaderLinks": 2,
+        "shaderCacheHits": 0,
+        "uniformStampHits": 0,
+        "uniformByteChecks": 0,
+        "uniformWrites": 0,
+        "clearDraws": 0,
+        "textureUploads": 0,
+        "textureBytes": 0,
+        "refusals": 0,
+        "refusalsByOp": {},
+        "expandedIndices": 0,
+        "dxtDecodes": 0,
+        "nonUniformSamples": 0,
+        "pipelinesRejected": 0,
+        "framesRejected": 0,
+        "hostErrors": 0
+      },
+      "shutdownWaitMs": 45000
+    }
+  ],
+  "scope": "Local files and ignored disk images updated; no remote publication.",
+  "previousCubeDLL": {
+    "size": 145408,
+    "sha256": "d7d6ffb7da3608ce5c6d9f068dea9c4ea1229e322ed16225dd67bb03c2185d9d",
+    "containsGl4esVersion": true
+  },
+  "sourceInputs": {
+    "glbridge/openglproxy/opengl32_proxy.c": "4d35cbf77b680f16c3c5bc538ec54bc09c2e5312ac2030793797b55e4d7df0b3",
+    "glbridge/openglproxy/opengl32.def": "e0adc0a0c93565b6d7115ae25db2f6de05bf22c20ab02b9a974badcfe6773767",
+    "glbridge/openglproxy/gl_protocol.h": "ca4ce405e2a964b9c325eeaa93381b99ea6c2b4e410537b099b145db2cb0d280",
+    "glbridge/openglproxy/v86gl_ioctl.h": "3fe165332ba678d510533ecfad3592adca157b2ce6d9b3f529017c04b5c28c7a",
+    "glbridge/openglproxy/build.sh": "b816343da2f3397db8a0721fc2336dc3dc31f1b6e5afeec2cf356457c849849e",
+    "glbridge/window_region.h": "463c93d19275182f4172e81e50e6a9bc1a43f6b9d94bf311d22c23564ab870f5",
+    "glbridge/upload_bands.h": "af596a95124ccecfdeb95b75df7b35435ccba1c3159ee19e31107df0547ebfb6",
+    "glbridge/v86gl_driver/v86gl_driver.c": "1d349c832524ac8593016f87837c475585fc57120267d2ccec6694723a2a314f",
+    "glbridge/v86gl_driver/virtio_transport.h": "2f86991556677a5693cf3d96b24fcd4f3b3a3faaec5d166016d1e885f4d63655",
+    "glbridge/v86gl_driver/build.sh": "85f775154a7883da1044b71363bd647a83ce7b5821728f46210e3e07d3612edc"
+  },
+  "generatedAssets": {
+    "libv86-webgpu.js": "3345ddef5480c9161417298c83859a1d98fed79e75d4232cd4721bc9b95a5310",
+    "d3d9_shader_worker.js": "db3cf202e7221137bf2817a9dc2bfe9badfc5e1d76f1f0b132cf6e6f2211639d",
+    "d3d9_shader_pipeline.js": "f0f0b0a533e49f59e3ccdec4a487947688f37afa28d905a6730d46fdde623a77",
+    "graphics_journal_worker.js": "be2d1610685b4d75cb5ee8fde24d0f9a4497b183828cb6c411b154ea428cdbb1",
+    "v86gl-device.js": "601b8006b117bf0e41e6d6188313494d7090a4ee4700945c77f7e5040d057d4f",
+    "glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641"
+  },
+  "reproducibleBuild": {
+    "checked": true,
+    "canonicalReleasePath": true,
+    "note": "MinGW automatic DLL ImageBase depends on the output path. Repeating the canonical release path is byte-identical; the driver also matches across directories."
+  },
+  "versionEvidence": "XP probe requires GL_VERSION 2.1 v86gl (WebGPU), exact Unicode GDI pixels and preserved application subclass before the deployment marker can run."
+}

@@ -1,0 +1,238 @@
+/* Fresh/ALL/Reset defaults through both actual SDK COM frontends. */
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#include <stdint.h>
+#include <windows.h>
+#if D9WG_DEFAULTS_API == 8
+#include <d3d8.h>
+typedef IDirect3D8 Factory;
+typedef IDirect3DDevice8 Device;
+typedef D3DCAPS8 Caps;
+typedef D3DMATERIAL8 Material;
+typedef D3DLIGHT8 Light;
+typedef DWORD Block;
+#define CALL(n) IDirect3DDevice8_##n
+#define FACT(n) IDirect3D8_##n
+#else
+#include <d3d9.h>
+typedef IDirect3D9 Factory;
+typedef IDirect3DDevice9 Device;
+typedef D3DCAPS9 Caps;
+typedef D3DMATERIAL9 Material;
+typedef D3DLIGHT9 Light;
+typedef IDirect3DStateBlock9* Block;
+#define CALL(n) IDirect3DDevice9_##n
+#define FACT(n) IDirect3D9_##n
+#endif
+#include "d3d_render_default_reference.h"
+static HANDLE logfile;
+static Device* device;
+static unsigned queries, texture_queries, object_words, light_queries;
+static void report(const char* s)
+{
+    DWORD n;
+    WriteFile(logfile, s, lstrlenA(s), &n, NULL);
+    WriteFile(logfile, "\r\n", 2, &n, NULL);
+    FlushFileBuffers(logfile);
+}
+static void check(BOOL yes, const char* s)
+{
+    if (!yes) {
+        report(s);
+        ExitProcess(1);
+    }
+}
+#define OK(x) check(SUCCEEDED(x), "FAIL " #x)
+static const DWORD light_indices[] = { 0, 7, 8, 0xffffffffu };
+static void verify_objects(void)
+{
+    Material material;
+    OK(CALL(GetMaterial)(device, &material));
+    for (UINT i = 0; i < 17; ++i) {
+        DWORD word;
+        CopyMemory(&word, (const BYTE*)&material + i * 4, 4);
+        check(word == material_default_reference[i], "FAIL material default word");
+        ++object_words;
+    }
+    for (UINT index = 0; index < 6; ++index) {
+        float plane[4];
+        OK(CALL(GetClipPlane)(device, index, plane));
+        for (UINT i = 0; i < 4; ++i) {
+            DWORD word;
+            CopyMemory(&word, plane + i, 4);
+            check(word == 0, "FAIL clip-plane default word");
+            ++object_words;
+        }
+    }
+}
+static void verify_no_lights(void)
+{
+    for (UINT i = 0; i < sizeof(light_indices) / sizeof(light_indices[0]); ++i) {
+        Light light;
+        FillMemory(&light, sizeof(light), 0xcc);
+        check(CALL(GetLight)(device, light_indices[i], &light) == D3DERR_INVALIDCALL, "FAIL fresh/reset light definition");
+        for (UINT word = 0; word < sizeof(light) / 4; ++word) {
+            DWORD value;
+            CopyMemory(&value, (const BYTE*)&light + word * 4, 4);
+            check(value == 0xccccccccu, "FAIL refused light output changed");
+        }
+        BOOL enabled = 0x12345678;
+        check(CALL(GetLightEnable)(device, light_indices[i], &enabled) == D3DERR_INVALIDCALL && enabled == 0x12345678, "FAIL fresh/reset light enable");
+        light_queries += 2;
+    }
+}
+static void change_lights(void)
+{
+    Light light;
+    ZeroMemory(&light, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = 0.5f;
+    light.Direction.z = 1;
+    for (UINT i = 0; i < sizeof(light_indices) / sizeof(light_indices[0]); ++i) {
+        OK(CALL(SetLight)(device, light_indices[i], &light));
+        OK(CALL(LightEnable)(device, light_indices[i], TRUE));
+    }
+}
+static void verify_textures(void)
+{
+    for (UINT stage = 0; stage < 8; ++stage) {
+        for (UINT i = 0; i < sizeof(texture_default_reference)/sizeof(texture_default_reference[0]); ++i) {
+            const struct TextureDefaultReference *r = &texture_default_reference[i];
+            DWORD expected = r->context == 1 ? stage : r->context == 2 ? (stage ? D3DTOP_DISABLE : D3DTOP_MODULATE) : r->context == 3 ? (stage ? D3DTOP_DISABLE : D3DTOP_SELECTARG1) : r->value;
+            DWORD value;OK(CALL(GetTextureStageState)(device, stage, (D3DTEXTURESTAGESTATETYPE)r->state, &value));
+            check(value == expected, "FAIL texture-stage default");++texture_queries;
+        }
+#if D9WG_DEFAULTS_API == 8
+        for (UINT i = 0; i < sizeof(sampler_default_reference)/sizeof(sampler_default_reference[0]); ++i) {
+            const struct SamplerDefaultReference *r = &sampler_default_reference[i];if (!r->legacy) continue;
+            DWORD value;OK(CALL(GetTextureStageState)(device, stage, (D3DTEXTURESTAGESTATETYPE)r->legacy, &value));
+            check(value == r->value, "FAIL legacy sampler default");++texture_queries;
+        }
+#endif
+    }
+#if D9WG_DEFAULTS_API == 9
+    for (UINT slot = 0; slot < 20; ++slot) for (UINT i = 0; i < sizeof(sampler_default_reference)/sizeof(sampler_default_reference[0]); ++i) {
+        const struct SamplerDefaultReference *r = &sampler_default_reference[i];DWORD value;UINT sampler = slot < 16 ? slot : D3DVERTEXTEXTURESAMPLER0 + slot - 16;
+        OK(CALL(GetSamplerState)(device, sampler, (D3DSAMPLERSTATETYPE)r->state, &value));check(value == r->value, "FAIL pixel/vertex sampler default");++texture_queries;
+    }
+#endif
+}
+static void verify(BOOL depth)
+{
+    verify_objects();
+    verify_no_lights();
+    verify_textures();
+    Caps caps;
+    OK(CALL(GetDeviceCaps)(device, &caps));
+    float maximum = caps.MaxPointSize > 1 ? caps.MaxPointSize : 64;
+    DWORD maximum_bits;
+    CopyMemory(&maximum_bits, &maximum, 4);
+    for (unsigned i = 0; i < sizeof(render_default_reference) / sizeof(render_default_reference[0]); ++i) {
+        const struct RenderDefaultReference* r = &render_default_reference[i];
+        DWORD value = 0xcccccccc, expected = r->context == 1 ? (depth ? 1u : 0u) : r->context == 2 ? maximum_bits
+                                                                                                   : r->value;
+        OK(CALL(GetRenderState)(device, (D3DRENDERSTATETYPE)r->state, &value));
+        if (value != expected) {
+            char s[140];
+            wsprintfA(s, "FAIL API %u default state %u actual=%08lX expected=%08lX depth=%u", D9WG_DEFAULTS_API, r->state, value, expected, depth);
+            report(s);
+            ExitProcess(1);
+        }
+        queries++;
+    }
+}
+static void change(void)
+{
+    Material material;
+    float values[17];
+    for (UINT i = 0; i < 17; ++i)
+        values[i] = 0.25f;
+    CopyMemory(&material, values, sizeof(material));
+    OK(CALL(SetMaterial)(device, &material));
+    const float plane[4] = { 1, 0.5f, -0.25f, 0.75f };
+    for (UINT i = 0; i < 6; ++i)
+        OK(CALL(SetClipPlane)(device, i, plane));
+    OK(CALL(SetTextureStageState)(device, 1, D3DTSS_COLORARG0, D3DTA_DIFFUSE));
+    OK(CALL(SetTextureStageState)(device, 1, D3DTSS_ALPHAARG0, D3DTA_DIFFUSE));
+#if D9WG_DEFAULTS_API == 8
+    OK(CALL(SetTextureStageState)(device, 7, D3DTSS_ADDRESSW, D3DTADDRESS_CLAMP));
+#else
+    OK(CALL(SetSamplerState)(device, D3DVERTEXTEXTURESAMPLER0 + 3, D3DSAMP_ADDRESSW, D3DTADDRESS_CLAMP));
+#endif
+
+    OK(CALL(SetRenderState)(device, D3DRS_ZENABLE, TRUE));
+    OK(CALL(SetRenderState)(device, D3DRS_ZWRITEENABLE, FALSE));
+    OK(CALL(SetRenderState)(device, D3DRS_CLIPPING, FALSE));
+    OK(CALL(SetRenderState)(device, D3DRS_FOGEND, 0x40800000));
+    OK(CALL(SetRenderState)(device, D3DRS_POINTSIZE_MAX, 0x42800000));
+    DWORD v;
+    OK(CALL(GetTextureStageState)(device, 1, D3DTSS_COLORARG0, &v));check(v == D3DTA_DIFFUSE, "FAIL first zero COLORARG0 transition");
+    OK(CALL(GetTextureStageState)(device, 1, D3DTSS_ALPHAARG0, &v));check(v == D3DTA_DIFFUSE, "FAIL first zero ALPHAARG0 transition");
+    OK(CALL(GetRenderState)(device, D3DRS_CLIPPING, &v));
+    check(v == FALSE, "FAIL changed clipping");
+}
+void WINAPI WinMainCRTStartup(void)
+{
+    char dir[MAX_PATH], path[MAX_PATH], name[32];
+    GetModuleFileNameA(NULL, dir, sizeof(dir));
+    unsigned at = lstrlenA(dir);
+    while (at && dir[at - 1] != '\\')
+        --at;
+    dir[at] = 0;
+    lstrcpyA(path, dir);
+    lstrcatA(path, "DEFAULT.TXT");
+    logfile = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    check(logfile != INVALID_HANDLE_VALUE, "FAIL log");
+    lstrcpyA(path, dir);
+    wsprintfA(name, "D3D%u.DLL", D9WG_DEFAULTS_API);
+    lstrcatA(path, name);
+    HMODULE module = LoadLibraryA(path);
+    check(module != NULL, "FAIL DLL");
+    wsprintfA(name, "Direct3DCreate%u", D9WG_DEFAULTS_API);
+    Factory*(WINAPI * make)(UINT) = (void*)(uintptr_t)GetProcAddress(module, name);
+    check(make != NULL, "FAIL export");
+    Factory* factory = make(D3D_SDK_VERSION);
+    check(factory != NULL, "FAIL factory");
+    HWND window = CreateWindowExA(0, "STATIC", "Default states", WS_OVERLAPPEDWINDOW, 0, 0, 96, 96, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    D3DPRESENT_PARAMETERS pp;
+    ZeroMemory(&pp, sizeof(pp));
+    pp.BackBufferWidth = pp.BackBufferHeight = 64;
+    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+    pp.BackBufferCount = 1;
+    pp.Windowed = TRUE;
+    pp.hDeviceWindow = window;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.AutoDepthStencilFormat = D3DFMT_D24S8;
+    OK(FACT(CreateDevice)(factory, 0, D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device));
+    verify(FALSE);
+    Block baseline;
+    OK(CALL(CreateStateBlock)(device, D3DSBT_ALL, &baseline));
+    change();
+#if D9WG_DEFAULTS_API == 8
+    OK(CALL(ApplyStateBlock)(device, baseline));
+    OK(CALL(DeleteStateBlock)(device, baseline));
+#else
+    OK(IDirect3DStateBlock9_Apply(baseline));
+    IDirect3DStateBlock9_Release(baseline);
+#endif
+    verify(FALSE);
+    change();
+    change_lights();
+    pp.EnableAutoDepthStencil = TRUE;
+    OK(CALL(Reset)(device, &pp));
+    verify(TRUE);
+    change();
+    change_lights();
+    pp.EnableAutoDepthStencil = FALSE;
+    OK(CALL(Reset)(device, &pp));
+    verify(FALSE);
+    CALL(Release)(device);
+    FACT(Release)(factory);
+    FreeLibrary(module);
+    DestroyWindow(window);
+    char message[240];
+    wsprintfA(message, "PASS D3D%u render defaults: %u exact queries, fresh/ALL/reset, conditional depth, reported point maximum and SDK version differences; texture=%u; objectWords=%u; lightQueries=%u", D9WG_DEFAULTS_API, queries, texture_queries, object_words, light_queries);
+    report(message);
+    CloseHandle(logfile);
+    ExitProcess(0);
+}

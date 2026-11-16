@@ -1,0 +1,43 @@
+{
+  "stage": "D3D review 3B3",
+  "hostCommit": "dfe26aaa865fc12d65f562b4da7a6a1b6031b886",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "b770378be2570b592c5e",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "c8df5b90a2c3d1f6a7fa7129f3c2cd103e1e818ca3b00fb74715662215df2db8",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "b74284df8ef1f9b093d6d3c257863df6dcac34ce9062c60d1380301df2a24727",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "1b387b3cd85f4f51ae46f496e66ad1e7770768e0a8ebd75cdddd91108090e734",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "b8403a92844a3c0b2f87e6a949dcc6706844068e986bd58c91acfae73d2d0f1a",
+    "vendor/v86/glbridge/v86gl-device.js": "bdfeead396daff2441909c2fcca32e5aff23ad7aad165a8c1ee3679b6adc4553",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641"
+  },
+  "validation": {
+    "coreSuites": 122,
+    "privateCorpusStrict": true,
+    "guestAbiSuites": 72,
+    "siteIntegrationTests": 2,
+    "swiftshaderCases": 133,
+    "knownPixelFailures": 19,
+    "warcraft3FrozenReplay": "PASS",
+    "pendingSessionUniformPixels": 8192,
+    "pendingDeviceUniformPixels": 8192,
+    "fullCheckpoint": "PASS",
+    "svgaSourceAndRelease": [
+      "vgpu9",
+      "gb9"
+    ],
+    "svgaWorkerPixelsBeforeAndAfterRestore": 512
+  },
+  "limitations": [
+    "GTA SA diagnostic startup remains stalled; not accepted as gameplay.",
+    "Wine guest device/visual suites and the full review game matrix remain pending.",
+    "No remote CI run or image writeback performed.",
+    "Ordered resource uploads, FFP repairs and draw CPU budget remain in stage 3."
+  ]
+}

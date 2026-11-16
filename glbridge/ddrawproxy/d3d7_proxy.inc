@@ -15,29 +15,22 @@
 #define D3D7_MAX_CLIP_PLANES 6u
 #define D3D7_MAX_VERTEX_ELEMENTS 24u
 
+/* Logical input binding, including a deferred empty strided declaration. */
+#define D3D7_INPUT_PACKED 0u
+#define D3D7_INPUT_STRIDED 1u
+#define D3D7_INPUT_EMPTY_INDEXED_STRIDED 2u
+#define D3D7_INPUT_VERTEX_BUFFER 3u
+
 typedef struct D3D7VertexBuffer D3D7VertexBuffer;
 typedef struct D3D7StateBlock D3D7StateBlock;
 
-typedef struct D3D7FVFLayout {
-    UINT stride;
-    UINT position_offset;
-    UINT position_bytes;
-    UINT normal_offset;
-    UINT diffuse_offset;
-    UINT specular_offset;
-    UINT texcoord_offset[8];
-    UINT texcoord_bytes[8];
-    UINT texcoord_count;
-    BOOL has_position;
-    BOOL has_normal;
-    BOOL has_diffuse;
-    BOOL has_specular;
-} D3D7FVFLayout;
+typedef D9WGFVFLayout D3D7FVFLayout;
 
 struct D3D7StateBlock {
     D3D7StateBlock *next;
     DWORD handle;
     D3DSTATEBLOCKTYPE type;
+    BOOL all_lights_scope;
     BYTE render_mask[D3D7_MAX_RENDER_STATES];
     BYTE texture_stage_mask[D3D7_MAX_TEXTURE_STAGES]
             [D3D7_MAX_TEXTURE_STAGE_STATES];
@@ -56,6 +49,7 @@ struct D3D7StateBlock {
     D3DLIGHT7 lights[D3D7_MAX_LIGHTS];
     BOOL light_set[D3D7_MAX_LIGHTS];
     BOOL light_enabled[D3D7_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
     float clip_planes[D3D7_MAX_CLIP_PLANES][4];
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
@@ -68,31 +62,52 @@ struct D3D7Device {
     const IDirect3DDeviceVtbl *device1_vtbl;
     LONG ref;
     DDrawObject *owner;
+    D3D7Device *next_in_owner;
+    DWORD wire_handle;
+    BOOL wire_created;
     DDSurface *render_target;
+    BOOL render_target_invalid;
+    BOOL render_target_pending;
+    BOOL legacy_failed_rt;
+    DDSurface *aggregate_surface; /* Device1's public IUnknown is Surface1 */
     /* Which of the three device GUIDs CreateDevice was given. GetCaps has to
      * answer for that device, not for the best one this DLL can offer: an app
      * that asked for the non-T&L HAL and is told it has hardware T&L will
      * measure the wrong thing and believe the wrong caps. */
     GUID device_guid;
+    UINT creation_version;
+    UINT draw_input_kind;
+    DWORD draw_input_fvf;
+    BOOL legacy_texture_blending;
     BOOL in_scene;
     D3DVIEWPORT7 viewport;
     D3DMATERIAL7 material;
+    /* D3D7's CPU processor retains its last processed positive shininess.
+     * SetMaterial/GetMaterial and GPU draws keep the actual material value. */
+    float process_specular_power;
+    float process_normal_inverse[16];
     D3DMATRIX transforms[D3D7_MAX_TRANSFORMS];
+    D3DMATRIX legacy_projection, legacy_clipspace;
     DWORD render_states[D3D7_MAX_RENDER_STATES];
+    DWORD rejected_render_values[D3D7_MAX_RENDER_STATES];
+    BYTE rejected_render_set[D3D7_MAX_RENDER_STATES];
     DWORD texture_stage_states[D3D7_MAX_TEXTURE_STAGES]
             [D3D7_MAX_TEXTURE_STAGE_STATES];
     DDSurface *textures[D3D7_MAX_TEXTURE_STAGES];
     D3DLIGHT7 lights[D3D7_MAX_LIGHTS];
     BOOL light_set[D3D7_MAX_LIGHTS];
     BOOL light_enabled[D3D7_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
     float clip_planes[D3D7_MAX_CLIP_PLANES][4];
-    D3DCLIPSTATUS clip_status;
+    D9WGClipLegacyStatus clip_status;
+    D9WGScreenClipCache screen_clip_cache;
     D3D7StateBlock *state_blocks;
     D3D7StateBlock *recording_state_block;
     DWORD next_state_block_handle;
     D3DLegacyViewport *legacy_viewports;
     D3DLegacyViewport *legacy_current_viewport;
     D3DLegacyMatrix *legacy_matrices;
+    D3DMATRIXHANDLE legacy_transform_handles[D3D7_MAX_TRANSFORMS];
     BYTE *legacy_vertices;
     WORD *legacy_indices;
     DWORD legacy_vertex_count;
@@ -100,6 +115,7 @@ struct D3D7Device {
     DWORD legacy_index_count;
     DWORD legacy_index_capacity;
     DWORD legacy_fvf;
+    DWORD legacy_draw_flags;
     D3DPRIMITIVETYPE legacy_primitive_type;
     BOOL legacy_in_begin;
     D3DSTATS legacy_stats;
@@ -116,11 +132,14 @@ struct D3D7VertexBuffer {
     const IDirect3DVertexBufferVtbl *legacy_vtbl;
     LONG ref;
     DDrawObject *owner;
+    unsigned creation_version;
+    BOOL owner_public_ref;
     uint32_t handle;
     D3DVERTEXBUFFERDESC desc;
     UINT stride;
     UINT byte_count;
     BYTE *shadow;
+    D9WGClipBuffer clips;
     BOOL locked;
     DWORD lock_flags;
 };
@@ -189,97 +208,8 @@ static BOOL d3d7_primitive_counts(D3DPRIMITIVETYPE type, UINT element_count,
 static BOOL d3d7_decode_fvf(DWORD fvf, D3D7FVFLayout *layout,
         D9WGVertexElement *elements, UINT *element_count)
 {
-    static const BYTE tex_types[4] = {
-        D3D9DECLTYPE_FLOAT2, D3D9DECLTYPE_FLOAT3,
-        D3D9DECLTYPE_FLOAT4, D3D9DECLTYPE_FLOAT1
-    };
-    static const UINT tex_bytes[4] = { 8u, 12u, 16u, 4u };
-    DWORD position = fvf & DDWG_FVF_POSITION_MASK_D3D7;
-    UINT offset = 0;
-    UINT count = 0;
-    UINT index;
-
-    ZeroMemory(layout, sizeof(*layout));
-    if (fvf & DDWG_FVF_RESERVED0) return FALSE;
-
-#define D3D7_PUSH_ELEMENT(kind, use, use_index) do { \
-    if (!elements || count >= D3D7_MAX_VERTEX_ELEMENTS || offset > 0xffffu) \
-        return FALSE; \
-    elements[count].stream = 0; \
-    elements[count].offset = (uint16_t)offset; \
-    elements[count].type = (uint8_t)(kind); \
-    elements[count].method = D3D9DECLMETHOD_DEFAULT; \
-    elements[count].usage = (uint8_t)(use); \
-    elements[count].usage_index = (uint8_t)(use_index); \
-    ++count; \
-} while (0)
-
-    layout->position_offset = offset;
-    if (position == DDWG_FVF_XYZ) {
-        layout->has_position = TRUE;
-        layout->position_bytes = 12u;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_POSITION, 0);
-        offset += 12u;
-    } else if (position == DDWG_FVF_XYZRHW) {
-        layout->has_position = TRUE;
-        layout->position_bytes = 16u;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT4, D3D9DECLUSAGE_POSITIONT, 0);
-        offset += 16u;
-    /* The advertised four-matrix vertex-blend limit covers XYZB1..XYZB4.
-     * D3D7's XYZB5 is five float weights (not D3D8's indexed LASTBETA form),
-     * so accepting it as blend indices would corrupt the following fields. */
-    } else if (position >= DDWG_FVF_XYZB1 && position <= DDWG_FVF_XYZB4) {
-        UINT blend_dwords = 1u + ((position - DDWG_FVF_XYZB1) >> 1);
-        UINT weight_count = blend_dwords;
-        layout->has_position = TRUE;
-        layout->position_bytes = 12u + blend_dwords * 4u;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_POSITION, 0);
-        offset += 12u;
-        if (weight_count) {
-            D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT1 + weight_count - 1u,
-                    D3D9DECLUSAGE_BLENDWEIGHT, 0);
-            offset += weight_count * 4u;
-        }
-    } else {
-        return FALSE;
-    }
-    if (fvf & DDWG_FVF_NORMAL) {
-        layout->has_normal = TRUE;
-        layout->normal_offset = offset;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_FLOAT3, D3D9DECLUSAGE_NORMAL, 0);
-        offset += 12u;
-    }
-    /* D3DFVF_RESERVED1 is a real reserved DWORD in D3DLVERTEX. It must stay
-     * in the stride even though it is deliberately absent from the host FVF. */
-    if (fvf & DDWG_FVF_RESERVED1_D3D7) offset += 4u;
-    if (fvf & DDWG_FVF_DIFFUSE) {
-        layout->has_diffuse = TRUE;
-        layout->diffuse_offset = offset;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_D3DCOLOR, D3D9DECLUSAGE_COLOR, 0);
-        offset += 4u;
-    }
-    if (fvf & DDWG_FVF_SPECULAR) {
-        layout->has_specular = TRUE;
-        layout->specular_offset = offset;
-        D3D7_PUSH_ELEMENT(D3D9DECLTYPE_D3DCOLOR, D3D9DECLUSAGE_COLOR, 1);
-        offset += 4u;
-    }
-    layout->texcoord_count = (fvf & DDWG_FVF_TEXCOUNT_MASK)
-            >> DDWG_FVF_TEXCOUNT_SHIFT;
-    if (layout->texcoord_count > 8u) return FALSE;
-    for (index = 0; index < layout->texcoord_count; ++index) {
-        UINT size_code = (fvf >> (16u + index * 2u)) & 3u;
-        layout->texcoord_offset[index] = offset;
-        layout->texcoord_bytes[index] = tex_bytes[size_code];
-        D3D7_PUSH_ELEMENT(tex_types[size_code], D3D9DECLUSAGE_TEXCOORD,
-                index);
-        offset += tex_bytes[size_code];
-    }
-#undef D3D7_PUSH_ELEMENT
-
-    layout->stride = offset;
-    *element_count = count;
-    return count != 0 && offset != 0;
+    return d9wg_fvf_decode(D9WG_FVF_D3D7, fvf, elements,
+            D3D7_MAX_VERTEX_ELEMENTS, element_count, layout);
 }
 
 /*
@@ -560,7 +490,7 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     result = reserve_command_locked(D9WG_OP_SET_FVF, sizeof(command), bytes,
             &payload, &blob);
     if (result) {
-        command.device_handle = device->owner->device_handle;
+        command.device_handle = device->wire_handle;
         command.fvf = ddraw_fvf_to_d3d9(fvf);
         command.element_count = count;
         CopyMemory(payload, &command, sizeof(command));
@@ -568,6 +498,93 @@ static BOOL d3d7_emit_fvf(D3D7Device *device, DWORD fvf, UINT *stride_out)
     }
     LeaveCriticalSection(&g_transport_lock);
     if (stride_out) *stride_out = layout.stride;
+    return result;
+}
+
+/* A submitted draw may update either attachment. Invalidate the shared
+ * memory so a later legacy Lock sees actual depth/stencil as well as color. */
+static void d3d7_mark_draw_surfaces_dirty(D3D7Device *device)
+{
+    if (!device->render_target) return;
+    device->render_target->memory->gpu_dirty = TRUE;
+    surface_memory_changed(device->render_target->memory);
+    if (device->render_target->attached_depth &&
+            ((device->render_states[D3DRENDERSTATE_ZENABLE] &&
+              device->render_states[D3DRENDERSTATE_ZWRITEENABLE]) ||
+             device->render_states[D3DRENDERSTATE_STENCILENABLE]))
+    {
+        device->render_target->attached_depth->memory->gpu_dirty = TRUE;
+        surface_memory_changed(device->render_target->attached_depth->memory);
+    }
+}
+
+static BOOL d3d7_draw_clip_status_locked(D3D7Device *device, DWORD fvf,
+        const void *vertices, uint32_t vertex_count, const WORD *indices, uint32_t index_count,
+        BOOL screen, D9WGClipLegacyStatus *status)
+{
+    D9WGProcessLayout layout;
+    if (!d9wg_process_fvf(D9WG_FVF_D3D7, fvf, &layout)) return FALSE;
+    if (layout.position_transformed && (!screen || !device->render_states[D3DRENDERSTATE_CLIPPING])) return TRUE;
+    if (!device->render_states[D3DRENDERSTATE_CLIPPING]) {
+        status->status &= 0xff000000u;return TRUE;
+    }
+    if (vertex_count > 0xffffffffu/layout.stride || index_count > 0x7fffffffu) return FALSE;
+    D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
+    source.vertices = vertices;source.length = vertex_count*layout.stride;source.stride = layout.stride;
+    source.layout = &layout;source.vertex_count = vertex_count;source.count = indices ? index_count : vertex_count;
+    source.indices = (const uint8_t *)indices;source.index_stride = 2;source.index_bytes = index_count*2u;
+    source.status_screen = screen;
+    source.viewport = (D9WGProcessViewport){(float)device->viewport.dwX,(float)device->viewport.dwY,
+            (float)device->viewport.dwWidth,(float)device->viewport.dwHeight,device->viewport.dvMinZ,device->viewport.dvMaxZ};
+    BOOL cacheable = layout.position_transformed && layout.position_type == 3 && layout.position == 0 &&
+        vertex_count && vertex_count <= 65536u && (!indices || index_count);
+    D9WGScreenClipCache *cache = &device->screen_clip_cache;
+    if (cacheable) {
+        /* A cache hit must still reject new, invalid indices. Unreferenced
+         * vertices remain part of the exact position comparison. */
+        if (indices) for (uint32_t i = 0; i < index_count; ++i)
+            if (indices[i] >= vertex_count) return FALSE;
+        if (d9wg_screen_clip_matches(cache, vertices, layout.stride, vertex_count, &source.viewport)) {
+            status->status = (status->status & 0xff000000u) |
+                ((status->status & 0xfffu) | cache->status.clip_union) |
+                (((status->status >> 12 & 0xfffu) & cache->status.clip_intersection) << 12);
+            return TRUE;
+        }
+    }
+    D9WGClipStatus combined = {0, 0xffffffffu};
+    BOOL result = d9wg_vertex_windows_clip_status(&source, device->render_states,
+            &device->transforms[D3DTRANSFORMSTATE_WORLD], 4, 2,
+            &device->transforms[D3DTRANSFORMSTATE_VIEW], &device->transforms[D3DTRANSFORMSTATE_PROJECTION],
+            device->clip_planes, &combined) == 0;
+    if (result) {
+        status->status = (status->status & 0xff000000u) |
+            ((status->status & 0xfffu) | combined.clip_union) |
+            (((status->status >> 12 & 0xfffu) & combined.clip_intersection) << 12);
+        if (cacheable) {
+            uint32_t bytes = vertex_count*16u;
+            if (cache->capacity < bytes) {
+                uint8_t *replacement = HeapAlloc(GetProcessHeap(), 0, bytes);
+                if (replacement) {
+                    heap_free(cache->positions);cache->positions = replacement;
+                    cache->capacity = bytes;cache->valid = 0;
+                }
+            }
+            d9wg_screen_clip_store(cache, vertices, layout.stride, vertex_count, &source.viewport, &combined);
+        }
+    }
+    return result;
+}
+
+static BOOL d3d7_draw_clip_status(D3D7Device *device, DWORD fvf,
+        const void *vertices, uint32_t vertex_count, const WORD *indices, uint32_t index_count,
+        BOOL screen, D9WGClipLegacyStatus *status)
+{
+    /* The position snapshot is mutable device state; concurrent draws must
+     * not replace or read its allocation while another draw updates it. */
+    EnterCriticalSection(&g_transport_lock);
+    BOOL result = d3d7_draw_clip_status_locked(device, fvf, vertices, vertex_count,
+            indices, index_count, screen, status);
+    LeaveCriticalSection(&g_transport_lock);
     return result;
 }
 
@@ -588,11 +605,13 @@ static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
     ZeroMemory(&command, sizeof(command));
     if (!d3d7_multiply_u32(vertex_count, stride, &command.vertex_bytes))
         return FALSE;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.primitive_type = primitive_type;
     command.primitive_count = primitive_count;
     command.stride = stride;
     command.vertex_count = vertex_count;
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, fvf, vertices, vertex_count, NULL, 0, TRUE, &next_status)) return FALSE;
     EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_DRAW_PRIMITIVE_UP,
             sizeof(command), command.vertex_bytes, &payload, &blob);
@@ -602,8 +621,8 @@ static BOOL d3d7_emit_draw_up_raw(D3D7Device *device,
         CopyMemory(blob, vertices, command.vertex_bytes);
     }
     LeaveCriticalSection(&g_transport_lock);
-    if (result && device->render_target)
-        device->render_target->memory->gpu_dirty = TRUE;
+    if (result) device->clip_status = next_status;
+    if (result) d3d7_mark_draw_surfaces_dirty(device);
     return result;
 }
 
@@ -615,6 +634,7 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
     UINT primitive_count;
     UINT stride;
     UINT extra_bytes;
+    UINT first_vertex, last_vertex;
     uint8_t *payload;
     uint8_t *blob;
     BOOL result;
@@ -629,14 +649,26 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
             !d3d7_multiply_u32(vertex_count, stride, &command.vertex_bytes) ||
             command.index_bytes > 0xffffffffu - command.vertex_bytes)
         return FALSE;
+    first_vertex = last_vertex = indices[0];
+    for (UINT i = 0; i < index_count; ++i) {
+        UINT index = indices[i];
+        if (index >= vertex_count) return FALSE;
+        if (index < first_vertex) first_vertex = index;
+        if (index > last_vertex) last_vertex = index;
+    }
+    /* Rasterization consumes only indexed vertices. ClipStatus below still
+     * processes the complete caller-declared range, including unused data. */
+    command.vertex_bytes = (last_vertex - first_vertex + 1u)*stride;
     extra_bytes = command.index_bytes + command.vertex_bytes;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.primitive_type = primitive_type;
-    command.vertex_count = vertex_count;
+    command.vertex_count = last_vertex - first_vertex + 1u;
     command.primitive_count = primitive_count;
     command.index_format = 101u; /* D3DFMT_INDEX16 */
     command.stride = stride;
     command.index_count = index_count;
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, fvf, vertices, vertex_count, indices, index_count, TRUE, &next_status)) return FALSE;
     EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_DRAW_INDEXED_PRIMITIVE_UP,
             sizeof(command), extra_bytes, &payload, &blob);
@@ -645,12 +677,16 @@ static BOOL d3d7_emit_draw_indexed_up_raw(D3D7Device *device,
         command.vertex_data_offset = command.index_data_offset +
                 command.index_bytes;
         CopyMemory(payload, &command, sizeof(command));
-        CopyMemory(blob, indices, command.index_bytes);
-        CopyMemory(blob + command.index_bytes, vertices, command.vertex_bytes);
+        if (!first_vertex) CopyMemory(blob, indices, command.index_bytes);
+        else for (UINT i = 0; i < index_count; ++i) {
+            WORD relative = (WORD)(indices[i] - first_vertex);
+            CopyMemory(blob + i*sizeof(WORD), &relative, sizeof(relative));
+        }
+        CopyMemory(blob + command.index_bytes, (const BYTE *)vertices + first_vertex*stride, command.vertex_bytes);
     }
     LeaveCriticalSection(&g_transport_lock);
-    if (result && device->render_target)
-        device->render_target->memory->gpu_dirty = TRUE;
+    if (result) device->clip_status = next_status;
+    if (result) d3d7_mark_draw_surfaces_dirty(device);
     return result;
 }
 
@@ -721,20 +757,7 @@ static void d3d7_multiply_matrix(const D3DMATRIX *left,
         const D3DMATRIX *right, D3DMATRIX *out)
 {
     D3DMATRIX result;
-    UINT row, column;
-    for (row = 0; row < 4u; ++row) {
-        for (column = 0; column < 4u; ++column) {
-            (&result._11)[row * 4u + column] =
-                    (&left->_11)[row * 4u + 0u] *
-                        (&right->_11)[0u * 4u + column] +
-                    (&left->_11)[row * 4u + 1u] *
-                        (&right->_11)[1u * 4u + column] +
-                    (&left->_11)[row * 4u + 2u] *
-                        (&right->_11)[2u * 4u + column] +
-                    (&left->_11)[row * 4u + 3u] *
-                        (&right->_11)[3u * 4u + column];
-        }
-    }
+    d9wg_multiply_matrix(left, right, &result);
     *out = result;
 }
 
@@ -840,13 +863,12 @@ static void d3d7_fill_caps_for(const GUID *device, D3DDEVICEDESC7 *caps)
             D3DVTXPCAPS_LOCALVIEWER;
     if (device && !guid_equal(device, &IID_IDirect3DTnLHalDevice))
         caps->dwDevCaps &= ~(DWORD)D3DDEVCAPS_HWTRANSFORMANDLIGHT;
-    if (device && guid_equal(device, &IID_IDirect3DRGBDevice))
-        caps->dwDevCaps &= ~(DWORD)D3DDEVCAPS_HWRASTERIZATION;
-}
-
-static void d3d7_fill_caps(D3DDEVICEDESC7 *caps)
-{
-    d3d7_fill_caps_for(&IID_IDirect3DTnLHalDevice, caps);
+    if (device && guid_equal(device, &IID_IDirect3DRGBDevice)) {
+        caps->dwDevCaps &= ~(DWORD)(D3DDEVCAPS_HWRASTERIZATION |
+            D3DDEVCAPS_DRAWPRIMITIVES2 | D3DDEVCAPS_DRAWPRIMITIVES2EX);
+        caps->dvGuardBandLeft = caps->dvGuardBandTop = -4096.0f;
+        caps->dvGuardBandRight = caps->dvGuardBandBottom = 4095.0f;
+    }
 }
 
 static void d3d7_make_rgb_format(DDPIXELFORMAT *format, DWORD bits,
@@ -994,24 +1016,16 @@ static ULONG WINAPI d3d7_Release(IDirect3D7 *iface)
 static HRESULT WINAPI d3d7_EnumDevices(IDirect3D7 *iface,
         LPD3DENUMDEVICESCALLBACK7 callback, void *context)
 {
-    /*
-     * All three retail device types, best first. CreateDevice already accepts
-     * each of these GUIDs, so enumerating only the T&L HAL hid two devices
-     * that work: an app offering a "hardware T&L / software T&L" choice --
-     * 3DMark 2000 is exactly that -- finds nothing behind the software entry
-     * and cannot select it. The order matters for the other kind of app, the
-     * one that takes the first device it is handed.
-     */
+    /* Preserve the runtime's device order and logical class names. Games
+     * inspect the capabilities to select hardware or software processing. */
     static const struct {
         const GUID *guid;
         const char *description;
         const char *name;
     } devices[] = {
-        { &IID_IDirect3DTnLHalDevice, "v86 WebGPU T&L HAL",
-          "Direct3D T&L HAL" },
+        { &IID_IDirect3DRGBDevice, "v86 WebGPU RGB Emulation", "RGB Emulation" },
         { &IID_IDirect3DHALDevice, "v86 WebGPU HAL", "Direct3D HAL" },
-        { &IID_IDirect3DRGBDevice, "v86 WebGPU RGB Emulation",
-          "Direct3D RGB" },
+        { &IID_IDirect3DTnLHalDevice, "v86 WebGPU T&L HAL", "Direct3D T&L HAL" },
     };
     D3DDEVICEDESC7 caps;
     UINT index;
@@ -1031,17 +1045,25 @@ static HRESULT WINAPI d3d7_EnumDevices(IDirect3D7 *iface,
 
 static void d3d7_device_init_state(D3D7Device *device)
 {
+    d9wg_clip_legacy_init(&device->clip_status);
     UINT index, stage;
+    D9WGLegacyDeviceDefaults defaults =
+        d9wg_legacy_device_defaults(device->creation_version);
+    device->creation_version = defaults.version;
+    device->legacy_texture_blending = defaults.legacy_texture_blending;
+    device->render_states[D3DRENDERSTATE_COLORKEYENABLE] = defaults.color_key;
+    device->render_states[D3DRENDERSTATE_SPECULARENABLE] = defaults.specular;
+    device->render_states[D3DRENDERSTATE_NORMALIZENORMALS] = defaults.normalize_normals;
     for (index = 0; index < D3D7_MAX_TRANSFORMS; ++index)
         d3d7_identity_matrix(&device->transforms[index]);
+    d3d7_identity_matrix(&device->legacy_projection);
+    d3d7_identity_matrix(&device->legacy_clipspace);
     device->viewport.dwX = device->viewport.dwY = 0;
     device->viewport.dwWidth = device->render_target->width;
     device->viewport.dwHeight = device->render_target->height;
     device->viewport.dvMinZ = 0.0f;
     device->viewport.dvMaxZ = 1.0f;
-    device->material.diffuse.r = device->material.diffuse.g =
-            device->material.diffuse.b = device->material.diffuse.a = 1.0f;
-    device->material.ambient = device->material.diffuse;
+    d9wg_object_defaults(7, &device->material, device->clip_planes, D3D7_MAX_CLIP_PLANES);
     device->render_states[D3DRENDERSTATE_ANTIALIAS] = D3DANTIALIAS_NONE;
     device->render_states[D3DRENDERSTATE_TEXTUREADDRESS] = D3DTADDRESS_WRAP;
     device->render_states[D3DRENDERSTATE_TEXTUREPERSPECTIVE] = TRUE;
@@ -1056,7 +1078,7 @@ static void d3d7_device_init_state(D3D7Device *device)
     device->render_states[D3DRENDERSTATE_TEXTUREMAG] = D3D7FILTER_NEAREST;
     device->render_states[D3DRENDERSTATE_TEXTUREMIN] = D3D7FILTER_NEAREST;
     device->render_states[D3DRENDERSTATE_TEXTUREMAPBLEND] =
-            D3D7TBLEND_MODULATE;
+            defaults.texture_map_blend;
     device->render_states[D3DRENDERSTATE_ALPHAFUNC] = D3DCMP_ALWAYS;
     device->render_states[D3DRENDERSTATE_SRCBLEND] = D3DBLEND_ONE;
     device->render_states[D3DRENDERSTATE_DESTBLEND] = D3DBLEND_ZERO;
@@ -1099,21 +1121,31 @@ static void d3d7_device_init_state(D3D7Device *device)
     device->legacy_stats.dwSize = sizeof(device->legacy_stats);
 }
 
+/* Native D3D7 RGB measurements: 61 predefined states, four shared by
+ * PIXEL/VERTEX, plus two queryable states omitted even by ALL. The legacy
+ * interfaces use the broader DX2/3 state namespace below. */
 static BOOL d3d7_render_state_is_vertex(DWORD state)
 {
     switch (state) {
-    case D3DRENDERSTATE_FOGVERTEXMODE:
-    case D3DRENDERSTATE_LIGHTING:
-    case D3DRENDERSTATE_AMBIENT:
-    case D3DRENDERSTATE_COLORVERTEX:
-    case D3DRENDERSTATE_LOCALVIEWER:
-    case D3DRENDERSTATE_NORMALIZENORMALS:
-    case D3DRENDERSTATE_DIFFUSEMATERIALSOURCE:
-    case D3DRENDERSTATE_SPECULARMATERIALSOURCE:
-    case D3DRENDERSTATE_AMBIENTMATERIALSOURCE:
-    case D3DRENDERSTATE_EMISSIVEMATERIALSOURCE:
-    case D3DRENDERSTATE_VERTEXBLEND:
-    case D3DRENDERSTATE_CLIPPLANEENABLE:
+    case 9: case 22: case 28: case 29: case 34: case 35: case 36:
+    case 37: case 38: case 48: case 136: case 137: case 138: case 139:
+    case 140: case 141: case 142: case 143: case 145: case 146:
+    case 147: case 148: case 151: case 152:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static BOOL d3d7_render_state_is_pixel(DWORD state)
+{
+    switch (state) {
+    case 2: case 4: case 7: case 8: case 9: case 10: case 14: case 15:
+    case 16: case 19: case 20: case 23: case 24: case 25: case 26:
+    case 27: case 33: case 36: case 37: case 38: case 40: case 41:
+    case 47: case 52: case 53: case 54: case 55: case 56: case 57:
+    case 58: case 59: case 60: case 128: case 129: case 130: case 131:
+    case 132: case 133: case 134: case 135: case 144:
         return TRUE;
     default:
         return FALSE;
@@ -1121,6 +1153,12 @@ static BOOL d3d7_render_state_is_vertex(DWORD state)
 }
 
 static BOOL d3d7_render_state_valid(DWORD state)
+{
+    return d3d7_render_state_is_pixel(state) ||
+            d3d7_render_state_is_vertex(state) || state == 30u || state == 50u;
+}
+
+static BOOL d3d_legacy_render_state_valid(DWORD state)
 {
     return (state >= 1u && state <= 41u) ||
             (state >= 43u && state <= 60u) ||
@@ -1148,13 +1186,12 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
     UINT state, stage;
     if (type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE) {
         for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
-            if (d3d7_render_state_valid(state) &&
-                    (type == D3DSBT_ALL ||
-                     !d3d7_render_state_is_vertex(state)))
+            if (d3d7_render_state_is_pixel(state) ||
+                    (type == D3DSBT_ALL && d3d7_render_state_is_vertex(state)))
                 block->render_mask[state] = 1;
         }
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
-            block->texture_mask[stage] = 1;
+            if (type == D3DSBT_ALL) block->texture_mask[stage] = 1;
             for (state = D3DTSS_COLOROP;
                     state <= D3DTSS_TEXTURETRANSFORMFLAGS; ++state)
                 block->texture_stage_mask[stage][state] = 1;
@@ -1162,27 +1199,31 @@ static void d3d7_state_block_mark_type(D3D7StateBlock *block,
     }
     if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {
         for (state = 0; state < D3D7_MAX_RENDER_STATES; ++state) {
-            if (d3d7_render_state_valid(state) &&
-                    (type == D3DSBT_ALL ||
-                     d3d7_render_state_is_vertex(state)))
+            if (d3d7_render_state_is_vertex(state) ||
+                    (type == D3DSBT_ALL && d3d7_render_state_is_pixel(state)))
                 block->render_mask[state] = 1;
         }
-        for (state = 0; state < D3D7_MAX_TRANSFORMS; ++state) {
-            if (d3d7_transform_state_valid(state))
-                block->transform_mask[state] = 1;
+        for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
+            block->texture_stage_mask[stage][D3DTSS_TEXCOORDINDEX] = 1;
+            block->texture_stage_mask[stage][D3DTSS_TEXTURETRANSFORMFLAGS] = 1;
         }
         for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
-            block->light_mask[state] = 1;
+            block->light_mask[state] = type == D3DSBT_ALL;
             block->light_enable_mask[state] = 1;
         }
-        for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state)
-            block->clip_plane_mask[state] = 1;
-        block->viewport_mask = TRUE;
-        block->material_mask = TRUE;
+        block->all_lights_scope = TRUE;
+
     }
+    if (type == D3DSBT_ALL) {
+        for (state = 0; state < D3D7_MAX_TRANSFORMS; ++state)
+            if (d3d7_transform_state_valid(state)) block->transform_mask[state] = 1;
+        for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) block->clip_plane_mask[state] = 1;
+        block->viewport_mask = block->material_mask = TRUE;
+    }
+
 }
 
-static void d3d7_state_block_capture(D3D7Device *device,
+static BOOL d3d7_state_block_capture(D3D7Device *device,
         D3D7StateBlock *block)
 {
     UINT state, stage;
@@ -1208,14 +1249,25 @@ static void d3d7_state_block_capture(D3D7Device *device,
         if (block->transform_mask[state])
             block->transforms[state] = device->transforms[state];
     }
-    for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
-        if (block->light_mask[state]) {
-            block->lights[state] = device->lights[state];
-            block->light_set[state] = device->light_set[state];
+    if (block->all_lights_scope) {
+        for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
+            if (!entry->set) continue;
+            D9WGLightState *saved = d9wg_light_get(&block->extra_lights, entry->index, TRUE);
+            if (!saved) return FALSE;
+            saved->light_mask = block->type == D3DSBT_ALL;saved->enable_mask = TRUE;
         }
-        if (block->light_enable_mask[state])
-            block->light_enabled[state] = device->light_enabled[state];
     }
+    for (state = 0; state < D3D7_MAX_LIGHTS; ++state) {
+        if (block->all_lights_scope && !device->light_set[state]) block->light_mask[state] = block->light_enable_mask[state] = 0;
+        if (block->light_mask[state]) {block->lights[state] = device->lights[state];block->light_set[state] = device->light_set[state];}
+        if (block->light_enable_mask[state]) block->light_enabled[state] = device->light_enabled[state];
+    }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        D9WGLightState *current = d9wg_light_find(device->extra_lights, entry->index);
+        if (entry->light_mask) {entry->set = current && current->set;if (entry->set) entry->light = current->light;}
+        if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
+    }
+    block->all_lights_scope = FALSE;
     for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) {
         if (block->clip_plane_mask[state])
             CopyMemory(block->clip_planes[state], device->clip_planes[state],
@@ -1223,6 +1275,7 @@ static void d3d7_state_block_capture(D3D7Device *device,
     }
     if (block->viewport_mask) block->viewport = device->viewport;
     if (block->material_mask) block->material = device->material;
+    return TRUE;
 }
 
 static void d3d7_state_block_destroy(D3D7StateBlock *block)
@@ -1233,6 +1286,7 @@ static void d3d7_state_block_destroy(D3D7StateBlock *block)
         if (block->textures[stage])
             surface_Release((IDirectDrawSurface7 *)&block->textures[stage]->vtbl7);
     }
+    d9wg_light_free(&block->extra_lights);
     heap_free(block);
 }
 
@@ -1252,49 +1306,119 @@ static BOOL d3d7_emit_render_target(D3D7Device *device)
     D9WGSetDepthStencilSurfaceLevel depth;
     DDSurface *target = device->render_target;
 
+    if (device->render_target_invalid) return FALSE;
+    device->render_target_pending = TRUE;
     if (target && !prepare_surface_for_host(target))
         return FALSE;
     if (target && target->attached_depth &&
             !ensure_surface_storage(target->attached_depth))
         return FALSE;
     ZeroMemory(&color, sizeof(color));
-    color.device_handle = device->owner->device_handle;
+    color.device_handle = device->wire_handle;
     color.color_texture_handle = target ? target->handle : 0u;
-    color.color_level = target ? target->mip_level : 0u;
-    color.color_face = target ? target->cube_face : 0u;
+    color.color_level = target ? surface_wire_mip_level(target) : 0u;
+    color.color_face = target ? surface_wire_cube_face(target) : 0u;
     if (!emit_command(D9WG_OP_SET_RENDER_TARGET, &color, sizeof(color)))
         return FALSE;
     ZeroMemory(&depth, sizeof(depth));
-    depth.device_handle = device->owner->device_handle;
+    depth.device_handle = device->wire_handle;
     if (target && target->attached_depth) {
         depth.depth_texture_handle = target->attached_depth->handle;
-        depth.depth_level = target->attached_depth->mip_level;
+        depth.depth_level = surface_wire_mip_level(target->attached_depth);
         depth.width = target->attached_depth->width;
         depth.height = target->attached_depth->height;
     }
-    return emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &depth,
-            sizeof(depth));
+    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &depth,
+            sizeof(depth))) return FALSE;
+    device->render_target_pending = FALSE;
+    return TRUE;
 }
 
-static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
-        IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out)
+static void d3d7_destroy_host_context(D3D7Device *device)
+{
+    if (device->wire_created) {
+        D9WGDestroyResource destroy;
+        ZeroMemory(&destroy, sizeof(destroy));
+        destroy.resource_handle = device->wire_handle;
+        destroy.resource_kind = 0;
+        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    }
+    device->wire_created = FALSE;
+    device->wire_handle = 0;
+}
+
+static BOOL d3d7_create_host_context(D3D7Device *device)
+{
+    D9WGCreateDevice create;
+    D9WGWindowState hidden;
+    ZeroMemory(&create, sizeof(create));
+    device->wire_handle = allocate_handle();
+    create.device_handle = device->wire_handle;
+    create.width = device->render_target->width;
+    create.height = device->render_target->height;
+    create.backbuffer_format = DDWG_FMT_X8R8G8B8;
+    create.windowed = TRUE;
+    if (device->creation_version < 7u)
+        create.behavior_flags = D9WG_DEVICE_LEGACY_LIGHTING;
+    if (!emit_command(D9WG_OP_CREATE_DEVICE, &create, sizeof(create))) return FALSE;
+    device->wire_created = TRUE;
+    ZeroMemory(&hidden, sizeof(hidden));
+    hidden.device_handle = device->wire_handle;
+    hidden.flags = D9WG_WINDOW_NO_SURFACE;
+    return emit_command(D9WG_OP_WINDOW_STATE, &hidden, sizeof(hidden));
+}
+
+static HRESULT d3d7_validate_device_target(DDSurface *surface, REFCLSID clsid,
+        UINT version)
+{
+    DWORD caps = surface->desc.ddsCaps.dwCaps;
+    BOOL software = guid_equal(clsid, &IID_IDirect3DRGBDevice);
+    if (!(caps & DDSCAPS_3DDEVICE) || (caps & DDSCAPS_ZBUFFER))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if (surface->indexed && !surface->palette)
+        return DDWG_TRACE_ERROR(DDERR_NOPALETTEATTACHED);
+    if (!software && !(caps & DDSCAPS_VIDEOMEMORY))
+        return DDWG_TRACE_ERROR(D3DERR_SURFACENOTINVIDMEM);
+    if (format_is_depth(surface->format) || format_is_yuv(surface->format) ||
+            format_is_compressed(surface->format))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
+    /* Legacy RGB devices can draw into palettised memory. D3D7 removed that
+     * render-target format, even though P8 remains a valid texture format. */
+    if (surface->indexed && (!software || version >= 7u))
+        return software && !(caps & DDSCAPS_VIDEOMEMORY)
+            ? E_FAIL : DDERR_INVALIDPIXELFORMAT;
+    return D3D_OK;
+}
+
+static HRESULT d3d7_create_device_for_version(IDirect3D7 *iface, REFCLSID clsid,
+        IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out,
+        UINT version)
 {
     DDrawObject *owner = d3d7_object_from_iface(iface);
     DDSurface *surface;
     D3D7Device *device;
+    HRESULT hr;
 
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     *out = NULL;
-    if (!surface_iface || surface_iface->lpVtbl != &g_surface_vtbl || !clsid)
+    /* Wine and existing games can pass an older surface view to Device7.
+     * Accept only our known vtables before resolving the interface offset. */
+    if (!surface_iface || !clsid ||
+            ((const void *)surface_iface->lpVtbl != &g_surface_vtbl &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl1 &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl2 &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl3 &&
+             (const void *)surface_iface->lpVtbl != &g_surface_vtbl4))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     if (!guid_equal(clsid, &IID_IDirect3DHALDevice) &&
             !guid_equal(clsid, &IID_IDirect3DTnLHalDevice) &&
             !guid_equal(clsid, &IID_IDirect3DRGBDevice))
         return DDWG_TRACE_ERROR(D3DERR_INVALID_DEVICE);
     surface = surface_from_any(surface_iface, NULL);
-    if (!surface || surface->owner != owner || format_is_depth(surface->format))
+    if (!surface || surface->owner != owner)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (owner->d3d7_device) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    hr = d3d7_validate_device_target(surface, clsid, version);
+    if (FAILED(hr)) return DDWG_TRACE_ERROR(hr);
     if (!ensure_device(owner)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device = (D3D7Device *)heap_alloc_zero(sizeof(*device));
     if (!device) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
@@ -1306,31 +1430,33 @@ static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
     device->owner = owner;
     device->render_target = surface;
     device->device_guid = *clsid;
+    device->creation_version = version;
     ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     d3d7_device_init_state(device);
+    if (!d3d7_create_host_context(device) || !d3d7_emit_render_target(device) ||
+            !d3d7_sync_initial_state(device)) {
+        d3d7_destroy_host_context(device);
+        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
+        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        heap_free(device);
+        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    }
+    device->next_in_owner = owner->d3d7_device;
     owner->d3d7_device = device;
-    if (!d3d7_emit_render_target(device)) {
-        owner->d3d7_device = NULL;
-        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
-        heap_free(device);
-        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    }
-    if (!d3d7_sync_initial_state(device)) {
-        owner->d3d7_device = NULL;
-        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
-        heap_free(device);
-        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    }
     *out = (IDirect3DDevice7 *)device;
     return D3D_OK;
 }
 
-static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
+static HRESULT WINAPI d3d7_CreateDevice(IDirect3D7 *iface, REFCLSID clsid,
+        IDirectDrawSurface7 *surface_iface, IDirect3DDevice7 **out)
+{
+    return d3d7_create_device_for_version(iface, clsid, surface_iface, out, 7u);
+}
+
+static HRESULT d3d7_CreateVertexBufferForVersion(IDirect3D7 *iface,
         D3DVERTEXBUFFERDESC *description, IDirect3DVertexBuffer7 **out,
-        DWORD flags)
+        DWORD flags, unsigned version)
 {
     DDrawObject *owner = d3d7_object_from_iface(iface);
     D3D7VertexBuffer *buffer;
@@ -1338,6 +1464,7 @@ static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
     D9WGCreateBuffer create;
     UINT count = 0;
+    UINT byte_count;
 
     (void)flags;
     if (!out) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -1346,25 +1473,26 @@ static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
             !description->dwNumVertices ||
             !d3d7_decode_fvf(description->dwFVF, &layout, elements, &count))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!d3d7_multiply_u32(description->dwNumVertices, layout.stride,
+            &byte_count))
+        return DDWG_TRACE_ERROR(D3DERR_TOOMANYVERTICES);
     buffer = (D3D7VertexBuffer *)heap_alloc_zero(sizeof(*buffer));
     if (!buffer) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
-    if (!d3d7_multiply_u32(description->dwNumVertices, layout.stride,
-            &buffer->byte_count)) {
-        heap_free(buffer);
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    }
+    buffer->byte_count = byte_count;
     buffer->shadow = (BYTE *)heap_alloc_zero(buffer->byte_count);
     if (!buffer->shadow) { heap_free(buffer); return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY); }
     buffer->vtbl = &g_d3d7_vb_vtbl;
     buffer->legacy_vtbl = &g_d3d_vb_vtbl;
     buffer->ref = 1;
     buffer->owner = owner;
+    buffer->creation_version = version;
+    buffer->owner_public_ref = version == DD_VERSION_7;
     buffer->handle = allocate_handle();
     buffer->desc = *description;
     buffer->stride = layout.stride;
-    ddraw_AddRef((IDirectDraw7 *)&owner->vtbl7);
+    ddraw_child_attach(owner, buffer->owner_public_ref);
     if (!ensure_device(owner)) {
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, buffer->owner_public_ref);
         heap_free(buffer->shadow);
         heap_free(buffer);
         return DDWG_TRACE_ERROR(D3DERR_VBUF_CREATE_FAILED);
@@ -1378,13 +1506,21 @@ static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
     create.pool = (description->dwCaps & D3DVBCAPS_SYSTEMMEMORY)
             ? DDWG_POOL_SYSTEMMEM : DDWG_POOL_DEFAULT;
     if (!emit_command(D9WG_OP_CREATE_BUFFER, &create, sizeof(create))) {
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, buffer->owner_public_ref);
         heap_free(buffer->shadow);
         heap_free(buffer);
         return DDWG_TRACE_ERROR(D3DERR_VBUF_CREATE_FAILED);
     }
     *out = (IDirect3DVertexBuffer7 *)buffer;
     return D3D_OK;
+}
+
+static HRESULT WINAPI d3d7_CreateVertexBuffer(IDirect3D7 *iface,
+        D3DVERTEXBUFFERDESC *description, IDirect3DVertexBuffer7 **out,
+        DWORD flags)
+{
+    return d3d7_CreateVertexBufferForVersion(iface, description, out, flags,
+            DD_VERSION_7);
 }
 
 static HRESULT WINAPI d3d7_EnumZBufferFormats(IDirect3D7 *iface,
@@ -1426,15 +1562,22 @@ static HRESULT WINAPI d3d7_device_QueryInterface(IDirect3DDevice7 *iface,
     if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid) return DDWG_TRACE_ERROR(E_NOINTERFACE);
-    if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DDevice7))
-        *out = &device->vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice3))
-        *out = &device->device3_vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice2))
-        *out = &device->device2_vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DDevice))
-        *out = &device->device1_vtbl;
-    else return DDWG_TRACE_ERROR(E_NOINTERFACE);
+    if (iid_is_unknown(iid)) {
+        if (device->creation_version == 7u) *out = &device->vtbl;
+        else if (device->creation_version == 3u) *out = &device->device3_vtbl;
+        else if (device->creation_version == 2u) *out = &device->device2_vtbl;
+        else *out = &device->device1_vtbl;
+    } else if (device->creation_version == 7u) {
+        if (guid_equal(iid, &IID_IDirect3DDevice7)) *out = &device->vtbl;
+    } else {
+        if (device->creation_version >= 3u && guid_equal(iid, &IID_IDirect3DDevice3))
+            *out = &device->device3_vtbl;
+        else if (device->creation_version >= 2u && guid_equal(iid, &IID_IDirect3DDevice2))
+            *out = &device->device2_vtbl;
+        else if (guid_equal(iid, &IID_IDirect3DDevice))
+            *out = &device->device1_vtbl;
+    }
+    if (!*out) return DDWG_TRACE_ERROR(E_NOINTERFACE);
     IDirect3DDevice7_AddRef(iface);
     return S_OK;
 }
@@ -1444,23 +1587,37 @@ static ULONG WINAPI d3d7_device_AddRef(IDirect3DDevice7 *iface)
     return (ULONG)InterlockedIncrement(&d3d7_device_from_iface(iface)->ref);
 }
 
+static void d3d7_release_target(DDSurface *surface, BOOL legacy_failed)
+{
+    if (!surface) return;
+    /* Device2 installs an invalid-format target without taking a public
+     * Surface1 reference, then consumes one on replacement/destruction. Retain
+     * an implementation-view pin while it is installed, so the native
+     * public-count quirk never leaves our internal pointer dangling. */
+    if (legacy_failed && surface->public_refs[DD_VERSION_1] > 0)
+        surface_public_release(surface, DD_VERSION_1);
+    surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
+}
+
 static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     LONG remaining = InterlockedDecrement(&device->ref);
     if (remaining == 0) {
         DDrawObject *owner = device->owner;
+        BOOL legacy_parent = device->creation_version == 1u;
         D3D7StateBlock *block;
         UINT stage;
-        if (owner->d3d7_device == device) owner->d3d7_device = NULL;
+        D3D7Device **link = &owner->d3d7_device;
+        while (*link && *link != device) link = &(*link)->next_in_owner;
+        if (*link) *link = device->next_in_owner;
+        d3d7_destroy_host_context(device);
         for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
             if (device->textures[stage])
                 surface_Release((IDirectDrawSurface7 *)
                         &device->textures[stage]->vtbl7);
         }
-        if (device->render_target)
-            surface_Release((IDirectDrawSurface7 *)
-                    &device->render_target->vtbl7);
+        d3d7_release_target(device->render_target, device->legacy_failed_rt);
         block = device->state_blocks;
         while (block) {
             D3D7StateBlock *next = block->next;
@@ -1469,8 +1626,11 @@ static ULONG WINAPI d3d7_device_Release(IDirect3DDevice7 *iface)
         }
         d3d7_state_block_destroy(device->recording_state_block);
         d3d_legacy_device_cleanup(device);
+        heap_free(device->screen_clip_cache.positions);
+        d9wg_light_free(&device->extra_lights);
         heap_free(device);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        if (legacy_parent) ddraw_child_detach(owner, FALSE);
+        else ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -1497,7 +1657,7 @@ static HRESULT WINAPI d3d7_device_BeginScene(IDirect3DDevice7 *iface)
     D9WGDeviceOnly command;
     if (device->in_scene) return DDWG_TRACE_ERROR(D3DERR_SCENE_IN_SCENE);
     device->in_scene = TRUE;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.reserved = 0;
     if (!emit_command(D9WG_OP_BEGIN_SCENE, &command, sizeof(command))) {
         device->in_scene = FALSE;
@@ -1512,7 +1672,7 @@ static HRESULT WINAPI d3d7_device_EndScene(IDirect3DDevice7 *iface)
     D9WGDeviceOnly command;
     if (!device->in_scene) return DDWG_TRACE_ERROR(D3DERR_SCENE_NOT_IN_SCENE);
     device->in_scene = FALSE;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.reserved = 0;
     return emit_command(D9WG_OP_END_SCENE, &command, sizeof(command))
             ? D3D_OK : D3DERR_SCENE_END_FAILED;
@@ -1534,24 +1694,50 @@ static HRESULT WINAPI d3d7_device_SetRenderTarget(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     DDSurface *surface;
     DDSurface *old;
+    DWORD caps;
+    BOOL invalid_format, old_invalid, old_failed;
     (void)flags;
     if (!surface_iface || surface_iface->lpVtbl != &g_surface_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = surface_from_any(surface_iface, NULL);
-    if (!surface || surface->owner != device->owner ||
-            format_is_depth(surface->format))
+    if (!surface || surface->owner != device->owner)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (surface == device->render_target) return D3D_OK;
+    caps = surface->desc.ddsCaps.dwCaps;
+    if (!(caps & DDSCAPS_3DDEVICE) || surface->indexed)
+        return DDWG_TRACE_ERROR(DDERR_INVALIDCAPS);
+    if (device->creation_version >= 7u && (caps & DDSCAPS_SYSTEMMEMORY))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    invalid_format = format_is_depth(surface->format) ||
+        format_is_yuv(surface->format) || format_is_compressed(surface->format);
+    if (surface == device->render_target) {
+        if (invalid_format) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
+        if (device->render_target_pending && !d3d7_emit_render_target(device))
+            return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+        return D3D_OK;
+    }
     surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     old = device->render_target;
+    old_invalid = device->render_target_invalid;
+    old_failed = device->legacy_failed_rt;
     device->render_target = surface;
-    if (!d3d7_emit_render_target(device)) {
+    device->render_target_invalid = invalid_format;
+    device->render_target_pending = TRUE;
+    device->legacy_failed_rt = invalid_format && device->creation_version == 2u;
+    /* Windows exposes the invalid-format target through GetRenderTarget even
+     * though SetRenderTarget fails. It cannot become a GPU color attachment. */
+    if (!invalid_format && !d3d7_emit_render_target(device)) {
         device->render_target = old;
+        device->render_target_invalid = old_invalid;
+        device->legacy_failed_rt = old_failed;
+        /* A successful color command may precede the failed depth command.
+         * Repair the old binding now; retain debt if the transport still fails.
+         * Every subsequent Clear/draw retries that debt before emitting work. */
+        if (!old_invalid) (void)d3d7_emit_render_target(device);
         surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
-    if (old) surface_Release((IDirectDrawSurface7 *)&old->vtbl7);
-    return D3D_OK;
+    d3d7_release_target(old, old_failed);
+    return DDWG_TRACE_ERROR(invalid_format ? DDERR_INVALIDPIXELFORMAT : D3D_OK);
 }
 
 static HRESULT WINAPI d3d7_device_GetRenderTarget(IDirect3DDevice7 *iface,
@@ -1564,21 +1750,21 @@ static HRESULT WINAPI d3d7_device_GetRenderTarget(IDirect3DDevice7 *iface,
     return DDWG_TRACE_ERROR(surface ? D3D_OK : DDERR_NOTFOUND);
 }
 
-static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
+static HRESULT d3d7_device_clear_bounds(IDirect3DDevice7 *iface,
         DWORD rect_count, D3DRECT *rects, DWORD flags, D3DCOLOR color,
-        D3DVALUE depth_value, DWORD stencil)
+        D3DVALUE depth_value, DWORD stencil, const D3DVIEWPORT7 *clear_viewport)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGClear command;
-    UINT rect_bytes;
+    UINT rect_bytes, extra_bytes;
     uint8_t *payload;
     uint8_t *blob;
     BOOL result;
-    if ((rect_count && !rects) ||
-            !(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER |
+    if (!(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER |
                     D3DCLEAR_STENCIL)) ||
             !d3d7_multiply_u32(rect_count, sizeof(*rects), &rect_bytes))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->render_target_invalid) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
     if ((flags & D3DCLEAR_ZBUFFER) &&
             !device->render_target->attached_depth)
         return DDWG_TRACE_ERROR(D3DERR_ZBUFFER_NOTPRESENT);
@@ -1586,24 +1772,57 @@ static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
             (!device->render_target->attached_depth ||
              device->render_target->attached_depth->format != DDWG_FMT_D24S8))
         return DDWG_TRACE_ERROR(D3DERR_STENCILBUFFER_NOTPRESENT);
+    /* The pointer selects rectangle mode. Keep the count overflow check
+     * above: unlike D3D8/9, native D3D7 still rejects an oversized null list. */
+    if (rects && !rect_count) return D3D_OK;
+    if (!rects) rect_count = rect_bytes = 0;
+    if (clear_viewport && rect_bytes > 0xffffffffu - sizeof(D9WGClearBounds))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    extra_bytes = rect_bytes + (clear_viewport ? sizeof(D9WGClearBounds) : 0u);
+    if (device->render_target_pending && !d3d7_emit_render_target(device))
+        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.clear_flags = flags;
     command.color = color;
     command.depth = depth_value;
     command.stencil = stencil;
     command.rect_count = rect_count;
     EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_CLEAR, sizeof(command), rect_bytes,
+    result = clear_viewport
+        ? reserve_command_with_flags_locked(D9WG_OP_CLEAR,
+            D9WG_COMMAND_CLEAR_BOUNDS, sizeof(command), extra_bytes, &payload, &blob)
+        : reserve_command_locked(D9WG_OP_CLEAR, sizeof(command), rect_bytes,
             &payload, &blob);
     if (result) {
         CopyMemory(payload, &command, sizeof(command));
         if (rect_bytes) CopyMemory(blob, rects, rect_bytes);
+        if (clear_viewport) {
+            D9WGClearBounds bounds = {clear_viewport->dwX, clear_viewport->dwY,
+                clear_viewport->dwWidth, clear_viewport->dwHeight};
+            CopyMemory(blob + rect_bytes, &bounds, sizeof(bounds));
+        }
     }
     LeaveCriticalSection(&g_transport_lock);
     if (result && (flags & D3DCLEAR_TARGET))
+    {
         device->render_target->memory->gpu_dirty = TRUE;
+        surface_memory_changed(device->render_target->memory);
+    }
+    if (result && (flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
+    {
+        device->render_target->attached_depth->memory->gpu_dirty = TRUE;
+        surface_memory_changed(device->render_target->attached_depth->memory);
+    }
     return DDWG_TRACE_ERROR(result ? D3D_OK : D3DERR_INITFAILED);
+}
+
+static HRESULT WINAPI d3d7_device_Clear(IDirect3DDevice7 *iface,
+        DWORD rect_count, D3DRECT *rects, DWORD flags, D3DCOLOR color,
+        D3DVALUE depth_value, DWORD stencil)
+{
+    return d3d7_device_clear_bounds(iface, rect_count, rects, flags, color,
+            depth_value, stencil, NULL);
 }
 
 static HRESULT WINAPI d3d7_device_SetTransform(IDirect3DDevice7 *iface,
@@ -1613,15 +1832,18 @@ static HRESULT WINAPI d3d7_device_SetTransform(IDirect3DDevice7 *iface,
     D9WGSetTransform command;
     if (!matrix || !d3d7_transform_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->transform_mask[state] = 1;block->transforms[state] = *matrix;
+        return D3D_OK;
+    }
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.state = ddraw_transform_state_to_d3d9(state);
     CopyMemory(command.matrix, matrix, sizeof(command.matrix));
     if (!emit_command(D9WG_OP_SET_TRANSFORM, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     device->transforms[state] = *matrix;
-    if (device->recording_state_block)
-        device->recording_state_block->transform_mask[state] = 1;
     return D3D_OK;
 }
 
@@ -1639,27 +1861,32 @@ static HRESULT WINAPI d3d7_device_SetViewport(IDirect3DDevice7 *iface,
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetViewport command;
-    if (!viewport || !viewport->dwWidth || !viewport->dwHeight ||
+    D3DVIEWPORT7 effective;
+    if (!viewport ||
             viewport->dwX > device->render_target->width ||
             viewport->dwY > device->render_target->height ||
             viewport->dwWidth > device->render_target->width - viewport->dwX ||
-            viewport->dwHeight > device->render_target->height - viewport->dwY ||
-            viewport->dvMinZ < 0.0f || viewport->dvMaxZ > 1.0f ||
-            viewport->dvMinZ > viewport->dvMaxZ)
+            viewport->dwHeight > device->render_target->height - viewport->dwY)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    effective = *viewport;
+    if (effective.dvMaxZ < effective.dvMinZ + 0.001f)
+        effective.dvMaxZ = effective.dvMinZ + 0.001f;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->viewport_mask = TRUE;block->viewport = effective;
+        return D3D_OK;
+    }
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.x = viewport->dwX;
     command.y = viewport->dwY;
     command.width = viewport->dwWidth;
     command.height = viewport->dwHeight;
-    command.min_z = viewport->dvMinZ;
-    command.max_z = viewport->dvMaxZ;
+    command.min_z = effective.dvMinZ;
+    command.max_z = effective.dvMaxZ;
     if (!emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    device->viewport = *viewport;
-    if (device->recording_state_block)
-        device->recording_state_block->viewport_mask = TRUE;
+    device->viewport = effective;
     return D3D_OK;
 }
 
@@ -1670,8 +1897,13 @@ static HRESULT WINAPI d3d7_device_MultiplyTransform(IDirect3DDevice7 *iface,
     D3DMATRIX result;
     if (!matrix || !d3d7_transform_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d7_multiply_matrix(&device->transforms[state], matrix, &result);
-    return d3d7_device_SetTransform(iface, state, &result);
+    /* Multiply targets the primary state even while SetTransform records. */
+    D3D7StateBlock *recording = device->recording_state_block;
+    d3d7_multiply_matrix(matrix, &device->transforms[state], &result);
+    device->recording_state_block = NULL;
+    HRESULT hr = d3d7_device_SetTransform(iface, state, &result);
+    device->recording_state_block = recording;
+    return hr;
 }
 
 static HRESULT WINAPI d3d7_device_GetViewport(IDirect3DDevice7 *iface,
@@ -1688,18 +1920,25 @@ static HRESULT WINAPI d3d7_device_SetMaterial(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetMaterial command;
     if (!material) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->material_mask = TRUE;block->material = *material;
+        return D3D_OK;
+    }
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     CopyMemory(command.diffuse, &material->diffuse, sizeof(command.diffuse));
     CopyMemory(command.ambient, &material->ambient, sizeof(command.ambient));
     CopyMemory(command.specular, &material->specular, sizeof(command.specular));
     CopyMemory(command.emissive, &material->emissive, sizeof(command.emissive));
     command.power = material->power;
+    /* Pre-D3D7 zero shininess disables material specular lighting. Keep the
+     * public material and prelit vertex colours unchanged. */
+    if (device->creation_version < 7u && material->power == 0.0f)
+        command.specular[0] = command.specular[1] = command.specular[2] = 0.0f;
     if (!emit_command(D9WG_OP_SET_MATERIAL, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_MATERIAL_SETDATA_FAILED);
     device->material = *material;
-    if (device->recording_state_block)
-        device->recording_state_block->material_mask = TRUE;
     return D3D_OK;
 }
 
@@ -1711,16 +1950,11 @@ static HRESULT WINAPI d3d7_device_GetMaterial(IDirect3DDevice7 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
-        DWORD index, D3DLIGHT7 *light)
+static BOOL d3d7_emit_light(D3D7Device *device, DWORD index, const D3DLIGHT7 *light)
 {
-    D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetLight command;
-    if (!light || index >= D3D7_MAX_LIGHTS) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (light->dltType < D3DLIGHT_POINT || light->dltType > D3DLIGHT_GLSPOT)
-        return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.index = index;
     command.type = ddraw_light_type_to_d3d9(light->dltType);
     CopyMemory(command.diffuse, &light->dcvDiffuse, sizeof(command.diffuse));
@@ -1728,9 +1962,6 @@ static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
     CopyMemory(command.ambient, &light->dcvAmbient, sizeof(command.ambient));
     CopyMemory(command.position, &light->dvPosition, sizeof(command.position));
     CopyMemory(command.direction, &light->dvDirection, sizeof(command.direction));
-    if (light->dltType == D3DLIGHT_PARALLELPOINT)
-        CopyMemory(command.direction, &light->dvPosition,
-                sizeof(command.direction));
     command.range = light->dvRange;
     command.falloff = light->dvFalloff;
     command.attenuation[0] = light->dvAttenuation0;
@@ -1738,12 +1969,32 @@ static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
     command.attenuation[2] = light->dvAttenuation2;
     command.theta = light->dvTheta;
     command.phi = light->dvPhi;
-    if (!emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command)))
+    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command));
+}
+
+static HRESULT WINAPI d3d7_device_SetLight(IDirect3DDevice7 *iface,
+        DWORD index, D3DLIGHT7 *light)
+{
+    D3D7Device *device = d3d7_device_from_iface(iface);
+    D9WGLightState *entry;
+    if (!light) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (light->dltType < D3DLIGHT_POINT || light->dltType > D3DLIGHT_GLSPOT)
         return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
-    device->lights[index] = *light;
-    device->light_set[index] = TRUE;
-    if (device->recording_state_block)
-        device->recording_state_block->light_mask[index] = 1;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        if (index < D3D7_MAX_LIGHTS) {block->light_mask[index] = 1;block->lights[index] = *light;block->light_set[index] = TRUE;}
+        else {
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+            entry->light_mask = TRUE;entry->light = *light;entry->set = TRUE;
+        }
+        return D3D_OK;
+    }
+    entry = index < D3D7_MAX_LIGHTS ? NULL : d9wg_light_get(&device->extra_lights, index, TRUE);
+    if (index >= D3D7_MAX_LIGHTS && !entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    if (!d3d7_emit_light(device, index, light)) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
+    if (entry) {entry->light = *light;entry->set = TRUE;}
+    else {device->lights[index] = *light;device->light_set[index] = TRUE;}
     return D3D_OK;
 }
 
@@ -1751,9 +2002,15 @@ static HRESULT WINAPI d3d7_device_GetLight(IDirect3DDevice7 *iface,
         DWORD index, D3DLIGHT7 *light)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    if (!light || index >= D3D7_MAX_LIGHTS || !device->light_set[index])
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *light = device->lights[index];
+    if (!light) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (index < D3D7_MAX_LIGHTS) {
+        if (!device->light_set[index]) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        *light = device->lights[index];
+    } else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        if (!entry || !entry->set) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+        *light = entry->light;
+    }
     return D3D_OK;
 }
 
@@ -1761,7 +2018,7 @@ static BOOL d3d7_emit_sampler_state(D3D7Device *device, DWORD stage,
         DWORD state, DWORD value)
 {
     D9WGSetSamplerState command;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.sampler = stage;
     command.state = state;
     command.value = value;
@@ -1772,12 +2029,54 @@ static BOOL d3d7_emit_texture_stage_state(D3D7Device *device, DWORD stage,
         DWORD state, DWORD value)
 {
     D9WGSetTextureStageState command;
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.stage = stage;
     command.state = state;
     command.value = value;
     return emit_command(D9WG_OP_SET_TEXTURE_STAGE_STATE, &command,
             sizeof(command));
+}
+
+/* Legacy HAL keeps the API texture reference even when its caps make it
+ * unsampleable. Device7 instead exposes a null binding for that surface. */
+static DDSurface *d3d7_sampled_texture(D3D7Device *device, DDSurface *surface)
+{
+    if (surface && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE) &&
+            !guid_equal(&device->device_guid, &IID_IDirect3DRGBDevice))
+        return NULL;
+    return surface;
+}
+
+static DWORD d3d7_legacy_texture_alpha_op(const DDSurface *texture)
+{
+    return d9wg_legacy_modulate_alpha_op(texture != NULL,
+            texture && texture->desc.ddpfPixelFormat.dwRGBAlphaBitMask != 0);
+}
+
+static void d3d7_texture_map_blend_cascade(D3D7Device *device, DWORD value,
+        DDrawBlendCascade *cascade)
+{
+    DDSurface *texture = device->textures[0];
+    if (device->recording_state_block && device->recording_state_block->texture_mask[0])
+        texture = device->recording_state_block->textures[0];
+    ddraw_texture_map_blend_cascade(value, cascade);
+    if (value == D3D7TBLEND_MODULATE)
+        cascade->alpha_op = d3d7_legacy_texture_alpha_op(d3d7_sampled_texture(device, texture));
+}
+
+static BOOL d3d7_fixup_legacy_texture_alpha(D3D7Device *device)
+{
+    DWORD op;
+    if (!device->legacy_texture_blending ||
+            device->render_states[D3DRENDERSTATE_TEXTUREMAPBLEND] != D3D7TBLEND_MODULATE)
+        return TRUE;
+    op = d3d7_legacy_texture_alpha_op(d3d7_sampled_texture(device, device->textures[0]));
+    if (op == device->texture_stage_states[0][D3DTSS_ALPHAOP])
+        return TRUE;
+    if (!d3d7_emit_texture_stage_state(device, 0, D3DTSS_ALPHAOP, op))
+        return FALSE;
+    device->texture_stage_states[0][D3DTSS_ALPHAOP] = op;
+    return TRUE;
 }
 
 static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
@@ -1787,7 +2086,7 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
     unsigned sampler_state;
     unsigned action = ddraw_render_state_action(state, &sampler_state);
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
 
     if (action == DDRAW_STATE_SHADOW_ONLY) return TRUE;
     if (action == DDRAW_STATE_SAMPLER) {
@@ -1819,7 +2118,7 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
     }
     case D3DRENDERSTATE_TEXTUREMAPBLEND: {
         DDrawBlendCascade cascade;
-        ddraw_texture_map_blend_cascade(value, &cascade);
+        d3d7_texture_map_blend_cascade(device, value, &cascade);
         if (!cascade.supported) return FALSE;
         device->texture_stage_states[0][D3DTSS_COLOROP] = cascade.color_op;
         device->texture_stage_states[0][D3DTSS_COLORARG1] = cascade.color_arg1;
@@ -1878,12 +2177,47 @@ static BOOL d3d7_emit_render_state(D3D7Device *device, DWORD state,
     }
 }
 
-static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
+static HRESULT WINAPI d3d7_set_render_state(IDirect3DDevice7 *iface,
         D3DRENDERSTATETYPE state, DWORD value)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     DWORD previous;
-    if (!d3d7_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (!d3d_legacy_render_state_valid(state)) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+
+    if (state == D3DRENDERSTATE_TEXTUREHANDLE && value)
+        return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    DDrawBlendCascade cascade = {0};
+    if (state == D3DRENDERSTATE_TEXTUREMAPBLEND) {
+        d3d7_texture_map_blend_cascade(device, value, &cascade);
+        if (!cascade.supported) return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    }
+    if (!device->recording_state_block && state == D3DRENDERSTATE_TEXTUREMAPBLEND &&
+            device->render_states[state] == value)
+        return D3D_OK;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->render_mask[state] = 1;block->render_states[state] = value;
+        if (state == D3DRENDERSTATE_WRAPU && block->render_mask[D3D9RS_WRAP0]) {
+            if (value) block->render_states[D3D9RS_WRAP0] |= 1u;else block->render_states[D3D9RS_WRAP0] &= ~1u;
+        } else if (state == D3DRENDERSTATE_WRAPV && block->render_mask[D3D9RS_WRAP0]) {
+            if (value) block->render_states[D3D9RS_WRAP0] |= 2u;else block->render_states[D3D9RS_WRAP0] &= ~2u;
+        } else if ((DWORD)state == D3D9RS_WRAP0) {
+            if (block->render_mask[D3DRENDERSTATE_WRAPU]) block->render_states[D3DRENDERSTATE_WRAPU] = !!(value & 1u);
+            if (block->render_mask[D3DRENDERSTATE_WRAPV]) block->render_states[D3DRENDERSTATE_WRAPV] = !!(value & 2u);
+        }
+        if (state == D3DRENDERSTATE_TEXTUREADDRESS || state == D3DRENDERSTATE_TEXTUREADDRESSU || state == D3DRENDERSTATE_TEXTUREADDRESSV) {
+            UINT first = state == D3DRENDERSTATE_TEXTUREADDRESSV ? D3DTSS_ADDRESSV : D3DTSS_ADDRESSU;
+            UINT last = state == D3DRENDERSTATE_TEXTUREADDRESS ? D3DTSS_ADDRESSV : first;
+            for (UINT slot = first; slot <= last; ++slot) {block->texture_stage_mask[0][slot] = 1;block->texture_stage_states[0][slot] = value;}
+            if (state == D3DRENDERSTATE_TEXTUREADDRESS) {block->texture_stage_mask[0][D3D7TSS_ADDRESS] = 1;block->texture_stage_states[0][D3D7TSS_ADDRESS] = value;}
+        }
+        if (state == D3DRENDERSTATE_TEXTUREMAPBLEND) {
+            const UINT slots[6] = {D3DTSS_COLOROP,D3DTSS_COLORARG1,D3DTSS_COLORARG2,D3DTSS_ALPHAOP,D3DTSS_ALPHAARG1,D3DTSS_ALPHAARG2};
+            const DWORD values[6] = {cascade.color_op,cascade.color_arg1,cascade.color_arg2,cascade.alpha_op,cascade.alpha_arg1,cascade.alpha_arg2};
+            for (UINT slot = 0; slot < 6; ++slot) {block->texture_stage_mask[0][slots[slot]] = 1;block->texture_stage_states[0][slots[slot]] = values[slot];}
+        }
+        return D3D_OK;
+    }
 
     /* D3DRENDERSTATE_WRAPU/V and D3DRS_WRAP0's U/V bits are aliases.  WRAP1
      * through WRAP7 name the other FVF coordinate sets.  None goes on the
@@ -1909,8 +2243,6 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
                         (value & 2u) != 0;
             }
         }
-        if (device->recording_state_block)
-            device->recording_state_block->render_mask[state] = 1;
         return D3D_OK;
     }
 
@@ -1920,6 +2252,8 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
         device->render_states[state] = previous;
         return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
     }
+    if (state == D3DRENDERSTATE_TEXTUREMAPBLEND)
+        device->legacy_texture_blending = TRUE;
     /* The old render-state spellings address sampler 0 and are aliases of
      * D3DTSS_ADDRESS/U/V.  Keep one authoritative shadow for restoring a
      * sampler temporarily forced to repeat by wrapped interpolation. */
@@ -1932,9 +2266,25 @@ static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
     } else if (state == D3DRENDERSTATE_TEXTUREADDRESSV) {
         device->texture_stage_states[0][D3DTSS_ADDRESSV] = value;
     }
-    if (device->recording_state_block)
-        device->recording_state_block->render_mask[state] = 1;
     return D3D_OK;
+}
+
+static HRESULT WINAPI d3d7_device_SetRenderState(IDirect3DDevice7 *iface,
+        D3DRENDERSTATETYPE state, DWORD value)
+{
+    if (!d3d7_render_state_valid(state)) {
+        D3D7Device *device = d3d7_device_from_iface(iface);
+        /* The retail runtime caches a rejected legacy value outside Begin.
+         * Repeating it succeeds without changing queryable/device state;
+         * recording neither consults nor updates that redundant-call cache. */
+        if (!device->recording_state_block && d3d_legacy_render_state_valid(state)) {
+            if (device->rejected_render_set[state] && device->rejected_render_values[state] == value) return D3D_OK;
+            device->rejected_render_set[state] = TRUE;
+            device->rejected_render_values[state] = value;
+        }
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
+    return d3d7_set_render_state(iface, state, value);
 }
 
 static HRESULT WINAPI d3d7_device_GetRenderState(IDirect3DDevice7 *iface,
@@ -1963,12 +2313,11 @@ static HRESULT WINAPI d3d7_device_EndStateBlock(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     D3D7StateBlock *block = device->recording_state_block;
     if (!handle) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *handle = 0;
     if (!block) return DDWG_TRACE_ERROR(D3DERR_NOTINBEGINSTATEBLOCK);
     device->recording_state_block = NULL;
     block->handle = device->next_state_block_handle++;
     if (!block->handle) block->handle = device->next_state_block_handle++;
-    d3d7_state_block_capture(device, block);
+    /* Recorded values and references are complete; End only publishes. */
     block->next = device->state_blocks;
     device->state_blocks = block;
     *handle = block->handle;
@@ -1991,13 +2340,81 @@ static HRESULT WINAPI d3d7_device_PreLoad(IDirect3DDevice7 *iface,
             ? D3D_OK : D3DERR_INITFAILED);
 }
 
+/* Before D3D7, the vertex format and draw flags select lighting; the
+ * LIGHTING render state itself is ignored by the public legacy interface. */
+static HRESULT d3d7_prepare_legacy_draw(D3D7Device *device, DWORD fvf, DWORD flags)
+{
+    if (device->render_target_invalid) return DDWG_TRACE_ERROR(DDERR_INVALIDPIXELFORMAT);
+    if (device->render_target_pending && !d3d7_emit_render_target(device))
+        return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
+    if (device->creation_version >= 7u) return D3D_OK;
+    return d3d7_device_SetRenderState((IDirect3DDevice7 *)device,
+            D3DRENDERSTATE_LIGHTING,
+            device->legacy_material && !!(fvf & D3DFVF_NORMAL) &&
+                    !(flags & D3DDP_DONOTLIGHT));
+}
+
+/* Empty streams have no declaration to upload or vertices to classify.
+ * Retain the runtime's format checks that precede this no-op: texture sizes
+ * must name existing coordinate sets, and strided data cannot supply RHW. */
+static HRESULT d3d7_empty_draw_result(DWORD fvf, BOOL strided)
+{
+    UINT texture_count = (fvf >> 8u) & 15u;
+    DWORD texture_sizes = texture_count >= 8u ? 0xffffu :
+        (1u << (2u * texture_count)) - 1u;
+    if (texture_count > 8u || ((fvf >> 16u) & ~texture_sizes))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    if (strided && (fvf & 0x000eu) == 0x0004u)
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXTYPE);
+    return D3D_OK;
+}
+
+/* Empty draws still select the logical input declaration on native T&L.
+ * NVIDIA93.71/D3DIM700: an empty indexed strided XYZ input followed by an
+ * empty indexed VB bind returns E_FAIL while consuming that transition; the
+ * next VB call succeeds. Cold VB, RGB/HAL and ordinary packed inputs succeed.
+ * This records the binding transition, never a call count or GPU draw. */
+static void d3d7_commit_draw_input(D3D7Device *device, UINT kind, DWORD fvf)
+{
+    device->draw_input_kind = kind;
+    device->draw_input_fvf = fvf;
+}
+
+static HRESULT d3d7_empty_stream_input_result(D3D7Device *device, DWORD fvf,
+        BOOL strided, BOOL indexed, DWORD vertex_count, DWORD index_count)
+{
+    HRESULT result = d3d7_empty_draw_result(fvf, strided);
+    if (SUCCEEDED(result))
+        d3d7_commit_draw_input(device, strided
+                ? (indexed && !vertex_count && !index_count
+                    ? D3D7_INPUT_EMPTY_INDEXED_STRIDED : D3D7_INPUT_STRIDED)
+                : D3D7_INPUT_PACKED, fvf);
+    return result;
+}
+
+static HRESULT d3d7_empty_vb_input_result(D3D7Device *device, DWORD fvf,
+        BOOL indexed, DWORD vertex_count, DWORD index_count)
+{
+    BOOL deferred_tnl_binding = indexed && !vertex_count && !index_count &&
+        device->creation_version >= 7u &&
+        guid_equal(&device->device_guid, &IID_IDirect3DTnLHalDevice) &&
+        device->draw_input_kind == D3D7_INPUT_EMPTY_INDEXED_STRIDED &&
+        device->draw_input_fvf == fvf && (fvf & 0x000eu) != 0x0004u;
+    d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, fvf);
+    return DDWG_TRACE_ERROR(deferred_tnl_binding ? E_FAIL : D3D_OK);
+}
+
 static HRESULT WINAPI d3d7_device_DrawPrimitive(IDirect3DDevice7 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf, void *vertices,
         DWORD vertex_count, DWORD flags)
 {
-    (void)flags;
-    return d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
-            fvf, vertices, vertex_count) ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, FALSE, FALSE, vertex_count, 0u);
+    BOOL emitted = d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
+            fvf, vertices, vertex_count) ;
+    if (emitted) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_PACKED, fvf);
+    return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
 static HRESULT WINAPI d3d7_device_DrawIndexedPrimitive(
@@ -2005,25 +2422,29 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitive(
         void *vertices, DWORD vertex_count, WORD *indices, DWORD index_count,
         DWORD flags)
 {
-    (void)flags;
-    return d3d7_emit_draw_indexed_up(d3d7_device_from_iface(iface),
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count || !index_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, FALSE, TRUE, vertex_count, index_count);
+    BOOL emitted = d3d7_emit_draw_indexed_up(d3d7_device_from_iface(iface),
             primitive_type, fvf, vertices, vertex_count, indices, index_count)
-            ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+            ;
+    if (emitted) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_PACKED, fvf);
+    return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
 static HRESULT WINAPI d3d7_device_SetClipStatus(IDirect3DDevice7 *iface,
         D3DCLIPSTATUS *status)
 {
     if (!status) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    d3d7_device_from_iface(iface)->clip_status = *status;
-    return D3D_OK;
+    return DDWG_TRACE_ERROR(d9wg_clip_legacy_set(&d3d7_device_from_iface(iface)->clip_status, status)
+            ? D3D_OK : DDERR_INVALIDPARAMS);
 }
 
 static HRESULT WINAPI d3d7_device_GetClipStatus(IDirect3DDevice7 *iface,
         D3DCLIPSTATUS *status)
 {
     if (!status) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *status = d3d7_device_from_iface(iface)->clip_status;
+    d9wg_clip_legacy_get(&d3d7_device_from_iface(iface)->clip_status, status);
     return D3D_OK;
 }
 
@@ -2084,13 +2505,16 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveStrided(
     BYTE *packed;
     UINT bytes;
     HRESULT result;
-    (void)flags;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, TRUE, FALSE, vertex_count, 0u);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     result = d3d7_emit_draw_up(d3d7_device_from_iface(iface), primitive_type,
             fvf, packed, vertex_count) ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
     heap_free(packed);
+    if (SUCCEEDED(result)) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_STRIDED, fvf);
     return DDWG_TRACE_ERROR(result);
 }
 
@@ -2102,7 +2526,9 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveStrided(
     BYTE *packed;
     UINT bytes;
     HRESULT result;
-    (void)flags;
+    HRESULT prepare = d3d7_prepare_legacy_draw(d3d7_device_from_iface(iface), fvf, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    if (!vertex_count || !index_count) return d3d7_empty_stream_input_result(d3d7_device_from_iface(iface), fvf, TRUE, TRUE, vertex_count, index_count);
     packed = d3d7_pack_strided(fvf, data, vertex_count, &bytes);
     (void)bytes;
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
@@ -2110,7 +2536,51 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveStrided(
             primitive_type, fvf, packed, vertex_count, indices, index_count)
             ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
     heap_free(packed);
+    if (SUCCEEDED(result)) d3d7_commit_draw_input(d3d7_device_from_iface(iface), D3D7_INPUT_STRIDED, fvf);
     return DDWG_TRACE_ERROR(result);
+}
+
+typedef struct D3D7ClipEmitContext { D3D7Device *device;DWORD fvf; } D3D7ClipEmitContext;
+static int d3d7_clip_emit(void *context, uint32_t primitive_type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D3D7ClipEmitContext *emit = context;(void)stride;
+    return d3d7_emit_draw_up(emit->device, (D3DPRIMITIVETYPE)primitive_type,
+            emit->fvf, vertices, count);
+}
+static int d3d7_clip_mask(void *context, uint32_t mask)
+{
+    D3D7ClipEmitContext *emit = context;
+    D9WGSetRenderState command = { emit->device->wire_handle, D3DRENDERSTATE_CLIPPLANEENABLE, mask, 0 };
+    return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
+}
+static HRESULT d3d7_clip_vb_draw(D3D7Device *device, D3D7VertexBuffer *buffer,
+        D3DPRIMITIVETYPE primitive_type, uint32_t first, uint32_t vertex_count,
+        const WORD *indices, uint32_t index_count, BOOL *handled)
+{
+    D9WGProcessLayout layout;*handled = FALSE;
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!buffer->clips.head) return D3D_OK;
+    *handled = TRUE;
+    if (!d9wg_process_fvf(D9WG_FVF_D3D7, buffer->desc.dwFVF, &layout) ||
+            index_count > 0x7fffffffu) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
+    source.clips = &buffer->clips;source.vertices = buffer->shadow;
+    source.length = buffer->byte_count;source.stride = buffer->stride;
+    source.first_vertex = first;source.vertex_count = vertex_count;
+    source.count = indices ? index_count : vertex_count;source.indices = (const uint8_t *)indices;
+    source.index_bytes = index_count*2u;source.index_stride = 2;
+    source.primitive_type = primitive_type;source.layout = &layout;
+    source.flat_shading = device->render_states[D3DRENDERSTATE_SHADEMODE] == D3DSHADE_FLAT;
+    source.viewport = (D9WGProcessViewport){ (float)device->viewport.dwX, (float)device->viewport.dwY,
+            (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
+            device->viewport.dvMinZ, device->viewport.dvMaxZ };
+    D3D7ClipEmitContext emit = { device, buffer->desc.dwFVF };
+    int result = d9wg_vertex_windows_clip_draw_planes(&source, d3d7_clip_emit, d3d7_clip_mask,
+            device->render_states[D3DRENDERSTATE_CLIPPLANEENABLE], &emit);
+    *handled = result != 0;
+    return DDWG_TRACE_ERROR(result >= 0 ? D3D_OK : result == -2 ? D3DERR_INITFAILED :
+            result == -3 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
 }
 
 static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
@@ -2122,36 +2592,57 @@ static HRESULT WINAPI d3d7_device_DrawPrimitiveVB(IDirect3DDevice7 *iface,
     D9WGSetStreamSource stream;
     D9WGDrawPrimitive draw;
     UINT primitive_count;
-    (void)flags;
     if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d7_vb_from_iface(buffer_iface);
     if (buffer->owner != device->owner || buffer->locked ||
             start_vertex > buffer->desc.dwNumVertices ||
-            vertex_count > buffer->desc.dwNumVertices - start_vertex ||
-            !d3d7_primitive_counts(primitive_type, vertex_count,
-                    &primitive_count))
+            vertex_count > buffer->desc.dwNumVertices - start_vertex)
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
-    if (d3d7_fvf_uses_wrap(device, buffer->desc.dwFVF))
-        return d3d7_emit_draw_up(device, primitive_type,
-                buffer->desc.dwFVF,
-                buffer->shadow + start_vertex * buffer->stride, vertex_count)
-                ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    if (!vertex_count) return d3d7_empty_vb_input_result(device, buffer->desc.dwFVF, FALSE, vertex_count, 0u);
+    if (!d3d7_primitive_counts(primitive_type, vertex_count, &primitive_count))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, buffer->desc.dwFVF,
+            buffer->shadow + start_vertex*buffer->stride, vertex_count, NULL, 0, FALSE, &next_status))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    BOOL clipped;HRESULT clip_result = d3d7_clip_vb_draw(device, buffer,
+            primitive_type, start_vertex, vertex_count, NULL, 0, &clipped);
+    if (clipped) {
+        if (SUCCEEDED(clip_result)) {
+            d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+            d3d7_mark_draw_surfaces_dirty(device);device->clip_status = next_status;
+        }
+        return DDWG_TRACE_ERROR(clip_result);
+    }
+    if (d3d7_fvf_uses_wrap(device, buffer->desc.dwFVF)) {
+        BOOL emitted = d3d7_emit_draw_up(device, primitive_type, buffer->desc.dwFVF,
+                buffer->shadow + start_vertex*buffer->stride, vertex_count);
+        if (emitted) {
+        d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+        device->clip_status = next_status;
+    }
+        return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+    }
     if (!d3d7_emit_fvf(device, buffer->desc.dwFVF, NULL))
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     ZeroMemory(&stream, sizeof(stream));
-    stream.device_handle = device->owner->device_handle;
+    stream.device_handle = device->wire_handle;
     stream.buffer_handle = buffer->handle;
     stream.stride = buffer->stride;
     if (!emit_command(D9WG_OP_SET_STREAM_SOURCE, &stream, sizeof(stream)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    draw.device_handle = device->owner->device_handle;
+    draw.device_handle = device->wire_handle;
     draw.primitive_type = primitive_type;
     draw.start_vertex = start_vertex;
     draw.primitive_count = primitive_count;
     if (!emit_command(D9WG_OP_DRAW_PRIMITIVE, &draw, sizeof(draw)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
-    device->render_target->memory->gpu_dirty = TRUE;
+    d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+    device->clip_status = next_status;
+    d3d7_mark_draw_surfaces_dirty(device);
     return D3D_OK;
 }
 
@@ -2162,18 +2653,42 @@ static HRESULT WINAPI d3d7_device_DrawIndexedPrimitiveVB(
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
     D3D7VertexBuffer *buffer;
-    (void)flags;
-    if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl || !indices)
+    UINT primitive_count;
+    if (!buffer_iface || buffer_iface->lpVtbl != &g_d3d7_vb_vtbl || (index_count && !indices))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     buffer = d3d7_vb_from_iface(buffer_iface);
     if (buffer->owner != device->owner || buffer->locked ||
             start_vertex > buffer->desc.dwNumVertices ||
             vertex_count > buffer->desc.dwNumVertices - start_vertex)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    return d3d7_emit_draw_indexed_up(device, primitive_type,
+    if (!vertex_count || !index_count) return d3d7_empty_vb_input_result(device, buffer->desc.dwFVF, TRUE, vertex_count, index_count);
+    if (!d3d7_primitive_counts(primitive_type, index_count, &primitive_count))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    (void)primitive_count;
+    HRESULT prepare = d3d7_prepare_legacy_draw(device, buffer->desc.dwFVF, flags);
+    if (FAILED(prepare)) return DDWG_TRACE_ERROR(prepare);
+    D9WGClipLegacyStatus next_status = device->clip_status;
+    if (!d3d7_draw_clip_status(device, buffer->desc.dwFVF,
+            buffer->shadow + start_vertex*buffer->stride, vertex_count, indices, index_count, FALSE, &next_status))
+        return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    BOOL clipped;HRESULT clip_result = d3d7_clip_vb_draw(device, buffer,
+            primitive_type, start_vertex, vertex_count, indices, index_count, &clipped);
+    if (clipped) {
+        if (SUCCEEDED(clip_result)) {
+            d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+            d3d7_mark_draw_surfaces_dirty(device);device->clip_status = next_status;
+        }
+        return DDWG_TRACE_ERROR(clip_result);
+    }
+    BOOL emitted = d3d7_emit_draw_indexed_up(device, primitive_type,
             buffer->desc.dwFVF, buffer->shadow + start_vertex * buffer->stride,
             vertex_count, indices, index_count)
-            ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
+;
+    if (emitted) {
+        d3d7_commit_draw_input(device, D3D7_INPUT_VERTEX_BUFFER, buffer->desc.dwFVF);
+        device->clip_status = next_status;
+    }
+    return emitted ? D3D_OK : D3DERR_INVALIDVERTEXFORMAT;
 }
 
 static HRESULT WINAPI d3d7_device_ComputeSphereVisibility(
@@ -2201,18 +2716,18 @@ static HRESULT WINAPI d3d7_device_ComputeSphereVisibility(
      * OpenGL [-w,w] convention.  Plane order matches the D3DVIS bit pairs. */
 #define D3D7_SET_PLANE(dst, sign, column) do { \
     planes[(dst)][0] = world_view_projection._14 sign \
-            world_view_projection.column##1; \
+            world_view_projection._1##column; \
     planes[(dst)][1] = world_view_projection._24 sign \
-            world_view_projection.column##2; \
+            world_view_projection._2##column; \
     planes[(dst)][2] = world_view_projection._34 sign \
-            world_view_projection.column##3; \
+            world_view_projection._3##column; \
     planes[(dst)][3] = world_view_projection._44 sign \
-            world_view_projection.column##4; \
+            world_view_projection._4##column; \
 } while (0)
-    D3D7_SET_PLANE(0, +, _1); /* left:   w + x */
-    D3D7_SET_PLANE(1, -, _1); /* right:  w - x */
-    D3D7_SET_PLANE(2, -, _2); /* top:    w - y */
-    D3D7_SET_PLANE(3, +, _2); /* bottom: w + y */
+    D3D7_SET_PLANE(0, +, 1); /* left:   w + x */
+    D3D7_SET_PLANE(1, -, 1); /* right:  w - x */
+    D3D7_SET_PLANE(2, -, 2); /* top:    w - y */
+    D3D7_SET_PLANE(3, +, 2); /* bottom: w + y */
 #undef D3D7_SET_PLANE
     planes[4][0] = world_view_projection._13; /* near: z */
     planes[4][1] = world_view_projection._23;
@@ -2278,39 +2793,52 @@ static HRESULT WINAPI d3d7_device_SetTexture(IDirect3DDevice7 *iface,
     DDSurface *surface;
     DDSurface *old;
     D9WGSetTexture command;
-    if (surface_iface && surface_iface->lpVtbl != &g_surface_vtbl)
+    const void *view = surface_iface ? surface_iface->lpVtbl : NULL;
+    if (surface_iface && view != &g_surface_vtbl && view != &g_surface_vtbl1 &&
+            view != &g_surface_vtbl2 && view != &g_surface_vtbl3 &&
+            view != &g_surface_vtbl4)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     surface = surface_iface ? surface_from_any(surface_iface, NULL) : NULL;
     if (stage >= D3D7_MAX_TEXTURE_STAGES ||
-            (surface && (surface->owner != device->owner ||
+            (surface && ((device->creation_version >= 7u && surface->owner != device->owner) ||
                     format_is_depth(surface->format))))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (surface) {
+    /* Device7 discards ordinary surfaces from both query and draw state.
+     * Older interfaces retain the reference; only RGB can sample it. */
+    if (surface && !(surface->desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE) &&
+            device->creation_version >= 7u)
+        surface = NULL;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
+        if (block->textures[stage]) surface_Release((IDirectDrawSurface7 *)&block->textures[stage]->vtbl7);
+        block->textures[stage] = surface;block->texture_mask[stage] = 1;return D3D_OK;
+    }
+    DDSurface *sampled = d3d7_sampled_texture(device, surface);
+    if (sampled) {
         if (!sync_external_surface_for_read(surface)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         if (!prepare_surface_for_host(surface)) return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
         rebind_host_surface_state(surface);
     }
     if (device->textures[stage] == surface) {
-        if (device->recording_state_block)
-            device->recording_state_block->texture_mask[stage] = 1;
-        return D3D_OK;
+        return stage != 0u || d3d7_fixup_legacy_texture_alpha(device)
+            ? D3D_OK : DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
     if (surface) surface_AddRef((IDirectDrawSurface7 *)&surface->vtbl7);
     old = device->textures[stage];
     device->textures[stage] = surface;
     ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
+    command.device_handle = device->wire_handle;
     command.stage = stage;
-    command.texture_handle = surface ? surface->handle : 0u;
+    command.texture_handle = sampled ? sampled->handle : 0u;
     if (!emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command))) {
         device->textures[stage] = old;
         if (surface) surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     }
+    BOOL alpha_ready = stage != 0u || d3d7_fixup_legacy_texture_alpha(device);
     if (old) surface_Release((IDirectDrawSurface7 *)&old->vtbl7);
-    if (device->recording_state_block)
-        device->recording_state_block->texture_mask[stage] = 1;
-    return D3D_OK;
+    return alpha_ready ? D3D_OK : DDWG_TRACE_ERROR(D3DERR_INITFAILED);
 }
 
 static HRESULT WINAPI d3d7_device_GetTextureStageState(
@@ -2360,6 +2888,18 @@ static HRESULT WINAPI d3d7_device_SetTextureStageState(
     if (stage >= D3D7_MAX_TEXTURE_STAGES ||
             !d3d7_texture_stage_state_valid(state))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    sampler_state = ddraw_stage_state_to_sampler_state(state);
+    if (sampler_state && !d3d7_sampler_value(state, value, &translated_value))
+        return DDWG_TRACE_ERROR(D3DERR_UNSUPPORTEDTEXTUREFILTER);
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->texture_stage_mask[stage][state] = 1;block->texture_stage_states[stage][state] = value;
+        if ((UINT)state == D3D7TSS_ADDRESS) {
+            block->texture_stage_mask[stage][D3DTSS_ADDRESSU] = block->texture_stage_mask[stage][D3DTSS_ADDRESSV] = 1;
+            block->texture_stage_states[stage][D3DTSS_ADDRESSU] = block->texture_stage_states[stage][D3DTSS_ADDRESSV] = value;
+        }
+        return D3D_OK;
+    }
     previous = device->texture_stage_states[stage][state];
     device->texture_stage_states[stage][state] = value;
     sampler_state = ddraw_stage_state_to_sampler_state(state);
@@ -2384,8 +2924,6 @@ static HRESULT WINAPI d3d7_device_SetTextureStageState(
         device->texture_stage_states[stage][D3DTSS_ADDRESSU] = value;
         device->texture_stage_states[stage][D3DTSS_ADDRESSV] = value;
     }
-    if (device->recording_state_block)
-        device->recording_state_block->texture_stage_mask[stage][state] = 1;
     return D3D_OK;
 }
 
@@ -2400,28 +2938,6 @@ static HRESULT WINAPI d3d7_device_ValidateDevice(IDirect3DDevice7 *iface,
 
 static BOOL d3d7_sync_initial_state(D3D7Device *device)
 {
-    static const DWORD render_states[] = {
-        D3DRENDERSTATE_ANTIALIAS, D3DRENDERSTATE_TEXTUREADDRESS,
-        D3DRENDERSTATE_TEXTUREPERSPECTIVE,
-        D3DRENDERSTATE_ZENABLE, D3DRENDERSTATE_ZWRITEENABLE,
-        D3DRENDERSTATE_ZFUNC, D3DRENDERSTATE_FILLMODE,
-        D3DRENDERSTATE_CULLMODE, D3DRENDERSTATE_SHADEMODE,
-        D3DRENDERSTATE_LASTPIXEL, D3DRENDERSTATE_TEXTUREMAG,
-        D3DRENDERSTATE_TEXTUREMIN, D3DRENDERSTATE_TEXTUREMAPBLEND,
-        D3DRENDERSTATE_ALPHAFUNC,
-        D3DRENDERSTATE_SRCBLEND, D3DRENDERSTATE_DESTBLEND,
-        D3DRENDERSTATE_TEXTUREFACTOR, D3DRENDERSTATE_FOGEND,
-        D3DRENDERSTATE_FOGDENSITY, D3DRENDERSTATE_STENCILFAIL,
-        D3DRENDERSTATE_STENCILZFAIL, D3DRENDERSTATE_STENCILPASS,
-        D3DRENDERSTATE_STENCILFUNC, D3DRENDERSTATE_STENCILMASK,
-        D3DRENDERSTATE_STENCILWRITEMASK, D3DRENDERSTATE_LIGHTING,
-        D3DRENDERSTATE_CLIPPING,
-        D3DRENDERSTATE_COLORVERTEX, D3DRENDERSTATE_LOCALVIEWER,
-        D3DRENDERSTATE_DIFFUSEMATERIALSOURCE,
-        D3DRENDERSTATE_SPECULARMATERIALSOURCE,
-        D3DRENDERSTATE_AMBIENTMATERIALSOURCE,
-        D3DRENDERSTATE_EMISSIVEMATERIALSOURCE,
-    };
     static const DWORD texture_states[] = {
         D3DTSS_COLOROP, D3DTSS_COLORARG1, D3DTSS_COLORARG2,
         D3DTSS_ALPHAOP, D3DTSS_ALPHAARG1, D3DTSS_ALPHAARG2,
@@ -2441,11 +2957,13 @@ static BOOL d3d7_sync_initial_state(D3D7Device *device)
                         &device->transforms[index])))
             return FALSE;
     }
-    for (index = 0; index < sizeof(render_states) / sizeof(render_states[0]);
-            ++index) {
-        DWORD state = render_states[index];
-        if (FAILED(d3d7_device_SetRenderState(iface,
-                (D3DRENDERSTATETYPE)state, device->render_states[state])))
+    /* Reusing an owner's host device must also clear zero defaults left by
+     * the previous public device. Legacy TEXTUREMAPBLEND is not a Device7
+     * state and must not overwrite the initialized texture-stage cascade. */
+    for (index = 0; index < D3D7_MAX_RENDER_STATES; ++index) {
+        if (d3d7_render_state_valid(index) &&
+                FAILED(d3d7_set_render_state(iface,
+                    (D3DRENDERSTATETYPE)index, device->render_states[index])))
             return FALSE;
     }
     for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
@@ -2507,9 +3025,13 @@ static HRESULT WINAPI d3d7_device_ApplyStateBlock(IDirect3DDevice7 *iface,
         if (block->light_mask[state] && block->light_set[state])
             D3D7_APPLY(d3d7_device_SetLight(iface, state,
                     &block->lights[state]));
-        if (block->light_enable_mask[state] && block->light_set[state])
+        if (block->light_enable_mask[state])
             D3D7_APPLY(d3d7_device_LightEnable(iface, state,
                     block->light_enabled[state]));
+    }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        if (entry->light_mask && entry->set) D3D7_APPLY(d3d7_device_SetLight(iface, entry->index, &entry->light));
+        if (entry->enable_mask) D3D7_APPLY(d3d7_device_LightEnable(iface, entry->index, entry->enabled));
     }
     for (state = 0; state < D3D7_MAX_CLIP_PLANES; ++state) {
         if (block->clip_plane_mask[state])
@@ -2527,8 +3049,7 @@ static HRESULT WINAPI d3d7_device_CaptureStateBlock(IDirect3DDevice7 *iface,
     D3D7StateBlock *block = d3d7_find_state_block(device, handle);
     if (!block) return DDWG_TRACE_ERROR(D3DERR_INVALIDSTATEBLOCK);
     if (device->recording_state_block) return DDWG_TRACE_ERROR(D3DERR_INBEGINSTATEBLOCK);
-    d3d7_state_block_capture(device, block);
-    return D3D_OK;
+    return d3d7_state_block_capture(device, block) ? D3D_OK : DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
 }
 
 static HRESULT WINAPI d3d7_device_DeleteStateBlock(IDirect3DDevice7 *iface,
@@ -2563,7 +3084,7 @@ static HRESULT WINAPI d3d7_device_CreateStateBlock(IDirect3DDevice7 *iface,
     block->handle = device->next_state_block_handle++;
     if (!block->handle) block->handle = device->next_state_block_handle++;
     d3d7_state_block_mark_type(block, type);
-    d3d7_state_block_capture(device, block);
+    if (!d3d7_state_block_capture(device, block)) {d3d7_state_block_destroy(block);return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);}
     block->next = device->state_blocks;
     device->state_blocks = block;
     *handle = block->handle;
@@ -2574,52 +3095,50 @@ static HRESULT WINAPI d3d7_device_Load(IDirect3DDevice7 *iface,
         IDirectDrawSurface7 *destination_iface, POINT *destination_point,
         IDirectDrawSurface7 *source_iface, RECT *source_rect, DWORD flags)
 {
-    DDSurface *destination;
-    DDSurface *source;
-    RECT destination_rect;
-    (void)iface; (void)flags;
+    D3D7Device *device = d3d7_device_from_iface(iface);
+    DDSurface *destination, *source;
     if (!destination_iface || destination_iface->lpVtbl != &g_surface_vtbl ||
             !source_iface || source_iface->lpVtbl != &g_surface_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     destination = surface_from_any(destination_iface, NULL);
     source = surface_from_any(source_iface, NULL);
-    if (destination->owner != d3d7_device_from_iface(iface)->owner ||
-            source->owner != d3d7_device_from_iface(iface)->owner)
+    if (destination->owner != device->owner || source->owner != device->owner)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (!source_rect) {
-        destination_rect.left = destination_point ? destination_point->x : 0;
-        destination_rect.top = destination_point ? destination_point->y : 0;
-        destination_rect.right = destination_rect.left + (LONG)source->width;
-        destination_rect.bottom = destination_rect.top + (LONG)source->height;
-    } else {
-        destination_rect.left = destination_point ? destination_point->x : 0;
-        destination_rect.top = destination_point ? destination_point->y : 0;
-        destination_rect.right = destination_rect.left +
-                (source_rect->right - source_rect->left);
-        destination_rect.bottom = destination_rect.top +
-                (source_rect->bottom - source_rect->top);
-    }
-    return surface_Blt((IDirectDrawSurface7 *)&destination->vtbl7,
-            &destination_rect, (IDirectDrawSurface7 *)&source->vtbl7,
-            source_rect, DDBLT_WAIT, NULL);
+    return DDWG_TRACE_ERROR(d3d_texture_load7(destination, source,
+            destination_point, source_rect, flags));
 }
 
 static HRESULT WINAPI d3d7_device_LightEnable(IDirect3DDevice7 *iface,
         DWORD index, WINBOOL enable)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    D9WGLightEnable command;
-    if (index >= D3D7_MAX_LIGHTS || !device->light_set[index])
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    ZeroMemory(&command, sizeof(command));
-    command.device_handle = device->owner->device_handle;
-    command.index = index;
-    command.enable = enable != FALSE;
-    if (!emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command)))
-        return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
-    device->light_enabled[index] = enable != FALSE;
-    if (device->recording_state_block)
-        device->recording_state_block->light_enable_mask[index] = 1;
+    D9WGLightState *entry;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        if (index < D3D7_MAX_LIGHTS) {
+            if (!block->light_mask[index] && !device->light_set[index]) {d9wg_light_default(&block->lights[index]);block->light_mask[index] = 1;block->light_set[index] = TRUE;}
+            block->light_enable_mask[index] = 1;block->light_enabled[index] = !!enable;
+        } else {
+            D9WGLightState *current = d9wg_light_find(device->extra_lights, index);
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+            if (!entry->light_mask && (!current || !current->set)) {d9wg_light_default(&entry->light);entry->light_mask = TRUE;entry->set = TRUE;}
+            entry->enable_mask = TRUE;entry->enabled = !!enable;
+        }
+        return D3D_OK;
+    }
+    entry = index < D3D7_MAX_LIGHTS ? NULL : d9wg_light_get(&device->extra_lights, index, TRUE);
+    if (index >= D3D7_MAX_LIGHTS && !entry) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+    D3DLIGHT7 *light = entry ? &entry->light : &device->lights[index];
+    BOOL *set = entry ? &entry->set : &device->light_set[index];
+    if (!*set) {
+        d9wg_light_default(light);
+        if (!d3d7_emit_light(device, index, light)) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
+        *set = TRUE;
+    }
+    D9WGLightEnable command = {device->wire_handle, index, !!enable, 0};
+    if (!emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command))) return DDWG_TRACE_ERROR(D3DERR_LIGHT_SET_FAILED);
+    if (entry) entry->enabled = !!enable;else device->light_enabled[index] = !!enable;
     return D3D_OK;
 }
 
@@ -2627,9 +3146,14 @@ static HRESULT WINAPI d3d7_device_GetLightEnable(IDirect3DDevice7 *iface,
         DWORD index, WINBOOL *enable)
 {
     D3D7Device *device = d3d7_device_from_iface(iface);
-    if (!enable || index >= D3D7_MAX_LIGHTS || !device->light_set[index])
+    BOOL known, enabled;
+    if (index < D3D7_MAX_LIGHTS) {known = device->light_set[index];enabled = device->light_enabled[index];}
+    else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        known = entry && entry->set;enabled = entry ? entry->enabled : FALSE;
+    }
+    if (!d9wg_light_query_enable(known, enabled, enable))
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *enable = device->light_enabled[index];
     return D3D_OK;
 }
 
@@ -2639,14 +3163,17 @@ static HRESULT WINAPI d3d7_device_SetClipPlane(IDirect3DDevice7 *iface,
     D3D7Device *device = d3d7_device_from_iface(iface);
     D9WGSetClipPlane command;
     if (!plane || index >= D3D7_MAX_CLIP_PLANES) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    command.device_handle = device->owner->device_handle;
+    if (device->recording_state_block) {
+        D3D7StateBlock *block = device->recording_state_block;
+        block->clip_plane_mask[index] = 1;CopyMemory(block->clip_planes[index], plane, sizeof(command.plane));
+        return D3D_OK;
+    }
+    command.device_handle = device->wire_handle;
     command.index = index;
     CopyMemory(command.plane, plane, sizeof(command.plane));
     if (!emit_command(D9WG_OP_SET_CLIP_PLANE, &command, sizeof(command)))
         return DDWG_TRACE_ERROR(D3DERR_INITFAILED);
     CopyMemory(device->clip_planes[index], plane, sizeof(command.plane));
-    if (device->recording_state_block)
-        device->recording_state_block->clip_plane_mask[index] = 1;
     return D3D_OK;
 }
 
@@ -2678,30 +3205,32 @@ static HRESULT WINAPI d3d7_device_GetInfo(IDirect3DDevice7 *iface,
  */
 static void d3d7_refresh_render_target(DDrawObject *object, DDSurface *surface)
 {
-    D3D7Device *device = object ? object->d3d7_device : NULL;
-    if (!device || device->render_target != surface) return;
-    d3d7_emit_render_target(device);
+    D3D7Device *device;
+    for (device = object ? object->d3d7_device : NULL; device; device = device->next_in_owner)
+        if (device->render_target == surface) d3d7_emit_render_target(device);
 }
 
 static void d3d7_rebind_after_flip(DDrawObject *object)
 {
-    D3D7Device *device = object ? object->d3d7_device : NULL;
+    D3D7Device *device;
     UINT stage;
-    if (!device) return;
-    d3d7_emit_render_target(device);
-    for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
-        if (device->textures[stage]) {
-            D9WGSetTexture command;
-            if (!prepare_surface_for_host(device->textures[stage]))
-                continue;
-            ZeroMemory(&command, sizeof(command));
-            command.device_handle = object->device_handle;
-            command.stage = stage;
-            command.texture_handle = device->textures[stage]->handle;
-            emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command));
+    for (device = object ? object->d3d7_device : NULL; device; device = device->next_in_owner) {
+        d3d7_emit_render_target(device);
+        for (stage = 0; stage < D3D7_MAX_TEXTURE_STAGES; ++stage) {
+            DDSurface *texture = d3d7_sampled_texture(device, device->textures[stage]);
+            if (texture) {
+                D9WGSetTexture command;
+                if (!prepare_surface_for_host(texture)) continue;
+                ZeroMemory(&command, sizeof(command));
+                command.device_handle = device->wire_handle;
+                command.stage = stage;
+                command.texture_handle = texture->handle;
+                emit_command(D9WG_OP_SET_TEXTURE, &command, sizeof(command));
+            }
         }
     }
 }
+
 
 /* ------------------------------------------------------------------ *
  * IDirect3DVertexBuffer7
@@ -2714,9 +3243,14 @@ static HRESULT WINAPI d3d7_vb_QueryInterface(IDirect3DVertexBuffer7 *iface,
     if (!out) return DDWG_TRACE_ERROR(E_POINTER);
     *out = NULL;
     if (!iid) return DDWG_TRACE_ERROR(E_NOINTERFACE);
-    if (iid_is_unknown(iid) || guid_equal(iid, &IID_IDirect3DVertexBuffer7))
+    if (iid_is_unknown(iid))
+        *out = buffer->creation_version == DD_VERSION_7
+            ? (void *)&buffer->vtbl : (void *)&buffer->legacy_vtbl;
+    else if (buffer->creation_version == DD_VERSION_7 &&
+            guid_equal(iid, &IID_IDirect3DVertexBuffer7))
         *out = &buffer->vtbl;
-    else if (guid_equal(iid, &IID_IDirect3DVertexBuffer))
+    else if (buffer->creation_version != DD_VERSION_7 &&
+            guid_equal(iid, &IID_IDirect3DVertexBuffer))
         *out = &buffer->legacy_vtbl;
     else return DDWG_TRACE_ERROR(E_NOINTERFACE);
     IDirect3DVertexBuffer7_AddRef(iface);
@@ -2735,12 +3269,14 @@ static ULONG WINAPI d3d7_vb_Release(IDirect3DVertexBuffer7 *iface)
     if (remaining == 0) {
         D9WGDestroyResource destroy;
         DDrawObject *owner = buffer->owner;
+        BOOL public_ref = buffer->owner_public_ref;
         destroy.resource_handle = buffer->handle;
         destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
         emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
         heap_free(buffer->shadow);
         heap_free(buffer);
-        ddraw_Release((IDirectDraw7 *)&owner->vtbl7);
+        ddraw_child_detach(owner, public_ref);
     }
     return (ULONG)(remaining < 0 ? 0 : remaining);
 }
@@ -2750,11 +3286,23 @@ static HRESULT WINAPI d3d7_vb_Lock(IDirect3DVertexBuffer7 *iface,
 {
     D3D7VertexBuffer *buffer = d3d7_vb_from_iface(iface);
     if (!data) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    if (buffer->locked) return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERLOCKED);
-    if (flags & DDLOCK_DISCARDCONTENTS)
-        ZeroMemory(buffer->shadow, buffer->byte_count);
+    /* These hints were introduced by Direct3D7. Legacy vertex buffers keep
+     * synchronized uploads even when callers pass the later flag bits. */
+    if (buffer->creation_version < DD_VERSION_7)
+        flags &= ~(DDLOCK_NOOVERWRITE | DDLOCK_DISCARDCONTENTS);
+    if (flags & DDLOCK_DISCARDCONTENTS) {
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
+        /* Native DD3/7 treat DISCARD as a synchronization hint; the CPU
+         * backing bytes remain observable across repeated locks. */
+    }
+    /* Repeated locks share the same mapping. Keep any write intent, and
+     * only retain NOOVERWRITE when every lock made that promise. */
+    if (buffer->locked) {
+        DWORD unanimous = DDLOCK_READONLY | DDLOCK_NOOVERWRITE;
+        buffer->lock_flags = ((buffer->lock_flags | flags) & ~unanimous)
+                | ((buffer->lock_flags & flags) & unanimous);
+    } else buffer->lock_flags = flags;
     buffer->locked = TRUE;
-    buffer->lock_flags = flags;
     *data = buffer->shadow;
     if (data_size) *data_size = buffer->byte_count;
     return D3D_OK;
@@ -2763,26 +3311,11 @@ static HRESULT WINAPI d3d7_vb_Lock(IDirect3DVertexBuffer7 *iface,
 static HRESULT WINAPI d3d7_vb_Unlock(IDirect3DVertexBuffer7 *iface)
 {
     D3D7VertexBuffer *buffer = d3d7_vb_from_iface(iface);
-    D9WGUpdateBuffer update;
-    uint8_t *payload;
-    uint8_t *blob;
     BOOL result = TRUE;
-    if (!buffer->locked) return DDWG_TRACE_ERROR(D3DERR_VERTEXBUFFERUNLOCKFAILED);
-    if (!(buffer->lock_flags & DDLOCK_READONLY)) {
-        ZeroMemory(&update, sizeof(update));
-        EnterCriticalSection(&g_transport_lock);
-        result = reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-                buffer->byte_count, &payload, &blob);
-        if (result) {
-            update.resource_handle = buffer->handle;
-            update.byte_count = buffer->byte_count;
-            update.data_offset = (uint32_t)(blob - batch_base());
-            update.lock_flags = buffer->lock_flags;
-            CopyMemory(payload, &update, sizeof(update));
-            CopyMemory(blob, buffer->shadow, buffer->byte_count);
-        }
-        LeaveCriticalSection(&g_transport_lock);
-    }
+    if (!buffer->locked) return D3D_OK;
+    if (!(buffer->lock_flags & DDLOCK_READONLY))
+        result = emit_buffer_update(buffer->handle, 0, buffer->shadow,
+                buffer->byte_count, buffer->lock_flags);
     buffer->locked = FALSE;
     buffer->lock_flags = 0;
     return DDWG_TRACE_ERROR(result ? D3D_OK
@@ -2791,246 +3324,186 @@ static HRESULT WINAPI d3d7_vb_Unlock(IDirect3DVertexBuffer7 *iface)
 
 static float d3d7_sqrt(float value)
 {
-    union { float value; uint32_t bits; } estimate;
-    UINT iteration;
-    if (!(value > 0.0f)) return 0.0f;
-    estimate.value = value;
-    estimate.bits = 0x1fbd1df5u + (estimate.bits >> 1);
-    for (iteration = 0; iteration < 4u; ++iteration)
-        estimate.value = 0.5f * (estimate.value + value / estimate.value);
-    return estimate.value;
+    return d9wg_sqrt_positive(value);
 }
 
 static void d3d7_transform_vector(const D3DMATRIX *matrix,
         const float *input, float *output)
 {
-    UINT column;
-    for (column = 0; column < 4u; ++column) {
-        output[column] = input[0] * (&matrix->_11)[column] +
-                input[1] * (&matrix->_21)[column] +
-                input[2] * (&matrix->_31)[column] +
-                input[3] * (&matrix->_41)[column];
-    }
+    d9wg_transform_vector4(matrix, input, output);
 }
 
-static float d3d7_saturate(float value)
-{
-    if (value < 0.0f) return 0.0f;
-    if (value > 1.0f) return 1.0f;
-    return value;
-}
 
-static DWORD d3d7_pack_color(const float *rgba)
-{
-    return ((DWORD)(d3d7_saturate(rgba[3]) * 255.0f + 0.5f) << 24) |
-            ((DWORD)(d3d7_saturate(rgba[0]) * 255.0f + 0.5f) << 16) |
-            ((DWORD)(d3d7_saturate(rgba[1]) * 255.0f + 0.5f) << 8) |
-            (DWORD)(d3d7_saturate(rgba[2]) * 255.0f + 0.5f);
-}
 
-static void d3d7_light_vertex(D3D7Device *device, const float *eye_position,
-        const float *eye_normal, float *rgba)
+
+
+static BOOL d3d7_prepare_lighting(D3D7Device *device, const D3DMATRIX *world_view,
+        BOOL lighting, D9WGTNLLighting *state)
 {
-    DWORD ambient_state = device->render_states[D3DRENDERSTATE_AMBIENT];
-    float scene_ambient[3];
     UINT index;
-    scene_ambient[0] = ((ambient_state >> 16) & 0xffu) / 255.0f;
-    scene_ambient[1] = ((ambient_state >> 8) & 0xffu) / 255.0f;
-    scene_ambient[2] = (ambient_state & 0xffu) / 255.0f;
-    rgba[0] = device->material.emissive.r +
-            device->material.ambient.r * scene_ambient[0];
-    rgba[1] = device->material.emissive.g +
-            device->material.ambient.g * scene_ambient[1];
-    rgba[2] = device->material.emissive.b +
-            device->material.ambient.b * scene_ambient[2];
-    rgba[3] = device->material.diffuse.a;
-    for (index = 0; index < D3D7_MAX_LIGHTS; ++index) {
-        const D3DLIGHT7 *light;
-        float to_light[3];
-        float attenuation = 1.0f;
-        float length;
-        float dot;
-        if (!device->light_set[index] || !device->light_enabled[index])
-            continue;
-        light = &device->lights[index];
-        if (light->dltType == D3DLIGHT_DIRECTIONAL ||
-                light->dltType == D3DLIGHT_PARALLELPOINT) {
-            float direction[4];
-            float view_direction[4];
-            const D3DVECTOR *source = light->dltType == D3DLIGHT_PARALLELPOINT
-                    ? &light->dvPosition : &light->dvDirection;
-            direction[0] = source->x;
-            direction[1] = source->y;
-            direction[2] = source->z;
-            direction[3] = 0.0f;
-            d3d7_transform_vector(&device->transforms[D3DTRANSFORMSTATE_VIEW],
-                    direction, view_direction);
-            length = d3d7_sqrt(view_direction[0] * view_direction[0] +
-                    view_direction[1] * view_direction[1] +
-                    view_direction[2] * view_direction[2]);
-            if (length < 1.0e-6f) continue;
-            to_light[0] = -view_direction[0] / length;
-            to_light[1] = -view_direction[1] / length;
-            to_light[2] = -view_direction[2] / length;
-        } else {
-            float position[4];
-            float view_position[4];
-            position[0] = light->dvPosition.x;
-            position[1] = light->dvPosition.y;
-            position[2] = light->dvPosition.z;
-            position[3] = 1.0f;
-            d3d7_transform_vector(&device->transforms[D3DTRANSFORMSTATE_VIEW],
-                    position, view_position);
-            to_light[0] = view_position[0] - eye_position[0];
-            to_light[1] = view_position[1] - eye_position[1];
-            to_light[2] = view_position[2] - eye_position[2];
-            length = d3d7_sqrt(to_light[0] * to_light[0] +
-                    to_light[1] * to_light[1] + to_light[2] * to_light[2]);
-            if (length > light->dvRange) continue;
-            if (length < 1.0e-6f) length = 1.0e-6f;
-            to_light[0] /= length;
-            to_light[1] /= length;
-            to_light[2] /= length;
-            attenuation = light->dvAttenuation0 +
-                    light->dvAttenuation1 * length +
-                    light->dvAttenuation2 * length * length;
-            attenuation = attenuation < 1.0e-6f ? 1.0f : 1.0f / attenuation;
-        }
-        dot = eye_normal[0] * to_light[0] +
-                eye_normal[1] * to_light[1] +
-                eye_normal[2] * to_light[2];
-        if (dot < 0.0f) dot = 0.0f;
-        rgba[0] += attenuation *
-                (device->material.ambient.r * light->dcvAmbient.r +
-                 device->material.diffuse.r * light->dcvDiffuse.r * dot);
-        rgba[1] += attenuation *
-                (device->material.ambient.g * light->dcvAmbient.g +
-                 device->material.diffuse.g * light->dcvDiffuse.g * dot);
-        rgba[2] += attenuation *
-                (device->material.ambient.b * light->dcvAmbient.b +
-                 device->material.diffuse.b * light->dcvDiffuse.b * dot);
+    static const float identity[16] = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    float legacy_light_transform[16];
+    const void *lighting_view = &device->transforms[D3DTRANSFORMSTATE_VIEW];
+    d9wg_lighting_sdk_prepare(state, &device->material, device->render_states, world_view);
+    state->specular_alpha_material = device->creation_version >= 7u;
+    if (device->creation_version < 7u && device->material.power == 0.0f)
+        state->flags.specular_enable = FALSE;
+    state->flags.lighting = lighting &&
+            (device->creation_version >= 7u || device->legacy_material);
+    if (!state->flags.lighting) return TRUE;
+    if (device->creation_version < 7u) {
+        d9wg_lighting_legacy_geometry(state, &device->transforms[D3DTRANSFORMSTATE_WORLD],
+                &device->transforms[D3DTRANSFORMSTATE_VIEW], legacy_light_transform);
+        lighting_view = legacy_light_transform;
     }
+    for (index = 0; index < D3D7_MAX_LIGHTS; ++index) {
+        if (device->light_set[index] && device->light_enabled[index] &&
+                !d9wg_lighting_sdk_add(state, index, &device->lights[index],
+                    device->creation_version < 7u && device->lights[index].dltType == D3DLIGHT_PARALLELPOINT
+                            ? identity : lighting_view)) return FALSE;
+    }
+    for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next) {
+        if (entry->set && entry->enabled && !d9wg_lighting_sdk_add(state, entry->index, &entry->light,
+                device->creation_version < 7u && entry->light.dltType == D3DLIGHT_PARALLELPOINT
+                        ? identity : lighting_view)) return FALSE;
+    }
+    return TRUE;
 }
 
 static BOOL d3d7_upload_vertex_range(D3D7VertexBuffer *buffer,
         UINT offset, UINT byte_count)
 {
-    D9WGUpdateBuffer update;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-    ZeroMemory(&update, sizeof(update));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_BUFFER, sizeof(update),
-            byte_count, &payload, &blob);
-    if (result) {
-        update.resource_handle = buffer->handle;
-        update.destination_offset = offset;
-        update.byte_count = byte_count;
-        update.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &update, sizeof(update));
-        CopyMemory(blob, buffer->shadow + offset, byte_count);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+    return emit_buffer_update(buffer->handle, offset, buffer->shadow + offset,
+            byte_count, 0);
 }
 
 static HRESULT d3d7_process_vertex_bytes(D3D7VertexBuffer *destination,
         DWORD vertex_op, DWORD destination_index, DWORD count,
         const BYTE *source, DWORD source_fvf, UINT source_stride,
-        DWORD source_index, D3D7Device *device)
+        DWORD source_index, D3D7Device *device, DWORD flags)
 {
-    D3D7FVFLayout source_layout, destination_layout;
-    D9WGVertexElement source_elements[D3D7_MAX_VERTEX_ELEMENTS];
-    D9WGVertexElement destination_elements[D3D7_MAX_VERTEX_ELEMENTS];
-    UINT source_element_count = 0, destination_element_count = 0;
+    D9WGProcessLayout source_layout, destination_layout;
     D3DMATRIX world_view, world_view_projection;
-    UINT vertex;
-    if (!(vertex_op & D3DVOP_TRANSFORM) || !count || !source ||
-            !d3d7_decode_fvf(source_fvf, &source_layout, source_elements,
-                    &source_element_count) ||
-            !d3d7_decode_fvf(destination->desc.dwFVF, &destination_layout,
-                    destination_elements, &destination_element_count) ||
-            source_layout.position_bytes != 12u ||
-            destination_layout.position_bytes != 16u ||
-            source_stride < source_layout.stride || destination->locked ||
-            destination_index > destination->desc.dwNumVertices ||
-            count > destination->desc.dwNumVertices - destination_index)
+    D9WGTNLLighting light_state;
+    uint32_t destination_offset;
+    if (!(vertex_op & D3DVOP_TRANSFORM) || !count || !source || destination->locked ||
+            !d9wg_process_fvf(D9WG_FVF_D3D7, source_fvf, &source_layout) ||
+            !d9wg_process_legacy_output(destination->desc.dwFVF, &destination_layout) ||
+            source_layout.position_transformed)
         return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
+    if (!d9wg_process_range(destination->byte_count, 0, destination->stride,
+            destination_layout.stride, destination_index, count, &destination_offset))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
     d3d7_multiply_matrix(&device->transforms[D3DTRANSFORMSTATE_WORLD],
             &device->transforms[D3DTRANSFORMSTATE_VIEW], &world_view);
     d3d7_multiply_matrix(&world_view,
-            &device->transforms[D3DTRANSFORMSTATE_PROJECTION],
-            &world_view_projection);
-    for (vertex = 0; vertex < count; ++vertex) {
-        const BYTE *input = source +
-                (source_index + vertex) * source_stride;
-        BYTE *output = destination->shadow +
-                (destination_index + vertex) * destination->stride;
-        float position[4], clip[4], rhw;
-        UINT stage;
-        position[0] = ((const float *)(input + source_layout.position_offset))[0];
-        position[1] = ((const float *)(input + source_layout.position_offset))[1];
-        position[2] = ((const float *)(input + source_layout.position_offset))[2];
-        position[3] = 1.0f;
-        d3d7_transform_vector(&world_view_projection, position, clip);
-        rhw = (clip[3] > 1.0e-6f || clip[3] < -1.0e-6f)
-                ? 1.0f / clip[3] : 1.0f;
-        ((float *)(output + destination_layout.position_offset))[0] =
-                (clip[0] * rhw * 0.5f + 0.5f) * device->viewport.dwWidth +
-                device->viewport.dwX;
-        ((float *)(output + destination_layout.position_offset))[1] =
-                (0.5f - clip[1] * rhw * 0.5f) * device->viewport.dwHeight +
-                device->viewport.dwY;
-        ((float *)(output + destination_layout.position_offset))[2] =
-                device->viewport.dvMinZ + clip[2] * rhw *
-                (device->viewport.dvMaxZ - device->viewport.dvMinZ);
-        ((float *)(output + destination_layout.position_offset))[3] = rhw;
-        if (destination_layout.has_diffuse) {
-            DWORD color = 0xffffffffu;
-            if ((vertex_op & D3DVOP_LIGHT) && source_layout.has_normal) {
-                float eye_position[4], normal[4], eye_normal[4];
-                float length, lit[4];
-                d3d7_transform_vector(&world_view, position, eye_position);
-                normal[0] = ((const float *)(input + source_layout.normal_offset))[0];
-                normal[1] = ((const float *)(input + source_layout.normal_offset))[1];
-                normal[2] = ((const float *)(input + source_layout.normal_offset))[2];
-                normal[3] = 0.0f;
-                d3d7_transform_vector(&world_view, normal, eye_normal);
-                length = d3d7_sqrt(eye_normal[0] * eye_normal[0] +
-                        eye_normal[1] * eye_normal[1] +
-                        eye_normal[2] * eye_normal[2]);
-                if (length > 1.0e-6f) {
-                    eye_normal[0] /= length;
-                    eye_normal[1] /= length;
-                    eye_normal[2] /= length;
-                }
-                d3d7_light_vertex(device, eye_position, eye_normal, lit);
-                color = d3d7_pack_color(lit);
-            } else if (source_layout.has_diffuse) {
-                color = *(const DWORD *)(input + source_layout.diffuse_offset);
-            }
-            *(DWORD *)(output + destination_layout.diffuse_offset) = color;
-        }
-        if (destination_layout.has_specular) {
-            *(DWORD *)(output + destination_layout.specular_offset) =
-                    source_layout.has_specular ?
-                    *(const DWORD *)(input + source_layout.specular_offset) : 0u;
-        }
-        for (stage = 0; stage < destination_layout.texcoord_count; ++stage) {
-            UINT bytes = destination_layout.texcoord_bytes[stage];
-            if (stage < source_layout.texcoord_count &&
-                    source_layout.texcoord_bytes[stage] < bytes)
-                bytes = source_layout.texcoord_bytes[stage];
-            if (stage < source_layout.texcoord_count)
-                CopyMemory(output + destination_layout.texcoord_offset[stage],
-                        input + source_layout.texcoord_offset[stage], bytes);
+            &device->transforms[D3DTRANSFORMSTATE_PROJECTION], &world_view_projection);
+    if (!d3d7_prepare_lighting(device, &world_view, (vertex_op & D3DVOP_LIGHT) != 0, &light_state))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    BOOL update_normal_inverse = device->creation_version >= 7u && light_state.flags.lighting &&
+            source_layout.normal >= 0 && !device->render_states[D3DRENDERSTATE_VERTEXBLEND]
+            && d9wg_lighting_process7_normal(&light_state, &world_view, device->process_normal_inverse);
+    if (device->creation_version >= 7u && light_state.flags.lighting) {
+        if (light_state.material.power == 0.0f)
+            light_state.material.power = device->process_specular_power;
+        if (light_state.material.power == 0.0f)
+            light_state.flags.specular_enable = FALSE;
+    }
+    D9WGVertexState vertex_state;
+    d9wg_vertex_state_init(&vertex_state, device->render_states);
+    vertex_state.blend_zero_w_nan = device->creation_version >= 7u && !(vertex_op & D3DVOP_CLIP);
+    if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
+            sizeof(device->texture_stage_states[0]), &device->transforms[D3DTRANSFORMSTATE_TEXTURE0]))
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    d9wg_vertex_clip_planes_init(&vertex_state, device->render_states[D3DRENDERSTATE_CLIPPLANEENABLE],
+            device->clip_planes, &device->transforms[D3DTRANSFORMSTATE_WORLD]);
+    D9WGProcessViewport viewport = { (float)device->viewport.dwX, (float)device->viewport.dwY,
+            (float)device->viewport.dwWidth, (float)device->viewport.dwHeight,
+            device->viewport.dvMinZ, device->viewport.dvMaxZ };
+    /* The public/strided entry points already validate the source allocation. */
+    uint64_t source_length = ((uint64_t)source_index + count)*source_stride;
+    if (source_length > 0xffffffffu) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
+            &device->transforms[D3DTRANSFORMSTATE_WORLD], 4, 2,
+            &device->transforms[D3DTRANSFORMSTATE_VIEW], &device->transforms[D3DTRANSFORMSTATE_PROJECTION]);
+    if (blend_error) return DDWG_TRACE_ERROR(blend_error == 2 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
+    D3DDEVICEDESC7 caps;D9WGClipBatch *clip_batch;
+    d3d7_fill_caps_for(&device->device_guid, &caps);
+    const float guard_band[4] = {caps.dvGuardBandLeft, caps.dvGuardBandTop,
+            caps.dvGuardBandRight, caps.dvGuardBandBottom};
+    uint32_t clip_error = d9wg_vertex_windows_clip(&vertex_state, (vertex_op & D3DVOP_CLIP) != 0,
+            destination_layout.legacy_xyz_output ? 0 : destination_offset + destination_layout.position,
+            destination_layout.legacy_xyz_output ? 16 : destination->stride,
+            count, &viewport, guard_band, &clip_batch);
+    if (clip_error) {
+        d9wg_vertex_windows_blend_free(&vertex_state);
+        return DDWG_TRACE_ERROR(clip_error == 2 ? DDERR_OUTOFMEMORY : DDERR_INVALIDPARAMS);
+    }
+    /* Original VertexBuffer3 copies colours/texture coordinates even with
+     * DONOTCOPYDATA; VertexBuffer7 applies the flag to unaffected attributes. */
+    BOOL processed = d9wg_process_vertices(&source_layout,
+            source, (uint32_t)source_length, 0, source_stride, source_index, &destination_layout,
+            destination->shadow, destination->byte_count, destination_index, count,
+            &world_view, &world_view_projection, &viewport, &light_state,
+            device->creation_version < 7u || !(flags & D3DPV_DONOTCOPYDATA), &vertex_state);
+    d9wg_vertex_windows_blend_free(&vertex_state);
+    if (!processed) {
+        if (clip_batch) d9wg_vertex_windows_clip_release(NULL, clip_batch);
+        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    }
+    if (device->creation_version >= 7u && light_state.flags.lighting &&
+            device->material.power > 0.0f)
+        device->process_specular_power = device->material.power;
+    if (update_normal_inverse)
+        CopyMemory(device->process_normal_inverse, light_state.normal_matrix,
+                sizeof(device->process_normal_inverse));
+    d9wg_clip_legacy_processed(&device->clip_status, clip_batch,
+            destination->shadow + destination_offset + destination_layout.position,
+            destination->stride, count, (vertex_op & D3DVOP_EXTENTS) != 0, &viewport);
+    /* XYZ records are temporary classification data. Their fourth position
+     * word overlaps an attribute / next vertex, so they cannot be retained
+     * as XYZRHW draw metadata. */
+    if (destination_layout.legacy_xyz_output && clip_batch) {
+        d9wg_vertex_windows_clip_release(NULL, clip_batch);clip_batch = NULL;
+    }
+    UINT written = count * destination->stride;
+    if (destination_layout.write_extent > destination->stride) {
+        UINT extra = destination_layout.write_extent - destination->stride;
+        UINT available = destination->byte_count - destination_offset - written;
+        written += extra < available ? extra : available;
+    }
+    d9wg_clip_buffer_commit(&destination->clips, clip_batch, destination_offset,
+            written, d9wg_vertex_windows_clip_release, NULL);
+    return d3d7_upload_vertex_range(destination, destination_offset, written)
+            ? D3D_OK : D3DERR_VERTEXBUFFERUNLOCKFAILED;
+}
+
+/* Legacy weighted processing can consume scalars following XYZ even when
+ * the FVF omitted them. Transcode only bytes within the source backing. */
+static BYTE *d3d7_implicit_weight_stream(const BYTE *source,
+        UINT source_bytes, UINT source_stride, UINT first, UINT count, UINT weights)
+{
+    if (!weights || weights > 3u) return NULL;
+    UINT output_stride = 12u + weights*4u;
+    if (!count || source_stride < 12u || count > 0xffffffffu / output_stride)
+        return NULL;
+    uint64_t first_offset = (uint64_t)first*source_stride;
+    if (first_offset > source_bytes || source_bytes - first_offset < 12u ||
+            (uint64_t)(count - 1u)*source_stride > source_bytes - first_offset - 12u)
+        return NULL;
+    BYTE *expanded = heap_alloc_zero((SIZE_T)count*output_stride);
+    if (!expanded) return NULL;
+    for (UINT vertex = 0; vertex < count; ++vertex) {
+        uint64_t offset = ((uint64_t)first + vertex)*source_stride;
+        CopyMemory(expanded + vertex*output_stride, source + (UINT)offset, 12u);
+        for (UINT weight = 0; weight < weights; ++weight) {
+            uint64_t weight_offset = offset + 12u + weight*4u;
+            if (weight_offset + 4u <= source_bytes)
+                CopyMemory(expanded + vertex*output_stride + 12u + weight*4u,
+                        source + (UINT)weight_offset, 4u);
         }
     }
-    return d3d7_upload_vertex_range(destination,
-            destination_index * destination->stride,
-            count * destination->stride) ? D3D_OK :
-            D3DERR_VERTEXBUFFERUNLOCKFAILED;
+    return expanded;
 }
 
 static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
@@ -3041,7 +3514,6 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
     D3D7VertexBuffer *destination = d3d7_vb_from_iface(iface);
     D3D7VertexBuffer *source;
     D3D7Device *d3d_device;
-    (void)flags;
     if (!source_iface || source_iface->lpVtbl != &g_d3d7_vb_vtbl ||
             !device || device->lpVtbl != &g_d3d7_device_vtbl)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
@@ -3052,17 +3524,39 @@ static HRESULT WINAPI d3d7_vb_ProcessVertices(IDirect3DVertexBuffer7 *iface,
             source_index > source->desc.dwNumVertices ||
             count > source->desc.dwNumVertices - source_index)
         return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    return d3d7_process_vertex_bytes(destination, vertex_op,
-            destination_index, count, source->shadow, source->desc.dwFVF,
-            source->stride, source_index, d3d_device);
+    BYTE *snapshot = NULL;
+    const BYTE *input = source->shadow;
+    if (source == destination) {
+        snapshot = heap_alloc_zero(source->byte_count);
+        if (!snapshot) return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY);
+        CopyMemory(snapshot, source->shadow, source->byte_count);input = snapshot;
+    }
+    BYTE *expanded = NULL;
+    DWORD fvf = source->desc.dwFVF;
+    UINT stride = source->stride;
+    UINT weights = d3d_device->render_states[D3DRENDERSTATE_VERTEXBLEND];
+    if (count && fvf == D3DFVF_XYZ && weights >= 1u && weights <= 3u) {
+        expanded = d3d7_implicit_weight_stream(input, source->byte_count,
+                stride, source_index, count, weights);
+        if (!expanded) { heap_free(snapshot);return DDWG_TRACE_ERROR(DDERR_OUTOFMEMORY); }
+        input = expanded;fvf = D3DFVF_XYZB1 + (weights - 1u)*2u;
+        stride = 12u + weights*4u;source_index = 0;
+    }
+    HRESULT result = d3d7_process_vertex_bytes(destination, vertex_op,
+            destination_index, count, input, fvf, stride, source_index, d3d_device, flags);
+    heap_free(expanded);heap_free(snapshot);return result;
 }
 
 static HRESULT WINAPI d3d7_vb_GetVertexBufferDesc(
         IDirect3DVertexBuffer7 *iface, D3DVERTEXBUFFERDESC *description)
 {
-    if (!description || description->dwSize != sizeof(*description))
-        return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
-    *description = d3d7_vb_from_iface(iface)->desc;
+    const D3DVERTEXBUFFERDESC *stored = &d3d7_vb_from_iface(iface)->desc;
+    if (!description) return DDWG_TRACE_ERROR(DDERR_INVALIDPARAMS);
+    /* Native fills the three payload fields, independently of the caller's
+     * dwSize. It preserves that word, including zero. */
+    description->dwCaps = stored->dwCaps;
+    description->dwFVF = stored->dwFVF;
+    description->dwNumVertices = stored->dwNumVertices;
     return D3D_OK;
 }
 
@@ -3091,7 +3585,6 @@ static HRESULT WINAPI d3d7_vb_ProcessVerticesStrided(
     D9WGVertexElement elements[D3D7_MAX_VERTEX_ELEMENTS];
     UINT element_count = 0;
     HRESULT result;
-    (void)flags;
     if (!device || device->lpVtbl != &g_d3d7_device_vtbl ||
             d3d7_device_from_iface(device)->owner != destination->owner ||
             !d3d7_decode_fvf(fvf, &layout, elements, &element_count))
@@ -3102,7 +3595,7 @@ static HRESULT WINAPI d3d7_vb_ProcessVerticesStrided(
     if (!packed) return DDWG_TRACE_ERROR(D3DERR_INVALIDVERTEXFORMAT);
     result = d3d7_process_vertex_bytes(destination, vertex_op,
             destination_index, count, packed, fvf, layout.stride, 0,
-            d3d_device);
+            d3d_device, flags);
     heap_free(packed);
     return DDWG_TRACE_ERROR(result);
 }

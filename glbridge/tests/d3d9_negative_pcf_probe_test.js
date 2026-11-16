@@ -19,8 +19,11 @@ const binary = path.join(directory, "probe");
 fs.writeFileSync(input, `
 #include <assert.h>
 #include <stdint.h>
+#include "${path.resolve(__dirname, "../runtime/d9wg_format_queries.h")}"
+#include "${path.resolve(__dirname, "../d3d9proxy/d3d9_protocol.h")}"
 typedef int BOOL;
-typedef void IDirect3D9;
+typedef struct{uint32_t compatibility_api;}IDirect3D9;
+#define d3d_from_iface(p) (p)
 typedef uint32_t UINT, DWORD, D3DDEVTYPE, D3DFORMAT, D3DRESOURCETYPE;
 typedef int32_t HRESULT;
 #define WINAPI
@@ -28,13 +31,23 @@ typedef int32_t HRESULT;
 #define FALSE 0
 #define SUCCEEDED(hr) ((hr) >= 0)
 #define D3D_OK ((HRESULT)0)
+#define D3DOK_NOAUTOGEN ((HRESULT)0x0876086f)
 #define D3DERR_NOTAVAILABLE ((HRESULT)0x8876086A)
 #define D3DDEVTYPE_HAL 1
+#define D3DRTYPE_SURFACE 1
+#define D3DRTYPE_VERTEXBUFFER 6
+#define D3DRTYPE_INDEXBUFFER 7
 #define D3DRTYPE_TEXTURE 3
 #define D3DRTYPE_VOLUMETEXTURE 4
+#define D3DRTYPE_CUBETEXTURE 5
 #define D3DPOOL_DEFAULT 0
+#define D3DFMT_UNKNOWN 0
+#define D3DFMT_A8R8G8B8 21
+#define D3DERR_INVALIDCALL ((HRESULT)0x8876086c)
+#define D3DUSAGE_RENDERTARGET 1u
 #define D3DUSAGE_SOFTWAREPROCESSING 0x10u
 #define D3DUSAGE_AUTOGENMIPMAP 0x400u
+#define D3DUSAGE_DYNAMIC 0x200u
 #define D3DUSAGE_DMAP 0x4000u
 #define D3DUSAGE_QUERY_LEGACYBUMPMAP 0x8000u
 #define D3DUSAGE_QUERY_SRGBREAD 0x10000u
@@ -45,29 +58,47 @@ typedef int32_t HRESULT;
 #define D3DUSAGE_QUERY_WRAPANDMIP 0x200000u
 #define D9FOURCC_NO_PCF 0x4643502Du
 static unsigned infos, warnings;
+static void *g_process;static int g_transport_lock;
+static void EnterCriticalSection(int *lock){++*lock;}static void LeaveCriticalSection(int *lock){--*lock;}
+static BOOL submit_batch_locked(BOOL present){(void)present;return TRUE;}
+static UINT shader_model_version(void){return 3;}
+static BOOL supported_render_target_format(D3DFORMAT format){return format==21;}
+static uint32_t d9wg_transport_host_features(void *process,uint32_t features,BOOL (*flush)(BOOL)){(void)process;(void)features;(void)flush;return 0;}
+
 #define TRACE(...) ((void)0)
 #define HOSTLOG_INFO(...) (++infos)
 #define HOSTLOG_REFUSED(...) (++warnings)
+#define TRACE_REFUSE(hr) (++warnings, (hr))
 // The query's shared creation predicate is external to the behavior under
 // test. Accept the D32 depth texture queried next by 3DMark05, nothing else.
 static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
         D3DFORMAT format, DWORD pool) {
     return type == D3DRTYPE_TEXTURE && usage == 2 && format == 71 && pool == 0;
 }
+${source.match(/static uint32_t runtime_host_features\(void\)[\s\S]*?\n}/)[0]}
+// This test targets ordinary9 diagnostics; the actual API8 helper is covered
+// by d8wg_format_core_test. Reaching it from a profile9 root is a failure.
+static HRESULT d3d_check_device_format8(IDirect3D9*r,UINT a,D3DDEVTYPE t,D3DFORMAT d,DWORD u,D3DRESOURCETYPE k,D3DFORMAT f){(void)r;(void)a;(void)t;(void)d;(void)u;(void)k;(void)f;assert(!"API8 route on ordinary9 root");return D3DERR_NOTAVAILABLE;}
 ${source.slice(start, end)}
 int main(void) {
-    HRESULT hr = d3d_check_device_format(0, 0, D3DDEVTYPE_HAL, 22, 0, 3, D9FOURCC_NO_PCF);
+    IDirect3D9 factory={9};
+    HRESULT hr = d3d_check_device_format(&factory, 0, D3DDEVTYPE_HAL, 22, 0, 3, D9FOURCC_NO_PCF);
     assert(hr == D3DERR_NOTAVAILABLE);
     assert(infos == 1 && warnings == 0);
-    hr = d3d_check_device_format(0, 0, D3DDEVTYPE_HAL, 22, 0x20002, 3, 71);
+    hr = d3d_check_device_format(&factory, 0, D3DDEVTYPE_HAL, 22, 0x20002, 3, 71);
     assert(hr == D3D_OK && warnings == 0);
     // Unrelated unknown formats and non-probe combinations stay visible.
-    assert(d3d_check_device_format(0, 0, 1, 22, 0, 3, 0x12345678) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 0, 1, 22, 2, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 0, 1, 22, 0, 5, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 1, 1, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
-    assert(d3d_check_device_format(0, 0, 2, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 3, 0x12345678) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 2, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 5, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 1, 1, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
+    assert(d3d_check_device_format(&factory, 0, 2, 22, 0, 3, D9FOURCC_NO_PCF) == D3DERR_NOTAVAILABLE);
     assert(infos == 1 && warnings == 5);
+    // Invalid adapters and buffer resource types are malformed calls, even for the probe FOURCC.
+    assert(d3d_check_device_format(&factory, 0, 1, 0, 0, 3, D9FOURCC_NO_PCF) == D3DERR_INVALIDCALL);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 6, D9FOURCC_NO_PCF) == D3DERR_INVALIDCALL);
+    assert(d3d_check_device_format(&factory, 0, 1, 22, 0, 7, D9FOURCC_NO_PCF) == D3DERR_INVALIDCALL);
+    assert(infos == 1 && warnings == 8);
     return 0;
 }
 `);

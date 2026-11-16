@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
+globalThis.V86GL_BUILD_REVISION = "5a4f0bf2252e904cfe40";
 // D3D9 shader-model 1.x/2.0/3.0 bytecode -> WGSL translation pipeline (M2).
 //
 // Plan section 9 proposed vkd3d-shader(wasm) -> SPIR-V -> Tint(wasm) -> WGSL
@@ -20,9 +20,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
 // to keep alive, no LGPL redistribution obligation (plan section 25 flags
 // this as unresolved for vkd3d), and a translator that is unit-testable
 // directly in Node. What it costs: correctness rests on this file's own test
-// suite instead of Wine's decades of game coverage, and the few ps_1_x
-// texture-addressing forms with no honest translation are refused (see
-// UNSUPPORTED_OPS) rather than approximated. compileShader() is the seam: it takes raw
+// suite instead of Wine's decades of game coverage. compileShader() takes raw
 // bytecode and returns WGSL + reflection, so swapping in a WASM backend later
 // changes only this file.
 //
@@ -108,6 +106,14 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         TEXM3x2DEPTH: 84, TEXDP3: 85, TEXM3x3: 86, TEXDEPTH: 87, CMP: 88,
         BEM: 89, DP2ADD: 90, DSX: 91, DSY: 92, TEXLDD: 93, SETP: 94,
         TEXLDL: 95, BREAKP: 96,
+        // Private NV40 arithmetic in D9WG shader bytecode. Never emitted by the guest D3D
+        // proxy: control selects RCC, legacy EXP/LOG, LIT, RCP, RSQ or LG2.
+        NV_ALU: 0x1000,
+        NV_LOAD: 0x1001, NV_STORE: 0x1002, NV_HALF: 0x1003, NV_COPY: 0x1004,
+        NV_PACK: 0x1005, NV_UNPACK: 0x1006,
+        NV_DEPTH_SAMPLER: 0x1007,
+        NV_DIV: 0x1008,
+        NV_SAT: 0x1009,
         PHASE: 0xfffd, COMMENT: 0xfffe, END: 0xffff,
     };
 
@@ -116,22 +122,6 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         for (const key of Object.keys(OP)) names[OP[key]] = key.toLowerCase();
         return names;
     })();
-
-    // What remains of the ps_1_x texture-addressing family after the bump and
-    // matrix forms were implemented (see the TEXBEM/TEXM3x*/BEM cases in
-    // emit()).
-    //
-    // These three are the ones with no honest translation. TEXDEPTH and
-    // TEXM3x2DEPTH replace the fragment's depth from a texture-addressing
-    // result, which needs a frag_depth output the surrounding pipeline is not
-    // built for; TEXM3x3 is the Radeon-era variant that writes a 3x3 result
-    // without sampling, and nothing that reaches this translator emits it.
-    // Refusing keeps the "no pretending" discipline: the shader is marked
-    // unusable and draws that bind it are counted and skipped, rather than
-    // silently rendering something wrong.
-    const UNSUPPORTED_OPS = new Set([
-        OP.TEXM3x2DEPTH, OP.TEXM3x3, OP.TEXDEPTH,
-    ]);
 
     // Operand shape per opcode: [destCount, sourceCount]. SM2.0+ instruction
     // tokens also carry a length field, which parseShader() uses as the
@@ -154,6 +144,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         [OP.BREAKP]: [0, 1], [OP.MOVA]: [1, 1], [OP.SETP]: [1, 2],
         [OP.TEXCOORD]: [1, 0], [OP.TEXKILL]: [1, 0],
         [OP.EXPP]: [1, 1], [OP.LOGP]: [1, 1], [OP.CND]: [1, 3],
+        [OP.NV_ALU]: [1, 1],
+        [OP.NV_LOAD]: [1, 1], [OP.NV_STORE]: [1, 2],
+        [OP.NV_HALF]: [1, 1], [OP.NV_COPY]: [1, 2],
+        [OP.NV_PACK]: [1, 2], [OP.NV_UNPACK]: [1, 1],
+        [OP.NV_DEPTH_SAMPLER]: [1, 0],
+        [OP.NV_DIV]: [1, 2],
+        [OP.NV_SAT]: [1, 1],
         [OP.CMP]: [1, 3], [OP.DP2ADD]: [1, 3], [OP.DSX]: [1, 1],
         [OP.DSY]: [1, 1], [OP.TEXLDD]: [1, 4], [OP.TEXLDL]: [1, 2],
         [OP.TEXREG2AR]: [1, 1], [OP.TEXREG2GB]: [1, 1],
@@ -180,13 +177,8 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
     // 0x1.fffffep+127 is f32 max exactly.
     const FLOAT_MAX = "0x1.fffffep+127";
 
-    // Canonical vertex-output/pixel-input varying slots. Vertex and pixel
-    // shaders are compiled into separate GPUShaderModules and only meet
-    // inside a GPURenderPipeline, so their @location numbering has to be
-    // fixed by semantic rather than negotiated per pair. Every translated
-    // vertex shader emits all of these (WebGPU allows a vertex stage to
-    // produce outputs the fragment stage ignores, but not the reverse), so
-    // no VS/PS combination can ever fail to link.
+    // Legacy shaders and fixed-function stages share canonical varying slots.
+    // SM3 shader pairs remap semantic components in their entry wrappers.
     // Identifies *this build of the translator* to the persistent shader
     // cache. The cache's own `version` field describes the storage format, so
     // it stayed at 1 while the translator changed underneath it -- and every
@@ -265,8 +257,84 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             return VARYING_COLOR0 + usageIndex;
         if (usage === DECLUSAGE_TEXCOORD && usageIndex < 8)
             return VARYING_TEXCOORD0 + usageIndex;
-        if (usage === DECLUSAGE_FOG) return VARYING_FOG;
+        if (usage === DECLUSAGE_FOG && usageIndex === 0) return VARYING_FOG;
         return -1;
+    }
+
+    // Match semantic components at link time, then pack only consumed values
+    // into WebGPU locations. A PS3 has at most forty input components; splitting
+    // flat colours from interpolated values still fits eleven vec4 locations.
+    function linkShaderSemantics(vertex, pixel) {
+        try {
+            if (!pixel || pixel.version.major < 3) return {ok: true, link: null, key: ""};
+            const programmable3 = vertex && vertex.version.major >= 3;
+            const declarations = programmable3 ? vertex.outputDeclarations || [] :
+                [{usage: DECLUSAGE_COLOR, usageIndex: 0, slot: 0, mask: 15},
+                    {usage: DECLUSAGE_COLOR, usageIndex: 1, slot: 1, mask: 15},
+                    ...Array.from({length: 8}, (_, index) =>
+                        ({usage: DECLUSAGE_TEXCOORD, usageIndex: index, slot: index + 2, mask: 15})),
+                    {usage: DECLUSAGE_FOG, usageIndex: 0, slot: 10, mask: 1}];
+            const bySemantic = new Map(), outputComponents = new Set();
+            for (const item of declarations) {
+                if (programmable3) for (let component = 0; component < 4; ++component) if (item.mask & 1 << component) {
+                    const address = item.register * 4 + component;
+                    if (item.register >= 12 || outputComponents.has(address))
+                        throw new Error("overlapping or out-of-range vertex output declaration");
+                    outputComponents.add(address);
+                }
+                const key = item.usage + ":" + item.usageIndex;
+                if (bySemantic.has(key)) throw new Error("duplicate vertex output semantic " + key);
+                bySemantic.set(key, item);
+            }
+            const inputs = pixel.inputDeclarations || pixel.inputs.map(item => ({...item, mask: 15}));
+            const matched = [], occupied = new Set(), semantics = new Set();
+            for (const input of inputs) {
+                const key = input.usage + ":" + input.usageIndex;
+                if (semantics.has(key)) throw new Error("duplicate pixel input semantic " + key);
+                semantics.add(key);
+                const output = bySemantic.get(key);
+                // Between two programmable SM3 stages an input the vertex shader
+                // never writes is legal and reads zero; only the fixed canonical
+                // slots of a legacy vertex stage must match exactly.
+                if (!programmable3 && (!output || input.mask & ~output.mask))
+                    throw new Error("unmatched pixel input semantic " + key + " mask " + input.mask);
+                for (let component = 0; component < 4; ++component) if (input.mask & 1 << component) {
+                    const address = input.register * 4 + component;
+                    if (input.register >= 10 || occupied.has(address))
+                        throw new Error("overlapping or out-of-range pixel input declaration");
+                    occupied.add(address);
+                    matched.push({input, output, component,
+                        written: !!output && !!(output.mask & 1 << component),
+                        flat: input.usage === DECLUSAGE_COLOR && input.usageIndex < 2});
+                }
+            }
+            const link = {vertex: programmable3 ? [] : null, pixel: [], flatSlots: []};
+            let cursor = 0;
+            for (const flat of [false, true]) {
+                cursor = Math.ceil(cursor / 4) * 4;
+                for (const item of matched.filter(item => item.flat === flat)) {
+                    const slot = programmable3 ? cursor >> 2 : item.output.slot;
+                    const channel = programmable3 ? cursor & 3 : item.component;
+                    if (slot >= VARYING_COUNT) throw new Error("inter-stage component budget exceeded");
+                    if (flat && !link.flatSlots.includes(slot)) link.flatSlots.push(slot);
+                    link.pixel.push({register: item.input.register, component: item.component, slot, channel});
+                    if (programmable3 && item.written) link.vertex.push({register: item.output.register,
+                        component: item.component, slot, channel,
+                        usage: item.input.usage, usageIndex: item.input.usageIndex});
+                    ++cursor;
+                }
+            }
+            // Fixed-function/legacy vertex modules always mark both canonical
+            // colour slots flat, including an unconsumed one.
+            if (!programmable3) link.flatSlots = [VARYING_COLOR0, VARYING_COLOR1];
+            const encode = item => (item.register | item.component << 4 | item.slot << 6 |
+                item.channel << 10 | (item.usage || 0) << 12 | (item.usageIndex || 0) << 16).toString(36);
+            const key = (link.vertex ? link.vertex.map(encode).join(".") : "legacy") + "/" +
+                link.pixel.map(encode).join(".") + "/" + link.flatSlots.join(".");
+            return {ok: true, link, key};
+        } catch (error) {
+            return {ok: false, error: error.message};
+        }
     }
 
     // ---- bytecode parsing ----
@@ -415,6 +483,33 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         return String(value);
     }
 
+    function sampleSwizzleExpression(expression, swizzle) {
+        if (!swizzle) return expression;
+        if (swizzle === "rgb1") return "vec4<f32>((" + expression + ").rgb, 1.0)";
+        if (swizzle === "r111") return "vec4<f32>((" + expression + ").r, 1.0, 1.0, 1.0)";
+        if (swizzle === "rg11") return "vec4<f32>((" + expression + ").rg, 1.0, 1.0)";
+        if (swizzle === "rrrr") return "vec4<f32>((" + expression + ").r)";
+        if (swizzle === "gr11") return "vec4<f32>((" + expression + ").gr, 1.0, 1.0)";
+        throw new Error("Unsupported D3D texture sample swizzle " + swizzle);
+    }
+
+    // AMD Fetch4 (D3DSAMP_MIPMAPLODBIAS = 'GET4'): one gather of level 0 in place
+    // of every sampling form, returning the 2x2 footprint whose first texel is
+    // floor(coord * size) as (top-right, bottom-left, bottom-right, top-left).
+    // textureGather itself starts at floor(coord * size - 0.5), hence the
+    // half-texel shift; the sampler's address modes still apply.
+    function fetch4Expression(texture, sampler, coord, channel) {
+        const shifted = "((" + coord + ") + vec2<f32>(0.5) / vec2<f32>(textureDimensions(" + texture + ")))";
+        return "textureGather(" + (channel === "depth" ? "" : channel + ", ") + texture + ", " +
+            sampler + ", " + shifted + ").zxyw";
+    }
+
+    const PROGRAM_MAPS = ["usedInputs", "outputSemantics", "samplers", "floatDefaults", "intDefaults", "boolDefaults", "nvDepthFunctions"];
+    const PROGRAM_SETS = ["temps", "writtenVaryings", "psTexcoordInputs", "bumpStages", "psColorInputs", "colorOutputs"];
+    const PROGRAM_VALUES = ["outputDeclarations", "inputDeclarations", "usesAddress", "usesLoopCounter", "usesPredicate",
+        "usesPointSize", "usesDepthOutput", "usesFragPosition", "usesFrontFacing", "usesRelativeConstants", "usesRelativeInputs",
+        "maxFloatConst", "maxIntConst", "maxBoolConst", "temporaryId", "warnings", "nvAlu", "nvRegisters"];
+
     class Translator {
         constructor(parsed, options) {
             this.parsed = parsed;
@@ -425,8 +520,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             this.lines = [];
             this.indent = 2;
             this.temps = new Set();
+            this.nvAlu = false;
+            this.nvRegisters = false;
+            this.nvDepthFunctions = new Map();
             this.usedInputs = new Map();       // register -> {usage, usageIndex}
             this.outputSemantics = new Map();  // vs_3_0 o# -> {usage, usageIndex}
+            this.outputDeclarations = [];
+            this.inputDeclarations = [];
             this.samplers = new Map();         // index -> "2d"|"cube"|"3d"
             // Stages the caller has a D3D9 depth texture bound to. D3D9 has no
             // syntax for a shadow sample: `tex2D`/`tex2Dproj` on a sampler
@@ -445,19 +545,24 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // comparison one, and no reference value at all.
             this.requestedDepthFetchSamplers = new Set(
                 (this.options.depthFetchSamplers || []).map(index => index | 0));
-            // D3DSAMP_MIPMAPLODBIAS per sampler, already quantised by the
-            // caller. WebGPU samplers have no bias field, so it can only be
-            // applied at the sample call; it arrives as a compile option rather
-            // than a uniform because that keeps it out of the per-draw uniform
-            // writer, and the caller folds it into the shader variant key.
+            // Standalone translations may supply literal sampler bias values.
+            // The executor uses samplerLodBiasUniform so changing a float value
+            // only updates per-draw constants, preserving the compiled module.
             this.samplerLodBias = this.options.samplerLodBias || null;
             // D3DTADDRESS_MIRRORONCE per sampler, as the axis letters that use
             // it ("xy", "x", ...). The host sampler is already clamp-to-edge
             // for such an axis, so mirroring about zero is all that is left,
             // and abs() on the coordinate is exactly that. It arrives as a
-            // compile option for the same reason the LOD bias does: it changes
+            // compile option because it changes
             // the WGSL, so it belongs in the shader variant key.
             this.samplerMirrorOnce = this.options.samplerMirrorOnce || null;
+            // D3DRS_SHADEMODE's D3DSHADE_FLAT: the two colour varyings take
+            // the provoking vertex's value, with shaders as without them (as
+            // wined3d's flatshading). A vertex output and the fragment input
+            // at one location must agree, so the caller passes the same flag
+            // to both stages, as the fixed-function ones get it, and keys the
+            // variant on it.
+            this.flatShading = !!this.options.flatShading;
             this.writtenVaryings = new Set();
             this.usesAddress = false;
             this.usesLoopCounter = false;
@@ -467,6 +572,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             this.usesFragPosition = false;
             this.usesFrontFacing = false;
             this.usesRelativeConstants = false;
+            this.usesRelativeInputs = false;
             this.maxFloatConst = -1;
             this.maxIntConst = -1;
             this.maxBoolConst = -1;
@@ -482,16 +588,30 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             this.matrixRows = [];
             this.psColorInputs = new Set();    // ps v# registers touched
             this.colorOutputs = new Set();
-            this.controlDepth = 0;             // >0 => inside if/loop
-            this.nonUniformDepth = 0;          // >0 => implicit-LOD sampling illegal
-            this.nonUniformFrames = [];        // open non-uniform regions
+            // per destination component, the predicate a predicated
+            // instruction's store() is gated by
+            this.predicateGate = null;
             this.levelZeroSamples = 0;
             this.temporaryId = 0;
             this.warnings = [];
+            this.sampleOperations = [];
+            this.sampleOperationKeys = new Map();
         }
 
         emit(text) {
             this.lines.push(" ".repeat(this.indent) + text);
+        }
+
+        // One varying of the inter-stage struct, the same in both stages:
+        // with flat shading the colour slots are flat (texture coordinates
+        // and fog keep interpolating, as in D3D9)
+        varyingDeclaration(slot) {
+            const flat = this.flatShading && (this.options.semanticLink
+                ? this.options.semanticLink.flatSlots.includes(slot)
+                : slot === VARYING_COLOR0 || slot === VARYING_COLOR1);
+            return "    @location(" + slot + ")" +
+                (flat ? " @interpolate(flat)" : "") +
+                " varying" + slot + ": vec4<f32>,";
         }
 
         fresh(prefix) {
@@ -511,7 +631,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return String(base);
             }
             this.usesRelativeConstants = true;
-            this.maxFloatConst = Math.max(this.maxFloatConst, 255);
+            this.maxFloatConst = Math.max(this.maxFloatConst, this.constantCapacity() - 1);
             // vs_1_1 has no relative-index token: a0.x is the only legal
             // index register. vs_2_0+ names it (a0 or aL) explicitly.
             let index = "a0.x";
@@ -525,22 +645,48 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             } else {
                 this.usesAddress = true;
             }
-            return "clamp(" + index + " + " + base + ", 0, " +
-                (this.constantCapacity() - 1) + ")";
+            return "clamp(" + index + " + " + base + ", 0, d9_float_constant_max)";
+        }
+
+        relativeRegisterIndex(operand, output) {
+            if (this.major !== 3 || !operand.relativeToken)
+                throw new Error("relative input/output addressing requires shader model 3");
+            const relative = decodeSource(operand.relativeToken, 0);
+            if (relative.index || relative.modifier || relative.relative)
+                throw new Error("invalid relative input/output index register");
+            let index;
+            if (relative.type === REG_LOOP) {
+                this.usesLoopCounter = true;
+                index = "aL";
+            } else if (!output && this.kind === "vertex" && relative.type === REG_ADDR) {
+                this.usesAddress = true;
+                index = "a0." + SWIZZLE_CHARS[relative.swizzle & 3];
+            } else {
+                throw new Error("relative input/output index requires " +
+                    (!output && this.kind === "vertex" ? "a0 or aL" : "aL"));
+            }
+            return "(" + index + " + " + operand.index + ")";
         }
 
         constantCapacity() {
-            return this.kind === "vertex" ? 256 : 224;
+            return this.kind === "vertex" ? (this.options.floatConstantCapacity === 8192 ? 8192 : 256) : 224;
         }
 
         // Raw (unswizzled, unmodified) vec4<f32> read of a source register.
         rawSource(source) {
+            if (source.relative && ![REG_CONST, REG_CONST2, REG_CONST3, REG_CONST4, REG_INPUT].includes(source.type))
+                throw new Error("source register does not support relative addressing");
             switch (source.type) {
             case REG_TEMP:
                 this.temps.add(source.index);
                 return "r" + source.index;
-            case REG_CONST:
-                return "d9c.f[" + this.constantIndexExpression(source, 0) + "]";
+            case REG_CONST: {
+                const value = "d9c.f[" + this.constantIndexExpression(source, 0) + "]";
+                // SM1 pixel constants have the hardware range [-1, 1]. Apply
+                // this before source swizzles/modifiers, including DEF values.
+                return this.kind === "pixel" && this.major === 1
+                    ? "clamp(" + value + ", vec4<f32>(-1.0), vec4<f32>(1.0))" : value;
+            }
             case REG_CONST2:
                 return "d9c.f[" + this.constantIndexExpression(source, 1) + "]";
             case REG_CONST3:
@@ -568,6 +714,11 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 this.psTexcoordInputs.add(source.index);
                 return "t" + source.index;
             case REG_INPUT:
+                if (source.relative) {
+                    const index = this.relativeRegisterIndex(source, false);
+                    this.usesRelativeInputs = true;
+                    return "d9_read_input(" + index + ")";
+                }
                 if (this.kind === "vertex") {
                     if (!this.usedInputs.has(source.index))
                         this.usedInputs.set(source.index, null);
@@ -586,10 +737,8 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     return "vec4<f32>(d9_face)";
                 }
                 throw new Error("unsupported misc register index " + source.index);
-            case REG_OUTPUT: // readable in vs_3_0 (o# behaves like a temp)
-                if (this.kind === "vertex" && this.major >= 3)
-                    return "o" + source.index;
-                throw new Error("output register is not readable in this shader model");
+            case REG_OUTPUT:
+                throw new Error("output registers are write-only");
             default:
                 throw new Error("unsupported source register type " + source.type);
             }
@@ -640,6 +789,8 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         // Name of the lvalue a destination register writes through, plus the
         // bookkeeping that makes it exist in the prologue/epilogue.
         destTarget(dest) {
+            if (dest.relative && !(this.kind === "vertex" && this.major === 3 && dest.type === REG_OUTPUT))
+                throw new Error("destination register does not support relative addressing");
             switch (dest.type) {
             case REG_TEMP:
                 this.temps.add(dest.index);
@@ -671,21 +822,27 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             }
             case REG_OUTPUT: {
                 if (this.kind === "vertex" && this.major >= 3) {
+                    if (dest.relative) {
+                        const index = this.relativeRegisterIndex(dest, true);
+                        for (const declaration of this.outputDeclarations) {
+                            if (declaration.usageIndex === 0 &&
+                                    ((declaration.usage === DECLUSAGE_POSITION && declaration.register !== 0) ||
+                                     (declaration.usage === DECLUSAGE_PSIZE && declaration.register !== 1)))
+                                throw new Error("indexed outputs require POSITION0 at o0 and PSIZE0 at o1");
+                            const slot = varyingForSemantic(declaration.usage, declaration.usageIndex);
+                            if (slot >= 0) this.writtenVaryings.add(slot);
+                        }
+                        return "o_raw[" + index + "]";
+                    }
                     const semantic = this.outputSemantics.get(dest.index);
                     if (!semantic)
                         throw new Error("vs_3_0 output o" + dest.index +
                             " was written without a dcl semantic");
-                    if (semantic.usage === DECLUSAGE_POSITION) return "o_position";
-                    if (semantic.usage === DECLUSAGE_PSIZE) {
-                        this.usesPointSize = true;
-                        return "o_pointsize";
+                    for (const declaration of this.outputDeclarations.filter(item => item.register === dest.index)) {
+                        const slot = varyingForSemantic(declaration.usage, declaration.usageIndex);
+                        if (slot >= 0) this.writtenVaryings.add(slot);
                     }
-                    const slot = varyingForSemantic(semantic.usage, semantic.usageIndex);
-                    if (slot < 0)
-                        throw new Error("vs_3_0 output semantic " + semantic.usage +
-                            "[" + semantic.usageIndex + "] has no varying slot");
-                    this.writtenVaryings.add(slot);
-                    return "o_varying" + slot;
+                    return "o_raw[" + dest.index + "]";
                 }
                 const slot = VARYING_TEXCOORD0 + dest.index;
                 if (dest.index > 7)
@@ -701,7 +858,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return "o_depthv";
             case REG_PREDICATE:
                 this.usesPredicate = true;
-                return "p0f";
+                return "p0";
             default:
                 throw new Error("unsupported destination register type " + dest.type);
             }
@@ -713,7 +870,6 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         // statement per component rather than `dest.xy = ...`.
         store(dest, valueExpression, options) {
             const asBool = options && options.bool;
-            this.noteRegisterWrite(dest);
             const target = this.destTarget(dest);
             const name = this.fresh("v");
             let value = valueExpression;
@@ -729,14 +885,29 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     value = "clamp(" + value + ", vec4<f32>(0.0), vec4<f32>(1.0))";
             }
             this.emit("let " + name + " = " + value + ";");
-            if (dest.writeMask === 0xf) {
-                this.emit(target + " = " + name + ";");
-                return;
+            const gate = this.predicateGate;
+            if (dest.relative) {
+                const index = this.relativeRegisterIndex(dest, true);
+                // Undefined accesses must not alias an unrelated output, nor
+                // alter POSITION/PSIZE. Keep value evaluation outside the guard.
+                const excluded = [...new Set(this.outputDeclarations.filter(item =>
+                    item.usage === DECLUSAGE_POSITION || item.usage === DECLUSAGE_PSIZE).map(item => item.register))];
+                this.emit("if (" + index + " >= 0 && " + index + " < 12" +
+                    excluded.map(register => " && " + index + " != " + register).join("") + ") {");
+                this.indent += 2;
             }
-            for (let i = 0; i < 4; ++i) {
+            if (dest.writeMask === 0xf && !gate) {
+                this.emit(target + " = " + name + ";");
+            } else for (let i = 0; i < 4; ++i) {
                 if (!(dest.writeMask & (1 << i))) continue;
                 const component = WRITEMASK_NAMES[i];
-                this.emit(target + "." + component + " = " + name + "." + component + ";");
+                this.emit(target + "." + component + " = " + (gate
+                    ? "select(" + target + "." + component + ", " + name + "." + component + ", " + gate[i] + ")"
+                    : name + "." + component) + ";");
+            }
+            if (dest.relative) {
+                this.indent -= 2;
+                this.emit("}");
             }
         }
 
@@ -750,15 +921,14 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             for (const instruction of parsed.instructions) {
                 if (instruction.opcode === OP.DCL) this.declare(instruction);
                 else if (instruction.opcode === OP.DEF)
-                    this.floatDefaults.set(instruction.dest.index, instruction.literals);
+                    this.floatDefaults.set(instruction.dest.index +
+                        (instruction.dest.type === REG_CONST2 ? 2048 : instruction.dest.type === REG_CONST3 ? 4096 :
+                            instruction.dest.type === REG_CONST4 ? 6144 : 0), instruction.literals);
                 else if (instruction.opcode === OP.DEFI)
                     this.intDefaults.set(instruction.dest.index, instruction.literals);
                 else if (instruction.opcode === OP.DEFB)
                     this.boolDefaults.set(instruction.dest.index, instruction.literals[0]);
-                else if (UNSUPPORTED_OPS.has(instruction.opcode))
-                    throw new Error("unsupported instruction '" +
-                        (OP_NAMES[instruction.opcode] || instruction.opcode) +
-                        "' (ps_1_x bump-environment/matrix texture addressing)");
+
             }
             for (const [register, literals] of this.floatDefaults)
                 this.maxFloatConst = Math.max(this.maxFloatConst, register);
@@ -783,7 +953,21 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             this.emitBlock(routines.main);
             const mainBody = this.lines;
 
-            return this.assemble(routines, bodies, mainBody);
+            return this.prepareProgram(routines, bodies, mainBody);
+        }
+
+        prepareProgram(routines, bodies, mainBody) {
+            // Plain data survives worker structured cloning and JSON cache
+            // persistence. Instruction operands are deliberately absent: a
+            // specialization cannot walk or retranslate the bytecode body.
+            const maps = {}, sets = {}, values = {};
+            for (const name of PROGRAM_MAPS) maps[name] = Array.from(this[name]);
+            for (const name of PROGRAM_SETS) sets[name] = Array.from(this[name]);
+            for (const name of PROGRAM_VALUES) values[name] = this[name];
+            return {version: 1, kind: this.kind, major: this.major, minor: this.minor,
+                maps, sets, values, sampleOperations: this.sampleOperations,
+                subroutines: routines.subroutines.map(routine => ({label: routine.label})),
+                bodies: Array.from(bodies), mainBody};
         }
 
         declare(instruction) {
@@ -795,11 +979,18 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return;
             }
             if (this.kind === "vertex" && dest.type === REG_INPUT) {
+                if (dest.index >= 16) throw new Error("vertex input register exceeds v15");
                 this.usedInputs.set(dest.index, {
                     usage: declaration.usage, usageIndex: declaration.usageIndex });
                 return;
             }
             if (this.kind === "vertex" && dest.type === REG_OUTPUT && this.major >= 3) {
+                if (dest.index >= 12) throw new Error("vs_3_0 output register exceeds o11");
+                const item = { register: dest.index, usage: declaration.usage,
+                    usageIndex: declaration.usageIndex, mask: dest.writeMask };
+                this.outputDeclarations.push(item);
+                if (item.usage === DECLUSAGE_PSIZE && item.usageIndex === 0)
+                    this.usesPointSize = true;
                 this.outputSemantics.set(dest.index, {
                     usage: declaration.usage, usageIndex: declaration.usageIndex });
                 return;
@@ -811,6 +1002,11 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 else if (dest.type === REG_INPUT) {
                     this.usedInputs.set(dest.index, {
                         usage: declaration.usage, usageIndex: declaration.usageIndex });
+                    if (this.major >= 3) {
+                        if (dest.index >= 10) throw new Error("ps_3_0 input register exceeds v9");
+                        this.inputDeclarations.push({register: dest.index, usage: declaration.usage,
+                            usageIndex: declaration.usageIndex, mask: dest.writeMask});
+                    }
                     this.psColorInputs.add(dest.index);
                 }
 
@@ -880,33 +1076,46 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             const dest = instruction.dest;
             const sources = instruction.sources;
 
+            if (instruction.predicated && instruction.predicate && dest &&
+                    opcode !== OP.TEXKILL) {
+                // `(p0) mov r0, r1` -- predication gates each destination
+                // component by its own predicate component (the predicate's
+                // swizzle picks which), so the instruction runs and store()
+                // keeps the old value where the gate is false
+                this.usesPredicate = true;
+                const predicate = instruction.predicate;
+                const not = predicate.modifier === SRCMOD_NOT ? "!" : "";
+                this.predicateGate = [0, 1, 2, 3].map(i =>
+                    not + "p0." + SWIZZLE_CHARS[(predicate.swizzle >> (i * 2)) & 0x3]);
+                try {
+                    this.instruction(Object.assign({}, instruction, { predicated: false }));
+                } finally {
+                    this.predicateGate = null;
+                }
+                return;
+            }
             if (instruction.predicated && instruction.predicate) {
-                // `(p0.x) mov r0, r1` -- run the instruction, then keep the
-                // old value where the predicate is false. Doing it as a
-                // guarded block is simpler and matches the semantics for
-                // every opcode, including texture reads.
+                // texkill (whose operand is not written) runs under the
+                // predicate's first component
                 this.usesPredicate = true;
                 const predicate = instruction.predicate;
                 const component = SWIZZLE_CHARS[predicate.swizzle & 0x3];
                 const negated = predicate.modifier === SRCMOD_NOT;
                 this.emit("if (" + (negated ? "!" : "") + "p0." + component + ") {");
                 this.indent += 2;
-                ++this.controlDepth;
-                ++this.nonUniformDepth;
-                this.pushNonUniformFrame();
                 const inner = Object.assign({}, instruction, { predicated: false });
                 this.instruction(inner);
-                (this.nonUniformFrames || []).pop();
-                --this.nonUniformDepth;
-                --this.controlDepth;
                 this.indent -= 2;
                 this.emit("}");
                 return;
             }
 
             const s = i => this.sourceExpression(sources[i]);
+            // Unswizzled VS 1.x scalar operands use w. Replicated operands
+            // still select their explicit component after swizzling.
             const scalar = (i, component) =>
-                "(" + this.sourceExpression(sources[i]) + ")." + (component || "x");
+                "(" + this.sourceExpression(sources[i]) + ")." +
+                    (component || (this.kind === "vertex" && this.major === 1 ? "w" : "x"));
 
             switch (opcode) {
             case OP.NOP: case OP.PHASE:
@@ -915,13 +1124,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return;
             case OP.MOV:
                 // vs_1_1 predates MOVA. Its only legal way to load a0.x is
-                // `mov a0.x, src`, which performs the same round-to-nearest
-                // float-to-integer conversion MOVA performs in later models.
+                // `mov a0.x, src`. Windows floors this value (Wine visual.c
+                // test_mova); MOVA in later models uses nearest rounding.
                 // Keep the float mirror for masked assignment, then update
                 // the integer register relative c[a0.x + n] reads.
                 if (this.kind === "vertex" && this.major === 1 &&
                         dest.type === REG_ADDR) {
-                    this.store(dest, "round(" + s(0) + ")");
+                    this.store(dest, "floor(" + s(0) + ")");
                     this.emit("a0 = vec4<i32>(a0f);");
                 } else {
                     this.store(dest, s(0));
@@ -950,6 +1159,98 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             case OP.FRC: this.store(dest, "fract(" + s(0) + ")"); return;
             case OP.ABS: this.store(dest, "abs(" + s(0) + ")"); return;
             case OP.RCP: this.store(dest, "vec4<f32>(d9_rcp(" + scalar(0) + "))"); return;
+            case OP.NV_ALU:
+                if (instruction.control > 6 || this.kind !== "vertex" && ![4, 6].includes(instruction.control))
+                    throw new Error("invalid private NV40 arithmetic variant");
+                this.nvAlu = true;
+                this.store(dest, "nv40_alu(" + instruction.control + "u, " + s(0) + ")");
+                return;
+            case OP.NV_DIV:
+                if (this.kind !== "pixel" || instruction.control)
+                    throw new Error("invalid private NV40 fragment division");
+                this.nvAlu = true;
+                this.store(dest, "nv40_div(" + s(0) + ", (" + s(1) + ").x)");
+                return;
+            case OP.NV_SAT:
+                if (this.kind !== "pixel" || instruction.control)
+                    throw new Error("invalid private NV40 fragment saturation");
+                this.nvRegisters = true;
+                this.store(dest, "nv40_saturate(" + s(0) + ")");
+                return;
+            case OP.NV_LOAD: case OP.NV_STORE: case OP.NV_HALF: case OP.NV_COPY: {
+                if (this.kind !== "pixel" || instruction.control > 1 || instruction.predicated ||
+                    dest.relative || dest.type !== REG_TEMP || dest.modifier || dest.shift)
+                    throw new Error("invalid private NV40 fragment register operation");
+                this.nvRegisters = true;
+                const half = instruction.control, physical = opcode === OP.NV_LOAD ? sources[0] : dest;
+                if (opcode !== OP.NV_HALF && (physical.index >= 64 || physical.type !== REG_TEMP || physical.relative))
+                    throw new Error("invalid private NV40 fragment register index");
+                if (opcode === OP.NV_HALF) {
+                    this.store(dest, "nv40_half(" + s(0) + ")"); return;
+                }
+                if (opcode === OP.NV_LOAD) {
+                    if (sources[0].modifier || sources[0].swizzle !== 0xe4)
+                        throw new Error("invalid private NV40 register load source");
+                    this.store(dest, "nv40_load(" + physical.index + "u, " + half + "u)"); return;
+                }
+                const value = this.fresh("nv"), predicate = this.fresh("nv_gate");
+                if (opcode === OP.NV_COPY) {
+                    const source = sources[0];
+                    if (source.type !== REG_TEMP || source.relative || source.index >= 64 ||
+                        ![SRCMOD_NONE, SRCMOD_NEG, SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier))
+                        throw new Error("invalid private NV40 register copy source");
+                    let raw = "nv40_raw(" + source.index + "u, " + half + "u)." + swizzleString(source.swizzle);
+                    const sign = half ? "0x8000u" : "0x80000000u";
+                    if ([SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier)) raw = "(" + raw + " & vec4<u32>(~" + sign + "))";
+                    if ([SRCMOD_NEG, SRCMOD_ABSNEG].includes(source.modifier)) raw = "(" + raw + " ^ vec4<u32>(" + sign + "))";
+                    this.emit("let " + value + " = " + raw + ";");
+                } else {
+                    this.emit("let " + value + " = " + (half ? "nv40_encode(" + s(0) + ")" : "bitcast<vec4<u32>>(" + s(0) + ")") + ";");
+                }
+                this.emit("let " + predicate + " = " + s(1) + ";");
+                for (let lane = 0; lane < 4; lane++) if (dest.writeMask & 1 << lane) {
+                    const component = WRITEMASK_NAMES[lane];
+                    this.emit("if (" + predicate + "." + component + " >= 0.0) { nv40_write(" +
+                        physical.index + "u, " + half + "u, " + lane + "u, " + value + "." + component + "); }");
+                }
+                return;
+            }
+            case OP.NV_PACK: case OP.NV_UNPACK: {
+                const pack = opcode === OP.NV_PACK, control = instruction.control;
+                if (this.kind !== "pixel" || control > (pack ? 3 : 7) || instruction.predicated ||
+                    dest.relative || dest.type !== REG_TEMP || pack && (dest.index >= 64 || dest.modifier || dest.shift))
+                    throw new Error("invalid private NV40 fragment packing operation");
+                this.nvRegisters = true;
+                if (pack) {
+                    const value = this.fresh("nv_pack"), predicate = this.fresh("nv_gate");
+                    this.emit("let " + value + " = nv40_pack(" + control + "u, " + s(0) + ");");
+                    this.emit("let " + predicate + " = " + s(1) + ";");
+                    for (let lane = 0; lane < 4; lane++) if (dest.writeMask & 1 << lane) {
+                        const component = WRITEMASK_NAMES[lane];
+                        this.emit("if (" + predicate + "." + component + " >= 0.0) { nv40_write(" +
+                            dest.index + "u, 0u, " + lane + "u, " + value + "); }");
+                    }
+                } else {
+                    const source = sources[0], physical = !!(control & 4);
+                    if (source.relative || physical && (source.type !== REG_TEMP || source.index >= 64) ||
+                        ![SRCMOD_NONE, SRCMOD_NEG, SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier))
+                        throw new Error("invalid private NV40 unpack source");
+                    let value = physical ? "nv40_raw(" + source.index + "u, 0u)"
+                        : "bitcast<vec4<u32>>(" + this.rawSource(source) + ")";
+                    value = "(" + value + ")." + SWIZZLE_CHARS[source.swizzle & 3];
+                    if ([SRCMOD_ABS, SRCMOD_ABSNEG].includes(source.modifier)) value = "(" + value + " & 0x7fffffffu)";
+                    if ([SRCMOD_NEG, SRCMOD_ABSNEG].includes(source.modifier)) value = "(" + value + " ^ 0x80000000u)";
+                    this.store(dest, "nv40_unpack(" + (control & 3) + "u, " + value + ")");
+                }
+                return;
+            }
+            case OP.NV_DEPTH_SAMPLER:
+                if (this.kind !== "pixel" || instruction.control > 7 || instruction.predicated ||
+                    dest.type !== REG_SAMPLER || dest.index >= 16 || dest.relative || dest.modifier || dest.shift)
+                    throw new Error("invalid private NV40 depth sampler");
+                this.nvDepthFunctions.set(dest.index, ["never", "greater", "equal", "greater-equal",
+                    "less", "not-equal", "less-equal", "always"][instruction.control]);
+                return;
             case OP.RSQ: this.store(dest, "vec4<f32>(d9_rsq(" + scalar(0) + "))"); return;
             case OP.EXP: this.store(dest, "vec4<f32>(exp2(" + scalar(0) + "))"); return;
             case OP.LOG: this.store(dest, "vec4<f32>(d9_log(" + scalar(0) + "))"); return;
@@ -965,7 +1266,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return;
             case OP.LOGP: this.store(dest, "vec4<f32>(d9_log(" + scalar(0) + "))"); return;
             case OP.POW:
-                this.store(dest, "vec4<f32>(pow(abs(" + scalar(0) + "), " +
+                this.store(dest, "vec4<f32>(d9_pow(" + scalar(0) + ", " +
                     scalar(1) + "))");
                 return;
             case OP.DP3:
@@ -983,7 +1284,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     s(1) + ").xyz), 0.0)");
                 return;
             case OP.NRM:
-                this.store(dest, "vec4<f32>(d9_normalize((" + s(0) + ").xyz), 0.0)");
+                this.store(dest, "d9_normalize(" + s(0) + ")");
                 return;
             case OP.SGN: this.store(dest, "sign(" + s(0) + ")"); return;
             case OP.LIT: this.store(dest, "d9_lit(" + s(0) + ")"); return;
@@ -1016,9 +1317,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             case OP.DSX:
             case OP.DSY: {
                 const builtin = opcode === OP.DSX ? "dpdx" : "dpdy";
-                this.store(dest, this.nonUniformDepth > 0
-                    ? this.derivativeExpression(builtin, sources[0])
-                    : builtin + "(" + s(0) + ")");
+                this.store(dest, builtin + "(" + s(0) + ")");
                 return;
             }
             case OP.M4x4: this.matrix(dest, sources, 4, 4); return;
@@ -1051,6 +1350,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 } else {
                     this.store(dest, s(0));
                 }
+                return;
+            }
+            case OP.TEXDEPTH: {
+                if (this.kind !== "pixel" || this.major !== 1 || this.minor !== 4 || dest.type !== REG_TEMP || dest.index !== 5)
+                    throw new Error("texdepth requires ps_1_4 r5");
+                this.temps.add(5);
+                this.emitLegacyDepth("r5.x", "r5.y");
                 return;
             }
             case OP.TEX: this.textureLoad(instruction); return;
@@ -1099,16 +1405,15 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 this.psTexcoordInputs.add(index);
                 this.bumpStages.add(index);
                 const bump = "d9c.bump[" + index + "]";
-                const source = this.rawSource({ type: sources[0].type,
-                    index: sources[0].index, swizzle: 0xe4, modifier: 0,
-                    relative: false, relativeToken: 0 });
-                const perturbed = this.fresh("bem");
-                this.emit("let " + perturbed + " = t" + index + ".xy + vec2<f32>(" +
+                const source = this.sourceExpression(sources[0]);
+                // The displacement is added to the stage's own coordinate after
+                // D3DTTFF_PROJECTED has divided it, as the plain tex form would.
+                const displacement = "vec2<f32>(" +
                     bump + ".x * (" + source + ").x + " + bump + ".z * (" +
                     source + ").y, " + bump + ".y * (" + source + ").x + " +
-                    bump + ".w * (" + source + ").y);");
+                    bump + ".w * (" + source + ").y)";
                 const sampled = this.sampleExpression(index,
-                    { coord: perturbed, ref: null }, {});
+                    this.coordinateFor(index, "t" + index, "legacy"), { offset: displacement });
                 if (instruction.opcode === OP.TEXBEM) {
                     this.store(dest, sampled);
                 } else {
@@ -1129,9 +1434,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 const index = dest.index;
                 this.psTexcoordInputs.add(index);
                 const value = "dot(t" + index + ".xyz, (" +
-                    this.rawSource({ type: sources[0].type,
-                        index: sources[0].index, swizzle: 0xe4, modifier: 0,
-                        relative: false, relativeToken: 0 }) + ").xyz)";
+                    this.sourceExpression(sources[0]) + ").xyz)";
                 this.store(dest, "vec4<f32>(" + value + ")");
                 return;
             }
@@ -1144,9 +1447,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 this.psTexcoordInputs.add(index);
                 const coord = this.fresh("dp3tex");
                 this.emit("let " + coord + " = vec2<f32>(dot(t" + index +
-                    ".xyz, (" + this.rawSource({ type: sources[0].type,
-                        index: sources[0].index, swizzle: 0xe4, modifier: 0,
-                        relative: false, relativeToken: 0 }) +
+                    ".xyz, (" + this.sourceExpression(sources[0]) +
                     ").xyz), 0.0);");
                 this.store(dest, this.sampleExpression(index,
                     { coord, ref: null }, {}));
@@ -1161,10 +1462,27 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 const row = this.fresh("m3row");
                 this.psTexcoordInputs.add(dest.index);
                 this.emit("let " + row + " = dot(t" + dest.index + ".xyz, (" +
-                    this.rawSource({ type: sources[0].type,
-                        index: sources[0].index, swizzle: 0xe4, modifier: 0,
-                        relative: false, relativeToken: 0 }) + ").xyz);");
+                    this.sourceExpression(sources[0]) + ").xyz);");
                 this.matrixRows.push(row);
+                return;
+            }
+            case OP.TEXM3x2DEPTH: {
+                if (this.kind !== "pixel" || this.major !== 1 || this.minor !== 3)
+                    throw new Error("texm3x2depth requires ps_1_3");
+                this.psTexcoordInputs.add(dest.index);
+                const last = this.fresh("m3depth");
+                this.emit("let " + last + " = dot(t" + dest.index + ".xyz, (" + s(0) + ").xyz);");
+                const rows = this.takeMatrixRows(1, last);
+                this.emitLegacyDepth(rows[0], rows[1]);
+                return;
+            }
+            case OP.TEXM3x3: {
+                if (this.kind !== "pixel" || this.major !== 1 || this.minor < 2 || this.minor > 3)
+                    throw new Error("texm3x3 requires ps_1_2 or ps_1_3");
+                this.psTexcoordInputs.add(dest.index);
+                const last = this.fresh("m3row");
+                this.emit("let " + last + " = dot(t" + dest.index + ".xyz, (" + s(0) + ").xyz);");
+                this.store(dest, "vec4<f32>(" + this.takeMatrixRows(2, last).join(", ") + ", 1.0)");
                 return;
             }
             case OP.TEXM3x2TEX: {
@@ -1173,9 +1491,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 this.psTexcoordInputs.add(index);
                 const last = this.fresh("m3row");
                 this.emit("let " + last + " = dot(t" + index + ".xyz, (" +
-                    this.rawSource({ type: sources[0].type,
-                        index: sources[0].index, swizzle: 0xe4, modifier: 0,
-                        relative: false, relativeToken: 0 }) + ").xyz);");
+                    this.sourceExpression(sources[0]) + ").xyz);");
                 const rows = this.takeMatrixRows(1, last);
                 const coord = this.fresh("m3x2");
                 this.emit("let " + coord + " = vec2<f32>(" + rows.join(", ") + ");");
@@ -1187,16 +1503,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             case OP.TEXM3x3SPEC:
             case OP.TEXM3x3VSPEC: {
                 const index = dest.index;
-                // The 3x3 forms address a cube map or a volume; both take a
-                // three-component coordinate, and a cube is what environment
-                // mapping actually binds.
-                if (!this.samplers.has(index)) this.samplers.set(index, "cube");
+                // These forms also accept 2D textures. Bindings decide the
+                // dimension; three computed coordinates do not imply a cube.
+                if (!this.samplers.has(index)) this.samplers.set(index, this.legacySamplerType(index));
                 this.psTexcoordInputs.add(index);
                 const last = this.fresh("m3row");
                 this.emit("let " + last + " = dot(t" + index + ".xyz, (" +
-                    this.rawSource({ type: sources[0].type,
-                        index: sources[0].index, swizzle: 0xe4, modifier: 0,
-                        relative: false, relativeToken: 0 }) + ").xyz);");
+                    this.sourceExpression(sources[0]) + ").xyz);");
                 const rows = this.takeMatrixRows(2, last);
                 const normal = this.fresh("m3x3");
                 this.emit("let " + normal + " = vec3<f32>(" + rows.join(", ") + ");");
@@ -1217,7 +1530,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     coord = reflected;
                 }
                 this.store(dest, this.sampleExpression(index,
-                    { coord, ref: null }, {}));
+                    this.coordinateFor(index, "vec4<f32>(" + coord + ", 1.0)", false), {}));
                 return;
             }
             case OP.TEXREG2AR:
@@ -1262,23 +1575,27 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             case OP.LOOP: {
                 const counter = this.fresh("loop");
                 const register = sources[1].index;
+                const saved = this.fresh("saved_aL");
                 this.usesLoopCounter = true;
                 this.maxIntConst = Math.max(this.maxIntConst, register);
+                this.emit("let " + saved + " = aL;");
                 this.emit("aL = d9c.i[" + register + "].y;");
                 this.emit("for (var " + counter + " = 0; " + counter + " < d9c.i[" +
                     register + "].x; " + counter + " = " + counter + " + 1) {");
                 this.enter(false);
                 this.emit("// aL advances at the bottom of the body");
                 this.pendingLoopStep = this.pendingLoopStep || [];
-                this.pendingLoopStep.push(register);
+                this.pendingLoopStep.push({ register, saved });
                 return;
             }
             case OP.ENDLOOP: {
-                const register = this.pendingLoopStep && this.pendingLoopStep.pop();
-                if (register !== undefined)
-                    this.emit("aL = aL + d9c.i[" + register + "].z;");
+                const loop = this.pendingLoopStep && this.pendingLoopStep.pop();
+                if (loop)
+                    this.emit("aL = aL + d9c.i[" + loop.register + "].z;");
                 this.leave();
                 this.emit("}");
+                // This also runs after BREAK, restoring the enclosing loop.
+                if (loop) this.emit("aL = " + loop.saved + ";");
                 return;
             }
             case OP.BREAK: this.emit("break;"); return;
@@ -1294,12 +1611,20 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return;
             }
             case OP.CALL:
-                this.emit("d9_sub" + sources[0].index + "();");
+            case OP.CALLNZ: {
+                // RET inside a callee's loop bypasses that loop's epilogue.
+                // The calling loop's aL must survive even that early return.
+                this.usesLoopCounter = true;
+                const saved = this.fresh("call_aL");
+                this.emit("let " + saved + " = aL;");
+                if (opcode === OP.CALL)
+                    this.emit("d9_sub" + sources[0].index + "();");
+                else
+                    this.emit("if (" + this.booleanSource(sources[1]) + ") { d9_sub" +
+                        sources[0].index + "(); }");
+                this.emit("aL = " + saved + ";");
                 return;
-            case OP.CALLNZ:
-                this.emit("if (" + this.booleanSource(sources[1]) + ") { d9_sub" +
-                    sources[0].index + "(); }");
-                return;
+            }
             case OP.RET:
                 this.emit("return;");
                 return;
@@ -1311,113 +1636,12 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             }
         }
 
-        // A frame per open non-uniform region, recording where its opening
-        // statement began and which registers have been written since. Both are
-        // what dsx/dsy needs: see derivativeExpression().
-        pushNonUniformFrame(insertAt) {
-            this.nonUniformFrames = this.nonUniformFrames || [];
-            this.nonUniformFrames.push({
-                // The `if (...) {` line is emitted before enter() runs, so the
-                // position *before* the region is one line back.
-                insertAt: insertAt === undefined
-                    ? Math.max(0, this.lines.length - 1) : insertAt,
-                indent: Math.max(0, this.indent - 2),
-                written: new Set(),
-            });
-        }
-
-        enter(nonUniform) {
-            this.indent += 2;
-            ++this.controlDepth;
-            this.uniformityStack = this.uniformityStack || [];
-            this.uniformityStack.push(!!nonUniform);
-            if (nonUniform) {
-                ++this.nonUniformDepth;
-                this.pushNonUniformFrame();
-            }
-        }
-
-        enterSameUniformity() {
-            this.indent += 2;
-            ++this.controlDepth;
-            const nonUniform = this.lastLeftNonUniform;
-            this.uniformityStack.push(nonUniform);
-            if (nonUniform) {
-                ++this.nonUniformDepth;
-                // An `else` branch hoists to before the whole `if`, not to
-                // before the `} else {` -- that position is inside the *then*
-                // branch, where the code would run under the wrong condition.
-                // Writes made by the then-branch do not reach here, so the
-                // written-register set starts empty again.
-                this.pushNonUniformFrame(this.lastLeftInsertAt);
-            }
-        }
-
-        leave() {
-            this.indent -= 2;
-            --this.controlDepth;
-            const nonUniform = (this.uniformityStack || []).pop();
-            this.lastLeftNonUniform = nonUniform;
-            if (nonUniform) {
-                --this.nonUniformDepth;
-                const frame = (this.nonUniformFrames || []).pop();
-                this.lastLeftInsertAt = frame ? frame.insertAt : undefined;
-            }
-        }
-
-        // Every register written inside an open non-uniform region, so a later
-        // hoist can tell whether the value it wants still exists above it.
-        noteRegisterWrite(dest) {
-            if (!this.nonUniformFrames || !this.nonUniformFrames.length) return;
-            const key = dest.type + ":" + dest.index;
-            for (const frame of this.nonUniformFrames) frame.written.add(key);
-        }
-
-        /*
-         * dsx/dsy inside data-dependent control flow.
-         *
-         * D3D9 runs both sides of a branch on real hardware, so a derivative
-         * taken inside an `if` is well defined there. WGSL forbids it outright,
-         * and the shader fails to compile -- which is not a subtle difference:
-         * 3DMark06's airship rendered as a black silhouette because its pixel
-         * shader would not build at all.
-         *
-         * The derivative almost always reads a register computed *before* the
-         * branch (screen-space coordinates, most often), so hoisting the call
-         * to just above the branch is both legal and exactly what the shader
-         * asked for. That is only true while nothing has overwritten the
-         * operand inside the region, which is what the written-register set
-         * tracks; when it has, there is no value above the branch to take a
-         * derivative of and the result degrades to zero -- flat, noted, and
-         * still a shader that compiles.
-         */
-        derivativeExpression(builtin, source) {
-            const registerKey = source.type + ":" + source.index;
-            const frames = this.nonUniformFrames || [];
-            const clobbered = frames.some(frame => frame.written.has(registerKey));
-            const before = this.lines.length;
-            const expression = this.sourceExpression(source);
-            // A source modifier that emits its own statement cannot be hoisted
-            // with the call; those statements would stay behind.
-            const emitted = this.lines.length !== before;
-            if (!clobbered && !emitted && !source.relative && frames.length) {
-                const outermost = frames[0];
-                const name = this.fresh("deriv");
-                this.lines.splice(outermost.insertAt, 0,
-                    " ".repeat(outermost.indent) + "let " + name + " = " +
-                    builtin + "(" + expression + ");");
-                for (const frame of frames) ++frame.insertAt;
-                this.note("a screen-space derivative inside data-dependent " +
-                    "control flow was hoisted above the branch, which WGSL " +
-                    "requires and D3D9 does not");
-                return name;
-            }
-            this.note("a screen-space derivative inside data-dependent control " +
-                "flow reads a register the branch itself overwrote; there is no " +
-                "value above the branch to differentiate, so it evaluates to " +
-                "zero (WGSL forbids the call there)");
-            return "vec4<f32>(0.0)";
-        }
+        // Keep derivatives and samples at the instruction's execution point.
+        // The module-level diagnostic permits data-dependent flow; moving an
+        // operand above a loop freezes it before subsequent iterations write it.
+        enter() { this.indent += 2; }
+        enterSameUniformity() { this.enter(); }
+        leave() { this.indent -= 2; }
 
         comparison(control, left, right, componentwise) {
             const operators = { 1: ">", 2: "==", 3: ">=", 4: "<", 5: "!=", 6: "<=" };
@@ -1477,9 +1701,6 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         //  - Only 2D. A cube or volume depth texture cannot be created here at
         //    all (the protocol's render target binding carries no face index),
         //    so a request for one is a caller bug, not a shader to translate.
-        //  - Not ps_1_x. Its texreg2* forms build coordinates out of a
-        //    previously sampled register and have no z to compare against, and
-        //    hardware shadow maps postdate that shader model entirely.
         //  - Pixel stage only. vs_3_0 vertex texture fetch on a shadow map is
         //    legal in principle but has no caller, and supporting it would mean
         //    a second binding-type path through the vertex sampler layout.
@@ -1490,7 +1711,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         // validation error that takes down the whole submit, not one draw.
         isDepthSampler(index) {
             return this.requestedDepthSamplers.has(index)
-                && this.kind === "pixel" && this.major >= 2
+                && this.kind === "pixel"
                 && (this.samplers.get(index) || "2d") === "2d";
         }
 
@@ -1504,6 +1725,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         // depth sampler, where z is the comparison reference and so has to be
         // carried out alongside the uv rather than dropped with the rest.
         coordinateFor(index, expression, projected) {
+            if (this.preparing) return {rawExpression: expression, projected};
             const type = this.samplers.get(index) || "2d";
             const arity = type === "cube" ? 3 : (type === "3d" ? 3 : 2);
             const name = this.fresh("uv");
@@ -1517,8 +1739,10 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // the non-projected and non-depth forms have to keep producing
             // exactly the expression they produced before, and `a / b * c` does
             // not reassociate to `a * (c / b)` in floating point.
-            const project = value => "(" + value + " / max(abs(" + name +
-                ".w), 1e-8) * sign(" + name + ".w + 1e-20))";
+            const component = typeof projected === "string" ? projected : "w";
+            const divisor = name + "." + component;
+            const project = value => "(" + value + " / select(-max(abs(" + divisor +
+                "), 1e-8), max(abs(" + divisor + "), 1e-8), " + divisor + " >= 0.0))";
             if (projected)
                 return { coord: project(name + "." + swizzle),
                     ref: wantsDepth ? project(name + ".z") : null };
@@ -1527,12 +1751,44 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         }
 
         sampleExpression(index, coordinate, options) {
+            if (this.preparing) {
+                const params = [], args = [coordinate.rawExpression ||
+                    "vec4<f32>(" + coordinate.coord + ", 0.0, 1.0)"];
+                const dimension = (this.samplers.get(index) || "2d") === "2d" ? 2 : 3;
+                for (const name of ["lod", "bias", "ddx", "ddy", "offset"]) {
+                    if (!options || options[name] === undefined) continue;
+                    params.push({name, type: name === "ddx" || name === "ddy" ? "vec" + dimension + "<f32>"
+                        : name === "offset" ? "vec2<f32>" : "f32"});
+                    args.push(options[name]);
+                }
+                const operation = {index, projected: coordinate.projected || false, params,
+                    explicitLod: !!(options && options.explicitLod), gradients: !!(options && options.gradients)};
+                const key = JSON.stringify(operation);
+                let id = this.sampleOperationKeys.get(key);
+                if (id === undefined) {
+                    id = this.sampleOperations.length;
+                    this.sampleOperationKeys.set(key, id);
+                    this.sampleOperations.push({...operation, uses: 1});
+                } else ++this.sampleOperations[id].uses;
+                return "d9_sample" + id + "(" + args.join(", ") + ")";
+            }
+            const raw = this.rawSampleExpression(index, coordinate, options);
+            return sampleSwizzleExpression(raw, this.options.samplerSwizzles && this.options.samplerSwizzles[index]);
+        }
+
+        rawSampleExpression(index, coordinate, options) {
             const texture = "d9_tex" + index;
             const sampler = "d9_smp" + index;
-            const coord = this.mirrorOnceCoord(index, coordinate.coord);
-            if (coordinate.ref !== null && coordinate.ref !== undefined)
+            const coord = this.mirrorOnceCoord(index, options && options.offset !== undefined
+                ? "(" + coordinate.coord + " + " + options.offset + ")" : coordinate.coord);
+            const fetch4 = this.kind === "pixel" && this.options.fetch4Samplers
+                ? this.options.fetch4Samplers[index] : undefined;
+            if (fetch4 !== undefined && (this.samplers.get(index) || "2d") === "2d" &&
+                    (fetch4 === "depth") === this.isDepthFetchSampler(index))
+                return fetch4Expression(texture, sampler, coord, fetch4);
+            if (this.isDepthSampler(index) && !this.isDepthFetchSampler(index))
                 return this.compareExpression(texture, sampler, coord,
-                    coordinate.ref, options);
+                    coordinate.ref === null || coordinate.ref === undefined ? "0.0" : coordinate.ref, options);
             if (this.isDepthFetchSampler(index))
                 return this.depthFetchExpression(texture, sampler, coord,
                     options);
@@ -1543,20 +1799,17 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 return "textureSampleLevel(" + texture + ", " + sampler + ", " +
                     coord + ", " + options.lod + ")";
             if (options && options.bias !== undefined)
-                return this.nonUniformDepth > 0
-                    ? this.degradedSample(texture, sampler, coord)
-                    : "textureSampleBias(" + texture + ", " + sampler + ", " +
-                        coord + ", " + options.bias + ")";
-            const stateBias = this.samplerLodBias
-                ? this.samplerLodBias[index] : 0;
-            if (this.nonUniformDepth > 0)
-                return this.degradedSample(texture, sampler, coord);
+                return "textureSampleBias(" + texture + ", " + sampler + ", " +
+                    coord + ", " + options.bias + ")";
+            const uniformBias = this.options.samplerLodBiasUniform && this.kind === "pixel"
+                ? "d9c.sampler_lod_bias[" + Math.floor(index / 4) + "][" + (index & 3) + "]" : "";
+            const stateBias = this.samplerLodBias ? this.samplerLodBias[index] : 0;
             // A sampler-state bias applies to the ordinary implicit-derivative
             // sample only. D3D9 ignores it for the explicit-LOD and gradient
             // forms above, and a vertex fetch has no mip chain to bias.
-            if (stateBias && this.kind !== "vertex")
+            if ((uniformBias || stateBias) && this.kind !== "vertex")
                 return "textureSampleBias(" + texture + ", " + sampler + ", " +
-                    coord + ", " + floatLiteral(stateBias) + ")";
+                    coord + ", " + (uniformBias || floatLiteral(stateBias)) + ")";
             // Vertex shaders have no implicit derivatives. D3D9 permits VTF
             // only in vs_3_0 and its ordinary texld form selects mip zero;
             // texldl above still uses the explicit LOD carried in coord.w.
@@ -1612,83 +1865,18 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         // very nearly always single-level to begin with, so this is a real
         // approximation only for the rare mipped one.
         compareExpression(texture, sampler, coord, ref, options) {
-            const explicitLevel = (options && (options.gradients ||
-                options.explicitLod || options.bias !== undefined)) ||
-                this.nonUniformDepth > 0;
+            const explicitLevel = options && (options.gradients ||
+                options.explicitLod || options.bias !== undefined);
             if (explicitLevel) {
                 ++this.levelZeroSamples;
                 this.note("a depth comparison sample selects mip level 0: WGSL " +
-                    "has no gradient, bias or non-uniform form of " +
+                    "has no gradient or bias form of " +
                     "textureSampleCompare");
                 return "vec4<f32>(textureSampleCompareLevel(" + texture + ", " +
                     sampler + ", " + coord + ", " + ref + "))";
             }
             return "vec4<f32>(textureSampleCompare(" + texture + ", " +
                 sampler + ", " + coord + ", " + ref + "))";
-        }
-
-        /*
-         * Recovers real gradients for a texture sample inside data-dependent
-         * control flow.
-         *
-         * WGSL forbids implicit-derivative sampling there, and the fallback
-         * below picks mip level 0 -- correct-ish but visibly aliased wherever
-         * the surface is minified, which in practice is most of a scene. When
-         * the coordinate comes from a register the branch has not touched,
-         * there *is* a value above the branch to differentiate: hoist the
-         * coordinate and both derivatives out, and sample with
-         * textureSampleGrad, which WGSL permits under any control flow because
-         * the gradients are explicit. That is not a degradation at all -- it is
-         * the mip level the shader would have selected on D3D9 hardware.
-         *
-         * Returns null when the coordinate cannot be reconstructed above the
-         * branch, leaving degradedSample() to handle it.
-         */
-        hoistedGradients(index, source, coordinateExpression, projected) {
-            const frames = this.nonUniformFrames || [];
-            if (!frames.length || !source || source.relative) return null;
-            if (frames.some(frame =>
-                    frame.written.has(source.type + ":" + source.index)))
-                return null;
-            const type = this.samplers.get(index) || "2d";
-            const swizzle = (type === "cube" || type === "3d") ? "xyz" : "xy";
-            const outermost = frames[0];
-            const pad = " ".repeat(outermost.indent);
-            const raw = this.fresh("guv");
-            const uv = this.fresh("gc");
-            const dx = this.fresh("gdx");
-            const dy = this.fresh("gdy");
-            const projectedExpression = projected
-                ? "(" + raw + "." + swizzle + " / max(abs(" + raw +
-                    ".w), 1e-8) * sign(" + raw + ".w + 1e-20))"
-                : raw + "." + swizzle;
-            this.lines.splice(outermost.insertAt, 0,
-                pad + "let " + raw + " = " + coordinateExpression + ";",
-                pad + "let " + uv + " = " + projectedExpression + ";",
-                pad + "let " + dx + " = dpdx(" + uv + ");",
-                pad + "let " + dy + " = dpdy(" + uv + ");");
-            for (const frame of frames) frame.insertAt += 4;
-            this.note("a texture sample inside data-dependent control flow " +
-                "keeps its real mip level: the coordinate and its derivatives " +
-                "are hoisted above the branch and the sample uses explicit " +
-                "gradients, which WGSL allows there");
-            return { coordinate: uv, ddx: dx, ddy: dy };
-        }
-
-        // WGSL forbids implicit-derivative sampling under non-uniform control
-        // flow. When hoistedGradients() cannot reconstruct the coordinate above
-        // the branch -- because the branch computed it -- mip level 0 is the
-        // legal, deterministic fallback: visibly sharper/aliased rather than
-        // wrong colours, and counted so it is never a silent difference. Note
-        // this is unreachable for ps_2_0 (no flow control at all in that model)
-        // and for uniform `if b#`/`rep`/`loop` bodies, whose conditions come
-        // from the uniform buffer and so keep control flow uniform.
-        degradedSample(texture, sampler, coordinate) {
-            ++this.levelZeroSamples;
-            this.note("sampling inside data-dependent control flow falls back " +
-                "to mip level 0 (WGSL forbids implicit derivatives there)");
-            return "textureSampleLevel(" + texture + ", " + sampler + ", " +
-                coordinate + ", 0.0)";
         }
 
         // Consumes the rows the preceding texm3x*pad instructions produced,
@@ -1709,6 +1897,14 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             return rows;
         }
 
+        emitLegacyDepth(numerator, denominator) {
+            this.usesDepthOutput = true;
+            // Both legacy depth instructions define a zero divisor as 1.
+            // D3D leaves out-of-range quotients undefined; clamp defensively.
+            this.emit("o_depthv.x = clamp(select(" + numerator + " / " + denominator +
+                ", 1.0, " + denominator + " == 0.0), 0.0, 1.0);");
+        }
+
         legacySamplerType(index) {
             // ps_1_x tex/texld have no sampler declaration. SetTexture selects
             // the dimension at draw time; default to 2D only for the base
@@ -1720,7 +1916,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         textureLoad(instruction, options) {
             const dest = instruction.dest;
             const sources = instruction.sources;
-            const projected = (instruction.control & 0x1) !== 0;
+            let projected = (instruction.control & 0x1) !== 0;
             const biased = (instruction.control & 0x2) !== 0;
             let index, coordinateExpression;
             if (this.kind === "pixel" && this.major === 1 && this.minor < 4) {
@@ -1731,6 +1927,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     this.samplers.set(index, this.legacySamplerType(index));
                 this.psTexcoordInputs.add(index);
                 coordinateExpression = "t" + index;
+                projected = "legacy";
             } else if (this.kind === "pixel" && this.major === 1) {
                 // ps_1_4 `texld r#, t#`: sampler comes from the destination.
                 index = dest.index;
@@ -1740,31 +1937,6 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             } else {
                 index = this.samplerIndexFor(sources[1]);
                 coordinateExpression = this.sourceExpression(sources[0]);
-            }
-            // Try to keep the real mip level before anything else decides the
-            // sample has to be level 0. Only the plain and biased forms need
-            // it: texldd already carries explicit gradients and texldl an
-            // explicit level, and both are legal in non-uniform flow as they
-            // stand.
-            //
-            // Depth samplers are excluded: WGSL has no textureSampleCompareGrad,
-            // so there is no gradient form to recover *to*, and the comparison
-            // reference must survive -- compareExpression() already handles
-            // them and drops to textureSampleCompareLevel.
-            const wantsImplicitLod = !(options &&
-                (options.explicitLod || options.gradients)) &&
-                !this.isDepthSampler(index);
-            const recovered = (this.nonUniformDepth > 0 && wantsImplicitLod)
-                ? this.hoistedGradients(index,
-                    (this.kind === "pixel" && this.major === 1 && this.minor < 4)
-                        ? null : sources[0],
-                    coordinateExpression, projected)
-                : null;
-            if (recovered) {
-                this.store(dest, this.sampleExpression(index,
-                    { coord: recovered.coordinate, ref: null },
-                    { gradients: true, ddx: recovered.ddx, ddy: recovered.ddy }));
-                return;
             }
             const coordinate = this.coordinateFor(index, coordinateExpression, projected);
             const sampleOptions = {};
@@ -1782,7 +1954,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             } else if (biased) {
                 sampleOptions.bias = "(" + coordinateExpression + ").w";
             }
-            this.store(dest, this.sampleExpression(index, coordinate, sampleOptions));
+            let sampled = this.sampleExpression(index, coordinate, sampleOptions);
+            // The swizzle written on a texld sampler register selects components
+            // of the returned texel (ps_2_0 and later have a sampler operand).
+            const samplerSwizzle = sources.length > 1 && sources[1].type === REG_SAMPLER
+                ? swizzleString(sources[1].swizzle) : "xyzw";
+            if (samplerSwizzle !== "xyzw") sampled = "(" + sampled + ")." + samplerSwizzle;
+            this.store(dest, sampled);
         }
 
         // ps_1_x texreg2ar/gb/rgb: build the coordinate from components of a
@@ -1791,12 +1969,10 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             const dest = instruction.dest;
             const index = dest.index;
             if (!this.samplers.has(index))
-                this.samplers.set(index, components.length === 3 ? "3d" : "2d");
-            // ps_1_x only, and isDepthSampler() excludes ps_1_x, so this form
-            // never carries a comparison reference.
-            const coordinate = { coord: "(" +
-                this.sourceExpression(instruction.sources[0]) + ")." + components,
-                ref: null };
+                this.samplers.set(index, this.legacySamplerType(index));
+            const value = "(" + this.sourceExpression(instruction.sources[0]) + ")." + components;
+            const coordinate = this.coordinateFor(index, "vec4<f32>(" + value +
+                (components.length === 3 ? ", 1.0)" : ", 0.0, 1.0)"), false);
             this.store(dest, this.sampleExpression(index, coordinate, {}));
         }
 
@@ -1805,13 +1981,23 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
         assemble(routines, bodies, mainBody) {
             const out = [];
             const kind = this.kind;
-            const floatCount = Math.max(1, Math.min(this.constantCapacity(),
-                this.maxFloatConst + 1));
+            const floatCount = Math.max(1, Math.min(kind === "vertex" ? 8192 : 224,
+                Math.max(this.maxFloatConst + 1, this.usesRelativeConstants ? this.constantCapacity() : 0)));
             const intCount = Math.max(1, this.maxIntConst + 1);
             const boolVectors = Math.max(1, Math.ceil((this.maxBoolConst + 1) / 4));
+            // Extended software constants exceed WebGPU's uniform binding limit.
+            // Leave room for viewport, clipping and point expansion parameters.
+            const storage = kind === "vertex" && (floatCount + intCount + boolVectors) * 16 > 65280;
 
             out.push("// translated from " + kind + " shader model " +
                 this.major + "." + this.minor);
+            // D3D leaves a derivative in non-uniform control flow undefined,
+            // and SM3 shaders sample inside data-dependent branches and loops
+            // all the time; Tint rejects those modules unless this is off
+            // (naga does not check it at all)
+            out.push("diagnostic(off, derivative_uniformity);");
+            if (this.usesRelativeConstants)
+                out.push("const d9_float_constant_max: i32 = " + (this.constantCapacity() - 1) + ";");
             out.push("struct D9Constants {");
             out.push("    f: array<vec4<f32>, " + floatCount + ">,");
             out.push("    i: array<vec4<i32>, " + intCount + ">,");
@@ -1836,9 +2022,18 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 out.push("    bump: array<vec4<f32>, " + count + ">,");
                 out.push("    bump_lum: array<vec4<f32>, " + count + ">,");
             }
+            if (kind === "pixel" && this.options.fogBlend) {
+                out.push("    fog_color: vec4<f32>,");
+                out.push("    fog_params: vec4<f32>,");
+            }
+            if (kind === "pixel" && this.options.alphaTestUniform) out.push("    alpha_test: vec4<u32>,");
+            if (kind === "pixel" && this.options.samplerLodBiasUniform) {
+                const vectors = Math.max(1, Math.ceil((Math.max(...this.samplers.keys()) + 1) / 4));
+                out.push("    sampler_lod_bias: array<vec4<f32>, " + vectors + ">,");
+            }
             out.push("};");
             out.push("@group(0) @binding(" + (kind === "vertex" ? 0 : 1) +
-                ") var<uniform> d9c: D9Constants;");
+                ") var<" + (storage ? "storage, read" : "uniform") + "> d9c: D9Constants;");
 
             const samplerIndices = Array.from(this.samplers.keys()).sort((a, b) => a - b);
             const samplerBindingBase = kind === "vertex" ? 34 : 2;
@@ -1856,14 +2051,184 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             }
 
             out.push("");
+            if (this.nvRegisters) out.push(`
+// NV40's R/H names view the same bits. H[2*n].xy/zw occupy R[n].x/y;
+// H[2*n+1].xy/zw occupy R[n].z/w. Integer storage preserves packed NaNs.
+var<private> nv40_registers: array<vec4<u32>, 64>;
+fn nv40_f16(value: f32) -> u32 {
+    let raw = bitcast<u32>(value);
+    let sign = (raw >> 16u) & 0x8000u;
+    let mag = raw & 0x7fffffffu;
+    if (mag >= 0x7f800000u) {
+        if (mag == 0x7f800000u) { return sign | 0x7c00u; }
+        return sign | 0x7e00u | ((mag >> 13u) & 0x3ffu);
+    }
+    if (mag >= 0x477ff000u) { return sign | 0x7c00u; }
+    let exponent = mag >> 23u;
+    if (exponent >= 113u) {
+        return sign | ((mag - 0x38000000u + 0xfffu + ((mag >> 13u) & 1u)) >> 13u);
+    }
+    if (exponent < 102u) { return sign; }
+    let mantissa = (mag & 0x7fffffu) | 0x800000u;
+    let shift = 126u - exponent;
+    let rounded = mantissa + (1u << (shift - 1u)) - 1u + ((mantissa >> shift) & 1u);
+    return sign | (rounded >> shift);
+}
+fn nv40_f32(value: u32) -> f32 {
+    let sign = (value & 0x8000u) << 16u;
+    var mantissa = value & 0x3ffu;
+    var exponent = (value >> 10u) & 31u;
+    if (exponent == 31u) { return bitcast<f32>(sign | 0x7f800000u | (mantissa << 13u)); }
+    if (exponent == 0u) {
+        if (mantissa == 0u) { return bitcast<f32>(sign); }
+        exponent = 113u;
+        loop {
+            if ((mantissa & 0x400u) != 0u) { break; }
+            mantissa <<= 1u; exponent -= 1u;
+        }
+        mantissa &= 0x3ffu;
+    } else { exponent += 112u; }
+    return bitcast<f32>(sign | (exponent << 23u) | (mantissa << 13u));
+}
+fn nv40_encode(value: vec4<f32>) -> vec4<u32> {
+    return vec4<u32>(nv40_f16(value.x), nv40_f16(value.y), nv40_f16(value.z), nv40_f16(value.w));
+}
+fn nv40_half(value: vec4<f32>) -> vec4<f32> {
+    let h = nv40_encode(value);
+    return vec4<f32>(nv40_f32(h.x), nv40_f32(h.y), nv40_f32(h.z), nv40_f32(h.w));
+}
+fn nv40_saturate(value: vec4<f32>) -> vec4<f32> {
+    let nan = (bitcast<vec4<u32>>(value) & vec4<u32>(0x7fffffffu)) > vec4<u32>(0x7f800000u);
+    return clamp(select(value, vec4<f32>(0.0), nan), vec4<f32>(0.0), vec4<f32>(1.0));
+}
+fn nv40_raw(index: u32, half: u32) -> vec4<u32> {
+    if (half == 0u) { return nv40_registers[index]; }
+    let r = nv40_registers[index >> 1u];
+    let pair = (index & 1u) * 2u;
+    return vec4<u32>(r[pair] & 0xffffu, r[pair] >> 16u, r[pair+1u] & 0xffffu, r[pair+1u] >> 16u);
+}
+fn nv40_load(index: u32, half: u32) -> vec4<f32> {
+    let raw = nv40_raw(index, half);
+    if (half == 0u) { return bitcast<vec4<f32>>(raw); }
+    return vec4<f32>(nv40_f32(raw.x), nv40_f32(raw.y), nv40_f32(raw.z), nv40_f32(raw.w));
+}
+fn nv40_write(index: u32, half: u32, lane: u32, value: u32) {
+    if (half == 0u) { nv40_registers[index][lane] = value; return; }
+    let component = (index & 1u) * 2u + (lane >> 1u);
+    let shift = (lane & 1u) * 16u;
+    let old = nv40_registers[index >> 1u][component];
+    nv40_registers[index >> 1u][component] = (old & ~(0xffffu << shift)) | ((value & 0xffffu) << shift);
+}
+fn nv40_pack(op: u32, value: vec4<f32>) -> u32 {
+    if (op == 0u) { return nv40_f16(value.x) | (nv40_f16(value.y) << 16u); }
+    if (op == 1u) {
+        let words = vec2<u32>(round(clamp(value.xy, vec2<f32>(0.0), vec2<f32>(1.0)) * 65535.0));
+        return words.x | (words.y << 16u);
+    }
+    var converted = round(clamp(value, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0);
+    if (op == 2u) { converted = round(clamp(value, vec4<f32>(-128.0/127.0), vec4<f32>(1.0)) * 127.0 + 128.0); }
+    let bytes = vec4<u32>(converted);
+    return bytes.x | (bytes.y << 8u) | (bytes.z << 16u) | (bytes.w << 24u);
+}
+fn nv40_unpack(op: u32, value: u32) -> vec4<f32> {
+    if (op == 0u) { return vec4<f32>(nv40_f32(value & 0xffffu), nv40_f32(value >> 16u), nv40_f32(value & 0xffffu), nv40_f32(value >> 16u)); }
+    if (op == 1u) { return vec4<f32>(f32(value & 0xffffu), f32(value >> 16u), f32(value & 0xffffu), f32(value >> 16u)) / 65535.0; }
+    let bytes = vec4<f32>(f32(value & 255u), f32((value >> 8u) & 255u), f32((value >> 16u) & 255u), f32(value >> 24u));
+    if (op == 2u) { return (bytes - 128.0) / 127.0; }
+    return bytes / 255.0;
+}
+`);
+            if (this.nvAlu) out.push(`
+// NV arithmetic differs from D3D's finite-zero helpers and legacy
+// partial-precision instructions. Classification uses bits, including -0.
+// Runtime bitcasts avoid WGSL constant-evaluation rejection of Inf/NaN.
+fn nv40_bits(bits: u32) -> f32 { return bitcast<f32>(bits); }
+fn nv40_divide(a: f32, b: f32) -> f32 {
+    let ra = bitcast<u32>(a); let rb = bitcast<u32>(b);
+    let ma = ra & 0x7fffffffu; let mb = rb & 0x7fffffffu;
+    let sign = (ra ^ rb) & 0x80000000u;
+    if (ma > 0x7f800000u || mb > 0x7f800000u ||
+        (ma == 0u && mb == 0u) || (ma == 0x7f800000u && mb == 0x7f800000u)) {
+        return nv40_bits(0x7fc00000u);
+    }
+    if (mb == 0u || ma == 0x7f800000u) { return nv40_bits(sign | 0x7f800000u); }
+    if (ma == 0u || mb == 0x7f800000u) { return nv40_bits(sign); }
+    return a / b;
+}
+fn nv40_div(a: vec4<f32>, b: f32) -> vec4<f32> {
+    return vec4<f32>(nv40_divide(a.x,b), nv40_divide(a.y,b), nv40_divide(a.z,b), nv40_divide(a.w,b));
+}
+fn nv40_alu(op: u32, s: vec4<f32>) -> vec4<f32> {
+    let raw = bitcast<u32>(s.x);
+    let mag = raw & 0x7fffffffu;
+    let sign = raw & 0x80000000u;
+    let inf = nv40_bits(0x7f800000u);
+    if (op == 0u || op == 4u) {
+        if (mag > 0x7f800000u) { return vec4<f32>(s.x); }
+        var value = inf;
+        if (mag != 0u) { value = 1.0 / abs(s.x); }
+        if (op == 0u) { value = clamp(value, 5.421010862427522e-20, 18446744073709551616.0); }
+        return vec4<f32>(bitcast<f32>(bitcast<u32>(value) | sign));
+    }
+    if (op == 1u) {
+        var power = exp2(s.x);
+        if (mag == 0x7f800000u) { power = select(inf, 0.0, sign != 0u); }
+        if (mag > 0x7f800000u) { power = s.x; }
+        return vec4<f32>(exp2(floor(s.x)), fract(s.x), power, 1.0);
+    }
+    if (op == 2u || op == 6u) {
+        if (mag > 0x7f800000u) { return select(vec4<f32>(s.x, s.x, s.x, 1.0), vec4<f32>(s.x), op == 6u); }
+        if (op == 6u && sign != 0u && mag != 0u) { return vec4<f32>(nv40_bits(0x7fc00000u)); }
+        if (mag == 0u) { return select(vec4<f32>(-inf, 1.0, -inf, 1.0), vec4<f32>(-inf), op == 6u); }
+        if (mag == 0x7f800000u) { return select(vec4<f32>(inf, 1.0, inf, 1.0), vec4<f32>(inf), op == 6u); }
+        // Extract exponent/mantissa exactly; floor(log2(x)) alone can round
+        // up for the float immediately below an exact power of two.
+        var exponent = i32(mag >> 23u) - 127;
+        var mantissa = mag & 0x007fffffu;
+        if ((mag >> 23u) == 0u) {
+            exponent = -126;
+            loop {
+                if ((mantissa & 0x00800000u) != 0u) { break; }
+                mantissa <<= 1u; exponent -= 1;
+            }
+        }
+        let fraction = bitcast<f32>((mantissa & 0x007fffffu) | 0x3f800000u);
+        let result = f32(exponent) + log2(fraction);
+        return select(vec4<f32>(f32(exponent), fraction, result, 1.0), vec4<f32>(result), op == 6u);
+    }
+    if (op == 3u) {
+        let diffuse = max(s.x, 0.0);
+        let base = max(s.y, 0.0);
+        let power = clamp(s.w, -127.99999237060547, 127.99999237060547);
+        var specular = 0.0;
+        if (s.x > 0.0) {
+            if (power == 0.0) { specular = 1.0; }
+            else if (base == 0.0) { specular = select(0.0, inf, power < 0.0); }
+            else { specular = pow(base, power); }
+        }
+        return vec4<f32>(1.0, diffuse, specular, 1.0);
+    }
+    // NV RSQ is signed-domain square root, unlike D3D's abs(x) operation.
+    if (mag > 0x7f800000u) { return vec4<f32>(s.x); }
+    if (mag == 0u) { return vec4<f32>(nv40_bits(0x7f800000u | sign)); }
+    if (sign != 0u) { return vec4<f32>(nv40_bits(0x7fc00000u)); }
+    if (mag == 0x7f800000u) { return vec4<f32>(0.0); }
+    return vec4<f32>(inverseSqrt(s.x));
+}
+`);
             out.push("fn d9_rcp(v: f32) -> f32 { return select(1.0 / v, " +
                 FLOAT_MAX + ", v == 0.0); }");
             out.push("fn d9_rsq(v: f32) -> f32 { let a = abs(v); return " +
                 "select(inverseSqrt(a), " + FLOAT_MAX + ", a == 0.0); }");
             out.push("fn d9_log(v: f32) -> f32 { let a = abs(v); return " +
                 "select(log2(a), -" + FLOAT_MAX + ", a == 0.0); }");
-            out.push("fn d9_normalize(v: vec3<f32>) -> vec3<f32> { let l = " +
-                "dot(v, v); return select(v * inverseSqrt(l), vec3<f32>(0.0), l == 0.0); }");
+            out.push("fn d9_pow(x: f32, y: f32) -> f32 {");
+            out.push("    if (y == 0.0) { return 1.0; }");
+            out.push("    if (x == 0.0 && y > 0.0) { return 0.0; }");
+            out.push("    return pow(abs(x), y);");
+            out.push("}");
+            out.push("fn d9_normalize(v: vec4<f32>) -> vec4<f32> { let l = " +
+                "dot(v.xyz, v.xyz); return select(v * inverseSqrt(l), vec4<f32>(0.0), l == 0.0); }");
             out.push("fn d9_lit(s: vec4<f32>) -> vec4<f32> {");
             out.push("    let power = clamp(s.w, -127.9961, 127.9961);");
             out.push("    let specular = select(0.0, pow(max(s.y, 0.0), power), " +
@@ -1883,20 +2248,22 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             if (this.usesLoopCounter) out.push("var<private> aL: i32 = 0;");
             if (this.usesPredicate) {
                 out.push("var<private> p0: vec4<bool> = vec4<bool>(false);");
-                out.push("var<private> p0f: vec4<bool> = vec4<bool>(false);");
             }
 
             if (kind === "vertex") {
+                if (this.major >= 3)
+                    out.push("var<private> o_raw: array<vec4<f32>, 12>;");
                 out.push("var<private> o_position: vec4<f32> = vec4<f32>(0.0, 0.0, 0.0, 1.0);");
                 if (this.usesPointSize)
                     out.push("var<private> o_pointsize: vec4<f32> = vec4<f32>(1.0);");
                 for (let slot = 0; slot < VARYING_COUNT; ++slot) {
-                    // D3D9's oFog factor defaults to one (no fog) when a
-                    // vertex shader does not write it. Initialising it to
-                    // zero makes a fixed-function pixel fog blend replace the
-                    // entire textured draw with the fog colour.
+                    // Legacy diffuse defaults to white. The legacy fog
+                    // epilogue below substitutes specular alpha if oFog was
+                    // not written; SM3 keeps its separate default varying.
                     const initialValue = slot === VARYING_FOG
-                        ? "vec4<f32>(1.0, 0.0, 0.0, 0.0)" : "vec4<f32>(0.0)";
+                        ? "vec4<f32>(1.0, 0.0, 0.0, 0.0)"
+                        : slot === VARYING_COLOR0 && this.major < 3
+                            ? "vec4<f32>(1.0)" : "vec4<f32>(0.0)";
                     out.push("var<private> o_varying" + slot +
                         ": vec4<f32> = " + initialValue + ";");
                 }
@@ -1925,6 +2292,15 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             }
             out.push("");
 
+            if (this.usesRelativeInputs) {
+                const count = kind === "vertex" ? 16 : 10;
+                out.push("var<private> d9_inputs: array<vec4<f32>, " + count + ">;");
+                out.push("fn d9_read_input(index: i32) -> vec4<f32> {");
+                out.push("    if (index < 0 || index >= " + count + ") { return vec4<f32>(0.0); }");
+                out.push("    return d9_inputs[index];");
+                out.push("}");
+            }
+            this.assembleSampleHelpers(out);
             for (const routine of routines.subroutines) {
                 out.push("fn d9_sub" + routine.label + "() {");
                 out.push(...bodies.get(routine.label));
@@ -1940,8 +2316,27 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             if (kind === "vertex") this.assembleVertexEntry(out);
             else this.assemblePixelEntry(out);
 
-            const reflection = this.reflect(floatCount, intCount, boolVectors);
+            const reflection = this.reflect(floatCount, intCount, boolVectors, storage);
             return { wgsl: out.join("\n") + "\n", reflection };
+        }
+
+        assembleSampleHelpers(out) {
+            for (const [id, operation] of this.sampleOperations.entries()) {
+                const {index, params, explicitLod, gradients} = operation;
+                const projected = operation.projected === "legacy"
+                    ? (this.options.legacyProjection || {})[index] || false : operation.projected;
+                const options = {explicitLod, gradients};
+                for (const parameter of params) options[parameter.name] = "sample_" + parameter.name;
+                this.lines = [];
+                this.indent = 4;
+                const coordinate = this.coordinateFor(index, "sample_coord", projected);
+                const before = this.levelZeroSamples;
+                const value = this.sampleExpression(index, coordinate, options);
+                this.levelZeroSamples += (this.levelZeroSamples - before) * (operation.uses - 1);
+                out.push("fn d9_sample" + id + "(sample_coord: vec4<f32>" +
+                    params.map(parameter => ", sample_" + parameter.name + ": " + parameter.type).join("") + ") -> vec4<f32> {");
+                out.push(...this.lines, "    return " + value + ";", "}", "");
+            }
         }
 
         assembleVertexEntry(out) {
@@ -1950,41 +2345,19 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 .filter(entry => entry[1])
                 .sort((a, b) => a[0] - b[0]);
             const conversions = this.options.inputConversions || {};
-            const conversionKinds = new Set(Object.values(conversions));
-            if (conversionKinds.has("udec3")) {
-                out.push("fn d9_unpack_udec3(value: u32) -> vec4<f32> {");
-                out.push("    return vec4<f32>(f32(value & 0x3ffu), " +
-                    "f32((value >> 10u) & 0x3ffu), " +
-                    "f32((value >> 20u) & 0x3ffu), 1.0);");
-                out.push("}");
-                out.push("");
-            }
-            if (conversionKinds.has("dec3n")) {
-                out.push("fn d9_snorm10(value: u32) -> f32 {");
-                out.push("    let signed_value = i32(value << 22u) >> 22;");
-                out.push("    return max(f32(signed_value) / 511.0, -1.0);");
-                out.push("}");
-                out.push("fn d9_unpack_dec3n(value: u32) -> vec4<f32> {");
-                out.push("    return vec4<f32>(d9_snorm10(value & 0x3ffu), " +
-                    "d9_snorm10((value >> 10u) & 0x3ffu), " +
-                    "d9_snorm10((value >> 20u) & 0x3ffu), 1.0);");
-                out.push("}");
-                out.push("");
-            }
+            const inputHelpers = vertexInputHelpers(Object.values(conversions));
+            if (inputHelpers) out.push(inputHelpers);
             out.push("struct D9VertexOutput {");
             out.push("    @builtin(position) position: vec4<f32>,");
             for (let slot = 0; slot < VARYING_COUNT; ++slot)
-                out.push("    @location(" + slot + ") varying" + slot + ": vec4<f32>,");
+                out.push(this.varyingDeclaration(slot));
             const clipPlaneCount = this.options.clipPlaneCount || 0;
             for (let group = 0; group < Math.ceil(clipPlaneCount / 4); ++group)
                 out.push("    @location(" + (VARYING_COUNT + group) +
                     ") clip" + group + ": vec4<f32>,");
             out.push("};");
             out.push("");
-            const inputType = location => ({
-                ubyte4: "vec4<u32>", short2: "vec2<i32>",
-                short4: "vec4<i32>", udec3: "u32", dec3n: "u32",
-            })[conversions[location]] || "vec4<f32>";
+            const inputType = location => vertexInputType(conversions[location]);
             const parameters = inputs.map(entry =>
                 "@location(" + entry[0] + ") in" + entry[0] + ": " +
                     inputType(entry[0]));
@@ -2004,22 +2377,28 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // WebGPU exposes integer vertex formats as integer WGSL values,
             // while D3D9 always presents them to v# as a float4.
             const bgra = new Set(this.options.bgraInputLocations || []);
-            const inputValue = location => {
-                const name = "in" + location;
-                switch (conversions[location]) {
-                case "ubyte4":
-                case "short4": return "vec4<f32>(" + name + ")";
-                case "short2":
-                    return "vec4<f32>(vec2<f32>(" + name + "), 0.0, 1.0)";
-                case "udec3": return "d9_unpack_udec3(" + name + ")";
-                case "dec3n": return "d9_unpack_dec3n(" + name + ")";
-                default: return name + (bgra.has(location) ? ".bgra" : "");
-                }
-            };
+            const inputValue = location => vertexInputValue("in" + location,
+                conversions[location], bgra.has(location));
             for (const entry of inputs)
                 out.push("    vin" + entry[0] + " = " +
                     inputValue(entry[0]) + ";");
+            if (this.usesRelativeInputs)
+                for (const entry of inputs) out.push("    d9_inputs[" + entry[0] + "] = vin" + entry[0] + ";");
             out.push("    d9_body();");
+            if (this.major >= 3) {
+                for (const item of this.outputDeclarations) {
+                    const slot = varyingForSemantic(item.usage, item.usageIndex);
+                    const target = item.usage === DECLUSAGE_POSITION && item.usageIndex === 0 ? "o_position"
+                        : item.usage === DECLUSAGE_PSIZE && item.usageIndex === 0 ? "o_pointsize"
+                            : slot >= 0 ? "o_varying" + slot : null;
+                    if (!target) continue;
+                    if (item.mask === 15) out.push("    " + target + " = o_raw[" + item.register + "];");
+                    else for (let component = 0; component < 4; ++component) if (item.mask & 1 << component) {
+                        const channel = "xyzw"[component];
+                        out.push("    " + target + "." + channel + " = o_raw[" + item.register + "]." + channel + ";");
+                    }
+                }
+            }
             out.push("    var result: D9VertexOutput;");
             // D3D9 clip space is z in [0, w]; WebGPU's is identical, so the
             // position needs no depth-range remap (unlike an OpenGL target,
@@ -2036,8 +2415,19 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             out.push("        o_position.x + o_position.w / d9c.viewport.x,");
             out.push("        o_position.y - o_position.w / d9c.viewport.y,");
             out.push("        o_position.zw);");
-            for (let slot = 0; slot < VARYING_COUNT; ++slot)
-                out.push("    result.varying" + slot + " = o_varying" + slot + ";");
+            // Legacy colour outputs are saturated before interpolation. A VS3
+            // linked to a legacy pixel stage uses the same rasterizer rule.
+            const clampColors = this.major < 3 || this.options.legacyColorClamp;
+            for (let slot = 0; slot < VARYING_COUNT; ++slot) {
+                let value = "o_varying" + slot;
+                // Colour interpolators hold 8-bit values: round to even on the
+                // fp32 product like the hardware, so a 0.3 input stores 76, not 77.
+                if (clampColors && (slot === VARYING_COLOR0 || slot === VARYING_COLOR1))
+                    value = "round(clamp(" + value + ", vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0) / 255.0";
+                if (this.major < 3 && slot === VARYING_FOG && !this.writtenVaryings.has(slot))
+                    value = "vec4<f32>(clamp(o_varying1.a, 0.0, 1.0), 0.0, 0.0, 0.0)";
+                out.push("    result.varying" + slot + " = " + value + ";");
+            }
             for (let group = 0; group < Math.ceil(clipPlaneCount / 4); ++group)
                 out.push("    result.clip" + group + " = vec4<f32>(1.0);");
             for (let plane = 0; plane < clipPlaneCount; ++plane)
@@ -2066,6 +2456,17 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     }
                 }
             }
+            // Link only at the entry boundary; the SM3 instruction body writes
+            // physical o# registers independently of its pixel-shader partner.
+            if (this.options.semanticLink && this.options.semanticLink.vertex) {
+                for (const binding of this.options.semanticLink.vertex) {
+                    let value = "o_raw[" + binding.register + "]." + "xyzw"[binding.component];
+                    if (this.options.pointExpansion && this.options.pointSprite &&
+                            binding.usage === DECLUSAGE_TEXCOORD && binding.usageIndex < 8)
+                        value = ["d9_point_uv.x", "d9_point_uv.y", "0.0", "1.0"][binding.component];
+                    out.push("    result.varying" + binding.slot + "." + "xyzw"[binding.channel] + " = " + value + ";");
+                }
+            }
             out.push("    return result;");
             out.push("}");
         }
@@ -2080,18 +2481,22 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                     declared.push({ slot: VARYING_TEXCOORD0 + index, register: "t" + index });
                 for (const index of this.psColorInputs)
                     declared.push({ slot: VARYING_COLOR0 + index, register: "v" + index });
+            } else if (this.options.semanticLink) {
+                for (const item of this.options.semanticLink.pixel)
+                    declared.push({slot: item.slot, register: "v" + item.register + "." + "xyzw"[item.component],
+                        channel: "xyzw"[item.channel]});
             } else {
-                for (const index of this.psColorInputs) {
-                    const semantic = this.usedInputs.get(index);
-                    if (!semantic)
-                        throw new Error("ps_3_0 input v" + index +
-                            " was read without a dcl semantic");
-                    const slot = varyingForSemantic(semantic.usage, semantic.usageIndex);
-                    if (slot < 0)
-                        throw new Error("pixel shader input semantic " + semantic.usage +
-                            "[" + semantic.usageIndex + "] has no varying slot");
-                    declared.push({ slot, register: "v" + index });
+                // The unlinked module supplies reflection for pair linking.
+                // Legacy semantics retain their standalone canonical mapping.
+                for (const item of this.inputDeclarations) {
+                    const slot = varyingForSemantic(item.usage, item.usageIndex);
+                    if (slot < 0) continue;
+                    for (let component = 0; component < 4; ++component) if (item.mask & 1 << component)
+                        declared.push({slot, register: "v" + item.register + "." + "xyzw"[component],
+                            channel: "xyzw"[component]});
                 }
+                for (const index of this.psColorInputs) if (!this.usedInputs.get(index))
+                    throw new Error("ps_3_0 input v" + index + " was read without a dcl semantic");
             }
             for (const entry of declared) {
                 if (entry.slot < 0 || entry.slot >= VARYING_COUNT)
@@ -2101,7 +2506,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             out.push("struct D9PixelInput {");
             out.push("    @builtin(position) position: vec4<f32>,");
             for (let slot = 0; slot < VARYING_COUNT; ++slot)
-                out.push("    @location(" + slot + ") varying" + slot + ": vec4<f32>,");
+                out.push(this.varyingDeclaration(slot));
             const clipPlaneCount = this.options.clipPlaneCount || 0;
             for (let group = 0; group < Math.ceil(clipPlaneCount / 4); ++group)
                 out.push("    @location(" + (VARYING_COUNT + group) +
@@ -2117,11 +2522,13 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // target within a pass, and is visible in reflection.colorOutputs.
             const targetCount = this.colorOutputs.size
                 ? Math.max(...this.colorOutputs) + 1 : 1;
+            const viewportDepthRange = this.options.viewportDepthRange;
             out.push("struct D9PixelOutput {");
             for (let target = 0; target < targetCount; ++target)
                 out.push("    @location(" + target + ") color" + target +
                     ": vec4<f32>,");
-            if (this.usesDepthOutput)
+            const depthBias = this.options.depthBias;
+            if (this.usesDepthOutput || viewportDepthRange || depthBias)
                 out.push("    @builtin(frag_depth) depth: f32,");
             out.push("};");
             out.push("");
@@ -2134,7 +2541,10 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 out.push("    if (stage_in.clip" + Math.floor(plane / 4) +
                     "." + "xyzw"[plane & 3] + " < 0.0) { discard; }");
             for (const entry of declared)
-                out.push("    " + entry.register + " = stage_in.varying" + entry.slot + ";");
+                out.push("    " + entry.register + " = stage_in.varying" + entry.slot +
+                    (entry.channel ? "." + entry.channel : "") + ";");
+            if (this.usesRelativeInputs)
+                for (const index of this.usedInputs.keys()) out.push("    d9_inputs[" + index + "] = v" + index + ";");
             if (this.usesFragPosition)
                 out.push("    d9_frag_position = stage_in.position;");
             if (this.usesFrontFacing)
@@ -2144,7 +2554,8 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // ps_1_x leaves its result in r0; ps_2_0+ writes oC0 explicitly.
             out.push("    result.color0 = " + (this.major === 1 ? "r0" : "oC0") + ";");
             for (let target = 1; target < targetCount; ++target)
-                out.push("    result.color" + target + " = oC" + target + ";");
+                out.push("    result.color" + target + " = " +
+                    (this.colorOutputs.has(target) ? "oC" + target : "vec4<f32>(0.0)") + ";");
             // D3D9's alpha test runs after the shader, on the colour it
             // produced. WebGPU has no such stage, so the caller passes the
             // comparison in and it becomes a discard here -- which is why an
@@ -2152,8 +2563,14 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             // bytecode (see alphaTest in compileShader's options).
             if (this.options.alphaTestDiscard)
                 out.push(this.options.alphaTestDiscard.replace(/\n$/, ""));
+            if (this.options.fogBlend) out.push(this.options.fogBlend.replace(/\n$/, ""));
             if (this.usesDepthOutput)
                 out.push("    result.depth = o_depthv.x;");
+            else if (viewportDepthRange || depthBias)
+                out.push("    result.depth = clamp(" + (viewportDepthRange
+                    ? "mix(f32(" + viewportDepthRange[0] + "), f32(" + viewportDepthRange[1] +
+                        "), stage_in.position.z)" : "stage_in.position.z") +
+                    (depthBias ? " + f32(" + depthBias + ")" : "") + ", 0.0, 1.0);");
             out.push("    return result;");
             out.push("}");
 
@@ -2169,7 +2586,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             return null;
         }
 
-        reflect(floatCount, intCount, boolVectors) {
+        reflect(floatCount, intCount, boolVectors, storage) {
             const inputs = [];
             for (const register of this.usedInputs.keys()) {
                 const semantic = this.inputSemanticFor(register);
@@ -2177,10 +2594,18 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 inputs.push({ register, usage: semantic.usage,
                     usageIndex: semantic.usageIndex, location: register });
             }
+            // Coordinates may be read by texcoord/matrix/depth arithmetic
+            // without any texture sample. The fixed vertex stage still must
+            // export them; sampler count is not an input-usage description.
+            if (this.kind === "pixel" && this.major < 3)
+                for (const register of this.psTexcoordInputs)
+                    inputs.push({register, usage: DECLUSAGE_TEXCOORD, usageIndex: register,
+                        location: VARYING_TEXCOORD0 + register});
             inputs.sort((a, b) => a.register - b.register);
             const samplerBindingBase = this.kind === "vertex" ? 34 : 2;
             const samplers = Array.from(this.samplers.entries())
                 .map(([index, type]) => ({ index, type,
+                    ...(this.nvDepthFunctions.has(index) ? {compareFunction:this.nvDepthFunctions.get(index)} : {}),
                     depth: this.isDepthSampler(index)
                         ? (this.isDepthFetchSampler(index) ? "fetch" : "compare")
                         : false,
@@ -2200,6 +2625,15 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 boolVectors * 16;
             const pointExpansion = this.kind === "vertex" &&
                 !!this.options.pointExpansion;
+            // The point-sprite entry wrapper writes all eight legacy UVs,
+            // even when the guest's shader body only writes position. Keep
+            // this variant's reflection consistent without changing the
+            // prepared body reused by ordinary triangle/point variants.
+            const writtenVaryings = new Set(this.writtenVaryings);
+            if (pointExpansion && this.options.pointSprite) {
+                for (let stage = 0; stage < 8; ++stage)
+                    writtenVaryings.add(VARYING_TEXCOORD0 + stage);
+            }
             // Every vertex shader carries the render target size for the
             // half-pixel offset, so it sits between the register region and the
             // optional point-sprite fields.
@@ -2218,12 +2652,20 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
             const bumpOffset = bumpStageCount ? trailingOffset : -1;
             const bumpLuminanceOffset = bumpStageCount
                 ? trailingOffset + bumpStageCount * 16 : -1;
+            const fogOffset = this.kind === "pixel" && this.options.fogBlend ? trailingOffset + bumpStageCount * 32 : -1;
+            const alphaTestOffset = this.kind === "pixel" && this.options.alphaTestUniform ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) : -1;
+            const samplerBiasVectors = this.kind === "pixel" && this.options.samplerLodBiasUniform
+                ? Math.max(1, Math.ceil((Math.max(...this.samplers.keys()) + 1) / 4)) : 0;
+            const samplerLodBiasOffset = samplerBiasVectors ? trailingOffset + bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0) : -1;
             return {
                 kind: this.kind,
                 version: { major: this.major, minor: this.minor },
                 entryPoint: this.kind === "vertex" ? "d9_vs_main" : "d9_ps_main",
                 inputs,
+                outputDeclarations: this.outputDeclarations.map(item => ({...item})),
+                inputDeclarations: this.inputDeclarations.map(item => ({...item})),
                 samplers,
+                constantBufferType: storage ? "read-only-storage" : "uniform",
                 floatConstCount: floatCount,
                 intConstCount: intCount,
                 boolVectorCount: boolVectors,
@@ -2240,13 +2682,15 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 // coordinate samples one texel across a whole model -- a flat
                 // silhouette that looks like a lighting or texture bug rather
                 // than the stage/varying mismatch it is.
-                writtenVaryings: Array.from(this.writtenVaryings)
+                writtenVaryings: Array.from(writtenVaryings)
                     .sort((a, b) => a - b),
                 floatDefaults, intDefaults, boolDefaults,
                 levelZeroSamples: this.levelZeroSamples,
                 warnings: this.warnings.slice(),
                 uniformBytes: trailingOffset + (pointExpansion ? 32 : 0) +
-                    bumpStageCount * 32,
+                    bumpStageCount * 32 + (fogOffset >= 0 ? 32 : 0) + (alphaTestOffset >= 0 ? 16 : 0) + samplerBiasVectors * 16,
+                samplerLodBiasOffset, samplerBiasCount: samplerBiasVectors * 4,
+                fogOffset, alphaTestOffset,
                 bumpStageCount,
                 bumpOffset,
                 bumpLuminanceOffset,
@@ -2268,15 +2712,100 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
     // module cannot handle comes back as {ok:false, error}, because the
     // caller's contract (plan 4.2) is to mark the handle unusable and skip
     // draws that bind it -- not to fail the whole command batch.
+
+    function vertexInputHelpers(conversions) {
+        const out = [];
+        const conversionKinds = new Set(conversions);
+        if (conversionKinds.has("udec3")) {
+            out.push("fn d9_unpack_udec3(value: u32) -> vec4<f32> {");
+            out.push("    return vec4<f32>(f32(value & 0x3ffu), " +
+                "f32((value >> 10u) & 0x3ffu), " +
+                "f32((value >> 20u) & 0x3ffu), 1.0);");
+            out.push("}");
+            out.push("");
+        }
+        if (conversionKinds.has("dec3n")) {
+            out.push("fn d9_snorm10(value: u32) -> f32 {");
+            out.push("    let signed_value = i32(value << 22u) >> 22;");
+            out.push("    return max(f32(signed_value) / 511.0, -1.0);");
+            out.push("}");
+            out.push("fn d9_unpack_dec3n(value: u32) -> vec4<f32> {");
+            out.push("    return vec4<f32>(d9_snorm10(value & 0x3ffu), " +
+                "d9_snorm10((value >> 10u) & 0x3ffu), " +
+                "d9_snorm10((value >> 20u) & 0x3ffu), 1.0);");
+            out.push("}");
+            out.push("");
+        }
+        return out.join("\n");
+    }
+    function vertexInputConversion(type) {
+        switch (type) {
+        case 4: return "color";
+        case 5: return "ubyte4";
+        case 6: return "short2";
+        case 7: return "short4";
+        case 13: return "udec3";
+        case 14: return "dec3n";
+        default: return "";
+        }
+    }
+    function vertexInputType(conversion) {
+        return {ubyte4: "vec4<u32>", short2: "vec2<i32>", short4: "vec4<i32>",
+            udec3: "u32", dec3n: "u32"}[conversion] || "vec4<f32>";
+    }
+    function vertexInputValue(name, conversion, bgra) {
+        switch (conversion) {
+        case "ubyte4":
+        case "short4": return "vec4<f32>(" + name + ")";
+        case "short2": return "vec4<f32>(vec2<f32>(" + name + "), 0.0, 1.0)";
+        case "udec3": return "d9_unpack_udec3(" + name + ")";
+        case "dec3n": return "d9_unpack_dec3n(" + name + ")";
+        case "color": return name + ".bgra";
+        default: return name + (bgra ? ".bgra" : "");
+        }
+    }
+
+    function isPreparedProgram(program) {
+        return !!program && program.version === 1 && !!program.maps && !!program.sets && !!program.values &&
+            PROGRAM_MAPS.every(name => Array.isArray(program.maps[name])) &&
+            PROGRAM_SETS.every(name => Array.isArray(program.sets[name])) &&
+            [program.mainBody, program.bodies, program.subroutines, program.sampleOperations].every(Array.isArray);
+    }
+
+    function specializeShader(base, options) {
+        try {
+            if (!base || !base.ok) return base || {ok: false, error: "missing translated shader"};
+            const program = base.program;
+            if (!isPreparedProgram(program)) throw new Error("missing prepared shader body");
+            const translator = new Translator(program, options);
+            for (const name of PROGRAM_MAPS) translator[name] = new Map(program.maps[name]);
+            for (const name of PROGRAM_SETS) translator[name] = new Set(program.sets[name]);
+            for (const name of PROGRAM_VALUES) translator[name] = Array.isArray(program.values[name])
+                ? program.values[name].slice() : program.values[name];
+            translator.sampleOperations = program.sampleOperations;
+            if (program.kind === "pixel" && program.major === 1)
+                for (const index of translator.samplers.keys()) translator.samplers.set(index, translator.legacySamplerType(index));
+            else if (program.kind === "pixel" && options && options.legacySamplerTypes)
+                for (const index of translator.samplers.keys()) {
+                    const type = options.legacySamplerTypes[index];
+                    if (type) translator.samplers.set(index, type);
+                }
+            const result = translator.assemble({subroutines: program.subroutines}, new Map(program.bodies), program.mainBody);
+            return {ok: true, wgsl: result.wgsl, reflection: result.reflection, program};
+        } catch (error) {
+            return {ok: false, error: error && error.message ? error.message : String(error)};
+        }
+    }
+
     function compileShader(tokens, options) {
         try {
             const parsed = parseShader(tokens);
-            const translator = new Translator(parsed, options);
-            const result = translator.translate();
-            return { ok: true, wgsl: result.wgsl, reflection: result.reflection };
+            const translator = new Translator(parsed);
+            translator.preparing = true;
+            const program = translator.translate();
+            return specializeShader({ok: true, program}, options);
         } catch (error) {
-            return { ok: false, error: error && error.message ? error.message :
-                String(error) };
+            return {ok: false, error: error && error.message ? error.message : String(error)};
         }
     }
 
@@ -2422,7 +2951,7 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
                 if (!item || typeof item.key !== "string" || !item.result) continue;
                 const result = item.result;
                 if (result.ok && (typeof result.wgsl !== "string" ||
-                        !result.reflection)) continue;
+                        !result.reflection || !isPreparedProgram(result.program))) continue;
                 if (!result.ok && typeof result.error !== "string") continue;
                 if (this.entries.has(item.key)) continue;
                 this.entries.set(item.key, result);
@@ -2436,12 +2965,14 @@ globalThis.V86GL_BUILD_REVISION = "6a5936bfd189a5d6221e";
     }
 
     const api = {
-        compileShader, parseShader, hashTokens, D3D9ShaderCache,
+        compileShader, specializeShader, parseShader, hashTokens, D3D9ShaderCache, sampleSwizzleExpression, fetch4Expression, linkShaderSemantics,
+        vertexInputConversion, vertexInputType, vertexInputValue, vertexInputHelpers,
         TRANSLATOR_REVISION,
         VARYING_COLOR0, VARYING_COLOR1, VARYING_TEXCOORD0, VARYING_FOG,
         VARYING_COUNT, varyingForSemantic,
         OP, REGISTER: {
             TEMP: REG_TEMP, INPUT: REG_INPUT, CONST: REG_CONST, ADDR: REG_ADDR,
+            CONST2: REG_CONST2, CONST3: REG_CONST3, CONST4: REG_CONST4,
             TEXTURE: REG_TEXTURE, RASTOUT: REG_RASTOUT, ATTROUT: REG_ATTROUT,
             OUTPUT: REG_OUTPUT, CONSTINT: REG_CONSTINT, COLOROUT: REG_COLOROUT,
             DEPTHOUT: REG_DEPTHOUT, SAMPLER: REG_SAMPLER,

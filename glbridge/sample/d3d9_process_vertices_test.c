@@ -348,10 +348,9 @@ static HRESULT run_process_vertices(HWND hwnd)
     }
     IDirect3DVertexBuffer9_Unlock(g_result_buffer);
 
-    /* D3DPV_DONOTCOPYDATA transforms position and leaves every other channel
-     * of the destination alone. It is checked only for acceptance here: the
-     * point is that the flag is honoured rather than rejected, and the values
-     * it preserves are the ones the run above already verified. */
+    /* Lighting is disabled in this case. DONOTCOPYDATA transforms position
+     * while preserving these passthrough channels. The shared three-API XP
+     * probe separately checks that enabled lighting still writes colors. */
     begin_stage("ProcessVertices(D3DPV_DONOTCOPYDATA)");
     hr = IDirect3DDevice9_ProcessVertices(g_device, 0, 0, TEST_VERTEX_COUNT,
             g_result_buffer, g_result_decl, D3DPV_DONOTCOPYDATA);

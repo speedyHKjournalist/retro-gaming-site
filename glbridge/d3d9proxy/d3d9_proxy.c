@@ -1,9 +1,9 @@
 /*
  * App-local Direct3D 9 frontend for Windows XP guests running in v86.
  *
- * Independent from d3d8.dll: separate COM objects, separate D9WG protocol
- * (d3d9_protocol.h), separate host executor. A game directory loads exactly
- * one of d3d8.dll/d3d9.dll/opengl32.dll -- never more than one.
+ * COM objects remain frontend-owned. D3D8 and DirectDraw emit this same
+ * D9WG protocol and host executor. Pure retry/upload mechanics are shared
+ * by d9wg_runtime, together with process-wide DMA, query and handle state.
  *
  * Current scope: device/resource lifecycle, vertex declarations and FVF,
  * vertex/index buffers, 2D/cube/volume textures, integer and floating-point
@@ -12,9 +12,8 @@
  * planes, state blocks, asynchronous GPU queries, and GPU render-target
  * readback through the response tail of the shared DMA arena.
  *
- * Legacy entry points which do not map to the advertised drawing profile are
- * still rejected explicitly: ProcessVertices, additional swap chains,
- * palettized textures, higher-order patches, and Surface::GetDC/ReleaseDC.
+ * Software ProcessVertices uses the shared fixed-function vertex kernel.
+ * Programmable vertex processing is still refused explicitly.
  *
  * The discipline throughout: an entry point either does what D3D9 says or
  * fails, and GetDeviceCaps only claims what is actually implemented. Where an
@@ -22,18 +21,74 @@
  * getStats() counters.
  */
 
+/* Private consumers link the same implementation without publishing the
+ * d3d9.dll loader/compatibility exports in their own module. */
+#ifdef D9WG_STATIC_CORE
+#define Direct3DCreate9 d9wg_d3d9_core_create
+#define DllMain d9wg_d3d9_core_module
+#endif
+
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include <windows.h>
 #include <initguid.h>
 #include <d3d9.h>
+#include <ddraw.h>
+#include "d3d9_gdi_memory.inc"
+#include "d3d9_core.h"
+#include "../runtime/d9wg_declaration8.h"
+#include "../runtime/d9wg_shader8_local_defs.h"
+#include "../runtime/d9wg_shader9_constants.h"
 #include <stdint.h>
+#include "../runtime/d9wg_runtime.h"
+#include "../runtime/d9wg_reset.h"
+#include "../runtime/d9wg_present_parameters.h"
+#include "../runtime/d9wg_display_mode.h"
+#include "../runtime/d9wg_window_reset.h"
+#include "../runtime/d9wg_window_mode.h"
+#include "../runtime/d9wg_exclusive_window.h"
+#include "../runtime/d9wg_private_data.h"
+#include "../runtime/d9wg_present_pacing.h"
+#include "../runtime/d9wg_cursor.h"
+#include "../runtime/d9wg_surface_readback.h"
+#include "../runtime/d9wg_surface_lock.h"
+#include "../runtime/d9wg_backbuffer_upload.h"
+#include "../runtime/d9wg_format_layouts.h"
+#include "../runtime/d9wg_cpu_texture_layout.h"
+#include "../runtime/d9wg_depth_surface_layout8.h"
+#include "../runtime/d9wg_format_queries.h"
+#include "../runtime/d9wg_state_defaults.h"
+#include "../runtime/d9wg_state_bridge8.h"
+#include "../runtime/d9wg_fvf.h"
+#include "../runtime/d9wg_math.h"
+#define D9WG_LIGHTING_SDK_MATERIAL D3DMATERIAL9
+#define D9WG_LIGHTING_SDK_LIGHT D3DLIGHT9
+#include "../runtime/d9wg_lighting_bridge.h"
+#include "../runtime/d9wg_palette_state.h"
+#include "../runtime/d9wg_light_state.h"
+#define D9WG_STATE_BLOCK_API 9
+#include "../runtime/d9wg_state_block_scope.h"
+#include "../runtime/d9wg_vertex.h"
+#include "../runtime/d9wg_process_layout8.h"
+#include "../runtime/d9wg_vertex_windows.h"
+#include "../runtime/d9wg_fpu.h"
+#include "../runtime/d9wg_transport.h"
+#include "../runtime/d9wg_process_aliases.h"
 #ifdef D9WG_DIAGNOSTIC_TRACE
 #include <stdarg.h>
 #endif
 #include "../openglproxy/v86gl_ioctl.h"
 #include "d3d9_protocol.h"
-#include "../window_region.h"
+#include "../runtime/d9wg_window_probe.h"
+#include "../runtime/d9wg_window_watch.h"
+#include "../runtime/d9wg_buffer_lock.h"
+
+_Static_assert(D3DLOCK_READONLY == D9WG_BUFFER_LOCK_READONLY, "readonly lock flag");
+_Static_assert(D3DLOCK_NOOVERWRITE == D9WG_BUFFER_LOCK_NOOVERWRITE, "nooverwrite lock flag");
+_Static_assert(D3DLOCK_DISCARD == D9WG_BUFFER_LOCK_DISCARD, "discard lock flag");
+_Static_assert(D3DUSAGE_WRITEONLY == D9WG_BUFFER_USAGE_WRITEONLY, "writeonly buffer usage");
+_Static_assert(D3DUSAGE_DYNAMIC == D9WG_BUFFER_USAGE_DYNAMIC, "dynamic buffer usage");
+#include "../upload_bands.h"
 
 #ifndef D3DSTREAMSOURCE_INDEXEDDATA
 #define D3DSTREAMSOURCE_INDEXEDDATA 0x40000000u
@@ -107,9 +162,15 @@ static void trace_open(HINSTANCE instance)
         return;
     while (length && path[length - 1] != '\\' && path[length - 1] != '/')
         --length;
+#ifdef D9WG_STATIC_CORE
+    if (length + sizeof("d3d9_core_trace_4294967295.log") > MAX_PATH)
+        return;
+    wsprintfA(path + length, "d3d9_core_trace_%lu.log", GetCurrentProcessId());
+#else
     if (length + sizeof("d3d9_trace_4294967295.log") > MAX_PATH)
         return;
     wsprintfA(path + length, "d3d9_trace_%lu.log", GetCurrentProcessId());
+#endif
     g_trace_file = CreateFileA(path, GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL, NULL);
@@ -676,7 +737,7 @@ static void trace_close(void)
 #define D9_MAX_RENDER_STATES 256u
 #define D9_MAX_TEXTURE_STAGES 8u
 #define D9_MAX_TEXTURE_BINDINGS 20u /* 16 pixel + 4 vs_3_0 vertex samplers */
-#define D9_MAX_PALETTES 16u
+#define D9_MAX_PALETTES D9WG_PALETTE_COUNT
 
 /*
  * ATI's depth-as-texture FOURCCs, absent from d3d9types.h because they were
@@ -759,6 +820,9 @@ static void trace_close(void)
  * here is the ps_3_0 ceiling, so the shadow is large enough for any shader
  * the host translator will accept without needing a second size later. */
 #define D9_MAX_VS_CONST_F 256u
+#define D9_SW_VS_CONST_F 8192u
+#define D9_SW_VS_CONST_I 2048u
+#define D9_SW_VS_CONST_B 2048u
 #define D9_MAX_PS_CONST_F 224u
 #define D9_MAX_CONST_I 16u
 #define D9_MAX_CONST_B 16u
@@ -800,7 +864,6 @@ static void trace_close(void)
 #define D9_ADAPTER_GEFORCEFX_5200 3
 
 #define D9_ADAPTER_IDENTITY D9_ADAPTER_NATIVE
-#define D9_VGL2_RECORD_HEADER_BYTES 8u
 #define D9_HANDLE_GENERATION_ONE (1u << 20)
 
 typedef struct D9Direct3D D9Direct3D;
@@ -818,7 +881,15 @@ typedef struct D9Volume D9Volume;
 typedef struct D9StateBlock D9StateBlock;
 typedef struct D9Query D9Query;
 
+typedef struct D9TextureDirtyRect {
+    RECT rect;
+    struct D9TextureDirtyRect *next;
+} D9TextureDirtyRect;
+
 typedef struct D9TextureLevel {
+    BOOL dirty_full;
+    D9TextureDirtyRect *dirty_rects;
+    D9WGPrivateStore private_data;
     BYTE *shadow;
     /* The one surface GetSurfaceLevel hands out for this level, created on
      * first request and destroyed with the texture.  D3D9 makes a level
@@ -847,6 +918,7 @@ typedef struct D9TextureLevel {
     D3DBOX lock_box;
     DWORD lock_flags;
     BOOL locked;
+    BOOL dc_active; /* GDI owns a map across the complete texture resource. */
 } D9TextureLevel;
 
 typedef struct D9StreamBinding {
@@ -856,9 +928,77 @@ typedef struct D9StreamBinding {
     DWORD frequency; /* 1, INDEXEDDATA|count, or INSTANCEDATA|step rate */
 } D9StreamBinding;
 
+#define D9_STATE_BLOCK_TRANSFORMS D9WG_STATE_BLOCK_TRANSFORMS
+
+struct D9StateBlock {
+    IDirect3DStateBlock9 iface;
+    LONG refcount;
+    BOOL device_parent_ref; /* false for recording and device-owned8 tokens */
+    BOOL freeze_stream_offsets; /* predefined blocks retain creation offsets on recapture */
+    DWORD handle8; /* zero for ordinary9 COM blocks; never a protocol resource */
+    D9Device *device;
+
+    BOOL has_render_state[D9_MAX_RENDER_STATES];
+    DWORD render_states[D9_MAX_RENDER_STATES];
+    BOOL has_texture_stage_state[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
+    DWORD texture_stage_states[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
+    BOOL has_sampler_state[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
+    DWORD sampler_states[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
+    BOOL has_transform[D9_STATE_BLOCK_TRANSFORMS];
+    float transforms[D9_STATE_BLOCK_TRANSFORMS][16];
+    BOOL has_texture[D9_MAX_TEXTURE_BINDINGS];
+    D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
+    D9CubeTexture *cube_textures[D9_MAX_TEXTURE_BINDINGS];
+    D9VolumeTexture *volume_textures[D9_MAX_TEXTURE_BINDINGS];
+    BOOL has_palette;
+    UINT current_palette;
+    BOOL has_material;
+    D3DMATERIAL9 material;
+    BOOL has_clip_plane[D9_MAX_CLIP_PLANES];
+    float clip_planes[D9_MAX_CLIP_PLANES][4];
+    BOOL has_npatch_mode;
+    float npatch_segments;
+    BOOL has_light[D9_MAX_LIGHTS];
+    D3DLIGHT9 lights[D9_MAX_LIGHTS];
+    BOOL has_light_enable[D9_MAX_LIGHTS];
+    BOOL light_enabled[D9_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
+    BOOL light_allocation_failed;
+    BOOL has_viewport;
+    D3DVIEWPORT9 viewport;
+    BOOL has_scissor;
+    RECT scissor_rect;
+    BOOL has_vertex_shader;
+    D9Shader *vertex_shader;
+    BOOL has_pixel_shader;
+    D9Shader *pixel_shader;
+    BOOL *has_vs_const_f;
+    float (*vs_const_f)[4];
+    BOOL has_ps_const_f[D9_MAX_PS_CONST_F];
+    float ps_const_f[D9_MAX_PS_CONST_F][4];
+    BOOL *has_vs_const_i;
+    int (*vs_const_i)[4];
+    BOOL has_ps_const_i[D9_MAX_CONST_I];
+    int ps_const_i[D9_MAX_CONST_I][4];
+    BOOL *has_vs_const_b;
+    BOOL *vs_const_b;
+    BOOL has_ps_const_b[D9_MAX_CONST_B];
+    BOOL ps_const_b[D9_MAX_CONST_B];
+    BOOL has_vertex_format;
+    DWORD fvf;
+    D9VertexDeclaration *vertex_declaration;
+    BOOL has_stream[D9_MAX_STREAMS];
+    BOOL has_stream_frequency[D9_MAX_STREAMS];
+    D9StreamBinding streams[D9_MAX_STREAMS];
+    BOOL has_indices;
+    D9IndexBuffer *index_buffer;
+    struct D9StateBlock *next_device_resource;
+};
+
 struct D9Direct3D {
     IDirect3D9 iface;
     LONG refcount;
+    UINT compatibility_api;
 };
 
 /*
@@ -866,7 +1006,8 @@ struct D9Direct3D {
  * COM identity embedded in D9Device so repeated GetSwapChain(0) calls return
  * the same object, just as the native runtime does.  The device itself does
  * not own a COM reference to this object (that would form a cycle); every
- * external swap-chain reference holds one ordinary device reference instead.
+ * active implicit chain holds one child reference while its public count is
+ * nonzero; additional chains own one child reference for their lifetime.
  */
 struct D9SwapChain {
     IDirect3DSwapChain9 iface;
@@ -883,7 +1024,12 @@ struct D9SwapChain {
     HWND window;
     D3DPRESENT_PARAMETERS present;
     IDirect3DSurface9 *back_buffer;
+    /* Public buffers 1/2, then the preserved front and temporary FLIP image.
+     * Cached surfaces have no public/device reference while unused. */
+    D9Surface *cached_buffers[4];
     D9SwapChain *next_device_chain;
+    D9WGPresentClock present_clock;
+    D9WGPresentPacing present_pacing;
 };
 
 struct D9Device {
@@ -900,6 +1046,8 @@ struct D9Device {
     D3DDEVICE_CREATION_PARAMETERS creation;
     D3DPRESENT_PARAMETERS present;
     D3DDISPLAYMODE display_mode;
+    D9WGCursorState app_cursor_state;
+    D9WGResetState reset_state;
     D3DVIEWPORT9 viewport;
     float transforms[D9_MAX_TRANSFORMS][16];
     DWORD render_states[D9_MAX_RENDER_STATES];
@@ -908,22 +1056,26 @@ struct D9Device {
     D3DMATERIAL9 material;
     /* The last ramp SetGammaRamp was given, kept so GetGammaRamp answers with
      * it rather than with zeroes. D3D9 has no "no ramp set" state -- a device
-     * starts at identity -- so `gamma_ramp_set` only records whether the host
-     * has been told, which decides whether Reset has to tell it again. */
+     * starts at identity -- so `gamma_ramp_set` records whether the app supplied one;
+     * Reset replays that stored ramp and its flags to the new device. */
     D3DGAMMARAMP gamma_ramp;
     BOOL gamma_ramp_set;
+    DWORD gamma_ramp_flags;
     /* Only meaningful on a D3DCREATE_MIXED_VERTEXPROCESSING device; the other
      * two modes are fixed at creation and answer from BehaviorFlags. */
     BOOL software_vertex_processing;
+    BOOL vertex_shader_hw_disabled;
     /* SetNPatchMode's level, or 0 when tessellation is off. Zero is the gate
      * the draw path checks, so the default costs one comparison. */
     float npatch_segments;
     D3DLIGHT9 lights[D9_MAX_LIGHTS];
     BOOL light_set[D9_MAX_LIGHTS];
     BOOL light_enabled[D9_MAX_LIGHTS];
+    D9WGLightState *extra_lights;
     D9StreamBinding streams[D9_MAX_STREAMS];
     D9IndexBuffer *index_buffer;
     D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
+    BOOL managed_texture_dirty;
     /* Parallel to `textures`: a stage holds either a 2D or a cube texture, and
      * exactly one of the two slots is non-NULL. Keeping them apart rather than
      * behind a tagged union keeps the release paths type-correct. */
@@ -941,12 +1093,8 @@ struct D9Device {
     D9Shader *shaders;
     D9StateBlock *state_blocks;
     D9Query *queries;
-    /* Non-NULL between BeginStateBlock and EndStateBlock: `recording` is the
-     * pre-Begin snapshot used to restore live device state, while
-     * `recording_result` receives an explicit mask entry for every Set* call.
-     * Keeping the call mask is essential: setting a state to its current value
-     * is still part of a D3D9 state block. */
-    D9StateBlock *recording;
+    /* The unfinished block owns recorded values/references; live state stays
+     * unchanged until Apply. Even same-value calls retain their masks. */
     D9StateBlock *recording_result;
     /* Explicitly bound targets. A NULL slot 0 means the implicit back buffer,
      * which is what a device renders to until the app says otherwise. */
@@ -967,7 +1115,8 @@ struct D9Device {
     RECT scissor_rect;
     BOOL scissor_set;
     float clip_planes[D9_MAX_CLIP_PLANES][4];
-    D3DCLIPSTATUS9 clip_status;
+    D9WGClipStatus clip_status;
+    BOOL clip_status_valid;
     D9Shader *vertex_shader;
     D9Shader *pixel_shader;
     BOOL cursor_ready;
@@ -977,25 +1126,19 @@ struct D9Device {
     BOOL app_cursor;
     HCURSOR system_cursor;
     BOOL display_mode_changed;
-    BOOL window_state_sent;
+    D9WGWindowCache window_cache;
+    D9WGWindowWatch window_watch;
     /* Saved across the borderless override an exclusive-fullscreen device
      * applies to its window, so the app's own frame comes back on teardown. */
     HWND styled_window;
     LONG saved_window_style;
     LONG saved_window_exstyle;
-    /* Reconstructs the vertical-retrace wait Present owes the app; see
-     * throttle_to_presentation_interval().  Times are present_clock() ticks. */
-    DWORD present_deadline;
-    DWORD present_clock_hz;
-    BYTE present_clock_shift;
-    BOOL present_paced;
+    D9WGPresentClock present_clock;
+    D9WGPresentPacing present_pacing;
     /* Rate limiting for maintain_fullscreen_foreground(). */
     DWORD last_foreground_claim;
     DWORD foreground_claims;
-    uint32_t last_window_flags;
-    uint32_t last_foreground;
-    /* The visible part of the client area last reported (D9WG_WINDOW_REGION) */
-    V86WindowRegion last_region;
+    D9WGExclusiveWindow *exclusive_window;
     /* The window emit_window_state() last reported, which the window-event
      * hook reports again when anything on the screen changes. */
     HWND state_window;
@@ -1005,26 +1148,17 @@ struct D9Device {
      * after a Reset. Holding the authoritative copy here (rather than only on
      * the host) is what lets set_shader_constant_f() suppress the very common
      * "set the same matrix palette again every frame" traffic and lets
-     * recreate_device_resources() replay the live values after a Reset.
+     * emit_device_state_after_reset() replay the live values after a Reset.
      */
-    float vs_const_f[D9_MAX_VS_CONST_F][4];
-    int vs_const_i[D9_MAX_CONST_I][4];
-    BOOL vs_const_b[D9_MAX_CONST_B];
+    UINT vs_float_capacity, vs_int_capacity, vs_bool_capacity;
+    float (*vs_const_f)[4];
+    int (*vs_const_i)[4];
+    BOOL *vs_const_b;
     float ps_const_f[D9_MAX_PS_CONST_F][4];
     int ps_const_i[D9_MAX_CONST_I][4];
     BOOL ps_const_b[D9_MAX_CONST_B];
-    /*
-     * Texture palettes, held here for the same reason as the constant
-     * registers: D3D9 lets an app read its palette back, and a palette is
-     * device state that outlives any one texture. The count is a local limit
-     * rather than a D3D9 one -- the API takes an arbitrary UINT index -- but a
-     * palettized title uses a handful, and a sparse map would cost more than
-     * the table it replaced.
-     */
-    DWORD palettes[D9_MAX_PALETTES][256];
-    BOOL palette_valid[D9_MAX_PALETTES];
+    D9WGPaletteStore palettes;
     UINT current_palette;
-    BOOL current_palette_set;
     uint32_t reset_epoch;
 };
 
@@ -1042,9 +1176,11 @@ struct D9Shader {
         IDirect3DPixelShader9 pixel;
     } iface;
     LONG refcount;
+    LONG binding_refs;          /* private declaration/shader slot holds */
     D9Device *device;
     uint32_t handle;
     BOOL is_pixel;
+    BOOL requires_software;
     DWORD *code;
     UINT token_count;
     uint32_t hash_low;
@@ -1055,42 +1191,54 @@ struct D9Shader {
 struct D9VertexBuffer {
     IDirect3DVertexBuffer9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private stream/index storage holds */
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
+    BYTE *shadow_allocation;    /* heap base of the 16-byte aligned shadow */
+    D9WGClipBuffer clips;
     UINT length;
     DWORD usage;
     DWORD fvf;
     D3DPOOL pool;
     DWORD priority;
+    D9WGPrivateStore private_data;
     UINT lock_offset;
     UINT lock_size;
-    DWORD lock_flags;
+    uint32_t lock_flags;
     BOOL locked;
+    BOOL full_upload_pending; /* managed residency: load the whole shadow once */
+    UINT lock_count;
     D9VertexBuffer *next_device_resource;
 };
 
 struct D9IndexBuffer {
     IDirect3DIndexBuffer9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private stream/index storage holds */
     D9Device *device;
     uint32_t handle;
     BYTE *shadow;
+    BYTE *shadow_allocation;    /* heap base of the 16-byte aligned shadow */
     UINT length;
     DWORD usage;
     D3DFORMAT format;
     D3DPOOL pool;
     DWORD priority;
+    D9WGPrivateStore private_data;
     UINT lock_offset;
     UINT lock_size;
-    DWORD lock_flags;
+    uint32_t lock_flags;
     BOOL locked;
+    BOOL full_upload_pending; /* managed residency: load the whole shadow once */
+    UINT lock_count;
     D9IndexBuffer *next_device_resource;
 };
 
 struct D9Texture {
     IDirect3DTexture9 iface;
     LONG refcount;
+    LONG binding_refs;          /* sampler/target holds do not expose COM refs */
     D9Device *device;
     uint32_t handle;
     UINT width;
@@ -1103,8 +1251,13 @@ struct D9Texture {
     DWORD multisample_quality;
     DWORD priority;
     DWORD lod;
+    D9WGPrivateStore private_data;
     D9TextureLevel *levels;
+    BYTE *mip_storage; /* CPU pools: contiguous mip/face allocation. */
     D9Texture *next_device_resource;
+    BOOL dirty_pending;
+    /* Private surface/backbuffer storage: its public owner holds the device pin. */
+    BOOL private_back_buffer;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
      * downsample with. Zero means it never said, which D3D9 reports as
      * D3DTEXF_LINEAR. */
@@ -1114,6 +1267,7 @@ struct D9Texture {
 struct D9CubeTexture {
     IDirect3DCubeTexture9 iface;
     LONG refcount;
+    LONG binding_refs;          /* sampler and cube-face target storage holds */
     D9Device *device;
     uint32_t handle;
     UINT edge_length;
@@ -1123,7 +1277,9 @@ struct D9CubeTexture {
     D3DPOOL pool;
     DWORD priority;
     DWORD lod;
+    D9WGPrivateStore private_data;
     D9TextureLevel *levels; /* face * level_count + level */
+    BYTE *mip_storage; /* face-major, each face begins on a 16-byte boundary. */
     D9CubeTexture *next_device_resource;
     /* D3DUSAGE_AUTOGENMIPMAP only: the filter the app asked the driver to
      * downsample with. Zero means it never said, which D3D9 reports as
@@ -1134,6 +1290,7 @@ struct D9CubeTexture {
 struct D9VolumeTexture {
     IDirect3DVolumeTexture9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private sampler storage holds */
     D9Device *device;
     uint32_t handle;
     UINT width;
@@ -1145,9 +1302,15 @@ struct D9VolumeTexture {
     D3DPOOL pool;
     DWORD priority;
     DWORD lod;
+    D9WGPrivateStore private_data;
     D9TextureLevel *levels;
     D9VolumeTexture *next_device_resource;
 };
+
+/* The COM conversion helpers cast interface pointers to these objects. */
+typedef char D9WGTextureInterfaceFirst[
+    offsetof(D9Texture, iface) == 0 && offsetof(D9CubeTexture, iface) == 0
+            && offsetof(D9VolumeTexture, iface) == 0 ? 1 : -1];
 
 struct D9Volume {
     IDirect3DVolume9 iface;
@@ -1164,9 +1327,14 @@ static IDirect3DVolume9Vtbl g_volume_vtbl;
 struct D9VertexDeclaration {
     IDirect3DVertexDeclaration9 iface;
     LONG refcount;
+    LONG binding_refs;          /* private declaration/shader slot holds */
     D9Device *device;
     uint32_t handle;
     UINT element_count;
+    DWORD fvf;                 /* native association, also for POSITION-only user views */
+    DWORD legacy_fvf8;         /* private8 cache key; never interpreted as an API9 FVF */
+    BOOL fvf_converted;         /* cache origin is distinct from an associated user FVF */
+    BOOL fvf_cache_ref;         /* device cache owns one private storage hold */
     D3DVERTEXELEMENT9 elements[D3DMAXDECLLENGTH];
     D9VertexDeclaration *next_device_resource;
 };
@@ -1179,6 +1347,9 @@ struct D9VertexDeclaration {
 struct D9Surface {
     IDirect3DSurface9 iface;
     LONG refcount;
+    /* Standalone storage can remain bound after its public count reaches zero. */
+    LONG binding_refs;
+    D9WGPrivateStore private_data;
     D9Device *device;
     /* Non-NULL for a texture-level or standalone render-target surface. The
      * surface is a view onto that texture level; LockRect/UnlockRect share its
@@ -1205,6 +1376,7 @@ struct D9Surface {
      * copy back. The surface stays LockRect-locked for that whole window,
      * which is what D3D9 specifies. */
     HDC dc;
+    D9GdiMemory *gdi_memory;
     HBITMAP dib;
     HBITMAP dc_previous;
     void *dib_bits;
@@ -1232,6 +1404,9 @@ struct D9Surface {
     UINT row_pitch;
     UINT byte_count;
     BOOL locked;
+    RECT lock_rect;
+    DWORD lock_flags;
+    BOOL lockable_render_target;
     /* TRUE for the surface GetDepthStencilSurface hands back for the device's
      * implicit auto depth-stencil. It has no texture and no pixels; its only
      * job is to be passed back to SetDepthStencilSurface, which is how an app
@@ -1245,37 +1420,228 @@ struct D9Surface {
  * fields tested here is written by exactly one place, so the pair already
  * identifies them and no extra flag is needed.
  *
- * Such a surface behaves like a texture level surface: AddRef/Release adjust
- * the parent's reference count, and the object itself survives to the parent's
- * teardown, so an app is free to drop its reference and keep using the pointer.
+ * The surface has its own public count. Only its zero/nonzero transitions
+ * retain/release the device; the cached wrapper survives a zero public count
+ * until device teardown.
  */
 static BOOL surface_is_implicit(const D9Surface *surface)
 {
-    return surface->swap_chain != NULL || surface->auto_depth_stencil;
+    return (surface->swap_chain && !surface->swap_chain->handle)
+        || surface->auto_depth_stencil;
+}
+
+static void core_view_retire8(void *object);
+static void texture_destroy_storage(D9Texture *texture);
+
+static void texture_binding_add_ref(D9Texture *texture)
+{
+    InterlockedIncrement(&texture->binding_refs);
+}
+
+static void texture_binding_release(D9Texture *texture)
+{
+    if (!InterlockedDecrement(&texture->binding_refs)
+            && !InterlockedCompareExchange(&texture->refcount, 0, 0))
+        texture_destroy_storage(texture);
+}
+
+static void cube_destroy_storage(D9CubeTexture *texture);
+
+static void cube_binding_add_ref(D9CubeTexture *texture)
+{
+    InterlockedIncrement(&texture->binding_refs);
+}
+
+static void cube_binding_release(D9CubeTexture *texture)
+{
+    if (!InterlockedDecrement(&texture->binding_refs)
+            && !InterlockedCompareExchange(&texture->refcount, 0, 0))
+        cube_destroy_storage(texture);
+}
+
+static void volume_texture_destroy_storage(D9VolumeTexture *texture);
+
+static void volume_texture_binding_add_ref(D9VolumeTexture *texture)
+{
+    InterlockedIncrement(&texture->binding_refs);
+}
+
+static void volume_texture_binding_release(D9VolumeTexture *texture)
+{
+    if (!InterlockedDecrement(&texture->binding_refs)
+            && !InterlockedCompareExchange(&texture->refcount, 0, 0))
+        volume_texture_destroy_storage(texture);
+}
+
+static void vb_destroy_storage(D9VertexBuffer *buffer);
+
+static void vb_binding_add_ref(D9VertexBuffer *buffer)
+{
+    InterlockedIncrement(&buffer->binding_refs);
+}
+
+static void vb_binding_release(D9VertexBuffer *buffer)
+{
+    if (!InterlockedDecrement(&buffer->binding_refs)
+            && !InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        vb_destroy_storage(buffer);
+}
+
+static void ib_destroy_storage(D9IndexBuffer *buffer);
+
+static void ib_binding_add_ref(D9IndexBuffer *buffer)
+{
+    InterlockedIncrement(&buffer->binding_refs);
+}
+
+static void ib_binding_release(D9IndexBuffer *buffer)
+{
+    if (!InterlockedDecrement(&buffer->binding_refs)
+            && !InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        ib_destroy_storage(buffer);
+}
+
+static void decl_destroy_storage(D9VertexDeclaration *object);
+
+static void decl_binding_add_ref(D9VertexDeclaration *object)
+{
+    InterlockedIncrement(&object->binding_refs);
+}
+
+static void decl_binding_release(D9VertexDeclaration *object)
+{
+    if (!InterlockedDecrement(&object->binding_refs)
+            && !InterlockedCompareExchange(&object->refcount, 0, 0))
+        decl_destroy_storage(object);
+}
+
+/* Clear only cache holds: public views and captured bindings retain storage.
+ * Detach each cache ownership flag before its private release. */
+static void device_clear_fvf_cache(D9Device *device)
+{
+    D9VertexDeclaration *decl = device->vertex_declarations;
+    while (decl) {
+        D9VertexDeclaration *next = decl->next_device_resource;
+        if (decl->fvf_cache_ref) {
+            decl->fvf_cache_ref = FALSE;
+            decl_binding_release(decl);
+        }
+        decl = next;
+    }
+}
+
+static void shader_destroy_storage(D9Shader *object);
+static HRESULT emit_set_shader(D9Device *device, D9Shader *shader, BOOL is_pixel);
+
+static void shader_binding_add_ref(D9Shader *object)
+{
+    InterlockedIncrement(&object->binding_refs);
+}
+
+static void shader_binding_release(D9Shader *object)
+{
+    if (!InterlockedDecrement(&object->binding_refs)
+            && !InterlockedCompareExchange(&object->refcount, 0, 0))
+        shader_destroy_storage(object);
+}
+
+static void surface_dispose_dc(D9Surface *surface)
+{
+    if (!surface) return;
+    if (surface->gdi_memory) {
+        gdi_memory_close(surface->gdi_memory, NULL, 0);
+        surface->gdi_memory = NULL;
+    } else if (surface->dc) {
+        SelectObject(surface->dc, surface->dc_previous);
+        DeleteDC(surface->dc);
+    }
+    if (surface->dib) DeleteObject(surface->dib);
+    surface->dc = NULL;
+    surface->dib = NULL;
+}
+
+static void surface_destroy_storage(D9Surface *surface);
+static void swap_chain_destroy_storage(D9SwapChain *chain);
+static HRESULT swap_chain_cached_buffer(D9SwapChain *chain, UINT index, IDirect3DSurface9 **out);
+static HRESULT swap_chain_prepare_buffers(D9SwapChain *chain);
+static HRESULT swap_chain_advance_buffers(D9SwapChain *chain);
+static void swap_chain_destroy_cached_buffers(D9SwapChain *chain);
+static BOOL swap_chain_cached_private_data(D9SwapChain *chain, BOOL clear);
+
+static BOOL swap_chain_buffers_referenced(D9SwapChain *chain)
+{
+    for (UINT i = 0; i < 5; ++i) {
+        D9Surface *surface = i ? chain->cached_buffers[i - 1]
+                : (D9Surface *)chain->back_buffer;
+        if (surface && (InterlockedCompareExchange(&surface->refcount, 0, 0)
+                || InterlockedCompareExchange(&surface->binding_refs, 0, 0)))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+
+static BOOL surface_uses_private_bindings(const D9Surface *surface)
+{
+    return !surface->texture_child && !surface->cube_texture;
+}
+
+static void surface_binding_add_ref(D9Surface *surface)
+{
+    if (surface->cube_texture)
+        cube_binding_add_ref(surface->cube_texture);
+    else if (surface->texture_child)
+        texture_binding_add_ref(surface->texture);
+    else if (surface_uses_private_bindings(surface))
+        InterlockedIncrement(&surface->binding_refs);
+    else
+        IDirect3DSurface9_AddRef(&surface->iface);
+}
+
+static void surface_binding_release(D9Surface *surface)
+{
+    if (surface->cube_texture) {
+        cube_binding_release(surface->cube_texture);
+        return;
+    }
+    if (surface->texture_child) {
+        texture_binding_release(surface->texture);
+        return;
+    }
+    if (!surface_uses_private_bindings(surface)) {
+        IDirect3DSurface9_Release(&surface->iface);
+        return;
+    }
+    if (!InterlockedDecrement(&surface->binding_refs)
+            && !InterlockedCompareExchange(&surface->refcount, 0, 0)
+            && !surface_is_implicit(surface)) {
+        if (surface->swap_chain) {
+            D9SwapChain *chain = surface->swap_chain;
+            if (!InterlockedCompareExchange(&chain->refcount, 0, 0)
+                    && !swap_chain_buffers_referenced(chain))
+                swap_chain_destroy_storage(chain);
+        } else {
+            surface_destroy_storage(surface);
+        }
+    }
 }
 
 /* BeginStateBlock records calls, including calls which write the value the
  * device already has.  The block structure itself lives near its COM methods;
  * these helpers keep its layout out of the ordinary Set* implementations. */
-static void state_block_record_render_state(D9Device *device, UINT state);
-static void state_block_record_texture_stage_state(D9Device *device,
-        UINT stage, UINT state);
-static void state_block_record_sampler_state(D9Device *device,
-        UINT sampler, UINT state);
-static void state_block_record_transform(D9Device *device, UINT state);
-static void state_block_record_texture(D9Device *device, UINT stage);
-static void state_block_record_material(D9Device *device);
-static void state_block_record_light(D9Device *device, UINT index);
-static void state_block_record_light_enable(D9Device *device, UINT index);
-static void state_block_record_viewport(D9Device *device);
-static void state_block_record_scissor(D9Device *device);
-static void state_block_record_vertex_shader(D9Device *device);
-static void state_block_record_pixel_shader(D9Device *device);
-static void state_block_record_constant(D9Device *device, BOOL is_pixel,
-        BOOL is_float, BOOL is_bool, UINT start, UINT count);
-static void state_block_record_vertex_format(D9Device *device);
-static void state_block_record_stream(D9Device *device, UINT stream);
-static void state_block_record_indices(D9Device *device);
+static BOOL state_block_record_render_state(D9Device *device, UINT state, DWORD value);
+static BOOL state_block_record_texture_stage_state(D9Device *device, UINT stage, UINT state, DWORD value);
+static BOOL state_block_record_sampler_state(D9Device *device, UINT sampler, UINT state, DWORD value);
+static BOOL state_block_record_transform(D9Device *device, UINT state, const D3DMATRIX *matrix);
+static BOOL state_block_record_palette(D9Device *device, UINT index);
+static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material);
+static BOOL state_block_record_clip_plane(D9Device *device, UINT index, const float *plane);
+static BOOL state_block_record_npatch_mode(D9Device *device, float segments);
+static BOOL state_block_record_stream_frequency(D9Device *device, UINT stream, DWORD divider);
+static BOOL state_block_record_viewport(D9Device *device, const D3DVIEWPORT9 *viewport);
+static BOOL state_block_record_scissor(D9Device *device, const RECT *rect);
+static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
+        BOOL is_float, BOOL is_bool, UINT start, UINT count, const void *data);
 
 static IDirect3D9Vtbl g_d3d_vtbl;
 static IDirect3DDevice9Vtbl g_device_vtbl;
@@ -1294,7 +1660,8 @@ static IDirect3DPixelShader9Vtbl g_pixel_shader_vtbl;
 static void device_clear_bindings(D9Device *device);
 static BOOL device_has_reset_blockers(D9Device *device);
 static void device_release_owned_references(D9Device *device);
-static BOOL recreate_device_resources(D9Device *device);
+static void device_clear_state_block_handles8(D9Device *device);
+static BOOL emit_device_state_after_reset(D9Device *device);
 static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture);
 static BOOL emit_cube_texture_update(D9CubeTexture *texture, UINT face,
         UINT level, const RECT *rect);
@@ -1314,9 +1681,10 @@ static void update_system_cursor(D9Device *device, HWND window);
 static BOOL emit_window_state(D9Device *device, HWND window);
 static void watch_window_state(D9Device *device);
 static void unwatch_window_state(D9Device *device);
-static void claim_fullscreen_foreground(D9Device *device, HWND window);
-static void maintain_fullscreen_foreground(D9Device *device, HWND window);
-static void restore_display_mode(D9Device *device);
+static BOOL reset_window_mode(D9Device *device, HWND window);
+static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
+        const D9WGWindowProbe *probe);
+static BOOL restore_display_mode(D9Device *device);
 
 static D9Direct3D *d3d_from_iface(IDirect3D9 *iface)
 {
@@ -1326,6 +1694,11 @@ static D9Direct3D *d3d_from_iface(IDirect3D9 *iface)
 static D9Device *device_from_iface(IDirect3DDevice9 *iface)
 {
     return (D9Device *)iface;
+}
+
+static UINT device_compatibility_api(const D9Device *device)
+{
+    return device->parent->compatibility_api == 8 ? 8u : 9u;
 }
 
 static D9SwapChain *swap_chain_from_iface(IDirect3DSwapChain9 *iface)
@@ -1469,7 +1842,138 @@ static void dump_shader_bytecode(const DWORD *code, UINT token_count,
     CloseHandle(file);
 }
 
-static uint32_t g_next_handle = D9_HANDLE_GENERATION_ONE;
+/* A frontend8 view is weak with respect to its real9 object. The caller
+ * owns an ordinary resource reference while looking up/installing the view.
+ * Its metadata lasts until actual storage retirement, including public zero.
+ * Tombstones remain linked during callbacks so retirement cannot reattach a
+ * view to the same dying object. Callbacks run outside the transport lock. */
+typedef struct D9CoreView8 {
+    struct D9CoreView8 *next;
+    void *object;
+    void *view;
+    D9WGCoreViewRetire8 retire;
+    D9WGCoreDeviceCleanup8 cleanup;
+    BOOL retiring;
+} D9CoreView8;
+static D9CoreView8 *g_core_views8;
+
+static D9Device *core_view_device8(IUnknown *object)
+{
+    if (!object) return NULL;
+    const void *vtbl = object->lpVtbl;
+    D9Device *device = NULL;
+    if (vtbl == &g_device_vtbl) device = (D9Device *)object;
+    else if (vtbl == &g_vb_vtbl) device = ((D9VertexBuffer *)object)->device;
+    else if (vtbl == &g_ib_vtbl) device = ((D9IndexBuffer *)object)->device;
+    else if (vtbl == &g_texture_vtbl) device = ((D9Texture *)object)->device;
+    else if (vtbl == &g_cube_vtbl) device = ((D9CubeTexture *)object)->device;
+    else if (vtbl == &g_volume_texture_vtbl) device = ((D9VolumeTexture *)object)->device;
+    else if (vtbl == &g_volume_vtbl) device = ((D9Volume *)object)->texture->device;
+    else if (vtbl == &g_surface_vtbl) device = ((D9Surface *)object)->device;
+    else if (vtbl == &g_swap_chain_vtbl) {
+        D9SwapChain *chain = (D9SwapChain *)object;
+        /* D3D8 only exposes additional chains;its implicit surfaces use the
+         * frontend device as their container. */
+        if (chain->handle) device = chain->device;
+    }
+    return device && device_compatibility_api(device) == 8u ? device : NULL;
+}
+
+/* Called only while holding g_transport_lock. */
+static D9CoreView8 **core_view_link8(void *object)
+{
+    D9CoreView8 **link = &g_core_views8;
+    while (*link && (*link)->object != object) link = &(*link)->next;
+    return link;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_get_view8(IUnknown *object, void **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!core_view_device8(object)) return D3DERR_INVALIDCALL;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 *entry = *core_view_link8(object);
+    HRESULT hr = entry && entry->retiring ? D3DERR_INVALIDCALL : D3D_OK;
+    if (entry && !entry->retiring) *out = entry->view;
+    LeaveCriticalSection(&g_transport_lock);
+    return hr;
+}
+
+static HRESULT core_view_attach8(IUnknown *object, void *view,
+        D9WGCoreDeviceCleanup8 cleanup, D9WGCoreViewRetire8 retire)
+{
+    if (!view || !retire || !core_view_device8(object)) return D3DERR_INVALIDCALL;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 **link = core_view_link8(object);
+    if (*link) {
+        LeaveCriticalSection(&g_transport_lock);
+        return D3DERR_INVALIDCALL;
+    }
+    D9CoreView8 *entry = (D9CoreView8 *)HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, sizeof(*entry));
+    if (!entry) {
+        LeaveCriticalSection(&g_transport_lock);
+        return E_OUTOFMEMORY;
+    }
+    entry->object = object;
+    entry->view = view;
+    entry->retire = retire;
+    entry->cleanup = cleanup;
+    *link = entry;
+    LeaveCriticalSection(&g_transport_lock);
+    return D3D_OK;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_attach_view8(IUnknown *object, void *view,
+        D9WGCoreViewRetire8 retire)
+{
+    return core_view_attach8(object, view, NULL, retire);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_attach_device_view8(IDirect3DDevice9 *device,
+        void *view, D9WGCoreDeviceCleanup8 cleanup, D9WGCoreViewRetire8 retire)
+{
+    if (!device || device->lpVtbl != &g_device_vtbl || !cleanup)
+        return D3DERR_INVALIDCALL;
+    return core_view_attach8((IUnknown *)device, view, cleanup, retire);
+}
+
+/* Core temporary ownership keeps this weak metadata alive. Frontend CPU
+ * snapshots must detach before core blocks/bindings can retire their storage. */
+static void core_device_cleanup8(D9Device *device)
+{
+    D9WGCoreDeviceCleanup8 cleanup = NULL;
+    void *view = NULL;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 *entry = *core_view_link8(device);
+    if (entry && !entry->retiring) {
+        cleanup = entry->cleanup;
+        view = entry->view;
+    }
+    LeaveCriticalSection(&g_transport_lock);
+    if (cleanup) cleanup(view);
+}
+
+static void core_view_retire8(void *object)
+{
+    if (!object) return;
+    EnterCriticalSection(&g_transport_lock);
+    D9CoreView8 *entry = *core_view_link8(object);
+    if (!entry || entry->retiring) {
+        LeaveCriticalSection(&g_transport_lock);
+        return;
+    }
+    entry->retiring = TRUE;
+    LeaveCriticalSection(&g_transport_lock);
+    entry->retire(entry->view);
+    EnterCriticalSection(&g_transport_lock);
+    /* Another object's callback may have changed adjacent links. */
+    D9CoreView8 **link = core_view_link8(object);
+    if (*link == entry) *link = entry->next;
+    LeaveCriticalSection(&g_transport_lock);
+    HeapFree(GetProcessHeap(), 0, entry);
+}
 
 static uint32_t allocate_handle(void)
 {
@@ -1486,7 +1990,6 @@ static uint32_t allocate_handle(void)
  * so this is what guarantees a shader handle can never alias a buffer,
  * texture or declaration handle allocated by allocate_handle().
  */
-static uint32_t g_next_shader_handle = D9WG_SHADER_HANDLE_BASE;
 
 static uint32_t allocate_shader_handle(void)
 {
@@ -1495,41 +1998,28 @@ static uint32_t allocate_shader_handle(void)
 
 /* ---- VGL2 transport / D9WG batch buffer ---- */
 
-static HANDLE g_transport = INVALID_HANDLE_VALUE;
-static uint8_t *g_dma_buffer;
-static uint32_t g_dma_capacity;
-static uint32_t g_batch_bytes;
-static uint32_t g_command_count;
-static uint32_t g_frame_id = 1;
-static uint32_t g_sequence = 1;
-static uint32_t g_session_id_low;
-static uint32_t g_session_id_high;
-static BOOL g_transport_failed;
+/*
+ * A transport failure is never permanent (review S1-3): the renderer may not
+ * be up yet, may be behind, or the page may have been reloaded. Opening is
+ * retried after D9WG_RUNTIME_RETRY_MS; a batch the host refuses is dropped
+ * and counted, and the mapping -- with it the host's session, which ends when
+ * the arena is released -- is kept.
+ */
 static BOOL g_hello_emitted;
-static CRITICAL_SECTION g_transport_lock;
-static CRITICAL_SECTION g_readback_lock;
-static volatile LONG g_query_slots[D9WG_QUERY_SLOT_COUNT];
-static volatile LONG g_response_request_id;
 
 static uint8_t *batch_base(void)
 {
-    return g_dma_buffer + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES;
+    return d9wg_transport_batch(g_process);
 }
 
 static uint32_t batch_capacity(void)
 {
-    if (g_dma_capacity <= D9WG_RESPONSE_REGION_BYTES
-            + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES)
-        return 0;
-    return g_dma_capacity - (uint32_t)sizeof(V86GLDMADesc)
-            - D9_VGL2_RECORD_HEADER_BYTES - D9WG_RESPONSE_REGION_BYTES;
+    return d9wg_transport_capacity(g_process);
 }
 
 static uint8_t *response_region(void)
 {
-    if (!g_dma_buffer || g_dma_capacity < D9WG_RESPONSE_REGION_BYTES)
-        return NULL;
-    return g_dma_buffer + g_dma_capacity - D9WG_RESPONSE_REGION_BYTES;
+    return d9wg_transport_response(g_process);
 }
 
 static LONG next_response_request_id(void)
@@ -1555,144 +2045,30 @@ static void free_query_slot(UINT index)
         InterlockedExchange((LONG *)&g_query_slots[index], 0);
 }
 
-static void reset_batch_locked(void)
-{
-    D9WGBatchHeader *header;
-
-    g_batch_bytes = sizeof(D9WGBatchHeader);
-    g_command_count = 0;
-    if (!g_dma_buffer || batch_capacity() < sizeof(D9WGBatchHeader))
-        return;
-
-    header = (D9WGBatchHeader *)batch_base();
-    ZeroMemory(header, sizeof(*header));
-    header->magic = D9WG_MAGIC;
-    header->version_major = D9WG_VERSION_MAJOR;
-    header->version_minor = D9WG_VERSION_MINOR;
-    header->frame_id = g_frame_id;
-    header->session_id_low = g_session_id_low;
-    header->session_id_high = g_session_id_high;
-}
-
 static void close_transport_locked(void)
 {
-    DWORD returned = 0;
-
-    if (g_transport != INVALID_HANDLE_VALUE) {
-        if (g_dma_buffer) {
-            DeviceIoControl(g_transport, V86GL_IOCTL_UNMAP_BUFFER,
-                    NULL, 0, NULL, 0, &returned, NULL);
-        }
-        CloseHandle(g_transport);
-    }
-    g_transport = INVALID_HANDLE_VALUE;
-    g_dma_buffer = NULL;
-    g_dma_capacity = 0;
-    g_batch_bytes = 0;
-    g_command_count = 0;
+    d9wg_transport_close(g_process);
 }
 
 static BOOL open_transport_locked(void)
 {
-    V86GLMapBuffer mapping;
-    DWORD returned = 0;
-
-    if (g_dma_buffer)
-        return TRUE;
-    if (g_transport_failed)
-        return FALSE;
-
-    g_transport = CreateFileA(V86GL_DEVICE_DOS_NAME,
-            GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL, NULL);
-    if (g_transport == INVALID_HANDLE_VALUE) {
-        g_transport_failed = TRUE;
-        return FALSE;
+    BOOL attempt = !g_dma_buffer && d9wg_retry_ready(GetTickCount(), g_transport_retry_tick, g_transport_retry_armed);
+    BOOL result = d9wg_transport_open(g_process);
+    if (!result && attempt) {
+        TRACE("TRANSPORT open/map failed error=%lu; retrying in %lums", GetLastError(), (DWORD)D9WG_RUNTIME_RETRY_MS);
     }
-
-    ZeroMemory(&mapping, sizeof(mapping));
-    if (!DeviceIoControl(g_transport, V86GL_IOCTL_MAP_BUFFER,
-            NULL, 0, &mapping, sizeof(mapping), &returned, NULL)
-            || returned != sizeof(mapping)
-            || !mapping.user_address
-            || mapping.buffer_bytes < sizeof(V86GLDMADesc)
-                    + D9_VGL2_RECORD_HEADER_BYTES
-                    + sizeof(D9WGBatchHeader)
-                    + sizeof(D9WGCommandHeader)) {
-        close_transport_locked();
-        g_transport_failed = TRUE;
-        return FALSE;
-    }
-
-    g_dma_buffer = (uint8_t *)(uintptr_t)mapping.user_address;
-    g_dma_capacity = mapping.buffer_bytes;
-    if (g_dma_capacity <= D9WG_RESPONSE_REGION_BYTES
-            + sizeof(V86GLDMADesc) + D9_VGL2_RECORD_HEADER_BYTES
-            + sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)) {
-        close_transport_locked();
-        g_transport_failed = TRUE;
-        return FALSE;
-    }
-    ZeroMemory(response_region(), D9WG_RESPONSE_REGION_BYTES);
-    reset_batch_locked();
-    return TRUE;
+    return result;
 }
 
 static BOOL submit_batch_locked(BOOL present)
 {
-    V86GLDMADesc *descriptor;
-    D9WGBatchHeader *batch;
-    V86GLSubmit submit;
-    uint8_t *outer;
-    uint32_t outer_bytes;
-    DWORD returned = 0;
-
-    if (!open_transport_locked())
-        return FALSE;
-    if (g_command_count == 0)
-        return TRUE;
-
-    batch = (D9WGBatchHeader *)batch_base();
-    batch->frame_id = g_frame_id;
-    batch->flags = present ? D9WG_BATCH_FLAG_PRESENT : 0;
-    batch->command_count = g_command_count;
-    batch->command_bytes = g_batch_bytes - sizeof(*batch);
-    batch->session_id_low = g_session_id_low;
-    batch->session_id_high = g_session_id_high;
-
-    outer = g_dma_buffer + sizeof(V86GLDMADesc);
-    outer[0] = (uint8_t)(V86GL_CTRL_D3D9_BATCH & 0xFFu);
-    outer[1] = (uint8_t)(V86GL_CTRL_D3D9_BATCH >> 8);
-    outer[2] = 0xFF;
-    outer[3] = 0xFF;
-    outer[4] = (uint8_t)(g_batch_bytes & 0xFFu);
-    outer[5] = (uint8_t)((g_batch_bytes >> 8) & 0xFFu);
-    outer[6] = (uint8_t)((g_batch_bytes >> 16) & 0xFFu);
-    outer[7] = (uint8_t)((g_batch_bytes >> 24) & 0xFFu);
-
-    outer_bytes = D9_VGL2_RECORD_HEADER_BYTES + g_batch_bytes;
-    descriptor = (V86GLDMADesc *)g_dma_buffer;
-    descriptor->magic = V86GL_MAGIC;
-    descriptor->version = V86GL_VERSION;
-    descriptor->flags = 0;
-    descriptor->frame_id = g_frame_id;
-    descriptor->command_count = 1;
-    descriptor->command_bytes = outer_bytes;
-    descriptor->reserved0 = D9WG_MAGIC;
-    descriptor->reserved1 = 0;
-
-    submit.descriptor_bytes = (uint32_t)sizeof(*descriptor) + outer_bytes;
-    submit.flags = 0;
-    if (!DeviceIoControl(g_transport, V86GL_IOCTL_SUBMIT,
-            &submit, sizeof(submit), NULL, 0, &returned, NULL)) {
-        close_transport_locked();
-        g_transport_failed = TRUE;
-        return FALSE;
+    BOOL result;
+    if (!open_transport_locked()) return FALSE;
+    result = d9wg_transport_submit(g_process, present);
+    if (!result) {
+        TRACE("SUBMIT failed error=%lu; batch dropped (total=%lu)", GetLastError(), g_batches_dropped);
     }
-
-    if (present)
-        ++g_frame_id;
-    reset_batch_locked();
+    /* A dropped batch must not stop later commands in the D3D stream. */
     return TRUE;
 }
 
@@ -1700,50 +2076,9 @@ static BOOL reserve_command_locked(uint16_t opcode, uint32_t payload_bytes,
         uint32_t extra_bytes, D9WGCommandHeader **command_out,
         uint8_t **payload_out, uint8_t **extra_out)
 {
-    uint32_t raw_size;
-    uint32_t record_size;
-    D9WGCommandHeader *command;
-
-    if (!open_transport_locked())
-        return FALSE;
-    if (payload_bytes > 0xFFFFFFFFu - sizeof(*command) - extra_bytes)
-        return FALSE;
-    raw_size = (uint32_t)sizeof(*command) + payload_bytes + extra_bytes;
-    record_size = D9WG_ALIGN8(raw_size);
-    if (record_size > batch_capacity() - sizeof(D9WGBatchHeader))
-        return FALSE;
-    if (g_batch_bytes + record_size > batch_capacity()
-            && !submit_batch_locked(FALSE))
-        return FALSE;
-
-    command = (D9WGCommandHeader *)(batch_base() + g_batch_bytes);
-    ZeroMemory(command, record_size);
-    command->opcode = opcode;
-    command->size = record_size;
-    command->sequence = g_sequence++;
-    if (command_out)
-        *command_out = command;
-    if (payload_out)
-        *payload_out = (uint8_t *)(command + 1);
-    if (extra_out)
-        *extra_out = (uint8_t *)(command + 1) + payload_bytes;
-    g_batch_bytes += record_size;
-    ++g_command_count;
-    /*
-     * This is the single chokepoint every host-bound call passes through, so
-     *
-     *     TRACE("CMD opcode=%04lX seq=%lu bytes=%lu pending=%lu",
-     *             (DWORD)opcode, (DWORD)command->sequence, record_size,
-     *             g_command_count);
-     *
-     * here covers in one line the ~100 device methods that have no trace of
-     * their own -- SetRenderState, SetTextureStageState, SetTransform and the
-     * rest -- which is what identified where GTA San Andreas stopped during
-     * startup. It is not compiled in because it is one WriteFile per command:
-     * invaluable up to the first frame, unusable once a title is drawing.
-     * Opcodes are numeric; d3d9_protocol.h decodes them.
-     */
-    return TRUE;
+    if (!open_transport_locked()) return FALSE;
+    return d9wg_transport_reserve(g_process, opcode, payload_bytes, extra_bytes,
+            command_out, payload_out, extra_out, submit_batch_locked);
 }
 
 static BOOL emit_command(uint16_t opcode, const void *payload,
@@ -1760,6 +2095,8 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
     LeaveCriticalSection(&g_transport_lock);
     return result;
 }
+
+#include "../runtime/d9wg_state_defaults_bridge.h"
 
 /*
  * Reports a refusal or failure to the host so it lands in the browser console.
@@ -1778,7 +2115,7 @@ static BOOL emit_command(uint16_t opcode, const void *payload,
  */
 /* Bumped whenever guest-visible behaviour changes, so the console can say
  * which DLL is actually loaded rather than leaving it to be inferred. */
-#define D9_PROXY_BUILD "negative-pcf-probe-20260906"
+#define D9_PROXY_BUILD "api-refusal-severity-20261114"
 
 #define D9_HOSTLOG_MAX_DISTINCT 128u
 
@@ -1858,31 +2195,20 @@ static void host_log(uint32_t severity, const char *format, ...)
 #define HOSTLOG_FAILED(...) \
     host_log(D9WG_LOG_SEVERITY_FAILED, __VA_ARGS__)
 
-static BOOL emit_buffer_update(uint32_t handle, uint32_t destination_offset,
-        const void *data, uint32_t byte_count, uint32_t lock_flags)
-{
-    D9WGUpdateBuffer update;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-
-    ZeroMemory(&update, sizeof(update));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_BUFFER,
-            sizeof(update), byte_count, NULL, &payload, &blob);
-    if (result) {
-        update.resource_handle = handle;
-        update.destination_offset = destination_offset;
-        update.byte_count = byte_count;
-        update.data_offset = (uint32_t)(blob - batch_base());
-        update.lock_flags = lock_flags;
-        CopyMemory(payload, &update, sizeof(update));
-        if (byte_count)
-            CopyMemory(blob, data, byte_count);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
-}
+#define D9WG_RESERVE_UPLOAD(op, size, extra, payload, blob) \
+    reserve_command_locked(op, size, extra, NULL, payload, blob)
+#define D9WG_DISCARD_FLAG D3DLOCK_DISCARD
+#include "../runtime/d9wg_upload_bridge.h"
+#define D9WG_MAPPED_DEVICE D9Device
+#define D9WG_MAPPED_VERTEX D9VertexBuffer
+#define D9WG_MAPPED_INDEX D9IndexBuffer
+#include "../runtime/d9wg_mapped_draw_bridge.h"
+#include "../runtime/d9wg_texture_lod_bridge.h"
+#include "../runtime/d9wg_gamma_bridge.h"
+#include "../runtime/d9wg_private_data_bridge.h"
+#include "../runtime/d9wg_present_pacing_bridge.h"
+static BOOL submit_readback_batch_locked(BOOL present);
+#include "../runtime/d9wg_cursor_bridge.h"
 
 /* ---- format / geometry helpers (format-agnostic; mirrors d3d8proxy) ---- */
 
@@ -1897,119 +2223,14 @@ static BOOL multiply_u32(UINT left, UINT right, UINT *result)
 static BOOL texture_format_layout(D3DFORMAT format, UINT *block_width,
         UINT *block_height, UINT *block_bytes)
 {
-    *block_width = 1;
-    *block_height = 1;
-    switch (format) {
-    case D3DFMT_R8G8B8:
-        *block_bytes = 3;
-        return TRUE;
-    case D3DFMT_A8R8G8B8:
-    case D3DFMT_X8R8G8B8:
-    case D3DFMT_A8B8G8R8:
-    case D3DFMT_X8B8G8R8:
-    case D3DFMT_X8L8V8U8:
-    case D3DFMT_Q8W8V8U8:
-    case D3DFMT_V16U16:
-    case D3DFMT_A2W10V10U10:
-    case D3DFMT_A2B10G10R10:
-    case D3DFMT_G16R16:
-    case D3DFMT_A2R10G10B10:
-    case D3DFMT_G16R16F:
-    case D3DFMT_R32F:
-        *block_bytes = 4;
-        return TRUE;
-    case D3DFMT_A16B16G16R16:
-    case D3DFMT_A16B16G16R16F:
-    case D3DFMT_G32R32F:
-        *block_bytes = 8;
-        return TRUE;
-    case D3DFMT_A32B32G32R32F:
-        *block_bytes = 16;
-        return TRUE;
-    case D3DFMT_R5G6B5:
-    case D3DFMT_X1R5G5B5:
-    case D3DFMT_A1R5G5B5:
-    case D3DFMT_A4R4G4B4:
-    case D3DFMT_A8R3G3B2:
-    case D3DFMT_X4R4G4B4:
-    case D3DFMT_A8L8:
-    case D3DFMT_V8U8:
-    case D3DFMT_L6V5U5:
-    case D3DFMT_CxV8U8:
-    case D3DFMT_L16:
-    case D3DFMT_R16F:
-        *block_bytes = 2;
-        return TRUE;
-    case D3DFMT_R3G3B2:
-    case D3DFMT_L8:
-    case D3DFMT_A8:
-    case D3DFMT_A4L4:
-    case D3DFMT_P8:
-        *block_bytes = 1;
-        return TRUE;
-    case D3DFMT_A8P8:
-        *block_bytes = 2;
-        return TRUE;
-    case D3DFMT_Q16W16V16U16:
-        *block_bytes = 8;
-        return TRUE;
-    /* Two texels share one 32-bit block, so the block is 2x1 rather than the
-     * 4x4 a BCn block is -- the same mechanism, a different shape. D3D9
-     * requires an even width for these, which a 2-wide block enforces. */
-    case D3DFMT_UYVY:
-    case D3DFMT_YUY2:
-    case D3DFMT_R8G8_B8G8:
-    case D3DFMT_G8R8_G8B8:
-        *block_width = 2;
-        *block_bytes = 4;
-        return TRUE;
-    case D3DFMT_DXT1:
-        *block_width = 4;
-        *block_height = 4;
-        *block_bytes = 8;
-        return TRUE;
-    case D3DFMT_DXT2:
-    case D3DFMT_DXT3:
-    case D3DFMT_DXT4:
-    case D3DFMT_DXT5:
-        *block_width = 4;
-        *block_height = 4;
-        *block_bytes = 16;
-        return TRUE;
-    default:
-        /* Outside the switch because a FOURCC is not a D3DFORMAT enumerator.
-         * ATI1N is one BC4 block (8 bytes) and ATI2N two of them (16). */
-        if (format == D9FMT_ATI1N) {
-            *block_width = 4;
-            *block_height = 4;
-            *block_bytes = 8;
-            return TRUE;
-        }
-        if (format == D9FMT_ATI2N) {
-            *block_width = 4;
-            *block_height = 4;
-            *block_bytes = 16;
-            return TRUE;
-        }
-        return FALSE;
-    }
+    return d9wg_format_layout(9, (uint32_t)format, block_width, block_height, block_bytes);
 }
 
 static BOOL texture_level_layout(D3DFORMAT format, UINT width, UINT height,
         UINT *row_pitch, UINT *row_count, UINT *byte_count)
 {
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    UINT columns;
-
-    if (!texture_format_layout(format, &block_width, &block_height,
-            &block_bytes))
-        return FALSE;
-    columns = (width + block_width - 1u) / block_width;
-    *row_count = (height + block_height - 1u) / block_height;
-    return multiply_u32(columns, block_bytes, row_pitch)
-            && multiply_u32(*row_pitch, *row_count, byte_count);
+    return d9wg_texture_level_layout(9, (uint32_t)format, width, height,
+            row_pitch, row_count, byte_count);
 }
 
 static BOOL supported_texture_format(D3DFORMAT format)
@@ -2101,10 +2322,8 @@ static BOOL supported_render_target_format(D3DFORMAT format)
     }
 }
 
-/* Depth surfaces are real WebGPU render attachments.  The guest cannot lock
- * or read them back, so the observable distinction between these D3D9
- * formats is their depth/stencil role rather than their physical storage;
- * the executor maps them to depth24plus-stencil8. */
+/* Depth surfaces use shared depth/stencil attachments. D16_LOCKABLE maps
+ * actual GPU depth values to/from its 16-bit UNORM CPU representation. */
 static BOOL supported_depth_stencil_format(D3DFORMAT format)
 {
     switch (format) {
@@ -2133,7 +2352,9 @@ static BOOL supported_depth_stencil_format(D3DFORMAT format)
 }
 
 static BOOL supported_volume_texture_format(D3DFORMAT format);
-static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle);
+static BOOL supported_volume_texture_format8(D3DFORMAT format);
+static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
+        D3DTEXTUREFILTERTYPE filter, BOOL defer_generation);
 /* N-patch tessellation, defined with the other higher-order primitive code far
  * below but reached from the draw path above it. Returns D3DERR_INVALIDCALL for
  * a draw it cannot tessellate, which the callers treat as "draw it flat"
@@ -2141,14 +2362,6 @@ static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle);
 static HRESULT d9_draw_npatch(IDirect3DDevice9 *iface, D9Device *device,
         D3DPRIMITIVETYPE primitive_type, UINT primitive_count,
         const void *indices, UINT index_size, UINT base_vertex);
-/*
- * IDirect3DBaseTexture9::SetLOD. D3D9 defines it as a no-op on anything but a
- * MANAGED texture, so the three callers below apply it under the same
- * condition and only then tell the host -- a host that clamped a DEFAULT-pool
- * texture's LOD would be honouring a call D3D9 ignores.
- */
-static BOOL emit_texture_lod(D9Device *device, uint32_t resource_handle,
-        DWORD lod);
 static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
         D3DFORMAT format, DWORD usage, D3DMULTISAMPLE_TYPE multisample,
         DWORD multisample_quality, IDirect3DSurface9 **surface_out);
@@ -2213,6 +2426,13 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
     }
     switch (type) {
     case D3DRTYPE_VOLUMETEXTURE:
+        /* SCRATCH is runtime-owned CPU storage; driver sampling support is
+         * irrelevant. Keep CheckDeviceFormat (DEFAULT pool) unchanged. */
+        if (pool == D3DPOOL_SCRATCH) {
+            UINT bw, bh, bytes;
+            return !(usage & (D3DUSAGE_WRITEONLY | D3DUSAGE_DYNAMIC))
+                    && d9wg_format_layout(9u, format, &bw, &bh, &bytes);
+        }
         return supported_volume_texture_format(format);
     case D3DRTYPE_SURFACE:
         /*
@@ -2228,8 +2448,15 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
          * carries the same GPU texture a render target does, so both halves
          * hold and the honest answer is yes again.
          */
-        return supported_texture_format(format);
+        return supported_texture_format(format)
+                && ((format != (D3DFORMAT)0x31495441u && format != (D3DFORMAT)0x32495441u)
+                    || pool == D3DPOOL_SCRATCH);
     case D3DRTYPE_TEXTURE:
+        /* Depth textures can be sampled without being attachment surfaces.
+         * Keep their public Usage unchanged; the host selects depth storage
+         * from the format. CPU pools still reject hardware depth formats. */
+        return supported_texture_format(format)
+                || (pool == D3DPOOL_DEFAULT && supported_depth_stencil_format(format));
     case D3DRTYPE_CUBETEXTURE:
         return supported_texture_format(format);
     default:
@@ -2240,7 +2467,8 @@ static BOOL texture_create_supported(D3DRESOURCETYPE type, DWORD usage,
 static BOOL supported_backbuffer_format(D3DFORMAT format)
 {
     return format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8
-            || format == D3DFMT_R5G6B5;
+            || format == D3DFMT_R5G6B5 || format == D3DFMT_X1R5G5B5
+            || format == D3DFMT_A1R5G5B5;
 }
 
 /* WebGPU guarantees a single quality level for the sample counts it exposes;
@@ -2276,8 +2504,7 @@ static D9TextureLevel *surface_texture_level(D9Surface *surface)
 static BOOL ensure_target_shadow(D9Surface *surface)
 {
     D9TextureLevel *level = surface_texture_level(surface);
-    if (!level || (surface->format != D3DFMT_A8R8G8B8
-            && surface->format != D3DFMT_X8R8G8B8))
+    if (!level)
         return FALSE;
     if (level->shadow)
         return TRUE;
@@ -2290,12 +2517,16 @@ static BOOL ensure_target_shadow(D9Surface *surface)
     return level->shadow != NULL;
 }
 
+#include "../runtime/d9wg_color_fill_pixel.h"
+
 static void mirror_target_color_fill(D9Surface *surface, const RECT *area,
         D3DCOLOR color)
 {
     D9TextureLevel *level = surface_texture_level(surface);
     RECT clipped;
     UINT x, y;
+    BYTE pixel[16];
+    UINT pixel_bytes = d9wg_color_fill_pixel(surface->format, color, pixel);
     BOOL full;
 
     if (!level || !area)
@@ -2314,14 +2545,14 @@ static void mirror_target_color_fill(D9Surface *surface, const RECT *area,
     /* Filling part of an unknown image does not make the other pixels known. */
     if (!full && !level->shadow_valid)
         return;
-    if (!ensure_target_shadow(surface))
+    if (!pixel_bytes || !ensure_target_shadow(surface)) {
+        level->shadow_valid = FALSE;
         return;
-    if (surface->format == D3DFMT_X8R8G8B8)
-        color |= 0xFF000000u;
+    }
     for (y = (UINT)clipped.top; y < (UINT)clipped.bottom; ++y) {
-        DWORD *row = (DWORD *)(level->shadow + y * level->row_pitch);
+        BYTE *row = level->shadow + y * level->row_pitch;
         for (x = (UINT)clipped.left; x < (UINT)clipped.right; ++x)
-            row[x] = color;
+            CopyMemory(row + x * pixel_bytes, pixel, pixel_bytes);
     }
     if (full)
         level->shadow_valid = TRUE;
@@ -2413,118 +2644,41 @@ static UINT full_mip_level_count(UINT width, UINT height)
     return levels;
 }
 
-static BOOL emit_texture_update(D9Texture *texture, UINT level,
-        const RECT *rect)
+static BOOL emit_level_update_api(UINT api, uint32_t handle, D3DFORMAT format,
+        const D9TextureLevel *level_data, UINT level, UINT z, const RECT *rect)
 {
-    D9TextureLevel *level_data = &texture->levels[level];
-    D9WGUpdateTexture update;
-    UINT block_width;
-    UINT block_height;
-    UINT block_bytes;
-    UINT block_x;
-    UINT block_y;
-    UINT row_bytes;
-    UINT row_count;
-    UINT data_bytes;
-    UINT row;
-    UINT band_start;
-    UINT rows_per_band;
-    uint32_t capacity;
-    uint32_t overhead;
-    uint8_t *payload;
-    uint8_t *blob;
-    BOOL result;
-
-    if (!texture_format_layout(texture->format, &block_width, &block_height,
-            &block_bytes))
+    D9WGTextureRows rows;
+    UINT block_width, block_height, block_bytes;
+    if (!d9wg_format_layout(api, format, &block_width, &block_height, &block_bytes))
         return FALSE;
-    block_x = (UINT)rect->left / block_width;
-    block_y = (UINT)rect->top / block_height;
-    if (!multiply_u32(((UINT)(rect->right - rect->left)
-            + block_width - 1u) / block_width, block_bytes, &row_bytes))
+    ZeroMemory(&rows, sizeof(rows));
+    rows.resource_handle = handle;rows.level = level;rows.z = z;
+    rows.x = (UINT)rect->left;rows.y = (UINT)rect->top;
+    rows.width = (UINT)(rect->right - rect->left);
+    rows.height = (UINT)(rect->bottom - rect->top);
+    rows.block_height = block_height;
+    rows.row_count = (rows.height + block_height - 1u) / block_height;
+    if (!multiply_u32((rows.width + block_width - 1u) / block_width,
+            block_bytes, &rows.row_bytes))
         return FALSE;
-    row_count = ((UINT)(rect->bottom - rect->top)
-            + block_height - 1u) / block_height;
-    /* Only an overflow guard now that the upload is banded: no single record
-     * carries the whole rectangle, but the total still has to be addressable. */
-    if (!multiply_u32(row_bytes, row_count, &data_bytes))
-        return FALSE;
-    (void)data_bytes;
-
-    /*
-     * One record has to fit in the DMA arena whole, and a single mip level can
-     * be larger than the arena is: 2048x2048 A8R8G8B8 is exactly 16 MiB, which
-     * is the arena's entire size before its own headers are counted. That is an
-     * ordinary texture -- the caps advertise 8192x8192 -- so the upload is sent
-     * as bands of whole rows rather than refused. Refusing it was silent in the
-     * only way that matters: UnlockRect returned a failure the app ignored, the
-     * level was never uploaded, and the first symptom was the host warning that
-     * a bound texture samples levels nobody ever filled.
-     *
-     * Bands need nothing from the wire format -- UPDATE_TEXTURE already names a
-     * sub-rectangle -- and the transport lock is held across all of them so no
-     * other thread can interleave commands into the middle of one upload.
-     */
-    if (!row_bytes)
-        return FALSE;
-    EnterCriticalSection(&g_transport_lock);
-    capacity = batch_capacity();
-    overhead = (uint32_t)(sizeof(D9WGBatchHeader) + sizeof(D9WGCommandHeader)
-            + sizeof(update) + 8u /* D9WG_ALIGN8 slack */);
-    rows_per_band = capacity > overhead ? (capacity - overhead) / row_bytes : 0;
-    if (!rows_per_band) {
-        /* A single row does not fit; there is nothing left to split. */
-        LeaveCriticalSection(&g_transport_lock);
-        return FALSE;
-    }
-    if (rows_per_band > row_count)
-        rows_per_band = row_count;
-
-    result = TRUE;
-    for (band_start = 0; band_start < row_count && result;
-            band_start += rows_per_band) {
-        UINT band_rows = row_count - band_start;
-        LONG band_top;
-        LONG band_bottom;
-
-        if (band_rows > rows_per_band)
-            band_rows = rows_per_band;
-        /* Texel coordinates, so a block format's band spans block_height rows
-         * of blocks; the final band stops at the rect rather than past it. */
-        band_top = rect->top + (LONG)(band_start * block_height);
-        band_bottom = band_top + (LONG)(band_rows * block_height);
-        if (band_bottom > rect->bottom)
-            band_bottom = rect->bottom;
-
-        ZeroMemory(&update, sizeof(update));
-        update.resource_handle = texture->handle;
-        update.level = level;
-        update.x = (uint32_t)rect->left;
-        update.y = (uint32_t)band_top;
-        update.z = 0;
-        update.width = (uint32_t)(rect->right - rect->left);
-        update.height = (uint32_t)(band_bottom - band_top);
-        update.depth = 1;
-        update.row_pitch = row_bytes;
-        update.slice_pitch = 0;
-        update.data_bytes = row_bytes * band_rows;
-
-        result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE,
-                sizeof(update), update.data_bytes, NULL, &payload, &blob);
-        if (result) {
-            update.data_offset = (uint32_t)(blob - batch_base());
-            CopyMemory(payload, &update, sizeof(update));
-            for (row = 0; row < band_rows; ++row) {
-                CopyMemory(blob + row * row_bytes,
-                        level_data->shadow
-                        + (block_y + band_start + row) * level_data->row_pitch
-                        + block_x * block_bytes, row_bytes);
-            }
-        }
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+    rows.source_pitch = level_data->row_pitch;
+    rows.source = level_data->shadow + ((UINT)rect->top / block_height) * level_data->row_pitch
+            + ((UINT)rect->left / block_width) * block_bytes;
+    return emit_texture_rows(&rows);
 }
+
+static BOOL emit_level_update(uint32_t handle, D3DFORMAT format,
+        const D9TextureLevel *level_data, UINT level, UINT z, const RECT *rect)
+{
+    return emit_level_update_api(9u, handle, format, level_data, level, z, rect);
+}
+
+static BOOL emit_texture_update(D9Texture *texture, UINT level, const RECT *rect)
+{
+    return emit_level_update_api(device_compatibility_api(texture->device), texture->handle, texture->format, &texture->levels[level], level, 0, rect);
+}
+
+#include "../runtime/d9wg_texture_dirty2d.h"
 
 static BOOL primitive_element_count(D3DPRIMITIVETYPE type,
         UINT primitive_count, UINT *element_count)
@@ -2563,195 +2717,11 @@ static BOOL primitive_element_count(D3DPRIMITIVETYPE type,
  * Buffer(..., this fvf, ...) should fail with D3DERR_INVALIDCALL", not "best
  * effort".
  */
-/* D3DFVF_XYZB1..XYZB5 are the five blended position codes, contiguous in steps
- * of 2 between XYZB1 (0x0006) and XYZB5 (0x000e). XYZRHW (0x0004) sits below
- * them and XYZW (0x4002) carries a bit outside this range, so both are excluded
- * before the range test rather than by it. */
-static BOOL fvf_position_is_blended(DWORD fvf)
-{
-    DWORD position = fvf & D3DFVF_POSITION_MASK;
-    return position >= D3DFVF_XYZB1 && position <= D3DFVF_XYZB5;
-}
-
-/* Whether the last of a D3DFVF_XYZBn block's DWORDs holds matrix indices
- * rather than another weight. Either LASTBETA flag says so outright; XYZB5 says
- * so implicitly, because five float weights have no D3DDECLTYPE to be declared
- * as and D3D9 has always read that last DWORD as indices. Same rule wined3d
- * applies, and getting it wrong shifts every following element's offset. */
-static BOOL fvf_has_blend_indices(DWORD fvf)
-{
-    if (fvf & (D3DFVF_LASTBETA_UBYTE4 | D3DFVF_LASTBETA_D3DCOLOR))
-        return TRUE;
-    return (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZB5;
-}
-
 static BOOL fvf_to_declaration(DWORD fvf, D9WGVertexElement *elements,
         UINT *element_count)
 {
-    UINT count = 0;
-    UINT offset = 0;
-    UINT tex_count;
-    UINT i;
-
-    if (fvf & D3DFVF_RESERVED0)
-        return FALSE;
-    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZ) {
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_FLOAT3;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_POSITION;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 12;
-    } else if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_FLOAT4;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_POSITIONT;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 16;
-    } else if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZW) {
-        /* A four-component untransformed position, which only a vertex shader
-         * consumes -- unlike XYZRHW it is not pre-transformed. */
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_FLOAT4;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_POSITION;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 16;
-    } else if (fvf_position_is_blended(fvf)) {
-        /* D3DFVF_XYZBn: a float3 position followed by n DWORDs of skinning
-         * data. This is the FVF spelling of the same BLENDWEIGHT/BLENDINDICES
-         * a vertex declaration states directly, and it used to be refused
-         * outright -- so SetFVF was the one entry point where the host's
-         * D3DRS_VERTEXBLEND support could not be reached. */
-        DWORD blend_dwords = 1u + (((fvf & D3DFVF_POSITION_MASK)
-                - D3DFVF_XYZB1) >> 1);
-        BOOL has_indices = fvf_has_blend_indices(fvf);
-        DWORD weight_count = blend_dwords - (has_indices ? 1u : 0u);
-
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_FLOAT3;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_POSITION;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 12;
-
-        if (weight_count) {
-            /* FLOAT1..FLOAT4 are D3DDECLTYPE 0..3, so the count maps straight
-             * onto the enum. weight_count cannot exceed 4: XYZB5 always
-             * spends its last DWORD on indices (see fvf_has_blend_indices). */
-            elements[count].stream = 0;
-            elements[count].offset = (uint16_t)offset;
-            elements[count].type = (uint8_t)(D3DDECLTYPE_FLOAT1
-                    + (weight_count - 1u));
-            elements[count].method = D3DDECLMETHOD_DEFAULT;
-            elements[count].usage = D3DDECLUSAGE_BLENDWEIGHT;
-            elements[count].usage_index = 0;
-            ++count;
-            offset += weight_count * 4u;
-        }
-        if (has_indices) {
-            elements[count].stream = 0;
-            elements[count].offset = (uint16_t)offset;
-            elements[count].type = (fvf & D3DFVF_LASTBETA_D3DCOLOR)
-                    ? D3DDECLTYPE_D3DCOLOR : D3DDECLTYPE_UBYTE4;
-            elements[count].method = D3DDECLMETHOD_DEFAULT;
-            elements[count].usage = D3DDECLUSAGE_BLENDINDICES;
-            elements[count].usage_index = 0;
-            ++count;
-            offset += 4;
-        }
-    }
-    /*
-     * No position bits at all is the remaining case, and it is deliberately
-     * not an error. A vs_3_0 shader may take its position from somewhere other
-     * than the vertex stream -- 3DMark06's SM3.0 particle test drives every
-     * particle from a vertex texture fetch and its stream carries nothing but
-     * two texture coordinates, so the FVF describing that stream has no
-     * position element to declare. Refusing it left the *previous* pass's
-     * declaration bound, and the draw was then laid out with that pass's
-     * offsets against this pass's 12-byte stride.
-     *
-     * Only an FVF that describes no attribute whatsoever is refused, below.
-     */
-    if (fvf & D3DFVF_NORMAL) {
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_FLOAT3;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_NORMAL;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 12;
-    }
-    if (fvf & D3DFVF_PSIZE) {
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_FLOAT1;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_PSIZE;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 4;
-    }
-    if (fvf & D3DFVF_DIFFUSE) {
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_D3DCOLOR;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_COLOR;
-        elements[count].usage_index = 0;
-        ++count;
-        offset += 4;
-    }
-    if (fvf & D3DFVF_SPECULAR) {
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = D3DDECLTYPE_D3DCOLOR;
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_COLOR;
-        elements[count].usage_index = 1;
-        ++count;
-        offset += 4;
-    }
-    tex_count = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
-    if (tex_count > 8)
-        return FALSE;
-    for (i = 0; i < tex_count; ++i) {
-        /*
-         * The two bits per set in the FVF's high half are D3DFVF_TEXTUREFORMAT2
-         * /3/4/1 in that order -- the encoding is not the component count, so
-         * these tables carry it rather than arithmetic. A set is two floats
-         * only by default; 1D sets index a lookup table and 3D/4D sets carry
-         * projective or cube coordinates, and all three are ordinary D3D9.
-         */
-        static const uint8_t texcoord_type[4] = {
-            D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT3,
-            D3DDECLTYPE_FLOAT4, D3DDECLTYPE_FLOAT1
-        };
-        static const UINT texcoord_bytes[4] = { 8, 12, 16, 4 };
-        DWORD size_bits = (fvf >> (16 + i * 2)) & 0x3u;
-        elements[count].stream = 0;
-        elements[count].offset = (uint16_t)offset;
-        elements[count].type = texcoord_type[size_bits];
-        elements[count].method = D3DDECLMETHOD_DEFAULT;
-        elements[count].usage = D3DDECLUSAGE_TEXCOORD;
-        elements[count].usage_index = (uint8_t)i;
-        ++count;
-        offset += texcoord_bytes[size_bits];
-    }
-    if (!count)
-        return FALSE;
-    *element_count = count;
-    return TRUE;
+    return d9wg_fvf_decode(D9WG_FVF_D3D9, fvf, elements, D3DMAXDECLLENGTH,
+            element_count, NULL);
 }
 
 /* ---- vertex declaration validation ---- */
@@ -2775,9 +2745,11 @@ static BOOL declaration_element_supported(const D3DVERTEXELEMENT9 *e)
     case D3DDECLUSAGE_TANGENT:
     case D3DDECLUSAGE_BINORMAL:
     case D3DDECLUSAGE_FOG:
+    case D3DDECLUSAGE_TESSFACTOR:
+    case D3DDECLUSAGE_DEPTH:
+    case D3DDECLUSAGE_SAMPLE:
         break;
     default:
-        /* TESSFACTOR/DEPTH/SAMPLE have no consumer on this path. */
         return FALSE;
     }
     switch (e->Type) {
@@ -2891,7 +2863,10 @@ static BOOL emit_texture_create(D9Device *device, D9Texture *texture)
     command.pool = texture->pool;
     command.multisample_type = texture->multisample;
     command.multisample_quality = texture->multisample_quality;
-    return emit_command(D9WG_OP_CREATE_TEXTURE_2D, &command, sizeof(command));
+    if (!emit_command(D9WG_OP_CREATE_TEXTURE_2D, &command, sizeof(command))) return FALSE;
+    return device_compatibility_api(device) == 8u
+        || !(texture->usage & D3DUSAGE_AUTOGENMIPMAP)
+        || emit_generate_mips(device, texture->handle, texture->autogen_filter, TRUE);
 }
 
 static BOOL emit_vertex_declaration_create(D9Device *device, uint32_t handle,
@@ -2965,6 +2940,238 @@ static BOOL emit_set_fvf(D9Device *device, DWORD fvf,
 #define D9_SIO_DEF 81u
 #define D9_SIO_DEFI 48u
 #define D9_SIO_DEFB 47u
+
+/* ---- Stage 6: D3D8 shader model 1.x bytecode validation ---- */
+
+static BOOL shader8_regtype_valid(DWORD register_type, BOOL is_pixel_shader)
+{
+    switch (register_type >> D3DSP_REGTYPE_SHIFT) {
+    case D3DSPR_TEMP:
+    case D3DSPR_INPUT:
+    case D3DSPR_CONST:
+    case D3DSPR_ADDR: /* SDK9 ordinal;legacy tokens keep SDK8 shifted encoding. */
+        return TRUE;
+    case D3DSPR_RASTOUT:
+    case D3DSPR_ATTROUT:
+    case D3DSPR_TEXCRDOUT:
+        return !is_pixel_shader;
+    default:
+        return FALSE;
+    }
+}
+
+/*
+ * Returns FALSE for any opcode outside the supported instruction set for this
+ * shader type/version. The set is the host translator's, not a smaller one of
+ * this DLL's own: a legal instruction refused here is a shader the backend
+ * could have run, and the app has no way to tell that apart from a driver
+ * with no shader support at all. What stays refused is what the host also
+ * refuses (`texdepth`, `texm3x2depth`, `texm3x3`) plus anything malformed, on
+ * the parser safety rule "never guess at semantics for an instruction you do
+ * not implement". On success,
+ * *operand_words is the number of DWORD parameter tokens following the
+ * opcode token (D3DSIO_DEF's trailing four are raw float32 immediates, not
+ * register-encoded operands, but are still counted here).
+ */
+static BOOL shader8_opcode_supported(WORD opcode, BOOL is_pixel_shader,
+        UINT minor, UINT *operand_words)
+{
+    switch (opcode) {
+    case D3DSIO_NOP:
+        *operand_words = 0; return TRUE;
+    case D3DSIO_MOV:
+        *operand_words = 2; return TRUE;
+    case D3DSIO_ADD:
+    case D3DSIO_SUB:
+    case D3DSIO_MUL:
+    case D3DSIO_MIN:
+    case D3DSIO_MAX:
+    case D3DSIO_DP3:
+    case D3DSIO_DP4:
+        *operand_words = 3; return TRUE;
+    case D3DSIO_MAD:
+        *operand_words = 4; return TRUE;
+    case D3DSIO_RCP:
+    case D3DSIO_RSQ:
+    case D3DSIO_EXP:
+    case D3DSIO_LOG:
+    case D3DSIO_LIT:
+    case D3DSIO_FRC:
+    case D3DSIO_EXPP:
+    case D3DSIO_LOGP:
+        if (is_pixel_shader) return FALSE;
+        *operand_words = 2; return TRUE;
+    case D3DSIO_SLT:
+    case D3DSIO_SGE:
+    case D3DSIO_DST:
+        if (is_pixel_shader) return FALSE;
+        *operand_words = 3; return TRUE;
+    case D3DSIO_DEF:
+        *operand_words = 5; return TRUE;
+    case D3DSIO_M4x4:
+    case D3DSIO_M4x3:
+    case D3DSIO_M3x4:
+    case D3DSIO_M3x3:
+    case D3DSIO_M3x2:
+        /* dst, the source vector, and the first row of the matrix. These are
+         * how every vs_1_x transform is spelled -- 3DMark 2001 opens with
+         * `m4x4 oPos, v0, c0` -- and the host translator expands each one into
+         * consecutive dot products. Refusing them refused vertex shaders as a
+         * feature. */
+        if (is_pixel_shader) return FALSE;
+        *operand_words = 3; return TRUE;
+    case D3DSIO_LRP:
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = 4; return TRUE;
+    case D3DSIO_CND:
+        /* ps_1_4 keeps CND and compares each source component to 0.5. */
+        if (!is_pixel_shader || minor > 4u) return FALSE;
+        *operand_words = 4; return TRUE;
+    case D3DSIO_CMP:
+        if (!is_pixel_shader || minor < 2u) return FALSE;
+        *operand_words = 4; return TRUE;
+    case D3DSIO_TEXCOORD:
+        /* ps_1_4 renamed this to `texcrd dst, src` and gave it a source
+         * operand; 1.1-1.3 `texcoord dst` has none. Reading the wrong number
+         * of words here does not just mis-validate one instruction, it
+         * desyncs the walk over everything after it. */
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = (minor >= 4u) ? 2u : 1u; return TRUE;
+    case D3DSIO_TEX:
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = (minor >= 4u) ? 2u : 1u; return TRUE;
+    case D3DSIO_TEXKILL:
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = 1; return TRUE;
+    case D3DSIO_PHASE:
+        if (!is_pixel_shader || minor != 4u) return FALSE;
+        *operand_words = 0; return TRUE;
+    case D3DSIO_BEM:
+        /* ps_1_4's arithmetic form of the texbem displacement: `bem dst.rg,
+         * src0, src1` applies the destination stage's D3DTSS_BUMPENVMAT*
+         * matrix without sampling. 1.4-only -- earlier versions have only the
+         * texture-addressing spelling. 3DMark 2001's Advanced Pixel Shader
+         * test is a ps_1_4 shader built around it, so refusing it failed that
+         * test at CreatePixelShader. */
+        if (!is_pixel_shader || minor != 4u) return FALSE;
+        *operand_words = 3; return TRUE;
+    /*
+     * The ps_1_x texture-addressing family. The host translates all of these
+     * (see the TEXBEM/TEXM3x* cases in d3d9_shader_pipeline.js's emit()), so
+     * refusing them here hid environment bump mapping behind a validator that
+     * had never been updated to match. TEXDEPTH, TEXM3x2DEPTH and TEXM3x3 stay
+     * refused -- those are the three the host itself refuses -- and TEXM3x3DIFF
+     * was never implemented by any hardware.
+     */
+    case D3DSIO_TEXBEM:
+    case D3DSIO_TEXBEML:
+    case D3DSIO_TEXREG2AR:
+    case D3DSIO_TEXREG2GB:
+    case D3DSIO_TEXREG2RGB:
+    case D3DSIO_TEXDP3:
+    case D3DSIO_TEXDP3TEX:
+    case D3DSIO_TEXM3x2PAD:
+    case D3DSIO_TEXM3x2TEX:
+    case D3DSIO_TEXM3x3PAD:
+    case D3DSIO_TEXM3x3TEX:
+    case D3DSIO_TEXM3x3VSPEC:
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = 2; return TRUE;
+    case D3DSIO_TEXM3x3SPEC:
+        /* The one that also takes the eye-ray constant. */
+        if (!is_pixel_shader) return FALSE;
+        *operand_words = 3; return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+/*
+ * Walk one D3D8 SM1.x token stream (the app-supplied pFunction, starting
+ * right after the version token) until D3DSIO_END. Rejects anything that
+ * would read past `max_tokens`, any opcode outside shader8_opcode_supported,
+ * and any register-type field outside the recognized D3DSPR_* set, so a
+ * corrupt or hostile token stream can never desync the parser or run
+ * unbounded. On success *body_token_count is the token count from index 0
+ * through (but excluding) the END token.
+ */
+static BOOL shader8_validate_body(const DWORD *tokens, UINT max_tokens,
+        BOOL is_pixel_shader, UINT minor, UINT *body_token_count)
+{
+    UINT offset = 0;
+    while (offset < max_tokens) {
+        DWORD token = tokens[offset];
+        WORD opcode;
+        UINT operand_words;
+
+        if (token == (DWORD)D3DVS_END()) {
+            *body_token_count = offset;
+            return TRUE;
+        }
+        opcode = (WORD)(token & D3DSI_OPCODE_MASK);
+        if (opcode == D3DSIO_COMMENT) {
+            UINT comment_words = (UINT)((token & D3DSI_COMMENTSIZE_MASK)
+                    >> D3DSI_COMMENTSIZE_SHIFT);
+            if (offset + 1u + comment_words > max_tokens) {
+                TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u "
+                        "offset=%u opcode=%04X reason=truncated-comment",
+                        is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                        (UINT)opcode);
+                return FALSE;
+            }
+            offset += 1u + comment_words;
+            continue;
+        }
+        if (!shader8_opcode_supported(opcode, is_pixel_shader, minor,
+                &operand_words)) {
+            TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u "
+                    "opcode=%04X reason=unsupported-opcode",
+                    is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                    (UINT)opcode);
+            return FALSE;
+        }
+        if (offset + 1u + operand_words > max_tokens) {
+            TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u "
+                    "opcode=%04X reason=truncated-operands",
+                    is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                    (UINT)opcode);
+            return FALSE;
+        }
+        if (opcode != D3DSIO_NOP && opcode != D3DSIO_PHASE) {
+            DWORD dst_regtype = tokens[offset + 1u] & D3DSP_REGTYPE_MASK;
+            if (!shader8_regtype_valid(dst_regtype, is_pixel_shader)) {
+                TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u "
+                        "offset=%u opcode=%04X reason=invalid-dst-regtype "
+                        "regtype=%08lX",
+                        is_pixel_shader ? "pixel" : "vertex", minor, offset,
+                        (UINT)opcode, dst_regtype);
+                return FALSE;
+            }
+        }
+        if (opcode != D3DSIO_DEF && opcode != D3DSIO_NOP
+                && opcode != D3DSIO_PHASE) {
+            UINT src_count = operand_words - 1u;
+            UINT src;
+            for (src = 0; src < src_count; ++src) {
+                DWORD src_regtype =
+                        tokens[offset + 2u + src] & D3DSP_REGTYPE_MASK;
+                if (!shader8_regtype_valid(src_regtype, is_pixel_shader)) {
+                    TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u "
+                            "offset=%u opcode=%04X reason=invalid-src-regtype "
+                            "source=%u regtype=%08lX",
+                            is_pixel_shader ? "pixel" : "vertex", minor,
+                            offset, (UINT)opcode, src, src_regtype);
+                    return FALSE;
+                }
+            }
+        }
+        offset += 1u + operand_words;
+    }
+    TRACE("SHADER VALIDATE REFUSE kind=%s minor=%u offset=%u "
+            "reason=missing-end", is_pixel_shader ? "pixel" : "vertex",
+            minor, offset);
+    return FALSE; /* ran past max_tokens without ever finding D3DSIO_END */
+}
 
 static BOOL shader_token_count(const DWORD *code, UINT *count_out,
         BOOL *is_pixel_out)
@@ -3181,26 +3388,6 @@ static void emit_hello_once(void)
             "reported here", D9_PROXY_BUILD);
 }
 
-static void initialize_session_id(HINSTANCE instance)
-{
-    FILETIME time;
-    LARGE_INTEGER counter;
-    DWORD process_id = GetCurrentProcessId();
-    DWORD thread_id = GetCurrentThreadId();
-
-    GetSystemTimeAsFileTime(&time);
-    if (!QueryPerformanceCounter(&counter)) {
-        counter.LowPart = GetTickCount();
-        counter.HighPart = process_id ^ thread_id;
-    }
-    g_session_id_low = time.dwLowDateTime ^ counter.LowPart ^ process_id
-            ^ (uint32_t)(uintptr_t)instance;
-    g_session_id_high = time.dwHighDateTime ^ counter.HighPart
-            ^ GetTickCount() ^ (thread_id * 0x9E3779B9u);
-    if (!g_session_id_low && !g_session_id_high)
-        g_session_id_high = 0xD9A80001u;
-}
-
 static void fill_display_mode(D3DDISPLAYMODE *mode, UINT width, UINT height,
         D3DFORMAT format)
 {
@@ -3254,6 +3441,16 @@ static UINT shader_model_version(void)
     length = GetEnvironmentVariableA("D9WG_SHADER_MODEL", value, sizeof(value));
     cached = (length == 1 && value[0] == '0') ? 0 : 3;
     return (UINT)cached;
+}
+
+static uint32_t runtime_host_features(void)
+{
+    uint32_t guest_features = shader_model_version() >= 2 ? D9WG_FEATURE_SHADER_MODEL_2 : 0;
+    if (shader_model_version() >= 3) guest_features |= D9WG_FEATURE_SHADER_MODEL_3;
+    EnterCriticalSection(&g_transport_lock);
+    uint32_t features = d9wg_transport_host_features(g_process, guest_features, submit_batch_locked);
+    LeaveCriticalSection(&g_transport_lock);
+    return features;
 }
 
 static BOOL env_flag_enabled(const char *name)
@@ -3342,10 +3539,8 @@ static void apply_permissive_caps(D3DCAPS9 *caps)
     caps->MaxPShaderInstructionsExecuted = 0xFFFFFFFFu;
 }
 
-static void fill_caps(D3DCAPS9 *caps)
+static void fill_caps_for_profile(D3DCAPS9 *caps, UINT shader_model, BOOL permissive)
 {
-    UINT shader_model = shader_model_version();
-
     ZeroMemory(caps, sizeof(*caps));
     caps->DeviceType = D3DDEVTYPE_HAL;
     caps->AdapterOrdinal = D3DADAPTER_DEFAULT;
@@ -3380,8 +3575,7 @@ static void fill_caps(D3DCAPS9 *caps)
     /* A single-adapter device is a group of one. Zero is not a value any
      * runtime reports, and an app that iterates the group gets nothing. */
     caps->NumberOfAdaptersInGroup = 1;
-    caps->PresentationIntervals = D3DPRESENT_INTERVAL_IMMEDIATE
-            | D3DPRESENT_INTERVAL_ONE;
+    caps->PresentationIntervals = D9WG_PRESENT_INTERVAL_MASK;
     caps->DevCaps = D3DDEVCAPS_HWRASTERIZATION
             | D3DDEVCAPS_HWTRANSFORMANDLIGHT
             | D3DDEVCAPS_DRAWPRIMTLVERTEX
@@ -3433,7 +3627,8 @@ static void fill_caps(D3DCAPS9 *caps)
             | D3DPMISCCAPS_CLIPTLVERTS
             /* M3: D3DTA_TEMP as a stage argument and D3DTSS_RESULTARG
              * choosing it, both implemented by the host's cascade. */
-            | D3DPMISCCAPS_TSSARGTEMP;
+            | D3DPMISCCAPS_TSSARGTEMP
+            | D3DPMISCCAPS_PERSTAGECONSTANT;
     caps->RasterCaps = D3DPRASTERCAPS_ZTEST | D3DPRASTERCAPS_DEPTHBIAS
             | D3DPRASTERCAPS_SLOPESCALEDEPTHBIAS
             | D3DPRASTERCAPS_FOGVERTEX | D3DPRASTERCAPS_FOGTABLE
@@ -3473,7 +3668,10 @@ static void fill_caps(D3DCAPS9 *caps)
              * game's frontend loader then exits cleanly. */
             | D3DPSHADECAPS_SPECULARGOURAUDRGB
             | D3DPSHADECAPS_FOGGOURAUD | D3DPSHADECAPS_ALPHAGOURAUDBLEND;
-    caps->TextureCaps = D3DPTEXTURECAPS_ALPHA | D3DPTEXTURECAPS_MIPMAP
+    /* Palette alpha is preserved through PALETTEENTRY, the wire palette and
+     * host P8 expansion (A8P8 uses its separate per-texel alpha). */
+    caps->TextureCaps = D3DPTEXTURECAPS_ALPHA | D3DPTEXTURECAPS_ALPHAPALETTE
+            | D3DPTEXTURECAPS_MIPMAP
             | D3DPTEXTURECAPS_PERSPECTIVE
             /* M3: real IDirect3DCubeTexture9, six faces per level, sampled
              * through a texture_cube<f32> by both the fixed-function cascade
@@ -3644,7 +3842,7 @@ static void fill_caps(D3DCAPS9 *caps)
              * reflection vector -- the same formula GL_SPHERE_MAP and wined3d
              * use, which is what titles authored their sphere-map art
              * against. */
-            | D3DVTXPCAPS_TEXGEN_SPHEREMAP;
+            | D3DVTXPCAPS_TEXGEN_SPHEREMAP | D3DVTXPCAPS_TWEENING;
     caps->MaxActiveLights = 8;
     /* Implemented through interpolated distances plus fragment discard because
      * core WGSL has no user clip-distance builtin. */
@@ -3655,72 +3853,146 @@ static void fill_caps(D3DCAPS9 *caps)
      * too, and BLENDINDICES can name any of D3D9's 256 world matrices; the host
      * uploads a palette sized from the matrices the guest has actually set.
      *
-     * D3DVTXPCAPS_TWEENING is deliberately NOT set alongside it. Tweening
-     * interpolates two vertex streams by D3DRS_TWEENFACTOR rather than blending
-     * matrices, and nothing implements that -- it is a separate feature that
-     * happens to share the D3DVERTEXBLENDFLAGS enum. */
+     * Tweening independently interpolates POSITION1/NORMAL1 before the same
+     * transforms, lighting, texgen, fog and clipping. The common CPU path and
+     * real WebGPU pixels cover that separate mode before advertising it. */
     caps->MaxVertexBlendMatrices = 4;
     caps->MaxVertexBlendMatrixIndex = 255;
     /* The tessellation ceiling d9_draw_npatch() clamps to. It bounds the
      * scratch each draw allocates; 16-bit output indices bound it further for
      * a large mesh, and a draw that would overflow them is left flat. */
     caps->MaxNpatchTessellationLevel = (float)D9_PATCH_MAX_SEGMENTS;
-    apply_permissive_caps(caps);
+    if (permissive) apply_permissive_caps(caps);
     /* Render targets and MRT: the host binds up to four colour attachments and
      * a translated pixel shader's oC0..oC3 reach them (M4 work brought forward
      * because a 2005-era D3D9 game renders most of its frame into textures). */
     caps->NumSimultaneousRTs = D9_MAX_RENDER_TARGETS;
 }
 
+static void fill_caps(D3DCAPS9 *caps)
+{
+    fill_caps_for_profile(caps, shader_model_version(), TRUE);
+}
+
+static UINT reset_buffer_owned_refs(D9Device *device, const void *iface, BOOL index_buffer)
+{
+    /* Stream/index slots retain storage without a public COM reference. */
+    (void)device;(void)iface;(void)index_buffer;
+    return 0;
+}
+
+static D9Surface *reset_bound_surface(D9Device *device, UINT slot)
+{
+    return slot < D9_MAX_RENDER_TARGETS ? device->render_target_surfaces[slot]
+                                      : device->depth_stencil_surface;
+}
+
+static UINT reset_surface_owned_refs(D9Device *device, D9Surface *surface)
+{
+    UINT refs = 0;
+    /* Internal target slots never discount a private surface public ref. */
+    if (surface && surface_uses_private_bindings(surface))
+        return 0;
+    if (surface)
+        for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i)
+            if (reset_bound_surface(device, i) == surface)
+                ++refs;
+    return refs;
+}
+
+static UINT reset_texture_owned_refs(D9Device *device, const void *iface, UINT kind)
+{
+    UINT refs = 0;
+    if (kind == D9WG_RESOURCE_TEXTURE_2D)
+        for (UINT i = 0; i < 4; ++i) {
+            D9Surface *surface = device->implicit_swap_chain.cached_buffers[i];
+            if (surface && surface->texture && &surface->texture->iface == iface)
+                return InterlockedCompareExchange(&surface->refcount, 0, 0) ? 0u : 1u;
+        }
+    for (UINT i = 0; i <= D9_MAX_RENDER_TARGETS; ++i) {
+        D9Surface *surface = reset_bound_surface(device, i);
+        if (!surface)
+            continue;
+        if (kind == D9WG_RESOURCE_TEXTURE_2D && surface->texture
+                && &surface->texture->iface == iface) {
+            if (!surface->texture_child) {
+                /* A standalone target owns one backing-texture reference,
+                 * independent of how many slots retain its surface. */
+                UINT j;
+                for (j = 0; j < i; ++j)
+                    if (reset_bound_surface(device, j) == surface)
+                        break;
+                if (j == i && (UINT)InterlockedCompareExchange(&surface->refcount, 0, 0)
+                        == (surface->swap_chain ? reset_surface_owned_refs(device, surface) : 0u))
+                    ++refs;
+            }
+        }
+    }
+    return refs;
+}
+
 static BOOL device_has_reset_blockers(D9Device *device)
 {
-    D9VertexBuffer *vb;
-    D9IndexBuffer *ib;
-    D9Texture *texture;
-    D9CubeTexture *cube;
-    D9VolumeTexture *volume;
-    UINT level;
-
-    if (device->in_scene)
+    for (D9SwapChain *chain = device->additional_swap_chains; chain;
+            chain = chain->next_device_chain)
+        if (InterlockedCompareExchange(&chain->refcount, 0, 0))
+            return TRUE;
+    if (device->implicit_back_buffer && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
+            (UINT)device->implicit_back_buffer->refcount,
+            reset_surface_owned_refs(device, device->implicit_back_buffer),
+            device->implicit_back_buffer->locked))
         return TRUE;
-    for (vb = device->vertex_buffers; vb; vb = vb->next_device_resource) {
-        if (vb->pool == D3DPOOL_DEFAULT || vb->locked)
-            return TRUE;
-    }
-    for (ib = device->index_buffers; ib; ib = ib->next_device_resource) {
-        if (ib->pool == D3DPOOL_DEFAULT || ib->locked)
-            return TRUE;
-    }
-    for (texture = device->texture_resources; texture;
-            texture = texture->next_device_resource) {
-        if (texture->pool == D3DPOOL_DEFAULT)
-            return TRUE;
-        for (level = 0; level < texture->level_count; ++level) {
-            if (texture->levels[level].locked)
-                return TRUE;
-        }
-    }
-    for (cube = device->cube_textures; cube; cube = cube->next_device_resource) {
-        if (cube->pool == D3DPOOL_DEFAULT)
-            return TRUE;
-        for (level = 0; level < cube->level_count * 6u; ++level) {
-            if (cube->levels[level].locked)
-                return TRUE;
-        }
-    }
-    for (volume = device->volume_textures; volume;
-            volume = volume->next_device_resource) {
-        if (volume->pool == D3DPOOL_DEFAULT)
-            return TRUE;
-        for (level = 0; level < volume->level_count; ++level) {
-            if (volume->levels[level].locked)
-                return TRUE;
-        }
-    }
-    /* An open state-block recording spans the Reset, and the block it would
-     * produce describes resources the Reset is about to invalidate. */
-    if (device->recording)
+    if (device->implicit_depth_stencil && d9wg_reset_resource_blocks(D3DPOOL_DEFAULT,
+            (UINT)device->implicit_depth_stencil->refcount,
+            reset_surface_owned_refs(device, device->implicit_depth_stencil),
+            device->implicit_depth_stencil->locked))
         return TRUE;
+    for (D9VertexBuffer *buffer = device->vertex_buffers; buffer; buffer = buffer->next_device_resource)
+        if (d9wg_reset_resource_blocks(buffer->pool,
+                (UINT)InterlockedCompareExchange(&buffer->refcount, 0, 0),
+                reset_buffer_owned_refs(device, &buffer->iface, FALSE), buffer->locked))
+            return TRUE;
+    for (D9IndexBuffer *buffer = device->index_buffers; buffer; buffer = buffer->next_device_resource)
+        if (d9wg_reset_resource_blocks(buffer->pool,
+                (UINT)InterlockedCompareExchange(&buffer->refcount, 0, 0),
+                reset_buffer_owned_refs(device, &buffer->iface, TRUE), buffer->locked))
+            return TRUE;
+    for (D9Texture *texture = device->texture_resources; texture; texture = texture->next_device_resource) {
+        BOOL locked = FALSE;
+        for (UINT level = 0; level < texture->level_count; ++level)
+            if (texture->levels[level].locked) {
+                locked = TRUE;
+                break;
+            }
+        if (d9wg_reset_resource_blocks(texture->pool,
+                (UINT)InterlockedCompareExchange(&texture->refcount, 0, 0),
+                reset_texture_owned_refs(device, &texture->iface, D9WG_RESOURCE_TEXTURE_2D), locked))
+            return TRUE;
+    }
+    for (D9CubeTexture *texture = device->cube_textures; texture; texture = texture->next_device_resource) {
+        BOOL locked = FALSE;
+        for (UINT level = 0; level < texture->level_count * 6u; ++level)
+            if (texture->levels[level].locked) {
+                locked = TRUE;
+                break;
+            }
+        if (d9wg_reset_resource_blocks(texture->pool,
+                (UINT)InterlockedCompareExchange(&texture->refcount, 0, 0),
+                reset_texture_owned_refs(device, &texture->iface, D9WG_RESOURCE_TEXTURE_CUBE), locked))
+            return TRUE;
+    }
+    for (D9VolumeTexture *texture = device->volume_textures; texture; texture = texture->next_device_resource) {
+        BOOL locked = FALSE;
+        for (UINT level = 0; level < texture->level_count; ++level)
+            if (texture->levels[level].locked) {
+                locked = TRUE;
+                break;
+            }
+        if (d9wg_reset_resource_blocks(texture->pool,
+                (UINT)InterlockedCompareExchange(&texture->refcount, 0, 0),
+                reset_texture_owned_refs(device, &texture->iface, D9WG_RESOURCE_TEXTURE_VOLUME), locked))
+            return TRUE;
+    }
     return FALSE;
 }
 
@@ -3742,7 +4014,9 @@ static BOOL device_has_reset_blockers(D9Device *device)
  */
 static BOOL device_is_pure(const D9Device *device)
 {
-    return (device->creation.BehaviorFlags & D3DCREATE_PUREDEVICE) != 0;
+    /* Legacy8 kept state queries readable for this creation hint. */
+    return device_compatibility_api(device) != 8u
+            && (device->creation.BehaviorFlags & D3DCREATE_PUREDEVICE) != 0;
 }
 
 #define PURE_DEVICE_REFUSE(device, name) \
@@ -3764,12 +4038,12 @@ static void device_clear_bindings(D9Device *device)
         device->streams[index].stride = 0;
         device->streams[index].offset = 0;
         device->streams[index].frequency = 1u;
-        if (buffer) IDirect3DVertexBuffer9_Release(&buffer->iface);
+        if (buffer) vb_binding_release(buffer);
     }
     if (device->index_buffer) {
         D9IndexBuffer *buffer = device->index_buffer;
         device->index_buffer = NULL;
-        IDirect3DIndexBuffer9_Release(&buffer->iface);
+        ib_binding_release(buffer);
     }
     for (index = 0; index < D9_MAX_TEXTURE_BINDINGS; ++index) {
         D9Texture *texture = device->textures[index];
@@ -3778,37 +4052,48 @@ static void device_clear_bindings(D9Device *device)
         device->textures[index] = NULL;
         device->cube_bindings[index] = NULL;
         device->volume_bindings[index] = NULL;
-        if (texture) IDirect3DTexture9_Release(&texture->iface);
-        if (cube) IDirect3DCubeTexture9_Release(&cube->iface);
-        if (volume) IDirect3DVolumeTexture9_Release(&volume->iface);
+        if (texture) texture_binding_release(texture);
+        if (cube) cube_binding_release(cube);
+        if (volume) volume_texture_binding_release(volume);
     }
     for (index = 0; index < D9_MAX_RENDER_TARGETS; ++index) {
         D9Surface *surface = device->render_target_surfaces[index];
         device->render_target_surfaces[index] = NULL;
-        if (surface) IDirect3DSurface9_Release(&surface->iface);
+        if (surface) surface_binding_release(surface);
     }
     if (device->depth_stencil_surface) {
         D9Surface *surface = device->depth_stencil_surface;
         device->depth_stencil_surface = NULL;
-        IDirect3DSurface9_Release(&surface->iface);
+        surface_binding_release(surface);
     }
     device->depth_stencil_unbound = FALSE;
     if (device->vertex_declaration) {
         D9VertexDeclaration *decl = device->vertex_declaration;
         device->vertex_declaration = NULL;
-        IDirect3DVertexDeclaration9_Release(&decl->iface);
+        decl_binding_release(decl);
     }
     if (device->vertex_shader) {
         D9Shader *shader = device->vertex_shader;
+        device->vertex_shader_hw_disabled = FALSE;
         device->vertex_shader = NULL;
-        IDirect3DVertexShader9_Release(&shader->iface.vertex);
+        shader_binding_release(shader);
     }
     if (device->pixel_shader) {
         D9Shader *shader = device->pixel_shader;
         device->pixel_shader = NULL;
-        IDirect3DPixelShader9_Release(&shader->iface.pixel);
+        shader_binding_release(shader);
     }
     device->fvf = 0;
+}
+
+static void device_cancel_recording(D9Device *device)
+{
+    D9StateBlock *recording = device->recording_result;
+    /* Detach before releasing resources: private-data callbacks may re-enter. */
+    device->recording_result = NULL;
+    if (recording) {
+        IDirect3DStateBlock9_Release(&recording->iface);
+    }
 }
 
 static void device_release_owned_references(D9Device *device)
@@ -3817,137 +4102,53 @@ static void device_release_owned_references(D9Device *device)
             device->handle,
             InterlockedCompareExchange(&device->refcount, 0, 0),
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
+    core_device_cleanup8(device);
+    device_cancel_recording(device);
+    device_clear_state_block_handles8(device);
     device_clear_bindings(device);
+    device_clear_fvf_cache(device);
     TRACE("LEAVE Device.ReleaseOwnedReferences device=%08lX refs=%ld child_refs=%ld",
             device->handle,
             InterlockedCompareExchange(&device->refcount, 0, 0),
             InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
 }
 
-static BOOL recreate_device_resources(D9Device *device)
+/*
+ * After a Reset the host has a new device under the new handle, with
+ * default state; the resources -- buffers, textures, declarations, shaders --
+ * are the session's, not the device's, and keep their handles and contents
+ * there. They used to be created again under new handles and uploaded again,
+ * without the old ones ever being destroyed: every Reset doubled the GPU
+ * memory (review S1-9a). What the new device lacks is the shader constant
+ * registers, sent unconditionally because the host's copy is empty, not
+ * stale.
+ */
+static BOOL emit_device_state_after_reset(D9Device *device)
 {
-    D9VertexBuffer *vb;
-    D9IndexBuffer *ib;
-    D9Texture *texture;
-    D9CubeTexture *cube;
-    D9VolumeTexture *volume;
-    D9VertexDeclaration *decl;
-    D9Shader *shader;
-    UINT level;
+    if (!emit_render_default_patches(device->handle, device_compatibility_api(device), device->present.EnableAutoDepthStencil, device->render_states)
+            || !emit_object_default_patches(device->handle, &device->material))
+        return FALSE;
 
-    for (vb = device->vertex_buffers; vb; vb = vb->next_device_resource) {
-        vb->handle = allocate_handle();
-        if (!emit_vertex_buffer_create(device, vb)
-                || !emit_buffer_update(vb->handle, 0, vb->shadow,
-                        vb->length, 0))
-            return FALSE;
-    }
-    for (ib = device->index_buffers; ib; ib = ib->next_device_resource) {
-        ib->handle = allocate_handle();
-        if (!emit_index_buffer_create(device, ib)
-                || !emit_buffer_update(ib->handle, 0, ib->shadow,
-                        ib->length, 0))
-            return FALSE;
-    }
-    for (texture = device->texture_resources; texture;
-            texture = texture->next_device_resource) {
-        texture->handle = allocate_handle();
-        if (!emit_texture_create(device, texture)) return FALSE;
-        for (level = 0; level < texture->level_count; ++level) {
-            RECT full;
-            SetRect(&full, 0, 0, (int)texture->levels[level].width,
-                    (int)texture->levels[level].height);
-            if (!emit_texture_update(texture, level, &full)) return FALSE;
-        }
-    }
-    for (cube = device->cube_textures; cube; cube = cube->next_device_resource) {
-        UINT face;
-        cube->handle = allocate_handle();
-        if (!emit_cube_texture_create(device, cube)) return FALSE;
-        for (face = 0; face < 6u; ++face) {
-            for (level = 0; level < cube->level_count; ++level) {
-                D9TextureLevel *level_data =
-                        &cube->levels[face * cube->level_count + level];
-                RECT full;
-                SetRect(&full, 0, 0, (int)level_data->width,
-                        (int)level_data->height);
-                if (!emit_cube_texture_update(cube, face, level, &full))
-                    return FALSE;
-            }
-        }
-    }
-    for (volume = device->volume_textures; volume;
-            volume = volume->next_device_resource) {
-        volume->handle = allocate_handle();
-        if (!emit_volume_texture_create(device, volume)) return FALSE;
-        for (level = 0; level < volume->level_count; ++level) {
-            D9TextureLevel *level_data = &volume->levels[level];
-            D3DBOX full;
-            full.Left = full.Top = full.Front = 0;
-            full.Right = level_data->width;
-            full.Bottom = level_data->height;
-            full.Back = level_data->depth;
-            if (!emit_volume_texture_update(volume, level, &full))
-                return FALSE;
-        }
-    }
-    for (decl = device->vertex_declarations; decl;
-            decl = decl->next_device_resource) {
-        D9WGVertexElement wire[D3DMAXDECLLENGTH];
-        UINT i;
-        decl->handle = allocate_handle();
-        for (i = 0; i < decl->element_count; ++i) {
-            wire[i].stream = decl->elements[i].Stream;
-            wire[i].offset = decl->elements[i].Offset;
-            wire[i].type = decl->elements[i].Type;
-            wire[i].method = decl->elements[i].Method;
-            wire[i].usage = decl->elements[i].Usage;
-            wire[i].usage_index = decl->elements[i].UsageIndex;
-        }
-        if (!emit_vertex_declaration_create(device, decl->handle, wire,
-                decl->element_count))
-            return FALSE;
-    }
-    /*
-     * Shaders and their constant registers are not pool-bound resources and
-     * so survive Reset from the app's point of view -- but the host's
-     * resource table is rebuilt from scratch, so both have to be replayed
-     * here or the first draw after a Reset binds a handle the host has never
-     * heard of. The constants go out unconditionally (bypassing the
-     * dirty-range suppression in set_constant_*, which compares against a
-     * shadow the host no longer shares) because after a Reset the host's
-     * copy is empty, not stale.
-     */
-    for (shader = device->shaders; shader; shader = shader->next_device_resource) {
-        shader->handle = allocate_shader_handle();
-        if (!emit_shader_create(device, shader))
-            return FALSE;
-    }
+    if (device->gamma_ramp_set && !d9wg_emit_gamma_ramp(device->handle,
+            device->gamma_ramp_flags, &device->gamma_ramp))
+        return FALSE;
+
     if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_F,
-                    0, D9_MAX_VS_CONST_F, device->vs_const_f,
-                    D9_MAX_VS_CONST_F * 16u)
+                    0, device->vs_float_capacity, device->vs_const_f,
+                    device->vs_float_capacity * 16u)
             || !emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_F,
                     0, D9_MAX_PS_CONST_F, device->ps_const_f,
                     D9_MAX_PS_CONST_F * 16u)
             || !emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_I,
-                    0, D9_MAX_CONST_I, device->vs_const_i, D9_MAX_CONST_I * 16u)
+                    0, device->vs_int_capacity, device->vs_const_i, device->vs_int_capacity * 16u)
             || !emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_I,
                     0, D9_MAX_CONST_I, device->ps_const_i, D9_MAX_CONST_I * 16u))
         return FALSE;
-    {
-        uint32_t packed[D9_MAX_CONST_B];
-        UINT index;
-        for (index = 0; index < D9_MAX_CONST_B; ++index)
-            packed[index] = device->vs_const_b[index] ? 1u : 0u;
-        if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_B,
-                0, D9_MAX_CONST_B, packed, D9_MAX_CONST_B * 4u))
-            return FALSE;
-        for (index = 0; index < D9_MAX_CONST_B; ++index)
-            packed[index] = device->ps_const_b[index] ? 1u : 0u;
-        if (!emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_B,
-                0, D9_MAX_CONST_B, packed, D9_MAX_CONST_B * 4u))
-            return FALSE;
-    }
+    if (!emit_shader_constants(device, D9WG_OP_SET_VERTEX_SHADER_CONSTANT_B,
+            0, device->vs_bool_capacity, device->vs_const_b, device->vs_bool_capacity * 4u)
+            || !emit_shader_constants(device, D9WG_OP_SET_PIXEL_SHADER_CONSTANT_B,
+            0, D9_MAX_CONST_B, device->ps_const_b, D9_MAX_CONST_B * 4u))
+        return FALSE;
     return TRUE;
 }
 
@@ -3968,102 +4169,36 @@ static BOOL device_light_is_set(D9Device *device, UINT index)
     return index < D9_MAX_LIGHTS && device->light_set[index];
 }
 
-static void device_init_states(D9Device *device)
+static void device_init_states_for_api(D9Device *device, UINT api)
 {
     UINT slot;
     UINT stage;
+    device->current_palette = 0;
 
-    /*
-     * These arrays are not merely Get*State backing stores: every Set*State
-     * path suppresses a command when the cached value already equals the new
-     * one.  Zero-initialising them therefore is only correct for states whose
-     * D3D9 default is actually zero.  In particular, a game commonly starts a
-     * UI/fog/shadow pass with ZENABLE=FALSE and ZWRITEENABLE=FALSE.  With an
-     * all-zero cache those first calls were discarded, while the host (quite
-     * correctly) retained D3D9's default enabled depth state.  The result was
-     * scene depth hiding UI glyphs/icons and depth-writing overlay passes
-     * corrupting fog and projected shadows.
-     *
-     * Keep this table aligned with the fallback values in
-     * d3d9_executor.js.  Initial state is not replayed: both ends begin from
-     * these same D3D9 defaults, and subsequent Set calls carry every change.
-     */
+    /* Setters suppress equal values, so the shadow and host must start from
+     * the same generated defaults, including creation-time depth state. */
+    d9wg_clip_status_init(&device->clip_status);device->clip_status_valid = TRUE;
     ZeroMemory(device->render_states, sizeof(device->render_states));
     ZeroMemory(device->texture_stage_states,
             sizeof(device->texture_stage_states));
     ZeroMemory(device->sampler_states, sizeof(device->sampler_states));
 
-    device->render_states[D3DRS_ZENABLE] = D3DZB_TRUE;
-    device->render_states[D3DRS_FILLMODE] = D3DFILL_SOLID;
-    device->render_states[D3DRS_SHADEMODE] = D3DSHADE_GOURAUD;
-    device->render_states[D3DRS_ZWRITEENABLE] = TRUE;
-    device->render_states[D3DRS_LASTPIXEL] = TRUE;
-    device->render_states[D3DRS_SRCBLEND] = D3DBLEND_ONE;
-    device->render_states[D3DRS_DESTBLEND] = D3DBLEND_ZERO;
-    device->render_states[D3DRS_CULLMODE] = D3DCULL_CCW;
-    device->render_states[D3DRS_ZFUNC] = D3DCMP_LESSEQUAL;
-    device->render_states[D3DRS_ALPHAFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_FOGEND] = 0x3F800000u;
-    device->render_states[D3DRS_FOGDENSITY] = 0x3F800000u;
-    device->render_states[D3DRS_STENCILFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILZFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILPASS] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_STENCILFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_STENCILMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_STENCILWRITEMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_TEXTUREFACTOR] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_CLIPPING] = TRUE;
-    device->render_states[D3DRS_LIGHTING] = TRUE;
-    device->render_states[D3DRS_COLORVERTEX] = TRUE;
-    device->render_states[D3DRS_LOCALVIEWER] = TRUE;
-    device->render_states[D3DRS_DIFFUSEMATERIALSOURCE] = D3DMCS_COLOR1;
-    device->render_states[D3DRS_SPECULARMATERIALSOURCE] = D3DMCS_COLOR2;
-    device->render_states[D3DRS_AMBIENTMATERIALSOURCE] = D3DMCS_MATERIAL;
-    device->render_states[D3DRS_EMISSIVEMATERIALSOURCE] = D3DMCS_MATERIAL;
-    device->render_states[D3DRS_POINTSIZE] = 0x3F800000u;
-    device->render_states[D3DRS_POINTSIZE_MIN] = 0x3F800000u;
-    device->render_states[D3DRS_POINTSCALE_A] = 0x3F800000u;
-    device->render_states[D3DRS_POINTSIZE_MAX] = 0x42800000u; /* 64.0f */
-    device->render_states[D3DRS_MULTISAMPLEANTIALIAS] = TRUE;
-    device->render_states[D3DRS_MULTISAMPLEMASK] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_PATCHEDGESTYLE] = D3DPATCHEDGE_DISCRETE;
-    device->render_states[D3DRS_COLORWRITEENABLE] = 0xFu;
-    device->render_states[D3DRS_BLENDOP] = D3DBLENDOP_ADD;
-    device->render_states[D3DRS_CCW_STENCILFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_CCW_STENCILZFAIL] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_CCW_STENCILPASS] = D3DSTENCILOP_KEEP;
-    device->render_states[D3DRS_CCW_STENCILFUNC] = D3DCMP_ALWAYS;
-    device->render_states[D3DRS_COLORWRITEENABLE1] = 0xFu;
-    device->render_states[D3DRS_COLORWRITEENABLE2] = 0xFu;
-    device->render_states[D3DRS_COLORWRITEENABLE3] = 0xFu;
-    device->render_states[D3DRS_BLENDFACTOR] = 0xFFFFFFFFu;
-    device->render_states[D3DRS_SRCBLENDALPHA] = D3DBLEND_ONE;
-    device->render_states[D3DRS_DESTBLENDALPHA] = D3DBLEND_ZERO;
-    device->render_states[D3DRS_BLENDOPALPHA] = D3DBLENDOP_ADD;
-
-    for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage) {
-        device->texture_stage_states[stage][D3DTSS_COLOROP] = stage == 0
-                ? D3DTOP_MODULATE : D3DTOP_DISABLE;
-        device->texture_stage_states[stage][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
-        device->texture_stage_states[stage][D3DTSS_COLORARG2] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_ALPHAOP] = stage == 0
-                ? D3DTOP_SELECTARG1 : D3DTOP_DISABLE;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG2] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_TEXCOORDINDEX] = stage;
-        device->texture_stage_states[stage][D3DTSS_COLORARG0] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_ALPHAARG0] = D3DTA_CURRENT;
-        device->texture_stage_states[stage][D3DTSS_RESULTARG] = D3DTA_CURRENT;
-    }
-    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
-        device->sampler_states[slot][D3DSAMP_ADDRESSU] = D3DTADDRESS_WRAP;
-        device->sampler_states[slot][D3DSAMP_ADDRESSV] = D3DTADDRESS_WRAP;
-        device->sampler_states[slot][D3DSAMP_ADDRESSW] = D3DTADDRESS_WRAP;
-        device->sampler_states[slot][D3DSAMP_MAGFILTER] = D3DTEXF_POINT;
-        device->sampler_states[slot][D3DSAMP_MINFILTER] = D3DTEXF_POINT;
-        device->sampler_states[slot][D3DSAMP_MIPFILTER] = D3DTEXF_NONE;
-        device->sampler_states[slot][D3DSAMP_MAXANISOTROPY] = 1u;
-    }
+    D3DCAPS9 caps;fill_caps(&caps);
+    DWORD point_max_bits;CopyMemory(&point_max_bits, &caps.MaxPointSize, sizeof(point_max_bits));
+    for (UINT state = 0; state < sizeof(device->render_states)/sizeof(device->render_states[0]); ++state)
+        device->render_states[state] = d9wg_render_default(api, state,
+                device->present.EnableAutoDepthStencil, point_max_bits);
+    d9wg_object_defaults(api, &device->material, device->clip_planes, D9_MAX_CLIP_PLANES);
+    d9wg_light_free(&device->extra_lights);
+    ZeroMemory(device->lights, sizeof(device->lights));
+    ZeroMemory(device->light_set, sizeof(device->light_set));
+    ZeroMemory(device->light_enabled, sizeof(device->light_enabled));
+    for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage)
+        for (UINT state = 0; state < sizeof(device->texture_stage_states[stage])/sizeof(device->texture_stage_states[stage][0]); ++state)
+            device->texture_stage_states[stage][state] = d9wg_texture_default(api, stage, state);
+    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot)
+        for (UINT state = 0; state < sizeof(device->sampler_states[slot])/sizeof(device->sampler_states[slot][0]); ++state)
+            device->sampler_states[slot][state] = d9wg_sampler_default(state);
     for (slot = 0; slot < D9_MAX_STREAMS; ++slot)
         device->streams[slot].frequency = 1u;
     for (slot = 0; slot < D9_MAX_TRANSFORMS; ++slot) {
@@ -4073,6 +4208,11 @@ static void device_init_states(D9Device *device)
         device->transforms[slot][10] = 1.0f;
         device->transforms[slot][15] = 1.0f;
     }
+}
+
+static void device_init_states(D9Device *device)
+{
+    device_init_states_for_api(device, device_compatibility_api(device));
 }
 
 /* ---- IDirect3D9 ---- */
@@ -4129,6 +4269,32 @@ static UINT WINAPI d3d_get_adapter_count(IDirect3D9 *iface)
     return 1;
 }
 
+static void fill_adapter_identifier8(D3DADAPTER_IDENTIFIER9 *identifier, DWORD flags)
+{
+    lstrcpynA(identifier->Driver, "d3d8-webgpu", sizeof(identifier->Driver));
+    lstrcpynA(identifier->Description,
+            "v86 Direct3D 8 WebGPU Adapter", sizeof(identifier->Description));
+    identifier->VendorId = 0x1234;
+    identifier->DeviceId = 0x5686;
+    identifier->SubSysId = 0x56861234;
+    identifier->Revision = 1;
+    identifier->DriverVersion.HighPart = (6 << 16) | 14;
+    identifier->DriverVersion.LowPart = (10 << 16) | 6764;
+    identifier->DeviceIdentifier.Data1 = 0xD8E60000u | identifier->DeviceId;
+    identifier->DeviceIdentifier.Data2 = (WORD)identifier->VendorId;
+    identifier->DeviceIdentifier.Data3 = (WORD)identifier->DeviceId;
+    identifier->DeviceIdentifier.Data4[0] = 0x9A;
+    identifier->DeviceIdentifier.Data4[1] = 0xB1;
+    identifier->DeviceIdentifier.Data4[2] = 0xC2;
+    identifier->DeviceIdentifier.Data4[3] = 0xD3;
+    identifier->DeviceIdentifier.Data4[4] = 0xE4;
+    identifier->DeviceIdentifier.Data4[5] = 0xF5;
+    identifier->DeviceIdentifier.Data4[6] = 0x06;
+    identifier->DeviceIdentifier.Data4[7] = 0x17;
+    /* The same bit means NO_WHQL in D3D8 and WHQL_LEVEL in D3D9. */
+    identifier->WHQLLevel = (flags & D3DENUM_WHQL_LEVEL) ? 0 : 1;
+}
+
 static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D9 *iface,
         UINT adapter, DWORD flags, D3DADAPTER_IDENTIFIER9 *identifier)
 {
@@ -4149,6 +4315,10 @@ static HRESULT WINAPI d3d_get_adapter_identifier(IDirect3D9 *iface,
      */
     lstrcpynA(identifier->DeviceName, "\\\\.\\DISPLAY1",
             sizeof(identifier->DeviceName));
+    if (d3d_from_iface(iface)->compatibility_api == 8) {
+        fill_adapter_identifier8(identifier, flags);
+        return D3D_OK;
+    }
 #if D9_ADAPTER_IDENTITY == D9_ADAPTER_GEFORCEFX_5200
     /* NV34. The entry-level card of the first NVIDIA generation with
      * vs_2_0/ps_2_0, matching the shader model fill_caps() reports from M2
@@ -4278,11 +4448,26 @@ static UINT enumerate_adapter_modes(D3DFORMAT format, UINT wanted,
     return out ? 0 : matched;
 }
 
+/* Private D3D8 factories expose the legacy flattened list through format
+ * UNKNOWN. Ordinary D3D9 factories retain driver-enumerated, filtered modes. */
+static UINT enumerate_adapter_modes8(UINT index, D3DDISPLAYMODE *mode)
+{
+    /* Flatten the actual driver's two supported display formats. Never
+     * advertise invented 15-bit modes or fixed resolutions / refresh rates. */
+    UINT count16 = enumerate_adapter_modes(D3DFMT_R5G6B5, 0, NULL);
+    if (!mode)
+        return count16 + enumerate_adapter_modes(D3DFMT_X8R8G8B8, 0, NULL);
+    return index < count16
+            ? enumerate_adapter_modes(D3DFMT_R5G6B5, index, mode)
+            : enumerate_adapter_modes(D3DFMT_X8R8G8B8, index - count16, mode);
+}
+
 static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D9 *iface, UINT adapter,
         D3DFORMAT format)
 {
     UINT count;
-    (void)iface;
+    if (d3d_from_iface(iface)->compatibility_api == 8)
+        return adapter || format != D3DFMT_UNKNOWN ? 0 : enumerate_adapter_modes8(0, NULL);
 
     if (adapter || (format != D3DFMT_X8R8G8B8 && format != D3DFMT_R5G6B5)) {
         /* A zero here empties the app's video-mode list for that format, which
@@ -4300,7 +4485,12 @@ static UINT WINAPI d3d_get_adapter_mode_count(IDirect3D9 *iface, UINT adapter,
 static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D9 *iface, UINT adapter,
         D3DFORMAT format, UINT index, D3DDISPLAYMODE *mode)
 {
-    (void)iface;
+    if (d3d_from_iface(iface)->compatibility_api == 8) {
+        if (adapter || !mode || format != D3DFMT_UNKNOWN
+                || !enumerate_adapter_modes8(index, mode))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
+    }
 
     if (adapter || !mode || (format != D3DFMT_X8R8G8B8
             && format != D3DFMT_R5G6B5)
@@ -4315,39 +4505,38 @@ static HRESULT WINAPI d3d_enum_adapter_modes(IDirect3D9 *iface, UINT adapter,
     return D3D_OK;
 }
 
-static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D9 *iface,
-        UINT adapter, D3DDISPLAYMODE *mode)
+static HRESULT WINAPI d3d_get_adapter_display_mode(IDirect3D9* iface,
+    UINT adapter, D3DDISPLAYMODE* mode)
 {
     (void)iface;
 
     if (adapter || !mode)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /*
-     * The guest's actual desktop mode, not a fixed 1024x768. This is what the
-     * question asks -- "what is the display doing right now" -- and answering
-     * it with a constant meant reporting a resolution the guest was not in:
-     * a title that sizes a windowed device to the desktop, or compares the
-     * mode against its saved settings, is then working from a number that was
-     * never true. The reference implementation reports the real mode.
-     */
-    {
-        DEVMODEA current;
-        ZeroMemory(&current, sizeof(current));
-        current.dmSize = sizeof(current);
-        if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &current)
-                && current.dmPelsWidth && current.dmPelsHeight) {
-            fill_display_mode(mode, current.dmPelsWidth, current.dmPelsHeight,
-                    current.dmBitsPerPel == 16 ? D3DFMT_R5G6B5
-                            : D3DFMT_X8R8G8B8);
-            if (current.dmDisplayFrequency > 1)
-                mode->RefreshRate = current.dmDisplayFrequency;
-        } else {
-            fill_display_mode(mode, 1024, 768, D3DFMT_X8R8G8B8);
-        }
-    }
+    D9WGDisplayMode current;
+    d9wg_display_mode_current(&current);
+    fill_display_mode(mode, current.width, current.height, (D3DFORMAT)current.format);
+    mode->RefreshRate = current.refresh_rate;
     TRACE("OK GetAdapterDisplayMode -> %lux%lu format=%08lX refresh=%lu",
-            mode->Width, mode->Height, (DWORD)mode->Format, mode->RefreshRate);
+        mode->Width, mode->Height, (DWORD)mode->Format, mode->RefreshRate);
     return D3D_OK;
+}
+
+/* Version8 query policy is a restriction of the common implemented formats.
+ * Legacy device/resource code still calls its local predicates until wrapped. */
+static BOOL supported_render_target_format8(D3DFORMAT format)
+{
+    return (format == D3DFMT_A8R8G8B8 || format == D3DFMT_X8R8G8B8
+            || format == D3DFMT_R5G6B5 || format == D3DFMT_X1R5G5B5
+            || format == D3DFMT_A1R5G5B5 || format == D3DFMT_A4R4G4B4)
+            && supported_render_target_format(format);
+}
+
+static BOOL supported_depth_stencil_format8(D3DFORMAT format)
+{
+    return (format == D3DFMT_D16 || format == D3DFMT_D24S8
+            || format == D3DFMT_D32 || format == D3DFMT_D15S1
+            || format == D3DFMT_D24X8 || format == D3DFMT_D24X4S4)
+            && supported_depth_stencil_format(format);
 }
 
 static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
@@ -4355,11 +4544,26 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
         D3DFORMAT backbuffer_format, WINBOOL windowed)
 {
     BOOL ok;
-    (void)iface; (void)windowed;
+    BOOL legacy8 = d3d_from_iface(iface)->compatibility_api == 8;
+    if (!legacy8 && windowed && backbuffer_format == D3DFMT_UNKNOWN)
+        backbuffer_format = display_format;
     ok = !adapter && type == D3DDEVTYPE_HAL
             && (display_format == D3DFMT_X8R8G8B8
-                || display_format == D3DFMT_R5G6B5)
-            && supported_backbuffer_format(backbuffer_format);
+                || display_format == D3DFMT_R5G6B5
+                || display_format == D3DFMT_X1R5G5B5)
+            && supported_render_target_format8(backbuffer_format);
+    /* Fullscreen scan-out permits only the display format or its alpha
+     * variant. Windowed D3D9 permits the implemented display conversions;
+     * UNKNOWN selects the display format. */
+    ok = ok && (backbuffer_format == display_format
+            || (display_format == D3DFMT_X8R8G8B8
+                && backbuffer_format == D3DFMT_A8R8G8B8)
+            || (display_format == D3DFMT_X1R5G5B5
+                && backbuffer_format == D3DFMT_A1R5G5B5)
+            || (!legacy8 && windowed && display_format == D3DFMT_X8R8G8B8
+                && backbuffer_format == D3DFMT_R5G6B5));
+    if (!windowed && display_format == D3DFMT_X1R5G5B5)
+        ok = FALSE; /* The display driver exposes 16-bit RGB565 modes. */
 
     TRACE("OK CheckDeviceType adapter=%lu type=%lu display=%08lX backbuffer=%08lX "
             "windowed=%lu -> %08lX", adapter, (DWORD)type,
@@ -4368,13 +4572,104 @@ static HRESULT WINAPI d3d_check_device_type(IDirect3D9 *iface, UINT adapter,
     return ok ? D3D_OK : D3DERR_NOTAVAILABLE;
 }
 
+static BOOL supported_format8(D3DFORMAT format, BOOL image_surface)
+{
+    UINT width, height, bytes;
+    return d9wg_format_layout(8, (uint32_t)format, &width, &height, &bytes)
+            && (!image_surface || (width == 1 && height == 1));
+}
+
+static HRESULT WINAPI d3d_check_device_format8(IDirect3D9 *iface,
+        UINT adapter, D3DDEVTYPE type, D3DFORMAT adapter_format,
+        DWORD usage, D3DRESOURCETYPE resource_type, D3DFORMAT format)
+{
+    (void)iface;
+    if (adapter_format == D3DFMT_UNKNOWN
+            || resource_type == D3DRTYPE_VERTEXBUFFER
+            || resource_type == D3DRTYPE_INDEXBUFFER)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (adapter_format == D3DFMT_A8R8G8B8)
+        return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
+    if (adapter || type != D3DDEVTYPE_HAL)
+        return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
+    if (resource_type == D3DRTYPE_TEXTURE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_format8(format, FALSE))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_CUBETEXTURE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_format8(format, FALSE))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_CUBETEXTURE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format8(format))
+        return D3D_OK;
+    /* Volumes have no block-compressed layout on this path, and are never
+     * render targets -- device_create_volume_texture refuses both. */
+    if (resource_type == D3DRTYPE_VOLUMETEXTURE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && format != D3DFMT_DXT1 && format != D3DFMT_DXT2
+            && format != D3DFMT_DXT3 && format != D3DFMT_DXT4
+            && format != D3DFMT_DXT5
+            && format != 0x31495441u /* ATI1 */
+            && format != 0x32495441u /* ATI2 */
+            && supported_format8(format, FALSE))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_TEXTURE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format8(format))
+        return D3D_OK;
+    /*
+     * 3DMark2001 validates every enumerated display mode with this exact
+     * query before it exposes the adapter:
+     *
+     *   CheckDeviceFormat(display_format, D3DUSAGE_RENDERTARGET,
+     *           D3DRTYPE_SURFACE, display_format)
+     *
+     * A render-target surface is the object returned by CreateRenderTarget,
+     * which this frontend backs with the same one-level target texture as the
+     * texture case above. Omitting SURFACE here therefore hid a capability the
+     * device really has and made 3DMark reject every 32-bit display mode as
+     * non-renderable before CreateDevice was ever reached.
+     */
+    if (resource_type == D3DRTYPE_SURFACE
+            && usage == D3DUSAGE_RENDERTARGET
+            && supported_render_target_format8(format))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_SURFACE
+            && (usage & D3DUSAGE_DEPTHSTENCIL)
+            && supported_depth_stencil_format8(format))
+        return D3D_OK;
+    if (resource_type == D3DRTYPE_SURFACE
+            && !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+            && supported_format8(format, TRUE))
+        return D3D_OK;
+    TRACE("CHECK_FORMAT REFUSE adapter=%lu type=%lu adapter_fmt=%08lX "
+            "usage=%08lX resource_type=%lu format=%08lX", adapter,
+            (DWORD)type, (DWORD)adapter_format, usage, (DWORD)resource_type,
+            (DWORD)format);
+    return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
+}
+
 static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
         UINT adapter, D3DDEVTYPE type, D3DFORMAT adapter_format,
         DWORD usage, D3DRESOURCETYPE resource_type, D3DFORMAT format)
 {
     BOOL ok = FALSE;
     HRESULT result;
-    (void)iface; (void)adapter_format;
+    if (d3d_from_iface(iface)->compatibility_api == 8)
+        return d3d_check_device_format8(iface, adapter, type, adapter_format,
+                usage, resource_type, format);
+    if (adapter_format == D3DFMT_UNKNOWN
+            || resource_type == D3DRTYPE_VERTEXBUFFER
+            || resource_type == D3DRTYPE_INDEXBUFFER)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (adapter_format == D3DFMT_A8R8G8B8)
+        return D3DERR_NOTAVAILABLE;
+    if (resource_type == D3DRTYPE_SURFACE
+            && (usage & D3DUSAGE_QUERY_SRGBWRITE)
+            && !(usage & D3DUSAGE_RENDERTARGET))
+        return D3DERR_NOTAVAILABLE;
     /* 3DMark05's 0x0046F240 probe stops looking for filtered depth textures
      * when '-PCF' succeeds. Our depth comparison sampler supports PCF, so
      * NOTAVAILABLE is the expected answer here. Keep this query out of the
@@ -4392,8 +4687,9 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
          * Create*, so they are answered here and masked off before the shared
          * creation predicate sees the usage. D3DUSAGE_AUTOGENMIPMAP is masked
          * for the same reason from the other direction: the create paths
-         * accept it and report D3DOK_NOAUTOGEN, so it cannot make an otherwise
-         * valid format unavailable. */
+         * accept a valid 2D/cube request even if generation is unavailable.
+         * Only the query returns D3DOK_NOAUTOGEN; creation returns D3D_OK
+         * with a single accessible level in either case. */
         const DWORD query_bits = D3DUSAGE_QUERY_LEGACYBUMPMAP
                 | D3DUSAGE_QUERY_SRGBREAD | D3DUSAGE_QUERY_FILTER
                 | D3DUSAGE_QUERY_SRGBWRITE
@@ -4418,17 +4714,32 @@ static HRESULT WINAPI d3d_check_device_format(IDirect3D9 *iface,
          * ordinary vertex buffer. */
         const DWORD unimplemented = D3DUSAGE_QUERY_LEGACYBUMPMAP
                 | D3DUSAGE_DMAP
-                | ((resource_type == D3DRTYPE_VOLUMETEXTURE)
-                    ? D3DUSAGE_AUTOGENMIPMAP : 0u);
+                | (((resource_type != D3DRTYPE_TEXTURE && resource_type != D3DRTYPE_CUBETEXTURE)
+                        || (usage & D3DUSAGE_DYNAMIC)) ? D3DUSAGE_AUTOGENMIPMAP : 0u);
         const DWORD creation_usage = usage
                 & ~(query_bits | D3DUSAGE_AUTOGENMIPMAP
                     | D3DUSAGE_SOFTWAREPROCESSING);
+        BOOL renderable = supported_render_target_format(format);
         if (!(usage & unimplemented)
                 && texture_create_supported(resource_type, creation_usage,
-                        format, D3DPOOL_DEFAULT))
-            ok = TRUE;
+                        format, D3DPOOL_DEFAULT)
+                && d9wg_format_query_supported(resource_type, usage, format,
+                        D9WG_HOST_FEATURE_MASK, shader_model_version(), renderable)) {
+            uint32_t host_features = 0;
+            uint32_t info = d9wg_format_query_info(format);
+            if ((info & 32u) || ((info & 4u)
+                    && (usage & (D3DUSAGE_QUERY_FILTER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING)))) {
+                host_features = runtime_host_features();
+            }
+            ok = d9wg_format_query_supported(resource_type, usage, format,
+                    host_features, shader_model_version(), renderable);
+        }
     }
     result = ok ? D3D_OK : D3DERR_NOTAVAILABLE;
+    if (ok && (usage & D3DUSAGE_AUTOGENMIPMAP)
+            && (!supported_render_target_format(format)
+                || !d9wg_autogen_mips_supported(resource_type, format)))
+        result = D3DOK_NOAUTOGEN;
     TRACE("%s CheckDeviceFormat adapter=%lu type=%lu adapter_fmt=%08lX "
             "usage=%08lX resource_type=%lu format=%08lX -> %08lX",
             SUCCEEDED(result) ? "OK" : "FAIL", adapter, (DWORD)type,
@@ -4456,9 +4767,12 @@ static HRESULT WINAPI d3d_check_multisample(IDirect3D9 *iface, UINT adapter,
         D3DMULTISAMPLE_TYPE multisample, DWORD *quality_levels)
 {
     BOOL ok;
-    (void)iface; (void)windowed;
+    (void)windowed;
     ok = !adapter && type == D3DDEVTYPE_HAL
-            && supported_multisample(format, multisample);
+            /* Version8 ignores the queried format; use a common colour format to
+             * keep its sample-count policy without imposing D3D9 format checks. */
+            && supported_multisample(d3d_from_iface(iface)->compatibility_api == 8
+                    ? D3DFMT_A8R8G8B8 : format, multisample);
     if (quality_levels) *quality_levels = ok ? 1u : 0u;
 
     TRACE("OK CheckDeviceMultiSampleType adapter=%lu type=%lu format=%08lX "
@@ -4472,9 +4786,11 @@ static HRESULT WINAPI d3d_check_depth_stencil(IDirect3D9 *iface,
         D3DFORMAT render_format, D3DFORMAT depth_format)
 {
     BOOL ok;
-    (void)iface; (void)adapter_format; (void)render_format;
+    (void)adapter_format; (void)render_format;
     ok = !adapter && type == D3DDEVTYPE_HAL
-            && supported_depth_stencil_format(depth_format);
+            && (d3d_from_iface(iface)->compatibility_api == 8
+                    ? (depth_format != D3DFMT_D32 && supported_depth_stencil_format8(depth_format))
+                    : (depth_format != D3DFMT_D32 && supported_depth_stencil_format(depth_format)));
 
     TRACE("OK CheckDepthStencilMatch adapter=%lu type=%lu adapter_fmt=%08lX "
             "render_fmt=%08lX depth_fmt=%08lX -> %08lX", adapter, (DWORD)type,
@@ -4491,7 +4807,16 @@ static HRESULT WINAPI d3d_check_device_format_conversion(IDirect3D9 *iface,
     if (adapter || type != D3DDEVTYPE_HAL)
         result = D3DERR_NOTAVAILABLE;
     else
-        result = source == target ? D3D_OK : D3DERR_NOTAVAILABLE;
+        /* StretchRect converts between these through the host blit (alpha
+         * dropped or forced opaque; 5:6:5 expanded; packed YUY2 decoded). */
+        result = source == target
+                || (source == D3DFMT_A8R8G8B8 && target == D3DFMT_X8R8G8B8)
+                || (source == D3DFMT_X8R8G8B8 && target == D3DFMT_A8R8G8B8)
+                || (source == D3DFMT_A1R5G5B5 && target == D3DFMT_X1R5G5B5)
+                || (source == D3DFMT_R5G6B5 && target == D3DFMT_X8R8G8B8)
+                || (source == D3DFMT_YUY2
+                    && (target == D3DFMT_X8R8G8B8 || target == D3DFMT_R5G6B5))
+                ? D3D_OK : D3DERR_NOTAVAILABLE;
     TRACE("OK CheckDeviceFormatConversion source=%08lX target=%08lX -> %08lX",
             (DWORD)source, (DWORD)target, (DWORD)result);
     return result;
@@ -4556,91 +4881,130 @@ static HMONITOR WINAPI d3d_get_adapter_monitor(IDirect3D9 *iface, UINT adapter)
     return monitor;
 }
 
-static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
-        D3DDEVTYPE type, HWND focus_window, DWORD behavior,
-        D3DPRESENT_PARAMETERS *parameters,
-        IDirect3DDevice9 **device_out)
+/* BFME Online Arena locates the Device9 vtable through the native x86
+ * constructor signature (also exercised by Wine's assembly-hook test).
+ * Keep this in the real initialization path so hooks find the exact table
+ * used by created devices, not a decoy that can diverge from it. */
+static void device_initialize_identity(D9Device *device)
 {
-    D9Direct3D *d3d = d3d_from_iface(iface);
-    D9Device *device;
+#if defined(__i386__) && defined(__GNUC__)
+    __asm__ volatile (
+            ".byte 0xc7,0x06\n\t.long %c[vtbl]\n\t"
+            ".byte 0x89,0x86\n\t.long %c[children]\n\t"
+            ".byte 0x89,0x86\n\t.long %c[releasing]\n\t"
+            :
+            : "S"(device), "a"(0), [vtbl] "i"(&g_device_vtbl),
+              [children] "i"(offsetof(D9Device, child_parent_refs)),
+              [releasing] "i"(offsetof(D9Device, releasing_owned_refs))
+            : "memory");
+#else
+    device->iface.lpVtbl = &g_device_vtbl;
+    device->child_parent_refs = 0;
+    device->releasing_owned_refs = FALSE;
+#endif
+    device->refcount = 1;
+}
+
+static HRESULT WINAPI d3d_create_device(IDirect3D9* iface, UINT adapter,
+    D3DDEVTYPE type, HWND focus_window, DWORD behavior,
+    D3DPRESENT_PARAMETERS* parameters,
+    IDirect3DDevice9** device_out)
+{
+    D9Direct3D* d3d = d3d_from_iface(iface);
+    D9Device* device;
+    UINT api;
     D9WGCreateDevice command;
     HWND window;
     RECT client;
     POINT origin;
+    UINT width, height;
     D3DFORMAT backbuffer_format;
 
     TRACE("CALL CreateDevice adapter=%lu type=%lu focus=%08lX behavior=%08lX",
-            adapter, (DWORD)type, (DWORD)(uintptr_t)focus_window, behavior);
+        adapter, (DWORD)type, (DWORD)(uintptr_t)focus_window, behavior);
 
     if (!device_out) {
         TRACE("FAIL CreateDevice missing output -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     *device_out = NULL;
     if (adapter || type != D3DDEVTYPE_HAL || !parameters) {
         TRACE("FAIL CreateDevice invalid arguments -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    api = d3d->compatibility_api == 8 ? 8u : 9u;
     TRACE("CreateDevice params %lux%lu fmt=%08lX count=%lu multisample=%lu "
-            "quality=%lu swap=%lu windowed=%lu auto_depth=%lu "
-            "depth_fmt=%08lX flags=%08lX interval=%08lX hwnd=%08lX",
-            parameters->BackBufferWidth, parameters->BackBufferHeight,
-            (DWORD)parameters->BackBufferFormat, parameters->BackBufferCount,
-            (DWORD)parameters->MultiSampleType, parameters->MultiSampleQuality,
-            (DWORD)parameters->SwapEffect, (DWORD)parameters->Windowed,
-            (DWORD)parameters->EnableAutoDepthStencil,
-            (DWORD)parameters->AutoDepthStencilFormat, parameters->Flags,
-            parameters->PresentationInterval,
-            (DWORD)(uintptr_t)parameters->hDeviceWindow);
-    backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
-            ? D3DFMT_X8R8G8B8 : parameters->BackBufferFormat;
+          "quality=%lu swap=%lu windowed=%lu auto_depth=%lu "
+          "depth_fmt=%08lX flags=%08lX interval=%08lX hwnd=%08lX",
+        parameters->BackBufferWidth, parameters->BackBufferHeight,
+        (DWORD)parameters->BackBufferFormat, parameters->BackBufferCount,
+        (DWORD)parameters->MultiSampleType, parameters->MultiSampleQuality,
+        (DWORD)parameters->SwapEffect, (DWORD)parameters->Windowed,
+        (DWORD)parameters->EnableAutoDepthStencil,
+        (DWORD)parameters->AutoDepthStencilFormat, parameters->Flags,
+        parameters->PresentationInterval,
+        (DWORD)(uintptr_t)parameters->hDeviceWindow);
+    if (!d9wg_present_interval_valid(api, parameters->Windowed,
+            parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(api, parameters->SwapEffect, parameters->BackBufferCount))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_multisample_valid(api, parameters->SwapEffect,
+            parameters->MultiSampleType, parameters->MultiSampleQuality, parameters->Flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 9 && !parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    backbuffer_format = api == 8
+        ? (parameters->BackBufferFormat ? parameters->BackBufferFormat : D3DFMT_X8R8G8B8)
+        : (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+        parameters->BackBufferFormat);
     if (!supported_multisample(backbuffer_format,
-            parameters->MultiSampleType)
-            || parameters->MultiSampleQuality != 0) {
+            parameters->MultiSampleType)) {
         TRACE("FAIL CreateDevice unsupported multisample=%lu quality=%lu "
-                "format=%08lX -> %08lX",
-                (DWORD)parameters->MultiSampleType,
-                parameters->MultiSampleQuality, (DWORD)backbuffer_format,
-                (DWORD)D3DERR_NOTAVAILABLE);
+              "format=%08lX -> %08lX",
+            (DWORD)parameters->MultiSampleType,
+            parameters->MultiSampleQuality, (DWORD)backbuffer_format,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-            && !supported_depth_stencil_format(
-                    parameters->AutoDepthStencilFormat)) {
+        && !(api == 8 ? supported_depth_stencil_format8(parameters->AutoDepthStencilFormat)
+            : supported_depth_stencil_format(parameters->AutoDepthStencilFormat))) {
         TRACE("FAIL CreateDevice unsupported depth_fmt=%08lX -> %08lX",
-                (DWORD)parameters->AutoDepthStencilFormat,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->AutoDepthStencilFormat,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-            && !supported_multisample(parameters->AutoDepthStencilFormat,
-                    parameters->MultiSampleType)) {
+        && !supported_multisample(parameters->AutoDepthStencilFormat,
+            parameters->MultiSampleType)) {
         TRACE("FAIL CreateDevice depth multisample mismatch depth_fmt=%08lX "
-                "multisample=%lu -> %08lX",
-                (DWORD)parameters->AutoDepthStencilFormat,
-                (DWORD)parameters->MultiSampleType,
-                (DWORD)D3DERR_NOTAVAILABLE);
+              "multisample=%lu -> %08lX",
+            (DWORD)parameters->AutoDepthStencilFormat,
+            (DWORD)parameters->MultiSampleType,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-            && !supported_backbuffer_format(parameters->BackBufferFormat)) {
+        && !(api == 8 ? supported_render_target_format8(parameters->BackBufferFormat)
+            : supported_backbuffer_format(parameters->BackBufferFormat))) {
         TRACE("FAIL CreateDevice unsupported backbuffer_fmt=%08lX -> %08lX",
-                (DWORD)parameters->BackBufferFormat,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->BackBufferFormat,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->BackBufferWidth > 8192
-            || parameters->BackBufferHeight > 8192) {
+        || parameters->BackBufferHeight > 8192) {
         TRACE("FAIL CreateDevice oversized backbuffer=%lux%lu -> %08lX",
-                parameters->BackBufferWidth, parameters->BackBufferHeight,
-                (DWORD)D3DERR_INVALIDCALL);
+            parameters->BackBufferWidth, parameters->BackBufferHeight,
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     if (parameters->BackBufferCount > 3) {
         TRACE("FAIL CreateDevice backbuffer_count=%lu -> %08lX",
-                parameters->BackBufferCount, (DWORD)D3DERR_INVALIDCALL);
+            parameters->BackBufferCount, (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     /*
@@ -4650,85 +5014,106 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
      * requires exactly one vertex-processing mode, and D3DCREATE_PUREDEVICE
      * only alongside the hardware one.
      */
-    {
+    if (api == 9) {
         const DWORD vertex_processing = behavior
-                & (D3DCREATE_SOFTWARE_VERTEXPROCESSING
-                        | D3DCREATE_HARDWARE_VERTEXPROCESSING
-                        | D3DCREATE_MIXED_VERTEXPROCESSING);
+            & (D3DCREATE_SOFTWARE_VERTEXPROCESSING
+                | D3DCREATE_HARDWARE_VERTEXPROCESSING
+                | D3DCREATE_MIXED_VERTEXPROCESSING);
         if (vertex_processing != D3DCREATE_SOFTWARE_VERTEXPROCESSING
-                && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING
-                && vertex_processing != D3DCREATE_MIXED_VERTEXPROCESSING) {
+            && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING
+            && vertex_processing != D3DCREATE_MIXED_VERTEXPROCESSING) {
             TRACE("FAIL CreateDevice behavior=%08lX names %s vertex processing "
-                    "mode -> %08lX", behavior,
-                    vertex_processing ? "more than one" : "no",
-                    (DWORD)D3DERR_INVALIDCALL);
-            HOSTLOG_FAILED("CreateDevice refused: BehaviorFlags %08lX must "
-                    "name exactly one vertex-processing mode", behavior);
+                  "mode -> %08lX",
+                behavior,
+                vertex_processing ? "more than one" : "no",
+                (DWORD)D3DERR_INVALIDCALL);
+            HOSTLOG_REFUSED("CreateDevice refused: BehaviorFlags %08lX must "
+                           "name exactly one vertex-processing mode",
+                behavior);
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
         if ((behavior & D3DCREATE_PUREDEVICE)
-                && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING) {
+            && vertex_processing != D3DCREATE_HARDWARE_VERTEXPROCESSING) {
             TRACE("FAIL CreateDevice behavior=%08lX pairs PUREDEVICE with "
-                    "non-hardware vertex processing -> %08lX", behavior,
-                    (DWORD)D3DERR_INVALIDCALL);
-            HOSTLOG_FAILED("CreateDevice refused: D3DCREATE_PUREDEVICE "
-                    "requires D3DCREATE_HARDWARE_VERTEXPROCESSING");
+                  "non-hardware vertex processing -> %08lX",
+                behavior,
+                (DWORD)D3DERR_INVALIDCALL);
+            HOSTLOG_REFUSED("CreateDevice refused: D3DCREATE_PUREDEVICE "
+                           "requires D3DCREATE_HARDWARE_VERTEXPROCESSING");
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
 
-    device = (D9Device *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            sizeof(*device));
-    if (!device) {
-        TRACE("FAIL CreateDevice allocation -> %08lX", (DWORD)E_OUTOFMEMORY);
-        return E_OUTOFMEMORY;
-    }
-    device->iface.lpVtbl = &g_device_vtbl;
-    device->implicit_swap_chain.iface.lpVtbl = &g_swap_chain_vtbl;
-    device->implicit_swap_chain.device = device;
-    device->refcount = 1;
-    device->parent = d3d;
-    IDirect3D9_AddRef(iface);
-    device->handle = allocate_handle();
-    device->present = *parameters;
-    device->creation.AdapterOrdinal = adapter;
-    device->creation.DeviceType = type;
-    device->creation.hFocusWindow = focus_window;
-    device->creation.BehaviorFlags = behavior;
-    fill_display_mode(&device->display_mode,
-            parameters->BackBufferWidth ? parameters->BackBufferWidth : 640,
-            parameters->BackBufferHeight ? parameters->BackBufferHeight : 480,
-            parameters->BackBufferFormat == D3DFMT_UNKNOWN
-                    ? D3DFMT_X8R8G8B8 : parameters->BackBufferFormat);
-    device->viewport.X = 0;
-    device->viewport.Y = 0;
-    device->viewport.Width = device->display_mode.Width;
-    device->viewport.Height = device->display_mode.Height;
-    device->viewport.MinZ = 0.0f;
-    device->viewport.MaxZ = 1.0f;
-    device_init_states(device);
-
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
-            : focus_window;
-    SetRect(&client, 0, 0, (int)device->display_mode.Width,
-            (int)device->display_mode.Height);
+                                       : focus_window;
+    SetRect(&client, 0, 0, 640, 480);
     origin.x = 0;
     origin.y = 0;
     if (window) {
         GetClientRect(window, &client);
         ClientToScreen(window, &origin);
     }
+    width = d9wg_present_extent(parameters->BackBufferWidth,
+        (uint32_t)(client.right - client.left), 640);
+    height = d9wg_present_extent(parameters->BackBufferHeight,
+        (uint32_t)(client.bottom - client.top), 480);
+    if (width > 8192 || height > 8192)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+
+    BOOL extended_constants = api == 9 && (behavior &
+            (D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_MIXED_VERTEXPROCESSING));
+    UINT float_capacity = extended_constants ? D9_SW_VS_CONST_F : D9_MAX_VS_CONST_F;
+    UINT int_capacity = extended_constants ? D9_SW_VS_CONST_I : D9_MAX_CONST_I;
+    UINT bool_capacity = extended_constants ? D9_SW_VS_CONST_B : D9_MAX_CONST_B;
+    /* One allocation, sized for the actual device. Hardware-only games keep
+     * the ordinary small constant file and state blocks. */
+    device = (D9Device*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        sizeof(*device) + (float_capacity + int_capacity) * 16u + bool_capacity * 4u);
+    if (!device) {
+        TRACE("FAIL CreateDevice allocation -> %08lX", (DWORD)E_OUTOFMEMORY);
+        return E_OUTOFMEMORY;
+    }
+    d9wg_fpu_setup((behavior & D3DCREATE_FPU_PRESERVE) != 0);
+    device_initialize_identity(device);
+    device->implicit_swap_chain.iface.lpVtbl = &g_swap_chain_vtbl;
+    device->implicit_swap_chain.device = device;
+    device->parent = d3d;
+    IDirect3D9_AddRef(iface);
+    device->handle = allocate_handle();
+    device->creation.AdapterOrdinal = adapter;
+    device->creation.DeviceType = type;
+    device->creation.hFocusWindow = focus_window;
+    device->creation.BehaviorFlags = behavior;
+    device->vs_float_capacity = float_capacity;
+    device->vs_int_capacity = int_capacity;
+    device->vs_bool_capacity = bool_capacity;
+    device->vs_const_f = (float (*)[4])(device + 1);
+    device->vs_const_i = (int (*)[4])(device->vs_const_f + float_capacity);
+    device->vs_const_b = (BOOL *)(device->vs_const_i + int_capacity);
+    fill_display_mode(&device->display_mode,
+        width, height,
+        backbuffer_format);
+    d9wg_present_parameters_effective(&device->present, parameters,
+        width, height, device->display_mode.Format, window);
+    device->viewport.X = 0;
+    device->viewport.Y = 0;
+    device->viewport.Width = device->display_mode.Width;
+    device->viewport.Height = device->display_mode.Height;
+    device->viewport.MinZ = 0.0f;
+    device->viewport.MaxZ = 1.0f;
+    /* D3D9's default scissor rect is the whole back buffer (a state block of
+     * D3DSBT_ALL captured it as {0,0,0,0}) */
+    SetRect(&device->scissor_rect, 0, 0, (int)device->display_mode.Width,
+        (int)device->display_mode.Height);
+    device_init_states_for_api(device, api);
+
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
     command.hwnd = (uint32_t)(uintptr_t)window;
     command.x = origin.x;
     command.y = origin.y;
-    command.width = parameters->BackBufferWidth
-            ? parameters->BackBufferWidth : (uint32_t)(client.right - client.left);
-    command.height = parameters->BackBufferHeight
-            ? parameters->BackBufferHeight : (uint32_t)(client.bottom - client.top);
-    if (!command.width) command.width = 640;
-    if (!command.height) command.height = 480;
+    command.width = width;
+    command.height = height;
     command.backbuffer_format = device->display_mode.Format;
     command.windowed = parameters->Windowed;
     command.behavior_flags = behavior;
@@ -4740,19 +5125,29 @@ static HRESULT WINAPI d3d_create_device(IDirect3D9 *iface, UINT adapter,
         IDirect3D9_Release(iface);
         HeapFree(GetProcessHeap(), 0, device);
         TRACE("FAIL CreateDevice transport -> %08lX",
-                (DWORD)D3DERR_DRIVERINTERNALERROR);
+            (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
-    claim_fullscreen_foreground(device, window);
+    if (!emit_render_default_patches(device->handle, api, device->present.EnableAutoDepthStencil, device->render_states)
+        || !emit_object_default_patches(device->handle, &device->material)) {
+        IDirect3DDevice9_Release(&device->iface);
+        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    }
+
+    if (!reset_window_mode(device, window)) {
+        IDirect3DDevice9_Release(&device->iface);
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
     emit_window_state(device, window);
     watch_window_state(device);
+    d9wg_present_parameters_return(api, parameters, &device->present);
     *device_out = &device->iface;
 #ifdef D9WG_DIAGNOSTIC_TRACE
     g_trace_device_window = window;
 #endif
     TRACE("OK CreateDevice handle=%08lX surface=%lux%lu hwnd=%08lX",
-            device->handle, command.width, command.height,
-            (DWORD)(uintptr_t)window);
+        device->handle, command.width, command.height,
+        (DWORD)(uintptr_t)window);
     return D3D_OK;
 }
 
@@ -4802,43 +5197,82 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
         TRACE_MARK_EXIT("Device.Release", (HRESULT)refs, NULL);
         return refs;
     }
-    if ((LONG)refs == InterlockedCompareExchange(
-            &device->child_parent_refs, 0, 0)) {
-        TRACE("Device.Release cycle-break object=%08lX refs=%lu child_refs=%ld",
+    /* Resource public refs keep this complete state alive, even after the
+     * application's last direct device reference is gone. All internal live
+     * and recorded bindings retain storage without a device parent pin. */
+    if (!refs) {
+        TRACE("Device.Release final-state object=%08lX refs=%lu child_refs=%ld",
                 (DWORD)(uintptr_t)iface, refs,
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         device->releasing_owned_refs = TRUE;
+        /* Final private-data callbacks may query the device while bound-only
+         * storage is retired, even when every public parent pin is gone. */
+        InterlockedIncrement(&device->refcount);
         device_release_owned_references(device);
+        /* Cache finalizers run before host/device teardown under the same
+         * temporary pin. Reentrant insertion is drained; retaining the device
+         * leaves subsequent stores intact until its next final Release. */
+        while (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                && (swap_chain_cached_private_data(&device->implicit_swap_chain, FALSE)
+                    || (device->implicit_back_buffer
+                        && device->implicit_back_buffer->private_data.head)
+                    || (device->implicit_depth_stencil
+                        && device->implicit_depth_stencil->private_data.head))) {
+            swap_chain_cached_private_data(&device->implicit_swap_chain, TRUE);
+            if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                    && device->implicit_back_buffer)
+                d9wg_private_clear(&device->implicit_back_buffer->private_data, &d9wg_private_ops);
+            if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1
+                    && device->implicit_depth_stencil)
+                d9wg_private_clear(&device->implicit_depth_stencil->private_data, &d9wg_private_ops);
+        }
+        if (InterlockedCompareExchange(&device->refcount, 0, 0) == 1)
+            swap_chain_destroy_cached_buffers(&device->implicit_swap_chain);
+        refs = (ULONG)InterlockedDecrement(&device->refcount);
         device->releasing_owned_refs = FALSE;
-        refs = (ULONG)InterlockedCompareExchange(&device->refcount, 0, 0);
     }
     if (!refs) {
         D9WGDestroyResource destroy;
+        d9wg_light_free(&device->extra_lights);
+        d9wg_palette_free(&device->palettes);
         TRACE("Device.Release destroy object=%08lX handle=%08lX pending=%lu",
                 (DWORD)(uintptr_t)iface, device->handle, g_command_count);
         unwatch_window_state(device);
         restore_display_mode(device);
         destroy.resource_handle = device->handle;
         destroy.resource_kind = 0;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        EnterCriticalSection(&g_transport_lock);
-        if (g_command_count)
-            submit_batch_locked(FALSE);
-        LeaveCriticalSection(&g_transport_lock);
         TRACE("LEAVE Device.Release free object=%08lX refs=0 child_refs=%ld",
                 (DWORD)(uintptr_t)iface,
                 InterlockedCompareExchange(&device->child_parent_refs, 0, 0));
         TRACE_MARK_EXIT("Device.Release", 0, NULL);
         TRACE_FLUSH();
-        IDirect3D9_Release(&device->parent->iface);
         /* The implicit surfaces outlive every public reference to them by
          * design, so the device is what finally frees them. Reaching here means
-         * their refcounts are zero: each public reference held one of the
-         * device references that had to reach zero to get this far. */
-        if (device->implicit_back_buffer)
+         * their public counts are zero: each active surface pinned one device
+         * reference that had to reach zero to get this far. */
+        if (device->implicit_back_buffer) {
+            core_view_retire8(device->implicit_back_buffer);
             HeapFree(GetProcessHeap(), 0, device->implicit_back_buffer);
-        if (device->implicit_depth_stencil)
+        }
+        if (device->implicit_depth_stencil) {
+            core_view_retire8(device->implicit_depth_stencil);
             HeapFree(GetProcessHeap(), 0, device->implicit_depth_stencil);
+        }
+        /* Frontend Device8 metadata outlives every implicit surface view.
+         * Private-data finalizers and any resurrection already ran above. */
+        core_view_retire8(device);
+        /* Raw8 shader handles own private storage until metadata retirement.
+         * Their final releases enqueue resource destruction above. Submit only
+         * after those commands, or the last shader survives until owner cleanup
+         * when no later device operation happens to flush the queue. */
+        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+        EnterCriticalSection(&g_transport_lock);
+        if (g_command_count)
+            submit_batch_locked(FALSE);
+        LeaveCriticalSection(&g_transport_lock);
+        /* Registry queries in retirement callbacks still inspect the parent
+         * compatibility profile. Keep that factory alive through every view. */
+        IDirect3D9_Release(&device->parent->iface);
         HeapFree(GetProcessHeap(), 0, device);
         return 0;
     }
@@ -4849,25 +5283,77 @@ static ULONG WINAPI device_release(IDirect3DDevice9 *iface)
     return refs;
 }
 
-static HRESULT WINAPI device_test_cooperative_level(IDirect3DDevice9 *iface)
+static HRESULT WINAPI device_test_cooperative_level(IDirect3DDevice9* iface)
 {
     /* Deliberately untraced: most titles call this every frame. */
-    (void)iface;
-    return D3D_OK;
+    return d9wg_reset_cooperative_result(&device_from_iface(iface)->reset_state);
+}
+
+/* GetAvailableTextureMem is an estimate of the virtual adapter budget, not
+ * physical browser GPU memory. Count live DEFAULT/MANAGED allocations using
+ * their logical layouts; CPU-only pools do not consume this budget. Reading
+ * the ownership lists also handles failed creates and private surface views
+ * without maintaining a second, potentially stale set of lifetime counters. */
+static uint64_t texture_memory_estimate(UINT width, UINT height, UINT depth,
+        UINT levels, D3DFORMAT format, DWORD usage, UINT samples)
+{
+    UINT bw = 1, bh = 1, bytes = 4;
+    uint64_t total = 0;
+    d9wg_format_layout(9u, format, &bw, &bh, &bytes);
+    if ((usage & D3DUSAGE_AUTOGENMIPMAP)
+            && d9wg_autogen_mips_supported(D3DRTYPE_TEXTURE, format)) {
+        UINT dimension = width > height ? width : height;
+        levels = 1;
+        while (dimension > 1) { dimension >>= 1; ++levels; }
+    }
+    for (UINT level = 0; level < levels; ++level) {
+        /* Divide the 32-bit dimensions before widening: the XP DLL has no
+         * CRT helper for 64-bit division. Quotient + remainder avoids overflow. */
+        total += (uint64_t)(width / bw + (width % bw != 0))
+                * (height / bh + (height % bh != 0)) * depth * bytes;
+        if (width > 1) width >>= 1;
+        if (height > 1) height >>= 1;
+        if (depth > 1) depth >>= 1;
+    }
+    return total * (samples > 1 ? samples : 1u);
 }
 
 static UINT WINAPI device_get_available_texture_mem(IDirect3DDevice9 *iface)
 {
-    (void)iface;
-    /* Titles size their texture budget from this, and some refuse to start
-     * below a threshold, so it is worth knowing when it was read. */
-    TRACE("OK Device.GetAvailableTextureMem -> %lu", 256u * 1024u * 1024u);
-    return 256u * 1024u * 1024u;
+    D9Device *device = device_from_iface(iface);
+    const uint64_t budget = 256u * 1024u * 1024u;
+    uint64_t used = 0;
+    for (D9Texture *t = device->texture_resources; t; t = t->next_device_resource)
+        if (t->pool <= D3DPOOL_MANAGED)
+            used += texture_memory_estimate(t->width, t->height, 1, t->level_count,
+                    t->format, t->usage, t->multisample);
+    for (D9CubeTexture *t = device->cube_textures; t; t = t->next_device_resource)
+        if (t->pool <= D3DPOOL_MANAGED)
+            used += 6u * texture_memory_estimate(t->edge_length, t->edge_length,
+                    1, t->level_count, t->format, t->usage, 1);
+    for (D9VolumeTexture *t = device->volume_textures; t; t = t->next_device_resource)
+        if (t->pool <= D3DPOOL_MANAGED)
+            used += texture_memory_estimate(t->width, t->height, t->depth,
+                    t->level_count, t->format, t->usage, 1);
+    for (D9VertexBuffer *v = device->vertex_buffers; v; v = v->next_device_resource)
+        if (v->pool <= D3DPOOL_MANAGED) used += v->length;
+    for (D9IndexBuffer *v = device->index_buffers; v; v = v->next_device_resource)
+        if (v->pool <= D3DPOOL_MANAGED) used += v->length;
+    UINT available = used >= budget ? 0u : (UINT)(budget - used) & ~((1u << 20) - 1u);
+    TRACE("OK Device.GetAvailableTextureMem -> %lu", available);
+    return available;
 }
 
 static HRESULT WINAPI device_evict_managed_resources(IDirect3DDevice9 *iface)
 {
-    (void)iface;
+    D9Device *device = device_from_iface(iface);
+    for (D9Texture *texture = device->texture_resources; texture; texture = texture->next_device_resource)
+        if (texture->pool == D3DPOOL_MANAGED)
+            texture_dirty_all(texture);
+    for (D9VertexBuffer *buffer = device->vertex_buffers; buffer; buffer = buffer->next_device_resource)
+        if (buffer->pool == D3DPOOL_MANAGED) buffer->full_upload_pending = TRUE;
+    for (D9IndexBuffer *buffer = device->index_buffers; buffer; buffer = buffer->next_device_resource)
+        if (buffer->pool == D3DPOOL_MANAGED) buffer->full_upload_pending = TRUE;
     return D3D_OK;
 }
 
@@ -4884,24 +5370,27 @@ static HRESULT WINAPI device_get_direct3d(IDirect3DDevice9 *iface,
 
 static HRESULT WINAPI device_get_caps(IDirect3DDevice9 *iface, D3DCAPS9 *caps)
 {
-    (void)iface;
     if (!caps)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     fill_caps(caps);
+    if (device_from_iface(iface)->creation.BehaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING)
+        caps->MaxVertexShaderConst = D9_SW_VS_CONST_F;
     trace_caps("Device.GetDeviceCaps", caps);
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_get_display_mode(IDirect3DDevice9 *iface,
-        UINT swapchain, D3DDISPLAYMODE *mode)
+static HRESULT WINAPI device_get_display_mode(IDirect3DDevice9* iface,
+    UINT swapchain, D3DDISPLAYMODE* mode)
 {
-    D9Device *device = device_from_iface(iface);
+    D9Device* device = device_from_iface(iface);
     if (swapchain || !mode)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *mode = device->display_mode;
-    TRACE("OK Device.GetDisplayMode -> %lux%lu format=%08lX refresh=%lu",
+    HRESULT result = d3d_get_adapter_display_mode(&device->parent->iface,
+        device->creation.AdapterOrdinal, mode);
+    if (SUCCEEDED(result))
+        TRACE("OK Device.GetDisplayMode -> %lux%lu format=%08lX refresh=%lu",
             mode->Width, mode->Height, (DWORD)mode->Format, mode->RefreshRate);
-    return D3D_OK;
+    return result;
 }
 
 static HRESULT WINAPI device_get_creation_parameters(IDirect3DDevice9 *iface,
@@ -4934,66 +5423,44 @@ static HRESULT WINAPI device_set_cursor_properties(IDirect3DDevice9 *iface,
         UINT hotspot_x, UINT hotspot_y, IDirect3DSurface9 *bitmap)
 {
     D9Device *device = device_from_iface(iface);
-    D9Surface *surface;
-    D9WGSetCursorProperties command;
-    const BYTE *pixels;
-    UINT row_pitch;
-    uint8_t *payload;
-    uint8_t *blob;
-    UINT byte_count;
-    BOOL result;
-
-    if (!bitmap || bitmap->lpVtbl != &g_surface_vtbl) {
+    if (!bitmap || bitmap->lpVtbl != &g_surface_vtbl)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    surface = surface_from_iface(bitmap);
-    if (surface->shadow) {
-        pixels = surface->shadow;
-        row_pitch = surface->row_pitch;
-    } else if (surface->texture
-            && surface->level < surface->texture->level_count
-            && surface->texture->levels[surface->level].shadow) {
-        /* A cursor built as a texture level rather than a plain surface. */
-        pixels = surface->texture->levels[surface->level].shadow;
-        row_pitch = surface->texture->levels[surface->level].row_pitch;
-    } else {
-
+    D9Surface *surface = surface_from_iface(bitmap);
+    D9TextureLevel *level = surface_texture_level(surface);
+    D3DDISPLAYMODE adapter;
+    if (FAILED(d3d_get_adapter_display_mode(&device->parent->iface,
+            device->creation.AdapterOrdinal, &adapter)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    if (surface->format != D3DFMT_A8R8G8B8 && surface->format != D3DFMT_X8R8G8B8) {
-
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    if (!multiply_u32(surface->width * 4u, surface->height, &byte_count))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-
-    ZeroMemory(&command, sizeof(command));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_SET_CURSOR_PROPERTIES,
-            sizeof(command), byte_count, NULL, &payload, &blob);
-    if (result) {
-        UINT row;
-        command.device_handle = device->handle;
-        command.hotspot_x = hotspot_x;
-        command.hotspot_y = hotspot_y;
-        command.width = surface->width;
-        command.height = surface->height;
-        command.data_bytes = byte_count;
-        command.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &command, sizeof(command));
-        /* Repack to a tight width*4 stride; the source pitch is whatever the
-         * surface was allocated with. */
-        for (row = 0; row < surface->height; ++row)
-            CopyMemory(blob + row * surface->width * 4u,
-                    pixels + row * row_pitch, surface->width * 4u);
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    if (!result)
-        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    D9WGCursorImage image;
+    ZeroMemory(&image, sizeof(image));
+    image.adapter_width = adapter.Width;
+    image.adapter_height = adapter.Height;
+    image.level = surface->level;
+    image.locked = surface->locked || (level && level->locked);
+    image.device = surface->device->handle;
+    image.format = surface->format;
+    image.width = surface->width;
+    image.height = surface->height;
+    image.pixels = surface->shadow ? surface->shadow : level ? level->shadow : NULL;
+    image.pitch = surface->shadow ? surface->row_pitch : level ? level->row_pitch : 0;
+    image.byte_count = surface->shadow ? surface->byte_count : level ? level->byte_count : 0;
+    DWORD usage = surface->texture ? surface->texture->usage
+            : surface->cube_texture ? surface->cube_texture->usage : 0;
+    image.readback = surface->pool == D3DPOOL_DEFAULT
+            && (surface->swap_chain || (usage & D3DUSAGE_RENDERTARGET)
+                || !level || !level->shadow_valid);
+    image.handle = surface->texture ? surface->texture->handle
+            : surface->cube_texture ? surface->cube_texture->handle : 0;
+    image.face = surface->cube_texture ? surface->cube_face : 0;
+    HRESULT result = d9wg_cursor_upload(device->handle, hotspot_x, hotspot_y, &image);
+    if (FAILED(result))
+        return TRACE_REFUSE(result);
+    BOOL committed = d9wg_cursor_commit(device->handle, &device->app_cursor_state,
+            image.width, image.height);
     device->cursor_ready = TRUE;
     device->app_cursor = TRUE;
-
-    return D3D_OK;
+    device->cursor_visible = device->app_cursor_state.visible;
+    return TRACE_REFUSE(committed ? D3D_OK : D3DERR_DRIVERINTERNALERROR);
 }
 
 /*
@@ -5006,201 +5473,59 @@ static HRESULT WINAPI device_set_cursor_properties(IDirect3DDevice9 *iface,
  * owns those pixels. That failure is invisible in the picture by construction,
  * so it has to be reported rather than deduced.
  */
-/*
- * Whether other windows cover all of the device window's client area.
- *
- * Without a desktop compositor (Windows 2000/XP) a window's DC is clipped to
- * the part of it nothing else is drawn over, so an empty clip box means
- * nothing of it shows -- which is how Warcraft III plays its cinematics: a
- * topmost "Blizzard Player" popup over the whole screen, the D3D window
- * untouched behind it. An empty client rect is not evidence either way (it is
- * what GetClientRect reports for some fullscreen windows), so it never counts
- * as covered; neither does anything under a compositor, where the clip box is
- * always the whole window.
- */
-static BOOL window_fully_covered(HWND window)
+static BOOL emit_window_state_from_probe(D9Device *device, HWND window,
+        const D9WGWindowProbe *probe)
 {
-    RECT client;
-    RECT box;
-    HDC dc;
-    int kind;
-
-    if (!window || !IsWindow(window) || !IsWindowVisible(window)
-            || IsIconic(window))
+    D9WGWindowStateWithRegion report;
+    BOOL result;
+    d9wg_window_probe_report(probe, device->handle, !device->present.Windowed, 0, &report);
+    EnterCriticalSection(&g_transport_lock);
+    device->state_window = window;
+    if (d9wg_window_cache_matches(&device->window_cache, &report)) {
+        LeaveCriticalSection(&g_transport_lock);
         return FALSE;
-    if (!GetClientRect(window, &client) || IsRectEmpty(&client))
-        return FALSE;
-    dc = GetDC(window);
-    if (!dc)
-        return FALSE;
-    kind = GetClipBox(dc, &box);
-    ReleaseDC(window, dc);
-    return kind == NULLREGION;
+    }
+    result = emit_command(D9WG_OP_WINDOW_STATE, &report,
+            (uint32_t)D9WG_WINDOW_STATE_BYTES(&report));
+    if (result) d9wg_window_cache_commit(&device->window_cache, &report);
+    LeaveCriticalSection(&g_transport_lock);
+    return result;
 }
 
 static BOOL emit_window_state(D9Device *device, HWND window)
 {
-    D9WGWindowStateWithRegion report;
-    D9WGWindowState *command = &report.state;
-    V86WindowRegion region;
-    HWND foreground = GetForegroundWindow();
-    RECT window_rect;
-    RECT client;
-    POINT origin;
-    uint32_t flags = 0;
-    uint32_t i;
-
-    SetRect(&window_rect, 0, 0, 0, 0);
-    SetRect(&client, 0, 0, 0, 0);
-    origin.x = 0;
-    origin.y = 0;
-    region.count = 0;
-    if (window && IsWindow(window)) {
-        flags |= D9WG_WINDOW_IS_WINDOW;
-        if (IsWindowVisible(window)) flags |= D9WG_WINDOW_VISIBLE;
-        if (IsIconic(window)) flags |= D9WG_WINDOW_ICONIC;
-        if (window == foreground) flags |= D9WG_WINDOW_FOREGROUND;
-        switch (v86_window_visible_region(window, &region)) {
-        case V86_WINDOW_REGION_NONE:
-            flags |= D9WG_WINDOW_OCCLUDED;
-            break;
-        case V86_WINDOW_REGION_PART:
-            flags |= D9WG_WINDOW_REGION;
-            break;
-        }
-        GetWindowRect(window, &window_rect);
-        GetClientRect(window, &client);
-        ClientToScreen(window, &origin);
-    }
-    if (!device->present.Windowed)
-        flags |= D9WG_WINDOW_FULLSCREEN;
-
-    command->device_handle = device->handle;
-    command->hwnd = (uint32_t)(uintptr_t)window;
-    command->foreground_hwnd = (uint32_t)(uintptr_t)foreground;
-    command->flags = flags;
-    /* Where the client area is, as D9WGPresent says it: the host places the
-     * picture from this report too */
-    command->window_x = origin.x;
-    command->window_y = origin.y;
-    command->window_width = (uint32_t)(window_rect.right - window_rect.left);
-    command->window_height = (uint32_t)(window_rect.bottom - window_rect.top);
-    command->client_width = (uint32_t)(client.right - client.left);
-    command->client_height = (uint32_t)(client.bottom - client.top);
-    report.region.rect_count = region.count;
-    for (i = 0; i < region.count; ++i) {
-        report.region.rects[i][0] = region.rects[i][0];
-        report.region.rects[i][1] = region.rects[i][1];
-        report.region.rects[i][2] = region.rects[i][2];
-        report.region.rects[i][3] = region.rects[i][3];
-    }
-
-    device->state_window = window;
-    if (device->window_state_sent
-            && device->last_window_flags == flags
-            && device->last_foreground == command->foreground_hwnd
-            && v86_window_region_equal(&device->last_region, &region))
-        return FALSE;
-    device->window_state_sent = TRUE;
-    device->last_window_flags = flags;
-    device->last_foreground = command->foreground_hwnd;
-    v86_window_region_copy(&device->last_region, &region);
-    return emit_command(D9WG_OP_WINDOW_STATE, &report,
-            (uint32_t)D9WG_WINDOW_STATE_BYTES(&report));
+    D9WGWindowProbe probe;
+    EnterCriticalSection(&g_transport_lock);
+    d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
+        D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    BOOL emitted = emit_window_state_from_probe(device, window, &probe);
+    LeaveCriticalSection(&g_transport_lock);
+    return emitted;
 }
 
-/*
- * Present is not a reliable heartbeat: a game that shows a video, a dialog or
- * a loading screen through another window may not present at all until it is
- * done, and the host has to learn about that window meanwhile. A WinEvent hook
- * on the device's thread hears about every window that is shown, hidden,
- * moved, restacked or brought to the foreground, in any process, and the
- * window state is reported and sent right away. emit_window_state() only
- * emits when something it reports changed, so the frequent events (moves,
- * the pointer's location changes) cost one GetClipBox each.
- *
- * Out-of-context hooks are delivered while the installing thread retrieves
- * messages, which the device's window thread does, video or not.
- */
-#define D9_MAX_WATCHED_DEVICES 8
-static D9Device *g_watched_devices[D9_MAX_WATCHED_DEVICES];
-static UINT g_watched_device_count;
-static HWINEVENTHOOK g_foreground_hook;
-static HWINEVENTHOOK g_window_hook;
-
-static void CALLBACK window_event(HWINEVENTHOOK hook, DWORD event, HWND window,
-        LONG object, LONG child, DWORD thread, DWORD time)
+/* A shared message thread observes foreground/window events even while the
+ * application stops presenting or pumping messages. Removal synchronizes with
+ * callbacks before the API object is destroyed; report/flush policy stays here. */
+static int notify_device_window(void *context)
 {
-    BOOL emitted = FALSE;
-    UINT i;
+    D9Device *device = context;
+    return device->state_window && emit_window_state(device, device->state_window);
+}
 
-    (void)hook; (void)thread; (void)time;
-    if (event != EVENT_SYSTEM_FOREGROUND) {
-        if (object != OBJID_WINDOW || child != CHILDID_SELF || !window)
-            return;
-        if (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_HIDE
-                && event != EVENT_OBJECT_DESTROY
-                && event != EVENT_OBJECT_REORDER
-                && event != EVENT_OBJECT_LOCATIONCHANGE)
-            return;
-    }
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        D9Device *device = g_watched_devices[i];
-        if (device->state_window
-                && emit_window_state(device, device->state_window))
-            emitted = TRUE;
-    }
-    if (emitted && g_command_count)
-        submit_batch_locked(FALSE);
-    LeaveCriticalSection(&g_transport_lock);
+static void flush_window_reports(void)
+{
+    if (g_command_count) submit_batch_locked(FALSE);
 }
 
 static void watch_window_state(D9Device *device)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        if (g_watched_devices[i] == device) {
-            LeaveCriticalSection(&g_transport_lock);
-            return;
-        }
-    }
-    if (g_watched_device_count < D9_MAX_WATCHED_DEVICES) {
-        g_watched_devices[g_watched_device_count++] = device;
-        if (!g_foreground_hook)
-            g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
-                    EVENT_SYSTEM_FOREGROUND, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-        if (!g_window_hook)
-            g_window_hook = SetWinEventHook(EVENT_OBJECT_DESTROY,
-                    EVENT_OBJECT_LOCATIONCHANGE, NULL, window_event, 0, 0,
-                    WINEVENT_OUTOFCONTEXT);
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_add(&device->window_watch, device,
+        notify_device_window, flush_window_reports, &g_transport_lock);
 }
 
 static void unwatch_window_state(D9Device *device)
 {
-    UINT i;
-
-    EnterCriticalSection(&g_transport_lock);
-    for (i = 0; i < g_watched_device_count; ++i) {
-        if (g_watched_devices[i] == device) {
-            g_watched_devices[i] = g_watched_devices[--g_watched_device_count];
-            break;
-        }
-    }
-    if (!g_watched_device_count) {
-        if (g_foreground_hook)
-            UnhookWinEvent(g_foreground_hook);
-        if (g_window_hook)
-            UnhookWinEvent(g_window_hook);
-        g_foreground_hook = NULL;
-        g_window_hook = NULL;
-    }
-    LeaveCriticalSection(&g_transport_lock);
+    d9wg_window_watch_remove(&device->window_watch);
 }
 
 /*
@@ -5222,118 +5547,12 @@ static void unwatch_window_state(D9Device *device)
  */
 static void raise_window_to_foreground(HWND window)
 {
-    HWND foreground = GetForegroundWindow();
-    DWORD foreground_thread = foreground
-            ? GetWindowThreadProcessId(foreground, NULL) : 0;
-    DWORD our_thread = GetCurrentThreadId();
-    BOOL attached = FALSE;
-
-    if (foreground_thread && foreground_thread != our_thread)
-        attached = AttachThreadInput(our_thread, foreground_thread, TRUE);
-    BringWindowToTop(window);
-    SetForegroundWindow(window);
-    SetActiveWindow(window);
-    SetFocus(window);
-    if (attached)
-        AttachThreadInput(our_thread, foreground_thread, FALSE);
+    d9wg_window_mode_raise(window);
 }
 
-static void claim_fullscreen_foreground(D9Device *device, HWND window)
-{
-    DEVMODEA mode;
-    LONG result;
 
-    if (device->present.Windowed)
-        return;
 
-    /*
-     * Switch the guest's display mode to the one the device asked for.
-     *
-     * This is the other half of what "exclusive fullscreen" means, and it is
-     * not cosmetic. Warcraft III creates an 800x600 fullscreen device on a
-     * 1024x768 desktop; with no mode change Windows keeps reporting a
-     * 1024x768 screen, so the guest's pointer coordinates, the window
-     * geometry and the game's own 800x600 layout all disagree -- the picture
-     * looks right while a click lands somewhere else entirely. Doing the mode
-     * change makes the guest's idea of the screen match what the game
-     * renders, which is what every other part of this path already assumes.
-     */
-    ZeroMemory(&mode, sizeof(mode));
-    mode.dmSize = sizeof(mode);
-    mode.dmPelsWidth = device->display_mode.Width;
-    mode.dmPelsHeight = device->display_mode.Height;
-    mode.dmBitsPerPel = 32;
-    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
-    result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
-    if (result != DISP_CHANGE_SUCCESSFUL) {
-        /* 16bpp is the other mode a v86 guest is likely to actually have. */
-        mode.dmBitsPerPel = 16;
-        result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
-    }
-    device->display_mode_changed = (result == DISP_CHANGE_SUCCESSFUL);
 
-    if (!window || !IsWindow(window))
-        return;
-    if (IsIconic(window))
-        ShowWindow(window, SW_RESTORE);
-    /*
-     * Size the device window to the mode as well: testing showed War3's window
-     * reporting an empty rect to both GetClientRect and GetWindowRect, so
-     * nothing downstream can discover where the game's output belongs.
-     *
-     * Strip the frame first. SetWindowPos sizes the *window*, so on a window
-     * that still has a caption and border the client area comes out smaller
-     * than the mode -- an 800x600 window is a 792x573 client -- and the WM_SIZE
-     * this call sends tells the application that smaller number, from inside
-     * CreateDevice, while its engine is still starting. GTA San Andreas took
-     * exactly that WM_SIZE (792x573 at client origin 4,23) and then destroyed
-     * its window and exited. An exclusive-fullscreen window is borderless and
-     * covers the mode, which is also what makes client == back buffer true.
-     */
-    if (device->styled_window != window) {
-        LONG style = GetWindowLongA(window, GWL_STYLE);
-        LONG exstyle = GetWindowLongA(window, GWL_EXSTYLE);
-        LONG bare_style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_BORDER
-                | WS_DLGFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU))
-                | WS_POPUP;
-        LONG bare_exstyle = exstyle & ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE
-                | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
-
-        device->styled_window = window;
-        device->saved_window_style = style;
-        device->saved_window_exstyle = exstyle;
-        if (bare_style != style)
-            SetWindowLongA(window, GWL_STYLE, bare_style);
-        if (bare_exstyle != exstyle)
-            SetWindowLongA(window, GWL_EXSTYLE, bare_exstyle);
-    }
-    /* SWP_FRAMECHANGED so the stripped style is recalculated now rather than
-     * at some later, unrelated window event. */
-    SetWindowPos(window, HWND_TOP, 0, 0, (int)device->display_mode.Width,
-            (int)device->display_mode.Height,
-            SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-    raise_window_to_foreground(window);
-    device->last_foreground_claim = GetTickCount();
-
-}
-
-/* Undoes the borderless override, so a window that outlives the device (a
- * Reset back to windowed, or a title that keeps running after releasing it)
- * gets its own frame back rather than staying stripped. */
-static void restore_window_style(D9Device *device)
-{
-    HWND window = device->styled_window;
-
-    if (!window)
-        return;
-    device->styled_window = NULL;
-    if (!IsWindow(window))
-        return;
-    SetWindowLongA(window, GWL_STYLE, device->saved_window_style);
-    SetWindowLongA(window, GWL_EXSTYLE, device->saved_window_exstyle);
-    SetWindowPos(window, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE
-            | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
 
 /*
  * Re-takes the foreground for a fullscreen device that has lost it.
@@ -5355,54 +5574,67 @@ static void restore_window_style(D9Device *device)
  * is a syscall and losing focus is not something a frame boundary can fix
  * faster than a person can notice.
  */
-static void maintain_fullscreen_foreground(D9Device *device, HWND window)
+static BOOL maintain_fullscreen_foreground(D9Device *device, HWND window,
+        const D9WGWindowProbe *probe)
 {
     DWORD now;
 
-    if (device->present.Windowed || !window || !IsWindow(window))
-        return;
-    if (GetForegroundWindow() == window)
-        return;
+    if (device->exclusive_window || device_compatibility_api(device) == 8u || device->present.Windowed
+            || !window || !(probe->state.flags & D9WG_WINDOW_IS_WINDOW))
+        return FALSE;
+    if ((probe->state.flags & D9WG_WINDOW_FOREGROUND) != 0)
+        return FALSE;
     /* Something the game itself put over its whole window -- Warcraft III's
      * cinematic player -- owns the screen and the keyboard (Esc skips the
      * video) until it goes away. A splash or a message-only window does not
      * cover the device window, so NFS's case below still re-claims. */
-    if (window_fully_covered(window))
-        return;
+    if ((probe->state.flags & D9WG_WINDOW_OCCLUDED) != 0)
+        return FALSE;
     now = GetTickCount();
     /* GetTickCount wraps every ~49 days; the subtraction is unsigned so the
      * wrap is harmless, but a zero initial value must not look like "claimed
      * just now" either -- hence the explicit first-time case. */
     if (device->foreground_claims &&
             (DWORD)(now - device->last_foreground_claim) < 500u)
-        return;
+        return FALSE;
     device->last_foreground_claim = now;
     ++device->foreground_claims;
-    if (IsIconic(window))
+    /* Window activation can call application window procedures; release the
+     * transport lock while mutating, then recapture under it in Present. */
+    LeaveCriticalSection(&g_transport_lock);
+    if ((probe->state.flags & D9WG_WINDOW_ICONIC) != 0)
         ShowWindow(window, SW_RESTORE);
     raise_window_to_foreground(window);
+    EnterCriticalSection(&g_transport_lock);
+    return TRUE;
 
 }
 
 /* Undo the mode change when the device goes away, so a crashed or closed game
  * does not leave the guest desktop stuck at the game's resolution. */
-static void restore_display_mode(D9Device *device)
+static BOOL restore_display_mode(D9Device* device)
 {
-    restore_window_style(device);
-    if (!device->display_mode_changed)
-        return;
-    device->display_mode_changed = FALSE;
-    ChangeDisplaySettingsA(NULL, 0);
+    d9wg_exclusive_window_leave(&device->exclusive_window);
+    return TRUE;
+}
+
+static BOOL reset_window_mode(D9Device* device, HWND window)
+{
+    if (device->present.Windowed) {
+        d9wg_exclusive_window_leave(&device->exclusive_window);
+        return TRUE;
+    }
+    UINT flags = device_compatibility_api(device) == 9u ? D9WG_EXCLUSIVE_D3D9 : 0u;
+    if (flags && (device->creation.BehaviorFlags & D3DCREATE_NOWINDOWCHANGES))
+        flags |= D9WG_EXCLUSIVE_NO_WINDOW_CHANGES;
+    return d9wg_exclusive_window_enter_ex(&device->exclusive_window,
+        device->creation.hFocusWindow, window, device->display_mode.Width,
+        device->display_mode.Height, &device->reset_state, flags);
 }
 
 static void emit_cursor_position(D9Device *device, int x, int y, DWORD flags)
 {
-    D9WGSetCursorPosition command;
-    command.device_handle = device->handle;
-    command.x = x;
-    command.y = y;
-    command.flags = flags;
-    emit_command(D9WG_OP_SET_CURSOR_POSITION, &command, sizeof(command));
+    d9wg_cursor_position_wire(device->handle, x, y, flags);
 }
 
 /*
@@ -5618,34 +5850,17 @@ static void WINAPI device_set_cursor_position(IDirect3DDevice9 *iface,
         int x, int y, DWORD flags)
 {
     D9Device *device = device_from_iface(iface);
-    POINT point;
-
-    /* D3D9 takes screen coordinates here; the host draws into back-buffer
-     * space, so convert through the device window the same way
-     * emit_present_and_flush() does. */
-    point.x = x;
-    point.y = y;
-    if (device->present.hDeviceWindow)
-        ScreenToClient(device->present.hDeviceWindow, &point);
-    emit_cursor_position(device, point.x, point.y, flags);
+    HWND window = device->present.hDeviceWindow ? device->present.hDeviceWindow : device->creation.hFocusWindow;
+    d9wg_cursor_set_position(device->handle, window, &device->app_cursor_state,
+            (int32_t)x, (int32_t)y, flags);
 }
 
-static WINBOOL WINAPI device_show_cursor(IDirect3DDevice9 *iface,
-        WINBOOL show)
+static WINBOOL WINAPI device_show_cursor(IDirect3DDevice9 *iface, WINBOOL show)
 {
     D9Device *device = device_from_iface(iface);
-    D9WGShowCursor command;
-    WINBOOL previous = device->cursor_visible;
-
-    /* Worth tracing on its own: ShowCursor(FALSE) from a game that never
-     * called SetCursorProperties means it intends to draw the pointer itself,
-     * as ordinary geometry. A missing cursor would then be a lost draw, not a
-     * missing cursor feature -- a completely different bug. */
-
-    device->cursor_visible = show ? TRUE : FALSE;
-    command.device_handle = device->handle;
-    command.show = device->cursor_visible ? 1u : 0u;
-    emit_command(D9WG_OP_SHOW_CURSOR, &command, sizeof(command));
+    HWND window = device->present.hDeviceWindow ? device->present.hDeviceWindow : device->creation.hFocusWindow;
+    WINBOOL previous = d9wg_cursor_show(device->handle, window, &device->app_cursor_state, show);
+    device->cursor_visible = device->app_cursor_state.visible;
     return previous;
 }
 
@@ -5660,75 +5875,96 @@ static UINT WINAPI device_get_number_of_swap_chains(IDirect3DDevice9 *iface)
     return 1;
 }
 
-static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
-        D3DPRESENT_PARAMETERS *parameters)
+static HRESULT WINAPI device_reset(IDirect3DDevice9* iface,
+    D3DPRESENT_PARAMETERS* parameters)
 {
-    D9Device *device = device_from_iface(iface);
+    D9Device* device = device_from_iface(iface);
     D9WGResetDevice reset;
+    const UINT api = device_compatibility_api(device);
     RECT client;
     POINT origin;
     HWND window;
+    D3DFORMAT backbuffer_format;
 
+    d9wg_reset_begin(&device->reset_state);
+    if (device->reset_state.lost && parameters && !parameters->Windowed)
+        return TRACE_REFUSE(D3DERR_DEVICELOST);
     /* Reset was completely untraced, which left a hole exactly where one is
      * least affordable: a title that resets to apply its saved video settings
      * does so once, early, and everything after depends on it having worked.
      * Its three refusal paths returned bare HRESULTs, indistinguishable in a
      * trace from the call never happening. */
     TRACE("CALL Reset %lux%lu fmt=%08lX count=%lu multisample=%lu windowed=%lu "
-            "auto_depth=%lu depth_fmt=%08lX interval=%08lX hwnd=%08lX",
-            parameters ? parameters->BackBufferWidth : 0,
-            parameters ? parameters->BackBufferHeight : 0,
-            parameters ? (DWORD)parameters->BackBufferFormat : 0,
-            parameters ? parameters->BackBufferCount : 0,
-            parameters ? (DWORD)parameters->MultiSampleType : 0,
-            parameters ? (DWORD)parameters->Windowed : 0,
-            parameters ? (DWORD)parameters->EnableAutoDepthStencil : 0,
-            parameters ? (DWORD)parameters->AutoDepthStencilFormat : 0,
-            parameters ? parameters->PresentationInterval : 0,
-            parameters ? (DWORD)(uintptr_t)parameters->hDeviceWindow : 0);
-    if (!parameters || parameters->BackBufferCount > 1
-            || device_has_reset_blockers(device)) {
+          "auto_depth=%lu depth_fmt=%08lX interval=%08lX hwnd=%08lX",
+        parameters ? parameters->BackBufferWidth : 0,
+        parameters ? parameters->BackBufferHeight : 0,
+        parameters ? (DWORD)parameters->BackBufferFormat : 0,
+        parameters ? parameters->BackBufferCount : 0,
+        parameters ? (DWORD)parameters->MultiSampleType : 0,
+        parameters ? (DWORD)parameters->Windowed : 0,
+        parameters ? (DWORD)parameters->EnableAutoDepthStencil : 0,
+        parameters ? (DWORD)parameters->AutoDepthStencilFormat : 0,
+        parameters ? parameters->PresentationInterval : 0,
+        parameters ? (DWORD)(uintptr_t)parameters->hDeviceWindow : 0);
+    /* D3D9 takes up to D3DPRESENT_BACK_BUFFERS_MAX (3) back buffers here,
+     * as CreateDevice does; refusing more than one failed every Reset of a
+     * double- or triple-buffered game (review S1-9b) */
+    if (!parameters || parameters->BackBufferCount > 3) {
         TRACE("FAIL Reset parameters=%lu multisample=%lu count=%lu "
-                "blockers=%lu -> %08lX", (DWORD)(parameters != NULL),
-                parameters ? (DWORD)parameters->MultiSampleType : 0,
-                parameters ? parameters->BackBufferCount : 0,
-                (DWORD)device_has_reset_blockers(device),
-                (DWORD)D3DERR_INVALIDCALL);
+              "blockers=%lu -> %08lX",
+            (DWORD)(parameters != NULL),
+            parameters ? (DWORD)parameters->MultiSampleType : 0,
+            parameters ? parameters->BackBufferCount : 0,
+            (DWORD)device_has_reset_blockers(device),
+            (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    if (!supported_multisample(
-            parameters->BackBufferFormat == D3DFMT_UNKNOWN
-                    ? device->display_mode.Format
-                    : parameters->BackBufferFormat,
-            parameters->MultiSampleType)
-            || parameters->MultiSampleQuality != 0) {
+    if (api == 8 && parameters->MultiSampleType != D3DMULTISAMPLE_NONE
+            && parameters->MultiSampleType != D3DMULTISAMPLE_4_SAMPLES)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(api, parameters->Windowed,
+            parameters->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(api, parameters->SwapEffect, parameters->BackBufferCount))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_multisample_valid(api, parameters->SwapEffect,
+            parameters->MultiSampleType, parameters->MultiSampleQuality, parameters->Flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 9 && !parameters->Windowed && parameters->BackBufferFormat == D3DFMT_UNKNOWN)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    backbuffer_format = api == 8
+        ? (parameters->BackBufferFormat ? parameters->BackBufferFormat : device->display_mode.Format)
+        : (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+        parameters->BackBufferFormat);
+    if (!supported_multisample(backbuffer_format, parameters->MultiSampleType)) {
         TRACE("FAIL Reset unsupported multisample=%lu quality=%lu -> %08lX",
-                (DWORD)parameters->MultiSampleType,
-                parameters->MultiSampleQuality,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->MultiSampleType,
+            parameters->MultiSampleQuality,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-            && !supported_depth_stencil_format(
-                    parameters->AutoDepthStencilFormat)) {
+        && !(api == 8 ? supported_depth_stencil_format8(parameters->AutoDepthStencilFormat)
+            : supported_depth_stencil_format(parameters->AutoDepthStencilFormat))) {
         TRACE("FAIL Reset depth_fmt=%08lX -> %08lX",
-                (DWORD)parameters->AutoDepthStencilFormat,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->AutoDepthStencilFormat,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     if (parameters->EnableAutoDepthStencil
-            && !supported_multisample(parameters->AutoDepthStencilFormat,
-                    parameters->MultiSampleType))
+        && !supported_multisample(parameters->AutoDepthStencilFormat,
+            parameters->MultiSampleType))
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     if (parameters->BackBufferFormat != D3DFMT_UNKNOWN
-            && !supported_backbuffer_format(parameters->BackBufferFormat)) {
+        && !(api == 8 ? supported_render_target_format8(parameters->BackBufferFormat)
+            : supported_backbuffer_format(parameters->BackBufferFormat))) {
         TRACE("FAIL Reset backbuffer_fmt=%08lX -> %08lX",
-                (DWORD)parameters->BackBufferFormat,
-                (DWORD)D3DERR_NOTAVAILABLE);
+            (DWORD)parameters->BackBufferFormat,
+            (DWORD)D3DERR_NOTAVAILABLE);
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     window = parameters->hDeviceWindow ? parameters->hDeviceWindow
-            : device->creation.hFocusWindow;
+                                       : device->creation.hFocusWindow;
     SetRect(&client, 0, 0, 640, 480);
     origin.x = origin.y = 0;
     if (window) {
@@ -5741,14 +5977,11 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
     reset.hwnd = (uint32_t)(uintptr_t)window;
     reset.x = origin.x;
     reset.y = origin.y;
-    reset.width = parameters->BackBufferWidth
-            ? parameters->BackBufferWidth : (uint32_t)(client.right - client.left);
-    reset.height = parameters->BackBufferHeight
-            ? parameters->BackBufferHeight : (uint32_t)(client.bottom - client.top);
-    if (!reset.width) reset.width = device->display_mode.Width;
-    if (!reset.height) reset.height = device->display_mode.Height;
-    reset.backbuffer_format = parameters->BackBufferFormat == D3DFMT_UNKNOWN
-            ? device->display_mode.Format : parameters->BackBufferFormat;
+    reset.width = d9wg_present_extent(parameters->BackBufferWidth,
+        (uint32_t)(client.right - client.left), device->display_mode.Width);
+    reset.height = d9wg_present_extent(parameters->BackBufferHeight,
+        (uint32_t)(client.bottom - client.top), device->display_mode.Height);
+    reset.backbuffer_format = backbuffer_format;
     reset.windowed = parameters->Windowed;
     reset.behavior_flags = device->creation.BehaviorFlags;
     reset.enable_auto_depth_stencil = parameters->EnableAutoDepthStencil;
@@ -5757,51 +5990,66 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
     reset.multisample_quality = parameters->MultiSampleQuality;
     if (reset.width > 8192 || reset.height > 8192)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    device_cancel_recording(device);
+    if (device_has_reset_blockers(device))
+        return TRACE_REFUSE(api == 8 ? D3DERR_DEVICELOST : D3DERR_INVALIDCALL);
     if (!emit_command(D9WG_OP_RESET, &reset, sizeof(reset)))
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-    device_clear_bindings(device);
+    /* Reset ends an active Scene once the host accepts the new device. */
+    device->in_scene = FALSE;
     device->handle = reset.new_device_handle;
+    device_clear_bindings(device);
+    swap_chain_destroy_cached_buffers(&device->implicit_swap_chain);
     ++device->reset_epoch;
-    device->present = *parameters;
+    d9wg_present_parameters_effective(&device->present, parameters,
+        reset.width, reset.height, reset.backbuffer_format, window);
     fill_display_mode(&device->display_mode, reset.width, reset.height,
-            reset.backbuffer_format);
+        reset.backbuffer_format);
     /* A Reset resizes the implicit surfaces rather than replacing them -- the
      * app keeps the same pointers across it -- so the cached objects have to
      * pick up the new geometry here or GetDesc keeps reporting the old size. */
     if (device->implicit_back_buffer) {
+        /* A cached object survives Reset, but its CPU lock storage does not. */
+        if (device->implicit_back_buffer->shadow)
+            HeapFree(GetProcessHeap(), 0, device->implicit_back_buffer->shadow);
+        device->implicit_back_buffer->shadow = NULL;
+        device->implicit_back_buffer->row_pitch = 0;
+        device->implicit_back_buffer->byte_count = 0;
         device->implicit_back_buffer->width = device->display_mode.Width;
         device->implicit_back_buffer->height = device->display_mode.Height;
         device->implicit_back_buffer->format = device->display_mode.Format;
-        device->implicit_back_buffer->multisample =
-                parameters->MultiSampleType;
-        device->implicit_back_buffer->multisample_quality =
-                parameters->MultiSampleQuality;
+        device->implicit_back_buffer->multisample = parameters->MultiSampleType;
+        device->implicit_back_buffer->multisample_quality = parameters->MultiSampleQuality;
     }
     if (device->implicit_depth_stencil) {
         device->implicit_depth_stencil->width = reset.width;
         device->implicit_depth_stencil->height = reset.height;
-        device->implicit_depth_stencil->format =
-                parameters->AutoDepthStencilFormat;
-        device->implicit_depth_stencil->multisample =
-                parameters->MultiSampleType;
-        device->implicit_depth_stencil->multisample_quality =
-                parameters->MultiSampleQuality;
+        device->implicit_depth_stencil->format = parameters->AutoDepthStencilFormat;
+        device->implicit_depth_stencil->multisample = parameters->MultiSampleType;
+        device->implicit_depth_stencil->multisample_quality = parameters->MultiSampleQuality;
     }
     device_init_states(device);
+    d9wg_window_cache_invalidate(&device->window_cache);
     device->viewport.X = device->viewport.Y = 0;
     device->viewport.Width = reset.width;
     device->viewport.Height = reset.height;
     device->viewport.MinZ = 0.0f;
     device->viewport.MaxZ = 1.0f;
-    if (!recreate_device_resources(device)) {
-        TRACE("FAIL Reset recreate_device_resources -> %08lX",
-                (DWORD)D3DERR_DRIVERINTERNALERROR);
+    SetRect(&device->scissor_rect, 0, 0, (int)reset.width, (int)reset.height);
+    if (!emit_device_state_after_reset(device)) {
+        TRACE("FAIL Reset emit_device_state_after_reset -> %08lX",
+            (DWORD)D3DERR_DRIVERINTERNALERROR);
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     }
+    if (!reset_window_mode(device, window))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    emit_window_state(device, window);
     TRACE("OK Reset old_handle=%08lX new_handle=%08lX %lux%lu epoch=%lu",
-            reset.old_device_handle, device->handle, reset.width, reset.height,
-            device->reset_epoch);
+        reset.old_device_handle, device->handle, reset.width, reset.height,
+        device->reset_epoch);
 
+    d9wg_present_parameters_return(api, parameters, &device->present);
+    d9wg_reset_complete(&device->reset_state);
     return D3D_OK;
 }
 
@@ -5822,26 +6070,13 @@ static HRESULT WINAPI device_reset(IDirect3DDevice9 *iface,
 static void probe_window_rect(HWND window, int fallback_width,
         int fallback_height, RECT *client, POINT *origin)
 {
-    SetRect(client, 0, 0, fallback_width, fallback_height);
-    origin->x = 0;
-    origin->y = 0;
-    if (window) {
-        GetClientRect(window, client);
-        ClientToScreen(window, origin);
-    }
-    if (client->right - client->left > 0 && client->bottom - client->top > 0)
-        return;
-    {
-        RECT window_rect;
-        if (window && GetWindowRect(window, &window_rect)
-                && window_rect.right > window_rect.left
-                && window_rect.bottom > window_rect.top) {
-            origin->x = window_rect.left;
-            origin->y = window_rect.top;
-            SetRect(client, 0, 0, window_rect.right - window_rect.left,
-                    window_rect.bottom - window_rect.top);
-        }
-    }
+    D9WGWindowProbe probe;
+    D9WGWindowGeometry geometry;
+    d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_OUTER_IF_EMPTY, &probe);
+    d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_D3D9,
+        (uint32_t)fallback_width, (uint32_t)fallback_height, &geometry);
+    SetRect(client, 0, 0, (int)geometry.width, (int)geometry.height);
+    origin->x = geometry.x;origin->y = geometry.y;
 }
 
 /*
@@ -5888,19 +6123,27 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
     D9WGPresent present;
     HWND window = override_window ? override_window
             : device->present.hDeviceWindow;
-    RECT client;
-    POINT origin;
+    D9WGWindowProbe probe;
+    D9WGWindowGeometry geometry;
     uint8_t *payload;
     BOOL result;
 
+    d9wg_window_watch_retry();
+
     if (!window)
         window = device->creation.hFocusWindow;
-    probe_window_rect(window, (int)device->display_mode.Width,
-            (int)device->display_mode.Height, &client, &origin);
+    EnterCriticalSection(&g_transport_lock);
+    d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
+        D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    if (maintain_fullscreen_foreground(device, window, &probe))
+        d9wg_window_probe_capture((uintptr_t)window, D9WG_WINDOW_PROBE_STATE |
+            D9WG_WINDOW_PROBE_REGION | D9WG_WINDOW_PROBE_OUTER, &probe);
+    d9wg_window_probe_geometry(&probe, D9WG_WINDOW_GEOMETRY_D3D9,
+        device->display_mode.Width, device->display_mode.Height, &geometry);
     present.device_handle = device->handle;
     present.hwnd = (uint32_t)(uintptr_t)window;
-    present.x = origin.x;
-    present.y = origin.y;
+    present.x = geometry.x;
+    present.y = geometry.y;
     /*
      * An empty client rect is not a curiosity to work around -- it means the
      * host has no idea where the game's output actually is, and it positions
@@ -5913,31 +6156,22 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
      * reports nothing useful for, and it answers both questions at once
      * (position and size, in screen coordinates).
      */
-    present.width = (uint32_t)(client.right - client.left);
-    present.height = (uint32_t)(client.bottom - client.top);
+    present.width = geometry.width;
+    present.height = geometry.height;
 
     /* D3D9's hardware cursor follows the OS pointer on its own, so the app is
      * under no obligation to call SetCursorPosition -- most never do. Sample
      * it here instead, once per frame, and only while a cursor is actually
      * armed and visible. */
-    maintain_fullscreen_foreground(device, window);
-    emit_window_state(device, window);
+    emit_window_state_from_probe(device, window, &probe);
     if (device->app_cursor) {
-        if (device->cursor_visible) {
-            POINT pointer;
-            if (GetCursorPos(&pointer)) {
-                if (window)
-                    ScreenToClient(window, &pointer);
-                emit_cursor_position(device, pointer.x, pointer.y, 0);
-            }
-        }
+        d9wg_cursor_present(device->handle, window, &device->app_cursor_state);
     } else {
         /* The application is leaving the pointer to Windows; capture it out
          * of GDI instead (see emit_system_cursor_bitmap). */
         update_system_cursor(device, window);
     }
 
-    EnterCriticalSection(&g_transport_lock);
     result = reserve_command_locked(D9WG_OP_PRESENT, sizeof(present), 0,
             NULL, &payload, NULL);
     if (result) {
@@ -5948,119 +6182,32 @@ static BOOL emit_present_and_flush(D9Device *device, HWND override_window)
     return result;
 }
 
-/*
- * D3DPRESENT_INTERVAL_ONE..FOUR ask Present to block until the Nth vertical
- * retrace.  That wait is the only back-pressure a D3D9 title has on its own
- * frame rate: the render loop is `while (running) { render(); Present(); }` and
- * nothing else in it sleeps.  Returning immediately -- what this proxy did
- * until now, whatever the app requested -- lets the guest spin as fast as the
- * emulator can retire the command stream.  San Andreas' loading screen reached
- * roughly 1000 Present/s that way, which starves every other thread in the
- * process of timeslices and spends the emulator's budget on frames nobody sees.
- *
- * There is no retrace to wait on here, so the wait is reconstructed from the
- * clock: each Present may return no earlier than a deadline one interval after
- * the previous one's.  A frame that finishes late by less than an interval
- * keeps the cadence -- the next frame's wait is shorter -- so frames that
- * straddle the interval still average the refresh rate, as with a retrace
- * wait and a render-ahead queue; later than that, the cadence restarts from
- * now instead of letting the frames that follow run unthrottled to catch up.
- *
- * The clock must resolve well under a millisecond.  GetTickCount advances in
- * whole clock-interrupt periods -- 10 ms on the XP HAL v86 runs -- so the
- * elapsed time it reports for a 14 ms frame is 10 ms or 20 ms.  Measuring
- * from it held a KartRider race at 50 frames/s with a fifth of the game
- * thread asleep, while the frames themselves took 14 ms, and capped even an
- * idle loop below 60.
- */
-static BOOL present_throttle_disabled(void)
-{
-    static LONG cached = -1;
-
-    if (cached < 0)
-        cached = env_flag_enabled("D9WG_PRESENT_NO_THROTTLE") ? 1 : 0;
-    return cached != 0;
-}
-
-/* QueryPerformanceCounter, shifted down to at most 2^20 ticks/s (a
- * microsecond or so) so that pacing needs only 32-bit arithmetic -- this DLL
- * links no compiler runtime for 64-bit division -- and still wraps only about
- * once an hour, which the signed differences below tolerate.  GetTickCount is
- * the fallback where there is no performance counter. */
+/* Raster status shares the presentation clock and its fallback units. */
 static DWORD present_clock(D9Device *device)
 {
-    LARGE_INTEGER value;
-
-    if (!device->present_clock_hz) {
-        BYTE shift = 0;
-        if (!QueryPerformanceFrequency(&value) || value.QuadPart <= 0) {
-            device->present_clock_shift = 0xFF;
-            device->present_clock_hz = 1000u;
-        } else {
-            while ((value.QuadPart >> shift) > (1 << 20))
-                ++shift;
-            device->present_clock_shift = shift;
-            device->present_clock_hz = (DWORD)(value.QuadPart >> shift);
-        }
-    }
-    if (device->present_clock_shift == 0xFF || !QueryPerformanceCounter(&value))
-        return GetTickCount();
-    return (DWORD)(value.QuadPart >> device->present_clock_shift);
+    return d9wg_present_clock_now(&device->present_clock);
 }
 
-static void throttle_to_presentation_interval(D9Device *device)
-{
-    DWORD frames, refresh, interval, now, deadline;
-
-    if (present_throttle_disabled())
-        return;
-
-    switch (device->present.PresentationInterval) {
-    /* DEFAULT is documented as equivalent to ONE, not as "do not wait". */
-    case D3DPRESENT_INTERVAL_DEFAULT:
-    case D3DPRESENT_INTERVAL_ONE:   frames = 1; break;
-    case D3DPRESENT_INTERVAL_TWO:   frames = 2; break;
-    case D3DPRESENT_INTERVAL_THREE: frames = 3; break;
-    case D3DPRESENT_INTERVAL_FOUR:  frames = 4; break;
-    default:                        return;  /* IMMEDIATE */
-    }
-
-    refresh = device->display_mode.RefreshRate;
-    if (refresh < 20u || refresh > 240u)
-        refresh = 60u;
-    now = present_clock(device);
-    interval = device->present_clock_hz * frames / refresh;
-    if (!interval)
-        return;
-
-    deadline = device->present_deadline;
-    /* The first Present has no predecessor to wait for. */
-    if (device->present_paced && (LONG)(deadline - now) > 0) {
-        /* Whole milliseconds: Sleep cannot do better, and waking up to a
-         * millisecond early is absorbed by the next frame's deadline. */
-        DWORD wait = deadline - now <= interval
-                ? (deadline - now) * 1000u / device->present_clock_hz : 0;
-        if (wait)
-            Sleep(wait);
-        now = present_clock(device);
-    }
-    if (!device->present_paced || (LONG)(now - deadline) >= (LONG)interval
-            || (LONG)(deadline - now) > (LONG)interval)
-        deadline = now;
-    device->present_deadline = deadline + interval;
-    device->present_paced = TRUE;
-}
-
-static HRESULT WINAPI device_present(IDirect3DDevice9 *iface,
-        const RECT *src_rect, const RECT *dst_rect, HWND override_window,
-        const RGNDATA *dirty_region)
+static HRESULT WINAPI device_present(IDirect3DDevice9* iface,
+    const RECT* src_rect, const RECT* dst_rect, HWND override_window,
+    const RGNDATA* dirty_region)
 {
     BOOL ok;
-    (void)src_rect; (void)dst_rect; (void)dirty_region;
+    HWND window = override_window ? override_window
+            : device_from_iface(iface)->present.hDeviceWindow;
+    if (!window) window = device_from_iface(iface)->creation.hFocusWindow;
+    if (device_compatibility_api(device_from_iface(iface)) == 8u && !IsWindow(window))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    HRESULT status = d9wg_reset_present_result(&device_from_iface(iface)->reset_state);
+    if (status != D3D_OK)
+        return TRACE_REFUSE(status);
+    (void)src_rect;
+    (void)dst_rect;
+    (void)dirty_region;
 
     TRACE("CALL Present device=%08lX override=%08lX",
-            device_from_iface(iface)->handle,
-            (DWORD)(uintptr_t)override_window);
+        device_from_iface(iface)->handle,
+        (DWORD)(uintptr_t)override_window);
 #ifdef D9WG_DIAGNOSTIC_TRACE
     trace_frame_summary();
     {
@@ -6071,13 +6218,23 @@ static HRESULT WINAPI device_present(IDirect3DDevice9 *iface,
             trace_memory_state("present");
     }
 #endif
+    status = swap_chain_prepare_buffers(&device_from_iface(iface)->implicit_swap_chain);
+    if (FAILED(status)) return status;
     ok = emit_present_and_flush(device_from_iface(iface), override_window);
+    if (ok) {
+        status = swap_chain_advance_buffers(&device_from_iface(iface)->implicit_swap_chain);
+        if (FAILED(status)) return status;
+    }
     /* After the flush, so the frame is on its way to the host while this
      * thread is parked rather than before it. */
-    throttle_to_presentation_interval(device_from_iface(iface));
+    if (ok) {
+        D9Device* device = device_from_iface(iface);
+        d9wg_throttle_present(&device->present_clock, &device->present_pacing,
+            device->present.PresentationInterval, device->display_mode.RefreshRate);
+    }
     TRACE("%s Present device=%08lX -> %08lX", ok ? "OK" : "FAIL",
-            device_from_iface(iface)->handle,
-            (DWORD)(ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR));
+        device_from_iface(iface)->handle,
+        (DWORD)(ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR));
     return ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
@@ -6098,52 +6255,18 @@ static void WINAPI device_set_gamma_ramp(IDirect3DDevice9 *iface,
         UINT swapchain, DWORD flags, const D3DGAMMARAMP *ramp)
 {
     D9Device *device = device_from_iface(iface);
-    D9WGSetGammaRamp command;
-    UINT index;
-
-    TRACE("CALL SetGammaRamp device=%08lX chain=%lu flags=%08lX ramp=%08lX",
-            device->handle, swapchain, flags, (DWORD)(uintptr_t)ramp);
-    if (!ramp || swapchain)
-        return;
-    device->gamma_ramp = *ramp;
-    device->gamma_ramp_set = TRUE;
-    command.device_handle = device->handle;
-    command.swap_chain = swapchain;
-    command.flags = flags;
-    command.reserved = 0;
-    for (index = 0; index < 256; ++index) {
-        command.ramp[index] = (uint16_t)ramp->red[index];
-        command.ramp[256 + index] = (uint16_t)ramp->green[index];
-        command.ramp[512 + index] = (uint16_t)ramp->blue[index];
-    }
-    emit_command(D9WG_OP_SET_GAMMA_RAMP, &command, sizeof(command));
+    TRACE("CALL SetGammaRamp device=%08lX chain=%lu flags=%08lX ramp=%08lX", device->handle, swapchain, flags, (DWORD)(uintptr_t)ramp);
+    if (swapchain) return;
+    d9wg_set_gamma_ramp(device->handle, flags, ramp, &device->gamma_ramp,
+            &device->gamma_ramp_set, &device->gamma_ramp_flags);
 }
 
 static void WINAPI device_get_gamma_ramp(IDirect3DDevice9 *iface,
         UINT swapchain, D3DGAMMARAMP *ramp)
 {
     D9Device *device = device_from_iface(iface);
-    UINT index;
-    if (!ramp)
-        return;
-    if (swapchain) {
-        ZeroMemory(ramp, sizeof(*ramp));
-        return;
-    }
-    if (device->gamma_ramp_set) {
-        *ramp = device->gamma_ramp;
-        return;
-    }
-    /* A device that has never been given a ramp is at identity, not at zero.
-     * Answering zero tells a title the display is black, and one that reads the
-     * ramp before writing it -- to restore it on exit -- would then "restore"
-     * the screen to black. */
-    for (index = 0; index < 256; ++index) {
-        WORD level = (WORD)((index << 8) | index);
-        ramp->red[index] = level;
-        ramp->green[index] = level;
-        ramp->blue[index] = level;
-    }
+    if (swapchain) { if (ramp) ZeroMemory(ramp, sizeof(*ramp)); return; }
+    d9wg_get_gamma_ramp(&device->gamma_ramp, device->gamma_ramp_set, ramp);
 }
 
 static HRESULT WINAPI device_begin_scene(IDirect3DDevice9 *iface)
@@ -6185,9 +6308,19 @@ static HRESULT WINAPI device_clear(IDirect3DDevice9 *iface, DWORD rect_count,
     uint32_t rect_bytes;
     BOOL result;
 
-    if (rect_count && !rects)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* Native D3D8/9 use the pointer to select rectangle mode. A non-null
+     * list with zero entries clears nothing; a null list clears the viewport
+     * even when its count is nonzero (Wine visual clear_test). */
+    if (!rects)
+        rect_count = 0;
+    else if (!rect_count)
+        return D3D_OK;
     if (!(flags & (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (device_compatibility_api(device) == 9u
+            && (flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL))
+            && !device->depth_stencil_surface
+            && (device->depth_stencil_unbound || !device->present.EnableAutoDepthStencil))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect_count > 0xFFFFFFFFu / sizeof(*rects))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -6238,14 +6371,11 @@ static HRESULT WINAPI device_clear(IDirect3DDevice9 *iface, DWORD rect_count,
     return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
-static HRESULT WINAPI device_set_transform(IDirect3DDevice9 *iface,
+/* MultiplyTransform updates primary state even during BeginStateBlock. */
+static HRESULT device_set_live_transform(D9Device *device,
         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
 {
-    D9Device *device = device_from_iface(iface);
     D9WGSetTransform command;
-    if (!matrix || (UINT)state >= D9_MAX_TRANSFORMS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_transform(device, (UINT)state);
     CopyMemory(device->transforms[state], matrix, sizeof(float) * 16);
     command.device_handle = device->handle;
     command.state = (uint32_t)state;
@@ -6254,62 +6384,54 @@ static HRESULT WINAPI device_set_transform(IDirect3DDevice9 *iface,
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
+static HRESULT WINAPI device_set_transform(IDirect3DDevice9 *iface,
+        D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
+{
+    D9Device *device = device_from_iface(iface);
+    uint32_t slot;
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (state_block_record_transform(device, (UINT)state, matrix)) return D3D_OK;
+    return device_set_live_transform(device, state, matrix);
+}
+
 static HRESULT WINAPI device_get_transform(IDirect3DDevice9 *iface,
         D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetTransform");
     D9Device *device = device_from_iface(iface);
-    if (!matrix || (UINT)state >= D9_MAX_TRANSFORMS)
+    uint32_t slot;
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(matrix, device->transforms[state], sizeof(float) * 16);
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
-        const D3DVIEWPORT9 *viewport)
+static HRESULT device_set_live_scissor(D9Device *device, const RECT *rect)
 {
-    D9Device *device = device_from_iface(iface);
-    D9Surface *target = device->render_target_surfaces[0];
-    UINT target_width = target ? target->width : device->display_mode.Width;
-    UINT target_height = target ? target->height : device->display_mode.Height;
+    D9WGSetScissorRect command;
+    device->scissor_rect = *rect;
+    device->scissor_set = TRUE;
+    command.device_handle = device->handle;
+    command.left = rect->left;
+    command.top = rect->top;
+    command.right = rect->right;
+    command.bottom = rect->bottom;
+    return emit_command(D9WG_OP_SET_SCISSOR_RECT, &command, sizeof(command))
+            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+
+static HRESULT device_set_live_viewport(D9Device *device,
+        const D3DVIEWPORT9 *viewport, BOOL suppress_equal)
+{
     D9WGSetViewport command;
-    if (!viewport || !viewport->Width || !viewport->Height) {
-        TRACE("REJECT SetViewport empty viewport=%08lX",
-                (DWORD)(uintptr_t)viewport);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    /*
-     * A rejected SetViewport is one of the worst silent failures in this
-     * surface: the call returns an error the app almost never checks, the old
-     * viewport stays, and every later draw is rendered at whatever scale that
-     * viewport implies. A title drawing a model into a small panel then gets it
-     * at full-target scale -- oversized and off-centre, with nothing anywhere
-     * saying why. Trace both outcomes; the accepted case is a few lines a frame
-     * and is what makes the rejected case legible by contrast.
-     */
-    if (viewport->X > target_width
-            || viewport->Y > target_height
-            || viewport->Width > target_width - viewport->X
-            || viewport->Height > target_height - viewport->Y
-            || viewport->MinZ < 0.0f || viewport->MaxZ > 1.0f
-            || viewport->MinZ > viewport->MaxZ) {
-        TRACE("REJECT SetViewport x=%lu y=%lu %lux%lu minz=%ld/1000 "
-                "maxz=%ld/1000 limit=%lux%lu",
-                viewport->X, viewport->Y, viewport->Width, viewport->Height,
-                (LONG)(viewport->MinZ * 1000.0f),
-                (LONG)(viewport->MaxZ * 1000.0f),
-                target_width, target_height);
-        HOSTLOG_REFUSED("SetViewport %lux%lu at %lu,%lu refused; the target is "
-                "%lux%lu, so every later draw keeps the previous viewport's "
-                "scale", viewport->Width, viewport->Height, viewport->X,
-                viewport->Y, target_width, target_height);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    TRACE("OK SetViewport x=%lu y=%lu %lux%lu minz=%ld/1000 maxz=%ld/1000",
-            viewport->X, viewport->Y, viewport->Width, viewport->Height,
-            (LONG)(viewport->MinZ * 1000.0f),
-            (LONG)(viewport->MaxZ * 1000.0f));
-    state_block_record_viewport(device);
+    if (suppress_equal && device->viewport.X == viewport->X
+            && device->viewport.Y == viewport->Y
+            && device->viewport.Width == viewport->Width
+            && device->viewport.Height == viewport->Height
+            && device->viewport.MinZ == viewport->MinZ
+            && device->viewport.MaxZ == viewport->MaxZ)
+        return D3D_OK;
     device->viewport = *viewport;
     command.device_handle = device->handle;
     command.x = viewport->X;
@@ -6321,6 +6443,43 @@ static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
     command.reserved = 0;
     return emit_command(D9WG_OP_SET_VIEWPORT, &command, sizeof(command))
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+
+static HRESULT WINAPI device_set_viewport(IDirect3DDevice9 *iface,
+        const D3DVIEWPORT9 *viewport)
+{
+    D9Device *device = device_from_iface(iface);
+    /* D3D9 on XP accepts a viewport larger than the attachment and depth ranges
+     * outside [0,1]. The host clips to the target and maps depth per fragment.
+     * Keep finite values and the WebGPU coordinate domain of our 8K adapter. */
+    if (!viewport || !viewport->Width || !viewport->Height
+            || viewport->Width > 8192u || viewport->Height > 8192u
+            || viewport->X > 16383u || viewport->Y > 16383u
+            || viewport->Width > 16383u - viewport->X
+            || viewport->Height > 16383u - viewport->Y
+            || !(viewport->MinZ >= -3.402823466e38F)
+            || !(viewport->MinZ <= 3.402823466e38F)
+            || !(viewport->MaxZ >= -3.402823466e38F)
+            || !(viewport->MaxZ <= 3.402823466e38F))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* D3D8 validates the rectangle against the current color target, even
+     * while recording a state block. Depth ranges follow the shared path. */
+    if (device_compatibility_api(device) == 8u)
+    {
+        D9Surface *target = device->render_target_surfaces[0];
+        UINT width = target ? target->width : device->display_mode.Width;
+        UINT height = target ? target->height : device->display_mode.Height;
+        if (viewport->X > width || viewport->Y > height
+                || viewport->Width > width - viewport->X
+                || viewport->Height > height - viewport->Y)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+    TRACE("OK SetViewport x=%lu y=%lu %lux%lu minz=%ld/1000 maxz=%ld/1000",
+            viewport->X, viewport->Y, viewport->Width, viewport->Height,
+            (LONG)(viewport->MinZ * 1000.0f),
+            (LONG)(viewport->MaxZ * 1000.0f));
+    if (state_block_record_viewport(device, viewport)) return D3D_OK;
+    return device_set_live_viewport(device, viewport, FALSE);
 }
 
 static HRESULT WINAPI device_get_viewport(IDirect3DDevice9 *iface,
@@ -6340,7 +6499,7 @@ static HRESULT WINAPI device_set_render_state(IDirect3DDevice9 *iface,
     D9WGSetRenderState command;
     if ((UINT)state >= D9_MAX_RENDER_STATES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_render_state(device, (UINT)state);
+    if (state_block_record_render_state(device, (UINT)state, value)) return D3D_OK;
     if (device->render_states[state] == value)
         return D3D_OK;
     /*
@@ -6476,17 +6635,10 @@ static HRESULT WINAPI device_get_texture(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-/*
- * SetTexture takes an IDirect3DBaseTexture9*, so the concrete type has to be
- * recovered from the vtable pointer -- there is no tag in the interface. Doing
- * it by vtable is also the validation: a pointer that is neither of ours is
- * rejected instead of being dereferenced as if it were.
- *
- * Cube textures (M3) bind through the same D9WG_OP_SET_TEXTURE, because the
- * host resource table is one flat handle space and the *host* already knows
- * each handle's kind from its CREATE command. Sending the kind again here would
- * be a second source of truth for the same fact.
- */
+/* Native D3D9 accepts its own resource even if an application has replaced
+ * its interface table. Keep the ordinary table/owner lookup constant-time;
+ * consult the device registry only for an unfamiliar table. No caller COM
+ * method is invoked to acquire the private binding reference. */
 static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
         DWORD stage, IDirect3DBaseTexture9 *texture_iface)
 {
@@ -6502,6 +6654,21 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (texture_iface) {
         const void *vtbl = ((const IDirect3DTexture9 *)texture_iface)->lpVtbl;
+        if (device_compatibility_api(device) == 9u
+                && vtbl != (const void *)&g_texture_vtbl
+                && vtbl != (const void *)&g_cube_vtbl
+                && vtbl != (const void *)&g_volume_texture_vtbl) {
+            D9Texture *t;
+            D9CubeTexture *c;
+            D9VolumeTexture *v;
+            for (t = device->texture_resources; t; t = t->next_device_resource)
+                if ((void *)t == (void *)texture_iface) { vtbl = &g_texture_vtbl; break; }
+            if (!t) for (c = device->cube_textures; c; c = c->next_device_resource)
+                if ((void *)c == (void *)texture_iface) { vtbl = &g_cube_vtbl; break; }
+            if (!t && vtbl != (const void *)&g_cube_vtbl)
+                for (v = device->volume_textures; v; v = v->next_device_resource)
+                    if ((void *)v == (void *)texture_iface) { vtbl = &g_volume_texture_vtbl; break; }
+        }
         if (vtbl == (const void *)&g_texture_vtbl) {
             texture = (D9Texture *)texture_iface;
             if (texture->device != device)
@@ -6514,29 +6681,49 @@ static HRESULT WINAPI device_set_texture(IDirect3DDevice9 *iface,
             handle = cube->handle;
         } else if (vtbl == (const void *)&g_volume_texture_vtbl) {
             volume = (D9VolumeTexture *)texture_iface;
-            if (volume->device != device)
+            if (volume->device != device
+                    || (volume->pool == D3DPOOL_SCRATCH
+                        && !(device_compatibility_api(device) == 9u
+                            ? supported_volume_texture_format(volume->format)
+                            : supported_volume_texture_format8(volume->format))))
                 return TRACE_REFUSE(D3DERR_INVALIDCALL);
             handle = volume->handle;
         } else {
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
         }
     }
-    state_block_record_texture(device, slot);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9Texture *old_texture = block->textures[slot];
+        D9CubeTexture *old_cube = block->cube_textures[slot];
+        D9VolumeTexture *old_volume = block->volume_textures[slot];
+        if (texture) texture_binding_add_ref(texture);
+        if (cube) cube_binding_add_ref(cube);
+        if (volume) volume_texture_binding_add_ref(volume);
+        block->has_texture[slot] = TRUE;block->textures[slot] = texture;
+        block->cube_textures[slot] = cube;block->volume_textures[slot] = volume;
+        if (old_texture) texture_binding_release(old_texture);
+        if (old_cube) cube_binding_release(old_cube);
+        if (old_volume) volume_texture_binding_release(old_volume);
+        return D3D_OK;
+    }
     if (device->textures[slot] == texture && device->cube_bindings[slot] == cube
             && device->volume_bindings[slot] == volume)
         return D3D_OK;
-    if (texture) IDirect3DTexture9_AddRef(&texture->iface);
-    if (cube) IDirect3DCubeTexture9_AddRef(&cube->iface);
-    if (volume) IDirect3DVolumeTexture9_AddRef(&volume->iface);
-    if (device->textures[slot])
-        IDirect3DTexture9_Release(&device->textures[slot]->iface);
-    if (device->cube_bindings[slot])
-        IDirect3DCubeTexture9_Release(&device->cube_bindings[slot]->iface);
-    if (device->volume_bindings[slot])
-        IDirect3DVolumeTexture9_Release(&device->volume_bindings[slot]->iface);
+    D9Texture *old_texture = device->textures[slot];
+    D9CubeTexture *old_cube = device->cube_bindings[slot];
+    D9VolumeTexture *old_volume = device->volume_bindings[slot];
+    if (texture) texture_binding_add_ref(texture);
+    if (cube) cube_binding_add_ref(cube);
+    if (volume) volume_texture_binding_add_ref(volume);
     device->textures[slot] = texture;
+    if (texture && texture->pool == D3DPOOL_MANAGED && texture->dirty_pending)
+        device->managed_texture_dirty = TRUE;
     device->cube_bindings[slot] = cube;
     device->volume_bindings[slot] = volume;
+    if (old_texture) texture_binding_release(old_texture);
+    if (old_cube) cube_binding_release(old_cube);
+    if (old_volume) volume_texture_binding_release(old_volume);
     command.device_handle = device->handle;
     command.stage = stage;
     command.texture_handle = handle;
@@ -6564,7 +6751,7 @@ static HRESULT WINAPI device_set_texture_stage_state(IDirect3DDevice9 *iface,
     if (stage >= D9_MAX_TEXTURE_STAGES
             || (UINT)state >= D9_MAX_TEXTURE_STAGE_STATES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_texture_stage_state(device, stage, (UINT)state);
+    if (state_block_record_texture_stage_state(device, stage, (UINT)state, value)) return D3D_OK;
     if (device->texture_stage_states[stage][state] == value)
         return D3D_OK;
     device->texture_stage_states[stage][state] = value;
@@ -6587,28 +6774,24 @@ static HRESULT WINAPI device_validate_device(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-/*
- * These two used to disagree: the setter returned D3D_OK and the getter always
- * answered FALSE, so an app that set software processing and read it back was
- * told its own call had not happened. That is worse than a refusal -- a
- * refusal is a fact the app can branch on, while a silent disagreement looks
- * like a driver bug in whatever renders wrong three frames later.
- *
- * D3D9's rule is that the mode is fixed at creation except on a mixed device,
- * where this switches between the two. The switch is honoured as bookkeeping:
- * every vertex is processed on the GPU either way, because that is the only
- * place this backend can process one. What that costs is the one guarantee
- * software processing carries that hardware does not -- no caps limits, so
- * shader versions and constant counts beyond what the device advertises --
- * which a title only reaches by first reading caps that already say otherwise.
- */
+/* Mixed devices retain their extended constant banks across mode switches.
+ * A rejected software-only program is disabled for subsequent hardware draws,
+ * but remains the API binding and is restored when software processing resumes. */
 static HRESULT WINAPI device_set_software_vertex_processing(
         IDirect3DDevice9 *iface, WINBOOL software)
 {
     D9Device *device = device_from_iface(iface);
     const DWORD behavior = device->creation.BehaviorFlags;
     if (behavior & D3DCREATE_MIXED_VERTEXPROCESSING) {
-        device->software_vertex_processing = software ? TRUE : FALSE;
+        BOOL next = software ? TRUE : FALSE;
+        if (device->software_vertex_processing != next) {
+            if (device->vertex_shader_hw_disabled) {
+                HRESULT hr = emit_set_shader(device, device->vertex_shader, FALSE);
+                if (FAILED(hr)) return hr;
+            }
+            device->vertex_shader_hw_disabled = FALSE;
+            device->software_vertex_processing = next;
+        }
         return D3D_OK;
     }
     /* Not a mixed device: the only accepted call is the one that asks for the
@@ -6656,6 +6839,7 @@ static HRESULT WINAPI device_set_npatch_mode(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     if (segments > (float)D9_PATCH_MAX_SEGMENTS)
         segments = (float)D9_PATCH_MAX_SEGMENTS;
+    if (state_block_record_npatch_mode(device, segments > 1.0f ? segments : 0.0f)) return D3D_OK;
     device->npatch_segments = segments > 1.0f ? segments : 0.0f;
     return D3D_OK;
 }
@@ -6671,7 +6855,7 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
 {
     D9Device *device = device_from_iface(iface);
     D9VertexBuffer *buffer;
-    (void)shared_handle;
+    if (shared_handle) return TRACE_REFUSE(E_NOTIMPL);
     TRACE_MARK_ENTER("Device.CreateVertexBuffer");
     if (!buffer_out) {
         TRACE("FAIL CreateVertexBuffer length=%lu missing output -> %08lX",
@@ -6680,10 +6864,11 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *buffer_out = NULL;
-    if (!length || pool > D3DPOOL_SCRATCH) {
+    if (!length || pool >= D3DPOOL_SCRATCH
+            || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TRACE("FAIL CreateVertexBuffer length=%lu usage=%08lX fvf=%08lX pool=%lu -> %08lX",
                 length, usage, fvf, (DWORD)pool, (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateVertexBuffer refused: length=%lu usage=%08lX "
+        HOSTLOG_REFUSED("CreateVertexBuffer refused: length=%lu usage=%08lX "
                 "fvf=%08lX pool=%lu", length, usage, fvf, (DWORD)pool);
         TRACE_MARK_EXIT("Device.CreateVertexBuffer", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
@@ -6697,8 +6882,12 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
         TRACE_FLUSH();
         return E_OUTOFMEMORY;
     }
-    buffer->shadow = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            length);
+    if (length <= UINT32_MAX - 15u)
+        buffer->shadow_allocation = (BYTE *)HeapAlloc(GetProcessHeap(),
+                HEAP_ZERO_MEMORY, (SIZE_T)length + 15u);
+    if (buffer->shadow_allocation)
+        buffer->shadow = (BYTE *)(((uintptr_t)buffer->shadow_allocation + 15u)
+                & ~(uintptr_t)15u);
     if (!buffer->shadow) {
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE("FAIL CreateVertexBuffer shadow allocation length=%lu -> %08lX",
@@ -6716,12 +6905,13 @@ static HRESULT WINAPI device_create_vertex_buffer(IDirect3DDevice9 *iface,
     buffer->usage = usage;
     buffer->fvf = fvf;
     buffer->pool = pool;
+    buffer->full_upload_pending = pool == D3DPOOL_MANAGED;
 
     if (!emit_vertex_buffer_create(device, buffer)) {
         TRACE("FAIL CreateVertexBuffer transport length=%lu handle=%08lX -> %08lX",
                 length, buffer->handle, (DWORD)D3DERR_DRIVERINTERNALERROR);
         device_child_release(device);
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
+        HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE_MARK_EXIT("Device.CreateVertexBuffer",
                 D3DERR_DRIVERINTERNALERROR, NULL);
@@ -6755,7 +6945,7 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9IndexBuffer *buffer;
     UINT index_size;
-    (void)shared_handle;
+    if (shared_handle) return TRACE_REFUSE(E_NOTIMPL);
 
     TRACE_MARK_ENTER("Device.CreateIndexBuffer");
     if (!buffer_out) {
@@ -6765,11 +6955,12 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *buffer_out = NULL;
-    if (!length || pool > D3DPOOL_SCRATCH) {
+    if (!length || pool >= D3DPOOL_SCRATCH
+            || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TRACE("FAIL CreateIndexBuffer length=%lu usage=%08lX format=%08lX pool=%lu -> %08lX",
                 length, usage, (DWORD)format, (DWORD)pool,
                 (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateIndexBuffer refused: length=%lu usage=%08lX "
+        HOSTLOG_REFUSED("CreateIndexBuffer refused: length=%lu usage=%08lX "
                 "format=%08lX pool=%lu", length, usage, (DWORD)format,
                 (DWORD)pool);
         TRACE_MARK_EXIT("Device.CreateIndexBuffer", D3DERR_INVALIDCALL, NULL);
@@ -6799,8 +6990,12 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
         TRACE_FLUSH();
         return E_OUTOFMEMORY;
     }
-    buffer->shadow = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-            length);
+    if (length <= UINT32_MAX - 15u)
+        buffer->shadow_allocation = (BYTE *)HeapAlloc(GetProcessHeap(),
+                HEAP_ZERO_MEMORY, (SIZE_T)length + 15u);
+    if (buffer->shadow_allocation)
+        buffer->shadow = (BYTE *)(((uintptr_t)buffer->shadow_allocation + 15u)
+                & ~(uintptr_t)15u);
     if (!buffer->shadow) {
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE("FAIL CreateIndexBuffer shadow allocation length=%lu -> %08lX",
@@ -6818,12 +7013,13 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     buffer->usage = usage;
     buffer->format = format;
     buffer->pool = pool;
+    buffer->full_upload_pending = pool == D3DPOOL_MANAGED;
 
     if (!emit_index_buffer_create(device, buffer)) {
         TRACE("FAIL CreateIndexBuffer transport length=%lu handle=%08lX -> %08lX",
                 length, buffer->handle, (DWORD)D3DERR_DRIVERINTERNALERROR);
         device_child_release(device);
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
+        HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
         HeapFree(GetProcessHeap(), 0, buffer);
         TRACE_MARK_EXIT("Device.CreateIndexBuffer",
                 D3DERR_DRIVERINTERNALERROR, NULL);
@@ -6851,11 +7047,52 @@ static HRESULT WINAPI device_create_index_buffer(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
-        UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
-        D3DPOOL pool, IDirect3DTexture9 **texture_out, HANDLE *shared_handle)
+/* CPU pool mip pointers are part of the D3D8/9 API contract. Reserve every
+ * face before assigning pointers, so overflow/allocation failure is atomic. */
+static BYTE *allocate_mip_shadows(D9TextureLevel *levels, UINT level_count, UINT faces,
+        UINT api, D3DFORMAT format)
 {
-    D9Device *device = device_from_iface(iface);
+    UINT face, level, bytes = 0, offset = 0;
+    BYTE *storage;
+    for (face = 0; face < faces; ++face) {
+        for (level = 0; level < level_count; ++level) {
+            D9TextureLevel *data = &levels[face * level_count + level];
+            UINT span = data->byte_count;
+            if (!d9wg_cpu_texture_span(api, format, data->width, data->height,
+                        data->byte_count, &span)
+                    || data->byte_count > UINT32_MAX - offset
+                    || span > UINT32_MAX - offset) return NULL;
+            UINT end = offset + data->byte_count;
+            if (end > bytes) bytes = end;
+            offset += span;
+        }
+        if (offset > UINT32_MAX - 15u) return NULL;
+        offset = (offset + 15u) & ~15u;
+    }
+    if (offset > bytes) bytes = offset;
+    if (!bytes) return NULL;
+    storage = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    if (!storage) return NULL;
+    offset = 0;
+    for (face = 0; face < faces; ++face) {
+        for (level = 0; level < level_count; ++level) {
+            D9TextureLevel *data = &levels[face * level_count + level];
+            UINT span = data->byte_count;
+            d9wg_cpu_texture_span(api, format, data->width, data->height,
+                    data->byte_count, &span);
+            data->shadow = storage + offset;
+            data->shadow_valid = TRUE;
+            offset += span;
+        }
+        offset = (offset + 15u) & ~15u;
+    }
+    return storage;
+}
+
+static HRESULT create_texture_object(D9Device *device,
+        UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
+        D3DPOOL pool, UINT api, IDirect3DTexture9 **texture_out)
+{
     D9Texture *texture;
     UINT full_levels;
     UINT level;
@@ -6863,8 +7100,10 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
     UINT level_height;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
+    /* CPU-pool mip pointers share one native contiguous allocation. */
+    BOOL contiguous_mips = pool != D3DPOOL_DEFAULT
+            && (api == 8u || !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)));
     BOOL is_depth = (usage & D3DUSAGE_DEPTHSTENCIL) != 0;
-    (void)shared_handle;
 
     TRACE("CALL CreateTexture %lux%lu levels=%lu usage=%08lX "
             "format=%08lX pool=%lu", width, height, levels, usage,
@@ -6875,32 +7114,59 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
                 (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    *texture_out = NULL;
-    /*
-     * D3DUSAGE_AUTOGENMIPMAP: the sublevels exist but only level 0 is the
-     * app's. D3D9 reports GetLevelCount() == 1 for such a texture and hands out
-     * no surface below the top, because the driver owns the rest -- so one
-     * visible level here is not a simplification, it is the documented shape.
-     *
-     * The flag stays on `usage` rather than being stripped: it is what tells
-     * the host to allocate the full chain behind that single visible level and
-     * to refill it whenever level 0 changes. It is masked out only for the
-     * capability predicate, which answers which resources can exist and has no
-     * opinion on how their mips get filled.
-     */
-    if (usage & D3DUSAGE_AUTOGENMIPMAP)
-        levels = 1;
-    if (!width || !height || width > 8192 || height > 8192
-            || !texture_create_supported(D3DRTYPE_TEXTURE,
-                    usage & ~(DWORD)D3DUSAGE_AUTOGENMIPMAP, format, pool)) {
-
-        TRACE("FAIL CreateTexture invalid arguments -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateTexture refused: %lux%lu levels=%lu usage=%08lX "
-                "format=%08lX pool=%lu", width, height, levels, usage,
-                (DWORD)format, (DWORD)pool);
+    if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *texture_out = NULL;
+    if ((usage & D3DUSAGE_WRITEONLY)
+            || ((usage & D3DUSAGE_DYNAMIC)
+                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 8u) {
+        if (!width || !height || width > 4096 || height > 4096
+                || !supported_format8(format, FALSE)
+                || (usage & D3DUSAGE_DEPTHSTENCIL)
+                || ((usage & D3DUSAGE_RENDERTARGET)
+                    && (pool != D3DPOOL_DEFAULT || levels != 1
+                        || !supported_render_target_format8(format)))
+                || pool > D3DPOOL_SCRATCH)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    } else {
+        /*
+         * D3DUSAGE_AUTOGENMIPMAP: the sublevels exist but only level 0 is the
+         * app's. D3D9 reports GetLevelCount() == 1 for such a texture and hands out
+         * no surface below the top, because the driver owns the rest -- so one
+         * visible level here is not a simplification, it is the documented shape.
+         *
+         * The flag stays on `usage` rather than being stripped: it is what tells
+         * the host to allocate the full chain behind that single visible level and
+         * to refill it whenever level 0 changes. It is masked out only for the
+         * capability predicate, which answers which resources can exist and has no
+         * opinion on how their mips get filled.
+         */
+        if (!d9wg_autogen_creation_valid(levels, usage, pool))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (usage & D3DUSAGE_AUTOGENMIPMAP)
+            levels = 1;
+        if (!width || !height || width > 8192 || height > 8192
+                || !texture_create_supported(D3DRTYPE_TEXTURE,
+                        usage & ~(DWORD)D3DUSAGE_AUTOGENMIPMAP, format, pool)) {
+
+            TRACE("FAIL CreateTexture invalid arguments -> %08lX",
+                    (DWORD)D3DERR_INVALIDCALL);
+            HOSTLOG_REFUSED("CreateTexture refused: %lux%lu levels=%lu usage=%08lX "
+                    "format=%08lX pool=%lu", width, height, levels, usage,
+                    (DWORD)format, (DWORD)pool);
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
     }
+    /* The top level of a DXT resource must contain whole 4x4 blocks in
+     * every pool. Sublevels may be 1x1/2x2 and retain one physical block. */
+    UINT block_width, block_height, block_bytes;
+    if (d9wg_format_layout(api, format, &block_width, &block_height, &block_bytes)
+            && (format & 0x00ffffffu) == 0x00545844u /* DXT1 through DXT5 */
+            && block_width == 4u && block_height == 4u
+            && ((width & 3u) || (height & 3u)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(width, height);
     if (!levels) levels = full_levels;
     if (levels > full_levels) {
@@ -6924,6 +7190,9 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
                 levels, (DWORD)E_OUTOFMEMORY);
         return TRACE_REFUSE(E_OUTOFMEMORY);
     }
+    if (api == 9u && (usage & D3DUSAGE_AUTOGENMIPMAP))
+        texture->autogen_filter = (D3DTEXTUREFILTERTYPE)d9wg_autogen_default_filter(format,
+                (d9wg_format_query_info(format) & 4u) ? runtime_host_features() : 0);
     texture->iface.lpVtbl = &g_texture_vtbl;
     texture->refcount = 1;
     texture->device = device;
@@ -6942,33 +7211,40 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
         D9TextureLevel *level_data = &texture->levels[level];
         level_data->width = level_width;
         level_data->height = level_height;
-        if (!is_depth && !texture_level_layout(format, level_width, level_height,
+        if (!is_depth && format != D9FMT_NULL
+                && !d9wg_cpu_texture_level_layout(api, format, level_width, level_height,
                 &level_data->row_pitch, &level_data->row_count,
                 &level_data->byte_count))
             goto allocation_failed;
         /* Targets are not directly lockable.  A render target can acquire a
          * lazy CPU mirror later when Clear/ColorFill gives us exact contents;
          * texture_lock_level() therefore rejects the usage flags explicitly. */
-        if (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) {
+        if (api == 9u && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
             if (level_width > 1) level_width >>= 1;
             if (level_height > 1) level_height >>= 1;
             continue;
         }
-        level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
-                HEAP_ZERO_MEMORY, level_data->byte_count);
-        if (!level_data->shadow)
-            goto allocation_failed;
-        level_data->shadow_valid = TRUE;
+        if (!contiguous_mips) {
+            level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
+                    HEAP_ZERO_MEMORY, level_data->byte_count);
+            if (!level_data->shadow) goto allocation_failed;
+            level_data->shadow_valid = TRUE;
+        }
         if (level_width > 1) level_width >>= 1;
         if (level_height > 1) level_height >>= 1;
     }
 
+    if (contiguous_mips) {
+        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 1u, api, format);
+        if (!texture->mip_storage) goto allocation_failed;
+    }
     if (!emit_texture_create(device, texture)) {
         failure = D3DERR_DRIVERINTERNALERROR;
         goto allocation_failed;
     }
     texture->next_device_resource = device->texture_resources;
     device->texture_resources = texture;
+    if (pool == D3DPOOL_MANAGED || pool == D3DPOOL_SYSTEMMEM) texture_dirty_all(texture);
     *texture_out = &texture->iface;
     TRACE_REGISTER_RANGE("TEXTURE_OBJECT", texture->handle, texture, texture,
             sizeof(*texture));
@@ -6989,9 +7265,10 @@ static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
 
 allocation_failed:
     for (level = 0; level < levels; ++level) {
-        if (texture->levels[level].shadow)
+        if (!texture->mip_storage && texture->levels[level].shadow)
             HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
     }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
     device_child_release(device);
     HeapFree(GetProcessHeap(), 0, texture->levels);
     HeapFree(GetProcessHeap(), 0, texture);
@@ -7004,13 +7281,47 @@ allocation_failed:
     return failure;
 }
 
+static HRESULT WINAPI device_create_texture(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format,
+        D3DPOOL pool, IDirect3DTexture9 **texture_out, HANDLE *shared_handle)
+{
+    if (shared_handle) return TRACE_REFUSE(E_NOTIMPL);
+    return create_texture_object(device_from_iface(iface), width, height,
+            levels, usage, format, pool, 9u, texture_out);
+}
+
+/* Internal updates restore exact captured metadata, including NULL buffers.
+ * The public SetStreamSource wrapper applies its live-metadata NULL rule. */
+static HRESULT device_set_stream_binding(D9Device *device, UINT stream,
+        D9VertexBuffer *buffer, UINT offset, UINT stride)
+{
+    D9WGSetStreamSource command;
+    if (device->streams[stream].buffer == buffer
+            && device->streams[stream].stride == stride
+            && device->streams[stream].offset == offset)
+        return D3D_OK;
+    D9VertexBuffer *old_buffer = device->streams[stream].buffer;
+    if (buffer) vb_binding_add_ref(buffer);
+    device->streams[stream].buffer = buffer;
+    device->streams[stream].stride = stride;
+    device->streams[stream].offset = offset;
+    if (old_buffer) vb_binding_release(old_buffer);
+    command.device_handle = device->handle;
+    command.stream = stream;
+    command.buffer_handle = buffer ? buffer->handle : 0;
+    command.stride = stride;
+    command.offset_in_bytes = offset;
+    command.reserved = 0;
+    return emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command))
+            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+
 static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
         UINT stream, IDirect3DVertexBuffer9 *buffer_iface, UINT offset,
         UINT stride)
 {
     D9Device *device = device_from_iface(iface);
     D9VertexBuffer *buffer = buffer_iface ? vb_from_iface(buffer_iface) : NULL;
-    D9WGSetStreamSource command;
     if (stream >= D9_MAX_STREAMS) {
 
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -7020,26 +7331,21 @@ static HRESULT WINAPI device_set_stream_source(IDirect3DDevice9 *iface,
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (buffer && offset >= buffer->length)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_stream(device, stream);
-    if (device->streams[stream].buffer == buffer
-            && device->streams[stream].stride == stride
-            && device->streams[stream].offset == offset)
+    if (!buffer) {
+        /* Retail keeps the current live offset/stride, even while recording. */
+        offset = device->streams[stream].offset;
+        stride = device->streams[stream].stride;
+    }
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9VertexBuffer *old = block->streams[stream].buffer;
+        if (buffer) vb_binding_add_ref(buffer);
+        block->has_stream[stream] = TRUE;block->streams[stream].buffer = buffer;
+        block->streams[stream].offset = offset;block->streams[stream].stride = stride;
+        if (old) vb_binding_release(old);
         return D3D_OK;
-    if (buffer)
-        IDirect3DVertexBuffer9_AddRef(buffer_iface);
-    if (device->streams[stream].buffer)
-        IDirect3DVertexBuffer9_Release(&device->streams[stream].buffer->iface);
-    device->streams[stream].buffer = buffer;
-    device->streams[stream].stride = stride;
-    device->streams[stream].offset = offset;
-    command.device_handle = device->handle;
-    command.stream = stream;
-    command.buffer_handle = buffer ? buffer->handle : 0;
-    command.stride = stride;
-    command.offset_in_bytes = offset;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    }
+    return device_set_stream_binding(device, stream, buffer, offset, stride);
 }
 
 static HRESULT WINAPI device_get_stream_source(IDirect3DDevice9 *iface,
@@ -7069,14 +7375,20 @@ static HRESULT WINAPI device_set_indices(IDirect3DDevice9 *iface,
     if (buffer && (buffer_iface->lpVtbl != &g_ib_vtbl
             || buffer->device != device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_indices(device);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9IndexBuffer *old = block->index_buffer;
+        if (buffer) ib_binding_add_ref(buffer);
+        block->has_indices = TRUE;block->index_buffer = buffer;
+        if (old) ib_binding_release(old);
+        return D3D_OK;
+    }
     if (device->index_buffer == buffer)
         return D3D_OK;
-    if (buffer)
-        IDirect3DIndexBuffer9_AddRef(buffer_iface);
-    if (device->index_buffer)
-        IDirect3DIndexBuffer9_Release(&device->index_buffer->iface);
+    D9IndexBuffer *old_buffer = device->index_buffer;
+    if (buffer) ib_binding_add_ref(buffer);
     device->index_buffer = buffer;
+    if (old_buffer) ib_binding_release(old_buffer);
     command.device_handle = device->handle;
     command.buffer_handle = buffer ? buffer->handle : 0;
     return emit_command(D9WG_OP_SET_INDICES, &command, sizeof(command))
@@ -7101,6 +7413,119 @@ static BOOL device_has_vertex_format(D9Device *device)
     return device->vertex_declaration != NULL || device->fvf != 0;
 }
 
+static BOOL d9_current_source_layout(D9Device *device, D9WGProcessLayout *layout);
+static int d9_current_source_position_transformed(D9Device *device);
+static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const D9WGClipDrawSource *draw);
+static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex);
+static HRESULT d9_draw_index_bounds(D9Device *device, INT base_vertex, D9WGDrawIndexBounds *bounds);
+static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *source,
+        D9WGClipStatus *next, BOOL *valid);
+
+
+static int d9_clip_emit(void *context, uint32_t primitive_type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D9Device *device = context;
+    D9WGDrawPrimitiveUP command;ZeroMemory(&command, sizeof(command));
+    command.device_handle = device->handle;command.primitive_type = primitive_type;
+    command.primitive_count = primitive_type == 1 ? count : primitive_type == 2 ? count/2u : count/3u;
+    command.stride = stride;command.vertex_count = count;command.vertex_bytes = count*stride;
+    /* Internal emission must preserve the application's bound VB and IB. */
+    return emit_draw_primitive_up(&command, vertices);
+}
+static int d9_clip_mask(void *context, uint32_t mask)
+{
+    D9Device *device = context;
+    D9WGSetRenderState command = { device->handle, D3DRS_CLIPPLANEENABLE, mask, 0 };
+    return emit_command(D9WG_OP_SET_RENDER_STATE, &command, sizeof(command));
+}
+static int d9_clip_vb_draw(D9Device *device, uint32_t primitive_type,
+        uint32_t first, uint32_t count, const uint8_t *indices,
+        uint32_t index_bytes, uint32_t index_stride, int32_t base_vertex,
+        uint32_t min_vertex, uint32_t vertex_limit)
+{
+    D9WGClipDrawSource submitted;ZeroMemory(&submitted, sizeof(submitted));
+    submitted.first_vertex = first;submitted.count = count;submitted.indices = indices;
+    submitted.index_bytes = index_bytes;submitted.index_stride = index_stride;submitted.base_vertex = base_vertex;
+    submitted.min_vertex = min_vertex;submitted.vertex_count = vertex_limit;
+    D9VertexBuffer *buffer = device->streams[0].buffer;
+    if (!buffer) return d9_clip_stream_draw(device, primitive_type, &submitted);
+    D9WGProcessLayout layout;
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!buffer->clips.head) return d9_clip_stream_draw(device, primitive_type, &submitted);
+    if (!d9_current_source_layout(device, &layout)) return d9_clip_stream_draw(device, primitive_type, &submitted);
+    if (!layout.position_transformed) return 0;
+    if (!d9wg_process_canonical_output(&layout)) return d9_clip_stream_draw(device, primitive_type, &submitted);
+    if (!device->streams[0].stride) return d9_clip_stream_draw(device, primitive_type, &submitted);
+    if (device->streams[0].frequency != 1) return -1;
+    D9WGClipDrawSource source;ZeroMemory(&source, sizeof(source));
+    source.clips = &buffer->clips;source.vertices = buffer->shadow;source.length = buffer->length;
+    source.base = device->streams[0].offset;source.stride = device->streams[0].stride;
+    source.first_vertex = first;source.count = count;source.indices = indices;
+    source.index_bytes = index_bytes;source.index_stride = index_stride;source.base_vertex = base_vertex;
+    source.min_vertex = min_vertex;source.vertex_count = vertex_limit;
+    source.primitive_type = primitive_type;source.layout = &layout;
+    source.flat_shading = device->render_states[D3DRS_SHADEMODE] == D3DSHADE_FLAT;
+    source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
+            (float)device->viewport.Width, (float)device->viewport.Height,
+            device->viewport.MinZ, device->viewport.MaxZ };
+    return d9wg_vertex_windows_clip_draw_planes(&source, d9_clip_emit, d9_clip_mask,
+            device->render_states[D3DRS_CLIPPLANEENABLE], device);
+}
+
+static BOOL d9_software_vertex_processing(D9Device *device)
+{
+    if (device->creation.BehaviorFlags & D3DCREATE_MIXED_VERTEXPROCESSING)
+        return device->software_vertex_processing;
+    return (device->creation.BehaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) != 0;
+}
+static HRESULT d9_prepare_clip_status(D9Device *device, const D9WGClipDrawSource *input, BOOL bound_stream,
+        D9WGClipStatus *next, BOOL *valid)
+{
+    *next = device->clip_status;*valid = device->clip_status_valid;
+    if (!d9_software_vertex_processing(device)) return D3D_OK;
+    D9WGProcessLayout layout;
+    BOOL supported_layout = d9_current_source_layout(device, &layout);
+    if (input->indices && input->min_vertex >= input->vertex_count) {
+        if (!input->status_screen && ((supported_layout && layout.position_transformed) ||
+                d9_current_source_position_transformed(device) == 1)) return D3D_OK;
+        /* No trustworthy software range: preserve rendering without reading
+         * arbitrary VB contents or returning a stale ClipStatus query. */
+        if (!device->render_states[D3DRS_CLIPPING]) {
+            next->clip_union = next->clip_intersection = 0;*valid = TRUE;
+        } else *valid = FALSE;
+        return D3D_OK;
+    }
+    if (bound_stream && (!supported_layout || !device->streams[0].stride || !device->streams[0].buffer))
+        return d9_prepare_stream_clip_status(device, input, next, valid);
+    BOOL pretransformed = supported_layout && layout.position_transformed;
+    if ((!pretransformed && device->vertex_shader) || !supported_layout ||
+            (!pretransformed && bound_stream && device->streams[0].frequency != 1)) {
+        /* Rendering still uses the supported GPU path. Until the shared CPU
+         * pipeline reads this layout/program, refuse a stale status query. */
+        if (!device->render_states[D3DRS_CLIPPING]) {
+            next->clip_union = next->clip_intersection = 0;*valid = TRUE;
+        } else *valid = FALSE;
+        return D3D_OK;
+    }
+    D9WGClipDrawSource source = *input;source.layout = &layout;
+    uint32_t error = d9wg_vertex_windows_clip_status(&source, device->render_states,
+            device->transforms[D3DTS_WORLD], 256, 0, device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION], device->clip_planes, next);
+    if (!error && (!layout.position_transformed || source.status_screen)) *valid = TRUE;
+    return TRACE_REFUSE(error == 2 ? E_OUTOFMEMORY : error ? D3DERR_INVALIDCALL : D3D_OK);
+}
+
+static HRESULT d9_validate_vertex_shader_mode(D9Device *device)
+{
+    if (!device->vertex_shader || !device->vertex_shader->requires_software
+            || d9_software_vertex_processing(device) || device->vertex_shader_hw_disabled)
+        return D3D_OK;
+    HRESULT hr = emit_set_shader(device, NULL, FALSE);
+    if (FAILED(hr)) return hr;
+    device->vertex_shader_hw_disabled = TRUE;
+    return TRACE_REFUSE(D3DERR_INVALIDCALL);
+}
+
 static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT start_vertex,
         UINT primitive_count)
@@ -7108,17 +7533,17 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9WGDrawPrimitive command;
     UINT vertex_count = 0;
-    UINT available_vertices;
 
-    if (!device->streams[0].buffer || !device->streams[0].stride
-            || device->streams[0].buffer->locked
-            || !device_has_vertex_format(device) || !primitive_count
+    if (!device_has_vertex_format(device)
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count)) {
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
-    if (device->npatch_segments > 1.0f) {
+    if (!primitive_count) return D3D_OK;
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
+    if (device->npatch_segments > 1.0f && device->streams[0].buffer && device->streams[0].stride) {
         HRESULT tessellated = d9_draw_npatch(iface, device, primitive_type,
                 primitive_count, NULL, 0, start_vertex);
         if (SUCCEEDED(tessellated))
@@ -7127,15 +7552,28 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
          * vertices for 16-bit indices. Fall through and draw it flat, which is
          * what the mesh looked like before N-patches were switched on. */
     }
-    /* Vertices addressable by this draw start after the stream's
-     * OffsetInBytes, not at the start of the buffer. */
-    available_vertices = (device->streams[0].buffer->length
-            - device->streams[0].offset) / device->streams[0].stride;
-    if (start_vertex > available_vertices
-            || vertex_count > available_vertices - start_vertex) {
-        TRACE_FRAME_REJECT();
-        return D3DERR_INVALIDCALL;
+    HRESULT range_result = d9_bound_draw_range(device, start_vertex, vertex_count, 0);
+    if (FAILED(range_result)) return TRACE_REFUSE(range_result);
+    D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
+    if (device->streams[0].buffer) {
+        status_source.vertices = device->streams[0].buffer->shadow;status_source.length = device->streams[0].buffer->length;
     }
+    status_source.base = device->streams[0].offset;status_source.stride = device->streams[0].stride;
+    status_source.first_vertex = start_vertex;status_source.count = status_source.vertex_count = vertex_count;
+    D9WGClipStatus next_status;BOOL next_status_valid;
+    HRESULT status_result = d9_prepare_clip_status(device, &status_source, TRUE, &next_status, &next_status_valid);
+    if (FAILED(status_result)) return status_result;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    int clipped = d9_clip_vb_draw(device, primitive_type, start_vertex, vertex_count, NULL, 0, 0, 0, 0, vertex_count);
+    if (clipped) {
+        if (clipped < 0) return TRACE_REFUSE(clipped == -3 ? E_OUTOFMEMORY :
+                clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
+        device->clip_status = next_status;device->clip_status_valid = next_status_valid;
+        TRACE_FRAME_DRAW(primitive_count);invalidate_render_target_mirrors(device);
+        return D3D_OK;
+    }
+    if (!d9wg_flush_draw_buffers(device, FALSE))
+        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.start_vertex = start_vertex;
@@ -7143,6 +7581,7 @@ static HRESULT WINAPI device_draw_primitive(IDirect3DDevice9 *iface,
 
     if (!emit_command(D9WG_OP_DRAW_PRIMITIVE, &command, sizeof(command)))
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    device->clip_status = next_status;device->clip_status_valid = next_status_valid;
     TRACE_FRAME_DRAW(primitive_count);
     invalidate_render_target_mirrors(device);
     return D3D_OK;
@@ -7158,17 +7597,25 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     UINT index_count = 0;
     UINT index_size;
     UINT available_indices;
-    UINT available_vertices;
 
-    if (!device->streams[0].buffer || !device->streams[0].stride
-            || device->streams[0].buffer->locked || !device->index_buffer
-            || device->index_buffer->locked || !device_has_vertex_format(device)
-            || !primitive_count || !vertex_count
+    if (!device->index_buffer) {
+        /* With no vertex storage every attribute is constant, so indices
+         * cannot change the geometry. Submit the equivalent nonindexed draw. */
+        BOOL bound = FALSE;
+        for (UINT i = 0; i < D9_MAX_STREAMS; ++i)
+            if (device->streams[i].buffer) bound = TRUE;
+        if (!bound) return device_draw_primitive(iface, primitive_type, 0, primitive_count);
+        return D3DERR_INVALIDCALL;
+    }
+    if (!device_has_vertex_format(device)
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count)) {
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
+    if (!primitive_count) return D3D_OK;
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
     index_size = device->index_buffer->format == D3DFMT_INDEX16 ? 2u : 4u;
     available_indices = device->index_buffer->length / index_size;
     if (start_index > available_indices
@@ -7176,7 +7623,8 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
-    if (device->npatch_segments > 1.0f && base_vertex_index >= 0) {
+    if (device->npatch_segments > 1.0f && base_vertex_index >= 0 &&
+            device->streams[0].buffer && device->streams[0].stride) {
         HRESULT tessellated = d9_draw_npatch(iface, device, primitive_type,
                 primitive_count,
                 device->index_buffer->shadow + start_index * index_size,
@@ -7186,16 +7634,43 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
         /* See the note in device_draw_primitive: falling through draws the
          * mesh flat rather than dropping it. */
     }
-    /* Vertices addressable by this draw start after the stream's
-     * OffsetInBytes, not at the start of the buffer. */
-    available_vertices = (device->streams[0].buffer->length
-            - device->streams[0].offset) / device->streams[0].stride;
-    if (min_vertex_index > available_vertices
-            || vertex_count > available_vertices - min_vertex_index) {
-        TRACE_FRAME_REJECT();
-        return D3DERR_INVALIDCALL;
-    }
+    D9WGDrawIndexBounds bounds;
+    HRESULT range_result = d9_draw_index_bounds(device, base_vertex_index, &bounds);
+    if (FAILED(range_result)) return TRACE_REFUSE(range_result);
 
+    D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
+    if (device->streams[0].buffer) {
+        status_source.vertices = device->streams[0].buffer->shadow;status_source.length = device->streams[0].buffer->length;
+    }
+    status_source.base = device->streams[0].offset;status_source.stride = device->streams[0].stride;
+    status_source.indices = device->index_buffer->shadow + start_index*index_size;
+    status_source.index_bytes = index_count*index_size;status_source.index_stride = index_size;
+    /* Only a supported software classification needs to read index contents. */
+    UINT status_index_count = d9_software_vertex_processing(device) && device->render_states[D3DRS_CLIPPING] &&
+            !device->vertex_shader && device->streams[0].frequency == 1u &&
+            d9_current_source_position_transformed(device) == 0 ? index_count : 0;
+    BOOL status_hints = d9_software_vertex_processing(device) &&
+            d9wg_draw_status_hints(&bounds, min_vertex_index, vertex_count,
+                    status_source.indices, status_index_count, index_size);
+    status_source.count = index_count;status_source.min_vertex = status_hints ? min_vertex_index : 0;
+    status_source.vertex_count = status_hints ? min_vertex_index + vertex_count : 0;
+    status_source.base_vertex = base_vertex_index;
+    D9WGClipStatus next_status;BOOL next_status_valid;
+    HRESULT status_result = d9_prepare_clip_status(device, &status_source, TRUE, &next_status, &next_status_valid);
+    if (FAILED(status_result)) return status_result;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    int clipped = d9_clip_vb_draw(device, primitive_type, 0, index_count, device->index_buffer->shadow + start_index*index_size,
+            index_count*index_size, index_size, base_vertex_index,
+            bounds.min_vertex, bounds.vertex_limit);
+    if (clipped) {
+        if (clipped < 0) return TRACE_REFUSE(clipped == -3 ? E_OUTOFMEMORY :
+                clipped == -2 ? D3DERR_DRIVERINTERNALERROR : D3DERR_INVALIDCALL);
+        device->clip_status = next_status;device->clip_status_valid = next_status_valid;
+        TRACE_FRAME_DRAW(primitive_count);invalidate_render_target_mirrors(device);
+        return D3D_OK;
+    }
+    if (!d9wg_flush_draw_buffers(device, TRUE))
+        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.base_vertex_index = base_vertex_index;
@@ -7206,37 +7681,59 @@ static HRESULT WINAPI device_draw_indexed_primitive(IDirect3DDevice9 *iface,
     if (!emit_command(D9WG_OP_DRAW_INDEXED_PRIMITIVE, &command,
             sizeof(command)))
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    device->clip_status = next_status;device->clip_status_valid = next_status_valid;
     TRACE_FRAME_DRAW(primitive_count);
     invalidate_render_target_mirrors(device);
     return D3D_OK;
 }
 
-static void clear_stream_zero_after_up(D9Device *device)
+static BOOL clear_stream_zero_after_up(D9Device *device)
 {
     D9VertexBuffer *old = device->streams[0].buffer;
     device->streams[0].buffer = NULL;
+    device->streams[0].offset = 0;
     device->streams[0].stride = 0;
-    if (old) IDirect3DVertexBuffer9_Release(&old->iface);
+    if (old) vb_binding_release(old);
+    D9WGSetStreamSource command = { device->handle, 0, 0, 0, 0, 0 };
+    return emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command));
 }
 
-static void clear_indices_after_indexed_up(D9Device *device)
+static BOOL clear_indices_after_indexed_up(D9Device *device)
 {
     D9IndexBuffer *old = device->index_buffer;
     device->index_buffer = NULL;
-    if (old) IDirect3DIndexBuffer9_Release(&old->iface);
+    if (old) ib_binding_release(old);
+    D9WGSetIndices command = { device->handle, 0 };
+    return emit_command(D9WG_OP_SET_INDICES, &command, sizeof(command));
+}
+
+/* The missing-declaration failure detaches storage without the successful
+ * UP path's zeroing of stream metadata. This modifies live state even during
+ * recording, just like successful UP; internal patch draws never use it. */
+static void clear_bindings_after_up_missing_format(D9Device *device, BOOL indexed)
+{
+    D9VertexBuffer *old = device->streams[0].buffer;
+    device->streams[0].buffer = NULL;
+    if (old) vb_binding_release(old);
+    D9WGSetStreamSource command = { device->handle, 0, 0, device->streams[0].stride, device->streams[0].offset, 0 };
+    emit_command(D9WG_OP_SET_STREAM_SOURCE, &command, sizeof(command));
+    if (indexed) clear_indices_after_indexed_up(device);
 }
 
 static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
         D3DPRIMITIVETYPE primitive_type, UINT primitive_count,
         const void *vertex_data, UINT stride)
 {
+    /* A nonzero stride makes a zero-primitive public UP a no-op before
+     * format/data validation and before either successful/failure unbinding. */
+    if (stride && !primitive_count) return D3D_OK;
     D9Device *device = device_from_iface(iface);
     D9WGDrawPrimitiveUP command;
     UINT vertex_count;
     UINT vertex_bytes;
     BOOL result;
 
-    if (!vertex_data || !stride || !device_has_vertex_format(device)
+    if (!vertex_data || !stride
             || !primitive_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &vertex_count)
@@ -7244,6 +7741,13 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
+    if (!device_has_vertex_format(device)) {
+        clear_bindings_after_up_missing_format(device, FALSE);
+        TRACE_FRAME_REJECT();
+        return D3DERR_INVALIDCALL;
+    }
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
@@ -7251,22 +7755,37 @@ static HRESULT WINAPI device_draw_primitive_up(IDirect3DDevice9 *iface,
     command.stride = stride;
     command.vertex_count = vertex_count;
     command.vertex_bytes = vertex_bytes;
+    D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
+    status_source.vertices = vertex_data;status_source.length = command.vertex_bytes;status_source.stride = stride;
+    status_source.count = status_source.vertex_count = vertex_count;
+    status_source.status_screen = 1;
+    status_source.viewport = (D9WGProcessViewport){(float)device->viewport.X,(float)device->viewport.Y,
+            (float)device->viewport.Width,(float)device->viewport.Height,device->viewport.MinZ,device->viewport.MaxZ};
+    D9WGClipStatus next_status;BOOL next_status_valid;
+    HRESULT status_result = d9_prepare_clip_status(device, &status_source, FALSE, &next_status, &next_status_valid);
+    if (FAILED(status_result)) return status_result;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     result = emit_draw_primitive_up(&command, vertex_data);
     if (result) {
+        device->clip_status = next_status;device->clip_status_valid = next_status_valid;
         TRACE_FRAME_DRAW(primitive_count);
         invalidate_render_target_mirrors(device);
-        clear_stream_zero_after_up(device);
+        result = clear_stream_zero_after_up(device);
     }
     return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
-static HRESULT WINAPI device_draw_indexed_primitive_up(
-        IDirect3DDevice9 *iface, D3DPRIMITIVETYPE primitive_type,
+/*
+ * The draw of DrawIndexedPrimitiveUP, without the API's side effect of
+ * unbinding stream 0 and the index buffer (including missing-format failure): patch tessellation draws through
+ * here, and must leave the application's bindings alone (review S2-28: every
+ * draw after a DrawRectPatch/DrawTriPatch was refused for want of stream 0).
+ */
+static HRESULT draw_indexed_up(D9Device *device, D3DPRIMITIVETYPE primitive_type,
         UINT min_vertex_index, UINT vertex_count, UINT primitive_count,
         const void *index_data, D3DFORMAT index_format,
-        const void *vertex_data, UINT stride)
+        const void *vertex_data, UINT stride, BOOL track_status, BOOL public_up)
 {
-    D9Device *device = device_from_iface(iface);
     D9WGDrawIndexedPrimitiveUP command;
     UINT index_count;
     UINT index_size;
@@ -7274,7 +7793,7 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
     BOOL result;
 
     if (!index_data || !vertex_data || !stride
-            || !device_has_vertex_format(device) || !primitive_count
+            || !primitive_count
             || !vertex_count
             || !primitive_element_count(primitive_type, primitive_count,
                     &index_count)) {
@@ -7295,6 +7814,11 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
         TRACE_FRAME_REJECT();
         return D3DERR_INVALIDCALL;
     }
+    if (!device_has_vertex_format(device)) {
+        if (public_up) clear_bindings_after_up_missing_format(device, TRUE);
+        TRACE_FRAME_REJECT();
+        return D3DERR_INVALIDCALL;
+    }
     command.device_handle = device->handle;
     command.primitive_type = primitive_type;
     command.min_vertex_index = min_vertex_index;
@@ -7303,14 +7827,63 @@ static HRESULT WINAPI device_draw_indexed_primitive_up(
     command.index_format = index_format;
     command.stride = stride;
     command.index_count = index_count;
-    result = emit_draw_indexed_primitive_up(&command, index_data, vertex_data);
-    if (result) {
-        TRACE_FRAME_DRAW(primitive_count);
-        invalidate_render_target_mirrors(device);
-        clear_stream_zero_after_up(device);
-        clear_indices_after_indexed_up(device);
+    D9WGClipDrawSource status_source;ZeroMemory(&status_source, sizeof(status_source));
+    status_source.vertices = vertex_data;status_source.length = command.vertex_bytes;status_source.stride = stride;
+    status_source.indices = index_data;status_source.index_bytes = command.index_bytes;status_source.index_stride = index_size;
+    status_source.count = index_count;status_source.min_vertex = min_vertex_index;status_source.vertex_count = vertex_elements;
+    status_source.status_screen = 1;
+    status_source.viewport = (D9WGProcessViewport){(float)device->viewport.X,(float)device->viewport.Y,
+            (float)device->viewport.Width,(float)device->viewport.Height,device->viewport.MinZ,device->viewport.MaxZ};
+    D9WGClipStatus next_status = device->clip_status;BOOL next_status_valid = device->clip_status_valid;
+    if (track_status) {
+        HRESULT status_result = d9_prepare_clip_status(device, &status_source, FALSE, &next_status, &next_status_valid);
+        if (FAILED(status_result)) return status_result;
     }
-    return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    if (!flush_managed_textures(device)) return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+    result = emit_draw_indexed_primitive_up(&command, index_data, vertex_data);
+    if (!result) return D3DERR_DRIVERINTERNALERROR;
+    if (track_status) { device->clip_status = next_status;device->clip_status_valid = next_status_valid; }
+    TRACE_FRAME_DRAW(primitive_count);
+    invalidate_render_target_mirrors(device);
+    return D3D_OK;
+}
+
+static HRESULT WINAPI device_draw_indexed_primitive_up(
+        IDirect3DDevice9 *iface, D3DPRIMITIVETYPE primitive_type,
+        UINT min_vertex_index, UINT vertex_count, UINT primitive_count,
+        const void *index_data, D3DFORMAT index_format,
+        const void *vertex_data, UINT stride)
+{
+    /* A nonzero stride makes a zero-primitive public UP a no-op before
+     * format/data validation and before either successful/failure unbinding. */
+    if (stride && !primitive_count) return D3D_OK;
+    D9Device *device = device_from_iface(iface);
+    HRESULT mode_result = d9_validate_vertex_shader_mode(device);
+    if (FAILED(mode_result)) return mode_result;
+    HRESULT result = draw_indexed_up(device, primitive_type, min_vertex_index,
+            vertex_count, primitive_count, index_data, index_format,
+            vertex_data, stride, TRUE, TRUE);
+    if (result == D3D_OK) {
+        BOOL stream_ok = clear_stream_zero_after_up(device);
+        BOOL index_ok = clear_indices_after_indexed_up(device);
+        if (!stream_ok || !index_ok) result = D3DERR_DRIVERINTERNALERROR;
+    }
+    return result;
+}
+
+/* Windows exposes these two POSITION-only user declarations as legacy FVFs.
+ * Keep all other reverse mappings at zero rather than guessing a layout. */
+static DWORD declaration_fvf(const D3DVERTEXELEMENT9 *elements, UINT count)
+{
+    if (count != 1 || !elements) return 0;
+    const D3DVERTEXELEMENT9 *e = elements;
+    if (e->Stream || e->Offset || e->Method != D3DDECLMETHOD_DEFAULT
+            || e->UsageIndex) return 0;
+    if (e->Type == D3DDECLTYPE_FLOAT3 && e->Usage == D3DDECLUSAGE_POSITION)
+        return D3DFVF_XYZ;
+    if (e->Type == D3DDECLTYPE_FLOAT4 && e->Usage == D3DDECLUSAGE_POSITIONT)
+        return D3DFVF_XYZRHW;
+    return 0;
 }
 
 static HRESULT WINAPI device_create_vertex_declaration(
@@ -7325,11 +7898,19 @@ static HRESULT WINAPI device_create_vertex_declaration(
     if (!decl_out || !elements)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *decl_out = NULL;
+    if (device_compatibility_api(device) == 9u) {
+        /* Native declaration validation reports E_FAIL for unused elements
+         * and offsets that cannot address a DWORD-aligned vertex value. */
+        UINT i;
+        for (i = 0; i < D3DMAXDECLLENGTH && elements[i].Stream != 0xff; ++i)
+            if ((elements[i].Offset & 3u) || elements[i].Type == D3DDECLTYPE_UNUSED)
+                return TRACE_REFUSE(E_FAIL);
+    }
     if (!parse_vertex_declaration(elements, wire, &count)) {
         /* The single most likely silent killer for a real game: one
          * unsupported D3DDECLTYPE/usage anywhere in the array rejects the
          * whole declaration, and without this the app just never draws. */
-        HOSTLOG_FAILED("CreateVertexDeclaration refused (see the "
+        HOSTLOG_REFUSED("CreateVertexDeclaration refused (see the "
                 "element-level line above for which element and why)");
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
@@ -7343,6 +7924,7 @@ static HRESULT WINAPI device_create_vertex_declaration(
     decl->device = device;
     decl->handle = allocate_handle();
     decl->element_count = count;
+    decl->fvf = declaration_fvf(elements, count);
     CopyMemory(decl->elements, elements, count * sizeof(D3DVERTEXELEMENT9));
     device_child_add_ref(device);
 
@@ -7357,6 +7939,45 @@ static HRESULT WINAPI device_create_vertex_declaration(
     return D3D_OK;
 }
 
+/* Converted declarations are cached by exact FVF for the device lifetime.
+ * A cache entry starts publicly at zero and never adds a device parent pin. */
+static HRESULT device_fvf_declaration(D9Device *device, DWORD fvf,
+        const D9WGVertexElement *wire, UINT count, D9VertexDeclaration **out)
+{
+    D9VertexDeclaration *decl;
+    *out = NULL;
+    for (decl = device->vertex_declarations; decl; decl = decl->next_device_resource) {
+        if (!decl->fvf_converted || decl->fvf != fvf) continue;
+        if (!decl->fvf_cache_ref) {
+            decl_binding_add_ref(decl);
+            decl->fvf_cache_ref = TRUE;
+        }
+        *out = decl;
+        return D3D_OK;
+    }
+    decl = (D9VertexDeclaration *)HeapAlloc(GetProcessHeap(),
+            HEAP_ZERO_MEMORY, sizeof(*decl));
+    if (!decl) return E_OUTOFMEMORY;
+    decl->iface.lpVtbl = &g_decl_vtbl;
+    decl->device = device;
+    decl->handle = allocate_handle();
+    decl->element_count = count;
+    decl->fvf = fvf;
+    decl->fvf_converted = TRUE;
+    decl->fvf_cache_ref = TRUE;
+    decl->binding_refs = 1;
+    /* SDK and protocol elements share the WORD/WORD/BYTE/BYTE/BYTE/BYTE ABI. */
+    CopyMemory(decl->elements, wire, count * sizeof(D3DVERTEXELEMENT9));
+    if (!emit_vertex_declaration_create(device, decl->handle, wire, count)) {
+        HeapFree(GetProcessHeap(), 0, decl);
+        return D3DERR_DRIVERINTERNALERROR;
+    }
+    decl->next_device_resource = device->vertex_declarations;
+    device->vertex_declarations = decl;
+    *out = decl;
+    return D3D_OK;
+}
+
 static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
         IDirect3DVertexDeclaration9 *decl_iface)
 {
@@ -7366,14 +7987,20 @@ static HRESULT WINAPI device_set_vertex_declaration(IDirect3DDevice9 *iface,
 
     if (decl && (decl_iface->lpVtbl != &g_decl_vtbl || decl->device != device))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_vertex_format(device);
-    if (decl)
-        IDirect3DVertexDeclaration9_AddRef(decl_iface);
-    if (device->vertex_declaration)
-        IDirect3DVertexDeclaration9_Release(
-                &device->vertex_declaration->iface);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9VertexDeclaration *old = block->vertex_declaration;
+        if (decl) decl_binding_add_ref(decl);
+        block->has_vertex_format = TRUE;block->vertex_declaration = decl;
+        block->fvf = decl ? decl->fvf : 0;
+        if (old) decl_binding_release(old);
+        return D3D_OK;
+    }
+    D9VertexDeclaration *old_decl = device->vertex_declaration;
+    if (decl) decl_binding_add_ref(decl);
     device->vertex_declaration = decl;
-    device->fvf = 0;
+    device->fvf = decl ? decl->fvf : 0;
+    if (old_decl) decl_binding_release(old_decl);
     command.device_handle = device->handle;
     command.declaration_handle = decl ? decl->handle : 0;
     return emit_command(D9WG_OP_SET_VERTEX_DECLARATION, &command,
@@ -7399,25 +8026,35 @@ static HRESULT WINAPI device_set_fvf(IDirect3DDevice9 *iface, DWORD fvf)
     D9Device *device = device_from_iface(iface);
     D9WGVertexElement wire[D3DMAXDECLLENGTH];
     UINT count;
+    D9VertexDeclaration *decl;
+    HRESULT result;
 
+    /* Native treats zero as a successful no-op, including while recording. */
+    if (!fvf) return D3D_OK;
     if (!fvf_to_declaration(fvf, wire, &count)) {
-        /* Worse than a plain refusal: nothing here clears the declaration
-         * already in force, so the app's next draw is laid out by the
-         * *previous* format. That renders -- with the wrong attributes at the
-         * wrong offsets -- rather than failing, which is the shape "the model
-         * is one flat colour" takes when a texcoord goes missing this way. */
-        HOSTLOG_FAILED("SetFVF refused: fvf=%08lX (the declaration already in "
+        /* Native keeps the previous declaration on an invalid FVF. Keep the
+         * rejection visible as an API warning, without reporting a host or
+         * transport failure for the caller's invalid format. */
+        HOSTLOG_REFUSED("SetFVF refused: fvf=%08lX (the declaration already in "
                 "force stays bound, so following draws use a stale layout)",
                 fvf);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    state_block_record_vertex_format(device);
-    if (device->vertex_declaration) {
-        IDirect3DVertexDeclaration9_Release(
-                &device->vertex_declaration->iface);
-        device->vertex_declaration = NULL;
+    result = device_fvf_declaration(device, fvf, wire, count, &decl);
+    if (FAILED(result)) return TRACE_REFUSE(result);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9VertexDeclaration *old = block->vertex_declaration;
+        decl_binding_add_ref(decl);
+        block->has_vertex_format = TRUE;block->vertex_declaration = decl;block->fvf = fvf;
+        if (old) decl_binding_release(old);
+        return D3D_OK;
     }
+    D9VertexDeclaration *old_decl = device->vertex_declaration;
+    decl_binding_add_ref(decl);
+    device->vertex_declaration = decl;
     device->fvf = fvf;
+    if (old_decl) decl_binding_release(old_decl);
     return emit_set_fvf(device, fvf, wire, count)
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -7438,12 +8075,10 @@ static HRESULT WINAPI device_get_fvf(IDirect3DDevice9 *iface, DWORD *fvf)
  * resolve. Passing NULL means "go back to fixed function", which stays a
  * fully supported mode.
  *
- * The guest does no semantic work on the bytecode: it counts tokens, hashes
- * them, keeps a shadow copy for GetFunction and Reset replay, and ships the
- * raw stream. Translation to WGSL is entirely host-side (plan 4.2), so a
- * shader this build cannot translate still creates successfully here and is
- * refused where the failure is visible and countable -- in the executor --
- * rather than being second-guessed from inside the guest.
+ * The guest validates API register limits, counts tokens, hashes them and
+ * keeps the original bytes for GetFunction and Reset replay. Translation to
+ * WGSL stays host-side; invalid constant operands are rejected before either
+ * a COM resource or a GPU shader is allocated.
  */
 static D9Shader *vertex_shader_from_iface(IDirect3DVertexShader9 *iface)
 {
@@ -7455,32 +8090,15 @@ static D9Shader *pixel_shader_from_iface(IDirect3DPixelShader9 *iface)
     return (D9Shader *)iface;
 }
 
-static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
-        BOOL want_pixel, D9Shader **shader_out)
+/* All bytecode entering here has already been validated. This single
+ * allocation/emission path also stores8 programs expanded with local DEFs;
+ * their original8192-token limit is checked before the trusted expansion. */
+static HRESULT create_shader_object(D9Device *device, const DWORD *bytecode,
+        UINT token_count, BOOL want_pixel, D9Shader **shader_out)
 {
     D9Shader *shader;
-    UINT token_count = 0;
-    BOOL is_pixel = FALSE;
     uint32_t code_bytes;
-
     *shader_out = NULL;
-    if (!bytecode) {
-        TRACE("FAIL CreateShader want_pixel=%lu bytecode=NULL -> %08lX",
-                (DWORD)want_pixel, (DWORD)D3DERR_INVALIDCALL);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    if (!shader_token_count(bytecode, &token_count, &is_pixel)
-            || is_pixel != want_pixel) {
-        /* Rejected before anything is emitted, so without this line the call
-         * leaves no record whatsoever: no CMD, no OK, no FAIL. An app whose
-         * shader is turned down here sees only D3DERR_INVALIDCALL, and the
-         * trace shows only the gap where the shader should have been. */
-        TRACE("FAIL CreateShader version=%08lX want_pixel=%lu is_pixel=%lu "
-                "tokens=%lu -> %08lX", bytecode[0], (DWORD)want_pixel,
-                (DWORD)is_pixel, token_count, (DWORD)D3DERR_INVALIDCALL);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-
     code_bytes = (uint32_t)token_count * 4u;
     shader = (D9Shader *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*shader));
@@ -7500,6 +8118,8 @@ static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
     shader->device = device;
     shader->handle = allocate_shader_handle();
     shader->is_pixel = want_pixel;
+    shader->requires_software = !want_pixel && device_compatibility_api(device) == 9
+            && !d9wg_shader9_constants_valid((const uint32_t *)bytecode, token_count, FALSE);
     shader->token_count = token_count;
     shader_bytecode_hash(shader->code, token_count, &shader->hash_low,
             &shader->hash_high);
@@ -7525,7 +8145,55 @@ static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
     return D3D_OK;
 }
 
-static void shader_destroy(D9Shader *shader)
+static HRESULT create_shader(D9Device *device, const DWORD *bytecode,
+        BOOL want_pixel, D9Shader **shader_out)
+{
+    UINT token_count = 0;
+    BOOL is_pixel = FALSE;
+
+    *shader_out = NULL;
+    if (!bytecode) {
+        TRACE("FAIL CreateShader want_pixel=%lu bytecode=NULL -> %08lX",
+                (DWORD)want_pixel, (DWORD)D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+    BOOL valid;
+    if (device_compatibility_api(device) == 8) {
+        const DWORD version = bytecode[0];
+        const UINT minor = version & 0xffu;
+        UINT body_count = 0;
+        valid = (version >> 16) == (want_pixel ? 0xffffu : 0xfffeu)
+                && ((version >> 8) & 0xffu) == 1u
+                && minor <= (want_pixel ? 4u : 1u)
+                && shader8_validate_body(bytecode + 1, D9WG_D3D8_SHADER_TOKENS,
+                        want_pixel, minor, &body_count);
+        if (valid) {
+            token_count = body_count + 2u; /* version and END */
+            is_pixel = want_pixel;
+        }
+    } else {
+        valid = shader_token_count(bytecode, &token_count, &is_pixel)
+                && d9wg_shader9_constants_valid((const uint32_t *)bytecode, token_count,
+                        !!(device->creation.BehaviorFlags
+                            & (D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_MIXED_VERTEXPROCESSING)))
+                && d9wg_shader9_declarations_valid((const uint32_t *)bytecode, token_count);
+    }
+    if (!valid || is_pixel != want_pixel) {
+        /* Rejected before anything is emitted, so without this line the call
+         * leaves no record whatsoever: no CMD, no OK, no FAIL. An app whose
+         * shader is turned down here sees only D3DERR_INVALIDCALL, and the
+         * trace shows only the gap where the shader should have been. */
+        TRACE("FAIL CreateShader version=%08lX want_pixel=%lu is_pixel=%lu "
+                "tokens=%lu -> %08lX", bytecode[0], (DWORD)want_pixel,
+                (DWORD)is_pixel, token_count, (DWORD)D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+
+    return create_shader_object(device, bytecode, token_count,
+            want_pixel, shader_out);
+}
+
+static void shader_destroy_storage(D9Shader *shader)
 {
     D9Shader **link = &shader->device->shaders;
     D9WGDestroyResource destroy;
@@ -7538,9 +8206,28 @@ static void shader_destroy(D9Shader *shader)
     destroy.resource_kind = shader->is_pixel ? D9WG_RESOURCE_PIXEL_SHADER
             : D9WG_RESOURCE_VERTEX_SHADER;
     emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-    device_child_release(shader->device);
     HeapFree(GetProcessHeap(), 0, shader->code);
     HeapFree(GetProcessHeap(), 0, shader);
+}
+
+static ULONG shader_public_add_ref(D9Shader *shader)
+{
+    ULONG refs = (ULONG)InterlockedIncrement(&shader->refcount);
+    if (refs == 1) device_child_add_ref(shader->device);
+    return refs;
+}
+
+static ULONG shader_public_release(D9Shader *shader)
+{
+    if (!InterlockedCompareExchange(&shader->refcount, 0, 0)) return 0;
+    ULONG refs = (ULONG)InterlockedDecrement(&shader->refcount);
+    if (!refs) {
+        D9Device *device = shader->device;
+        if (!InterlockedCompareExchange(&shader->binding_refs, 0, 0))
+            shader_destroy_storage(shader);
+        device_child_release(device);
+    }
+    return refs;
 }
 
 static HRESULT emit_set_shader(D9Device *device, D9Shader *shader,
@@ -7586,22 +8273,44 @@ static HRESULT WINAPI device_create_pixel_shader(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
+static BOOL shader_binding_identity(D9Device *device, D9Shader *shader, BOOL pixel)
+{
+    const void *expected = pixel ? (const void *)&g_pixel_shader_vtbl
+            : (const void *)&g_vertex_shader_vtbl;
+    if ((const void *)shader->iface.vertex.lpVtbl == expected)
+        return shader->device == device && shader->is_pixel == pixel;
+    if (device_compatibility_api(device) == 9u) {
+        D9Shader *owned;
+        for (owned = device->shaders; owned; owned = owned->next_device_resource)
+            if (owned == shader) return owned->is_pixel == pixel;
+    }
+    return FALSE;
+}
+
 static HRESULT WINAPI device_set_vertex_shader(IDirect3DDevice9 *iface,
         IDirect3DVertexShader9 *shader_iface)
 {
     D9Device *device = device_from_iface(iface);
     D9Shader *shader = shader_iface ? vertex_shader_from_iface(shader_iface) : NULL;
 
-    if (shader && (shader_iface->lpVtbl != &g_vertex_shader_vtbl
-            || shader->device != device))
+    if (shader && !shader_binding_identity(device, shader, FALSE))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_vertex_shader(device);
-    if (shader)
-        IDirect3DVertexShader9_AddRef(shader_iface);
-    if (device->vertex_shader)
-        IDirect3DVertexShader9_Release(&device->vertex_shader->iface.vertex);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9Shader *old = block->vertex_shader;
+        if (shader) shader_binding_add_ref(shader);
+        block->has_vertex_shader = TRUE;block->vertex_shader = shader;
+        if (old) shader_binding_release(old);
+        return D3D_OK;
+    }
+    HRESULT hr = emit_set_shader(device, shader, FALSE);
+    if (FAILED(hr)) return hr;
+    device->vertex_shader_hw_disabled = FALSE;
+    D9Shader *old_shader = device->vertex_shader;
+    if (shader) shader_binding_add_ref(shader);
     device->vertex_shader = shader;
-    return emit_set_shader(device, shader, FALSE);
+    if (old_shader) shader_binding_release(old_shader);
+    return D3D_OK;
 }
 
 static HRESULT WINAPI device_get_vertex_shader(IDirect3DDevice9 *iface,
@@ -7624,15 +8333,20 @@ static HRESULT WINAPI device_set_pixel_shader(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9Shader *shader = shader_iface ? pixel_shader_from_iface(shader_iface) : NULL;
 
-    if (shader && (shader_iface->lpVtbl != &g_pixel_shader_vtbl
-            || shader->device != device))
+    if (shader && !shader_binding_identity(device, shader, TRUE))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_pixel_shader(device);
-    if (shader)
-        IDirect3DPixelShader9_AddRef(shader_iface);
-    if (device->pixel_shader)
-        IDirect3DPixelShader9_Release(&device->pixel_shader->iface.pixel);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        D9Shader *old = block->pixel_shader;
+        if (shader) shader_binding_add_ref(shader);
+        block->has_pixel_shader = TRUE;block->pixel_shader = shader;
+        if (old) shader_binding_release(old);
+        return D3D_OK;
+    }
+    D9Shader *old_shader = device->pixel_shader;
+    if (shader) shader_binding_add_ref(shader);
     device->pixel_shader = shader;
+    if (old_shader) shader_binding_release(old_shader);
     return emit_set_shader(device, shader, TRUE);
 }
 
@@ -7659,6 +8373,16 @@ static HRESULT WINAPI device_get_pixel_shader(IDirect3DDevice9 *iface,
  * sub-range is sent -- a 32-register bone palette where one bone moved
  * becomes one float4 on the wire, not 32.
  */
+/* Float4 setters expose the original API bytes through GetConstant. Compare
+ * object representations so signed zero and NaN payloads remain distinct. */
+static BOOL constant_vector_equal(const float *left, const float *right)
+{
+    const unsigned char *a = (const unsigned char *)left;
+    const unsigned char *b = (const unsigned char *)right;
+    for (UINT i = 0; i < 16u; ++i) if (a[i] != b[i]) return FALSE;
+    return TRUE;
+}
+
 static BOOL constant_range_valid(UINT start, UINT count, UINT capacity)
 {
     return count != 0 && start < capacity && count <= capacity - start;
@@ -7668,22 +8392,19 @@ static HRESULT set_constant_f(D9Device *device, BOOL is_pixel, UINT start,
         const float *data, UINT count)
 {
     float (*shadow)[4] = is_pixel ? device->ps_const_f : device->vs_const_f;
-    UINT capacity = is_pixel ? D9_MAX_PS_CONST_F : D9_MAX_VS_CONST_F;
+    UINT capacity = is_pixel ? D9_MAX_PS_CONST_F : device->vs_float_capacity;
     UINT first_dirty = count;
     UINT last_dirty = 0;
     UINT index;
 
     if (!data || !constant_range_valid(start, count, capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_constant(device, is_pixel, TRUE, FALSE, start, count);
+    if (state_block_record_constant(device, is_pixel, TRUE, FALSE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
         const float *source = data + index * 4;
         float *target = shadow[start + index];
-        if (target[0] == source[0] && target[1] == source[1]
-                && target[2] == source[2] && target[3] == source[3])
-            continue;
-        target[0] = source[0]; target[1] = source[1];
-        target[2] = source[2]; target[3] = source[3];
+        if (constant_vector_equal(target, source)) continue;
+        CopyMemory(target, source, 16u);
         if (index < first_dirty) first_dirty = index;
         last_dirty = index;
     }
@@ -7706,9 +8427,9 @@ static HRESULT set_constant_i(D9Device *device, BOOL is_pixel, UINT start,
     UINT last_dirty = 0;
     UINT index;
 
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_I))
+    if (!data || !constant_range_valid(start, count, is_pixel ? D9_MAX_CONST_I : device->vs_int_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_constant(device, is_pixel, FALSE, FALSE, start, count);
+    if (state_block_record_constant(device, is_pixel, FALSE, FALSE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
         const int *source = data + index * 4;
         int *target = shadow[start + index];
@@ -7735,14 +8456,13 @@ static HRESULT set_constant_b(D9Device *device, BOOL is_pixel, UINT start,
         const WINBOOL *data, UINT count)
 {
     BOOL *shadow = is_pixel ? device->ps_const_b : device->vs_const_b;
-    uint32_t packed[D9_MAX_CONST_B];
     UINT first_dirty = count;
     UINT last_dirty = 0;
     UINT index;
 
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_B))
+    if (!data || !constant_range_valid(start, count, is_pixel ? D9_MAX_CONST_B : device->vs_bool_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_constant(device, is_pixel, FALSE, TRUE, start, count);
+    if (state_block_record_constant(device, is_pixel, FALSE, TRUE, start, count, data)) return D3D_OK;
     for (index = 0; index < count; ++index) {
         BOOL value = data[index] ? TRUE : FALSE;
         if (shadow[start + index] == value)
@@ -7753,15 +8473,10 @@ static HRESULT set_constant_b(D9Device *device, BOOL is_pixel, UINT start,
     }
     if (first_dirty > last_dirty)
         return D3D_OK;
-    /* One 32-bit slot per register on the wire: the host's uniform layout
-     * (plan 9.7) has no packed-bit representation, and this is a handful of
-     * bytes either way. */
-    for (index = first_dirty; index <= last_dirty; ++index)
-        packed[index - first_dirty] = shadow[start + index] ? 1u : 0u;
     return emit_shader_constants(device,
             is_pixel ? D9WG_OP_SET_PIXEL_SHADER_CONSTANT_B
                     : D9WG_OP_SET_VERTEX_SHADER_CONSTANT_B,
-            start + first_dirty, last_dirty - first_dirty + 1, packed,
+            start + first_dirty, last_dirty - first_dirty + 1, shadow + start + first_dirty,
             (last_dirty - first_dirty + 1) * 4u)
             ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -7795,7 +8510,7 @@ static HRESULT WINAPI device_get_vertex_shader_constant_f(
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetVertexShaderConstantF");
     D9Device *device = device_from_iface(iface);
-    if (!data || !constant_range_valid(start, count, D9_MAX_VS_CONST_F))
+    if (!data || !constant_range_valid(start, count, device->vs_float_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(data, device->vs_const_f[start], count * 16u);
     return D3D_OK;
@@ -7817,7 +8532,7 @@ static HRESULT WINAPI device_get_vertex_shader_constant_i(
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetVertexShaderConstantI");
     D9Device *device = device_from_iface(iface);
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_I))
+    if (!data || !constant_range_valid(start, count, device->vs_int_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(data, device->vs_const_i[start], count * 16u);
     return D3D_OK;
@@ -7840,7 +8555,7 @@ static HRESULT WINAPI device_get_vertex_shader_constant_b(
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetVertexShaderConstantB");
     D9Device *device = device_from_iface(iface);
     UINT index;
-    if (!data || !constant_range_valid(start, count, D9_MAX_CONST_B))
+    if (!data || !constant_range_valid(start, count, device->vs_bool_capacity))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     for (index = 0; index < count; ++index)
         data[index] = device->vs_const_b[start + index];
@@ -7890,6 +8605,7 @@ static HRESULT WINAPI device_create_additional_swap_chain(
         IDirect3DSwapChain9 **out)
 {
     D9Device *device = device_from_iface(iface);
+    const UINT api = device_compatibility_api(device);
     D9SwapChain *chain;
     D9WGCreateSwapChain command;
     IDirect3DSurface9 *back_buffer = NULL;
@@ -7909,6 +8625,25 @@ static HRESULT WINAPI device_create_additional_swap_chain(
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
+    if (api == 8 && (!params->Windowed
+            || (params->MultiSampleType != D3DMULTISAMPLE_NONE
+                && params->MultiSampleType != D3DMULTISAMPLE_4_SAMPLES)
+            || params->BackBufferCount > 3
+            || params->BackBufferWidth > 8192 || params->BackBufferHeight > 8192))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_interval_valid(api, params->Windowed,
+            params->PresentationInterval, D9WG_PRESENT_INTERVAL_MASK))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_swap_effect_valid(api, params->SwapEffect, params->BackBufferCount))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!d9wg_present_multisample_valid(api, params->SwapEffect,
+            params->MultiSampleType, params->MultiSampleQuality, params->Flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 8 && params->BackBufferFormat != D3DFMT_UNKNOWN
+            && !supported_render_target_format8(params->BackBufferFormat))
+        return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
+    if (params->BackBufferCount > 3)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!params->Windowed || !device->present.Windowed) {
         HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: D3D9 allows "
                 "additional chains only on a windowed device, and only for a "
@@ -7917,50 +8652,64 @@ static HRESULT WINAPI device_create_additional_swap_chain(
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    if (params->MultiSampleType != D3DMULTISAMPLE_NONE) {
-        /* The chain's back buffer would have to be a multisampled texture that
-         * also resolves at present; nothing here does that resolve, and a
-         * silently single-sampled chain is a difference the app cannot see. */
-        HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: multisample=%lu is "
-                "not implemented for an additional chain",
-                (DWORD)params->MultiSampleType);
-        TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain",
-                D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
 
     window = params->hDeviceWindow ? params->hDeviceWindow
             : device->creation.hFocusWindow;
-    if (!window) {
+    if (api == 9 && !window) {
         TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain",
                 D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    /* D3D9 fills a zero width/height from the window's client area. */
-    probe_window_rect(window, (int)device->display_mode.Width,
-            (int)device->display_mode.Height, &client, &origin);
-    width = params->BackBufferWidth ? params->BackBufferWidth
-            : (UINT)(client.right - client.left);
-    height = params->BackBufferHeight ? params->BackBufferHeight
-            : (UINT)(client.bottom - client.top);
-    if (!width || !height) {
-        TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain",
-                D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
+    if (api == 8) {
+        SetRect(&client, 0, 0, (int)device->display_mode.Width,
+                (int)device->display_mode.Height);
+        origin.x = origin.y = 0;
+        if (window) GetClientRect(window, &client);
+        width = d9wg_present_extent(params->BackBufferWidth,
+                (UINT)(client.right - client.left), device->display_mode.Width);
+        height = d9wg_present_extent(params->BackBufferHeight,
+                (UINT)(client.bottom - client.top), device->display_mode.Height);
+        if (width > 8192 || height > 8192)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    } else {
+        /* D3D9 fills zero extents from the window probe. */
+        probe_window_rect(window, (int)device->display_mode.Width,
+                (int)device->display_mode.Height, &client, &origin);
+        width = params->BackBufferWidth ? params->BackBufferWidth
+                : (UINT)(client.right - client.left);
+        height = params->BackBufferHeight ? params->BackBufferHeight
+                : (UINT)(client.bottom - client.top);
+        if (!width || !height) {
+            TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain", D3DERR_INVALIDCALL, NULL);
+            return D3DERR_INVALIDCALL;
+        }
     }
-    format = params->BackBufferFormat == D3DFMT_UNKNOWN
-            ? device->display_mode.Format : params->BackBufferFormat;
+    format = api == 8
+        ? (params->BackBufferFormat ? params->BackBufferFormat : device->display_mode.Format)
+        : (D3DFORMAT)d9wg_display_mode_backbuffer_format(
+        params->BackBufferFormat);
 
+    if (!supported_multisample(format, params->MultiSampleType))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     hr = create_target_texture(device, width, height, format,
-            D3DUSAGE_RENDERTARGET, D3DMULTISAMPLE_NONE, 0, &back_buffer);
+            D3DUSAGE_RENDERTARGET, params->MultiSampleType,
+            params->MultiSampleQuality, &back_buffer);
     if (FAILED(hr)) {
-        HOSTLOG_FAILED("CreateAdditionalSwapChain refused: its back buffer "
-                "(%lux%lu format=%08lX) could not be created", width, height,
-                (DWORD)format);
+        /* Bad dimensions/formats are caller validation failures. Preserve
+         * error-level reports for allocation and transport failures. */
+        if (hr == D3DERR_INVALIDCALL)
+            HOSTLOG_REFUSED("CreateAdditionalSwapChain refused: its back buffer "
+                    "(%lux%lu format=%08lX) could not be created", width, height,
+                    (DWORD)format);
+        else
+            HOSTLOG_FAILED("CreateAdditionalSwapChain refused: its back buffer "
+                    "(%lux%lu format=%08lX) could not be created", width, height,
+                    (DWORD)format);
         TRACE_MARK_EXIT("Device.CreateAdditionalSwapChain", hr, NULL);
         return hr;
     }
     surface = surface_from_iface(back_buffer);
+    surface->lockable_render_target = !!(params->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER);
 
     chain = (D9SwapChain *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*chain));
@@ -7976,14 +8725,10 @@ static HRESULT WINAPI device_create_additional_swap_chain(
     chain->handle = allocate_handle();
     chain->window = window;
     chain->back_buffer = back_buffer;
-    chain->present = *params;
-    chain->present.BackBufferWidth = width;
-    chain->present.BackBufferHeight = height;
-    chain->present.BackBufferFormat = format;
-    chain->present.BackBufferCount = params->BackBufferCount
-            ? params->BackBufferCount : 1;
-    chain->present.hDeviceWindow = window;
+    d9wg_present_parameters_effective(&chain->present, params,
+        width, height, format, window);
 
+    if (api == 8 && window) ClientToScreen(window, &origin);
     command.device_handle = device->handle;
     command.swap_chain_handle = chain->handle;
     command.back_buffer_handle = surface->texture ? surface->texture->handle : 0;
@@ -8004,7 +8749,11 @@ static HRESULT WINAPI device_create_additional_swap_chain(
 
     chain->next_device_chain = device->additional_swap_chains;
     device->additional_swap_chains = chain;
-    device_child_add_ref(device);
+    /* Transfer the standalone surface's one device pin to the public chain.
+     * Its private texture storage has no separate device pin. */
+    surface->swap_chain = chain;
+    surface->refcount = 0;
+    d9wg_present_parameters_return(api, params, &chain->present);
     *out = &chain->iface;
     TRACE("OK CreateAdditionalSwapChain device=%08lX chain=%08lX back=%08lX "
             "%lux%lu window=%08lX", device->handle, chain->handle,
@@ -8048,8 +8797,8 @@ static HRESULT WINAPI device_get_swap_chain(IDirect3DDevice9 *iface,
 /* War3 testing confirmed that engines can gate an entire render branch on
  * this succeeding even when they never read pixels back from the result.
  * StretchRect and GetRenderTargetData both understand the implicit back
- * buffer; LockRect remains invalid because a default-pool render target is not
- * a lockable surface in D3D9. */
+ * buffer. Explicit LOCKABLE_BACKBUFFER permits linear non-MSAA locks; other
+ * default-pool backbuffers keep returning INVALIDCALL. */
 static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
         UINT swapchain, UINT index, D3DBACKBUFFER_TYPE type,
         IDirect3DSurface9 **out)
@@ -8065,12 +8814,15 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     *out = NULL;
-    if (swapchain || index || type != D3DBACKBUFFER_TYPE_MONO) {
+    (void)type;
+    if (swapchain || index >= device->present.BackBufferCount) {
         TRACE("FAIL GetBackBuffer chain=%lu index=%lu type=%lu -> %08lX",
                 swapchain, index, (DWORD)type, (DWORD)D3DERR_INVALIDCALL);
         TRACE_MARK_EXIT("Device.GetBackBuffer", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
+    if (index)
+        return swap_chain_cached_buffer(&device->implicit_swap_chain, index, out);
     /* One object per device, handed out again on every call: an app that
      * caches the pointer -- RenderWare caches both this and the auto
      * depth-stencil -- must see the same surface it saw the first time. */
@@ -8105,7 +8857,7 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
                 surface->width, surface->height, (DWORD)surface->format);
     }
     *out = &surface->iface;
-    /* Takes the device reference standing behind this public reference. */
+    /* The first live surface reference pins the device. */
     IDirect3DSurface9_AddRef(*out);
     TRACE("OK GetBackBuffer object=%08lX %lux%lu fmt=%08lX refs=%ld",
             (DWORD)(uintptr_t)*out, surface->width, surface->height,
@@ -8114,6 +8866,118 @@ static HRESULT WINAPI device_get_back_buffer(IDirect3DDevice9 *iface,
     TRACE_MARK_EXIT("Device.GetBackBuffer", D3D_OK, *out);
     return D3D_OK;
 }
+/* The public surface identities stay fixed. GPU copies implement the ordered
+ * buffers, so an already-bound target keeps addressing its original index. */
+static HRESULT swap_chain_cached_buffer(D9SwapChain *chain, UINT index,
+        IDirect3DSurface9 **out)
+{
+    D9Device *device = chain->device;
+    if (!out || index > 4) return D3DERR_INVALIDCALL;
+    if (!index) {
+        if (!chain->handle)
+            return device_get_back_buffer(&device->iface, 0, 0, D3DBACKBUFFER_TYPE_MONO, out);
+        *out = chain->back_buffer;
+        IDirect3DSurface9_AddRef(*out);
+        return D3D_OK;
+    }
+    D9Surface *surface = chain->cached_buffers[index - 1];
+    if (!surface) {
+        const D3DPRESENT_PARAMETERS *pp = chain->handle ? &chain->present : &device->present;
+        IDirect3DSurface9 *owned = NULL;
+        HRESULT hr = create_target_texture(device, pp->BackBufferWidth, pp->BackBufferHeight,
+                pp->BackBufferFormat, D3DUSAGE_RENDERTARGET, pp->MultiSampleType,
+                pp->MultiSampleQuality, &owned);
+        if (FAILED(hr)) { *out = NULL; return hr; }
+        surface = surface_from_iface(owned);
+        surface->swap_chain = chain;
+        surface->lockable_render_target = !!(pp->Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER);
+        chain->cached_buffers[index - 1] = surface;
+        *out = owned; /* Constructor's public/device reference is the result. */
+        return D3D_OK;
+    }
+    *out = &surface->iface;
+    IDirect3DSurface9_AddRef(*out);
+    return D3D_OK;
+}
+
+static BOOL swap_chain_cached_private_data(D9SwapChain *chain, BOOL clear)
+{
+    BOOL found = FALSE;
+    for (UINT i = 0; i < 4; ++i) {
+        D9Surface *surface = chain->cached_buffers[i];
+        if (surface && surface->private_data.head) {
+            found = TRUE;
+            if (clear && InterlockedCompareExchange(&chain->device->refcount, 0, 0) == 1)
+                d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
+        }
+    }
+    return found;
+}
+
+static void swap_chain_destroy_cached_buffers(D9SwapChain *chain)
+{
+    for (UINT i = 0; i < 4; ++i) {
+        D9Surface *surface = chain->cached_buffers[i];
+        if (!surface) continue;
+        chain->cached_buffers[i] = NULL;
+        surface->swap_chain = NULL;
+        surface_destroy_storage(surface);
+    }
+}
+
+static HRESULT swap_chain_copy_buffer(D9SwapChain *chain, UINT from, UINT to)
+{
+    IDirect3DSurface9 *source = NULL, *destination = NULL;
+    HRESULT hr = swap_chain_cached_buffer(chain, from, &source);
+    if (FAILED(hr)) return hr;
+    hr = swap_chain_cached_buffer(chain, to, &destination);
+    if (SUCCEEDED(hr)) {
+        hr = IDirect3DDevice9_StretchRect(&chain->device->iface, source, NULL,
+                destination, NULL, D3DTEXF_NONE);
+        IDirect3DSurface9_Release(destination);
+    }
+    IDirect3DSurface9_Release(source);
+    return hr;
+}
+
+static HRESULT swap_chain_prepare_buffers(D9SwapChain *chain)
+{
+    const D3DPRESENT_PARAMETERS *pp = chain->handle ? &chain->present : &chain->device->present;
+    if (pp->SwapEffect != D3DSWAPEFFECT_FLIP && pp->SwapEffect != D3DSWAPEFFECT_DISCARD)
+        return D3D_OK;
+    UINT count = pp->BackBufferCount;
+    /* Prepare storage before presentation; allocation failure must not rotate
+     * a partly available chain. Hidden buffers are needed only for FLIP. */
+    for (UINT i = 1; i < (pp->SwapEffect == D3DSWAPEFFECT_FLIP ? 5u : count); ++i) {
+        if (i < 3 && i >= count) continue;
+        IDirect3DSurface9 *surface;
+        HRESULT hr = swap_chain_cached_buffer(chain, i, &surface);
+        if (FAILED(hr)) return hr;
+        IDirect3DSurface9_Release(surface);
+    }
+    return pp->SwapEffect == D3DSWAPEFFECT_FLIP ? swap_chain_copy_buffer(chain, 0, 4) : D3D_OK;
+}
+
+static HRESULT swap_chain_advance_buffers(D9SwapChain *chain)
+{
+    const D3DPRESENT_PARAMETERS *pp = chain->handle ? &chain->present : &chain->device->present;
+    if (pp->SwapEffect != D3DSWAPEFFECT_FLIP && pp->SwapEffect != D3DSWAPEFFECT_DISCARD)
+        return D3D_OK;
+    UINT count = pp->BackBufferCount;
+    for (UINT i = 1; i < count; ++i) {
+        HRESULT hr = swap_chain_copy_buffer(chain, i, i - 1);
+        if (FAILED(hr)) return hr;
+    }
+    if (pp->SwapEffect == D3DSWAPEFFECT_FLIP) {
+        HRESULT hr = swap_chain_copy_buffer(chain, 3, count - 1);
+        if (FAILED(hr)) return hr;
+        return swap_chain_copy_buffer(chain, 4, 3);
+    }
+    /* DISCARD leaves the final buffer undefined; its allocation can be reused. */
+    return D3D_OK;
+}
+
+
 static HRESULT WINAPI device_get_raster_status(IDirect3DDevice9 *iface,
         UINT swapchain, D3DRASTER_STATUS *status)
 {
@@ -8127,7 +8991,7 @@ static HRESULT WINAPI device_get_raster_status(IDirect3DDevice9 *iface,
      * the last 1/17 of each frame is the blank.  present_clock(), because
      * GetTickCount's 10 ms steps land in a 1 ms blank once every 170 ms. */
     now = present_clock(device);
-    period = device->present_clock_hz / 60u;
+    period = device->present_clock.hz / 60u;
     visible = period * 16u / 17u;
     if (!visible) {
         status->InVBlank = FALSE;
@@ -8164,13 +9028,19 @@ static BOOL supported_volume_texture_format(D3DFORMAT format)
     return supported_texture_format(format)
             && format != D3DFMT_DXT1 && format != D3DFMT_DXT2
             && format != D3DFMT_DXT3 && format != D3DFMT_DXT4
-            && format != D3DFMT_DXT5;
+            && format != D3DFMT_DXT5
+            && format != 0x31495441u /* ATI1: WebGPU BC is 2D-only. */
+            && format != 0x32495441u /* ATI2 */;
 }
 
 static BOOL emit_volume_texture_create(D9Device *device,
         D9VolumeTexture *texture)
 {
     D9WGCreateTextureVolume command;
+    if (texture->pool == D3DPOOL_SCRATCH
+            && (device_compatibility_api(device) == 9u
+                || !supported_volume_texture_format8(texture->format)))
+        return TRUE;
     ZeroMemory(&command, sizeof(command));
     command.device_handle = device->handle;
     command.resource_handle = texture->handle;
@@ -8188,94 +9058,85 @@ static BOOL emit_volume_texture_create(D9Device *device,
 static BOOL emit_volume_texture_update(D9VolumeTexture *texture, UINT level,
         const D3DBOX *box)
 {
+    if (texture->pool == D3DPOOL_SCRATCH
+            && (device_compatibility_api(texture->device) == 9u
+                || !supported_volume_texture_format8(texture->format)))
+        return TRUE;
     D9TextureLevel *level_data = &texture->levels[level];
-    D9WGUpdateTexture update;
-    UINT block_width, block_height, block_bytes;
-    UINT block_x, block_y, row_bytes, row_count, slice_bytes, data_bytes;
-    UINT slice, row;
-    uint8_t *payload, *blob;
-    BOOL result;
-
-    if (!texture_format_layout(texture->format, &block_width, &block_height,
-            &block_bytes)
-            || !multiply_u32(((box->Right - box->Left) + block_width - 1u)
-                    / block_width, block_bytes, &row_bytes))
-        return FALSE;
-    block_x = box->Left / block_width;
-    block_y = box->Top / block_height;
-    row_count = ((box->Bottom - box->Top) + block_height - 1u)
-            / block_height;
-    if (!multiply_u32(row_bytes, row_count, &slice_bytes)
-            || !multiply_u32(slice_bytes, box->Back - box->Front,
-                    &data_bytes))
-        return FALSE;
-    ZeroMemory(&update, sizeof(update));
-    update.resource_handle = texture->handle;
-    update.level = level;
-    update.x = box->Left;
-    update.y = box->Top;
-    update.z = box->Front;
-    update.width = box->Right - box->Left;
-    update.height = box->Bottom - box->Top;
-    update.depth = box->Back - box->Front;
-    update.row_pitch = row_bytes;
-    update.slice_pitch = slice_bytes;
-    update.data_bytes = data_bytes;
+    D9TextureLevel slice = *level_data;
+    RECT rect;
+    UINT z;
+    BOOL result = TRUE;
+    SetRect(&rect, (INT)box->Left, (INT)box->Top, (INT)box->Right, (INT)box->Bottom);
     EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE, sizeof(update),
-            data_bytes, NULL, &payload, &blob);
-    if (result) {
-        update.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &update, sizeof(update));
-        for (slice = 0; slice < update.depth; ++slice) {
-            for (row = 0; row < row_count; ++row) {
-                CopyMemory(blob + slice * slice_bytes + row * row_bytes,
-                        level_data->shadow
-                            + (box->Front + slice) * level_data->slice_pitch
-                            + (block_y + row) * level_data->row_pitch
-                            + block_x * block_bytes,
-                        row_bytes);
-            }
-        }
+    for (z = box->Front; z < box->Back && result; ++z) {
+        slice.shadow = level_data->shadow + z * level_data->slice_pitch;
+        if (device_compatibility_api(texture->device) == 8u)
+            result = emit_level_update_api(8u, texture->handle, texture->format,
+                    &slice, level, z, &rect);
+        else
+            result = emit_level_update(texture->handle, texture->format,
+                    &slice, level, z, &rect);
     }
     LeaveCriticalSection(&g_transport_lock);
     return result;
 }
 
-static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice9 *iface,
-        UINT width, UINT height, UINT depth, UINT levels, DWORD usage,
-        D3DFORMAT format, D3DPOOL pool, IDirect3DVolumeTexture9 **out,
-        HANDLE *shared)
+static BOOL supported_volume_texture_format8(D3DFORMAT format)
 {
-    D9Device *device = device_from_iface(iface);
+    return supported_format8(format, FALSE)
+            && format != D3DFMT_DXT1 && format != D3DFMT_DXT2
+            && format != D3DFMT_DXT3 && format != D3DFMT_DXT4
+            && format != D3DFMT_DXT5
+            && format != 0x31495441u /* ATI1 */
+            && format != 0x32495441u /* ATI2 */;
+}
+
+static HRESULT create_volume_texture_object(D9Device *device,
+        UINT width, UINT height, UINT depth, UINT levels, DWORD usage,
+        D3DFORMAT format, D3DPOOL pool, UINT api, IDirect3DVolumeTexture9 **out)
+{
     D9VolumeTexture *texture;
     UINT full_levels, level, level_width, level_height, level_depth;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
-    (void)shared;
     TRACE("CALL CreateVolumeTexture %lux%lux%lu levels=%lu usage=%08lX "
             "format=%08lX pool=%lu", width, height, depth, levels, usage,
             (DWORD)format, (DWORD)pool);
     if (!out)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *out = NULL;
-    /* D3D9 does not support automatic mip generation for volume textures at
-     * all, so the flag is a request no driver honours: report D3DOK_NOAUTOGEN
-     * and build the texture, which is what the runtime itself does. */
-    if (usage & D3DUSAGE_AUTOGENMIPMAP) {
-        usage &= ~(DWORD)D3DUSAGE_AUTOGENMIPMAP;
-        levels = 1;
-        success = D3DOK_NOAUTOGEN;
-    }
-    if (!width || !height || !depth || width > 2048 || height > 2048
-            || depth > 2048
-            || !texture_create_supported(D3DRTYPE_VOLUMETEXTURE, usage, format,
-                    pool)) {
-        HOSTLOG_FAILED("CreateVolumeTexture refused: %lux%lux%lu levels=%lu "
-                "usage=%08lX format=%08lX pool=%lu", width, height, depth,
-                levels, usage, (DWORD)format, (DWORD)pool);
+    if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *out = NULL;
+    if ((usage & D3DUSAGE_WRITEONLY)
+            || ((usage & D3DUSAGE_DYNAMIC)
+                && (pool == D3DPOOL_MANAGED || pool == D3DPOOL_SCRATCH)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 8u) {
+        if (!width || !height || !depth || width > 2048 || height > 2048
+                || depth > 2048
+                || !(pool == D3DPOOL_SCRATCH ? supported_format8(format, FALSE)
+                    : supported_volume_texture_format8(format))
+                || (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+                || pool > D3DPOOL_SCRATCH)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    } else {
+        /* Unlike the 2D/cube NOAUTOGEN fallback, volume autogen is invalid. */
+        if (usage & D3DUSAGE_AUTOGENMIPMAP)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (!width || !height || !depth || width > 2048 || height > 2048
+                || depth > 2048
+                || !texture_create_supported(D3DRTYPE_VOLUMETEXTURE, usage, format,
+                        pool)) {
+            HOSTLOG_REFUSED("CreateVolumeTexture refused: %lux%lux%lu levels=%lu "
+                    "usage=%08lX format=%08lX pool=%lu", width, height, depth,
+                    levels, usage, (DWORD)format, (DWORD)pool);
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
     }
+    if ((format & 0x00ffffffu) == 0x00545844u
+            && ((width & 3u) || (height & 3u)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     full_levels = full_volume_mip_level_count(width, height, depth);
     if (!levels) levels = full_levels;
     if (levels > full_levels)
@@ -8311,7 +9172,7 @@ static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice9 *iface,
         level_data->width = level_width;
         level_data->height = level_height;
         level_data->depth = level_depth;
-        if (!texture_level_layout(format, level_width, level_height,
+        if (!d9wg_texture_level_layout(api, format, level_width, level_height,
                 &level_data->row_pitch, &level_data->row_count,
                 &slice_bytes)
                 || !multiply_u32(slice_bytes, level_depth,
@@ -8320,13 +9181,19 @@ static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice9 *iface,
         level_data->slice_pitch = slice_bytes;
         level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
                 HEAP_ZERO_MEMORY, level_data->byte_count);
-        level_data->level_volume = (D9Volume *)HeapAlloc(GetProcessHeap(),
-                HEAP_ZERO_MEMORY, sizeof(*level_data->level_volume));
-        if (!level_data->shadow || !level_data->level_volume)
+        if (api == 8u && !level_data->shadow)
             goto allocation_failed;
-        level_data->level_volume->iface.lpVtbl = &g_volume_vtbl;
-        level_data->level_volume->texture = texture;
-        level_data->level_volume->level = level;
+        /* API8 keeps its legacy lazy level-view allocation. Ordinary9 keeps
+         * eager views and its existing allocation-failure ordering. */
+        if (api == 9u) {
+            level_data->level_volume = (D9Volume *)HeapAlloc(GetProcessHeap(),
+                    HEAP_ZERO_MEMORY, sizeof(*level_data->level_volume));
+            if (!level_data->shadow || !level_data->level_volume)
+                goto allocation_failed;
+            level_data->level_volume->iface.lpVtbl = &g_volume_vtbl;
+            level_data->level_volume->texture = texture;
+            level_data->level_volume->level = level;
+        }
         if (level_width > 1) level_width >>= 1;
         if (level_height > 1) level_height >>= 1;
         if (level_depth > 1) level_depth >>= 1;
@@ -8351,6 +9218,16 @@ allocation_failed:
     return TRACE_REFUSE(failure);
 }
 
+static HRESULT WINAPI device_create_volume_texture(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT depth, UINT levels, DWORD usage,
+        D3DFORMAT format, D3DPOOL pool, IDirect3DVolumeTexture9 **out,
+        HANDLE *shared)
+{
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    return create_volume_texture_object(device_from_iface(iface), width,
+            height, depth, levels, usage, format, pool, 9u, out);
+}
+
 static HRESULT WINAPI volume_texture_query_interface(
         IDirect3DVolumeTexture9 *iface, REFIID iid, void **object)
 {
@@ -8367,30 +9244,52 @@ static HRESULT WINAPI volume_texture_query_interface(
 }
 
 static ULONG WINAPI volume_texture_add_ref(IDirect3DVolumeTexture9 *iface)
-{ return (ULONG)InterlockedIncrement(
-        &volume_texture_from_iface(iface)->refcount); }
-
-static ULONG WINAPI volume_texture_release(IDirect3DVolumeTexture9 *iface)
 {
     D9VolumeTexture *texture = volume_texture_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&texture->refcount);
+    if (refs == 1)
+        device_child_add_ref(texture->device);
+    return refs;
+}
+
+static void volume_texture_destroy_storage(D9VolumeTexture *texture)
+{
+    D9VolumeTexture** link = &texture->device->volume_textures;
+    D9WGDestroyResource destroy;
+    UINT level;
+    while (*link && *link != texture)
+        link = &(*link)->next_device_resource;
+    if (*link)
+        *link = texture->next_device_resource;
+    d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
+    destroy.resource_handle = texture->handle;
+    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_VOLUME;
+    if (texture->pool != D3DPOOL_SCRATCH
+            || (device_compatibility_api(texture->device) == 8u
+                && supported_volume_texture_format8(texture->format)))
+        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    for (level = 0; level < texture->level_count; ++level) {
+        d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
+        core_view_retire8(texture->levels[level].level_volume);
+        HeapFree(GetProcessHeap(), 0, texture->levels[level].level_volume);
+        HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
+    }
+    HeapFree(GetProcessHeap(), 0, texture->levels);
+    core_view_retire8(texture);
+    HeapFree(GetProcessHeap(), 0, texture);
+}
+
+static ULONG WINAPI volume_texture_release(IDirect3DVolumeTexture9* iface)
+{
+    D9VolumeTexture *texture = volume_texture_from_iface(iface);
+    if (!InterlockedCompareExchange(&texture->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9VolumeTexture **link = &texture->device->volume_textures;
-        D9WGDestroyResource destroy;
-        UINT level;
-        while (*link && *link != texture)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = texture->next_device_resource;
-        destroy.resource_handle = texture->handle;
-        destroy.resource_kind = D9WG_RESOURCE_TEXTURE_VOLUME;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        for (level = 0; level < texture->level_count; ++level) {
-            HeapFree(GetProcessHeap(), 0, texture->levels[level].level_volume);
-            HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
-        }
-        HeapFree(GetProcessHeap(), 0, texture->levels);
-        device_child_release(texture->device);
-        HeapFree(GetProcessHeap(), 0, texture);
+        D9Device *device = texture->device;
+        if (!InterlockedCompareExchange(&texture->binding_refs, 0, 0))
+            volume_texture_destroy_storage(texture);
+        device_child_release(device);
     }
     return refs;
 }
@@ -8404,25 +9303,29 @@ static HRESULT WINAPI volume_texture_get_device(IDirect3DVolumeTexture9 *iface,
     return D3D_OK;
 }
 
-#define VOLUME_TEX_PRIVATE_STUB(name, result) \
-static HRESULT WINAPI volume_texture_##name(IDirect3DVolumeTexture9 *iface, \
-        REFGUID guid) \
-{ (void)iface; (void)guid; return result; }
-
 static HRESULT WINAPI volume_texture_set_private_data(
-        IDirect3DVolumeTexture9 *iface, REFGUID guid, const void *data,
-        DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+    IDirect3DVolumeTexture9* iface, REFGUID guid, const void* data,
+    DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = &volume_texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
 static HRESULT WINAPI volume_texture_get_private_data(
-        IDirect3DVolumeTexture9 *iface, REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size;
-  return TRACE_REFUSE(D3DERR_NOTFOUND); }
-VOLUME_TEX_PRIVATE_STUB(free_private_data, D3DERR_NOTFOUND)
+    IDirect3DVolumeTexture9* iface, REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = &volume_texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
+static HRESULT WINAPI volume_texture_free_private_data(IDirect3DVolumeTexture9* iface, REFGUID guid)
+{
+    D9WGPrivateStore* store = &volume_texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI volume_texture_set_priority(
         IDirect3DVolumeTexture9 *iface, DWORD priority)
 { D9VolumeTexture *texture = volume_texture_from_iface(iface);
+  if (texture->pool != D3DPOOL_MANAGED) return 0;
   DWORD previous = texture->priority; texture->priority = priority;
   return previous; }
 static DWORD WINAPI volume_texture_get_priority(IDirect3DVolumeTexture9 *iface)
@@ -8432,15 +9335,12 @@ static void WINAPI volume_texture_preload(IDirect3DVolumeTexture9 *iface)
 static D3DRESOURCETYPE WINAPI volume_texture_get_type(
         IDirect3DVolumeTexture9 *iface)
 { (void)iface; return D3DRTYPE_VOLUMETEXTURE; }
-static DWORD WINAPI volume_texture_set_lod(IDirect3DVolumeTexture9 *iface,
-        DWORD lod)
-{ D9VolumeTexture *texture = volume_texture_from_iface(iface);
-  DWORD previous = texture->lod;
-  if (texture->pool != D3DPOOL_MANAGED) return previous;
-  if (lod >= texture->level_count) lod = texture->level_count - 1;
-  texture->lod = lod;
-  emit_texture_lod(texture->device, texture->handle, lod);
-  return previous; }
+static DWORD WINAPI volume_texture_set_lod(IDirect3DVolumeTexture9 *iface, DWORD lod)
+{
+    D9VolumeTexture *texture = volume_texture_from_iface(iface);
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
+}
 static DWORD WINAPI volume_texture_get_lod(IDirect3DVolumeTexture9 *iface)
 { return volume_texture_from_iface(iface)->lod; }
 static DWORD WINAPI volume_texture_get_level_count(
@@ -8448,10 +9348,10 @@ static DWORD WINAPI volume_texture_get_level_count(
 { return volume_texture_from_iface(iface)->level_count; }
 static HRESULT WINAPI volume_texture_set_auto_gen_filter_type(
         IDirect3DVolumeTexture9 *iface, D3DTEXTUREFILTERTYPE type)
-{ (void)iface; (void)type; return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+{ (void)iface; (void)type; return D3D_OK; }
 static D3DTEXTUREFILTERTYPE WINAPI volume_texture_get_auto_gen_filter_type(
         IDirect3DVolumeTexture9 *iface)
-{ (void)iface; return D3DTEXF_LINEAR; }
+{ (void)iface; return D3DTEXF_NONE; }
 static void WINAPI volume_texture_generate_mip_sublevels(
         IDirect3DVolumeTexture9 *iface)
 { (void)iface; }
@@ -8484,6 +9384,10 @@ static HRESULT WINAPI volume_texture_lock_box(IDirect3DVolumeTexture9 *iface,
     UINT block_width, block_height, block_bytes;
     if (!locked || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (texture->pool == D3DPOOL_DEFAULT && !(texture->usage & D3DUSAGE_DYNAMIC)) {
+        locked->pBits = NULL;
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
     level_data = &texture->levels[level];
     if (level_data->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -8498,9 +9402,13 @@ static HRESULT WINAPI volume_texture_lock_box(IDirect3DVolumeTexture9 *iface,
             || area.Back <= area.Front || area.Right > level_data->width
             || area.Bottom > level_data->height
             || area.Back > level_data->depth
-            || !texture_format_layout(texture->format, &block_width,
+            || !d9wg_format_layout(device_compatibility_api(texture->device),
+                    texture->format, &block_width,
                     &block_height, &block_bytes)
             || area.Left % block_width || area.Top % block_height)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if ((area.Right != level_data->width && area.Right % block_width)
+            || (area.Bottom != level_data->height && area.Bottom % block_height))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data->lock_box = area;
     level_data->lock_flags = flags;
@@ -8538,9 +9446,20 @@ static HRESULT WINAPI volume_texture_get_volume_level(
         IDirect3DVolumeTexture9 *iface, UINT level, IDirect3DVolume9 **out)
 {
     D9VolumeTexture *texture = volume_texture_from_iface(iface);
-    if (!out || level >= texture->level_count)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *out = &texture->levels[level].level_volume->iface;
+    if (!out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (device_compatibility_api(texture->device) == 8u) *out = NULL;
+    if (level >= texture->level_count) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    D9Volume *volume = texture->levels[level].level_volume;
+    if (!volume) {
+        volume = (D9Volume *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                sizeof(*volume));
+        if (!volume) return TRACE_REFUSE(E_OUTOFMEMORY);
+        volume->iface.lpVtbl = &g_volume_vtbl;
+        volume->texture = texture;
+        volume->level = level;
+        texture->levels[level].level_volume = volume;
+    }
+    *out = &volume->iface;
     IDirect3DVolume9_AddRef(*out);
     return D3D_OK;
 }
@@ -8597,17 +9516,27 @@ static HRESULT WINAPI volume_get_device(IDirect3DVolume9 *iface,
         IDirect3DDevice9 **out)
 { D9Volume *volume = volume_from_iface(iface);
   return IDirect3DVolumeTexture9_GetDevice(&volume->texture->iface, out); }
-static HRESULT WINAPI volume_set_private_data(IDirect3DVolume9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
-static HRESULT WINAPI volume_get_private_data(IDirect3DVolume9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size;
-  return TRACE_REFUSE(D3DERR_NOTFOUND); }
-static HRESULT WINAPI volume_free_private_data(IDirect3DVolume9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI volume_set_private_data(IDirect3DVolume9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9Volume* volume = volume_from_iface(iface);
+    D9WGPrivateStore* store = &volume->texture->levels[volume->level].private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
+static HRESULT WINAPI volume_get_private_data(IDirect3DVolume9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9Volume* volume = volume_from_iface(iface);
+    D9WGPrivateStore* store = &volume->texture->levels[volume->level].private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
+static HRESULT WINAPI volume_free_private_data(IDirect3DVolume9* iface,
+    REFGUID guid)
+{
+    D9Volume* volume = volume_from_iface(iface);
+    D9WGPrivateStore* store = &volume->texture->levels[volume->level].private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 static HRESULT WINAPI volume_get_container(IDirect3DVolume9 *iface,
         REFIID iid, void **object)
 { D9Volume *volume = volume_from_iface(iface);
@@ -8685,7 +9614,7 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
     } else {
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    if (!destination_level->shadow || (source_level && source_level->locked)
+    if (source->locked || (source_level && source_level->locked)
             || destination_level->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (src_rect)
@@ -8712,6 +9641,15 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
             || destination_area.top % (LONG)block_height)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
+    /* Compressed tails may be smaller than a block only at both source
+     * and destination image edges; rounding an interior tail copies pixels
+     * outside the requested rectangle. */
+    if ((source_area.right != (LONG)source->width && source_area.right % (LONG)block_width)
+            || (source_area.bottom != (LONG)source->height && source_area.bottom % (LONG)block_height)
+            || (destination_area.right != (LONG)destination->width && destination_area.right % (LONG)block_width)
+            || (destination_area.bottom != (LONG)destination->height && destination_area.bottom % (LONG)block_height))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+
     source_block_x = (UINT)source_area.left / block_width;
     source_block_y = (UINT)source_area.top / block_height;
     destination_block_x = (UINT)destination_area.left / block_width;
@@ -8722,6 +9660,12 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
             + block_height - 1u) / block_height;
     if (!multiply_u32(block_columns, block_bytes, &row_bytes))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!destination_level->shadow) {
+        destination_level->shadow = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                destination_level->byte_count);
+        if (!destination_level->shadow)
+            return E_OUTOFMEMORY;
+    }
     for (row = 0; row < block_rows; ++row)
         CopyMemory(destination_level->shadow
                     + (destination_block_y + row)
@@ -8730,16 +9674,16 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
                 source_shadow + (source_block_y + row) * source_pitch
                     + source_block_x * block_bytes,
                 row_bytes);
-    destination_level->shadow_valid = destination_area.left == 0
+    destination_level->shadow_valid = destination_level->shadow_valid || (destination_area.left == 0
             && destination_area.top == 0
             && destination_area.right == (LONG)destination_level->width
-            && destination_area.bottom == (LONG)destination_level->height;
-    if (destination->cube_texture)
-        return emit_cube_texture_update(destination->cube_texture,
-                destination->cube_face, destination->level,
-                &destination_area) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
-    return emit_texture_update(destination->texture, destination->level,
-            &destination_area) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+            && destination_area.bottom == (LONG)destination_level->height);
+    BOOL uploaded = destination->cube_texture
+            ? emit_cube_texture_update(destination->cube_texture,
+                destination->cube_face, destination->level, &destination_area)
+            : emit_texture_update(destination->texture, destination->level, &destination_area);
+    if (!uploaded) destination_level->shadow_valid = FALSE;
+    return uploaded ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 /*
  * The other classic upload route besides Lock/Unlock: fill a
@@ -8749,110 +9693,51 @@ static HRESULT WINAPI device_update_surface(IDirect3DDevice9 *iface,
  * the same UPDATE_TEXTURE emission an unlock would have produced. Declared
  * after the texture helpers it calls; see the forward declaration above.
  */
+#define D9WG_COPY_LEVEL D9TextureLevel
+#define D9WG_COPY_2D_TYPE D9Texture
+#define D9WG_COPY_CUBE_TYPE D9CubeTexture
+#define D9WG_COPY_VOLUME_TYPE D9VolumeTexture
+#define D9WG_COPY_MARK_VALID(level) ((level)->shadow_valid = TRUE)
+#define D9WG_COPY_UPLOAD_2D(t,l,r) emit_texture_update((t),(l),(r))
+#define D9WG_COPY_UPLOAD_CUBE(t,f,l,r) emit_cube_texture_update((t),(f),(l),(r))
+#define D9WG_COPY_UPLOAD_VOLUME(t,l,b) emit_volume_texture_update((t),(l),(b))
+#include "../runtime/d9wg_texture_copy_bridge.h"
+#include "../runtime/d9wg_texture_legacy_color.h"
+#include "../runtime/d9wg_texture_dirty_copy2d.h"
+
 static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
         IDirect3DBaseTexture9 *src_iface, IDirect3DBaseTexture9 *dst_iface)
 {
     D9Device *device = device_from_iface(iface);
-    D9Texture *source = (D9Texture *)src_iface;
-    D9Texture *destination = (D9Texture *)dst_iface;
-    const void *source_vtbl;
-    const void *destination_vtbl;
-    UINT level;
-
-    if (!source || !destination)
+    /* Both native runtimes accept locked containers and raw volume updates. */
+    D9Texture *source = (D9Texture *)src_iface, *destination = (D9Texture *)dst_iface;
+    if (!source || !destination || source->iface.lpVtbl != destination->iface.lpVtbl)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    source_vtbl = source->iface.lpVtbl;
-    destination_vtbl = destination->iface.lpVtbl;
-    if (source_vtbl != destination_vtbl)
+    if (source->iface.lpVtbl == (const void *)&g_volume_texture_vtbl) {
+        D9VolumeTexture *from = (D9VolumeTexture *)src_iface, *to = (D9VolumeTexture *)dst_iface;
+        if (from->device != device || to->device != device || !d9wg_texture_copy_pools(from->pool, to->pool))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return TRACE_REFUSE(d9wg_update_texture_common_mode(to, D9WG_COPY_VOLUME,
+                from->levels, (D9WGTextureCopyExtent){from->width, from->height, from->depth, from->level_count},
+                to->levels, (D9WGTextureCopyExtent){to->width, to->height, to->depth, to->level_count}, TRUE));
+    }
+    if (source->iface.lpVtbl == (const void *)&g_cube_vtbl) {
+        D9CubeTexture *from = (D9CubeTexture *)src_iface, *to = (D9CubeTexture *)dst_iface;
+        if (from->device != device || to->device != device || !d9wg_texture_copy_pools(from->pool, to->pool))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (from->format != to->format)
+            return TRACE_REFUSE(texture_update_legacy_color(from, to, TRUE));
+        return TRACE_REFUSE(d9wg_update_texture_common_mode(to, D9WG_COPY_CUBE,
+                from->levels, (D9WGTextureCopyExtent){from->edge_length, from->edge_length, 1, from->level_count},
+                to->levels, (D9WGTextureCopyExtent){to->edge_length, to->edge_length, 1, to->level_count}, TRUE));
+    }
+    if (source->iface.lpVtbl != &g_texture_vtbl || source->device != device || destination->device != device ||
+            !d9wg_texture_copy_pools(source->pool, destination->pool) || (source->format != destination->format
+                && !legacy_color_copy_supported(device_compatibility_api(device), source->format, destination->format)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (source_vtbl == &g_volume_texture_vtbl) {
-        D9VolumeTexture *volume_source = (D9VolumeTexture *)src_iface;
-        D9VolumeTexture *volume_destination = (D9VolumeTexture *)dst_iface;
-        if (volume_source->device != device
-                || volume_destination->device != device
-                || volume_source->pool != D3DPOOL_SYSTEMMEM
-                || volume_destination->pool != D3DPOOL_DEFAULT
-                || volume_source->format != volume_destination->format
-                || volume_source->width != volume_destination->width
-                || volume_source->height != volume_destination->height
-                || volume_source->depth != volume_destination->depth)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        for (level = 0; level < volume_source->level_count
-                && level < volume_destination->level_count; ++level) {
-            D9TextureLevel *from = &volume_source->levels[level];
-            D9TextureLevel *to = &volume_destination->levels[level];
-            D3DBOX full;
-            if (from->locked || to->locked
-                    || from->byte_count != to->byte_count)
-                return TRACE_REFUSE(D3DERR_INVALIDCALL);
-            CopyMemory(to->shadow, from->shadow, to->byte_count);
-            full.Left = full.Top = full.Front = 0;
-            full.Right = to->width;
-            full.Bottom = to->height;
-            full.Back = to->depth;
-            if (!emit_volume_texture_update(volume_destination, level, &full))
-                return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-        }
-        return D3D_OK;
-    }
-    if (source_vtbl == &g_cube_vtbl) {
-        D9CubeTexture *cube_source = (D9CubeTexture *)src_iface;
-        D9CubeTexture *cube_destination = (D9CubeTexture *)dst_iface;
-        UINT face;
-        if (cube_source->device != device
-                || cube_destination->device != device
-                || cube_source->pool != D3DPOOL_SYSTEMMEM
-                || cube_destination->pool != D3DPOOL_DEFAULT
-                || cube_source->format != cube_destination->format
-                || cube_source->edge_length != cube_destination->edge_length)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        for (face = 0; face < 6u; ++face) {
-            for (level = 0; level < cube_source->level_count
-                    && level < cube_destination->level_count; ++level) {
-                D9TextureLevel *from = &cube_source->levels[
-                        face * cube_source->level_count + level];
-                D9TextureLevel *to = &cube_destination->levels[
-                        face * cube_destination->level_count + level];
-                RECT full;
-                if (from->locked || to->locked
-                        || from->byte_count != to->byte_count)
-                    return TRACE_REFUSE(D3DERR_INVALIDCALL);
-                CopyMemory(to->shadow, from->shadow, to->byte_count);
-                SetRect(&full, 0, 0, (int)to->width, (int)to->height);
-                if (!emit_cube_texture_update(cube_destination, face, level,
-                        &full))
-                    return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-            }
-        }
-        return D3D_OK;
-    }
-    if (source_vtbl != &g_texture_vtbl
-            || source->device != device || destination->device != device
-            || source->pool != D3DPOOL_SYSTEMMEM
-            || destination->pool != D3DPOOL_DEFAULT
-            || source->format != destination->format
-            || source->width != destination->width
-            || source->height != destination->height)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /* D3D9 allows the source to carry fewer levels than the destination;
-     * only the levels both actually have can be copied. */
-    for (level = 0; level < source->level_count
-            && level < destination->level_count; ++level) {
-        D9TextureLevel *from = &source->levels[level];
-        D9TextureLevel *to = &destination->levels[level];
-        RECT full;
-        if (from->locked || to->locked)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        if (from->byte_count != to->byte_count)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        CopyMemory(to->shadow, from->shadow, to->byte_count);
-        to->shadow_valid = TRUE;
-        SetRect(&full, 0, 0, (int)to->width, (int)to->height);
-        if (!emit_texture_update(destination, level, &full))
-            return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-    }
-    return D3D_OK;
+    return TRACE_REFUSE(texture_update_dirty(source, destination));
 }
+
 /*
  * Shared by GetRenderTargetData and GetFrontBufferData, which differ only in
  * how strict they are about the destination format.
@@ -8870,6 +9755,14 @@ static HRESULT WINAPI device_update_texture(IDirect3DDevice9 *iface,
  * unchanged and only the alpha channel's meaning differs: the front buffer is
  * what is on screen, and what is on screen is opaque.
  */
+/* Mandatory reads must observe submission failure, including a capacity flush
+ * of the draws preceding the request. Ordinary draw-drop continuation is not
+ * a successful readback submission. The common reader already pins the map. */
+static BOOL submit_readback_batch_locked(BOOL present)
+{
+    return d9wg_transport_submit(g_process, present);
+}
+
 static HRESULT copy_surface_to_system_memory(D9Device *device,
         IDirect3DSurface9 *rt_iface, IDirect3DSurface9 *dst_iface,
         BOOL front_buffer)
@@ -8896,6 +9789,10 @@ static HRESULT copy_surface_to_system_memory(D9Device *device,
      * attempt at this function into a second round trip through the VM.
      */
     if (rt->device != device || dst->device != device)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (rt->locked || dst->locked
+            || (surface_texture_level(rt) && surface_texture_level(rt)->locked)
+            || (surface_texture_level(dst) && surface_texture_level(dst)->locked))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rt->width != dst->width || rt->height != dst->height)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
@@ -8950,141 +9847,29 @@ static HRESULT copy_surface_to_system_memory(D9Device *device,
                     source_level->shadow + row * source_level->row_pitch,
                     source_row_bytes);
     } else {
-        D9WGReadbackSurface command;
-        D9WGReadbackResponse *response;
-        volatile uint32_t *heartbeat;
-        uint32_t last_beat;
-        uint8_t *base;
-        UINT first_row = 0;
-        UINT rows_per_chunk;
-        UINT capacity;
-        HRESULT result = D3D_OK;
-
-        EnterCriticalSection(&g_readback_lock);
-        EnterCriticalSection(&g_transport_lock);
-        if (!open_transport_locked()) {
-            LeaveCriticalSection(&g_transport_lock);
-            LeaveCriticalSection(&g_readback_lock);
-            return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+        D9WGReadbackSurface request;
+        D9WGReadbackDiagnostic detail;
+        ZeroMemory(&request, sizeof(request));
+        request.device_handle = device->handle;
+        request.texture_handle = rt->texture ? rt->texture->handle : 0;
+        request.level = rt->level;
+        request.format = dst->format;
+        request.width = rt->width;
+        request.height = rt->height;
+        request.destination_pitch = destination_pitch;
+        UINT destination_bytes = dst->shadow ? dst->byte_count : destination_level->byte_count;
+        int result = d9wg_surface_readback(g_process, &request, source_row_bytes,
+                source_rows, destination, destination_bytes, submit_readback_batch_locked, &detail);
+        if (result) {
+            HOSTLOG_FAILED("readback failed: result=%d row=%lu request=%08lX response=%08lX "
+                    "status=%lu bytes=%lu/%lu silence=%lums heartbeat=%08lX",
+                    result, (DWORD)detail.first_row, (DWORD)detail.request_id,
+                    (DWORD)detail.response_id, (DWORD)detail.status,
+                    (DWORD)detail.actual_bytes, (DWORD)detail.expected_bytes,
+                    (DWORD)detail.silent_ms, (DWORD)detail.heartbeat);
+            return TRACE_REFUSE(result == D9WG_READBACK_INVALID
+                    ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
         }
-        base = response_region();
-        response = (D9WGReadbackResponse *)(base +
-                D9WG_READBACK_REGION_OFFSET);
-        heartbeat = (volatile uint32_t *)(base + D9WG_HEARTBEAT_OFFSET);
-        capacity = D9WG_RESPONSE_REGION_BYTES - D9WG_READBACK_REGION_OFFSET
-                - (UINT)sizeof(*response) - D9WG_HEARTBEAT_BYTES;
-        rows_per_chunk = destination_pitch ? capacity / destination_pitch : 0;
-        TRACE("READBACK BEGIN source=%08lX texture=%08lX dst_format=%08lX "
-                "src_format=%08lX %lux%lu rows=%lu pitch=%lu rows_per_chunk=%lu "
-                "capacity=%lu front=%lu",
-                (DWORD)(uintptr_t)rt_iface,
-                rt->texture ? rt->texture->handle : 0,
-                (DWORD)dst->format, (DWORD)rt->format, rt->width, rt->height,
-                source_rows, destination_pitch, rows_per_chunk, capacity,
-                (DWORD)front_buffer);
-        if (!rows_per_chunk) {
-            LeaveCriticalSection(&g_transport_lock);
-            LeaveCriticalSection(&g_readback_lock);
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        }
-        LeaveCriticalSection(&g_transport_lock);
-
-        while (first_row < source_rows) {
-            uint32_t request_id = (uint32_t)next_response_request_id();
-            UINT chunk_rows = source_rows - first_row;
-            DWORD start;
-            BOOL emitted;
-            uint8_t *payload;
-            if (chunk_rows > rows_per_chunk) chunk_rows = rows_per_chunk;
-
-            ZeroMemory(response, sizeof(*response));
-            response->request_id = request_id;
-            response->status = D9WG_RESPONSE_PENDING;
-            MemoryBarrier();
-            ZeroMemory(&command, sizeof(command));
-            command.device_handle = device->handle;
-            command.texture_handle = rt->texture ? rt->texture->handle : 0;
-            command.level = rt->level;
-            command.format = dst->format;
-            command.width = rt->width;
-            command.height = rt->height;
-            command.first_row = first_row;
-            command.row_count = chunk_rows;
-            command.destination_pitch = destination_pitch;
-            command.destination_bytes = chunk_rows * destination_pitch;
-            command.response_offset = D9WG_READBACK_REGION_OFFSET;
-            command.request_id = request_id;
-
-            EnterCriticalSection(&g_transport_lock);
-            emitted = reserve_command_locked(D9WG_OP_READBACK_SURFACE,
-                    sizeof(command), 0, NULL, &payload, NULL);
-            if (emitted) {
-                CopyMemory(payload, &command, sizeof(command));
-                emitted = submit_batch_locked(FALSE);
-            }
-            LeaveCriticalSection(&g_transport_lock);
-            if (!emitted) {
-                TRACE("READBACK FAIL emit first_row=%lu rows=%lu bytes=%lu",
-                        first_row, chunk_rows, command.destination_bytes);
-                result = D3DERR_DRIVERINTERNALERROR;
-                break;
-            }
-
-            /*
-             * The deadline measures host *silence*, not elapsed time. Every
-             * batch the host finishes bumps the heartbeat, so a host that is
-             * simply thousands of batches behind keeps this loop waiting; only
-             * a host that has stopped answering entirely trips the cap. The
-             * host bounds its own side of the handshake (readbackTimeoutMs in
-             * d3d9_executor.js) and reports a failure rather than going quiet,
-             * so reaching this cap means the host went away.
-             */
-            start = GetTickCount();
-            last_beat = *heartbeat;
-            for (;;) {
-                uint32_t beat;
-                MemoryBarrier();
-                if (response->status != D9WG_RESPONSE_PENDING)
-                    break;
-                beat = *heartbeat;
-                if (beat != last_beat) {
-                    last_beat = beat;
-                    start = GetTickCount();
-                }
-                if (GetTickCount() - start >= 6000u)
-                    break;
-                Sleep(1);
-            }
-            MemoryBarrier();
-            if (response->request_id != request_id
-                    || response->status != D9WG_RESPONSE_OK
-                    || response->byte_count != command.destination_bytes) {
-                /* status 0 with the elapsed time at the cap is a timeout; 2 is
-                 * the host reporting a failure, and its own message names the
-                 * JS error. A mismatched request id means a stale response. */
-                TRACE("READBACK FAIL response first_row=%lu rows=%lu "
-                        "want_id=%08lX got_id=%08lX status=%lu want_bytes=%lu "
-                        "got_bytes=%lu silent_for=%lu beat=%08lX",
-                        first_row, chunk_rows, request_id,
-                        response->request_id, response->status,
-                        command.destination_bytes, response->byte_count,
-                        GetTickCount() - start, last_beat);
-                HOSTLOG_FAILED("readback failed: status=%lu host silent for "
-                        "%lums (heartbeat=%08lX) rows=%lu pitch=%lu (0=the "
-                        "host stopped answering, 2=it reported a failure -- "
-                        "see its own console message)",
-                        response->status, GetTickCount() - start,
-                        last_beat, chunk_rows, destination_pitch);
-                result = D3DERR_DRIVERINTERNALERROR;
-                break;
-            }
-            CopyMemory(destination + first_row * destination_pitch,
-                    response + 1, command.destination_bytes);
-            first_row += chunk_rows;
-        }
-        LeaveCriticalSection(&g_readback_lock);
-        if (FAILED(result))
-            return TRACE_REFUSE(result);
     }
     if (front_buffer) {
         /* Opaque, whichever path filled the destination. The readback already
@@ -9134,45 +9919,24 @@ static HRESULT WINAPI device_get_front_buffer_data(IDirect3DDevice9 *iface,
  * SetCursorProperties; it is deliberately limited to the 32-bit formats a
  * cursor may use, so nothing else starts depending on it as a general
  * offscreen surface. */
-static HRESULT WINAPI device_create_offscreen_plain_surface(
-        IDirect3DDevice9 *iface, UINT width, UINT height, D3DFORMAT format,
-        D3DPOOL pool, IDirect3DSurface9 **out, HANDLE *shared)
+/* CPU surfaces share allocation/lifetime mechanics; their frontend selects
+ * the format layout. API8 has linear formats absent from the9 layout. */
+static HRESULT create_cpu_surface(D9Device *device, UINT width, UINT height,
+        D3DFORMAT format, D3DPOOL pool, UINT api, IDirect3DSurface9 **out)
 {
-    D9Device *device = device_from_iface(iface);
     D9Surface *surface;
-    UINT row_pitch;
-    UINT byte_count;
-
-    (void)shared;
-    if (!out)
+    UINT row_pitch, row_count, byte_count;
+    if (!d9wg_cpu_texture_level_layout(api, format, width, height,
+            &row_pitch, &row_count, &byte_count))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *out = NULL;
-    if (!width || !height || pool == D3DPOOL_MANAGED
-            || pool > D3DPOOL_SCRATCH || !supported_texture_format(format))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /*
-     * A D3DPOOL_DEFAULT offscreen surface lives on the GPU, and D3D9 lets it be
-     * a StretchRect operand -- both operands have to be DEFAULT, and this is
-     * how apps get the second one. Backing it with the same texture a render
-     * target uses is what makes that true here; a CPU-only surface has no
-     * handle to blit with, which is precisely how 3DMark06 ended up looking at
-     * an "IDirect3DDevice9::StretchRect failed" box.
-     *
-     * SYSTEMMEM and SCRATCH keep the CPU-only form below. D3D9 refuses
-     * StretchRect on those too, so refusing them costs nothing and they stay
-     * cheap: no GPU allocation for a surface whose whole purpose is to be
-     * locked.
-     */
-    if (pool == D3DPOOL_DEFAULT)
-        return create_target_texture(device, width, height, format, 0u,
-                D3DMULTISAMPLE_NONE, 0u, out);
-    {
-        UINT row_count;
-        if (!texture_level_layout(format, width, height, &row_pitch,
-                &row_count, &byte_count))
+    if (api == 9u && !d9wg_cpu_texture_broken_pitch(api, format)) {
+        uint64_t aligned_pitch = ((uint64_t)row_pitch + 3u) & ~3ULL;
+        uint64_t aligned_bytes = aligned_pitch * row_count;
+        if (aligned_pitch > UINT32_MAX || aligned_bytes > UINT32_MAX)
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        row_pitch = (UINT)aligned_pitch;
+        byte_count = (UINT)aligned_bytes;
     }
-
     surface = (D9Surface *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
             sizeof(*surface));
     if (!surface)
@@ -9209,24 +9973,50 @@ static HRESULT WINAPI device_create_offscreen_plain_surface(
             surface->height, (DWORD)surface->format, surface->byte_count);
     return D3D_OK;
 }
+
+static HRESULT WINAPI device_create_offscreen_plain_surface(
+        IDirect3DDevice9 *iface, UINT width, UINT height, D3DFORMAT format,
+        D3DPOOL pool, IDirect3DSurface9 **out, HANDLE *shared)
+{
+    D9Device *device = device_from_iface(iface);
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    if (!out)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *out = NULL;
+    if (!width || !height || pool == D3DPOOL_MANAGED
+            || pool > D3DPOOL_SCRATCH || !supported_texture_format(format)
+            || ((format == (D3DFORMAT)0x31495441u || format == (D3DFORMAT)0x32495441u)
+                && pool != D3DPOOL_SCRATCH)
+            || ((format & 0x00ffffffu) == 0x00545844u /* DXT1..5 */
+                && ((width | height) & 3u)))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (pool == D3DPOOL_DEFAULT)
+        return create_target_texture(device, width, height, format, 0u,
+                D3DMULTISAMPLE_NONE, 0u, out);
+    return create_cpu_surface(device, width, height, format, pool, 9u, out);
+}
+
 static HRESULT WINAPI device_multiply_transform(IDirect3DDevice9 *iface,
         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
 {
     D9Device *device = device_from_iface(iface);
+    uint32_t slot;
     D3DMATRIX result;
     UINT row, column, k;
-    if (!matrix || (UINT)state >= D9_MAX_TRANSFORMS)
+    const float *source;
+    if (!matrix || !d9wg_state_block_transform_slot((UINT)state, &slot))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    source = device->transforms[state];
     for (row = 0; row < 4; ++row) {
         for (column = 0; column < 4; ++column) {
             float value = 0.0f;
             for (k = 0; k < 4; ++k)
-                value += device->transforms[state][row * 4 + k]
-                        * ((const float *)matrix)[k * 4 + column];
+                value += ((const float *)matrix)[row * 4 + k]
+                        * source[k * 4 + column];
             ((float *)&result)[row * 4 + column] = value;
         }
     }
-    return device_set_transform(iface, state, &result);
+    return device_set_live_transform(device, state, &result);
 }
 /*
  * SetMaterial/SetLight/LightEnable were emitted from M1 onwards but only
@@ -9242,7 +10032,7 @@ static HRESULT WINAPI device_set_material(IDirect3DDevice9 *iface,
     D9WGSetMaterial command;
     if (!material)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_material(device);
+    if (state_block_record_material(device, material)) return D3D_OK;
     device->material = *material;
     command.device_handle = device->handle;
     CopyMemory(command.diffuse, &material->Diffuse, sizeof(command.diffuse));
@@ -9264,71 +10054,97 @@ static HRESULT WINAPI device_get_material(IDirect3DDevice9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI device_set_light(IDirect3DDevice9 *iface, DWORD index,
-        const D3DLIGHT9 *light)
+static BOOL d9_emit_light(D9Device *device, DWORD index, const D3DLIGHT9 *light)
 {
-    D9Device *device = device_from_iface(iface);
-    D9WGSetLight command;
-    if (!light || index >= D9_MAX_LIGHTS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_light(device, index);
-    device->lights[index] = *light;
-    device->light_set[index] = TRUE;
-    command.device_handle = device->handle;
-    command.index = index;
-    command.type = (uint32_t)light->Type;
-    CopyMemory(command.diffuse, &light->Diffuse, sizeof(command.diffuse));
-    CopyMemory(command.specular, &light->Specular, sizeof(command.specular));
-    CopyMemory(command.ambient, &light->Ambient, sizeof(command.ambient));
-    CopyMemory(command.position, &light->Position, sizeof(command.position));
-    CopyMemory(command.direction, &light->Direction, sizeof(command.direction));
-    command.range = light->Range;
-    command.falloff = light->Falloff;
-    command.attenuation[0] = light->Attenuation0;
-    command.attenuation[1] = light->Attenuation1;
-    command.attenuation[2] = light->Attenuation2;
-    command.theta = light->Theta;
-    command.phi = light->Phi;
-    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    D9WGSetLight command;command.device_handle = device->handle;command.index = index;
+    CopyMemory(&command.type, light, sizeof(*light));
+    return emit_command(D9WG_OP_SET_LIGHT, &command, sizeof(command));
 }
-
-static HRESULT WINAPI device_get_light(IDirect3DDevice9 *iface, DWORD index,
-        D3DLIGHT9 *light)
+static HRESULT WINAPI device_set_light(IDirect3DDevice9 *iface, DWORD index, const D3DLIGHT9 *light)
+{
+    D9Device *device = device_from_iface(iface);D9WGLightState *entry = NULL;
+    if (!light || light->Type < D3DLIGHT_POINT || light->Type > D3DLIGHT_DIRECTIONAL)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (index < D9_MAX_LIGHTS) {block->has_light[index] = TRUE;block->lights[index] = *light;}
+        else {
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
+            entry->light_mask = TRUE;entry->light = *light;entry->set = TRUE;
+        }
+        return D3D_OK;
+    }
+    if (index >= D9_MAX_LIGHTS && !(entry = d9wg_light_get(&device->extra_lights, index, TRUE)))
+        return TRACE_REFUSE(E_OUTOFMEMORY);
+    if (entry) {entry->light = *light;entry->set = TRUE;}
+    else {device->lights[index] = *light;device->light_set[index] = TRUE;}
+    return d9_emit_light(device, index, light) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+}
+static HRESULT WINAPI device_get_light(IDirect3DDevice9 *iface, DWORD index, D3DLIGHT9 *light)
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetLight");
     D9Device *device = device_from_iface(iface);
-    if (!light || index >= D9_MAX_LIGHTS || !device->light_set[index])
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *light = device->lights[index];
+    if (!light) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (index < D9_MAX_LIGHTS) {
+        if (!device->light_set[index]) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        *light = device->lights[index];
+    } else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        if (!entry || !entry->set) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        *light = entry->light;
+    }
     return D3D_OK;
 }
-
-static HRESULT WINAPI device_light_enable(IDirect3DDevice9 *iface,
-        DWORD index, WINBOOL enable)
+static HRESULT WINAPI device_light_enable(IDirect3DDevice9 *iface, DWORD index, WINBOOL enable)
 {
-    D9Device *device = device_from_iface(iface);
-    D9WGLightEnable command;
-    if (index >= D9_MAX_LIGHTS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_light_enable(device, index);
-    device->light_enabled[index] = enable ? TRUE : FALSE;
-    command.device_handle = device->handle;
-    command.index = index;
-    command.enable = enable ? 1u : 0u;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    D9Device *device = device_from_iface(iface);D9WGLightState *entry = NULL;
+    D3DLIGHT9 *light;BOOL *set, *enabled;
+    if (device->recording_result) {
+        D9StateBlock *block = device->recording_result;
+        if (index < D9_MAX_LIGHTS) {
+            if (!block->has_light[index] && !device->light_set[index]) {
+                d9wg_light_default(&block->lights[index]);block->has_light[index] = TRUE;
+            }
+            block->has_light_enable[index] = TRUE;block->light_enabled[index] = !!enable;
+        } else {
+            D9WGLightState *current = d9wg_light_find(device->extra_lights, index);
+            entry = d9wg_light_get(&block->extra_lights, index, TRUE);
+            if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
+            if (!entry->light_mask && (!current || !current->set)) {
+                d9wg_light_default(&entry->light);entry->light_mask = TRUE;entry->set = TRUE;
+            }
+            entry->enable_mask = TRUE;entry->enabled = !!enable;
+        }
+        return D3D_OK;
+    }
+    if (index < D9_MAX_LIGHTS) {light = device->lights + index;set = device->light_set + index;enabled = device->light_enabled + index;}
+    else {
+        entry = d9wg_light_get(&device->extra_lights, index, TRUE);
+        if (!entry) return TRACE_REFUSE(E_OUTOFMEMORY);
+        light = &entry->light;set = &entry->set;enabled = &entry->enabled;
+    }
+    if (!*set) {
+        d9wg_light_default(light);*set = TRUE;
+        if (!d9_emit_light(device, index, light)) return D3DERR_DRIVERINTERNALERROR;
+    }
+    *enabled = !!enable;
+    D9WGLightEnable command = {device->handle, index, !!enable, 0};
+    return emit_command(D9WG_OP_LIGHT_ENABLE, &command, sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
-
 static HRESULT WINAPI device_get_light_enable(IDirect3DDevice9 *iface,
         DWORD index, WINBOOL *enable)
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetLightEnable");
     D9Device *device = device_from_iface(iface);
-    if (!enable || index >= D9_MAX_LIGHTS)
+    BOOL known, enabled;
+    if (index < D9_MAX_LIGHTS) {known = device->light_set[index];enabled = device->light_enabled[index];}
+    else {
+        D9WGLightState *entry = d9wg_light_find(device->extra_lights, index);
+        known = entry && entry->set;enabled = entry ? entry->enabled : FALSE;
+    }
+    if (!d9wg_light_query_enable(known, enabled, enable))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *enable = device->light_enabled[index];
     return D3D_OK;
 }
 static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,
@@ -9336,8 +10152,12 @@ static HRESULT WINAPI device_set_clip_plane(IDirect3DDevice9 *iface,
 {
     D9Device *device = device_from_iface(iface);
     D9WGSetClipPlane command;
+    /* Native9 aliases every excess index to the last hardware plane. */
+    if (device_compatibility_api(device) == 9u && index >= D9_MAX_CLIP_PLANES)
+        index = D9_MAX_CLIP_PLANES - 1u;
     if (!plane || index >= D9_MAX_CLIP_PLANES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (state_block_record_clip_plane(device, index, plane)) return D3D_OK;
     CopyMemory(device->clip_planes[index], plane, sizeof(command.plane));
     command.device_handle = device->handle;
     command.index = index;
@@ -9350,6 +10170,9 @@ static HRESULT WINAPI device_get_clip_plane(IDirect3DDevice9 *iface,
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetClipPlane");
     D9Device *device = device_from_iface(iface);
+    /* Native9 aliases every excess index to the last hardware plane. */
+    if (device_compatibility_api(device) == 9u && index >= D9_MAX_CLIP_PLANES)
+        index = D9_MAX_CLIP_PLANES - 1u;
     if (!plane || index >= D9_MAX_CLIP_PLANES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     CopyMemory(plane, device->clip_planes[index], sizeof(float) * 4u);
@@ -9359,7 +10182,8 @@ static HRESULT WINAPI device_set_clip_status(IDirect3DDevice9 *iface,
         const D3DCLIPSTATUS9 *status)
 {
     if (!status) return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    device_from_iface(iface)->clip_status = *status;
+    device_from_iface(iface)->clip_status_valid = TRUE;
+    CopyMemory(&device_from_iface(iface)->clip_status, status, sizeof(*status));
     return D3D_OK;
 }
 static HRESULT WINAPI device_get_clip_status(IDirect3DDevice9 *iface,
@@ -9367,7 +10191,8 @@ static HRESULT WINAPI device_get_clip_status(IDirect3DDevice9 *iface,
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetClipStatus");
     if (!status) return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    *status = device_from_iface(iface)->clip_status;
+    if (!device_from_iface(iface)->clip_status_valid) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    CopyMemory(status, &device_from_iface(iface)->clip_status, sizeof(*status));
     return D3D_OK;
 }
 static HRESULT WINAPI device_get_sampler_state(IDirect3DDevice9 *iface,
@@ -9395,7 +10220,7 @@ static HRESULT WINAPI device_set_sampler_state(IDirect3DDevice9 *iface,
     if (!sampler_state_slot(sampler, &slot)
             || (UINT)type >= D9_MAX_SAMPLER_STATES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_sampler_state(device, slot, (UINT)type);
+    if (state_block_record_sampler_state(device, slot, (UINT)type, value)) return D3D_OK;
     if (device->sampler_states[slot][type] == value)
         return D3D_OK;
     device->sampler_states[slot][type] = value;
@@ -9420,18 +10245,11 @@ static HRESULT WINAPI device_set_palette_entries(IDirect3DDevice9 *iface,
     uint8_t *payload;
     uint8_t *blob;
     BOOL sent = FALSE;
-    UINT entry;
 
     if (!entries || index >= D9_MAX_PALETTES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    for (entry = 0; entry < 256u; ++entry) {
-        device->palettes[index][entry] =
-                ((DWORD)entries[entry].peFlags << 24)
-                | ((DWORD)entries[entry].peRed << 16)
-                | ((DWORD)entries[entry].peGreen << 8)
-                | (DWORD)entries[entry].peBlue;
-    }
-    device->palette_valid[index] = TRUE;
+    if (!d9wg_palette_set(&device->palettes, index, entries))
+        return TRACE_REFUSE(E_OUTOFMEMORY);
 
     ZeroMemory(&command, sizeof(command));
     EnterCriticalSection(&g_transport_lock);
@@ -9442,7 +10260,7 @@ static HRESULT WINAPI device_set_palette_entries(IDirect3DDevice9 *iface,
         command.entry_count = 256u;
         command.data_offset = (uint32_t)(blob - batch_base());
         CopyMemory(payload, &command, sizeof(command));
-        CopyMemory(blob, device->palettes[index], 256u * 4u);
+        CopyMemory(blob, d9wg_palette_find(&device->palettes, index), 256u * 4u);
         sent = TRUE;
     }
     LeaveCriticalSection(&g_transport_lock);
@@ -9454,17 +10272,10 @@ static HRESULT WINAPI device_get_palette_entries(IDirect3DDevice9 *iface,
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetPaletteEntries");
     D9Device *device = device_from_iface(iface);
-    UINT entry;
 
-    if (!entries || index >= D9_MAX_PALETTES || !device->palette_valid[index])
+    if (!entries || index >= D9_MAX_PALETTES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    for (entry = 0; entry < 256u; ++entry) {
-        const DWORD value = device->palettes[index][entry];
-        entries[entry].peRed = (BYTE)((value >> 16) & 0xFF);
-        entries[entry].peGreen = (BYTE)((value >> 8) & 0xFF);
-        entries[entry].peBlue = (BYTE)(value & 0xFF);
-        entries[entry].peFlags = (BYTE)((value >> 24) & 0xFF);
-    }
+    d9wg_palette_get(&device->palettes, index, entries);
     return D3D_OK;
 }
 
@@ -9474,14 +10285,11 @@ static HRESULT WINAPI device_set_current_texture_palette(
     D9Device *device = device_from_iface(iface);
     D9WGSetCurrentTexturePalette command;
 
-    /* D3D9 requires the palette to have been filled first: selecting an unset
-     * one would sample colours the app never chose. */
-    if (index >= D9_MAX_PALETTES || !device->palette_valid[index])
+    if (index >= D9_MAX_PALETTES)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (device->current_palette_set && device->current_palette == index)
-        return D3D_OK;
+    if (state_block_record_palette(device, index)) return D3D_OK;
+    if (device->current_palette == index) return D3D_OK;
     device->current_palette = index;
-    device->current_palette_set = TRUE;
     command.device_handle = device->handle;
     command.palette_index = index;
     return emit_command(D9WG_OP_SET_CURRENT_TEXTURE_PALETTE, &command,
@@ -9493,7 +10301,7 @@ static HRESULT WINAPI device_get_current_texture_palette(
 {
     PURE_DEVICE_REFUSE(device_from_iface(iface), "Device.GetCurrentTexturePalette");
     D9Device *device = device_from_iface(iface);
-    if (!index || !device->current_palette_set)
+    if (!index)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *index = device->current_palette;
     return D3D_OK;
@@ -9513,90 +10321,41 @@ static HRESULT WINAPI device_get_current_texture_palette(
  * from the D3D8 path's implementation, which has the same problem and solved
  * it the same way.
  *
- * Two deliberate limits, both named rather than silent:
- *
- *   - A bound vertex shader means programmable processing, and running the
- *     fixed-function pipeline instead would silently produce different
- *     geometry. Refused.
- *   - Lighting computes the ambient and diffuse terms. D3DRS_SPECULARENABLE's
- *     highlight is not computed; a destination asking for SPECULAR gets the
- *     source's specular copied through, which is what the D3D8 path does.
+ * The shared C kernel handles the supported fixed-function layouts. Bound
+ * vertex shaders, unsupported packed inputs and multiple source
+ * streams still require further software-pipeline work and are refused.
  */
 #define D9_PV_MAX_TEXCOORDS 8
 
-typedef struct D9ProcessLayout {
-    int position;
-    BOOL position_transformed;
-    int normal;
-    int diffuse;
-    int specular;
-    int psize;
-    int texcoord[D9_PV_MAX_TEXCOORDS];
-    UINT texcoord_floats[D9_PV_MAX_TEXCOORDS];
-    UINT stride;
-} D9ProcessLayout;
+typedef D9WGProcessLayout D9ProcessLayout;
 
 /* This DLL links no C runtime (see build.sh), so libm's sqrtf is unavailable.
  * Newton-Raphson from the classic bit-level estimate converges to float
  * precision well within four iterations for the magnitudes vertex normals and
  * light distances actually take. */
-static float d9_sqrt(float value)
-{
-    union { float number; uint32_t bits; } convert;
-    float guess;
-    UINT iteration;
 
-    if (!(value > 0.0f)) return 0.0f;
-    convert.number = value;
-    convert.bits = 0x1fbd1df5u + (convert.bits >> 1);
-    guess = convert.number;
-    for (iteration = 0; iteration < 4u; ++iteration)
-        guess = 0.5f * (guess + value / guess);
-    return guess;
-}
 
 /* D3D matrices are row-major and its vectors are row vectors, so this is
  * `in * matrix`, not `matrix * in`. Getting the side wrong transposes every
  * transform, which looks like a broken camera rather than a broken multiply. */
-static void d9_transform_vector4(const D3DMATRIX *matrix, const float *in,
-        float *out)
+static float d9_sqrt(float value)
 {
-    UINT row;
-    for (row = 0; row < 4; ++row) {
-        out[row] = in[0] * matrix->m[0][row] + in[1] * matrix->m[1][row]
-                + in[2] * matrix->m[2][row] + in[3] * matrix->m[3][row];
-    }
+    return d9wg_sqrt_positive(value);
 }
+
+
 
 static void d9_multiply_matrix(const D3DMATRIX *left, const D3DMATRIX *right,
         D3DMATRIX *out)
 {
-    UINT row;
-    UINT column;
-    for (row = 0; row < 4; ++row) {
-        for (column = 0; column < 4; ++column) {
-            out->m[row][column] =
-                    left->m[row][0] * right->m[0][column]
-                    + left->m[row][1] * right->m[1][column]
-                    + left->m[row][2] * right->m[2][column]
-                    + left->m[row][3] * right->m[3][column];
-        }
-    }
+    d9wg_multiply_matrix(left, right, out);
 }
 
-static float d9_saturate(float value)
-{
-    if (value < 0.0f) return 0.0f;
-    if (value > 1.0f) return 1.0f;
-    return value;
-}
+
 
 static D3DCOLOR d9_pack_color(const float *rgba)
 {
-    return ((DWORD)(d9_saturate(rgba[3]) * 255.0f + 0.5f) << 24)
-            | ((DWORD)(d9_saturate(rgba[0]) * 255.0f + 0.5f) << 16)
-            | ((DWORD)(d9_saturate(rgba[1]) * 255.0f + 0.5f) << 8)
-            | (DWORD)(d9_saturate(rgba[2]) * 255.0f + 0.5f);
+    return d9wg_pack_color(rgba);
 }
 
 static UINT d9_decl_type_bytes(BYTE type)
@@ -9623,12 +10382,7 @@ static UINT d9_decl_type_bytes(BYTE type)
     }
 }
 
-/*
- * The subset of D3DDECLTYPE this software path reads and writes directly.
- * Everything else -- the packed and half-float formats -- is rejected rather
- * than approximated, because a silently mis-decoded position is geometry that
- * is wrong rather than missing.
- */
+/* Float output widths used by generated primitive declarations. */
 static BOOL d9_decl_type_float_count(BYTE type, UINT *floats)
 {
     switch (type) {
@@ -9643,209 +10397,35 @@ static BOOL d9_decl_type_float_count(BYTE type, UINT *floats)
 static BOOL d9_build_process_layout(const D9WGVertexElement *elements,
         UINT count, D9ProcessLayout *layout)
 {
-    UINT index;
-
-    ZeroMemory(layout, sizeof(*layout));
-    layout->position = -1;
-    layout->normal = -1;
-    layout->diffuse = -1;
-    layout->specular = -1;
-    layout->psize = -1;
-    for (index = 0; index < D9_PV_MAX_TEXCOORDS; ++index)
-        layout->texcoord[index] = -1;
-
-    for (index = 0; index < count; ++index) {
-        const D9WGVertexElement *e = &elements[index];
-        UINT bytes = d9_decl_type_bytes(e->type);
-        UINT end;
-        UINT floats;
-
-        /* Only stream 0 participates. A declaration spreading its attributes
-         * over several streams is legal D3D9 and this path cannot serve it
-         * without also tracking every stream's stride and base -- refusing is
-         * the honest answer rather than reading stream 0 at the wrong offset. */
-        if (e->stream != 0)
-            return FALSE;
-        if (!bytes || e->method != D3DDECLMETHOD_DEFAULT)
-            return FALSE;
-        end = (UINT)e->offset + bytes;
-        if (end > layout->stride) layout->stride = end;
-
-        switch (e->usage) {
-        case D3DDECLUSAGE_POSITION:
-            if (e->usage_index) break;
-            if (!d9_decl_type_float_count(e->type, &floats) || floats < 3)
-                return FALSE;
-            layout->position = (int)e->offset;
-            layout->position_transformed = FALSE;
-            break;
-        case D3DDECLUSAGE_POSITIONT:
-            if (e->usage_index) break;
-            if (e->type != D3DDECLTYPE_FLOAT4)
-                return FALSE;
-            layout->position = (int)e->offset;
-            layout->position_transformed = TRUE;
-            break;
-        case D3DDECLUSAGE_NORMAL:
-            if (e->usage_index) break;
-            if (!d9_decl_type_float_count(e->type, &floats) || floats < 3)
-                return FALSE;
-            layout->normal = (int)e->offset;
-            break;
-        case D3DDECLUSAGE_COLOR:
-            if (e->type != D3DDECLTYPE_D3DCOLOR)
-                return FALSE;
-            if (e->usage_index == 0) layout->diffuse = (int)e->offset;
-            else if (e->usage_index == 1) layout->specular = (int)e->offset;
-            break;
-        case D3DDECLUSAGE_PSIZE:
-            if (e->usage_index || e->type != D3DDECLTYPE_FLOAT1)
-                return FALSE;
-            layout->psize = (int)e->offset;
-            break;
-        case D3DDECLUSAGE_TEXCOORD:
-            if (e->usage_index >= D9_PV_MAX_TEXCOORDS)
-                return FALSE;
-            if (!d9_decl_type_float_count(e->type, &floats))
-                return FALSE;
-            layout->texcoord[e->usage_index] = (int)e->offset;
-            layout->texcoord_floats[e->usage_index] = floats;
-            break;
-        default:
-            /* BLENDWEIGHT/BLENDINDICES and the rest are simply not carried
-             * through; their bytes still count toward the stride above. */
-            break;
-        }
-    }
-    return layout->position >= 0;
+    return d9wg_process_layout(elements, count, layout);
 }
 
 /*
- * The fixed-function ambient and diffuse terms D3D9 specifies, in view space,
+ * The fixed-function lighting D3D9 specifies, in view space,
  * over the lights the guest has shadowed. Directional, point and spot lights
  * all reach here; the spot cone uses the same rho/theta/phi falloff the host's
  * generated vertex stage uses, so the two paths agree on the same scene.
  */
-static void d9_light_vertex(D9Device *device, const float *eye_position,
-        const float *eye_normal, float *out_rgba)
+static BOOL d9_prepare_lighting(D9Device *device, const D3DMATRIX *world_view,
+        D9WGTNLLighting *state)
 {
-    const D3DMATERIAL9 *material = &device->material;
-    DWORD ambient_state = device->render_states[D3DRS_AMBIENT];
-    float ambient[3];
     UINT index;
-
-    ambient[0] = ((ambient_state >> 16) & 0xffu) / 255.0f;
-    ambient[1] = ((ambient_state >> 8) & 0xffu) / 255.0f;
-    ambient[2] = (ambient_state & 0xffu) / 255.0f;
-
-    out_rgba[0] = material->Emissive.r + material->Ambient.r * ambient[0];
-    out_rgba[1] = material->Emissive.g + material->Ambient.g * ambient[1];
-    out_rgba[2] = material->Emissive.b + material->Ambient.b * ambient[2];
-    out_rgba[3] = material->Diffuse.a;
-
+    d9wg_lighting_sdk_prepare(state, &device->material, device->render_states, world_view);
+    if (!state->flags.lighting) return TRUE;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
-        const D3DLIGHT9 *light;
-        float to_light[3];
-        float attenuation = 1.0f;
-        float n_dot_l;
-        float length;
-
-        if (!device->light_set[index] || !device->light_enabled[index])
-            continue;
-        light = &device->lights[index];
-        if (light->Type == D3DLIGHT_DIRECTIONAL) {
-            float view_direction[4];
-            float direction[4];
-            direction[0] = light->Direction.x;
-            direction[1] = light->Direction.y;
-            direction[2] = light->Direction.z;
-            direction[3] = 0.0f;
-            d9_transform_vector4(
-                    (const D3DMATRIX *)device->transforms[D3DTS_VIEW],
-                    direction, view_direction);
-            length = d9_sqrt(view_direction[0] * view_direction[0]
-                    + view_direction[1] * view_direction[1]
-                    + view_direction[2] * view_direction[2]);
-            if (length < 1e-6f) continue;
-            to_light[0] = -view_direction[0] / length;
-            to_light[1] = -view_direction[1] / length;
-            to_light[2] = -view_direction[2] / length;
-        } else {
-            float view_position[4];
-            float position[4];
-            position[0] = light->Position.x;
-            position[1] = light->Position.y;
-            position[2] = light->Position.z;
-            position[3] = 1.0f;
-            d9_transform_vector4(
-                    (const D3DMATRIX *)device->transforms[D3DTS_VIEW],
-                    position, view_position);
-            to_light[0] = view_position[0] - eye_position[0];
-            to_light[1] = view_position[1] - eye_position[1];
-            to_light[2] = view_position[2] - eye_position[2];
-            length = d9_sqrt(to_light[0] * to_light[0]
-                    + to_light[1] * to_light[1] + to_light[2] * to_light[2]);
-            if (length > light->Range) continue;
-            if (length < 1e-6f) length = 1e-6f;
-            to_light[0] /= length;
-            to_light[1] /= length;
-            to_light[2] /= length;
-            attenuation = light->Attenuation0
-                    + light->Attenuation1 * length
-                    + light->Attenuation2 * length * length;
-            attenuation = attenuation < 1e-6f ? 1.0f : 1.0f / attenuation;
-            if (light->Type == D3DLIGHT_SPOT) {
-                float spot_direction[4];
-                float direction[4];
-                float rho;
-                float spot = 0.0f;
-                direction[0] = light->Direction.x;
-                direction[1] = light->Direction.y;
-                direction[2] = light->Direction.z;
-                direction[3] = 0.0f;
-                d9_transform_vector4(
-                        (const D3DMATRIX *)device->transforms[D3DTS_VIEW],
-                        direction, spot_direction);
-                length = d9_sqrt(spot_direction[0] * spot_direction[0]
-                        + spot_direction[1] * spot_direction[1]
-                        + spot_direction[2] * spot_direction[2]);
-                if (length < 1e-6f) continue;
-                /* rho is the cosine between the cone axis and the direction
-                 * *to the vertex*, which is the negation of to_light. */
-                rho = (-to_light[0] * spot_direction[0]
-                        - to_light[1] * spot_direction[1]
-                        - to_light[2] * spot_direction[2]) / length;
-                if (rho > light->Theta) {
-                    spot = 1.0f;
-                } else if (rho > light->Phi) {
-                    /* Falloff is an exponent D3D9 defaults to 1.0, and this
-                     * DLL has no pow(); the linear case is exact and anything
-                     * else is treated as linear rather than approximated with
-                     * a series that would be wrong in a different way. */
-                    spot = (rho - light->Phi)
-                            / (light->Theta - light->Phi > 1e-6f
-                                ? light->Theta - light->Phi : 1e-6f);
-                }
-                attenuation *= spot;
-            }
-        }
-        n_dot_l = eye_normal[0] * to_light[0] + eye_normal[1] * to_light[1]
-                + eye_normal[2] * to_light[2];
-        if (n_dot_l < 0.0f) n_dot_l = 0.0f;
-        out_rgba[0] += attenuation * (material->Ambient.r * light->Ambient.r
-                + material->Diffuse.r * light->Diffuse.r * n_dot_l);
-        out_rgba[1] += attenuation * (material->Ambient.g * light->Ambient.g
-                + material->Diffuse.g * light->Diffuse.g * n_dot_l);
-        out_rgba[2] += attenuation * (material->Ambient.b * light->Ambient.b
-                + material->Diffuse.b * light->Diffuse.b * n_dot_l);
+        if (device->light_set[index] && device->light_enabled[index] &&
+                !d9wg_lighting_sdk_add(state, index, &device->lights[index], (const void *)device->transforms[D3DTS_VIEW])) return FALSE;
     }
+    for (D9WGLightState *entry = device->extra_lights; entry; entry = entry->next)
+        if (entry->set && entry->enabled && !d9wg_lighting_sdk_add(state, entry->index, &entry->light,
+                (const void *)device->transforms[D3DTS_VIEW])) return FALSE;
+    return TRUE;
 }
 
 /* The source layout is the declaration currently bound, whether it arrived as
  * a real IDirect3DVertexDeclaration9 or as an FVF. */
-static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
+static BOOL d9_current_source_elements(D9Device *device, D9WGVertexElement *elements, UINT *element_count)
 {
-    D9WGVertexElement elements[D3DMAXDECLLENGTH];
     UINT count = 0;
 
     if (device->vertex_declaration) {
@@ -9869,7 +10449,364 @@ static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
     } else {
         return FALSE;
     }
-    return d9_build_process_layout(elements, count, layout);
+    *element_count = count;return TRUE;
+}
+static BOOL d9_current_source_layout(D9Device *device, D9ProcessLayout *layout)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
+    return d9_current_source_elements(device, elements, &count) &&
+            d9_build_process_layout(elements, count, layout);
+}
+
+static int d9_current_source_position_transformed(D9Device *device)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
+    D9WGProcessStreamLayout layout;
+    if (!d9_current_source_elements(device, elements, &count) ||
+            !d9wg_process_stream_layout(elements, count, &layout)) return -1;
+    return layout.vertex.position_transformed != 0;
+}
+static HRESULT d9_draw_index_bounds(D9Device *device, INT base_vertex, D9WGDrawIndexBounds *bounds)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT count;
+    D9WGVertexStream streams[D9_MAX_STREAMS] = {{0}};
+    uint32_t frequencies[D9_MAX_STREAMS];
+    if (!d9_current_source_elements(device, elements, &count)) return D3DERR_INVALIDCALL;
+    /* Programs without vertex inputs may use an empty declaration. */
+    if (!count) {
+        bounds->min_vertex = 0;bounds->vertex_limit = UINT32_MAX;return D3D_OK;
+    }
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) frequencies[i] = device->streams[i].frequency;
+    UINT readable = 0;
+    for (UINT i = 0; i < count; ++i) {
+        UINT stream = elements[i].stream;
+        if (stream >= D9_MAX_STREAMS) return D3DERR_INVALIDCALL;
+        D9VertexBuffer *buffer = device->streams[stream].buffer;
+        if (!buffer) continue; /* Unbound streams supply constant attributes. */
+        if (buffer->device != device) return D3DERR_INVALIDCALL;
+        elements[readable++] = elements[i];
+        streams[stream].length = buffer->length;streams[stream].base = device->streams[stream].offset;
+        streams[stream].stride = device->streams[stream].stride;
+    }
+    if (!readable) {
+        bounds->min_vertex = base_vertex < 0 ? (UINT)(-(int64_t)base_vertex) : 0;
+        bounds->vertex_limit = UINT32_MAX;return D3D_OK;
+    }
+    return d9wg_draw_index_bounds(elements, readable, streams, frequencies, base_vertex, bounds) ? D3D_OK : D3DERR_INVALIDCALL;
+}
+
+static HRESULT d9_bound_draw_range(D9Device *device, UINT first, UINT count, INT base_vertex)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
+    uint32_t extent[D9_MAX_STREAMS] = {0};
+    if (!count || !d9_current_source_elements(device, elements, &element_count)) return D3DERR_INVALIDCALL;
+    int64_t start = (int64_t)first + base_vertex;
+    if (start < 0 || start > 0xffffffffu) return D3DERR_INVALIDCALL;
+    for (UINT i = 0; i < element_count; ++i) {
+        const D9WGVertexElement *element = elements + i;
+        uint32_t bytes = d9wg_decl_bytes(element->type);
+        if (element->stream >= D9_MAX_STREAMS || !bytes) return D3DERR_INVALIDCALL;
+        uint32_t end = element->offset + bytes;
+        if (extent[element->stream] < end) extent[element->stream] = end;
+    }
+    uint32_t frequency = device->streams[0].frequency;
+    uint32_t instances = frequency & D3DSTREAMSOURCE_INDEXEDDATA ? frequency & D9_STREAMSOURCE_FREQUENCY_MASK : 1u;
+    if (!instances) return D3DERR_INVALIDCALL;
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
+        if (!extent[i]) continue;
+        D9VertexBuffer *buffer = device->streams[i].buffer;
+        if (!buffer) continue; /* The host supplies a constant default attribute. */
+        if (buffer->device != device) return D3DERR_INVALIDCALL;
+        uint32_t vertex = (uint32_t)start, vertices = count, at;
+        frequency = device->streams[i].frequency;
+        if (frequency & D3DSTREAMSOURCE_INSTANCEDATA) {
+            uint32_t divisor = frequency & D9_STREAMSOURCE_FREQUENCY_MASK;
+            if (!divisor) return D3DERR_INVALIDCALL;
+            vertex = 0;vertices = (instances - 1u)/divisor + 1u;
+        }
+        if (!d9wg_process_stream_range(buffer->length, device->streams[i].offset,
+                device->streams[i].stride, extent[i], vertex, vertices, &at)) return D3DERR_INVALIDCALL;
+    }
+    return D3D_OK;
+}
+
+typedef struct D9ProcessInput {
+    D9WGProcessStreamLayout layout;
+    D9WGVertexStream streams[D9_MAX_STREAMS];
+    D9ProcessLayout fast_layout;
+    BOOL gather;
+    BYTE *snapshot;
+} D9ProcessInput;
+static void d9_process_input_free(D9ProcessInput *input)
+{
+    if (input->snapshot) HeapFree(GetProcessHeap(), 0, input->snapshot);
+    HeapFree(GetProcessHeap(), 0, input);
+}
+static HRESULT d9_process_input(D9Device *device, D9VertexBuffer *destination,
+        UINT start, UINT count, BOOL allow_locked, D9ProcessInput **result)
+{
+    D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
+    uint32_t first[D9_MAX_STREAMS];
+    *result = NULL;
+    if (!d9_current_source_elements(device, elements, &element_count)) return D3DERR_INVALIDCALL;
+    D9ProcessInput *input = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*input));
+    if (!input) return E_OUTOFMEMORY;
+    HRESULT error = D3DERR_INVALIDCALL;
+    if (!d9wg_process_stream_layout(elements, element_count, &input->layout) ||
+            (destination && input->layout.vertex.position_transformed)) goto fail;
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
+        if (!(input->layout.stream_mask & (1u << i))) continue;
+        D9VertexBuffer *buffer = device->streams[i].buffer;
+        if (!buffer || buffer->device != device || (buffer->locked && !allow_locked) || device->streams[i].frequency != 1u) goto fail;
+        input->streams[i].vertices = buffer->shadow;
+        input->streams[i].length = buffer->length;
+        input->streams[i].base = device->streams[i].offset;
+        input->streams[i].stride = device->streams[i].stride;
+    }
+    if (!d9wg_process_stream_validate(&input->layout, input->streams, start, count, first)) goto fail;
+    input->gather = input->layout.stream_mask != 1u || !input->streams[0].stride;
+    if (!input->gather && !d9_build_process_layout(elements, element_count, &input->fast_layout)) goto fail;
+    /* Every alias observes the same pre-call bytes, including a constant
+     * stream inside the destination. One snapshot covers all alias bindings. */
+    for (UINT i = 0; i < D9_MAX_STREAMS; ++i) {
+        if (!(input->layout.stream_mask & (1u << i)) || device->streams[i].buffer != destination) continue;
+        if (!input->snapshot) {
+            input->snapshot = HeapAlloc(GetProcessHeap(), 0, destination->length);
+            if (!input->snapshot) { error = E_OUTOFMEMORY;goto fail; }
+            CopyMemory(input->snapshot, destination->shadow, destination->length);
+        }
+        input->streams[i].vertices = input->snapshot;
+    }
+    *result = input;return D3D_OK;
+fail:
+    d9_process_input_free(input);return error;
+}
+
+/* Internal clipped UP emissions use one gathered stream. Only host wire
+ * state changes: the application's declaration and all VB/IB shadows stay
+ * bound, and the original host declaration is restored even after failure. */
+typedef struct D9StreamClipEmit {
+    D9Device *device;
+    const D9WGVertexElement *elements;
+    uint32_t count;
+    BOOL remapped;
+} D9StreamClipEmit;
+static BOOL d9_emit_clip_layout(D9Device *device, DWORD fvf,
+        const D9WGVertexElement *elements, uint32_t count, BOOL gather)
+{
+    BYTE payload[sizeof(D9WGSetFVF) + D3DMAXDECLLENGTH*sizeof(D9WGVertexElement)];
+    D9WGSetFVF *command = (D9WGSetFVF *)payload;
+    command->device_handle = device->handle;command->fvf = fvf;
+    command->element_count = count;command->reserved = 0;
+    D9WGVertexElement *output = (D9WGVertexElement *)(payload + sizeof(*command));
+    for (uint32_t i = 0; i < count; ++i) {
+        output[i] = elements[i];
+        if (gather) { output[i].stream = 0;output[i].offset = (uint16_t)(i*16u); }
+    }
+    return emit_command(D9WG_OP_SET_FVF, payload, sizeof(*command) + count*sizeof(*output));
+}
+static int d9_clip_stream_emit(void *context, uint32_t primitive_type,
+        const void *vertices, uint32_t count, uint32_t stride)
+{
+    D9StreamClipEmit *state = context;
+    if (!state->remapped) {
+        if (!d9_emit_clip_layout(state->device, 0, state->elements, state->count, TRUE)) return 0;
+        state->remapped = TRUE;
+    }
+    return d9_clip_emit(state->device, primitive_type, vertices, count, stride);
+}
+static int d9_clip_stream_mask(void *context, uint32_t mask)
+{ return d9_clip_mask(((D9StreamClipEmit *)context)->device, mask); }
+static int d9_clip_stream_draw(D9Device *device, uint32_t primitive_type, const D9WGClipDrawSource *draw)
+{
+    UINT position_stream = 0, position_offset = 0;
+    if (device->vertex_declaration) {
+        BOOL found = FALSE;
+        D9VertexDeclaration *declaration = device->vertex_declaration;
+        for (UINT i = 0; i < declaration->element_count; ++i) {
+            const D3DVERTEXELEMENT9 *element = declaration->elements + i;
+            if (element->Usage == D3DDECLUSAGE_POSITIONT && !element->UsageIndex) {
+                position_stream = element->Stream;position_offset = element->Offset;found = TRUE;break;
+            }
+        }
+        if (!found) return 0;
+    } else if ((device->fvf & 0x00eu) != D3DFVF_XYZRHW) return 0;
+    if (position_stream >= D9_MAX_STREAMS) return -1;
+    D9VertexBuffer *buffer = device->streams[position_stream].buffer;
+    if (!buffer) return 0; /* Constant defaults have no ProcessVertices clip records. */
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!buffer->clips.head) return 0;
+    BOOL live = FALSE;
+    for (uint32_t vertex = 0; vertex < draw->count; ++vertex) {
+        uint32_t index = d9wg_clip_read_index(draw, vertex);
+        int64_t source = (int64_t)draw->first_vertex + draw->base_vertex + index;
+        if (index < draw->min_vertex || index >= draw->vertex_count || source < 0 ||
+                (source > 0xffffffffu && device->streams[position_stream].stride)) return -1;
+        uint64_t at = device->streams[position_stream].offset + (uint64_t)source*device->streams[position_stream].stride + position_offset;
+        if (at > buffer->length || buffer->length - at < 16u) return -1;
+        const D9WGProcessViewport *viewport;
+        if (d9wg_clip_buffer_lookup(&buffer->clips, (uint32_t)at, buffer->shadow + (uint32_t)at, &viewport)) live = TRUE;
+    }
+    d9wg_clip_buffer_commit(&buffer->clips, NULL, 0, 0, d9wg_vertex_windows_clip_release, NULL);
+    if (!live) return 0;
+    uint32_t begin = draw->indices ? draw->min_vertex : 0;
+    uint32_t count = draw->indices ? draw->vertex_count - begin : draw->count;
+    int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
+    if (start < 0 || start > 0xffffffffu) return -1;
+    D9ProcessInput *input;
+    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, TRUE, &input);
+    if (FAILED(error)) return error == E_OUTOFMEMORY ? -3 : -1;
+    D9WGVertexElement output_elements[D3DMAXDECLLENGTH];D9WGProcessLayout output_layout;
+    if (!d9wg_clip_stream_output(&input->layout, output_elements, &output_layout)) {
+        d9_process_input_free(input);return -1;
+    }
+    D9WGClipDrawSource source = *draw;
+    d9wg_clip_draw_streams_init(&source, &input->layout, input->streams);
+    source.output_layout = &output_layout;
+    if (source.stride < output_layout.stride) source.stride = output_layout.stride;
+    source.clips = &buffer->clips;source.primitive_type = primitive_type;
+    source.flat_shading = device->render_states[D3DRS_SHADEMODE] == D3DSHADE_FLAT;
+    source.viewport = (D9WGProcessViewport){ (float)device->viewport.X, (float)device->viewport.Y,
+            (float)device->viewport.Width, (float)device->viewport.Height, device->viewport.MinZ, device->viewport.MaxZ };
+    D9StreamClipEmit state = { device, output_elements, input->layout.count, FALSE };
+    int result = d9wg_vertex_windows_clip_draw_planes(&source, d9_clip_stream_emit, d9_clip_stream_mask,
+            device->render_states[D3DRS_CLIPPLANEENABLE], &state);
+    if (state.remapped) {
+        BOOL restored;
+        if (device->vertex_declaration) {
+            D9WGSetVertexDeclaration command = { device->handle, device->vertex_declaration->handle };
+            restored = emit_command(D9WG_OP_SET_VERTEX_DECLARATION, &command, sizeof(command));
+        } else {
+            D9WGVertexElement elements[D3DMAXDECLLENGTH];UINT element_count;
+            restored = fvf_to_declaration(device->fvf, elements, &element_count) &&
+                    d9_emit_clip_layout(device, device->fvf, elements, element_count, FALSE);
+        }
+        if (!restored) result = -2;
+    }
+    d9_process_input_free(input);return result;
+}
+
+static HRESULT d9_prepare_stream_clip_status(D9Device *device, const D9WGClipDrawSource *draw,
+        D9WGClipStatus *next, BOOL *valid)
+{
+    int transformed = d9_current_source_position_transformed(device);
+    if (transformed == 1) return D3D_OK;
+    if (!device->render_states[D3DRS_CLIPPING]) {
+        next->clip_union = next->clip_intersection = 0;*valid = TRUE;return D3D_OK;
+    }
+    if (transformed < 0 || device->vertex_shader) { *valid = FALSE;return D3D_OK; }
+    uint32_t begin = draw->indices ? draw->min_vertex : 0;
+    uint32_t count = draw->indices ? draw->vertex_count - begin : draw->count;
+    int64_t start = (int64_t)draw->first_vertex + draw->base_vertex + begin;
+    if (start < 0 || start > 0xffffffffu) return D3DERR_INVALIDCALL;
+    D9ProcessInput *input;
+    HRESULT error = d9_process_input(device, NULL, (UINT)start, count, TRUE, &input);
+    if (error == D3DERR_INVALIDCALL) { *valid = FALSE;return D3D_OK; }
+    if (FAILED(error)) return error;
+    D9WGClipDrawSource source = *draw;source.layout = &input->layout.vertex;
+    uint32_t result = d9wg_vertex_windows_clip_status_inputs(&source, &input->layout, input->streams,
+            device->render_states, device->transforms[D3DTS_WORLD], 256, 0,
+            device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION], device->clip_planes, next);
+    d9_process_input_free(input);
+    if (!result) *valid = TRUE;
+    return result == 2 ? E_OUTOFMEMORY : result ? D3DERR_INVALIDCALL : D3D_OK;
+}
+
+static HRESULT process_vertices_layout(D9Device *device,
+        D9VertexBuffer *destination, const D9ProcessLayout *destination_layout_ptr,
+        UINT src_start, UINT dst_index, UINT count, DWORD flags)
+{
+    D3DMATRIX world_view;
+    D3DMATRIX world_view_projection;
+    BOOL lighting;
+    BOOL copy_data;
+    uint32_t validated_offset;
+
+    /* D3D9 refuses to transform geometry that already is, and requires the
+     * result to be pre-transformed. */
+    if (!destination_layout_ptr->position_transformed ||
+            !d9wg_process_canonical_output(destination_layout_ptr) ||
+            !d9wg_process_range(destination->length, 0, destination_layout_ptr->stride,
+                destination_layout_ptr->stride, dst_index, count, &validated_offset))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+
+    d9_multiply_matrix((const D3DMATRIX *)device->transforms[D3DTS_WORLD],
+            (const D3DMATRIX *)device->transforms[D3DTS_VIEW], &world_view);
+    d9_multiply_matrix(&world_view,
+            (const D3DMATRIX *)device->transforms[D3DTS_PROJECTION],
+            &world_view_projection);
+    D9WGTNLLighting light_state;
+    if (!d9_prepare_lighting(device, &world_view, &light_state))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    D9WGVertexState vertex_state;
+    d9wg_vertex_state_init(&vertex_state, device->render_states);
+    if (!d9wg_vertex_textures_init(&vertex_state, device->texture_stage_states,
+            sizeof(device->texture_stage_states[0]), device->transforms[D3DTS_TEXTURE0]))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    d9wg_vertex_clip_planes_init(&vertex_state, device->render_states[D3DRS_CLIPPLANEENABLE],
+            device->clip_planes, device->transforms[D3DTS_WORLD]);
+    lighting = light_state.flags.lighting != 0;
+    (void)lighting;
+    /* Transformed channels are always written; this flag only suppresses
+     * passthrough data. */
+    copy_data = (flags & D3DPV_DONOTCOPYDATA) == 0;
+
+    {
+        D9WGProcessViewport viewport = { (float)device->viewport.X, (float)device->viewport.Y,
+                (float)device->viewport.Width, (float)device->viewport.Height,
+                device->viewport.MinZ, device->viewport.MaxZ };
+        D9ProcessInput *input;
+        HRESULT input_error = d9_process_input(device, destination, src_start, count, FALSE, &input);
+        if (FAILED(input_error)) return TRACE_REFUSE(input_error);
+        uint32_t blend_error = d9wg_vertex_windows_blend(&vertex_state, device->render_states,
+                device->transforms[D3DTS_WORLD], 256, 0, device->transforms[D3DTS_VIEW], device->transforms[D3DTS_PROJECTION]);
+        if (blend_error) {
+            d9_process_input_free(input);
+            return TRACE_REFUSE(blend_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+        }
+        D3DCAPS9 caps;fill_caps(&caps);
+        float guard[4] = { caps.GuardBandLeft, caps.GuardBandTop, caps.GuardBandRight, caps.GuardBandBottom };
+        D9WGClipBatch *clip_batch;
+        uint32_t clip_error = d9wg_vertex_windows_clip(&vertex_state, device->render_states[D3DRS_CLIPPING],
+                validated_offset + destination_layout_ptr->position, destination_layout_ptr->stride, count, &viewport, guard, &clip_batch);
+        if (clip_error) {
+            d9wg_vertex_windows_blend_free(&vertex_state);
+            d9_process_input_free(input);
+            return TRACE_REFUSE(clip_error == 2 ? E_OUTOFMEMORY : D3DERR_INVALIDCALL);
+        }
+        BOOL processed;
+        if (input->gather) processed = d9wg_process_vertices_streams(&input->layout,
+                input->streams, src_start, destination_layout_ptr, destination->shadow,
+                destination->length, dst_index, count, &world_view, &world_view_projection,
+                &viewport, &light_state, copy_data, &vertex_state);
+        else processed = d9wg_process_vertices(&input->fast_layout,
+                input->streams[0].vertices, input->streams[0].length,
+                input->streams[0].base, input->streams[0].stride, src_start,
+                destination_layout_ptr, destination->shadow, destination->length, dst_index, count,
+                &world_view, &world_view_projection, &viewport, &light_state, copy_data, &vertex_state);
+        d9wg_vertex_windows_blend_free(&vertex_state);
+        d9_process_input_free(input);
+        if (!processed) {
+            if (clip_batch) HeapFree(GetProcessHeap(), 0, clip_batch);
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
+        d9wg_clip_status_processed(&device->clip_status, clip_batch);
+        if (!clip_batch) device->clip_status_valid = TRUE;
+        d9wg_clip_buffer_commit(&destination->clips, clip_batch, validated_offset,
+                count * destination_layout_ptr->stride, d9wg_vertex_windows_clip_release, NULL);
+    }
+
+    /* The transformed vertices live in the destination's guest shadow; the
+     * host needs them too, since the app will draw straight from the buffer. */
+    TRACE("OK ProcessVertices device=%08lX count=%lu stride=%lu lit=%lu",
+            device->handle, count, destination_layout_ptr->stride,
+            (DWORD)lighting);
+    TRACE_MARK_EXIT("Device.ProcessVertices", D3D_OK, NULL);
+    return emit_buffer_update(destination->handle,
+            dst_index * destination_layout_ptr->stride,
+            destination->shadow + dst_index * destination_layout_ptr->stride,
+            count * destination_layout_ptr->stride, 0)
+            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
 
 static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
@@ -9879,15 +10816,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
 {
     D9Device *device = device_from_iface(iface);
     D9VertexBuffer *destination;
-    D9VertexBuffer *source;
-    D9ProcessLayout source_layout;
     D9ProcessLayout destination_layout;
-    D3DMATRIX world_view;
-    D3DMATRIX world_view_projection;
-    BOOL lighting;
-    BOOL copy_data;
-    UINT vertex;
-    UINT source_stride;
 
     TRACE_MARK_ENTER("Device.ProcessVertices");
     if (!dst || dst->lpVtbl != &g_vb_vtbl) {
@@ -9895,10 +10824,7 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         return D3DERR_INVALIDCALL;
     }
     destination = vb_from_iface(dst);
-    source = device->streams[0].buffer;
-    source_stride = device->streams[0].stride;
-    if (destination->device != device || !source || destination->locked
-            || source->locked || !count) {
+    if (destination->device != device || destination->locked || !count) {
         TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
@@ -9906,13 +10832,6 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
         HOSTLOG_REFUSED("ProcessVertices refused: a vertex shader is bound, "
                 "and running the fixed-function pipeline in its place would "
                 "silently produce different geometry");
-        TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
-    if (!d9_current_source_layout(device, &source_layout)) {
-        HOSTLOG_REFUSED("ProcessVertices refused: the source declaration uses "
-                "a stream, element type or method this software vertex path "
-                "does not read");
         TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
@@ -9956,147 +10875,8 @@ static HRESULT WINAPI device_process_vertices(IDirect3DDevice9 *iface,
             return D3DERR_INVALIDCALL;
         }
     }
-    /* D3D9 refuses to transform geometry that already is, and requires the
-     * result to be pre-transformed. */
-    if (source_layout.position_transformed
-            || !destination_layout.position_transformed) {
-        HOSTLOG_REFUSED("ProcessVertices refused: the source must be "
-                "untransformed (POSITION) and the destination pre-transformed "
-                "(POSITIONT)");
-        TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
-    if (!source_stride || source_stride < source_layout.stride) {
-        TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-        return D3DERR_INVALIDCALL;
-    }
-    {
-        UINT source_needed;
-        UINT destination_needed;
-        if (!multiply_u32(src_start + count, source_stride, &source_needed)
-                || !multiply_u32(dst_index + count, destination_layout.stride,
-                        &destination_needed)
-                || source_needed > source->length
-                || destination_needed > destination->length) {
-            TRACE_MARK_EXIT("Device.ProcessVertices", D3DERR_INVALIDCALL, NULL);
-            return D3DERR_INVALIDCALL;
-        }
-    }
-
-    d9_multiply_matrix((const D3DMATRIX *)device->transforms[D3DTS_WORLD],
-            (const D3DMATRIX *)device->transforms[D3DTS_VIEW], &world_view);
-    d9_multiply_matrix(&world_view,
-            (const D3DMATRIX *)device->transforms[D3DTS_PROJECTION],
-            &world_view_projection);
-    lighting = device->render_states[D3DRS_LIGHTING]
-            && source_layout.normal >= 0;
-    /* D3DPV_DONOTCOPYDATA says the caller only wants the transform; everything
-     * but position keeps whatever the destination already held. */
-    copy_data = (flags & D3DPV_DONOTCOPYDATA) == 0;
-
-    for (vertex = 0; vertex < count; ++vertex) {
-        const BYTE *in = source->shadow
-                + (src_start + vertex) * source_stride;
-        BYTE *out = destination->shadow
-                + (dst_index + vertex) * destination_layout.stride;
-        float position[4];
-        float clip[4];
-        float rhw;
-        UINT index;
-
-        position[0] = ((const float *)(in + source_layout.position))[0];
-        position[1] = ((const float *)(in + source_layout.position))[1];
-        position[2] = ((const float *)(in + source_layout.position))[2];
-        position[3] = 1.0f;
-        d9_transform_vector4(&world_view_projection, position, clip);
-        rhw = (clip[3] > 1e-6f || clip[3] < -1e-6f) ? 1.0f / clip[3] : 1.0f;
-        /* Clip space -> the viewport's pixel rectangle, which is what makes
-         * the result drawable as XYZRHW. */
-        ((float *)(out + destination_layout.position))[0] =
-                (clip[0] * rhw * 0.5f + 0.5f) * (float)device->viewport.Width
-                + (float)device->viewport.X;
-        ((float *)(out + destination_layout.position))[1] =
-                (0.5f - clip[1] * rhw * 0.5f) * (float)device->viewport.Height
-                + (float)device->viewport.Y;
-        ((float *)(out + destination_layout.position))[2] =
-                device->viewport.MinZ + clip[2] * rhw
-                * (device->viewport.MaxZ - device->viewport.MinZ);
-        ((float *)(out + destination_layout.position))[3] = rhw;
-        if (!copy_data)
-            continue;
-
-        if (destination_layout.diffuse >= 0) {
-            if (lighting) {
-                float eye_position[4];
-                float normal[4];
-                float eye_normal[4];
-                float length;
-                float lit[4];
-                d9_transform_vector4(&world_view, position, eye_position);
-                normal[0] = ((const float *)(in + source_layout.normal))[0];
-                normal[1] = ((const float *)(in + source_layout.normal))[1];
-                normal[2] = ((const float *)(in + source_layout.normal))[2];
-                normal[3] = 0.0f;
-                d9_transform_vector4(&world_view, normal, eye_normal);
-                length = d9_sqrt(eye_normal[0] * eye_normal[0]
-                        + eye_normal[1] * eye_normal[1]
-                        + eye_normal[2] * eye_normal[2]);
-                if (length > 1e-6f) {
-                    eye_normal[0] /= length;
-                    eye_normal[1] /= length;
-                    eye_normal[2] /= length;
-                }
-                d9_light_vertex(device, eye_position, eye_normal, lit);
-                *(D3DCOLOR *)(out + destination_layout.diffuse) =
-                        d9_pack_color(lit);
-            } else if (source_layout.diffuse >= 0) {
-                *(D3DCOLOR *)(out + destination_layout.diffuse) =
-                        *(const D3DCOLOR *)(in + source_layout.diffuse);
-            } else {
-                *(D3DCOLOR *)(out + destination_layout.diffuse) = 0xffffffffu;
-            }
-        }
-        if (destination_layout.specular >= 0) {
-            /* Copied, never computed: see the note above about
-             * D3DRS_SPECULARENABLE. */
-            *(D3DCOLOR *)(out + destination_layout.specular) =
-                    source_layout.specular >= 0
-                    ? *(const D3DCOLOR *)(in + source_layout.specular) : 0;
-        }
-        if (destination_layout.psize >= 0) {
-            *(float *)(out + destination_layout.psize) =
-                    source_layout.psize >= 0
-                    ? *(const float *)(in + source_layout.psize) : 1.0f;
-        }
-        for (index = 0; index < D9_PV_MAX_TEXCOORDS; ++index) {
-            UINT floats = destination_layout.texcoord_floats[index];
-            UINT component;
-            if (destination_layout.texcoord[index] < 0) continue;
-            for (component = 0; component < floats; ++component) {
-                float value = 0.0f;
-                if (source_layout.texcoord[index] >= 0
-                        && component < source_layout.texcoord_floats[index]) {
-                    value = ((const float *)(in
-                            + source_layout.texcoord[index]))[component];
-                }
-                ((float *)(out
-                        + destination_layout.texcoord[index]))[component] =
-                        value;
-            }
-        }
-    }
-
-    /* The transformed vertices live in the destination's guest shadow; the
-     * host needs them too, since the app will draw straight from the buffer. */
-    TRACE("OK ProcessVertices device=%08lX count=%lu stride=%lu lit=%lu",
-            device->handle, count, destination_layout.stride,
-            (DWORD)lighting);
-    TRACE_MARK_EXIT("Device.ProcessVertices", D3D_OK, NULL);
-    return emit_buffer_update(destination->handle,
-            dst_index * destination_layout.stride,
-            destination->shadow + dst_index * destination_layout.stride,
-            count * destination_layout.stride, 0)
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    return process_vertices_layout(device, destination, &destination_layout,
+            src_start, dst_index, count, flags);
 }
 static HRESULT WINAPI device_set_stream_source_freq(IDirect3DDevice9 *iface,
         UINT stream, UINT divider)
@@ -10104,31 +10884,28 @@ static HRESULT WINAPI device_set_stream_source_freq(IDirect3DDevice9 *iface,
     D9Device *device = device_from_iface(iface);
     D9WGSetStreamSourceFreq command;
     DWORD mode;
-    DWORD frequency;
 
     if (stream >= D9_MAX_STREAMS)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
     mode = divider & (D3DSTREAMSOURCE_INDEXEDDATA |
             D3DSTREAMSOURCE_INSTANCEDATA);
-    frequency = divider & D9_STREAMSOURCE_FREQUENCY_MASK;
-    if (divider != 1u) {
-        if (!frequency)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-        if ((stream == 0 && mode != D3DSTREAMSOURCE_INDEXEDDATA) ||
-                (stream != 0 && mode != D3DSTREAMSOURCE_INSTANCEDATA))
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
+    /* INDEXEDDATA is accepted on any stream; stream zero alone supplies
+     * the instance count. A flag with zero frequency is legal. */
+    if (!divider || mode == (D3DSTREAMSOURCE_INDEXEDDATA | D3DSTREAMSOURCE_INSTANCEDATA)
+            || (!stream && mode == D3DSTREAMSOURCE_INSTANCEDATA))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
 
-    state_block_record_stream(device, stream);
+    if (state_block_record_stream_frequency(device, stream, divider)) return D3D_OK;
     if (device->streams[stream].frequency == divider)
         return D3D_OK;
-    device->streams[stream].frequency = divider;
     command.device_handle = device->handle;
     command.stream = stream;
     command.divider = divider;
-    return emit_command(D9WG_OP_SET_STREAM_SOURCE_FREQ, &command,
-            sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    if (!emit_command(D9WG_OP_SET_STREAM_SOURCE_FREQ, &command, sizeof(command)))
+        return D3DERR_DRIVERINTERNALERROR;
+    device->streams[stream].frequency = divider;
+    return D3D_OK;
 }
 
 static HRESULT WINAPI device_get_stream_source_freq(IDirect3DDevice9 *iface,
@@ -10740,9 +11517,9 @@ static HRESULT d9_draw_npatch(IDirect3DDevice9 *iface, D9Device *device,
                 quadratic_normal);
     }
 
-    result = device_draw_indexed_primitive_up(iface, D3DPT_TRIANGLELIST, 0,
+    result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             total_points, total_indices / 3u, out_indices, D3DFMT_INDEX16,
-            vertices, format.stride);
+            vertices, format.stride, TRUE, FALSE);
     HeapFree(GetProcessHeap(), 0, vertices);
     HeapFree(GetProcessHeap(), 0, out_indices);
     HeapFree(GetProcessHeap(), 0, corners);
@@ -10894,9 +11671,9 @@ static HRESULT WINAPI device_draw_rect_patch(IDirect3DDevice9 *iface,
 
     d9_patch_grid_indices(segment_count, indices);
     index = segment_count * segment_count * 2u;
-    result = device_draw_indexed_primitive_up(iface, D3DPT_TRIANGLELIST, 0,
+    result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             grid * grid, index, indices, D3DFMT_INDEX16, vertices,
-            format.stride);
+            format.stride, FALSE, FALSE);
 
     HeapFree(GetProcessHeap(), 0, vertices);
     HeapFree(GetProcessHeap(), 0, indices);
@@ -11066,9 +11843,9 @@ static HRESULT WINAPI device_draw_tri_patch(IDirect3DDevice9 *iface,
 
     d9_patch_grid_indices(segment_count, indices);
     triangles = segment_count * segment_count * 2u;
-    result = device_draw_indexed_primitive_up(iface, D3DPT_TRIANGLELIST, 0,
+    result = draw_indexed_up(device_from_iface(iface), D3DPT_TRIANGLELIST, 0,
             grid * grid, triangles, indices, D3DFMT_INDEX16, vertices,
-            format.stride);
+            format.stride, FALSE, FALSE);
 
     HeapFree(GetProcessHeap(), 0, vertices);
     HeapFree(GetProcessHeap(), 0, indices);
@@ -11133,6 +11910,7 @@ static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
     texture->iface.lpVtbl = &g_texture_vtbl;
     texture->refcount = 1;
     texture->device = device;
+    texture->private_back_buffer = TRUE;
     texture->handle = allocate_handle();
     texture->width = width;
     texture->height = height;
@@ -11144,7 +11922,7 @@ static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
     texture->multisample_quality = multisample_quality;
     texture->levels[0].width = width;
     texture->levels[0].height = height;
-    if (!(usage & D3DUSAGE_DEPTHSTENCIL)
+    if (!(usage & D3DUSAGE_DEPTHSTENCIL) && format != D9FMT_NULL
             && !texture_level_layout(format, width, height,
             &texture->levels[0].row_pitch, &texture->levels[0].row_count,
             &texture->levels[0].byte_count)) {
@@ -11177,9 +11955,7 @@ static HRESULT create_target_texture(D9Device *device, UINT width, UINT height,
         }
         texture->levels[0].shadow_valid = TRUE;
     }
-    device_child_add_ref(device);
     if (!emit_texture_create(device, texture)) {
-        device_child_release(device);
         if (texture->levels[0].shadow)
             HeapFree(GetProcessHeap(), 0, texture->levels[0].shadow);
         HeapFree(GetProcessHeap(), 0, texture->levels);
@@ -11230,7 +12006,9 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice9 *iface,
         D3DMULTISAMPLE_TYPE multisample, DWORD multisample_quality,
         WINBOOL lockable, IDirect3DSurface9 **surface_out, HANDLE *shared)
 {
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    if (!surface_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *surface_out = NULL;
     if (!supported_multisample(format, multisample)
             || multisample_quality != 0
             || (lockable && multisample != D3DMULTISAMPLE_NONE)) {
@@ -11238,9 +12016,10 @@ static HRESULT WINAPI device_create_render_target(IDirect3DDevice9 *iface,
     }
     if (!supported_render_target_format(format))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    return create_target_texture(device_from_iface(iface), width, height, format,
-            D3DUSAGE_RENDERTARGET, multisample, multisample_quality,
-            surface_out);
+    HRESULT hr = create_target_texture(device_from_iface(iface), width, height, format,
+            D3DUSAGE_RENDERTARGET, multisample, multisample_quality, surface_out);
+    if (SUCCEEDED(hr)) surface_from_iface(*surface_out)->lockable_render_target = !!lockable;
+    return hr;
 }
 
 static HRESULT WINAPI device_create_depth_stencil_surface(
@@ -11248,7 +12027,9 @@ static HRESULT WINAPI device_create_depth_stencil_surface(
         D3DMULTISAMPLE_TYPE multisample, DWORD multisample_quality,
         WINBOOL discard, IDirect3DSurface9 **surface_out, HANDLE *shared)
 {
-    (void)shared;
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    if (!surface_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *surface_out = NULL;
     (void)discard;
     if (!supported_multisample(format, multisample)
             || multisample_quality != 0)
@@ -11269,7 +12050,10 @@ static BOOL surface_target_handle(D9Surface *surface, uint32_t *handle_out,
 {
     if (!surface)
         return FALSE;
-    if (surface->shadow)
+    /* Renderable locks also allocate a CPU readback shadow; that cache does
+     * not remove the original GPU resource or implicit backbuffer. */
+    if (surface->shadow && !surface->texture && !surface->cube_texture
+            && !surface->swap_chain)
         return FALSE; /* CPU-only offscreen surface: never a GPU target */
     if (surface->cube_texture) {
         *handle_out = surface->cube_texture->handle;
@@ -11283,31 +12067,10 @@ static BOOL surface_target_handle(D9Surface *surface, uint32_t *handle_out,
     return TRUE;
 }
 
-static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
-        DWORD index, IDirect3DSurface9 *surface_iface)
+static void device_replace_render_target_surface(D9Device *device,
+        UINT index, D9Surface *surface)
 {
-    D9Device *device = device_from_iface(iface);
-    D9Surface *surface = surface_iface ? surface_from_iface(surface_iface) : NULL;
     D9Surface *old_surface;
-    D9WGSetRenderTarget command;
-    uint32_t handle = 0;
-    uint32_t level = 0;
-    uint32_t face = 0;
-
-    if (index >= D9_MAX_RENDER_TARGETS)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    /* D3D9 forbids unbinding slot 0: something always has to receive colour. */
-    if (!surface_iface && index == 0)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (surface_iface && !surface_target_handle(surface, &handle, &level, &face))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (surface_iface && surface->texture
-            && !(surface->texture->usage & D3DUSAGE_RENDERTARGET))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (surface_iface && surface->cube_texture
-            && !(surface->cube_texture->usage & D3DUSAGE_RENDERTARGET))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-
     old_surface = device->render_target_surfaces[index];
     TRACE("CALL SetRenderTarget index=%lu old=%08lX new=%08lX same=%lu "
             "old_refs=%ld new_refs=%ld", index,
@@ -11321,10 +12084,43 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
      * the usual COM replacement discipline, this keeps same-object rebinding
      * safe even when the caller is holding only a borrowed alias. */
     if (surface)
-        IDirect3DSurface9_AddRef(surface_iface);
+        surface_binding_add_ref(surface);
     device->render_target_surfaces[index] = surface;
     if (old_surface)
-        IDirect3DSurface9_Release(&old_surface->iface);
+        surface_binding_release(old_surface);
+
+}
+
+static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
+        DWORD index, IDirect3DSurface9 *surface_iface)
+{
+    D9Device *device = device_from_iface(iface);
+    D9Surface *surface = surface_iface ? surface_from_iface(surface_iface) : NULL;
+    D9WGSetRenderTarget command;
+    uint32_t handle = 0;
+    uint32_t level = 0;
+    uint32_t face = 0;
+
+    if (index >= D9_MAX_RENDER_TARGETS)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* D3D9 forbids unbinding slot 0: something always has to receive colour. */
+    if (!surface_iface && index == 0)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* A host handle is valid only in the creating device's target state.
+     * Reject before retaining/replacing bindings or changing viewport state. */
+    if (surface_iface && (surface_iface->lpVtbl != &g_surface_vtbl
+            || surface->device != device))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (surface_iface && !surface_target_handle(surface, &handle, &level, &face))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (surface_iface && surface->texture
+            && !(surface->texture->usage & D3DUSAGE_RENDERTARGET))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (surface_iface && surface->cube_texture
+            && !(surface->cube_texture->usage & D3DUSAGE_RENDERTARGET))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+
+    device_replace_render_target_surface(device, (UINT)index, surface);
 
     command.device_handle = device->handle;
     command.target_index = index;
@@ -11339,13 +12135,21 @@ static HRESULT WINAPI device_set_render_target(IDirect3DDevice9 *iface,
      * source of "the render-to-texture pass only fills a corner". */
     if (index == 0 && surface) {
         D3DVIEWPORT9 viewport;
+        RECT scissor;
+        HRESULT hr;
         viewport.X = 0;
         viewport.Y = 0;
         viewport.Width = surface->width;
         viewport.Height = surface->height;
         viewport.MinZ = 0.0f;
         viewport.MaxZ = 1.0f;
-        return IDirect3DDevice9_SetViewport(iface, &viewport);
+        /* ... and the scissor rect, or a render-to-texture pass is cut by the
+         * previous target's rect while the scissor test is on (review S2-29;
+         * wined3d's device.c resets both) */
+        SetRect(&scissor, 0, 0, (int)surface->width, (int)surface->height);
+        hr = device_set_live_scissor(device, &scissor);
+        if (FAILED(hr)) return hr;
+        return device_set_live_viewport(device, &viewport, FALSE);
     }
     return D3D_OK;
 }
@@ -11371,12 +12175,31 @@ static HRESULT WINAPI device_get_render_target(IDirect3DDevice9 *iface,
             D3DBACKBUFFER_TYPE_MONO, surface_out);
 }
 
+static void device_replace_depth_stencil_surface(D9Device *device,
+        D9Surface *surface)
+{
+    D9Surface *old_surface;
+    old_surface = device->depth_stencil_surface;
+    TRACE("CALL SetDepthStencilSurface old=%08lX new=%08lX same=%lu "
+            "old_refs=%ld new_refs=%ld", (DWORD)(uintptr_t)old_surface,
+            (DWORD)(uintptr_t)surface, old_surface == surface,
+            old_surface ? InterlockedCompareExchange(&old_surface->refcount,
+                    0, 0) : 0,
+            surface ? InterlockedCompareExchange(&surface->refcount, 0, 0)
+                    : 0);
+    if (surface)
+        surface_binding_add_ref(surface);
+    device->depth_stencil_surface = surface;
+    if (old_surface)
+        surface_binding_release(old_surface);
+    device->depth_stencil_unbound = surface ? FALSE : TRUE;
+}
+
 static HRESULT WINAPI device_set_depth_stencil_surface(IDirect3DDevice9 *iface,
         IDirect3DSurface9 *surface_iface)
 {
     D9Device *device = device_from_iface(iface);
     D9Surface *surface = surface_iface ? surface_from_iface(surface_iface) : NULL;
-    D9Surface *old_surface;
     D9WGSetDepthStencilSurfaceLevel command;
     uint32_t handle = 0;
     uint32_t level = 0;
@@ -11390,25 +12213,12 @@ static HRESULT WINAPI device_set_depth_stencil_surface(IDirect3DDevice9 *iface,
                 || !(surface->texture->usage & D3DUSAGE_DEPTHSTENCIL))
             return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    old_surface = device->depth_stencil_surface;
-    TRACE("CALL SetDepthStencilSurface old=%08lX new=%08lX same=%lu "
-            "old_refs=%ld new_refs=%ld", (DWORD)(uintptr_t)old_surface,
-            (DWORD)(uintptr_t)surface, old_surface == surface,
-            old_surface ? InterlockedCompareExchange(&old_surface->refcount,
-                    0, 0) : 0,
-            surface ? InterlockedCompareExchange(&surface->refcount, 0, 0)
-                    : 0);
-    if (surface)
-        IDirect3DSurface9_AddRef(surface_iface);
-    device->depth_stencil_surface = surface;
-    if (old_surface)
-        IDirect3DSurface9_Release(&old_surface->iface);
+    device_replace_depth_stencil_surface(device, surface);
     command.device_handle = device->handle;
     command.depth_texture_handle = handle;
     command.depth_level = level;
     command.width = surface ? surface->width : 0u;
     command.height = surface ? surface->height : 0u;
-    device->depth_stencil_unbound = surface ? FALSE : TRUE;
     return emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL, &command,
             sizeof(command)) ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
 }
@@ -11492,9 +12302,63 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
     RECT destination_area;
 
     if (!source || !destination) {
-        HOSTLOG_FAILED("StretchRect refused: %s surface is NULL",
+        HOSTLOG_REFUSED("StretchRect refused: %s surface is NULL",
                 source ? "destination" : "source");
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    }
+    normalize_rect(source_rect, (int)source->width, (int)source->height, &source_area);
+    normalize_rect(destination_rect, (int)destination->width, (int)destination->height, &destination_area);
+    if (device_compatibility_api(device) == 9u) {
+        DWORD source_usage = source->texture ? source->texture->usage
+                : source->cube_texture ? source->cube_texture->usage
+                : source->auto_depth_stencil ? D3DUSAGE_DEPTHSTENCIL
+                : source->swap_chain ? D3DUSAGE_RENDERTARGET : 0u;
+        DWORD destination_usage = destination->texture ? destination->texture->usage
+                : destination->cube_texture ? destination->cube_texture->usage
+                : destination->auto_depth_stencil ? D3DUSAGE_DEPTHSTENCIL
+                : destination->swap_chain ? D3DUSAGE_RENDERTARGET : 0u;
+        if (source->device != device || destination->device != device
+                || source->pool != D3DPOOL_DEFAULT || destination->pool != D3DPOOL_DEFAULT
+                || (filter != D3DTEXF_NONE && filter != D3DTEXF_POINT && filter != D3DTEXF_LINEAR))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (source_area.left < 0 || source_area.top < 0
+                || source_area.right <= source_area.left || source_area.bottom <= source_area.top
+                || source_area.right > (LONG)source->width || source_area.bottom > (LONG)source->height
+                || destination_area.left < 0 || destination_area.top < 0
+                || destination_area.right <= destination_area.left || destination_area.bottom <= destination_area.top
+                || destination_area.right > (LONG)destination->width || destination_area.bottom > (LONG)destination->height
+                || (!(destination_usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))
+                    && (source_area.right - source_area.left != destination_area.right - destination_area.left
+                        || source_area.bottom - source_area.top != destination_area.bottom - destination_area.top)))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (device->in_scene
+                && ((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        /* Native depth copies cover whole, equally sized and formatted
+         * surfaces. Reject color/depth conversion and partial/flipped/scaled
+         * rectangles before normalization or emitting a GPU command. */
+        if ((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL) {
+            if (!(source_usage & destination_usage & D3DUSAGE_DEPTHSTENCIL)
+                    || source->format != destination->format
+                    || source->width != destination->width
+                    || source->height != destination->height
+                    || source->multisample != destination->multisample
+                    || (source_rect && (source_rect->left || source_rect->top
+                        || source_rect->right != (LONG)source->width
+                        || source_rect->bottom != (LONG)source->height))
+                    || (destination_rect && (destination_rect->left || destination_rect->top
+                        || destination_rect->right != (LONG)destination->width
+                        || destination_rect->bottom != (LONG)destination->height)))
+                return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
+        /* Color copies can target a render target, or copy plain -> plain.
+         * A regular texture level is not a StretchRect destination. Preserve
+         * the separate depth-copy path and the API8 CopyRects bridge. */
+        if (!((source_usage | destination_usage) & D3DUSAGE_DEPTHSTENCIL)
+                && !(destination_usage & D3DUSAGE_RENDERTARGET)
+                && (destination->texture_child || source->texture_child
+                    || (source_usage & D3DUSAGE_RENDERTARGET)))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
     ZeroMemory(&command, sizeof(command));
     if (!surface_target_handle(source, &command.source_texture_handle,
@@ -11510,7 +12374,7 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
          * CPU-to-CPU is a memcpy that never has to reach the host at all.
          * Without this line the refusal is just "invalid call" again.
          */
-        HOSTLOG_FAILED("StretchRect refused: no GPU resource behind %s "
+        HOSTLOG_REFUSED("StretchRect refused: no GPU resource behind %s "
                 "(source %lux%lu fmt=%08lX pool=%lu cpu_only=%lu, "
                 "destination %lux%lu fmt=%08lX pool=%lu cpu_only=%lu)",
                 source->shadow
@@ -11529,6 +12393,10 @@ static HRESULT WINAPI device_stretch_rect(IDirect3DDevice9 *iface,
                 (DWORD)destination->pool);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
+    if (source->auto_depth_stencil)
+        command.source_texture_handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+    if (destination->auto_depth_stencil)
+        command.destination_texture_handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
     command.device_handle = device->handle;
     normalize_rect(source_rect, (int)source->width, (int)source->height,
             &source_area);
@@ -11558,7 +12426,14 @@ static HRESULT WINAPI device_color_fill(IDirect3DDevice9 *iface,
     D9WGColorFill command;
     RECT area;
 
-    if (!surface)
+    if (!surface || surface->device != device || surface->pool != D3DPOOL_DEFAULT)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    DWORD usage = surface->texture ? surface->texture->usage
+            : surface->cube_texture ? surface->cube_texture->usage
+            : surface->auto_depth_stencil ? D3DUSAGE_DEPTHSTENCIL
+            : surface->swap_chain ? D3DUSAGE_RENDERTARGET : 0;
+    if ((usage & D3DUSAGE_DEPTHSTENCIL)
+            || (surface->texture_child && !(usage & D3DUSAGE_RENDERTARGET)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     ZeroMemory(&command, sizeof(command));
     if (!surface_target_handle(surface, &command.texture_handle, &command.level,
@@ -11567,6 +12442,14 @@ static HRESULT WINAPI device_color_fill(IDirect3DDevice9 *iface,
     command.device_handle = device->handle;
     command.color = color;
     normalize_rect(rect, (int)surface->width, (int)surface->height, &area);
+    UINT bw, bh, bb;
+    if (!texture_format_layout(surface->format, &bw, &bh, &bb)
+            || area.left < 0 || area.top < 0 || area.right <= area.left || area.bottom <= area.top
+            || area.right > (LONG)surface->width || area.bottom > (LONG)surface->height
+            || area.left % (LONG)bw || area.top % (LONG)bh
+            || (area.right != (LONG)surface->width && area.right % (LONG)bw)
+            || (area.bottom != (LONG)surface->height && area.bottom % (LONG)bh))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     command.left = area.left;
     command.top = area.top;
     command.right = area.right;
@@ -11581,23 +12464,14 @@ static HRESULT WINAPI device_set_scissor_rect(IDirect3DDevice9 *iface,
         const RECT *rect)
 {
     D9Device *device = device_from_iface(iface);
-    D9WGSetScissorRect command;
 
     if (!rect)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect->left < 0 || rect->top < 0 || rect->right < rect->left
             || rect->bottom < rect->top)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    state_block_record_scissor(device);
-    device->scissor_rect = *rect;
-    device->scissor_set = TRUE;
-    command.device_handle = device->handle;
-    command.left = rect->left;
-    command.top = rect->top;
-    command.right = rect->right;
-    command.bottom = rect->bottom;
-    return emit_command(D9WG_OP_SET_SCISSOR_RECT, &command, sizeof(command))
-            ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+    if (state_block_record_scissor(device, rect)) return D3D_OK;
+    return device_set_live_scissor(device, rect);
 }
 
 static HRESULT WINAPI device_get_scissor_rect(IDirect3DDevice9 *iface,
@@ -11633,10 +12507,14 @@ typedef struct D9Query {
     uint32_t request_id;
     BOOL issued;
     BOOL begun;
+    /* GetData's deadline: the heartbeat last seen, and since when */
+    uint32_t last_beat;
+    DWORD silent_since;
     struct D9Query *next_device_resource;
 } D9Query;
 
 static IDirect3DQuery9Vtbl g_query_vtbl;
+static uint32_t query_heartbeat(void);
 
 static D9Query *query_from_iface(IDirect3DQuery9 *iface)
 {
@@ -11740,12 +12618,13 @@ static HRESULT WINAPI query_issue(IDirect3DQuery9 *iface, DWORD flags)
 
     if (!begin && !end)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    /* Event/timestamp markers have no begin interval. Native accepts BEGIN
+     * as a no-op, including when a previous END is still pending. */
     if (begin && query->type != D3DQUERYTYPE_OCCLUSION
             && query->type != D3DQUERYTYPE_TIMESTAMPDISJOINT)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return D3D_OK;
     if (begin) {
-        if (query->begun)
-            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        /* A second BEGIN discards the previous interval and starts anew. */
         query->request_id = (uint32_t)next_response_request_id();
         response = query_response(query);
         if (!response)
@@ -11761,10 +12640,6 @@ static HRESULT WINAPI query_issue(IDirect3DQuery9 *iface, DWORD flags)
         return D3D_OK;
     }
 
-    if ((query->type == D3DQUERYTYPE_OCCLUSION
-            || query->type == D3DQUERYTYPE_TIMESTAMPDISJOINT)
-            && !query->begun)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!query->begun) {
         query->request_id = (uint32_t)next_response_request_id();
         response = query_response(query);
@@ -11779,7 +12654,39 @@ static HRESULT WINAPI query_issue(IDirect3DQuery9 *iface, DWORD flags)
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     query->begun = FALSE;
     query->issued = TRUE;
+    query->last_beat = query_heartbeat();
+    query->silent_since = GetTickCount();
     return D3D_OK;
+}
+
+/* The host bumps this once per batch it finishes (D9WG_HEARTBEAT_OFFSET) */
+static uint32_t query_heartbeat(void)
+{
+    uint8_t *base = response_region();
+    return base ? *(volatile uint32_t *)(base + D9WG_HEARTBEAT_OFFSET) : 0;
+}
+
+/*
+ * What GetData answers for a query the host reported as failed, or stopped
+ * answering: the value that keeps an application going and drawing rather
+ * than culling or spinning -- visible, signalled, disjoint (review S1-2:
+ * `while (GetData() == S_FALSE)` used to spin forever when the host dropped
+ * the frame the query was in).
+ */
+static ULONGLONG query_fallback_value(D9Query *query)
+{
+    switch (query->type) {
+    case D3DQUERYTYPE_OCCLUSION:
+        return (ULONGLONG)query->device->display_mode.Width
+                * query->device->display_mode.Height;
+    case D3DQUERYTYPE_TIMESTAMPFREQ:
+        return 1000000000u;
+    case D3DQUERYTYPE_TIMESTAMP:
+        /* nanoseconds, as the host's TIMESTAMPFREQ says */
+        return (ULONGLONG)GetTickCount() * 1000000u;
+    default:   /* EVENT signalled, TIMESTAMPDISJOINT disjoint */
+        return 1;
+    }
 }
 
 static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
@@ -11787,13 +12694,17 @@ static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
 {
     D9Query *query = query_from_iface(iface);
     D9WGQueryResponse *response;
-    DWORD expected = query_get_data_size(iface);
     ULONGLONG value;
 
-    if (!query->issued)
+    if ((!data && size) || (flags & ~D3DGETDATA_FLUSH))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (data && size < expected)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!query->issued && !query->begun) {
+        /* XP exposes the initial debug-fill result until an interval/marker
+         * has been issued. This is an initial state, never a GPU completion. */
+        value = 0xddddddddddddddddULL;
+        if (data && size) CopyMemory(data, &value, size < sizeof(value) ? size : sizeof(value));
+        return S_OK;
+    }
 
     /* GetData must make progress even before Present.  D3DGETDATA_FLUSH asks
      * for this explicitly, but flushing on ordinary polling also avoids a
@@ -11803,24 +12714,39 @@ static HRESULT WINAPI query_get_data(IDirect3DQuery9 *iface, void *data,
         submit_batch_locked(FALSE);
     LeaveCriticalSection(&g_transport_lock);
 
+    /* An open interval cannot be observed as a completed result. */
+    if (query->begun) return S_FALSE;
     response = query_response(query);
     if (!response)
         return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
     MemoryBarrier();
     if (response->request_id != query->request_id
-            || response->status == D9WG_RESPONSE_PENDING)
-        return S_FALSE;
-    if (response->status != D9WG_RESPONSE_OK)
-        return TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
-
-    value = ((ULONGLONG)response->value_high << 32) | response->value_low;
-    if (data) {
-        if (expected == sizeof(ULONGLONG))
-            *(ULONGLONG *)data = value;
-        else
-            *(DWORD *)data = response->value_low;
+            || response->status == D9WG_RESPONSE_PENDING) {
+        /* The deadline measures host silence, as the readback's does: a
+         * host thousands of batches behind is slow, not gone */
+        uint32_t beat = query_heartbeat();
+        if (beat != query->last_beat) {
+            query->last_beat = beat;
+            query->silent_since = GetTickCount();
+        }
+        if (GetTickCount() - query->silent_since < 6000u)
+            return S_FALSE;
+        HOSTLOG_FAILED("GetData: the host has not answered query %08lX type %lu "
+                "for %lums; answering it as visible/signalled",
+                query->handle, (DWORD)query->type, GetTickCount() - query->silent_since);
+        value = query_fallback_value(query);
+    } else if (response->status != D9WG_RESPONSE_OK) {
+        /* the host dropped the frame the query was in */
+        TRACE("GetData query %08lX failed on the host; answering the fallback", query->handle);
+        value = query_fallback_value(query);
+    } else {
+        value = ((ULONGLONG)response->value_high << 32) | response->value_low;
     }
-    (void)flags;
+    /* Native accepts partial result reads and extended 64-bit occlusion
+     * counts. Copying bytes also supports unaligned output and size-zero
+     * status probes without touching caller storage. */
+    if (data && size)
+        CopyMemory(data, &value, size < sizeof(value) ? size : sizeof(value));
     return S_OK;
 }
 
@@ -11838,7 +12764,7 @@ static HRESULT WINAPI device_create_query(IDirect3DDevice9 *iface,
             && type != D3DQUERYTYPE_TIMESTAMPDISJOINT
             && type != D3DQUERYTYPE_TIMESTAMPFREQ) {
 
-        if (query_out) *query_out = NULL;
+        /* Native leaves the output untouched for an unsupported query. */
         return TRACE_REFUSE(D3DERR_NOTAVAILABLE);
     }
     /* A NULL out pointer is D3D9's "do you support this type?" probe. */
@@ -11926,7 +12852,10 @@ static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture)
     command.usage = texture->usage;
     command.pool = texture->pool;
     command.reserved = 0;
-    return emit_command(D9WG_OP_CREATE_TEXTURE_CUBE, &command, sizeof(command));
+    if (!emit_command(D9WG_OP_CREATE_TEXTURE_CUBE, &command, sizeof(command))) return FALSE;
+    return device_compatibility_api(device) == 8u
+        || !(texture->usage & D3DUSAGE_AUTOGENMIPMAP)
+        || emit_generate_mips(device, texture->handle, texture->autogen_filter, TRUE);
 }
 
 /* Shares the 2D upload path's payload shape; only the resource handle and the
@@ -11934,63 +12863,15 @@ static BOOL emit_cube_texture_create(D9Device *device, D9CubeTexture *texture)
 static BOOL emit_cube_texture_update(D9CubeTexture *texture, UINT face,
         UINT level, const RECT *rect)
 {
-    D9TextureLevel *level_data = &texture->levels[face * texture->level_count + level];
-    D9WGUpdateTexture command;
-    UINT block_width, block_height, block_bytes;
-    UINT block_x, block_y, block_columns, block_rows;
-    uint8_t *payload;
-    uint8_t *blob;
-    uint32_t data_bytes;
-    BOOL result;
-
-    if (!texture_format_layout(texture->format, &block_width, &block_height,
-            &block_bytes))
-        return FALSE;
-    block_x = (UINT)rect->left / block_width;
-    block_y = (UINT)rect->top / block_height;
-    block_columns = ((UINT)rect->right - (UINT)rect->left + block_width - 1)
-            / block_width;
-    block_rows = ((UINT)rect->bottom - (UINT)rect->top + block_height - 1)
-            / block_height;
-    if (!block_columns || !block_rows)
-        return TRUE;
-    data_bytes = block_rows * block_columns * block_bytes;
-
-    ZeroMemory(&command, sizeof(command));
-    EnterCriticalSection(&g_transport_lock);
-    result = reserve_command_locked(D9WG_OP_UPDATE_TEXTURE, sizeof(command),
-            data_bytes, NULL, &payload, &blob);
-    if (result) {
-        UINT row;
-        command.resource_handle = texture->handle;
-        command.level = level;
-        command.x = (UINT)rect->left;
-        command.y = (UINT)rect->top;
-        command.z = face;
-        command.width = (UINT)rect->right - (UINT)rect->left;
-        command.height = (UINT)rect->bottom - (UINT)rect->top;
-        command.depth = 1;
-        command.row_pitch = block_columns * block_bytes;
-        command.slice_pitch = 0;
-        command.data_bytes = data_bytes;
-        command.data_offset = (uint32_t)(blob - batch_base());
-        CopyMemory(payload, &command, sizeof(command));
-        for (row = 0; row < block_rows; ++row) {
-            CopyMemory(blob + row * block_columns * block_bytes,
-                    level_data->shadow + (block_y + row) * level_data->row_pitch
-                        + block_x * block_bytes,
-                    block_columns * block_bytes);
-        }
-    }
-    LeaveCriticalSection(&g_transport_lock);
-    return result;
+    return emit_level_update_api(device_compatibility_api(texture->device),
+            texture->handle, texture->format,
+            &texture->levels[face * texture->level_count + level], level, face, rect);
 }
 
-static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
+static HRESULT create_cube_texture_object(D9Device *device,
         UINT edge, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool,
-        IDirect3DCubeTexture9 **texture_out, HANDLE *shared)
+        UINT api, IDirect3DCubeTexture9 **texture_out)
 {
-    D9Device *device = device_from_iface(iface);
     D9CubeTexture *texture;
     UINT full_levels;
     UINT face;
@@ -11998,7 +12879,9 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
     UINT total;
     HRESULT failure = E_OUTOFMEMORY;
     HRESULT success = D3D_OK;
-    (void)shared;
+    /* CPU-pool mip pointers share one native contiguous allocation. */
+    BOOL contiguous_mips = pool != D3DPOOL_DEFAULT
+            && (api == 8u || !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)));
 
     /* This path used to refuse without recording a single argument, which is
      * how a 3DMark06 crash spent a whole trace being unattributable: the log
@@ -12014,21 +12897,44 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
                 (DWORD)D3DERR_INVALIDCALL);
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     }
-    *texture_out = NULL;
-    /* See device_create_texture: one visible level, a full chain behind it. */
-    if (usage & D3DUSAGE_AUTOGENMIPMAP)
-        levels = 1;
-    if (!edge || edge > 8192
-            || !texture_create_supported(D3DRTYPE_CUBETEXTURE,
-                    usage & ~(DWORD)D3DUSAGE_AUTOGENMIPMAP, format, pool)) {
-
-        TRACE("FAIL CreateCubeTexture invalid arguments -> %08lX",
-                (DWORD)D3DERR_INVALIDCALL);
-        HOSTLOG_FAILED("CreateCubeTexture refused: edge=%lu levels=%lu "
-                "usage=%08lX format=%08lX pool=%lu", edge, levels, usage,
-                (DWORD)format, (DWORD)pool);
+    if (api == 8u && format == D3DFMT_UNKNOWN)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    *texture_out = NULL;
+    if ((usage & D3DUSAGE_WRITEONLY)
+            || ((usage & D3DUSAGE_DYNAMIC)
+                && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (api == 8u) {
+        if (!edge || edge > 4096 || !supported_format8(format, FALSE)
+                || (usage & D3DUSAGE_DEPTHSTENCIL)
+                || ((usage & D3DUSAGE_RENDERTARGET)
+                    && (pool != D3DPOOL_DEFAULT
+                        || !supported_render_target_format8(format)))
+                || pool > D3DPOOL_SCRATCH)
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    } else {
+        /* See device_create_texture: one visible level, a full chain behind it. */
+        if (!d9wg_autogen_creation_valid(levels, usage, pool))
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        if (usage & D3DUSAGE_AUTOGENMIPMAP)
+            levels = 1;
+        if (!edge || edge > 8192
+                || !texture_create_supported(D3DRTYPE_CUBETEXTURE,
+                        usage & ~(DWORD)D3DUSAGE_AUTOGENMIPMAP, format, pool)) {
+
+            TRACE("FAIL CreateCubeTexture invalid arguments -> %08lX",
+                    (DWORD)D3DERR_INVALIDCALL);
+            HOSTLOG_REFUSED("CreateCubeTexture refused: edge=%lu levels=%lu "
+                    "usage=%08lX format=%08lX pool=%lu", edge, levels, usage,
+                    (DWORD)format, (DWORD)pool);
+            return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        }
     }
+    UINT block_width, block_height, block_bytes;
+    if (d9wg_format_layout(api, format, &block_width, &block_height, &block_bytes)
+            && (format & 0x00ffffffu) == 0x00545844u
+            && block_width == 4u && block_height == 4u && (edge & 3u))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     full_levels = full_mip_level_count(edge, edge);
     if (!levels) levels = full_levels;
     if (levels > full_levels) {
@@ -12049,6 +12955,9 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
         HeapFree(GetProcessHeap(), 0, texture);
         return TRACE_REFUSE(E_OUTOFMEMORY);
     }
+    if (api == 9u && (usage & D3DUSAGE_AUTOGENMIPMAP))
+        texture->autogen_filter = (D3DTEXTUREFILTERTYPE)d9wg_autogen_default_filter(format,
+                (d9wg_format_query_info(format) & 4u) ? runtime_host_features() : 0);
     texture->iface.lpVtbl = &g_cube_vtbl;
     texture->refcount = 1;
     texture->device = device;
@@ -12066,16 +12975,21 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
             D9TextureLevel *level_data = &texture->levels[face * levels + level];
             level_data->width = size;
             level_data->height = size;
-            if (!texture_level_layout(format, size, size,
+            if (!d9wg_cpu_texture_level_layout(api, format, size, size,
                     &level_data->row_pitch, &level_data->row_count,
                     &level_data->byte_count))
                 goto allocation_failed;
-            level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
-                    HEAP_ZERO_MEMORY, level_data->byte_count);
-            if (!level_data->shadow)
-                goto allocation_failed;
+            if (!contiguous_mips) {
+                level_data->shadow = (BYTE *)HeapAlloc(GetProcessHeap(),
+                        HEAP_ZERO_MEMORY, level_data->byte_count);
+                if (!level_data->shadow) goto allocation_failed;
+            }
             if (size > 1) size >>= 1;
         }
+    }
+    if (contiguous_mips) {
+        texture->mip_storage = allocate_mip_shadows(texture->levels, levels, 6u, api, format);
+        if (!texture->mip_storage) goto allocation_failed;
     }
     if (!emit_cube_texture_create(device, texture)) {
         failure = D3DERR_DRIVERINTERNALERROR;
@@ -12092,13 +13006,23 @@ static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
 
 allocation_failed:
     for (face = 0; face < total; ++face) {
-        if (texture->levels[face].shadow)
+        if (!texture->mip_storage && texture->levels[face].shadow)
             HeapFree(GetProcessHeap(), 0, texture->levels[face].shadow);
     }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
     device_child_release(device);
     HeapFree(GetProcessHeap(), 0, texture->levels);
     HeapFree(GetProcessHeap(), 0, texture);
     return failure;
+}
+
+static HRESULT WINAPI device_create_cube_texture(IDirect3DDevice9 *iface,
+        UINT edge, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool,
+        IDirect3DCubeTexture9 **texture_out, HANDLE *shared)
+{
+    if (shared) return TRACE_REFUSE(E_NOTIMPL);
+    return create_cube_texture_object(device_from_iface(iface), edge, levels,
+            usage, format, pool, 9u, texture_out);
 }
 
 static HRESULT WINAPI cube_query_interface(IDirect3DCubeTexture9 *iface,
@@ -12119,31 +13043,52 @@ static HRESULT WINAPI cube_query_interface(IDirect3DCubeTexture9 *iface,
 
 static ULONG WINAPI cube_add_ref(IDirect3DCubeTexture9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&cube_from_iface(iface)->refcount);
+    D9CubeTexture *texture = cube_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&texture->refcount);
+    if (refs == 1)
+        device_child_add_ref(texture->device);
+    return refs;
 }
 
-static ULONG WINAPI cube_release(IDirect3DCubeTexture9 *iface)
+static void cube_destroy_storage(D9CubeTexture *texture)
+{
+    D9CubeTexture** link = &texture->device->cube_textures;
+    D9WGDestroyResource destroy;
+    UINT index;
+    while (*link && *link != texture)
+        link = &(*link)->next_device_resource;
+    if (*link)
+        *link = texture->next_device_resource;
+    d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
+    destroy.resource_handle = texture->handle;
+    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    for (index = 0; index < texture->level_count * 6u; ++index) {
+        d9wg_private_clear(&texture->levels[index].private_data, &d9wg_private_ops);
+        surface_dispose_dc(texture->levels[index].level_surface);
+        core_view_retire8(texture->levels[index].level_surface);
+        HeapFree(GetProcessHeap(), 0,
+            texture->levels[index].level_surface);
+        if (!texture->mip_storage)
+            HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
+    }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
+    HeapFree(GetProcessHeap(), 0, texture->levels);
+    core_view_retire8(texture);
+    HeapFree(GetProcessHeap(), 0, texture);
+}
+
+static ULONG WINAPI cube_release(IDirect3DCubeTexture9* iface)
 {
     D9CubeTexture *texture = cube_from_iface(iface);
+    if (!InterlockedCompareExchange(&texture->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9CubeTexture **link = &texture->device->cube_textures;
-        D9WGDestroyResource destroy;
-        UINT index;
-        while (*link && *link != texture)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = texture->next_device_resource;
-        destroy.resource_handle = texture->handle;
-        destroy.resource_kind = D9WG_RESOURCE_TEXTURE_CUBE;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        for (index = 0; index < texture->level_count * 6u; ++index) {
-            HeapFree(GetProcessHeap(), 0,
-                    texture->levels[index].level_surface);
-            HeapFree(GetProcessHeap(), 0, texture->levels[index].shadow);
-        }
-        HeapFree(GetProcessHeap(), 0, texture->levels);
-        device_child_release(texture->device);
-        HeapFree(GetProcessHeap(), 0, texture);
+        D9Device *device = texture->device;
+        if (!InterlockedCompareExchange(&texture->binding_refs, 0, 0))
+            cube_destroy_storage(texture);
+        device_child_release(device);
     }
     return refs;
 }
@@ -12159,21 +13104,31 @@ static HRESULT WINAPI cube_get_device(IDirect3DCubeTexture9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI cube_set_private_data(IDirect3DCubeTexture9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
-static HRESULT WINAPI cube_get_private_data(IDirect3DCubeTexture9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
-static HRESULT WINAPI cube_free_private_data(IDirect3DCubeTexture9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI cube_set_private_data(IDirect3DCubeTexture9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = &cube_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
+static HRESULT WINAPI cube_get_private_data(IDirect3DCubeTexture9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = &cube_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
+static HRESULT WINAPI cube_free_private_data(IDirect3DCubeTexture9* iface,
+    REFGUID guid)
+{
+    D9WGPrivateStore* store = &cube_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI cube_set_priority(IDirect3DCubeTexture9 *iface,
         DWORD priority)
 {
     D9CubeTexture *texture = cube_from_iface(iface);
+    if (texture->pool != D3DPOOL_MANAGED)
+        return 0;
     DWORD previous = texture->priority;
     texture->priority = priority;
     return previous;
@@ -12188,12 +13143,8 @@ static D3DRESOURCETYPE WINAPI cube_get_type(IDirect3DCubeTexture9 *iface)
 static DWORD WINAPI cube_set_lod(IDirect3DCubeTexture9 *iface, DWORD lod)
 {
     D9CubeTexture *texture = cube_from_iface(iface);
-    DWORD previous = texture->lod;
-    if (texture->pool != D3DPOOL_MANAGED) return previous;
-    if (lod >= texture->level_count) lod = texture->level_count - 1;
-    texture->lod = lod;
-    emit_texture_lod(texture->device, texture->handle, lod);
-    return previous;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI cube_get_lod(IDirect3DCubeTexture9 *iface)
@@ -12206,10 +13157,12 @@ static HRESULT WINAPI cube_set_auto_gen_filter_type(
 {
     D9CubeTexture *texture = cube_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
+        return D3D_OK;
+    if (!d9wg_autogen_filter_supported(texture->format, type,
+                (d9wg_format_query_info(texture->format) & 4u) ? runtime_host_features() : 0))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (type != D3DTEXF_POINT && type != D3DTEXF_LINEAR
-            && type != D3DTEXF_NONE)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!emit_generate_mips(texture->device, texture->handle, type, TRUE))
+        return D3DERR_DRIVERINTERNALERROR;
     texture->autogen_filter = type;
     return D3D_OK;
 }
@@ -12226,7 +13179,7 @@ static void WINAPI cube_generate_mip_sublevels(IDirect3DCubeTexture9 *iface)
     D9CubeTexture *texture = cube_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
         return;
-    emit_generate_mips(texture->device, texture->handle);
+    emit_generate_mips(texture->device, texture->handle, texture->autogen_filter, FALSE);
 }
 
 static HRESULT WINAPI cube_get_level_desc(IDirect3DCubeTexture9 *iface,
@@ -12283,6 +13236,17 @@ static HRESULT WINAPI cube_get_cube_map_surface(IDirect3DCubeTexture9 *iface,
     return D3D_OK;
 }
 
+/* Ordinary maps are per subresource; a GDI map excludes all subresources. */
+static BOOL texture_levels_mapped(const D9TextureLevel *levels, UINT count,
+        BOOL include_locks)
+{
+    UINT i;
+    for (i = 0; i < count; ++i)
+        if (levels[i].dc_active || (include_locks && levels[i].locked))
+            return TRUE;
+    return FALSE;
+}
+
 static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
         D3DCUBEMAP_FACES face, UINT level, D3DLOCKED_RECT *locked_rect,
         const RECT *rect, DWORD flags)
@@ -12291,31 +13255,45 @@ static HRESULT WINAPI cube_lock_rect(IDirect3DCubeTexture9 *iface,
     D9TextureLevel *level_data;
     RECT area;
     UINT block_width, block_height, block_bytes;
+    UINT api = device_compatibility_api(texture->device);
+    BOOL permissive = api == 9u && texture->pool != D3DPOOL_DEFAULT;
+    BOOL broken_pitch = d9wg_cpu_texture_broken_pitch(api, texture->format);
 
-    if (!locked_rect || (UINT)face >= 6u || level >= texture->level_count)
+    if (locked_rect && device_compatibility_api(texture->device) == 8u)
+        ZeroMemory(locked_rect, sizeof(*locked_rect));
+    if (!locked_rect || (texture->pool == D3DPOOL_DEFAULT
+                && !(texture->usage & D3DUSAGE_DYNAMIC)
+                && (UINT)texture->format < 0x10000u) || (UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[(UINT)face * texture->level_count + level];
-    if (level_data->locked)
+    if (texture_levels_mapped(texture->levels, texture->level_count * 6u, FALSE) || level_data->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect) {
         area = *rect;
     } else {
         SetRect(&area, 0, 0, (int)level_data->width, (int)level_data->height);
     }
-    if (area.left < 0 || area.top < 0 || area.right <= area.left
-            || area.bottom <= area.top
-            || (UINT)area.right > level_data->width
-            || (UINT)area.bottom > level_data->height
-            || !texture_format_layout(texture->format, &block_width,
-                    &block_height, &block_bytes))
+    if (!d9wg_format_layout(api, texture->format, &block_width, &block_height, &block_bytes))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    BOOL bounds = area.left >= 0 && area.top >= 0 && area.right > area.left
+            && area.bottom > area.top && (UINT)area.right <= level_data->width
+            && (UINT)area.bottom <= level_data->height;
+    BOOL aligned = !((UINT)area.left % block_width) && !((UINT)area.top % block_height)
+            && ((UINT)area.right == level_data->width || !((UINT)area.right % block_width))
+            && ((UINT)area.bottom == level_data->height || !((UINT)area.bottom % block_height));
+    if (!(bounds && (broken_pitch || aligned)) && !permissive)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data->lock_rect = area;
+    if (!bounds || !aligned)
+        SetRect(&level_data->lock_rect, 0, 0, level_data->width, level_data->height);
     level_data->lock_flags = flags;
     level_data->locked = TRUE;
-    locked_rect->Pitch = (INT)level_data->row_pitch;
-    locked_rect->pBits = level_data->shadow
-            + ((UINT)area.top / block_height) * level_data->row_pitch
-            + ((UINT)area.left / block_width) * block_bytes;
+    UINT public_pitch = broken_pitch ? level_data->width : level_data->row_pitch;
+    if (broken_pitch) block_width = block_height = block_bytes = 1u;
+    locked_rect->Pitch = (INT)public_pitch;
+    locked_rect->pBits = (void *)((uintptr_t)level_data->shadow
+            + (uintptr_t)((int64_t)(area.top / (LONG)block_height) * public_pitch
+                + (int64_t)(area.left / (LONG)block_width) * block_bytes));
     return D3D_OK;
 }
 
@@ -12329,8 +13307,11 @@ static HRESULT WINAPI cube_unlock_rect(IDirect3DCubeTexture9 *iface,
     if ((UINT)face >= 6u || level >= texture->level_count)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[(UINT)face * texture->level_count + level];
+    if (texture_levels_mapped(texture->levels, texture->level_count * 6u, FALSE))
+        return D3D_OK;
     if (!level_data->locked)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+        return device_compatibility_api(texture->device) == 9u
+                ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_cube_texture_update(texture, (UINT)face, level,
                 &level_data->lock_rect);
@@ -12380,126 +13361,15 @@ static IDirect3DCubeTexture9Vtbl g_cube_vtbl = {
  * second, parallel path that could disagree with the first about what a given
  * state does.
  *
- * BeginStateBlock/EndStateBlock keeps both a pre-Begin snapshot and a separate
- * call mask. Every implemented Set* entry marks the latter before its normal
- * redundant-state suppression, so setting an existing value and setting then
- * reverting are recorded exactly as D3D9 requires. Setters run while recording
- * and End restores the snapshot; drawing during recording is invalid in D3D9,
- * so no draw can observe the temporary live values.
+ * Begin/End retains only explicitly recorded values and object references.
+ * Setters validate first, then store into that block before any live mutation
+ * or command emission. End publishes it without capturing or restoring state.
  */
 
-/* D3DSBT_PIXELSTATE's documented render-state list. Capturing more than D3D9
- * does is not a safe simplification: Apply() would then restore states the app
- * deliberately kept, which shows up as an unrelated render mode snapping back. */
-static const WORD g_pixel_state_render_states[] = {
-    D3DRS_ZENABLE, D3DRS_FILLMODE, D3DRS_SHADEMODE, D3DRS_ZWRITEENABLE,
-    D3DRS_ALPHATESTENABLE, D3DRS_LASTPIXEL, D3DRS_SRCBLEND, D3DRS_DESTBLEND,
-    D3DRS_ZFUNC, D3DRS_ALPHAREF, D3DRS_ALPHAFUNC, D3DRS_DITHERENABLE,
-    D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_FOGDENSITY, D3DRS_ALPHABLENDENABLE,
-    D3DRS_DEPTHBIAS, D3DRS_STENCILENABLE, D3DRS_STENCILFAIL,
-    D3DRS_STENCILZFAIL, D3DRS_STENCILPASS, D3DRS_STENCILFUNC,
-    D3DRS_STENCILREF, D3DRS_STENCILMASK, D3DRS_STENCILWRITEMASK,
-    D3DRS_TEXTUREFACTOR, D3DRS_WRAP0, D3DRS_WRAP1, D3DRS_WRAP2, D3DRS_WRAP3,
-    D3DRS_WRAP4, D3DRS_WRAP5, D3DRS_WRAP6, D3DRS_WRAP7, D3DRS_WRAP8,
-    D3DRS_WRAP9, D3DRS_WRAP10, D3DRS_WRAP11, D3DRS_WRAP12, D3DRS_WRAP13,
-    D3DRS_WRAP14, D3DRS_WRAP15, D3DRS_COLORWRITEENABLE, D3DRS_BLENDOP,
-    D3DRS_SCISSORTESTENABLE, D3DRS_SLOPESCALEDEPTHBIAS,
-    D3DRS_ANTIALIASEDLINEENABLE, D3DRS_TWOSIDEDSTENCILMODE,
-    D3DRS_CCW_STENCILFAIL, D3DRS_CCW_STENCILZFAIL, D3DRS_CCW_STENCILPASS,
-    D3DRS_CCW_STENCILFUNC, D3DRS_COLORWRITEENABLE1, D3DRS_COLORWRITEENABLE2,
-    D3DRS_COLORWRITEENABLE3, D3DRS_BLENDFACTOR, D3DRS_SRGBWRITEENABLE,
-    D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SRCBLENDALPHA,
-    D3DRS_DESTBLENDALPHA, D3DRS_BLENDOPALPHA
-};
+/* Predefined render/texture/sampler classes are shared with D3D8 in
+ * d9wg_state_block_scope.h. Explicit recorded masks remain frontend-owned. */
+/* ALL and explicit recordings preserve every SDK world matrix. */
 
-static const WORD g_vertex_state_render_states[] = {
-    D3DRS_CULLMODE, D3DRS_FOGENABLE, D3DRS_FOGCOLOR, D3DRS_FOGTABLEMODE,
-    D3DRS_FOGSTART, D3DRS_FOGEND, D3DRS_FOGDENSITY, D3DRS_RANGEFOGENABLE,
-    D3DRS_AMBIENT, D3DRS_COLORVERTEX, D3DRS_FOGVERTEXMODE, D3DRS_CLIPPING,
-    D3DRS_LIGHTING, D3DRS_LOCALVIEWER, D3DRS_EMISSIVEMATERIALSOURCE,
-    D3DRS_AMBIENTMATERIALSOURCE, D3DRS_DIFFUSEMATERIALSOURCE,
-    D3DRS_SPECULARMATERIALSOURCE, D3DRS_VERTEXBLEND, D3DRS_CLIPPLANEENABLE,
-    D3DRS_POINTSIZE, D3DRS_POINTSIZE_MIN, D3DRS_POINTSPRITEENABLE,
-    D3DRS_POINTSCALEENABLE, D3DRS_POINTSCALE_A, D3DRS_POINTSCALE_B,
-    D3DRS_POINTSCALE_C, D3DRS_MULTISAMPLEANTIALIAS, D3DRS_MULTISAMPLEMASK,
-    D3DRS_PATCHEDGESTYLE, D3DRS_POINTSIZE_MAX,
-    D3DRS_INDEXEDVERTEXBLENDENABLE, D3DRS_TWEENFACTOR,
-    D3DRS_NORMALIZENORMALS, D3DRS_SPECULARENABLE, D3DRS_SHADEMODE
-};
-
-/* The transform indices a state block tracks. D3D9's full D3DTRANSFORMSTATETYPE
- * space is 512 entries wide, mostly the 256 world matrices vertex blending
- * uses, and snapshotting all of them would cost 32 KB per block.
- *
- * D3DTS_WORLDMATRIX(1..3) are here because unindexed vertex blending reads
- * exactly those: fill_caps() reports MaxVertexBlendMatrices = 4, so a block
- * that captured only D3DTS_WORLD would restore a skinned draw's pose from one
- * matrix and three stale ones. Indexed blending can name any of the other 252,
- * which a block still does not capture -- an app that records a state block
- * around an indexed-skinned pass and expects the palette restored gets the
- * palette as the pass left it. That is a bounded, stated limit rather than an
- * unnoticed one; lifting it means paying the 32 KB. */
-static const WORD g_state_block_transforms[] = {
-    D3DTS_VIEW, D3DTS_PROJECTION, D3DTS_WORLD,
-    D3DTS_WORLDMATRIX(1), D3DTS_WORLDMATRIX(2), D3DTS_WORLDMATRIX(3),
-    D3DTS_TEXTURE0, D3DTS_TEXTURE1, D3DTS_TEXTURE2, D3DTS_TEXTURE3,
-    D3DTS_TEXTURE4, D3DTS_TEXTURE5, D3DTS_TEXTURE6, D3DTS_TEXTURE7
-};
-#define D9_STATE_BLOCK_TRANSFORMS \
-    (sizeof(g_state_block_transforms) / sizeof(g_state_block_transforms[0]))
-
-struct D9StateBlock {
-    IDirect3DStateBlock9 iface;
-    LONG refcount;
-    D9Device *device;
-
-    BOOL has_render_state[D9_MAX_RENDER_STATES];
-    DWORD render_states[D9_MAX_RENDER_STATES];
-    BOOL has_texture_stage_state[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
-    DWORD texture_stage_states[D9_MAX_TEXTURE_STAGES][D9_MAX_TEXTURE_STAGE_STATES];
-    BOOL has_sampler_state[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
-    DWORD sampler_states[D9_MAX_SAMPLERS][D9_MAX_SAMPLER_STATES];
-    BOOL has_transform[D9_STATE_BLOCK_TRANSFORMS];
-    float transforms[D9_STATE_BLOCK_TRANSFORMS][16];
-    BOOL has_texture[D9_MAX_TEXTURE_BINDINGS];
-    D9Texture *textures[D9_MAX_TEXTURE_BINDINGS];
-    D9CubeTexture *cube_textures[D9_MAX_TEXTURE_BINDINGS];
-    D9VolumeTexture *volume_textures[D9_MAX_TEXTURE_BINDINGS];
-    BOOL has_material;
-    D3DMATERIAL9 material;
-    BOOL has_light[D9_MAX_LIGHTS];
-    D3DLIGHT9 lights[D9_MAX_LIGHTS];
-    BOOL has_light_enable[D9_MAX_LIGHTS];
-    BOOL light_enabled[D9_MAX_LIGHTS];
-    BOOL has_viewport;
-    D3DVIEWPORT9 viewport;
-    BOOL has_scissor;
-    RECT scissor_rect;
-    BOOL has_vertex_shader;
-    D9Shader *vertex_shader;
-    BOOL has_pixel_shader;
-    D9Shader *pixel_shader;
-    BOOL has_vs_const_f[D9_MAX_VS_CONST_F];
-    float vs_const_f[D9_MAX_VS_CONST_F][4];
-    BOOL has_ps_const_f[D9_MAX_PS_CONST_F];
-    float ps_const_f[D9_MAX_PS_CONST_F][4];
-    BOOL has_vs_const_i[D9_MAX_CONST_I];
-    int vs_const_i[D9_MAX_CONST_I][4];
-    BOOL has_ps_const_i[D9_MAX_CONST_I];
-    int ps_const_i[D9_MAX_CONST_I][4];
-    BOOL has_vs_const_b[D9_MAX_CONST_B];
-    BOOL vs_const_b[D9_MAX_CONST_B];
-    BOOL has_ps_const_b[D9_MAX_CONST_B];
-    BOOL ps_const_b[D9_MAX_CONST_B];
-    BOOL has_vertex_format;
-    DWORD fvf;
-    D9VertexDeclaration *vertex_declaration;
-    BOOL has_stream[D9_MAX_STREAMS];
-    D9StreamBinding streams[D9_MAX_STREAMS];
-    BOOL has_indices;
-    D9IndexBuffer *index_buffer;
-    struct D9StateBlock *next_device_resource;
-};
 
 static IDirect3DStateBlock9Vtbl g_state_block_vtbl;
 
@@ -12508,164 +13378,162 @@ static struct D9StateBlock *state_block_from_iface(IDirect3DStateBlock9 *iface)
     return (struct D9StateBlock *)iface;
 }
 
-static void state_block_record_render_state(D9Device *device, UINT state)
+static BOOL state_block_record_palette(D9Device *device, UINT index)
 {
-    if (device->recording_result && state < D9_MAX_RENDER_STATES)
-        device->recording_result->has_render_state[state] = TRUE;
+    if (!device->recording_result) return FALSE;
+    device->recording_result->has_palette = TRUE;
+    device->recording_result->current_palette = index;
+    return TRUE;
 }
 
-static void state_block_record_texture_stage_state(D9Device *device,
-        UINT stage, UINT state)
+static BOOL state_block_record_render_state(D9Device *device, UINT state, DWORD value)
 {
-    if (device->recording_result && stage < D9_MAX_TEXTURE_STAGES
-            && state < D9_MAX_TEXTURE_STAGE_STATES)
-        device->recording_result->has_texture_stage_state[stage][state] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_render_state[state] = TRUE;block->render_states[state] = value;
+    return TRUE;
 }
 
-static void state_block_record_sampler_state(D9Device *device,
-        UINT sampler, UINT state)
+static BOOL state_block_record_texture_stage_state(D9Device *device, UINT stage, UINT state, DWORD value)
 {
-    if (device->recording_result && sampler < D9_MAX_SAMPLERS
-            && state < D9_MAX_SAMPLER_STATES)
-        device->recording_result->has_sampler_state[sampler][state] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_texture_stage_state[stage][state] = TRUE;block->texture_stage_states[stage][state] = value;
+    return TRUE;
 }
 
-static void state_block_record_transform(D9Device *device, UINT state)
+static BOOL state_block_record_sampler_state(D9Device *device, UINT sampler, UINT state, DWORD value)
 {
-    UINT index;
-    if (!device->recording_result)
-        return;
-    for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
-        if (g_state_block_transforms[index] == state) {
-            device->recording_result->has_transform[index] = TRUE;
-            return;
-        }
-    }
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_sampler_state[sampler][state] = TRUE;block->sampler_states[sampler][state] = value;
+    return TRUE;
 }
 
-static void state_block_record_texture(D9Device *device, UINT stage)
+static BOOL state_block_record_transform(D9Device *device, UINT state, const D3DMATRIX *matrix)
 {
-    if (device->recording_result && stage < D9_MAX_TEXTURE_BINDINGS)
-        device->recording_result->has_texture[stage] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    uint32_t slot;if (!d9wg_state_block_transform_slot(state, &slot)) return FALSE;
+    block->has_transform[slot] = TRUE;CopyMemory(block->transforms[slot], matrix, 64);
+    return TRUE;
 }
 
-static void state_block_record_material(D9Device *device)
+
+static BOOL state_block_record_material(D9Device *device, const D3DMATERIAL9 *material)
 {
-    if (device->recording_result)
-        device->recording_result->has_material = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_material = TRUE;block->material = *material;
+    return TRUE;
 }
 
-static void state_block_record_light(D9Device *device, UINT index)
+static BOOL state_block_record_clip_plane(D9Device *device, UINT index, const float *plane)
 {
-    if (device->recording_result && index < D9_MAX_LIGHTS)
-        device->recording_result->has_light[index] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_clip_plane[index] = TRUE;CopyMemory(block->clip_planes[index], plane, 16);
+    return TRUE;
+}
+static BOOL state_block_record_npatch_mode(D9Device *device, float segments)
+{
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_npatch_mode = TRUE;block->npatch_segments = segments;
+    return TRUE;
+}
+static BOOL state_block_record_stream_frequency(D9Device *device, UINT stream, DWORD divider)
+{
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_stream_frequency[stream] = TRUE;block->streams[stream].frequency = divider;
+    return TRUE;
 }
 
-static void state_block_record_light_enable(D9Device *device, UINT index)
+
+
+static BOOL state_block_record_viewport(D9Device *device, const D3DVIEWPORT9 *viewport)
 {
-    if (device->recording_result && index < D9_MAX_LIGHTS)
-        device->recording_result->has_light_enable[index] = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_viewport = TRUE;block->viewport = *viewport;
+    return TRUE;
 }
 
-static void state_block_record_viewport(D9Device *device)
+static BOOL state_block_record_scissor(D9Device *device, const RECT *rect)
 {
-    if (device->recording_result)
-        device->recording_result->has_viewport = TRUE;
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    block->has_scissor = TRUE;block->scissor_rect = *rect;
+    return TRUE;
 }
 
-static void state_block_record_scissor(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_scissor = TRUE;
-}
 
-static void state_block_record_vertex_shader(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_vertex_shader = TRUE;
-}
 
-static void state_block_record_pixel_shader(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_pixel_shader = TRUE;
-}
 
-static void state_block_record_constant(D9Device *device, BOOL is_pixel,
-        BOOL is_float, BOOL is_bool, UINT start, UINT count)
+
+static BOOL state_block_record_constant(D9Device *device, BOOL is_pixel,
+        BOOL is_float, BOOL is_bool, UINT start, UINT count, const void *data)
 {
-    struct D9StateBlock *block = device->recording_result;
-    UINT index;
-    if (!block)
-        return;
-    for (index = start; index < start + count; ++index) {
+    D9StateBlock *block = device->recording_result;
+    if (!block) return FALSE;
+    for (UINT i = 0; i < count; ++i) {
+        UINT index = start + i;
         if (is_float) {
-            if (is_pixel) block->has_ps_const_f[index] = TRUE;
-            else block->has_vs_const_f[index] = TRUE;
+            if (is_pixel) {block->has_ps_const_f[index] = TRUE;CopyMemory(block->ps_const_f[index], (const float *)data + i * 4, 16);}
+            else {block->has_vs_const_f[index] = TRUE;CopyMemory(block->vs_const_f[index], (const float *)data + i * 4, 16);}
         } else if (is_bool) {
-            if (is_pixel) block->has_ps_const_b[index] = TRUE;
-            else block->has_vs_const_b[index] = TRUE;
+            BOOL value = ((const WINBOOL *)data)[i] ? TRUE : FALSE;
+            if (is_pixel) {block->has_ps_const_b[index] = TRUE;block->ps_const_b[index] = value;}
+            else {block->has_vs_const_b[index] = TRUE;block->vs_const_b[index] = value;}
         } else {
-            if (is_pixel) block->has_ps_const_i[index] = TRUE;
-            else block->has_vs_const_i[index] = TRUE;
+            if (is_pixel) {block->has_ps_const_i[index] = TRUE;CopyMemory(block->ps_const_i[index], (const int *)data + i * 4, 16);}
+            else {block->has_vs_const_i[index] = TRUE;CopyMemory(block->vs_const_i[index], (const int *)data + i * 4, 16);}
         }
     }
+    return TRUE;
 }
 
-static void state_block_record_vertex_format(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_vertex_format = TRUE;
-}
 
-static void state_block_record_stream(D9Device *device, UINT stream)
-{
-    if (device->recording_result && stream < D9_MAX_STREAMS)
-        device->recording_result->has_stream[stream] = TRUE;
-}
 
-static void state_block_record_indices(D9Device *device)
-{
-    if (device->recording_result)
-        device->recording_result->has_indices = TRUE;
-}
 
-/* D3D9 state blocks keep every captured COM object alive.  Without these
- * references an engine may release the texture/shader it used to build a UI
- * block, leaving Apply() with a dangling pointer and the host with a destroyed
- * resource handle. */
+
+
+
+/* State blocks retain captured storage independently of public COM refs.
+ * Apply may revive bindings after the application has released every public
+ * resource reference, without introducing resource/device reference cycles. */
 static void state_block_release_references(struct D9StateBlock *block)
 {
     UINT index;
     for (index = 0; index < D9_MAX_TEXTURE_BINDINGS; ++index) {
-        if (block->textures[index])
-            IDirect3DTexture9_Release(&block->textures[index]->iface);
-        if (block->cube_textures[index])
-            IDirect3DCubeTexture9_Release(&block->cube_textures[index]->iface);
-        if (block->volume_textures[index])
-            IDirect3DVolumeTexture9_Release(
-                    &block->volume_textures[index]->iface);
+        D9Texture *texture = block->textures[index];
+        D9CubeTexture *cube = block->cube_textures[index];
+        D9VolumeTexture *volume = block->volume_textures[index];
         block->textures[index] = NULL;
         block->cube_textures[index] = NULL;
         block->volume_textures[index] = NULL;
+        if (texture) texture_binding_release(texture);
+        if (cube) cube_binding_release(cube);
+        if (volume) volume_texture_binding_release(volume);
     }
-    if (block->vertex_shader)
-        IDirect3DVertexShader9_Release(&block->vertex_shader->iface.vertex);
-    if (block->pixel_shader)
-        IDirect3DPixelShader9_Release(&block->pixel_shader->iface.pixel);
+    D9Shader *vertex_shader = block->vertex_shader;
+    D9Shader *pixel_shader = block->pixel_shader;
+    D9VertexDeclaration *decl = block->vertex_declaration;
     block->vertex_shader = NULL;
     block->pixel_shader = NULL;
-    if (block->vertex_declaration)
-        IDirect3DVertexDeclaration9_Release(&block->vertex_declaration->iface);
     block->vertex_declaration = NULL;
+    if (vertex_shader) shader_binding_release(vertex_shader);
+    if (pixel_shader) shader_binding_release(pixel_shader);
+    if (decl) decl_binding_release(decl);
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
-        if (block->streams[index].buffer)
-            IDirect3DVertexBuffer9_Release(&block->streams[index].buffer->iface);
+        D9VertexBuffer *buffer = block->streams[index].buffer;
         block->streams[index].buffer = NULL;
+        if (buffer) vb_binding_release(buffer);
     }
-    if (block->index_buffer)
-        IDirect3DIndexBuffer9_Release(&block->index_buffer->iface);
+    D9IndexBuffer *indices = block->index_buffer;
     block->index_buffer = NULL;
+    if (indices) ib_binding_release(indices);
 }
 
 /* Copies the live device value into every slot the mask already marks. This is
@@ -12676,6 +13544,7 @@ static void state_block_capture(struct D9StateBlock *block)
     D9Device *device = block->device;
     UINT index, stage, slot;
 
+    if (block->has_palette) block->current_palette = device->current_palette;
     state_block_release_references(block);
 
     for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
@@ -12695,12 +13564,11 @@ static void state_block_capture(struct D9StateBlock *block)
             block->cube_textures[stage] = device->cube_bindings[stage];
             block->volume_textures[stage] = device->volume_bindings[stage];
             if (block->textures[stage])
-                IDirect3DTexture9_AddRef(&block->textures[stage]->iface);
+                texture_binding_add_ref(block->textures[stage]);
             if (block->cube_textures[stage])
-                IDirect3DCubeTexture9_AddRef(&block->cube_textures[stage]->iface);
+                cube_binding_add_ref(block->cube_textures[stage]);
             if (block->volume_textures[stage])
-                IDirect3DVolumeTexture9_AddRef(
-                        &block->volume_textures[stage]->iface);
+                volume_texture_binding_add_ref(block->volume_textures[stage]);
         }
     }
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
@@ -12713,28 +13581,36 @@ static void state_block_capture(struct D9StateBlock *block)
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
         if (block->has_transform[index])
             CopyMemory(block->transforms[index],
-                    device->transforms[g_state_block_transforms[index]],
+                    device->transforms[d9wg_state_block_transform_state(index)],
                     sizeof(block->transforms[index]));
     }
     if (block->has_material) block->material = device->material;
+    for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
+        if (block->has_clip_plane[index]) CopyMemory(block->clip_planes[index], device->clip_planes[index], 16);
+    if (block->has_npatch_mode) block->npatch_segments = device->npatch_segments;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index]) block->lights[index] = device->lights[index];
         if (block->has_light_enable[index])
             block->light_enabled[index] = device->light_enabled[index];
+    }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        D9WGLightState *current = d9wg_light_find(device->extra_lights, entry->index);
+        if (entry->light_mask && current && current->set) {entry->light = current->light;entry->set = TRUE;}
+        if (entry->enable_mask) entry->enabled = current ? current->enabled : FALSE;
     }
     if (block->has_viewport) block->viewport = device->viewport;
     if (block->has_scissor) block->scissor_rect = device->scissor_rect;
     if (block->has_vertex_shader) {
         block->vertex_shader = device->vertex_shader;
         if (block->vertex_shader)
-            IDirect3DVertexShader9_AddRef(&block->vertex_shader->iface.vertex);
+            shader_binding_add_ref(block->vertex_shader);
     }
     if (block->has_pixel_shader) {
         block->pixel_shader = device->pixel_shader;
         if (block->pixel_shader)
-            IDirect3DPixelShader9_AddRef(&block->pixel_shader->iface.pixel);
+            shader_binding_add_ref(block->pixel_shader);
     }
-    for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
+    for (index = 0; index < block->device->vs_float_capacity; ++index) {
         if (block->has_vs_const_f[index])
             CopyMemory(block->vs_const_f[index], device->vs_const_f[index], 16);
     }
@@ -12742,37 +13618,39 @@ static void state_block_capture(struct D9StateBlock *block)
         if (block->has_ps_const_f[index])
             CopyMemory(block->ps_const_f[index], device->ps_const_f[index], 16);
     }
-    for (index = 0; index < D9_MAX_CONST_I; ++index) {
+    for (index = 0; index < block->device->vs_int_capacity; ++index) {
         if (block->has_vs_const_i[index])
             CopyMemory(block->vs_const_i[index], device->vs_const_i[index], 16);
-        if (block->has_ps_const_i[index])
+        if (index < D9_MAX_CONST_I && block->has_ps_const_i[index])
             CopyMemory(block->ps_const_i[index], device->ps_const_i[index], 16);
     }
-    for (index = 0; index < D9_MAX_CONST_B; ++index) {
+    for (index = 0; index < block->device->vs_bool_capacity; ++index) {
         if (block->has_vs_const_b[index])
             block->vs_const_b[index] = device->vs_const_b[index];
-        if (block->has_ps_const_b[index])
+        if (index < D9_MAX_CONST_B && block->has_ps_const_b[index])
             block->ps_const_b[index] = device->ps_const_b[index];
     }
     if (block->has_vertex_format) {
         block->fvf = device->fvf;
         block->vertex_declaration = device->vertex_declaration;
         if (block->vertex_declaration)
-            IDirect3DVertexDeclaration9_AddRef(
-                    &block->vertex_declaration->iface);
+            decl_binding_add_ref(block->vertex_declaration);
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
+            UINT offset = block->streams[index].offset;
             block->streams[index] = device->streams[index];
+            if (block->freeze_stream_offsets) block->streams[index].offset = offset;
             if (block->streams[index].buffer)
-                IDirect3DVertexBuffer9_AddRef(
-                        &block->streams[index].buffer->iface);
+                vb_binding_add_ref(block->streams[index].buffer);
         }
     }
+    for (index = 0; index < D9_MAX_STREAMS; ++index)
+        if (block->has_stream_frequency[index]) block->streams[index].frequency = device->streams[index].frequency;
     if (block->has_indices) {
         block->index_buffer = device->index_buffer;
         if (block->index_buffer)
-            IDirect3DIndexBuffer9_AddRef(&block->index_buffer->iface);
+            ib_binding_add_ref(block->index_buffer);
     }
 }
 
@@ -12786,17 +13664,12 @@ static void state_block_mark_pixel_states(struct D9StateBlock *block)
     }
     for (stage = 0; stage < D9_MAX_TEXTURE_STAGES; ++stage) {
         for (index = 0; index < D9_MAX_TEXTURE_STAGE_STATES; ++index) {
-            /* TEXCOORDINDEX and TEXTURETRANSFORMFLAGS belong to vertex state:
-             * they decide which coordinates a stage gets, not how it blends. */
-            if (index == D3DTSS_TEXCOORDINDEX ||
-                    index == D3DTSS_TEXTURETRANSFORMFLAGS)
-                continue;
-            block->has_texture_stage_state[stage][index] = TRUE;
+            block->has_texture_stage_state[stage][index] = d9wg_state_block_texture_state(D3DSBT_PIXELSTATE, index);
         }
     }
     for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
         for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index)
-            block->has_sampler_state[slot][index] = TRUE;
+            if (d9wg_state_block_sampler_state(D3DSBT_PIXELSTATE, index)) block->has_sampler_state[slot][index] = TRUE;
     }
     block->has_pixel_shader = TRUE;
     for (index = 0; index < D9_MAX_PS_CONST_F; ++index)
@@ -12809,7 +13682,7 @@ static void state_block_mark_pixel_states(struct D9StateBlock *block)
 
 static void state_block_mark_vertex_states(struct D9StateBlock *block)
 {
-    UINT index, stage;
+    UINT index, stage, slot;
     for (index = 0; index < sizeof(g_vertex_state_render_states) /
             sizeof(g_vertex_state_render_states[0]); ++index) {
         WORD state = g_vertex_state_render_states[index];
@@ -12819,18 +13692,28 @@ static void state_block_mark_vertex_states(struct D9StateBlock *block)
         block->has_texture_stage_state[stage][D3DTSS_TEXCOORDINDEX] = TRUE;
         block->has_texture_stage_state[stage][D3DTSS_TEXTURETRANSFORMFLAGS] = TRUE;
     }
-    block->has_material = TRUE;
+    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot)
+        for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index)
+            if (d9wg_state_block_sampler_state(D3DSBT_VERTEXSTATE, index)) block->has_sampler_state[slot][index] = TRUE;
+    for (index = 0; index < D9_MAX_STREAMS; ++index) block->has_stream_frequency[index] = TRUE;
+    block->has_npatch_mode = TRUE;
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         block->has_light[index] = device_light_is_set(block->device, index);
-        block->has_light_enable[index] = TRUE;
+        block->has_light_enable[index] = device_light_is_set(block->device, index);
+    }
+    for (D9WGLightState *light = block->device->extra_lights; light; light = light->next) {
+        if (!light->set) continue;
+        D9WGLightState *entry = d9wg_light_get(&block->extra_lights, light->index, TRUE);
+        if (!entry) {block->light_allocation_failed = TRUE;break;}
+        entry->light_mask = entry->enable_mask = TRUE;
     }
     block->has_vertex_shader = TRUE;
     block->has_vertex_format = TRUE;
-    for (index = 0; index < D9_MAX_VS_CONST_F; ++index)
+    for (index = 0; index < block->device->vs_float_capacity; ++index)
         block->has_vs_const_f[index] = TRUE;
-    for (index = 0; index < D9_MAX_CONST_I; ++index)
+    for (index = 0; index < block->device->vs_int_capacity; ++index)
         block->has_vs_const_i[index] = TRUE;
-    for (index = 0; index < D9_MAX_CONST_B; ++index)
+    for (index = 0; index < block->device->vs_bool_capacity; ++index)
         block->has_vs_const_b[index] = TRUE;
 }
 
@@ -12850,6 +13733,9 @@ static void state_block_mark_all(struct D9StateBlock *block)
         block->has_texture[stage] = TRUE;
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index)
         block->has_transform[index] = TRUE;
+    block->has_palette = TRUE;
+    block->has_material = TRUE;
+    FillMemory(block->has_clip_plane, sizeof(block->has_clip_plane), 1);
     block->has_viewport = TRUE;
     block->has_scissor = TRUE;
     for (index = 0; index < D9_MAX_STREAMS; ++index)
@@ -12857,41 +13743,61 @@ static void state_block_mark_all(struct D9StateBlock *block)
     block->has_indices = TRUE;
 }
 
-static struct D9StateBlock *state_block_alloc(D9Device *device)
+static struct D9StateBlock *state_block_alloc(D9Device *device, BOOL parent_ref)
 {
+    UINT floats = device->vs_float_capacity, ints = device->vs_int_capacity, bools = device->vs_bool_capacity;
     struct D9StateBlock *block = (struct D9StateBlock *)HeapAlloc(
-            GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*block));
+            GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*block) +
+            (floats + ints) * 20u + bools * 8u);
     if (!block)
         return NULL;
+    block->vs_const_f = (float (*)[4])(block + 1);
+    block->vs_const_i = (int (*)[4])(block->vs_const_f + floats);
+    block->vs_const_b = (BOOL *)(block->vs_const_i + ints);
+    block->has_vs_const_f = block->vs_const_b + bools;
+    block->has_vs_const_i = block->has_vs_const_f + floats;
+    block->has_vs_const_b = block->has_vs_const_i + ints;
     block->iface.lpVtbl = &g_state_block_vtbl;
     block->refcount = 1;
     block->device = device;
-    device_child_add_ref(device);
+    block->device_parent_ref = parent_ref;
+    if (parent_ref) device_child_add_ref(device);
     block->next_device_resource = device->state_blocks;
     device->state_blocks = block;
     return block;
 }
 
-/* Replays every captured entry through the public setters, so a state block can
- * never apply a state by a route the app's own equivalent call would not take. */
-static HRESULT state_block_apply(struct D9StateBlock *block)
+/* Replay ordinary state through public setters. Streams use their shared
+ * internal setter to restore exact captured NULL metadata without the public
+ * wrapper substituting the current live offset/stride. */
+static HRESULT state_block_apply_shared(struct D9StateBlock *block,
+        D9WGStateBlockApply8 apply8, void *context)
 {
     D9Device *device = block->device;
     IDirect3DDevice9 *iface = &device->iface;
     UINT index, stage, slot;
+    HRESULT result;
+#define APPLY_STATE(call) do { result = (call); if (FAILED(result)) return result; } while (0)
 
-    for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
+    if (block->has_palette) {
+        HRESULT hr = device_set_current_texture_palette(iface, block->current_palette);
+        if (FAILED(hr)) return hr;
+    }
+    if (apply8) APPLY_STATE(apply8(context, D9WG_APPLY8_RENDER, 0, D3D_OK));
+    else for (index = 0; index < D9_MAX_RENDER_STATES; ++index) {
         if (block->has_render_state[index])
-            IDirect3DDevice9_SetRenderState(iface, (D3DRENDERSTATETYPE)index,
-                    block->render_states[index]);
+            APPLY_STATE(IDirect3DDevice9_SetRenderState(iface, (D3DRENDERSTATETYPE)index,
+                    block->render_states[index]));
     }
     for (stage = 0; stage < D9_MAX_TEXTURE_BINDINGS; ++stage) {
-        if (stage < D9_MAX_TEXTURE_STAGES) {
+        if (apply8 && stage < D9_MAX_TEXTURE_STAGES)
+            APPLY_STATE(apply8(context, D9WG_APPLY8_TEXTURE_STAGE, stage, D3D_OK));
+        else if (!apply8 && stage < D9_MAX_TEXTURE_STAGES) {
             for (index = 0; index < D9_MAX_TEXTURE_STAGE_STATES; ++index) {
                 if (block->has_texture_stage_state[stage][index])
-                    IDirect3DDevice9_SetTextureStageState(iface, stage,
+                    APPLY_STATE(IDirect3DDevice9_SetTextureStageState(iface, stage,
                             (D3DTEXTURESTAGESTATETYPE)index,
-                            block->texture_stage_states[stage][index]);
+                            block->texture_stage_states[stage][index]));
             }
         }
         if (block->has_texture[stage]) {
@@ -12902,96 +13808,115 @@ static HRESULT state_block_apply(struct D9StateBlock *block)
                 texture = (IDirect3DBaseTexture9 *)&block->cube_textures[stage]->iface;
             else if (block->volume_textures[stage])
                 texture = (IDirect3DBaseTexture9 *)&block->volume_textures[stage]->iface;
-            IDirect3DDevice9_SetTexture(iface, texture_binding_stage(stage),
-                    texture);
+            APPLY_STATE(IDirect3DDevice9_SetTexture(iface, texture_binding_stage(stage),
+                    texture));
         }
     }
-    for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
+    if (!apply8) for (slot = 0; slot < D9_MAX_SAMPLERS; ++slot) {
         for (index = 0; index < D9_MAX_SAMPLER_STATES; ++index) {
             if (block->has_sampler_state[slot][index])
-                IDirect3DDevice9_SetSamplerState(iface,
+                APPLY_STATE(IDirect3DDevice9_SetSamplerState(iface,
                         sampler_state_index(slot),
                         (D3DSAMPLERSTATETYPE)index,
-                        block->sampler_states[slot][index]);
+                        block->sampler_states[slot][index]));
         }
     }
     for (index = 0; index < D9_STATE_BLOCK_TRANSFORMS; ++index) {
         if (block->has_transform[index])
-            IDirect3DDevice9_SetTransform(iface,
-                    (D3DTRANSFORMSTATETYPE)g_state_block_transforms[index],
-                    (const D3DMATRIX *)block->transforms[index]);
+            APPLY_STATE(IDirect3DDevice9_SetTransform(iface,
+                    (D3DTRANSFORMSTATETYPE)d9wg_state_block_transform_state(index),
+                    (const D3DMATRIX *)block->transforms[index]));
     }
     if (block->has_material)
-        IDirect3DDevice9_SetMaterial(iface, &block->material);
+        APPLY_STATE(IDirect3DDevice9_SetMaterial(iface, &block->material));
+    for (index = 0; index < D9_MAX_CLIP_PLANES; ++index)
+        if (block->has_clip_plane[index]) APPLY_STATE(IDirect3DDevice9_SetClipPlane(iface, index, block->clip_planes[index]));
+    if (block->has_npatch_mode) APPLY_STATE(IDirect3DDevice9_SetNPatchMode(iface, block->npatch_segments));
     for (index = 0; index < D9_MAX_LIGHTS; ++index) {
         if (block->has_light[index])
-            IDirect3DDevice9_SetLight(iface, index, &block->lights[index]);
+            APPLY_STATE(IDirect3DDevice9_SetLight(iface, index, &block->lights[index]));
         if (block->has_light_enable[index])
-            IDirect3DDevice9_LightEnable(iface, index,
-                    block->light_enabled[index]);
+            APPLY_STATE(IDirect3DDevice9_LightEnable(iface, index,
+                    block->light_enabled[index]));
+    }
+    for (D9WGLightState *entry = block->extra_lights; entry; entry = entry->next) {
+        if (entry->light_mask && entry->set) APPLY_STATE(IDirect3DDevice9_SetLight(iface, entry->index, &entry->light));
+        if (entry->enable_mask) APPLY_STATE(IDirect3DDevice9_LightEnable(iface, entry->index, entry->enabled));
     }
     if (block->has_viewport)
-        IDirect3DDevice9_SetViewport(iface, &block->viewport);
+        APPLY_STATE(IDirect3DDevice9_SetViewport(iface, &block->viewport));
     if (block->has_scissor)
-        IDirect3DDevice9_SetScissorRect(iface, &block->scissor_rect);
-    if (block->has_vertex_shader)
-        IDirect3DDevice9_SetVertexShader(iface, block->vertex_shader
-                ? &block->vertex_shader->iface.vertex : NULL);
-    if (block->has_pixel_shader)
-        IDirect3DDevice9_SetPixelShader(iface, block->pixel_shader
-                ? &block->pixel_shader->iface.pixel : NULL);
-    for (index = 0; index < D9_MAX_VS_CONST_F; ++index) {
+        APPLY_STATE(IDirect3DDevice9_SetScissorRect(iface, &block->scissor_rect));
+    if (apply8) APPLY_STATE(apply8(context, D9WG_APPLY8_VERTEX, 0, D3D_OK));
+    else if (block->has_vertex_shader)
+        APPLY_STATE(IDirect3DDevice9_SetVertexShader(iface, block->vertex_shader
+                ? &block->vertex_shader->iface.vertex : NULL));
+    if (apply8) APPLY_STATE(apply8(context, D9WG_APPLY8_PIXEL, 0, D3D_OK));
+    else if (block->has_pixel_shader)
+        APPLY_STATE(IDirect3DDevice9_SetPixelShader(iface, block->pixel_shader
+                ? &block->pixel_shader->iface.pixel : NULL));
+    for (index = 0; index < device->vs_float_capacity; ++index) {
         if (block->has_vs_const_f[index])
-            IDirect3DDevice9_SetVertexShaderConstantF(iface, index,
-                    block->vs_const_f[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantF(iface, index,
+                    block->vs_const_f[index], 1));
     }
     for (index = 0; index < D9_MAX_PS_CONST_F; ++index) {
         if (block->has_ps_const_f[index])
-            IDirect3DDevice9_SetPixelShaderConstantF(iface, index,
-                    block->ps_const_f[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantF(iface, index,
+                    block->ps_const_f[index], 1));
     }
-    for (index = 0; index < D9_MAX_CONST_I; ++index) {
+    for (index = 0; index < device->vs_int_capacity; ++index) {
         if (block->has_vs_const_i[index])
-            IDirect3DDevice9_SetVertexShaderConstantI(iface, index,
-                    block->vs_const_i[index], 1);
-        if (block->has_ps_const_i[index])
-            IDirect3DDevice9_SetPixelShaderConstantI(iface, index,
-                    block->ps_const_i[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantI(iface, index,
+                    block->vs_const_i[index], 1));
+        if (index < D9_MAX_CONST_I && block->has_ps_const_i[index])
+            APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantI(iface, index,
+                    block->ps_const_i[index], 1));
     }
-    for (index = 0; index < D9_MAX_CONST_B; ++index) {
+    for (index = 0; index < device->vs_bool_capacity; ++index) {
         if (block->has_vs_const_b[index])
-            IDirect3DDevice9_SetVertexShaderConstantB(iface, index,
-                    &block->vs_const_b[index], 1);
-        if (block->has_ps_const_b[index])
-            IDirect3DDevice9_SetPixelShaderConstantB(iface, index,
-                    &block->ps_const_b[index], 1);
+            APPLY_STATE(IDirect3DDevice9_SetVertexShaderConstantB(iface, index,
+                    &block->vs_const_b[index], 1));
+        if (index < D9_MAX_CONST_B && block->has_ps_const_b[index])
+            APPLY_STATE(IDirect3DDevice9_SetPixelShaderConstantB(iface, index,
+                    &block->ps_const_b[index], 1));
     }
-    if (block->has_vertex_format) {
+    if (!apply8 && block->has_vertex_format) {
         /* A declaration and an FVF are mutually exclusive in D3D9: whichever
          * the device last had is the one to restore, and restoring both would
          * leave the loser silently overriding the winner. */
         if (block->vertex_declaration)
-            IDirect3DDevice9_SetVertexDeclaration(iface,
-                    &block->vertex_declaration->iface);
+            APPLY_STATE(IDirect3DDevice9_SetVertexDeclaration(iface,
+                    &block->vertex_declaration->iface));
         else if (block->fvf)
-            IDirect3DDevice9_SetFVF(iface, block->fvf);
-        else
-            IDirect3DDevice9_SetVertexDeclaration(iface, NULL);
+            APPLY_STATE(IDirect3DDevice9_SetFVF(iface, block->fvf));
+        else if (device_compatibility_api(device) == 8u)
+            APPLY_STATE(IDirect3DDevice9_SetVertexDeclaration(iface, NULL));
+        /* Native9 does not apply a captured NULL declaration. Capturing
+         * NULL drops the block's reference but preserves the device's live
+         * declaration when this block is subsequently applied. */
     }
     for (index = 0; index < D9_MAX_STREAMS; ++index) {
         if (block->has_stream[index]) {
-            IDirect3DDevice9_SetStreamSource(iface, index,
-                    block->streams[index].buffer
-                        ? &block->streams[index].buffer->iface : NULL,
-                    block->streams[index].offset, block->streams[index].stride);
-            IDirect3DDevice9_SetStreamSourceFreq(iface, index,
-                    block->streams[index].frequency);
+            APPLY_STATE(device_set_stream_binding(device, index,
+                    block->streams[index].buffer,
+                    block->streams[index].offset, block->streams[index].stride));
         }
+        if (block->has_stream_frequency[index]) APPLY_STATE(IDirect3DDevice9_SetStreamSourceFreq(iface, index, block->streams[index].frequency));
     }
-    if (block->has_indices)
-        IDirect3DDevice9_SetIndices(iface, block->index_buffer
+    if (block->has_indices) {
+        result = IDirect3DDevice9_SetIndices(iface, block->index_buffer
                 ? &block->index_buffer->iface : NULL);
+        if (apply8) result = apply8(context, D9WG_APPLY8_INDICES, 0, result);
+        if (FAILED(result)) return result;
+    }
+#undef APPLY_STATE
     return D3D_OK;
+}
+
+static HRESULT state_block_apply(struct D9StateBlock *block)
+{
+    return state_block_apply_shared(block, NULL, NULL);
 }
 
 static HRESULT WINAPI state_block_query_interface(IDirect3DStateBlock9 *iface,
@@ -13023,8 +13948,11 @@ static ULONG WINAPI state_block_release(IDirect3DStateBlock9 *iface)
             link = &(*link)->next_device_resource;
         if (*link) *link = block->next_device_resource;
         state_block_release_references(block);
-        device_child_release(block->device);
+        d9wg_light_free(&block->extra_lights);
+        D9Device *device = block->device;
+        BOOL parent_ref = block->device_parent_ref;
         HeapFree(GetProcessHeap(), 0, block);
+        if (parent_ref) device_child_release(device);
     }
     return refs;
 }
@@ -13042,14 +13970,17 @@ static HRESULT WINAPI state_block_get_device(IDirect3DStateBlock9 *iface,
 
 static HRESULT WINAPI state_block_capture_method(IDirect3DStateBlock9 *iface)
 {
-    state_block_capture(state_block_from_iface(iface));
+    D9StateBlock *block = state_block_from_iface(iface);
+    if (block->device->recording_result)
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    state_block_capture(block);
     return D3D_OK;
 }
 
 static HRESULT WINAPI state_block_apply_method(IDirect3DStateBlock9 *iface)
 {
     struct D9StateBlock *block = state_block_from_iface(iface);
-    if (block->device->recording)
+    if (block->device->recording_result)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     return state_block_apply(block);
 }
@@ -13072,18 +14003,23 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
     if (!block_out)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     *block_out = NULL;
-    if (device->recording)
+    if (device->recording_result)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (type != D3DSBT_ALL && type != D3DSBT_PIXELSTATE
             && type != D3DSBT_VERTEXSTATE)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    block = state_block_alloc(device);
+    block = state_block_alloc(device, TRUE);
     if (!block)
         return TRACE_REFUSE(E_OUTOFMEMORY);
     if (type == D3DSBT_ALL) state_block_mark_all(block);
     else if (type == D3DSBT_PIXELSTATE) state_block_mark_pixel_states(block);
     else state_block_mark_vertex_states(block);
+    if (block->light_allocation_failed) {IDirect3DStateBlock9_Release(&block->iface);return TRACE_REFUSE(E_OUTOFMEMORY);}
     state_block_capture(block);
+    /* Windows captures stream offsets once for CreateStateBlock; later Capture
+     * refreshes the buffer and stride only. Recorded blocks keep updating all
+     * three fields. Pinned Wine d3d9/tests/stateblock.c exercises all16 slots. */
+    block->freeze_stream_offsets = TRUE;
     *block_out = &block->iface;
     return D3D_OK;
 }
@@ -13091,23 +14027,10 @@ static HRESULT WINAPI device_create_state_block(IDirect3DDevice9 *iface,
 static HRESULT WINAPI device_begin_state_block(IDirect3DDevice9 *iface)
 {
     D9Device *device = device_from_iface(iface);
-    struct D9StateBlock *baseline;
-    struct D9StateBlock *result;
-
-    if (device->recording)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    baseline = state_block_alloc(device);
-    if (!baseline)
-        return TRACE_REFUSE(E_OUTOFMEMORY);
-    result = state_block_alloc(device);
-    if (!result) {
-        IDirect3DStateBlock9_Release(&baseline->iface);
-        return TRACE_REFUSE(E_OUTOFMEMORY);
-    }
-    state_block_mark_all(baseline);
-    state_block_capture(baseline);
-    device->recording = baseline;
-    device->recording_result = result;
+    if (device->recording_result) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    D9StateBlock *block = state_block_alloc(device, FALSE);
+    if (!block) return TRACE_REFUSE(E_OUTOFMEMORY);
+    device->recording_result = block;
     return D3D_OK;
 }
 
@@ -13115,30 +14038,26 @@ static HRESULT WINAPI device_end_state_block(IDirect3DDevice9 *iface,
         IDirect3DStateBlock9 **block_out)
 {
     D9Device *device = device_from_iface(iface);
-    struct D9StateBlock *baseline = device->recording;
-    struct D9StateBlock *block = device->recording_result;
-
-    if (!baseline || !block)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!block_out) {
-        device->recording = NULL;
-        device->recording_result = NULL;
-        state_block_apply(baseline);
-        IDirect3DStateBlock9_Release(&block->iface);
-        IDirect3DStateBlock9_Release(&baseline->iface);
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    }
-    *block_out = NULL;
-    /* Capture only the explicitly touched mask. This preserves same-value and
-     * write-then-revert calls which a final-value diff necessarily loses. */
-    state_block_capture(block);
-    device->recording = NULL;
+    D9StateBlock *block = device->recording_result;
+    if (!block || !block_out) return TRACE_REFUSE(D3DERR_INVALIDCALL);
     device->recording_result = NULL;
-    /* Put the device back the way the app left it before Begin. */
-    state_block_apply(baseline);
-    IDirect3DStateBlock9_Release(&baseline->iface);
+    block->device_parent_ref = TRUE;
+    device_child_add_ref(device);
     *block_out = &block->iface;
     return D3D_OK;
+}
+
+/* Device-owned8 tokens keep block storage, not a public device reference.
+ * Detach each token before resource finalizers can re-enter this device. */
+static void device_clear_state_block_handles8(D9Device *device)
+{
+    for (;;) {
+        D9StateBlock *block = device->state_blocks;
+        while (block && !block->handle8) block = block->next_device_resource;
+        if (!block) break;
+        block->handle8 = 0;
+        IDirect3DStateBlock9_Release(&block->iface);
+    }
 }
 
 /* ---- IDirect3DVertexBuffer9 ---- */
@@ -13160,25 +14079,41 @@ static HRESULT WINAPI vb_query_interface(IDirect3DVertexBuffer9 *iface,
 
 static ULONG WINAPI vb_add_ref(IDirect3DVertexBuffer9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&vb_from_iface(iface)->refcount);
+    D9VertexBuffer *buffer = vb_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&buffer->refcount);
+    if (refs == 1)
+        device_child_add_ref(buffer->device);
+    return refs;
+}
+
+static void vb_destroy_storage(D9VertexBuffer *buffer)
+{
+    D9VertexBuffer **link = &buffer->device->vertex_buffers;
+    D9WGDestroyResource destroy;
+    while (*link && *link != buffer)
+        link = &(*link)->next_device_resource;
+    if (*link) *link = buffer->next_device_resource;
+    d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
+    destroy.resource_handle = buffer->handle;
+    destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
+    HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
+    core_view_retire8(buffer);
+    HeapFree(GetProcessHeap(), 0, buffer);
 }
 
 static ULONG WINAPI vb_release(IDirect3DVertexBuffer9 *iface)
 {
     D9VertexBuffer *buffer = vb_from_iface(iface);
+    if (!InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&buffer->refcount);
     if (!refs) {
-        D9VertexBuffer **link = &buffer->device->vertex_buffers;
-        D9WGDestroyResource destroy;
-        while (*link && *link != buffer)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = buffer->next_device_resource;
-        destroy.resource_handle = buffer->handle;
-        destroy.resource_kind = D9WG_RESOURCE_BUFFER_VERTEX;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
-        device_child_release(buffer->device);
-        HeapFree(GetProcessHeap(), 0, buffer);
+        D9Device *device = buffer->device;
+        if (!InterlockedCompareExchange(&buffer->binding_refs, 0, 0))
+            vb_destroy_storage(buffer);
+        device_child_release(device);
     }
     return refs;
 }
@@ -13194,23 +14129,33 @@ static HRESULT WINAPI vb_get_device(IDirect3DVertexBuffer9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI vb_set_private_data(IDirect3DVertexBuffer9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+static HRESULT WINAPI vb_set_private_data(IDirect3DVertexBuffer9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9VertexBuffer* buffer = vb_from_iface(iface);
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(&buffer->private_data, guid, data, size, flags, &d9wg_private_ops)));
+}
 
-static HRESULT WINAPI vb_get_private_data(IDirect3DVertexBuffer9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI vb_get_private_data(IDirect3DVertexBuffer9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9VertexBuffer* buffer = vb_from_iface(iface);
+    return TRACE_REFUSE(d9wg_get_private_data(&buffer->private_data, guid, data, size));
+}
 
-static HRESULT WINAPI vb_free_private_data(IDirect3DVertexBuffer9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI vb_free_private_data(IDirect3DVertexBuffer9* iface,
+    REFGUID guid)
+{
+    D9VertexBuffer* buffer = vb_from_iface(iface);
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(&buffer->private_data, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI vb_set_priority(IDirect3DVertexBuffer9 *iface,
         DWORD priority)
 {
     D9VertexBuffer *buffer = vb_from_iface(iface);
+    if (buffer->pool != D3DPOOL_MANAGED)
+        return 0;
     DWORD old = buffer->priority;
     buffer->priority = priority;
     return old;
@@ -13220,7 +14165,11 @@ static DWORD WINAPI vb_get_priority(IDirect3DVertexBuffer9 *iface)
 { return vb_from_iface(iface)->priority; }
 
 static void WINAPI vb_preload(IDirect3DVertexBuffer9 *iface)
-{ (void)iface; }
+{
+    D9VertexBuffer *buffer = vb_from_iface(iface);
+    d9wg_preload_buffer(buffer->handle, buffer->shadow, buffer->length,
+            &buffer->full_upload_pending);
+}
 
 static D3DRESOURCETYPE WINAPI vb_get_type(IDirect3DVertexBuffer9 *iface)
 { (void)iface; return D3DRTYPE_VERTEXBUFFER; }
@@ -13229,26 +14178,21 @@ static HRESULT WINAPI vb_lock(IDirect3DVertexBuffer9 *iface, UINT offset,
         UINT size, void **data_out, DWORD flags)
 {
     D9VertexBuffer *buffer = vb_from_iface(iface);
-    if (!data_out || buffer->locked || offset > buffer->length)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_DISCARD) && (flags & D3DLOCK_NOOVERWRITE))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE))
-            && !(buffer->usage & D3DUSAGE_DYNAMIC))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_READONLY)
-            && (flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE)))
+    if (!data_out || (buffer->locked && device_compatibility_api(buffer->device) != 8u)
+            || offset > buffer->length)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);
+    if (!d9wg_buffer_lock_merge(offset, size, flags, &buffer->lock_count,
+            &buffer->lock_offset, &buffer->lock_size, &buffer->lock_flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     buffer->locked = TRUE;
-    buffer->lock_offset = offset;
-    buffer->lock_size = size;
-    buffer->lock_flags = flags;
-    if (flags & D3DLOCK_DISCARD)
-        ZeroMemory(buffer->shadow, buffer->length);
+    if (flags & D3DLOCK_DISCARD) {
+        d9wg_clip_buffer_free(&buffer->clips, d9wg_vertex_windows_clip_release, NULL);
+    }
     *data_out = buffer->shadow + offset;
     return D3D_OK;
 }
@@ -13259,11 +14203,14 @@ static HRESULT WINAPI vb_unlock(IDirect3DVertexBuffer9 *iface)
     BOOL result;
     if (!buffer->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    result = (buffer->lock_flags & D3DLOCK_READONLY)
+    if (buffer->lock_count > 1u) { --buffer->lock_count; return D3D_OK; }
+    result = buffer->full_upload_pending
+            || (buffer->lock_flags & D3DLOCK_READONLY)
             || emit_buffer_update(buffer->handle, buffer->lock_offset,
                     buffer->shadow + buffer->lock_offset, buffer->lock_size,
                     buffer->lock_flags);
     buffer->locked = FALSE;
+    buffer->lock_count = 0;
     buffer->lock_offset = 0;
     buffer->lock_size = 0;
     buffer->lock_flags = 0;
@@ -13305,25 +14252,40 @@ static HRESULT WINAPI ib_query_interface(IDirect3DIndexBuffer9 *iface,
 
 static ULONG WINAPI ib_add_ref(IDirect3DIndexBuffer9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&ib_from_iface(iface)->refcount);
+    D9IndexBuffer *buffer = ib_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&buffer->refcount);
+    if (refs == 1)
+        device_child_add_ref(buffer->device);
+    return refs;
+}
+
+static void ib_destroy_storage(D9IndexBuffer *buffer)
+{
+    D9IndexBuffer **link = &buffer->device->index_buffers;
+    D9WGDestroyResource destroy;
+    while (*link && *link != buffer)
+        link = &(*link)->next_device_resource;
+    if (*link) *link = buffer->next_device_resource;
+    d9wg_private_clear(&buffer->private_data, &d9wg_private_ops);
+    destroy.resource_handle = buffer->handle;
+    destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    HeapFree(GetProcessHeap(), 0, buffer->shadow_allocation);
+    core_view_retire8(buffer);
+    HeapFree(GetProcessHeap(), 0, buffer);
 }
 
 static ULONG WINAPI ib_release(IDirect3DIndexBuffer9 *iface)
 {
     D9IndexBuffer *buffer = ib_from_iface(iface);
+    if (!InterlockedCompareExchange(&buffer->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&buffer->refcount);
     if (!refs) {
-        D9IndexBuffer **link = &buffer->device->index_buffers;
-        D9WGDestroyResource destroy;
-        while (*link && *link != buffer)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = buffer->next_device_resource;
-        destroy.resource_handle = buffer->handle;
-        destroy.resource_kind = D9WG_RESOURCE_BUFFER_INDEX;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        HeapFree(GetProcessHeap(), 0, buffer->shadow);
-        device_child_release(buffer->device);
-        HeapFree(GetProcessHeap(), 0, buffer);
+        D9Device *device = buffer->device;
+        if (!InterlockedCompareExchange(&buffer->binding_refs, 0, 0))
+            ib_destroy_storage(buffer);
+        device_child_release(device);
     }
     return refs;
 }
@@ -13339,23 +14301,33 @@ static HRESULT WINAPI ib_get_device(IDirect3DIndexBuffer9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI ib_set_private_data(IDirect3DIndexBuffer9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+static HRESULT WINAPI ib_set_private_data(IDirect3DIndexBuffer9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9IndexBuffer* buffer = ib_from_iface(iface);
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(&buffer->private_data, guid, data, size, flags, &d9wg_private_ops)));
+}
 
-static HRESULT WINAPI ib_get_private_data(IDirect3DIndexBuffer9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI ib_get_private_data(IDirect3DIndexBuffer9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9IndexBuffer* buffer = ib_from_iface(iface);
+    return TRACE_REFUSE(d9wg_get_private_data(&buffer->private_data, guid, data, size));
+}
 
-static HRESULT WINAPI ib_free_private_data(IDirect3DIndexBuffer9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI ib_free_private_data(IDirect3DIndexBuffer9* iface,
+    REFGUID guid)
+{
+    D9IndexBuffer* buffer = ib_from_iface(iface);
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(&buffer->private_data, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI ib_set_priority(IDirect3DIndexBuffer9 *iface,
         DWORD priority)
 {
     D9IndexBuffer *buffer = ib_from_iface(iface);
+    if (buffer->pool != D3DPOOL_MANAGED)
+        return 0;
     DWORD old = buffer->priority;
     buffer->priority = priority;
     return old;
@@ -13365,7 +14337,11 @@ static DWORD WINAPI ib_get_priority(IDirect3DIndexBuffer9 *iface)
 { return ib_from_iface(iface)->priority; }
 
 static void WINAPI ib_preload(IDirect3DIndexBuffer9 *iface)
-{ (void)iface; }
+{
+    D9IndexBuffer *buffer = ib_from_iface(iface);
+    d9wg_preload_buffer(buffer->handle, buffer->shadow, buffer->length,
+            &buffer->full_upload_pending);
+}
 
 static D3DRESOURCETYPE WINAPI ib_get_type(IDirect3DIndexBuffer9 *iface)
 { (void)iface; return D3DRTYPE_INDEXBUFFER; }
@@ -13374,23 +14350,18 @@ static HRESULT WINAPI ib_lock(IDirect3DIndexBuffer9 *iface, UINT offset,
         UINT size, void **data_out, DWORD flags)
 {
     D9IndexBuffer *buffer = ib_from_iface(iface);
-    if (!data_out || buffer->locked || offset > buffer->length)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if ((flags & D3DLOCK_DISCARD) && (flags & D3DLOCK_NOOVERWRITE))
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if ((flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE))
-            && !(buffer->usage & D3DUSAGE_DYNAMIC))
+    if (!data_out || (buffer->locked && device_compatibility_api(buffer->device) != 8u)
+            || offset > buffer->length)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (!size)
         size = buffer->length - offset;
     if (size > buffer->length - offset)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    flags = d9wg_buffer_lock_flags(buffer->usage, buffer->pool, flags);
+    if (!d9wg_buffer_lock_merge(offset, size, flags, &buffer->lock_count,
+            &buffer->lock_offset, &buffer->lock_size, &buffer->lock_flags))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
     buffer->locked = TRUE;
-    buffer->lock_offset = offset;
-    buffer->lock_size = size;
-    buffer->lock_flags = flags;
-    if (flags & D3DLOCK_DISCARD)
-        ZeroMemory(buffer->shadow, buffer->length);
     *data_out = buffer->shadow + offset;
     return D3D_OK;
 }
@@ -13401,11 +14372,14 @@ static HRESULT WINAPI ib_unlock(IDirect3DIndexBuffer9 *iface)
     BOOL result;
     if (!buffer->locked)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    result = (buffer->lock_flags & D3DLOCK_READONLY)
+    if (buffer->lock_count > 1u) { --buffer->lock_count; return D3D_OK; }
+    result = buffer->full_upload_pending
+            || (buffer->lock_flags & D3DLOCK_READONLY)
             || emit_buffer_update(buffer->handle, buffer->lock_offset,
                     buffer->shadow + buffer->lock_offset, buffer->lock_size,
                     buffer->lock_flags);
     buffer->locked = FALSE;
+    buffer->lock_count = 0;
     buffer->lock_offset = 0;
     buffer->lock_size = 0;
     buffer->lock_flags = 0;
@@ -13437,45 +14411,80 @@ static HRESULT texture_lock_level(D9Texture *texture, UINT level,
     UINT block_width;
     UINT block_height;
     UINT block_bytes;
-    UINT block_x;
-    UINT block_y;
+    BOOL valid_rect;
+    BOOL permissive = texture->pool != D3DPOOL_DEFAULT;
+    BOOL broken_pitch = d9wg_cpu_texture_broken_pitch(
+            device_compatibility_api(texture->device), texture->format);
 
-    if (!locked_rect || level >= texture->level_count
+    if (!locked_rect || (!texture->private_back_buffer
+                && texture->pool == D3DPOOL_DEFAULT
+                && !(texture->usage & D3DUSAGE_DYNAMIC)
+                && (UINT)texture->format < 0x10000u) || level >= texture->level_count
             || (texture->usage & (D3DUSAGE_RENDERTARGET
                 | D3DUSAGE_DEPTHSTENCIL)))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
-    if (level_data->locked || !level_data->shadow)
+    if (texture_levels_mapped(texture->levels, texture->level_count, FALSE) || level_data->locked || !level_data->shadow)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     if (rect) {
         area = *rect;
     } else {
         SetRect(&area, 0, 0, (int)level_data->width, (int)level_data->height);
     }
-    if (area.left < 0 || area.top < 0 || area.right <= area.left
-            || area.bottom <= area.top
-            || (UINT)area.right > level_data->width
-            || (UINT)area.bottom > level_data->height
-            || !texture_format_layout(texture->format, &block_width,
-                    &block_height, &block_bytes))
+    if (!d9wg_format_layout(device_compatibility_api(texture->device),
+            texture->format, &block_width, &block_height, &block_bytes))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (block_width > 1
-            && (((UINT)area.left % block_width)
-                || ((UINT)area.top % block_height)
-                || ((UINT)area.right != level_data->width
-                    && (UINT)area.right % block_width)
-                || ((UINT)area.bottom != level_data->height
-                    && (UINT)area.bottom % block_height)))
+    valid_rect = area.left >= 0 && area.top >= 0 && area.right > area.left
+            && area.bottom > area.top && (UINT)area.right <= level_data->width
+            && (UINT)area.bottom <= level_data->height
+            && !((UINT)area.left % block_width)
+            && !((UINT)area.top % block_height)
+            && ((UINT)area.right == level_data->width || !((UINT)area.right % block_width))
+            && ((UINT)area.bottom == level_data->height || !((UINT)area.bottom % block_height));
+    BOOL mapped_rect_valid = valid_rect || (broken_pitch && area.left >= 0 && area.top >= 0
+            && area.right > area.left && area.bottom > area.top
+            && (UINT)area.right <= level_data->width && (UINT)area.bottom <= level_data->height);
+    if (!mapped_rect_valid && !permissive)
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-
-    block_x = (UINT)area.left / block_width;
-    block_y = (UINT)area.top / block_height;
-    level_data->lock_rect = area;
+    if (texture->private_back_buffer && texture->pool == D3DPOOL_DEFAULT
+            && !level_data->shadow_valid && !(flags & D3DLOCK_DISCARD)) {
+        D9WGReadbackSurface request;
+        D9WGReadbackDiagnostic detail;
+        ZeroMemory(&request, sizeof(request));
+        request.device_handle = texture->device->handle;
+        request.texture_handle = texture->handle;
+        request.level = level;
+        request.format = texture->format;
+        request.width = level_data->width;
+        request.height = level_data->height;
+        request.destination_pitch = level_data->row_pitch;
+        int result = d9wg_surface_readback(g_process, &request,
+                level_data->row_pitch, level_data->row_count,
+                level_data->shadow, level_data->byte_count,
+                submit_readback_batch_locked, &detail);
+        if (result)
+            return TRACE_REFUSE(result == D9WG_READBACK_INVALID
+                    ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
+        level_data->shadow_valid = TRUE;
+    }
+    /* D3D8/9 CPU-pool 2D locks expose raw offsets even outside the image.
+     * Preserve that API result without performing out-of-object C pointer
+     * arithmetic. Upload only owned storage, never the caller's unchecked ROI. */
+    RECT upload_area = area;
+    if (!valid_rect)
+        SetRect(&upload_area, 0, 0, level_data->width, level_data->height);
+    if (!(flags & (D3DLOCK_READONLY | D3DLOCK_NO_DIRTY_UPDATE))
+            && !texture_mark_dirty(texture, level, &upload_area))
+        return E_OUTOFMEMORY;
+    level_data->lock_rect = upload_area;
     level_data->lock_flags = flags;
     level_data->locked = TRUE;
-    locked_rect->Pitch = (INT)level_data->row_pitch;
-    locked_rect->pBits = level_data->shadow
-            + block_y * level_data->row_pitch + block_x * block_bytes;
+    UINT public_pitch = broken_pitch ? level_data->width : level_data->row_pitch;
+    if (broken_pitch) block_width = block_height = block_bytes = 1u;
+    locked_rect->Pitch = (INT)public_pitch;
+    locked_rect->pBits = (void *)((uintptr_t)level_data->shadow
+            + (uintptr_t)((int64_t)(area.top / (LONG)block_height) * public_pitch
+                + (int64_t)(area.left / (LONG)block_width) * block_bytes));
     return D3D_OK;
 }
 
@@ -13484,12 +14493,18 @@ static HRESULT texture_unlock_level(D9Texture *texture, UINT level)
     D9TextureLevel *level_data;
     BOOL result = TRUE;
 
-    if (level >= texture->level_count)
+    if (level >= texture->level_count || (!texture->private_back_buffer
+                && texture->pool == D3DPOOL_DEFAULT
+                && !(texture->usage & D3DUSAGE_DYNAMIC)
+                && (UINT)texture->format < 0x10000u))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
     level_data = &texture->levels[level];
+    if (texture_levels_mapped(texture->levels, texture->level_count, FALSE))
+        return D3D_OK;
     if (!level_data->locked)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (!(level_data->lock_flags & D3DLOCK_READONLY))
+        return device_compatibility_api(texture->device) == 8u || !texture->private_back_buffer
+                ? D3D_OK : TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (texture->pool != D3DPOOL_MANAGED && !(level_data->lock_flags & D3DLOCK_READONLY))
         result = emit_texture_update(texture, level, &level_data->lock_rect);
     level_data->locked = FALSE;
     level_data->lock_flags = 0;
@@ -13515,39 +14530,64 @@ static HRESULT WINAPI texture_query_interface(IDirect3DTexture9 *iface,
 
 static ULONG WINAPI texture_add_ref(IDirect3DTexture9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&texture_from_iface(iface)->refcount);
+    D9Texture *texture = texture_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&texture->refcount);
+    if (refs == 1 && !texture->private_back_buffer)
+        device_child_add_ref(texture->device);
+    return refs;
 }
 
-static ULONG WINAPI texture_release(IDirect3DTexture9 *iface)
+static void texture_destroy_storage(D9Texture *texture)
+{
+    D9Texture** link = &texture->device->texture_resources;
+    D9WGDestroyResource destroy;
+    UINT level;
+    while (*link && *link != texture)
+        link = &(*link)->next_device_resource;
+    if (*link)
+        *link = texture->next_device_resource;
+    d9wg_private_clear(&texture->private_data, &d9wg_private_ops);
+    destroy.resource_handle = texture->handle;
+    destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    for (level = 0; level < texture->level_count; ++level) {
+        texture_dirty_clear(&texture->levels[level]);
+        d9wg_private_clear(&texture->levels[level].private_data, &d9wg_private_ops);
+        /* The level's surface sub-object dies with the texture; nothing
+         * can still hold it, because every surface reference is one of the
+         * texture references that just reached zero. */
+        if (texture->levels[level].level_surface) {
+            TRACE_SURFACE_FREED(
+                &texture->levels[level].level_surface->iface);
+            surface_dispose_dc(texture->levels[level].level_surface);
+            core_view_retire8(texture->levels[level].level_surface);
+            HeapFree(GetProcessHeap(), 0,
+                texture->levels[level].level_surface);
+            texture->levels[level].level_surface = NULL;
+        }
+        if (!texture->mip_storage)
+            HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
+    }
+    HeapFree(GetProcessHeap(), 0, texture->mip_storage);
+    HeapFree(GetProcessHeap(), 0, texture->levels);
+    core_view_retire8(texture);
+    HeapFree(GetProcessHeap(), 0, texture);
+}
+
+static ULONG WINAPI texture_release(IDirect3DTexture9* iface)
 {
     D9Texture *texture = texture_from_iface(iface);
+    if (!InterlockedCompareExchange(&texture->refcount, 0, 0))
+        return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&texture->refcount);
     if (!refs) {
-        D9Texture **link = &texture->device->texture_resources;
-        D9WGDestroyResource destroy;
-        UINT level;
-        while (*link && *link != texture)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = texture->next_device_resource;
-        destroy.resource_handle = texture->handle;
-        destroy.resource_kind = D9WG_RESOURCE_TEXTURE_2D;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        for (level = 0; level < texture->level_count; ++level) {
-            /* The level's surface sub-object dies with the texture; nothing
-             * can still hold it, because every surface reference is one of the
-             * texture references that just reached zero. */
-            if (texture->levels[level].level_surface) {
-                TRACE_SURFACE_FREED(
-                        &texture->levels[level].level_surface->iface);
-                HeapFree(GetProcessHeap(), 0,
-                        texture->levels[level].level_surface);
-                texture->levels[level].level_surface = NULL;
-            }
-            HeapFree(GetProcessHeap(), 0, texture->levels[level].shadow);
-        }
-        HeapFree(GetProcessHeap(), 0, texture->levels);
-        device_child_release(texture->device);
-        HeapFree(GetProcessHeap(), 0, texture);
+        D9Device *device = texture->device;
+        BOOL private_storage = texture->private_back_buffer;
+        if (!InterlockedCompareExchange(&texture->binding_refs, 0, 0))
+            texture_destroy_storage(texture);
+        /* May destroy both objects through final binding cleanup. */
+        if (!private_storage)
+            device_child_release(device);
     }
     return refs;
 }
@@ -13563,23 +14603,33 @@ static HRESULT WINAPI texture_get_device(IDirect3DTexture9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI texture_set_private_data(IDirect3DTexture9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+static HRESULT WINAPI texture_set_private_data(IDirect3DTexture9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = &texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)));
+}
 
-static HRESULT WINAPI texture_get_private_data(IDirect3DTexture9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI texture_get_private_data(IDirect3DTexture9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = &texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_get_private_data(store, guid, data, size));
+}
 
-static HRESULT WINAPI texture_free_private_data(IDirect3DTexture9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI texture_free_private_data(IDirect3DTexture9* iface,
+    REFGUID guid)
+{
+    D9WGPrivateStore* store = &texture_from_iface(iface)->private_data;
+    return TRACE_REFUSE(d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)));
+}
 
 static DWORD WINAPI texture_set_priority(IDirect3DTexture9 *iface,
         DWORD priority)
 {
     D9Texture *texture = texture_from_iface(iface);
+    if (texture->pool != D3DPOOL_MANAGED)
+        return 0;
     DWORD old = texture->priority;
     texture->priority = priority;
     return old;
@@ -13589,7 +14639,10 @@ static DWORD WINAPI texture_get_priority(IDirect3DTexture9 *iface)
 { return texture_from_iface(iface)->priority; }
 
 static void WINAPI texture_preload(IDirect3DTexture9 *iface)
-{ (void)iface; }
+{
+    D9Texture *texture = texture_from_iface(iface);
+    if (texture->pool == D3DPOOL_MANAGED) texture_flush_dirty(texture);
+}
 
 static D3DRESOURCETYPE WINAPI texture_get_type(IDirect3DTexture9 *iface)
 { (void)iface; return D3DRTYPE_TEXTURE; }
@@ -13597,14 +14650,8 @@ static D3DRESOURCETYPE WINAPI texture_get_type(IDirect3DTexture9 *iface)
 static DWORD WINAPI texture_set_lod(IDirect3DTexture9 *iface, DWORD lod)
 {
     D9Texture *texture = texture_from_iface(iface);
-    DWORD old = texture->lod;
-    if (texture->pool != D3DPOOL_MANAGED)
-        return old;
-    if (lod >= texture->level_count)
-        lod = texture->level_count - 1;
-    texture->lod = lod;
-    emit_texture_lod(texture->device, texture->handle, lod);
-    return old;
+    return d9wg_set_texture_lod(texture->device->handle, texture->handle,
+            texture->pool, texture->level_count, &texture->lod, lod);
 }
 
 static DWORD WINAPI texture_get_lod(IDirect3DTexture9 *iface)
@@ -13613,48 +14660,36 @@ static DWORD WINAPI texture_get_lod(IDirect3DTexture9 *iface)
 static DWORD WINAPI texture_get_level_count(IDirect3DTexture9 *iface)
 { return texture_from_iface(iface)->level_count; }
 
-/* Auto mipmap generation is not implemented in M1 (CreateTexture already
- * rejects D3DUSAGE_AUTOGENMIPMAP); these three exist only to keep the vtable
- * complete for titles that probe the capability defensively. */
-static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle)
+/* One command carries both filter changes and explicit generation. Old
+ * eight-byte commands retain their immediate-generation semantics. */
+static BOOL emit_generate_mips(D9Device *device, uint32_t resource_handle,
+        D3DTEXTUREFILTERTYPE filter, BOOL defer_generation)
 {
     D9WGGenerateMips command;
     command.device_handle = device->handle;
     command.resource_handle = resource_handle;
+    command.filter_type = filter;
+    command.defer_generation = defer_generation ? 1u : 0u;
     return emit_command(D9WG_OP_GENERATE_MIPS, &command, sizeof(command));
 }
 
-static BOOL emit_texture_lod(D9Device *device, uint32_t resource_handle,
-        DWORD lod)
-{
-    D9WGSetTextureLOD command;
-    command.device_handle = device->handle;
-    command.resource_handle = resource_handle;
-    command.lod = (uint32_t)lod;
-    command.reserved = 0;
-    return emit_command(D9WG_OP_SET_TEXTURE_LOD, &command, sizeof(command));
-}
 
-/*
- * D3D9 exposes the filter used for automatic mip generation, and defaults it to
- * D3DTEXF_LINEAR. Reporting D3DTEXF_NONE was consistent while nothing generated
- * anything; now that the chain is real, the getter has to describe what the
- * host actually does -- a linear box downsample per level.
- *
- * The setter accepts the filters that describe that and refuses the ones it
- * would have to silently substitute for. D3D9's own contract here is that an
- * unsupported filter returns D3DERR_INVALIDCALL, so refusing is the documented
- * answer rather than an approximation.
- */
+
+/* Filtering follows the enabled per-format device support. Setters dirty
+ * without immediately generating; creation and Reset replay the stored filter. */
 static HRESULT WINAPI texture_set_auto_gen_filter_type(
         IDirect3DTexture9 *iface, D3DTEXTUREFILTERTYPE filter)
 {
     D9Texture *texture = texture_from_iface(iface);
+    /* A texture without D3DUSAGE_AUTOGENMIPMAP accepts and ignores the call
+     * (Wine's test_generate_mipmap sets it on an ordinary render target). */
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
+        return D3D_OK;
+    if (!d9wg_autogen_filter_supported(texture->format, filter,
+                (d9wg_format_query_info(texture->format) & 4u) ? runtime_host_features() : 0))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    if (filter != D3DTEXF_POINT && filter != D3DTEXF_LINEAR
-            && filter != D3DTEXF_NONE)
-        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!emit_generate_mips(texture->device, texture->handle, filter, TRUE))
+        return D3DERR_DRIVERINTERNALERROR;
     texture->autogen_filter = filter;
     return D3D_OK;
 }
@@ -13673,7 +14708,9 @@ static void WINAPI texture_generate_mip_sublevels(IDirect3DTexture9 *iface)
     D9Texture *texture = texture_from_iface(iface);
     if (!(texture->usage & D3DUSAGE_AUTOGENMIPMAP))
         return;
-    emit_generate_mips(texture->device, texture->handle);
+    if (texture->pool == D3DPOOL_MANAGED && !texture_flush_dirty(texture))
+        return;
+    emit_generate_mips(texture->device, texture->handle, texture->autogen_filter, FALSE);
 }
 
 static HRESULT WINAPI texture_get_level_desc(IDirect3DTexture9 *iface,
@@ -13808,7 +14845,7 @@ static HRESULT WINAPI texture_add_dirty_rect(IDirect3DTexture9 *iface,
             || (UINT)rect->right > texture->width
             || (UINT)rect->bottom > texture->height))
         return TRACE_REFUSE(D3DERR_INVALIDCALL);
-    return D3D_OK;
+    return texture_mark_dirty(texture, 0, rect) ? D3D_OK : E_OUTOFMEMORY;
 }
 
 /* ---- IDirect3DVertexDeclaration9 ---- */
@@ -13829,24 +14866,35 @@ static HRESULT WINAPI decl_query_interface(IDirect3DVertexDeclaration9 *iface,
 
 static ULONG WINAPI decl_add_ref(IDirect3DVertexDeclaration9 *iface)
 {
-    return (ULONG)InterlockedIncrement(&decl_from_iface(iface)->refcount);
+    D9VertexDeclaration *decl = decl_from_iface(iface);
+    ULONG refs = (ULONG)InterlockedIncrement(&decl->refcount);
+    if (refs == 1) device_child_add_ref(decl->device);
+    return refs;
+}
+
+static void decl_destroy_storage(D9VertexDeclaration *decl)
+{
+    D9VertexDeclaration **link = &decl->device->vertex_declarations;
+    D9WGDestroyResource destroy;
+    while (*link && *link != decl)
+        link = &(*link)->next_device_resource;
+    if (*link) *link = decl->next_device_resource;
+    destroy.resource_handle = decl->handle;
+    destroy.resource_kind = D9WG_RESOURCE_VERTEX_DECLARATION;
+    emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
+    HeapFree(GetProcessHeap(), 0, decl);
 }
 
 static ULONG WINAPI decl_release(IDirect3DVertexDeclaration9 *iface)
 {
     D9VertexDeclaration *decl = decl_from_iface(iface);
+    if (!InterlockedCompareExchange(&decl->refcount, 0, 0)) return 0;
     ULONG refs = (ULONG)InterlockedDecrement(&decl->refcount);
     if (!refs) {
-        D9VertexDeclaration **link = &decl->device->vertex_declarations;
-        D9WGDestroyResource destroy;
-        while (*link && *link != decl)
-            link = &(*link)->next_device_resource;
-        if (*link) *link = decl->next_device_resource;
-        destroy.resource_handle = decl->handle;
-        destroy.resource_kind = D9WG_RESOURCE_VERTEX_DECLARATION;
-        emit_command(D9WG_OP_DESTROY_RESOURCE, &destroy, sizeof(destroy));
-        device_child_release(decl->device);
-        HeapFree(GetProcessHeap(), 0, decl);
+        D9Device *device = decl->device;
+        if (!InterlockedCompareExchange(&decl->binding_refs, 0, 0))
+            decl_destroy_storage(decl);
+        device_child_release(device);
     }
     return refs;
 }
@@ -13908,7 +14956,7 @@ static HRESULT shader_query_interface(D9Shader *shader, REFIID iid,
     if (!iid || (!iid_is_unknown(iid) && !guid_equal(iid, interface_guid)))
         return E_NOINTERFACE;
     *object = &shader->iface;
-    InterlockedIncrement(&shader->refcount);
+    shader_public_add_ref(shader);
     return S_OK;
 }
 
@@ -13937,17 +14985,12 @@ static HRESULT WINAPI vertex_shader_query_interface(
 
 static ULONG WINAPI vertex_shader_add_ref(IDirect3DVertexShader9 *iface)
 {
-    return (ULONG)InterlockedIncrement(
-            &vertex_shader_from_iface(iface)->refcount);
+    return shader_public_add_ref(vertex_shader_from_iface(iface));
 }
 
 static ULONG WINAPI vertex_shader_release(IDirect3DVertexShader9 *iface)
 {
-    D9Shader *shader = vertex_shader_from_iface(iface);
-    ULONG refs = (ULONG)InterlockedDecrement(&shader->refcount);
-    if (!refs)
-        shader_destroy(shader);
-    return refs;
+    return shader_public_release(vertex_shader_from_iface(iface));
 }
 
 static HRESULT WINAPI vertex_shader_get_device(IDirect3DVertexShader9 *iface,
@@ -13976,17 +15019,12 @@ static HRESULT WINAPI pixel_shader_query_interface(
 
 static ULONG WINAPI pixel_shader_add_ref(IDirect3DPixelShader9 *iface)
 {
-    return (ULONG)InterlockedIncrement(
-            &pixel_shader_from_iface(iface)->refcount);
+    return shader_public_add_ref(pixel_shader_from_iface(iface));
 }
 
 static ULONG WINAPI pixel_shader_release(IDirect3DPixelShader9 *iface)
 {
-    D9Shader *shader = pixel_shader_from_iface(iface);
-    ULONG refs = (ULONG)InterlockedDecrement(&shader->refcount);
-    if (!refs)
-        shader_destroy(shader);
-    return refs;
+    return shader_public_release(pixel_shader_from_iface(iface));
 }
 
 static HRESULT WINAPI pixel_shader_get_device(IDirect3DPixelShader9 *iface,
@@ -14029,6 +15067,13 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
     LONG before = 0;
     ULONG refs;
 
+    if (surface->swap_chain && surface->swap_chain->handle) {
+        refs = (ULONG)InterlockedIncrement(&surface->refcount);
+        if (refs == 1)
+            device_child_add_ref(surface->device);
+        return refs;
+    }
+
     /* A texture level surface has no refcount of its own: it is a sub-object
      * of the texture and shares its parent's, so that dropping the last
      * surface reference cannot outlive-check the pointer the app kept. */
@@ -14049,13 +15094,14 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
         return refs;
     }
     /* The implicit back buffer and auto depth-stencil are sub-objects of the
-     * device in the same way, so each public reference on them is backed by one
-     * device reference -- that is what stops a device from being torn down
-     * while the app still holds one of its implicit surfaces. */
+     * device. Transitioning from zero to one surface reference pins that device;
+     * subsequent AddRefs leave its count unchanged. The last surface reference
+     * drops the pin, while the cached wrapper survives until device teardown. */
     if (surface_is_implicit(surface)) {
         TRACE_MARK_ENTER("Surface.AddRef");
         refs = (ULONG)InterlockedIncrement(&surface->refcount);
-        device_child_add_ref(surface->device);
+        if (refs == 1)
+            device_child_add_ref(surface->device);
         TRACE("SURFACE ADDREF object=%08lX implicit=1 after=%lu device=%08lX "
                 "device_refs=%ld", (DWORD)(uintptr_t)iface, refs,
                 (DWORD)(uintptr_t)surface->device,
@@ -14068,6 +15114,8 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
 #endif
     TRACE_MARK_ENTER("Surface.AddRef");
     refs = (ULONG)InterlockedIncrement(&surface->refcount);
+    if (refs == 1)
+        device_child_add_ref(surface->device);
     TRACE("SURFACE ADDREF object=%08lX vtbl=%08lX before=%ld after=%lu "
             "texture=%08lX shadow=%08lX level=%lu",
             (DWORD)(uintptr_t)iface,
@@ -14079,11 +15127,67 @@ static ULONG WINAPI surface_add_ref(IDirect3DSurface9 *iface)
     return refs;
 }
 
+static void surface_destroy_storage(D9Surface *surface)
+{
+    void *iface = surface;
+    (void)iface;
+    D9Device *device = surface->device;
+    (void)device;
+    D9Texture *texture = surface->texture;
+    BYTE *shadow = surface->shadow;
+
+    TRACE("SURFACE FREE_BEGIN object=%08lX vtbl=%08lX device=%08lX "
+            "texture=%08lX swapchain=%08lX shadow=%08lX level=%lu "
+            "size=%lux%lu format=%08lX locked=%lu",
+            (DWORD)(uintptr_t)iface,
+            (DWORD)(uintptr_t)surface->iface.lpVtbl,
+            (DWORD)(uintptr_t)device, (DWORD)(uintptr_t)texture,
+            (DWORD)(uintptr_t)surface->swap_chain,
+            (DWORD)(uintptr_t)shadow, surface->level, surface->width,
+            surface->height, (DWORD)surface->format,
+            (DWORD)surface->locked);
+    /* Only a create_target_texture surface arrives here with a texture,
+     * and it holds that texture's sole reference, so the texture goes with
+     * it.  Texture level surfaces never reach this path at all: they are
+     * sub-objects freed by texture_release.  The back-buffer, offscreen
+     * and auto-depth surfaces have no texture and only hold the device. */
+    d9wg_private_clear(&surface->private_data, &d9wg_private_ops);
+    if (texture)
+        IDirect3DTexture9_Release(&texture->iface);
+    /* An app that releases a surface without releasing its DC leaks a GDI
+     * object and a DC handle -- both process-wide and both scarce -- so
+     * the teardown reclaims them rather than trusting the caller. The
+     * contents are deliberately *not* copied back: a surface being freed
+     * has nowhere for them to go. */
+    surface_dispose_dc(surface);
+    if (shadow)
+        HeapFree(GetProcessHeap(), 0, shadow);
+    TRACE("SURFACE FREE_END object=%08lX", (DWORD)(uintptr_t)iface);
+    TRACE_SURFACE_FREED(iface);
+    core_view_retire8(surface);
+    HeapFree(GetProcessHeap(), 0, surface);
+}
+
 static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
 {
     D9Surface *surface = surface_from_iface(iface);
     LONG before = 0;
     ULONG refs;
+
+    if (surface->swap_chain && surface->swap_chain->handle) {
+        if (!InterlockedCompareExchange(&surface->refcount, 0, 0))
+            return 0;
+        refs = (ULONG)InterlockedDecrement(&surface->refcount);
+        if (!refs) {
+            D9Device *device = surface->device;
+            D9SwapChain *chain = surface->swap_chain;
+            if (!InterlockedCompareExchange(&chain->refcount, 0, 0)
+                    && !swap_chain_buffers_referenced(chain))
+                swap_chain_destroy_storage(chain);
+            device_child_release(device);
+        }
+        return refs;
+    }
 
     /* Mirror of surface_add_ref: the release lands on the texture, and the
      * surface object itself survives until the texture is destroyed.  This is
@@ -14119,6 +15223,10 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
         D9Device *device = surface->device;
 
         TRACE_MARK_ENTER("Surface.Release");
+        if (!InterlockedCompareExchange(&surface->refcount, 0, 0)) {
+            TRACE_MARK_EXIT("Surface.Release", 0, iface);
+            return 0;
+        }
         refs = (ULONG)InterlockedDecrement(&surface->refcount);
         TRACE("SURFACE RELEASE object=%08lX implicit=1 after=%lu device=%08lX "
                 "device_refs_before=%ld", (DWORD)(uintptr_t)iface, refs,
@@ -14127,13 +15235,18 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
         TRACE_MARK_EXIT("Surface.Release", (HRESULT)refs, iface);
         /* This can destroy the device, which frees `surface`; touch neither
          * object afterwards. */
-        device_child_release(device);
+        if (!refs)
+            device_child_release(device);
         return refs;
     }
 #ifdef D9WG_DIAGNOSTIC_TRACE
     before = InterlockedCompareExchange(&surface->refcount, 0, 0);
 #endif
     TRACE_MARK_ENTER("Surface.Release");
+    if (!InterlockedCompareExchange(&surface->refcount, 0, 0)) {
+        TRACE_MARK_EXIT("Surface.Release", 0, iface);
+        return 0;
+    }
     refs = (ULONG)InterlockedDecrement(&surface->refcount);
     TRACE("SURFACE RELEASE object=%08lX vtbl=%08lX before=%ld after=%lu "
             "device=%08lX texture=%08lX swapchain=%08lX shadow=%08lX "
@@ -14148,47 +15261,11 @@ static ULONG WINAPI surface_release(IDirect3DSurface9 *iface)
     (void)before;
     if (!refs) {
         D9Device *device = surface->device;
-        D9Texture *texture = surface->texture;
-        BYTE *shadow = surface->shadow;
-
-        TRACE("SURFACE FREE_BEGIN object=%08lX vtbl=%08lX device=%08lX "
-                "texture=%08lX swapchain=%08lX shadow=%08lX level=%lu "
-                "size=%lux%lu format=%08lX locked=%lu",
-                (DWORD)(uintptr_t)iface,
-                (DWORD)(uintptr_t)surface->iface.lpVtbl,
-                (DWORD)(uintptr_t)device, (DWORD)(uintptr_t)texture,
-                (DWORD)(uintptr_t)surface->swap_chain,
-                (DWORD)(uintptr_t)shadow, surface->level, surface->width,
-                surface->height, (DWORD)surface->format,
-                (DWORD)surface->locked);
-        /* Only a create_target_texture surface arrives here with a texture,
-         * and it holds that texture's sole reference, so the texture goes with
-         * it.  Texture level surfaces never reach this path at all: they are
-         * sub-objects freed by texture_release.  The back-buffer, offscreen
-         * and auto-depth surfaces have no texture and only hold the device. */
-        if (texture)
-            IDirect3DTexture9_Release(&texture->iface);
-        /* An app that releases a surface without releasing its DC leaks a GDI
-         * object and a DC handle -- both process-wide and both scarce -- so
-         * the teardown reclaims them rather than trusting the caller. The
-         * contents are deliberately *not* copied back: a surface being freed
-         * has nowhere for them to go. */
-        if (surface->dc) {
-            SelectObject(surface->dc, surface->dc_previous);
-            DeleteDC(surface->dc);
-            surface->dc = NULL;
-        }
-        if (surface->dib) {
-            DeleteObject(surface->dib);
-            surface->dib = NULL;
-        }
-        if (shadow)
-            HeapFree(GetProcessHeap(), 0, shadow);
-        device_child_release(device);
-        TRACE("SURFACE FREE_END object=%08lX", (DWORD)(uintptr_t)iface);
+        if (!InterlockedCompareExchange(&surface->binding_refs, 0, 0))
+            surface_destroy_storage(surface);
         TRACE_MARK_EXIT("Surface.Release", 0, iface);
-        TRACE_SURFACE_FREED(iface);
-        HeapFree(GetProcessHeap(), 0, surface);
+        /* This can destroy both objects through final binding cleanup. */
+        device_child_release(device);
         return 0;
     }
     TRACE_MARK_EXIT("Surface.Release", (HRESULT)refs, iface);
@@ -14206,18 +15283,35 @@ static HRESULT WINAPI surface_get_device(IDirect3DSurface9 *iface,
     return D3D_OK;
 }
 
-static HRESULT WINAPI surface_set_private_data(IDirect3DSurface9 *iface,
-        REFGUID guid, const void *data, DWORD size, DWORD flags)
-{ (void)iface; (void)guid; (void)data; (void)size; (void)flags;
-  return TRACE_REFUSE(D3DERR_INVALIDCALL); }
+static D9WGPrivateStore* surface_private_store(D9Surface* surface)
+{
+    if (surface->cube_texture)
+        return &surface->cube_texture->levels[surface->cube_face * surface->cube_texture->level_count + surface->level].private_data;
+    if (surface->texture_child)
+        return &surface->texture->levels[surface->level].private_data;
+    return &surface->private_data;
+}
 
-static HRESULT WINAPI surface_get_private_data(IDirect3DSurface9 *iface,
-        REFGUID guid, void *data, DWORD *size)
-{ (void)iface; (void)guid; (void)data; (void)size; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI surface_set_private_data(IDirect3DSurface9* iface,
+    REFGUID guid, const void* data, DWORD size, DWORD flags)
+{
+    D9WGPrivateStore* store = surface_private_store(surface_from_iface(iface));
+    return TRACE_REFUSE(store ? d9wg_private_hresult(d9wg_private_set(store, guid, data, size, flags, &d9wg_private_ops)) : D3DERR_INVALIDCALL);
+}
 
-static HRESULT WINAPI surface_free_private_data(IDirect3DSurface9 *iface,
-        REFGUID guid)
-{ (void)iface; (void)guid; return TRACE_REFUSE(D3DERR_NOTFOUND); }
+static HRESULT WINAPI surface_get_private_data(IDirect3DSurface9* iface,
+    REFGUID guid, void* data, DWORD* size)
+{
+    D9WGPrivateStore* store = surface_private_store(surface_from_iface(iface));
+    return TRACE_REFUSE(store ? d9wg_get_private_data(store, guid, data, size) : D3DERR_NOTFOUND);
+}
+
+static HRESULT WINAPI surface_free_private_data(IDirect3DSurface9* iface,
+    REFGUID guid)
+{
+    D9WGPrivateStore* store = surface_private_store(surface_from_iface(iface));
+    return TRACE_REFUSE(store ? d9wg_private_hresult(d9wg_private_free(store, guid, &d9wg_private_ops)) : D3DERR_NOTFOUND);
+}
 
 static DWORD WINAPI surface_set_priority(IDirect3DSurface9 *iface,
         DWORD priority)
@@ -14257,6 +15351,16 @@ static HRESULT WINAPI surface_get_container(IDirect3DSurface9 *iface,
             return E_NOINTERFACE;
         *container = &surface->cube_texture->iface;
         IDirect3DCubeTexture9_AddRef(&surface->cube_texture->iface);
+        return D3D_OK;
+    }
+    /* Standalone render/depth/offscreen surfaces have the device as their
+     * public container. Their private backing texture is not an API object. */
+    if (surface->auto_depth_stencil || !surface->texture_child) {
+        if (!riid || (!iid_is_unknown(riid)
+                && !guid_equal(riid, &IID_IDirect3DDevice9)))
+            return E_NOINTERFACE;
+        *container = &surface->device->iface;
+        IDirect3DDevice9_AddRef(&surface->device->iface);
         return D3D_OK;
     }
     if (!surface->texture)
@@ -14300,9 +15404,96 @@ static HRESULT WINAPI surface_get_desc(IDirect3DSurface9 *iface,
  * either route and the UPDATE_TEXTURE emitted on unlock is identical.
  *
  * A standalone system-memory surface locks its own shadow. A default-pool
- * render target/back buffer remains non-lockable; callers use the implemented
- * GetRenderTargetData path to transfer its GPU contents first.
+ * render target remains non-lockable. An implicit backbuffer with the explicit
+ * lockable flag uses the shared GPU readback/writeback adapter below.
  */
+/* Explicitly lockable implicit/additional backbuffers and standalone targets
+ * share the same pure bounds and upload bridge as API8. Read every successful lock from GPU; only the published lock rect
+ * is written back, and READONLY never emits an upload. */
+static HRESULT surface_lock_renderable(D9Surface *surface,
+        D3DLOCKED_RECT *out, const RECT *rect, DWORD flags)
+{
+    D9WGSurfaceLockPlan plan;
+    D9WGSurfaceLockRect requested;
+    UINT bw, bh, pixel_bytes, pitch, rows, bytes;
+    /* NULL targets have no observable color storage. Native still permits a
+     * lockable standalone NULL surface to be mapped. Give that mapping owned
+     * scratch bytes and normal bounds/lifetime rules; there is deliberately no
+     * GPU color read or write. The scratch layout is private, not a format cap. */
+    BOOL null_target = surface->format == D9FMT_NULL;
+    BOOL depth_lock = d9wg_lockable_depth_format(surface->format);
+    D3DFORMAT lock_format = null_target ? D3DFMT_A8R8G8B8
+            : depth_lock ? D3DFMT_R5G6B5 : surface->format;
+    if (rect) requested = (D9WGSurfaceLockRect){rect->left, rect->top, rect->right, rect->bottom};
+    if (!out || !texture_format_layout(lock_format, &bw, &bh, &pixel_bytes)
+            || bw != 1 || bh != 1
+            || !texture_level_layout(lock_format, surface->width, surface->height,
+                &pitch, &rows, &bytes) || rows != surface->height
+            || !d9wg_surface_lock_plan(surface->width, surface->height, pitch,
+                pixel_bytes, surface->multisample,
+                surface->texture ? (surface->lockable_render_target || depth_lock)
+                    : !!(surface->device->present.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER),
+                surface->locked || (surface->texture && surface->texture->levels[surface->level].locked),
+                rect ? &requested : NULL, flags, &plan))
+        return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    if (!surface->shadow) {
+        surface->shadow = HeapAlloc(GetProcessHeap(), 0, bytes);
+        if (!surface->shadow) return TRACE_REFUSE(E_OUTOFMEMORY);
+        surface->row_pitch = pitch;
+        surface->byte_count = bytes;
+    }
+    D9WGReadbackSurface request = {0};
+    D9WGReadbackDiagnostic detail;
+    request.device_handle = surface->device->handle;
+    request.texture_handle = surface->texture ? surface->texture->handle : 0;
+    request.level = surface->level;
+    request.format = surface->format;
+    request.width = surface->width;
+    request.height = surface->height;
+    request.destination_pitch = pitch;
+    int result = null_target ? 0 : d9wg_surface_readback(g_process, &request,
+            surface->width * pixel_bytes, surface->height, surface->shadow,
+            surface->byte_count, submit_readback_batch_locked, &detail);
+    if (result) return TRACE_REFUSE(result == D9WG_READBACK_INVALID
+            ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR);
+    surface->lock_rect = (RECT){plan.area.left, plan.area.top, plan.area.right, plan.area.bottom};
+    surface->lock_flags = flags;
+    surface->locked = TRUE;
+    if (surface->texture) surface->texture->levels[surface->level].locked = TRUE;
+    out->Pitch = pitch;
+    out->pBits = surface->shadow + plan.offset;
+    return D3D_OK;
+}
+
+static HRESULT surface_unlock_renderable(D9Surface *surface)
+{
+    if (!surface->locked) return TRACE_REFUSE(D3DERR_INVALIDCALL);
+    BOOL uploaded = TRUE;
+    if (!(surface->lock_flags & D3DLOCK_READONLY) && surface->format != D9FMT_NULL) {
+        UINT bw, bh, pixel_bytes;
+        const RECT *r = &surface->lock_rect;
+        const D9WGSurfaceLockRect area = {r->left, r->top, r->right, r->bottom};
+        uploaded = texture_format_layout(d9wg_lockable_depth_format(surface->format)
+                    ? D3DFMT_R5G6B5 : surface->format, &bw, &bh, &pixel_bytes)
+                && d9wg_renderable_upload(surface->device->handle, allocate_handle(),
+                    surface->format, surface->texture ? surface->texture->handle : 0,
+                    surface->level, 0, &area, surface->shadow
+                        + r->top * surface->row_pitch + r->left * pixel_bytes,
+                    surface->row_pitch, pixel_bytes, emit_command, emit_texture_rows);
+    }
+    if (surface->texture) {
+        D9TextureLevel *level = &surface->texture->levels[surface->level];
+        level->locked = FALSE;
+        /* A partial or failed write cannot leave an older Clear/ColorFill
+         * mirror authoritative. The next read must observe GPU storage. */
+        if (!(surface->lock_flags & D3DLOCK_READONLY)) level->shadow_valid = FALSE;
+    }
+    surface->locked = FALSE;
+    surface->lock_flags = 0;
+    ZeroMemory(&surface->lock_rect, sizeof(surface->lock_rect));
+    return uploaded ? D3D_OK : TRACE_REFUSE(D3DERR_DRIVERINTERNALERROR);
+}
+
 static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
         D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
 {
@@ -14318,6 +15509,17 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked, (DWORD)(uintptr_t)rect, flags);
 
+    /* Wine's D3D8 image/cube failures clear the output; 2D texture-level
+     * failures leave it untouched. Ordinary D3D9 retains its own policy. */
+    if (locked_rect && !surface->texture
+            && device_compatibility_api(surface->device) == 8u)
+        ZeroMemory(locked_rect, sizeof(*locked_rect));
+    if ((surface->swap_chain && !surface->texture)
+            || (surface->texture && !surface->texture_child
+                && (surface->texture->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
+        result = surface_lock_renderable(surface, locked_rect, rect, flags);
+        goto done;
+    }
     if (surface->shadow) {
         /* A standalone CPU surface. The whole surface is handed over
          * regardless of `rect`: there is no upload to narrow, so a sub-rect
@@ -14329,22 +15531,31 @@ static HRESULT WINAPI surface_lock_rect(IDirect3DSurface9 *iface,
             result = D3DERR_INVALIDCALL;
             goto done;
         }
-        if ((rect && (rect->left < 0 || rect->top < 0
+        UINT api = device_compatibility_api(surface->device);
+        BOOL permissive = api == 9u && surface->pool != D3DPOOL_DEFAULT;
+        if (!d9wg_format_layout(api, surface->format, &block_width, &block_height, &block_bytes)) {
+            result = D3DERR_INVALIDCALL;
+            goto done;
+        }
+        if (!permissive && ((rect && (rect->left < 0 || rect->top < 0
                     || rect->right <= rect->left
                     || rect->bottom <= rect->top
                     || rect->right > (LONG)surface->width
                     || rect->bottom > (LONG)surface->height))
-                || !texture_format_layout(surface->format, &block_width,
-                    &block_height, &block_bytes)
                 || x >= surface->width || y >= surface->height
-                || x % block_width || y % block_height) {
+                || x % block_width || y % block_height)) {
             result = D3DERR_INVALIDCALL;
             goto done;
         }
-        locked_rect->Pitch = (INT)surface->row_pitch;
-        locked_rect->pBits = surface->shadow
-                + (y / block_height) * surface->row_pitch
-                + (x / block_width) * block_bytes;
+        UINT public_pitch = surface->row_pitch;
+        if (d9wg_cpu_texture_broken_pitch(api, surface->format)) {
+            public_pitch = surface->width;
+            block_width = block_height = block_bytes = 1u;
+        }
+        locked_rect->Pitch = (INT)public_pitch;
+        locked_rect->pBits = (void *)((uintptr_t)surface->shadow
+                + (uintptr_t)((int64_t)((LONG)y / (LONG)block_height) * public_pitch
+                    + (int64_t)((LONG)x / (LONG)block_width) * block_bytes));
         surface->locked = TRUE;
         (void)flags;
         result = D3D_OK;
@@ -14385,7 +15596,11 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
             (DWORD)(uintptr_t)surface->texture,
             (DWORD)(uintptr_t)surface->shadow, surface->level,
             (DWORD)surface->locked);
-    if (surface->shadow) {
+    if ((surface->swap_chain && !surface->texture)
+            || (surface->texture && !surface->texture_child
+                && (surface->texture->usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))) {
+        result = surface_unlock_renderable(surface);
+    } else if (surface->shadow) {
         if (!surface->locked)
             result = D3DERR_INVALIDCALL;
         else {
@@ -14393,7 +15608,14 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
             result = D3D_OK;
         }
     } else if (surface->cube_texture) {
-        result = IDirect3DCubeTexture9_UnlockRect(
+        D9CubeTexture *cube = surface->cube_texture;
+        D9TextureLevel *level = &cube->levels[surface->cube_face * cube->level_count + surface->level];
+        /* Unlike the cube interface, a surface view rejects redundant unlock.
+         * Keep an outstanding parent GetDC intact, as on the other views. */
+        if (device_compatibility_api(surface->device) == 9u && !level->locked
+                && !texture_levels_mapped(cube->levels, cube->level_count * 6u, FALSE))
+            result = D3DERR_INVALIDCALL;
+        else result = IDirect3DCubeTexture9_UnlockRect(
                 &surface->cube_texture->iface,
                 (D3DCUBEMAP_FACES)surface->cube_face, surface->level);
     } else if (!surface->texture) {
@@ -14413,21 +15635,19 @@ static HRESULT WINAPI surface_unlock_rect(IDirect3DSurface9 *iface)
  * video frame -- straight onto a D3D surface, so refusing it was a whole class
  * of 2D art silently never arriving.
  *
- * It is implemented entirely on this side of the wire, on top of the LockRect
- * path that already exists: a DIB section is the one bitmap GDI will draw into
- * *and* hand back a raw pointer for, so the surface's bits are copied into a
- * DIB for the duration of the DC and copied back on release. That is also how
- * wined3d does it, and for the same reason -- there is no way to point GDI at
- * arbitrary memory with a known layout otherwise.
+ * Mapping and uploads stay on the ordinary LockRect path. API9 uses an OS
+ * DirectDraw SYSTEMMEMORY surface to obtain the native GDI bitmap metadata;
+ * API8 retains its DIB section. Both copy actual pixels into GDI storage and
+ * back on ReleaseDC. The OS surface does no 3D rendering or presentation.
  *
  * Two bits of D3D9's contract shape this:
  *
- *   - Only the four uncompressed display formats are permitted (D3D9 returns
+ *   - Only the six uncompressed display formats are permitted (D3D9 returns
  *     D3DERR_INVALIDCALL for anything else, including every compressed and
  *     floating-point format), which is what makes a fixed DIB layout viable.
  *   - The surface is locked for as long as the DC is out, so LockRect during
- *     that window must fail. Reusing surface_lock_rect() gives that for free
- *     rather than needing a second flag to mean the same thing.
+ *     that window must fail across the entire parent texture, including other
+ *     faces and mip levels. The DC flag retains ownership until ReleaseDC.
  *
  * GDI has no notion of the alpha channel: it writes whatever it likes into the
  * top byte. For an X8 format those bits are ignored anyway; for A8R8G8B8 the
@@ -14437,12 +15657,17 @@ static BOOL surface_dc_format_bytes(D3DFORMAT format, UINT *bytes,
         WORD *bit_count)
 {
     switch (format) {
+    case D3DFMT_A1R5G5B5:
     case D3DFMT_X1R5G5B5:
     case D3DFMT_R5G6B5:
         *bytes = 2;
         /* GDI's 16-bit DIBs are 555 unless a BI_BITFIELDS mask says otherwise,
          * and 565 needs that mask. Both are two bytes per pixel either way. */
         *bit_count = 16;
+        return TRUE;
+    case D3DFMT_R8G8B8:
+        *bytes = 3;
+        *bit_count = 24;
         return TRUE;
     case D3DFMT_X8R8G8B8:
     case D3DFMT_A8R8G8B8:
@@ -14473,8 +15698,11 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
         TRACE_MARK_EXIT("Surface.GetDC", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    *hdc = NULL;
-    if (surface->dc) {
+    if (surface->dc
+            || (surface->texture && texture_levels_mapped(surface->texture->levels,
+                    surface->texture->level_count, TRUE))
+            || (surface->cube_texture && texture_levels_mapped(surface->cube_texture->levels,
+                    surface->cube_texture->level_count * 6u, TRUE))) {
         /* D3D9 allows exactly one outstanding DC per surface. */
         TRACE("FAIL GetDC object=%08lX already has a DC",
                 (DWORD)(uintptr_t)iface);
@@ -14483,7 +15711,7 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
     }
     if (!surface_dc_format_bytes(surface->format, &pixel_bytes, &bit_count)) {
         HOSTLOG_REFUSED("Surface.GetDC refused: format %08lX is not one of the "
-                "four D3D9 permits a DC on", (DWORD)surface->format);
+                "six D3D9 permits a DC on", (DWORD)surface->format);
         TRACE_MARK_EXIT("Surface.GetDC", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
@@ -14504,6 +15732,20 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
         return result;
     }
 
+    surface->dc_pitch = (UINT)locked.Pitch;
+    surface->dc_bits = locked.pBits;
+    if (device_compatibility_api(surface->device) == 9u) {
+        result = gdi_memory_open(surface->width, surface->height, surface->format,
+                locked.pBits, (UINT)locked.Pitch, g_module_instance, &surface->gdi_memory);
+        if (FAILED(result)) {
+            surface->dc_bits = NULL;
+            surface_unlock_rect(iface);
+            return result;
+        }
+        surface->dc = surface->gdi_memory->dc;
+        goto mapped_dc;
+    }
+
     ZeroMemory(&info, sizeof(info));
     info.header.biSize = sizeof(info.header);
     info.header.biWidth = (LONG)surface->width;
@@ -14512,10 +15754,10 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
     info.header.biHeight = -(LONG)surface->height;
     info.header.biPlanes = 1;
     info.header.biBitCount = bit_count;
-    if (surface->format == D3DFMT_R5G6B5) {
+    if (bit_count == 16) {
         info.header.biCompression = BI_BITFIELDS;
-        info.masks[0] = 0xF800;
-        info.masks[1] = 0x07E0;
+        info.masks[0] = surface->format == D3DFMT_R5G6B5 ? 0xF800 : 0x7C00;
+        info.masks[1] = surface->format == D3DFMT_R5G6B5 ? 0x07E0 : 0x03E0;
         info.masks[2] = 0x001F;
     } else {
         info.header.biCompression = BI_RGB;
@@ -14551,8 +15793,14 @@ static HRESULT WINAPI surface_get_dc(IDirect3DSurface9 *iface, HDC *hdc)
                 (const BYTE *)locked.pBits + row * surface->dc_pitch,
                 copy_bytes);
     }
+mapped_dc:
     surface->dc_pixel_bytes = pixel_bytes;
 
+    if (surface->texture)
+        surface->texture->levels[surface->level].dc_active = TRUE;
+    if (surface->cube_texture)
+        surface->cube_texture->levels[surface->cube_face
+                * surface->cube_texture->level_count + surface->level].dc_active = TRUE;
     *hdc = surface->dc;
     TRACE("OK GetDC object=%08lX dc=%08lX %lux%lu format=%08lX",
             (DWORD)(uintptr_t)iface, (DWORD)(uintptr_t)surface->dc,
@@ -14566,6 +15814,7 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
     D9Surface *surface = surface_from_iface(iface);
     UINT row;
     UINT copy_bytes;
+    HRESULT result = D3D_OK;
 
     TRACE_MARK_ENTER("Surface.ReleaseDC");
     if (!surface->dc || hdc != surface->dc) {
@@ -14578,6 +15827,10 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
         return D3DERR_INVALIDCALL;
     }
 
+    if (surface->gdi_memory) {
+        result = gdi_memory_close(surface->gdi_memory, surface->dc_bits, surface->dc_pitch);
+        surface->gdi_memory = NULL;
+    } else {
     /* Anything GDI still has queued has to land in the DIB before it is read
      * back, or the last drawing operation is the one that goes missing. */
     GdiFlush();
@@ -14591,6 +15844,12 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
     SelectObject(surface->dc, surface->dc_previous);
     DeleteDC(surface->dc);
     DeleteObject(surface->dib);
+    }
+    if (surface->texture)
+        surface->texture->levels[surface->level].dc_active = FALSE;
+    if (surface->cube_texture)
+        surface->cube_texture->levels[surface->cube_face
+                * surface->cube_texture->level_count + surface->level].dc_active = FALSE;
     surface->dc = NULL;
     surface->dc_previous = NULL;
     surface->dib = NULL;
@@ -14601,7 +15860,8 @@ static HRESULT WINAPI surface_release_dc(IDirect3DSurface9 *iface, HDC hdc)
      * through exactly the path an ordinary LockRect write would. */
     TRACE("OK ReleaseDC object=%08lX", (DWORD)(uintptr_t)iface);
     TRACE_MARK_EXIT("Surface.ReleaseDC", D3D_OK, NULL);
-    return surface_unlock_rect(iface);
+    HRESULT unlocked = surface_unlock_rect(iface);
+    return FAILED(result) ? result : unlocked;
 }
 
 /* ---- IDirect3DSwapChain9: the device's implicit primary chain ---- */
@@ -14626,15 +15886,40 @@ static HRESULT WINAPI swap_chain_query_interface(IDirect3DSwapChain9 *iface,
     return S_OK;
 }
 
+static void swap_chain_destroy_storage(D9SwapChain *chain)
+{
+    D9Device *device = chain->device;
+    D9Surface *surface = surface_from_iface(chain->back_buffer);
+    D9SwapChain **link = &device->additional_swap_chains;
+    D9WGDestroySwapChain destroy;
+
+    while (*link && *link != chain)
+        link = &(*link)->next_device_chain;
+    if (*link)
+        *link = chain->next_device_chain;
+    destroy.device_handle = device->handle;
+    destroy.swap_chain_handle = chain->handle;
+    emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy, sizeof(destroy));
+    chain->back_buffer = NULL;
+    swap_chain_destroy_cached_buffers(chain);
+    surface->swap_chain = NULL;
+    /* Public pins belong to the actual chain/surface Release caller;
+     * binding-only destruction runs under the pending device pin. */
+    surface_destroy_storage(surface);
+    core_view_retire8(chain);
+    HeapFree(GetProcessHeap(), 0, chain);
+}
+
 static ULONG WINAPI swap_chain_add_ref(IDirect3DSwapChain9 *iface)
 {
     D9SwapChain *swap_chain = swap_chain_from_iface(iface);
     ULONG refs;
 
     TRACE_MARK_ENTER("SwapChain.AddRef");
-    /* A live swap-chain pointer must keep its embedded storage alive. */
-    IDirect3DDevice9_AddRef(&swap_chain->device->iface);
     refs = (ULONG)InterlockedIncrement(&swap_chain->refcount);
+    /* Public zero/nonzero edges pin the device for both chain kinds. */
+    if (refs == 1)
+        device_child_add_ref(swap_chain->device);
     TRACE("CALL SwapChain.AddRef object=%08lX refs=%lu device_refs=%ld",
             (DWORD)(uintptr_t)iface, refs,
             InterlockedCompareExchange(&swap_chain->device->refcount, 0, 0));
@@ -14646,75 +15931,82 @@ static ULONG WINAPI swap_chain_release(IDirect3DSwapChain9 *iface)
 {
     D9SwapChain *swap_chain = swap_chain_from_iface(iface);
     D9Device *device = swap_chain->device;
-    ULONG device_refs;
     ULONG refs;
 
     TRACE_MARK_ENTER("SwapChain.Release");
+    if (!InterlockedCompareExchange(&swap_chain->refcount, 0, 0))
+        return 0;
     if (swap_chain->handle) {
-        /* An additional chain is an ordinary heap object with its own
-         * lifetime, unlike the implicit one, which is a member of the device
-         * and whose refcount is really the device's. */
         refs = (ULONG)InterlockedDecrement(&swap_chain->refcount);
         if (!refs) {
-            D9SwapChain **link = &device->additional_swap_chains;
-            D9WGDestroySwapChain destroy;
-            while (*link && *link != swap_chain)
-                link = &(*link)->next_device_chain;
-            if (*link) *link = swap_chain->next_device_chain;
-            destroy.device_handle = device->handle;
-            destroy.swap_chain_handle = swap_chain->handle;
-            emit_command(D9WG_OP_DESTROY_SWAP_CHAIN, &destroy,
-                    sizeof(destroy));
-            if (swap_chain->back_buffer)
-                IDirect3DSurface9_Release(swap_chain->back_buffer);
-            HeapFree(GetProcessHeap(), 0, swap_chain);
+            if (!swap_chain_buffers_referenced(swap_chain))
+                swap_chain_destroy_storage(swap_chain);
             device_child_release(device);
         }
-        TRACE_MARK_EXIT("SwapChain.Release", (HRESULT)refs, iface);
+        TRACE_MARK_EXIT("SwapChain.Release", (HRESULT)refs, NULL);
         return refs;
     }
+    /* The cached implicit chain remains usable at public count zero. */
+    if (!InterlockedCompareExchange(&swap_chain->refcount, 0, 0))
+        return 0;
     refs = (ULONG)InterlockedDecrement(&swap_chain->refcount);
     TRACE("CALL SwapChain.Release object=%08lX refs=%lu device_refs_before=%ld",
             (DWORD)(uintptr_t)iface, refs,
             InterlockedCompareExchange(&device->refcount, 0, 0));
     /* This can free device (and therefore swap_chain); do not touch either
      * object after the call. */
-    device_refs = IDirect3DDevice9_Release(&device->iface);
+    if (!refs)
+        device_child_release(device);
     TRACE_MARK_EXIT("SwapChain.Release", (HRESULT)refs, NULL);
-    TRACE("LEAVE SwapChain.Release object=%08lX refs=%lu device_refs=%lu",
-            (DWORD)(uintptr_t)iface, refs, device_refs);
-    (void)device_refs;
     return refs;
 }
 
-static HRESULT WINAPI swap_chain_present(IDirect3DSwapChain9 *iface,
-        const RECT *src_rect, const RECT *dst_rect, HWND override_window,
-        const RGNDATA *dirty_region, DWORD flags)
+static HRESULT WINAPI swap_chain_present(IDirect3DSwapChain9* iface,
+    const RECT* src_rect, const RECT* dst_rect, HWND override_window,
+    const RGNDATA* dirty_region, DWORD flags)
 {
-    D9SwapChain *swap_chain = swap_chain_from_iface(iface);
+    D9SwapChain* swap_chain = swap_chain_from_iface(iface);
+    D9Device* device = swap_chain->device;
+    D9WGPresentClock* clock = swap_chain->handle ? &swap_chain->present_clock : &device->present_clock;
+    D9WGPresentPacing* pacing = swap_chain->handle ? &swap_chain->present_pacing : &device->present_pacing;
+    DWORD interval = swap_chain->handle ? swap_chain->present.PresentationInterval : device->present.PresentationInterval;
+    BOOL nonblocking = (flags & D3DPRESENT_DONOTWAIT) != 0;
+    D9WGPresentPacing candidate = *pacing;
     HRESULT result;
 
+    result = d9wg_reset_present_result(&device->reset_state);
+    if (result != D3D_OK)
+        return TRACE_REFUSE(result);
     TRACE_MARK_ENTER("SwapChain.Present");
     TRACE("CALL SwapChain.Present object=%08lX flags=%08lX override=%08lX",
-            (DWORD)(uintptr_t)iface, flags,
-            (DWORD)(uintptr_t)override_window);
-    (void)flags;
-    (void)src_rect;
-    (void)dst_rect;
-    (void)dirty_region;
-    /* The bridge presents synchronously, so DONOTWAIT cannot make it return
-     * WASSTILLDRAWING.  LINEAR_CONTENT does not change the guest-side work;
-     * both flags can otherwise use the device's normal presentation path. */
-    if (swap_chain->handle) {
-        result = emit_present_swap_chain_and_flush(swap_chain, override_window)
-                ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+        (DWORD)(uintptr_t)iface, flags, (DWORD)(uintptr_t)override_window);
+    /* LINEAR_CONTENT is accepted but has no effect without the corresponding
+     * caps bit. DONOTWAIT never sleeps or emits a frame while its virtual
+     * deadline is pending. Prepare first, publish only after successful emit. */
+    if (nonblocking && !d9wg_prepare_present(clock, &candidate, interval, device->display_mode.RefreshRate)) {
+        result = D3DERR_WASSTILLDRAWING;
+    } else if (swap_chain->handle || nonblocking) {
+        result = swap_chain_prepare_buffers(swap_chain);
+        if (FAILED(result)) return result;
+        BOOL ok = swap_chain->handle
+            ? emit_present_swap_chain_and_flush(swap_chain, override_window)
+            : emit_present_and_flush(device, override_window);
+        result = ok ? D3D_OK : D3DERR_DRIVERINTERNALERROR;
+        if (ok) {
+            result = swap_chain_advance_buffers(swap_chain);
+            if (FAILED(result)) return result;
+            if (nonblocking)
+                *pacing = candidate;
+            else
+                d9wg_throttle_present(clock, pacing, interval, device->display_mode.RefreshRate);
+        }
     } else {
-        result = device_present(&swap_chain->device->iface, src_rect, dst_rect,
-                override_window, dirty_region);
+        result = device_present(&device->iface, src_rect, dst_rect,
+            override_window, dirty_region);
     }
     TRACE("%s SwapChain.Present object=%08lX -> %08lX",
-            SUCCEEDED(result) ? "OK" : "FAIL", (DWORD)(uintptr_t)iface,
-            (DWORD)result);
+        SUCCEEDED(result) ? "OK" : "FAIL", (DWORD)(uintptr_t)iface,
+        (DWORD)result);
     TRACE_MARK_EXIT("SwapChain.Present", result, NULL);
     return result;
 }
@@ -14752,19 +16044,18 @@ static HRESULT WINAPI swap_chain_get_back_buffer(IDirect3DSwapChain9 *iface,
     HRESULT result;
 
     TRACE_MARK_ENTER("SwapChain.GetBackBuffer");
-    if (swap_chain->handle) {
-        /* An additional chain owns a real surface rather than borrowing the
-         * device's implicit one. */
-        if (!out) {
-            result = D3DERR_INVALIDCALL;
-        } else if (index || type != D3DBACKBUFFER_TYPE_MONO) {
-            *out = NULL;
-            result = D3DERR_INVALIDCALL;
-        } else {
-            *out = swap_chain->back_buffer;
-            IDirect3DSurface9_AddRef(*out);
-            result = D3D_OK;
-        }
+    /* Unlike Device.GetBackBuffer, a bad chain index preserves the output.
+     * Native ignores the stereo selector for both chain kinds. */
+    UINT count = swap_chain->handle ? swap_chain->present.BackBufferCount
+            : swap_chain->device->present.BackBufferCount;
+    if (!out || index >= count) {
+        result = D3DERR_INVALIDCALL;
+    } else if (index) {
+        result = swap_chain_cached_buffer(swap_chain, index, out);
+    } else if (swap_chain->handle) {
+        *out = swap_chain->back_buffer;
+        IDirect3DSurface9_AddRef(*out);
+        result = D3D_OK;
     } else {
         result = device_get_back_buffer(&swap_chain->device->iface, 0, index,
                 type, out);
@@ -14792,24 +16083,26 @@ static HRESULT WINAPI swap_chain_get_raster_status(IDirect3DSwapChain9 *iface,
     return result;
 }
 
-static HRESULT WINAPI swap_chain_get_display_mode(IDirect3DSwapChain9 *iface,
-        D3DDISPLAYMODE *mode)
+static HRESULT WINAPI swap_chain_get_display_mode(IDirect3DSwapChain9* iface,
+    D3DDISPLAYMODE* mode)
 {
-    D9SwapChain *swap_chain = swap_chain_from_iface(iface);
+    D9SwapChain* swap_chain = swap_chain_from_iface(iface);
 
     TRACE_MARK_ENTER("SwapChain.GetDisplayMode");
     if (!mode) {
         TRACE("FAIL SwapChain.GetDisplayMode object=%08lX missing output -> %08lX",
-                (DWORD)(uintptr_t)iface, (DWORD)D3DERR_INVALIDCALL);
+            (DWORD)(uintptr_t)iface, (DWORD)D3DERR_INVALIDCALL);
         TRACE_MARK_EXIT("SwapChain.GetDisplayMode", D3DERR_INVALIDCALL, NULL);
         return D3DERR_INVALIDCALL;
     }
-    *mode = swap_chain->device->display_mode;
-    TRACE("OK SwapChain.GetDisplayMode object=%08lX %lux%lu fmt=%08lX refresh=%lu",
+    HRESULT result = d3d_get_adapter_display_mode(&swap_chain->device->parent->iface,
+        swap_chain->device->creation.AdapterOrdinal, mode);
+    if (SUCCEEDED(result))
+        TRACE("OK SwapChain.GetDisplayMode object=%08lX %lux%lu fmt=%08lX refresh=%lu",
             (DWORD)(uintptr_t)iface, mode->Width, mode->Height,
             (DWORD)mode->Format, mode->RefreshRate);
-    TRACE_MARK_EXIT("SwapChain.GetDisplayMode", D3D_OK, mode);
-    return D3D_OK;
+    TRACE_MARK_EXIT("SwapChain.GetDisplayMode", result, mode);
+    return result;
 }
 
 static HRESULT WINAPI swap_chain_get_device(IDirect3DSwapChain9 *iface,
@@ -15136,7 +16429,7 @@ static IDirect3DSurface9Vtbl g_surface_vtbl = {
 #define D3D_SDK_VERSION_9C      32u
 #define D3D_SDK_VERSION_DEBUG_BIT 0x80000000u
 
-IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
+static IDirect3D9 *d3d_create_root(UINT sdk_version, BOOL publish_hello, UINT compatibility_api)
 {
     D9Direct3D *d3d;
     BOOL transport_ready;
@@ -15170,10 +16463,1957 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
     }
     d3d->iface.lpVtbl = &g_d3d_vtbl;
     d3d->refcount = 1;
-    emit_hello_once();
+    d3d->compatibility_api = compatibility_api;
+    if (publish_hello) emit_hello_once();
     TRACE("OK Direct3DCreate9 object=%08lX", (DWORD)(uintptr_t)&d3d->iface);
     return &d3d->iface;
 }
+
+IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
+{
+    return d3d_create_root(sdk_version, TRUE, 9);
+}
+
+#ifdef D9WG_STATIC_CORE
+/* The D3D8 wrapper publishes its own compatibility profile. Creating its
+ * backend factory must not insert a D3D9 HELLO into the shared stream. */
+/* D3D8 retains its Shader1.x policy in the adapter. Query the shared base
+ * capabilities without a D3D9-only diagnostic/permissive profile. */
+void WINAPI d9wg_d3d9_core_caps8(void *caps8)
+{
+    _Static_assert(__builtin_offsetof(D3DCAPS9, DevCaps2) == D9WG_D3D8_CAPS_BYTES,
+            "D3D9 shared caps prefix size");
+    D3DCAPS9 caps;
+    fill_caps_for_profile(&caps, 0, FALSE);
+    if (caps.RasterCaps & D3DPRASTERCAPS_DEPTHBIAS)
+        caps.RasterCaps |= D9WG_D3D8_RASTER_ZBIAS;
+    CopyMemory(caps8, &caps, D9WG_D3D8_CAPS_BYTES);
+}
+
+void WINAPI d9wg_d3d9_core_hello8(void)
+{
+    if (InterlockedCompareExchange((LONG *)&g_hello_emitted, TRUE, FALSE)) return;
+    D9WGHello hello = {32, 0, g_session_id_low, g_session_id_high};
+    emit_command(D9WG_OP_HELLO, &hello, sizeof(hello));
+}
+
+IDirect3D9 *WINAPI d9wg_d3d9_core_create8(void)
+{
+    return d3d_create_root(D3D_SDK_VERSION_9C, FALSE, 8);
+}
+
+D9WGProcess *WINAPI d9wg_d3d9_core_process(void)
+{
+    return g_process;
+}
+
+ULONG WINAPI d9wg_d3d9_core_root_release(IDirect3D9 *factory)
+{
+    return IDirect3D9_Release(factory);
+}
+
+UINT WINAPI d9wg_d3d9_core_adapter_count(IDirect3D9 *factory)
+{
+    return IDirect3D9_GetAdapterCount(factory);
+}
+
+HMONITOR WINAPI d9wg_d3d9_core_adapter_monitor(IDirect3D9 *factory, UINT adapter)
+{
+    return IDirect3D9_GetAdapterMonitor(factory, adapter);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_register_software(IDirect3D9 *factory, void *initialize)
+{
+    return IDirect3D9_RegisterSoftwareDevice(factory, initialize);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_adapter_identifier8(IDirect3D9 *factory,
+        UINT adapter, DWORD flags, void *out, UINT bytes)
+{
+    _Static_assert(__builtin_offsetof(D3DADAPTER_IDENTIFIER9, DriverVersion) == 1056,
+            "D3D9 adapter identity version offset");
+    _Static_assert(sizeof(D3DADAPTER_IDENTIFIER9) == 1100, "D3D9 identity size");
+    D3DADAPTER_IDENTIFIER9 identifier;
+    HRESULT result;
+    if (!out || bytes != D9WG_D3D8_IDENTIFIER_BYTES) return D3DERR_INVALIDCALL;
+    result = IDirect3D9_GetAdapterIdentifier(factory, adapter, flags, &identifier);
+    if (FAILED(result)) return result;
+    CopyMemory(out, identifier.Driver, 1024);
+    CopyMemory((BYTE *)out + 1024, &identifier.DriverVersion,
+            D9WG_D3D8_IDENTIFIER_BYTES - 1024);
+    return result;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_adapter_display_mode(IDirect3D9 *factory,
+        UINT adapter, void *out)
+{
+    _Static_assert(sizeof(D3DDISPLAYMODE) == 16, "shared adapter mode size");
+    D3DDISPLAYMODE mode;
+    HRESULT result;
+    if (!out) return D3DERR_INVALIDCALL;
+    result = IDirect3D9_GetAdapterDisplayMode(factory, adapter, &mode);
+    if (SUCCEEDED(result)) CopyMemory(out, &mode, sizeof(mode));
+    return result;
+}
+
+UINT WINAPI d9wg_d3d9_core_adapter_mode_count8(IDirect3D9 *factory, UINT adapter)
+{
+    return IDirect3D9_GetAdapterModeCount(factory, adapter, D3DFMT_UNKNOWN);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_enum_adapter_modes8(IDirect3D9 *factory,
+        UINT adapter, UINT index, void *out)
+{
+    _Static_assert(sizeof(D3DDISPLAYMODE) == 16, "shared enumerated mode size");
+    D3DDISPLAYMODE mode;
+    HRESULT result;
+    if (!out) return D3DERR_INVALIDCALL;
+    result = IDirect3D9_EnumAdapterModes(factory, adapter, D3DFMT_UNKNOWN, index, &mode);
+    if (SUCCEEDED(result)) CopyMemory(out, &mode, sizeof(mode));
+    return result;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_type(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, UINT backbuffer, BOOL windowed)
+{
+    return IDirect3D9_CheckDeviceType(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)display, (D3DFORMAT)backbuffer, windowed);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_multisample8(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT format, BOOL windowed, UINT multisample)
+{
+    return IDirect3D9_CheckDeviceMultiSampleType(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)format, windowed, (D3DMULTISAMPLE_TYPE)multisample, NULL);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_depth(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, UINT render, UINT depth)
+{
+    return IDirect3D9_CheckDepthStencilMatch(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)display, (D3DFORMAT)render, (D3DFORMAT)depth);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_check_format8(IDirect3D9 *factory, UINT adapter,
+        UINT type, UINT display, DWORD usage, UINT resource_type, UINT format)
+{
+    return IDirect3D9_CheckDeviceFormat(factory, adapter, (D3DDEVTYPE)type,
+            (D3DFORMAT)display, usage, (D3DRESOURCETYPE)resource_type, (D3DFORMAT)format);
+}
+
+/* This is a layout conversion for the API8 compatibility path. Version8
+ * swap/interval/flag values stay intact; it is not ordinary9 CreateDevice
+ * validation. All input is staged before output, including in-place callers. */
+static void parameters8_to9(D3DPRESENT_PARAMETERS *requested, const void *requested8)
+{
+    CopyMemory(requested, requested8, 20);
+    requested->MultiSampleQuality = 0;
+    CopyMemory((BYTE *)requested + 24, (const BYTE *)requested8 + 20,
+            D9WG_D3D8_PARAMETERS_BYTES - 20);
+}
+
+void WINAPI d9wg_d3d9_core_parameters_effective8(void *out8, const void *requested8,
+        UINT width, UINT height, UINT format, HWND window)
+{
+    _Static_assert(sizeof(D3DPRESENT_PARAMETERS) == 56, "D3D9 parameter size");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, MultiSampleQuality) == 20,
+            "D3D9 quality offset");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, SwapEffect) == 24,
+            "D3D9 parameter tail offset");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, hDeviceWindow) == 28,
+            "D3D9 parameter window offset");
+    _Static_assert(__builtin_offsetof(D3DPRESENT_PARAMETERS, PresentationInterval) == 52,
+            "D3D9 parameter interval offset");
+    D3DPRESENT_PARAMETERS requested, effective;
+    parameters8_to9(&requested, requested8);
+    d9wg_present_parameters_effective(&effective, &requested,
+            width, height, format, window);
+    CopyMemory(out8, &effective, 20);
+    CopyMemory((BYTE *)out8 + 20, (const BYTE *)&effective + 24,
+            D9WG_D3D8_PARAMETERS_BYTES - 20);
+}
+
+/* Private constructor only. The embedding8 wrapper owns its public caller
+ * publication,identity and remaining methods. Never mutates the52-byte input. */
+HRESULT WINAPI d9wg_d3d9_core_create_device8(IDirect3D9 *factory, UINT adapter,
+        UINT type, HWND focus, DWORD behavior, const void *parameters8,
+        IDirect3DDevice9 **out)
+{
+    D3DPRESENT_PARAMETERS parameters;
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!factory || !parameters8 || d3d_from_iface(factory)->compatibility_api != 8)
+        return D3DERR_INVALIDCALL;
+    parameters8_to9(&parameters, parameters8);
+    return IDirect3D9_CreateDevice(factory, adapter, (D3DDEVTYPE)type,
+            focus, behavior, &parameters, out);
+}
+
+/* API8 wrapper performs its own public count-only publication after success.
+ * NULL parameters still enter Reset so its cooperative state becomes pending. */
+HRESULT WINAPI d9wg_d3d9_core_reset8(IDirect3DDevice9 *iface, const void *parameters8)
+{
+    D3DPRESENT_PARAMETERS parameters;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8)
+        return D3DERR_INVALIDCALL;
+    if (!parameters8)
+        return IDirect3DDevice9_Reset(iface, NULL);
+    parameters8_to9(&parameters, parameters8);
+    return IDirect3DDevice9_Reset(iface, &parameters);
+}
+
+/* Construction/metadata bridge. Surface locks and API8 public wrappers are
+ * separate adapters; returned object is a real private IDirect3DSwapChain9. */
+HRESULT WINAPI d9wg_d3d9_core_additional8(IDirect3DDevice9 *iface,
+        const void *parameters8, IDirect3DSwapChain9 **out)
+{
+    D3DPRESENT_PARAMETERS parameters;
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || !parameters8
+            || device_compatibility_api(device_from_iface(iface)) != 8)
+        return D3DERR_INVALIDCALL;
+    parameters8_to9(&parameters, parameters8);
+    return IDirect3DDevice9_CreateAdditionalSwapChain(iface, &parameters, out);
+}
+
+/* Public8 CreateRenderTarget validates samples/lockability before clearing
+ * the caller's output, then applies its texture constructor's4096 ceiling.
+ * Keep that adapter policy outside the ordinary9 constructor and reuse its
+ * actual target storage, lock permission and lifetime implementation. */
+HRESULT WINAPI d9wg_d3d9_core_render_target8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT format, UINT multisample, BOOL lockable,
+        IDirect3DSurface9 **out)
+{
+    if (!out || format == D3DFMT_UNKNOWN
+            || (lockable && multisample != D3DMULTISAMPLE_NONE))
+        return D3DERR_INVALIDCALL;
+    if (multisample != D3DMULTISAMPLE_NONE && multisample != D3DMULTISAMPLE_4_SAMPLES)
+        return multisample >= D3DMULTISAMPLE_2_SAMPLES && multisample <= D3DMULTISAMPLE_16_SAMPLES
+                ? D3DERR_NOTAVAILABLE : D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8
+            || !width || !height || width > 4096 || height > 4096
+            || !supported_render_target_format8((D3DFORMAT)format))
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateRenderTarget(iface, width, height,
+            (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
+            lockable, out, NULL);
+}
+
+/* API8 depth creation clears output on unsupported formats. Invalid sample
+ * types retain the earlier guard. Its8192 size bound matches create_target_texture.
+ * API8 has no discard argument; preserve depth/stencil across target binds. */
+HRESULT WINAPI d9wg_d3d9_core_depth_surface8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT format, UINT multisample,
+        IDirect3DSurface9 **out)
+{
+    if (!out || format == D3DFMT_UNKNOWN || (multisample != D3DMULTISAMPLE_NONE
+                && multisample != D3DMULTISAMPLE_4_SAMPLES))
+        return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8
+            || !supported_depth_stencil_format8((D3DFORMAT)format))
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateDepthStencilSurface(iface, width, height,
+            (D3DFORMAT)format, (D3DMULTISAMPLE_TYPE)multisample, 0,
+            FALSE, out, NULL);
+}
+
+/* API8 front readback binds the shared algorithm to actual core9 objects.
+ * Backbuffer/standalone storage belongs to its cached surface; texture views
+ * use their parent's level shadow. No temporary COM resource is introduced. */
+static BYTE *front_pixels8(D9Surface *surface, UINT *pitch)
+{
+    *pitch = 0;
+    D9TextureLevel *level = surface_texture_level(surface);
+    if (level) {
+        if (!level->shadow) {
+            if (!level->byte_count && !d9wg_texture_level_layout(8u,
+                    surface->format, level->width, level->height,
+                    &level->row_pitch, &level->row_count, &level->byte_count))
+                return NULL;
+            level->shadow = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                    level->byte_count);
+        }
+        *pitch = level->row_pitch;
+        return level->shadow;
+    }
+    if (!surface->shadow) {
+        UINT rows, bytes, row_pitch;
+        if (!d9wg_texture_level_layout(8u, surface->format, surface->width,
+                surface->height, &row_pitch, &rows, &bytes)) return NULL;
+        surface->shadow = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+        if (!surface->shadow) return NULL;
+        surface->row_pitch = row_pitch;
+        surface->byte_count = bytes;
+    }
+    *pitch = surface->row_pitch;
+    return surface->shadow;
+}
+
+static BOOL front_layout8(D3DFORMAT format, UINT *bw, UINT *bh, UINT *bytes)
+{
+    return d9wg_format_layout(8u, format, bw, bh, bytes);
+}
+
+static HRESULT readback_front8(D9Surface *surface, D3DFORMAT format,
+        BYTE *pixels, UINT pitch, UINT bytes)
+{
+    D9WGReadbackSurface request = {0};
+    D9WGReadbackDiagnostic detail;
+    UINT bw, bh, pixel_bytes;
+    if (!front_layout8(format, &bw, &bh, &pixel_bytes) || bw != 1 || bh != 1)
+        return D3DERR_INVALIDCALL;
+    request.device_handle = surface->device->handle;
+    request.texture_handle = surface->texture ? surface->texture->handle : 0;
+    request.level = surface->level;
+    request.format = format;
+    request.width = surface->width;
+    request.height = surface->height;
+    request.destination_pitch = pitch;
+    int result = d9wg_surface_readback(g_process, &request,
+            surface->width * pixel_bytes, surface->height, pixels, bytes,
+            submit_readback_batch_locked, &detail);
+    return !result ? D3D_OK : result == D9WG_READBACK_INVALID
+            ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR;
+}
+
+static BOOL upload_front8(D9Surface *surface, D3DFORMAT format,
+        const RECT *area, const BYTE *pixels, UINT pitch, UINT pixel_bytes)
+{
+    if (surface->texture) {
+        if (surface->texture->pool == D3DPOOL_SYSTEMMEM
+                && !texture_mark_dirty(surface->texture, surface->level, area)) return FALSE;
+        return emit_texture_update(surface->texture, surface->level, area);
+    }
+    if (surface->cube_texture)
+        return emit_cube_texture_update(surface->cube_texture,
+                surface->cube_face, surface->level, area);
+    if (surface->swap_chain) {
+        const D9WGSurfaceLockRect r = {area->left, area->top, area->right, area->bottom};
+        return d9wg_renderable_upload(surface->device->handle, allocate_handle(),
+                format, 0, 0, 0, &r, pixels + area->top * pitch
+                    + area->left * pixel_bytes, pitch, pixel_bytes,
+                emit_command, emit_texture_rows);
+    }
+    return TRUE;
+}
+
+#define D9WG_FRONT_DEVICE D9Device
+#define D9WG_FRONT_IFACE IDirect3DSurface9
+#define D9WG_FRONT_SURFACE D9Surface
+#define D9WG_FRONT_LEVEL D9TextureLevel
+#define D9WG_FRONT_DESC D3DSURFACE_DESC
+#define D9WG_FRONT_TRACE TRACE_REFUSE
+#define D9WG_FRONT_OWNER(s) ((s)->device)
+#define D9WG_FRONT_GET_DESC surface_get_desc
+#define D9WG_FRONT_LAYOUT front_layout8
+#define D9WG_FRONT_PIXELS front_pixels8
+#define D9WG_FRONT_READ readback_front8
+#define D9WG_FRONT_UPLOAD upload_front8
+#define D9WG_FRONT_DEPTH(s) ((s)->auto_depth_stencil || ((s)->texture && ((s)->texture->usage & D3DUSAGE_DEPTHSTENCIL)))
+#define D9WG_FRONT_SOURCE(d,out) IDirect3DDevice9_GetBackBuffer(&(d)->iface, 0, 0, D3DBACKBUFFER_TYPE_MONO, (out))
+#define D9WG_FRONT_SOURCE_BYTES(s,desc) ((s)->byte_count)
+#define D9WG_FRONT_DIRTY(level,value) ((level)->shadow_valid = !(value))
+#define D9WG_FRONT_RELEASE IDirect3DSurface9_Release
+#include "../runtime/d9wg_front_buffer_bridge8.h"
+
+HRESULT WINAPI d9wg_d3d9_core_get_front_buffer8(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *destination)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return d9wg_front_buffer8_common(device_from_iface(iface), destination);
+}
+
+/* CopyRects can address a texture mip, a cube face or the implicit buffer.
+ * CPU images deliberately have no GPU identity. */
+static BOOL copy_location8(D9Surface *surface, uint32_t *handle,
+        uint32_t *level, uint32_t *face)
+{
+    *handle = *level = *face = 0;
+    if (surface->texture) {
+        *handle = surface->texture->handle;
+        *level = surface->level;
+        return TRUE;
+    }
+    if (surface->cube_texture) {
+        *handle = surface->cube_texture->handle;
+        *level = surface->level;
+        *face = surface->cube_face;
+        return TRUE;
+    }
+    return surface->swap_chain != NULL;
+}
+
+static HRESULT refresh_copy8(D9Surface *surface)
+{
+    D3DSURFACE_DESC desc;
+    D9TextureLevel *level = surface_texture_level(surface);
+    if (FAILED(surface_get_desc(&surface->iface, &desc)))
+        return D3DERR_INVALIDCALL;
+    if (!surface->swap_chain && (desc.Pool != D3DPOOL_DEFAULT
+            || (!(desc.Usage & D3DUSAGE_RENDERTARGET)
+                && !(level && !level->shadow_valid))))
+        return D3D_OK;
+    UINT pitch;
+    BYTE *pixels = front_pixels8(surface, &pitch);
+    D9WGReadbackSurface request = {0};
+    D9WGReadbackDiagnostic detail;
+    UINT bw, bh, pixel_bytes;
+    if (!pixels || !copy_location8(surface, &request.texture_handle,
+                &request.level, &request.face)
+            || !front_layout8(desc.Format, &bw, &bh, &pixel_bytes)
+            || bw != 1 || bh != 1)
+        return D3DERR_INVALIDCALL;
+    request.device_handle = surface->device->handle;
+    request.format = desc.Format;
+    request.width = desc.Width;
+    request.height = desc.Height;
+    request.destination_pitch = pitch;
+    int result = d9wg_surface_readback(g_process, &request,
+            desc.Width * pixel_bytes, desc.Height, pixels,
+            level ? level->byte_count : surface->byte_count,
+            submit_readback_batch_locked, &detail);
+    if (!result && level) level->shadow_valid = TRUE;
+    return !result ? D3D_OK : result == D9WG_READBACK_INVALID
+            ? D3DERR_INVALIDCALL : D3DERR_DRIVERINTERNALERROR;
+}
+
+#define D9WG_RECT_DEVICE D9Device
+#define D9WG_RECT_SURFACE D9Surface
+#define D9WG_RECT_LEVEL D9TextureLevel
+#define D9WG_RECT_IFACE IDirect3DSurface9
+#define D9WG_RECT_DESC D3DSURFACE_DESC
+#define D9WG_RECT_TRACE TRACE_REFUSE
+#define D9WG_RECT_OWNER(s) ((s)->device)
+#define D9WG_RECT_GET_DESC surface_get_desc
+#define D9WG_RECT_LAYOUT front_layout8
+#define D9WG_RECT_LOCATION copy_location8
+#define D9WG_RECT_REFRESH refresh_copy8
+#define D9WG_RECT_PIXELS front_pixels8
+#define D9WG_RECT_UPLOAD upload_front8
+#define D9WG_RECT_DEPTH(s) ((s)->auto_depth_stencil)
+#define D9WG_RECT_DIRTY(level,value) ((level)->shadow_valid = !(value))
+#include "../runtime/d9wg_copy_rects_bridge8.h"
+
+HRESULT WINAPI d9wg_d3d9_core_copy_rects8(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *source, const RECT *rects, UINT count,
+        IDirect3DSurface9 *destination, const POINT *points)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return d9wg_copy_rects8_common(device_from_iface(iface), source,
+            rects, count, destination, points);
+}
+
+/* Shared mip/cube/volume copy machinery chooses API8 lock/raw-volume rules
+ * from the owning device. Ownership, type and pool validation stay common. */
+HRESULT WINAPI d9wg_d3d9_core_update_texture8(IDirect3DDevice9 *iface,
+        IDirect3DBaseTexture9 *source, IDirect3DBaseTexture9 *destination)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_UpdateTexture(iface, source, destination);
+}
+
+/* These entries translate backend state only. The public8 wrapper retains
+ * raw API8 Get/state-block bookkeeping before delegating to these methods. */
+HRESULT WINAPI d9wg_d3d9_core_set_render_state8(IDirect3DDevice9 *iface,
+        UINT state, DWORD value)
+{
+    D9WGState8 translated;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || state >= D9WG_RENDER_STATES8)
+        return D3DERR_INVALIDCALL;
+    translated = d9wg_render_state8(state, value);
+    if (translated.kind == D9WG_STATE8_DROP) return D3D_OK;
+    return IDirect3DDevice9_SetRenderState(iface,
+            (D3DRENDERSTATETYPE)translated.state, translated.value);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_set_texture_stage_state8(IDirect3DDevice9 *iface,
+        UINT stage, UINT state, DWORD value)
+{
+    D9WGState8 translated;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || stage >= D9WG_TEXTURE_STAGES8
+            || state >= D9WG_TEXTURE_STAGE_STATES8)
+        return D3DERR_INVALIDCALL;
+    translated = d9wg_texture_stage_state8(state, value);
+    if (translated.kind == D9WG_STATE8_SAMPLER)
+        return IDirect3DDevice9_SetSamplerState(iface, stage,
+                (D3DSAMPLERSTATETYPE)translated.state, translated.value);
+    return IDirect3DDevice9_SetTextureStageState(iface, stage,
+            (D3DTEXTURESTAGESTATETYPE)translated.state, translated.value);
+}
+
+/* Buffer creation/lock/descriptor contracts already agree between the
+ * legacy8 andordinary9 implementations. Keep the profile boundary explicit
+ * and reuse the actual core objects;public8 interface wrappers follow later. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_buffer8(IDirect3DDevice9 *iface,
+        UINT length, DWORD usage, DWORD fvf, UINT pool,
+        IDirect3DVertexBuffer9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateVertexBuffer(iface, length, usage, fvf,
+            (D3DPOOL)pool, out, NULL);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_index_buffer8(IDirect3DDevice9 *iface,
+        UINT length, DWORD usage, UINT format, UINT pool,
+        IDirect3DIndexBuffer9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreateIndexBuffer(iface, length, usage,
+            (D3DFORMAT)format, (D3DPOOL)pool, out, NULL);
+}
+
+/* Private API8 volume construction and exact32-byte SDK8 descriptor. */
+HRESULT WINAPI d9wg_d3d9_core_volume_texture8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT depth, UINT levels, DWORD usage,
+        UINT format, UINT pool, IDirect3DVolumeTexture9 **out)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u) {
+        if (out) *out = NULL;
+        return D3DERR_INVALIDCALL;
+    }
+    return create_volume_texture_object(device_from_iface(iface), width,
+            height, depth, levels, usage, (D3DFORMAT)format, (D3DPOOL)pool, 8u, out);
+}
+
+static HRESULT core_pack_volume_desc8(const D3DVOLUME_DESC *desc, void *out)
+{
+    UINT pitch, rows, slice;
+    if (!desc->Width || !desc->Height || !desc->Depth
+            || !supported_volume_texture_format8(desc->Format)
+            || !d9wg_texture_level_layout(8u, desc->Format, desc->Width, desc->Height,
+                &pitch, &rows, &slice)
+            || (uint64_t)slice * desc->Depth > UINT32_MAX)
+        return D3DERR_INVALIDCALL;
+    const UINT packed[8] = {desc->Format, desc->Type, desc->Usage, desc->Pool,
+        slice * desc->Depth, desc->Width, desc->Height, desc->Depth};
+    CopyMemory(out, packed, sizeof(packed));
+    return D3D_OK;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_volume_desc8(IDirect3DVolume9 *iface,
+        void *out, UINT bytes)
+{
+    D3DVOLUME_DESC desc;
+    if (!iface || iface->lpVtbl != &g_volume_vtbl || !out
+            || bytes != D9WG_D3D8_VOLUME_DESC_BYTES)
+        return D3DERR_INVALIDCALL;
+    D9Volume *volume = volume_from_iface(iface);
+    if (!volume->texture
+            || device_compatibility_api(volume->texture->device) != 8u)
+        return D3DERR_INVALIDCALL;
+    HRESULT hr = IDirect3DVolume9_GetDesc(iface, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_volume_desc8(&desc, out);
+}
+
+/* Private API8 cube creation;ordinary cube CPU lock/upload uses its owning
+ * profile. Renderable cube readback/public8 wrapping remain separate work. */
+HRESULT WINAPI d9wg_d3d9_core_cube_texture8(IDirect3DDevice9 *iface,
+        UINT edge, UINT levels, DWORD usage, UINT format, UINT pool,
+        IDirect3DCubeTexture9 **out)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u) {
+        if (out) *out = NULL;
+        return D3DERR_INVALIDCALL;
+    }
+    return create_cube_texture_object(device_from_iface(iface), edge, levels,
+            usage, (D3DFORMAT)format, (D3DPOOL)pool, 8u, out);
+}
+
+/* API8 creation policy with actual common core texture storage/lifetime.
+ * Returned SDK9 object stays private; public8 resource wrappers follow later. */
+HRESULT WINAPI d9wg_d3d9_core_texture8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT levels, DWORD usage, UINT format,
+        UINT pool, IDirect3DTexture9 **out)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u) {
+        if (out) *out = NULL;
+        return D3DERR_INVALIDCALL;
+    }
+    return create_texture_object(device_from_iface(iface), width, height,
+            levels, usage, (D3DFORMAT)format, (D3DPOOL)pool, 8u, out);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_image_surface8(IDirect3DDevice9 *iface,
+        UINT width, UINT height, UINT format, IDirect3DSurface9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8
+            || !width || !height || width > 8192 || height > 8192
+            || !supported_format8((D3DFORMAT)format, FALSE))
+        return D3DERR_INVALIDCALL;
+    if ((format & 0x00ffffffu) == 0x00545844u && ((width & 3u) || (height & 3u)))
+        return D3DERR_INVALIDCALL;
+    return create_cpu_surface(device_from_iface(iface), width, height,
+            (D3DFORMAT)format, D3DPOOL_SYSTEMMEM, 8u, out);
+}
+
+static HRESULT WINAPI core_surface_lock_rect8(IDirect3DSurface9 *surface,
+        void *locked, const RECT *rect, DWORD flags)
+{
+    return IDirect3DSurface9_LockRect(surface, (D3DLOCKED_RECT *)locked, rect, flags);
+}
+
+const D9WGSurfaceMethods8 *WINAPI d9wg_d3d9_core_surface_methods8(
+        IDirect3DSurface9 *surface)
+{
+    static const D9WGSurfaceMethods8 methods = {
+        surface_set_private_data, surface_get_private_data, surface_free_private_data,
+        d9wg_d3d9_core_surface_desc8, core_surface_lock_rect8, surface_unlock_rect
+    };
+    if (!surface || surface->lpVtbl != &g_surface_vtbl
+            || !core_view_device8((IUnknown *)surface))
+        return NULL;
+    return &methods;
+}
+
+/* Equal sizeof does not make these SDK descriptors interchangeable: API8
+ * has Size at word4 and samples at word5; API9 puts samples/quality there.
+ * Stage the complete eight-word result so failure never partly writes it. */
+static HRESULT core_pack_surface_desc8(const D3DSURFACE_DESC *desc, void *out)
+{
+    UINT pitch, rows, size = 0;
+    if (desc->Usage & D3DUSAGE_DEPTHSTENCIL) {
+        if (!d9wg_depth_surface_layout8(desc->Format, desc->Width,
+                desc->Height, &pitch, &size))
+            return D3DERR_INVALIDCALL;
+    } else if (!d9wg_texture_level_layout(8u, desc->Format,
+            desc->Width, desc->Height, &pitch, &rows, &size))
+        return D3DERR_INVALIDCALL;
+    DWORD packed[8] = {(DWORD)desc->Format, (DWORD)desc->Type, desc->Usage,
+            (DWORD)desc->Pool, size, (DWORD)desc->MultiSampleType,
+            desc->Width, desc->Height};
+    CopyMemory(out, packed, sizeof(packed));
+    return D3D_OK;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_surface_desc8(IDirect3DSurface9 *iface,
+        void *out, UINT bytes)
+{
+    D9Surface *surface;
+    D3DSURFACE_DESC desc;
+    if (!iface || iface->lpVtbl != &g_surface_vtbl || !out
+            || bytes != D9WG_D3D8_SURFACE_DESC_BYTES)
+        return D3DERR_INVALIDCALL;
+    surface = surface_from_iface(iface);
+    if (device_compatibility_api(surface->device) != 8)
+        return D3DERR_INVALIDCALL;
+    HRESULT hr = IDirect3DSurface9_GetDesc(iface, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_surface_desc8(&desc, out);
+}
+
+static HRESULT WINAPI core_swap_chain_present8(IDirect3DSwapChain9 *chain,
+        const RECT *source, const RECT *destination, HWND window, const RGNDATA *dirty)
+{
+    return IDirect3DSwapChain9_Present(chain, source, destination, window, dirty, 0u);
+}
+static HRESULT WINAPI core_swap_chain_back_buffer8(IDirect3DSwapChain9 *chain,
+        UINT index, UINT type, IDirect3DSurface9 **out)
+{
+    return IDirect3DSwapChain9_GetBackBuffer(chain, index, (D3DBACKBUFFER_TYPE)type, out);
+}
+const D9WGSwapChainMethods8 *WINAPI d9wg_d3d9_core_swap_chain_methods8(IDirect3DSwapChain9 *chain)
+{
+    static const D9WGSwapChainMethods8 methods = {
+        core_swap_chain_present8, core_swap_chain_back_buffer8
+    };
+    if (!chain || chain->lpVtbl != &g_swap_chain_vtbl
+            || !core_view_device8((IUnknown *)chain)) return NULL;
+    return &methods;
+}
+
+/* Identical SDK8/9 buffer descriptor layouts and the existing lock/private-data
+ * policy are owned by the real9 implementations. Only ABI signatures differ. */
+#define D9WG_BUFFER_METHODS8(P, Type, Descriptor) \
+static HRESULT WINAPI core_##P##8_set_private(IUnknown *p, const GUID *id, const void *data, DWORD size, DWORD flags) \
+{ return P##_set_private_data((Type *)p, id, data, size, flags); } \
+static HRESULT WINAPI core_##P##8_get_private(IUnknown *p, const GUID *id, void *data, DWORD *size) \
+{ return P##_get_private_data((Type *)p, id, data, size); } \
+static HRESULT WINAPI core_##P##8_free_private(IUnknown *p, const GUID *id) \
+{ return P##_free_private_data((Type *)p, id); } \
+static DWORD WINAPI core_##P##8_set_priority(IUnknown *p, DWORD value) \
+{ return P##_set_priority((Type *)p, value); } \
+static DWORD WINAPI core_##P##8_get_priority(IUnknown *p) \
+{ return P##_get_priority((Type *)p); } \
+static void WINAPI core_##P##8_preload(IUnknown *p) \
+{ P##_preload((Type *)p); } \
+static UINT WINAPI core_##P##8_get_type(IUnknown *p) \
+{ return (UINT)P##_get_type((Type *)p); } \
+static HRESULT WINAPI core_##P##8_lock(IUnknown *p, UINT offset, UINT size, void *out, DWORD flags) \
+{ return P##_lock((Type *)p, offset, size, (void **)out, flags); } \
+static HRESULT WINAPI core_##P##8_unlock(IUnknown *p) \
+{ return P##_unlock((Type *)p); } \
+static HRESULT WINAPI core_##P##8_get_desc(IUnknown *p, void *out, UINT bytes) \
+{ if (!out || bytes != sizeof(Descriptor)) return D3DERR_INVALIDCALL; return P##_get_desc((Type *)p, (Descriptor *)out); }
+D9WG_BUFFER_METHODS8(vb, IDirect3DVertexBuffer9, D3DVERTEXBUFFER_DESC)
+D9WG_BUFFER_METHODS8(ib, IDirect3DIndexBuffer9, D3DINDEXBUFFER_DESC)
+#undef D9WG_BUFFER_METHODS8
+#define D9WG_BUFFER_TABLE8(P) \
+    core_##P##8_set_private, core_##P##8_get_private, core_##P##8_free_private, \
+    core_##P##8_set_priority, core_##P##8_get_priority, core_##P##8_preload, \
+    core_##P##8_get_type, core_##P##8_lock, core_##P##8_unlock, core_##P##8_get_desc
+const D9WGBufferMethods8 *WINAPI d9wg_d3d9_core_buffer_methods8(
+        IUnknown *buffer, UINT expected_type)
+{
+    static const D9WGBufferMethods8 vertex_methods = {D9WG_BUFFER_TABLE8(vb)};
+    static const D9WGBufferMethods8 index_methods = {D9WG_BUFFER_TABLE8(ib)};
+    if (!buffer || !core_view_device8(buffer)) return NULL;
+    if (expected_type == 6u && buffer->lpVtbl == (const IUnknownVtbl *)&g_vb_vtbl)
+        return &vertex_methods;
+    if (expected_type == 7u && buffer->lpVtbl == (const IUnknownVtbl *)&g_ib_vtbl)
+        return &index_methods;
+    return NULL;
+}
+#undef D9WG_BUFFER_TABLE8
+
+static UINT WINAPI core_texture_type8(IDirect3DTexture9 *texture)
+{
+    return (UINT)IDirect3DTexture9_GetType(texture);
+}
+static HRESULT WINAPI core_texture_lock8(IDirect3DTexture9 *texture, UINT level,
+        void *locked, const RECT *rect, DWORD flags)
+{
+    return IDirect3DTexture9_LockRect(texture, level, (D3DLOCKED_RECT *)locked, rect, flags);
+}
+static HRESULT WINAPI core_texture_desc8(IDirect3DTexture9 *texture, UINT level,
+        void *out, UINT bytes)
+{
+    if (!out || bytes != D9WG_D3D8_SURFACE_DESC_BYTES) return D3DERR_INVALIDCALL;
+    D3DSURFACE_DESC desc;
+    HRESULT hr = IDirect3DTexture9_GetLevelDesc(texture, level, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_surface_desc8(&desc, out);
+}
+const D9WGTextureMethods8 *WINAPI d9wg_d3d9_core_texture_methods8(IDirect3DTexture9 *texture)
+{
+    static const D9WGTextureMethods8 methods = {
+        texture_set_private_data, texture_get_private_data, texture_free_private_data,
+        texture_set_priority, texture_get_priority, texture_preload, core_texture_type8,
+        texture_set_lod, texture_get_lod, texture_get_level_count, core_texture_desc8,
+        texture_get_surface_level, core_texture_lock8, texture_unlock_rect, texture_add_dirty_rect
+    };
+    if (!texture || texture->lpVtbl != &g_texture_vtbl
+            || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
+}
+
+static UINT WINAPI core_volume_texture_type8(IDirect3DVolumeTexture9 *texture)
+{
+    return (UINT)IDirect3DVolumeTexture9_GetType(texture);
+}
+static HRESULT WINAPI core_volume_texture_lock8(IDirect3DVolumeTexture9 *texture, UINT level,
+        void *locked, const void *rect, DWORD flags)
+{
+    return IDirect3DVolumeTexture9_LockBox(texture, level, (D3DLOCKED_BOX *)locked, (const D3DBOX *)rect, flags);
+}
+static HRESULT WINAPI core_volume_texture_desc8(IDirect3DVolumeTexture9 *texture, UINT level,
+        void *out, UINT bytes)
+{
+    if (!out || bytes != D9WG_D3D8_VOLUME_DESC_BYTES) return D3DERR_INVALIDCALL;
+    D3DVOLUME_DESC desc;
+    HRESULT hr = IDirect3DVolumeTexture9_GetLevelDesc(texture, level, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_volume_desc8(&desc, out);
+}
+static HRESULT WINAPI core_volume_texture_dirty8(IDirect3DVolumeTexture9 *texture, const void *box)
+{
+    return IDirect3DVolumeTexture9_AddDirtyBox(texture, (const D3DBOX *)box);
+}
+const D9WGVolumeTextureMethods8 *WINAPI d9wg_d3d9_core_volume_texture_methods8(IDirect3DVolumeTexture9 *texture)
+{
+    static const D9WGVolumeTextureMethods8 methods = {
+        volume_texture_set_private_data, volume_texture_get_private_data, volume_texture_free_private_data,
+        volume_texture_set_priority, volume_texture_get_priority, volume_texture_preload, core_volume_texture_type8,
+        volume_texture_set_lod, volume_texture_get_lod, volume_texture_get_level_count, core_volume_texture_desc8,
+        volume_texture_get_volume_level, core_volume_texture_lock8, volume_texture_unlock_box, core_volume_texture_dirty8
+    };
+    if (!texture || texture->lpVtbl != &g_volume_texture_vtbl
+            || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
+}
+
+static HRESULT WINAPI core_volume_lock8(IDirect3DVolume9 *volume,
+        void *locked, const void *box, DWORD flags)
+{
+    return IDirect3DVolume9_LockBox(volume, (D3DLOCKED_BOX *)locked, (const D3DBOX *)box, flags);
+}
+const D9WGVolumeMethods8 *WINAPI d9wg_d3d9_core_volume_methods8(IDirect3DVolume9 *volume)
+{
+    static const D9WGVolumeMethods8 methods = {
+        volume_set_private_data, volume_get_private_data, volume_free_private_data,
+        d9wg_d3d9_core_volume_desc8, core_volume_lock8, volume_unlock_box
+    };
+    if (!volume || volume->lpVtbl != &g_volume_vtbl
+            || !core_view_device8((IUnknown *)volume)) return NULL;
+    return &methods;
+}
+
+static UINT WINAPI core_cube_texture_type8(IDirect3DCubeTexture9 *texture)
+{
+    return (UINT)IDirect3DCubeTexture9_GetType(texture);
+}
+static HRESULT WINAPI core_cube_texture_lock8(IDirect3DCubeTexture9 *texture, UINT face, UINT level,
+        void *locked, const RECT *rect, DWORD flags)
+{
+    return IDirect3DCubeTexture9_LockRect(texture, (D3DCUBEMAP_FACES)face, level, (D3DLOCKED_RECT *)locked, rect, flags);
+}
+static HRESULT WINAPI core_cube_texture_desc8(IDirect3DCubeTexture9 *texture, UINT level,
+        void *out, UINT bytes)
+{
+    if (!out || bytes != D9WG_D3D8_SURFACE_DESC_BYTES) return D3DERR_INVALIDCALL;
+    D3DSURFACE_DESC desc;
+    HRESULT hr = IDirect3DCubeTexture9_GetLevelDesc(texture, level, &desc);
+    if (FAILED(hr)) return hr;
+    return core_pack_surface_desc8(&desc, out);
+}
+static HRESULT WINAPI core_cube_texture_surface8(IDirect3DCubeTexture9 *texture,
+        UINT face, UINT level, IDirect3DSurface9 **out)
+{
+    return IDirect3DCubeTexture9_GetCubeMapSurface(texture, (D3DCUBEMAP_FACES)face, level, out);
+}
+static HRESULT WINAPI core_cube_texture_unlock8(IDirect3DCubeTexture9 *texture, UINT face, UINT level)
+{
+    return IDirect3DCubeTexture9_UnlockRect(texture, (D3DCUBEMAP_FACES)face, level);
+}
+static HRESULT WINAPI core_cube_texture_dirty8(IDirect3DCubeTexture9 *texture, UINT face, const RECT *rect)
+{
+    return IDirect3DCubeTexture9_AddDirtyRect(texture, (D3DCUBEMAP_FACES)face, rect);
+}
+const D9WGCubeTextureMethods8 *WINAPI d9wg_d3d9_core_cube_texture_methods8(IDirect3DCubeTexture9 *texture)
+{
+    static const D9WGCubeTextureMethods8 methods = {
+        cube_set_private_data, cube_get_private_data, cube_free_private_data,
+        cube_set_priority, cube_get_priority, cube_preload, core_cube_texture_type8,
+        cube_set_lod, cube_get_lod, cube_get_level_count, core_cube_texture_desc8,
+        core_cube_texture_surface8, core_cube_texture_lock8, core_cube_texture_unlock8, core_cube_texture_dirty8
+    };
+    if (!texture || texture->lpVtbl != &g_cube_vtbl
+            || !core_view_device8((IUnknown *)texture)) return NULL;
+    return &methods;
+}
+
+/* Only the layout object is published here. Raw8 declaration/function and
+ * local constant shadows stay with the shader-handle adapter. The shared
+ * parser still validates every constant block before constructing storage. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_declaration8(IDirect3DDevice9 *iface,
+        const DWORD *tokens, BOOL declaration_only,
+        IDirect3DVertexDeclaration9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || !tokens
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9WGVertexElement wire[32];
+    DWORD constants[96 * 4];
+    BYTE mask[96];
+    UINT tokens_count, count, vectors;
+    if (!d9wg_declaration8_validate(tokens, D9WG_D3D8_SHADER_TOKENS,
+                &tokens_count)
+            || !d9wg_declaration8_elements(tokens, tokens_count, wire, 32,
+                &count, constants, 96, mask, &vectors))
+        return D3DERR_INVALIDCALL;
+    D3DVERTEXELEMENT9 elements[33];
+    for (UINT i = 0; i < count; ++i) {
+        const D9WGVertexElement *e = &wire[i];
+        if (declaration_only && e->usage == D3D9DECLUSAGE_NORMAL
+                && !e->usage_index && e->type != D3D9DECLTYPE_FLOAT3)
+            return D3DERR_INVALIDCALL;
+        elements[i] = (D3DVERTEXELEMENT9){e->stream, e->offset, e->type,
+            e->method, e->usage, e->usage_index};
+    }
+    elements[count] = (D3DVERTEXELEMENT9)D3DDECL_END();
+    return IDirect3DDevice9_CreateVertexDeclaration(iface, elements, out);
+}
+
+/* API8 FVFs must not enter the ordinary9 exact-FVF cache: XYZW and
+ * LASTBETA_D3DCOLOR have different meanings. Keep a real9 user-layout object
+ * with an8-only key and fvfassociation zero. State-block replay then binds its
+ * actual elements instead of decoding the original8 number as an API9 FVF. */
+static HRESULT fvf8_declaration(D9Device *device, DWORD fvf,
+        const D9WGVertexElement *wire, UINT count, D9VertexDeclaration **out)
+{
+    *out = NULL;
+    for (D9VertexDeclaration *decl = device->vertex_declarations; decl;
+            decl = decl->next_device_resource) {
+        if (decl->legacy_fvf8 != fvf) continue;
+        if (!decl->fvf_cache_ref) {
+            decl_binding_add_ref(decl);
+            decl->fvf_cache_ref = TRUE;
+        }
+        *out = decl;
+        return D3D_OK;
+    }
+    D3DVERTEXELEMENT9 elements[33];
+    for (UINT i = 0; i < count; ++i) {
+        const D9WGVertexElement *e = &wire[i];
+        elements[i] = (D3DVERTEXELEMENT9){e->stream, e->offset, e->type,
+            e->method, e->usage, e->usage_index};
+    }
+    elements[count] = (D3DVERTEXELEMENT9)D3DDECL_END();
+    IDirect3DVertexDeclaration9 *iface = NULL;
+    HRESULT hr = IDirect3DDevice9_CreateVertexDeclaration(&device->iface,
+            elements, &iface);
+    if (FAILED(hr)) return hr;
+    D9VertexDeclaration *decl = decl_from_iface(iface);
+    decl->legacy_fvf8 = fvf;
+    decl->fvf = 0;
+    decl_binding_add_ref(decl);
+    decl->fvf_cache_ref = TRUE;
+    /* Cache is private storage ownership, not a public device parent pin. */
+    IDirect3DVertexDeclaration9_Release(iface);
+    *out = decl;
+    return D3D_OK;
+}
+
+/* Backend binding only. Frontend8 retains the raw FVF-vs-DWORD-handle Get
+ * shadow and its public error publication. Zero clears both shader/layout;
+ * ordinary9 SetFVF(0) keeps its native successful-no-op contract. */
+HRESULT WINAPI d9wg_d3d9_core_set_fvf8(IDirect3DDevice9 *iface, DWORD fvf)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9VertexDeclaration *decl = NULL;
+    if (fvf) {
+        D9WGVertexElement wire[32];
+        UINT count;
+        if (!d9wg_fvf_decode(D9WG_FVF_D3D8, fvf, wire, 32, &count, NULL))
+            return D3DERR_INVALIDCALL;
+        HRESULT hr = fvf8_declaration(device, fvf, wire, count, &decl);
+        if (FAILED(hr)) return hr;
+    }
+    if (!device->recording_result && !device->vertex_shader
+            && device->vertex_declaration == decl)
+        return D3D_OK;
+    HRESULT hr = IDirect3DDevice9_SetVertexShader(iface, NULL);
+    if (FAILED(hr)) return hr;
+    return IDirect3DDevice9_SetVertexDeclaration(iface,
+            decl ? &decl->iface : NULL);
+}
+
+/* Use8 destination FVF policy and the same actual core9 software pipeline.
+ * No temporary declaration object or transport-side layout is required. */
+HRESULT WINAPI d9wg_d3d9_core_process_vertices8(IDirect3DDevice9 *iface,
+        UINT src_start, UINT dst_index, UINT count,
+        IDirect3DVertexBuffer9 *dst, DWORD flags)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (!dst || dst->lpVtbl != &g_vb_vtbl)
+        return D3DERR_INVALIDCALL;
+    D9VertexBuffer *destination = vb_from_iface(dst);
+    if (destination->device != device || destination->locked || !count
+            || device->vertex_shader)
+        return D3DERR_INVALIDCALL;
+    D9ProcessLayout layout;
+    if (!d9wg_process_fvf8_subset(destination->fvf, &layout))
+        return D3DERR_INVALIDCALL;
+    TRACE_MARK_ENTER("Device.ProcessVertices");
+    return process_vertices_layout(device, destination, &layout,
+            src_start, dst_index, count, flags);
+}
+
+/* Build the mapped core portion from an already selected8 snapshot. This
+ * reuses actual9 recording instead of interpreting8 masks as9 predefined
+ * scopes. The frontend owns raw8 shadow fields and DWORD publication. */
+HRESULT WINAPI d9wg_d3d9_core_record_state_block8(IDirect3DDevice9 *iface,
+        D9WGStateBlockRecorder8 recorder, const void *snapshot,
+        IDirect3DStateBlock9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || !recorder
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    HRESULT hr = IDirect3DDevice9_BeginStateBlock(iface);
+    if (FAILED(hr)) return hr;
+    hr = recorder(iface, snapshot);
+    if (SUCCEEDED(hr)) hr = IDirect3DDevice9_EndStateBlock(iface, out);
+    if (FAILED(hr)) device_cancel_recording(device_from_iface(iface));
+    return hr;
+}
+
+/* A token belongs to one compatibility8 device and is never exposed as a
+ * public9 COM block. Temporary operation references also retain only storage. */
+static D9StateBlock *state_block_handle8(D9Device *device, DWORD token)
+{
+    if (!token || device_compatibility_api(device) != 8u
+            || device->releasing_owned_refs)
+        return NULL;
+    D9StateBlock *block = device->state_blocks;
+    while (block && block->handle8 != token) block = block->next_device_resource;
+    return block;
+}
+
+static void state_block_adopt_handle8(D9StateBlock *block, DWORD token)
+{
+    block->handle8 = token;
+    block->device_parent_ref = FALSE;
+    device_child_release(block->device);
+}
+
+static DWORD state_block_publish_handle8(D9StateBlock *block)
+{
+    DWORD token;
+    do { token = allocate_handle(); }
+    while (state_block_handle8(block->device, token));
+    state_block_adopt_handle8(block, token);
+    return token;
+}
+
+/* Incremental8 recording uses the same actual9 recorder as mapped snapshots.
+ * A failed End leaves that recording intact and clears only the caller output. */
+HRESULT WINAPI d9wg_d3d9_core_begin_state_block8(IDirect3DDevice9 *iface)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || device_from_iface(iface)->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_BeginStateBlock(iface);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_end_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD *out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = 0;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u
+            || device_from_iface(iface)->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    IDirect3DStateBlock9 *created = NULL;
+    IDirect3DDevice9_AddRef(iface);
+    HRESULT hr = IDirect3DDevice9_EndStateBlock(iface, &created);
+    if (SUCCEEDED(hr))
+        *out = state_block_publish_handle8(state_block_from_iface(created));
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_create_state_block_handle8(IDirect3DDevice9 *iface,
+        D9WGStateBlockRecorder8 recorder, const void *snapshot, DWORD *out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = 0;
+    if (!iface || !recorder
+            || device_compatibility_api(device_from_iface(iface)) != 8u
+            || device_from_iface(iface)->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    IDirect3DStateBlock9 *created = NULL;
+    IDirect3DDevice9_AddRef(iface);
+    HRESULT hr = d9wg_d3d9_core_record_state_block8(iface, recorder, snapshot, &created);
+    if (SUCCEEDED(hr))
+        *out = state_block_publish_handle8(state_block_from_iface(created));
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_apply_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD token)
+{
+    if (!iface) return D3DERR_INVALIDCALL;
+    D9StateBlock *block = state_block_handle8(device_from_iface(iface), token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    IDirect3DStateBlock9_AddRef(&block->iface);
+    HRESULT hr = IDirect3DStateBlock9_Apply(&block->iface);
+    IDirect3DStateBlock9_Release(&block->iface);
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_apply_state_block_frontend8(IDirect3DDevice9 *iface,
+        DWORD token, D9WGStateBlockApply8 apply, void *context)
+{
+    if (!iface || !apply) return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8 || device->recording_result)
+        return D3DERR_INVALIDCALL;
+    D9StateBlock *block = state_block_handle8(device, token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    IDirect3DStateBlock9_AddRef(&block->iface);
+    HRESULT hr = state_block_apply_shared(block, apply, context);
+    IDirect3DStateBlock9_Release(&block->iface);
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+/* Frontend Capture supplies a newly selected raw8 snapshot. Rebuild first;
+ * callback failure leaves the old token/value untouched. A reentrant deletion
+ * or replacement wins over this call, so a retired token cannot be revived. */
+HRESULT WINAPI d9wg_d3d9_core_capture_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD token, D9WGStateBlockRecorder8 recorder, const void *snapshot)
+{
+    if (!iface || !recorder) return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9StateBlock *block = state_block_handle8(device, token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DStateBlock9 *created = NULL;
+    IDirect3DDevice9_AddRef(iface);
+    IDirect3DStateBlock9_AddRef(&block->iface);
+    HRESULT hr = d9wg_d3d9_core_record_state_block8(iface, recorder, snapshot, &created);
+    if (SUCCEEDED(hr)) {
+        if (state_block_handle8(device, token) != block) {
+            IDirect3DStateBlock9_Release(created);
+            hr = D3DERR_INVALIDCALL;
+        } else {
+            block->handle8 = 0;
+            state_block_adopt_handle8(state_block_from_iface(created), token);
+            IDirect3DStateBlock9_Release(&block->iface); /* token ownership */
+        }
+    }
+    IDirect3DStateBlock9_Release(&block->iface); /* operation storage pin */
+    IDirect3DDevice9_Release(iface);
+    return hr;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_delete_state_block_handle8(IDirect3DDevice9 *iface,
+        DWORD token)
+{
+    if (!iface) return D3DERR_INVALIDCALL;
+    D9StateBlock *block = state_block_handle8(device_from_iface(iface), token);
+    if (!block) return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    block->handle8 = 0;
+    IDirect3DStateBlock9_Release(&block->iface);
+    IDirect3DDevice9_Release(iface);
+    return D3D_OK;
+}
+
+/* Record only the common part selected by an API8 scope. Render/TSS and raw
+ * shader handles are supplied by the SDK8 recorder, using its versioned lists.
+ * For incremental Capture, copy the existing masks into a detached recording;
+ * all values and storage references are then captured by the shared engine. */
+HRESULT WINAPI d9wg_d3d9_core_record_common_state8(IDirect3DDevice9 *iface,
+        UINT type, DWORD source_token)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl) return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9StateBlock *dst = device->recording_result;
+    if (device_compatibility_api(device) != 8 || !dst
+            || type > D3DSBT_VERTEXSTATE) return D3DERR_INVALIDCALL;
+    D9StateBlock *src = source_token ? state_block_handle8(device, source_token) : NULL;
+    if (source_token && !src) return D3DERR_INVALIDCALL;
+    if (src) {
+#define COPY_MASK(member) CopyMemory(&dst->member, &src->member, sizeof(dst->member))
+        COPY_MASK(has_render_state); COPY_MASK(has_texture_stage_state);
+        COPY_MASK(has_sampler_state); COPY_MASK(has_transform); COPY_MASK(has_texture);
+        COPY_MASK(has_palette); COPY_MASK(has_material); COPY_MASK(has_clip_plane);
+        COPY_MASK(has_light); COPY_MASK(has_light_enable); COPY_MASK(has_viewport);
+        COPY_MASK(has_vertex_shader); COPY_MASK(has_pixel_shader);
+        CopyMemory(dst->has_vs_const_f, src->has_vs_const_f, device->vs_float_capacity * sizeof(BOOL)); COPY_MASK(has_ps_const_f);
+        COPY_MASK(has_vertex_format); COPY_MASK(has_stream); COPY_MASK(has_indices);
+#undef COPY_MASK
+        for (D9WGLightState *light = src->extra_lights; light; light = light->next) {
+            D9WGLightState *entry = d9wg_light_get(&dst->extra_lights, light->index, TRUE);
+            if (!entry) return E_OUTOFMEMORY;
+            entry->light_mask = light->light_mask;
+            entry->enable_mask = light->enable_mask;
+        }
+    }
+    if (type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE) {
+        for (UINT i = 0; i < 8; ++i) dst->has_ps_const_f[i] = TRUE;
+        dst->has_pixel_shader = TRUE;
+    }
+    if (type == D3DSBT_ALL || type == D3DSBT_VERTEXSTATE) {
+        for (UINT i = 0; i < 96; ++i) dst->has_vs_const_f[i] = TRUE;
+        dst->has_vertex_shader = dst->has_vertex_format = TRUE;
+        for (UINT i = 0; i < D9_MAX_LIGHTS; ++i)
+            dst->has_light[i] = dst->has_light_enable[i] = device_light_is_set(device, i);
+        for (D9WGLightState *light = device->extra_lights; light; light = light->next) {
+            if (!light->set) continue;
+            D9WGLightState *entry = d9wg_light_get(&dst->extra_lights, light->index, TRUE);
+            if (!entry) return E_OUTOFMEMORY;
+            entry->light_mask = entry->enable_mask = TRUE;
+        }
+    }
+    if (type == D3DSBT_ALL) {
+        for (UINT i = 0; i < 8; ++i) dst->has_texture[i] = TRUE;
+        for (UINT i = 0; i < 16; ++i) dst->has_stream[i] = TRUE;
+        for (UINT i = 0; i < D9_STATE_BLOCK_TRANSFORMS; ++i) dst->has_transform[i] = TRUE;
+        for (UINT i = 0; i < 6; ++i) dst->has_clip_plane[i] = TRUE;
+        dst->has_palette = dst->has_material = dst->has_viewport = dst->has_indices = TRUE;
+    }
+    state_block_capture(dst);
+    return D3D_OK;
+}
+
+/* Observe actual Reset commit/cancel boundaries even when a later transport
+ * operation fails. No public structure or wire command is added. */
+HRESULT WINAPI d9wg_d3d9_core_device_state8(IDirect3DDevice9 *iface,
+        UINT *epoch, BOOL *recording, BOOL *auto_depth)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl || !epoch || !recording || !auto_depth)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8) return D3DERR_INVALIDCALL;
+    *epoch = device->reset_epoch;
+    *recording = device->recording_result != NULL;
+    *auto_depth = device->present.EnableAutoDepthStencil;
+    return D3D_OK;
+}
+
+/* D3D8 keeps the unsigned BaseVertexIndex with its index binding. The
+ * frontend passes that raw DWORD on every indexed draw; core9 consumes the
+ * same bits as a signed per-draw base, without changing SetIndices state. */
+HRESULT WINAPI d9wg_d3d9_core_draw_indexed8(IDirect3DDevice9 *iface,
+        UINT primitive_type, UINT base_vertex_index,
+        UINT min_vertex_index, UINT vertex_count, UINT start_index,
+        UINT primitive_count)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    if (!device_from_iface(iface)->streams[0].buffer)
+        return D3D_OK;
+    INT signed_base;
+    CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));
+    return IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,
+            signed_base, min_vertex_index, vertex_count, start_index,
+            primitive_count);
+}
+
+/* SDK-neutral Device8 backend operations; no frontend handles or SDK8 ABI. */
+static HRESULT WINAPI core_device_test_cooperative_level8(struct IDirect3DDevice9* iface)
+{
+    return device_test_cooperative_level(iface);
+}
+
+static UINT WINAPI core_device_get_available_texture_mem8(struct IDirect3DDevice9 * iface)
+{
+    (void)iface;
+    return 128u * 1024u * 1024u;
+}
+
+static HRESULT WINAPI core_device_resource_manager_discard_bytes8(struct IDirect3DDevice9 * iface, DWORD bytes)
+{
+    (void)bytes;
+    return device_evict_managed_resources(iface);
+}
+
+static HRESULT WINAPI core_device_get_display_mode8(struct IDirect3DDevice9* iface, void * mode)
+{
+    return device_get_display_mode(iface, 0, (D3DDISPLAYMODE*)mode);
+}
+
+static HRESULT WINAPI core_device_get_creation_parameters8(struct IDirect3DDevice9 * iface, void * parameters)
+{
+    return device_get_creation_parameters(iface, (D3DDEVICE_CREATION_PARAMETERS *)parameters);
+}
+
+static HRESULT WINAPI core_device_set_cursor_properties8(struct IDirect3DDevice9 * iface, UINT hotspot_x, UINT hotspot_y, struct IDirect3DSurface9 * bitmap)
+{
+    return device_set_cursor_properties(iface, hotspot_x, hotspot_y, bitmap);
+}
+
+static void WINAPI core_device_set_cursor_position8(struct IDirect3DDevice9 * iface, int x, int y, DWORD flags)
+{
+    device_set_cursor_position(iface, x, y, flags);
+}
+
+static BOOL WINAPI core_device_show_cursor8(struct IDirect3DDevice9 * iface, BOOL show)
+{
+    return device_show_cursor(iface, (WINBOOL)show);
+}
+
+static HRESULT WINAPI core_device_present8(struct IDirect3DDevice9* iface, const RECT* src_rect, const RECT* dst_rect, HWND override_window, const RGNDATA* dirty_region)
+{
+    return device_present(iface, src_rect, dst_rect, override_window, dirty_region);
+}
+
+static HRESULT WINAPI core_device_get_back_buffer8(struct IDirect3DDevice9 * iface, UINT index, UINT type, struct IDirect3DSurface9 ** out)
+{
+    return device_get_back_buffer(iface, 0, index, (D3DBACKBUFFER_TYPE)type, out);
+}
+
+static HRESULT WINAPI core_device_get_raster_status8(struct IDirect3DDevice9 * iface, void * status)
+{
+    return device_get_raster_status(iface, 0, (D3DRASTER_STATUS *)status);
+}
+
+static void WINAPI core_device_set_gamma_ramp8(struct IDirect3DDevice9 * iface, DWORD flags, const void * ramp)
+{
+    device_set_gamma_ramp(iface, 0, flags, (const D3DGAMMARAMP *)ramp);
+}
+
+static void WINAPI core_device_get_gamma_ramp8(struct IDirect3DDevice9 * iface, void * ramp)
+{
+    device_get_gamma_ramp(iface, 0, (D3DGAMMARAMP *)ramp);
+}
+
+static HRESULT WINAPI core_device_get_render_target8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 ** surface_out)
+{
+    return device_get_render_target(iface, 0, surface_out);
+}
+
+static HRESULT WINAPI core_device_get_depth_stencil_surface8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 ** surface_out)
+{
+    return device_get_depth_stencil_surface(iface, surface_out);
+}
+
+static HRESULT WINAPI core_device_set_render_target8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 * surface_iface)
+{
+    return device_set_render_target(iface, 0, surface_iface);
+}
+
+static HRESULT WINAPI core_device_set_depth_stencil_surface8(struct IDirect3DDevice9 * iface, struct IDirect3DSurface9 * surface_iface)
+{
+    return device_set_depth_stencil_surface(iface, surface_iface);
+}
+
+static HRESULT WINAPI core_device_begin_scene8(struct IDirect3DDevice9 * iface)
+{
+    return device_begin_scene(iface);
+}
+
+static HRESULT WINAPI core_device_end_scene8(struct IDirect3DDevice9 * iface)
+{
+    return device_end_scene(iface);
+}
+
+static HRESULT WINAPI core_device_clear8(struct IDirect3DDevice9 * iface, DWORD rect_count, const void * rects, DWORD flags, DWORD color, float z, DWORD stencil)
+{
+    return device_clear(iface, rect_count, (const D3DRECT *)rects, flags, (D3DCOLOR)color, z, stencil);
+}
+
+static HRESULT WINAPI core_device_set_transform8(struct IDirect3DDevice9 * iface, UINT state, const void * matrix)
+{
+    return device_set_transform(iface, (D3DTRANSFORMSTATETYPE)state, (const D3DMATRIX *)matrix);
+}
+
+static HRESULT WINAPI core_device_get_transform8(struct IDirect3DDevice9 * iface, UINT state, void * matrix)
+{
+    return device_get_transform(iface, (D3DTRANSFORMSTATETYPE)state, (D3DMATRIX *)matrix);
+}
+
+static HRESULT WINAPI core_device_multiply_transform8(struct IDirect3DDevice9 * iface, UINT state, const void * matrix)
+{
+    return device_multiply_transform(iface, (D3DTRANSFORMSTATETYPE)state, (const D3DMATRIX *)matrix);
+}
+
+static HRESULT WINAPI core_device_set_viewport8(struct IDirect3DDevice9 * iface, const void * viewport)
+{
+    return device_set_viewport(iface, (const D3DVIEWPORT9 *)viewport);
+}
+
+static HRESULT WINAPI core_device_get_viewport8(struct IDirect3DDevice9 * iface, void * viewport)
+{
+    return device_get_viewport(iface, (D3DVIEWPORT9 *)viewport);
+}
+
+static HRESULT WINAPI core_device_set_material8(struct IDirect3DDevice9 * iface, const void * material)
+{
+    return device_set_material(iface, (const D3DMATERIAL9 *)material);
+}
+
+static HRESULT WINAPI core_device_get_material8(struct IDirect3DDevice9 * iface, void * material)
+{
+    return device_get_material(iface, (D3DMATERIAL9 *)material);
+}
+
+static HRESULT WINAPI core_device_set_light8(struct IDirect3DDevice9 * iface, DWORD index, const void * light)
+{
+    return device_set_light(iface, index, (const D3DLIGHT9 *)light);
+}
+
+static HRESULT WINAPI core_device_get_light8(struct IDirect3DDevice9 * iface, DWORD index, void * light)
+{
+    return device_get_light(iface, index, (D3DLIGHT9 *)light);
+}
+
+static HRESULT WINAPI core_device_light_enable8(struct IDirect3DDevice9 * iface, DWORD index, BOOL enable)
+{
+    return device_light_enable(iface, index, (WINBOOL)enable);
+}
+
+static HRESULT WINAPI core_device_get_light_enable8(struct IDirect3DDevice9 * iface, DWORD index, BOOL * enable)
+{
+    return device_get_light_enable(iface, index, (WINBOOL *)enable);
+}
+
+static HRESULT WINAPI core_device_set_clip_plane8(struct IDirect3DDevice9 * iface, DWORD index, const float * plane)
+{
+    return device_set_clip_plane(iface, index, plane);
+}
+
+static HRESULT WINAPI core_device_get_clip_plane8(struct IDirect3DDevice9 * iface, DWORD index, float * plane)
+{
+    return device_get_clip_plane(iface, index, plane);
+}
+
+static HRESULT WINAPI core_device_set_clip_status8(struct IDirect3DDevice9 * iface, const void * status)
+{
+    return device_set_clip_status(iface, (const D3DCLIPSTATUS9 *)status);
+}
+
+static HRESULT WINAPI core_device_get_clip_status8(struct IDirect3DDevice9 * iface, void * status)
+{
+    return device_get_clip_status(iface, (D3DCLIPSTATUS9 *)status);
+}
+
+static HRESULT WINAPI core_device_get_texture8(struct IDirect3DDevice9 * iface, DWORD stage, struct IDirect3DBaseTexture9 ** texture_out)
+{
+    if (stage >= 8u) return D3DERR_INVALIDCALL;
+    return device_get_texture(iface, stage, texture_out);
+}
+
+static HRESULT WINAPI core_device_set_texture8(struct IDirect3DDevice9 * iface, DWORD stage, struct IDirect3DBaseTexture9 * texture_iface)
+{
+    if (stage >= 8u) return D3DERR_INVALIDCALL;
+    return device_set_texture(iface, stage, texture_iface);
+}
+
+static HRESULT WINAPI core_device_validate_device8(struct IDirect3DDevice9 * iface, DWORD * passes)
+{
+    return device_validate_device(iface, passes);
+}
+
+static HRESULT WINAPI core_device_set_palette_entries8(struct IDirect3DDevice9 * iface, UINT index, const void * entries)
+{
+    return device_set_palette_entries(iface, index, (const PALETTEENTRY *)entries);
+}
+
+static HRESULT WINAPI core_device_get_palette_entries8(struct IDirect3DDevice9 * iface, UINT index, void * entries)
+{
+    return device_get_palette_entries(iface, index, (PALETTEENTRY *)entries);
+}
+
+static HRESULT WINAPI core_device_set_current_texture_palette8(struct IDirect3DDevice9 * iface, UINT index)
+{
+    return device_set_current_texture_palette(iface, index);
+}
+
+static HRESULT WINAPI core_device_get_current_texture_palette8(struct IDirect3DDevice9 * iface, UINT * index)
+{
+    return device_get_current_texture_palette(iface, index);
+}
+
+static HRESULT WINAPI core_device_draw_primitive8(struct IDirect3DDevice9 * iface, UINT primitive_type, UINT start_vertex, UINT primitive_count)
+{
+    return device_draw_primitive(iface, (D3DPRIMITIVETYPE)primitive_type, start_vertex, primitive_count);
+}
+
+static HRESULT WINAPI core_device_draw_primitive_up8(struct IDirect3DDevice9 * iface, UINT primitive_type, UINT primitive_count, const void * vertex_data, UINT stride)
+{
+    return device_draw_primitive_up(iface, (D3DPRIMITIVETYPE)primitive_type, primitive_count, vertex_data, stride);
+}
+
+static HRESULT WINAPI core_device_draw_indexed_primitive_up8(struct IDirect3DDevice9 * iface, UINT primitive_type, UINT min_vertex_index, UINT vertex_count, UINT primitive_count, const void * index_data, UINT index_format, const void * vertex_data, UINT stride)
+{
+    return device_draw_indexed_primitive_up(iface, (D3DPRIMITIVETYPE)primitive_type, min_vertex_index, vertex_count, primitive_count, index_data, (D3DFORMAT)index_format, vertex_data, stride);
+}
+
+static HRESULT WINAPI core_device_set_vertex_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, const float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 96u) return D3DERR_INVALIDCALL;
+    return device_set_vertex_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_get_vertex_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 96u) return D3DERR_INVALIDCALL;
+    return device_get_vertex_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_set_stream_source8(struct IDirect3DDevice9 * iface, UINT stream, struct IDirect3DVertexBuffer9 * buffer_iface, UINT stride)
+{
+    return device_set_stream_source(iface, stream, buffer_iface, 0, stride);
+}
+
+static HRESULT WINAPI core_device_get_stream_source8(struct IDirect3DDevice9 * iface, UINT stream, struct IDirect3DVertexBuffer9 ** buffer_out, UINT * stride_out)
+{
+    UINT ignored_offset;
+    return device_get_stream_source(iface, stream, buffer_out, &ignored_offset, stride_out);
+}
+
+static HRESULT WINAPI core_device_set_indices8(struct IDirect3DDevice9 * iface, struct IDirect3DIndexBuffer9 * buffer_iface)
+{
+    return device_set_indices(iface, buffer_iface);
+}
+
+static HRESULT WINAPI core_device_get_indices8(struct IDirect3DDevice9 * iface, struct IDirect3DIndexBuffer9 ** buffer_out)
+{
+    return device_get_indices(iface, buffer_out);
+}
+
+static HRESULT WINAPI core_device_set_pixel_shader8(struct IDirect3DDevice9 * iface, struct IDirect3DPixelShader9 * shader_iface)
+{
+    return device_set_pixel_shader(iface, shader_iface);
+}
+
+static HRESULT WINAPI core_device_set_pixel_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, const float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 8u) return D3DERR_INVALIDCALL;
+    return device_set_pixel_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_get_pixel_shader_constant8(struct IDirect3DDevice9 * iface, UINT start, float * data, UINT count)
+{
+    if (!count) return D3D_OK;
+    if (!data || (uint64_t)start + count > 8u) return D3DERR_INVALIDCALL;
+    return device_get_pixel_shader_constant_f(iface, start, data, count);
+}
+
+static HRESULT WINAPI core_device_draw_rect_patch8(struct IDirect3DDevice9 * iface, UINT handle, const float * segments, const void * info)
+{
+    return device_draw_rect_patch(iface, handle, segments, (const D3DRECTPATCH_INFO *)info);
+}
+
+static HRESULT WINAPI core_device_draw_tri_patch8(struct IDirect3DDevice9 * iface, UINT handle, const float * segments, const void * info)
+{
+    return device_draw_tri_patch(iface, handle, segments, (const D3DTRIPATCH_INFO *)info);
+}
+
+static HRESULT WINAPI core_device_delete_patch8(struct IDirect3DDevice9 * iface, UINT handle)
+{
+    return device_delete_patch(iface, handle);
+}
+
+static const D9WGDeviceMethods8 g_core_device_methods8 = {
+    .test_cooperative_level = core_device_test_cooperative_level8,
+    .get_available_texture_mem = core_device_get_available_texture_mem8,
+    .resource_manager_discard_bytes = core_device_resource_manager_discard_bytes8,
+    .get_display_mode = core_device_get_display_mode8,
+    .get_creation_parameters = core_device_get_creation_parameters8,
+    .set_cursor_properties = core_device_set_cursor_properties8,
+    .set_cursor_position = core_device_set_cursor_position8,
+    .show_cursor = core_device_show_cursor8,
+    .present = core_device_present8,
+    .get_back_buffer = core_device_get_back_buffer8,
+    .get_raster_status = core_device_get_raster_status8,
+    .set_gamma_ramp = core_device_set_gamma_ramp8,
+    .get_gamma_ramp = core_device_get_gamma_ramp8,
+    .get_render_target = core_device_get_render_target8,
+    .get_depth_stencil_surface = core_device_get_depth_stencil_surface8,
+    .set_render_target = core_device_set_render_target8,
+    .set_depth_stencil_surface = core_device_set_depth_stencil_surface8,
+    .begin_scene = core_device_begin_scene8,
+    .end_scene = core_device_end_scene8,
+    .clear = core_device_clear8,
+    .set_transform = core_device_set_transform8,
+    .get_transform = core_device_get_transform8,
+    .multiply_transform = core_device_multiply_transform8,
+    .set_viewport = core_device_set_viewport8,
+    .get_viewport = core_device_get_viewport8,
+    .set_material = core_device_set_material8,
+    .get_material = core_device_get_material8,
+    .set_light = core_device_set_light8,
+    .get_light = core_device_get_light8,
+    .light_enable = core_device_light_enable8,
+    .get_light_enable = core_device_get_light_enable8,
+    .set_clip_plane = core_device_set_clip_plane8,
+    .get_clip_plane = core_device_get_clip_plane8,
+    .set_clip_status = core_device_set_clip_status8,
+    .get_clip_status = core_device_get_clip_status8,
+    .get_texture = core_device_get_texture8,
+    .set_texture = core_device_set_texture8,
+    .validate_device = core_device_validate_device8,
+    .set_palette_entries = core_device_set_palette_entries8,
+    .get_palette_entries = core_device_get_palette_entries8,
+    .set_current_texture_palette = core_device_set_current_texture_palette8,
+    .get_current_texture_palette = core_device_get_current_texture_palette8,
+    .draw_primitive = core_device_draw_primitive8,
+    .draw_primitive_up = core_device_draw_primitive_up8,
+    .draw_indexed_primitive_up = core_device_draw_indexed_primitive_up8,
+    .set_vertex_shader_constant = core_device_set_vertex_shader_constant8,
+    .get_vertex_shader_constant = core_device_get_vertex_shader_constant8,
+    .set_stream_source = core_device_set_stream_source8,
+    .get_stream_source = core_device_get_stream_source8,
+    .set_indices = core_device_set_indices8,
+    .get_indices = core_device_get_indices8,
+    .set_pixel_shader = core_device_set_pixel_shader8,
+    .set_pixel_shader_constant = core_device_set_pixel_shader_constant8,
+    .get_pixel_shader_constant = core_device_get_pixel_shader_constant8,
+    .draw_rect_patch = core_device_draw_rect_patch8,
+    .draw_tri_patch = core_device_draw_tri_patch8,
+    .delete_patch = core_device_delete_patch8
+};
+
+const D9WGDeviceMethods8 *WINAPI d9wg_d3d9_core_device_methods8(
+        IDirect3DDevice9 *iface)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return NULL;
+    return &g_core_device_methods8;
+}
+
+/* Legacy8 paired targets and borrowed surface containers. */
+HRESULT WINAPI d9wg_d3d9_core_set_render_target8(IDirect3DDevice9 *iface,
+        IDirect3DSurface9 *color_iface, IDirect3DSurface9 *depth_iface)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    D9Surface *color = color_iface ? surface_from_iface(color_iface) : NULL;
+    D9Surface *depth = depth_iface ? surface_from_iface(depth_iface) : NULL;
+    D9Surface *current = device->render_target_surfaces[0];
+    UINT width = current ? current->width : device->display_mode.Width;
+    UINT height = current ? current->height : device->display_mode.Height;
+    D3DMULTISAMPLE_TYPE samples = current ? current->multisample
+            : device->present.MultiSampleType;
+    D9WGSetRenderTarget color_command;
+    D9WGSetDepthStencilSurfaceLevel depth_command;
+    D3DSURFACE_DESC desc;
+    ZeroMemory(&color_command, sizeof(color_command));
+    ZeroMemory(&depth_command, sizeof(depth_command));
+    color_command.device_handle = depth_command.device_handle = device->handle;
+    if (color) {
+        if (color_iface->lpVtbl != &g_surface_vtbl || color->device != device
+                || FAILED(surface_get_desc(color_iface, &desc))
+                || desc.Pool != D3DPOOL_DEFAULT
+                || !(desc.Usage & D3DUSAGE_RENDERTARGET)
+                || (desc.Usage & D3DUSAGE_DEPTHSTENCIL)
+                || !surface_target_handle(color, &color_command.color_texture_handle,
+                        &color_command.color_level, &color_command.color_face))
+            return D3DERR_INVALIDCALL;
+        width = desc.Width;
+        height = desc.Height;
+        samples = desc.MultiSampleType;
+    }
+    if (depth) {
+        if (depth_iface->lpVtbl != &g_surface_vtbl || depth->device != device
+                || depth->cube_texture
+                || FAILED(surface_get_desc(depth_iface, &desc))
+                || !(desc.Usage & D3DUSAGE_DEPTHSTENCIL)
+                || desc.Width < width || desc.Height < height
+                || desc.MultiSampleType != samples)
+            return D3DERR_INVALIDCALL;
+        if (depth->auto_depth_stencil)
+            depth_command.depth_texture_handle = D9WG_AUTO_DEPTH_STENCIL_HANDLE;
+        else {
+            uint32_t face;
+            if (!depth->texture || !surface_target_handle(depth,
+                    &depth_command.depth_texture_handle,
+                    &depth_command.depth_level, &face) || face)
+                return D3DERR_INVALIDCALL;
+        }
+        depth_command.width = desc.Width;
+        depth_command.height = desc.Height;
+    }
+    /* Legacy8 publishes both bindings before the first transport attempt. */
+    if (color) device_replace_render_target_surface(device, 0, color);
+    device_replace_depth_stencil_surface(device, depth);
+    if (color && !emit_command(D9WG_OP_SET_RENDER_TARGET,
+            &color_command, sizeof(color_command)))
+        return D3DERR_DRIVERINTERNALERROR;
+    if (!emit_command(D9WG_OP_SET_DEPTH_STENCIL_SURFACE_LEVEL,
+            &depth_command, sizeof(depth_command)))
+        return D3DERR_DRIVERINTERNALERROR;
+    if (!color) return D3D_OK;
+    D3DVIEWPORT9 viewport = {0, 0, width, height, 0.0f, 1.0f};
+    return device_set_live_viewport(device, &viewport, TRUE);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_surface_owner8(IDirect3DSurface9 *iface,
+        IUnknown **owner, UINT *kind)
+{
+    if (!owner || !kind) return D3DERR_INVALIDCALL;
+    *owner = NULL;
+    *kind = 0;
+    if (!iface || iface->lpVtbl != &g_surface_vtbl
+            || !core_view_device8((IUnknown *)iface))
+        return D3DERR_INVALIDCALL;
+    D9Surface *surface = surface_from_iface(iface);
+    if (surface->cube_texture) {
+        *owner = (IUnknown *)&surface->cube_texture->iface;
+        *kind = 4;
+    } else if (surface->texture_child && surface->texture) {
+        *owner = (IUnknown *)&surface->texture->iface;
+        *kind = 3;
+    } else *owner = (IUnknown *)&surface->device->iface;
+    return D3D_OK;
+}
+
+
+/* A frontend8 last-direct-reference boundary may precede core public zero
+ * while application-owned resources still pin the device. Use the same
+ * guarded cleanup and let normal Release finalize if callbacks remove them. */
+HRESULT WINAPI d9wg_d3d9_core_release_owned8(IDirect3DDevice9 *iface)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8u || device->releasing_owned_refs)
+        return D3DERR_INVALIDCALL;
+    IDirect3DDevice9_AddRef(iface);
+    device->releasing_owned_refs = TRUE;
+    device_release_owned_references(device);
+    device->releasing_owned_refs = FALSE;
+    IDirect3DDevice9_Release(iface);
+    return D3D_OK;
+}
+
+/* A raw8 DWORD handle owns storage, not a public9 resource/device pin.
+ * The frontend pairs these holds, drops constructor COM refs separately,
+ * and releases the holds during its device metadata retirement callback. */
+static HRESULT shader_storage_reference8(IDirect3DDevice9 *iface,
+        IUnknown *object, BOOL retain)
+{
+    if (!iface || iface->lpVtbl != &g_device_vtbl || !object)
+        return D3DERR_INVALIDCALL;
+    D9Device *device = device_from_iface(iface);
+    if (device_compatibility_api(device) != 8u) return D3DERR_INVALIDCALL;
+    const void *vtbl = object->lpVtbl;
+    if (vtbl == &g_decl_vtbl) {
+        D9VertexDeclaration *decl = (D9VertexDeclaration *)object;
+        if (decl->device != device || (!retain
+                && !InterlockedCompareExchange(&decl->binding_refs, 0, 0)))
+            return D3DERR_INVALIDCALL;
+        if (retain) decl_binding_add_ref(decl);
+        else decl_binding_release(decl);
+        return D3D_OK;
+    }
+    if (vtbl == &g_vertex_shader_vtbl
+            || vtbl == &g_pixel_shader_vtbl) {
+        D9Shader *shader = (D9Shader *)object;
+        if (shader->device != device || (!retain
+                && !InterlockedCompareExchange(&shader->binding_refs, 0, 0)))
+            return D3DERR_INVALIDCALL;
+        if (retain) shader_binding_add_ref(shader);
+        else shader_binding_release(shader);
+        return D3D_OK;
+    }
+    return D3DERR_INVALIDCALL;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_shader_storage_add_ref8(IDirect3DDevice9 *device,
+        IUnknown *object)
+{
+    return shader_storage_reference8(device, object, TRUE);
+}
+
+HRESULT WINAPI d9wg_d3d9_core_shader_storage_release8(IDirect3DDevice9 *device,
+        IUnknown *object)
+{
+    return shader_storage_reference8(device, object, FALSE);
+}
+
+/* Backend for an already resolved8 DWORD shader handle. Validate both
+ * owners before either setter changes state; public raw-handle queries and
+ * deletion remain frontend responsibilities. NULL/NULL is the8 zero bind. */
+HRESULT WINAPI d9wg_d3d9_core_set_vertex_shader8(IDirect3DDevice9 *iface,
+        IDirect3DVertexDeclaration9 *layout_iface,
+        IDirect3DVertexShader9 *shader_iface)
+{
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    if (!layout_iface)
+        return shader_iface ? D3DERR_INVALIDCALL
+                : d9wg_d3d9_core_set_fvf8(iface, 0);
+    D9Device *device = device_from_iface(iface);
+    D9VertexDeclaration *layout = decl_from_iface(layout_iface);
+    D9Shader *shader = shader_iface ? vertex_shader_from_iface(shader_iface) : NULL;
+    if (layout_iface->lpVtbl != &g_decl_vtbl || layout->device != device
+            || (shader_iface && (shader_iface->lpVtbl != &g_vertex_shader_vtbl
+                || shader->device != device)))
+        return D3DERR_INVALIDCALL;
+    if (!device->recording_result && device->vertex_declaration == layout
+            && device->vertex_shader == shader)
+        return D3D_OK;
+    HRESULT hr = IDirect3DDevice9_SetVertexDeclaration(iface, layout_iface);
+    if (FAILED(hr)) return hr;
+    return IDirect3DDevice9_SetVertexShader(iface, shader_iface);
+}
+
+/* Both streams have already passed their bounded parsers. Native API8
+ * rejects a vertex program that reads inputs absent from its declaration;
+ * API9 creates the two objects independently and must not inherit this rule.
+ * Skip declaration constants, comments and shader DEF literals explicitly. */
+static BOOL shader8_inputs_declared(const DWORD *declaration, UINT decl_words,
+        const DWORD *body, UINT body_words, UINT minor)
+{
+    DWORD declared = 0;
+    for (UINT i = 0; i < decl_words; ++i) {
+        DWORD token = declaration[i];
+        UINT type = (token & D3D8VSD_TOKENTYPEMASK) >> D3D8VSD_TOKENTYPESHIFT;
+        if (type == D3D8VSD_TOKEN_CONSTMEM) {
+            i += ((token & D3D8VSD_CONSTCOUNTMASK) >> D3D8VSD_CONSTCOUNTSHIFT) * 4u;
+        } else if (type == D3D8VSD_TOKEN_STREAMDATA && !(token & D3D8VSD_SKIPFLAG)) {
+            UINT reg = token & D3D8VSD_VERTEXREGMASK;
+            if (reg < 32u) declared |= 1u << reg;
+        }
+    }
+    for (UINT i = 0; i < body_words;) {
+        UINT opcode = body[i] & D3DSI_OPCODE_MASK, operands;
+        if (opcode == D3DSIO_COMMENT) {
+            i += 1u + ((body[i] & D3DSI_COMMENTSIZE_MASK) >> D3DSI_COMMENTSIZE_SHIFT);
+            continue;
+        }
+        if (!shader8_opcode_supported((WORD)opcode, FALSE, minor, &operands)) return FALSE;
+        if (opcode != D3DSIO_DEF) for (UINT source = 1; source < operands; ++source) {
+            DWORD token = body[i + 1u + source];
+            if ((token & D3DSP_REGTYPE_MASK) != (D3DSPR_INPUT << D3DSP_REGTYPE_SHIFT)) continue;
+            UINT reg = token & D3DSP_REGNUM_MASK;
+            if (reg >= 32u || !(declared & (1u << reg))) return FALSE;
+        }
+        i += operands + 1u;
+    }
+    return TRUE;
+}
+
+/* Raw8 GetDeclaration/GetFunction and DWORD handle ownership belong to
+ * the frontend. Returned shader storage includes injected local DEFs and
+ * END, while this entry validates the original unexpanded8 input bound. */
+HRESULT WINAPI d9wg_d3d9_core_vertex_shader8(IDirect3DDevice9 *iface,
+        const DWORD *declaration, const DWORD *function,
+        IDirect3DVertexDeclaration9 **layout_out,
+        IDirect3DVertexShader9 **shader_out)
+{
+    if (layout_out) *layout_out = NULL;
+    if (shader_out) *shader_out = NULL;
+    if (!layout_out || !shader_out || !iface || !declaration
+            || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    UINT body = 0;
+    if (function && ((function[0] >> 16) != 0xfffeu
+            || ((function[0] >> 8) & 0xffu) != 1u
+            || (function[0] & 0xffu) > 1u
+            || !shader8_validate_body(function + 1, D9WG_D3D8_SHADER_TOKENS,
+                FALSE, function[0] & 0xffu, &body)))
+        return D3DERR_INVALIDCALL;
+    UINT tokens, elements, vectors;
+    D9WGVertexElement wire[32];
+    DWORD constants[96 * 4];
+    BYTE mask[96];
+    if (!d9wg_declaration8_validate(declaration, D9WG_D3D8_SHADER_TOKENS, &tokens)
+            || !d9wg_declaration8_elements(declaration, tokens, wire, 32,
+                &elements, constants, 96, mask, &vectors))
+        return D3DERR_INVALIDCALL;
+    if (function && !shader8_inputs_declared(declaration, tokens, function + 1,
+            body, function[0] & 0xffu)) return D3DERR_INVALIDCALL;
+    IDirect3DVertexDeclaration9 *layout = NULL;
+    HRESULT hr = d9wg_d3d9_core_vertex_declaration8(iface, declaration,
+            function == NULL, &layout);
+    if (FAILED(hr)) return hr;
+    if (function) {
+        UINT count = body + 2u + vectors * 6u;
+        DWORD *expanded = HeapAlloc(GetProcessHeap(), 0, count * sizeof(DWORD));
+        if (!expanded) {
+            IDirect3DVertexDeclaration9_Release(layout);
+            return E_OUTOFMEMORY;
+        }
+        d9wg_shader8_build_local_defs(expanded, function, body + 2u,
+                constants, mask, 96);
+        D9Shader *shader = NULL;
+        hr = create_shader_object(device_from_iface(iface), expanded,
+                count, FALSE, &shader);
+        HeapFree(GetProcessHeap(), 0, expanded);
+        if (FAILED(hr)) {
+            IDirect3DVertexDeclaration9_Release(layout);
+            return hr;
+        }
+        *shader_out = &shader->iface.vertex;
+    }
+    *layout_out = layout;
+    return D3D_OK;
+}
+
+HRESULT WINAPI d9wg_d3d9_core_pixel_shader8(IDirect3DDevice9 *iface,
+        const DWORD *function, IDirect3DPixelShader9 **out)
+{
+    if (!out) return D3DERR_INVALIDCALL;
+    *out = NULL;
+    if (!iface || device_compatibility_api(device_from_iface(iface)) != 8u)
+        return D3DERR_INVALIDCALL;
+    return IDirect3DDevice9_CreatePixelShader(iface, function, out);
+}
+
+BOOL WINAPI d9wg_d3d9_core_validate_shader_body8(const DWORD *tokens, UINT max_tokens,
+        BOOL is_pixel, UINT minor, UINT *body_count)
+{
+    if (!tokens || !body_count) return FALSE;
+    return shader8_validate_body(tokens, max_tokens, is_pixel, minor, body_count);
+}
+
+/* Validation exports share the creation parser. Additional declaration/caps
+ * checks have no device, transport, or shader-object side effects. */
+BOOL WINAPI d9wg_d3d9_core_validate_shader_export8(const DWORD *shader,
+        const DWORD *declaration, BOOL is_pixel, UINT max_constants)
+{
+    UINT count, offset = 0, inputs = 0xffffffffu;
+    if (!shader || !shader8_validate_body(shader + 1,
+            D9WG_D3D8_SHADER_TOKENS, is_pixel, shader[0] & 0xffu, &count))
+        return FALSE;
+    if (declaration && !is_pixel) {
+        UINT decl_count;
+        if (!d9wg_declaration8_validate(declaration,
+                D9WG_D3D8_SHADER_TOKENS, &decl_count)) return FALSE;
+        inputs = 0;
+        for (UINT i = 0; i < decl_count; ++i) {
+            DWORD token = declaration[i];
+            UINT type = (token >> 29) & 7u;
+            if (type == 2u && !(token & 0x10000000u)) {
+                UINT reg = token & 0x1fu;
+                if (reg >= 16u) return FALSE;
+                inputs |= 1u << reg;
+            } else if (type == 4u) {
+                i += ((token >> 25) & 15u) * 4u;
+            }
+        }
+    }
+    const DWORD *body = shader + 1;
+    while (offset < count) {
+        WORD opcode = (WORD)(body[offset] & D3DSI_OPCODE_MASK);
+        UINT words;
+        if (opcode == D3DSIO_COMMENT) {
+            offset += 1u + ((body[offset] & D3DSI_COMMENTSIZE_MASK)
+                    >> D3DSI_COMMENTSIZE_SHIFT);
+            continue;
+        }
+        if (!shader8_opcode_supported(opcode, is_pixel,
+                shader[0] & 0xffu, &words)) return FALSE;
+        /* DEF's constants are immediate data. All other operands use the
+         * SM1 register encoding; matrix operands span consecutive constants. */
+        UINT operands = opcode == D3DSIO_DEF ? 1u : words;
+        for (UINT i = 1; i <= operands; ++i) {
+            DWORD token = body[offset + i];
+            UINT type = (token & D3DSP_REGTYPE_MASK) >> D3DSP_REGTYPE_SHIFT;
+            UINT reg = token & D3DSP_REGNUM_MASK;
+            if (type == D3DSPR_CONST) {
+                UINT span = 1u;
+                if (i == 3u) {
+                    if (opcode == D3DSIO_M4x4 || opcode == D3DSIO_M3x4) span = 4;
+                    else if (opcode == D3DSIO_M4x3 || opcode == D3DSIO_M3x3) span = 3;
+                    else if (opcode == D3DSIO_M3x2) span = 2;
+                }
+                if (span > max_constants || reg > max_constants - span)
+                    return FALSE;
+            } else if (!is_pixel && i > 1u && type == D3DSPR_INPUT
+                    && (reg >= 16u || !(inputs & (1u << reg)))) {
+                return FALSE;
+            }
+        }
+        offset += words + 1u;
+    }
+    return TRUE;
+}
+
+#endif
+
+#ifndef D9WG_STATIC_CORE
+#include "d3d9_shader_validator.inc"
+#endif
 
 /*
  * Secondary d3d9.dll exports. A title that statically imports any of these
@@ -15185,6 +18425,7 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk_version)
  * commonly pulled in by profiling-instrumented engine builds even when the
  * game never calls them at runtime. All are harmless no-ops here.
  */
+#ifndef D9WG_STATIC_CORE
 void WINAPI DebugSetMute(void)
 {
 }
@@ -15225,10 +18466,17 @@ DWORD WINAPI D3DPERF_GetStatus(void)
     return 0;
 }
 
+#endif
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
+    if (reason == DLL_PROCESS_DETACH && (reserved || !g_process))
+        return TRUE; /* OS handle cleanup ends a terminating process owner. */
+
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
+        g_process = d9wg_process_attach();
+        if (!g_process) return FALSE;
         DisableThreadLibraryCalls(instance);
         g_module_instance = instance;
 #ifdef D9WG_DIAGNOSTIC_TRACE
@@ -15245,9 +18493,6 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         trace_memory_state("process_attach");
         TRACE_FLUSH();
 #endif
-        initialize_session_id(instance);
-        InitializeCriticalSection(&g_transport_lock);
-        InitializeCriticalSection(&g_readback_lock);
     } else if (reason == DLL_PROCESS_DETACH) {
         TRACE("PROCESS_DETACH reserved=%08lX pending_commands=%lu",
                 (DWORD)(uintptr_t)reserved, g_command_count);
@@ -15258,12 +18503,24 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 #endif
         TRACE_FLUSH();
         EnterCriticalSection(&g_transport_lock);
+        /* The host releases whatever this process left alive -- devices,
+         * resources, its last frame -- instead of keeping them until the page
+         * reloads (review S1-10; v86gl.sys's unmap covers a killed process) */
+        if (g_process->references == 1 && g_dma_buffer) {
+            D9WGSessionEnd end;
+            uint8_t *destination;
+            end.session_id_low = g_session_id_low;
+            end.session_id_high = g_session_id_high;
+            if (reserve_command_locked(D9WG_OP_SESSION_END, sizeof(end), 0, NULL,
+                    &destination, NULL))
+                CopyMemory(destination, &end, sizeof(end));
+        }
         if (g_command_count)
             submit_batch_locked(FALSE);
-        close_transport_locked();
+        if (g_process->references == 1) close_transport_locked();
         LeaveCriticalSection(&g_transport_lock);
-        DeleteCriticalSection(&g_transport_lock);
-        DeleteCriticalSection(&g_readback_lock);
+        d9wg_process_release(g_process);
+        g_process = NULL;
 #ifdef D9WG_DIAGNOSTIC_TRACE
         trace_remove_message_hooks();
         if (g_trace_veh) {

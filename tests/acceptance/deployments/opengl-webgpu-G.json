@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "date": "2026-11-01",
+  "plan": "opengl-webgpu G2 / C-D-E-F-G complete",
+  "source": {
+    "v86": "72533bab8c4a2439b8c3e61827f965b05b55acf7",
+    "siteBase": "8d4aec79d3b5ed34001df0a3662737e52875ad56"
+  },
+  "host": "8523858ab36865e264c6",
+  "guestPayloads": {
+    "dll": {
+      "path": "glbridge/openglproxy/opengl32.dll",
+      "sha256": "4bffb949270e19d263289e46bbc01cb8eae49fe048e13260d06e0625cabdd71f",
+      "size": 145408
+    },
+    "driver": {
+      "path": "glbridge/v86gl_driver/v86gl.sys",
+      "sha256": "57c47879bdc28c95352c259df2b441904a82dac36ebc33671d3f238cee68177d",
+      "size": 19636
+    }
+  },
+  "imageDeployment": "opengl-webgpu-F6.json",
+  "matrix": {
+    "source": "v86/tests/glbridge/acceptance/application-matrix.json",
+    "sha256": "2a562fb8bcb8e8255dab465530d69093c44c081755b7b9eb1f56d645d00df2f0",
+    "baseline": "retro-gaming-site e0b52c0 F6 shipped host assets",
+    "baselineRevision": "6a5eb14d73549ecd56fe",
+    "method": "Serial full-VM cold restore, exact stopped composed RGBA, 64 resumed frames, ABBA from the same snapshot (21 warmup + 64 measured frames per run), then a second real program in the same VM. Timing summaries average the two run medians; raw samples are retained.",
+    "tests": [
+      {
+        "program": "glview",
+        "application": "GLView 2.6.0",
+        "worker": false,
+        "evidence": "gl-final-glview-local.json",
+        "evidenceSha256": "c0d78b53c9516a312912fd3f892218ecbaf04eb46511a3262003bc8ea825db3a",
+        "coldRestorePixelSha256": "91ec8e15e2dc599dc771f6f1fbfb92f9605b8a8db9fa0fdce95da5db20f44abf",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 16.68250000476837,
+            "executorCpuMedianMs": 0.45249998569488525
+          },
+          "candidate": {
+            "frameMedianMs": 16.662499994039536,
+            "executorCpuMedianMs": 0.4624999761581421
+          }
+        }
+      },
+      {
+        "program": "glview",
+        "application": "GLView 2.6.0",
+        "worker": true,
+        "evidence": "gl-final-glview-worker.json",
+        "evidenceSha256": "ce55705dac49a710da293f65b870cee9486fb3c29bf450ca1983ddde4d87b9b5",
+        "coldRestorePixelSha256": "a34ec2cc4830fc9ce8c4370031a990e5dcd353f1e900ee7c66b74699360fe231",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 16.672500014305115,
+            "executorCpuMedianMs": 0.5425000190734863
+          },
+          "candidate": {
+            "frameMedianMs": 16.64500004053116,
+            "executorCpuMedianMs": 0.5624999403953552
+          }
+        }
+      },
+      {
+        "program": "warcraft3",
+        "application": "Warcraft III",
+        "worker": false,
+        "evidence": "gl-final-warcraft3-local.json",
+        "evidenceSha256": "7072ef291c6ed8645534e0c7a4936eafe8483f96ee67579ed90db8cd085484af",
+        "coldRestorePixelSha256": "aa68dc2eece5d670c9235b74d031dfc89b6b8e98a2cbea9439b38aabb5e27f94",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 133.37999999523163,
+            "executorCpuMedianMs": 23.247500002384186
+          },
+          "candidate": {
+            "frameMedianMs": 133.54249998927116,
+            "executorCpuMedianMs": 23.504999697208405
+          }
+        }
+      },
+      {
+        "program": "warcraft3",
+        "application": "Warcraft III",
+        "worker": true,
+        "evidence": "gl-final-warcraft3-worker.json",
+        "evidenceSha256": "300d0360e1d7e3ad5f49af02c5af46bf63680fc6a1da11d3457f7a71cac07d34",
+        "coldRestorePixelSha256": "7eeaea6d0dd562bc5d1127358ae652bbf77eabd19351f5c8b83d48ad1e148bd1",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 133.79000002145767,
+            "executorCpuMedianMs": 28.664999544620514
+          },
+          "candidate": {
+            "frameMedianMs": 133.88250002264977,
+            "executorCpuMedianMs": 29.182499825954437
+          }
+        }
+      },
+      {
+        "program": "cube2",
+        "application": "Cube 2",
+        "worker": false,
+        "evidence": "gl-final-cube2-local.json",
+        "evidenceSha256": "215216cb5427e62777b9432a150ca11bc212c2623bf8a2ec2b0f78306ffe7432",
+        "coldRestorePixelSha256": "f6662843a4e0f313a6ba8d3b2ac3ea8583d5bd6c417cfea961ce5f84e3518862",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 46.05000001192093,
+            "executorCpuMedianMs": 18.582500278949738
+          },
+          "candidate": {
+            "frameMedianMs": 46.814999997615814,
+            "executorCpuMedianMs": 18.772500306367874
+          }
+        }
+      },
+      {
+        "program": "cube2",
+        "application": "Cube 2",
+        "worker": true,
+        "evidence": "gl-final-cube2-worker.json",
+        "evidenceSha256": "a3a23f1c15743d8d4122493b061959532174a72142e6697a902b70cfc6b72536",
+        "coldRestorePixelSha256": "b7a8914bf6155562b2f27f7b300950e4ef1e22887ce833d3284fe7d888f92246",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 60.252499997615814,
+            "executorCpuMedianMs": 17.569999903440475
+          },
+          "candidate": {
+            "frameMedianMs": 59.217500030994415,
+            "executorCpuMedianMs": 16.994999825954437
+          }
+        }
+      },
+      {
+        "program": "quake3",
+        "application": "Tremulous GPP1 (Quake 3 engine)",
+        "worker": false,
+        "evidence": "gl-final-quake3-local.json",
+        "evidenceSha256": "4c9856716c5ed35f9d4530dee7958fc36352e71bc25cad3a23b0db218b4f4f54",
+        "coldRestorePixelSha256": "d0edeef2339c21b5458459889ae91b7654302f1955dbb4609ffd6ee419213ee8",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 33.34499999880791,
+            "executorCpuMedianMs": 5.202500015497208
+          },
+          "candidate": {
+            "frameMedianMs": 33.35249999165535,
+            "executorCpuMedianMs": 5.32000008225441
+          }
+        }
+      },
+      {
+        "program": "quake3",
+        "application": "Tremulous GPP1 (Quake 3 engine)",
+        "worker": true,
+        "evidence": "gl-final-quake3-worker.json",
+        "evidenceSha256": "b027d9005a3ae3cb155134113d8b299886296188b596cb025f3e0e1262d5d415",
+        "coldRestorePixelSha256": "5d254d9986c4923edccb98815d506742fadf913f357539dea4a9ebe4657b2738",
+        "secondProgram": "wined3d",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 34.46750000119209,
+            "executorCpuMedianMs": 6.77000018954277
+          },
+          "candidate": {
+            "frameMedianMs": 34.5174999833107,
+            "executorCpuMedianMs": 6.839999616146088
+          }
+        }
+      },
+      {
+        "program": "wined3d",
+        "application": "WineD3D 1.7.52 / D3D8 cube",
+        "worker": false,
+        "evidence": "gl-final-wined3d-local.json",
+        "evidenceSha256": "476a3f561046e7e0dee2181834ae9e1760f79d4181ad77b331f948e06a7b5c23",
+        "coldRestorePixelSha256": "f401b38afcf73cdd180a763101f01cec1f122617d668959d2f447b68a9ec2177",
+        "secondProgram": "cube2",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 49.98750001192093,
+            "executorCpuMedianMs": 0.739999920129776
+          },
+          "candidate": {
+            "frameMedianMs": 49.9825000166893,
+            "executorCpuMedianMs": 0.7699999213218689
+          }
+        }
+      },
+      {
+        "program": "wined3d",
+        "application": "WineD3D 1.7.52 / D3D8 cube",
+        "worker": true,
+        "evidence": "gl-final-wined3d-worker.json",
+        "evidenceSha256": "5281610886990a85e399a2f715afa2cbc949e207bbe7587b46a225663d74beca",
+        "coldRestorePixelSha256": "ab93d007359a38d388d2e7f1b0eb1eeca369885a8bcfc0e8a3dc04d2bcfde135",
+        "secondProgram": "cube2",
+        "timings": {
+          "baseline": {
+            "frameMedianMs": 58.1700000166893,
+            "executorCpuMedianMs": 0.997499942779541
+          },
+          "candidate": {
+            "frameMedianMs": 57.969999969005585,
+            "executorCpuMedianMs": 0.9450000524520874
+          }
+        }
+      }
+    ]
+  },
+  "validation": {
+    "coreGroups": 115,
+    "gpuPages": 55,
+    "sharedGlesGroups": 9,
+    "behaviorSuites": 94,
+    "records": 257,
+    "mutationFamilies": 44,
+    "mutants": 802,
+    "killed": 792,
+    "survivors": [
+      {
+        "family": "glclipplanes",
+        "label": "fixed clip equation forces eye w to one"
+      },
+      {
+        "family": "gl",
+        "label": "Selection/feedback: change resolved raster colour"
+      },
+      {
+        "family": "gl",
+        "label": "Display list pixels: create an invalid 2D view for 3D slice reads"
+      },
+      {
+        "family": "gl",
+        "label": "GLSL struct arrays: read widened member storage as a GLSL value"
+      },
+      {
+        "family": "gl",
+        "label": "CPU GLSL samplers: ignore CPU link failure in the renderer"
+      },
+      {
+        "family": "gl",
+        "label": "ARB LIT diffuse not clamped"
+      },
+      {
+        "family": "gl",
+        "label": "pipelines keyed by program name"
+      },
+      {
+        "family": "gl",
+        "label": "the LOD bias is not applied"
+      },
+      {
+        "family": "gl",
+        "label": "a single-buffered window draws into its back buffer"
+      },
+      {
+        "family": "gl",
+        "label": "the border factor ignores the half texel"
+      }
+    ],
+    "mutationSurvivors": 10,
+    "applicationModesPassed": 10,
+    "exactColdRestore": true,
+    "resumedIntervalsPerMode": 64,
+    "oldContextsReleasedBeforeSecondProgram": true
+  },
+  "scope": {
+    "report": "v86/docs/opengl-webgpu-acceptance.md",
+    "glview": "EXE/DLL unchanged; test copies remove one extraneous GLSL 1.10 function-ending semicolon in each of simple.vert and simple.frag. Original/native compiler results and hashes retained.",
+    "quake3": "Stock Tremulous GPP1/SDL with a separate deterministic ATCS test-only flare map. Actual depth ReadPixels, stencil enable and weapon depth range required. Original Q3 demo does not provide flare coverage.",
+    "timing": "First Quake 3 engine worker wall interval difference did not repeat in an independent fresh-boot ABBA run. Both runs retained; scope is this host and these samples.",
+    "gles": "Nine regression groups and bundled 7-program corpus; optional full dEQP APK absent, one unsupported SPIR-V stage recorded.",
+    "images": "Existing F6 local images; G application installs and writes remain RAM overlays."
+  }
+}

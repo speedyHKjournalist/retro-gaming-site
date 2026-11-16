@@ -1,0 +1,655 @@
+{
+  "wineRevision": "66caeb46",
+  "source": "dlls/d3d9/tests/device.c:test_fvf_declaration",
+  "sourceSha256": "78c0925be01fba6e2b3ce54a7f6f9f32e2a3c3d0680b48eabb102b00d50c89eb",
+  "cases": [
+    {
+      "expression": "D3DFVF_XYZ",
+      "fvf": 2,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZW",
+      "fvf": 16386,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 3,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZRHW",
+      "fvf": 4,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 3,
+          "method": 0,
+          "usage": 9,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB5",
+      "fvf": 14,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 3,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 28,
+          "type": 0,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB5 | D3DFVF_LASTBETA_UBYTE4",
+      "fvf": 4110,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 3,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 28,
+          "type": 5,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB5 | D3DFVF_LASTBETA_D3DCOLOR",
+      "fvf": 32782,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 3,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 28,
+          "type": 4,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB1",
+      "fvf": 6,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 0,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB1 | D3DFVF_LASTBETA_UBYTE4",
+      "fvf": 4102,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 5,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB1 | D3DFVF_LASTBETA_D3DCOLOR",
+      "fvf": 32774,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 4,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB2",
+      "fvf": 8,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 1,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB2 | D3DFVF_LASTBETA_UBYTE4",
+      "fvf": 4104,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 0,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 16,
+          "type": 5,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB2 | D3DFVF_LASTBETA_D3DCOLOR",
+      "fvf": 32776,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 4,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 16,
+          "type": 5,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB3",
+      "fvf": 10,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 2,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB3 | D3DFVF_LASTBETA_UBYTE4",
+      "fvf": 4106,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 1,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 20,
+          "type": 5,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB3 | D3DFVF_LASTBETA_D3DCOLOR",
+      "fvf": 32778,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 1,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 20,
+          "type": 4,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB4",
+      "fvf": 12,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 3,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB4 | D3DFVF_LASTBETA_UBYTE4",
+      "fvf": 4108,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 2,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 24,
+          "type": 5,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB4 | D3DFVF_LASTBETA_D3DCOLOR",
+      "fvf": 32780,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 2,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 24,
+          "type": 4,
+          "method": 0,
+          "usage": 2,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_NORMAL",
+      "fvf": 16,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 3,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_PSIZE",
+      "fvf": 32,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 0,
+          "method": 0,
+          "usage": 4,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_DIFFUSE",
+      "fvf": 64,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 4,
+          "method": 0,
+          "usage": 10,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_SPECULAR",
+      "fvf": 128,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 4,
+          "method": 0,
+          "usage": 10,
+          "usage_index": 1
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_TEXCOORDSIZE1(0) | D3DFVF_TEX1",
+      "fvf": 196864,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 0,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_TEXCOORDSIZE2(0) | D3DFVF_TEX1",
+      "fvf": 256,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 1,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_TEXCOORDSIZE3(0) | D3DFVF_TEX1",
+      "fvf": 65792,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_TEXCOORDSIZE4(0) | D3DFVF_TEX1",
+      "fvf": 131328,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 3,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 0
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_TEXCOORDSIZE1(0) | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEXCOORDSIZE2(2)\n                    | D3DFVF_TEXCOORDSIZE4(3) | D3DFVF_TEX4",
+      "fvf": 8848384,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 0,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 4,
+          "type": 2,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 1
+        },
+        {
+          "stream": 0,
+          "offset": 16,
+          "type": 1,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 2
+        },
+        {
+          "stream": 0,
+          "offset": 24,
+          "type": 3,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 3
+        }
+      ]
+    },
+    {
+      "expression": "D3DFVF_XYZB4 | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEXCOORDSIZE2(0)\n                    | D3DFVF_TEXCOORDSIZE3(1) | D3DFVF_TEX2",
+      "fvf": 262860,
+      "elements": [
+        {
+          "stream": 0,
+          "offset": 0,
+          "type": 2,
+          "method": 0,
+          "usage": 0,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 12,
+          "type": 3,
+          "method": 0,
+          "usage": 1,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 28,
+          "type": 4,
+          "method": 0,
+          "usage": 10,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 32,
+          "type": 4,
+          "method": 0,
+          "usage": 10,
+          "usage_index": 1
+        },
+        {
+          "stream": 0,
+          "offset": 36,
+          "type": 1,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 0
+        },
+        {
+          "stream": 0,
+          "offset": 44,
+          "type": 2,
+          "method": 0,
+          "usage": 5,
+          "usage_index": 1
+        }
+      ]
+    }
+  ]
+}

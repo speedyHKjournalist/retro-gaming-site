@@ -1,0 +1,13 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
+const root=path.resolve(__dirname,".."),dir=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-context-mutants-"));
+const cases=[
+ ["Device2 exposes Device3","device","device->creation_version >= 3u && guid_equal(iid, &IID_IDirect3DDevice3)","device->creation_version >= 2u && guid_equal(iid, &IID_IDirect3DDevice3)"],
+ ["IUnknown names Device7","device","else if (device->creation_version == 2u) *out = &device->device2_vtbl;","else if (device->creation_version == 2u) *out = &device->vtbl;"],
+ ["current reference omitted","legacy","if (device->creation_version >= 2u)\n            d3d_viewport_AddRef","if (device->creation_version >= 3u)\n            d3d_viewport_AddRef"],
+ ["unset viewport rejected","legacy","    HRESULT result = D3D_OK;\n    if (!viewport || viewport->device != device)","    HRESULT result = D3D_OK;\n    if (viewport && !viewport->viewport1_set && !viewport->viewport2_set) return -90;\n    if (!viewport || viewport->device != device)"],
+ ["failed query overwrites output","legacy","    if (!viewport) return DDWG_TRACE_ERROR(D3DERR_NOCURRENTVIEWPORT);","    if (!viewport) { if (out) *out = NULL; return DDWG_TRACE_ERROR(D3DERR_NOCURRENTVIEWPORT); }"],
+ ["Device2 detach frees native retained reference","legacy","if (device->creation_version >= 3u)\n            d3d_viewport_Release","if (device->creation_version >= 2u)\n            d3d_viewport_Release"],
+ ["Device3 destroy misses current reference","legacy","if (device->creation_version >= 3u && device->legacy_current_viewport)","if (device->creation_version >= 7u && device->legacy_current_viewport)"],
+];
+try{for(const [label,kind,before,after]of cases){const source=fs.readFileSync(root+"/ddrawproxy/"+(kind==="device"?"d3d7_proxy.inc":"d3d_legacy_proxy.inc"),"utf8");assert(source.includes(before),label);const file=dir+"/mutant.inc";fs.writeFileSync(file,source.replaceAll(before,after));const run=spawnSync(process.execPath,[path.join(__dirname,"ddraw_device_context_test.js")],{encoding:"utf8",env:{...process.env,[kind==="device"?"DDRAW_CONTEXT_DEVICE_SOURCE":"DDRAW_CONTEXT_LEGACY_SOURCE"]:file}});assert.notEqual(run.status,0,"survived "+label);assert.match(run.stderr,/context line \d+:/,"compiled runtime assertion required: "+label+"\n"+run.stderr);assert(!/error: |ERROR: AddressSanitizer|runtime error:/.test(run.stderr),run.stderr);console.log("KILL "+label);}console.log("PASS legacy device context mutations: 7/7 compiled implementations rejected by native contract assertions");}finally{fs.rmSync(dir,{recursive:true,force:true});}

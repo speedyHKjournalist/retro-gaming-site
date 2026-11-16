@@ -1,11 +1,13 @@
 {
-  "revision": "6a5936bfd189a5d6221e",
+  "revision": "5a4f0bf2252e904cfe40",
   "files": [
     "libv86-webgpu.js",
     "d3d9_shader_worker.js",
     "d3d9_shader_pipeline.js",
     "graphics_journal_worker.js",
+    "d9wg_diagnostics.js",
     "v86gl-device.js",
+    "glslang.wasm",
     "vx_naga.wasm"
   ]
 }

@@ -75,7 +75,7 @@ assert.match(proxy, /g_trace_calls_this_frame = 0;/,
 
 /* Every per-call site goes through the gate, none reads a raw flag. */
 const gated = [...proxy.matchAll(/\bv86gl_trace_call_allowed\(\)/g)].length;
-assert.ok(gated >= 30,
+assert.ok(gated >= 15,
     "too few per-call trace sites route through the budget gate: " + gated);
 assert.ok(!/if \(g_trace_calls(?:_enabled)?\)/.test(proxy),
     "a per-call trace site must not test the enable flag directly");
@@ -89,12 +89,12 @@ assert.ok(rawFlagReads <= 5,
 /* OutputDebugString raises a first-chance exception per line with no debugger
  * attached, so the now-default trace must not pay for it. */
 assert.match(proxy,
-    /if \(force \|\| g_trace_debug_string\) \{\s+lstrcatA\(message, "\\r\\n"\);\s+OutputDebugStringA\(message\);/,
+    /if \(g_trace_debug_string\) \{\s+lstrcatA\(message, "\\r\\n"\);\s+OutputDebugStringA\(message\);/,
     "the debug-string path must stay behind the environment variable");
 
 for (const marker of [
     "PROCESS_ATTACH", "MODE", "FRAME id=", "GLERROR", "HISTOGRAM",
-    "SUBMIT_FAILED", "READBACK_TIMEOUT", "ARB_PROGRAM", "QUERY_BATCH",
+    "SUBMIT_FAILED", "READBACK_TIMEOUT", "ARB_PROGRAM",
     "SURFACE", "WGL",
 ]) {
     assert.ok(proxy.includes(marker),

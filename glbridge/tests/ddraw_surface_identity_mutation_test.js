@@ -1,0 +1,15 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process");
+const root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/ddrawproxy/ddraw_proxy.c","utf8"),legacy=fs.readFileSync(root+"/ddrawproxy/d3d_legacy_proxy.inc","utf8"),directory=fs.mkdtempSync(path.join(os.tmpdir(),"ddraw-identity-mutants-"));
+const cases=[
+    ["implicit factory count discarded","surface","surface->creation_version = view;","surface->creation_version = view; if (surface->implicit) { surface->public_refs[DD_VERSION_7] = 0; return; }",1],
+    ["public groups shared","surface","&surface->public_refs[version]","&surface->public_refs[version * 0 + DD_VERSION_7]",2],
+    ["IUnknown names Surface7","surface","version = DD_VERSION_1;\n    else if (guid_equal(iid, &IID_IDirectDrawSurface7))","version = DD_VERSION_7;\n    else if (guid_equal(iid, &IID_IDirectDrawSurface7))",1],
+    ["GammaControl shares Surface1","surface","surface_public_addref(surface, 0);","surface_public_addref(surface, DD_VERSION_1);",2],
+    ["Texture ignores factory view","legacy","return surface_public_addref(surface, surface->creation_version);","return surface_public_addref(surface, DD_VERSION_1);",2],
+    ["Device1 retains its outer render target","legacy","        surface_Release((IDirectDrawSurface7 *)&surface->vtbl7);\n    }\n    device = surface->device1;","        (void)surface;\n    }\n    device = surface->device1;",1],
+    ["Device1 query bypasses outer","legacy","return surface_QueryInterface((IDirectDrawSurface7 *)&device->aggregate_surface->vtbl7, iid, out);","return d3d3_device_QueryInterface((IDirect3DDevice3 *)&device->device3_vtbl, iid, out);",1],
+    ["Device1 releases cached inner directly","legacy","if (device->aggregate_surface) return surface_public_release(device->aggregate_surface, DD_VERSION_1);","if (device->aggregate_surface) return d3d7_device_Release((IDirect3DDevice7 *)device);",1],
+    ["Device1 cache is not reused","legacy","if (!surface->device1) {","if (TRUE) {",1],
+];
+try{for(const [name,which,before,after,count] of cases){const input=which==="surface"?source:legacy;assert.equal(input.split(before).length,count+1,name);const file=directory+"/mutant.c";fs.writeFileSync(file,input.replaceAll(before,after));const run=spawnSync(process.execPath,[path.join(__dirname,"ddraw_surface_identity_test.js")],{encoding:"utf8",env:{...process.env,[which==="surface"?"DDRAW_IDENTITY_SOURCE":"DDRAW_IDENTITY_LEGACY_SOURCE"]:file}});assert.notEqual(run.status,0,"survived: "+name);assert(/identity line \d+:/.test(run.stderr),"Runtime assertion required: "+name+"\n"+run.stderr);assert(!/error: |ERROR: AddressSanitizer|runtime error:/.test(run.stderr),run.stderr);console.log("KILL "+name);}console.log("PASS DirectDraw identity mutations: "+cases.length+"/"+cases.length+" compiled actual C implementations rejected by runtime ownership/identity assertions");}finally{fs.rmSync(directory,{recursive:true,force:true});}

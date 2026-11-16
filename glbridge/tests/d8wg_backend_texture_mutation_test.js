@@ -1,0 +1,35 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),assert=require("node:assert/strict"),{spawnSync}=require("node:child_process"),root=path.resolve(__dirname,".."),source=fs.readFileSync(root+"/d3d9proxy/d3d9_proxy.c","utf8"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"backend8-texture-mut-"));
+function body(s,n){const m=new RegExp("^[A-Za-z_][^;{}\\n]*?\\b"+n+"\\([^;]*?\\)\\s*\\{","m").exec(s);assert(m,n);let b=s.indexOf("{",m.index)+1,d=1;for(;d;b++){if(s[b]==="{")d++;if(s[b]==="}")d--;}return[m.index,b,s.slice(m.index,b)];}
+const cases=[
+ ["WRITEONLY rejected","create_texture_object","if ((usage & D3DUSAGE_WRITEONLY)","if ((0 && (usage & D3DUSAGE_WRITEONLY))"],
+ ["DXT top-level alignment", "create_texture_object", "block_width == 4u", "block_width == 400u"],
+ ["creation mip metadata","emit_texture_create","command.level_count = texture->level_count;","command.level_count = 1;"],
+ ["creation sample quality","emit_texture_create","command.multisample_quality = texture->multisample_quality;","command.multisample_quality = 4;"],
+ ["API8 unknown autogen bit","emit_texture_create","device_compatibility_api(device) == 8u","device_compatibility_api(device) == 7u"],
+ ["profile","d9wg_d3d9_core_texture8","!= 8u","!= 9u"],
+ ["dispatch","d9wg_d3d9_core_texture8","pool, 8u, out","pool, 9u, out"],
+ ["width ceiling","create_texture_object","width > 4096","width > 8192"],
+ ["height ceiling","create_texture_object","height > 4096","height > 8192"],
+ ["API8 format","create_texture_object","!supported_format8(format, FALSE)","(!supported_format8(format, FALSE) && format != 113u)"],
+ ["depth usage","create_texture_object","|| (usage & D3DUSAGE_DEPTHSTENCIL)","|| ((usage & D3DUSAGE_DEPTHSTENCIL) && 0)"],
+ ["RT pool","create_texture_object","pool != D3DPOOL_DEFAULT || levels != 1","pool > D3DPOOL_SCRATCH || levels != 1"],
+ ["RT levels","create_texture_object","pool != D3DPOOL_DEFAULT || levels != 1","pool != D3DPOOL_DEFAULT || levels > 32"],
+ ["mip bound","create_texture_object","if (levels > full_levels)","if (levels > full_levels && 0)"],
+ ["failed output","create_texture_object","*texture_out = NULL;","(void)texture_out;"],
+ ["resource list","create_texture_object","device->texture_resources = texture;","(void)texture;"],
+ ["RT CPU storage","create_texture_object","if (api == 9u && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)))","if (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))"],
+ ["API8 autogen visibility","create_texture_object","if (api == 9u && (usage & D3DUSAGE_AUTOGENMIPMAP))","if (usage & D3DUSAGE_AUTOGENMIPMAP)"],
+ ["lock API","texture_lock_level","if (!d9wg_format_layout(device_compatibility_api(texture->device),","if (!d9wg_format_layout(9u,","lock"],
+ ["upload API","emit_texture_update","device_compatibility_api(texture->device)","9u","lock"],
+ ["read only","texture_unlock_level","if (texture->pool != D3DPOOL_MANAGED && !(level_data->lock_flags & D3DLOCK_READONLY))","if (texture->pool != D3DPOOL_MANAGED)","lock"],
+ ["unlock cleanup","texture_unlock_level","level_data->locked = FALSE;","level_data->locked = TRUE;","lock"],
+ ["subrect offset","texture_lock_level","+ (int64_t)(area.left / (LONG)block_width) * block_bytes","+ (int64_t)(area.left / (LONG)block_width) * block_bytes * 0u","lock"],
+ ["CPU pool permission","texture_lock_level","BOOL permissive = texture->pool != D3DPOOL_DEFAULT;","BOOL permissive = texture->pool == D3DPOOL_DEFAULT;","lock"],
+ ["bounded upload","texture_lock_level","if (!valid_rect)","if (!valid_rect && 0)","lock"],
+ ["row pitch","emit_level_update_api","rows.source_pitch = level_data->row_pitch;","rows.source_pitch = rows.row_bytes;","lock"],
+ ["upload status","texture_unlock_level","return result ? D3D_OK : D3DERR_DRIVERINTERNALERROR;","return result ? D3D_OK : D3D_OK;","lock"]
+];
+try{for(const[label,name,from,to,kind]of cases){const[a,b,f]=body(source,name);assert(f.includes(from),label);const file=dir+"/frontend.c";fs.writeFileSync(file,source.slice(0,a)+f.replace(from,to)+source.slice(b));const test="d8wg_backend_texture"+(kind==="lock"?"_lock":"")+"_test.js",r=spawnSync(process.execPath,[root+"/tests/"+test],{encoding:"utf8",timeout:180000,env:{...process.env,D8WG_BACKEND_TEXTURE_SOURCE:file}}),out=r.stdout+r.stderr;assert(r.status!==0&&!r.signal,label+" survived/abnormal "+out);assert(!/error:|undefined reference|error generated|errors generated/.test(out),label+" compiler failure is not a runtime mutation kill: "+out);assert(/Backend8 texture(?: lock)? case \d+ line \d+:/.test(out),label+" did not fail actual C semantic assertion: "+out);}
+ console.log(`PASS backend8 texture mutations: ${cases.length}/${cases.length};strict compilation then actual constructor/lock/upload runtime assertions,profile/bounds/formats/mips/pools/output/list/storage/read-only/pitch/status guards`);
+}finally{fs.rmSync(dir,{recursive:true,force:true});}

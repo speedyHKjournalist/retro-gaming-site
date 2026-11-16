@@ -1,0 +1,22 @@
+"use strict";
+const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'indexed8-core-mut-')),source=fs.readFileSync(root+'/d3d9proxy/d3d9_proxy.c','utf8');
+const plan=[
+ ["profile", "d9wg_d3d9_core_draw_indexed8", "device_compatibility_api(device_from_iface(iface)) != 8u", "device_compatibility_api(device_from_iface(iface)) != 9u"],
+ ["base lost", "d9wg_d3d9_core_draw_indexed8", "CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));", "signed_base = 0; (void)base_vertex_index;"],
+ ["sign bit cleared", "d9wg_d3d9_core_draw_indexed8", "CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));", "signed_base = base_vertex_index & 0x7fffffffu;"],
+ ["base negated", "d9wg_d3d9_core_draw_indexed8", "CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));", "UINT changed = 0u-base_vertex_index; CopyMemory(&signed_base, &changed, sizeof(signed_base));"],
+ ["negative clamped", "d9wg_d3d9_core_draw_indexed8", "CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));", "CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base)); if(signed_base<0)signed_base=0;"],
+ ["base biased", "d9wg_d3d9_core_draw_indexed8", "CopyMemory(&signed_base, &base_vertex_index, sizeof(signed_base));", "UINT changed = base_vertex_index+1u; CopyMemory(&signed_base, &changed, sizeof(signed_base));"],
+ ["minimum lost", "d9wg_d3d9_core_draw_indexed8", "signed_base, min_vertex_index, vertex_count", "signed_base, 0u*min_vertex_index, vertex_count"],
+ ["vertex hint lost", "d9wg_d3d9_core_draw_indexed8", "signed_base, min_vertex_index, vertex_count", "signed_base, min_vertex_index, 0u*vertex_count"],
+ ["start lost", "d9wg_d3d9_core_draw_indexed8", "vertex_count, start_index,", "vertex_count, 0u*start_index,"],
+ ["start biased", "d9wg_d3d9_core_draw_indexed8", "vertex_count, start_index,", "vertex_count, start_index+1u,"],
+ ["primitive count lost", "d9wg_d3d9_core_draw_indexed8", "            primitive_count);", "            primitive_count*0u);"],
+ ["zero not no-op", "d9wg_d3d9_core_draw_indexed8", "    INT signed_base;", "    if(!primitive_count)return D3DERR_INVALIDCALL; INT signed_base;"],
+ ["zero bypasses required bindings", "d9wg_d3d9_core_draw_indexed8", "    INT signed_base;", "    if(!primitive_count)return D3D_OK; INT signed_base;"],
+ ["empty vertex hint rejected", "d9wg_d3d9_core_draw_indexed8", "    INT signed_base;", "    if(!vertex_count)return D3DERR_INVALIDCALL; INT signed_base;"],
+ ["primitive type forced", "d9wg_d3d9_core_draw_indexed8", "iface, (D3DPRIMITIVETYPE)primitive_type,", "iface, (D3DPRIMITIVETYPE)(primitive_type*0u+4u),"],
+ ["return status swallowed", "d9wg_d3d9_core_draw_indexed8", "return IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,\n            signed_base, min_vertex_index, vertex_count, start_index,\n            primitive_count);", "IDirect3DDevice9_DrawIndexedPrimitive(iface, (D3DPRIMITIVETYPE)primitive_type,\n            signed_base, min_vertex_index, vertex_count, start_index,\n            primitive_count); return D3D_OK;"],
+];
+function span(s,n){const m=new RegExp('^[A-Za-z_][^;{}\\n]*?\\b'+n+'\\([^;]*?\\)\\s*\\{','m').exec(s);assert(m,n);let e=s.indexOf('{',m.index)+1,d=1;for(;d;e++){if(s[e]==='{')d++;if(s[e]==='}')d--;}return[m.index,e];}
+try{let killed=0;for(const[name,fn,from,to]of plan){const[a,b]=span(source,fn),body=source.slice(a,b);assert(body.includes(from),name);const candidate=source.slice(0,a)+body.replace(from,to)+source.slice(b),file=dir+'/candidate.c';fs.writeFileSync(file,candidate);const r=spawnSync(process.execPath,[__dirname+'/d8wg_indexed_core_test.js'],{encoding:'utf8',timeout:60000,env:{...process.env,D8WG_INDEXED_CORE_SOURCE:file}});assert(!r.error,name+': '+r.error);assert.notEqual(r.status,0,name+' survived');const out=r.stdout+r.stderr;assert(!/error:|undefined reference|Undefined symbols/.test(out),name+' compiler failure: '+out);assert(/Indexed8 core line \d+:|Assertion failed: \([^\n]*\), function \w+, file target\.c, line \d+\.|target\.c:\d+:[^\n]*Assertion[^\n]*failed/.test(out),name+' must fail actual C semantic assertion: '+out);killed++;}console.log('PASS core8 indexed mutations: '+killed+'/'+plan.length+' strictly compiled then failed actual C assertions');}finally{fs.rmSync(dir,{recursive:true,force:true});}

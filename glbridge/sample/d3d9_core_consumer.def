@@ -1,0 +1,3 @@
+LIBRARY core9
+EXPORTS
+    D9CoreCreate9=D9CoreCreate9@4

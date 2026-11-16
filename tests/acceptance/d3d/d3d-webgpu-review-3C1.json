@@ -1,0 +1,43 @@
+{
+  "stage": "D3D review 3C1",
+  "hostCommit": "daf33ffaf952f12c0eff06cc86da97d8193500da",
+  "coreRevision": "cc49eed222f9fb724ba3",
+  "graphicsRevision": "0e7abe82a5a0bb1e93a6",
+  "files": {
+    "glbridge/d3d9proxy/d3d9_protocol.h": "e4b33882315a00c591a7ffeab87bf4590be3f0f9a3b88d8f285381adf95a3094",
+    "libv86.js": "bf4101821a875b9a8fd8b6d9ad40db89adbdf21b62e85f442a47dea4dc754bfe",
+    "v86.wasm": "15a39f2f07c9d40f9c4d5bae1fb720dd410d91d1a3d05a541f2d92cf584a8d9f",
+    "cpu-worker.js": "1982d98e76fc08f6d0d338b94bff806263ab5e81ccfe706a4b40e5dbb4c17ef8",
+    "v86-bochs-vga.js": "ce8415006ca38dc53bd807323fc01fcfc47e9d3c31b7aad3934636e4408d1984",
+    "vendor/v86/glbridge/libv86-webgpu.js": "6de1b1528ec9f8acd6428302556c58f9ae61be0c01000490264e8163c6386eba",
+    "vendor/v86/glbridge/d3d9_shader_worker.js": "96cc3c0939d5fff7044985015470de387c527a56f6cdf274ef5c791fb8aeadd8",
+    "vendor/v86/glbridge/d3d9_shader_pipeline.js": "84b39996273f418e98060fe84b97305a6bebf37c76c58d9b04716aa3c35391d4",
+    "vendor/v86/glbridge/graphics_journal_worker.js": "5a5f27c553df3f3b10aa4be8e1260903795d75e247ae16875ffd41c16dea6d52",
+    "vendor/v86/glbridge/v86gl-device.js": "133f8fe755de1bcba051b10e90a7195bda96ac05afd7bfcfd30b12b8254c5f0c",
+    "vendor/v86/glbridge/glslang.wasm": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+    "vendor/v86/glbridge/vx_naga.wasm": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641",
+    "glbridge/ddrawproxy/ddraw_protocol.h": "baa645ca14ed5e52d3c4dc5df0a6737a036f723e7a81379caaa5a8eb43e5c8ba",
+    "glbridge/ddrawproxy/ddraw.dll": "8e8f30d9beb6812a4eba2abd21ce786f1204358d56cd5de659ac7f9064b7e809",
+    "glbridge/ddrawproxy/ddraw-diagnostic.dll": "02c0cb893fcee1a03a60a5d56e87c3f3ee1235e29d21e61b946eb4004a5e5472"
+  },
+  "validation": {
+    "coreSuites": 123,
+    "privateCorpusStrict": true,
+    "guestAbiSuites": 72,
+    "siteIntegrationTests": 2,
+    "swiftshaderCases": 136,
+    "normativePixels": 118,
+    "knownPixelFailures": 18,
+    "compiledGuestChannelInputs": 510,
+    "fullCheckpoint": "PASS",
+    "d3dMutationsKilled": 12,
+    "warcraft3FrozenReplay": "EXPECTED_DIFFERENCE_FROM_NARROW_UNORM_REPAIR",
+    "warcraft3LegacyUnormCounterfactual": "PASS"
+  },
+  "limitations": [
+    "Original game golden/policy preserved; 95393 channel bytes differ by +1/+2 from the corrected RGB565/1555 expansion. The diagnostic restoring only that expansion passes the original frozen comparison.",
+    "Half-float direct upload, channel remapping and ordered uploads remain review 3C2/3C3.",
+    "Wine guest tests, multi-owner driver and full game acceptance remain pending.",
+    "No remote CI run or disk image writeback performed."
+  ]
+}

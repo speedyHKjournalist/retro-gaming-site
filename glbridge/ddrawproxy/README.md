@@ -47,7 +47,7 @@ interface version and the Direct3D 1-7 fixed-function object models:
 | `Flip`, including storage rotation around a chain | done |
 | `IDirectDrawPalette`, palettised surfaces kept as GPU-side indices | done |
 | `IDirectDrawClipper`, resolved guest-side into per-rectangle blits | done |
-| Window state: where the cooperative window's client area is and what of it other windows leave showing (`D9WG_OP_WINDOW_STATE` with `D9WG_WINDOW_OCCLUDED`/`D9WG_WINDOW_REGION`), sent with each present and from a `SetWinEventHook` while there is a primary | done, not yet run in the guest |
+| Window state: where the cooperative window's client area is and what of it other windows leave showing (`D9WG_OP_WINDOW_STATE` with `D9WG_WINDOW_OCCLUDED`/`D9WG_WINDOW_REGION`), sent with each present and from a `SetWinEventHook` while there is a primary | done; window reports verified in real XP |
 | `GetDC`/`ReleaseDC` over a DIB section | done |
 | Windowed primary initial contents | seeded from the current GDI desktop, so save-under splash screens preserve rather than black out their background |
 | Overlay show/hide, position/stretch, dirty refresh, source/destination keys and overrides, mirroring, enumeration and all z-order operations | done as a non-destructive present-time composite |
@@ -65,7 +65,7 @@ interface version and the Direct3D 1-7 fixed-function object models:
 | D3D7 environment bump mapping | done; `V8U8`/`DDPF_BUMPDUDV` is enumerated and uploaded as signed Du/Dv, with `BUMPENVMAP` and `BUMPENVMAPLUMINANCE` executed by the fixed-function WebGPU cascade |
 | D3D7 state blocks and `IDirect3DVertexBuffer7`, including software `ProcessVertices` | done |
 | D3D7 mip chains, six-face cube maps, DXT1-5 upload/readback and texture colour-key rendering | done |
-| D3D7 `ComputeSphereVisibility`, including enabled user clip planes | exact CPU frustum classification |
+| D3D7 `ComputeSphereVisibility`, including enabled user clip planes | implemented; original Wine classification cases remain under repair |
 | Direct3D 1-6 factory/device/texture/VB/viewport/material/light views | done as adapters over the D3D7 core |
 | D3D1 matrices, execute buffers, all 14 opcodes and triangle `Pick` records | done |
 | DirectDraw video ports and overlay alpha/bob capture modes | not advertised; refused |
@@ -75,14 +75,17 @@ browser console rather than only as an `HRESULT` nobody can see.
 
 ### How the interface versions fit together
 
-A versioned DirectDraw interface is a different *view* of one object with one
-reference count, not a different object, so each object carries every vtable it
-answers to and `QueryInterface` hands back a pointer into the same allocation.
-Which version a call arrived through is recovered from the vtable the caller's
-pointer names (`surface_from_any`), which is also how a method that returns an
-interface knows which version to hand back -- a version 2 app calling
-`GetAttachedSurface` gets an `IDirectDrawSurface2`, because that is what it
-will call through.
+A versioned DirectDraw interface is a different *view* of one allocation.
+Public references are counted by interface group, alongside private references
+that keep attached allocations alive. `QueryInterface` returns the requested
+vtable within that allocation; a zero public count in one group does not destroy
+an allocation that another group or an attachment still owns.
+
+Returned interfaces follow the native method's ABI. `GetAttachedSurface` and
+`EnumAttachedSurfaces` inherited by Surface2/3 return Surface1; Surface4/7 return
+their respective interfaces. Depth attachment deletion also retains the caller's
+interface namespace separately from the target reference group it must release.
+The native XP attachment fixtures cover these identities and reference counts.
 
 The version 7 methods are the implementation; the older versions are generated
 thunks that convert their arguments and forward. They differ in exactly three
@@ -97,16 +100,21 @@ pair there is a crash with no explanation anywhere near the mistake, inside a
 VM. `ddraw_d3d_legacy_vtable_test.js` performs the same check for the 241 slots
 in the seventeen Direct3D 1-6 vtables.
 
-### Not yet run against a real game
+### Guest acceptance
 
-Everything above is verified statically, by the JS suites, by real `naga`
-compilation and by clean `-Werror`, no-CRT builds. The XP-targeted four smoke
-programs are written and build: the D3D7 triangle, the advanced
-mip/cube/DXT/colour-key/sphere test, a D3D1 execute-buffer test that also draws
-through Device2 and Device3, and the advanced DirectDraw surface/overlay test.
-None has executed inside the XP guest yet.
-Guest execution is therefore still the next acceptance gate; static and host
-executor coverage is not presented as real-game compatibility.
+The frozen Wine DirectDraw 1/2/4/7 suites run in XP with the actual WebGPU
+renderer and GPU readbacks. Applicable conformance failures remain; local
+compiled C checks and metadata probes do not replace those full runs. Exact
+DLL hashes, original failures, unreviewed skips, environment histories and
+game-specific evidence are in
+[`docs/d3d-stage6-local-acceptance.md`](../../docs/d3d-stage6-local-acceptance.md).
+
+Client depth memory retains the DirectDraw pixel format's depth, stencil and
+padding bits. Upload/readback privately repacks these integer fields into the
+existing D3D9 wire format; D32 does not pass through a float conversion.
+Legacy `DDSD_ZBUFFERBITDEPTH=24` uses the low 24 bits of a DWORD. Device3 sphere
+classification follows XP's inverse-corner plane construction and half-unit
+intersection boundary; Device7 retains its separate classification rules.
 
 ## Documented deviations
 
@@ -125,7 +133,7 @@ another, on purpose.
 | Raster operations other than `SRCCOPY` and `BLACKNESS` | refused with `DDERR_NORASTEROPHW` | the only two DirectDraw ever required of a driver |
 | GDI drawn straight onto the primary after its initial desktop snapshot | does not appear | the primary is a host texture, not the screen; the same boundary d7vk draws |
 | `CoCreateInstance(CLSID_DirectDraw)` | reaches `system32\ddraw.dll`, not this DLL | the registry, not the loader, resolves it; app-local replacement cannot intercept it |
-| Surface loss | never reported; `Restore` returns `DD_OK` | nothing here is lost to a mode change or a task switch |
+| Surface loss | proxy allocations track mode/focus loss and restoration; some original Wine transition assertions remain outstanding | native system surfaces supply window/mode control, while retained GPU allocations and public loss state are managed by the proxy |
 | Filtered true-colour texture colour keys | compared after the sampled RGB value is quantised | exact at texel centres; filtered edges may differ from individual 1990s drivers |
 | `IDirectDrawGammaControl::SetGammaRamp` | the ramp is stored and returned by `GetGammaRamp`, not applied to the output | presentation and output transfer belong to the browser, the same boundary the D3D8/D3D9 frontends' `SetGammaRamp` draws. A fade done by ramping gamma stays lit; refusing the interface while `DDCAPS2_PRIMARYGAMMA` is advertised would be worse, and dropping the cap loses apps that query without checking |
 | `D3DLIGHT_PARALLELPOINT` / `D3DLIGHT_GLSPOT` | translated to directional / spot | D3D9/WebGPU has no distinct form for either legacy light type |
@@ -223,3 +231,26 @@ driver.
 See `../../docs/ddraw-d3d7-webgpu-architecture.md` and
 `../../docs/ddraw-d3d7-webgpu-implementation-plan.zh-CN.md` for the milestone
 schedule and the protocol increment.
+
+D3D7 fresh material and all six clip planes use the shared generated zero
+object defaults. The original Microsoft system RGB device was measured twice,
+including recreation after nonzero changes; the proxy matches all 82 words and
+HRESULTs. D3D8 has its own SDK material default and is not used as a D3D7 oracle.
+
+Pixel/block sizes and legacy depth classification now use the shared generated
+`../runtime/d9wg_format_layouts.h` table. This preserves the DirectDraw layout
+range; API8/9 use their own masks in that same table. Layout availability is
+separate from actual backend filtering/blending capabilities.
+
+The shared process runtime now includes bounded host-capability discovery.
+Deploy D3D8, D3D9 and DirectDraw DLLs from the same build together; mixed
+process-layout versions are rejected before accessing shared resource state.
+
+Window-report region encoding and duplicate suppression now use the shared
+`../runtime/d9wg_window_state.c` core. The full transmitted report participates
+in the comparison, including geometry and foreground HWND; inactive region
+tail bytes do not. Failed queueing/submission leaves the previous cache so an
+idempotent state report can retry. Actual XP move/resize, foreground, hide/show
+and no-surface observations pass, with the original command stream also
+replayed on SwiftShader and Metal. Win32 capture/event code and per-Present
+probe reuse continue in the following refactor step.

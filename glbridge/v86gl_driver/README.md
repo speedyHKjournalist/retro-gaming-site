@@ -8,10 +8,11 @@ name and proxy DLL IOCTL ABI are unchanged.
 Game → existing proxy DLL → MAP_BUFFER / SUBMIT IOCTL → virtqueue →
 registered shared RAM → browser graphics adapter → WebGPU.
 
-**The checked-in `v86gl.sys` is the old PCI driver.** The new cross-build is
-named `v86gl-virtio.sys` to make deployment explicit. Do not use the old binary
-with the new host device. The new driver has been cross-compiled and the host
-protocol tested, but XP boot/service/game validation remains required.
+The sole shipping driver is `v86gl.sys`, which contains this virtio implementation.
+XP cold boot, GL/GLSL queries, exact GDI Unicode glyph pixels, window lifecycle and Cube 2
+have passed with the current driver, including the local and CPU-worker paths.
+Use the driver and proxy from the same release. F6's deployment manifest records
+source, payload and installed-image hashes and the preserved image backups.
 
 ## Cross-build
 
@@ -21,7 +22,7 @@ With the i686 mingw-w64 toolchain installed, from the repo root:
 sh glbridge/v86gl_driver/build.sh
 ```
 
-Output: `glbridge/v86gl_driver/v86gl-virtio.sys`. The script accepts an output
+Output: `glbridge/v86gl_driver/v86gl.sys`. The script accepts an output
 path as its first argument; `CC` and `V86GL_DDK_INCLUDE` override tool locations.
 It targets PE32, native subsystem 5.1 and only imports kernel/HAL routines.
 
@@ -102,3 +103,7 @@ The log identifies this build as `virtio perf1`. Before replacing a driver, run
 does not update the service. Optimized-driver XP performance remains to be tested.
 
 See [the host/driver optimization report](../../../v86/docs/v86gl-virtio-perf.md).
+
+## 2026-10-31 cold-boot validation
+
+The current source cross-build passed a cold boot of the owner's XP image with the CPU in a worker: service start, the actual GL ABI/GLSL probe, and Cube 2's Complex map, with zero renderer refusals or host/GPU validation errors. The guest installation was in a memory overlay; this does not update the checked-in binaries or source disk images. Reproduce with the sibling v86 checkout's `tools/gl_guest_acceptance.mjs` and `tests/glbridge/GL_GUEST_ACCEPTANCE.md`. Final image deployment remains plan F6; the full game/save/performance matrix remains G.

@@ -29,6 +29,8 @@ const hostSource = fs.readFileSync(
 const executorSource = fs.readFileSync(
     require("./host_paths.js").hostPath("d3d9-webgpu/d3d9_executor.js"), "utf8");
 const ddraw = require(require("./host_paths.js").hostPath("d3d9-webgpu/ddraw_ops.js"));
+// The protocol's one description, which the header above is generated from
+const D9WG = require(require("./host_paths.js").hostPath("d3d9-webgpu/d9wg_protocol.js"));
 
 const failures = [];
 let passed = 0;
@@ -64,6 +66,13 @@ function structLayout(name) {
     }
     layout.set("__size", offset);
     layout.components = components;
+    layout.struct = name;
+    // the protocol's description says the same
+    const described = D9WG.STRUCTS[name.slice("D9WG".length)];
+    assert.ok(described, name + " is not in d9wg_protocol.js");
+    assert.equal(described.size, offset, name + "'s size");
+    for (const [field, at] of layout)
+        if (field !== "__size") assert.equal(described.fields[field].offset, at, name + "." + field);
     return layout;
 }
 
@@ -107,17 +116,24 @@ function handlerSource(name) {
     return hostSource.slice(start, end);
 }
 
-// Reads written as `view.getUint32(offset + 32, true)`, plus the bare
-// `view.getUint32(offset, true)` that is field zero.
-function offsetsRead(source) {
+// Reads written as `view.getUint32(offset + D9WG.F.DDBlt.flags, true)`, an
+// array component as `... + D9WG.F.DDBlt.source_rect + 4`: the offsets they
+// come to, through the protocol's layout of `struct` (the header's name)
+function offsetsRead(source, struct) {
     const offsets = new Set();
-    for (const match of source.matchAll(/view\.get(?:Uint32|Int32|Float32)\(offset(?:\s*\+\s*(\d+))?\s*,/g))
-        offsets.add(match[1] ? Number(match[1]) : 0);
+    for (const match of source.matchAll(
+            /(?:view\.get(?:Uint32|Int32|Float32)|sourceCoordinate)\(offset\s*\+\s*D9WG\.F\.(\w+)\.(\w+)(?:\s*\+\s*(\d+))?\s*[,)]/g)) {
+        assert.equal("D9WG" + match[1], struct, "a read of " + match[1] + "." + match[2] + " in a " + struct + " handler");
+        assert.ok(match[2] in D9WG.F[match[1]], match[1] + " has no field " + match[2]);
+        offsets.add(D9WG.F[match[1]][match[2]] + (match[3] ? Number(match[3]) : 0));
+    }
+    assert.ok(!/view\.get(?:Uint32|Int32|Float32)\(offset\s*\+\s*\d/.test(source),
+        "a field read at a literal offset instead of through D9WG.F");
     return offsets;
 }
 
 function assertReadsFields(handler, layout, fields) {
-    const read = offsetsRead(handlerSource(handler));
+    const read = offsetsRead(handlerSource(handler), layout.struct);
     for (const field of fields) {
         const offset = layout.get(field);
         assert.notEqual(offset, undefined,
@@ -139,13 +155,19 @@ check("onDDBlt decodes every field of D9WGDDBlt at its own offset", () => {
         "source_level", "source_face", "source_rect", "destination_handle",
         "destination_level", "destination_face", "flags",
         "destination_rect", "fill_color"]);
-    // The rectangles are four consecutive int32s read one by one, so their
+    // Both rectangles retain four consecutive 32-bit fields, so their
     // interior offsets have to be accepted as well as their starts.
-    const read = offsetsRead(handlerSource("onDDBlt"));
+    const read = offsetsRead(handlerSource("onDDBlt"), "D9WGDDBlt");
     for (const base of [BLT.get("source_rect"), BLT.get("destination_rect")])
         for (let index = 0; index < 4; ++index)
             assert.ok(read.has(base + index * 4),
                 "rectangle component at " + (base + index * 4) + " is not read");
+});
+
+check("fractional source reads retain the integer wire layout and flag selection", () => {
+    assert.match(handlerSource("onDDBlt"), /sourceCoordinate = at => flags & DDBLT_SOURCE_RECT_F32\s*\? view\.getFloat32\(at, true\) : view\.getInt32\(at, true\)/);
+    assert.equal(ddraw.DDBLT_SOURCE_RECT_F32, D9WG.C.D9WG_DDBLT_SOURCE_RECT_F32);
+    assert.equal(D9WG.C.D9WG_DDBLT_SOURCE_RECT_F32, 1 << 7);
 });
 
 check("onDDSetColorKey decodes the key and its presence flag", () => {
@@ -170,7 +192,7 @@ check("onDDUpdateOverlay decodes identity, rectangles, state and destination",
     assertReadsFields("onDDUpdateOverlay", OVERLAY,
         ["surface_handle", "overlay_id", "source_rect", "destination_rect",
          "flags", "z_order", "destination_handle"]);
-    const read = offsetsRead(handlerSource("onDDUpdateOverlay"));
+    const read = offsetsRead(handlerSource("onDDUpdateOverlay"), "D9WGDDUpdateOverlay");
     for (const base of [OVERLAY.get("source_rect"),
             OVERLAY.get("destination_rect")])
         for (let index = 0; index < 4; ++index)
@@ -273,17 +295,21 @@ check("the overlay flag bits match between the header and host module", () => {
 check("the indexed-storage usage bit is the same number everywhere", () => {
     assert.match(headerConstant(protocolHeader, "D9WG_USAGE_DDRAW_INDEXED"),
         /0x80000000u/);
+    assert.equal(D9WG.C.D9WG_USAGE_DDRAW_INDEXED, 0x80000000);
     assert.match(executorSource,
-        /const D9WG_USAGE_DDRAW_INDEXED = 0x80000000;/,
-        "the executor's copy of the usage bit has drifted");
+        /const D9WG_USAGE_DDRAW_INDEXED = D9WG\.C\.D9WG_USAGE_DDRAW_INDEXED;/,
+        "the executor must take the usage bit from d9wg_protocol.js");
     assert.ok(guestSource.includes("D9WG_USAGE_DDRAW_INDEXED"),
         "the guest never marks a palettised surface as indexed");
 });
 
-check("the protocol minor version is 7 in the header, guest and executor",
+check("the generated header and framing parser agree on the protocol minor range",
         () => {
-    assert.match(headerConstant(protocolHeader, "D9WG_VERSION_MINOR"), /^7u$/);
-    assert.match(executorSource, /const D9WG_VERSION_MINOR = 7;/);
+    const wire = require(require("./host_paths.js").hostPath("d3d9-webgpu/d9wg_wire.js"));
+    assert.equal(Number(headerConstant(protocolHeader, "D9WG_VERSION_MINOR").replace(/u$/, "")), D9WG.VERSION_MINOR);
+    for (let minor = D9WG.MIN_MINOR; minor <= D9WG.VERSION_MINOR; minor++)
+        assert.doesNotThrow(() => wire.readHeader(D9WG.encodeBatch([], { version_minor: minor })));
+    assert.throws(() => wire.readHeader(D9WG.encodeBatch([], { version_minor: D9WG.VERSION_MINOR + 1 })), wire.D9WGStreamError);
     // The guest gets its version from the header it includes, so the check
     // there is that it includes it rather than restating it.
     assert.ok(guestSource.includes("d3d9_protocol.h") ||
@@ -333,7 +359,8 @@ check("the guest emits the DirectDraw group by name, not by number", () => {
 check("DirectDraw teardown reaches both normal and process-wide host paths",
         () => {
     assert.equal(headerEnum("D9WG_OP_SESSION_END"), 13);
-    assert.match(executorSource, /const OP_SESSION_END = 13;/);
+    assert.equal(D9WG.OP.SESSION_END, 13);
+    assert.match(executorSource, /const OP_SESSION_END = D9WG\.OP\.SESSION_END;/);
     assert.match(executorSource,
         /\[OP_SESSION_END\]: this\.onSessionEnd/,
         "the executor must dispatch process teardown");
@@ -357,28 +384,30 @@ check("the guest rides the D3D9 batch function code, not one of its own",
 
 check("mip and cube subresources keep their level and face on every wire path",
         () => {
-    assert.match(guestSource, /update\.level\s*=\s*surface->mip_level/);
-    assert.match(guestSource, /update\.z\s*=\s*surface->cube_face/);
-    assert.match(guestSource, /command\.level\s*=\s*surface->mip_level/);
-    assert.match(guestSource, /command\.face\s*=\s*surface->cube_face/);
+    // Upload level/face and logical BC edge heights are exercised through
+    // the actual C emitter in d9wg_runtime_texture_test.js.
+    assert.match(guestSource, /command\.level\s*=\s*surface_wire_mip_level\(surface\)/);
+    assert.match(guestSource, /command\.face\s*=\s*surface_wire_cube_face\(surface\)/);
     assert.match(guestSource,
         /storage->create_opcode = D9WG_OP_CREATE_TEXTURE_CUBE;[\s\S]*?storage->create\.texture_cube = cube_create;/,
         "a cube surface must record a cube create with the cube payload");
     assert.match(guestSource,
         /emit_command\(storage->create_opcode, &storage->create,\s*storage->create_bytes\)/,
         "the recorded create is what reaches the wire");
-    assert.match(guestSource, /update\.height\s*=\s*bottom\s*-\s*top/,
-        "a DXT upload carries logical texel height, not its block-row count");
 
     const readbackStart = executorSource.indexOf("async onReadbackSurface(");
     assert.ok(readbackStart >= 0, "the host has no readback handler");
     const readbackEnd = executorSource.indexOf("\n        // A \"frame\"", readbackStart);
     const readback = executorSource.slice(readbackStart, readbackEnd);
+    assert.deepEqual(D9WG.ADDED_FIELDS.ReadbackSurface, ["face"]);
+    assert.equal(D9WG.F.ReadbackSurface.face, 48);
     assert.match(readback,
-        /const face = length >= 52 \? view\.getUint32\(offset \+ 48, true\) : 0/,
+        /const face = D9WG\.has\(length, "ReadbackSurface", "face"\)\s*\? view\.getUint32\(offset \+ D9WG\.F\.ReadbackSurface\.face, true\) : 0/,
         "52-byte requests must select a cube face while old requests use face 0");
+    assert.match(readback, /let copyLevel = level, copyRow = firstRow;/,
+        "ordinary readback retains the requested row before optional depth conversion");
     assert.match(readback,
-        /origin: \{ x: 0, y: firstRow, z: face \}/,
+        /origin: \{ x: 0, y: copyRow, z: face \}/,
         "the selected face must reach copyTextureToBuffer");
 });
 
@@ -430,7 +459,7 @@ check("advanced DirectDraw surface features are real core paths, not stubs",
         /object_display_size[\s\S]*?GetSystemMetrics\(SM_CXSCREEN\)[\s\S]*?GetSystemMetrics\(SM_CYSCREEN\)/,
         "a windowless normal-mode primary must fall back to the desktop size");
     assert.match(guestSource,
-        /if \(caps & DDSCAPS_PRIMARYSURFACE\) \{\s*object_display_size\(object,\s*&width,\s*&height\)/,
+        /if \(caps & DDSCAPS_PRIMARYSURFACE\) \{\s*ddraw_platform_sync\(object\);\s*object_display_size\(object,\s*&width,\s*&height\)/,
         "CreateSurface must resolve a primary size without requiring exclusive mode");
     assert.doesNotMatch(guestSource,
         /if \(!width \|\| !height\) return DDERR_NOEXCLUSIVEMODE/,
@@ -450,11 +479,10 @@ check("a closed transport is retried, recorded, and never fails CreateSurface",
     assert.doesNotMatch(guestSource, /g_transport_failed/,
         "a transport failure must not latch the DLL off permanently");
     assert.match(guestSource,
-        /GetTickCount\(\) - g_transport_retry_tick < DDWG_TRANSPORT_RETRY_MS/,
+        /d9wg_retry_ready\(GetTickCount\(\), g_transport_retry_tick, g_transport_retry_armed\)/,
         "a failed open must be retried after a backoff");
-    assert.match(guestSource,
-        /\+\+g_transport_generation;/,
-        "a successful open must start a new resource generation");
+    // Open generations and failure backoff are checked through the common C
+    // transport and the real XP owner probe.
     assert.match(guestSource,
         /if \(emit_command\(D9WG_OP_HELLO[\s\S]*?g_hello_generation = g_transport_generation;/,
         "HELLO must be resent when it was dropped by a closed transport");
@@ -475,9 +503,9 @@ check("a closed transport is retried, recorded, and never fails CreateSurface",
     assert.match(guestSource,
         /CreateFileA\(g_log_path, FILE_APPEND_DATA/,
         "a transport failure must be written somewhere the guest can read it");
-    assert.match(guestSource,
-        /could not open \\\\\\\\\.\\\\v86gl \(Win32 error %lu\)/,
-        "the log line must name the Win32 error behind a failed open");
+    // Win32 open/map errors are exercised by d9wg_transport_test.js; its
+    // frozen framing oracle and failure cases also cover ambiguous submits.
+
 });
 
 if (failures.length) {

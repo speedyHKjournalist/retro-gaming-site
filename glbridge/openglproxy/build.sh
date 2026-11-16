@@ -43,7 +43,7 @@ build_dll() {
     # not a bug.
     "$compiler" -shared -std=gnu99 -Os -s -nostdlib "$@" \
         -Wall -Wextra -Wno-cast-function-type -Werror \
-        -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at \
+        -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at -Wl,--no-insert-timestamp \
         -o "$output" \
         "$script_dir/opengl32_proxy.c" "$script_dir/opengl32.def" \
         -luser32 -lgdi32 -lkernel32
@@ -76,7 +76,6 @@ case $mode in
         ;;
     diagnostic)
         output=${1:-"$script_dir/opengl32-diagnostic.dll"}
-        python3 "$script_dir/../tools/gen_gl_opcode_names.py" >/dev/null
         build_dll "$output" -DV86GL_DIAGNOSTIC_TRACE=1
         printf '%s\n' "Built diagnostic $output" "$imports" \
             "$export_count GL/WGL exports" \

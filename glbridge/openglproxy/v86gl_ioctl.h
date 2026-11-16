@@ -13,7 +13,7 @@ typedef uint32_t V86GLU32;
 #define V86GL_MAGIC 0x324C4756u
 #define V86GL_VERSION 1u
 
-/* User/kernel IOCTL ABI is unchanged. The kernel transport now uses virtio;
+/* Existing user/kernel IOCTL numbers and layouts are unchanged. The kernel uses virtio;
  * legacy PCI register definitions are intentionally removed. */
 
 #define V86GL_DESC_FLAG_PRESENT (1u << 0)
@@ -28,6 +28,10 @@ typedef uint32_t V86GLU32;
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define V86GL_IOCTL_UNMAP_BUFFER \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Optional: process-owned DirectX arena; old drivers return unsupported. */
+#define V86GL_IOCTL_MAP_D3D_BUFFER \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #pragma pack(push, 1)
 typedef struct V86GLDMADesc {

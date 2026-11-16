@@ -1,0 +1,4 @@
+LIBRARY CORE8
+EXPORTS
+    Core8Factory=Core8Factory@0
+    Core8Device=d8wg_core_create_device8@32

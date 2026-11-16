@@ -33,6 +33,13 @@ if [ $# -gt 1 ]; then
     exit 2
 fi
 
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/d9wg-link.XXXXXX")
+trap 'rm -rf "$runtime_dir"' EXIT HUP INT TERM
+core_archive="$runtime_dir/libd9wg_d3d9.a"
+core_mode=--static
+if [ "$mode" = diagnostic ]; then core_mode=--static-diagnostic; fi
+CC="$compiler" sh "$script_dir/../d3d9proxy/build.sh" "$core_mode" "$core_archive"
+
 # The guest has no C runtime to resolve such an import against.
 check_imports() {
     imports=$("$objdump" -p "$1" | sed -n 's/^[[:space:]]*DLL Name: //p')
@@ -52,8 +59,8 @@ build_dll() {
         -Wall -Wextra -Werror \
         -Wl,--subsystem,windows:5.01 -Wl,-e,_DllMain@12 -Wl,--kill-at \
         -o "$output" \
-        "$script_dir/d3d8_proxy.c" "$script_dir/d3d8.def" \
-        -luser32 -lgdi32 -lkernel32
+        "$script_dir/d3d8_proxy.c" "$script_dir/d3d8_core_device.c" "$script_dir/d3d8_core_surface.c" "$script_dir/d3d8_core_texture.c" "$script_dir/d3d8_core_cube_texture.c" "$script_dir/d3d8_core_volume.c" "$script_dir/d3d8_core_volume_texture.c" "$script_dir/d3d8_core_buffer.c" "$script_dir/d3d8_core_swap_chain.c" "$script_dir/d3d8.def" \
+        "$core_archive" -luser32 -lgdi32 -lkernel32
     check_imports "$output"
 }
 
@@ -97,6 +104,7 @@ case $mode in
             transform_depth \
             raster_stencil \
             lighting \
+            tween_draw \
             fog \
             textured_cube \
             stateblock \

@@ -1,87 +1,80 @@
 # OpenGL guest proxy
 
-`opengl32.dll` is the Windows XP guest half of the OpenGL 1.1–2.1 WebGPU
-path. It exports the system OpenGL/WGL ABI, encodes calls into the VGL2 record
-format, and submits batches through `v86gl.sys`.
+`opengl32.dll` is the Windows XP guest half of the desktop OpenGL/WGL
+WebGPU path. It exports the 831-entry ABI, captures application inputs,
+encodes VGL2 records and uses the matched `v86gl.sys` virtio transport.
+The authoritative GL state, object names, errors, capability profile,
+queries, lists, evaluators, selection/feedback and link interfaces belong
+to v86's CPU `GLShadow`. The page executor renders accepted records and
+returns explicitly asynchronous GPU results.
 
 ```text
-game.exe
-  -> opengl32.dll (this directory)
-  -> v86gl.sys + v86 PCI DMA
-  -> ../v86_network_bridge.js
-  -> ../gl-webgpu/gl_executor.js
-  -> WebGPU
+game.exe -> app-local opengl32.dll -> v86gl.sys / virtio
+         -> v86 CPU GLShadow -> browser GLWebGPUExecutor -> WebGPU
 ```
 
-There is no GL4ES or WebGL fallback. `v86gl.sys` remains a transport only; the
-authoritative GL state machine and all rendering live in `../gl-webgpu/`.
+There is no GL4ES or WebGL fallback. The DLL still owns TLS, client-pointer
+capture, response lifetimes, WGL/window bookkeeping and GDI font access;
+it is a thin transport/API shim, not an empty forwarding DLL. Ordinary
+GL getters have no guessed-limit or local-state fallback. CPU answers,
+including `glGetError`, reach the caller before submission returns in
+both local and CPU-worker modes. Failed queries preserve application
+output. Explicit GPU-derived reads, fences, selection vertices and query
+results use pending responses and bounded waits.
 
-## What the proxy does
+The single protocol source is
+[`v86/gl_protocol.js`](../../../v86/src/browser/glbridge/gl-webgpu/gl_protocol.js).
+It defines all 257 wire records, control records, payload layouts and
+constants. Regenerate the C headers with:
 
-- Exports the OpenGL 1.1 core ABI plus the OpenGL 1.2–2.1/extension entry
-  points returned by `wglGetProcAddress`.
-- Batches fixed-size and extended-size records in a 16 MiB mapped DMA arena.
-- Keeps large texture, buffer, shader and direct-draw payloads inline with the
-  record that owns them.
-- Reserves response storage for synchronous state queries and asynchronous GPU
-  readback.
-- Tracks guest-visible generated object names and program/uniform/attribute
-  locations so replay is deterministic.
-- Exposes conservative extension profiles for OpenGL 1.5 WineD3D, ARB-program
-  WineD3D and OpenGL 2.1 applications.
+```sh
+node ../v86/tools/gen_gl_protocol_header.mjs glbridge/openglproxy
+```
 
-The protocol schema is `../gl_protocol.json`; constants shared with the host
-are in `../gl-webgpu/gl_constants.js` and the decoder table is in
-`../gl-webgpu/gl_wire.js`. `../tests/gl_protocol_consistency_test.js` checks
-that these views stay identical.
+Run that from the site root. Generated headers have a size/offset assert
+for every payload; guest-supplied internal resolved-state records are
+rejected. The [behavior coverage table](../../../v86/src/browser/glbridge/gl-webgpu/COVERAGE.md)
+links actual passing tests for each record. The [architecture](../../../v86/docs/glbridge.md),
+[plan](../../../v86/docs/opengl-webgpu-plan.md) and
+[acceptance record](../../../v86/docs/opengl-webgpu-acceptance.md) describe
+the completed migration and its tested scope.
 
-## Window state
+The mapped DMA arena is 16 MiB. Large inputs are bounded/chunked, and
+synchronous answers retain their valid lifetime while the recursive API
+guard is held. Asynchronous waits use a six-second host-silence deadline
+renewed by the heartbeat; GPU waits are bounded to five seconds. The last
+16 arena bytes hold the heartbeat and are excluded from command capacity.
+Inline answers expire on the next submission. Actual C ABI fixtures cover
+both transports, progress, silence, tick wrap and command boundaries.
 
-The host shows the GL picture as a layer over the guest's desktop, so it has
-to know when other guest windows lie over the drawing window. The proxy sends
-`V86GL_CTRL_WINDOW_STATE` (0xFFF3) whenever that changes: the window's client
-origin and size, whether it is shown, minimised, covered entirely
-(`V86GL_WINDOW_OCCLUDED` -- Warcraft III's cinematic popup) or in part
-(`V86GL_WINDOW_REGION`, followed by the rectangles that show, from
-`../window_region.h`). The flag bits are D9WG's (`d3d9_protocol.h`). It goes
-out with each frame, from the subclassed window procedure on moves, and from a
-`SetWinEventHook` that the drawing thread installs, so a game that stops
-drawing while another window covers it is still heard from. A host that
-predates the record refuses it as an unknown opcode and draws as before.
-
-## Synchronous calls
-
-The host executes a submitted batch synchronously while the guest is blocked
-inside `DeviceIoControl`. State-only queries such as `glGetError`,
-`glGetIntegerv`, `glGetString`, shader/program status, uniform/attribute
-location mapping, and framebuffer status write their answer into the command
-record before the IOCTL returns.
-
-`glReadPixels` and occlusion results require GPU completion. Their records
-contain status/heartbeat fields and response storage in the shared DMA arena;
-the host completes them after WebGPU mapping without allocating a second IPC
-channel.
+Window visibility/occlusion uses `WINDOW_STATE` control records. WinEvent
+callbacks register changes; a separate serialized dispatcher also polls
+bound-window liveness and updates idle windows. No application window
+procedure is replaced. Full GL checkpoints save CPU authority plus live
+GPU resources, every texture mip/layer, depth/stencil/MSAA samples and the
+last presented image separately from an unfinished back frame.
 
 ## Capability profiles
 
 The default renderer strings are:
 
 ```text
-GL_VENDOR   = Anthropic v86gl
-GL_RENDERER = v86 WebGPU bridge
-GL_VERSION  = 2.1 (v86gl/WebGPU)
-GLSL        = 1.20
+GL_VENDOR   = VMware, Inc.
+GL_RENDERER = SVGA3D; v86 WebGPU bridge
+GL_VERSION  = 2.1 v86gl (WebGPU)
+GLSL        = 1.20 v86gl
 ```
 
 The WineD3D compatibility profile preserves the VMware/SVGA3D identity used
 by legacy WineD3D capability selection, but names the backend
 `SVGA3D; v86 WebGPU bridge`.
 
-Optional formats are enabled only after the private host-capability query is
-answered by the live WebGPU adapter. The complete entry-point classification
+The CPU freezes adapter capabilities and limits in the context profile;
+snapshots preserve that profile. Compatibility hints can hide capabilities,
+never grant an unimplemented one. The entry-point classification
 and known semantic deviations are documented in
-[`../gl-webgpu/COVERAGE.md`](../gl-webgpu/COVERAGE.md) and
-[`../gl-webgpu/README.md`](../gl-webgpu/README.md).
+[coverage table](../../../v86/src/browser/glbridge/gl-webgpu/COVERAGE.md) and
+[retained differences](../../../v86/src/browser/glbridge/gl-webgpu/README.md).
 
 ## Build
 
@@ -170,44 +163,97 @@ The file exists only inside the running VM. v86 mounts the game image with
 reach the `.img` on the host. Read the log inside the guest, or copy it out
 with the file-transfer tool, before the page reloads.
 
-## Host page
+## Host page and tests
 
-Load the WebGPU modules in dependency order, then the router:
+Use the generated `vendor/v86/glbridge/libv86-webgpu.js` bundle with the
+matching core, WASM, CPU worker, display plugin and shader resources.
+The `V86` graphics proxy option installs its lifecycle/restore hooks; an
+embedding should not manually load the retired site-side module paths.
+Build, sync and embedding instructions are in the
+[graphics README](../README.md) and [host architecture](../../../v86/docs/glbridge.md).
 
-```html
-<canvas id="d3d_webgpu_canvas"></canvas>
-<script src="glbridge/webgpu_host.js"></script>
-<script src="glbridge/gl-webgpu/gl_constants.js"></script>
-<script src="glbridge/gl-webgpu/gl_wire.js"></script>
-<script src="glbridge/gl-webgpu/gl_state_layout.js"></script>
-<script src="glbridge/gl-webgpu/gl_shader_translator.js"></script>
-<script src="glbridge/gl-webgpu/gl_fixed_function.js"></script>
-<script src="glbridge/gl-webgpu/gl_executor.js"></script>
-<script src="glbridge/v86_network_bridge.js"></script>
+From the site root, run all guest ABI tests and core regression:
+
+```sh
+for test in glbridge/tests/*_test.js; do node "$test" || exit 1; done
+make -C ../v86 test-glbridge
+make -C ../v86 glbridge-gpu-tests
 ```
 
-```js
-installV86GLNetworkBridge(
-    emulator,
-    document.getElementById("d3d_webgpu_canvas"),
-    { graphicsCanvas: document.getElementById("d3d_webgpu_canvas") }
-);
-```
+The standalone scripts are also directly runnable with `node`.
+The application matrix and its required local inputs are documented in
+the [acceptance record](../../../v86/docs/opengl-webgpu-acceptance.md).
 
-The same canvas may be shared with the D3D8 and D3D9 WebGPU executors because
-a game directory drives only one graphics API backend at a time. D3D batches
-use tagged envelopes; untagged VGL2 records always route to OpenGL WebGPU.
+### Thread and window ownership
 
-## Tests
+Every exported GL/WGL entry takes a recursive call guard, including client
+input encoding and synchronous response reads. Win32 TLS selects the calling
+thread's context; switching threads saves and submits the old encoding state
+before loading the new one. Mapping return storage is scoped to the share group.
+WinEvent callbacks only mark changes; window procedures are never replaced,
+leaving application Unicode/ANSI subclass chains intact. Bound-window liveness is
+also polled, so destruction does not depend on a message pump. A separate dispatcher uses the same guard
+for idle visibility/occlusion updates, retains the DLL while contexts exist and
+exits after the final context is deleted. The host ABI fixtures separately
+exercise real entry bodies, TLS/locking, all 831 preprocessed exports, callbacks
+and dispatcher lifetime; their small-body shim is test-only.
 
-From the repository root:
+### Window pixel formats
 
-```bash
-node glbridge/tests/gl_protocol_consistency_test.js
-node glbridge/tests/cube2_gl_proc_coverage_test.js
-node glbridge/tests/wined3d_caps_profile_test.js
-node glbridge/tests/gl_executor_test.js
-node glbridge/tests/v86_network_bridge_gl_route_test.js
-node glbridge/tests/gl_proxy_diagnostic_trace_test.js
-node glbridge/tests/gl_diagnostic_buffer_test.js
-```
+Display windows expose RGB24 plus alpha8, depth24/stencil8, with double,
+4-sample double and single-buffer variants. The format is a window property:
+unset returns zero, repeating the same selection succeeds, changing it fails.
+Contexts require a selected compatible format. Bitmap/memory DCs are explicitly
+unsupported and are never converted to a screen overlay. ARB selection handles
+integer and floating constraints, and queries validate all fields before writing.
+The actual-C format fixture and its 12 mutants cover these rules; an XP worker
+Cube 2 complex run also checks the current DLL and GLSL probe.
+
+### Window swaps
+
+SwapBuffers validates and presents the supplied DC, independently of the current
+rendering context. Single-buffer Swap is a no-op; Flush/Finish presents front
+writes. Swap interval is window state, defaults to 1 and clamps to 4. Negative
+values and calls without a current DC fail. The host replies after the requested
+refresh callbacks, bounding queued work; interval 0 removes that wait, while the
+browser compositor retains control of physical presentation. Expired arena,
+device-loss and timeout callbacks cannot present later. The real-GPU test covers
+two windows, no-current swaps and cold restore in both transports; XP/Cube 2 also
+passes with the matching guest and host protocol.
+
+WGL sharing migrates every member of an unused target group. Once any target
+member has been current, namespace merging is explicitly refused; already
+shared contexts remain accepted. Nonzero wglCopyContext masks return
+ERROR_CALL_NOT_IMPLEMENTED instead of false success. The context-operations
+fixture covers these limits, format compatibility and unadvertised layer refusal.
+
+### Recovering transport failures
+
+A failed open/map can be attempted again. A failed submit keeps the process's
+mapping and previously accepted objects; the driver resets its queue and can
+register the same arena again. The failed batch is discarded, never replayed
+when acceptance is uncertain. The next API entry resends the current surface.
+There is no permanent disabled flag. Error messages use OutputDebugString only
+when tracing was explicitly requested; diagnostic builds retain file logging.
+
+### Truthful query and font results
+
+Texture residency queries validate names on the CPU. This implementation keeps
+all live textures resident; aggregate true leaves the caller's array untouched.
+Invalid/deleted/zero names and Begin/End queries report GL errors. Bitmap fonts
+use matching ANSI/Unicode GDI calls, preserve unpack state and PBO binding, and
+compile actual glyph bits with their origins and both advances. Undefined glyphs
+create empty lists. GDI/allocation errors fail without placeholder geometry.
+Outline fonts remain explicitly unsupported. RGBA formats have no layer palette,
+so palette calls fail rather than returning fabricated entries or success.
+The XP probe compares a Unicode glyph against GDI pixels and checks application
+window chains before allowing Cube 2 to launch.
+
+### F6 installed images
+
+`../../tests/acceptance/deployments/opengl-webgpu-F6.json` records the exact source, shipping and
+installed-image hashes plus original-image backup names. XP, Cube 2 and Warcraft
+III local images contain the current driver/proxy. The XP system OpenGL files
+are protected and remain unchanged. The old and new Cube DLLs are both 145408
+bytes: use hashes and the XP GL_VERSION/probe result, never file size alone.
+Local branch assets and images are prepared; no remote publication is implied.

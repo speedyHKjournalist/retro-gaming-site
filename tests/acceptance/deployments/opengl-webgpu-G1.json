@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "date": "2026-11-01",
+  "plan": "opengl-webgpu G1",
+  "source": {
+    "v86": "173d7cf36b6cf8bedbf8b54f6c0461d8f5c1cd48"
+  },
+  "host": "8523858ab36865e264c6",
+  "change": "Keep the last presented frame separate from unfinished back-buffer contents during graphics cold restore.",
+  "guestPayloads": {
+    "dll": {
+      "path": "glbridge/openglproxy/opengl32.dll",
+      "sha256": "4bffb949270e19d263289e46bbc01cb8eae49fe048e13260d06e0625cabdd71f",
+      "size": 145408
+    },
+    "driver": {
+      "path": "glbridge/v86gl_driver/v86gl.sys",
+      "sha256": "57c47879bdc28c95352c259df2b441904a82dac36ebc33671d3f238cee68177d",
+      "size": 19636
+    }
+  },
+  "imageDeployment": "opengl-webgpu-F6.json",
+  "validation": {
+    "coreGroups": 115,
+    "gpuPages": 55,
+    "sharedGlesGroups": 8,
+    "decodedRecords": 257,
+    "behaviorSuites": 94,
+    "mutationFamilies": 44,
+    "mutants": 802,
+    "killed": 792,
+    "exitCode": 0
+  },
+  "applicationMatrix": "G2 in progress; this manifest records only the completed G1 regression stage."
+}
