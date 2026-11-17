@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "5a4f0bf2252e904cfe40";
+globalThis.V86GL_BUILD_REVISION = "64378aa6ca60e754a869";
 (function(module, require) {
 globalThis.V86SVGADXFormats = [["","","",1,1,0],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbmxe","",1,1,2],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["depth32float","dum","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus-stencil8","dum","",1,1,4],["","","",1,1,2],["rgba8unorm","se","",1,1,1],["","","",1,1,1],["","","",1,1,2],["rgba8unorm","se","",1,1,2],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["","","",1,1,2],["","","",1,1,2],["","","",1,1,4],["","","",1,1,3],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srb","float32x4",1,1,16],["rgb10a2unorm","srbme","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,2],["","","",1,1,4],["","","",1,1,4],["rgba8unorm","srbe","",1,1,1],["r16float","srbm","float16",1,1,2],["r32float","srb","float32",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srb","float32x2",1,1,8],["","","",1,1,1],["depth24plus","dum","",1,1,4],["","","",1,1,4],["rg16uint","ue","",1,1,4],["rgba16uint","ue","",1,1,8],["","","",2,1,4],["","","",2,1,4],["","","",2,2,6],["","","",1,1,4],["rgba32float","srb","float32x4",1,1,16],["rgba32uint","ur","uint32x4",1,1,16],["rgba32sint","ur","sint32x4",1,1,16],["rgba32float","se","float32x3",1,1,12],["rgba32float","se","float32x3",1,1,12],["rgba32uint","ue","uint32x3",1,1,12],["rgba32sint","ue","sint32x3",1,1,12],["rgba16float","srbm","float16x4",1,1,8],["rgba16uint","urm","uint16x4",1,1,8],["rgba32float","srbe","snorm16x4",1,1,8],["rgba16sint","urm","sint16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rg32uint","ur","uint32x2",1,1,8],["rg32sint","ur","sint32x2",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","du","",1,1,8],["depth32float-stencil8","u","",1,1,8],["depth32float-stencil8","u","",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgb10a2uint","urm","pull:uint10-10-10-2",1,1,4],["rg11b10ufloat","srb","pull:ufloat11-11-10",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm","srbm","unorm8x4",1,1,4],["rgba8unorm-srgb","srbm","",1,1,4],["rgba8uint","urm","uint8x4",1,1,4],["rgba8sint","urm","sint8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg16uint","urm","uint16x2",1,1,4],["rg16sint","urm","sint16x2",1,1,4],["r32float","srb","float32",1,1,4],["depth32float","dum","",1,1,4],["r32uint","urm","uint32",1,1,4],["r32sint","urm","sint32",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["depth24plus-stencil8","u","",1,1,4],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8unorm","srbm","unorm8x2",1,1,2],["rg8uint","urm","uint8x2",1,1,2],["rg8sint","urm","sint8x2",1,1,2],["r16float","srbm","float16",1,1,2],["r32float","srbe","unorm16",1,1,2],["r16uint","urm","uint16",1,1,2],["r32float","srbe","snorm16",1,1,2],["r16sint","urm","sint16",1,1,2],["r8unorm","srbm","unorm8",1,1,1],["r8unorm","srbm","unorm8",1,1,1],["r8uint","urm","uint8",1,1,1],["r16float","srbe","snorm8",1,1,1],["r8sint","urm","sint8",1,1,1],["","","",1,1,1],["rgb9e5ufloat","s","",1,1,4],["rgba8unorm","se","",2,1,4],["rgba8unorm","se","",2,1,4],["bc1-rgba-unorm","s","",4,4,8],["bc1-rgba-unorm-srgb","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc2-rgba-unorm-srgb","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm-srgb","s","",4,4,16],["bc4-r-unorm","s","",4,4,8],["bc4-r-unorm","s","",4,4,8],["bc4-r-snorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-unorm","s","",4,4,16],["bc5-rg-snorm","s","",4,4,16],["rgb10a2unorm","","",1,1,4],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm-srgb","srbm","",1,1,4],["bgra8unorm","srbmx","",1,1,4],["bgra8unorm-srgb","srbmx","",1,1,4],["depth16unorm","dum","",1,1,2],["depth24plus","dum","",1,1,4],["depth24plus-stencil8","dum","",1,1,4],["","","",2,2,6],["rgba32float","srb","float32x4",1,1,16],["rgba16float","srbm","float16x4",1,1,8],["rgba32float","srbe","unorm16x4",1,1,8],["rg32float","srb","float32x2",1,1,8],["rgb10a2unorm","srbm","unorm10-10-10-2",1,1,4],["rgba16float","srbe","snorm8x4",1,1,4],["rg16float","srbm","float16x2",1,1,4],["rg32float","srbe","unorm16x2",1,1,4],["rg32float","srbe","snorm16x2",1,1,4],["r32float","srbm","float32",1,1,4],["rg16float","srbe","snorm8x2",1,1,2],["r16float","srbm","float16",1,1,2],["depth16unorm","dum","",1,1,2],["rgba8unorm","srbe","",1,1,1],["bc1-rgba-unorm","s","",4,4,8],["bc2-rgba-unorm","s","",4,4,16],["bc3-rgba-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["rgba8unorm","srbme","",1,1,2],["bgra8unorm","srbm","unorm8x4-bgra",1,1,4],["bgra8unorm","srbmx","pull:unorm8x4-bgrx",1,1,4],["bc4-r-unorm","s","",4,4,8],["bc5-rg-unorm","s","",4,4,16],["rgba8unorm","srbme","",1,1,2],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-ufloat","s","",4,4,16],["bc6h-rgb-float","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm","s","",4,4,16],["bc7-rgba-unorm-srgb","s","",4,4,16],["","","",1,1,4],["rg11b10ufloat","srb","",1,1,4]];
 globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unorm","frbmcp",null,2],"8":["rgba8unorm","frbmcp",null,2],"9":["r8unorm","frbmc","unorm8",1],"10":["r8snorm","fc","snorm8",1],"13":["r8uint","irmc","uint8",1],"14":["r8sint","irmc","sint8",1],"16":["rg8unorm","frbmc","unorm8x2",2],"17":["rg8snorm","fc","snorm8x2",2],"20":["rg8uint","irmc","uint8x2",2],"21":["rg8sint","irmc","sint8x2",2],"37":["rgba8unorm","frbmsc","unorm8x4",4],"38":["rgba8snorm","fsc","snorm8x4",4],"41":["rgba8uint","irmsc","uint8x4",4],"42":["rgba8sint","irmsc","sint8x4",4],"43":["rgba8unorm-srgb","frbmc",null,4],"44":["bgra8unorm","frbmc","unorm8x4-bgra",4],"50":["bgra8unorm-srgb","frbmc",null,4],"51":["rgba8unorm","frbmsc","unorm8x4",4],"52":["rgba8snorm","fsc","snorm8x4",4],"55":["rgba8uint","irmsc","uint8x4",4],"56":["rgba8sint","irmsc","sint8x4",4],"57":["rgba8unorm-srgb","frbmc",null,4],"64":["rgb10a2unorm","frbmc","unorm10-10-10-2",4],"68":["rgb10a2uint","irmc",null,4],"70":[null,"","unorm16",2],"71":[null,"","snorm16",2],"74":["r16uint","irmc","uint16",2],"75":["r16sint","irmc","sint16",2],"76":["r16float","frbmc","float16",2],"77":[null,"","unorm16x2",4],"78":[null,"","snorm16x2",4],"81":["rg16uint","irmc","uint16x2",4],"82":["rg16sint","irmc","sint16x2",4],"83":["rg16float","frbmc","float16x2",4],"91":[null,"","unorm16x4",8],"92":[null,"","snorm16x4",8],"95":["rgba16uint","irmsc","uint16x4",8],"96":["rgba16sint","irmsc","sint16x4",8],"97":["rgba16float","frbmsc","float16x4",8],"98":["r32uint","irmsc","uint32",4],"99":["r32sint","irmsc","sint32",4],"100":["r32float","xrmsc","float32",4],"101":["rg32uint","irsc","uint32x2",8],"102":["rg32sint","irsc","sint32x2",8],"103":["rg32float","xrsc","float32x2",8],"104":[null,"","uint32x3",12],"105":[null,"","sint32x3",12],"106":[null,"","float32x3",12],"107":["rgba32uint","irsc","uint32x4",16],"108":["rgba32sint","irsc","sint32x4",16],"109":["rgba32float","xrsc","float32x4",16],"122":["rg11b10ufloat","fc",null,4],"123":["rgb9e5ufloat","fc",null,4],"124":["depth16unorm","dmc",null,2],"125":["depth24plus","dmc",null,4],"126":["depth32float","dmc",null,4],"127":["stencil8","dmc",null,1],"129":["depth24plus-stencil8","dmc",null,4],"130":["depth32float-stencil8","dmc",null,8]};
@@ -742,7 +742,7 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
     // Match semantic components at link time, then pack only consumed values
     // into WebGPU locations. A PS3 has at most forty input components; splitting
     // flat colours from interpolated values still fits eleven vec4 locations.
-    function linkShaderSemantics(vertex, pixel) {
+    function linkShaderSemantics(vertex, pixel, options = {}) {
         try {
             if (!pixel || pixel.version.major < 3) return {ok: true, link: null, key: ""};
             const programmable3 = vertex && vertex.version.major >= 3;
@@ -770,7 +770,13 @@ globalThis.V86VenusFormats = {"4":["rgba8unorm","frbmcp",null,2],"6":["rgba8unor
                 const key = input.usage + ":" + input.usageIndex;
                 if (semantics.has(key)) throw new Error("duplicate pixel input semantic " + key);
                 semantics.add(key);
-                const output = bySemantic.get(key);
+                // Point coordinates come from rasterization, including when
+                // an SM3 vertex body declares no TEXCOORD output. The entry
+                // wrapper replaces these bindings with (u,v,0,1); register 0
+                // is only a placeholder and its raw value is never read.
+                const pointCoordinates = programmable3 && options.pointSprite &&
+                    input.usage === DECLUSAGE_TEXCOORD && input.usageIndex < 8;
+                const output = pointCoordinates ? {register: 0, mask: 15} : bySemantic.get(key);
                 // Between two programmable SM3 stages an input the vertex shader
                 // never writes is legal and reads zero; only the fixed canonical
                 // slots of a legacy vertex stage must match exactly.
@@ -5793,23 +5799,23 @@ fn nv40_alu(op: u32, s: vec4<f32>) -> vec4<f32> {
                 || source.length<(depth-1)*slicePitch+(rows-1)*rowPitch+columns*blockBytes)
             throw new Error("Invalid DXT block upload extent");
         const output=new Uint8Array(width*height*depth*4);
-        for(let z=0;z<depth;z++)for(let by=0;by<rows;by++)for(let bx=0;bx<columns;bx++) {
+        for (let z=0;z<depth;z++) for (let by=0;by<rows;by++) for (let bx=0;bx<columns;bx++) {
             const at=z*slicePitch+by*rowPitch+bx*blockBytes,color=at+(dxt===1?0:8);
             const a=source[color]|source[color+1]<<8,b=source[color+2]|source[color+3]<<8;
             // Bit replication, matching the packed-format expansion path.
             const unpack=v=>[(v>>11<<3)|(v>>13),(((v>>5)&63)<<2)|((v>>9)&3),((v&31)<<3)|((v>>2)&7),255];
             const palette=[unpack(a),unpack(b)];
-            if(a>b||dxt!==1) {
+            if (a>b||dxt!==1) {
                 palette.push(palette[0].map((v,c)=>c===3?255:Math.round((2*v+palette[1][c])/3)),
                     palette[0].map((v,c)=>c===3?255:Math.round((v+2*palette[1][c])/3)));
             } else palette.push(palette[0].map((v,c)=>c===3?255:Math.floor((v+palette[1][c])/2)),[0,0,0,0]);
             const selectors=(source[color+4]|source[color+5]<<8|source[color+6]<<16|source[color+7]<<24)>>>0;
             const alpha=dxt>=4?expandATIBlocks(D3DFMT_ATI1N,source.subarray(at,at+8),4,4,1,8,8):null;
-            for(let y=0;y<4&&by*4+y<height;y++)for(let x=0;x<4&&bx*4+x<width;x++) {
+            for (let y=0;y<4&&by*4+y<height;y++) for (let x=0;x<4&&bx*4+x<width;x++) {
                 const texel=y*4+x,to=((z*height+by*4+y)*width+bx*4+x)*4;
                 output.set(palette[(selectors>>>(texel*2))&3],to);
-                if(dxt===2||dxt===3)output[to+3]=((source[at+(texel>>1)]>>((texel&1)*4))&15)*17;
-                else if(alpha)output[to+3]=alpha[texel*4];
+                if (dxt===2||dxt===3)output[to+3]=((source[at+(texel>>1)]>>((texel&1)*4))&15)*17;
+                else if (alpha)output[to+3]=alpha[texel*4];
             }
         }
         return output;
@@ -6083,6 +6089,8 @@ fn nv40_alu(op: u32, s: vec4<f32>) -> vec4<f32> {
         case D3DFMT_A4R4G4B4:
         case D3DFMT_R16F:
             return 2;
+        case D3DFMT_A8B8G8R8:
+        case D3DFMT_X8B8G8R8:
         case D3DFMT_A8R8G8B8:
         case 71: // D32
         case 75: // D24S8
@@ -6179,6 +6187,14 @@ fn nv40_alu(op: u32, s: vec4<f32>) -> vec4<f32> {
                 destination[destinationAt + 1] = unorm(g, 255);
                 destination[destinationAt + 2] = unorm(r, 255);
                 destination[destinationAt + 3] = format === D3DFMT_A8R8G8B8 || preserveXrgbBits
+                    ? unorm(a, 255) : 0xff;
+                break;
+            case D3DFMT_A8B8G8R8:
+            case D3DFMT_X8B8G8R8:
+                destination[destinationAt] = unorm(r, 255);
+                destination[destinationAt + 1] = unorm(g, 255);
+                destination[destinationAt + 2] = unorm(b, 255);
+                destination[destinationAt + 3] = format === D3DFMT_A8B8G8R8 || preserveXrgbBits
                     ? unorm(a, 255) : 0xff;
                 break;
             case D3DFMT_R5G6B5:
@@ -8347,7 +8363,7 @@ struct Params { source: vec4<f32>, destination: vec4<f32> };
                     const pass=encoder.beginRenderPass({colorAttachments:[],depthStencilAttachment:{view:op.destinationView,
                         depthLoadOp:"load",depthStoreOp:"store",stencilLoadOp:"load",stencilStoreOp:"store"}});
                     ++this.stats.renderPasses;pass.setPipeline(entry.pipeline);pass.setBindGroup(0,group);
-                    if(mask)pass.setStencilReference(clear?0:mask);
+                    if (mask)pass.setStencilReference(clear?0:mask);
                     pass.setViewport(x,y,width,height,0,1);pass.setScissorRect(x,y,width,height);pass.draw(3);pass.end();
                 };
                 draw(source.createView({aspect:"depth-only",baseMipLevel:level,mipLevelCount:1}),0,false);
@@ -8363,7 +8379,7 @@ struct Params { source: vec4<f32>, destination: vec4<f32> };
                     encoder.copyBufferToTexture({buffer,offset:0,bytesPerRow:pitch,rowsPerImage:op.sourceHeight},{texture},size);
                     const view=texture.createView();
                     draw(view,mask,true);
-                    for(let bit=1;bit<=mask;bit<<=1)if(mask&bit)draw(view,bit,false);
+                    for (let bit=1;bit<=mask;bit<<=1) if (mask&bit)draw(view,bit,false);
                 }
                 return transients;
             },
@@ -8424,7 +8440,7 @@ struct Params { source: vec4<f32>, destination: vec4<f32> };
                         source.byteLength < (height-1)*rowPitch + width*bytes)
                     throw new Error("invalid lockable depth upload");
                 const values = new Float32Array(width*height), view = new DataView(source.buffer,source.byteOffset,source.byteLength);
-                for(let row=0;row<height;++row)for(let col=0;col<width;++col) {
+                for (let row=0;row<height;++row) for (let col=0;col<width;++col) {
                     const at=row*rowPitch+col*bytes;
                     const packed=sixteen?view.getUint16(at,true):view.getUint32(at,true);
                     values[row*width+col] = resource.format===73 ? (packed>>>1)/32767
@@ -8437,11 +8453,11 @@ struct Params { source: vec4<f32>, destination: vec4<f32> };
                 this.ensureFrame().record({kind:"depth-upload",source:texture.createView(),destination:this.targetViewFor(resource,level,false),x,y,width,height});
                 this.retireGPUObject(texture);
                 const stencilMask=resource.format===73?1:resource.format===75?255:resource.format===79?15:0;
-                if(stencilMask) {
+                if (stencilMask) {
                     const stencil=new Uint8Array(width*height);
-                    for(let row=0;row<height;++row)for(let col=0;col<width;++col)
+                    for (let row=0;row<height;++row) for (let col=0;col<width;++col)
                         stencil[row*width+col]=source[row*rowPitch+col*bytes]&stencilMask;
-                    if(!x && !y && width===Math.max(1,resource.width>>level) && height===Math.max(1,resource.height>>level)) {
+                    if (!x && !y && width===Math.max(1,resource.width>>level) && height===Math.max(1,resource.height>>level)) {
                         this.stageTextureUpload({texture:resource.gpuTexture,mipLevel:level,aspect:"stencil-only"},stencil,
                             {bytesPerRow:width,rowsPerImage:height},{width,height,depthOrArrayLayers:1});
                     } else {
@@ -8459,7 +8475,7 @@ struct Params { source: vec4<f32>, destination: vec4<f32> };
 
             encodeStencilUpload(encoder,op) {
                 const buffers=[],masks=[op.stencilMask];
-                for(let bit=1;bit<=op.stencilMask;bit<<=1)if(bit&op.stencilMask)masks.push(bit);
+                for (let bit=1;bit<=op.stencilMask;bit<<=1) if (bit&op.stencilMask)masks.push(bit);
                 masks.forEach((mask,index)=>{
                     const entry=this.depthBlitPipelineFor(mask,index===0);
                     const uniform=this.device.createBuffer({label:"D3D9 stencil upload coordinates",size:32,usage:0x40|0x08});buffers.push(uniform);
@@ -11282,9 +11298,12 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                 this.hasColorClear = false;
                 this.hasOcclusion = false;
             }
-            // NOOVERWRITE promises that pending draws do not read the changed
-            // bytes. Upload them before those draws to avoid synchronisation,
-            // but keep every earlier overlapping write before this write.
+            // NOOVERWRITE applies only since the last synchronising lock.
+            // A plain/DISCARD upload starts a new buffer-use epoch even when
+            // its byte range is disjoint: DISCARD invalidates the whole buffer.
+            // Do not move a later append into draws from the previous epoch.
+            // Within one epoch, retain unsynchronised updates and write order
+            // for overlapping ranges, independently for each buffer.
             recordNoOverwriteUpload(op) {
                 let position = 0;
                 const end = op.destinationOffset + op.size;
@@ -11292,8 +11311,9 @@ ${specularBody}${alphaTestDiscard(signature.alphaTest, "result.a", "uniforms.alp
                     const previous = this.ops[i];
                     if (previous.kind === "buffer-upload" &&
                             previous.destination === op.destination &&
-                            previous.destinationOffset < end &&
-                            op.destinationOffset < previous.destinationOffset + previous.size)
+                            (!previous.noOverwrite ||
+                                previous.destinationOffset < end &&
+                                op.destinationOffset < previous.destinationOffset + previous.size))
                         position = i + 1;
                 }
                 this.ops.splice(position, 0, op);
@@ -14303,10 +14323,11 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             // frame are three orders of magnitude below this.
             this.flushThreshold = Math.max(1024,
                 this.options.flushThreshold || 16384);
-            // The guest blocks on a readback, so this is a VM-freeze budget
-            // rather than a GPU-latency one.
+            // The guest blocks on a readback. A cold native HDR pipeline can
+            // legitimately keep the queue busy for more than four seconds;
+            // retain a finite freeze bound without reporting that work lost.
             this.readbackTimeoutMs = Math.max(250,
-                this.options.readbackTimeoutMs || 4000);
+                this.options.readbackTimeoutMs || 30000);
             this.heartbeat = 0;
             this.heartbeatBuffer = new Uint8Array(4);
             this.uploads = null;
@@ -14987,6 +15008,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
         stageBufferUpload(buffer, offset, source, noOverwrite = false) {
             const frame = this.uploadFrame(source.byteLength);
             const op = this.uploads.buffer(buffer, offset, source);
+            op.noOverwrite = noOverwrite;
             if (noOverwrite) frame.recordNoOverwriteUpload(op);
             else frame.record(op);
         }
@@ -17793,7 +17815,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
             const semanticPair = shaderPipeline.linkShaderSemantics(
                 passthrough ? {version:{major:3},outputDeclarations:passthroughOutputs}
                     : vsResource && vsResource.translated.ok ? vsResource.translated.reflection : null,
-                pixelInterface);
+                pixelInterface, {pointSprite: !!drawOptions.pointExpansion && !!drawOptions.pointSprite});
             if (!semanticPair.ok) return {error: "shader semantic link failed: " + semanticPair.error, shaderError: true};
             const semanticLink = semanticPair.link;
             const semanticKey = semanticPair.key ? "|link:" + semanticPair.key : "";
@@ -20316,7 +20338,7 @@ fn d9_ps_main() -> @location(0) vec4<f32> {
                     return;
                 }
                 const src=clipped.source;
-                if(src.left<0||src.top<0||src.right>sourceWidth||src.bottom>sourceHeight) {
+                if (src.left<0||src.top<0||src.right>sourceWidth||src.bottom>sourceHeight) {
                     this.ddRefuse("depth-blit-source","DirectDraw depth blit source is out of bounds",{sourceHandle});return;
                 }
                 const frame=this.ensureFrame();
@@ -64208,6 +64230,51 @@ struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> 
     return output;
   }
 
+  // src/gles/paletted.js
+  var PALETTED_FORMATS = Array.from({ length: 10 }, (_, i) => 35728 + i);
+  function paletted_layout(format, width, height, level) {
+    const code = format - 35728;
+    if (![code, width, height, level].every(Number.isInteger) || code < 0 || code > 9 || width > 16384 || height > 16384 || level > 0 || level < -Math.floor(Math.log2(Math.max(1, width, height))) || width < 0 || height < 0) return null;
+    const bits = code < 5 ? 4 : 8, kind = code % 5;
+    const entry = [3, 4, 2, 2, 2][kind];
+    const palette_bytes = (1 << bits) * entry;
+    let size = palette_bytes;
+    const images = [];
+    for (let n = 0; n <= -level; n++) {
+      const w = width ? Math.max(1, width >> n) : 0, h = height ? Math.max(1, height >> n) : 0;
+      const bytes = Math.ceil(w * h * bits / 8);
+      images.push({ level: n, width: w, height: h, offset: size, bytes });
+      size += bytes;
+    }
+    return { bits, kind, entry, palette_bytes, images, size, rgb: kind === 0 || kind === 2 };
+  }
+  function decode_paletted(layout, data) {
+    if (!data || data.length < layout.size) throw new RangeError("Truncated paletted texture");
+    const palette = new Uint8Array((1 << layout.bits) * 4);
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    for (let i = 0; i < palette.length / 4; i++) {
+      const at = i * layout.entry;
+      let rgba;
+      if (layout.kind < 2) rgba = [data[at], data[at + 1], data[at + 2], layout.kind ? data[at + 3] : 255];
+      else {
+        const p = view.getUint16(at, true);
+        if (layout.kind === 2) rgba = [Math.round((p >> 11) * 255 / 31), Math.round((p >> 5 & 63) * 255 / 63), Math.round((p & 31) * 255 / 31), 255];
+        else if (layout.kind === 3) rgba = [(p >> 12) * 17, (p >> 8 & 15) * 17, (p >> 4 & 15) * 17, (p & 15) * 17];
+        else rgba = [Math.round((p >> 11) * 255 / 31), Math.round((p >> 6 & 31) * 255 / 31), Math.round((p >> 1 & 31) * 255 / 31), (p & 1) * 255];
+      }
+      palette.set(rgba, i * 4);
+    }
+    return layout.images.map((image) => {
+      const rgba = new Uint8Array(image.width * image.height * 4);
+      for (let i = 0; i < rgba.length / 4; i++) {
+        const byte = data[image.offset + (layout.bits === 4 ? i >> 1 : i)];
+        const index = layout.bits === 4 ? i & 1 ? byte & 15 : byte >> 4 : byte;
+        rgba.set(palette.subarray(index * 4, index * 4 + 4), i * 4);
+      }
+      return { ...image, rgba };
+    });
+  }
+
   // src/gles/gles_formats.js
   var GL = {
     NO_ERROR: 0,
@@ -64637,6 +64704,7 @@ struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> 
     1: [
       "GL_OES_EGL_image",
       "GL_OES_EGL_image_external",
+      "GL_OES_compressed_paletted_texture",
       "GL_OES_compressed_ETC1_RGB8_texture",
       "GL_OES_element_index_uint",
       "GL_OES_framebuffer_object",
@@ -64648,6 +64716,7 @@ struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> 
       "GL_OES_blend_equation_separate",
       "GL_OES_blend_subtract",
       "GL_OES_draw_texture",
+      "GL_OES_matrix_get",
       "GL_OES_point_sprite",
       "GL_OES_point_size_array",
       "GL_EXT_texture_format_BGRA8888",
@@ -64686,6 +64755,7 @@ struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> 
   };
   var EXTENSIONS_3 = EXTENSIONS[3];
   var COMPRESSED_TEXTURE_FORMATS = [36196, 35840, 35841, 35842, 35843];
+  var COMPRESSED_TEXTURE_FORMATS_1 = [...COMPRESSED_TEXTURE_FORMATS, ...PALETTED_FORMATS];
   var GL_STATE = /* @__PURE__ */ new Map([
     [34047, [16]],
     // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT (WebGPU maximum)
@@ -71064,7 +71134,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       alpha_func: 519,
       alpha_ref: 0,
       clip_planes: Array.from({ length: CLIP_PLANES }, () => [0, 0, 0, 0]),
-      point: { size: 1, min: 0, max: 1, fade: 1, attenuation: [1, 0, 0] },
+      point: { size: 1, min: 0, max: 256, fade: 1, attenuation: [1, 0, 0] },
       logic_op: 5379
     };
   }
@@ -71619,13 +71689,19 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     const tex = ff.arrays.texcoord[ff.client_active_texture];
     switch (pname) {
       case 2976:
-        return [[ff.matrix_mode], "i"];
+        return [[ff.matrix_mode], "e"];
       case 2982:
         return [ff.stacks[5888].at(-1), "f"];
       case 2983:
         return [ff.stacks[5889].at(-1), "f"];
       case 2984:
         return [ff.stacks[5890][unit].at(-1), "f"];
+      case 35213:
+      case 35214:
+      case 35215: {
+        const values = pname === 35213 ? ff.stacks[5888].at(-1) : pname === 35214 ? ff.stacks[5889].at(-1) : ff.stacks[5890][unit].at(-1);
+        return [Array.from(new Int32Array(new Float32Array(values).buffer)), "i"];
+      }
       case 2979:
         return [[ff.stacks[5888].length], "i"];
       case 2980:
@@ -71649,13 +71725,13 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       case 33065:
         return [ff.point.attenuation, "f"];
       case 2900:
-        return [[ff.shade_model], "i"];
+        return [[ff.shade_model], "e"];
       case 2899:
         return [ff.light_model.ambient, "n"];
       case 2898:
         return [[ff.light_model.two_side], "b"];
       case 2917:
-        return [[ff.fog.mode], "i"];
+        return [[ff.fog.mode], "e"];
       case 2914:
         return [[ff.fog.density], "f"];
       case 2915:
@@ -71665,37 +71741,37 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       case 2918:
         return [ff.fog.color, "n"];
       case 3009:
-        return [[ff.alpha_func], "i"];
+        return [[ff.alpha_func], "e"];
       case 3010:
         return [[ff.alpha_ref], "n"];
       case 3056:
-        return [[ff.logic_op], "i"];
+        return [[ff.logic_op], "e"];
       case 34017:
-        return [[33984 + ff.client_active_texture], "i"];
+        return [[33984 + ff.client_active_texture], "e"];
       case 32890:
         return [[ff.arrays.vertex.size], "i"];
       case 32891:
-        return [[ff.arrays.vertex.type], "i"];
+        return [[ff.arrays.vertex.type], "e"];
       case 32892:
         return [[ff.arrays.vertex.stride], "i"];
       case 32894:
-        return [[ff.arrays.normal.type], "i"];
+        return [[ff.arrays.normal.type], "e"];
       case 32895:
         return [[ff.arrays.normal.stride], "i"];
       case 32897:
         return [[ff.arrays.color.size], "i"];
       case 32898:
-        return [[ff.arrays.color.type], "i"];
+        return [[ff.arrays.color.type], "e"];
       case 32899:
         return [[ff.arrays.color.stride], "i"];
       case 32904:
         return [[tex.size], "i"];
       case 32905:
-        return [[tex.type], "i"];
+        return [[tex.type], "e"];
       case 32906:
         return [[tex.stride], "i"];
       case 35210:
-        return [[ff.arrays.point_size.type], "i"];
+        return [[ff.arrays.point_size.type], "e"];
       case 35211:
         return [[ff.arrays.point_size.stride], "i"];
       case 34966:
@@ -71866,6 +71942,14 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
   var MIN_FILTERS2 = /* @__PURE__ */ new Set([GL.NEAREST, GL.LINEAR, GL.NEAREST_MIPMAP_NEAREST, GL.LINEAR_MIPMAP_NEAREST, GL.NEAREST_MIPMAP_LINEAR, GL.LINEAR_MIPMAP_LINEAR]);
   var WRAPS2 = /* @__PURE__ */ new Set([GL.REPEAT, GL.CLAMP_TO_EDGE, GL.MIRRORED_REPEAT]);
   var ATTACHMENTS = [GL.COLOR_ATTACHMENT0, GL.DEPTH_ATTACHMENT, GL.STENCIL_ATTACHMENT];
+  var TEXTURE_CHANGES = /* @__PURE__ */ new Set([
+    "glTexImage2D",
+    "glTexSubImage2D",
+    "glCompressedTexImage2D",
+    "glCompressedTexSubImage2D",
+    "glCopyTexImage2D",
+    "glCopyTexSubImage2D"
+  ]);
   var REFUSED = /* @__PURE__ */ Symbol("refused");
   function ShareGroup() {
     this.textures = /* @__PURE__ */ new Map();
@@ -71998,7 +72082,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
           out.view.setFloat32(4 * i, kind === "b" ? v ? 1 : 0 : v, true);
           break;
         case "x":
-          out.view.setInt32(4 * i, Math.round(v * 65536), true);
+          out.view.setInt32(4 * i, kind === "e" ? v : Math.max(-2147483648, Math.min(2147483647, Math.round(v * 65536))), true);
           break;
         default:
           if (kind === "n") out.view.setInt32(4 * i, Math.round(Math.max(-1, Math.min(1, v)) * 2147483647), true);
@@ -72014,6 +72098,33 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     return bytes.length;
   }
   var STATE_KIND = new Map([
+    ...[
+      2885,
+      2886,
+      2932,
+      2962,
+      2964,
+      2965,
+      2966,
+      3040,
+      3041,
+      32968,
+      32969,
+      32970,
+      32971,
+      32777,
+      34877,
+      34016,
+      34467,
+      35738,
+      35739,
+      3152,
+      3153,
+      3154,
+      3155,
+      3156,
+      33170
+    ].map((pname) => [pname, "e"]),
     [2928, "n"],
     [2849, "f"],
     [32824, "f"],
@@ -72141,7 +72252,22 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     }
     const ret = handler(this, context, args);
     if (ret === REFUSED) return { ret: 0, keep: false };
+    const texture = this.mipmap_target(context, base, args);
+    if (texture) {
+      const image = texture.images.get(0);
+      if (image)
+        for (let level = 1, w = image.width, h = image.height; w > 1 || h > 1; level++) {
+          w = Math.max(1, w >> 1);
+          h = Math.max(1, h >> 1);
+          texture.images.set(level, { width: w, height: h, format: image.format, type: image.type, compressed: image.compressed });
+        }
+    }
     return { ret, keep: this.keep };
+  };
+  GLESShadow.prototype.mipmap_target = function(c, name, args) {
+    if (c.api !== 1 || !TEXTURE_CHANGES.has(name) || args[1] > 0 || args[0] !== GL.TEXTURE_2D) return null;
+    const texture = bound_texture(c, args[0]);
+    return texture && texture.generate_mipmap ? texture : null;
   };
   function fail(context, error) {
     if (context.error === GL.NO_ERROR) context.error = error;
@@ -72342,8 +72468,10 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       case 3414:
       case 3415:
         return [this.framebuffer_bits(c)[pname - 3410]];
+      case 34466:
+        return [c.api === 1 ? COMPRESSED_TEXTURE_FORMATS_1.length : COMPRESSED_TEXTURE_FORMATS.length];
       case 34467:
-        return COMPRESSED_TEXTURE_FORMATS;
+        return c.api === 1 ? COMPRESSED_TEXTURE_FORMATS_1 : COMPRESSED_TEXTURE_FORMATS;
     }
     if (c.hints.has(pname) && (c.api === 1 || pname === 33170 || pname === 35723)) return [c.hints.get(pname)];
     if ((c.api === 1 ? CAPS_1 : CAPS_2).has(pname)) return [c.enabled.has(pname) ? 1 : 0];
@@ -72353,6 +72481,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
   function get(as) {
     return (shadow, c, [pname, params]) => {
       query(shadow);
+      if (c.api === 1 && pname >= 35213 && pname <= 35215 && as !== "i") return fail(c, GL.INVALID_ENUM);
       const own = c.api === 1 ? gles1_state_value(c, pname) : null;
       if (own) return put(params, own[0], as, own[1]);
       let value = shadow.state_value(c, pname);
@@ -72509,7 +72638,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     "glGetFixedv": get("x"),
     "glGetCompressedTextureFormats": (shadow, c, [count, formats]) => {
       query(shadow);
-      put(formats, COMPRESSED_TEXTURE_FORMATS, "i", "i");
+      put(formats, c.api === 1 ? COMPRESSED_TEXTURE_FORMATS_1 : COMPRESSED_TEXTURE_FORMATS, "i", "e");
     },
     "glGetShaderPrecisionFormat": (shadow, c, [shadertype, precisiontype, range, precision]) => {
       query(shadow);
@@ -72697,6 +72826,17 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       const t = image_target(c, target);
       if (!t) return REFUSED;
       const pvrtc = internalformat >= 35840 && internalformat <= 35843;
+      if (c.api === 1 && internalformat >= 35728 && internalformat <= 35737) {
+        if (target !== GL.TEXTURE_2D || border) return fail(c, GL.INVALID_OPERATION);
+        if (!image_size_ok(c, target, 0, width, height, 0)) return REFUSED;
+        const palette = paletted_layout(internalformat, width, height, level);
+        if (!palette || size !== palette.size || !data || data.length < size) return fail(c, GL.INVALID_VALUE);
+        for (const image of palette.images) t.texture.images.set(
+          image.level,
+          { width: image.width, height: image.height, format: internalformat, type: GL.UNSIGNED_BYTE, compressed: true }
+        );
+        return void 0;
+      }
       if (!pvrtc && internalformat !== GL.ETC1_RGB8_OES) return fail(c, GL.INVALID_ENUM);
       if (!image_size_ok(c, target, level, width, height, border)) return REFUSED;
       const expected = pvrtc ? pvrtc_bytes(width, height, !!(internalformat & 1)) : etc1_bytes(width, height);
@@ -72753,13 +72893,25 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     },
     "glTexParameterf": (shadow, c, [target, pname, param]) => tex_parameter(c, target, pname, [param]),
     "glTexParameteri": (shadow, c, [target, pname, param]) => tex_parameter(c, target, pname, [param]),
-    "glTexParameterx": (shadow, c, [target, pname, param]) => tex_parameter(c, target, pname, [param]),
+    "glTexParameterx": (shadow, c, [target, pname, param]) => tex_parameter(c, target, pname, [pname === GL.TEXTURE_MAX_ANISOTROPY_EXT ? param / 65536 : param]),
     "glTexParameterfv": (shadow, c, [target, pname, params]) => tex_parameter(c, target, pname, f32s(params)),
     "glTexParameteriv": (shadow, c, [target, pname, params]) => tex_parameter(c, target, pname, i32s(params)),
-    "glTexParameterxv": (shadow, c, [target, pname, params]) => tex_parameter(c, target, pname, i32s(params)),
+    "glTexParameterxv": (shadow, c, [target, pname, params]) => tex_parameter(
+      c,
+      target,
+      pname,
+      i32s(params).map((v) => pname === GL.TEXTURE_MAX_ANISOTROPY_EXT || pname === GL.TEXTURE_CROP_RECT_OES ? v / 65536 : v)
+    ),
     "glGetTexParameteriv": (shadow, c, [target, pname, params]) => get_tex_parameter(shadow, c, target, pname, params, "i"),
     "glGetTexParameterfv": (shadow, c, [target, pname, params]) => get_tex_parameter(shadow, c, target, pname, params, "f"),
-    "glGetTexParameterxv": (shadow, c, [target, pname, params]) => get_tex_parameter(shadow, c, target, pname, params, "i"),
+    "glGetTexParameterxv": (shadow, c, [target, pname, params]) => get_tex_parameter(
+      shadow,
+      c,
+      target,
+      pname,
+      params,
+      pname === GL.TEXTURE_MAX_ANISOTROPY_EXT || pname === GL.TEXTURE_CROP_RECT_OES ? "x" : "i"
+    ),
     // EGL images (OES_EGL_image): the image's color buffer is the texture's level 0
     "glEGLImageTargetTexture2DOES": (shadow, c, [target, image]) => {
       if (target !== GL.TEXTURE_2D && target !== GL.TEXTURE_EXTERNAL_OES) return fail(c, GL.INVALID_ENUM);
@@ -72795,6 +72947,10 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
         if (c.array_buffer === name) c.array_buffer = 0;
         if (c.element_array_buffer === name) c.element_array_buffer = 0;
         for (const a of c.attribs) if (a.buffer === name) a.buffer = 0;
+        if (c.api === 1) {
+          for (const a of [c.ff.arrays.vertex, c.ff.arrays.normal, c.ff.arrays.color, c.ff.arrays.point_size, ...c.ff.arrays.texcoord])
+            if (a.buffer === name) a.buffer = 0;
+        }
       }
     },
     "glIsBuffer": (shadow, c, [name]) => {
@@ -72806,13 +72962,24 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (size < 0) return fail(c, GL.INVALID_VALUE);
       const buffer = bound_buffer(c, target);
       if (!buffer) return REFUSED;
+      let bytes = null;
+      if (c.api === 1 && shadow.keep_bytes) {
+        try {
+          bytes = new Uint8Array(size);
+        } catch (e) {
+          return fail(c, GL.OUT_OF_MEMORY);
+        }
+        if (data) bytes.set(data.subarray(0, size));
+      }
       buffer.size = size;
       buffer.usage = usage;
+      if (bytes) buffer.bytes = bytes;
     },
     "glBufferSubData": (shadow, c, [target, offset, size, data]) => {
       const buffer = bound_buffer(c, target);
       if (!buffer) return REFUSED;
       if (offset < 0 || size < 0 || offset + size > buffer.size) return fail(c, GL.INVALID_VALUE);
+      if (c.api === 1 && shadow.keep_bytes && buffer.bytes && data) buffer.bytes.set(data.subarray(0, size), offset);
     },
     "glGetBufferParameteriv": (shadow, c, [target, pname, params]) => {
       query(shadow);
@@ -73378,7 +73545,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
         return void 0;
       case GL.TEXTURE_CROP_RECT_OES:
         if (c.api !== 1) return fail(c, GL.INVALID_ENUM);
-        texture.crop = params.slice(0, 4);
+        texture.crop = params.slice(0, 4).map(Math.round);
         return void 0;
     }
     return fail(c, GL.INVALID_ENUM);
@@ -73546,8 +73713,10 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     // before its glLinkProgram, which the page then links with it (it has no glslang)
     BUFFER_READ: 20,
     // connection, request id, buffer, offset, length: a buffer's bytes the GPU wrote (glMapBufferRange's)
-    QUERY_READ: 21
+    QUERY_READ: 21,
     // connection, request id, query: an occlusion query's result (a u32: whether a sample passed)
+    IOSURFACE_READ: 22
+    // color buffer, y, rows, reverse rows, request id; tightly packed BGRA
   };
   function GXWriter(magic) {
     this.magic = magic || GX_MAGIC;
@@ -74433,7 +74602,9 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
   var IOSURFACE_COMMANDS = [
     ["v86AcquireIOSurface", [["id", "u32"], ["width", "u32"], ["height", "u32"], ["fourcc", "u32"]]],
     ["v86IOSurfaceIsCurrent", [["handle", "u32"], ["seed", "u32"]]],
-    ["v86UploadIOSurface", [["handle", "u32"], ["seed", "u32"], ["pixels", "ptr", "in"]]]
+    ["v86UploadIOSurface", [["handle", "u32"], ["seed", "u32"], ["pixels", "ptr", "in"]]],
+    ["v86ReadIOSurface", [["handle", "u32"], ["y", "u32"], ["rows", "u32"], ["flip", "u32"], ["pixels", "ptr", "out"]]],
+    ["v86ElementIndexMax", [["count", "u32"], ["type", "u32"], ["offset", "u32"], ["maximum", "ptr", "out"]]]
   ];
   IOSURFACE_COMMANDS.forEach(([name, params], i) => {
     const command = { api: "rc", opcode: IOSURFACE_ACQUIRE + i, name, ret: "u32", params, flags: [] };
@@ -74528,7 +74699,8 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     CONNECTION_CLOSE: ["conn"],
     PROGRAM_LINK: ["conn", "program", "length"],
     BUFFER_READ: ["conn", "request", "buffer", "offset", "length"],
-    QUERY_READ: ["conn", "request", "query"]
+    QUERY_READ: ["conn", "request", "query"],
+    IOSURFACE_READ: ["color_buffer", "y", "height", "flip", "request"]
   };
   var GLES_RECORD_NAMES = Object.fromEntries(Object.entries(GLES).map(([name, op]) => [op, name]));
   function read_gles_batch(bytes, decode) {
@@ -74743,7 +74915,8 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     [GL.ETC1_RGB8_OES]: "RGB",
     [GL.ALPHA]: "ALPHA",
     [GL.LUMINANCE]: "LUMINANCE",
-    [GL.LUMINANCE_ALPHA]: "LUMINANCE_ALPHA"
+    [GL.LUMINANCE_ALPHA]: "LUMINANCE_ALPHA",
+    ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [35728 + i, i % 5 === 0 || i % 5 === 2 ? "RGB" : "RGBA"]))
   };
   var is_identity = (m) => m.every((v, i) => v === IDENTITY2[i]);
   function unit_texture(c, unit) {
@@ -74780,7 +74953,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       texture: textures.map((t, i) => {
         if (!t) return { enabled: false };
         const e = ff.env[i];
-        const env = { mode: ENV_MODES[e.mode], coordReplace: !!e.coord_replace };
+        const env = { mode: ENV_MODES[e.mode], coordReplace: points && on(34913) && !!e.coord_replace };
         if (e.mode === 34160) {
           Object.assign(env, {
             combineRGB: COMBINE[e.combine_rgb],
@@ -74807,6 +74980,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       alphaTest: on(3008) ? ALPHA_FUNCS[ff.alpha_func] : "always",
       clipPlaneCount: ff.clip_planes.reduce((n, p, i) => on(12288 + i) ? i + 1 : n, 0),
       pointSprite: points && on(34913),
+      logicOp: on(3058) ? ff.logic_op : 0,
       flatShading: ff.shade_model === 7424,
       colorTargets: 1
     };
@@ -78606,8 +78780,8 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (!texture) return fallback();
       const level0 = texture.images.get(0);
       if (level0 && (level0.image || level0.color_buffer)) {
-        const t = level0.image ? this.image_texture(level0.image) : this.color_buffer_texture(level0.color_buffer);
-        if (!t || tex.sample !== "float" || tex.dimension !== "2d" || target.textures.has(t.texture)) return fallback();
+        const t = level0.image ? this.image_texture(level0.image, true) : this.color_buffer_texture(level0.color_buffer, true);
+        if (!t || tex.sample !== "float" || tex.dimension !== "2d" || target.textures.has(t.texture) || target.textures.has(t.source)) return fallback();
         return { view: t.texture.createView(), sample_type: "float", filtering: true };
       }
       const gpu = this.gpu_texture3(texture);
@@ -79091,7 +79265,19 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     this.fallback = null;
     this.blit = null;
     this.posted = 0;
-    this.stats = { batches: 0, records: 0, draws: 0, refused: 0, pipelines: 0, uploads: 0, posts: 0, errors: [] };
+    this.stats = {
+      batches: 0,
+      records: 0,
+      draws: 0,
+      refused: 0,
+      pipelines: 0,
+      uploads: 0,
+      posts: 0,
+      readbacks: 0,
+      readback_bytes: 0,
+      errors: []
+    };
+    this.native_read = null;
     this.pass = null;
     this.pass_target = null;
   };
@@ -79144,6 +79330,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     }
   };
   GLESExecutor.prototype.run = function(record) {
+    if (record.name !== "IOSURFACE_READ") this.native_read = null;
     switch (record.name) {
       case "COMMAND":
         return this.command(record);
@@ -79204,28 +79391,101 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       }
       case "COLOR_BUFFER_DESTROY": {
         const cb = this.rc.color_buffers.get(record.color_buffer);
-        if (cb) this.staging.push(cb.texture);
+        if (cb) {
+          this.staging.push(cb.texture);
+          if (cb.native_texture) this.staging.push(cb.native_texture);
+        }
         this.rc.color_buffers.delete(record.color_buffer);
         return void 0;
       }
       case "COLOR_BUFFER_UPDATE": {
         const cb = this.rc.color_buffers.get(record.color_buffer);
         if (!cb || !record.width || !record.height) return void 0;
+        if (cb.native_flip) {
+          const memory = this.color_buffer_texture(record.color_buffer, true);
+          this.end_pass();
+          this.encoder.copyTextureToTexture({ texture: memory.texture }, { texture: cb.texture }, [cb.width, cb.height, 1]);
+          cb.native_flip = false;
+        }
         const rgba = to_rgba8(record.format, record.type, record.width, record.height, 1, record.bytes);
         this.upload(cb.texture, 0, 0, record.x, record.y, record.width, record.height, rgba);
         return void 0;
       }
       case "COLOR_BUFFER_READ": {
         const cb = this.rc.color_buffers.get(record.color_buffer);
-        if (!cb) return this.answer_failed(record.request);
+        if (!cb || record.type !== GL.UNSIGNED_BYTE || record.format !== GL.RGBA && record.format !== GL.BGRA_EXT)
+          return this.answer_failed(record.request);
+        const memory = this.color_buffer_texture(record.color_buffer, true);
         return this.read_texture(
-          cb.texture,
+          memory.texture,
           record.x,
           record.y,
           record.width,
           record.height,
           false,
-          (rgba, sink) => this.answer(sink, record.request, rgba)
+          (rgba, sink) => {
+            if (record.format === GL.BGRA_EXT)
+              for (let i = 0; i < rgba.length; i += 4) {
+                const r = rgba[i];
+                rgba[i] = rgba[i + 2];
+                rgba[i + 2] = r;
+              }
+            this.answer(sink, record.request, rgba);
+          }
+        );
+      }
+      case "IOSURFACE_READ": {
+        const cb = this.rc.color_buffers.get(record.color_buffer);
+        if (!cb || record.flip > 1 || !record.height || record.y > cb.height || record.height > cb.height - record.y) {
+          this.native_read = null;
+          return this.answer_failed(record.request);
+        }
+        if (record.y + record.height === cb.height) cb.native_flip = !!record.flip;
+        let cached = this.native_read;
+        const answer = (sink) => {
+          const row = record.flip ? cb.height - record.y - record.height : record.y;
+          this.answer(sink, record.request, cached.bytes.subarray(row * cb.width * 4, (row + record.height) * cb.width * 4));
+        };
+        if (cached && cached.texture === cb.texture && cached.handle === record.color_buffer && cached.flip === record.flip && record.y === cached.next_y) {
+          cached.next_y += record.height;
+          if (cached.next_y === cb.height) this.native_read = null;
+          this.reads.push({ buffer: null, done: (_, sink) => answer(sink) });
+          return;
+        }
+        this.native_read = null;
+        if (record.y === 0 && record.height < cb.height && cb.width * cb.height * 4 <= 16 * 1024 * 1024) {
+          cached = this.native_read = {
+            texture: cb.texture,
+            handle: record.color_buffer,
+            flip: record.flip,
+            next_y: record.height,
+            bytes: null
+          };
+          return this.read_texture(cb.texture, 0, 0, cb.width, cb.height, !!record.flip, (rgba, sink) => {
+            for (let i = 0; i < rgba.length; i += 4) {
+              const r = rgba[i];
+              rgba[i] = rgba[i + 2];
+              rgba[i + 2] = r;
+            }
+            cached.bytes = rgba;
+            answer(sink);
+          });
+        }
+        return this.read_texture(
+          cb.texture,
+          0,
+          record.y,
+          cb.width,
+          record.height,
+          !!record.flip,
+          (rgba, sink) => {
+            for (let i = 0; i < rgba.length; i += 4) {
+              const r = rgba[i];
+              rgba[i] = rgba[i + 2];
+              rgba[i + 2] = r;
+            }
+            this.answer(sink, record.request, rgba);
+          }
         );
       }
       case "COLOR_BUFFER_BIND": {
@@ -79281,17 +79541,23 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     if (c.glslang && this.command3(c, name, args)) return void 0;
     switch (name) {
       case "glTexImage2D":
-        return this.tex_image(c, args, false);
+        this.tex_image(c, args, false);
+        break;
       case "glTexSubImage2D":
-        return this.tex_image(c, args, true);
+        this.tex_image(c, args, true);
+        break;
       case "glCompressedTexImage2D":
-        return this.compressed_tex_image(c, args);
+        this.compressed_tex_image(c, args);
+        break;
       case "glCompressedTexSubImage2D":
-        return this.compressed_tex_image(c, args, true);
+        this.compressed_tex_image(c, args, true);
+        break;
       case "glCopyTexImage2D":
-        return this.copy_tex_image(c, args, false);
+        this.copy_tex_image(c, args, false);
+        break;
       case "glCopyTexSubImage2D":
-        return this.copy_tex_image(c, args, true);
+        this.copy_tex_image(c, args, true);
+        break;
       case "glGenerateMipmap":
         return this.generate_mipmap(c, args[0]);
       case "glEGLImageTargetTexture2D":
@@ -79332,6 +79598,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       case "glDrawTexxv":
         return this.draw_tex(c, Array.from(new Int32Array(args[0].slice().buffer), (v) => v / 65536));
     }
+    if (this.shadow.mipmap_target(c, name, args)) this.generate_mipmap(c, args[0]);
     return void 0;
   };
   function bound(c, target) {
@@ -79403,6 +79670,14 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     if (sub) [, , , , width, height, format, , data] = args;
     else [, , format, width, height, , , data] = args;
     const { texture, face } = bound(c, target);
+    if (!sub && c.api === 1 && format >= 35728 && format <= 35737) {
+      const layout = paletted_layout(format, width, height, level);
+      const target_texture = texture && this.write_target(texture, 0);
+      if (!target_texture) return;
+      for (const image of decode_paletted(layout, data))
+        if (image.width && image.height) this.upload(target_texture.texture, image.level, 0, 0, 0, image.width, image.height, image.rgba);
+      return;
+    }
     const t = texture && this.write_target(texture, level);
     if (!t || level >= t.levels) return;
     const rgba = format === GL.ETC1_RGB8_OES ? decode_etc1(width, height, data) : decode_pvrtc(width, height, data, !!(format & 1), !!(format & 2));
@@ -79521,6 +79796,8 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     return {
       color: color ? color.texture : null,
       color_view: color ? view(color) : null,
+      color_level: color ? color.level : 0,
+      color_layer: color ? color.layer : 0,
       depth: depth ? view(depth) : null,
       depth_format: depth ? depth.format : "",
       width,
@@ -79572,13 +79849,25 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     }
     this.clear_texture(s.texture, [0, 0, 0, config[CONFIG_ATTRIBUTES.indexOf(EGL.ALPHA_SIZE)] ? 0 : 1]);
   };
-  GLESExecutor.prototype.image_texture = function(image) {
+  GLESExecutor.prototype.image_texture = function(image, sample = false) {
     const object = this.rc.images.get(image);
-    return object ? this.color_buffer_texture(object.buffer) : null;
+    return object ? this.color_buffer_texture(object.buffer, sample) : null;
   };
-  GLESExecutor.prototype.color_buffer_texture = function(handle) {
+  GLESExecutor.prototype.color_buffer_texture = function(handle, sample = false) {
     const cb = this.rc.color_buffers.get(handle);
-    return cb ? { texture: cb.texture, format: COLOR_FORMAT, layer: 0, level: 0 } : null;
+    if (!cb) return null;
+    let texture = cb.texture;
+    if (sample && cb.native_flip) {
+      cb.native_texture || (cb.native_texture = this.device.createTexture({
+        label: "native IOSurface memory rows",
+        size: [cb.width, cb.height],
+        format: COLOR_FORMAT,
+        usage: TEXTURE_USAGE
+      }));
+      this.blit_into(cb.texture.createView(), cb.native_texture.createView(), true, false);
+      texture = cb.native_texture;
+    }
+    return { texture, source: cb.texture, format: COLOR_FORMAT, layer: 0, level: 0 };
   };
   GLESExecutor.prototype.begin_pass = function(target, clear) {
     if (this.pass && this.pass_target === target.key && !clear) return this.pass;
@@ -79697,7 +79986,20 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     pass.setScissorRect(x0, y0, x1 - x0, y1 - y0);
     return x1 > x0 && y1 > y0;
   };
-  GLESExecutor.prototype.draw = function(c, mode, first, count, elements) {
+  function primitive_order(mode, order) {
+    const out = [], count = order.length;
+    if (mode === GL.TRIANGLES || mode === GL.LINES) {
+      const n = mode === GL.TRIANGLES ? 3 : 2;
+      for (let i = 0; i + n <= count; i += n) out.push(order.slice(i, i + n));
+    } else if (mode === GL.TRIANGLE_STRIP || mode === GL.TRIANGLE_FAN)
+      for (let i = 2; i < count; i++) out.push(mode === GL.TRIANGLE_FAN ? [order[0], order[i - 1], order[i]] : i % 2 ? [order[i - 1], order[i - 2], order[i]] : order.slice(i - 2, i + 1));
+    else {
+      for (let i = 1; i < count; i++) out.push([order[i - 1], order[i]]);
+      if (mode === GL.LINE_LOOP && count > 1) out.push([order[count - 1], order[0]]);
+    }
+    return out;
+  }
+  GLESExecutor.prototype.draw = function(c, mode, first, count, elements, logic_split = false) {
     if (!count) return;
     const program = c.api === 1 ? null : c.group.objects.get(c.program);
     if (c.api !== 1 && (!program || !program.info || !program.info.ok)) return;
@@ -79724,6 +80026,27 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     }
     const vertices = high - low + 1;
     if (vertices <= 0 || vertices > 1 << 24) return;
+    if (c.api === 1 && c.enabled.has(3058) && c.ff.logic_op !== 5379 && !logic_split && mode !== GL.POINTS) {
+      const order = indices ? [...indices] : Array.from({ length: count }, (_, i) => first + i);
+      const primitives = primitive_order(mode, order);
+      for (const primitive of primitives) this.draw(
+        c,
+        primitive.length === 3 ? GL.TRIANGLES : GL.LINES,
+        0,
+        primitive.length,
+        { type: GL.UNSIGNED_INT, bytes: new Uint8Array(new Uint32Array(primitive).buffer) },
+        true
+      );
+      return;
+    }
+    if (c.api === 1 && mode === GL.POINTS) return this.draw_points1(c, low, vertices, indices);
+    if (c.api === 1 && c.ff.shade_model === 7424) {
+      const order = indices ? [...indices] : Array.from({ length: count }, (_, i) => first + i);
+      const primitives = primitive_order(mode, order);
+      indices = new Uint32Array(primitives.flatMap((p) => [p.at(-1), ...p.slice(0, -1)]));
+      mode = mode >= GL.TRIANGLES ? GL.TRIANGLES : GL.LINES;
+      count = indices.length;
+    }
     let topology = {
       [GL.POINTS]: "point-list",
       [GL.LINES]: "line-list",
@@ -79743,7 +80066,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     }
     const index_count = list ? list.length : count;
     if (!index_count) return;
-    const ff = c.api === 1 ? this.ff_shaders(c, mode === GL.POINTS) : null;
+    const ff = c.api === 1 ? this.ff_shaders(c, false) : null;
     const shaders = ff ? ff.shaders : this.program_shaders(program);
     if (!shaders) return;
     const layout = ff ? this.ff_layout(c, ff.generated, low, vertices) : this.vertex_layout(c, program, low, vertices);
@@ -79761,9 +80084,9 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     for (const face of this.stencil_faces(c, target, mode)) {
       const pipeline = this.pipeline(c, program, shaders, layout, topology, target, !!list, face);
       if (!pipeline) return;
+      const groups = ff ? this.ff_bind_groups(c, ff, pipeline, target, c.viewport) : this.bind_groups(c, program, shaders, pipeline, target);
       const pass = this.begin_pass(target, null);
       pass.setPipeline(pipeline);
-      const groups = ff ? this.ff_bind_groups(c, ff, pipeline, target, c.viewport) : this.bind_groups(c, program, shaders, pipeline, target);
       for (const [index, group] of groups) pass.setBindGroup(index, group);
       layout.buffers.forEach((buffer, slot) => pass.setVertexBuffer(slot, buffer));
       pass.setViewport(vx, vy, vw, vh, Math.min(c.depth_range[0], c.depth_range[1]), Math.max(c.depth_range[0], c.depth_range[1]));
@@ -79784,12 +80107,12 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     if (c.enabled.has(2884)) return c.cull_face === 1028 ? [1] : [0];
     return [0, 1];
   };
-  GLESExecutor.prototype.ff_shaders = function(c, rectangle) {
+  GLESExecutor.prototype.ff_shaders = function(c, rectangle, points = false) {
     const textures = Array.from({ length: UNITS }, (_, i) => unit_texture(c, i));
-    const signature = ff_signature(c, false, textures);
+    const signature = ff_signature(c, points, textures);
+    if (points) signature.pointSprite = true;
     if (rectangle) {
       signature.lighting = { enabled: false, lights: [] };
-      signature.fog = { enabled: false };
       signature.attributes.normal = false;
       signature.attributes.position = { components: 4 };
       signature.clipPlaneCount = 0;
@@ -79798,11 +80121,25 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       });
     }
     const FF = globalThis["GLFixedFunction"];
-    const key = FF.signatureKey(signature);
+    const key = (rectangle ? "rectangle:" : points ? "points:" : "") + FF.signatureKey(signature);
     this.ff_cache = this.ff_cache || /* @__PURE__ */ new Map();
     let entry = this.ff_cache.get(key);
     if (!entry) {
       const generated = FF.generate(signature);
+      if (rectangle) generated.wgslVertex = generated.wgslVertex.replace(/let fogCoord = [^;]+;/, "let fogCoord = 0.0;");
+      if (points) {
+        generated.wgslVertex = generated.wgslVertex.replace(
+          "gl_point_position(clip,ptSize,corner,glState.viewportParams)",
+          "gles_point_position(clip,ptSize,corner,glState.viewportParams)"
+        ) + `
+fn gles_point_position(clip:vec4<f32>,size:f32,corner:vec2<f32>,viewport:vec4<f32>)->vec4<f32>{
+ if(clip.w<=0.0||any(abs(clip.xyz)>vec3<f32>(clip.w))){return vec4<f32>(0.0,0.0,0.0,-1.0);}
+ let rounded=clamp(floor(size+0.5),1.0,256.0);
+ let window=viewport.xy+(clip.xy/clip.w*0.5+0.5)*viewport.zw;
+ let centre=select(floor(window)+0.5,floor(window+0.5),u32(rounded)%2u==0u);
+ return vec4<f32>(((centre-viewport.xy+corner*rounded*0.5)/viewport.zw*2.0-1.0)*clip.w,clip.zw);
+}`;
+      }
       const module = (code) => {
         let m = this.shaders.get(code);
         if (!m) this.shaders.set(code, m = this.device.createShaderModule({ label: "GLES 1.1 fixed function", code }));
@@ -79815,6 +80152,43 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       this.ff_cache.set(key, entry);
     }
     return { generated: entry.generated, shaders: entry.shaders, textures };
+  };
+  GLESExecutor.prototype.draw_points1 = function(c, low, vertices, indices) {
+    const target = this.target_of(c);
+    if (!target) return;
+    const enabled = new Set(c.enabled);
+    enabled.delete(2884);
+    enabled.delete(32823);
+    const state = Object.assign({}, c, { enabled, front_face: 2305 });
+    const ff = this.ff_shaders(c, false, true);
+    const point = c.ff.arrays.point_size;
+    const sizes = point.enabled ? this.attribute_values(c, point, low, vertices, 1) : null;
+    if (point.enabled && !sizes) return;
+    const order = indices || Array.from({ length: vertices }, (_, i) => low + i);
+    const [vx, vy, vw, vh] = c.viewport;
+    if (vw <= 0 || vh <= 0) return;
+    for (const vertex of order) {
+      const layout = this.ff_layout(c, ff.generated, vertex, 1);
+      if (!layout) return;
+      layout.formats.forEach((f) => f.stride = 0);
+      layout.key = "point:" + layout.key;
+      const pipeline = this.pipeline(state, null, ff.shaders, layout, "triangle-list", target, false);
+      if (!pipeline) return;
+      const snapshot = ff_snapshot(c, c.viewport);
+      snapshot.point.size = sizes ? sizes[vertex - low] : c.ff.point.size;
+      if (c.enabled.has(2832)) snapshot.point.sizeMin = snapshot.point.sizeMax = 1;
+      const groups = this.ff_bind_groups(c, ff, pipeline, target, c.viewport, snapshot);
+      const pass = this.begin_pass(target, null);
+      pass.setPipeline(pipeline);
+      for (const [index, group] of groups) pass.setBindGroup(index, group);
+      layout.buffers.forEach((buffer, i) => pass.setVertexBuffer(i, buffer));
+      pass.setViewport(vx, vy, vw, vh, Math.min(...c.depth_range), Math.max(...c.depth_range));
+      if (!this.apply_scissor(pass, c, target)) return;
+      pass.setBlendConstant(c.blend_func.some((f) => f === 32771 || f === 32772) ? { r: c.blend_color[3], g: c.blend_color[3], b: c.blend_color[3], a: c.blend_color[3] } : { r: c.blend_color[0], g: c.blend_color[1], b: c.blend_color[2], a: c.blend_color[3] });
+      if (c.enabled.has(2960)) pass.setStencilReference(c.stencil_func[0][1] & 255);
+      pass.draw(6);
+      this.stats.draws++;
+    }
   };
   GLESExecutor.prototype.ff_layout = function(c, generated, low, vertices) {
     const buffers = [], formats = [];
@@ -79855,6 +80229,22 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       if (ff.shaders.bindings.has("2:" + t.samplerBinding)) entries.push({ binding: t.samplerBinding, resource: this.sampler(texture) });
     }
     if (entries.length) groups.push([2, this.device.createBindGroup({ layout: pipeline.getBindGroupLayout(2), entries })]);
+    if (ff.shaders.bindings.has("3:0")) {
+      this.end_pass();
+      const copy = this.device.createTexture({
+        label: "ES1 logic destination",
+        size: [target.width, target.height],
+        format: COLOR_FORMAT,
+        usage: U.COPY_DST | U.TEXTURE_BINDING
+      });
+      if (target.color) this.encoder.copyTextureToTexture({
+        texture: target.color,
+        mipLevel: target.color_level || 0,
+        origin: [0, 0, target.color_layer || 0]
+      }, { texture: copy }, [target.width, target.height]);
+      this.staging.push(copy);
+      groups.push([3, this.device.createBindGroup({ layout: pipeline.getBindGroupLayout(3), entries: [{ binding: 0, resource: copy.createView() }] })]);
+    }
     return groups;
   };
   GLESExecutor.prototype.draw_tex = function(c, [x, y, z, w, h]) {
@@ -79889,15 +80279,20 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
       formats.push({ location: a.location, components: a.components, stride: a.components * 4 });
     }
     const layout = { buffers, formats, key: "tex:" + formats.map((f) => f.location + ":" + f.components).join(",") };
-    const pipeline = this.pipeline(c, null, ff.shaders, layout, "triangle-list", target, false);
+    const enabled = new Set(c.enabled);
+    enabled.delete(2884);
+    enabled.delete(32823);
+    const raster = Object.assign({}, c, { enabled, front_face: 2305 });
+    const pipeline = this.pipeline(raster, null, ff.shaders, layout, "triangle-list", target, false);
     if (!pipeline) return;
-    const pass = this.begin_pass(target, null);
-    pass.setPipeline(pipeline);
     const snapshot = ff_snapshot(c, [0, 0, W, H]);
     const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     Object.assign(snapshot.matrices, { modelview: identity, projection: identity, mvp: identity });
     snapshot.depthRange = { near: 0, far: 1 };
-    for (const [index, group] of this.ff_bind_groups(c, ff, pipeline, target, [0, 0, W, H], snapshot)) pass.setBindGroup(index, group);
+    const groups = this.ff_bind_groups(c, ff, pipeline, target, [0, 0, W, H], snapshot);
+    const pass = this.begin_pass(target, null);
+    pass.setPipeline(pipeline);
+    for (const [index, group] of groups) pass.setBindGroup(index, group);
     buffers.forEach((buffer, slot) => pass.setVertexBuffer(slot, buffer));
     pass.setViewport(0, 0, W, H, 0, 1);
     if (!this.apply_scissor(pass, c, target)) return;
@@ -80000,7 +80395,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     return out;
   };
   GLESExecutor.prototype.pipeline = function(c, program, shaders, layout, topology, target, indexed, face) {
-    const blend = c.enabled.has(3042);
+    const blend = c.enabled.has(3042) && !(c.api === 1 && c.enabled.has(3058));
     const depth_test = c.enabled.has(2929), stencil_test = c.enabled.has(2960);
     const cull = face === 0 ? "back" : face === 1 ? "front" : c.enabled.has(2884) ? c.cull_face === 1028 ? "front" : "back" : "none";
     const masks = face === void 0 ? 0 : face;
@@ -80165,8 +80560,8 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
     if (!texture) return fallback();
     const base = texture.images.get(0);
     if (base && (base.image || base.color_buffer)) {
-      const t = base.image ? this.image_texture(base.image) : this.color_buffer_texture(base.color_buffer);
-      return t && t.texture !== drawn_to ? t.texture.createView() : fallback();
+      const t = base.image ? this.image_texture(base.image, true) : this.color_buffer_texture(base.color_buffer, true);
+      return t && t.texture !== drawn_to && t.source !== drawn_to ? t.texture.createView() : fallback();
     }
     const gpu = this.gpu_texture(texture);
     if (!gpu || gpu.texture === drawn_to) return fallback();
@@ -80326,6 +80721,8 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
   GLESExecutor.prototype.read_texture = function(texture, x, y, width, height, flip, done, mip = 0, layer = 0, texel = 4) {
     this.end_pass();
     const stride = Math.ceil(width * texel / 256) * 256;
+    this.stats.readbacks++;
+    this.stats.readback_bytes += stride * height;
     const buffer = this.device.createBuffer({ size: stride * height, usage: B.COPY_DST | B.MAP_READ });
     this.encoder.copyTextureToBuffer({ texture, mipLevel: mip, origin: [x, y, layer] }, { buffer, bytesPerRow: stride, rowsPerImage: height }, [width, height, 1]);
     this.reads.push({ buffer, stride, width, height, flip, done, texel });
@@ -80507,7 +80904,7 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
 //                            readback, tagged with its request id
 //   done   { seq }           the batch has run and its writes were sent
 //   lost   { reason }        the renderer cannot go on
-//   caps   { present }       (to hello and reset) whether SURFACE_PRESENT shows pictures
+//   caps   { present, textureCompressionBC }  presentation and enabled device BC
 //   frame  { width, height, bytes }  (stream "gles", without a layer) a posted
 //                            color buffer, RGBA rows from the top
 //   gles_saved { id, state } gles_save's answer (null: no GLES executor yet)
@@ -80589,7 +80986,16 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
                 { texture: layer.context.getCurrentTexture(), origin: [p.dx, p.dy, 0] }, [p.w, p.h, 1]);
             layer.place(0, 0, p.width, p.height, true);
         };
-        const caps = () => channel.post({ type: "caps", present: !!layer });
+        let lastCaps = null;
+        const caps = (force = true) => {
+            const features = executor.device && executor.device.features;
+            const bc = !!(!lost && features && typeof features.has === "function" && features.has("texture-compression-bc"));
+            const bits = +!!layer | +bc << 1;
+            if (force || bits !== lastCaps) {
+                lastCaps = bits;
+                channel.post({ type: "caps", present: !!layer, textureCompressionBC: bc });
+            }
+        };
 
         // VX (virtio-gpu's Venus contexts), on the same device
         let vx = null;
@@ -80684,7 +81090,12 @@ ${explicit ? `layout(location = ${15 - i}) ` : ""}${type.integer ? "flat " : ""}
                                 submitCount: seq });
                             if (executor.failed && !executor.device) fail(executor.failed);
                         }
-                        if (forGeneration === generation) channel.post({ type: "done", seq });
+                        if (forGeneration === generation) {
+                            // A first batch may have acquired the device. Optional
+                            // compression is granted only after actual enablement.
+                            caps(false);
+                            channel.post({ type: "done", seq });
+                        }
                     });
                     break;
                 }

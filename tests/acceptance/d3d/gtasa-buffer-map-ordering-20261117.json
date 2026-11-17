@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-17",
+  "status": "PASS",
+  "change": "Publish the D3D9 buffer lock epoch fix for GTA SA sky flicker.",
+  "v86Commit": "1c16a4e9f1927808ec6dd3e77a19d1a4678bee14",
+  "graphicsRevision": "64378aa6ca60e754a869",
+  "sharedAcceptance": "../../../../v86/tests/acceptance/d3d/gtasa-buffer-map-ordering-20261117.json",
+  "publishedFiles": {
+    "libv86-webgpu.js": {
+      "sha256": "082cd65738e1ae8aff4fe78767c012c6d1990818fd1d51112af166829ffc7562",
+      "bytes": 4395636
+    },
+    "d3d9_shader_worker.js": {
+      "sha256": "f68a90af294e7a78e423b593b77b6c6927d98248ad81c024bae2346a064d9bd0",
+      "bytes": 1023
+    },
+    "d3d9_shader_pipeline.js": {
+      "sha256": "1c468ca29fd50103101affb662ec7cfc97aac5d5ce0210b0159802f6d61c56de",
+      "bytes": 162000
+    },
+    "graphics_journal_worker.js": {
+      "sha256": "3a276145939f38562862627cf4f6c1b44037ed446bc65c8c11641eedbc01c661",
+      "bytes": 1165
+    },
+    "d9wg_diagnostics.js": {
+      "sha256": "2570686f0e2621fc885e296b6ba43c6bb20c3e0ebc2ea07a305463cdb41d3967",
+      "bytes": 19987
+    },
+    "v86gl-device.js": {
+      "sha256": "ad505d707ff826d69dde9032b99b37f34e7ef2602848d743157bd04a7f31b8fe",
+      "bytes": 920051
+    },
+    "glslang.wasm": {
+      "sha256": "bf04f3f1aa510afd7e461ccb75c929e9498684b3186768c00804ffecc8bdbd16",
+      "bytes": 2007343
+    },
+    "vx_naga.wasm": {
+      "sha256": "8a0e51ee1698ff84d14a125d00241fc57fa33f17123cc3d6850d742bf41f5641",
+      "bytes": 1736395
+    }
+  },
+  "checks": {
+    "manifestMatchesCoreBuild": true,
+    "allGraphicsFilesMatchCoreBuild": true,
+    "gameHtmlCacheRevisionMatchesManifest": true,
+    "publishedJavaScriptSyntax": "PASS",
+    "game": "Exact published graphics package passed the XP GTA bicycle/outdoor test on the local current v86 CPU build; browser, host and GPU errors were empty."
+  },
+  "publicationScope": "Graphics files and their page cache revision. Site CPU assets and the shipping proxy DLL are unchanged. The graphics bundle also includes already-committed upstream graphics changes from the current v86 source baseline.",
+  "dllSha256": "c451eef1f674cf49a1e2708d750091d18477653c60853d64ccd217805fdb9fe2"
+}
