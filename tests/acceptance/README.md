@@ -1,6 +1,7 @@
 # Site acceptance records
 
 - [Site-specific D3D acceptance](d3d/)
+- [GTA SA fixed graphics publication](d3d/gtasa-buffer-map-ordering-20261117.json)
 - [OpenGL guest-image deployment records](deployments/)
 - [Shared D3D acceptance in v86](../../../v86/tests/acceptance/d3d/)
 

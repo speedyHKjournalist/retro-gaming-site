@@ -1,4 +1,4 @@
-globalThis.V86GL_BUILD_REVISION = "5a4f0bf2252e904cfe40";
+globalThis.V86GL_BUILD_REVISION = "64378aa6ca60e754a869";
 // Dedicated compression thread. Pages arrive by ownership transfer, so neither
 // structured clone nor compression scans command bytes on the emulation thread.
 (function() {
